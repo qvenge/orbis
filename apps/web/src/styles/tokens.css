@@ -40,6 +40,10 @@
   --color-success: #1a7f37;
   --color-success-foreground: #ffffff;
   --color-overlay: rgb(15 15 15 / 0.4);
+  /* Присутствие и кнопки хоста (срез 1б §6.2 п. 5) — тёмные сплошные в обеих темах: приложение не
+     может нарисовать кнопку в стиле хоста. Контраст глифа ≈ 13:1 (светлая), ≈ 10:1 (тёмная). */
+  --color-host: #2b2a26;
+  --color-host-foreground: #ffffff;
 
   /* --- Шрифты: системные, без webfont — гуманистический стек --- */
   --font-sans:
@@ -119,6 +123,8 @@
   --color-success: #79cf9d;
   --color-success-foreground: #0c2916;
   --color-overlay: rgb(0 0 0 / 0.55);
+  --color-host: #3a3a3e;
+  --color-host-foreground: #f5f4f2;
 
   /* Тёмные тени — тонкий верхний блик + мягкая глубина (перенесены из dark-first). */
   --orbis-shadow-control: inset 0 1px 0 0 rgb(255 255 255 / 0.12), 0 1px 2px 0 rgb(0 0 0 / 0.35);

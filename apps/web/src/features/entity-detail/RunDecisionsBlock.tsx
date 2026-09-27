@@ -10,9 +10,9 @@
 // пачки у них общий с этим блоком (`routine.runUnits` по `{runId}`): владелец ходит между
 // двумя местами, и одно событие обязано выглядеть в них одинаково.
 import { useId, useState } from 'react';
+import { useOpenRecord } from '../../app/useOpenRecord';
 import { invalidateGraph } from '../../lib/invalidate';
 import { useRegistry } from '../../lib/registry/useRegistry';
-import { openEntity } from '../../state/navigation';
 import { type RouterOutputs, trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
 import { Dialog } from '../../ui/Dialog';
@@ -157,6 +157,7 @@ function RunBatch({
   flagged: boolean;
   terminalUnanswered: boolean;
 }) {
+  const openEntity = useOpenRecord();
   const utils = trpc.useUtils();
   // Предпросмотр шаблона (хост `readOnly`): пачка видна строками-итогами (`UnitStub`), без карточек
   // с «Принять»/«Отклонить» и без «Принять все» и «Продолжить сейчас».

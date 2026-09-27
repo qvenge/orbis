@@ -41,12 +41,12 @@ import { Input } from '../../ui/Input';
 import { Sheet } from '../../ui/Sheet';
 import { Skeleton } from '../../ui/Skeleton';
 import { useToast } from '../../ui/toast-store';
-import { isRecurringTemplate } from '../agenda/useAgenda';
+import { isRecurringTemplate } from '../../features/agenda/useAgenda';
 import { currentMonth, monthTitle } from './BudgetScreen';
-import { CATEGORIES_QUERY, type CategoryOption, FINANCE_CATEGORY, toOption } from './categories';
-import { ddmm } from './EnvelopeCard';
-import { buildTxQuery, TX_PAGE_SIZE } from './txQuery';
-import { invalidateBudget, monthShift } from './useBudget';
+import { CATEGORIES_QUERY, type CategoryOption, FINANCE_CATEGORY, toOption } from '../../features/budget/categories';
+import { ddmm } from '../../features/budget/EnvelopeCard';
+import { buildTxQuery, TX_PAGE_SIZE } from '../../features/budget/txQuery';
+import { invalidateBudget, monthShift } from '../../features/budget/useBudget';
 
 type QueryEntity = RouterOutputs['entity']['query'][number];
 

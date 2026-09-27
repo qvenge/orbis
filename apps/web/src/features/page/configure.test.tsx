@@ -14,9 +14,9 @@ import userEvent from '@testing-library/user-event';
 import type { Editor } from '@tiptap/react';
 import { useState } from 'react';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
-import { goBack } from '../../app/history';
+import { installHistory } from '../../app/history';
 import { noteRegistryVersion, resetRegistryVersionForTests } from '../../lib/registry/useRegistry';
-import { openEntity, openPinnedEntity, useNav } from '../../state/navigation';
+import { resetNavForTests, useNav } from '../../state/navigation';
 import {
   installCrashTrap,
   type MockHandler,
@@ -25,6 +25,7 @@ import {
   type WireEntityFixture,
   wireEntity,
 } from '../../test/harness';
+import { navAt, recordAddress, topAddress } from '../../test/nav';
 import { BUILTIN_REGISTRY } from '../../test/registry';
 import { queryClient } from '../../trpc';
 import { Toaster } from '../../ui/Toast';
@@ -55,6 +56,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+  resetNavForTests();
 });
 
 /** Простой — сразу: редактор, которому позволено встать, встаёт; тело только для чтения — нет. */
@@ -139,10 +141,7 @@ const aspectsOfFilter = (ast: QueryAst): string[] => {
  * последние изменённые первыми, как отсортировал бы сервер.
  */
 function open(main: StructureFixture, rows: WireEntityFixture[], over?: MockHandler) {
-  useNav.setState({
-    activeTab: 'browser',
-    stacks: { chat: [], browser: [{ kind: 'entity', id: main.entity.id }], agenda: [], budget: [] },
-  });
+  navAt(main.entity.id);
   const all = [main.entity, ...rows];
   const base = structureHandler(main);
   const handler: MockHandler = async (path, input, type) => {
@@ -204,15 +203,17 @@ function Screen({ first, others }: { first: string; others: string[] }) {
 const asScreen = (entity: WireEntityFixture): StructureFixture => ({ name: 'screen', entity });
 
 async function choose(label: string): Promise<void> {
-  fireEvent.keyDown(await screen.findByTestId('detail-menu'), { key: 'Enter' });
+  fireEvent.keyDown(await screen.findByTestId('screen-menu'), { key: 'Enter' });
   await screen.findByRole('menu');
   fireEvent.click(screen.getByRole('menuitem', { name: label }));
 }
 
 const menuLabels = async () => {
-  fireEvent.keyDown(await screen.findByTestId('detail-menu'), { key: 'Enter' });
+  fireEvent.keyDown(await screen.findByTestId('screen-menu'), { key: 'Enter' });
   await screen.findByRole('menu');
-  const labels = screen.getAllByRole('menuitem').map((i) => i.textContent ?? '');
+  const labels = within(screen.getByRole('group', { name: 'Этот экран' }))
+    .getAllByRole('menuitem')
+    .map((i) => i.textContent ?? '');
   fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' });
   await waitFor(() => expect(screen.queryByRole('menu')).toBeNull());
   return labels;
@@ -323,10 +324,7 @@ test('«Настроить шаблон „Проекты“» с записи, 
   expect(within(view).queryByText('Смета кухни')).toBeNull();
   expect(calls).toContainEqual({ path: 'entity.get', input: detailGetInput(TPL) });
   // Экран остался на своей записи: настройка — режим экрана, не переход.
-  expect(useNav.getState().stacks.browser.at(-1)).toEqual({
-    kind: 'entity',
-    id: PROJECT_A.entity.id,
-  });
+  expect(topAddress()).toEqual(recordAddress(PROJECT_A.entity.id));
 });
 
 test('плашка «шаблон не разобран» открывает настройку этого шаблона', async () => {
@@ -577,23 +575,38 @@ describe('несохранённая правка настройки не мол
     expect(updates(calls)).toHaveLength(1);
   });
 
-  test('«назад» и переход на другую запись при неотправленной правке — настройка на месте, стек прежний, тост', async () => {
-    const { view } = await configure(bodyServer({ hold: new Promise(() => {}) }));
-    await editUnsent(view, ' ХВОСТ');
-    const back = vi.spyOn(window.history, 'back');
-    const stacks = useNav.getState().stacks;
+  // Страж ухода — у КАЖДОГО перехода стора навигации 1б (РП-33) и в обоих поведениях истории:
+  // модель одна, эффект разный (сайт — запись/`history.back()`, приложение — замена).
+  test.each([
+    'site',
+    'app',
+  ] as const)('«назад» и переход на другую запись при неотправленной правке (%s) — настройка на месте, модель прежняя, тост', async (mode) => {
+    useNav.setState({ mode });
+    const uninstall = installHistory();
+    try {
+      const { view } = await configure(bodyServer({ hold: new Promise(() => {}) }));
+      await editUnsent(view, ' ХВОСТ');
+      const back = vi.spyOn(window.history, 'back');
+      const replace = vi.spyOn(window.history, 'replaceState');
+      const push = vi.spyOn(window.history, 'pushState');
+      const model = useNav.getState().model;
 
-    const toasts = () => useToastStore.getState().toasts.map((t) => t.title);
+      const toasts = () => useToastStore.getState().toasts.map((t) => t.title);
 
-    goBack();
-    expect(toasts()).toContain(BODY_SAVING);
-    expect(back).not.toHaveBeenCalled();
+      useNav.getState().back();
+      expect(toasts()).toContain(BODY_SAVING);
 
-    useToastStore.setState({ toasts: [] });
-    openEntity(PROJECT_B);
-    expect(toasts()).toContain(BODY_SAVING);
-    expect(useNav.getState().stacks).toEqual(stacks);
-    expect(screen.getByTestId('configure-view')).toBe(view);
+      useToastStore.setState({ toasts: [] });
+      useNav.getState().openRecord(PROJECT_B);
+      expect(toasts()).toContain(BODY_SAVING);
+      expect(useNav.getState().model).toBe(model);
+      expect(back).not.toHaveBeenCalled();
+      expect(replace).not.toHaveBeenCalled();
+      expect(push).not.toHaveBeenCalled();
+      expect(screen.getByTestId('configure-view')).toBe(view);
+    } finally {
+      uninstall();
+    }
   });
 
   test('«Предпросмотр на записи…» из настройки своей страницы при неотправленной правке — тот же страж (M-1)', async () => {
@@ -605,28 +618,27 @@ describe('несохранённая правка настройки не мол
     expect(screen.queryByTestId('template-preview-plaque')).toBeNull();
   });
 
-  test('закреплённая запись с другой вкладки при неотправленной правке — один досыл, один тост (M-2)', async () => {
+  test('переход в другой раздел при неотправленной правке — один досыл, один тост (M-2)', async () => {
     const { view, calls } = await configure(bodyServer({ hold: new Promise(() => {}) }));
     await editUnsent(view, ' ХВОСТ');
-    // Вкладка другая: переход — два шага стора (вкладка, затем экран), а страж — один.
-    useNav.setState({ activeTab: 'chat' });
-    const stacks = useNav.getState().stacks;
+    // Раздел другой: модель переключает раздел и кладёт место одним действием — страж один.
+    const model = useNav.getState().model;
     useToastStore.setState({ toasts: [] });
-    openPinnedEntity(PROJECT_B);
+    useNav.getState().openSection('host', PROJECT_B);
     expect(useToastStore.getState().toasts.map((t) => t.title)).toEqual([BODY_SAVING]);
-    expect(useNav.getState().activeTab).toBe('chat');
-    expect(useNav.getState().stacks).toEqual(stacks);
+    expect(useNav.getState().model).toBe(model);
     await waitFor(() => expect(updates(calls)).toHaveLength(1));
   });
 
   test('без неотправленного «Готово», «назад» и переход работают сразу', async () => {
     const { view } = await configure(bodyServer({}));
-    const back = vi.spyOn(window.history, 'back').mockImplementation(() => {});
+    // «Назад» по модели (режим приложения) — видно сразу, без истории браузера.
+    useNav.setState({ mode: 'app' });
 
-    goBack();
-    expect(back).toHaveBeenCalledTimes(1);
-    openEntity(PROJECT_B);
-    expect(useNav.getState().stacks.browser.at(-1)).toEqual({ kind: 'entity', id: PROJECT_B });
+    useNav.getState().back();
+    expect(topAddress()).toEqual({ kind: 'home', app: { kind: 'host' } });
+    useNav.getState().openRecord(PROJECT_B);
+    expect(topAddress()).toEqual(recordAddress(PROJECT_B));
 
     fireEvent.click(done(view));
     await screen.findByTestId('page-columns');

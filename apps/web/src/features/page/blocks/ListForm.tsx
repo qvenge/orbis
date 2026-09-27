@@ -1,4 +1,4 @@
-import { openEntity } from '../../../state/navigation';
+import { useOpenRecord } from '../../../app/useOpenRecord';
 import { EntityRow } from '../../browser/EntityRow';
 import type { BlockRow } from './types';
 
@@ -8,6 +8,7 @@ import type { BlockRow } from './types';
  * контрол, — отметка со страницы придёт действием в срезе 2.
  */
 export function ListForm({ rows }: { rows: readonly BlockRow[] }) {
+  const openEntity = useOpenRecord();
   return (
     <ul className="flex flex-col gap-px">
       {rows.map((e) => (

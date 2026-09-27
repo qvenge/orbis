@@ -1,69 +1,64 @@
-import { fireEvent, screen, waitFor } from '@testing-library/react';
-import { afterEach, expect, test } from 'vitest';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { afterEach, beforeEach, expect, test } from 'vitest';
 import { App } from '../App';
 import { useNav } from '../state/navigation';
-import { renderWithProviders } from '../test/harness';
+import { renderWithProviders, wireEntity } from '../test/harness';
+import { recordAddress, topAddress } from '../test/nav';
+import { registryReply } from '../test/registry';
+import { resetFrame, stubLaunchMode, unstubLaunchMode } from './frame/frame-fixtures';
 
-// §9.4: настройки/экспорт — сквозной экран поверх активного таба.
-// Этап 3: аффордансы — пункт «Настройки» в sidebar (десктоп, data-testid="open-settings",
-// ровно один узел) и icon-кнопка в шапке экрана (мобила, "open-settings-mobile").
-const settings = {
-  timezone: 'Europe/Moscow',
-  defaultCurrency: 'RUB',
-  weekStartDay: 'monday',
-  pinnedEntities: [],
-};
+// Настройки — экран хоста (срез 1б §6.4, §7.3): открываются пунктом «Настройки» раздела «Хост» меню
+// «⋯» и ложатся поверх текущего раздела; «‹» возвращает в раздел. Отдельной иконки настроек в шапке
+// нет.
+const E1 = '11111111-1111-4111-8111-111111111111';
 
-const handler = (path: string) => {
-  if (path === 'user.getSettings') return settings;
-  if (path === 'chat.ensureThread') return { threadId: 't1' };
-  if (path === 'chat.listMessages') return [];
-  // Бейдж Agenda (§1.5) смонтирован на любом экране в обеих поверхностях навигации,
-  // поэтому App всегда шлёт entity.query — контракт процедуры массив, не {}.
+const handler = (path: string, input: unknown) => {
+  const reg = registryReply(path);
+  if (reg !== undefined) return reg;
+  if (path === 'entity.get') {
+    const id = (input as { id: string }).id;
+    return { entity: wireEntity({ id, title: `Запись ${id}` }), relations: [], thread: null };
+  }
+  if (path === 'user.getSettings')
+    return { timezone: 'Europe/Moscow', defaultCurrency: 'RUB', weekStartDay: 1 };
   if (path === 'entity.query') return [];
   return {};
 };
 
+beforeEach(() => {
+  stubLaunchMode('app');
+  resetFrame(`/r/${E1}`);
+});
+
 afterEach(() => {
-  localStorage.clear();
-  // Сброс in-memory nav-стора (persist держит стеки между тестами файла).
-  useNav.setState({
-    activeTab: 'chat',
-    stacks: { chat: [], browser: [], agenda: [], budget: [] },
-  });
+  unstubLaunchMode();
+  resetFrame('/');
 });
 
-test('пункт «Настройки» в sidebar открывает SettingsScreen поверх активного таба', async () => {
+async function openSettingsFromMenu() {
+  fireEvent.click(screen.getByTestId('screen-menu'));
+  const host = await screen.findByRole('group', { name: 'Хост' });
+  fireEvent.click(within(host).getByRole('menuitem', { name: 'Настройки' }));
+  await screen.findByRole('heading', { level: 1, name: 'Настройки' });
+}
+
+test('«⋯ → Настройки» открывает настройки поверх раздела; «‹» — обратно в раздел', async () => {
   renderWithProviders(<App />, handler);
-
-  // До клика настроек нет — доказывает, что именно аффорданса приводит к экрану (не тавтология).
-  expect(screen.queryByTestId('general-form')).toBeNull();
-
-  // getByTestId упадёт при дублях узла — заодно фиксируем «ровно один open-settings».
-  fireEvent.click(screen.getByTestId('open-settings'));
-
-  // Экран настроек виден (форма «Общие») → SettingsScreen смонтирован через роутер.
-  await waitFor(() => expect(screen.getByTestId('general-form')).toBeInTheDocument());
+  await screen.findByRole('heading', { level: 1, name: `Запись ${E1}` });
+  expect(screen.queryByRole('button', { name: 'Настройки' })).toBeNull();
+  await openSettingsFromMenu();
+  expect(topAddress()).toEqual({ kind: 'host-screen', screen: 'settings' });
+  fireEvent.click(
+    within(screen.getByTestId('host-presence')).getByRole('button', { name: 'Назад' }),
+  );
+  await waitFor(() => expect(topAddress()).toEqual(recordAddress(E1)));
 });
 
-test('повторный клик по «Настройки» не создаёт дубль settings в стеке', async () => {
+test('повторное «Настройки» с экрана настроек не кладёт второй экран в стопку', async () => {
   renderWithProviders(<App />, handler);
-
-  fireEvent.click(screen.getByTestId('open-settings'));
-  await waitFor(() => expect(screen.getByTestId('general-form')).toBeInTheDocument());
-  fireEvent.click(screen.getByTestId('open-settings'));
-
-  expect(useNav.getState().stacks.chat).toEqual([{ kind: 'settings' }]);
-});
-
-test('мобильная кнопка настроек в шапке открывает SettingsScreen и пропадает глубже корня', async () => {
-  renderWithProviders(<App />, handler);
-
-  // На корневом экране (стек пуст) кнопка есть.
-  fireEvent.click(screen.getByTestId('open-settings-mobile'));
-  await waitFor(() => expect(screen.getByTestId('general-form')).toBeInTheDocument());
-
-  // Settings всегда в стеке → на экране настроек мобильной кнопки настроек нет.
-  expect(screen.queryByTestId('open-settings-mobile')).toBeNull();
-  expect(useNav.getState().stacks.chat).toEqual([{ kind: 'settings' }]);
+  await screen.findByRole('heading', { level: 1, name: `Запись ${E1}` });
+  await openSettingsFromMenu();
+  const depth = useNav.getState().model.apps.host?.stacks.home?.length;
+  await openSettingsFromMenu();
+  expect(useNav.getState().model.apps.host?.stacks.home?.length).toBe(depth);
 });

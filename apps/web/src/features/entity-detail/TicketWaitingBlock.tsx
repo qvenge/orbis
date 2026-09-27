@@ -1,9 +1,9 @@
 // Тикет остановился и ждёт человека (С3, С8, С6; приёмка 7–8). Один блок на три исхода
 // прогона, потому что жест у них ОДИН: прочитать текст и ответить, вернув работу в круг.
 import { useId, useState } from 'react';
+import { useOpenRecord } from '../../app/useOpenRecord';
 import { invalidateGraph } from '../../lib/invalidate';
 import { Markdown } from '../../lib/markdown/Markdown';
-import { openEntity } from '../../state/navigation';
 import { type RouterOutputs, trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
 import { useHostReadOnly } from './record-host';
@@ -30,6 +30,7 @@ export function TicketWaitingBlock({
   entity: Entity;
   lastRun: TicketRun | undefined;
 }) {
+  const openEntity = useOpenRecord();
   const utils = trpc.useUtils();
   // Предпросмотр шаблона (хост `readOnly`): вопрос виден, ответа и «Закрыть тикет» нет.
   const readOnly = useHostReadOnly();

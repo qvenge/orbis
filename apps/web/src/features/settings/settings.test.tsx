@@ -1,6 +1,6 @@
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { beforeEach, expect, test, vi } from 'vitest';
-import { renderWithProviders } from '../../test/harness';
+import { isSupplyRecordsCall, renderWithProviders } from '../../test/harness';
 import { BUILTIN_REGISTRY } from '../../test/registry';
 import { AspectsList } from './AspectsList';
 import { ExportButton } from './ExportButton';
@@ -98,7 +98,8 @@ test('настройки не монтируют неактивные вклад
   await screen.findByRole('tab', { name: 'Агенты' });
   expect(screen.getByTestId('general-form')).toBeInTheDocument();
 
-  const paths = () => calls.map((c) => c.path);
+  // Запрос записей поставки шлёт рамка (присутствие хоста в шапке), не вкладки настроек.
+  const paths = () => calls.filter((c) => !isSupplyRecordsCall(c)).map((c) => c.path);
   expect(paths()).toEqual(['user.getSettings']);
 
   // Положительный контроль В ТОМ ЖЕ ТЕСТЕ: открытая вкладка свой запрос ШЛЁТ — иначе молчание

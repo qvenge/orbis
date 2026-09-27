@@ -54,22 +54,15 @@ export function SettingsScreen() {
   );
 }
 
-// Раздел «Память AI» (02-core-os §2.7) — вход на отдельный экран, а не список прямо
-// здесь: экрану нужен свой ScreenRef, чтобы тап по правилу пушил detail в стек
-// активного таба (K10), а инлайн-контент таба настроек этого не даёт.
+// Раздел «Память AI» (02-core-os §2.7) — вход на отдельный экран хоста (`/settings/memory`), а не
+// список прямо здесь: у экрана свой адрес, и тап по правилу открывает запись из хоста (срез 1б §7.2).
 function MemorySection() {
   return (
     <div className="flex flex-col items-start gap-2 p-3">
       <p className="text-sm text-text-secondary">
         Факты и правила, которые AI держит в контексте: их видно, их можно править и архивировать.
       </p>
-      <Button
-        variant="outline"
-        onClick={() => {
-          const { activeTab, push } = useNav.getState();
-          push(activeTab, { kind: 'memory' });
-        }}
-      >
+      <Button variant="outline" onClick={() => useNav.getState().openHostScreen('memory')}>
         Открыть память AI
       </Button>
     </div>

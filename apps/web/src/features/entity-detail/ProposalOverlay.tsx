@@ -40,6 +40,7 @@
 import { type BodyDiffResult, diffBodyDocs } from '@orbis/shared/doc/diff';
 import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
+import { useOpenRecord } from '../../app/useOpenRecord';
 import { EntityRef } from '../../lib/entity-ref/EntityRef';
 import { invalidateGraph } from '../../lib/invalidate';
 import { BodyKindProvider } from '../../lib/query-blocks/body-kind';
@@ -47,7 +48,6 @@ import { ThisEntityProvider } from '../../lib/query-blocks/this-entity';
 import { isScalar, valueText as rawValueText } from '../../lib/registry/format';
 import type { RegistryLookup } from '../../lib/registry/labels';
 import { useRegistry } from '../../lib/registry/useRegistry';
-import { openEntity } from '../../state/navigation';
 import { type RouterInputs, type RouterOutputs, trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
 import { Card } from '../../ui/Card';
@@ -639,6 +639,7 @@ function ProposalRowView({
   edited?: unknown;
   onEdit: (raw: string) => void;
 }) {
+  const openEntity = useOpenRecord();
   // Тело правится тут же, если есть ЧТО открыть (документ предложенного тела) и С ЧЕМ
   // сравнивать (тело этой записи). Обе половины — не формальность: см. NO_BODY_EDIT_HERE.
   const bodyRow = op.field === 'body';

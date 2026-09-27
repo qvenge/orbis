@@ -20,8 +20,8 @@ import { type RouterOutputs, trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
 import { Card } from '../../ui/Card';
 import { Skeleton } from '../../ui/Skeleton';
-import { isRecurringTemplate } from '../agenda/useAgenda';
-import { NativeRow } from '../entity-detail/NativeRow';
+import { isRecurringTemplate } from '../../features/agenda/useAgenda';
+import { NativeRow } from '../../features/entity-detail/NativeRow';
 import { monthGenitive, monthTitle, Section } from './BudgetScreen';
 import {
   ddmm,
@@ -29,10 +29,10 @@ import {
   type EnvelopeViewModel,
   envelopePercent,
   envelopeView,
-} from './EnvelopeCard';
-import { QuickAddBar } from './QuickAddBar';
-import { TX_PAGE_SIZE } from './txQuery';
-import { todayISO } from './useBudget';
+} from '../../features/budget/EnvelopeCard';
+import { QuickAddBar } from '../../features/budget/QuickAddBar';
+import { TX_PAGE_SIZE } from '../../features/budget/txQuery';
+import { todayISO } from '../../features/budget/useBudget';
 
 type QueryEntity = RouterOutputs['entity']['query'][number];
 

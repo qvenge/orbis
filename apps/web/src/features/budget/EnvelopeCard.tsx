@@ -4,9 +4,9 @@
 // decimal-строки сервера; пороги сравниваются ТОЧНО (BigInt), без IEEE-754.
 // Тап → push экрана категории (§3.2, сам экран — Task B3).
 import type { EnvelopeStatus } from '@orbis/shared';
+import { useOpenRecord } from '../../app/useOpenRecord';
 import { CURRENCY_SYMBOL, formatAmount } from '../../lib/format';
 import { decimalPercent, scaledPair } from '../../lib/percent';
-import { useNav } from '../../state/navigation';
 
 // --- точная арифметика порогов (§3.1) без чисел с плавающей точкой ---------------------
 
@@ -120,8 +120,13 @@ export function envelopeView(status: EnvelopeStatus): EnvelopeViewModel {
   return { level, percent, mark, barColor, paceText, sym, carryoverText, budget };
 }
 
+/**
+ * Карточка конверта. Экрана категории в интерфейсе больше нет (срез 1б §8.6: экраны Бюджета — в
+ * `legacy-1v/` до 1в), поэтому нажатие открывает саму запись категории в рамке экрана.
+ */
 export function EnvelopeCard({ status }: { status: EnvelopeStatus }) {
   const { category, phase } = status;
+  const openRecord = useOpenRecord();
   const { level, percent, mark, barColor, paceText, sym, carryoverText } = envelopeView(status);
 
   // Одна интерактивная кнопка с токенами Card (не <Card><button>): вся карточка —
@@ -132,10 +137,7 @@ export function EnvelopeCard({ status }: { status: EnvelopeStatus }) {
       data-testid="envelope-card"
       data-level={level}
       data-phase={phase}
-      onClick={() => {
-        const { activeTab, push } = useNav.getState();
-        push(activeTab, { kind: 'budget-category', id: category.id });
-      }}
+      onClick={() => openRecord(category.id)}
       className={`flex cursor-pointer flex-col gap-1 rounded-card border border-line bg-surface p-3 text-left shadow-card outline-hidden transition hover:bg-surface-2/60 focus-visible:ring-2 focus-visible:ring-accent/60 ${
         phase === 'closed' ? 'opacity-60' : ''
       }`}

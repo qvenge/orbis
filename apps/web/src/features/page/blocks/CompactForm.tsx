@@ -1,4 +1,4 @@
-import { openEntity } from '../../../state/navigation';
+import { useOpenRecord } from '../../../app/useOpenRecord';
 import type { BlockRow } from './types';
 
 /**
@@ -8,6 +8,7 @@ import type { BlockRow } from './types';
  * (`isBodyGesture` пропускает кнопки мимо).
  */
 export function CompactForm({ rows }: { rows: readonly BlockRow[] }) {
+  const openEntity = useOpenRecord();
   return (
     <ul className="flex flex-col divide-y divide-line">
       {rows.map((e) => (

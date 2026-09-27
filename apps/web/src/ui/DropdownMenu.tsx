@@ -19,23 +19,37 @@ export type DropdownMenuItem = {
 };
 
 /**
+ * Раздел меню с подписью — одно меню «⋯» рамки держит два: «Этот экран» и «Хост» (спека 1б §6.4).
+ * Раздел читается группой с именем (`role="group"`), подпись видна над пунктами.
+ */
+export interface DropdownMenuSection {
+  label: string;
+  items: readonly DropdownMenuItem[];
+}
+
+/**
  * Выпадающее меню (Radix) в управляемой форме: «открыто» держит хозяин (`LazyMenuSlot`), кнопку
  * рисует тоже он. Меню живёт только в ленивых чанках (Radix — самый крупный кусок меню), а кнопка
  * эагерная и стоит на экране с первого кадра — поэтому триггер Radix ей отдать нельзя, и список
  * позиционируется от невидимого двойника кнопки (см. ниже).
  *
- * Меню намеренно бедное: только плоский список пунктов. Подменю, чекбоксы и радиогруппы
+ * Меню намеренно бедное: плоский список пунктов или разделы с подписью. Подменю, чекбоксы и радиогруппы
  * Radix умеет, но заводить их «на будущее» здесь нечем оправдать — появится нужда,
  * появится и код.
  */
 export function DropdownMenu({
   items,
+  sections,
   open,
   onOpenChange,
   anchorRef,
   triggerId,
   contentId,
-}: { items: DropdownMenuItem[] } & LazyMenuControl) {
+}: (
+  | { items: readonly DropdownMenuItem[]; sections?: undefined }
+  | { sections: readonly DropdownMenuSection[]; items?: undefined }
+) &
+  LazyMenuControl) {
   return (
     <RDM.Root open={open} onOpenChange={onOpenChange}>
       <RDM.Trigger asChild>
@@ -65,20 +79,37 @@ export function DropdownMenu({
           }}
           className="z-50 min-w-48 rounded-card border border-line bg-surface p-1 shadow-pop"
         >
-          {items.map((item) => (
-            <RDM.Item
-              key={item.key ?? item.label}
-              onSelect={item.onSelect}
-              // data-highlighted Radix ставит и на наведение мышью, и на переход
-              // стрелками — подсветка одна на оба способа.
-              className="flex cursor-pointer select-none items-center gap-2 rounded-control px-2 py-1.5 text-sm text-text outline-hidden transition data-[highlighted]:bg-surface-2 data-[highlighted]:text-text"
-            >
-              {item.icon}
-              {item.label}
-            </RDM.Item>
-          ))}
+          {sections === undefined
+            ? items.map(menuItem)
+            : sections
+                // Пустой раздел не рисуется: подпись без пунктов обещала бы действия, которых нет.
+                .filter((sec) => sec.items.length > 0)
+                .map((sec, i) => (
+                  <RDM.Group key={sec.label} aria-label={sec.label}>
+                    {i > 0 && <RDM.Separator className="my-1 h-px bg-line" />}
+                    <RDM.Label className="px-2 pb-0.5 pt-1 text-2xs uppercase tracking-wide text-text-muted">
+                      {sec.label}
+                    </RDM.Label>
+                    {sec.items.map(menuItem)}
+                  </RDM.Group>
+                ))}
         </RDM.Content>
       </RDM.Portal>
     </RDM.Root>
+  );
+}
+
+function menuItem(item: DropdownMenuItem) {
+  return (
+    <RDM.Item
+      key={item.key ?? item.label}
+      onSelect={item.onSelect}
+      // data-highlighted Radix ставит и на наведение мышью, и на переход
+      // стрелками — подсветка одна на оба способа.
+      className="flex cursor-pointer select-none items-center gap-2 rounded-control px-2 py-1.5 text-sm text-text outline-hidden transition data-[highlighted]:bg-surface-2 data-[highlighted]:text-text"
+    >
+      {item.icon}
+      {item.label}
+    </RDM.Item>
   );
 }

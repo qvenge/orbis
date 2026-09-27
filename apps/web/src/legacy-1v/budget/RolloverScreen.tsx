@@ -24,9 +24,9 @@ import { Input } from '../../ui/Input';
 import { Skeleton } from '../../ui/Skeleton';
 import { Spinner } from '../../ui/Spinner';
 import { currentMonth, monthGenitive, monthTitle } from './BudgetScreen';
-import { CATEGORIES_QUERY, type CategoryOption, toOption } from './categories';
-import { AMOUNT_RE, toDecimal2 } from './moneyInput';
-import { invalidateBudget, monthShift } from './useBudget';
+import { CATEGORIES_QUERY, type CategoryOption, toOption } from '../../features/budget/categories';
+import { AMOUNT_RE, toDecimal2 } from '../../features/budget/moneyInput';
+import { invalidateBudget, monthShift } from '../../features/budget/useBudget';
 
 type RolloverRow = RolloverPreview['rows'][number];
 type SubmitRow = { categoryId: string; limit: string; carryover: string };

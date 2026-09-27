@@ -4,8 +4,9 @@ import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { Editor } from '@tiptap/react';
 import { beforeEach, expect, test, vi } from 'vitest';
-import { useNav } from '../../../state/navigation';
+import { resetNavForTests } from '../../../state/navigation';
 import { installCrashTrap, renderWithProviders, trpcError } from '../../../test/harness';
+import { recordAddress, topAddress } from '../../../test/nav';
 import { BodyEditor } from '../BodyEditor';
 import { RefTitlesProvider } from './RefTitlesContext';
 
@@ -63,10 +64,7 @@ const held = (): Held => ({ editor: null });
 beforeEach(() => {
   // Навигационный стор persist'ится в localStorage и живёт между тестами файла: без сброса
   // «клик открыл сущность» проходил бы по стеку, набранному соседним тестом.
-  useNav.setState({
-    activeTab: 'browser',
-    stacks: { chat: [], browser: [], agenda: [], budget: [] },
-  });
+  resetNavForTests();
 });
 
 test('чип показывает АКТУАЛЬНЫЙ заголовок, а не вмороженную подпись из текста', async () => {
@@ -232,7 +230,7 @@ test('клик по чипу открывает сущность, Ctrl-клик 
   );
   const chip = await screen.findByTestId('entity-chip');
   // href настоящий — иначе перехватывать было бы нечего, и «новая вкладка» открывала бы пустоту.
-  expect(chip.getAttribute('href')).toBe(`/entity/${A}`);
+  expect(chip.getAttribute('href')).toBe(`/r/${A}`);
 
   // Слушатель на body: он висит ПОСЛЕ корневого слушателя React (корень RTL — div внутри
   // body), поэтому успевает прочитать defaultPrevented и лишь затем гасит сам переход.
@@ -251,11 +249,11 @@ test('клик по чипу открывает сущность, Ctrl-клик 
     chip.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, ctrlKey: true }));
     chip.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, metaKey: true }));
     expect(seen).toEqual([false, false]);
-    expect(useNav.getState().stacks.browser).toEqual([]);
+    expect(topAddress()).toEqual({ kind: 'home', app: { kind: 'host' } });
 
     chip.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
     expect(seen).toEqual([false, false, true]); // обычный клик перехвачен нами
-    expect(useNav.getState().stacks.browser).toEqual([{ kind: 'entity', id: A }]);
+    expect(topAddress()).toEqual(recordAddress(A));
   } finally {
     document.body.removeEventListener('click', swallow);
   }

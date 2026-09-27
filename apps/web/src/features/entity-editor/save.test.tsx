@@ -1534,10 +1534,9 @@ test('модули первого кадра не тянут схему реда
     // Пачка правок с тостом «Отменить» — плашка спора зовёт её эагерно (финальное ревью, C1-I4).
     '../page/useUpdateBatch.ts',
     '../page/BaseRecordView.tsx',
-    // Кнопка меню ⋮ — эагерная кнопка ленивого меню (рычаг веса задачи 14); само меню
-    // (`DetailMenu.tsx`) ленивое и сторожится наличием своего чанка (check-lazy-chunks).
+    // Точка лени меню «⋯» записи (рычаг веса задачи 14 1а); само меню (`DetailMenu.tsx`) ленивое
+    // и сторожится наличием своего чанка (check-lazy-chunks). Кнопка «⋯» — в рамке (ниже).
     '../entity-detail/DetailMenuSlot.tsx',
-    '../entity-detail/MenuTrigger.tsx',
     // Механика ленивого меню (Л-1, РП-13) — эагерна; Radix — только в ленивом чанке (страж —
     // `MENU_WEIGHT` ниже).
     '../../ui/LazyMenuSlot.tsx',
@@ -1565,6 +1564,19 @@ test('модули первого кадра не тянут схему реда
     // Точка лени блока «Записи» (срез 1б, задача 18): рендерер зовёт её эагерно; сам блок
     // (`RecordsBlock.tsx`) — ленивый, сторожится своим чанком и порогами gzip (check-lazy-chunks).
     '../browser/RecordsBlockSlot.tsx',
+    // Рамка хоста (срез 1б, задача 19): присутствие хоста рисует шапка каждого экрана, в том
+    // числе записи, — лист разделов, оболочка приложения, меню «⋯», бейджи, ссылки по рамке и стор
+    // навигации достижимы из экрана записи эагерно. `HostMenu.tsx` — ленивый (содержимое «⋯»
+    // экранов без своих пунктов).
+    '../../app/ScreenHeader.tsx',
+    '../../app/frame/HostPresence.tsx',
+    '../../app/frame/NavSheet.tsx',
+    '../../app/frame/useAppShell.ts',
+    '../../app/frame/ScreenMenu.tsx',
+    '../../app/frame/FrameApp.tsx',
+    '../../app/useOpenRecord.ts',
+    '../../lib/query-blocks/useBadgeData.ts',
+    '../../state/navigation.ts',
   ]) {
     expect(
       runtimeImports(file).filter((s) => EDITOR_WEIGHT.test(s)),
@@ -1619,15 +1631,18 @@ test('хук сохранения берёт версию схемы из ЛИС
  * файла `DetailScreen-*.js` эту утечку не видят: Rollup кладёт Radix в общие чанки, которые экран
  * импортирует статически (замер мутации (г) задачи 1 среза 1б: файл +33 Б, замыкание +16 кБ).
  *
- * `(^|\/)DetailMenu$` не задевает `./DetailMenuSlot`: якорь `$`.
+ * `(^|\/)DetailMenu$` не задевает `./DetailMenuSlot`: якорь `$`. `HostMenu` — ленивое содержимое «⋯»
+ * рамки на экранах без своих пунктов (срез 1б §6.4).
  */
-const MENU_WEIGHT = /^radix-ui$|(^|\/)DropdownMenu$|(^|\/)DetailMenu$/;
+const MENU_WEIGHT = /^radix-ui$|(^|\/)DropdownMenu$|(^|\/)(DetailMenu|HostMenu)$/;
 
 test('эагерные файлы механики меню не тянут Radix-меню в первый кадр (Л-1, РП-13)', () => {
   for (const file of [
     '../../ui/LazyMenuSlot.tsx',
     '../entity-detail/DetailMenuSlot.tsx',
-    '../entity-detail/MenuTrigger.tsx',
+    // Кнопка «⋯» рамки (срез 1б §6.4) — эагерна на каждом экране; меню — только в ленивых чанках.
+    '../../app/frame/ScreenMenu.tsx',
+    '../../app/frame/HostPresence.tsx',
   ]) {
     expect(
       runtimeImports(file).filter((s) => MENU_WEIGHT.test(s)),
@@ -1647,6 +1662,7 @@ test('эагерные файлы механики меню не тянут Radi
   expect(MENU_WEIGHT.test('./DetailMenu')).toBe(true);
   expect(MENU_WEIGHT.test('./DropdownMenu')).toBe(true);
   expect(MENU_WEIGHT.test('./DetailMenuSlot')).toBe(false);
+  expect(MENU_WEIGHT.test('./HostMenu')).toBe(true);
   expect(MENU_WEIGHT.test('../../ui/LazyMenuSlot')).toBe(false);
 });
 

@@ -315,7 +315,7 @@ export function RecordView({
       : source;
   }, [hostRecord, reg, hostCrash, hostCrashKey]);
   const markHostCrashed = useCallback(() => setHostCrash(hostCrashKey), [hostCrashKey]);
-  const host = recordHostValue(reply, { planToFact, activeTab: 'record', readOnly });
+  const host = recordHostValue(reply, { planToFact, openTab: 'record', readOnly });
   const titleOf = (id: string) => list.rows.find((r) => r.id === id)?.title ?? id;
 
   const shownId =

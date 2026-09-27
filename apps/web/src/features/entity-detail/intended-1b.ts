@@ -6,6 +6,23 @@
  * поимённая функция, видимая ревью; вход не мутируется.
  */
 
+import { INTENDED_1A } from './intended-1a';
+import type { DetailStructure } from './structure-snapshot';
+
+/**
+ * 1б §6.4, РП-24: меню «⋯» — одно на экран и живёт в присутствии хоста (рамка), а не в шапке экрана
+ * записи: ориентира `detail-menu` над вкладками больше нет. Пункты те же — они приходят в меню рамки
+ * контекстом экрана (`ScreenMenuProvider`).
+ */
+export function menuInHostPresence(golden: DetailStructure): DetailStructure {
+  return { ...golden, aboveTabs: golden.aboveTabs.filter((p) => p !== 'detail-menu') };
+}
+
+/** Снимок, который ОБЯЗАН дать экран записи 1б на фикстуре эталона: отличия 1а и переезд «⋯». */
+export function INTENDED_1B(golden: DetailStructure): DetailStructure {
+  return menuInHostPresence(INTENDED_1A(golden));
+}
+
 /** Ключи по алфавиту — форма счёта запросов `captureDetail`. */
 const sorted = (counts: Record<string, number>): Record<string, number> =>
   Object.fromEntries(Object.entries(counts).sort(([a], [b]) => a.localeCompare(b)));

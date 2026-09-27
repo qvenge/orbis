@@ -43,11 +43,11 @@ test('javascript:-ссылка обезврежена санитизацией: 
   expect(onEntityLink).not.toHaveBeenCalled();
 });
 
-test('[[entity:id]] становится ссылкой на detail-экран, клик перехвачен', () => {
+test('[[entity:id]] становится ссылкой на запись (адрес /r/<id>, срез 1б §7.1), клик перехвачен', () => {
   const onEntityLink = vi.fn();
   render(<Markdown source={`см. [[entity:${E1}]]`} onEntityLink={onEntityLink} />);
   const link = screen.getByRole('link');
-  expect(link).toHaveAttribute('href', `/entity/${E1}`);
+  expect(link).toHaveAttribute('href', `/r/${E1}`);
   const click = createEvent.click(link);
   fireEvent(link, click);
   expect(onEntityLink).toHaveBeenCalledWith(E1);
@@ -57,10 +57,7 @@ test('[[entity:id]] становится ссылкой на detail-экран, 
 
 test('[[entity:id|подпись]] — текстом ссылки становится подпись', () => {
   render(<Markdown source={`[[entity:${E1}|Wishlist: бег]]`} onEntityLink={vi.fn()} />);
-  expect(screen.getByRole('link', { name: 'Wishlist: бег' })).toHaveAttribute(
-    'href',
-    `/entity/${E1}`,
-  );
+  expect(screen.getByRole('link', { name: 'Wishlist: бег' })).toHaveAttribute('href', `/r/${E1}`);
 });
 
 test('UUID в верхнем регистре — та же ссылка (сервер регистр игнорирует)', () => {
@@ -74,10 +71,14 @@ test('спецсимволы подписи экранируются и не л�
   // Хвостовой обратный слэш без экранирования съел бы закрывающую скобку markdown-ссылки,
   // ведущая «[» открыла бы вложенную скобочную группу.
   render(<Markdown source={`[[entity:${E1}|[черновик\\]]`} onEntityLink={vi.fn()} />);
-  expect(screen.getByRole('link', { name: '[черновик\\' })).toHaveAttribute(
-    'href',
-    `/entity/${E1}`,
-  );
+  expect(screen.getByRole('link', { name: '[черновик\\' })).toHaveAttribute('href', `/r/${E1}`);
+});
+
+test('старая ссылка /entity/<id> в тексте — тоже ссылка на запись: клик перехвачен (срез 1б §7.1)', () => {
+  const onEntityLink = vi.fn();
+  render(<Markdown source={`[старая](/entity/${E1})`} onEntityLink={onEntityLink} />);
+  fireEvent.click(screen.getByRole('link', { name: 'старая' }));
+  expect(onEntityLink).toHaveBeenCalledWith(E1);
 });
 
 test('битый id остаётся текстом, а не ссылкой', () => {

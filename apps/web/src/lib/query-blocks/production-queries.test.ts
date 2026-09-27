@@ -25,7 +25,6 @@ import { fileURLToPath } from 'node:url';
 import { parseQueryAst } from '@orbis/shared/query';
 import { expect, test } from 'vitest';
 import { browserQuery, buildFilterQuery } from '../../features/browser/query';
-import { envelopeTransactionsQuery } from '../../features/budget/CategoryScreen';
 import { CATEGORIES_QUERY } from '../../features/budget/categories';
 import { RECENT_QUERY } from '../../features/budget/QuickAddBar';
 import { buildTxQuery } from '../../features/budget/txQuery';
@@ -128,7 +127,8 @@ const PRODUCTION_TEXTS: ReadonlyArray<readonly [string, string]> = [
     'features/budget/txQuery.ts (поиск с пробелом)',
     buildTxQuery({ month: '2026-06', search: 'кофе эклер', limit: 50 }),
   ],
-  ['features/budget/CategoryScreen.tsx (транзакции конверта)', envelopeTransactionsQuery(ID, 50)],
+  // Транзакции конверта (`CategoryScreen`) — экран в `legacy-1v` до 1в (срез 1б §8.6): в продукте
+  // этого запроса нет, сверять нечего.
   ['features/budget/categories.ts (CATEGORIES_QUERY)', CATEGORIES_QUERY],
   ['features/chat/memoryRules.ts (MEMORY_RULES_QUERY)', MEMORY_RULES_QUERY.query],
   ['features/chat/useFastPath.ts (CATEGORY_QUERY)', CATEGORY_QUERY.query],
@@ -195,14 +195,17 @@ test('контрол ссылки — ровно одна реализация �
  * категорий, дубля больше нет (тест выше), и отдельного текста у него не осталось.
  * `SmartListSave.tsx` собственного текста не имел (он оборачивал в `{{query:…}}` строку
  * Browser, покрытую записями `browser/query.ts`) и снят Задачей 21b как механизм без
- * единого вызывателя — причина записана в докблоке `BrowserScreen.tsx`. Ещё минус три адреса
+ * единого вызывателя. Ещё минус три адреса
  * Повестки — вкладка перешла на подписку `agenda.list` (§А5-5), собственного текста запроса у
  * неё нет.
+ *
+ * Минус один — транзакции конверта: экран категории ушёл в `legacy-1v` (срез 1б §8.6, РП-31), и
+ * в продукте этого текста нет.
  *
  * Число пиннится, потому что молча УКОРОТИТЬ этот список — самый дешёвый способ сделать тест
  * зелёным, не переведя текст.
  */
-test('в списке боевых текстов ровно двенадцать адресов', () => {
-  expect(PRODUCTION_TEXTS.length).toBe(12);
-  expect(new Set(PRODUCTION_TEXTS.map(([where]) => where)).size).toBe(12);
+test('в списке боевых текстов ровно одиннадцать адресов', () => {
+  expect(PRODUCTION_TEXTS.length).toBe(11);
+  expect(new Set(PRODUCTION_TEXTS.map(([where]) => where)).size).toBe(11);
 });

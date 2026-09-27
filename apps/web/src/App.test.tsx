@@ -1,99 +1,44 @@
-import { act, fireEvent, screen, waitFor } from '@testing-library/react';
-import { afterEach, expect, test } from 'vitest';
+import { act, screen, within } from '@testing-library/react';
+import { afterEach, beforeEach, expect, test } from 'vitest';
 import { App } from './App';
-import { useNav } from './state/navigation';
+import { resetFrame, stubLaunchMode, unstubLaunchMode } from './app/frame/frame-fixtures';
 import { useRetryBuffer } from './state/retry';
-import { renderWithProviders, wireEntity } from './test/harness';
+import { renderWithProviders } from './test/harness';
+
+beforeEach(() => {
+  stubLaunchMode('site');
+  resetFrame('/');
+});
 
 afterEach(() => {
-  localStorage.clear();
-  useNav.setState({
-    activeTab: 'chat',
-    stacks: { chat: [], browser: [], agenda: [], budget: [] },
-  });
+  unstubLaunchMode();
+  resetFrame('/');
 });
 
-// Этап 3: двухрежимный layout. jsdom не применяет media queries — в DOM присутствуют
-// ОБЕ поверхности (SidebarNav и TabBar), поэтому testid у них разные.
-// Agenda — вкладка ЯДРА (02-core-os §1.1): в отличие от Budget («первый устанавливаемый
-// view», 03-budget §1.2) гейта installedViews у неё нет. Порядок вкладок — Chat, Browser,
-// Agenda, (Budget). Handler отдаёт {} на user.getSettings → installedViews пуст → Budget скрыт.
-test('навигация: Чат, Обзор, Повестка в обеих поверхностях; Budget под гейтом installedViews', () => {
-  // App живёт под trpc.Provider (main.tsx); дефолтный таб chat рендерит ChatScreen → нужен контекст.
-  // entity.query отдаём массивом: бейдж Agenda (§1.5) шлёт его с любого экрана.
+// Срез 1б §6.1–§6.2: нижнего ряда вкладок и сайдбара закреплённых больше нет — сверху присутствие
+// хоста, внизу справа кнопки хоста. Сегодня рамка одна на телефон и десктоп (рейка и сайдбар —
+// задача 25).
+test('рамка: присутствие хоста сверху и кнопки хоста внизу; ни вкладок, ни закреплённых', async () => {
   renderWithProviders(<App />, (path) => (path === 'entity.query' ? [] : {}));
-  // Мобильный tab-bar — вкладки в порядке §1.1
-  expect(screen.getAllByRole('tab').map((b) => b.getAttribute('data-testid'))).toEqual([
-    'tab-chat',
-    'tab-browser',
-    'tab-agenda',
-  ]);
-  expect(screen.getByTestId('tab-chat')).toBeEnabled();
-  expect(screen.getByTestId('tab-browser')).toBeEnabled();
-  expect(screen.getByTestId('tab-agenda')).toBeEnabled();
-  expect(screen.queryByTestId('tab-budget')).toBeNull();
-  // Десктопный sidebar: навигация + настройки
-  expect(screen.getByTestId('sidebar-chat')).toBeInTheDocument();
-  expect(screen.getByTestId('sidebar-browser')).toBeInTheDocument();
-  expect(screen.getByTestId('sidebar-agenda')).toBeInTheDocument();
-  expect(screen.queryByTestId('sidebar-budget')).toBeNull();
-  expect(screen.getByTestId('open-settings')).toBeInTheDocument();
-  // Подпись вкладки — «Повестка» (решение владельца 2026-07-25); testid и id таба прежние.
-  // Доступное имя проверяем не атрибутом, а вычисленным именем: aria-label с кнопки снят
-  // намеренно (иначе бейдж в имя не попадает, B5), и важно именно то, что услышит скринридер.
-  expect(screen.getByTestId('tab-agenda')).toHaveTextContent('Повестка');
-  expect(screen.getByRole('tab', { name: 'Повестка' })).toBe(screen.getByTestId('tab-agenda'));
-  expect(screen.getByTestId('sidebar-agenda')).toHaveTextContent('Повестка');
+  expect(await screen.findByTestId('host-presence')).toBeInTheDocument();
+  expect(screen.getByTestId('host-buttons')).toBeInTheDocument();
+  expect(screen.queryByRole('tab')).toBeNull();
+  expect(screen.queryByText('Закреплённые')).toBeNull();
+  expect(screen.queryByTestId('agenda-badge')).toBeNull();
 });
 
-// §1.5: бейдж Chat реактивно отражает размер retry-буфера (пусто → нет бейджа) —
-// в обеих поверхностях навигации.
-test('бейдж Chat показывает размер retry-буфера в tab-bar и sidebar, исчезает при опустошении', () => {
+// §1.5: бейдж очереди офлайн-записей — теперь на кнопке чата хоста (записи уходят из чата).
+test('бейдж чата показывает размер retry-буфера и исчезает при опустошении', async () => {
   const op = useRetryBuffer.getState().enqueueCreate({ title: 'Тест', tags: [] }, 'fast_path');
   renderWithProviders(<App />);
-  expect(screen.getByTestId('chat-badge')).toHaveTextContent('1');
-  expect(screen.getByTestId('sidebar-chat-badge')).toHaveTextContent('1');
-  // Бейдж входит в ДОСТУПНОЕ ИМЯ пункта — иначе про очередь знает только зрячий.
-  // Обе поверхности: tab-bar (role=tab) и sidebar (обычная кнопка, aria-current).
-  expect(screen.getByRole('tab', { name: 'Чат, 1 ждут отправки' })).toBeInTheDocument();
-  expect(screen.getByRole('button', { name: 'Чат, 1 ждут отправки' })).toBe(
-    screen.getByTestId('sidebar-chat'),
-  );
+  const buttons = await screen.findByTestId('host-buttons');
+  expect(within(buttons).getByTestId('chat-badge')).toHaveTextContent('1');
+  // Число — в доступном имени кнопки: иначе про очередь знает только зрячий.
+  expect(within(buttons).getByRole('button', { name: 'Чат, 1 ждут отправки' })).toBeInTheDocument();
 
   act(() => {
     useRetryBuffer.getState().cancel(op.clientId);
   });
   expect(screen.queryByTestId('chat-badge')).toBeNull();
-  expect(screen.queryByTestId('sidebar-chat-badge')).toBeNull();
-  expect(screen.getByRole('tab', { name: 'Чат' })).toBeInTheDocument();
-});
-
-// Клик по закреплённой в sidebar: активный таб становится browser, entity — наверху
-// browser-стека БЕЗ сворачивания существующего стека (switchTab по активному табу
-// сворачивает — проверяем, что хелпер это обходит).
-test('закреплённая из sidebar открывается в browser-стеке поверх существующего стека', async () => {
-  useNav.setState({
-    activeTab: 'browser',
-    stacks: { chat: [], browser: [{ kind: 'entity', id: 'e0' }], agenda: [], budget: [] },
-  });
-  renderWithProviders(<App />, (path) => {
-    if (path === 'user.getSettings') return { pinnedEntities: [{ id: 'p1', order: 0 }] };
-    if (path === 'entity.get')
-      return {
-        entity: wireEntity({ id: 'p1', title: 'Закреп' }),
-        relations: [],
-        thread: null,
-      };
-    if (path === 'entity.query') return [];
-    return {};
-  });
-
-  await waitFor(() => expect(screen.getByTestId('pinned-p1')).toBeInTheDocument());
-  fireEvent.click(screen.getByTestId('pinned-p1'));
-
-  expect(useNav.getState().activeTab).toBe('browser');
-  expect(useNav.getState().stacks.browser).toEqual([
-    { kind: 'entity', id: 'e0' },
-    { kind: 'entity', id: 'p1' },
-  ]);
+  expect(within(buttons).getByRole('button', { name: 'Чат' })).toBeInTheDocument();
 });

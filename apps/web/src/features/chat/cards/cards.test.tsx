@@ -1,12 +1,13 @@
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
-import { useNav } from '../../../state/navigation';
+import { resetNavForTests } from '../../../state/navigation';
 import {
   type MockHandler,
   renderWithProviders,
   trpcError,
   wireEntity,
 } from '../../../test/harness';
+import { recordAddress, topAddress } from '../../../test/nav';
 import { registryReply } from '../../../test/registry';
 import { smoothAuditText } from '../format-audit';
 import { MEMORY_RULES_QUERY } from '../memoryRules';
@@ -33,10 +34,7 @@ const msg = (cards: unknown[], extra: Partial<ChatMessage> = {}): ChatMessage =>
 // оставшейся навигации.
 beforeEach(() => {
   localStorage.clear();
-  useNav.setState({
-    activeTab: 'chat',
-    stacks: { chat: [], browser: [], agenda: [], budget: [] },
-  });
+  resetNavForTests();
 });
 
 // Мок entity.get для строк query_result: EntityRef резолвит id → title (этап 4, без UUID в UI).
@@ -601,35 +599,12 @@ test('smoothAuditText сглаживает «batch: операций — 1»', (
 // Производителя на сервере ещё нет (он приезжает задачей C4c) — карточка проверяется
 // от фикстурного сообщения, чтобы не остаться непроверяемым кодом.
 
-const settingsWithViews = (views: string[]) => ({
-  timezone: 'Europe/Moscow',
-  defaultCurrency: 'RUB',
-  weekStartDay: 1,
-  installedViews: views,
-  pinnedEntities: [],
-});
-
-test('import_review: «Открыть импорт» переключает на Budget и пушит экран импорта', async () => {
-  renderWithProviders(<div>{renderCards(msg([{ kind: 'import_review' }]))}</div>, (path) =>
-    path === 'user.getSettings' ? settingsWithViews(['orbis-budget']) : {},
-  );
-  expect(screen.getByTestId('import-review-card')).toHaveTextContent(/импорт выписки/i);
-  await waitFor(() =>
-    expect(screen.getByRole('button', { name: /открыть импорт/i })).toBeInTheDocument(),
-  );
-
-  fireEvent.click(screen.getByRole('button', { name: /открыть импорт/i }));
-  expect(useNav.getState().activeTab).toBe('budget');
-  expect(useNav.getState().stacks.budget.at(-1)).toEqual({ kind: 'budget-import' });
-});
-
-test('import_review без вкладки Budget: вместо кнопки — строка-объяснение', async () => {
-  renderWithProviders(<div>{renderCards(msg([{ kind: 'import_review' }]))}</div>, (path) =>
-    path === 'user.getSettings' ? settingsWithViews([]) : {},
-  );
-  await waitFor(() => expect(screen.getByTestId('import-review-card')).toBeInTheDocument());
-  expect(screen.queryByRole('button', { name: /открыть импорт/i })).toBeNull();
-  expect(screen.getByTestId('import-review-card')).toHaveTextContent(/бюджет/i);
+test('import_review: импорт — в приложении «Бюджет» следующего среза; кнопки в пустоту нет', () => {
+  renderWithProviders(<div>{renderCards(msg([{ kind: 'import_review' }]))}</div>, () => ({}));
+  const card = screen.getByTestId('import-review-card');
+  expect(card).toHaveTextContent(/импорт выписки/i);
+  expect(card).toHaveTextContent('Импорт откроется в приложении «Бюджет» — следующий срез');
+  expect(within(card).queryByRole('button')).toBeNull();
 });
 
 // --- карточка memory_rule_suggestion (01-arch §7.8, D3b) --------------------------------
@@ -1291,10 +1266,10 @@ test('свёрнутый дифф: счётчики и ≤3 блоков; skippe
   // Приёмка 2: и строка записи, и «открыть запись» ведут на саму запись — существующей
   // навигацией по entity id (полный дифф живёт там, а не в ленте).
   fireEvent.click(await within(card).findByRole('button', { name: 'Купить билеты' }));
-  expect(useNav.getState().stacks.chat).toContainEqual({ kind: 'entity', id: 'e1' });
-  useNav.setState({ stacks: { chat: [], browser: [], agenda: [], budget: [] } });
+  expect(topAddress()).toEqual(recordAddress('e1'));
+  resetNavForTests();
   fireEvent.click(await within(card).findByRole('button', { name: /открыть запись/i }));
-  expect(useNav.getState().stacks.chat).toContainEqual({ kind: 'entity', id: 'e1' });
+  expect(topAddress()).toEqual(recordAddress('e1'));
   withUnits.unmount();
 
   // Приёмка 12 + 16: дифф не построен — показываем ПРЕЖНЮЮ форму и говорим словами, почему.

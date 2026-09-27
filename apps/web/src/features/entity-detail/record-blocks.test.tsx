@@ -13,8 +13,8 @@ import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { BodyKindProvider } from '../../lib/query-blocks/body-kind';
 import { noteRegistryVersion, resetRegistryVersionForTests } from '../../lib/registry/useRegistry';
-import { useNav } from '../../state/navigation';
 import { installCrashTrap, type MockHandler, renderWithProviders } from '../../test/harness';
+import { navAt } from '../../test/nav';
 import { BUILTIN_REGISTRY } from '../../test/registry';
 import { queryClient } from '../../trpc';
 import { usePlanToFactPrompt } from '../budget/usePlanToFactPrompt';
@@ -67,7 +67,7 @@ function Host({ id, children }: { id: string; children: ReactNode }) {
   if (get.data === undefined) return null;
   return (
     <RecordHostProvider
-      value={recordHostValue(get.data, { planToFact, activeTab: 'record', readOnly: false })}
+      value={recordHostValue(get.data, { planToFact, openTab: 'record', readOnly: false })}
     >
       <BodyScreenProvider value={SCREEN}>{children}</BodyScreenProvider>
     </RecordHostProvider>
@@ -79,10 +79,7 @@ function renderUnder(
   ui: ReactNode,
   handler: MockHandler = structureHandler(f),
 ) {
-  useNav.setState({
-    activeTab: 'browser',
-    stacks: { chat: [], browser: [{ kind: 'entity', id: f.entity.id }], agenda: [], budget: [] },
-  });
+  navAt(f.entity.id);
   return renderWithProviders(<Host id={f.entity.id}>{ui}</Host>, handler, {
     queries: queryClient.getDefaultOptions().queries,
   });

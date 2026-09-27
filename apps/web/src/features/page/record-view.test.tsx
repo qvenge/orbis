@@ -21,7 +21,6 @@ import { act, fireEvent, screen, waitFor, within } from '@testing-library/react'
 import { createElement } from 'react';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { noteRegistryVersion, resetRegistryVersionForTests } from '../../lib/registry/useRegistry';
-import { useNav } from '../../state/navigation';
 import {
   blocksReply,
   installCrashTrap,
@@ -31,6 +30,7 @@ import {
   type WireEntityFixture,
   wireEntity,
 } from '../../test/harness';
+import { navAt, recordAddress, topAddress } from '../../test/nav';
 import { BUILTIN_REGISTRY } from '../../test/registry';
 import { queryClient } from '../../trpc';
 import { Toaster } from '../../ui/Toast';
@@ -158,10 +158,7 @@ function openRecord(
   world: World,
   opts: { blocks?: Parameters<typeof blocksReply>[0]; over?: MockHandler } = {},
 ) {
-  useNav.setState({
-    activeTab: 'browser',
-    stacks: { chat: [], browser: [{ kind: 'entity', id: f.entity.id }], agenda: [], budget: [] },
-  });
+  navAt(f.entity.id);
   const screenHandler = structureHandler(f);
   const blocks = blocksReply(opts.blocks ?? {});
   const handler: MockHandler = async (path, input) => {
@@ -263,10 +260,7 @@ describe('выбор шаблона (§4.2)', () => {
     expect(await screen.findByTestId('configure-view')).toBeInTheDocument();
     expect(calls).toContainEqual({ path: 'entity.get', input: detailGetInput(TPL_B) });
     // Экран не уходил со своей записи: настройка — режим экрана, а не переход.
-    expect(useNav.getState().stacks.browser.at(-1)).toEqual({
-      kind: 'entity',
-      id: fixture('project-task').entity.id,
-    });
+    expect(topAddress()).toEqual(recordAddress(fixture('project-task').entity.id));
   });
 
   test('повтор одинаковым текстом в единственном шаблоне → шаблон хоста и «не разобран» с причиной «второй» (R-4)', async () => {
@@ -364,7 +358,7 @@ describe('выбор шаблона (§4.2)', () => {
     expect(await screen.findByTestId('page-tabs')).toBeInTheDocument();
     expect(renderedTexts()).not.toContain('Вид в колонках');
 
-    fireEvent.keyDown(await screen.findByTestId('detail-menu'), { key: 'Enter' });
+    fireEvent.keyDown(await screen.findByTestId('screen-menu'), { key: 'Enter' });
     await screen.findByRole('menu');
     fireEvent.click(screen.getByRole('menuitem', { name: 'Изменить вид только этой записи' }));
     await waitFor(() => expect(batches).toHaveLength(1));

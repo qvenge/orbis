@@ -1,277 +1,159 @@
-import { fireEvent, screen, waitFor } from '@testing-library/react';
-import { afterEach, beforeEach, expect, test } from 'vitest';
-import { App } from '../App';
+/**
+ * История браузера под моделью навигации (срез 1б §7.3, С1б-3): одна модель — два поведения.
+ * Сайт — честные записи со снимком модели, «назад» браузера восстанавливает место из снимка;
+ * приложение — одна запись и охранная над ней, системный «назад» работает как «‹».
+ *
+ * jsdom держит ОДНУ сессионную историю на файл — длину меряем дельтой, адресную строку перед тестом
+ * ставим `replaceState`.
+ */
+import { waitFor } from '@testing-library/react';
+import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { registerLeaveGuard } from '../state/leave-guard';
-import { closeToBudgetOverview, useNav } from '../state/navigation';
-import { renderWithProviders, wireEntity } from '../test/harness';
-import { installHistorySync } from './history';
+import { resetNavForTests, useNav } from '../state/navigation';
+import { recordAddress, topAddress } from '../test/nav';
+import { stubLaunchMode, unstubLaunchMode } from './frame/frame-fixtures';
+import { installHistory, startNavigation } from './history';
 
-// D18: история браузера — носитель пути навигации. Системный жест «назад» и кнопка шапки
-// обязаны означать одно и то же, а адресная строка — показывать текущий экран.
-//
-// ВАЖНО про jsdom: сессионная история ОДНА на весь файл и между тестами не сбрасывается
-// (window.history.length копится). Поэтому длину меряем дельтой, а текущую запись
-// в beforeEach канонизируем replaceState — тогда стартовая позиция теста известна.
+const A = '00000000-0000-4000-8000-00000000b001';
+const B = '00000000-0000-4000-8000-00000000b002';
+const C = '00000000-0000-4000-8000-00000000b003';
 
-const E1 = '11111111-1111-4111-8111-111111111111';
-const E2 = '22222222-2222-4222-8222-222222222222';
+let uninstall: () => void = () => {};
 
-const ent = (id: string, title: string) => wireEntity({ id, title });
-
-const handler = (path: string, input: unknown) => {
-  if (path === 'user.getSettings')
-    return {
-      timezone: 'Europe/Moscow',
-      defaultCurrency: 'RUB',
-      weekStartDay: 'monday',
-      pinnedEntities: [],
-    };
-  if (path === 'entity.get') {
-    const id = (input as { id: string }).id;
-    return { entity: ent(id, `Сущность ${id}`), relations: [], thread: null };
-  }
-  if (path === 'entity.query') return [];
-  if (path === 'entity.count') return { count: 0 };
-  if (path === 'chat.ensureThread') return { threadId: 't1' };
-  if (path === 'chat.listMessages') return [];
-  return {};
-};
-
-const resetNav = () =>
-  useNav.setState({ activeTab: 'chat', stacks: { chat: [], browser: [], agenda: [], budget: [] } });
+function start(path: string, mode: 'app' | 'site' = 'site') {
+  stubLaunchMode(mode);
+  window.history.replaceState(null, '', path);
+  startNavigation();
+  uninstall = installHistory();
+}
 
 beforeEach(() => {
   localStorage.clear();
-  resetNav();
-  window.history.replaceState(null, '', '/');
+  resetNavForTests();
 });
 
 afterEach(() => {
+  uninstall();
+  unstubLaunchMode();
+  vi.restoreAllMocks();
+  resetNavForTests();
   localStorage.clear();
-  resetNav();
+  window.history.replaceState(null, '', '/');
 });
 
-test('push пишет запись истории, popstate снимает верхний экран', async () => {
-  const uninstall = installHistorySync();
-  useNav.getState().switchTab('browser');
-  useNav.getState().push('browser', { kind: 'entity', id: E1 });
-  expect(window.location.pathname).toBe(`/entity/${E1}`);
+const path = () => window.location.pathname + window.location.search;
 
-  // Эмуляция системного жеста «назад»
+test('сайт: переход — запись истории со снимком; «назад» браузера восстанавливает прежнее место', async () => {
+  start('/');
+  const before = window.history.length;
+  useNav.getState().openRecord(A);
+  useNav.getState().openRecord(B);
+  expect(window.history.length).toBe(before + 2);
+  expect(path()).toBe(`/r/${B}`);
+
   window.history.back();
-  await waitFor(() => expect(useNav.getState().stacks.browser).toHaveLength(0));
-  expect(window.location.pathname).toBe('/browser');
-  uninstall();
+  await waitFor(() => expect(topAddress()).toEqual(recordAddress(A)));
+  expect(path()).toBe(`/r/${A}`);
+  // Применение `popstate` новых записей не порождает.
+  expect(window.history.length).toBe(before + 2);
 });
 
-test('D18: back на корне вкладки возвращает на вкладку, с которой пришли', async () => {
-  const uninstall = installHistorySync();
-  useNav.getState().switchTab('chat');
-  useNav.getState().switchTab('budget');
-  expect(window.location.pathname).toBe('/budget');
-
+test('сайт: «вперёд» возвращает снятое место из снимка записи', async () => {
+  start('/');
+  useNav.getState().openRecord(A);
+  useNav.getState().openRecord(B);
   window.history.back();
-  await waitFor(() => expect(useNav.getState().activeTab).toBe('chat'));
-  uninstall();
-});
-
-test('применение popstate не порождает новых записей истории', async () => {
-  const uninstall = installHistorySync();
-  useNav.getState().switchTab('browser');
-  useNav.getState().push('browser', { kind: 'entity', id: E1 });
-  const lenBefore = window.history.length;
-  window.history.back();
-  await waitFor(() => expect(useNav.getState().stacks.browser).toHaveLength(0));
-
-  // ЧЕСТНО про этот ассерт: сам по себе он слабее, чем звучит. ОДИНОЧНЫЙ лишний pushState
-  // внутри обработчика popstate длину НЕ меняет — усечение forward-хвоста и добавление
-  // записи гасят друг друга. Оставляем его сторожем грубых случаев (несколько записей
-  // за одно применение), но ловит петлю не он.
-  expect(window.history.length).toBe(lenBefore);
-
-  // Вот настоящий детектор: петля затирает forward-хвост, и «вперёд» становится некуда —
-  // при петле здесь остался бы /browser и пустой стек.
+  await waitFor(() => expect(topAddress()).toEqual(recordAddress(A)));
   window.history.forward();
-  await waitFor(() => expect(window.location.pathname).toBe(`/entity/${E1}`));
-  expect(useNav.getState().stacks.browser).toEqual([{ kind: 'entity', id: E1 }]);
-  uninstall();
+  await waitFor(() => expect(topAddress()).toEqual(recordAddress(B)));
 });
 
-test('push в НЕактивную вкладку не пишет запись истории', () => {
-  const uninstall = installHistorySync();
-  const lenBefore = window.history.length;
-  const pathBefore = window.location.pathname;
-  // Видимая позиция (вкладка + глубина её стека) не изменилась — писать нечего.
-  useNav.getState().push('budget', { kind: 'budget-transactions' });
-  expect(window.history.length).toBe(lenBefore);
-  expect(window.location.pathname).toBe(pathBefore);
-  uninstall();
-});
-
-test('шаг стека без собственного маршрута тоже переживает back', async () => {
-  const uninstall = installHistorySync();
-  useNav.getState().switchTab('budget');
-  // У «Транзакций» нет внешней ссылки: путь остаётся корнем вкладки, а шаг стека
-  // держит запись истории — иначе back с них ничего бы не снял.
-  useNav.getState().push('budget', { kind: 'budget-transactions' });
-  expect(window.location.pathname).toBe('/budget');
-
-  window.history.back();
-  await waitFor(() => expect(useNav.getState().stacks.budget).toHaveLength(0));
-  expect(useNav.getState().activeTab).toBe('budget');
-  uninstall();
-});
-
-test('forward восстанавливает экран БЕЗ собственного маршрута, а не корень вкладки', async () => {
-  const uninstall = installHistorySync();
-  useNav.getState().switchTab('budget');
-  useNav.getState().push('budget', { kind: 'budget-transactions' });
-
-  window.history.back();
-  await waitFor(() => expect(useNav.getState().stacks.budget).toEqual([]));
-
-  // Пути тут не хватило бы: /budget — это и корень вкладки тоже. Экран приезжает
-  // из самой записи истории, поэтому «вперёд» возвращает именно «Транзакции».
-  window.history.forward();
-  await waitFor(() =>
-    expect(useNav.getState().stacks.budget).toEqual([{ kind: 'budget-transactions' }]),
-  );
-  uninstall();
-});
-
-test('«назад» после «К бюджету» возвращает на экран импорта, а не в пустоту', async () => {
-  const uninstall = installHistorySync();
-  useNav.getState().switchTab('budget');
-  useNav.getState().push('budget', { kind: 'budget-import' });
-  // Импорт закрывается переходом ВПЕРЁД на Overview — запись {budget, 1, импорт} остаётся
-  // позади. Если бы в ней лежал только путь (/budget — он же корень вкладки), «назад»
-  // не менял бы ничего: два мёртвых нажатия подряд.
-  closeToBudgetOverview();
-  expect(useNav.getState().stacks.budget).toEqual([]);
-
-  window.history.back();
-  await waitFor(() => expect(useNav.getState().stacks.budget).toEqual([{ kind: 'budget-import' }]));
-  uninstall();
-});
-
-test('битая запись истории не ломает стор: фолбэк по пути', async () => {
-  const uninstall = installHistorySync();
-  // Чужая запись может нести что угодно — экран из неё нельзя брать на веру,
-  // иначе роутер получит неизвестный kind и упадёт на renderScreen.
-  window.history.pushState(
-    { tab: 'browser', depth: 4, screen: { kind: 'нечто-постороннее' } },
-    '',
-    `/entity/${E1}`,
-  );
-  useNav.getState().switchTab('budget');
-
-  window.history.back();
-  await waitFor(() => expect(useNav.getState().activeTab).toBe('browser'));
-  // Запись отброшена целиком, экран восстановлен по пути.
-  expect(useNav.getState().stacks.browser).toEqual([{ kind: 'entity', id: E1 }]);
-  uninstall();
-});
-
-test('прыжок через две записи оставляет стор и запись истории согласованными', async () => {
-  const uninstall = installHistorySync();
-  useNav.getState().switchTab('browser');
-  useNav.getState().push('browser', { kind: 'entity', id: E1 });
-  useNav.getState().push('browser', { kind: 'entity', id: E2 });
-
-  // Так ходят выпадающим списком браузера и долгим тапом по «назад».
+test('сайт: прыжок через две записи — модель и адрес той записи, согласованно', async () => {
+  start('/');
+  useNav.getState().openRecord(A);
+  useNav.getState().openRecord(B);
+  useNav.getState().openRecord(C);
   window.history.go(-2);
-  await waitFor(() => expect(useNav.getState().stacks.browser).toEqual([]));
+  await waitFor(() => expect(topAddress()).toEqual(recordAddress(A)));
+  expect(path()).toBe(`/r/${A}`);
+  expect(useNav.getState().model.apps.host?.stacks.home).toHaveLength(2);
+});
 
-  window.history.go(2);
-  await waitFor(() =>
-    expect(useNav.getState().stacks.browser.at(-1)).toEqual({ kind: 'entity', id: E2 }),
+test('чужая запись истории (форма 1а) не ломает стор: место — по адресной строке', async () => {
+  start('/');
+  useNav.getState().openRecord(A);
+  // Запись вкладки 1а после выкатки: `{tab, depth, screen}` и старый путь.
+  window.history.pushState(
+    { tab: 'browser', depth: 1, screen: { kind: 'entity', id: B } },
+    '',
+    `/entity/${B}`,
   );
-
-  // Запись обязана описывать то, что РЕАЛЬНО в сторе: глубину, которой в стеке нет,
-  // восстановить не из чего, и оставить в записи прежнее число значило бы соврать —
-  // следующий «назад» собрал бы стек не из тех экранов.
-  const state = window.history.state as { tab: string; depth: number; screen: unknown };
-  const stack = useNav.getState().stacks.browser;
-  expect(state.tab).toBe('browser');
-  expect(state.depth).toBe(stack.length);
-  expect(state.screen).toEqual(stack.at(-1) ?? null);
-
-  // И следующий «назад» снимает ровно один уровень.
+  window.history.pushState({ junk: true }, '', '/');
   window.history.back();
-  await waitFor(() =>
-    expect(useNav.getState().stacks.browser).toEqual([{ kind: 'entity', id: E1 }]),
-  );
-  uninstall();
+  await waitFor(() => expect(topAddress()).toEqual(recordAddress(B)));
+  // Адрес канонизирован под модель.
+  expect(path()).toBe(`/r/${B}`);
 });
 
-test('forward восстанавливает снятый экран из записи', async () => {
-  const uninstall = installHistorySync();
-  useNav.getState().switchTab('browser');
-  useNav.getState().push('browser', { kind: 'entity', id: E1 });
-  useNav.getState().push('browser', { kind: 'entity', id: E2 });
-
+test('повторная установка (StrictMode) не плодит слушателей: один «назад» — один шаг', async () => {
+  start('/');
+  installHistory();
+  uninstall = installHistory();
+  useNav.getState().openRecord(A);
+  useNav.getState().openRecord(B);
   window.history.back();
-  await waitFor(() => expect(useNav.getState().stacks.browser).toHaveLength(1));
-  expect(useNav.getState().stacks.browser).toEqual([{ kind: 'entity', id: E1 }]);
-
-  window.history.forward();
-  await waitFor(() => expect(useNav.getState().stacks.browser).toHaveLength(2));
-  expect(useNav.getState().stacks.browser).toEqual([
-    { kind: 'entity', id: E1 },
-    { kind: 'entity', id: E2 },
-  ]);
-  uninstall();
+  await waitFor(() => expect(topAddress()).toEqual(recordAddress(A)));
+  // Второй слушатель снял бы ещё шаг — на домашнюю.
+  await new Promise((r) => setTimeout(r, 20));
+  expect(topAddress()).toEqual(recordAddress(A));
 });
 
-test('повторная установка (StrictMode) не плодит записи истории и подписки', () => {
-  const first = installHistorySync();
-  const second = installHistorySync();
-  const lenBefore = window.history.length;
-  useNav.getState().switchTab('browser');
-  // Одна видимая смена позиции — ровно одна новая запись, а не две.
-  expect(window.history.length).toBe(lenBefore + 1);
-  first();
-  second();
-});
+test('кнопка «‹» и браузерный «назад» дают одно и то же место', async () => {
+  start('/');
+  useNav.getState().openRecord(A);
+  useNav.getState().openRecord(B);
+  useNav.getState().back();
+  await waitFor(() => expect(topAddress()).toEqual(recordAddress(A)));
+  const byButton = { model: useNav.getState().model, path: path() };
 
-test('кнопка «Назад» и системный жест дают одинаковый результат', async () => {
-  const uninstall = installHistorySync();
-  useNav.getState().switchTab('browser');
-  useNav.getState().push('browser', { kind: 'entity', id: E1 });
-  useNav.getState().push('browser', { kind: 'entity', id: E2 });
-  renderWithProviders(<App />, handler);
-
-  // Ветка 1: кнопка шапки
-  await waitFor(() => expect(screen.getByTestId('nav-back')).toBeInTheDocument());
-  fireEvent.click(screen.getByTestId('nav-back'));
-  await waitFor(() => expect(useNav.getState().stacks.browser).toHaveLength(1));
-  const afterButton = {
-    activeTab: useNav.getState().activeTab,
-    stack: useNav.getState().stacks.browser,
-    path: window.location.pathname,
-  };
-
-  // Возврат в ту же позицию и ветка 2: системный жест
-  useNav.getState().push('browser', { kind: 'entity', id: E2 });
-  await waitFor(() => expect(useNav.getState().stacks.browser).toHaveLength(2));
+  useNav.getState().openRecord(B);
   window.history.back();
-  await waitFor(() => expect(useNav.getState().stacks.browser).toHaveLength(1));
-  const afterGesture = {
-    activeTab: useNav.getState().activeTab,
-    stack: useNav.getState().stacks.browser,
-    path: window.location.pathname,
-  };
-
-  expect(afterGesture).toEqual(afterButton);
-  uninstall();
+  await waitFor(() => expect(topAddress()).toEqual(recordAddress(A)));
+  expect({ model: useNav.getState().model, path: path() }).toEqual(byButton);
 });
 
-test('страж ухода сказал «нет» — системный «назад» не уходит: стор прежний, запись экрана возвращена', async () => {
-  const uninstall = installHistorySync();
-  useNav.getState().switchTab('browser');
-  useNav.getState().push('browser', { kind: 'entity', id: E1 });
-  const before = window.history.state;
-  const stacks = useNav.getState().stacks;
+test('сайт, первая запись вкладки (вход по ссылке): «‹» идёт по модели честной записью, не прочь с Orbis (R-24)', () => {
+  start(`/r/${A}`);
+  const back = vi.spyOn(window.history, 'back');
+  const push = vi.spyOn(window.history, 'pushState');
+  useNav.getState().back();
+  expect(back).not.toHaveBeenCalled();
+  expect(push).toHaveBeenCalledTimes(1);
+  expect(topAddress()).toEqual({ kind: 'home', app: { kind: 'host' } });
+  expect(path()).toBe('/');
+});
+
+test('приложение: «‹» — по модели, новых записей нет, адрес обновлён (эффект none → replaceState)', () => {
+  start('/', 'app');
+  useNav.getState().openRecord(A);
+  useNav.getState().openRecord(B);
+  const push = vi.spyOn(window.history, 'pushState');
+  const before = window.history.length;
+  useNav.getState().back();
+  expect(topAddress()).toEqual(recordAddress(A));
+  expect(path()).toBe(`/r/${A}`);
+  expect(push).not.toHaveBeenCalled();
+  expect(window.history.length).toBe(before);
+});
+
+test.each([
+  'site',
+  'app',
+] as const)('страж ухода сказал «нет» (%s) — системный «назад» не уходит: место прежнее, запись возвращена', async (mode) => {
+  start('/', mode);
+  useNav.getState().openRecord(A);
+  useNav.getState().openRecord(B);
+  const model = useNav.getState().model;
   const unregister = registerLeaveGuard(() => false);
   try {
     const popped = new Promise<void>((resolve) =>
@@ -279,13 +161,22 @@ test('страж ухода сказал «нет» — системный «н�
     );
     window.history.back();
     await popped;
-    expect(useNav.getState().activeTab).toBe('browser');
-    expect(useNav.getState().stacks).toEqual(stacks);
-    // В истории снова запись экрана, с которого не ушли: следующий «назад» уйдёт с него же.
-    expect(window.history.state).toEqual(before);
-    expect(window.location.pathname).toBe(`/entity/${E1}`);
+    expect(useNav.getState().model).toBe(model);
+    expect(path()).toBe(`/r/${B}`);
+    expect((window.history.state as { model?: unknown }).model).toEqual(model);
   } finally {
     unregister();
-    uninstall();
   }
+});
+
+test('перезагрузка: место и глубина — из снимка записи истории, новых записей нет', () => {
+  start('/');
+  useNav.getState().openRecord(A);
+  useNav.getState().openRecord(B);
+  const model = useNav.getState().model;
+  const before = window.history.length;
+  resetNavForTests();
+  startNavigation();
+  expect(useNav.getState().model).toEqual(model);
+  expect(window.history.length).toBe(before);
 });

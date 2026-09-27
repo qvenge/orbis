@@ -13,7 +13,7 @@ import type { usePlanToFactPrompt } from '../budget/usePlanToFactPrompt';
  * запроса записи хост не заводит.
  *
  * Два поля — не данные запроса, а СВЯЗИ экрана, которые разрез обязан сохранить (Ф-1а-18):
- * `planToFact` и `activeTab`. Разведка нашла их как пропы между частями одной вкладки; шаблон
+ * `planToFact` и `openTab`. Разведка нашла их как пропы между частями одной вкладки; шаблон
  * разносит эти части по разным местам дерева, и держать их можно только выше обоих.
  */
 
@@ -48,7 +48,7 @@ export interface RecordHostValue {
    * с версиями никто не ходил. Сообщает это контейнер вкладок — оборачивая каждую часть в
    * `TabPartHost`; корень хоста (вне вкладок) несёт непустую строку: блок вне вкладок виден всегда.
    */
-  activeTab: string | null;
+  openTab: string | null;
   /**
    * Запись только для чтения ЦЕЛИКОМ — предпросмотр шаблона на чужой записи (§9.3; 1а новое-5,
    * принцип §0.2 п. 2): не правится ничего — ни тело, ни заголовок с чекбоксом, ни теги,
@@ -90,8 +90,8 @@ export function useHostReadOnly(): boolean {
 }
 
 /**
- * Часть контейнера вкладок: дети видят `activeTab` своей части — её значение, пока она открыта,
- * и `null`, пока скрыта (см. `RecordHostValue.activeTab`).
+ * Часть контейнера вкладок: дети видят `openTab` своей части — её значение, пока она открыта,
+ * и `null`, пока скрыта (см. `RecordHostValue.openTab`).
  */
 export function TabPartHost({
   value,
@@ -104,7 +104,7 @@ export function TabPartHost({
 }) {
   const host = useRecordHost();
   return (
-    <RecordHostProvider value={{ ...host, activeTab: open ? value : null }}>
+    <RecordHostProvider value={{ ...host, openTab: open ? value : null }}>
       {children}
     </RecordHostProvider>
   );
@@ -116,7 +116,7 @@ export function TabPartHost({
  */
 export function recordHostValue(
   reply: EntityGetReply,
-  screen: Pick<RecordHostValue, 'planToFact' | 'activeTab' | 'readOnly'>,
+  screen: Pick<RecordHostValue, 'planToFact' | 'openTab' | 'readOnly'>,
 ): RecordHostValue {
   return {
     entity: reply.entity,

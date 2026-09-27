@@ -19,6 +19,7 @@ import {
   trpcError,
   wireEntity,
 } from '../../test/harness';
+import { navAt, recordAddress, topAddress } from '../../test/nav';
 import { registryReply } from '../../test/registry';
 import { trpc } from '../../trpc';
 import { Toaster } from '../../ui/Toast';
@@ -107,10 +108,7 @@ beforeEach(() => {
   // реализации не имеет, поэтому подмена именно ДОБАВЛЯЕТ ветку простоя — и она молчит
   // (приём editor.test.tsx). Тесты, которым редактор нужен, зовут openEditor().
   vi.stubGlobal('requestIdleCallback', () => 1);
-  useNav.setState({
-    activeTab: 'browser',
-    stacks: { chat: [], browser: [{ kind: 'entity', id: 'e1' }], agenda: [], budget: [] },
-  });
+  navAt('e1');
 });
 
 /**
@@ -439,8 +437,8 @@ test('подзадачи: подпункт рождается ЗАДАЧЕЙ; с
 
   /**
    * ЗАПИСЬ С НУЛЯ: аспект задачи навешивается ЯВНО (§А1-1). Это БОЕВОЙ путь заведения
-   * подпункта — единственный: `QuickCapture` смонтирован только на корне Browser
-   * (`BrowserScreen.tsx`, `context={{kind:'root'}}`), и его ветка подпункта сегодня мертва.
+   * подпункта — единственный: `QuickCapture` монтируется только без контекста (`root`: блок
+   * «Записи» и «＋» рамки, срез 1б), и его ветка подпункта сегодня мертва.
    *
    * Потеря списка наблюдаема не отказом, а ТИШИНОЙ: запись рождается со
    * `orbis/task_status: 'inbox'`, но без носителя — чекбокса у неё нет, в Повестку она не
@@ -1203,8 +1201,8 @@ test('query-блок с `this` на detail получает контекст о�
 // --- меню ⋮ на detail: закрепить / архивировать / скопировать ссылку (§3.5) ------------
 // До слайса 3 «меню ⋮» из §3.5 было двумя icon-кнопками в шапке, а обещанного пункта
 // «Скопировать ссылку» не существовало вовсе. Теперь это настоящее меню, и оба прежних
-// действия живут внутри него. Форму пути даёт buildAppPath (B1) — руками её не собирают
-// ни здесь, ни в экране, иначе ссылка разъедется с роутером при первом же изменении.
+// действия живут внутри него. Форму адреса даёт buildAddress (срез 1б §7.1) — руками её не
+// собирают ни здесь, ни в экране, иначе ссылка разъедется с разбором при первом же изменении.
 
 // Radix позиционирует меню через floating-ui, а тот следит за размерами якоря
 // ResizeObserver'ом — в jsdom его нет вовсе, и без заглушки открытие меню падает на
@@ -1217,7 +1215,7 @@ class ResizeObserverStub {
 }
 globalThis.ResizeObserver ??= ResizeObserverStub as unknown as typeof ResizeObserver;
 
-const LINK_E1 = `${window.location.origin}/entity/e1`;
+const LINK_E1 = `${window.location.origin}/r/e1`;
 
 /** jsdom не реализует Clipboard API: свойства navigator.clipboard нет вовсе. */
 function stubClipboard(writeText: (text: string) => Promise<void>): void {
@@ -1236,7 +1234,7 @@ afterEach(() => {
  * ничего. Заодно это проверка того, что меню достижимо без мыши.
  */
 async function openDetailMenu(): Promise<void> {
-  fireEvent.keyDown(await screen.findByTestId('detail-menu'), { key: 'Enter' });
+  fireEvent.keyDown(await screen.findByTestId('screen-menu'), { key: 'Enter' });
   await screen.findByRole('menu');
 }
 
@@ -1254,12 +1252,12 @@ const menuHandler: MockHandler = (path) => {
  */
 test('меню ⋮ с клавиатуры до загрузки: Tab до кнопки, Enter — меню открыто, фокус в пунктах', async () => {
   renderWithProviders(<DetailScreen entityId="e1" />, menuHandler);
-  const button = await screen.findByTestId('detail-menu');
+  const button = await screen.findByTestId('screen-menu');
   // Табом, как человек без мыши: заглушка — обычная кнопка в порядке обхода.
   for (let i = 0; i < 30 && document.activeElement !== button; i++) await userEvent.tab();
   expect(button).toHaveFocus();
   // Фокус модуль не грузит и узел кнопки не меняет: фокус не потерян.
-  expect(screen.getByTestId('detail-menu')).toBe(button);
+  expect(screen.getByTestId('screen-menu')).toBe(button);
   await userEvent.keyboard('{Enter}');
   const menu = await screen.findByRole('menu');
   await waitFor(() => expect(menu).toContainElement(document.activeElement as HTMLElement));
@@ -1267,7 +1265,7 @@ test('меню ⋮ с клавиатуры до загрузки: Tab до кн�
 
 test('меню ⋮: нажатие до загрузки чанка не теряется — меню открывается, когда чанк приехал', async () => {
   renderWithProviders(<DetailScreen entityId="e1" />, menuHandler);
-  fireEvent.click(await screen.findByTestId('detail-menu'));
+  fireEvent.click(await screen.findByTestId('screen-menu'));
   expect(await screen.findByRole('menuitem', { name: 'Скопировать ссылку' })).toBeInTheDocument();
 });
 
@@ -1399,15 +1397,14 @@ test('меню ⋮: удавшееся копирование убирает п�
   await waitFor(() => expect(screen.queryByLabelText('Ссылка на запись')).toBeNull());
 });
 
-test('меню ⋮: «Закрепить» шлёт user.updateSettings с этой сущностью', async () => {
+test('меню ⋮: «Закрепить» (в сайдбар) больше нет — закреплённые стали навигацией (срез 1б §9.3)', async () => {
   const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, menuHandler);
   await openDetailMenu();
-  fireEvent.click(screen.getByRole('menuitem', { name: 'Закрепить' }));
-
-  await waitFor(() => {
-    const c = calls.find((x) => x.path === 'user.updateSettings');
-    expect(c?.input).toEqual({ pinnedEntities: [{ id: 'e1', order: 0 }] });
-  });
+  const own = screen.getByRole('group', { name: 'Этот экран' });
+  expect(within(own).queryByRole('menuitem', { name: 'Закрепить' })).toBeNull();
+  // «Закрепить версию» — другое понятие (Э-11), остаётся.
+  expect(within(own).getByRole('menuitem', { name: 'Закрепить версию' })).toBeInTheDocument();
+  expect(calls.some((c) => c.path === 'user.updateSettings')).toBe(false);
 });
 
 test('меню ⋮: «Архивировать» шлёт entity.update archived=true', async () => {
@@ -1528,16 +1525,15 @@ test('[[entity:…]] в body — живая ссылка: клик открыв�
     bodyHandler(`см. [[entity:${BODY_LINK_ID}]]`),
   );
   const link = await screen.findByRole('link');
-  expect(link).toHaveAttribute('href', `/entity/${BODY_LINK_ID}`);
+  expect(link).toHaveAttribute('href', `/r/${BODY_LINK_ID}`);
 
   fireEvent.click(link);
 
-  // push поверх стека текущей вкладки (openEntity), а не openDeepLink: стек Browser цел.
-  const nav = useNav.getState();
-  expect(nav.activeTab).toBe('browser');
-  expect(nav.stacks.browser).toEqual([
-    { kind: 'entity', id: 'e1' },
-    { kind: 'entity', id: BODY_LINK_ID },
+  // В стопку текущего раздела поверх записи (срез 1б §7.3): место под ней цело.
+  expect(useNav.getState().model.apps.host?.stacks.home?.map((e) => e.address)).toEqual([
+    { kind: 'home', app: { kind: 'host' } },
+    recordAddress('e1'),
+    recordAddress(BODY_LINK_ID),
   ]);
 });
 
@@ -3362,10 +3358,8 @@ describe('ADE: тикет', () => {
     expect(row).toHaveTextContent('worker-1');
 
     fireEvent.click(row);
-    // Открытие прогона — тем же жестом, что и подзадачи: push поверх стека АКТИВНОЙ вкладки.
-    const nav = useNav.getState();
-    expect(nav.activeTab).toBe('browser');
-    expect(nav.stacks.browser.at(-1)).toEqual({ kind: 'entity', id: 'r1' });
+    // Открытие прогона — тем же жестом, что и подзадачи: в стопку текущего раздела.
+    expect(topAddress()).toEqual(recordAddress('r1'));
   });
 
   test('тикет не в waiting → чекпойнт-блока нет; заметка без orbis/task → назначения и прогонов нет', async () => {
@@ -4373,13 +4367,8 @@ describe('V1: рутина', () => {
     await waitFor(() =>
       expect(calls.find((c) => c.path === 'routine.runNow')?.input).toEqual({ routineId: 'rt1' }),
     );
-    // Ответ приходит ДО модели (V1.3) — экран ведёт на сам прогон, поверх стека активной вкладки.
-    await waitFor(() =>
-      expect(useNav.getState().stacks.browser.at(-1)).toEqual({
-        kind: 'entity',
-        id: 'rr9',
-      }),
-    );
+    // Ответ приходит ДО модели (V1.3) — экран ведёт на сам прогон, в стопку текущего раздела.
+    await waitFor(() => expect(topAddress()).toEqual(recordAddress('rr9')));
 
     await userEvent.click(within(status).getByRole('button', { name: 'Пауза' }));
     await waitFor(() => {
@@ -5071,9 +5060,7 @@ describe('D42: пачка решений на экране прогона', () =
       }),
     );
     // Ответ приходит ДО модели (V1.3) — за исходом владелец идёт на экран нового прогона.
-    await waitFor(() =>
-      expect(useNav.getState().stacks.browser.at(-1)).toEqual({ kind: 'entity', id: 'rr9' }),
-    );
+    await waitFor(() => expect(topAddress()).toEqual(recordAddress('rr9')));
     plain.unmount();
 
     // В3: у прогона висит НЕОТВЕЧЕННЫЙ терминальный вопрос, и новый прогон его погасит

@@ -23,6 +23,7 @@ import {
   type BlockError,
   type BlockResult,
   EMPTY_QUERY_MESSAGE,
+  type EntityBlockBadgeItem,
   type EntityBlockTextItem,
   entityBlockTextItem,
 } from '@orbis/shared';
@@ -38,10 +39,12 @@ import { useThisEntityId } from './this-entity';
 
 export const QUERY_BLOCK_KEY = 'query-block';
 
-// Блок страницы — элемент по тексту; бейджи разделов (`badgeOf`, срез 1б) идут не через эту очередь.
-type BlockItem = EntityBlockTextItem;
+// Блок страницы — элемент по тексту; бейдж раздела навигации (`badgeOf`, срез 1б §9.3, РП-8) —
+// элемент второго вида В ТОЙ ЖЕ очереди: все бейджи навигации и блоки, попросившие данные в одном
+// кадре, уходят одной пачкой `entity.blocks`.
+type BlockItem = EntityBlockTextItem | EntityBlockBadgeItem;
 /** Просьба без ключа пачки: ключ раздаёт сброс очереди, он живёт один вызов. */
-type BlockAsk = Omit<BlockItem, 'key'>;
+type BlockAsk = Omit<EntityBlockTextItem, 'key'> | Omit<EntityBlockBadgeItem, 'key'>;
 type Pending = { ask: BlockAsk; resolve: (r: BlockResult) => void; reject: (e: unknown) => void };
 
 /**
@@ -73,6 +76,18 @@ const TRANSPORT_MESSAGE = 'сервер недоступен — данные б
 
 type Batcher = { ask: (ask: BlockAsk) => Promise<BlockResult> };
 const BatchContext = createContext<Batcher | null>(null);
+
+/**
+ * Собиратель пачки над деревом — для просьб, у которых свой хук (бейдж раздела, `useBadgeData`).
+ * Нет провайдера — ошибка сразу, а не вечная загрузка.
+ */
+export function useBlockBatcher(who: string): Batcher {
+  const batcher = useContext(BatchContext);
+  if (batcher === null) {
+    throw new Error(`${who}: нет QueryBatchProvider над деревом (main.tsx, test/harness)`);
+  }
+  return batcher;
+}
 
 /**
  * Живые клиенты кеша под провайдером пачки — адресат инвалидации блоков. Счётчик, а не
@@ -194,10 +209,7 @@ export function useBlockData(
   text: string,
   opts: { limit?: number } = {},
 ): UseQueryResult<BlockResult> {
-  const batcher = useContext(BatchContext);
-  if (batcher === null) {
-    throw new Error('useBlockData: нет QueryBatchProvider над деревом (main.tsx, test/harness)');
-  }
+  const batcher = useBlockBatcher('useBlockData');
   const thisEntityId = useThisEntityId();
   const trimmed = text.trim();
   const limit = opts.limit;

@@ -19,7 +19,7 @@ import { HOST_TEMPLATE_ETALON_TEXT, printPageRecord } from '@orbis/shared/supply
 import { act, waitFor } from '@testing-library/react';
 import { createElement, type ReactNode } from 'react';
 import { noteRegistryVersion, resetRegistryVersionForTests } from '../../lib/registry/useRegistry';
-import { useNav } from '../../state/navigation';
+import { HOST_HOME, useNav } from '../../state/navigation';
 import {
   type MockHandler,
   renderWithProviders,
@@ -231,6 +231,9 @@ const RUNS_BY_PARENT: Readonly<Record<string, WireEntity[]>> = {
     }),
   ],
 };
+
+/** Подзадача мира фикстур — запись, на которую уходят «вглубь» (тест состояния экрана в стопке). */
+export const SUBTASK_ID: string = SUBTASK.id;
 
 const WORLD: ReadonlyMap<string, WireEntity> = new Map(
   [CATEGORY, SUBTASK, BLOCKER, MENTIONER, ...Object.values(RUNS_BY_PARENT).flat()].map((e) => [
@@ -642,7 +645,7 @@ const SETTLE_MAX_TICKS = 200;
  * гонку ответов, а не экран.
  *
  * `ui` — экран, который снимают: по умолчанию сегодняшний `DetailScreen`; задачи 12 и 14
- * подают сюда новый экран с теми же фикстурами. Стек навигации, версию реестра и продуктовые
+ * подают сюда новый экран с теми же фикстурами. Стопку навигации, версию реестра и продуктовые
  * умолчания запросов ставит сама функция; на вызывающем тесте — только заглушка простоя
  * (`vi.stubGlobal('requestIdleCallback', …)` в `beforeEach`) и `localStorage.clear()`, см.
  * `structure.test.tsx`.
@@ -659,9 +662,23 @@ export async function captureDetail(
   // (`useRegistry`, срез 1б); холодный старт проверяет отдельный тест `structure.test.tsx`.
   resetRegistryVersionForTests();
   noteRegistryVersion(BUILTIN_REGISTRY.version);
+  // Запись — верх стопки раздела хоста (модель навигации 1б): так её открывает человек.
   useNav.setState({
-    activeTab: 'browser',
-    stacks: { chat: [], browser: [{ kind: 'entity', id: f.entity.id }], agenda: [], budget: [] },
+    model: {
+      activeApp: 'host',
+      apps: {
+        host: {
+          activeSection: 'home',
+          stacks: {
+            home: [
+              { address: HOST_HOME },
+              { address: { kind: 'record', app: { kind: 'host' }, id: f.entity.id } },
+            ],
+          },
+        },
+      },
+    },
+    overlay: null,
   });
   // Умолчания запросов — ПРОДУКТОВЫЕ (trpc.ts): счёт запросов меряет экран, а не обвязку. С
   // нулевым `staleTime` обвязки поздний подписчик уже приехавшего ключа перезапрашивал бы его, и

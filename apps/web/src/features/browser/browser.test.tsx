@@ -1,14 +1,13 @@
 import { BUILTIN_CONTRACT_DEFS, effectiveLabel, OWNER_LOCALE } from '@orbis/shared';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
-import { beforeEach, expect, test, vi } from 'vitest';
-import { useNav } from '../../state/navigation';
+import { beforeEach, expect, test } from 'vitest';
+import { resetNavForTests } from '../../state/navigation';
 import { renderWithProviders, trpcError, wireEntity } from '../../test/harness';
 import { registryReply } from '../../test/registry';
 import { Toaster } from '../../ui/Toast';
 import { useToastStore } from '../../ui/toast-store';
 import { EntityList } from './EntityList';
 import { EntityRow } from './EntityRow';
-import { PinnedList } from './PinnedList';
 import { QuickCapture } from './QuickCapture';
 
 const ent = (id: string, title: string) => wireEntity({ id, title });
@@ -16,10 +15,7 @@ const ent = (id: string, title: string) => wireEntity({ id, title });
 beforeEach(() => {
   localStorage.clear();
   useToastStore.setState({ toasts: [] });
-  useNav.setState({
-    activeTab: 'browser',
-    stacks: { chat: [], browser: [], agenda: [], budget: [] },
-  });
+  resetNavForTests();
 });
 
 test('EntityList: первая страница 50 через entity.query; «ещё» шлёт limit=100', async () => {
@@ -48,31 +44,6 @@ test('EntityList: первая страница 50 через entity.query; «е
       ),
     ).toBe(true),
   );
-});
-
-test('PinnedList: строки pinned, бейдж через entity.count (>99 → «99+»), onOpen с id', async () => {
-  const onOpen = vi.fn();
-  // §3.2: бейдж считается по первому {{query:...}}-блоку body закреплённой сущности.
-  const pinnedEntity = { ...ent('p1', 'Задачи'), body: '{{query:aspect=orbis/task}}' };
-  renderWithProviders(<PinnedList onOpen={onOpen} />, (path) => {
-    if (path === 'user.getSettings') return { pinnedEntities: [{ id: 'p1', order: 0 }] };
-    if (path === 'entity.get') return { entity: pinnedEntity, relations: [] };
-    if (path === 'entity.count') return { count: 250 };
-    return {};
-  });
-  await waitFor(() => expect(screen.getByTestId('pin-badge-p1')).toHaveTextContent('99+'));
-  expect(screen.getByTestId('pinned-p1')).toHaveTextContent('Задачи');
-
-  fireEvent.click(screen.getByTestId('pinned-p1'));
-  expect(onOpen).toHaveBeenCalledWith('p1');
-});
-
-test('PinnedList: без закреплённых — muted-строка «Нет закреплённых»', async () => {
-  renderWithProviders(<PinnedList onOpen={() => {}} />, (path) => {
-    if (path === 'user.getSettings') return { pinnedEntities: [] };
-    return {};
-  });
-  await waitFor(() => expect(screen.getByText('Нет закреплённых')).toBeInTheDocument());
 });
 
 test('QuickCapture: title-only через entity.create(source:quick_capture) без интерпретации', async () => {

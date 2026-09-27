@@ -7,7 +7,7 @@
 import { act, fireEvent, screen, waitFor } from '@testing-library/react';
 import { useState } from 'react';
 import { beforeEach, expect, test } from 'vitest';
-import { useNav } from '../../state/navigation';
+import { resetNavForTests } from '../../state/navigation';
 import { type MockHandler, renderWithProviders, trpcError, wireEntity } from '../../test/harness';
 import { registryReply } from '../../test/registry';
 import { trpc } from '../../trpc';
@@ -126,10 +126,7 @@ const handler =
 
 beforeEach(() => {
   localStorage.clear();
-  useNav.setState({
-    activeTab: 'budget',
-    stacks: { chat: [], browser: [], agenda: [], budget: [] },
-  });
+  resetNavForTests();
 });
 
 // Хелпер: последняя мутация entity.create из журнала вызовов.

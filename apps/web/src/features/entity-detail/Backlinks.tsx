@@ -1,4 +1,4 @@
-import { useNav } from '../../state/navigation';
+import { useOpenRecord } from '../../app/useOpenRecord';
 import type { RouterOutputs } from '../../trpc';
 
 type Backlink = NonNullable<RouterOutputs['entity']['get']['backlinks']>[number];
@@ -16,8 +16,7 @@ type Backlink = NonNullable<RouterOutputs['entity']['get']['backlinks']>[number]
  * иначе «Связанное (100)» читалось бы как точное число связей (урок C6).
  */
 export function Backlinks({ items, truncated }: { items: Backlink[]; truncated: boolean }) {
-  const push = useNav((s) => s.push);
-  const activeTab = useNav((s) => s.activeTab);
+  const openRecord = useOpenRecord();
   if (items.length === 0) return null;
 
   return (
@@ -33,10 +32,10 @@ export function Backlinks({ items, truncated }: { items: Backlink[]; truncated: 
             data-testid="backlink"
             className="flex items-center gap-2.5 rounded-md px-2 py-1.5 text-sm transition hover:bg-surface-2/60"
           >
-            {/* Открытие — push в АКТИВНЫЙ таб поверх текущего Detail (как у подзадач). */}
+            {/* Открытие — в стопку текущего раздела поверх записи (как у подзадач). */}
             <button
               type="button"
-              onClick={() => push(activeTab, { kind: 'entity', id: entity.id })}
+              onClick={() => openRecord(entity.id)}
               className="min-w-0 flex-1 cursor-pointer truncate text-left hover:underline"
             >
               {entity.title}

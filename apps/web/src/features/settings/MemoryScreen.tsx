@@ -3,13 +3,10 @@
 // редактора нет: правка формулировки и архивация — обычный DetailScreen (§7.4:
 // архивная memory-сущность в контекст не инжектится).
 //
-// EntityList (features/browser) намеренно НЕ переиспользован (K10): он жёстко пушит
-// detail в стек таба browser, а этот экран открывается поверх АКТИВНОГО таба (в
-// настройки входят из chat/budget) — тап по правилу визуально «ничего бы не сделал».
-// Пустое состояние Browser'а («добавьте через быструю запись ниже») для памяти тоже
-// неверно: правила рождаются из эскалации, а не из быстрой записи. Общий с Browser'ом
-// хук useEntities оставлен: строку запроса собирает browserQuery, и своего sortBy
-// добавлять нельзя — повтор параметра ломает парсер грамматики.
+// EntityList (features/browser) намеренно НЕ переиспользован: его пустое состояние («добавьте
+// первую через быструю запись ниже») для памяти неверно — правила рождаются из эскалации, а не из
+// быстрой записи. Общий с «Записями» хук useEntities оставлен: строку запроса собирает browserQuery,
+// и своего sortBy добавлять нельзя — повтор параметра ломает парсер грамматики.
 //
 // ЗНАЧКА «ФОРМАТ» ЗДЕСЬ БОЛЬШЕ НЕТ. Он показывал правило, которое записано, но молча не
 // работает (заголовок без разделителя), — и держался на разборе заголовка. После В7 такое
@@ -17,7 +14,7 @@
 // ссылка. Признак, который никогда не срабатывает, — это не подстраховка, а мёртвая ветка.
 import { Brain } from 'lucide-react';
 import { ScreenHeader } from '../../app/ScreenHeader';
-import { useNav } from '../../state/navigation';
+import { useOpenRecord } from '../../app/useOpenRecord';
 import { Button } from '../../ui/Button';
 import { Card } from '../../ui/Card';
 import { EmptyState } from '../../ui/EmptyState';
@@ -34,13 +31,9 @@ export const MEMORY_FILTER = 'aspect=orbis/memory';
 const ROW_CLASS =
   'flex w-full cursor-pointer items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm transition hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50';
 
-/** Detail открывается в ТЕКУЩЕМ табе (экран памяти живёт в его же стеке). */
-function openEntity(id: string) {
-  const { activeTab, push } = useNav.getState();
-  push(activeTab, { kind: 'entity', id });
-}
-
 export function MemoryScreen() {
+  // Запись правила открывается из хоста: экран памяти — экран хоста (срез 1б §7.2).
+  const openEntity = useOpenRecord();
   // Отрицаний «Записей» (§9.6) здесь нет: фильтр уже сужает до правил памяти, и текст запроса
   // остаётся прежним — `showPagesAndApps` лишь не дописывает `!aspect=…` к своему аспекту.
   const { entities, hasMore, loadMore, isLoading, isError } = useEntities(MEMORY_FILTER, true);

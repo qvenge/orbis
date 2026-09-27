@@ -6,11 +6,11 @@
 // своими глаголами, а инпут рядом с ними предлагал бы владельцу править журнал работы.
 import { ExternalLink, Globe } from 'lucide-react';
 import { useId, useState } from 'react';
+import { useOpenRecord } from '../../app/useOpenRecord';
 import { EntityRef } from '../../lib/entity-ref/EntityRef';
 import { formatDate } from '../../lib/format';
 import { invalidateGraph } from '../../lib/invalidate';
 import { Markdown } from '../../lib/markdown/Markdown';
-import { openEntity } from '../../state/navigation';
 import { type RouterOutputs, trpc } from '../../trpc';
 import { Badge } from '../../ui/Badge';
 import { Button } from '../../ui/Button';
@@ -135,6 +135,7 @@ function TextBlock({
   text: string;
   tz?: string;
 }) {
+  const openEntity = useOpenRecord();
   return (
     <section className="flex flex-col gap-1 rounded-control border border-line bg-surface-2/40 p-3">
       <h4 className="flex flex-wrap items-baseline gap-2 font-medium text-sm">
@@ -155,6 +156,7 @@ function TextBlock({
 }
 
 export function RunFeed({ entity }: { entity: Entity }) {
+  const openEntity = useOpenRecord();
   // Предпросмотр шаблона (хост `readOnly`): лента прогона видна целиком, отката и карточки
   // предложения с «Принять»/«Отклонить» нет — вместо карточки её проза (отчёт).
   const readOnly = useHostReadOnly();

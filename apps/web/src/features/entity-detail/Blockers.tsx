@@ -1,8 +1,8 @@
 import { ROLE_DEPENDENCY } from '@orbis/shared';
 import { Ban, Plus, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
+import { useOpenRecord } from '../../app/useOpenRecord';
 import { invalidateQueryBlocks } from '../../lib/query-blocks/batch';
-import { useNav } from '../../state/navigation';
 import { type RouterOutputs, trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
 import { Spinner } from '../../ui/Spinner';
@@ -53,8 +53,7 @@ export function Blockers({ entityId, relations }: { entityId: string; relations:
   // Предпросмотр шаблона (хост `readOnly`): блокировки видны и открываются, но не ставятся и не
   // снимаются.
   const readOnly = useHostReadOnly();
-  const push = useNav((s) => s.push);
-  const activeTab = useNav((s) => s.activeTab);
+  const openRecord = useOpenRecord();
   const utils = trpc.useUtils();
   const [adding, setAdding] = useState(false);
   const [draft, setDraft] = useState('');
@@ -149,7 +148,7 @@ export function Blockers({ entityId, relations }: { entityId: string; relations:
   });
   const failure = relate.error ?? unrelate.error;
 
-  const open = (id: string) => push(activeTab, { kind: 'entity', id });
+  const open = openRecord;
   const list = (label: string, items: Relation[]) => (
     <div className="flex flex-col">
       <p className={SECTION_LABEL}>{label}</p>

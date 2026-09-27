@@ -3,11 +3,11 @@ import type { BodyDoc } from '@orbis/shared/doc'; // ТОЛЬКО type — фа�
 import { type PageNode, parsePageText } from '@orbis/shared/doc/page-grammar';
 import { type BodyKind, bodyIssues, type PlacementIssue } from '@orbis/shared/doc/placement';
 import { lazy, type MouseEvent, type ReactNode, Suspense, useEffect, useState } from 'react';
+import { useOpenRecord } from '../../app/useOpenRecord';
 import { Markdown } from '../../lib/markdown/Markdown';
 import { useBodyKind } from '../../lib/query-blocks/body-kind';
 import { QueryBlock } from '../../lib/query-blocks/QueryBlock';
 import { useFieldCatalog } from '../../lib/query-blocks/useFieldCatalog';
-import { openEntity } from '../../state/navigation';
 import { BlockPlaque, issueTone } from '../page/blocks/BlockPlaque';
 import { NO_REGISTRY } from '../page/render-plan';
 import { BODY_BOX_CLASS, BODY_PLACEHOLDER } from './body-box';
@@ -118,7 +118,7 @@ function firstFrameNodes(nodes: readonly PageNode[], kind: BodyKind): ReactNode[
 function firstFrameNode(node: PageNode, kind: BodyKind, key: number): ReactNode {
   if (node.kind === 'text') {
     const text = node.text.trim();
-    return text === '' ? null : <Markdown key={key} source={text} onEntityLink={openEntity} />;
+    return text === '' ? null : <FrameMarkdown key={key} source={text} />;
   }
   if (node.kind === 'query') {
     // Обёртка с data-query-widget — не украшение: по ней страж выше отличает клик по живому
@@ -192,8 +192,17 @@ function firstFrameNode(node: PageNode, kind: BodyKind, key: number): ReactNode 
     case 'broken':
       // `broken` всегда несёт проблему (`bodyIssues`) и сюда не доходит; ветка — ради полноты
       // разбора: пустоты вместо узла не бывает.
-      return <Markdown key={key} source={node.raw.trim()} onEntityLink={openEntity} />;
+      return <FrameMarkdown key={key} source={node.raw.trim()} />;
   }
+}
+
+/**
+ * Текст первого кадра: ссылки на записи открываются в рамке экрана (`useOpenRecord`, срез 1б §7.2).
+ * Компонентом, а не колбэком в `firstFrameNode`: та — обычная функция, хук в ней не позвать.
+ */
+function FrameMarkdown({ source }: { source: string }) {
+  const openRecord = useOpenRecord();
+  return <Markdown source={source} onEntityLink={openRecord} />;
 }
 
 /** Клик по телу (а значит — зовущий редактор) или по чему-то внутри тела со своим смыслом. */

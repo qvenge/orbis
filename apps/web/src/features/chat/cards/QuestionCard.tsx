@@ -15,8 +15,8 @@
 // Своя карточка, а не `confirmation_card`: её кнопки «Принять»/«Отклонить» вели бы владельца
 // прямо в структурный отказ гейта рода (server `policy/pending.ts`, assertNotQuestion).
 import { useId, useState } from 'react';
+import { useOpenRecord } from '../../../app/useOpenRecord';
 import { Markdown } from '../../../lib/markdown/Markdown';
-import { openEntity } from '../../../state/navigation';
 import { type RouterOutputs, trpc } from '../../../trpc';
 import { Button } from '../../../ui/Button';
 import { Card } from '../../../ui/Card';
@@ -35,6 +35,7 @@ export function QuestionCard({
   /** Тред, в ленте которого стоит карточка; `undefined` — экран прогона (рулинг П-5). */
   threadId?: string;
 }) {
+  const openEntity = useOpenRecord();
   const { unit, loaded, isError, errorMessage, isFetching, settled } = useRunUnit({
     runId: card.runId,
     pendingId: card.pendingId,

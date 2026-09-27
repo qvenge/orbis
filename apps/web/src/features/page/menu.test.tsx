@@ -7,20 +7,16 @@
  * снимку до пачки. Все записи меню — ОДНИМ вызовом `entity.updateBatch` (РП-9): в каждом тесте,
  * где что-то пишется, счёт вызовов сверяется. `this` у блоков данных — только uuid.
  */
-import {
-  buildAppPath,
-  PAGE_ASPECT,
-  TEMPLATE_FOR_PROPERTY,
-  TEMPLATE_WINS_OVER_PROPERTY,
-} from '@orbis/shared';
+import { PAGE_ASPECT, TEMPLATE_FOR_PROPERTY, TEMPLATE_WINS_OVER_PROPERTY } from '@orbis/shared';
 import { parseBody, serializeBody } from '@orbis/shared/doc';
+import { buildAddress } from '@orbis/shared/nav';
 import { focusManager } from '@tanstack/react-query';
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import type { Editor } from '@tiptap/react';
 import { useState } from 'react';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { noteRegistryVersion, resetRegistryVersionForTests } from '../../lib/registry/useRegistry';
-import { useNav } from '../../state/navigation';
+import { resetNavForTests, useNav } from '../../state/navigation';
 import {
   installCrashTrap,
   type MockHandler,
@@ -29,6 +25,7 @@ import {
   type WireEntityFixture,
   wireEntity,
 } from '../../test/harness';
+import { navAt, recordAddress, topAddress } from '../../test/nav';
 import { BUILTIN_REGISTRY } from '../../test/registry';
 import { queryClient } from '../../trpc';
 import { Toaster } from '../../ui/Toast';
@@ -64,6 +61,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+  resetNavForTests();
 });
 
 const uuid = (n: number): string => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
@@ -229,17 +227,44 @@ function worldHandler(f: StructureFixture, world: World): MockHandler {
 
 /**
  * Экран записи с переключателем «уйти на соседнюю запись и вернуться»: экран монтируется без key
- * (router.tsx), и переход меняет только проп — ровно так, как в приложении.
+ * (router.tsx), и переход меняет только проп — ровно так, как в приложении. Переходы идут и по
+ * модели навигации (срез 1б): соседняя — новое место в стопке, «назад» — «‹» по стопке (режим
+ * приложения), и место возвращается со своим состоянием экрана (§7.1).
  */
 function Screen({ first }: { first: string }) {
   const [id, setId] = useState(first);
   return (
     <>
-      <button type="button" data-testid="go-other" onClick={() => setId(OTHER)}>
+      <button
+        type="button"
+        data-testid="go-other"
+        onClick={() => {
+          useNav.getState().openRecord(OTHER);
+          setId(OTHER);
+        }}
+      >
         соседняя
       </button>
-      <button type="button" data-testid="go-back" onClick={() => setId(first)}>
+      <button
+        type="button"
+        data-testid="go-back"
+        onClick={() => {
+          useNav.setState({ mode: 'app' });
+          useNav.getState().back();
+          setId(first);
+        }}
+      >
         назад
+      </button>
+      <button
+        type="button"
+        data-testid="go-first"
+        onClick={() => {
+          useNav.getState().openRecord(first);
+          setId(first);
+        }}
+      >
+        заново
       </button>
       <DetailScreen entityId={id} />
       <Toaster />
@@ -257,10 +282,7 @@ function open(
     wireEntity({ id: OTHER, title: 'Соседняя запись', body: 'Сосед' }),
     ...extra,
   ]);
-  useNav.setState({
-    activeTab: 'browser',
-    stacks: { chat: [], browser: [{ kind: 'entity', id: f.entity.id }], agenda: [], budget: [] },
-  });
+  navAt(f.entity.id);
   const base = worldHandler(f, world);
   const handler: MockHandler = async (path, input) => {
     const own = opts.over ? await opts.over(path, input) : undefined;
@@ -277,11 +299,14 @@ function open(
 }
 
 async function openMenu(): Promise<void> {
-  fireEvent.keyDown(await screen.findByTestId('detail-menu'), { key: 'Enter' });
+  fireEvent.keyDown(await screen.findByTestId('screen-menu'), { key: 'Enter' });
   await screen.findByRole('menu');
 }
 
-const menuLabels = () => screen.getAllByRole('menuitem').map((i) => i.textContent ?? '');
+const menuLabels = () =>
+  within(screen.getByRole('group', { name: 'Этот экран' }))
+    .getAllByRole('menuitem')
+    .map((i) => i.textContent ?? '');
 
 async function choose(label: string): Promise<void> {
   await openMenu();
@@ -513,7 +538,7 @@ describe('«Изменить вид только этой записи» (С1а-
 });
 
 describe('«Открыть через …» — разово (§8.4)', () => {
-  test('«Открыть через шаблон хоста» — только при шаблоне владельца; после ухода и возврата — снова свой', async () => {
+  test('«Открыть через шаблон хоста» — только при шаблоне владельца; «‹» возвращает его, новый заход — снова свой', async () => {
     const f = fixture('project');
     open(f, [template(TPL_A, 'Шаблон A', ['orbis/project'], 'Вид A\n\n{{body}}\n')]);
     await waitFor(() => expect(renderedTexts()).toContain('Вид A'));
@@ -533,7 +558,14 @@ describe('«Открыть через …» — разово (§8.4)', () => {
 
     fireEvent.click(screen.getByTestId('go-other'));
     await screen.findByText('Соседняя запись');
+    // «‹» возвращает место вместе с его состоянием экрана (срез 1б §7.1): тот же разовый вид.
     fireEvent.click(screen.getByTestId('go-back'));
+    expect(await screen.findByTestId('page-tabs')).toBeInTheDocument();
+    expect(renderedTexts()).not.toContain('Вид A');
+    // Новый заход на запись — новое место без состояния: снова свой шаблон (разово, §8.4).
+    fireEvent.click(screen.getByTestId('go-other'));
+    await screen.findByText('Соседняя запись');
+    fireEvent.click(screen.getByTestId('go-first'));
     await waitFor(() => expect(renderedTexts()).toContain('Вид A'));
     expect(screen.queryByTestId('page-tabs')).toBeNull();
   });
@@ -802,13 +834,13 @@ describe('диалоги меню держат снимок записи, на �
 
   test('переход на соседнюю запись с открытым вопросом случая 3 — диалог закрыт, вызовов нет', async () => {
     const { batches, world } = await askCase3();
-    const button = screen.getByTestId('detail-menu');
+    const button = screen.getByTestId('screen-menu');
     fireEvent.click(screen.getByTestId('go-other'));
     await screen.findByText('Соседняя запись');
     // Меню пережило переход (шапка не размонтировалась: кнопка — тот же узел) — а диалог закрыт.
     // Тождество узла, а не `aria-haspopup`: по форме РП-13 атрибут у кнопки с первого кадра, и
     // перемонтированная шапка несла бы его так же.
-    expect(screen.getByTestId('detail-menu')).toBe(button);
+    expect(screen.getByTestId('screen-menu')).toBe(button);
     expect(screen.queryByRole('dialog')).toBeNull();
     // И вернувшись — вопрос не всплывает сам: он был про ту запись и тот момент.
     fireEvent.click(screen.getByTestId('go-back'));
@@ -1182,10 +1214,10 @@ describe('меню при настройке чужого шаблона — п�
     fireEvent.click(screen.getByRole('menuitem', { name: 'Скопировать ссылку' }));
     await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
     expect(writeText).toHaveBeenCalledWith(
-      `${window.location.origin}${buildAppPath({ kind: 'entity', id: TPL_A })}`,
+      `${window.location.origin}${buildAddress({ kind: 'record', app: { kind: 'host' }, id: TPL_A })}`,
     );
 
     await choose('Открыть шаблон „Шаблон проекта“');
-    expect(useNav.getState().stacks.browser.at(-1)).toEqual({ kind: 'entity', id: TPL_A });
+    expect(topAddress()).toEqual(recordAddress(TPL_A));
   });
 });

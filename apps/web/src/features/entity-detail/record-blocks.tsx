@@ -99,13 +99,13 @@ export function BacklinksBlock() {
 }
 
 /**
- * `{{versions}}` — версии тела. Список идёт в сеть только на открытой вкладке (`activeTab`), а
+ * `{{versions}}` — версии тела. Список идёт в сеть только на открытой вкладке (`openTab`), а
  * key — как у ленты прогона: у карточки своё состояние (выбранная версия, отказ
  * восстановления), и переезжать на соседнюю запись оно не должно.
  */
 export function VersionsBlock() {
-  const { entity, activeTab } = useRecordHost();
-  return <VersionsCard key={`versions-${entity.id}`} entity={entity} active={activeTab !== null} />;
+  const { entity, openTab } = useRecordHost();
+  return <VersionsCard key={`versions-${entity.id}`} entity={entity} active={openTab !== null} />;
 }
 
 /**

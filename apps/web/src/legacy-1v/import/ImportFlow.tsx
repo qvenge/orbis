@@ -37,17 +37,17 @@ import { Button } from '../../ui/Button';
 import { Card } from '../../ui/Card';
 import { Input } from '../../ui/Input';
 import { Spinner } from '../../ui/Spinner';
-import { FINANCE_CATEGORY, toOption } from '../budget/categories';
-import { invalidateBudget } from '../budget/useBudget';
+import { FINANCE_CATEGORY, toOption } from '../../features/budget/categories';
+import { invalidateBudget } from '../../features/budget/useBudget';
 import {
   decodeCsvBytes,
   detectDelimiter,
   fileHashHex,
   parseCsv,
   toCanonicalRows,
-} from './csv-parse';
-import { AMOUNT, BANK_TXN_ID, COUNTERPARTY, DIRECTION, OCCURRED_ON } from './money-movement';
-import { csvNamespace } from './namespace';
+} from '../../features/import/csv-parse';
+import { AMOUNT, BANK_TXN_ID, COUNTERPARTY, DIRECTION, OCCURRED_ON } from '../../features/import/money-movement';
+import { csvNamespace } from '../../features/import/namespace';
 import { ReviewTable } from './ReviewTable';
 
 type Step = 'idle' | 'parsing' | 'mapping' | 'reviewing' | 'review_ready' | 'confirming' | 'done';

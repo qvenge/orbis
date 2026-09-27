@@ -31,8 +31,8 @@ import { parseBody } from '@orbis/shared/doc';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, expect, test, vi } from 'vitest';
-import { useNav } from '../../state/navigation';
 import { renderWithProviders, wireEntity } from '../../test/harness';
+import { navAt } from '../../test/nav';
 import { DetailScreen } from './DetailScreen';
 
 /** Бытовое тело: сорок блоков с жирным и курсивом — тот размер, на котором в коде уже замерена
@@ -47,10 +47,7 @@ const entity = wireEntity({ id: 'e1', title: 'Задача', body: BODY, bodyDoc
 beforeEach(() => {
   localStorage.clear();
   vi.stubGlobal('requestIdleCallback', () => 1);
-  useNav.setState({
-    activeTab: 'browser',
-    stacks: { chat: [], browser: [{ kind: 'entity', id: 'e1' }], agenda: [], budget: [] },
-  });
+  navAt('e1');
 });
 
 const CHARS = 30;

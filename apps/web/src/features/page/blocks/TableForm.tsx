@@ -1,13 +1,13 @@
 import { rowMoneyCurrencyOf, rowProjectionOf } from '@orbis/shared';
 import type { QueryColumn } from '@orbis/shared/query';
 import type { ReactNode } from 'react';
+import { useOpenRecord } from '../../../app/useOpenRecord';
 import { EntityRef } from '../../../lib/entity-ref/EntityRef';
 import { formatDate, formatMoney, formatMoneyWithCurrency } from '../../../lib/format';
 import { displayText, EMPTY_TEXT } from '../../../lib/registry/format';
 import { classLabel } from '../../../lib/registry/labels';
 import { rowRegistryOf } from '../../../lib/registry/row';
 import { type RegistryView, useRegistry } from '../../../lib/registry/useRegistry';
-import { openEntity } from '../../../state/navigation';
 import { trpc } from '../../../trpc';
 import { formatDay } from '../../browser/EntityRow';
 import type { BlockRow } from './types';
@@ -16,6 +16,7 @@ const CELL = 'px-2 py-1 text-left align-top';
 
 /** Название — кнопкой, как строка `compact`: таблица на странице — тоже вход в свои записи. */
 function TitleCell({ row }: { row: BlockRow }) {
+  const openEntity = useOpenRecord();
   return (
     <td className={CELL}>
       <button
@@ -116,6 +117,7 @@ function ColumnCell({
   registry: RegistryView;
   tz: string | undefined;
 }) {
+  const openEntity = useOpenRecord();
   const def = registry.property(field);
   const value = def?.storage === 'core' ? CORE_FIELD[field]?.(row) : row.props[field];
   const kind = def?.type.kind;

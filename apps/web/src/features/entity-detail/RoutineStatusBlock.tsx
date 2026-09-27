@@ -9,9 +9,9 @@
 // работы: у поля `at` один смысл («во сколько»), а у паузы — совсем другой («работает ли»), и
 // текстовый инпут рядом с кнопкой означал бы, что выключить рутину можно опечаткой.
 import type { ReactNode } from 'react';
+import { useOpenRecord } from '../../app/useOpenRecord';
 import { formatDate, plural } from '../../lib/format';
 import { invalidateGraph } from '../../lib/invalidate';
-import { openEntity } from '../../state/navigation';
 import { type RouterOutputs, trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
 import { str, strArray } from './aspect-read';
@@ -84,6 +84,7 @@ export function RoutineStatusBlock({
   entity: Entity;
   lastRun: TicketRun | undefined;
 }) {
+  const openEntity = useOpenRecord();
   const utils = trpc.useUtils();
   const tz = trpc.user.getSettings.useQuery().data?.timezone;
   // Предпросмотр шаблона (хост `readOnly`): состояние рутины видно, «Прогнать сейчас» и паузы нет —

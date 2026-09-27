@@ -10,7 +10,6 @@ import { parseBody } from '@orbis/shared/doc';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { noteRegistryVersion, resetRegistryVersionForTests } from '../../lib/registry/useRegistry';
-import { useNav } from '../../state/navigation';
 import {
   installCrashTrap,
   type MockHandler,
@@ -19,6 +18,7 @@ import {
   type WireEntityFixture,
   wireEntity,
 } from '../../test/harness';
+import { navAt } from '../../test/nav';
 import { BUILTIN_REGISTRY } from '../../test/registry';
 import { queryClient } from '../../trpc';
 import { resetDetailMenuModuleForTests } from '../entity-detail/DetailMenuSlot';
@@ -74,10 +74,7 @@ function open(
     supplyFails?: boolean;
   } = {},
 ) {
-  useNav.setState({
-    activeTab: 'browser',
-    stacks: { chat: [], browser: [{ kind: 'entity', id: f.entity.id }], agenda: [], budget: [] },
-  });
+  navAt(f.entity.id);
   const base = structureHandler(
     f,
     opts.hostTemplate === undefined ? {} : { hostTemplate: opts.hostTemplate },
@@ -99,9 +96,11 @@ function open(
 }
 
 async function menuLabels(): Promise<string[]> {
-  fireEvent.keyDown(await screen.findByTestId('detail-menu'), { key: 'Enter' });
+  fireEvent.keyDown(await screen.findByTestId('screen-menu'), { key: 'Enter' });
   await screen.findByRole('menu');
-  const labels = screen.getAllByRole('menuitem').map((i) => i.textContent ?? '');
+  const labels = within(screen.getByRole('group', { name: 'Этот экран' }))
+    .getAllByRole('menuitem')
+    .map((i) => i.textContent ?? '');
   fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' });
   await waitFor(() => expect(screen.queryByRole('menu')).toBeNull());
   return labels;
@@ -160,7 +159,7 @@ test('«⋯» записи через шаблон хоста — «Настро
   await screen.findByTestId('page-tabs');
   await waitFor(async () => expect(await menuLabels()).toContain('Настроить шаблон хоста'));
 
-  fireEvent.keyDown(await screen.findByTestId('detail-menu'), { key: 'Enter' });
+  fireEvent.keyDown(await screen.findByTestId('screen-menu'), { key: 'Enter' });
   await screen.findByRole('menu');
   fireEvent.click(screen.getByRole('menuitem', { name: 'Настроить шаблон хоста' }));
   const view = await screen.findByTestId('configure-view');

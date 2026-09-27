@@ -1,8 +1,8 @@
-import { buildAppPath } from '@orbis/shared';
 import { EntityRef } from '@orbis/shared/doc';
+import { buildAddress } from '@orbis/shared/nav';
 import type { Attributes, NodeViewProps } from '@tiptap/core';
 import { NodeViewWrapper, ReactNodeViewRenderer } from '@tiptap/react';
-import { openEntity } from '../../../state/navigation';
+import { useOpenRecord } from '../../../app/useOpenRecord';
 import { useRefTitle } from './RefTitlesContext';
 
 function Chip({ node }: NodeViewProps) {
@@ -14,6 +14,7 @@ function Chip({ node }: NodeViewProps) {
   const entityId = typeof node.attrs.entityId === 'string' ? node.attrs.entityId : '';
   const label = typeof node.attrs.label === 'string' ? node.attrs.label : null;
   const found = useRefTitle(entityId);
+  const openRecord = useOpenRecord();
 
   // Пока резолв едет — показываем ВМОРОЖЕННУЮ подпись из текста: пустое место мигало бы при
   // каждом открытии записи. Подписи нет — обрубок id, потому что невидимый чип неотличим от
@@ -34,7 +35,9 @@ function Chip({ node }: NodeViewProps) {
         // уступает чипу цвет. Без него общее правило разметки (селектор специфичнее одиночного
         // класса Tailwind) красило бы акцентом и серый, и зачёркнутый чип.
         data-entity-chip=""
-        href={buildAppPath({ kind: 'entity', id: entityId })}
+        // Адрес вычисляется при нажатии (срез 1б §7.4): `href` — запись в хосте для «открыть в новой
+        // вкладке»; клик открывает её в рамке экрана.
+        href={buildAddress({ kind: 'record', app: { kind: 'host' }, id: entityId })}
         // Внутренность чипа — не текст документа: без этого каретка заходила бы внутрь
         // подписи, которой в документе нет (в документе только id и label атрибутами).
         contentEditable={false}
@@ -50,7 +53,7 @@ function Chip({ node }: NodeViewProps) {
           // обязаны работать. Ссылка, которая ведёт себя не как ссылка, хуже её отсутствия.
           if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
           e.preventDefault();
-          openEntity(entityId);
+          openRecord(entityId);
         }}
       >
         {found?.emoji ? `${found.emoji} ` : ''}

@@ -4,8 +4,8 @@
 import { parseBody } from '@orbis/shared/doc';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
-import { useNav } from '../../state/navigation';
 import { type MockHandler, renderWithProviders, wireEntity } from '../../test/harness';
+import { navAt } from '../../test/nav';
 import { registryReply } from '../../test/registry';
 import { QuickCapture } from '../browser/QuickCapture';
 import { DetailScreen } from './DetailScreen';
@@ -47,10 +47,7 @@ beforeEach(() => {
   // Простоя не даём: файл про полосу прогресса и поля аспектов, а редактор, встающий сам по
   // запасному таймеру, менял бы дерево посреди ожиданий (приём editor.test.tsx).
   vi.stubGlobal('requestIdleCallback', () => 1);
-  useNav.setState({
-    activeTab: 'browser',
-    stacks: { chat: [], browser: [{ kind: 'entity', id: 'g1' }], agenda: [], budget: [] },
-  });
+  navAt('g1');
 });
 
 afterEach(() => {

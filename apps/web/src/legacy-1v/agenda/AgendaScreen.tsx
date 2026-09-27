@@ -14,8 +14,8 @@ import { useRegistry } from '../../lib/registry/useRegistry';
 import { useNav } from '../../state/navigation';
 import { Card } from '../../ui/Card';
 import { Skeleton } from '../../ui/Skeleton';
-import { EntityRow, formatDay } from '../browser/EntityRow';
-import { type AgendaEntity, endAt, localTime, useAgendaDays, useAgendaOverdue } from './useAgenda';
+import { EntityRow, formatDay } from '../../features/browser/EntityRow';
+import { type AgendaEntity, endAt, localTime, useAgendaDays, useAgendaOverdue } from '../../features/agenda/useAgenda';
 
 const ROW_CLASS =
   'flex w-full cursor-pointer items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm transition hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50';

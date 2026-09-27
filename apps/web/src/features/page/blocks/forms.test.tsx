@@ -4,7 +4,8 @@ import { useState } from 'react';
 import { beforeEach, expect, test } from 'vitest';
 import { BodyKindProvider } from '../../../lib/query-blocks/body-kind';
 import { ThisEntityProvider } from '../../../lib/query-blocks/this-entity';
-import { useNav } from '../../../state/navigation';
+import { useBadgeData } from '../../../lib/query-blocks/useBadgeData';
+import { resetNavForTests } from '../../../state/navigation';
 import {
   blocksReply,
   blockTexts,
@@ -14,8 +15,8 @@ import {
   trpcError,
   wireEntity,
 } from '../../../test/harness';
+import { recordAddress, topAddress } from '../../../test/nav';
 import { registryReply } from '../../../test/registry';
-import { PinnedList } from '../../browser/PinnedList';
 import { EditorShell } from '../../entity-editor/EditorShell';
 import { REGISTRY_FAILED_MESSAGE } from './BlockPlaque';
 import { DataBlock } from './DataBlock';
@@ -26,10 +27,7 @@ import { DataBlock } from './DataBlock';
 installCrashTrap();
 
 beforeEach(() => {
-  useNav.setState({
-    activeTab: 'browser',
-    stacks: { chat: [], browser: [], agenda: [], budget: [] },
-  });
+  resetNavForTests();
 });
 
 const handler =
@@ -53,7 +51,7 @@ test('compact: строка — кнопка, открывающая запис�
   renderWithProviders(<DataBlock text={text} />, handler({ [text]: [task('Отчёт')] }));
   const item = await screen.findByTestId('qb-item');
   fireEvent.click(within(item).getByRole('button', { name: 'Отчёт' }));
-  expect(useNav.getState().stacks.browser.at(-1)).toEqual({ kind: 'entity', id: 'Отчёт' });
+  expect(topAddress()).toEqual(recordAddress('Отчёт'));
 });
 
 test('compact — форма по умолчанию (display не задан)', async () => {
@@ -76,7 +74,7 @@ test('list: строки EntityRow — глиф статуса есть, чек�
   expect(item.querySelector('svg')).not.toBeNull();
   expect(screen.queryByRole('checkbox')).toBeNull();
   fireEvent.click(within(item).getByRole('button'));
-  expect(useNav.getState().stacks.browser.at(-1)).toEqual({ kind: 'entity', id: 'Отчёт' });
+  expect(topAddress()).toEqual(recordAddress('Отчёт'));
 });
 
 test('table без columns: заголовок и элементы строки фактов', async () => {
@@ -124,10 +122,7 @@ test('table с columns=orbis/title|orbis/due_date: колонка заголов
     ['orbis/title|orbis/due_date', ['Заголовок', 'Срок'], 0],
     ['orbis/due_date|orbis/title', ['Срок', 'Заголовок'], 1],
   ] as const) {
-    useNav.setState({
-      activeTab: 'browser',
-      stacks: { chat: [], browser: [], agenda: [], budget: [] },
-    });
+    resetNavForTests();
     const text = `aspect=orbis/task, display=table, columns=${columns}`;
     const { unmount } = renderWithProviders(
       <DataBlock text={text} />,
@@ -145,7 +140,7 @@ test('table с columns=orbis/title|orbis/due_date: колонка заголов
     if (cell === undefined) throw new Error('нет ячейки заголовка');
     // Колонка заголовка из `columns` — тот же вход в запись, что и постоянная «Название».
     fireEvent.click(within(cell).getByRole('button', { name: 'Отчёт' }));
-    expect(useNav.getState().stacks.browser.at(-1)).toEqual({ kind: 'entity', id: 'Отчёт' });
+    expect(topAddress()).toEqual(recordAddress('Отчёт'));
     unmount();
   }
 });
@@ -319,17 +314,40 @@ test('абсолютная дата: на странице — плашка с �
   expect(batches(note.calls).map(blockTexts)).toEqual([[text]]);
 });
 
-test('счётчик закреплённого (PinnedList) по-прежнему зовёт entity.count, а не entity.blocks (§6.3)', async () => {
-  const { calls } = renderWithProviders(<PinnedList onOpen={() => {}} />, (path) => {
-    if (path === 'user.getSettings') return { pinnedEntities: [{ id: 'p1', order: 0 }] };
-    if (path === 'entity.get')
-      return { entity: { ...wireEntity({ id: 'p1', title: 'Inbox' }), body: '{{query:tags=x}}' } };
-    if (path === 'entity.count') return { count: 4 };
-    return registryReply(path) ?? {};
-  });
-  await screen.findByText('4');
-  expect(calls.find((c) => c.path === 'entity.count')?.input).toEqual({ query: 'tags=x' });
-  expect(calls.some((c) => c.path === 'entity.blocks')).toBe(false);
+test('бейджи разделов (badgeOf) — одной пачкой entity.blocks, без entity.count (срез 1б §9.3, РП-8)', async () => {
+  const pages = ['901', '902', '903'].map((n) => `00000000-0000-4000-8000-000000000${n}`);
+  function Badge({ id }: { id: string }) {
+    const { badge } = useBadgeData(id);
+    return <span data-testid={`badge-${id}`}>{badge ?? '—'}</span>;
+  }
+  const counts = [150, 0, 7];
+  const { calls } = renderWithProviders(
+    pages.map((id) => <Badge key={id} id={id} />),
+    (path, input) => {
+      if (path === 'entity.blocks') {
+        const items = (input as { blocks: { key: string; badgeOf: string }[] }).blocks;
+        return {
+          results: Object.fromEntries(
+            items.map((b) => [
+              b.key,
+              { ok: true, kind: 'count', count: counts[pages.indexOf(b.badgeOf)] },
+            ]),
+          ),
+        };
+      }
+      return registryReply(path) ?? {};
+    },
+  );
+  await waitFor(() => expect(screen.getByTestId(`badge-${pages[0]}`)).toHaveTextContent('99+'));
+  // Ноль — не бейдж.
+  expect(screen.getByTestId(`badge-${pages[1]}`)).toHaveTextContent('—');
+  expect(screen.getByTestId(`badge-${pages[2]}`)).toHaveTextContent('7');
+  const sent = batches(calls);
+  expect(sent).toHaveLength(1);
+  expect(
+    (sent[0]?.input as { blocks: { badgeOf: string }[] }).blocks.map((b) => b.badgeOf),
+  ).toEqual(pages);
+  expect(calls.some((c) => c.path === 'entity.count')).toBe(false);
 });
 
 test('первый кадр заметки: блок обвязки и контейнер — плашкой с подсказкой, блок данных — живой (§5.5)', async () => {

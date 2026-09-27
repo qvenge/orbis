@@ -7,10 +7,10 @@
 // отвечают на него ЗДЕСЬ, на экране прогона, — второго места, где владелец мог бы его
 // увидеть, у рутины не существует.
 import { useId, useState } from 'react';
+import { useOpenRecord } from '../../app/useOpenRecord';
 import { formatDate } from '../../lib/format';
 import { invalidateGraph } from '../../lib/invalidate';
 import { Markdown } from '../../lib/markdown/Markdown';
-import { openEntity } from '../../state/navigation';
 import { trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
 import { useHostReadOnly } from './record-host';
@@ -36,6 +36,7 @@ export type RoutineRunQuestion = {
 };
 
 export function RoutineQuestionBlock({ run }: { run: RoutineRunQuestion }) {
+  const openEntity = useOpenRecord();
   const utils = trpc.useUtils();
   const answerId = useId();
   // Зона владельца — тем же швом, что у ленты прогона и истории: без неё время печаталось бы

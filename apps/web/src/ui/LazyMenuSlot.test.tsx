@@ -11,6 +11,7 @@ import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
 import { afterEach, expect, test, vi } from 'vitest';
 import { ChunkErrorBoundary } from '../app/ChunkErrorBoundary';
+import { renderWithProviders } from '../test/harness';
 import { DropdownMenu, type DropdownMenuItem } from './DropdownMenu';
 import { type LazyMenuControl, LazyMenuSlot, type LazyMenuTriggerProps } from './LazyMenuSlot';
 
@@ -179,7 +180,8 @@ test('(7) отказ загрузки на нажатие — к границе 
       </>
     );
   }
-  render(<Screen />);
+  // Обвязка с провайдерами: кадр ошибки несёт шапку с присутствием хоста (рамку, срез 1б).
+  renderWithProviders(<Screen />);
   await user.click(screen.getByTestId('probe-trigger'));
   expect(await screen.findByText('Не удалось открыть экран')).toBeInTheDocument();
   const failedCalls = state.calls;

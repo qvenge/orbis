@@ -7,13 +7,13 @@
 // [Оставить план] — без мутации.
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { beforeEach, expect, test } from 'vitest';
-import { useNav } from '../../state/navigation';
 import {
   type MockHandler,
   renderWithProviders,
   trpcError,
   wireEntity as wireFixture,
 } from '../../test/harness';
+import { navAt } from '../../test/nav';
 import { registryReply } from '../../test/registry';
 import { DetailScreen } from '../entity-detail/DetailScreen';
 
@@ -91,10 +91,7 @@ const handler =
 
 beforeEach(() => {
   localStorage.clear();
-  useNav.setState({
-    activeTab: 'browser',
-    stacks: { chat: [], browser: [{ kind: 'entity', id: 'e1' }], agenda: [], budget: [] },
-  });
+  navAt('e1');
 });
 
 const confirmCalls = (calls: { path: string; input: unknown }[]) =>
@@ -125,10 +122,7 @@ test('done планируемой покупки → карточка «Поку
 });
 
 test('done обычной задачи (без planned-financial) — карточки нет', async () => {
-  useNav.setState({
-    activeTab: 'browser',
-    stacks: { chat: [], browser: [{ kind: 'entity', id: 'e2' }], agenda: [], budget: [] },
-  });
+  navAt('e2');
   const { calls } = renderWithProviders(<DetailScreen entityId="e2" />, handler());
   await waitFor(() =>
     expect(screen.getByRole('checkbox', { name: /готово/i })).toBeInTheDocument(),

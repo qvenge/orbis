@@ -15,7 +15,7 @@ import { type MockHandler, renderWithProviders, wireEntity } from '../../test/ha
 import { registryReply } from '../../test/registry';
 import { useToastStore } from '../../ui/toast-store';
 import { TransactionsScreen } from './TransactionsScreen';
-import { buildTxQuery, TX_PAGE_SIZE } from './txQuery';
+import { buildTxQuery, TX_PAGE_SIZE } from '../../features/budget/txQuery';
 
 // --- фикстуры -------------------------------------------------------------------------
 

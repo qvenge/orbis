@@ -16,7 +16,7 @@ import { ActiveScreen } from '../../app/router';
 import { useNav } from '../../state/navigation';
 import { type MockHandler, renderWithProviders, trpcError, wireEntity } from '../../test/harness';
 import { registryReply } from '../../test/registry';
-import { todayISO } from '../budget/useBudget';
+import { todayISO } from '../../features/budget/useBudget';
 import { AgendaScreen } from './AgendaScreen';
 
 const TZ = 'Europe/Moscow';
@@ -480,7 +480,7 @@ test('дневная секция: у платежа сумма остаётся
 
 test('дефолт даты EntityRow не менялся: в Browser строка по-прежнему печатает дату', async () => {
   // Дефолт пропа общий с Browser — правка Повестки не имеет права его сдвинуть.
-  const { EntityRow } = await import('../browser/EntityRow');
+  const { EntityRow } = await import('../../features/browser/EntityRow');
   const task = ent('b1', 'Отчёт', { 'orbis/task_status': 'planned', 'orbis/due_date': tomorrow }, [
     'orbis/task',
   ]);

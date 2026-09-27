@@ -3,7 +3,7 @@
 import tailwind from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import { VitePWA } from 'vite-plugin-pwa';
-import { defineConfig } from 'vitest/config';
+import { configDefaults, defineConfig } from 'vitest/config';
 import { pwaManifest } from './src/pwa/manifest';
 
 export default defineConfig({
@@ -36,6 +36,9 @@ export default defineConfig({
     environment: 'jsdom',
     globals: true,
     setupFiles: ['./tests/setup.ts'],
+    // Экраны Бюджета, импорта и Повестки лежат в `src/legacy-1v` до среза 1в (спека 1б §8.6, §15,
+    // РП-31): их тесты не гоняются — экраны недоступны из интерфейса и написаны на навигацию 1а.
+    exclude: [...configDefaults.exclude, 'src/legacy-1v/**'],
     // Дефолт vitest — `availableParallelism − 1`; на машине разработчика это 11 форков
     // jsdom на 12 ядрах при 16 ГБ, и они переподписывают процессор: та же работа стоит
     // 205 с процессорного времени против 65 с на четырёх воркерах, сьют идёт 64–70 с

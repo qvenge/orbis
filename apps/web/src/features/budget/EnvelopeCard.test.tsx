@@ -3,13 +3,13 @@
 // с аспектом orbis/budget, инвалидация budget, тост ошибки уникальности §2.1).
 
 import type { BudgetOverview, EnvelopeStatus } from '@orbis/shared';
+import { currentEntry } from '@orbis/shared/nav';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { beforeEach, expect, test, vi } from 'vitest';
-import { useNav } from '../../state/navigation';
+import { resetNavForTests, useNav } from '../../state/navigation';
 import { type MockHandler, renderWithProviders, wireEntity } from '../../test/harness';
 import { registryReply } from '../../test/registry';
 import { useToastStore } from '../../ui/toast-store';
-import { BudgetScreen } from './BudgetScreen';
 import { EnvelopeCard, envelopeLevel, envelopePercent } from './EnvelopeCard';
 import { EnvelopeCreateSheet } from './EnvelopeCreateSheet';
 
@@ -55,10 +55,7 @@ function status(over: {
 beforeEach(() => {
   localStorage.clear();
   useToastStore.setState({ toasts: [] });
-  useNav.setState({
-    activeTab: 'budget',
-    stacks: { chat: [], browser: [], agenda: [], budget: [] },
-  });
+  resetNavForTests();
 });
 
 // --- envelopeLevel / envelopePercent: точные пороги §3.1 без IEEE-754 ------------------
@@ -240,12 +237,16 @@ test('carryover-бейдж: ↩ +1 200 при профиците, ↩ −800 п�
   expect(screen.getByTestId('envelope-card')).not.toHaveTextContent('↩');
 });
 
-// --- тап → push экрана категории (B3) ----------------------------------------------------
+// --- тап → запись категории (экрана категории в 1б нет, §8.6) ---------------------------
 
-test('тап по карточке пушит экран budget-category в стек budget', () => {
+test('тап по карточке открывает запись категории в рамке экрана', () => {
   renderWithProviders(<EnvelopeCard status={status({ spent: '0', effectiveLimit: '10000.00' })} />);
   fireEvent.click(screen.getByRole('button', { name: /Еда/ }));
-  expect(useNav.getState().stacks.budget).toEqual([{ kind: 'budget-category', id: 'cat-1' }]);
+  expect(currentEntry(useNav.getState().model).address).toEqual({
+    kind: 'record',
+    app: { kind: 'host' },
+    id: 'cat-1',
+  });
 });
 
 // --- EnvelopeCreateSheet ------------------------------------------------------------------
@@ -259,6 +260,16 @@ const categories = [
   }),
   wireEntity({ id: 'c2', title: 'Транспорт', aspects: ['orbis/category'] }),
 ];
+
+const emptyOverview: BudgetOverview = {
+  period: { start: '2026-07-01', end: '2026-07-31' },
+  balance: { income: '0', expense: '0', balance: '0' },
+  envelopes: [],
+  comingUp: [],
+  planned: [],
+  unbudgeted: [{ category: { id: 'c1', title: 'Еда', icon: '🍔' }, total: '3200.00' }],
+  alertCount: 0,
+};
 
 const settings = {
   timezone: 'Europe/Moscow',
@@ -378,47 +389,4 @@ test('ошибка уникальности §2.1 → тост с текстом
   );
   expect(useToastStore.getState().toasts[0]?.tone).toBe('danger');
   expect(onOpenChange).not.toHaveBeenCalledWith(false);
-});
-
-// --- интеграция с BudgetScreen ------------------------------------------------------------
-
-const emptyOverview: BudgetOverview = {
-  period: { start: '2026-07-01', end: '2026-07-31' },
-  balance: { income: '0', expense: '0', balance: '0' },
-  envelopes: [],
-  comingUp: [],
-  planned: [],
-  unbudgeted: [{ category: { id: 'c1', title: 'Еда', icon: '🍔' }, total: '3200.00' }],
-  alertCount: 0,
-};
-
-test('[+ конверт] открывает Sheet; после успешного сабмита budget.overview перезапрашивается', async () => {
-  const { calls } = renderWithProviders(<BudgetScreen />, sheetHandler());
-  await waitFor(() => expect(screen.getByTestId('balance-card')).toBeInTheDocument());
-
-  fireEvent.click(screen.getByRole('button', { name: '+ конверт' }));
-  await waitFor(() => expect(screen.getByRole('option', { name: /Еда/ })).toBeInTheDocument());
-
-  const overviewCallsBefore = calls.filter((c) => c.path === 'budget.overview').length;
-  fireEvent.change(screen.getByLabelText('Категория'), { target: { value: 'c1' } });
-  fireEvent.change(screen.getByLabelText('Лимит'), { target: { value: '9000' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Создать' }));
-  await waitFor(() => expect(calls.some((c) => c.path === 'entity.create')).toBe(true));
-
-  // invalidateBudget → повторный запрос overview
-  await waitFor(() =>
-    expect(calls.filter((c) => c.path === 'budget.overview').length).toBeGreaterThan(
-      overviewCallsBefore,
-    ),
-  );
-});
-
-test('Unbudgeted: кнопка создания конверта открывает Sheet с предвыбранной категорией', async () => {
-  renderWithProviders(<BudgetScreen />, sheetHandler());
-  await waitFor(() => expect(screen.getByTestId('balance-card')).toBeInTheDocument());
-
-  fireEvent.click(screen.getByRole('button', { name: 'Конверт для «Еда»' }));
-  await waitFor(() =>
-    expect((screen.getByLabelText('Категория') as HTMLSelectElement).value).toBe('c1'),
-  );
 });

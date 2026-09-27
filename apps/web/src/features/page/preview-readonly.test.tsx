@@ -15,7 +15,6 @@ import type { QueryAst } from '@orbis/shared/query';
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { noteRegistryVersion, resetRegistryVersionForTests } from '../../lib/registry/useRegistry';
-import { useNav } from '../../state/navigation';
 import {
   installCrashTrap,
   type MockHandler,
@@ -23,6 +22,7 @@ import {
   type WireEntityFixture,
   wireEntity,
 } from '../../test/harness';
+import { navAt } from '../../test/nav';
 import { BUILTIN_REGISTRY } from '../../test/registry';
 import { queryClient } from '../../trpc';
 import { Toaster } from '../../ui/Toast';
@@ -236,10 +236,7 @@ const READING_MUTATIONS: ReadonlySet<string> = new Set(['entity.blocks']);
  */
 function openPreview(record: StructureFixture, forAspects: string[]) {
   const tpl = templateFor(forAspects);
-  useNav.setState({
-    activeTab: 'browser',
-    stacks: { chat: [], browser: [{ kind: 'entity', id: TPL }], agenda: [], budget: [] },
-  });
+  navAt(TPL);
   const withRelations: StructureFixture = {
     ...record,
     extra: {

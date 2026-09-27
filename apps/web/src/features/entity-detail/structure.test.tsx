@@ -2,29 +2,33 @@
  * Структура экрана записи против эталона (приёмка С1а-5, база сторожа С1а-6; РП-10, РП-11).
  *
  * Эталон снят задачей 2 на экране до среза 1а и не перезаписывается никогда. Новый экран (шаблон
- * хоста, задача 14) сравнивается с `INTENDED_1A(эталон)`: три намеренных отличия (спека §8.2)
- * снимаются поимёнными функциями поверх `golden/*.json`, а не правкой файлов — пересъёмка эталона
+ * хоста, задача 14) сравнивается с `INTENDED_1B(эталон)` = `INTENDED_1A` (три намеренных отличия
+ * спеки 1а §8.2) плюс переезд «⋯» в присутствие хоста (1б, РП-24) — поимёнными функциями поверх
+ * `golden/*.json`, а не правкой файлов — пересъёмка эталона
  * с нового экрана превратила бы приёмку «расхождения — только намеренные» в «экран похож сам на
  * себя». Любое иное расхождение — дефект экрана, а не повод для четвёртой функции.
  *
  * Съёмка — `structure.capture.test.tsx` (по `CAPTURE=1`); этот файл только сверяет.
  */
 import { BUILTIN_ASPECT_IDS } from '@orbis/shared';
-import { act, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
+import { ActiveScreen } from '../../app/router';
 import { resetRegistryVersionForTests } from '../../lib/registry/useRegistry';
+import { resetNavForTests, useNav } from '../../state/navigation';
 import { installCrashTrap, renderWithProviders } from '../../test/harness';
+import { navAt } from '../../test/nav';
 import { queryClient } from '../../trpc';
 import { DetailScreen } from './DetailScreen';
 import goldenRequests from './golden/detail-requests.json';
 import goldenStructure from './golden/detail-structure.json';
-import { INTENDED_1A } from './intended-1a';
-import { INTENDED_1B_REQUESTS } from './intended-1b';
+import { INTENDED_1B, INTENDED_1B_REQUESTS } from './intended-1b';
 import {
   captureDetail,
   type HostTemplateVariant,
   STRUCTURE_FIXTURES,
   type StructureFixture,
+  SUBTASK_ID,
   structureHandler,
   TICKET_ROUTINE_FIXTURE,
 } from './structure-fixtures';
@@ -51,9 +55,9 @@ const fixture = (name: string): StructureFixture => {
 
 test('проба средства: снимок цели видит шапку над вкладками, вкладки и карточку цели одним куском', async () => {
   const { structure } = await captureDetail(fixture('goal'));
-  expect(structure.aboveTabs).toEqual(
-    expect.arrayContaining(['detail-menu', 'native-row', 'tags-block']),
-  );
+  // «⋯» — в присутствии хоста (срез 1б §6.4, РП-24), не над вкладками экрана записи.
+  expect(structure.aboveTabs).toEqual(expect.arrayContaining(['native-row', 'tags-block']));
+  expect(structure.aboveTabs).not.toContain('detail-menu');
   expect(structure.tabs.map((t) => t.label)).toEqual(['Запись', 'Детали', 'Тред']);
   expect(structure.tabs[0]?.parts).toContain('goal-progress');
   expect(structure.tabs[0]?.parts.some((p) => p.startsWith('aspect:orbis/goal['))).toBe(true);
@@ -130,7 +134,7 @@ describe('каждая фикстура показывает шапку и св�
  * Шаблон хоста — ЗАПИСЬ поставки (`structureHandler` по умолчанию отдаёт её с эталонным телом в
  * той форме, в какой её пишет сервер): вид экрана через запись обязан совпасть со снимком 1а (С1б-9).
  */
-describe('INTENDED_1A(эталон) = экран через запись шаблона хоста (С1а-5, С1а-6, С1б-9, С1б-16)', () => {
+describe('INTENDED_1B(эталон) = экран через запись шаблона хоста (С1а-5, С1а-6, С1б-9, С1б-16)', () => {
   const structures = goldenStructure as Record<string, DetailStructure>;
   const requests = goldenRequests as Record<string, Record<string, number>>;
 
@@ -143,7 +147,7 @@ describe('INTENDED_1A(эталон) = экран через запись шаб�
   for (const f of STRUCTURE_FIXTURES) {
     test(f.name, async () => {
       const got = await captureDetail(f);
-      expect(got.structure).toEqual(INTENDED_1A(structures[f.name] as DetailStructure));
+      expect(got.structure).toEqual(INTENDED_1B(structures[f.name] as DetailStructure));
       expect(got.requests).toEqual(INTENDED_1B_REQUESTS(requests[f.name] ?? {}));
     });
   }
@@ -173,9 +177,9 @@ const VARIANTS: readonly {
   variant: HostTemplateVariant;
   expected: (golden: DetailStructure) => DetailStructure;
 }[] = [
-  { variant: 'none', expected: INTENDED_1A },
-  { variant: 'archived', expected: INTENDED_1A },
-  { variant: 'broken', expected: (g) => withHostTemplatePlaque(INTENDED_1A(g)) },
+  { variant: 'none', expected: INTENDED_1B },
+  { variant: 'archived', expected: INTENDED_1B },
+  { variant: 'broken', expected: (g) => withHostTemplatePlaque(INTENDED_1B(g)) },
 ];
 
 for (const { variant, expected } of VARIANTS) {
@@ -243,4 +247,50 @@ test('экран записи с холодного старта — один re
     last = calls.length;
   }
   expect(calls.filter((c) => c.path === 'registry.effective')).toHaveLength(1);
+});
+
+/**
+ * Состояние экрана — в истории, не в адресе (срез 1б §7.1, С1б-9): вкладка шаблона лежит в верхе
+ * стопки (действие `view` модели), и «‹» на запись возвращает её — в том числе после экрана хоста
+ * поверх, когда экран записи монтируется заново и своей памяти у него нет.
+ */
+describe('вкладка «Детали» переживает уход вглубь и «‹» (§7.1)', () => {
+  afterEach(() => resetNavForTests());
+
+  async function openOnDetails() {
+    const f = fixture('task');
+    navAt(f.entity.id);
+    useNav.setState({ mode: 'app' });
+    renderWithProviders(<ActiveScreen />, structureHandler(f), {
+      queries: queryClient.getDefaultOptions().queries,
+    });
+    fireEvent.click(await screen.findByRole('tab', { name: 'Детали' }));
+    await waitFor(() =>
+      expect(screen.getByRole('tab', { name: 'Детали' })).toHaveAttribute('aria-selected', 'true'),
+    );
+    return f;
+  }
+
+  test('запись → вглубь (подзадача) → «‹» — снова «Детали»', async () => {
+    const f = await openOnDetails();
+    act(() => useNav.getState().openRecord(SUBTASK_ID));
+    await screen.findByRole('heading', { level: 1, name: 'Собрать чеки' });
+    act(() => useNav.getState().back());
+    await screen.findByRole('heading', { level: 1, name: f.entity.title });
+    expect(await screen.findByRole('tab', { name: 'Детали' })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+  });
+
+  test('запись → чат поверх (экран записи снят) → «‹» — снова «Детали»', async () => {
+    const f = await openOnDetails();
+    act(() => useNav.getState().openHostScreen('chat'));
+    await screen.findByRole('heading', { level: 1, name: 'Чат' });
+    act(() => useNav.getState().back());
+    await screen.findByRole('heading', { level: 1, name: f.entity.title });
+    await waitFor(() =>
+      expect(screen.getByRole('tab', { name: 'Детали' })).toHaveAttribute('aria-selected', 'true'),
+    );
+  });
 });

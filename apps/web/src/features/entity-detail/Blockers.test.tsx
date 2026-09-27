@@ -1,13 +1,13 @@
 import { parseBody } from '@orbis/shared/doc';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
-import { useNav } from '../../state/navigation';
 import {
   isRecordScreenListCall,
   renderWithProviders,
   trpcError,
   wireEntity,
 } from '../../test/harness';
+import { navAt } from '../../test/nav';
 import { registryReply } from '../../test/registry';
 import { trpc } from '../../trpc';
 import { DetailScreen } from './DetailScreen';
@@ -147,10 +147,7 @@ beforeEach(() => {
   // менял бы дерево в непредсказуемый момент. jsdom своей реализации не имеет, поэтому подмена
   // именно ДОБАВЛЯЕТ ветку простоя — и она никогда не срабатывает (приём editor.test.tsx).
   vi.stubGlobal('requestIdleCallback', () => 1);
-  useNav.setState({
-    activeTab: 'browser',
-    stacks: { chat: [], browser: [{ kind: 'entity', id: 'e1' }], agenda: [], budget: [] },
-  });
+  navAt('e1');
 });
 
 afterEach(() => {

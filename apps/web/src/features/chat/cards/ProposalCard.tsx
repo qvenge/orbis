@@ -20,11 +20,11 @@
 //    гасило бы кнопки живого предложения — и наоборот.
 import { useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
+import { useOpenRecord } from '../../../app/useOpenRecord';
 import { EntityRef } from '../../../lib/entity-ref/EntityRef';
 import { formatDate } from '../../../lib/format';
 import { invalidateGraph } from '../../../lib/invalidate';
 import { useRegistry } from '../../../lib/registry/useRegistry';
-import { openEntity } from '../../../state/navigation';
 import { type RouterOutputs, trpc } from '../../../trpc';
 import { Button } from '../../../ui/Button';
 import { Card } from '../../../ui/Card';
@@ -97,6 +97,7 @@ function diffCounts(units: readonly DiffUnit[]): {
  * неизменённых строки вытеснили бы единственную изменённую. На записи — наоборот (Задача 10).
  */
 function CollapsedBodyDiff({ units, entityId }: { units: readonly DiffUnit[]; entityId?: string }) {
+  const openEntity = useOpenRecord();
   const changed = units.filter((unit) => unit.kind !== 'same');
   const counts = diffCounts(changed);
   const rest = changed.length - COLLAPSED_DIFF_UNITS;
@@ -171,6 +172,7 @@ export function ProposalCard({
   /** Тред, в ленте которого карточка стоит; `undefined` — экран прогона (ленты нет). */
   threadId?: string;
 }) {
+  const openEntity = useOpenRecord();
   const utils = trpc.useUtils();
   // Подписи строк предложения и разбора расхождений — из реестра (§А9-2).
   const registry = useRegistry();

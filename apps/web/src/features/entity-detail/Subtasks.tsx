@@ -1,9 +1,9 @@
 import { newId, ROLE_SUBITEM, ROLE_TICKET } from '@orbis/shared';
 import { Circle, Plus } from 'lucide-react';
 import { useState } from 'react';
+import { useOpenRecord } from '../../app/useOpenRecord';
 import { EntityRef } from '../../lib/entity-ref/EntityRef';
 import { invalidateGraph } from '../../lib/invalidate';
-import { useNav } from '../../state/navigation';
 import { type RouterOutputs, trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
 import { Spinner } from '../../ui/Spinner';
@@ -51,8 +51,7 @@ export function Subtasks({ parentId, relations }: { parentId: string; relations:
   // Предпросмотр шаблона (хост `readOnly`): список и переходы остаются, строки добавления нет.
   const readOnly = useHostReadOnly();
   const { show } = useToast();
-  const push = useNav((s) => s.push);
-  const activeTab = useNav((s) => s.activeTab);
+  const openRecord = useOpenRecord();
   const create = trpc.entity.create.useMutation();
   const relate = trpc.relation.create.useMutation({
     // DF п.5: списки читают ДРУГОЙ ключ со своим staleTime (60 с у Повестки, K16) и сами
@@ -120,8 +119,8 @@ export function Subtasks({ parentId, relations }: { parentId: string; relations:
               className="flex items-center gap-2.5 rounded-md px-2 py-1.5 text-sm transition hover:bg-surface-2/60"
             >
               <Circle size={14} aria-hidden className="shrink-0 text-text-muted/70" />
-              {/* Открытие подзадачи — push entity в АКТИВНЫЙ таб поверх текущего Detail. */}
-              <EntityRef id={id} onOpen={(eid) => push(activeTab, { kind: 'entity', id: eid })} />
+              {/* Открытие подзадачи — в стопку текущего раздела поверх записи. */}
+              <EntityRef id={id} onOpen={openRecord} />
             </li>
           ))}
         </ul>

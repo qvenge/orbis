@@ -1,7 +1,7 @@
 import { act, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { App } from '../App';
-import { useNav } from '../state/navigation';
+import { resetNavForTests } from '../state/navigation';
 import { registerRetrySend, useRetryBuffer } from '../state/retry';
 import { renderWithProviders } from '../test/harness';
 import { trpc } from '../trpc';
@@ -10,8 +10,7 @@ import { trpc } from '../trpc';
 const appMocks = (path: string) => {
   if (path === 'chat.ensureThread') return { threadId: 't1' };
   if (path === 'chat.listMessages') return [];
-  // `entity.query` шлёт пробник ниже; подписку Повестки (её бейдж смонтирован на любом экране
-  // в обеих поверхностях навигации) за нас роутит обвязка — `UNROUTED_DEFAULTS` в `test/harness.tsx`.
+  // `entity.query` шлёт пробник ниже и рамка (записи поставки хоста).
   if (path === 'entity.query') return [];
   return {};
 };
@@ -22,7 +21,7 @@ const setOnline = (value: boolean) =>
 beforeEach(() => {
   localStorage.clear();
   useRetryBuffer.setState({ size: 0, pending: [] });
-  useNav.setState({ activeTab: 'chat', stacks: { chat: [], browser: [], agenda: [], budget: [] } });
+  resetNavForTests();
   setOnline(true);
 });
 afterEach(() => {
@@ -102,7 +101,11 @@ async function flushWithOutcome(outcome: 'confirmed' | 'business_rejection') {
     expect(calls.some((c) => c.path === 'entity.get')).toBe(true);
     expect(calls.some((c) => c.path === 'entity.count')).toBe(true);
   });
-  const before = (path: string) => calls.filter((c) => c.path === path).length;
+  // Счёт — по ключам пробника: рамка (записи поставки хоста) шлёт свой `entity.query`, и его
+  // приход до или после снимка мерил бы порядок монтирования, а не Р17.
+  const ofProbe = (c: { path: string; input: unknown }) =>
+    c.path !== 'entity.query' || (c.input as { query?: string }).query === 'aspect=orbis/task';
+  const before = (path: string) => calls.filter((c) => c.path === path && ofProbe(c)).length;
   const snapshot = {
     query: before('entity.query'),
     get: before('entity.get'),

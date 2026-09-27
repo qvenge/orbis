@@ -11,14 +11,13 @@ import {
   LayoutTemplate,
   Link2,
   PanelsTopLeft,
-  Pin,
   Scale,
   SlidersHorizontal,
   Undo2,
 } from 'lucide-react';
 import { useState } from 'react';
+import type { ScreenMenuContentProps } from '../../app/frame/ScreenMenu';
 import { DropdownMenu, type DropdownMenuItem } from '../../ui/DropdownMenu';
-import type { LazyMenuControl } from '../../ui/LazyMenuSlot';
 import { useToast } from '../../ui/toast-store';
 import { ChangeViewDialog } from '../page/ChangeViewDialog';
 import { type ChangeViewPlan, changeViewPlan, TEXT_BEFORE_VIEW_CHANGE } from '../page/change-view';
@@ -62,9 +61,9 @@ export type DetailMenuView =
     }
   /**
    * В настройке чужого шаблона пункты — про шаблон: запись под ним не видна, и «Архивировать»,
-   * «Закрепить», «Сделать страницей», «Изменить вид», «Открыть через…» действовали бы на невидимую
-   * запись, а не на то, что человек правит (остаток 1а №87). Остаются «Открыть шаблон» и ссылка на
-   * него. Задача 19 среза 1б переносит этот вид в «⋯» рамки приложения.
+   * «Сделать страницей», «Изменить вид», «Открыть через…» действовали бы на невидимую запись, а не
+   * на то, что человек правит (остаток 1а №87). Остаются «Открыть шаблон» и ссылка на него — разделом
+   * «Этот экран» одного меню «⋯» рамки (срез 1б §6.4).
    */
   | {
       kind: 'configuring';
@@ -73,22 +72,38 @@ export type DetailMenuView =
     };
 
 /**
- * Меню ⋮ шапки detail (§3.5). Раньше «меню» было двумя icon-кнопками в ряд: пункт
- * «Скопировать ссылку» третьей кнопкой сделал бы шапку панелью инструментов, а на узком
- * экране — очередью иконок поверх заголовка. Теперь это настоящее меню, действия внутри.
+ * Раздел «Этот экран» одного меню «⋯» (срез 1б §6.4) на экране записи: пункты записи или страницы,
+ * а следом — раздел «Хост» (`hostItems`, их собирает рамка). Кнопка «⋯» — в присутствии хоста;
+ * экран отдаёт это содержимое контекстом `ScreenMenuProvider`.
  *
- * Модуль ЛЕНИВЫЙ (`DetailMenuSlot` → `ui/LazyMenuSlot`, грузится нажатием): кнопку «⋯» рисует
- * эагерный слот, здесь — только всплывающий список, его пункты и диалоги; «открыто» держит слот
- * (`LazyMenuControl`). Дерево Radix-меню (menu, popper,
- * floating-ui) — ≈7,7 кБ gzip чанка экрана записи, а нужно оно только после жеста. Статический импорт этого файла вернул бы
- * вес в первый кадр каждого открытия записи (сторож — `scripts/check-lazy-chunks.ts`). По той же
- * причине здесь, а не в экране, живут пункты страниц (§8.4), их диалоги и разбор шаблона.
+ * Модуль ЛЕНИВЫЙ (`DetailMenuSlot.tsx` → `ui/LazyMenuSlot`, грузится нажатием): кнопку «⋯» рисует
+ * эагерный слот рамки, здесь — только всплывающий список, его пункты и диалоги; «открыто» держит
+ * слот (`LazyMenuControl`). Дерево Radix-меню (menu, popper, floating-ui) — ≈7,7 кБ gzip, а нужно оно
+ * только после жеста. Статический импорт этого файла вернул бы вес в первый кадр каждого открытия
+ * записи (сторож — `scripts/check-lazy-chunks.ts`). По той же причине здесь, а не в экране, живут
+ * пункты страниц (§8.4), их диалоги и разбор шаблона.
+ *
+ * «Закрепить» (в сайдбар) ушло: закреплённые стали навигацией оболочки хоста (§9.3), глагол вместо
+ * него — «Добавить в навигацию» (задача 21). «Закрепить версию» — другое понятие (Э-11), остаётся.
  */
-export interface DetailMenuProps {
-  onPin: () => void;
+export type DetailMenuProps = RecordMenuProps | { pending: true };
+
+/**
+ * Меню экрана записи. Запись ещё не приехала (`pending`) — только раздел «Хост»: «⋯» нажимают и в
+ * кадре загрузки, и меню не должно ждать ответа записи, чтобы открыться (Л-1).
+ */
+export function DetailMenu(props: DetailMenuProps & ScreenMenuContentProps) {
+  if ('pending' in props) {
+    const { pending: _pending, hostItems, ...control } = props;
+    return <DropdownMenu {...control} sections={[{ label: 'Хост', items: hostItems }]} />;
+  }
+  return <RecordMenu {...props} />;
+}
+
+interface RecordMenuProps {
   onArchive: () => void;
   onCopyLink: () => void;
-  /** Закрепить ВЕРСИЮ ТЕЛА (С11) — не путать с `onPin`, который держит запись в сайдбаре. */
+  /** Закрепить ВЕРСИЮ ТЕЛА (С11). */
   onPinVersion: () => void;
   /** Не задан — править как markdown нечего (у записи нет документа), и пункта нет вовсе. */
   onToggleMarkdown?: () => void;
@@ -129,8 +144,7 @@ type MenuDialog =
   | { kind: 'template-for'; entityId: string; value: unknown }
   | null;
 
-export function DetailMenu({
-  onPin,
+function RecordMenu({
   onArchive,
   onCopyLink,
   onPinVersion,
@@ -144,7 +158,8 @@ export function DetailMenu({
   anchorRef,
   triggerId,
   contentId,
-}: DetailMenuProps & LazyMenuControl) {
+  hostItems,
+}: RecordMenuProps & ScreenMenuContentProps) {
   const runBatch = useUpdateBatch();
   const { show } = useToast();
   const [dialog, setDialog] = useState<MenuDialog>(null);
@@ -199,7 +214,6 @@ export function DetailMenu({
 
   function commonItems(v: Exclude<DetailMenuView, { kind: 'configuring' }>): DropdownMenuItem[] {
     return [
-      { label: 'Закрепить', icon: <Pin size={16} aria-hidden />, onSelect: onPin },
       {
         label: archiveLabel,
         icon: archived ? (
@@ -210,9 +224,7 @@ export function DetailMenu({
         onSelect: onArchive,
       },
       copyLinkItem,
-      // Про ТЕЛО, а не про сайдбар — и стоит рядом с «Править как markdown», второй правкой
-      // тела, а не рядом с «Закрепить». Иконка тоже другая (History против Pin): два пункта
-      // с одной иконкой и почти одной подписью читались бы как один с опечаткой.
+      // Про ТЕЛО — и стоит рядом с «Править как markdown», второй правкой тела.
       {
         label: 'Закрепить версию',
         icon: <History size={16} aria-hidden />,
@@ -424,7 +436,10 @@ export function DetailMenu({
         anchorRef={anchorRef}
         triggerId={triggerId}
         contentId={contentId}
-        items={items}
+        sections={[
+          { label: 'Этот экран', items },
+          { label: 'Хост', items: hostItems },
+        ]}
       />
       {dialog?.kind === 'change-view' && dialog.entityId === entity.id && (
         <ChangeViewDialog

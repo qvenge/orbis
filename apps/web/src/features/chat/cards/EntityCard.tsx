@@ -1,9 +1,9 @@
 import { useState } from 'react';
+import { useOpenRecord } from '../../../app/useOpenRecord';
 import { formatAmount } from '../../../lib/format';
 import { invalidateGraph } from '../../../lib/invalidate';
 import { fieldLabel } from '../../../lib/registry/labels';
 import { useRegistry } from '../../../lib/registry/useRegistry';
-import { useNav } from '../../../state/navigation';
 import { trpc } from '../../../trpc';
 import { Button } from '../../../ui/Button';
 import { Card } from '../../../ui/Card';
@@ -25,8 +25,7 @@ export function EntityCard({
   readOnly?: boolean;
 }) {
   const [undone, setUndone] = useState(false);
-  const push = useNav((s) => s.push);
-  const activeTab = useNav((s) => s.activeTab);
+  const openRecord = useOpenRecord();
   const utils = trpc.useUtils();
   // Подписи полей — из реестра (§А9-2): ключи `keyFields` это id СВОЙСТВ, и словарь имён
   // старой схемы, живший здесь раньше, не знал ни одного из них.
@@ -102,7 +101,7 @@ export function EntityCard({
         type="button"
         className="cursor-pointer text-left text-sm font-medium transition hover:text-accent disabled:cursor-default disabled:hover:text-text"
         disabled={undone}
-        onClick={() => push(activeTab, { kind: 'entity', id: card.entityId })}
+        onClick={() => openRecord(card.entityId)}
       >
         {card.title}
       </button>

@@ -1,7 +1,7 @@
 import { MessageSquare } from 'lucide-react';
 import { useEffect, useRef } from 'react';
+import { useOpenRecord } from '../../app/useOpenRecord';
 import { Markdown } from '../../lib/markdown/Markdown';
-import { openEntity } from '../../state/navigation';
 import { EmptyState } from '../../ui/EmptyState';
 import { Skeleton } from '../../ui/Skeleton';
 import {
@@ -45,6 +45,7 @@ export function MessageList({
   // чипов нет вовсе: кнопка, которая ничего не делает, хуже её отсутствия.
   onPick?: (text: string) => void;
 } & CardHandlers) {
+  const openEntity = useOpenRecord();
   // messages в DESC; для показа сверху-вниз (старые вверху) — reverse на рендере.
   const ordered = [...messages].reverse();
 

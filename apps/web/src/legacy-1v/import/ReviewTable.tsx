@@ -25,8 +25,8 @@ import { useNav } from '../../state/navigation';
 import { Button } from '../../ui/Button';
 import { Card } from '../../ui/Card';
 import { Spinner } from '../../ui/Spinner';
-import { FINANCE_CATEGORY } from '../budget/categories';
-import { ddmm } from '../budget/EnvelopeCard';
+import { FINANCE_CATEGORY } from '../../features/budget/categories';
+import { ddmm } from '../../features/budget/EnvelopeCard';
 
 type RowAction = 'create' | 'adopt' | 'skip';
 

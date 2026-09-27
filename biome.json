@@ -13,7 +13,8 @@
       "!.superpowers",
       "!.playwright-mcp",
       "!.remember",
-      "!.claude"
+      "!.claude",
+      "!apps/web/src/legacy-1v"
     ]
   },
   "formatter": {

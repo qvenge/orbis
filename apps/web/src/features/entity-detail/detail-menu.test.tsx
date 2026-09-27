@@ -12,8 +12,8 @@ import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { ChunkErrorBoundary } from '../../app/ChunkErrorBoundary';
 import { invalidateGraph } from '../../lib/invalidate';
 import { noteRegistryVersion, resetRegistryVersionForTests } from '../../lib/registry/useRegistry';
-import { useNav } from '../../state/navigation';
 import { installCrashTrap, renderWithProviders, wireEntity } from '../../test/harness';
+import { navAt } from '../../test/nav';
 import { registryReply } from '../../test/registry';
 import { trpc } from '../../trpc';
 import { resetDetailMenuModuleForTests } from './DetailMenuSlot';
@@ -51,10 +51,7 @@ beforeEach(() => {
   });
   // Простой не наступает (тест «ничего до нажатия» ставит свой).
   vi.stubGlobal('requestIdleCallback', () => 1);
-  useNav.setState({
-    activeTab: 'browser',
-    stacks: { chat: [], browser: [{ kind: 'entity', id: ENTITY_ID }], agenda: [], budget: [] },
-  });
+  navAt(ENTITY_ID);
 });
 
 afterEach(() => {
@@ -117,12 +114,12 @@ test('чанк меню не приехал: нажатие — кадр оши�
   vi.spyOn(console, 'error').mockImplementation(() => {});
   network.down = true;
   renderWithProviders(<Screen />, handler);
-  fireEvent.click(await screen.findByTestId('detail-menu'));
+  fireEvent.click(await screen.findByTestId('screen-menu'));
   expect(await screen.findByText('Не удалось открыть экран')).toBeInTheDocument();
 
   network.down = false;
   fireEvent.click(screen.getByTestId('revisit'));
-  fireEvent.click(await screen.findByTestId('detail-menu'));
+  fireEvent.click(await screen.findByTestId('screen-menu'));
   expect(await screen.findByRole('menuitem', { name: 'Скопировать ссылку' })).toBeInTheDocument();
 });
 
@@ -133,7 +130,7 @@ test('до нажатия чанк меню не запрашивается: р�
     return 1;
   });
   renderWithProviders(<Screen />, handler);
-  const button = await screen.findByTestId('detail-menu');
+  const button = await screen.findByTestId('screen-menu');
   fireEvent.pointerEnter(button);
   fireEvent.mouseEnter(button);
   act(() => button.focus());
@@ -142,7 +139,7 @@ test('до нажатия чанк меню не запрашивается: р�
   });
   // Фоновый import() запрещён правилом app/chunk-reload.ts: его провал перезагрузил бы страницу.
   expect(network.attempts).toBe(0);
-  expect(screen.getByTestId('detail-menu')).toBe(button);
+  expect(screen.getByTestId('screen-menu')).toBe(button);
   expect(button).toHaveAttribute('aria-expanded', 'false');
 });
 
@@ -153,7 +150,9 @@ test('отказ форы на pointerdown молчит, click следом по
   process.on('unhandledRejection', onUnhandled);
   network.down = true;
   renderWithProviders(<Screen />, handler);
-  const button = await screen.findByTestId('detail-menu');
+  // Кнопка «⋯» стоит и в кадре загрузки записи; здесь проверяется фора на записи, как раньше.
+  await screen.findByRole('heading', { level: 1, name: 'Задача' });
+  const button = await screen.findByTestId('screen-menu');
   fireEvent.pointerDown(button);
   await act(async () => {
     await new Promise((r) => setTimeout(r, 50));
@@ -164,7 +163,7 @@ test('отказ форы на pointerdown молчит, click следом по
   expect(screen.queryByText('Не удалось открыть экран')).toBeNull();
 
   network.down = false;
-  fireEvent.click(screen.getByTestId('detail-menu'));
+  fireEvent.click(screen.getByTestId('screen-menu'));
   expect(await screen.findByRole('menuitem', { name: 'Скопировать ссылку' })).toBeInTheDocument();
   // Click повторил загрузку: отказ форы не запомнен.
   expect(network.attempts).toBe(2);
@@ -175,7 +174,7 @@ test('нажатие до приезда чанка: рефетч entity.get и 
   const user = userEvent.setup();
   const { calls } = renderWithProviders(<Screen />, handler);
   // Полная последовательность жеста: pointerdown → mousedown → pointerup → mouseup → click.
-  await user.click(await screen.findByTestId('detail-menu'));
+  await user.click(await screen.findByTestId('screen-menu'));
   const before = entityGets(calls);
   // fireEvent, а не user: проба не должна уводить фокус с кнопки меню.
   fireEvent.click(screen.getByTestId('refetch'));
@@ -189,13 +188,13 @@ test('нажатие до приезда чанка: рефетч entity.get и 
 test('кнопка меню — один узел от первого кадра: открытие и Escape её не подменяют, фокус возвращается ей (Л-1)', async () => {
   const user = userEvent.setup();
   renderWithProviders(<Screen />, handler);
-  const button = await screen.findByTestId('detail-menu');
+  const button = await screen.findByTestId('screen-menu');
   fireEvent.click(button);
   // Имя меню — от кнопки слота («Меню»), а не от невидимого якоря Radix.
   await screen.findByRole('menu', { name: 'Меню' });
-  expect(screen.getByTestId('detail-menu')).toBe(button);
+  expect(screen.getByTestId('screen-menu')).toBe(button);
   await user.keyboard('{Escape}');
   await waitFor(() => expect(screen.queryByRole('menu')).toBeNull());
-  expect(screen.getByTestId('detail-menu')).toBe(button);
+  expect(screen.getByTestId('screen-menu')).toBe(button);
   expect(document.activeElement).toBe(button);
 });

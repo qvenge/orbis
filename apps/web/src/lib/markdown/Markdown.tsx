@@ -1,4 +1,4 @@
-import { buildAppPath, parseAppPath } from '@orbis/shared';
+import { buildAddress, parseAddress } from '@orbis/shared/nav';
 import { useMemo } from 'react';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import rehypeSanitize from 'rehype-sanitize';
@@ -32,11 +32,12 @@ function escapeLinkText(label: string): string {
 function linkifyEntityRefs(source: string): string {
   return source.replace(ENTITY_REF_RE, (whole, rawId: string, label?: string) => {
     const id = rawId.toLowerCase();
-    const href = buildAppPath({ kind: 'entity', id });
-    // Форму id проверяет ТОТ ЖЕ контракт маршрутов, что разбирает клик (@orbis/shared):
-    // второй таблицы маршрутов и второго UUID-регэкспа у markdown быть не должно.
+    // Запись в хосте (срез 1б §7.1): приложение ссылки решает рамка при нажатии (§7.2, §7.4).
+    const href = buildAddress({ kind: 'record', app: { kind: 'host' }, id });
+    // Форму id проверяет ТОТ ЖЕ разбор адреса, что разбирает клик (@orbis/shared/nav):
+    // второй таблицы адресов и второго UUID-регэкспа у markdown быть не должно.
     // Не разобралось — не ссылка: печатаем как было, догадка тут хуже отказа.
-    if (parseAppPath(href) === null) return whole;
+    if (parseAddress(href) === null) return whole;
     const text = label?.trim() ? escapeLinkText(label.trim()) : id;
     return `[${text}](${href})`;
   });
@@ -45,12 +46,13 @@ function linkifyEntityRefs(source: string): string {
 function buildComponents(onEntityLink?: (id: string) => void): Components {
   return {
     a({ node: _node, href, children, ...rest }) {
-      const screen = href ? parseAppPath(href) : null;
-      // Внутренняя ссылка: push поверх стека ТЕКУЩЕЙ вкладки (см. openEntity,
-      // state/navigation.ts). Без preventDefault браузер перезагрузил бы документ,
-      // а `openDeepLink` (вход снаружи) затёр бы стек целевой вкладки — не тот случай.
-      if (screen?.kind === 'entity' && onEntityLink) {
-        const { id } = screen;
+      const place = href ? parseAddress(href) : null;
+      // Внутренняя ссылка на запись (и старая `/entity/<id>`): открыть по месту экрана
+      // (`useOpenRecord` вызывающего, срез 1б §7.2). Приложение из адреса отбрасывается — в данных
+      // ссылка на запись по id, рамку выбирает правило открытия при нажатии (§7.4). Без
+      // preventDefault браузер перезагрузил бы документ.
+      if (place?.kind === 'record' && onEntityLink) {
+        const { id } = place;
         return (
           <a
             {...rest}

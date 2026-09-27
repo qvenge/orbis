@@ -1,10 +1,14 @@
-import { buildAppPath, PAGE_ASPECT } from '@orbis/shared';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { PAGE_ASPECT } from '@orbis/shared';
+import { buildAddress, currentEntry, HOST_APP } from '@orbis/shared/nav';
+import { useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { FrameAppContext } from '../../app/frame/FrameApp';
+import { ScreenMenuProvider } from '../../app/frame/ScreenMenu';
 import { NotFoundScreen } from '../../app/NotFoundScreen';
 import { ScreenHeader } from '../../app/ScreenHeader';
+import { useOpenRecord } from '../../app/useOpenRecord';
 import { invalidateGraph } from '../../lib/invalidate';
 import { mayLeave } from '../../state/leave-guard';
-import { openEntity } from '../../state/navigation';
+import { appRefOf, useNav } from '../../state/navigation';
 import { trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
 import { Input } from '../../ui/Input';
@@ -17,7 +21,8 @@ import { type TabMemory, TabMemoryProvider, TabMemoryScope } from '../page/TabsC
 import { TemplatePreview } from '../page/TemplatePreview';
 import { usePageTemplates } from '../page/usePageTemplates';
 import { useSupplyRecords } from '../page/useSupplyRecords';
-import { DetailMenuSlot } from './DetailMenuSlot';
+import type { DetailMenuProps } from './DetailMenu';
+import { loadDetailMenu } from './DetailMenuSlot';
 import { type BodyGate, BodyScreenProvider, bodyKindOf } from './EntityBody';
 import { ProposalOverlay } from './ProposalOverlay';
 import { ROUTINE_ASPECT } from './RoutineStatusBlock';
@@ -31,10 +36,14 @@ const PROJECT = 'orbis/project';
 export function DetailScreen({ entityId }: { entityId: string }) {
   const { get, setArchived, conflict, dismissConflict } = useEntityDetail(entityId);
   const utils = trpc.useUtils();
-  const settings = trpc.user.getSettings.useQuery();
-  const updateSettings = trpc.user.updateSettings.useMutation({
-    onSuccess: () => void utils.user.getSettings.invalidate(),
-  });
+  const openRecord = useOpenRecord();
+  const frame = useContext(FrameAppContext);
+  /**
+   * Состояние экрана в верхе стопки навигации (срез 1б §7.1): вкладка шаблона и «открыть через X»
+   * живут в истории, а не в адресе, — «‹» на эту запись возвращает их, в том числе после экрана
+   * хоста поверх (экран записи тогда монтируется заново). Ключи: `tab:<ключ памяти вкладок>`, `via`.
+   */
+  const topView = useNav((s) => currentEntry(s.model).view);
   /**
    * Список шаблонов владельца — ЗДЕСЬ, до ответа записи, а не в `RecordView` после него (§6.5,
    * РП-11 (2), РП-14): запрос уходит вместе с `entity.get` (в проде — одним HTTP, `httpBatchLink`) и
@@ -85,18 +94,31 @@ export function DetailScreen({ entityId }: { entityId: string }) {
   const [tabMemory, setTabMemory] = useState<Readonly<Record<string, string>>>({});
   const tabs = useMemo<TabMemory>(
     () => ({
-      get: (key) => tabMemory[key],
-      set: (key, value) => setTabMemory((m) => ({ ...m, [key]: value })),
+      // Сначала — состояние ЭТОГО места в истории (вернулись «‹»), затем — память экрана
+      // (соседняя запись того же шаблона открывается там же, где смотрели).
+      get: (key) => topView?.[`tab:${key}`] ?? tabMemory[key],
+      set: (key, value) => {
+        setTabMemory((m) => ({ ...m, [key]: value }));
+        useNav.getState().setView({ [`tab:${key}`]: value });
+      },
     }),
-    [tabMemory],
+    [tabMemory, topView],
   );
   /**
    * «Открыть через шаблон хоста» / «Открыть через „X“» у записи и «Открыть как запись» у страницы
-   * (спека §8.4) — разово, не запоминается: состояние экрана, а не данные записи и не адрес
-   * (`ScreenRef`): навигация и история от него не меняются (W7). Сбрасывается сменой записи и сменой
-   * её «страничности» (ниже).
+   * (спека §8.4) — разово, не запоминается в записи: состояние экрана, а не данные записи и не адрес.
+   * Живёт в верхе стопки навигации (`view.via`, срез 1б §7.1): «‹» на запись возвращает его, новый
+   * заход — нет. Сбрасывается сменой записи и сменой её «страничности» (ниже).
    */
-  const [openVia, setOpenVia] = useState<{ templateId: string | 'host' } | undefined>(undefined);
+  const [openVia, setOpenVia] = useState<{ templateId: string | 'host' } | undefined>(() =>
+    viaOf(topView),
+  );
+  // Разовый вид — зеркалом в верх стопки: «‹» на запись вернёт его (§7.1). Эффект, а не запись в
+  // жесте: вид сбрасывается и рендером (смена «страничности» записи), а из рендера стор не правят.
+  useEffect(() => {
+    const want = openVia?.templateId ?? null;
+    if ((topView?.via ?? null) !== want) useNav.getState().setView({ via: want });
+  }, [openVia, topView]);
   /** «Сменить выбор шаблона для таких записей» (§4.3) — плашка спора по просьбе меню. */
   const [disputeRequest, setDisputeRequest] = useState<DisputeRequest | undefined>(undefined);
   /**
@@ -144,8 +166,9 @@ export function DetailScreen({ entityId }: { entityId: string }) {
     // закрепил бы соседнюю (экран монтируется без key, router.tsx).
     setPinVersion(false);
     // «Открыть через X» — про ту запись, из чьего меню его выбрали: переехав, он показал бы
-    // соседнюю запись чужим шаблоном без единого жеста человека.
-    setOpenVia(undefined);
+    // соседнюю запись чужим шаблоном без единого жеста человека. У новой записи — её собственный,
+    // из её места в истории.
+    setOpenVia(viaOf(topView));
     setDisputeRequest(undefined);
     setMode(null);
     // Слой переезжает на соседнюю запись вместе с экраном (монтируется без key), и его
@@ -226,10 +249,12 @@ export function DetailScreen({ entityId }: { entityId: string }) {
 
   // `id` — не всегда запись экрана: в настройке чужого шаблона ссылка — на шаблон (№87).
   async function copyLink(id: string = entityId) {
-    // Форму пути знает ТОЛЬКО buildAppPath (B1): собранная здесь руками строка разъехалась
-    // бы с роутером при первой же правке таблицы маршрутов, и ссылки из чужих писем вели
-    // бы в никуда. origin делает её абсолютной — ссылку отправляют наружу, а не внутрь SPA.
-    const url = `${window.location.origin}${buildAppPath({ kind: 'entity', id })}`;
+    // Форму адреса знает ТОЛЬКО buildAddress (срез 1б §7.1): собранная здесь руками строка
+    // разъехалась бы с разбором при первой же правке таблицы адресов. Запись экрана — в
+    // приложении своей рамки; чужой шаблон из настройки — в хосте. origin делает ссылку
+    // абсолютной — её отправляют наружу, а не внутрь SPA (§7.4: «Скопировать ссылку» — полный адрес).
+    const app = id === entityId ? appRefOf(frame?.app ?? HOST_APP) : appRefOf(HOST_APP);
+    const url = `${window.location.origin}${buildAddress({ kind: 'record', app, id })}`;
     try {
       // Обращение к navigator.clipboard намеренно внутри try: когда API нет вовсе,
       // это TypeError — та же беда для пользователя, что и отклонённое разрешение.
@@ -248,9 +273,12 @@ export function DetailScreen({ entityId }: { entityId: string }) {
   // (такие ошибки остаются на прежнем поведении — это отдельный разговор, не §1.3).
   if (get.isError && get.error.data?.code === 'NOT_FOUND') return <NotFoundScreen />;
 
+  // Шапка с меню «⋯» — ПЕРВЫМ ребёнком одного и того же провайдера меню и в кадре загрузки, и на
+  // записи: React сохраняет её узел, и «⋯», нажатое до ответа записи, остаётся открытым (Л-1) —
+  // сперва с разделом «Хост», а пункты записи встают в то же меню, когда запись приехала.
   if (get.isLoading || !get.data) {
     return (
-      <>
+      <ScreenMenuProvider items={loadDetailMenu} props={PENDING_MENU}>
         <ScreenHeader title="…" />
         <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 p-3">
           <Skeleton className="h-7 w-48" />
@@ -258,7 +286,7 @@ export function DetailScreen({ entityId }: { entityId: string }) {
           <Skeleton className="h-16" />
           <Skeleton className="h-16" />
         </div>
-      </>
+      </ScreenMenuProvider>
     );
   }
   const { entity } = get.data;
@@ -275,102 +303,88 @@ export function DetailScreen({ entityId }: { entityId: string }) {
   // про шаблон (№87). Своя страница в настройке — та же запись экрана, её пункты законны.
   const configuringId =
     mode?.kind === 'configure' && mode.targetId !== entity.id ? mode.targetId : null;
+  const menuProps: DetailMenuProps = {
+    onArchive: () => setArchived(!entity.archived),
+    onCopyLink: () => void copyLink(configuringId ?? entityId),
+    onPinVersion: () => setPinVersion(true),
+    // Без документа пункта НЕТ вовсе. Показать его — значит предложить действие, которое молча
+    // ничего не делает, а флаг после нажатия остался бы поднятым: приедь документ следующим
+    // рефетчем — и тумблер открылся бы сам, без жеста человека. Ветку «документа нет» разбирает
+    // EditorShell; здесь у неё видимое следствие. У страницы — тоже нет: её тело показывает
+    // рендерер, а не редактор записи, и режиму разметки включить нечего.
+    ...(entity.bodyDoc != null && !isPage && { onToggleMarkdown: () => setAsMarkdown((v) => !v) }),
+    archived: entity.archived,
+    entity,
+    bodyGate,
+    view:
+      configuringId !== null
+        ? {
+            kind: 'configuring',
+            templateTitle:
+              // Пустой заголовок — id, как у пунктов «Открыть через „X“» (`titleOf`). Шаблона хоста
+              // в списке шаблонов нет (он не кандидат) — его заголовок из записей поставки.
+              (
+                templates.rows.find((r) => r.id === configuringId) ??
+                [...supply.byKey.values()].find((r) => r.id === configuringId)
+              )?.title || configuringId,
+            onOpenTemplate: () => openRecord(configuringId),
+          }
+        : isPage
+          ? {
+              kind: 'page',
+              asRecord,
+              onOpenAsRecord: () => setOpenVia(HOST_VIEW),
+              onConfigure: () => configure(entity.id),
+              // Из настройки своей страницы предпросмотр снимает `ConfigureView` — это уход с тела,
+              // и спрашивается тот же страж, что у «Готово» и «назад» (№86): иначе отказ досыла на
+              // размонтировании молчал бы.
+              ...(!isTemplate && {
+                onPreview: () => {
+                  if (mayLeave()) setMode({ kind: 'preview' });
+                },
+              }),
+            }
+          : {
+              kind: 'record',
+              shown: recordShown?.entityId === entity.id ? recordShown : null,
+              templates,
+              onOpenVia: (templateId) =>
+                setOpenVia(templateId === 'host' ? HOST_VIEW : { templateId }),
+              onChangeDispute: (contenders) =>
+                setDisputeRequest((prev) => ({ contenders, n: (prev?.n ?? 0) + 1 })),
+              onConfigureTemplate: configure,
+            },
+  };
 
   return (
-    <TabMemoryProvider value={tabs}>
-      <BodyScreenProvider
-        value={{
-          asMarkdown,
-          onCloseMarkdown: () => setAsMarkdown(false),
-          screenConflict: conflict,
-          noticeHost,
-          onRefresh: () => {
-            void get.refetch();
-            dismissConflict();
-          },
-          bodyGate,
-        }}
-      >
-        <ScreenHeader
-          title={entity.title}
-          actions={
-            <DetailMenuSlot
-              onPin={() => {
-                const pinned = settings.data?.pinnedEntities ?? [];
-                updateSettings.mutate({
-                  pinnedEntities: [...pinned, { id: entity.id, order: pinned.length }],
-                });
-              }}
-              onArchive={() => setArchived(!entity.archived)}
-              onCopyLink={() => void copyLink(configuringId ?? entityId)}
-              onPinVersion={() => setPinVersion(true)}
-              // Без документа пункта НЕТ вовсе. Показать его — значит предложить действие,
-              // которое молча ничего не делает, а флаг после нажатия остался бы поднятым: приедь
-              // документ следующим рефетчем — и тумблер открылся бы сам, без жеста человека.
-              // Ветку «документа нет» разбирает EditorShell; здесь у неё видимое следствие.
-              // У страницы — тоже нет: её тело показывает рендерер, а не редактор записи, и
-              // режиму разметки включить нечего (правка страницы — настройкой, задачи 15–16).
-              onToggleMarkdown={
-                entity.bodyDoc == null || isPage ? undefined : () => setAsMarkdown((v) => !v)
-              }
-              archived={entity.archived}
-              entity={entity}
-              bodyGate={bodyGate}
-              view={
-                configuringId !== null
-                  ? {
-                      kind: 'configuring',
-                      templateTitle:
-                        // Пустой заголовок — id, как у пунктов «Открыть через „X“» (`titleOf`).
-                        // Шаблона хоста в списке шаблонов нет (он не кандидат) — его заголовок
-                        // из записей поставки.
-                        (
-                          templates.rows.find((r) => r.id === configuringId) ??
-                          [...supply.byKey.values()].find((r) => r.id === configuringId)
-                        )?.title || configuringId,
-                      onOpenTemplate: () => openEntity(configuringId),
-                    }
-                  : isPage
-                    ? {
-                        kind: 'page',
-                        asRecord,
-                        onOpenAsRecord: () => setOpenVia(HOST_VIEW),
-                        onConfigure: () => configure(entity.id),
-                        // Из настройки своей страницы предпросмотр снимает `ConfigureView` —
-                        // это уход с тела, и спрашивается тот же страж, что у «Готово» и «назад»
-                        // (№86): иначе отказ досыла на размонтировании молчал бы.
-                        ...(!isTemplate && {
-                          onPreview: () => {
-                            if (mayLeave()) setMode({ kind: 'preview' });
-                          },
-                        }),
-                      }
-                    : {
-                        kind: 'record',
-                        shown: recordShown?.entityId === entity.id ? recordShown : null,
-                        templates,
-                        onOpenVia: (templateId) =>
-                          setOpenVia(templateId === 'host' ? HOST_VIEW : { templateId }),
-                        onChangeDispute: (contenders) =>
-                          setDisputeRequest((prev) => ({ contenders, n: (prev?.n ?? 0) + 1 })),
-                        onConfigureTemplate: configure,
-                      }
-              }
-            />
-          }
-        />
-        {/* Диалог закрепления версии — ВНЕ табов и по той же причине, что запасная ссылка ниже:
+    <ScreenMenuProvider items={loadDetailMenu} props={menuProps}>
+      <ScreenHeader title={entity.title} />
+      <TabMemoryProvider value={tabs}>
+        <BodyScreenProvider
+          value={{
+            asMarkdown,
+            onCloseMarkdown: () => setAsMarkdown(false),
+            screenConflict: conflict,
+            noticeHost,
+            onRefresh: () => {
+              void get.refetch();
+              dismissConflict();
+            },
+            bodyGate,
+          }}
+        >
+          {/* Диалог закрепления версии — ВНЕ табов и по той же причине, что запасная ссылка ниже:
           открывают его из меню, а меню одно на все вкладки. Монтируется только открытым —
           набранная и брошенная подпись не переживает закрытие. */}
-        {pinVersion && (
-          <PinVersionDialog entityId={entity.id} onClose={() => setPinVersion(false)} />
-        )}
-        {/* Запасной путь копирования — ВНЕ табов: ссылку просят из меню, а меню одно на все
+          {pinVersion && (
+            <PinVersionDialog entityId={entity.id} onClose={() => setPinVersion(false)} />
+          )}
+          {/* Запасной путь копирования — ВНЕ табов: ссылку просят из меню, а меню одно на все
           табы, и прятать ответ на вкладке «Запись» значило бы иногда не отвечать вовсе. */}
-        {manualLink !== null && manualLink.id === entityId && (
-          <ManualLinkNotice url={manualLink.url} onHide={() => setManualLink(null)} />
-        )}
-        {/* Плашки тела (расхождение версий, неотправленный черновик, состояние сохранения) —
+          {manualLink !== null && manualLink.id === entityId && (
+            <ManualLinkNotice url={manualLink.url} onHide={() => setManualLink(null)} />
+          )}
+          {/* Плашки тела (расхождение версий, неотправленный черновик, состояние сохранения) —
           тоже ВНЕ табов, и по той же причине, что запасная ссылка выше. «Запись» держится
           живой через display:none (keepMounted), то есть с «Деталей» и «Треда» всё, что лежит
           внутри неё, не видно вовсе, — а это единственный канал, которым экран сообщает, что
@@ -381,8 +395,8 @@ export function DetailScreen({ entityId }: { entityId: string }) {
           сюда лишним слоем состояния значило бы завести второй ответ на вопрос «что с
           сохранением». Портал переносит DOM, оставляя дерево React на месте, — поэтому
           `key={entity.id}` у тела и вся его память о правке работают ровно как прежде. */}
-        <div ref={setNoticeHost} className="mx-auto w-full max-w-3xl px-4 md:px-6" />
-        {/* Слой предложения рутины (Ш1.3) — СОСЕДНИМ узлом, а не внутри `noticeHost` выше:
+          <div ref={setNoticeHost} className="mx-auto w-full max-w-3xl px-4 md:px-6" />
+          {/* Слой предложения рутины (Ш1.3) — СОСЕДНИМ узлом, а не внутри `noticeHost` выше:
           тот узел уже цель портала (плашки тела), и порядок двух порталов в один узел не
           определён. Место то же по смыслу — снаружи вкладок: предложение видно и с «Деталей»,
           и с «Треда», как и всё, что экран говорит о судьбе записи.
@@ -390,12 +404,12 @@ export function DetailScreen({ entityId }: { entityId: string }) {
           key по id — по той же причине, что у ленты прогона и блока ожидания: экран
           монтируется БЕЗ key (router.tsx), а у слоя своя память (какие плашки развёрнуты,
           буфер правок), и переехать на соседнюю запись она не должна. */}
-        <ProposalOverlay
-          key={`proposal-${entity.id}`}
-          entity={entity}
-          onOverlayExpanded={setProposalOpen}
-        />
-        {/* Развёрнутый слой предложения прячет ВЕСЬ показ записи — заголовок, теги и все вкладки
+          <ProposalOverlay
+            key={`proposal-${entity.id}`}
+            entity={entity}
+            onOverlayExpanded={setProposalOpen}
+          />
+          {/* Развёрнутый слой предложения прячет ВЕСЬ показ записи — заголовок, теги и все вкладки
           шаблона, — а не одно тело записи, и это правка по итогам живого смоука Ш1 (наблюдение
           Н-2, замерено).
           Пока прятали только тело, вкладка «Детали» оставалась полностью кликабельной — а её
@@ -413,52 +427,65 @@ export function DetailScreen({ entityId }: { entityId: string }) {
           ТЕМ ЖЕ механизмом, что прежде прятал тело: класс, а не снятие с монтирования, — см.
           докблок `proposalOpen`. Ради него это и один узел, а не два: спрячь мы вкладки, оставив
           прежний класс на теле, у одного вопроса «видно ли это сейчас» стало бы два ответа. */}
-        <div
-          data-testid="record-area"
-          className={`mx-auto w-full max-w-3xl${proposalOpen ? ' hidden' : ''}`}
-        >
-          {/* Страница — своим телом (спека страниц 1а §4.2 шаг 1); любая другая запись — через
+          <div
+            data-testid="record-area"
+            className={`mx-auto w-full max-w-3xl${proposalOpen ? ' hidden' : ''}`}
+          >
+            {/* Страница — своим телом (спека страниц 1а §4.2 шаг 1); любая другая запись — через
             шаблон по функции выбора (§4.2): свой шаблон владельца или шаблон хоста (§8.1). Оба —
             над тем же ответом `entity.get` этого экрана, второго запроса записи нет (РП-13).
             Шапка, меню, слой предложения и плашки над ними — прежние. Вкладки, их keepMounted
             (тело и «Детали» живы, «Тред» — только открытым) — дело шаблона и рендерера.
             Режим «Настроить» (§9.1) заменяет показ телом в редакторе, шаблон страницы — его
             предпросмотром на записи (§9.3). */}
-          {mode?.kind === 'configure' ? (
-            <ConfigureView targetId={mode.targetId} onDone={() => setMode(null)} />
-          ) : isPage && !asRecord ? (
-            // Вкладки страницы — её собственные: пространство памяти по id страницы. Иначе третья
-            // вкладка страницы A открывала бы третью вкладку страницы B — это разные тексты.
-            <TabMemoryScope scope={`page:${entity.id}`}>
-              {isTemplate || mode?.kind === 'preview' ? (
-                <TemplatePreview
-                  page={get.data}
-                  {...(mode?.kind === 'preview' && { onClose: () => setMode(null) })}
-                />
-              ) : (
-                <PageView reply={get.data} />
-              )}
-            </TabMemoryScope>
-          ) : (
-            <RecordView
-              reply={get.data}
-              onShown={setRecordShown}
-              onConfigureTemplate={configure}
-              {...(openVia !== undefined && { override: openVia })}
-              {...(disputeRequest !== undefined && !isPage && { disputeRequest })}
-            />
-          )}
-        </div>
-      </BodyScreenProvider>
-    </TabMemoryProvider>
+            {mode?.kind === 'configure' ? (
+              <ConfigureView targetId={mode.targetId} onDone={() => setMode(null)} />
+            ) : isPage && !asRecord ? (
+              // Вкладки страницы — её собственные: пространство памяти по id страницы. Иначе третья
+              // вкладка страницы A открывала бы третью вкладку страницы B — это разные тексты.
+              <TabMemoryScope scope={`page:${entity.id}`}>
+                {isTemplate || mode?.kind === 'preview' ? (
+                  <TemplatePreview
+                    page={get.data}
+                    {...(mode?.kind === 'preview' && { onClose: () => setMode(null) })}
+                  />
+                ) : (
+                  <PageView reply={get.data} />
+                )}
+              </TabMemoryScope>
+            ) : (
+              <RecordView
+                reply={get.data}
+                onShown={setRecordShown}
+                onConfigureTemplate={configure}
+                {...(openVia !== undefined && { override: openVia })}
+                {...(disputeRequest !== undefined && !isPage && { disputeRequest })}
+              />
+            )}
+          </div>
+        </BodyScreenProvider>
+      </TabMemoryProvider>
+    </ScreenMenuProvider>
   );
 }
 
 /** Режим экрана (§9): настройка тела страницы или шаблона, предпросмотр черновика шаблона. */
 type ScreenMode = { kind: 'configure'; targetId: string } | { kind: 'preview' } | null;
 
+/** Пункты меню, пока запись не приехала: только раздел «Хост» (`DetailMenu`). */
+const PENDING_MENU: DetailMenuProps = { pending: true };
+
 /** Разовый показ шаблоном хоста — одним объектом: выбор шаблона мемоизирован по нему. */
 const HOST_VIEW = { templateId: 'host' } as const;
+
+/** «Открыть через X» из состояния места в истории. */
+function viaOf(
+  view: Readonly<Record<string, string>> | undefined,
+): { templateId: string | 'host' } | undefined {
+  const via = view?.via;
+  if (via === undefined) return undefined;
+  return via === 'host' ? HOST_VIEW : { templateId: via };
+}
 
 /**
  * Запасной путь копирования: буфер отказал — показываем сам адрес, чтобы его можно было

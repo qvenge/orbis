@@ -1,6 +1,6 @@
 import { ownCardOrder } from '@orbis/shared';
 import { EXTENSION_CARDS, type OwnCard } from '../../app/extension-registry';
-import { useNav } from '../../state/navigation';
+import { useOpenRecord } from '../../app/useOpenRecord';
 import { AspectSection, AspectSections } from './AspectSection';
 import { AssignmentCard } from './AssignmentCard';
 import { ROUTINE_ASPECT, RoutineStatusBlock } from './RoutineStatusBlock';
@@ -41,8 +41,7 @@ const CARD_CLASS = 'flex flex-col gap-6';
  */
 function AssignmentOwnCard() {
   const { entity } = useRecordHost();
-  const push = useNav((s) => s.push);
-  const navTab = useNav((s) => s.activeTab);
+  const openRecord = useOpenRecord();
   const isTicket = entity.aspects.includes(TASK) && entity.aspects.includes(ASSIGNMENT);
   const isRoutine = entity.aspects.includes(ROUTINE_ASPECT);
   const { runs, lastRun } = useTicketRuns(entity.id, isTicket);
@@ -54,21 +53,14 @@ function AssignmentOwnCard() {
       {isTicket && (
         <TicketWaitingBlock key={`waiting-${entity.id}`} entity={entity} lastRun={lastRun} />
       )}
-      {isTicket && !isRoutine && (
-        <RunsList
-          parentId={entity.id}
-          runs={runs}
-          onOpen={(id) => push(navTab, { kind: 'entity', id })}
-        />
-      )}
+      {isTicket && !isRoutine && <RunsList parentId={entity.id} runs={runs} onOpen={openRecord} />}
     </div>
   );
 }
 
 function RoutineCard() {
   const { entity } = useRecordHost();
-  const push = useNav((s) => s.push);
-  const navTab = useNav((s) => s.activeTab);
+  const openRecord = useOpenRecord();
   const { runs, lastRun } = useTicketRuns(entity.id, true);
   return (
     <div className={CARD_CLASS}>
@@ -77,12 +69,7 @@ function RoutineCard() {
           рутину оно не должно. */}
       <RoutineStatusBlock key={`routine-${entity.id}`} entity={entity} lastRun={lastRun} />
       {/* У рутины исполнитель внутренний и всегда один — колонка гранта ей не положена (Р-8). */}
-      <RunsList
-        parentId={entity.id}
-        runs={runs}
-        showGrant={false}
-        onOpen={(id) => push(navTab, { kind: 'entity', id })}
-      />
+      <RunsList parentId={entity.id} runs={runs} showGrant={false} onOpen={openRecord} />
     </div>
   );
 }

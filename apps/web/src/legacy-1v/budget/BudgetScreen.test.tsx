@@ -5,7 +5,7 @@ import { App } from '../../App';
 import { useNav } from '../../state/navigation';
 import { type MockHandler, renderWithProviders, trpcError, wireEntity } from '../../test/harness';
 import { BudgetScreen } from './BudgetScreen';
-import { monthShift } from './useBudget';
+import { monthShift } from '../../features/budget/useBudget';
 
 const ent = (id: string, title: string) => wireEntity({ id, title });
 

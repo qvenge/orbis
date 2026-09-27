@@ -4,7 +4,7 @@
  *
  * Страницы и приложения в общем списке по умолчанию скрыты (отрицания в тексте запроса),
  * переключатель их показывает. Блок открывает запись через проп `onOpen` — куда открывать, решает
- * место показа: на странице — рендерер (текущий раздел), на экране «Обзор» — его стопка.
+ * место показа: на странице — рендерер открывает её в текущем разделе рамки.
  *
  * Модуль блока (`RecordsBlock.tsx`) грузится только тогда, когда узел `{{records}}` рисуется: экран
  * записи открывается при каждом заходе в запись, и список с фильтрами, быстрым вводом и строками
@@ -22,11 +22,11 @@ import {
   type WireEntityFixture,
   wireEntity,
 } from '../../test/harness';
+import { navAt, recordAddress } from '../../test/nav';
 import { BUILTIN_REGISTRY } from '../../test/registry';
 import { queryClient } from '../../trpc';
 import { DetailScreen } from '../entity-detail/DetailScreen';
 import { structureHandler } from '../entity-detail/structure-fixtures';
-import { BrowserScreen } from './BrowserScreen';
 import { RECORDS_HIDE_PAGES_AND_APPS } from './query';
 import { resetRecordsBlockModuleForTests } from './RecordsBlockSlot';
 
@@ -61,10 +61,7 @@ beforeEach(() => {
     await chunk.gate;
     return importOriginal();
   });
-  useNav.setState({
-    activeTab: 'browser',
-    stacks: { chat: [], browser: [{ kind: 'entity', id: PAGE_ID }], agenda: [], budget: [] },
-  });
+  navAt(PAGE_ID);
 });
 
 afterEach(() => {
@@ -224,20 +221,16 @@ test('быстрый ввод создаёт запись', async () => {
 
 test('нажатие строки зовёт onOpen(id) и не трогает стопки навигации само', async () => {
   const onOpen = vi.fn();
-  const before = useNav.getState().stacks;
+  const before = useNav.getState().model;
   await renderBlock(onOpen, listReply(3));
   const [, second] = await screen.findAllByTestId('entity-row');
   fireEvent.click(second as HTMLElement);
   expect(onOpen).toHaveBeenCalledWith(rowId(1));
-  expect(useNav.getState().stacks).toEqual(before);
+  expect(useNav.getState().model).toBe(before);
 });
 
 test('блок во вкладке контейнера рисуется; строка открывает запись в текущем разделе', async () => {
-  // Раздел — не «Обзор»: жёсткий `push('browser', …)` увёл бы запись в чужую стопку.
-  useNav.setState({
-    activeTab: 'budget',
-    stacks: { chat: [], browser: [], agenda: [], budget: [{ kind: 'entity', id: PAGE_ID }] },
-  });
+  navAt(PAGE_ID);
   openPage(
     page(`{{tabs}}
 {{tab: Все записи}}
@@ -256,26 +249,9 @@ test('блок во вкладке контейнера рисуется; стр
   const [first] = await within(block).findAllByTestId('entity-row');
   fireEvent.click(first as HTMLElement);
   // Рендерер открывает запись в активном разделе — поверх страницы, с которой ушли.
-  expect(useNav.getState().stacks.budget).toEqual([
-    { kind: 'entity', id: PAGE_ID },
-    { kind: 'entity', id: rowId(0) },
+  expect(useNav.getState().model.apps.host?.stacks.home?.map((e) => e.address)).toEqual([
+    { kind: 'home', app: { kind: 'host' } },
+    recordAddress(PAGE_ID),
+    recordAddress(rowId(0)),
   ]);
-  expect(useNav.getState().stacks.browser).toEqual([]);
-});
-
-test('экран «Обзор» до рамки — шапка и тот же блок; строка открывается в стопке Обзора', async () => {
-  useNav.setState({
-    activeTab: 'browser',
-    stacks: { chat: [], browser: [], agenda: [], budget: [] },
-  });
-  const { calls } = renderWithProviders(<BrowserScreen />, (path, input) => {
-    if (path === 'user.getSettings') return { pinnedEntities: [] };
-    return listReply(2)(path, input) ?? {};
-  });
-  expect(screen.getByRole('heading', { name: 'Обзор' })).toBeInTheDocument();
-  const block = await screen.findByTestId('records-block');
-  const [first] = await within(block).findAllByTestId('entity-row');
-  fireEvent.click(first as HTMLElement);
-  expect(useNav.getState().stacks.browser).toEqual([{ kind: 'entity', id: rowId(0) }]);
-  expect(queriesOf(calls)).toEqual([HIDDEN_QUERY]);
 });

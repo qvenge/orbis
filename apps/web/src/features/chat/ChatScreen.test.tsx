@@ -1,6 +1,6 @@
 import { act, fireEvent, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
-import { useNav } from '../../state/navigation';
+import { resetNavForTests } from '../../state/navigation';
 import { registerRetrySend, useRetryBuffer } from '../../state/retry';
 import { renderWithProviders, trpcError } from '../../test/harness';
 import { ChatScreen } from './ChatScreen';
@@ -16,10 +16,7 @@ beforeEach(() => {
   useRetryBuffer.setState({ size: 0, pending: [], flushing: false });
   registerRetrySend(async () => 'transport_failure');
   setOnline(true);
-  useNav.setState({
-    activeTab: 'chat',
-    stacks: { chat: [], browser: [], agenda: [], budget: [] },
-  });
+  resetNavForTests();
 });
 
 afterEach(() => {

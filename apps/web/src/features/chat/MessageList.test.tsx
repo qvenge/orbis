@@ -1,14 +1,14 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
-import { useNav } from '../../state/navigation';
+import { FrameAppContext } from '../../app/frame/FrameApp';
+import { resetNavForTests, useNav } from '../../state/navigation';
 import { renderWithProviders } from '../../test/harness';
+import { recordAddress, topAddress } from '../../test/nav';
 import { MessageList } from './MessageList';
 import type { ChatMessage } from './useChatThread';
 
 // jsdom не реализует scrollIntoView — мокаем на прототипе, иначе вызов бросил бы.
 const scrollSpy = vi.fn();
-
-const emptyStacks = () => ({ chat: [], browser: [], agenda: [], budget: [] });
 
 beforeEach(() => {
   Element.prototype.scrollIntoView = scrollSpy;
@@ -18,8 +18,8 @@ beforeEach(() => {
 afterEach(() => {
   vi.restoreAllMocks();
   // Стор навигации глобальный и переживает файл теста: кто его трогает, тот и прибирает,
-  // иначе следующему тесту ленты достанется чужой activeTab (образец — RolloverScreen.test).
-  useNav.setState({ activeTab: 'chat', stacks: emptyStacks() });
+  // иначе следующему тесту ленты достанется чужое место навигации.
+  resetNavForTests();
 });
 
 function msg(id: string, content: string): ChatMessage {
@@ -321,13 +321,22 @@ test('посты агента и чат-AI в тред тоже помечены
   expect(screen.getAllByTestId('system-message')).toHaveLength(2);
 });
 
-test('клик по [[entity:…]] открывает запись поверх стека АКТИВНОЙ вкладки', () => {
-  // Ровно как тап по карточке в той же ленте (cards/EntityCard): push, без смены вкладки.
-  useNav.setState({ activeTab: 'chat', stacks: emptyStacks() });
-  render(<MessageList messages={[msg('a', `готово: [[entity:${E1}]]`)]} isTyping={false} />);
+test('клик по [[entity:…]] в чате открывает запись из хоста, а не из приложения под чатом (§7.2)', () => {
+  // Чат — экран хоста поверх раздела своего приложения: ссылка из него — хост, дальше правило
+  // открытия (задача 20). Ровно как тап по карточке в той же ленте (cards/EntityCard).
+  resetNavForTests();
+  const app = '00000000-0000-4000-8000-00000000c0de';
+  useNav.getState().openAddress({ kind: 'home', app: { kind: 'app', ref: app } });
+  useNav.getState().openHostScreen('chat');
+  render(
+    <FrameAppContext.Provider value={{ app: 'host', via: 'host-screen' }}>
+      <MessageList messages={[msg('a', `готово: [[entity:${E1}]]`)]} isTyping={false} />
+    </FrameAppContext.Provider>,
+  );
+  expect(screen.getByRole('link')).toHaveAttribute('href', `/r/${E1}`);
   fireEvent.click(screen.getByRole('link'));
-  expect(useNav.getState().activeTab).toBe('chat');
-  expect(useNav.getState().stacks.chat).toEqual([{ kind: 'entity', id: E1 }]);
+  expect(useNav.getState().model.activeApp).toBe('host');
+  expect(topAddress()).toEqual(recordAddress(E1));
 });
 
 test('мусор в metadata.suggestions игнорируется, пустые строки отброшены', () => {

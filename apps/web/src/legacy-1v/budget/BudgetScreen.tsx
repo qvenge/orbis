@@ -20,10 +20,10 @@ import { trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
 import { Card } from '../../ui/Card';
 import { Skeleton } from '../../ui/Skeleton';
-import { EnvelopeCard } from './EnvelopeCard';
-import { EnvelopeCreateSheet } from './EnvelopeCreateSheet';
-import { QuickAddBar } from './QuickAddBar';
-import { monthShift, useBudgetOverview } from './useBudget';
+import { EnvelopeCard } from '../../features/budget/EnvelopeCard';
+import { EnvelopeCreateSheet } from '../../features/budget/EnvelopeCreateSheet';
+import { QuickAddBar } from '../../features/budget/QuickAddBar';
+import { monthShift, useBudgetOverview } from '../../features/budget/useBudget';
 
 const TONE_CLASS: Record<MoneyTone, string> = { danger: 'text-danger', positive: 'text-success' };
 

@@ -12,7 +12,6 @@ import { act, fireEvent, screen, waitFor, within } from '@testing-library/react'
 import { useState } from 'react';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { noteRegistryVersion, resetRegistryVersionForTests } from '../../lib/registry/useRegistry';
-import { useNav } from '../../state/navigation';
 import {
   blocksReply,
   blockTexts,
@@ -23,6 +22,7 @@ import {
   type WireEntityFixture,
   wireEntity,
 } from '../../test/harness';
+import { navAt } from '../../test/nav';
 import { BUILTIN_REGISTRY, registryReply } from '../../test/registry';
 import { queryClient } from '../../trpc';
 import { DetailScreen } from '../entity-detail/DetailScreen';
@@ -76,10 +76,7 @@ function openPage(
     over?: MockHandler;
   } = {},
 ) {
-  useNav.setState({
-    activeTab: 'browser',
-    stacks: { chat: [], browser: [{ kind: 'entity', id: entity.id }], agenda: [], budget: [] },
-  });
+  navAt(entity.id);
   const screenHandler = structureHandler({ name: 'page', entity, extra: opts.extra ?? {} });
   const map = opts.blocks ?? {};
   const blocks = blocksReply(map);
@@ -430,10 +427,7 @@ test('вкладки страницы — её собственные: трет�
     `{{tabs}}\n{{tab: Один}}\n${p} один\n{{/tab}}\n{{tab: Два}}\n${p} два\n{{/tab}}\n{{tab: Три}}\n${p} три\n{{/tab}}\n{{/tabs}}\n`;
   const a = page(withTabs('Утро'));
   const b = page(withTabs('Вечер'), { id: MENTIONER_ID, title: 'Вечер' });
-  useNav.setState({
-    activeTab: 'browser',
-    stacks: { chat: [], browser: [{ kind: 'entity', id: a.id }], agenda: [], budget: [] },
-  });
+  navAt(a.id);
   // Переход страница → страница внутри того же экрана (роутер монтирует его без key).
   function Switcher() {
     const [id, setId] = useState(a.id);

@@ -11,10 +11,10 @@ import {
 } from '@orbis/shared/doc/placement';
 import type { ParseRegistry } from '@orbis/shared/query';
 import { createContext, type ReactNode, useContext, useMemo } from 'react';
+import { useOpenRecord } from '../../app/useOpenRecord';
 import { Markdown } from '../../lib/markdown/Markdown';
 import { BodyKindProvider } from '../../lib/query-blocks/body-kind';
 import { useFieldCatalog } from '../../lib/query-blocks/useFieldCatalog';
-import { openEntity } from '../../state/navigation';
 import { RecordsBlockSlot } from '../browser/RecordsBlockSlot';
 import { OwnCards } from '../entity-detail/OwnCards';
 import { AspectCardFor, OWN_ASPECT_CARDS, RestCards } from '../entity-detail/own-cards';
@@ -288,6 +288,7 @@ function PageNodeView({
   path: readonly number[];
   place: string;
 }) {
+  const openEntity = useOpenRecord();
   const plan = useRenderPlan();
   const issue = plan.issues.get(pathKey(path));
   if (issue !== undefined) {

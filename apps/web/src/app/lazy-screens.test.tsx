@@ -1,23 +1,45 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { lazy, Suspense } from 'react';
-import { expect, test, vi } from 'vitest';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { lazy, type ReactNode, Suspense, useState } from 'react';
+import { afterEach, expect, test, vi } from 'vitest';
 import { App } from '../App';
+import { QueryBatchProvider } from '../lib/query-blocks/batch';
 import { reloadWithFreshWorker } from '../pwa/fresh-reload';
-import { useNav } from '../state/navigation';
-import { type MockHandler, renderWithProviders, wireEntity } from '../test/harness';
+import { resetNavForTests, useNav } from '../state/navigation';
+import { type MockHandler, mockLink, renderWithProviders, wireEntity } from '../test/harness';
+import { recordAddress } from '../test/nav';
+import { trpc } from '../trpc';
 import { ChunkErrorBoundary } from './ChunkErrorBoundary';
 import { installChunkReload } from './chunk-reload';
-import { ActiveScreen } from './router';
+import { ActiveScreen, resetDetailScreenModuleForTests } from './router';
 import { ScreenFallback } from './ScreenFallback';
 
 // «Обновить» кадра ошибки — через свежий сервис-воркер (Л-5); механика — `pwa/fresh-reload.test.ts`.
 vi.mock('../pwa/fresh-reload', () => ({ reloadWithFreshWorker: vi.fn(() => Promise.resolve()) }));
 
 test('заглушка экрана показывает скелетон, а не текст «Загрузка…»', () => {
-  render(<ScreenFallback />);
+  renderWithProviders(<ScreenFallback />);
   expect(screen.getAllByRole('status', { name: 'Загрузка' }).length).toBeGreaterThanOrEqual(1);
   expect(screen.queryByText(/Загрузка…/)).not.toBeInTheDocument();
 });
+
+afterEach(() => resetNavForTests());
+
+/** Провайдеры обвязки для `rerender`: шапка кадра ошибки несёт присутствие хоста (рамку). */
+function Providers({ children }: { children: ReactNode }) {
+  const [tree] = useState(() => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const client = trpc.createClient({ links: [mockLink(() => [])] });
+    return { qc, client };
+  });
+  return (
+    <trpc.Provider client={tree.client} queryClient={tree.qc}>
+      <QueryClientProvider client={tree.qc}>
+        <QueryBatchProvider>{children}</QueryBatchProvider>
+      </QueryClientProvider>
+    </trpc.Provider>
+  );
+}
 
 function Boom(): never {
   throw new Error('Failed to fetch dynamically imported module');
@@ -26,7 +48,7 @@ function Boom(): never {
 test('граница ошибок ловит провал рендера и даёт кнопку обновления', () => {
   // React печатает пойманную ошибку в консоль — это ожидаемо, глушим шум.
   const err = vi.spyOn(console, 'error').mockImplementation(() => {});
-  render(
+  renderWithProviders(
     <ChunkErrorBoundary resetKey="budget/root">
       <Boom />
     </ChunkErrorBoundary>,
@@ -41,7 +63,7 @@ test('граница ошибок ловит провал рендера и да
 
 test('«Обновить» кадра ошибки — перезагрузка через свежий сервис-воркер, одна на два нажатия (Л-5)', () => {
   const err = vi.spyOn(console, 'error').mockImplementation(() => {});
-  render(
+  renderWithProviders(
     <ChunkErrorBoundary resetKey="budget/root">
       <Boom />
     </ChunkErrorBoundary>,
@@ -65,6 +87,7 @@ test('смена экрана снимает пойманную ошибку, т
     <ChunkErrorBoundary resetKey="budget/root">
       <Boom />
     </ChunkErrorBoundary>,
+    { wrapper: Providers },
   );
   expect(screen.getByRole('alert')).toBeInTheDocument();
 
@@ -112,7 +135,7 @@ test('после провала чанка возврат на экран НЕ �
     );
   }
 
-  const { rerender } = render(<Host at="broken" />);
+  const { rerender } = render(<Host at="broken" />, { wrapper: Providers });
   await waitFor(() => expect(screen.getByRole('alert')).toBeInTheDocument());
   expect(loads).toBe(1);
 
@@ -128,51 +151,10 @@ test('после провала чанка возврат на экран НЕ �
   err.mockRestore();
 });
 
-// Собственно смысл всей затеи: экран Budget приезжает отдельным чанком, до его приезда
-// в <main> стоит ScreenFallback, а второй заход на ту же вкладку заглушку уже НЕ показывает
-// (React.lazy держит разрешённый модуль) — иначе разбиение стоило бы мигания на каждом
-// переключении вкладок.
-const budgetHandler: MockHandler = (path) => {
-  if (path === 'budget.overview')
-    return {
-      period: { start: '2026-07-01', end: '2026-07-31' },
-      balance: { income: '0.00', expense: '0.00', balance: '0.00' },
-      envelopes: [],
-      comingUp: [],
-      planned: [],
-      unbudgeted: [],
-      alertCount: 0,
-    };
-  if (path === 'budget.postDue') return { posted: 0 };
-  if (path === 'budget.rolloverPreview') return { month: '2026-07', rows: [], needsSetup: false };
-  return {};
-};
-
-test('вкладка Budget: сперва ScreenFallback, потом сам экран; повторный заход — без заглушки', async () => {
-  useNav.setState({
-    activeTab: 'budget',
-    stacks: { chat: [], browser: [], agenda: [], budget: [] },
-  });
-  renderWithProviders(<ActiveScreen />, budgetHandler);
-
-  // Первый синхронный кадр — заглушка: чанк экрана ещё в пути.
-  expect(screen.getByRole('heading', { name: '…' })).toBeInTheDocument();
-  expect(screen.getAllByRole('status', { name: 'Загрузка' }).length).toBeGreaterThanOrEqual(3);
-
-  await waitFor(() => expect(screen.getByText(/^Бюджет · /)).toBeInTheDocument());
-  expect(screen.queryByRole('heading', { name: '…' })).toBeNull();
-
-  // Ушли и вернулись: модуль уже разрешён, заголовок настоящего экрана есть СИНХРОННО.
-  act(() => useNav.getState().switchTab('chat'));
-  await waitFor(() => expect(screen.queryByText(/^Бюджет · /)).toBeNull());
-  act(() => useNav.getState().switchTab('budget'));
-  expect(screen.queryByRole('heading', { name: '…' })).toBeNull();
-  expect(screen.getByText(/^Бюджет · /)).toBeInTheDocument();
-});
-
-// Второй разрез: экран сущности. Доказательство лени здесь не в заглушке (её титул «…»
-// совпадает с собственным кадром загрузки DetailScreen, DetailScreen.tsx:79), а в том, что
-// на первом синхронном кадре экран не успел сделать НИ ОДНОГО запроса: модуля ещё нет.
+// Экран записи — ленивый чанк (экраны Бюджета ушли в `legacy-1v`, срез 1б §8.6). Доказательство
+// лени не в заглушке (её титул «…» совпадает с собственным кадром загрузки DetailScreen), а в том,
+// что на первом синхронном кадре экран не успел сделать НИ ОДНОГО своего запроса: модуля ещё нет.
+// Рамка (присутствие хоста в шапке заглушки) свои запросы шлёт и тут — они не про экран записи.
 const detailEntity = wireEntity({
   id: 'e1',
   title: 'Задача',
@@ -186,14 +168,20 @@ const detailHandler: MockHandler = (path) => {
   return {};
 };
 
-test('экран сущности: первый кадр — заглушка без единого запроса, потом сам экран', async () => {
+test('экран записи: первый кадр — заглушка без единого запроса записи, потом сам экран', async () => {
+  resetDetailScreenModuleForTests();
   useNav.setState({
-    activeTab: 'browser',
-    stacks: { chat: [], browser: [{ kind: 'entity', id: 'e1' }], agenda: [], budget: [] },
+    model: {
+      activeApp: 'host',
+      apps: {
+        host: { activeSection: 'home', stacks: { home: [{ address: recordAddress('e1') }] } },
+      },
+    },
+    overlay: null,
   });
   const { calls } = renderWithProviders(<ActiveScreen />, detailHandler);
 
-  expect(calls).toHaveLength(0);
+  expect(calls.filter((c) => c.path === 'entity.get')).toHaveLength(0);
   expect(screen.getByRole('heading', { name: '…' })).toBeInTheDocument();
 
   await waitFor(() => expect(screen.getByRole('heading', { name: 'Задача' })).toBeInTheDocument());
