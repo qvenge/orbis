@@ -20,6 +20,9 @@ import {
   batchAuditMessageId,
   type CanonicalRow,
   csvMappingToolJsonSchema,
+  EXTENSION_IDS,
+  EXTENSION_MANIFESTS,
+  extensionName,
   externalRowId,
   type FastPathCategory,
   type FastPathRule,
@@ -32,6 +35,7 @@ import {
   type ImportReviewResult,
   type ImportReviewRow,
   importSummaryMessageId,
+  isExtensionEnabled,
   isProbableDuplicate,
   llmMappingResponseSchema,
   MAX_ANALYZE_ROW_CHARS,
@@ -59,6 +63,7 @@ import type { Identity } from '../identity';
 import type { LLMRequest, LLMResponse } from '../llm/types';
 import { CONTRACT_MONEY_MOVEMENT, RULE_PATTERN, RULE_TARGET } from '../memory/rules';
 import { memoryRulesWhere } from '../memory/select';
+import { disabledExtensionsOf } from '../registry/extensions';
 import type { Card } from '../tools/registry';
 
 // Синк один на модуль (как rollover/post-due): состояния не хранит, audit-сообщение
@@ -95,6 +100,28 @@ export function gateImportCsv(account: AccountId, resolve: EntitlementResolver):
       limit: decision.limit,
     });
   }
+}
+
+/**
+ * Импорт — путь расширения «Финансы» (его тул `import_csv_start` в манифесте). ГЕЙТ НА ВСЕХ ТРЁХ
+ * шагах — analyze, review, confirm, — а не только на создании (спека 1б §8.3, Р-23 п. 4.3 «закрыть
+ * обход маски»): `analyze` тратит токены модели на выписку, которую некуда положить, `review`
+ * читает дубли для флоу, который всё равно упрётся в отказ. Прежде отказывал только исполнитель —
+ * на создании финансового аспекта, то есть ПОСЛЕ LLM-вызова и ревью. Первым из гейтов шага: «это
+ * выключено» — ответ раньше «лимит тарифа исчерпан». Расширение — из манифеста по имени тула, а не
+ * литералом: тул переедет — переедет и гейт. Отказ `MODULE_DISABLED` → `FORBIDDEN` на проводе.
+ */
+async function gateImportExtension(db: Db, who: Identity): Promise<void> {
+  const ext = EXTENSION_IDS.find((id) =>
+    EXTENSION_MANIFESTS[id].tools.includes('import_csv_start'),
+  );
+  const disabled = await withIdentity(db, who, (tx) => disabledExtensionsOf(tx, who.graph));
+  if (isExtensionEnabled(ext, disabled)) return;
+  throw new ExecError(
+    'MODULE_DISABLED',
+    `импорт выписок принадлежит выключенному расширению «${extensionName(ext ?? '')}» (§Б8-3)`,
+    { module: ext ?? null, extension: ext ?? null, reason: 'create' },
+  );
 }
 
 /** Потолок размера импорта — общий для review и confirm (см. MAX_IMPORT_ROWS). */
@@ -157,6 +184,7 @@ export async function analyzeCsv(
   deps: AiDeps,
   args: { identity: Identity; sampleRows: string[] },
 ): Promise<ImportAnalyzeResult> {
+  await gateImportExtension(db, args.identity);
   const resolve = deps.entitlements ?? resolveEntitlement;
   gateImportCsv(args.identity.actor, resolve);
   // Гейт AI-бюджета §8 — ТОТ ЖЕ, что у ai.sendMessage: analyze зовёт провайдера и
@@ -435,6 +463,7 @@ export async function reviewImport(
   input: ImportReviewInput,
   deps: ImportDeps = {},
 ): Promise<ImportReviewResult> {
+  await gateImportExtension(db, who);
   gateImportCsv(who.actor, deps.entitlements ?? resolveEntitlement);
   assertRowLimit(input.rows.length);
 
@@ -707,6 +736,7 @@ export async function confirmImport(
   input: ImportConfirmInput,
   deps: ImportDeps = {},
 ): Promise<ImportConfirmResult> {
+  await gateImportExtension(db, who);
   gateImportCsv(who.actor, deps.entitlements ?? resolveEntitlement);
   assertRowLimit(input.items.length);
   await assertAdoptTargets(db, who, input);

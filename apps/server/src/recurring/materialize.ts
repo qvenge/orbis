@@ -19,6 +19,7 @@ import {
   addDays,
   BUILTIN_ASPECT_DEFS,
   expandRecurrence,
+  isExtensionEnabled,
   materializeBatchId,
   type RecurrenceRule,
   recurringInstanceId,
@@ -39,6 +40,7 @@ import { makeChatJournalSink } from '../executor/journal';
 import type { Identity } from '../identity';
 import { DEFAULT_TIMEZONE, isValidTimeZone } from '../query/context';
 import { effectiveRegistry } from '../registry/cache';
+import { disabledExtensionsOf } from '../registry/extensions';
 import type { RegistrySnapshot } from '../registry/load';
 import { type MaterializeParams, type MaterializeRule, materializeRuleOf } from '../rules/carriers';
 
@@ -301,8 +303,20 @@ export async function materializeInstances(deps: MaterializeDeps): Promise<{ cre
         .from(userSettings)
         .where(eq(userSettings.graphId, identity.graph));
       const stored = settings[0]?.timezone ?? DEFAULT_TIMEZONE;
+      // ОТСЕВ ШАБЛОНОВ ВЫКЛЮЧЕННОГО РАСШИРЕНИЯ (Р-23 п. 4.3 ⚑, Д-8) — здесь, в фазе чтения, ДО
+      // цикла: шаблон с аспектом выключенного расширения до исполнителя не доходит вовсе. Гейт в
+      // исполнителе дал бы отказ, а отказ здесь — `console.warn` на каждой выборке Повестки и
+      // шум «вечно нематериализуемого шаблона» там, где владелец сам выключил расширение. Одна
+      // точка покрывает всех вызывающих (выборки `entity.query`/`count`, Повестку, блоки
+      // страницы, бюджет). Маска читается той же фазой, что снимок и шаблоны: разойдись они, и
+      // отсев судил бы по одному состоянию, а исполнитель — по другому. Догонка после включения
+      // — обычное окно правила: ретро-пол `retro_days` (92) клампит его ниже, и экземпляры
+      // старше квартала не рождаются (пункт 5 «Фокуса ревью» плана 1б).
+      const disabled = await disabledExtensionsOf(tx, identity.graph);
       return {
-        templates: rows,
+        templates: rows.filter((t) =>
+          t.aspects.every((a) => isExtensionEnabled(snapshot.aspects.get(a)?.module, disabled)),
+        ),
         userTimezone: isValidTimeZone(stored) ? stored : DEFAULT_TIMEZONE,
         reg: snapshot,
         rule: found,

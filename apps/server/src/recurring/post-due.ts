@@ -8,13 +8,18 @@
 // с двух устройств сходятся к одному action по audit-PK (§7.8), повтор — replay;
 // Undo перехода «липкий» — заново инстанс не постится, воля владельца уважается.
 // Один batch на ОДИН инстанс: отказ по одному инстансу не валит остальные.
-import { postFinancialBatchId, ROLE_INSTANCE_OF } from '@orbis/shared';
+import { isExtensionEnabled, postFinancialBatchId, ROLE_INSTANCE_OF } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import type { Db } from '../db/client';
 import { withIdentity } from '../db/with-identity';
 import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
 import type { Identity } from '../identity';
+import { effectiveRegistry } from '../registry/cache';
+import { disabledExtensionsOf } from '../registry/extensions';
+
+/** Носитель плановых операций — его расширение гасит проводку (гейт Д-2 ниже). */
+const FINANCIAL_ASPECT = 'orbis/financial';
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -53,6 +58,16 @@ export async function postDueInstances(deps: PostDueDeps): Promise<{ posted: num
   // операцией, получала бы системный переход «план → факт» и привязку к конверту.
   // Форма `planned` — единая на систему (РП-9): «отсутствие = false».
   const due = await withIdentity(db, identity, async (tx) => {
+    // ГЕЙТ ВЫКЛЮЧЕННОГО РАСШИРЕНИЯ (Д-2, §Б8-3 ревизия 7) — СВОЙ, в фазе чтения, до единой
+    // записи. Проводка пишет механизмом `materialize`, а у него льгота гейта полей (догонка
+    // материализации); без этого гейта переход «план → факт» правил бы `orbis/planned`
+    // выключенных Финансов — то есть поле только для чтения. Одна точка закрывает оба пути:
+    // ручку `budget.postDue` и конвейер `preparePeriod` (`budgetOverview`/`budgetStatus` зовут
+    // его ДО маски поверхности). Ответ — пустой, а не отказ: конвейер обзора не должен падать
+    // от того, что владелец выключил Финансы. Расширение — из строки носителя, а не литералом.
+    const reg = await effectiveRegistry(tx, identity.graph);
+    const disabled = await disabledExtensionsOf(tx, identity.graph);
+    if (!isExtensionEnabled(reg.aspects.get(FINANCIAL_ASPECT)?.module, disabled)) return [];
     const rows = (await tx.execute(sql`
       SELECT e.id FROM entities e
       WHERE e.graph_id = ${identity.graph} AND NOT e.archived

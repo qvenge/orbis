@@ -16,10 +16,12 @@ import {
   type ConfirmPurchaseInput,
   type ConfirmPurchaseResult,
   effectiveLabel,
+  extensionName,
+  isExtensionEnabled,
 } from '@orbis/shared';
 import { OWNER_LOCALE } from '@orbis/shared/query';
 import { actionDateArgs } from '../actions/precondition';
-import { resolveAction } from '../actions/resolve';
+import { lookupAction, resolveAction } from '../actions/resolve';
 import type { Db } from '../db/client';
 import { withIdentity } from '../db/with-identity';
 import { ExecError, type ExecErrorCode } from '../errors';
@@ -27,6 +29,7 @@ import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
 import type { Identity } from '../identity';
 import { effectiveRegistry } from '../registry/cache';
+import { disabledExtensionsOf } from '../registry/extensions';
 
 // Синк один на модуль (как post-due.ts / rollover): состояния не хранит, audit-сообщение
 // batch пишется тем же tx, что операции executor'а (§7.8).
@@ -64,10 +67,31 @@ export async function confirmPurchase(
     // «Сегодня» и зона — той же функцией, что у `runAction` и «Принять» (`actionDateArgs`):
     // предусловие `plan-to-fact` дат не читает, но резолв одного действия, считающий «сегодня»
     // по разным часам на разных входах, был бы вторым правилом.
-    const resolved = await withIdentity(db, who, async (tx) =>
-      resolveAction(
+    const resolved = await withIdentity(db, who, async (tx) => {
+      const reg = await effectiveRegistry(tx, graphId);
+      // ОБХОД МАСКИ ЗАКРЫТ (§Б8-3 ревизия 4 и 7, спека 1б §8.3): ручка исполняет действие
+      // расширения мимо `run_action`, у которого этот гейт уже есть (`actions/run.ts`), — и без
+      // него выключенные Финансы переводили бы покупку в факт, то есть правили бы свои поля
+      // только для чтения. В фазе резолва и ДО него — тем же порядком, что у `run_action`:
+      // действие выключенного расширения не читает цели вовсе, и отказ не зависит от того,
+      // выполнено ли у цели предусловие. Код `MODULE_DISABLED` `asLegacyRefusal` не переводит —
+      // роутер отдаёт `FORBIDDEN`.
+      const declared = lookupAction(reg, PLAN_TO_FACT_ACTION);
+      if (!isExtensionEnabled(declared.module, await disabledExtensionsOf(tx, graphId))) {
+        throw new ExecError(
+          'MODULE_DISABLED',
+          `действие «${declared.key}» принадлежит выключенному расширению «${extensionName(declared.module ?? '')}» (§Б8-3)`,
+          {
+            action: declared.id,
+            module: declared.module,
+            extension: declared.module,
+            reason: 'read_only',
+          },
+        );
+      }
+      return resolveAction(
         tx,
-        await effectiveRegistry(tx, graphId),
+        reg,
         graphId,
         {
           action: PLAN_TO_FACT_ACTION,
@@ -76,8 +100,8 @@ export async function confirmPurchase(
           batch_id: input.batchId,
         },
         await actionDateArgs(tx, graphId),
-      ),
-    );
+      );
+    });
     // Один batch (§2.7): batchId клиента → ветка executeBatch (идемпотентность/Undo по
     // audit-PK), A4-хук переселектит конверт в тот же action.
     const r = await execute(

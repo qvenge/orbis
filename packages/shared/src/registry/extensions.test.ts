@@ -170,13 +170,14 @@ describe('манифест расширения (§4.1): состав вне р�
     expect(extensionPromptFragments(['goals'])).not.toContain('orbis/target_value');
     // Непустые фрагменты — только у Финансов и Целей: без обоих секции нет вовсе
     expect(extensionPromptFragments(['finance', 'goals'])).toBe(null);
-    expect(setExtensionEnabledInput.safeParse({ module: 'finance', enabled: false }).success).toBe(
-      true,
-    );
-    // Ф-Б1-57б: переключается ТОЛЬКО `finance` до задачи 7; бывшие модули ядра и `ade` —
-    // не расширения вовсе.
-    expect([...SWITCHABLE_EXTENSION_IDS]).toEqual(['finance']);
-    for (const m of ['planner', 'ade', 'nope', 'memory', 'goals']) {
+    // П0 (спека 1б §8.6): с задачи 7 переключаются ВСЕ четыре расширения — условия Ф-Б1-57б
+    // выполнены (проза — во фрагментах, задача 6; поля — только чтение, задача 7). Бывшие модули
+    // ядра и `ade` — не расширения вовсе.
+    expect([...SWITCHABLE_EXTENSION_IDS]).toEqual([...EXTENSION_IDS]);
+    for (const m of EXTENSION_IDS) {
+      expect(setExtensionEnabledInput.safeParse({ module: m, enabled: false }).success).toBe(true);
+    }
+    for (const m of ['planner', 'ade', 'nope', 'memory']) {
       expect(setExtensionEnabledInput.safeParse({ module: m, enabled: false }).success).toBe(false);
     }
     expect(

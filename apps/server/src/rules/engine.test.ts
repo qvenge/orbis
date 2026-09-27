@@ -1694,3 +1694,75 @@ describe('waiting_for живёт только в ожидании (В-П-8 (в),
     expect((await row(t.id)).props['orbis/waiting_for']).toBeUndefined();
   });
 });
+
+// Спека реформы §Б8-3 ревизия 7 (Р-23 п. 4.3 ⚑): правила аспектов выключенного расширения работают
+// на правке прочих полей, и отказ НАЗЫВАЕТ расширение — «правило <Расширение>: …». Включённое
+// расширение и ядро — текст прежний побайтно.
+describe('префикс отказа правила выключенного расширения носителя (§Б8-3 ревизия 7)', () => {
+  async function requiresOccurredOn(disabledModules?: readonly string[]): Promise<string> {
+    const graph = await freshGraph();
+    return withIdentity(db, personal(graph), async (tx) => {
+      const registry = await effectiveRegistry(tx, graph);
+      const id = newId();
+      try {
+        await assertConstraintRules({
+          ctx: {
+            tx,
+            registry,
+            graphId: graph,
+            clock: () => T0,
+            mechanism: 'user',
+            internalUndo: false,
+            ...(disabledModules !== undefined && { disabledModules }),
+          },
+          entityId: id,
+          before: { props: {}, aspects: [] },
+          // Финансовая запись без даты — `financial_requires_occurred_on` (носитель `orbis/financial`).
+          state: { props: { 'orbis/amount': '10.00' }, aspects: ['orbis/financial'] },
+          patch: {},
+          core: { id, title: 'Прямой вызов', archived: false, createdAt: T0, updatedAt: T0 },
+        });
+        return 'ok';
+      } catch (e) {
+        if (!(e instanceof ExecError)) throw e;
+        return e.message;
+      }
+    });
+  }
+
+  test('requires_when: маска с расширением носителя — префикс; без маски и с чужим расширением — нет', async () => {
+    const plain =
+      'правило «financial_requires_occurred_on»: свойство orbis/occurred_on обязательно';
+    expect(await requiresOccurredOn(['finance'])).toStartWith(`правило Финансы: ${plain}`);
+    expect(await requiresOccurredOn()).toStartWith(plain);
+    expect(await requiresOccurredOn([])).toStartWith(plain);
+    expect(await requiresOccurredOn(['goals'])).toStartWith(plain);
+  });
+
+  test('unique_among через исполнитель: разархивация дубля конверта при выключенных Финансах — отказ с префиксом', async () => {
+    const w = await worldWith();
+    const envelope = {
+      tags: [],
+      aspects: ['orbis/budget'],
+      props: {
+        'orbis/finance_category': w.categoryId,
+        'orbis/limit': '100.00',
+        'orbis/currency': 'RUB',
+        'orbis/period_start': '2026-07-01',
+        'orbis/period_end': '2026-07-31',
+      },
+    };
+    const first = entityOf(await w.run('entity_create', { title: 'Конверт', ...envelope }));
+    entityOf(await w.run('entity_update', { id: first.id, archived: true }));
+    entityOf(await w.run('entity_create', { title: 'Конверт-дубль', ...envelope }));
+    await withIdentity(db, personal(w.graph), (tx) =>
+      tx.execute(sql`INSERT INTO user_settings (graph_id, disabled_modules)
+                     VALUES (${w.graph}::uuid, ARRAY['finance']::text[])
+                     ON CONFLICT (graph_id) DO UPDATE SET disabled_modules = ARRAY['finance']::text[]`),
+    );
+    // Разархивация — правка ядра: гейт «только чтение» её пропускает, правило уникальности — нет.
+    const r = await w.run('entity_update', { id: first.id, archived: false });
+    expect(refusalOf(r)).toBe('INVARIANT/duplicate_envelope');
+    expect(r.ok ? '' : r.error.message).toStartWith('правило Финансы: уже есть неархивная запись');
+  });
+});

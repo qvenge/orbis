@@ -20,6 +20,7 @@ import {
   entityUpdateExecInput,
   extensionName,
   type GraphId,
+  isExtensionEnabled,
   newId,
   type PreconditionMismatch,
   RULE_NEAREST_ANCESTOR,
@@ -160,6 +161,7 @@ import { bodyFieldsFromMarkdown } from './body-fields';
 import { ExecError } from './errors';
 import {
   assertExtensionEnabled,
+  assertExtensionPropsWritable,
   assertGrantAlive,
   assertRoutineRelationUntouchable,
   assertRoutineUntouchable,
@@ -1855,6 +1857,8 @@ function ruleCtxOf(ctx: ExecCtx): RuleWriteInput['ctx'] {
     clock: ctx.clock,
     mechanism: ctx.mechanism,
     internalUndo: ctx.internalUndo !== undefined,
+    // Маска — только текст отказа правила (префикс выключенного расширения носителя).
+    disabledModules: ctx.disabledModules,
   };
 }
 
@@ -1939,6 +1943,15 @@ async function prepareEntityCreate(
   // Гейт §Б8-3 — ДО гейта флагов и по тому же доводу: «вам сюда нельзя» честнее, чем
   // «ваше значение не той формы». У create ДОБАВЛЯЕМЫЕ аспекты — это всё состояние.
   assertExtensionEnabled(ctx.registry, ctx.disabledModules, ctx.mechanism, state.aspects);
+  // Поля выключенного расширения — только чтение (§Б8-3 ревизия 7) и на create: свойство без
+  // своего аспекта законно (`aspects-validate.ts`), и запись «без аспекта, но с полем
+  // расширения» была бы обходом гейта полей. Вход create — ВСЁ состояние, поэтому по патчу.
+  assertExtensionPropsWritable(
+    ctx.registry,
+    ctx.disabledModules,
+    ctx.mechanism,
+    touchedProperties(propsPatch),
+  );
   // Гейт флагов (§А2-5/Б6) — ДО валидации значений: «вам сюда нельзя» честнее, чем
   // «ваше значение не той формы», когда запись запрещена независимо от значения.
   assertPropsWritable(ctx.registry, ctx.mechanism, propsPatch);
@@ -2272,14 +2285,25 @@ async function prepareEntityUpdate(
       // идентичность этой записью» обязан следовать за ним туда же (функция чистая и сама молчит без
       // аспекта, без переноса и при переносе, названном патчем).
       dropStaleCarryover(ctx.registry, before, state, touchedProperties(propsPatch));
-      // Гейт §Б8-3: только ПОЯВИВШИЕСЯ аспекты — правка суммы существующей транзакции
-      // выключенного модуля разрешена (§Б8-3: скрытое ≠ удалённое), а появление нового
-      // аспекта модуля через `entity_update` — тот же обход, что через attach.
+      // Гейты §Б8-3 — внутри блока «вне внутреннего undo»: откат восстанавливает своё же
+      // законно записанное состояние и проходит СТРУКТУРНО (Ф-1б-18). Появившиеся аспекты —
+      // гейт создания: появление аспекта расширения через `entity_update` — тот же обход, что
+      // через attach. Снятые аспекты и затронутые свойства — гейт «только чтение» (ревизия 7,
+      // Р-28 п. 3; перерешает прежнее «правка существующей записи выключенного модуля
+      // разрешена» и Ф-34). T-правила выше пишут в `state.props`, а не в патч, и гейт полей их
+      // не видит по построению; post-due закрыт своим гейтом (Д-2).
       assertExtensionEnabled(
         ctx.registry,
         ctx.disabledModules,
         ctx.mechanism,
         state.aspects.filter((a) => !before.aspects.includes(a)),
+      );
+      assertExtensionPropsWritable(
+        ctx.registry,
+        ctx.disabledModules,
+        ctx.mechanism,
+        touchedProperties(propsPatch),
+        before.aspects.filter((a) => !state.aspects.includes(a)),
       );
       // Гейт флагов (§А2-5/Б6). Внутренний undo его ПРОПУСКАЕТ — ровно как семь проверок
       // ниже: он восстанавливает СВОЁ ЖЕ законно записанное состояние, и отказ здесь
@@ -2610,12 +2634,19 @@ async function prepareAttach(
   // Гейт §Б8-3: повторный attach ТОГО ЖЕ аспекта — правка, а не появление (докблок выше
   // подтверждает, что внутренний undo сюда не заходит — у него свой путь в entity_update).
   // Гейт в двух точках из трёх был бы дырой: `attach_*` заводит аспект на готовой сущности
-  // мимо create.
+  // мимо create. Правка — это ПОЛЯ носителя, и с ревизии 7 поля выключенного расширения только
+  // для чтения: повторный attach его аспекта отказывает гейтом полей, а не проходит.
   assertExtensionEnabled(
     ctx.registry,
     ctx.disabledModules,
     ctx.mechanism,
     before.aspects.includes(aspectId) ? [] : [aspectId],
+  );
+  assertExtensionPropsWritable(
+    ctx.registry,
+    ctx.disabledModules,
+    ctx.mechanism,
+    touchedProperties(propsPatch),
   );
   // Гейт флагов (§А2-5/Б6) и стадия 2 — по итоговому состоянию; `DEPRECATED` — по
   // затронутым (свободное deprecated-значение не обязано запирать навешивание аспекта).
@@ -3859,6 +3890,26 @@ async function prepareSubscriptionSet(_ctx: ExecCtx, rawInput: unknown): Promise
     journal,
     async apply(applyCtx: ExecCtx): Promise<OpOutcome> {
       const graphId = applyCtx.req.identity.graph;
+      // Поверхность выключенного расширения (§Б8-3; M-5 гейта задачи 6) — вторая линия к enum
+      // тула (`subscriptionSetDefFor`): схема входа держит ВЕСЬ словарь поверхностей, и вызов по
+      // угаданному адресу иначе заводил бы подписку выключенного расширения. Undo мимо: откат
+      // восстанавливает своё же законно записанное (Ф-1б-18).
+      const surfaceExt = surfaceExtensionOf(input.surface);
+      if (
+        applyCtx.internalUndo === undefined &&
+        !isExtensionEnabled(surfaceExt, applyCtx.disabledModules)
+      ) {
+        throw new ExecError(
+          'MODULE_DISABLED',
+          `поверхность «${input.surface}» принадлежит выключенному расширению «${extensionName(surfaceExt ?? '')}» (§Б8-3)`,
+          {
+            module: surfaceExt,
+            extension: surfaceExt,
+            surface: input.surface,
+            reason: input.id.startsWith('user/') ? 'create' : 'read_only',
+          },
+        );
+      }
       const current = await readSubscriptionRow(applyCtx.tx, graphId, input.id);
       if (input.id.startsWith('user/')) {
         const occupied = await readSurfaceOwner(applyCtx.tx, graphId, input.surface, input.id);

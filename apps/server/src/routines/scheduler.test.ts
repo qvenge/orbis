@@ -493,3 +493,49 @@ describe('startRoutineScheduler: интервал, наложение, оста�
     expect(await runsOf(owner, routineId)).toHaveLength(1);
   });
 });
+
+// Маска расширений в тике (спека 1б §8.3, Р-23 п. 4.3): рутина, чей НЕПУСТОЙ белый список целиком
+// из тулов выключенных расширений, пропускается до стоп-крана с причиной `extension_disabled`
+// (сквозной пин без записи — `registry/extension-off.test.ts`, пункт 15). Здесь — граница правила:
+// смешанный список и включённое расширение пропуском не считаются.
+describe('routineTick: маска расширений (С1б-4 п. 15)', () => {
+  async function disable(owner: GraphId, ext: string): Promise<void> {
+    await withIdentity(db, personal(owner), (tx) =>
+      tx
+        .update(userSettings)
+        .set({ disabledModules: [ext] })
+        .where(eq(userSettings.graphId, owner)),
+    );
+  }
+
+  test('список целиком из тулов выключенных Финансов — пропуск; при включённых — прогон', async () => {
+    const owner = await newOwner();
+    const routineId = await newRoutine(owner, { 'orbis/allowed_tools': ['budget_status'] });
+    await disable(owner, 'finance');
+    const provider = new ScriptedProvider([endTurn('не должно случиться')]);
+    const tick = await routineTick(deps(provider));
+    expect(tick.skipped).toContainEqual({
+      routineId,
+      bucket: BUCKET,
+      reason: 'extension_disabled',
+    });
+    expect(provider.requests).toHaveLength(0);
+    expect(await runsOf(owner, routineId)).toHaveLength(0);
+
+    await disable(owner, 'goals'); // Финансы снова включены, выключено чужое расширение
+    const second = await routineTick(deps(provider));
+    expect(second.started).toContain(routineRunId(routineId, BUCKET, 1));
+  });
+
+  test('смешанный список (тул расширения + тул ядра) — не пропуск: доступное ядро рутина делает', async () => {
+    const owner = await newOwner();
+    const routineId = await newRoutine(owner, {
+      'orbis/allowed_tools': ['budget_status', 'entity_update'],
+    });
+    await disable(owner, 'finance');
+    const provider = new ScriptedProvider([endTurn('Сделал, что смог.')]);
+    const tick = await routineTick(deps(provider));
+    expect(tick.started).toContain(routineRunId(routineId, BUCKET, 1));
+    expect(tick.skipped.filter((s) => s.reason === 'extension_disabled')).toEqual([]);
+  });
+});

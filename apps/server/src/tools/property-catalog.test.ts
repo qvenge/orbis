@@ -288,3 +288,39 @@ describe('property_catalog: форма строки (§А9-3)', () => {
     ]);
   });
 });
+
+// Маска расширений (§Б8-3; Р-23 п. 4.3 ⚑, спека 1б §8.3): выключенное расширение агент не видит и
+// в каталоге — ни его свойств, ни его аспектов среди носителей. Снимок при этом тот же: отсев —
+// свойство выдачи, а не реестра (определения выключенного резолвимы на чтение).
+describe('property_catalog: маска расширений (§Б8-3)', () => {
+  function masked(
+    input: Parameters<typeof runPropertyCatalog>[2],
+    disabled: readonly string[],
+  ): Promise<PropertyCatalogRow[]> {
+    return withIdentity(db, personal(owner), async (tx) => {
+      const r = await runPropertyCatalog(tx, reg, input, 'ru', {
+        graphId: owner,
+        now: new Date(),
+        disabled,
+      });
+      return r.properties;
+    });
+  }
+
+  test('маска [finance]: ни свойства Финансов, ни их аспектов в носителях; ядро и чужие расширения на месте', async () => {
+    const all = await masked({}, ['finance']);
+    expect(all.filter((r) => r.module === 'finance').map((r) => r.key)).toEqual([]);
+    const amount = all.find((r) => r.key === 'orbis/amount'); // свойство ЯДРА у финансового носителя
+    expect(amount).toBeDefined();
+    expect(amount?.usage.aspects).not.toContain('orbis/financial');
+    expect(all.some((r) => r.module === 'goals')).toBe(true);
+    // Фильтры входа не пробивают маску: по имени модуля и по аспекту выключенного — пусто.
+    expect(await masked({ module: 'finance' }, ['finance'])).toEqual([]);
+    expect(await masked({ aspect: 'orbis/financial' }, ['finance'])).toEqual([]);
+    // Без маски тот же снимок отдаёт их — отсев не вырожден.
+    expect((await run({})).some((r) => r.module === 'finance')).toBe(true);
+    expect((await run({})).find((r) => r.key === 'orbis/amount')?.usage.aspects).toContain(
+      'orbis/financial',
+    );
+  });
+});

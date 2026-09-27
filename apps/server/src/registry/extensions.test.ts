@@ -455,7 +455,7 @@ describe('§С8-22: маска на реестре тулов — один фи�
   });
 });
 
-describe('§С8-22: запись при выключенном модуле — create/attach нет, update да', () => {
+describe('§С8-22, §Б8-3 ревизия 7: запись при выключенном расширении — create/attach нет, его поля только чтение', () => {
   // `CATEGORY_ID`, `txId`, `noteId` пришли из ОБЩЕГО `beforeAll` файла (шаг 3): они заведены до
   // первого выключения — завести их здесь уже нельзя, гейт шага 11 не пустил бы.
   beforeEach(blockEntry(['finance']));
@@ -485,7 +485,12 @@ describe('§С8-22: запись при выключенном модуле — 
     expect(denied.ok).toBe(false);
     if (denied.ok) return;
     expect(denied.error.code).toBe('MODULE_DISABLED');
-    expect(denied.error.details).toMatchObject({ module: 'finance', aspect: 'orbis/financial' });
+    expect(denied.error.details).toMatchObject({
+      module: 'finance',
+      extension: 'finance',
+      aspect: 'orbis/financial',
+      reason: 'create',
+    });
     expect(
       (
         await execute(db, {
@@ -503,12 +508,59 @@ describe('§С8-22: запись при выключенном модуле — 
     ).toBe(true);
   });
 
-  test('правка существующей транзакции и повторный attach того же аспекта — разрешены', async () => {
+  test('правка поля Финансов и повторный attach того же аспекта — только чтение; сумма (ядро) правится', async () => {
+    // ПЕРЕВОРОТ ПИНА (§Б8-3 ревизия 7, Р-28 п. 3): прежде правка существующей транзакции и
+    // повторный attach при выключенном модуле были разрешены («скрытое ≠ удалённое»). Теперь поля
+    // выключенного расширения — только чтение для всех акторов, а стандартные свойства ядра
+    // (сумма, валюта, направление, дата — `module: null` с задачи 5) правятся как обычно.
+    //
     // txId создан ДО выключения модуля (общий `beforeAll` файла, шаг 3). Поля `version` у
     // `entity_update` НЕТ: CAS-предусловие §5.2 называется `expectedUpdatedAt`, оно
-    // необязательно, и здесь не нужно — конкурента у теста нет. Лишний ключ `.strict()`
-    // отверг бы кодом `VALIDATION`, то есть до гейта §Б8-3 проверка бы не дошла вовсе
-    // (адрес брифа опровергнут деревом).
+    // необязательно, и здесь не нужно — конкурента у теста нет.
+    const readOnly = { extension: 'finance', reason: 'read_only' };
+    const edit = await execute(db, {
+      identity: personal(owner),
+      actorKind: 'owner',
+      source: 'ui',
+      operations: [
+        {
+          tool: 'entity_update',
+          input: {
+            id: txId,
+            props: { 'orbis/finance_category': seedCategoryId(owner, 'transport') },
+          },
+        },
+      ],
+    });
+    expect(edit.ok).toBe(false);
+    if (!edit.ok) {
+      expect(edit.error.code).toBe('MODULE_DISABLED');
+      expect(edit.error.details).toMatchObject({ ...readOnly, property: 'orbis/finance_category' });
+    }
+    const reattach = await execute(db, {
+      identity: personal(owner),
+      actorKind: 'owner',
+      source: 'ui',
+      operations: [
+        {
+          tool: 'attach_orbis_financial',
+          input: {
+            entity_id: txId,
+            data: {
+              'orbis/amount': '800.00',
+              'orbis/direction': 'expense',
+              'orbis/occurred_on': '2026-09-03',
+              'orbis/finance_category': CATEGORY_ID,
+            },
+          },
+        },
+      ],
+    });
+    expect(reattach.ok).toBe(false);
+    if (!reattach.ok) {
+      expect(reattach.error.code).toBe('MODULE_DISABLED');
+      expect(reattach.error.details).toMatchObject(readOnly);
+    }
     expect(
       (
         await execute(db, {
@@ -517,29 +569,6 @@ describe('§С8-22: запись при выключенном модуле — 
           source: 'ui',
           operations: [
             { tool: 'entity_update', input: { id: txId, props: { 'orbis/amount': '700.00' } } },
-          ],
-        })
-      ).ok,
-    ).toBe(true);
-    expect(
-      (
-        await execute(db, {
-          identity: personal(owner),
-          actorKind: 'owner',
-          source: 'ui',
-          operations: [
-            {
-              tool: 'attach_orbis_financial',
-              input: {
-                entity_id: txId,
-                data: {
-                  'orbis/amount': '800.00',
-                  'orbis/direction': 'expense',
-                  'orbis/occurred_on': '2026-09-03',
-                  'orbis/finance_category': CATEGORY_ID,
-                },
-              },
-            },
           ],
         })
       ).ok,
@@ -649,13 +678,22 @@ describe('§С8-22: подписки и сохранённые AST при вык
     // Обратное направление врезки Agenda до 1б («Планировщик выключен — Повестка пуста») снято
     // вместе с Планировщиком: поверхность `core/agenda` — ядро, и `surfaceExtensionOf` отвечает
     // `null`. Пин держит обратное: ни одно расширение и ни устаревший `planner` в маске (колонка
-    // text[] без CHECK) Повестку не гасят. Маска пишется НАПРЯМУЮ — `module_set` пускает только
-    // `finance` (Ф-Б1-57б), а движок спрашивает саму колонку.
+    // text[] без CHECK) Повестку не гасят. С задачи 7 все четыре расширения выключаются ОПЕРАЦИЕЙ
+    // владельца `module_set` (П0) — путь владельца, а не запись в колонку; устаревший `planner`
+    // операцией не записать (его нет в словаре), поэтому он — по-прежнему напрямую.
     const agendaBefore = await agenda();
     expect(agendaBefore.rows.length).toBeGreaterThan(0); // сравнение не вырождено в «пусто = пусто»
     // `finally` — не вежливость: провались утверждение внутри, и маска осталась бы выключенной,
     // а соседний тест канала покраснел бы каскадом на чужой причине.
-    await setModules([...EXTENSION_IDS]);
+    for (const m of EXTENSION_IDS) {
+      const r = await execute(db, {
+        identity: personal(owner),
+        actorKind: 'owner',
+        source: 'ui',
+        operations: [{ tool: 'module_set', input: { module: m, enabled: false } }],
+      });
+      if (!r.ok) throw new Error(`module_set ${m}: ${r.error.code} — ${r.error.message}`);
+    }
     await withIdentity(db, personal(owner), (tx) =>
       setExtensionDisabled(tx, owner, 'planner', true),
     );
@@ -697,14 +735,15 @@ describe('§С8-22: подписки и сохранённые AST при вык
   });
 });
 
-describe('§Б8-3 против §С1-3 п.9: материализация — не создание (Ф-Б1-57а)', () => {
+describe('§Б8-3 ревизия 7: материализация шаблона выключенного расширения останавливается (Р-23 п. 4.3)', () => {
   beforeEach(blockEntry([]));
 
-  test('финансовый recurring-шаблон материализуется при выключенных Финансах, без warn и без потери строк Повестки', async () => {
-    // Шаблон заводится при ВКЛЮЧЁННЫХ Финансах — это законная запись владельца. Дальше
-    // модуль выключается, и сервер обязан продолжать рождать инстансы: инстанс — следствие
-    // существующего шаблона, а не новая запись. Иначе выключение Финансов молча уносило бы
-    // строки ЧУЖОЙ подписки (Повестки) — буква §С1-3 п.9.
+  test('финансовый recurring-шаблон при выключенных Финансах не материализуется: без warn, без отказов, чужие строки Повестки на месте', async () => {
+    // ПЕРЕВОРОТ ПИНА (Ф-Б1-57а → Р-23 п. 4.3, ⚑): прежде инстансы финансового шаблона
+    // рождались и при выключенных Финансах («материализация — не создание»). Теперь шаблон
+    // расширения отсеивается в фазе чтения ДО исполнения: исполнитель не зовётся, отказа нет,
+    // warn нет. Консервативность §С1-3 п.9 держится иначе: Повестка ЯДРА теряет только строки
+    // выключенного расширения, строки ядра на месте (пин «Повестка — ядро» выше).
     const templateId = await seedOne({
       title: 'Аренда',
       tags: [],
@@ -728,14 +767,14 @@ describe('§Б8-3 против §С1-3 п.9: материализация — н
       operations: [{ tool: 'module_set', input: { module: 'finance', enabled: false } }],
     });
 
-    // `console.warn` — наблюдаемый след отказа: `materializeInstances` не роняет запрос
-    // вызывающего, а ПРОПУСКАЕТ шаблон с warn. Без перехвата тест зеленел бы на `created: 0`.
+    // `console.warn` — наблюдаемый след отказа исполнителя: `materializeInstances` не роняет
+    // запрос вызывающего, а ПРОПУСКАЕТ шаблон с warn. Отсев обязан обходиться без него.
     const warns: string[] = [];
     const realWarn = console.warn;
     console.warn = (...args: unknown[]) => {
       warns.push(args.map(String).join(' '));
     };
-    let created = 0;
+    let created = -1;
     try {
       created = (
         await materializeInstances({
@@ -750,10 +789,9 @@ describe('§Б8-3 против §С1-3 п.9: материализация — н
       console.warn = realWarn;
     }
     expect(warns.filter((w) => w.includes('recurring/materialize'))).toEqual([]);
-    expect(created).toBeGreaterThan(0);
+    expect(created).toBe(0);
 
-    // Инстансы видны в окне Повестки — то, что теряется, если гейт стоит на materialize.
-    const rows = await withIdentity(db, personal(owner), async (tx) =>
+    const agendaNow = await withIdentity(db, personal(owner), async (tx) =>
       agendaListOf(tx, owner, agendaSubscriptionOf(await effectiveRegistry(tx, owner)), {
         today,
         timeZone: TZ,
@@ -763,6 +801,26 @@ describe('§Б8-3 против §С1-3 п.9: материализация — н
     const instanceIds = [today, addDays(today, 1), addDays(today, 2)].map((d) =>
       recurringInstanceId(templateId, d),
     );
-    expect(rows.rows.filter((r) => instanceIds.includes(r.entity.id)).length).toBeGreaterThan(0);
+    expect(agendaNow.rows.filter((r) => instanceIds.includes(r.entity.id))).toEqual([]);
+    expect(agendaNow.rows.length).toBeGreaterThan(0); // строки ядра на месте
+
+    // Включение возвращает материализацию того же окна.
+    await execute(db, {
+      identity: personal(owner),
+      actorKind: 'owner',
+      source: 'ui',
+      operations: [{ tool: 'module_set', input: { module: 'finance', enabled: true } }],
+    });
+    expect(
+      (
+        await materializeInstances({
+          db,
+          identity: personal(owner),
+          from: today,
+          to: addDays(today, 2),
+          today,
+        })
+      ).created,
+    ).toBeGreaterThan(0);
   });
 });

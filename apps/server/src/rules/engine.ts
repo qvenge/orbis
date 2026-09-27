@@ -27,7 +27,9 @@ import {
   canonicalJson,
   effectiveLabel,
   entityClassOf,
+  extensionName,
   type GraphId,
+  isExtensionEnabled,
   type RuleCarrier,
   type RuleDefinition,
 } from '@orbis/shared';
@@ -62,6 +64,13 @@ export interface RuleWriteInput {
     clock: () => Date;
     mechanism: MutationMechanism;
     internalUndo: boolean;
+    /**
+     * Маска расширений транзакции (`ExecCtx.disabledModules`) — только для ТЕКСТА отказа: правило
+     * аспекта выключенного расширения продолжает работать (§Б8-3 ревизия 7), и отказ обязан
+     * назвать расширение, иначе владелец увидит запрет от того, чего на экране нет. Необязательный
+     * член — прежние вызовы (тесты движка) законны и префикса не получают.
+     */
+    disabledModules?: readonly string[];
   };
   entityId: string;
   before: EntityState;
@@ -298,10 +307,31 @@ function whenHolds(rule: RuleDefinition, scope: ExprEvalScope): boolean {
 
 function refusalText(
   rule: Extract<RuleDefinition, { template: 'requires_when' | 'forbidden_when' }>,
+  prefix: string,
 ): string {
   return rule.template === 'requires_when'
-    ? `правило «${rule.id}»: свойство ${rule.params.property} обязательно, когда выполнено условие правила (§Б4-3)`
-    : `правило «${rule.id}»: свойство ${rule.params.property} запрещено, когда выполнено условие правила (§Б4-3)`;
+    ? `${prefix}правило «${rule.id}»: свойство ${rule.params.property} обязательно, когда выполнено условие правила (§Б4-3)`
+    : `${prefix}правило «${rule.id}»: свойство ${rule.params.property} запрещено, когда выполнено условие правила (§Б4-3)`;
+}
+
+/**
+ * Префикс отказа правила, чей носитель принадлежит ВЫКЛЮЧЕННОМУ расширению (§Б8-3 ревизия 7,
+ * Р-23 п. 4.3 ⚑): «правило <Расширение>: ». Правила его аспектов работают на правке прочих полей
+ * записи (целостность не выключается), но владелец не видит расширения на экране — без его имени
+ * отказ выглядел бы запретом ниоткуда. Модуль — из строки носителя (аспект или свойство; у ролей
+ * расширений нет с задачи 5), маска — из транзакции; включённое расширение и ядро — без префикса,
+ * текст прежний побайтно.
+ */
+function extensionPrefix(ctx: RuleWriteInput['ctx'], carrier: RuleCarrier): string {
+  const disabled = ctx.disabledModules ?? [];
+  if (disabled.length === 0) return '';
+  const module =
+    carrier.kind === 'aspect'
+      ? ctx.registry.aspects.get(carrier.id)?.module
+      : carrier.kind === 'property'
+        ? ctx.registry.properties.get(carrier.id)?.module
+        : null;
+  return isExtensionEnabled(module, disabled) ? '' : `правило ${extensionName(module ?? '')}: `;
 }
 
 /**
@@ -352,7 +382,7 @@ export async function assertConstraintRules(input: RuleWriteInput): Promise<void
             { reason: 'RULE_SCOPE_UNSUPPORTED', rule: rule.id, scope: ruleScope },
           );
         }
-        await assertUniqueAmong(input, rule, ruleScope.aspect);
+        await assertUniqueAmong(input, rule, ruleScope.aspect, extensionPrefix(input.ctx, carrier));
         continue;
       }
       case 'requires_when':
@@ -360,7 +390,7 @@ export async function assertConstraintRules(input: RuleWriteInput): Promise<void
         if (!whenHolds(rule, scope)) continue;
         const has = present(input.state.props[rule.params.property]);
         if (rule.template === 'requires_when' ? has : !has) continue;
-        throw new ExecError('INVARIANT', refusalText(rule), {
+        throw new ExecError('INVARIANT', refusalText(rule, extensionPrefix(input.ctx, carrier)), {
           invariant: rule.id,
           rule_template: rule.template,
           property: rule.params.property,
@@ -428,6 +458,8 @@ async function assertUniqueAmong(
   input: RuleWriteInput,
   rule: Extract<RuleDefinition, { template: 'unique_among' }>,
   aspectId: string,
+  /** Префикс выключенного расширения носителя (`extensionPrefix`) — носитель сюда не передаётся. */
+  prefix: string,
 ): Promise<void> {
   const { ctx, entityId, state, batch } = input;
   if (input.touchedCore !== undefined && input.core.archived) return;
@@ -493,7 +525,7 @@ async function assertUniqueAmong(
     existing.title === '' ? 'неархивная запись' : `неархивная запись «${existing.title}»`;
   throw new ExecError(
     'INVARIANT',
-    `уже есть ${holder} с тем же набором (${labels.join(', ')}) — правило «${rule.id}» (§Б4-3); правьте существующую или архивируйте её`,
+    `${prefix}уже есть ${holder} с тем же набором (${labels.join(', ')}) — правило «${rule.id}» (§Б4-3); правьте существующую или архивируйте её`,
     { invariant: rule.id, rule_template: 'unique_among', existingId: existing.id, values },
   );
 }

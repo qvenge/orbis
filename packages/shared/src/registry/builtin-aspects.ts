@@ -354,12 +354,15 @@ const ENTRIES: readonly AspectEntry[] = [
       en: 'An endeavour with a life cycle; tickets are child tasks.',
     },
     properties: [['orbis/project_stage', true]],
+    // Инструкции Проектов и Разработки не называют аспектов друг друга (задача 7, С1б-4 п. 1):
+    // расширения выключаются порознь, и описание тула включённого называло бы модели аспект
+    // выключенного. Связь «на той же сущности» сказана словами.
     aiInstructions:
       'orbis/project — проект: затея с жизненным циклом (orbis/project_stage: active|paused|done). ' +
       'Тикеты проекта — дочерние сущности с orbis/task, привязанные ребром роли ticket от проекта к ' +
       'тикету. «Сделай A, B, C» в треде проекта = создать по тикету на пункт (orbis/task_status ' +
       'inbox), детьми проекта. Тело проекта с живыми блоками сервер засевает сам при пустом теле — ' +
-      'не пиши его вручную. Кодовое (репозиторий, ветка) — в orbis/repo на той же сущности, не здесь.',
+      'не пиши его вручную. Кодовое (репозиторий, ветка) — не здесь: у репозитория свой аспект на той же сущности.',
     tagMappings: ['project', 'проект'],
     viewConfig: { keyFields: ['orbis/project_stage'], icon: '📁' },
     module: 'projects',
@@ -378,7 +381,7 @@ const ENTRIES: readonly AspectEntry[] = [
     ],
     aiInstructions:
       'orbis/repo — репозиторий код-проекта: orbis/repo_url и orbis/default_branch. Ставится на ту же ' +
-      'сущность, что orbis/project, только если проект — про код.',
+      'сущность, что и сам проект, только если проект — про код.',
     tagMappings: ['repo', 'репозиторий'],
     viewConfig: { keyFields: ['orbis/repo_url', 'orbis/default_branch'], icon: '🗂️' },
     module: 'dev',

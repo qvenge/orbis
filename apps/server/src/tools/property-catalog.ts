@@ -11,7 +11,12 @@
 // владельца целиком, и фоновому исполнителю (`worker`) она не адресована — его периметр это
 // назначенные тикеты, а не устройство графа. Гейт стоит дважды: список (`mcp/server.ts`) и
 // вызов (`tools/dispatch.ts`) — список подсказка, доступ решает сервер.
-import { effectiveLabel, type GraphId, type PropertyDefinition } from '@orbis/shared';
+import {
+  effectiveLabel,
+  type GraphId,
+  isExtensionEnabled,
+  type PropertyDefinition,
+} from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import { z } from 'zod';
 import type { Tx } from '../db/with-identity';
@@ -195,18 +200,35 @@ export async function runPropertyCatalog(
   reg: RegistrySnapshot,
   input: PropertyCatalogInput,
   locale: string,
-  args: { graphId: GraphId; now: Date },
+  args: {
+    graphId: GraphId;
+    now: Date;
+    /**
+     * Маска расширений (§Б8-3; Р-23 п. 4.3 ⚑): выключенное расширение агент не видит — ни его
+     * свойств, ни его аспектов среди носителей. Отсев — здесь, а не в снимке: тот же снимок
+     * резолвит сохранённые AST, и определения выключенного остаются резолвимыми на чтение.
+     * Необязательна — прямые вызовы тестов законны и видят всё.
+     */
+    disabled?: readonly string[];
+  },
 ): Promise<PropertyCatalogResult> {
+  const disabled = args.disabled ?? [];
   // Носители — общей `carrierAspects` (она же держит запрет по объекту в предложении):
   // второй обход тех же ссылок разошёлся бы с первым молча. Она отдаёт id аспекта, а
   // каталог показывает модели `key` — у встроенных они совпадают, у своего аспекта нет.
+  // Аспект выключенного расширения носителем не показывается: у ядерного `orbis/amount`
+  // носитель — `orbis/financial`, и без отсева имя выключенного аспекта утекало бы через
+  // свойство ядра.
   const aspectKeyById = new Map([...reg.aspects.values()].map((a) => [a.id, a.key]));
   const carriersOf = (propertyId: string): string[] =>
-    carrierAspects(reg, propertyId).map((id) => aspectKeyById.get(id) ?? id);
+    carrierAspects(reg, propertyId)
+      .filter((id) => isExtensionEnabled(reg.aspects.get(id)?.module, disabled))
+      .map((id) => aspectKeyById.get(id) ?? id);
 
   const needle = input.q?.toLowerCase();
   const selected: PropertyDefinition[] = [];
   for (const def of reg.properties.values()) {
+    if (!isExtensionEnabled(def.module, disabled)) continue;
     if (needle !== undefined && !matchesQuery(def, needle)) continue;
     if (input.status !== undefined && def.status !== input.status) continue;
     // Фильтр — по колонке `module`, то есть по id словаря расширений (`EXTENSION_IDS`): ядро и язык
@@ -216,8 +238,12 @@ export async function runPropertyCatalog(
     if (input.aspect !== undefined) {
       // Аспект адресуется и key, и id (у встроенных они совпадают) — тем же правилом, что
       // свойство на границе тулов: модель пишет тем именем, которым видела.
+      // Аспект выключенного расширения фильтром не адресуется — он скрыт так же, как в носителях.
       const carrier = reg.aspects.get(input.aspect);
-      const wanted = carrier?.properties.some((r) => r.propertyId === def.id) === true;
+      const wanted =
+        carrier !== undefined &&
+        isExtensionEnabled(carrier.module, disabled) &&
+        carrier.properties.some((r) => r.propertyId === def.id);
       const byKey = carriersOf(def.id).includes(input.aspect);
       if (!wanted && !byKey) continue;
     }

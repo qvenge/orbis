@@ -5392,7 +5392,7 @@
   },
   {
     "name": "attach_orbis_project",
-    "description": "orbis/project — проект: затея с жизненным циклом (orbis/project_stage: active|paused|done). Тикеты проекта — дочерние сущности с orbis/task, привязанные ребром роли ticket от проекта к тикету. «Сделай A, B, C» в треде проекта = создать по тикету на пункт (orbis/task_status inbox), детьми проекта. Тело проекта с живыми блоками сервер засевает сам при пустом теле — не пиши его вручную. Кодовое (репозиторий, ветка) — в orbis/repo на той же сущности, не здесь.",
+    "description": "orbis/project — проект: затея с жизненным циклом (orbis/project_stage: active|paused|done). Тикеты проекта — дочерние сущности с orbis/task, привязанные ребром роли ticket от проекта к тикету. «Сделай A, B, C» в треде проекта = создать по тикету на пункт (orbis/task_status inbox), детьми проекта. Тело проекта с живыми блоками сервер засевает сам при пустом теле — не пиши его вручную. Кодовое (репозиторий, ветка) — не здесь: у репозитория свой аспект на той же сущности.",
     "inputJsonSchema": {
       "type": "object",
       "properties": {
@@ -5448,7 +5448,7 @@
   },
   {
     "name": "attach_orbis_repo",
-    "description": "orbis/repo — репозиторий код-проекта: orbis/repo_url и orbis/default_branch. Ставится на ту же сущность, что orbis/project, только если проект — про код.",
+    "description": "orbis/repo — репозиторий код-проекта: orbis/repo_url и orbis/default_branch. Ставится на ту же сущность, что и сам проект, только если проект — про код.",
     "inputJsonSchema": {
       "type": "object",
       "properties": {

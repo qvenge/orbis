@@ -57,13 +57,16 @@
 import {
   actionDefinitionSchema,
   aspectImplementsSchema,
+  isExtensionEnabled,
   localizedTextSchema,
   PROPERTY_KINDS,
   RULE_ID_RE,
   RULE_TEMPLATES,
   ruleDefinitionSchema,
   SURFACES,
+  type SurfaceName,
   subscriptionDefinitionSchema,
+  surfaceExtensionOf,
 } from '@orbis/shared';
 import { EXPR_TREE_DEPTH_CAP, exprJsonSchema, exprTreeExceedsDepth } from '@orbis/shared/expr';
 import {
@@ -519,6 +522,46 @@ const subscriptionDefinitionJsonSchema = {
   required: ['engine'],
 } as const;
 
+/**
+ * Подпись поверхности для модели — описание enum `surface`. `satisfies` держит таблицу ПОЛНОЙ:
+ * новая поверхность без подписи не скомпилируется.
+ */
+const SURFACE_LABEL = {
+  'core/agenda': 'Повестка',
+  'finance/budget-overview': 'Бюджет',
+} as const satisfies Readonly<Record<SurfaceName, string>>;
+
+function surfaceJsonSchema(surfaces: readonly SurfaceName[]) {
+  return {
+    type: 'string',
+    enum: [...surfaces],
+    description: `поверхность-потребитель: ${surfaces.map((x) => `${x} — ${SURFACE_LABEL[x]}`).join(', ')}`,
+  } as const;
+}
+
+/**
+ * `subscription_set` под маску расширений (§Б8-3; перенос M-5 гейта задачи 6): поверхность
+ * выключенного расширения модели НЕ предлагается — ни в enum, ни в описании. Без этого core-тул
+ * при любой маске нёс адрес Бюджета (`finance/budget-overview`), и выключенное расширение
+ * оставалось видимым модели через чужой тул. Пустая маска — деф побайтно тот же (эталон реестра
+ * тулов сравнивается при пустой маске). Вторая линия — отказ исполнителя на записи
+ * (`prepareSubscriptionSet`): enum — подсказка модели, доступ решает сервер.
+ */
+export function subscriptionSetDefFor(
+  def: OrbisToolDef,
+  disabled: readonly string[],
+): OrbisToolDef {
+  if (disabled.length === 0) return def;
+  const surfaces = SURFACES.filter((x) => isExtensionEnabled(surfaceExtensionOf(x), disabled));
+  return {
+    ...def,
+    inputJsonSchema: {
+      ...subscriptionSetJsonSchema,
+      properties: { ...subscriptionSetJsonSchema.properties, surface: surfaceJsonSchema(surfaces) },
+    },
+  };
+}
+
 const subscriptionSetJsonSchema = {
   type: 'object',
   properties: {
@@ -529,12 +572,7 @@ const subscriptionSetJsonSchema = {
         'меняется и переживает обновления); user/… — своя подписка владельца, и она законна ' +
         'только на поверхности, где системной подписки нет.',
     },
-    surface: {
-      type: 'string',
-      enum: [...SURFACES],
-      description:
-        'поверхность-потребитель: core/agenda — Повестка, finance/budget-overview — Бюджет',
-    },
+    surface: surfaceJsonSchema(SURFACES),
     definition: subscriptionDefinitionJsonSchema,
   },
   required: ['id', 'surface', 'definition'],

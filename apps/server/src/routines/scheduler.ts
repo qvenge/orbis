@@ -11,11 +11,15 @@
 // решения о запуске — только так умерший процесс даёт ретрай, а не вечный `running`. Тем
 // же вызовом закрывается дыра среза 1: брошенные грантовые прогоны подметались только по
 // приходу агента за очередью.
+import { extensionOfTool, isExtensionEnabled } from '@orbis/shared';
 import { activeRoutines } from '../agent-loop/queries';
 import { sweepStaleRuns } from '../agent-loop/sweep';
 import { withIdentity } from '../db/with-identity';
 import { identitiesForScheduler } from '../identity';
 import { ownerTimeZone } from '../query/context';
+import { effectiveRegistry } from '../registry/cache';
+import { disabledExtensionsOf } from '../registry/extensions';
+import type { RegistrySnapshot } from '../registry/load';
 import { TICK_INTERVAL_MS } from './constants';
 import { pauseIfFailing, type RoutineDeps, type StartOutcome, startBucketRun } from './lifecycle';
 import { runRoutineRun } from './runner';
@@ -30,12 +34,40 @@ export interface TickResult {
   paused: string[];
   /** id прогонов, созданных ЭТИМ тиком (и отработанных им же — инвариант 1). */
   started: string[];
-  /** Наступившие бакеты, по которым прогон не заведён, с причиной (см. StartOutcome). */
+  /**
+   * Наступившие бакеты, по которым прогон не заведён, с причиной (см. StartOutcome).
+   * `extension_disabled` — причина ТИКА, а не запуска: рутину, чей белый список целиком из тулов
+   * выключенных расширений, тик пропускает ДО стоп-крана и до запуска (`isDisarmedByMask`), и
+   * `startBucketRun` такой причины не возвращает никогда.
+   */
   skipped: Array<{
     routineId: string;
     bucket: string;
-    reason: Extract<StartOutcome, { started: false }>['reason'];
+    reason: Extract<StartOutcome, { started: false }>['reason'] | 'extension_disabled';
   }>;
+}
+
+/**
+ * Рутина, которую маска расширений ОБЕЗОРУЖИЛА (Р-23 п. 4.3: «рутины не работают»; спека 1б
+ * §8.3): её непустой белый список целиком состоит из тулов выключенных расширений. Прогонять её
+ * нечем — модель не увидит ни одного своего тула (реестр прогона режется той же маской), и
+ * прогон только сжёг бы токены на «ничего не могу»; а стоп-кран, дойди до него дело, писал бы
+ * паузу и заметку в тред по провалам, которых владелец не просил.
+ *
+ * ПУСТОЙ список — не «целиком из тулов расширения»: безоружная рутина (`policy/confirmation.ts`)
+ * работает чтениями и базой, и выключение чужого расширения её не касается. Смешанный список —
+ * тоже не пропуск: тулы ядра в нём остаются, и рутина делает то, что ей ещё доступно.
+ */
+function isDisarmedByMask(
+  tools: readonly string[] | undefined,
+  reg: RegistrySnapshot,
+  disabled: readonly string[],
+): boolean {
+  if (tools === undefined || tools.length === 0 || disabled.length === 0) return false;
+  return tools.every((tool) => {
+    const ext = extensionOfTool(tool, reg);
+    return ext !== null && !isExtensionEnabled(ext, disabled);
+  });
 }
 
 /**
@@ -97,10 +129,17 @@ export async function routineTick(deps: RoutineDeps): Promise<TickResult> {
 
     let routines: Awaited<ReturnType<typeof activeRoutines>>;
     let timeZone: string;
+    let reg: RegistrySnapshot;
+    let disabled: readonly string[];
     try {
-      ({ routines, timeZone } = await withIdentity(deps.db, who, async (tx) => ({
+      // Снимок реестра и маска — той же фазой чтения, что рутины: расширение тула читается из
+      // строк реестра (`extensionOfTool` — `attach_*` по аспекту, `action_*` по действию), и
+      // снимок, взятый отдельно, мог бы разойтись с маской на переключении между чтениями.
+      ({ routines, timeZone, reg, disabled } = await withIdentity(deps.db, who, async (tx) => ({
         routines: await activeRoutines(tx),
         timeZone: await ownerTimeZone(tx, who.graph),
+        reg: await effectiveRegistry(tx, who.graph),
+        disabled: await disabledExtensionsOf(tx, who.graph),
       })));
     } catch (e) {
       console.error(`[routines] рутины графа ${who.graph} не прочитаны:`, e);
@@ -110,6 +149,24 @@ export async function routineTick(deps: RoutineDeps): Promise<TickResult> {
     for (const routine of routines) {
       if (aborted()) break;
       try {
+        // Наступившие бакеты — чистый расчёт по часам, без записи; считаются ДО обоих отказов,
+        // чтобы пропуск по маске отчитывался в тике теми же бакетами, что и прочие причины.
+        const due = dueBuckets({
+          at: routine.props['orbis/routine_at'],
+          ...(routine.props['orbis/routine_days'] !== undefined && {
+            days: routine.props['orbis/routine_days'],
+          }),
+          timeZone,
+          now: deps.clock(),
+        });
+        // Маска расширений — ПЕРВОЙ, до стоп-крана: пропуск не пишет ничего (ни паузы, ни
+        // заметки, ни прогона), а стоп-кран на провалах писал бы (`isDisarmedByMask`).
+        if (isDisarmedByMask(routine.props['orbis/allowed_tools'], reg, disabled)) {
+          for (const { bucket } of due) {
+            result.skipped.push({ routineId: routine.id, bucket, reason: 'extension_disabled' });
+          }
+          continue;
+        }
         // Стоп-кран по графу — ДО запуска: подметённые провалы считаются здесь (см. докблок)
         const { paused } = await pauseIfFailing(deps, { identity: who, routineId: routine.id });
         if (paused) {
@@ -121,14 +178,6 @@ export async function routineTick(deps: RoutineDeps): Promise<TickResult> {
           );
           continue;
         }
-        const due = dueBuckets({
-          at: routine.props['orbis/routine_at'],
-          ...(routine.props['orbis/routine_days'] !== undefined && {
-            days: routine.props['orbis/routine_days'],
-          }),
-          timeZone,
-          now: deps.clock(),
-        });
         for (const { bucket } of due) {
           if (aborted()) break;
           const outcome = await startBucketRun(deps, { identity: who, routine, bucket });

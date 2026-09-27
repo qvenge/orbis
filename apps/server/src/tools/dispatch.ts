@@ -273,7 +273,7 @@ export async function dispatchTool(
       // реестра уезжает с ним — по нему считаются факты чувствительности свёртки inverse
       if (def.name === 'undo_last') return { kind: 'undo_last', reg };
       if (def.kind === 'read')
-        return { kind: 'done', out: await runRead(tx, ctx, reg, def.name, input) };
+        return { kind: 'done', out: await runRead(tx, ctx, reg, disabled, def.name, input) };
       return {
         kind: 'mutate',
         def,
@@ -712,6 +712,8 @@ async function runRead(
   tx: Tx,
   ctx: ToolCallCtx,
   reg: RegistrySnapshot,
+  /** Маска расширений пред-tx — ей каталог свойств прячет выключенное (§Б8-3). */
+  disabled: readonly string[],
   name: string,
   input: unknown,
 ): Promise<ToolDispatchResult> {
@@ -733,6 +735,9 @@ async function runRead(
       result: await runPropertyCatalog(tx, reg, parsed, OWNER_LOCALE, {
         graphId: ctx.identity.graph,
         now: (ctx.clock ?? (() => new Date()))(),
+        // Маска — та же, по которой собран список тулов этого вызова: агент не видит свойств
+        // выключенного расширения ни тулами, ни каталогом (Р-23 п. 4.3 ⚑).
+        disabled,
       }),
     };
   }

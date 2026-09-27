@@ -42,7 +42,7 @@ import { effectiveRegistry } from '../registry/cache';
 import { disabledExtensionsOf } from '../registry/extensions';
 import type { RegistrySnapshot } from '../registry/load';
 import { MAX_PROPOSAL_OPERATIONS, MAX_RUN_UNITS } from '../routines/constants';
-import { REGISTRY_TOOLS } from './registry-tools';
+import { REGISTRY_TOOLS, subscriptionSetDefFor } from './registry-tools';
 
 export interface OrbisToolDef {
   name: string; // 'entity_query' | ... | 'attach_orbis_task' | ...
@@ -1435,6 +1435,9 @@ export function buildToolDefs(
       // §Б6-6 «run_action(id, params) с каталогом (описание из description)»: каталог живёт в
       // ОПИСАНИИ тула и строится из снимка (Р-К-86).
       .map((d) => (d.name === 'run_action' ? withActionCatalog(d, reg, disabled) : d))
+      // Поверхности выключенного расширения — вон из enum `subscription_set` (§Б8-3, M-5 гейта
+      // задачи 6): core-тул не должен оставлять модели адрес выключенного расширения.
+      .map((d) => (d.name === 'subscription_set' ? subscriptionSetDefFor(d, disabled) : d))
   );
 }
 
