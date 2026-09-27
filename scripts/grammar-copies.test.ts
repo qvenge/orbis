@@ -137,6 +137,14 @@ const ALLOWLIST: Record<string, { readonly count: number; readonly reason: strin
       'ДАННЫЕ, а не разбор: текст шаблона хоста (§8.1) строками массива, по строке на маркер; ' +
       'разбирает его препроход (`parsePageText`), дословность держит `host-template.test.ts`',
   },
+  'packages/shared/src/supply/etalons.ts': {
+    count: 20,
+    reason:
+      'ДАННЫЕ, а не разбор: эталоны поставки строками по строке на маркер — шаблон хоста (18 строк, ' +
+      '§8.1 спеки 1а с `{{cards: own}}` по §8.5 спеки 1б) и тела «Домой» и «Записи» (по строке); ' +
+      'разбирает их препроход, дословность держит `supply/etalons.test.ts`. Тела шести списков ' +
+      '(`supply/lists.ts`) — шаблонными строками, как тела сида: примет в них нет',
+  },
   'apps/server/src/db/audit-bodies.ts': {
     count: 1,
     reason:

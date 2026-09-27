@@ -19,6 +19,7 @@ import { oauthRouter } from './routers/oauth';
 import { registryRouter } from './routers/registry';
 import { relationRouter } from './routers/relation';
 import { routineRouter } from './routers/routine';
+import { supplyRouter } from './routers/supply';
 import { userRouter } from './routers/user';
 import { versionRouter } from './routers/version';
 import { protectedProcedure, publicProcedure, router } from './trpc';
@@ -53,6 +54,8 @@ export const appRouter = router({
   routine: routineRouter,
   // Действия владельца над записью-приложением (срез 1б §8.6): выключение и архив одной пачкой
   app: appsRouter,
+  // Записи поставки (срез 1б §9.1): обновления — только предложениями, каждое действие — владельца
+  supply: supplyRouter,
 });
 
 export type AppRouter = typeof appRouter;
