@@ -56,6 +56,23 @@ test('клиент 0.2.x (до формата тела v3) получает CLIE
   }
 });
 
+test('клиент 0.3.x (до страниц 1б) получает CLIENT_OUTDATED, 0.4.0 проходит (R-12)', async () => {
+  // Вкладка 1а, открытая через деплой 1б, не знает узлов `ownCards`/`hostBlock`: tiptap подставил
+  // бы пустой документ, и первая буква затёрла бы тело. Версия схемы документа та же (3), поэтому
+  // старую вкладку останавливает только этот гейт — на чтении так же, как на записи.
+  for (const v of ['0.3.0', '0.3.9']) {
+    const caller = appRouter.createCaller({ ...ctx, clientVersion: v });
+    const err = await caller.ping().then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect((err as TRPCError).code).toBe('PRECONDITION_FAILED');
+    expect(((err as TRPCError).cause as { code?: string }).code).toBe('CLIENT_OUTDATED');
+  }
+  const fresh = appRouter.createCaller({ ...ctx, clientVersion: '0.4.0' });
+  expect(await fresh.ping()).toEqual({ ok: true });
+});
+
 test('устаревший клиент получает отказ версии раньше auth-проверки', async () => {
   const caller = appRouter.createCaller({ ...ctx, clientVersion: '0.0.1' });
   const err = await caller.whoami().then(
@@ -163,8 +180,8 @@ test('равная/новая версия, отсутствие и мусорн
   // эквивалентно отсутствию заголовка: пред-проверка формата не блокирует запрос
   const passing = [
     MIN_COMPATIBLE_CLIENT_VERSION,
-    '0.3.1',
-    '0.3.0',
+    '0.4.1',
+    '0.4.0',
     '1.0.0',
     null,
     '',

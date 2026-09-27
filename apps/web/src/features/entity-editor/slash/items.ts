@@ -112,17 +112,6 @@ function hasOwnCardsBlock(doc: SlashDoc): boolean {
   return found;
 }
 
-/**
- * «Свои карточки» — только шаблону (план 1б, задача 8), хотя матрица пускает их и на страницу
- * (РП-4: как карточка). Их место — шаблоны: шаблон хоста ставит одну строку вместо пяти
- * `{{card: …}}` (1б §8.5), и карточки нужны записям, которые шаблон показывает. На странице строка,
- * написанная текстом, работает — матрица её не ломает, меню её лишь не предлагает. Сужение
- * матрицы, а не свой список: род, которого матрица не пускает, сюда не попадёт.
- */
-const OWN_CARDS_KINDS: readonly BodyKind[] = kindsAllowing('own-cards').filter(
-  (kind) => kind === 'template',
-);
-
 /** Пункт блока хоста (1б §6.2 п. 3, §3.5): только странице — матрица `host` (РП-4). */
 function hostBlockItem(name: HostBlockName): SlashItem {
   return {
@@ -338,7 +327,9 @@ export const SLASH_ITEMS: readonly SlashItem[] = [
     id: 'own-cards',
     label: OWN_CARDS_TITLE,
     hint: 'блок записи',
-    kinds: OWN_CARDS_KINDS,
+    // Строго по матрице (R-11): как карточка — шаблон и страница. Меню, не предлагающее законный
+    // блок, расходилось бы с разбором: написанная руками строка работает, а пункта нет.
+    kinds: kindsAllowing('own-cards'),
     place: 'layout-block',
     available: (doc) => !hasOwnCardsBlock(doc),
     run: (e) => e.chain().focus().insertContent({ type: 'ownCards' }).run(),

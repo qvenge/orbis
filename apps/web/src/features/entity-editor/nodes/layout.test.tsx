@@ -17,7 +17,7 @@ import { GRAMMAR_ERROR_MESSAGES } from '@orbis/shared/doc/page-grammar';
 import type { BodyKind } from '@orbis/shared/doc/placement';
 import { MISPLACED_HINT } from '@orbis/shared/doc/placement';
 import { FIXTURE_PARSE_REGISTRY } from '@orbis/shared/query/fixtures';
-import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { Editor } from '@tiptap/react';
 import type { ReactNode } from 'react';
@@ -101,11 +101,20 @@ function endOf(editor: Editor, needle: string): number {
   return at;
 }
 
-test('в EDITOR_EXTENSIONS каждый из шести узлов тела v3 — ровно один', () => {
+test('в EDITOR_EXTENSIONS каждый из восьми узлов тела страницы — ровно один', () => {
   // Замена фильтром+concat: промахнись фильтр мимо имени — в составе оказались бы два узла с одним
   // именем (схемы и вида), и какой победит, решал бы порядок массива.
   const names = EDITOR_EXTENSIONS.map((e) => (e as { name: string }).name);
-  for (const name of ['columns', 'column', 'tabs', 'tab', 'recordBlock', 'aspectCard']) {
+  for (const name of [
+    'columns',
+    'column',
+    'tabs',
+    'tab',
+    'recordBlock',
+    'aspectCard',
+    'ownCards',
+    'hostBlock',
+  ]) {
     expect(
       names.filter((n) => n === name),
       name,
@@ -181,6 +190,59 @@ test('первый кадр страницы — те же рамки и заг�
   expect(screen.queryByTestId('body-editor')).toBeNull();
   // Текст в рамке — текст тела: касание его зовёт редактор.
   expect(isBodyGesture(screen.getByText('левая'))).toBe(true);
+});
+
+// --- 1б: свои карточки и блоки хоста — заглушки редактора и первого кадра одним видом --------
+
+const OWN_AND_HOST = '{{cards: own}}\n\n{{records}}\n\n{{apps}}';
+
+/** Первый кадр тела (редактор не встаёт: простой заглушён). */
+function mountFirstFrame(kind: BodyKind, md: string) {
+  vi.stubGlobal('requestIdleCallback', () => 1);
+  renderWithProviders(
+    <BodyKindProvider kind={kind}>
+      <EditorShell doc={parseBody(md)} markdown={md} onChange={vi.fn()} />
+    </BodyKindProvider>,
+    api(),
+  );
+}
+
+test('1б, страница: «[Свои карточки]», «[Записи]», «[Приложения]» — в редакторе и в первом кадре одинаково', async () => {
+  const labels = ['[Свои карточки]', '[Записи]', '[Приложения]'];
+  mountFirstFrame('page', OWN_AND_HOST);
+  await waitFor(() => expect(stubLabels()).toEqual(labels));
+  expect(screen.queryByTestId('body-editor')).toBeNull();
+  // Заглушка — не текст тела: касание её не зовёт редактор.
+  for (const stub of screen.getAllByTestId('record-stub')) expect(isBodyGesture(stub)).toBe(false);
+  cleanup();
+
+  const { h } = mountEditor('page', OWN_AND_HOST);
+  await waitFor(() => expect(h.editor).not.toBeNull());
+  await waitFor(() => expect(stubLabels()).toEqual(labels));
+  expect(screen.queryByTestId('block-misplaced')).toBeNull();
+});
+
+test('1б, шаблон: блок хоста — плашка «не показывается в шаблоне», свои карточки — заглушка; в обоих кадрах', async () => {
+  const message = 'Блок {{apps}} не показывается в шаблоне.';
+  mountFirstFrame('template', '{{cards: own}}\n\n{{apps}}');
+  await waitFor(() => expect(stubLabels()).toEqual(['[Свои карточки]']));
+  expect(screen.getByTestId('block-misplaced')).toHaveTextContent(message);
+  cleanup();
+
+  const { h } = mountEditor('template', '{{cards: own}}\n\n{{apps}}');
+  await waitFor(() => expect(h.editor).not.toBeNull());
+  await waitFor(() => expect(stubLabels()).toEqual(['[Свои карточки]']));
+  expect(screen.getByTestId('block-misplaced')).toHaveTextContent(message);
+});
+
+test('1б, заметка: свои карточки и блок хоста — плашки места в редакторе, текст узлов в документе цел', async () => {
+  const { h } = mountEditor('note', OWN_AND_HOST);
+  await waitFor(() => expect(h.editor).not.toBeNull());
+  await waitFor(() => expect(screen.getAllByTestId('block-misplaced')).toHaveLength(3));
+  expect(screen.queryByTestId('record-stub')).toBeNull();
+  expect(serializeBody({ v: DOC_SCHEMA_VERSION, doc: (h.editor as Editor).getJSON() })).toBe(
+    OWN_AND_HOST,
+  );
 });
 
 test('первый кадр страницы: сломанный контейнер — тем же тоном, что на показе (ошибка), неуместный — спокойно', async () => {

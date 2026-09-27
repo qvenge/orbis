@@ -78,6 +78,9 @@ test('подменённые ноды в составе редактора ро�
   // проверку по первому.
   expect(EDITOR_EXTENSIONS.filter((e) => e.name === 'entityRef')).toHaveLength(1);
   expect(EDITOR_EXTENSIONS.filter((e) => e.name === 'queryBlock')).toHaveLength(1);
+  // Страницы 1б: свои карточки и блок хоста подменены тем же приёмом (заглушки редактора).
+  expect(EDITOR_EXTENSIONS.filter((e) => e.name === 'ownCards')).toHaveLength(1);
+  expect(EDITOR_EXTENSIONS.filter((e) => e.name === 'hostBlock')).toHaveLength(1);
 });
 
 test('таблицы умолчаний strip-ids совпадают со схемой — поимённо и по значению', () => {

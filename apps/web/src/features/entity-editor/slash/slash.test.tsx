@@ -455,14 +455,14 @@ test('у шаблона — «Свои карточки», без «Записе
   );
 });
 
-test('у страницы — «Записи» и «Приложения», без «Своих карточек»; пункт вставляет hostBlock', async () => {
+test('у страницы — «Записи», «Приложения» и «Свои карточки» (по матрице, R-11); пункт вставляет hostBlock', async () => {
   const { h } = await mountEditor('привет', api({}), 'page');
   await userEvent.keyboard(' /');
   await screen.findByTestId('slash-menu');
   const labels = labelsOf();
   expect(labels).toContain('Записи');
   expect(labels).toContain('Приложения');
-  expect(labels).not.toContain('Свои карточки');
+  expect(labels).toContain('Свои карточки');
   await userEvent.keyboard('прилож');
   await waitFor(() => expect(rows()).toEqual(['Приложенияблок страницы']));
   await userEvent.keyboard('{Enter}');
@@ -470,6 +470,14 @@ test('у страницы — «Записи» и «Приложения», бе
     expect(h.editor?.getJSON().content?.map((n) => n.type)).toEqual(['paragraph', 'hostBlock']),
   );
   expect(h.editor?.getJSON().content?.[1]?.attrs?.name).toBe('apps');
+
+  // Свои карточки уже есть — второй пункт не предлагается (плашка «второй», 1б §8.5).
+  h.editor?.commands.insertContentAt(h.editor.state.doc.content.size, { type: 'ownCards' });
+  h.editor?.commands.focus(1);
+  await userEvent.keyboard(' /');
+  await screen.findByTestId('slash-menu');
+  expect(labelsOf()).not.toContain('Свои карточки');
+  expect(labelsOf()).toContain('Записи');
 });
 
 test('у заметки — ни «Своих карточек», ни «Записей», ни «Приложений»', async () => {
