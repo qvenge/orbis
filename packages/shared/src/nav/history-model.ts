@@ -29,6 +29,7 @@
 // | replace с `app` ≠ активного      | верх перенесён в стопку `app`, `source` = откуда      | replace    | replace   |
 // | view                             | состояние экрана в верх стопки, `null` снимает ключ   | replace    | replace   |
 // | back                             | app: по стопке / в источник / в хост / выход          | none, exit | back      |
+// | back { atFirstEntry } (R-24)     | site: как app — «‹» хоста ведёт внутри Orbis          | как без    | push      |
 // В режиме сайта переход на то же место, что уже на экране, — `replace`, не `push`: так же поступает
 // браузер с переходом на текущий URL, и «назад» не упирается в запись-двойник. «То же место» — то же
 // приложение, тот же раздел и тот же адрес верха: одна запись в разделах «Записи» и «Сегодня» — два
@@ -105,7 +106,13 @@ export type NavAction =
   // показывается; другое, чем активное, — запись переезжает в его стопку (см. рамку в шапке модуля).
   | { type: 'replace'; address: Address; app?: AppKey }
   | { type: 'view'; patch: Readonly<Record<string, string | null>> } // экран записал своё состояние в верх стопки
-  | { type: 'back' };
+  // «‹» хоста или системный «назад». `atFirstEntry` (R-24) — позади в истории вкладки нет записи Orbis
+  // (вкладку открыли по ссылке). Флаг вычисляет web (индекс записи в `history.state`); чистая функция
+  // истории браузера не видит. В режиме сайта с флагом «‹» идёт по модели, как в приложении, и кладёт
+  // честную запись (`push`) — иначе `history.back()` увёл бы на чужой сайт или промолчал. Web передаёт
+  // флаг только для своей кнопки «‹»: системный «назад» браузера уходить со страницы вправе, его не
+  // трогаем. В режиме приложения флаг ничего не меняет.
+  | { type: 'back'; atFirstEntry?: boolean };
 
 export type NavEffect =
   | { history: 'push' } // site: честная запись истории
@@ -306,11 +313,13 @@ function applyReplaceToApp(model: NavModel, address: Address, app: AppKey): NavM
   const top = stack[stack.length - 1];
   const rest = stack.slice(0, -1);
   const source = top?.source ?? (rest.length > 0 ? { app: cur, section: curSection } : undefined);
-  const moved: StackEntry = { address };
-  if (source) moved.source = source;
-  if (top?.view) moved.view = top.view;
   const m = stack.length > 0 ? putStack(model, cur, curSection, rest) : model;
   const targetSection = activeSectionOf(m, app);
+  const moved: StackEntry = { address };
+  // Запись вернулась туда, откуда пришла (источник = раздел назначения): это обычный шаг стопки, а
+  // не межприложенческий переход — источник на самого себя «назад» опустошил бы стопку.
+  if (source && !(source.app === app && source.section === targetSection)) moved.source = source;
+  if (top?.view) moved.view = top.view;
   const targetStack = stackAt(m, app, targetSection) ?? [];
   return {
     ...putStack(m, app, targetSection, [...targetStack, moved], targetSection),
@@ -325,19 +334,14 @@ function backInApp(model: NavModel): { model: NavModel; effect: NavEffect } {
   const stack = activeStack(model) ?? [];
   const top = stack[stack.length - 1];
   const source = top?.source;
-  if (source && stackAt(model, source.app, source.section)) {
-    const m = withActiveSection(
-      putStack(model, app, section, stack.slice(0, -1)),
-      source.app,
-      source.section,
-    );
+  // Источник проверяется ПОСЛЕ снятия записи: источник, указывающий в эту же стопку, иначе сделал бы
+  // активной только что опустевшую стопку.
+  const popped = putStack(model, app, section, stack.slice(0, -1));
+  if (source && stackAt(popped, source.app, source.section)) {
+    const m = withActiveSection(popped, source.app, source.section);
     return { model: { ...m, activeApp: source.app }, effect: { history: 'none' } };
   }
-  if (stack.length > 1)
-    return {
-      model: putStack(model, app, section, stack.slice(0, -1)),
-      effect: { history: 'none' },
-    };
+  if (stack.length > 1) return { model: popped, effect: { history: 'none' } };
   // Дно стопки без источника: журнал межприложенческих переходов исчерпан — в хост ВСЕГДА. Выход
   // только с дна хоста: закрыть Orbis с дна приложения, куда пришли по ссылке, значило бы потерять
   // корневое приложение, которого владелец ещё не видел.
@@ -410,9 +414,17 @@ export function navReduce(
         model: mapTop(model, (top) => patchView(top, action.patch)),
         effect: { history: 'replace' },
       };
-    case 'back':
+    case 'back': {
+      if (mode === 'app') return backInApp(model);
       // Сайт: «назад» ведёт браузер; web на `popstate` восстановит модель из `history.state`.
-      return mode === 'site' ? { model, effect: { history: 'back' } } : backInApp(model);
+      if (!action.atFirstEntry) return { model, effect: { history: 'back' } };
+      // Первая запись вкладки: позади не Orbis — место по модели и честная новая запись. На дне хоста
+      // (`canGoBack` = false, «‹» не показан) идти внутри Orbis некуда — браузерный «назад» как был.
+      const r = backInApp(model);
+      return r.effect.history === 'exit'
+        ? { model, effect: { history: 'back' } }
+        : { model: r.model, effect: { history: 'push' } };
+    }
   }
 }
 

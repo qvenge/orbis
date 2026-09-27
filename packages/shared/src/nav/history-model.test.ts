@@ -623,6 +623,94 @@ describe('поведение «как сайт» (site): назад — брау
   });
 });
 
+describe('источник на собственную стопку (найдено генератором тотальности в раунде 3)', () => {
+  test('replace обратно в приложение и раздел источника — обычный шаг стопки, без источника', () => {
+    const r = run(
+      hostWithSections(),
+      [open(rec(1)), open(rec(5, XR), X), { type: 'replace', address: rec(5), app: HOST_APP }],
+      'app',
+    );
+    expect(r.model.activeApp).toBe(HOST_APP);
+    expect(r.model.apps[HOST_APP]?.stacks[RECORDS]).toEqual([
+      { address: RECORDS_ROOT },
+      { address: rec(1) },
+      { address: rec(5) },
+    ]);
+    expect(currentEntry(navReduce(r.model, BACK, 'app').model).address).toEqual(rec(1));
+  });
+
+  test('«назад» с записи, чей источник — эта же стопка: активная стопка не пустеет', () => {
+    const self = { app: HOST_APP, section: RECORDS };
+    const one: NavModel = {
+      activeApp: HOST_APP,
+      apps: {
+        [HOST_APP]: {
+          activeSection: RECORDS,
+          stacks: { [RECORDS]: [{ address: rec(1), source: self }] },
+        },
+      },
+    };
+    expect(navReduce(one, BACK, 'app')).toEqual({ model: one, effect: { history: 'exit' } });
+    const two: NavModel = {
+      activeApp: HOST_APP,
+      apps: {
+        [HOST_APP]: {
+          activeSection: RECORDS,
+          stacks: { [RECORDS]: [{ address: RECORDS_ROOT }, { address: rec(1), source: self }] },
+        },
+      },
+    };
+    const r = navReduce(two, BACK, 'app');
+    expect(r.effect).toEqual({ history: 'none' });
+    expect(currentEntry(r.model)).toEqual({ address: RECORDS_ROOT });
+  });
+});
+
+describe('«‹» на первой записи вкладки (R-24)', () => {
+  const FIRST: NavAction = { type: 'back', atFirstEntry: true };
+
+  test('site: новая вкладка /r/<id> → replace в X → «‹» ведёт в хост, эффект push', () => {
+    const entered = navReduce(
+      initialModel(rec(1)),
+      { type: 'replace', address: rec(1, XR), app: X },
+      'site',
+    ).model;
+    expect(canGoBack(entered)).toBe(true);
+    // Без флага — браузер (он может увести на чужой сайт — это его право для системного «назад»).
+    expect(navReduce(entered, BACK, 'site')).toEqual({
+      model: entered,
+      effect: { history: 'back' },
+    });
+    const r = navReduce(entered, FIRST, 'site');
+    expect(r.effect).toEqual({ history: 'push' });
+    expect(r.model.activeApp).toBe(HOST_APP);
+    expect(currentEntry(r.model)).toEqual({ address: HOST_HOME });
+  });
+
+  test('site: с флагом — логика приложения по стопке и в источник', () => {
+    const m = run(hostWithSections(), [open(rec(1)), open(rec(5, XR), X)], 'site').model;
+    const toSource = navReduce(m, FIRST, 'site');
+    expect(toSource.effect).toEqual({ history: 'push' });
+    expect(toSource.model).toEqual(navReduce(m, BACK, 'app').model);
+    expect(toSource.model.activeApp).toBe(HOST_APP);
+    const pop = navReduce(toSource.model, FIRST, 'site');
+    expect(currentEntry(pop.model).address).toEqual(RECORDS_ROOT);
+    expect(pop.effect).toEqual({ history: 'push' });
+  });
+
+  test('site: на дне хоста идти внутри Orbis некуда — браузерный back, модель та же', () => {
+    const m = initialModel(HOST_HOME);
+    expect(navReduce(m, FIRST, 'site')).toEqual({ model: m, effect: { history: 'back' } });
+  });
+
+  test('app: флаг ничего не меняет', () => {
+    const m = run(hostWithSections(), [open(rec(1)), open(rec(5, XR), X)], 'app').model;
+    expect(navReduce(m, FIRST, 'app')).toEqual(navReduce(m, BACK, 'app'));
+    const i = initialModel(HOST_HOME);
+    expect(navReduce(i, FIRST, 'app')).toEqual({ model: i, effect: { history: 'exit' } });
+  });
+});
+
 describe('(11) сохранение orbis:nav:v2', () => {
   function rich(): NavModel {
     return run(
@@ -819,6 +907,11 @@ describe('(11) сохранение orbis:nav:v2', () => {
     expect(b.model.activeApp).toBe(HOST_APP);
     expect(currentEntry(b.model)).toEqual({ address: HOST_HOME });
     expect(navReduce(m, BACK, 'site').effect).toEqual({ history: 'back' });
+    // «‹» хоста на первой записи вкладки (R-24): внутри Orbis — в хост, честная запись.
+    const first = navReduce(m, { type: 'back', atFirstEntry: true }, 'site');
+    expect(first.effect).toEqual({ history: 'push' });
+    expect(first.model.activeApp).toBe(HOST_APP);
+    expect(currentEntry(first.model)).toEqual({ address: HOST_HOME });
   });
 
   test('restoreFrom: ключи-имена свойств Object.prototype — обычные ключи, не прототип', () => {
@@ -905,7 +998,7 @@ describe('тотальность: любое действие над любой 
       case 5:
         return { type: 'view', patch: pick(2) ? { tab: `t${pick(3)}` } : { tab: null } };
       default:
-        return BACK;
+        return pick(3) ? BACK : { type: 'back', atFirstEntry: true };
     }
   }
 
