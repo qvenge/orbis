@@ -33,8 +33,9 @@ export function TabMemoryProvider({ value, children }: { value: TabMemory; child
 }
 
 /**
- * Ключи памяти — в пространстве `scope` (шаблона): один и тот же путь контейнера в двух разных
- * шаблонах — два разных контейнера, и вкладка одного не должна открывать вкладку другого.
+ * Ключи памяти — в пространстве `scope` (шаблона): одно и то же устойчивое имя контейнера (`tabs0`,
+ * `placeNames` рендерера) в двух разных шаблонах — два разных контейнера, и вкладка одного не
+ * должна открывать вкладку другого.
  */
 export function TabMemoryScope({ scope, children }: { scope: string; children: ReactNode }) {
   const outer = useContext(TabMemoryContext);

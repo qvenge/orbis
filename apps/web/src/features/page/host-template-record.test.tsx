@@ -236,10 +236,17 @@ test('смена «эталон → запись шаблона хоста» н�
   fireEvent.click(details);
   await waitFor(() => expect(details).toHaveAttribute('aria-selected', 'true'));
   expect(pageTexts()).not.toContain('Своя строка шаблона хоста');
+  // Узлы ДО смены: контейнер вкладок и первый кадр тела (вкладка «Запись» живёт смонтированной).
+  const tabsBefore = screen.getByTestId('page-tabs');
+  const bodyBefore = screen.getByTestId('editor-preview');
 
   release();
   await waitFor(() => expect(pageTexts()).toContain('Своя строка шаблона хоста'));
   expect(screen.getByRole('tab', { name: 'Детали' })).toHaveAttribute('aria-selected', 'true');
+  // Не перемонтировано: те же DOM-узлы — ключ узла по виду, а не по индексу (гейт 17, N-1). Иначе
+  // смена эталона на запись снимала бы редактор тела с его фокусом и неотправленным.
+  expect(screen.getByTestId('page-tabs')).toBe(tabsBefore);
+  expect(screen.getByTestId('editor-preview')).toBe(bodyBefore);
 });
 
 // --- (д) {{cards: own}} рядом с явной карточкой и «остальными» ----------------------------------
