@@ -89,7 +89,12 @@ function renderApp(world = frameWorld()) {
   return renderWithProviders(<App />, frameHandler(world));
 }
 
-const heading = (name: string) => screen.findByRole('heading', { level: 1, name });
+/**
+ * Первое ожидание экрана записи ждёт ленивый чанк `DetailScreen`: на холодном кеше vite/vitest его
+ * сборка занимает больше секунды умолчания Testing Library (гейт 19, M-1) — запас в пять секунд.
+ */
+const heading = (name: string) =>
+  screen.findByRole('heading', { level: 1, name }, { timeout: 5000 });
 
 function hanging(): { release: () => void; gate: Promise<void> } {
   let release!: () => void;
@@ -240,6 +245,25 @@ describe('(б) лист разделов формы «список из заго
     // У раздела на корне — только заголовок.
     expect(screen.getByTestId(`nav-section-${RECORDS}`)).not.toHaveTextContent('·');
   });
+});
+
+test('лист разделов — вне шапки (портал): касание подложки закрывает его, капсула кнопок хоста ниже подложки (гейт 19, Fable M-5)', async () => {
+  resetFrame('/');
+  renderApp();
+  await heading('Домой');
+  fireEvent.click(screen.getByTestId('nav-switch'));
+  const sheet = await screen.findByTestId('nav-sheet');
+  const backdrop = screen.getByTestId('nav-sheet-backdrop');
+  // Не внутри шапки с `backdrop-filter`: иначе `fixed` мерился бы от шапки, а не от окна.
+  expect(sheet.closest('header')).toBeNull();
+  expect(backdrop.closest('header')).toBeNull();
+  const z = (el: Element) => Number(/(?:^|\s)z-(\d+)/.exec(el.className)?.[1]);
+  const capsule = screen.getByTestId('host-buttons');
+  expect(z(backdrop)).toBeGreaterThan(z(capsule));
+  expect(z(sheet)).toBeGreaterThan(z(backdrop));
+  fireEvent.click(backdrop);
+  expect(screen.queryByTestId('nav-sheet')).toBeNull();
+  expect(screen.getByTestId('nav-switch')).toHaveAttribute('aria-expanded', 'false');
 });
 
 // ─── (в) архивный раздел ───────────────────────────────────────────────────────────────────────

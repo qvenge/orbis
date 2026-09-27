@@ -1,4 +1,5 @@
 import type { AppKey } from '@orbis/shared/nav';
+import { createPortal } from 'react-dom';
 import { useBadgeData } from '../../lib/query-blocks/useBadgeData';
 import { useNav } from '../../state/navigation';
 import { NavBadge } from '../../ui/NavBadge';
@@ -12,6 +13,12 @@ import { type ShellSection, useAppShell } from './useAppShell';
  *
  * Бейджи — только пока лист открыт и все одной пачкой `entity.blocks` (`useBadgeData`, РП-8): на
  * холодном старте лист закрыт, и запроса за бейджами нет (С1б-16).
+ *
+ * Лист и подложка — порталом в `body`, а не внутри шапки: у шапки `backdrop-blur`, а
+ * `backdrop-filter` делает элемент containing block для `fixed`-потомков (Filter Effects L2) —
+ * подложка покрыла бы одну шапку, касание по экрану лист не закрывало бы, а капсула кнопок хоста
+ * ложилась бы поверх листа (гейт 19, Fable M-5). Слои: кнопки хоста `z-30` < подложка `z-40` <
+ * лист `z-50`. Лист стоит под строкой присутствия хоста (её высота — `h-14`).
  */
 export function NavSheet({
   app,
@@ -27,21 +34,22 @@ export function NavSheet({
     onClose();
     useNav.getState().openSection(app, id);
   };
-  return (
+  return createPortal(
     <>
       {/* Подложка: касание мимо листа закрывает его. */}
       <button
         type="button"
         aria-label="Закрыть разделы"
+        data-testid="nav-sheet-backdrop"
         tabIndex={-1}
         onClick={onClose}
-        className="fixed inset-0 z-20 cursor-default bg-overlay/20"
+        className="fixed inset-0 z-40 cursor-default bg-overlay/20"
       />
       <div
         role="dialog"
         aria-label="Разделы"
         data-testid="nav-sheet"
-        className="absolute inset-x-2 top-full z-30 mt-1 max-h-[70vh] overflow-y-auto rounded-card border border-line bg-surface p-1 shadow-pop"
+        className="fixed inset-x-2 top-15 z-50 mx-auto max-h-[70vh] max-w-3xl overflow-y-auto rounded-card border border-line bg-surface p-1 shadow-pop"
       >
         {shell.fromEtalon && (
           <p
@@ -68,7 +76,8 @@ export function NavSheet({
           ))}
         </ul>
       </div>
-    </>
+    </>,
+    document.body,
   );
 }
 

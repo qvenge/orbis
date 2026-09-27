@@ -23,7 +23,6 @@ beforeEach(() => {
   connectHistoryPort({
     apply: (e) => effects.push(e),
     atFirstEntry: () => false,
-    hasOrbisBehind: () => false,
   });
 });
 
@@ -128,6 +127,6 @@ test('«‹» в режиме приложения — по модели (canGoB
 
   resetNavForTests();
   useNav.setState({ mode: 'site' });
-  connectHistoryPort({ apply: () => {}, atFirstEntry: () => false, hasOrbisBehind: () => true });
+  useNav.setState({ behind: true });
   expect(read()).toBe(true);
 });

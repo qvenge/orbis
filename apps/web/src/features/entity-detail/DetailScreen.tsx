@@ -8,7 +8,7 @@ import { ScreenHeader } from '../../app/ScreenHeader';
 import { useOpenRecord } from '../../app/useOpenRecord';
 import { invalidateGraph } from '../../lib/invalidate';
 import { mayLeave } from '../../state/leave-guard';
-import { appRefOf, useNav } from '../../state/navigation';
+import { appRefOf, placeKeyOf, useNav } from '../../state/navigation';
 import { trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
 import { Input } from '../../ui/Input';
@@ -175,6 +175,17 @@ export function DetailScreen({ entityId }: { entityId: string }) {
     // собственное состояние обнуляет `key` ниже. Но признак живёт ЗДЕСЬ, и один кадр между
     // сменой пропа и его извещением тело соседней записи стояло бы спрятанным ни за что.
     setProposalOpen(false);
+  }
+  /**
+   * Та же запись в ДРУГОМ месте (другой раздел, другая глубина стопки — гейт 19, M-2): экран
+   * монтируется без key, и разовый вид прежнего места переехал бы сюда, а зеркало ниже записало бы
+   * его в новое место без жеста человека. У места — его собственное состояние из истории (§7.1).
+   */
+  const placeKey = useNav((s) => placeKeyOf(s.model));
+  const prevPlaceRef = useRef(placeKey);
+  if (prevPlaceRef.current !== placeKey) {
+    prevPlaceRef.current = placeKey;
+    setOpenVia(viaOf(topView));
   }
   const { show } = useToast();
 

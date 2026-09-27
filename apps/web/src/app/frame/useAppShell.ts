@@ -19,15 +19,18 @@ import { useSupplyRecords } from '../../features/page/useSupplyRecords';
 import { sectionRoot, useNav } from '../../state/navigation';
 import { trpc } from '../../trpc';
 
-/** Раздел навигации приложения в листе разделов (спека 1б §6.2, §9.3). */
+/**
+ * Раздел навигации приложения в листе разделов (спека 1б §6.2, §9.3). Бейджа здесь нет намеренно:
+ * оболочку читает каждый экран, а бейджи идут в сеть только там, где их рисуют, — потребитель
+ * (лист разделов, сайдбар задачи 25) зовёт `useBadgeData(section.id)` сам, и все бейджи одного кадра
+ * уходят одной пачкой `entity.blocks` (РП-8).
+ */
 export interface ShellSection {
   id: string;
   title: string;
   emoji: string | null;
   /** Запись раздела в архиве — строка-плашка «в архиве», а не пустота (§4.4, §6.6). */
   archived: boolean;
-  /** Бейдж раздела читает `NavSheet` (`useBadgeData`) — здесь его нет: оболочку рисует каждый экран. */
-  badge: string | null;
   /** «Где остановились» (§7.3): заголовок верха стопки раздела, если открыто вглубь. */
   stoppedAt: string | null;
 }
@@ -192,7 +195,6 @@ export function useAppShell(app: AppKey, opts: { withStoppedAt?: boolean } = {})
           title: r?.title ?? '…',
           emoji: r?.emoji ?? null,
           archived: r?.archived ?? false,
-          badge: null,
           stoppedAt: stopId === undefined ? null : (titleOf.get(stopId) ?? null),
         },
       ];

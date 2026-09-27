@@ -1,8 +1,8 @@
-import { DAILY_PLANNING_BODY, SEED_SMART_LISTS } from '@orbis/server/src/seed/smart-lists';
+import { SEED_SMART_LISTS } from '@orbis/server/src/seed/smart-lists';
 import { parseBody } from '@orbis/shared/doc';
 import { parsePageText } from '@orbis/shared/doc/page-grammar';
 import { expect, test } from 'vitest';
-import { browserQuery, buildFilterQuery, firstQueryBlock } from './query';
+import { browserQuery, buildFilterQuery } from './query';
 
 test('browserQuery включает limit и сортировку по orbis/updated_at desc', () => {
   const q = browserQuery({ limit: 50, filters: '', showPagesAndApps: true });
@@ -51,15 +51,6 @@ test('buildFilterQuery квотирует тег с пробелом', () => {
     createdTo: null,
   });
   expect(s).toContain('tags="личные дела"');
-});
-
-test('firstQueryBlock извлекает первый {{query:...}} из body', () => {
-  expect(firstQueryBlock('текст\n{{query:aspect=orbis/task}}\nещё {{query:tags=x}}')).toBe(
-    'aspect=orbis/task',
-  );
-  expect(firstQueryBlock('без блоков')).toBeNull();
-  // Края текста блока сняты — как у запроса, который уходит на сервер.
-  expect(firstQueryBlock('{{query:\n  tags=x\n}}')).toBe('tags=x');
 });
 
 // --- первый кадр и схема документа согласны про блоки (Р-v2-6, РП-6) ----------------------
@@ -129,21 +120,4 @@ test('первый кадр НЕ видит блок в пункте списк�
   expect(blocksFromSchema('> {{query:a=1}}')).toEqual(['a=1']);
   expect(blocksOfFrame('{{query:a=1}}{{query:b=2}}')).toEqual(['a=1']);
   expect(blocksFromSchema('{{query:a=1}}{{query:b=2}}')).toEqual(['a=1', 'b=2']);
-});
-
-test('firstQueryBlock (бейдж pinned) считает по тому же правилу колонки', () => {
-  // §3.2: бейдж — «число результатов ПЕРВОГО query-блока body». Обёртка посреди строки
-  // блоком не является ни для первого кадра, ни для схемы — значит и бейджу не считать.
-  expect(firstQueryBlock('смотри {{query:a=1}} тут')).toBeNull();
-  expect(firstQueryBlock('смотри {{query:a=1}} тут\n{{query:b=2}}')).toBe('b=2');
-  // …и обёртка в заборе кода — код, а не блок.
-  expect(firstQueryBlock('```\n{{query:a=1}}\n```\n{{query:b=2}}')).toBe('b=2');
-  // У всех сидов бейдж прежний: их блоки стоят с колонки 1.
-  for (const s of SEED_SMART_LISTS) {
-    expect([s.slug, firstQueryBlock(s.body)]).toEqual([s.slug, blocksFromSchema(s.body)[0]]);
-    expect(firstQueryBlock(s.body)).not.toBeNull();
-  }
-  // Daily Planning — три блока, бейдж по первому (Inbox).
-  expect(blocksOfFrame(DAILY_PLANNING_BODY)).toHaveLength(3);
-  expect(firstQueryBlock(DAILY_PLANNING_BODY)).toBe(blocksOfFrame(DAILY_PLANNING_BODY)[0]);
 });

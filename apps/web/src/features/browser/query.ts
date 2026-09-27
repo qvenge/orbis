@@ -1,5 +1,4 @@
 import { APP_ASPECT, PAGE_ASPECT } from '@orbis/shared';
-import { parsePageText } from '@orbis/shared/doc/page-grammar';
 import { quoteQueryValue } from '@orbis/shared/query';
 
 export type FilterState = {
@@ -56,21 +55,4 @@ export function browserQuery({
   const clauses = [filters, showPagesAndApps ? '' : RECORDS_HIDE_PAGES_AND_APPS].filter(Boolean);
   const base = clauses.length > 0 ? `${clauses.join(', ')}, ` : '';
   return `${base}sortBy=orbis/updated_at:desc, limit=${limit}`;
-}
-
-/**
- * Первый блок данных тела — и только он: §3.2 нормирует бейдж pinned-сущности как «число
- * результатов ПЕРВОГО query-блока её body» (у Daily Planning это размер Inbox). Потребителя в
- * интерфейсе с среза 1б нет: закреплённые сняты, бейдж раздела навигации считает сервер тем же
- * правилом (`entity.blocks {badgeOf}`, РП-8). Правило держат тесты этого файла; снять функцию —
- * вместе с правкой сторожа `scripts/grammar-copies.test.ts` (он числит этот файл читателем грамматики).
- *
- * Блоки узнаёт препроход тела (`parsePageText`) — одна копия правил маркеров (РП-6): прежний
- * свой регэксп (`bodySegments`) снят вместе с первым кадром, который на нём жил. Блок ищется
- * только на верхнем уровне тела: у заметки контейнеров нет, а бейдж страницы с раскладкой —
- * забота размещений (1б).
- */
-export function firstQueryBlock(body: string): string | null {
-  const first = parsePageText(body).find((n) => n.kind === 'query');
-  return first?.kind === 'query' ? first.text.trim() : null;
 }

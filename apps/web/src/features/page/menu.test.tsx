@@ -9,7 +9,7 @@
  */
 import { PAGE_ASPECT, TEMPLATE_FOR_PROPERTY, TEMPLATE_WINS_OVER_PROPERTY } from '@orbis/shared';
 import { parseBody, serializeBody } from '@orbis/shared/doc';
-import { buildAddress } from '@orbis/shared/nav';
+import { buildAddress, currentEntry } from '@orbis/shared/nav';
 import { focusManager } from '@tanstack/react-query';
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import type { Editor } from '@tiptap/react';
@@ -568,6 +568,29 @@ describe('«Открыть через …» — разово (§8.4)', () => {
     fireEvent.click(screen.getByTestId('go-first'));
     await waitFor(() => expect(renderedTexts()).toContain('Вид A'));
     expect(screen.queryByTestId('page-tabs')).toBeNull();
+  });
+
+  test('разовый вид не переезжает в другое место с той же записью; у каждого места — своё (гейт 19, M-2)', async () => {
+    const f = fixture('project');
+    open(f, [template(TPL_A, 'Шаблон A', ['orbis/project'], 'Вид A\n\n{{body}}\n')]);
+    await waitFor(() => expect(renderedTexts()).toContain('Вид A'));
+    await openMenu();
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Открыть через шаблон хоста' }));
+    expect(await screen.findByTestId('page-tabs')).toBeInTheDocument();
+
+    // Та же запись в другом разделе — новое место без состояния: свой шаблон, и «via» туда не пишется.
+    const SECTION = '00000000-0000-4000-8000-00000000f19a';
+    act(() => {
+      useNav.getState().openSection('host', SECTION);
+      useNav.getState().openRecord(f.entity.id);
+    });
+    await waitFor(() => expect(renderedTexts()).toContain('Вид A'));
+    expect(screen.queryByTestId('page-tabs')).toBeNull();
+    expect(currentEntry(useNav.getState().model).view).toBeUndefined();
+
+    // Прежнее место своё состояние хранит: вернулись в раздел — снова шаблон хоста.
+    act(() => useNav.getState().openSection('host', 'home'));
+    expect(await screen.findByTestId('page-tabs')).toBeInTheDocument();
   });
 
   test('шаблон хоста у записи без своих шаблонов — пункта «через шаблон хоста» нет', async () => {

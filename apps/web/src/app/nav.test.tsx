@@ -8,7 +8,7 @@
  * а адресную строку перед тестом ставим `replaceState` (`resetFrame`).
  */
 import { NAV_STORAGE_KEY } from '@orbis/shared/nav';
-import { act, fireEvent, screen, within } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { App } from '../App';
 import { noteRegistryVersion, resetRegistryVersionForTests } from '../lib/registry/useRegistry';
@@ -21,7 +21,6 @@ import {
   frameHandler,
   frameWorld,
   GLOBAL_THREAD,
-  HOME,
   MY_APP,
   MY_SECTION,
   NOTE,
@@ -54,7 +53,12 @@ function renderApp(world = frameWorld()) {
   return renderWithProviders(<App />, frameHandler(world));
 }
 
-const heading = (name: string) => screen.findByRole('heading', { level: 1, name });
+/**
+ * Первое ожидание экрана записи ждёт ленивый чанк `DetailScreen`: на холодном кеше vite/vitest его
+ * сборка занимает больше секунды умолчания Testing Library (гейт 19, M-1) — запас в пять секунд.
+ */
+const heading = (name: string) =>
+  screen.findByRole('heading', { level: 1, name }, { timeout: 5000 });
 
 // ─── (а) старт по адресу и старые ссылки ───────────────────────────────────────────────────────
 
@@ -212,7 +216,9 @@ test('(в) приложение: на дне стопки хоста систе�
 
 // ─── (г) перезапуск ────────────────────────────────────────────────────────────────────────────
 
-test('(г) перезапуск: активный раздел и его последнее место — из orbis:nav:v2, глубина — нет', async () => {
+test('(г) перезапуск в режиме приложения: активный раздел и его последнее место — из orbis:nav:v2, глубина — нет', async () => {
+  // Режим приложения: `/` — адрес иконки, открывается сохранённое место (R-32, §7.3).
+  stubLaunchMode('app');
   resetFrame('/');
   const first = renderApp();
   await heading('Домой');
@@ -223,7 +229,7 @@ test('(г) перезапуск: активный раздел и его пос�
   await heading('Купить хлеб');
   first.unmount();
 
-  // Новая вкладка: истории нет, в хранилище — сохранение v2.
+  // Новый запуск: истории нет, в хранилище — сохранение v2.
   act(() => resetNavForTests());
   window.history.replaceState(null, '', '/');
   renderApp();
@@ -232,6 +238,53 @@ test('(г) перезапуск: активный раздел и его пос�
   const host = navModel().apps.host;
   expect(host?.activeSection).toBe(UPCOMING);
   expect(host?.stacks[UPCOMING]).toHaveLength(1);
+});
+
+test('(г) сайт: `/` — домашняя хоста, последние места разделов из orbis:nav:v2 — в модели (R-32)', async () => {
+  resetFrame('/');
+  const first = renderApp();
+  await heading('Домой');
+  fireEvent.click(screen.getByTestId('nav-switch'));
+  fireEvent.click(await screen.findByTestId(`nav-section-${UPCOMING}`));
+  await heading('Upcoming');
+  act(() => useNav.getState().openRecord(BREAD));
+  await heading('Купить хлеб');
+  first.unmount();
+
+  // Новая вкладка на `/`: адрес главнее — «Домой», а «где остановились» Upcoming на месте.
+  act(() => resetNavForTests());
+  window.history.replaceState(null, '', '/');
+  renderApp();
+  await heading('Домой');
+  expect(shownPath()).toBe('/');
+  expect(navModel().apps.host?.stacks[UPCOMING]?.map((e) => e.address)).toEqual([
+    { kind: 'record', app: { kind: 'host' }, id: BREAD },
+  ]);
+  fireEvent.click(screen.getByTestId('nav-switch'));
+  await waitFor(() =>
+    expect(screen.getByTestId(`nav-section-${UPCOMING}`)).toHaveTextContent(
+      'Upcoming · Купить хлеб',
+    ),
+  );
+});
+
+test('сайт: после перезагрузки на корне раздела с записью Orbis позади «‹» есть с первого кадра (гейт 19, Fable M-4)', async () => {
+  resetFrame('/');
+  const first = renderApp();
+  await heading('Домой');
+  fireEvent.click(screen.getByTestId('nav-switch'));
+  fireEvent.click(await screen.findByTestId(`nav-section-${UPCOMING}`));
+  await heading('Upcoming');
+  first.unmount();
+
+  // Перезагрузка: запись истории своя (idx 1), модель — из её снимка; корень раздела — по модели
+  // идти некуда, но позади — «Домой». Сеть молчит: ни один ответ не перерисует шапку — «‹» обязан
+  // быть уже в первом кадре, а не появиться случайной перерисовкой.
+  act(() => resetNavForTests());
+  renderWithProviders(<App />, () => new Promise(() => {}));
+  expect(
+    within(screen.getByTestId('host-presence')).getByRole('button', { name: 'Назад' }),
+  ).toBeInTheDocument();
 });
 
 // ─── (д) экраны хоста поверх раздела; ссылка из чата ──────────────────────────────────────────
@@ -271,6 +324,22 @@ test('(д) ссылка из чата открывает запись из хо�
   expect(navModel().activeApp).toBe(MY_APP);
 });
 
+test('(д) сайт: ссылка из чата → запись; «‹» — «назад» браузера по порядку, то есть в чат (R-30)', async () => {
+  resetFrame(`/a/${MY_APP}`);
+  renderApp(frameWorld({ chat: [chatMessage('m1', `готово: [[entity:${BREAD}]]`)] }));
+  await heading('Дом приложения');
+  fireEvent.click(within(screen.getByTestId('host-buttons')).getByRole('button', { name: /Чат/ }));
+  await heading('Чат');
+  fireEvent.click(await screen.findByRole('link', { name: BREAD }));
+  await heading('Купить хлеб');
+  expect(navModel().activeApp).toBe('host');
+  fireEvent.click(
+    within(screen.getByTestId('host-presence')).getByRole('button', { name: 'Назад' }),
+  );
+  await heading('Чат');
+  expect(shownPath()).toBe('/chat');
+});
+
 // ─── (е) ссылка внутри страницы «Записи» ───────────────────────────────────────────────────────
 
 test('(е) строка на странице «Записи» открывает запись в рамке хоста, в том же разделе', async () => {
@@ -301,17 +370,23 @@ test('(ж) повторное нажатие на активный раздел 
 });
 
 test('⌂ хоста из приложения — «Домой» хоста одним переходом (R-23)', async () => {
-  resetFrame(`/r/${MY_SECTION}`);
+  resetFrame(`/a/${MY_APP}/r/${MY_SECTION}`);
   renderApp();
   await heading('Ремонт');
+  expect(navModel().activeApp).toBe(MY_APP);
+  expect(screen.getByTestId('nav-switch')).toHaveTextContent('🏡');
   fireEvent.click(
     within(screen.getByTestId('host-presence')).getByRole('button', { name: 'Домой' }),
   );
   await heading('Домой');
   expect(shownPath()).toBe('/');
-  expect(navModel().apps.host?.stacks.home?.[0]?.address).toEqual({
-    kind: 'home',
-    app: { kind: 'host' },
+  expect(navModel().activeApp).toBe('host');
+  expect(navModel().apps.host?.activeSection).toBe('home');
+  expect(screen.getByTestId('nav-switch')).toHaveTextContent('🪐');
+  // Место приложения не потеряно: его стопка — где была.
+  expect(navModel().apps[MY_APP]?.stacks.home?.map((e) => e.address)).toContainEqual({
+    kind: 'record',
+    app: { kind: 'app', ref: MY_APP },
+    id: MY_SECTION,
   });
-  expect(HOME).toBeTruthy();
 });

@@ -218,6 +218,61 @@ describe.each(MODES)('общее для обоих режимов: %s', (mode) =
     expect(r.last).toEqual({ history: push });
   });
 
+  test('R-31: уход из раздела (⌂) снимает экран хоста с его верха — возврат в раздел показывает его место, не чат', () => {
+    const r = run(
+      hostWithSections(),
+      [
+        { type: 'section', app: HOST_APP, section: TODAY, root: TODAY_ROOT },
+        { type: 'host-screen', address: CHAT },
+        { type: 'switch-app', app: HOST_APP, home: HOST_HOME, toHome: true },
+        { type: 'section', app: HOST_APP, section: TODAY, root: TODAY_ROOT },
+      ],
+      mode,
+    );
+    expect(stackOf(r.model)).toEqual([TODAY_ROOT]);
+    expect(currentEntry(r.model).address).toEqual(TODAY_ROOT);
+  });
+
+  test('R-31: смена раздела и переход в другое приложение тоже снимают экран хоста с верха раздела', () => {
+    const r = run(
+      hostWithSections(),
+      [
+        open(rec(1)),
+        { type: 'host-screen', address: SEARCH },
+        { type: 'section', app: HOST_APP, section: TODAY, root: TODAY_ROOT },
+      ],
+      mode,
+    );
+    expect(stackOf(r.model, HOST_APP, RECORDS)).toEqual([RECORDS_ROOT, rec(1)]);
+    const x = run(
+      hostWithSections(),
+      [
+        { type: 'host-screen', address: CHAT },
+        { type: 'switch-app', app: X, home: X_HOME },
+      ],
+      mode,
+    );
+    expect(stackOf(x.model, HOST_APP, RECORDS)).toEqual([RECORDS_ROOT]);
+    // Экран хоста, который и есть всё место раздела (стартовали на /chat), снимается целиком:
+    // стопка-пустышка не место, раздел потом заведётся от корня.
+    const only = run(
+      run(initialModel(HOST_HOME), [], mode).model,
+      [
+        { type: 'section', app: HOST_APP, section: TODAY, root: TODAY_ROOT },
+        { type: 'host-screen', address: CHAT },
+        { type: 'section', app: HOST_APP, section: RECORDS, root: RECORDS_ROOT },
+        { type: 'section', app: HOST_APP, section: TODAY, root: TODAY_ROOT },
+      ],
+      mode,
+    );
+    expect(stackOf(only.model)).toEqual([TODAY_ROOT]);
+  });
+
+  test('R-31: повторное нажатие на свой раздел и уточнение места экран хоста не трогают как «уход»', () => {
+    const r = run(hostWithSections(), [{ type: 'host-screen', address: CHAT }], mode);
+    expect(stackOf(r.model)).toEqual([RECORDS_ROOT, CHAT]);
+  });
+
   test('(7) экран хоста поверх экрана хоста заменяет его: «‹» всегда ведёт в раздел', () => {
     const r = run(
       hostWithSections(),

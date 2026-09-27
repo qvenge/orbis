@@ -32,31 +32,9 @@ export function todayISO(tz?: string): string {
   }
 }
 
-/**
- * Гейт вкладки Budget (03-budget §1.2): вкладка видна только когда view
- * 'orbis-budget' установлен (installedViews из user.getSettings).
- */
-export function useBudgetTabVisible(): boolean {
-  const settings = trpc.user.getSettings.useQuery();
-  return settings.data?.installedViews?.includes('orbis-budget') ?? false;
-}
-
 /** Инвалидация budget-запросов — звать после любой мутации транзакций/конвертов (B2+). */
 export function invalidateBudget(utils: ReturnType<typeof trpc.useUtils>) {
   return utils.budget.invalidate();
-}
-
-/**
- * Бейдж вкладки Budget (§6.1, B7): число конвертов текущего месяца в тревоге/
- * перерасходе (spent > 85% × effectiveLimit, считает сервер). Гейт — как у самой
- * вкладки (installedViews); 0, ошибка или отсутствие view → бейджа нет (возврат 0).
- * Пересчёт приходит инвалидацией: invalidateBudget → utils.budget.invalidate()
- * покрывает и alertCount (§6.1 «count-запрос при инвалидации кэша»).
- */
-export function useBudgetAlertCount(): number {
-  const visible = useBudgetTabVisible();
-  const q = trpc.budget.alertCount.useQuery({}, { enabled: visible });
-  return visible && typeof q.data === 'number' ? q.data : 0;
 }
 
 /**
@@ -64,7 +42,7 @@ export function useBudgetAlertCount(): number {
  * recurring переходят planned→fact до чтения агрегатов (сервер идемпотентен,
  * overview сам гоняет конвейер §2.8 — вызов здесь закрывает гонку кэша).
  * posted>0 меняет spent → alertCount перечитывается (ревью B7: иначе Overview
- * покажет тревогу, а вечно смонтированный бейдж вкладки §6.1 — нет).
+ * покажет тревогу, а счётчик тревог — нет). Читатель — экран Бюджета в `legacy-1v` (до 1в).
  */
 export function useBudgetOverview(month: string) {
   const utils = trpc.useUtils();

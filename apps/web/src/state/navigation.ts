@@ -18,7 +18,9 @@ import {
   type Address,
   type AppKey,
   type AppRef,
+  buildAddress,
   canGoBack,
+  currentEntry,
   HOME_SECTION,
   HOST_APP,
   type HostScreen,
@@ -60,8 +62,6 @@ export interface NavHistoryPort {
   apply(effect: NavEffect): void;
   /** R-24: вкладку открыли по ссылке — позади в истории нет записи Orbis. */
   atFirstEntry(): boolean;
-  /** Режим сайта: есть ли позади в истории вкладки запись Orbis. */
-  hasOrbisBehind(): boolean;
 }
 
 let port: NavHistoryPort | null = null;
@@ -75,6 +75,13 @@ export interface NavState {
   model: NavModel;
   mode: LaunchMode;
   overlay: NavOverlay | null;
+  /**
+   * Режим сайта: есть ли позади в истории вкладки запись Orbis (индекс записи > 0). Полем стора, а
+   * не вопросом к порту при рисовании: «‹» обязан появиться, когда индекс сменился, даже если модель
+   * та же (перезагрузка на корне раздела с записью «Домой» позади), — подписка на стор это даёт.
+   * Пишет только `app/history.ts`.
+   */
+  behind: boolean;
   /**
    * Ссылка на запись. `app` — приложение рамки (по умолчанию — активное), `from` — откуда: из
    * содержимого или с экрана хоста (чат, поиск — тогда экран хоста снимается, §7.3).
@@ -151,6 +158,7 @@ export const useNav = create<NavState>()((set, get) => ({
   model: initialModel(HOST_HOME),
   mode: 'site',
   overlay: null,
+  behind: false,
   openRecord: (id, opts = {}) => {
     const app = opts.app ?? get().model.activeApp;
     go({
@@ -200,9 +208,27 @@ export function useShowBack(): boolean {
   const model = useNav((s) => s.model);
   const mode = useNav((s) => s.mode);
   const overlay = useNav((s) => s.overlay);
+  const behind = useNav((s) => s.behind);
   if (overlay !== null) return true;
   if (mode === 'app') return canGoBack(model);
-  return (port?.hasOrbisBehind() ?? false) || canGoBack(model);
+  return behind || canGoBack(model);
+}
+
+/**
+ * Ключ МЕСТА на экране: приложение, раздел, глубина в стопке и адрес верха. Одна запись в двух
+ * местах (разделы «Домой» и «Upcoming», или та же запись глубже в стопке) — разные места, и
+ * состояние экрана одного (разовый вид «открыть через X») не должно переезжать в другое (§7.1).
+ * Состояние экрана (`view`) в ключ не входит: его правка — то же место.
+ */
+export function placeKeyOf(model: NavModel): string {
+  const app = model.activeApp;
+  const nav = Object.hasOwn(model.apps, app) ? model.apps[app] : undefined;
+  const section = nav?.activeSection ?? HOME_SECTION;
+  const depth =
+    nav !== undefined && Object.hasOwn(nav.stacks, section)
+      ? (nav.stacks[section]?.length ?? 0)
+      : 0;
+  return `${app} ${section} ${depth} ${buildAddress(currentEntry(model).address)}`;
 }
 
 /**
@@ -224,5 +250,5 @@ export function setNavState(next: {
 
 /** Модель как у только что открытой вкладки — ТОЛЬКО для тестов (стор живёт модулем). */
 export function resetNavForTests(): void {
-  useNav.setState({ model: initialModel(HOST_HOME), mode: 'site', overlay: null });
+  useNav.setState({ model: initialModel(HOST_HOME), mode: 'site', overlay: null, behind: false });
 }

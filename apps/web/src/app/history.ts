@@ -124,8 +124,27 @@ function isNavHistoryState(x: unknown): x is NavHistoryState {
 let idx = 0;
 /** `popstate`, который мы вызвали сами (`history.back()` по «‹») — страж уже спрошен. */
 let expectingPop = false;
-/** Режим приложения: отпустили системный «назад» (дно хоста) — дальше не перехватываем. */
+/**
+ * Режим приложения: системный «назад» на дне хоста отпущен (`history.back()` с базовой записи).
+ *
+ * Уйти удаётся не всегда: у PWA, запущенной с иконки, базовая запись — ПЕРВАЯ в истории сессии, и
+ * `history.back()` с неё — пустая операция (закрыть окно из JS нельзя; закрывает второе нажатие
+ * жеста, когда снимать уже нечего). Страница тогда остаётся жить на базовой записи без охранной.
+ * Флаг значит «охранной записи сейчас нет»: пока человек не двигается, её и не нужно — второе
+ * нажатие «назад» честно закрывает Orbis с дна; первый же переход (`writeAppPlace`) или возврат
+ * страницы из кеша навигации (`pageshow`) снимают флаг и ставят пару «база + охранная» заново —
+ * иначе следующий «назад» закрыл бы Orbis с любой глубины до конца сессии.
+ * Таймер для этого не годится: вернув охранную сам, он перехватил бы и то второе нажатие, которым
+ * человек закрывает приложение, — Orbis не закрывался бы вовсе.
+ */
 let leaving = false;
+
+/** Индекс записи Orbis → стор (`behind`): «‹» сайта подписан на него, а не спрашивает при рисовании. */
+function setIdx(next: number): void {
+  idx = next;
+  const behind = next > 0;
+  if (useNav.getState().behind !== behind) useNav.setState({ behind });
+}
 
 function urlNow(): string {
   const { model, overlay } = useNav.getState();
@@ -137,23 +156,34 @@ function snapshot(guard = false): NavHistoryState {
   return { orbisNav: 2, idx, model, overlay, ...(guard && { guard: true as const }) };
 }
 
+/**
+ * Режим приложения: текущее место — в охранную запись. Охранную отпустили и не ушли (`leaving`) —
+ * сейчас мы на базовой записи: она получает место, а охранная ставится над ней заново.
+ */
+function writeAppPlace(): void {
+  if (leaving) {
+    leaving = false;
+    window.history.replaceState(snapshot(), '', urlNow());
+    window.history.pushState(snapshot(true), '', urlNow());
+    return;
+  }
+  window.history.replaceState(snapshot(true), '', urlNow());
+}
+
 function applyEffect(effect: NavEffect): void {
   const { mode } = useNav.getState();
   if (mode === 'app') {
-    if (effect.history === 'exit') {
-      // «‹» на дне хоста не показывается; сюда доходит только прямой вызов. Уходим за базовую
-      // запись и охранную разом.
-      leaving = true;
-      window.history.go(-2);
-      return;
-    }
+    // `exit` приходит сюда только прямым вызовом «‹» на дне хоста (кнопка там не показывается):
+    // закрывать Orbis кнопкой интерфейса нечем и незачем — место прежнее, писать нечего. Системный
+    // жест на дне хоста разбирает `onPopApp`.
+    if (effect.history === 'exit') return;
     // Одна запись истории: охранная запись описывает текущее место.
-    window.history.replaceState(snapshot(true), '', urlNow());
+    writeAppPlace();
     return;
   }
   switch (effect.history) {
     case 'push':
-      idx += 1;
+      setIdx(idx + 1);
       window.history.pushState(snapshot(), '', urlNow());
       return;
     case 'replace':
@@ -187,8 +217,12 @@ function enterAddress(model: NavModel, a: Address, mode: 'app' | 'site'): NavMod
  * Своя запись в `history.state` — перезагрузка или возврат в уже открытую вкладку: место — из
  * снимка записи (браузер хранит его между перезагрузками), ничего не пишется. Иначе — вход: модель
  * из сохранения `orbis:nav:v2` (активный раздел и последнее место каждого раздела, глубина — нет),
- * поверх — место из ссылки. `/` — ссылки нет, остаётся сохранённое место (так стартует PWA с иконки);
- * старые ссылки переводятся (§7.1), неразобранный путь — как `/`.
+ * поверх — место из ссылки; старые ссылки переводятся (§7.1).
+ *
+ * `/` (и неразобранный путь) — по режиму (R-32): во вкладке браузера адрес главнее — `/` это
+ * домашняя хоста (§7.1), а последние места разделов из сохранения остаются в модели («где
+ * остановились»); в режиме приложения `/` — адрес иконки (`start_url`), и открывается сохранённое
+ * активное место (§7.3 «переживает перезапуск: активный раздел»).
  */
 export function startNavigation(): void {
   const mode = readLaunchMode();
@@ -196,8 +230,8 @@ export function startNavigation(): void {
   expectingPop = false;
   const own = window.history.state;
   if (isNavHistoryState(own)) {
-    idx = own.idx;
     setNavState({ model: own.model, overlay: own.overlay, mode });
+    setIdx(mode === 'site' ? own.idx : 0);
     // Перезагрузка в режиме приложения на базовой записи (охранную уже сняли) — вернуть охранную.
     if (mode === 'app' && own.guard !== true) {
       window.history.pushState(snapshot(true), '', urlNow());
@@ -209,7 +243,16 @@ export function startNavigation(): void {
   let overlay: NavOverlay | null = null;
   const path = window.location.pathname + window.location.search;
   const parsed = parseAddress(path);
-  if (parsed !== null) {
+  if (
+    mode === 'site' &&
+    (parsed === null || (parsed.kind === 'home' && parsed.app.kind === 'host'))
+  ) {
+    model = navReduce(
+      model,
+      { type: 'switch-app', app: HOST_APP, home: HOST_HOME, toHome: true },
+      mode,
+    ).model;
+  } else if (parsed !== null) {
     switch (parsed.kind) {
       case 'home':
       case 'record':
@@ -227,8 +270,8 @@ export function startNavigation(): void {
         break;
     }
   }
-  idx = 0;
   setNavState({ model, overlay, mode });
+  setIdx(0);
   if (mode === 'site') {
     window.history.replaceState(snapshot(), '', urlNow());
   } else {
@@ -260,7 +303,8 @@ export function settleOverlay(
         ).model
       : enterAddress(model, target.address, mode);
   setNavState({ model: next, overlay: null });
-  window.history.replaceState(snapshot(mode === 'app'), '', urlNow());
+  if (mode === 'app') writeAppPlace();
+  else window.history.replaceState(snapshot(), '', urlNow());
 }
 
 // ─── popstate ──────────────────────────────────────────────────────────────────────────────────
@@ -275,8 +319,8 @@ function onPopSite(event: PopStateEvent): void {
   }
   const st: unknown = event.state;
   if (isNavHistoryState(st)) {
-    idx = st.idx;
     setNavState({ model: st.model, overlay: st.overlay });
+    setIdx(st.idx);
     return;
   }
   // Запись не наша (чужой pushState, запись 1а после выкатки): место — по адресной строке.
@@ -327,18 +371,24 @@ export function installHistory(): () => void {
   connectHistoryPort({
     apply: applyEffect,
     atFirstEntry: () => useNav.getState().mode === 'site' && idx === 0,
-    hasOrbisBehind: () => idx > 0,
   });
   const onPop = (event: PopStateEvent) => {
     if (useNav.getState().mode === 'app') onPopApp(event);
     else onPopSite(event);
   };
+  // Страница вернулась из кеша навигации (bfcache) после отпущенного «назад»: человек снова здесь —
+  // охранная запись нужна снова (см. `leaving`).
+  const onPageShow = (event: PageTransitionEvent) => {
+    if (event.persisted && leaving && useNav.getState().mode === 'app') writeAppPlace();
+  };
   window.addEventListener('popstate', onPop);
+  window.addEventListener('pageshow', onPageShow);
   const uninstall = () => {
     if (activeUninstall !== uninstall) return;
     activeUninstall = null;
     connectHistoryPort(null);
     window.removeEventListener('popstate', onPop);
+    window.removeEventListener('pageshow', onPageShow);
   };
   activeUninstall = uninstall;
   return uninstall;

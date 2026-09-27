@@ -23,6 +23,7 @@
 // | open из экрана хоста             | экран хоста снят; источник — раздел под ним          | replace    | push      |
 // | section на активном разделе      | стопка до корня                                      | replace    | push      |
 // | section / switch-app на другое   | его стопка (site показывает её верх — последнее место) | replace  | push      |
+// |   …и уход из текущего раздела     | экраны хоста с верха покинутой стопки сняты (R-31)    |            |           |
 // | switch-app на текущем / toHome   | домашняя приложения: HOME_SECTION, [home]            | replace    | push      |
 // | host-screen (кнопки хоста)       | поверх текущего раздела; поверх экрана хоста — вместо | replace   | push      |
 // | replace (РП-21)                  | верх стопки уточнён, `source` и `view` на месте       | replace    | replace   |
@@ -248,24 +249,47 @@ function applyOpen(model: NavModel, a: Extract<NavAction, { type: 'open' }>): Na
   return { ...m, activeApp: a.app };
 }
 
+/**
+ * Уход из раздела (R-31): экраны хоста на верху его стопки снимаются. Они лежат «поверх» раздела
+ * (§7.3), а не составляют его место, — вернувшись в раздел, человек видит место раздела, а не чат,
+ * оставленный там. Тем же правилом живут сохранение (`lastPlace`) и «где остановились» web: одно
+ * поведение и в сессии, и после перезапуска. Опустевшая стопка удаляется (`putStack`): раздел потом
+ * заведётся от корня.
+ */
+function leaveSection(model: NavModel): NavModel {
+  const app = model.activeApp;
+  const section = activeSectionOf(model, app);
+  const stack = stackAt(model, app, section);
+  if (!stack) return model;
+  let end = stack.length;
+  while (end > 0 && isHostScreen(stack[end - 1])) end--;
+  return end === stack.length ? model : putStack(model, app, section, stack.slice(0, end));
+}
+
 function applySection(model: NavModel, a: Extract<NavAction, { type: 'section' }>): NavModel {
-  const existing = stackAt(model, a.app, a.section);
   const isCurrent = a.app === model.activeApp && activeSectionOf(model, a.app) === a.section;
+  const m = isCurrent ? model : leaveSection(model);
+  const existing = stackAt(m, a.app, a.section);
   // Повторное нажатие на текущий раздел — его корень; другой раздел — его стопка как есть (app
   // продолжит «назад» по ней, site покажет её верх — последнее место); нет стопки — заводится от root.
   const stack = isCurrent || !existing ? [rootEntry(existing, a.root)] : existing;
-  return { ...putStack(model, a.app, a.section, stack, a.section), activeApp: a.app };
+  return { ...putStack(m, a.app, a.section, stack, a.section), activeApp: a.app };
 }
 
 function applySwitchApp(model: NavModel, a: Extract<NavAction, { type: 'switch-app' }>): NavModel {
-  const nav = own(model.apps, a.app);
+  // Другое приложение или его домашняя — уход из текущего раздела (R-31). Иконка текущего
+  // приложения на его домашней — не уход: домашняя и так становится корнем.
+  const leaves =
+    a.app !== model.activeApp || activeSectionOf(model, model.activeApp) !== HOME_SECTION;
+  const m = leaves ? leaveSection(model) : model;
+  const nav = own(m.apps, a.app);
   const restorable =
-    !a.toHome && nav && a.app !== model.activeApp && stackAt(model, a.app, nav.activeSection);
-  if (restorable) return { ...model, activeApp: a.app };
-  // Иконка текущего приложения, ⌂ (`toHome`) или приложение без стопки — его домашняя; стопки
-  // разделов не трогаются.
-  const home = rootEntry(stackAt(model, a.app, HOME_SECTION), a.home);
-  return { ...putStack(model, a.app, HOME_SECTION, [home], HOME_SECTION), activeApp: a.app };
+    !a.toHome && nav && a.app !== m.activeApp && stackAt(m, a.app, nav.activeSection);
+  if (restorable) return { ...m, activeApp: a.app };
+  // Иконка текущего приложения, ⌂ (`toHome`) или приложение без стопки — его домашняя; прочие
+  // стопки разделов не трогаются (кроме снятых экранов хоста покинутого раздела, R-31).
+  const home = rootEntry(stackAt(m, a.app, HOME_SECTION), a.home);
+  return { ...putStack(m, a.app, HOME_SECTION, [home], HOME_SECTION), activeApp: a.app };
 }
 
 function applyHostScreen(model: NavModel, address: Address): NavModel {
