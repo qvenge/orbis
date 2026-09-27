@@ -278,3 +278,74 @@ test('откат возвращает раздел, но «Дом» НЕ дов�
   expect(await propOf(graph, a, APP_NAV)).toEqual([p1]);
   expect(await homeOf(graph, p1)).toBeUndefined();
 });
+
+// ---------------------------------------------------------------------------
+// Фикс-раунд 1 гейта (R-15 п. 2, M-3, M-4)
+// ---------------------------------------------------------------------------
+
+function runBatch(
+  graph: GraphId,
+  operations: Array<{ tool: string; input: Record<string, unknown> }>,
+): Promise<ExecuteResult> {
+  return execute(
+    db,
+    { identity: personal(graph), actorKind: 'owner', source: 'ui', batchId: newId(), operations },
+    { sink },
+  );
+}
+
+test('одна пачка ставит страницу в два приложения — «Дом» = первое по порядку операций (R-15 п. 2)', async () => {
+  const graph = await freshGraph();
+  const p1 = await page(graph, 'P1');
+  const a = await app(graph, 'Приложение A');
+  const b = await app(graph, 'Приложение B');
+  okAction(
+    await runBatch(graph, [
+      { tool: 'entity_update', input: { id: a, props: { [APP_NAV]: [p1] } } },
+      { tool: 'entity_update', input: { id: b, props: { [APP_NAV]: [p1] } } },
+    ]),
+  );
+  expect(await homeOf(graph, p1)).toBe(a);
+
+  // Обратный порядок операций — обратный «Дом».
+  const p2 = await page(graph, 'P2');
+  okAction(
+    await runBatch(graph, [
+      { tool: 'entity_update', input: { id: b, props: { [APP_HOME]: p2 } } },
+      { tool: 'entity_update', input: { id: a, props: { [APP_HOME]: p2 } } },
+    ]),
+  );
+  expect(await homeOf(graph, p2)).toBe(b);
+});
+
+test('пачка «раздел → архив A» проходит и «Дом» не ставит; «раздел → снять раздел» — тоже без «Дома» (M-3)', async () => {
+  const graph = await freshGraph();
+  const p1 = await page(graph, 'P1');
+  const a = await app(graph, 'Приложение A');
+  okAction(
+    await runBatch(graph, [
+      { tool: 'entity_update', input: { id: a, props: { [APP_NAV]: [p1] } } },
+      { tool: 'entity_update', input: { id: a, archived: true } },
+    ]),
+  );
+  expect(await homeOf(graph, p1)).toBeUndefined();
+
+  const p2 = await page(graph, 'P2');
+  const c = await app(graph, 'Приложение C');
+  okAction(
+    await runBatch(graph, [
+      { tool: 'entity_update', input: { id: c, props: { [APP_NAV]: [p2] } } },
+      { tool: 'entity_update', input: { id: c, unset: [APP_NAV] } },
+    ]),
+  );
+  expect(await homeOf(graph, p2)).toBeUndefined();
+});
+
+test('attach аспекта «приложение» с навигацией — тот же «Дом», что у entity_update (M-4)', async () => {
+  const graph = await freshGraph();
+  const p1 = await page(graph, 'P1');
+  const host = okId(await run(graph, 'entity_create', { title: 'Будущее приложение', tags: [] }));
+  // Тула у модели нет (AUTHORING_DEFERRED_ASPECTS), но исполнитель его резолвит — прямым execute.
+  okAction(await run(graph, 'attach_orbis_app', { entity_id: host, data: { [APP_NAV]: [p1] } }));
+  expect(await homeOf(graph, p1)).toBe(host);
+});

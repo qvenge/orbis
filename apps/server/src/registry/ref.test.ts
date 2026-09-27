@@ -15,6 +15,7 @@ import {
   BUILTIN_CONTRACT_DEFS,
   BUILTIN_PROPERTY_META,
   BUILTIN_RELATION_ROLE_META,
+  HOME_PROPERTY,
   newId,
   PAGE_ASPECT,
 } from '@orbis/shared';
@@ -1135,4 +1136,55 @@ test('ref: архив страницы-раздела — приложение �
   expect(undone.ok).toBe(true);
   expect(await tagsOf(user, note)).toEqual([]);
   expect(await tagsOf(user, app)).toEqual([]);
+});
+
+test('ref: запись помечена архивом цели, потом стала приложением — откат архива тег снимает (R-15 п. 1)', async () => {
+  const user = await freshGraph();
+  const sink = makeChatJournalSink();
+  const home = okEntity(
+    await execute(
+      db,
+      req(user, [
+        { tool: 'entity_create', input: { title: 'X', tags: [], aspects: [APP_ASPECT] } },
+      ]),
+      { sink },
+    ),
+  ).id;
+  const pageId = okEntity(
+    await execute(
+      db,
+      req(user, [
+        {
+          tool: 'entity_create',
+          input: {
+            title: 'Страница',
+            tags: [],
+            aspects: [PAGE_ASPECT],
+            props: { [HOME_PROPERTY]: home },
+          },
+        },
+      ]),
+      { sink },
+    ),
+  ).id;
+  const archived = await execute(
+    db,
+    req(user, [{ tool: 'entity_update', input: { id: home, archived: true } }]),
+    { sink },
+  );
+  if (!archived.ok) throw new Error(JSON.stringify(archived.error));
+  expect(await tagsOf(user, pageId)).toEqual(['needs-review']);
+
+  const became = await execute(
+    db,
+    req(user, [
+      { tool: 'entity_update', input: { id: pageId, aspects: { attach: [APP_ASPECT] } } },
+    ]),
+    { sink },
+  );
+  expect(became.ok).toBe(true);
+
+  const undone = await undoAction(db, { identity: personal(user), actionId: archived.actionId });
+  expect(undone.ok).toBe(true);
+  expect(await tagsOf(user, pageId)).toEqual([]);
 });

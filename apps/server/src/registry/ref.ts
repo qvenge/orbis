@@ -480,9 +480,9 @@ export async function markRefSourcesNeedsReview(
  *
  * Возвращает id строк, с которых тег снят: тем же журналом мерится, что откат сработал.
  *
- * Запись-приложение отсечена симметрично пометке (срез 1б §4.4, РП-11): механизм `needs-review` по
- * архивации цели приложений не касается вовсе — ни ставит, ни снимает. Тег, лёгший на запись до
- * того, как она стала приложением, снимает человек.
+ * Приложения здесь НЕ отсекаются (рулинг R-15 п. 1), хотя пометка их отсекает (срез 1б §4.4): в
+ * список из журнала приложение попадает, только если стало приложением уже ПОСЛЕ пометки, и тогда
+ * тег поставила именно откатываемая операция — снять его обязан откат, а не человек (Р-11-1).
  */
 export async function unmarkRefSources(
   tx: Tx,
@@ -496,7 +496,6 @@ export async function unmarkRefSources(
      WHERE e.graph_id = ${graphId}::uuid
        AND e.id = ANY(${uuidArray(sourceIds)})
        AND ${NEEDS_REVIEW_TAG} = ANY(e.tags)
-       AND NOT (${APP_ASPECT} = ANY(e.aspects))
        AND NOT EXISTS (SELECT 1 FROM relations r
                          JOIN entities t ON t.id = r.target_id
                         WHERE r.source_id = e.id AND r.role = ${ROLE_REF} AND t.archived)

@@ -31,8 +31,8 @@ const sink = makeChatJournalSink();
 const HOST_SHELL_KEY = 'host-shell';
 
 /**
- * Запись-приложение по id под RLS: чужая и несуществующая — `NOT_FOUND`; не приложение и оболочка
- * хоста — `VALIDATION`. Проверка оболочки стоит здесь, а не правилом каталога: ключ эталона пишет
+ * Запись-приложение по id под RLS: чужая и несуществующая — `NOT_FOUND`; не приложение, архивное и
+ * оболочка хоста — `VALIDATION`. Проверка оболочки стоит здесь, а не правилом каталога: ключ эталона пишет
  * только механизм `supply`, и признак не меняется между чтением и пачкой.
  */
 async function loadApp(
@@ -42,7 +42,12 @@ async function loadApp(
 ): Promise<{ title: string }> {
   const rows = await withIdentity(ctx.db, ctx.identity, (tx) =>
     tx
-      .select({ title: entities.title, aspects: entities.aspects, props: entities.props })
+      .select({
+        title: entities.title,
+        aspects: entities.aspects,
+        props: entities.props,
+        archived: entities.archived,
+      })
       .from(entities)
       .where(and(eq(entities.id, appId), eq(entities.graphId, ctx.identity.graph))),
   );
@@ -56,6 +61,11 @@ async function loadApp(
         id: appId,
       }),
     );
+  }
+  // Архивное приложение уже удалено: выключать его или «удалять» повторно — действие над тем, чего
+  // у владельца нет, и в журнале легло бы «Удалить приложение» с выключением расширений.
+  if (row.archived) {
+    throw execErrorToTRPC(new ExecError('VALIDATION', 'приложение в архиве', { id: appId }));
   }
   if ((row.props as Record<string, unknown>)[SUPPLY_KEY] === HOST_SHELL_KEY) {
     throw execErrorToTRPC(new ExecError('VALIDATION', hostRefusal, { id: appId }));

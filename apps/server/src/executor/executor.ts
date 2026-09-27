@@ -2769,6 +2769,9 @@ async function prepareAttach(
   return {
     journal,
     budgetHook: { before: current, after: afterRow },
+    // Тот же признак, что у `entity_update`: attach навешивает «приложение» с местами, и два пути
+    // записи одних свойств не должны разъезжаться (довод `ancestorRootsOnProjectChange`).
+    ...homeHookOf(current, afterRow),
     ...ancestorRootsOnProjectChange(ctx.registry, input.entity_id, before, state),
     // Ссылочная половина записи (§А6): проверка целей и зеркала — после стадии 5.
     ...refWriteOf(ctx, input.entity_id, before, state, propsPatch),

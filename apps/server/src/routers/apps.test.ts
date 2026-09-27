@@ -230,3 +230,20 @@ test('правка «Состава» агентом маску НЕ меняе�
   if (d.status !== 'ok') throw new Error(`ожидался ok, получено ${JSON.stringify(d)}`);
   expect(await mask(graph)).toEqual([]);
 });
+
+test('архивное приложение не выключить и не «удалить» повторно — отказ VALIDATION «приложение в архиве» (M-5)', async () => {
+  const graph = await freshGraph();
+  const a = await createApp(graph, 'Цели', { [APP_EXTENSIONS]: ['goals'] });
+  const owner = callerFor(graph);
+  await owner.app.archive({ appId: a, disableExtensions: [] });
+  for (const call of [
+    () => owner.app.archive({ appId: a, disableExtensions: ['goals'] }),
+    () => owner.app.setDisabled({ appId: a, disabled: true, extensions: ['goals'] }),
+  ]) {
+    const err = await trpcError(call());
+    expect(err.code).toBe('BAD_REQUEST');
+    expect(err.message).toContain('приложение в архиве');
+  }
+  expect(await mask(graph)).toEqual([]);
+  expect((await rowOf(graph, a)).disabled).toBeUndefined();
+});
