@@ -15,7 +15,7 @@
 // `pattern`, `maxItems`) здесь НЕТ и быть не должно — её делает валидатор записи на сервере
 // (Задача 2), а вторая реализация на клиенте означала бы два разных ответа на вопрос
 // «допустимо ли это значение». Клиент отвечает только на вопрос «чем это набирают».
-import type { PropertyDefinition } from '@orbis/shared';
+import { APP_NAV, type PropertyDefinition } from '@orbis/shared';
 
 /**
  * Тихий инпут-в-строке-свойства: один вид у всех контролов формы записи и у строки правки
@@ -44,6 +44,7 @@ export type ControlKind =
   | 'select-many'
   | 'aspects-many'
   | 'ref'
+  | 'ref-list'
   | 'readonly';
 
 /**
@@ -78,7 +79,13 @@ export function controlKindOf(def: PropertyDefinition): ControlKind {
       // Список ссылок (срез 1а, «Главнее, чем») — только показ: пикер `RefField` одиночный, и
       // первый же выбор в нём затёр бы список одним id (Ф-1а-19). Правится список плашкой спора
       // шаблонов, а не строкой свойства.
-      return type.cardinality === 'many' ? 'readonly' : 'ref';
+      //
+      // Исключение — «Навигация» приложения (срез 1б §9.3): у неё порядок значения — порядок
+      // разделов, и правит её «упорядоченный список ссылок» (`RefListControl`). Только она: у
+      // прочих списков ссылок порядок смысла не несёт («Главнее, чем», «Открывать вместо»), а
+      // правит их свой механизм (плашка спора шаблонов, вопрос спора мест).
+      if (type.cardinality !== 'many') return 'ref';
+      return def.id === APP_NAV ? 'ref-list' : 'readonly';
     case 'registry_ref':
       return type.target === 'aspect' && type.cardinality === 'many' ? 'aspects-many' : 'readonly';
     default:

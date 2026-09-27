@@ -95,8 +95,19 @@ const LAZY_EDITOR_MODULES = ['BodyEditor', 'MarkdownToggle'];
  * и блок «Приложения» нужны редкой записи и редкой странице, а правило открытия считается на каждом
  * открытии. Точки лени — `features/apps/OpenPlaques.tsx` и `features/apps/slots.tsx`. У `AppsBlock`
  * второй ленивый импортёр — лист «Все приложения», поэтому его держит и ребро ниже (как `RecordsBlock`).
+ *
+ * `RefListControl` (срез 1б, задача 21): «упорядоченный список ссылок» — контрол одного свойства
+ * («Навигация» приложения), а `PropertyControl`, который его выбирает, эагерен в каждой записи. Точка
+ * лени — `lib/registry/PropertyControl.tsx`; второй импортёр (статический) — ленивый редактор
+ * навигации, поэтому и здесь ребро ниже, а не одна проверка наличия.
  */
-const LAZY_DETAIL_MODULES = ['DetailMenu', 'RecordsBlock', 'OpenPlaqueList', 'AppsBlock'];
+const LAZY_DETAIL_MODULES = [
+  'DetailMenu',
+  'RecordsBlock',
+  'OpenPlaqueList',
+  'AppsBlock',
+  'RefListControl',
+];
 
 /**
  * Ленивые модули рамки хоста (срез 1б, задача 19): `HostMenu` — содержимое одного меню «⋯» на
@@ -160,6 +171,13 @@ const FORBIDDEN_EDGES: readonly { from: string; to: string; hint: string }[] = [
     hint:
       "Ищите импортёра: `grep -rn \"AppsBlock'\" apps/web/src --include='*.ts*'` — блок «Приложения»\n" +
       'грузится только через `features/apps/slots.tsx` и лист «Все приложения» (задача 20).',
+  },
+  {
+    from: 'DetailScreen',
+    to: 'RefListControl',
+    hint:
+      "Ищите импортёра: `grep -rn \"RefListControl'\" apps/web/src --include='*.ts*'` — контрол\n" +
+      'грузится только лениво из `lib/registry/PropertyControl.tsx` и редактором навигации (задача 21).',
   },
 ];
 

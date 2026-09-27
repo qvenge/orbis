@@ -18,7 +18,7 @@ import {
   type PropertyDefinition,
 } from '@orbis/shared';
 import { Check } from 'lucide-react';
-import { useState } from 'react';
+import { lazy, Suspense, useState } from 'react';
 import { EntityRef } from '../entity-ref/EntityRef';
 import { RefField } from '../entity-ref/RefField';
 import {
@@ -33,6 +33,15 @@ import {
 import { displayText, EMPTY_TEXT } from './format';
 import { aspectLabel } from './labels';
 import { useRegistry } from './useRegistry';
+
+/**
+ * «Упорядоченный список ссылок» (срез 1б §9.3) — ЛЕНИВО: контрол есть у одного свойства
+ * («Навигация» приложения), а этот модуль эагерен в каждом открытии записи (вес первого кадра,
+ * сторож `LAZY_DETAIL_MODULES`).
+ */
+const RefListControl = lazy(() =>
+  import('./RefListControl').then((m) => ({ default: m.RefListControl })),
+);
 
 /**
  * Контрол свойства.
@@ -99,6 +108,12 @@ export function PropertyControl({
    * и пикер у них означал бы обещание правки, которую сервер отвергнет.
    */
   if (kind === 'ref') return <RefField def={def} label={label} value={value} onChange={onChange} />;
+  if (kind === 'ref-list')
+    return (
+      <Suspense fallback={null}>
+        <RefListControl def={def} label={label} value={value} onChange={onChange} />
+      </Suspense>
+    );
   if (kind === 'boolean')
     return <BooleanControl def={def} label={label} value={value} onChange={onChange} />;
   if (kind === 'select')

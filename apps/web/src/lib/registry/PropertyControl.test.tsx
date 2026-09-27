@@ -49,9 +49,11 @@ test('флаг writer (срез 1б, РП-3) — только чтение: кл
   expect(writeModeOf(def('orbis/supply_key'))).toBe('system');
   expect(writeModeOf(def('orbis/supply_text'))).toBe('system');
   expect(writeModeOf(def('orbis/app_disabled'))).toBe('system');
-  // Прочие свойства приложения правятся как обычно; `ref` списком — только показ, как в 1а.
+  // Прочие свойства приложения правятся как обычно. «Навигация» — «упорядоченный список ссылок»
+  // (задача 21, §9.3), прочие `ref` списком — только показ, как в 1а.
   expect(writeModeOf(def('orbis/app_nav_form'))).toBe('editable');
-  expect(controlKindOf(def('orbis/app_nav'))).toBe('readonly');
+  expect(controlKindOf(def('orbis/app_nav'))).toBe('ref-list');
+  expect(controlKindOf(def('orbis/app_opens_over'))).toBe('readonly');
   expect(controlKindOf(def('orbis/app_extensions'))).toBe('select-many');
 });
 

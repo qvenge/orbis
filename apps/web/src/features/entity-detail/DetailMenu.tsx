@@ -1,5 +1,6 @@
 import {
   contendersOf,
+  HOME_PROPERTY,
   openPlacesOf,
   PAGE_ASPECT,
   placeContendersOf,
@@ -18,22 +19,26 @@ import {
   History,
   LayoutTemplate,
   Link2,
+  ListMinus,
+  ListPlus,
   MapPin,
   PanelsTopLeft,
   Scale,
   SlidersHorizontal,
   Undo2,
 } from 'lucide-react';
-import { useState } from 'react';
+import { lazy, Suspense, useState } from 'react';
 import type { ScreenMenuContentProps } from '../../app/frame/ScreenMenu';
 import { useNav } from '../../state/navigation';
 import { DropdownMenu, type DropdownMenuItem } from '../../ui/DropdownMenu';
 import { useToast } from '../../ui/toast-store';
+import { ADD_TO_NAV, REMOVE_FROM_NAV, useFrameMenu, useNavWrite } from '../apps/frame-menu';
+import { inNav, withoutSection } from '../apps/nav-edit';
 import type { Apps } from '../apps/useApps';
 import { ChangeViewDialog } from '../page/ChangeViewDialog';
 import { type ChangeViewPlan, changeViewPlan, TEXT_BEFORE_VIEW_CHANGE } from '../page/change-view';
 import type { RecordShown } from '../page/RecordView';
-import { TemplateForDialog } from '../page/TemplateForDialog';
+import { homeForTemplate, TemplateForDialog } from '../page/TemplateForDialog';
 import type { PageTemplates } from '../page/usePageTemplates';
 import { type UpdateBatchOperation, useUpdateBatch } from '../page/useUpdateBatch';
 import { settleBody } from './body-gate';
@@ -111,20 +116,41 @@ export interface PlacesMenu {
  * пункты страниц (§8.4), их диалоги и разбор шаблона.
  *
  * «Закрепить» (в сайдбар) ушло: закреплённые стали навигацией оболочки хоста (§9.3), глагол вместо
- * него — «Добавить в навигацию» (задача 21). «Закрепить версию» — другое понятие (Э-11), остаётся.
+ * него — «Добавить в навигацию» / «Убрать из навигации» (текущего приложения). «Закрепить версию» —
+ * другое понятие (Э-11), остаётся.
+ *
+ * Между «Этот экран» и «Хост» — раздел «Приложение «A»» (пункты записи-приложения рамки,
+ * «Настроить навигацию»; `useFrameMenu`).
  */
 export type DetailMenuProps = RecordMenuProps | { pending: true };
 
+/** Диалоги навигации — после жеста, отдельным чанком от меню. */
+const AddToNavDialog = lazy(() =>
+  import('../apps/AddToNavDialog').then((m) => ({ default: m.AddToNavDialog })),
+);
+const NewAppDialog = lazy(() =>
+  import('../apps/NewAppDialog').then((m) => ({ default: m.NewAppDialog })),
+);
+
 /**
- * Меню экрана записи. Запись ещё не приехала (`pending`) — только раздел «Хост»: «⋯» нажимают и в
+ * Меню экрана записи. Запись ещё не приехала (`pending`) — без пунктов записи: «⋯» нажимают и в
  * кадре загрузки, и меню не должно ждать ответа записи, чтобы открыться (Л-1).
  */
 export function DetailMenu(props: DetailMenuProps & ScreenMenuContentProps) {
+  const frameMenu = useFrameMenu();
   if ('pending' in props) {
     const { pending: _pending, hostItems, ...control } = props;
-    return <DropdownMenu {...control} sections={[{ label: 'Хост', items: hostItems }]} />;
+    return (
+      <>
+        <DropdownMenu
+          {...control}
+          sections={[...frameMenu.sections, { label: 'Хост', items: hostItems }]}
+        />
+        {frameMenu.element}
+      </>
+    );
   }
-  return <RecordMenu {...props} />;
+  return <RecordMenu {...props} frameMenu={frameMenu} />;
 }
 
 interface RecordMenuProps {
@@ -168,7 +194,9 @@ type MenuDialog =
       updatedAt: string;
       plan: Extract<ChangeViewPlan, { case: 3 }>;
     }
-  | { kind: 'template-for'; entityId: string; value: unknown }
+  | { kind: 'template-for'; entityId: string; value: unknown; homeFor: string | null }
+  | { kind: 'add-to-nav'; entityId: string }
+  | { kind: 'new-app'; entityId: string }
   | null;
 
 function RecordMenu({
@@ -186,8 +214,11 @@ function RecordMenu({
   triggerId,
   contentId,
   hostItems,
-}: RecordMenuProps & ScreenMenuContentProps) {
+  frameMenu,
+}: RecordMenuProps & ScreenMenuContentProps & { frameMenu: ReturnType<typeof useFrameMenu> }) {
   const runBatch = useUpdateBatch();
+  const writeNav = useNavWrite();
+  const { apps, frame } = frameMenu;
   const { show } = useToast();
   const [dialog, setDialog] = useState<MenuDialog>(null);
   // Переход на соседнюю запись закрывает диалог прежней: его снимок — про неё (докблок `MenuDialog`).
@@ -269,6 +300,39 @@ function RecordMenu({
             },
           ]),
       ...(v.kind === 'record' ? recordItems(v) : pageItems(v)),
+      ...navItems(),
+    ];
+  }
+
+  /**
+   * «Добавить в навигацию» или «Убрать из навигации» — для ТЕКУЩЕГО приложения (§9.3): стоит запись в
+   * навигации рамки — её можно убрать, иначе — добавить (выбор приложения, по умолчанию текущее, или
+   * «Новое приложение…»). Список приложений не приехал — пунктов нет: спросить «стоит ли» не у кого.
+   */
+  function navItems(): DropdownMenuItem[] {
+    if (apps.status !== 'ok') return [];
+    const rec = frame;
+    if (rec !== null && inNav(rec.nav, entity.id)) {
+      return [
+        {
+          label: REMOVE_FROM_NAV,
+          icon: <ListMinus size={16} aria-hidden />,
+          onSelect: () =>
+            void writeNav(
+              rec,
+              (nav) => withoutSection(nav, entity.id),
+              `Убрано из навигации «${rec.title}»`,
+              REMOVE_FROM_NAV,
+            ),
+        },
+      ];
+    }
+    return [
+      {
+        label: ADD_TO_NAV,
+        icon: <ListPlus size={16} aria-hidden />,
+        onSelect: () => setDialog({ kind: 'add-to-nav', entityId: entity.id }),
+      },
     ];
   }
 
@@ -456,6 +520,13 @@ function RecordMenu({
                   kind: 'template-for',
                   entityId: entity.id,
                   value: entity.props[TEMPLATE_FOR_PROPERTY],
+                  // Шаблон из рамки своего приложения получает его «Дом», если он пуст (§4.3).
+                  // Только известного живого приложения: адрес `/a/<не приложение>` дал бы «Дом»,
+                  // который сервер отвергнет целью свойства.
+                  homeFor: homeForTemplate(
+                    frame?.host === false ? frame.id : null,
+                    entity.props[HOME_PROPERTY],
+                  ),
                 }),
             },
           ]),
@@ -504,6 +575,7 @@ function RecordMenu({
         contentId={contentId}
         sections={[
           { label: 'Этот экран', items },
+          ...frameMenu.sections,
           { label: 'Хост', items: hostItems },
         ]}
       />
@@ -543,6 +615,7 @@ function RecordMenu({
         <TemplateForDialog
           entityId={dialog.entityId}
           value={dialog.value}
+          homeFor={dialog.homeFor}
           onSave={(op) => {
             setDialog(null);
             const clearing = op.tool === 'entity_update' && op.input.unset !== undefined;
@@ -553,6 +626,28 @@ function RecordMenu({
           onCancel={() => setDialog(null)}
         />
       )}
+      {dialog?.kind === 'add-to-nav' && dialog.entityId === entity.id && (
+        <Suspense fallback={null}>
+          <AddToNavDialog
+            entityId={dialog.entityId}
+            apps={apps}
+            current={frame}
+            onNewApp={() => setDialog({ kind: 'new-app', entityId: dialog.entityId })}
+            onClose={() => setDialog((d) => (d?.kind === 'add-to-nav' ? null : d))}
+          />
+        </Suspense>
+      )}
+      {dialog?.kind === 'new-app' && dialog.entityId === entity.id && (
+        // Домашняя и единственный раздел нового приложения — эта запись (§9.5).
+        <Suspense fallback={null}>
+          <NewAppDialog
+            homeId={dialog.entityId}
+            navIds={[dialog.entityId]}
+            onClose={() => setDialog(null)}
+          />
+        </Suspense>
+      )}
+      {frameMenu.element}
     </>
   );
 }

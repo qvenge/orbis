@@ -1,6 +1,8 @@
 import {
+  APP_ASPECT,
   type AspectDefinition,
   effectiveLabel,
+  HOME_PROPERTY,
   OWNER_LOCALE,
   PAGE_ASPECT,
   SUPPLY_ASPECT,
@@ -21,9 +23,12 @@ import type { UpdateBatchOperation } from './useUpdateBatch';
  * «Поставка» (срез 1б) — тоже нет: это метка механизма поставки (Э-19), флаг `service` у неё снят
  * только ради видимости записей в выдачах. Шаблон «для Поставки» перехватил бы вид записей поставки,
  * которые не страницы, — прежде всего оболочки хоста (M-2 гейта задачи 9).
+ *
+ * «Приложение» (срез 1б, R-14) — тоже нет: запись-приложение по ссылке открывает своё приложение
+ * (Р-20), её экран записи недостижим, и шаблон для аспекта «приложение» не показывался бы никогда.
  */
 export const offeredForTemplate = (a: AspectDefinition) =>
-  !a.service && a.id !== PAGE_ASPECT && a.id !== SUPPLY_ASPECT;
+  !a.service && a.id !== PAGE_ASPECT && a.id !== SUPPLY_ASPECT && a.id !== APP_ASPECT;
 
 const listOf = (v: unknown): string[] =>
   Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
@@ -38,11 +43,17 @@ const sameSet = (a: readonly string[], b: readonly string[]) =>
  * правкой: правило «Главнее, чем непусто → Шаблон для непуст» отвергло бы правку, которая
  * оставила бы запомненные выборы у страницы без «Шаблон для». Пустой список не пишется вовсе:
  * `has` у пустого списка истинен, и черновик считался бы шаблоном (Ф-1а-3). `null` — писать нечего.
+ *
+ * `homeFor` (срез 1б §4.3) — приложение рамки A ≠ хост, когда «Дом» страницы пуст: шаблон
+ * принадлежит своему дому, и «Сделать шаблоном для…» из рамки A ставит «Дом» = A той же операцией
+ * (один Undo). В хосте и у страницы с «Домом» — `null`: хост — это пустой «Дом», а чужой дом
+ * владелец назначил сам. Снятие всех аспектов «Дом» не трогает — черновик остаётся там, где был.
  */
 export function templateForOperation(
   entityId: string,
   current: readonly string[],
   next: readonly string[],
+  homeFor: string | null = null,
 ): UpdateBatchOperation | null {
   if (sameSet(current, next)) return null;
   return {
@@ -50,8 +61,23 @@ export function templateForOperation(
     input:
       next.length === 0
         ? { id: entityId, unset: [TEMPLATE_FOR_PROPERTY, TEMPLATE_WINS_OVER_PROPERTY] }
-        : { id: entityId, props: { [TEMPLATE_FOR_PROPERTY]: [...next] } },
+        : {
+            id: entityId,
+            props: {
+              [TEMPLATE_FOR_PROPERTY]: [...next],
+              ...(homeFor !== null && { [HOME_PROPERTY]: homeFor }),
+            },
+          },
   };
+}
+
+/**
+ * Дом шаблона из рамки (§4.3): приложение рамки — не хост (`null`), и «Дом» страницы пуст. Иначе
+ * `null` — писать «Дом» нечего.
+ */
+export function homeForTemplate(frameApp: string | null, home: unknown): string | null {
+  const empty = typeof home !== 'string' || home === '';
+  return frameApp !== null && empty ? frameApp : null;
 }
 
 /**
@@ -66,12 +92,15 @@ export function templateForOperation(
 export function TemplateForDialog({
   entityId,
   value,
+  homeFor = null,
   onSave,
   onCancel,
 }: {
   entityId: string;
   /** Текущее значение «Шаблон для» у страницы. */
   value: unknown;
+  /** «Дом», который шаблон получает из рамки (`homeForTemplate`); `null` — не писать. */
+  homeFor?: string | null;
   onSave: (operation: UpdateBatchOperation) => void;
   onCancel: () => void;
 }) {
@@ -87,7 +116,7 @@ export function TemplateForDialog({
       : def;
 
   function save() {
-    const op = templateForOperation(entityId, current, draft);
+    const op = templateForOperation(entityId, current, draft, homeFor);
     if (op === null) onCancel();
     else onSave(op);
   }
