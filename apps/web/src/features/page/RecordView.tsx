@@ -12,6 +12,7 @@ import type { RouterOutputs } from '../../trpc';
 import { Skeleton } from '../../ui/Skeleton';
 import { usePlanToFactPrompt } from '../budget/usePlanToFactPrompt';
 import { RecordHostProvider, recordHostValue, type WireEntity } from '../entity-detail/record-host';
+import { SupplyPlaqueSlot } from '../supply/SupplyPlaqueSlot';
 import { BaseRecordView } from './BaseRecordView';
 import { BlockPlaque } from './blocks/BlockPlaque';
 import { HOST_TEMPLATE_NODES, HOST_TEMPLATE_TEXT } from './host-template';
@@ -398,6 +399,8 @@ export function RecordView({
               rows={list.rows}
             />
           )}
+          {/* Обновление поставки — предложение на самой записи (срез 1б §9.1 п. 2). */}
+          <SupplyPlaqueSlot entity={entity} />
           <ShownTemplate
             shown={decision.shown}
             host={hostSource}

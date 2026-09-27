@@ -23,12 +23,8 @@ import {
 } from '@orbis/shared';
 import { OWNER_LOCALE, parseQueryAst, toParseRegistry } from '@orbis/shared/query';
 import { AGENDA_QUERY_TEXTS } from '@orbis/shared/query/fixtures';
-import {
-  SUPPLY_ETALONS,
-  SUPPLY_KEYS,
-  type SupplyEtalon,
-  supplyStatusOf,
-} from '@orbis/shared/supply';
+import { SUPPLY_ETALONS, SUPPLY_KEYS, type SupplyEtalon } from '@orbis/shared/supply';
+import { supplyStatusOf } from '@orbis/shared/supply/print';
 import { TRPCError } from '@trpc/server';
 import { sql } from 'drizzle-orm';
 import { adminDb, appDb, freshGraph, personal, requireEnv, truncateAll } from '../../test/helpers';

@@ -100,6 +100,10 @@ const LAZY_EDITOR_MODULES = ['BodyEditor', 'MarkdownToggle'];
  * («Навигация» приложения), а `PropertyControl`, который его выбирает, эагерен в каждой записи. Точка
  * лени — `lib/registry/PropertyControl.tsx`; второй импортёр (статический) — ленивый редактор
  * навигации, поэтому и здесь ребро ниже, а не одна проверка наличия.
+ *
+ * `SupplyPlaque` (срез 1б, задача 22): плашка обновления поставки с кнопками — только у записи
+ * поставки с обновлением, а рендерер записи и страницы эагерен. Точка лени —
+ * `features/supply/SupplyPlaqueSlot.tsx`.
  */
 const LAZY_DETAIL_MODULES = [
   'DetailMenu',
@@ -107,6 +111,7 @@ const LAZY_DETAIL_MODULES = [
   'OpenPlaqueList',
   'AppsBlock',
   'RefListControl',
+  'SupplyPlaque',
 ];
 
 /**
@@ -118,8 +123,18 @@ const LAZY_DETAIL_MODULES = [
  * Задача 20: лист разделов `NavSheet` (с бейджами и ярлыками «↗ Дом»), лист «Все приложения»
  * `AllAppsSheet` и плитки «домашней как центр» `NavTiles` — после жеста или на редкой форме; входной
  * чанк входит в замыкание экрана записи, и их вес там лишний (РП-25, замер в отчёте задачи 20).
+ *
+ * Задача 22: вкладка настроек «Приложения и расширения» `AppsAndExtensions` — экран настроек лежит во
+ * входном чанке, а списки, диалоги и кнопки поставки нужны только открытой вкладке. Точка лени —
+ * `features/settings/SettingsScreen.tsx`.
  */
-const LAZY_FRAME_MODULES = ['HostMenu', 'NavSheet', 'AllAppsSheet', 'NavTiles'];
+const LAZY_FRAME_MODULES = [
+  'HostMenu',
+  'NavSheet',
+  'AllAppsSheet',
+  'NavTiles',
+  'AppsAndExtensions',
+];
 
 /**
  * ТРЕТЬЯ проверка — СОСТАВ чанка, а не его наличие (Ш1, задача 11).
@@ -171,6 +186,16 @@ const FORBIDDEN_EDGES: readonly { from: string; to: string; hint: string }[] = [
     hint:
       "Ищите импортёра: `grep -rn \"AppsBlock'\" apps/web/src --include='*.ts*'` — блок «Приложения»\n" +
       'грузится только через `features/apps/slots.tsx` и лист «Все приложения» (задача 20).',
+  },
+  {
+    // Печати и статус поставки (задача 22) нужны только ленивым частям — меню «⋯», плашке и сравнению.
+    // Реэкспорт из барреля `@orbis/shared/supply` (его web берёт эагерно) утянул бы код в эагерный
+    // чанк, и файл `print-*.js` при этом исчез бы (замерено: +508 Б gzip замыкания).
+    from: 'DetailScreen',
+    to: 'print',
+    hint:
+      "Ищите импортёра: `grep -rn \"@orbis/shared/supply'\" apps/web/src --include='*.ts*'` — печати\n" +
+      'берутся только сабпатом `@orbis/shared/supply/print`, а баррель их не реэкспортирует (задача 22).',
   },
   {
     from: 'DetailScreen',

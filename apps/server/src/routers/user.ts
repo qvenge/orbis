@@ -104,10 +104,14 @@ export const userRouter = router({
    * операция. Имя ручки прежнее (РП-10) — его зовёт web; переключается расширение.
    * `updateSettingsInput` маской НЕ расширяется: у одной настройки было бы два пути
    * записи — один с журналом и undo, другой без.
+   *
+   * Ответ — настройки и `actionId` действия (срез 1б, задача 22): переключатель «Приложений и
+   * расширений» показывает тост «Отменить», а `ai.undo` отменяет ИМЕННО это действие. «Отмени
+   * последнее» (`ai.undoLast`) вместо него отменило бы правку агента, успевшую лечь в журнал позже.
    */
   setModuleEnabled: ownerOnlyProcedure
     .input(setExtensionEnabledInput)
-    .mutation(async ({ ctx, input }): Promise<WireUserSettings> => {
+    .mutation(async ({ ctx, input }): Promise<WireUserSettings & { actionId: string }> => {
       const r = await execute(
         ctx.db,
         {
@@ -127,7 +131,7 @@ export const userRouter = router({
         if (!rows[0]) {
           throw execErrorToTRPC({ code: 'NOT_FOUND', message: 'настройки не найдены' });
         }
-        return toWireUserSettings(rows[0]);
+        return { ...toWireUserSettings(rows[0]), actionId: r.actionId };
       });
     }),
 

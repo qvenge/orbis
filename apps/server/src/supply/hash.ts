@@ -6,7 +6,8 @@
 // поэтому «эталон сменился» — это ровно «сменился код поставки», и ни канон тела этого графа, ни id его
 // записей отпечаток не сдвигают. Считает только сервер: `node:crypto` в листовой сабпат web не везут.
 import { createHash } from 'node:crypto';
-import { printAppEtalon, printPageRecord, type SupplyEtalon } from '@orbis/shared/supply';
+import type { SupplyEtalon } from '@orbis/shared/supply';
+import { printAppEtalon, printPageRecord } from '@orbis/shared/supply/print';
 
 export function etalonHash(e: SupplyEtalon): string {
   const form =

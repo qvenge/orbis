@@ -6,6 +6,7 @@ import { usePlanToFactPrompt } from '../budget/usePlanToFactPrompt';
 import { type BodyGate, BodyScreenProvider, bodyKindOf } from '../entity-detail/EntityBody';
 import { RecordHostProvider, recordHostValue } from '../entity-detail/record-host';
 import { detailGetInput } from '../entity-detail/useEntityDetail';
+import { SupplyPlaqueSlot } from '../supply/SupplyPlaqueSlot';
 import { OwnBodyProvider, Renderer } from './Renderer';
 
 type EntityGetReply = RouterOutputs['entity']['get'];
@@ -49,6 +50,8 @@ export function PageView({ reply }: { reply: EntityGetReply }) {
         <ThisEntityProvider id={entity.id}>
           <OwnBodyProvider>
             <div data-testid="page-view" className="flex flex-col gap-6 px-4 pb-10 pt-5 md:px-6">
+              {/* Обновление поставки — предложение на самой странице (срез 1б §9.1 п. 2). */}
+              <SupplyPlaqueSlot entity={entity} />
               <Renderer nodes={nodes} kind={kind} appendUnplacedCards={false} />
             </div>
           </OwnBodyProvider>

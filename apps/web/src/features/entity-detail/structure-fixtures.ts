@@ -15,7 +15,8 @@
  */
 import { PAGE_ASPECT, SUPPLY_ASPECT, SUPPLY_KEY, SUPPLY_TEXT } from '@orbis/shared';
 import { parseBody, serializeBody } from '@orbis/shared/doc';
-import { HOST_TEMPLATE_ETALON_TEXT, printPageRecord } from '@orbis/shared/supply';
+import { HOST_TEMPLATE_ETALON_TEXT } from '@orbis/shared/supply';
+import { printPageRecord } from '@orbis/shared/supply/print';
 import { act, waitFor } from '@testing-library/react';
 import { createElement, type ReactNode } from 'react';
 import { noteRegistryVersion, resetRegistryVersionForTests } from '../../lib/registry/useRegistry';

@@ -1,6 +1,7 @@
-import { APP_NAV } from '@orbis/shared';
+import { APP_NAV, SUPPLY_TEXT } from '@orbis/shared';
 import { type AppKey, HOST_APP } from '@orbis/shared/nav';
-import { ListTree } from 'lucide-react';
+import { supplyStatusOf } from '@orbis/shared/supply/print';
+import { ListTree, RotateCcw } from 'lucide-react';
 import { lazy, type ReactNode, Suspense, useState } from 'react';
 import { useNav } from '../../state/navigation';
 import { trpc } from '../../trpc';
@@ -8,6 +9,7 @@ import type { DropdownMenuSection } from '../../ui/DropdownMenu';
 import { useToast } from '../../ui/toast-store';
 import type { WireEntity } from '../entity-detail/record-host';
 import { BATCH_FAILED, useUpdateBatch } from '../page/useUpdateBatch';
+import { REVERT, STATUS_EDITED, STATUS_ETALON } from '../supply/useSupply';
 import { cleanNav, goneOf, navOf, refIdsKey } from './nav-edit';
 import { type Apps, useApps } from './useApps';
 
@@ -90,6 +92,28 @@ export function useNavWrite(): (
 /** Редактор «Настроить навигацию» — после жеста: первому кадру меню он ни к чему. */
 const NavEditor = lazy(() => import('./NavEditor').then((m) => ({ default: m.NavEditor })));
 
+/** Диалог «Вернуть как было» оболочки хоста — тоже после жеста. */
+const RevertShellDialog = lazy(() =>
+  import('../supply/RevertShellDialog').then((m) => ({ default: m.RevertShellDialog })),
+);
+
+/**
+ * Признак записи поставки в разделе меню (срез 1б §9.1 п. 5): «Как в поставке» / «Изменено вами»;
+ * не запись поставки (нет аспекта — своя или выведенная из поставки, R-17) — признака нет.
+ */
+export function supplyNoteOf(row: WireEntity): string | undefined {
+  const status = supplyStatusOf(row);
+  return status === null ? undefined : status === 'etalon' ? STATUS_ETALON : STATUS_EDITED;
+}
+
+/**
+ * «Вернуть как было» есть, когда запись поставки изменена И в ней лежит печать эталона: без печати
+ * возвращать не к чему — сервер ответил бы отказом, а пункт обещал бы действие, которого нет.
+ */
+export function canRevert(row: WireEntity): boolean {
+  return supplyStatusOf(row) === 'edited' && typeof row.props[SUPPLY_TEXT] === 'string';
+}
+
 /** Подписи жестов навигации: пункт меню, заголовок записи журнала и то, что назовёт «отмени последнее». */
 export const CONFIGURE_NAV = 'Настроить навигацию';
 export const ADD_TO_NAV = 'Добавить в навигацию';
@@ -98,6 +122,11 @@ export const REMOVE_FROM_NAV = 'Убрать из навигации';
 /**
  * Раздел «Приложение «A»» (пункты записи-приложения рамки, в том числе хоста на `/`) и редактор
  * навигации, который он открывает. Записи рамки нет — раздела нет: править нечего.
+ *
+ * У записи-приложения поставки (оболочка хоста) — признак «Как в поставке» / «Изменено вами» и
+ * «Вернуть как было» (§9.1 п. 4–5): её экран записи недостижим (Р-20 — запись-приложение открывает
+ * своё приложение), поэтому пункты записи живут здесь. Возврат — только через диалог исчезающих
+ * разделов (`RevertShellDialog`): молча снести разделы, добавленные владельцем, меню не вправе.
  */
 export function useFrameMenu(): {
   apps: Apps;
@@ -110,26 +139,46 @@ export function useFrameMenu(): {
   const frame = frameRecordOf(active, apps);
   // Снимок записи на момент жеста: редактор правит ту версию, которую открыл.
   const [editing, setEditing] = useState<WireEntity | null>(null);
+  const [reverting, setReverting] = useState<WireEntity | null>(null);
+  const note = frame === null ? undefined : supplyNoteOf(frame.row);
   const sections: DropdownMenuSection[] =
     frame === null
       ? []
       : [
           {
             label: `Приложение «${frame.title}»`,
+            ...(note !== undefined && { note }),
             items: [
               {
                 label: CONFIGURE_NAV,
                 icon: <ListTree size={16} aria-hidden />,
                 onSelect: () => setEditing(frame.row),
               },
+              ...(canRevert(frame.row)
+                ? [
+                    {
+                      label: REVERT,
+                      icon: <RotateCcw size={16} aria-hidden />,
+                      onSelect: () => setReverting(frame.row),
+                    },
+                  ]
+                : []),
             ],
           },
         ];
-  const element =
-    editing === null ? null : (
-      <Suspense fallback={null}>
-        <NavEditor app={editing} onClose={() => setEditing(null)} />
-      </Suspense>
-    );
+  const element = (
+    <>
+      {editing !== null && (
+        <Suspense fallback={null}>
+          <NavEditor app={editing} onClose={() => setEditing(null)} />
+        </Suspense>
+      )}
+      {reverting !== null && (
+        <Suspense fallback={null}>
+          <RevertShellDialog row={reverting} onClose={() => setReverting(null)} />
+        </Suspense>
+      )}
+    </>
+  );
   return { apps, frame, sections, element };
 }

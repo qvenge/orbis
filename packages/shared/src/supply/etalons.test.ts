@@ -28,18 +28,20 @@ import {
   HOST_TEMPLATE_KEY,
   isHostTemplateRecord,
   LEGACY_ETALON_TEXTS,
+  RESERVED_APP_KEYS,
+  SUPPLY_ETALONS,
+  SUPPLY_KEYS,
+  type SupplyEtalon,
+} from './etalons';
+import { SEED_SMART_LISTS } from './lists';
+import {
   parseAppPrint,
   parsePagePrint,
   printAppEtalon,
   printAppProps,
   printPageRecord,
-  RESERVED_APP_KEYS,
-  SUPPLY_ETALONS,
-  SUPPLY_KEYS,
-  type SupplyEtalon,
   supplyStatusOf,
-} from './etalons';
-import { SEED_SMART_LISTS } from './lists';
+} from './print';
 
 /** Реестр разбора из встроенных определений: блоки данных эталонов обязаны разбираться им. */
 const REG = toParseRegistry(
@@ -359,10 +361,18 @@ describe('листовость сабпата (вес экрана записи 
     for (const s of found) expect(['../constants', './lists']).toContain(s);
   });
 
+  test('print.ts импортирует только ../constants и ./etalons', () => {
+    const found = specifiers(read('./print.ts'));
+    expect(found).toContain('./etalons');
+    for (const s of found) expect(['../constants', './etalons']).toContain(s);
+  });
+
   test('lists.ts не импортирует ничего', () => {
     expect(specifiers(read('./lists.ts'))).toEqual([]);
   });
 
+  // Печати — отдельным сабпатом `@orbis/shared/supply/print`, НЕ через баррель: баррель web берёт
+  // эагерно, и реэкспорт утянул бы код печатей в эагерный чанк (замер задачи 22 — докблок `print.ts`).
   test('index.ts отдаёт только etalons и lists', () => {
     for (const s of specifiers(read('./index.ts'))) expect(['./etalons', './lists']).toContain(s);
   });

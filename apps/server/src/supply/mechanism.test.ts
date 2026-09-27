@@ -18,17 +18,19 @@ import {
 } from '@orbis/shared';
 import { parsePageText } from '@orbis/shared/doc/page-grammar';
 import {
-  APP_PRINT_PROPS,
   etalonOf,
-  parseAppPrint,
-  parsePagePrint,
-  printPageRecord,
   SUPPLY_ETALONS,
   SUPPLY_KEYS,
   type SupplyEtalon,
   type SupplyKey,
-  supplyStatusOf,
 } from '@orbis/shared/supply';
+import {
+  APP_PRINT_PROPS,
+  parseAppPrint,
+  parsePagePrint,
+  printPageRecord,
+  supplyStatusOf,
+} from '@orbis/shared/supply/print';
 import { sql } from 'drizzle-orm';
 import { appDb, freshGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
 import { withIdentity } from '../db/with-identity';

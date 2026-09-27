@@ -58,13 +58,11 @@ import {
 import {
   etalonOf,
   LEGACY_ETALON_TEXTS,
-  printAppProps,
-  printPageRecord,
   SEED_SMART_LISTS,
   type SupplyEtalon,
   type SupplyKey,
-  supplyStatusOf,
 } from '@orbis/shared/supply';
+import { printAppProps, printPageRecord, supplyStatusOf } from '@orbis/shared/supply/print';
 import { sql } from 'drizzle-orm';
 import { ExecError, type ExecErrorCode } from '../errors';
 import { execute } from '../executor/executor';

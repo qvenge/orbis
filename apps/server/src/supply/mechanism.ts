@@ -27,18 +27,15 @@ import {
   SUPPLY_KEY,
   SUPPLY_TEXT,
 } from '@orbis/shared';
+import { etalonOf, SUPPLY_ETALONS, type SupplyEtalon, type SupplyKey } from '@orbis/shared/supply';
 import {
   APP_PRINT_PROPS,
-  etalonOf,
   parseAppPrint,
   parsePagePrint,
   printAppProps,
   printPageRecord,
-  SUPPLY_ETALONS,
-  type SupplyEtalon,
-  type SupplyKey,
   supplyStatusOf,
-} from '@orbis/shared/supply';
+} from '@orbis/shared/supply/print';
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import type { Db } from '../db/client';
 import { entities } from '../db/schema';

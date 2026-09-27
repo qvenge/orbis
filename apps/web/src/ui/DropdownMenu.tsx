@@ -24,6 +24,12 @@ export type DropdownMenuItem = {
  */
 export interface DropdownMenuSection {
   label: string;
+  /**
+   * Признак под подписью раздела — состояние, а не действие («Как в поставке» / «Изменено вами»,
+   * спека 1б §9.1 п. 5). Не пункт меню: нажимать его нечего, а в списке пунктов он читался бы
+   * командой.
+   */
+  note?: string;
   items: readonly DropdownMenuItem[];
 }
 
@@ -90,6 +96,11 @@ export function DropdownMenu({
                     <RDM.Label className="px-2 pb-0.5 pt-1 text-2xs uppercase tracking-wide text-text-muted">
                       {sec.label}
                     </RDM.Label>
+                    {sec.note !== undefined && (
+                      <p data-testid="menu-note" className="px-2 pb-1 text-xs text-text-secondary">
+                        {sec.note}
+                      </p>
+                    )}
                     {sec.items.map(menuItem)}
                   </RDM.Group>
                 ))}

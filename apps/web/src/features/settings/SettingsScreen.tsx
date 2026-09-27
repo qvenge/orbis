@@ -1,3 +1,4 @@
+import { lazy, Suspense } from 'react';
 import { ScreenHeader } from '../../app/ScreenHeader';
 import { useNav } from '../../state/navigation';
 import { trpc } from '../../trpc';
@@ -8,7 +9,15 @@ import { AspectsList } from './AspectsList';
 import { ConnectedAgents } from './ConnectedAgents';
 import { ExportButton } from './ExportButton';
 import { GeneralForm } from './GeneralForm';
-import { ViewsList } from './ViewsList';
+
+/**
+ * «Приложения и расширения» (срез 1б §8.6) — ЛЕНИВО: экран настроек во входном чанке, а тот входит в
+ * замыкание первого кадра записи (РП-25). Статический импорт вернул бы списки и диалоги вкладки в
+ * первый кадр каждого экрана (сторож — `scripts/check-lazy-chunks.ts`).
+ */
+const AppsAndExtensions = lazy(() =>
+  import('./AppsAndExtensions').then((m) => ({ default: m.AppsAndExtensions })),
+);
 
 export function SettingsScreen() {
   const settings = trpc.user.getSettings.useQuery();
@@ -27,7 +36,15 @@ export function SettingsScreen() {
               },
               { value: 'memory', label: 'Память AI', content: <MemorySection /> },
               { value: 'aspects', label: 'Аспекты', content: <AspectsList /> },
-              { value: 'views', label: 'Views', content: <ViewsList /> },
+              {
+                value: 'apps',
+                label: 'Приложения и расширения',
+                content: (
+                  <Suspense fallback={<Skeleton className="m-3 h-24" />}>
+                    <AppsAndExtensions />
+                  </Suspense>
+                ),
+              },
               { value: 'agents', label: 'Агенты', content: <ConnectedAgents /> },
               {
                 value: 'export',

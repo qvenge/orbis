@@ -280,7 +280,10 @@ describe('module_set: переключение — действие исполн
    * одному модулю, а «прежнее состояние» разводится ПОРЯДКОМ операций, а не вторым именем.
    */
   test('ручка выключает модуль; настройки отдают маску наружу', async () => {
-    await caller.user.setModuleEnabled({ module: 'finance', enabled: false });
+    const reply = await caller.user.setModuleEnabled({ module: 'finance', enabled: false });
+    // Ответ несёт id действия журнала: тост «Отменить» web отменяет именно его (задача 22).
+    expect((await actionOf(reply.actionId))?.type).toBe('module_set');
+    expect(reply.disabledModules).toEqual(['finance']);
     expect(
       await withIdentity(db, personal(owner), (tx) => disabledExtensionsOf(tx, owner)),
     ).toEqual(['finance']);

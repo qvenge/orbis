@@ -20,11 +20,10 @@ import {
 import {
   etalonOf,
   LEGACY_ETALON_TEXTS,
-  printPageRecord,
   SEED_SMART_LISTS,
   type SupplyKey,
-  supplyStatusOf,
 } from '@orbis/shared/supply';
+import { printPageRecord, supplyStatusOf } from '@orbis/shared/supply/print';
 import { sql } from 'drizzle-orm';
 import {
   adminDb,

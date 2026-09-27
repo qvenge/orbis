@@ -4,10 +4,16 @@ import {
   openPlacesOf,
   PAGE_ASPECT,
   placeContendersOf,
+  SUPPLY_KEY,
   TEMPLATE_FOR_PROPERTY,
   type TemplateCandidate,
 } from '@orbis/shared';
-import { isHostTemplateRecord } from '@orbis/shared/supply';
+import {
+  HOST_SHELL_KEY,
+  isHostTemplateRecord,
+  SUPPLY_KEYS,
+  type SupplyKey,
+} from '@orbis/shared/supply';
 import {
   AppWindow,
   Archive,
@@ -23,6 +29,7 @@ import {
   ListPlus,
   MapPin,
   PanelsTopLeft,
+  RotateCcw,
   Scale,
   SlidersHorizontal,
   Undo2,
@@ -32,7 +39,14 @@ import type { ScreenMenuContentProps } from '../../app/frame/ScreenMenu';
 import { useNav } from '../../state/navigation';
 import { DropdownMenu, type DropdownMenuItem } from '../../ui/DropdownMenu';
 import { useToast } from '../../ui/toast-store';
-import { ADD_TO_NAV, REMOVE_FROM_NAV, useFrameMenu, useNavWrite } from '../apps/frame-menu';
+import {
+  ADD_TO_NAV,
+  canRevert,
+  REMOVE_FROM_NAV,
+  supplyNoteOf,
+  useFrameMenu,
+  useNavWrite,
+} from '../apps/frame-menu';
 import { inNav, withoutSection } from '../apps/nav-edit';
 import type { Apps } from '../apps/useApps';
 import { ChangeViewDialog } from '../page/ChangeViewDialog';
@@ -41,6 +55,7 @@ import type { RecordShown } from '../page/RecordView';
 import { homeForTemplate, TemplateForDialog } from '../page/TemplateForDialog';
 import type { PageTemplates } from '../page/usePageTemplates';
 import { type UpdateBatchOperation, useUpdateBatch } from '../page/useUpdateBatch';
+import { REVERT, useSupplyAction } from '../supply/useSupply';
 import { settleBody } from './body-gate';
 import type { BodyGateRef } from './EntityBody';
 import type { WireEntity } from './record-host';
@@ -217,6 +232,7 @@ function RecordMenu({
   frameMenu,
 }: RecordMenuProps & ScreenMenuContentProps & { frameMenu: ReturnType<typeof useFrameMenu> }) {
   const runBatch = useUpdateBatch();
+  const runSupply = useSupplyAction();
   const writeNav = useNavWrite();
   const { apps, frame } = frameMenu;
   const { show } = useToast();
@@ -224,6 +240,9 @@ function RecordMenu({
   // Переход на соседнюю запись закрывает диалог прежней: его снимок — про неё (докблок `MenuDialog`).
   if (dialog !== null && dialog.entityId !== entity.id) setDialog(null);
   const archiveLabel = archived ? 'Разархивировать' : 'Архивировать';
+  // Признак записи поставки (§9.1 п. 5) — о записи на экране; в настройке чужого шаблона пункты про
+  // шаблон, и признак записи под ним был бы не о том.
+  const note = view.kind === 'configuring' ? undefined : supplyNoteOf(entity);
 
   /**
    * Правка «вида только этой записи» (§8.4): новое тело и аспект «страница» — одной операцией, а
@@ -301,6 +320,31 @@ function RecordMenu({
           ]),
       ...(v.kind === 'record' ? recordItems(v) : pageItems(v)),
       ...navItems(),
+      ...revertItems(),
+    ];
+  }
+
+  /**
+   * «Вернуть как было» у страницы поставки и шаблона хоста (срез 1б §9.1 п. 4): содержимое = печать
+   * эталона в записи, прежнее тело — в версиях, одно действие с «Отменить». Есть, когда запись
+   * изменена и печать эталона в ней лежит (`canRevert`); запись, выведенная из поставки (снят аспект,
+   * R-17), — уже не запись поставки, пункта нет. Как и прочие переписывающие жесты, ждёт досыла тела:
+   * возврат поверх неотправленного текста потерял бы его мимо версий.
+   */
+  function revertItems(): DropdownMenuItem[] {
+    const key = entity.props[SUPPLY_KEY];
+    // Оболочка хоста возвращается только через диалог исчезающих разделов (раздел «Приложение»).
+    if (!canRevert(entity) || key === HOST_SHELL_KEY) return [];
+    if (!(SUPPLY_KEYS as readonly unknown[]).includes(key)) return [];
+    return [
+      {
+        label: REVERT,
+        icon: <RotateCcw size={16} aria-hidden />,
+        onSelect: () => {
+          if (!bodySettled()) return;
+          void runSupply({ kind: 'revert', key: key as SupplyKey });
+        },
+      },
     ];
   }
 
@@ -580,7 +624,7 @@ function RecordMenu({
         triggerId={triggerId}
         contentId={contentId}
         sections={[
-          { label: 'Этот экран', items },
+          { label: 'Этот экран', ...(note !== undefined && { note }), items },
           ...frameMenu.sections,
           { label: 'Хост', items: hostItems },
         ]}

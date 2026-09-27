@@ -15,13 +15,8 @@ import {
   SUPPLY_KEY,
   SUPPLY_TEXT,
 } from '@orbis/shared';
-import {
-  printAppProps,
-  printPageRecord,
-  SUPPLY_ETALONS,
-  type SupplyEtalon,
-  type SupplyKey,
-} from '@orbis/shared/supply';
+import { SUPPLY_ETALONS, type SupplyEtalon, type SupplyKey } from '@orbis/shared/supply';
+import { printAppProps, printPageRecord } from '@orbis/shared/supply/print';
 import { v5 as uuidv5 } from 'uuid';
 import { bodyFieldsFromMarkdown } from '../executor/body-fields';
 import type { RegistrySnapshot } from '../registry/load';
