@@ -23,8 +23,8 @@ import {
   type BlockError,
   type BlockResult,
   EMPTY_QUERY_MESSAGE,
-  type EntityBlocksInput,
-  entityBlocksInput,
+  type EntityBlockTextItem,
+  entityBlockTextItem,
 } from '@orbis/shared';
 import {
   type QueryClient,
@@ -38,7 +38,8 @@ import { useThisEntityId } from './this-entity';
 
 export const QUERY_BLOCK_KEY = 'query-block';
 
-type BlockItem = EntityBlocksInput['blocks'][number];
+// Блок страницы — элемент по тексту; бейджи разделов (`badgeOf`, срез 1б) идут не через эту очередь.
+type BlockItem = EntityBlockTextItem;
 /** Просьба без ключа пачки: ключ раздаёт сброс очереди, он живёт один вызов. */
 type BlockAsk = Omit<BlockItem, 'key'>;
 type Pending = { ask: BlockAsk; resolve: (r: BlockResult) => void; reject: (e: unknown) => void };
@@ -65,7 +66,7 @@ export class BlockDataError extends Error {
  * Сверка до очереди делает отказ отказом только этого блока. Сообщения схемы — русские
  * (`BLOCK_ITEM_MESSAGES`): их видит плашка.
  */
-const blockAskSchema = entityBlocksInput.innerType().shape.blocks.element.omit({ key: true });
+const blockAskSchema = entityBlockTextItem.omit({ key: true });
 
 /** Отказ всей пачки (сеть, авторизация, сбой сервера) — одним текстом, без английского транспорта. */
 const TRANSPORT_MESSAGE = 'сервер недоступен — данные блока не получены';

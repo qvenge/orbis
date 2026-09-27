@@ -3,8 +3,11 @@
 // один actionId и один Undo. Против живой БД через createCallerFactory, как в бою.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import {
+  APP_ASPECT,
+  APP_NAV,
   type GraphId,
   globalThreadId,
+  newId,
   PAGE_ASPECT,
   TEMPLATE_FOR_PROPERTY,
   TEMPLATE_WINS_OVER_PROPERTY,
@@ -342,6 +345,47 @@ describe('entity.updateBatch — пачка правок, один Undo (§4.3, 
         categoryTitle: 'Развлечения',
       },
     ]);
+  });
+
+  test('`entity_create` с клиентским id и следующая правка со ссылкой на него — один actionId, results длиной 2 (§9.3)', async () => {
+    const user = await freshGraph();
+    const caller = callerFor(user);
+    const section = await createTemplate(user, 'Раздел');
+    const appId = newId();
+    const r = await caller.entity.updateBatch({
+      label: 'Добавить в навигацию',
+      operations: [
+        {
+          tool: 'entity_create',
+          input: { id: appId, title: 'Новое приложение', tags: [], aspects: [APP_ASPECT] },
+        },
+        { tool: 'entity_update', input: { id: appId, props: { [APP_NAV]: [section] } } },
+      ],
+    });
+    expect(typeof r.actionId).toBe('string');
+    expect(r.results).toHaveLength(2);
+    expect((r.results[0] as { id: string }).id).toBe(appId);
+    const got = await caller.entity.get({ id: appId, include: [] });
+    expect(got.entity.props[APP_NAV]).toEqual([section]);
+
+    // Один Undo: созданная запись уходит в архив вместе с навигацией.
+    await caller.ai.undo({ actionId: r.actionId });
+    const after = await caller.entity.get({ id: appId, include: [] });
+    expect(after.entity.archived).toBe(true);
+  });
+
+  test('`entity_create` с занятым id — CONFLICT, пачка не легла', async () => {
+    const user = await freshGraph();
+    const caller = callerFor(user);
+    const taken = await createTemplate(user, 'Занятый');
+    const err = await trpcError(
+      caller.entity.updateBatch({
+        operations: [{ tool: 'entity_create', input: { id: taken, title: 'Дубль', tags: [] } }],
+      }),
+    );
+    expect(err.code).toBe('CONFLICT');
+    const got = await caller.entity.get({ id: taken, include: [] });
+    expect(got.entity.title).toBe('Занятый');
   });
 
   test(`${UPDATE_BATCH_CAP + 1} операция — отказ схемы (BAD_REQUEST)`, async () => {

@@ -324,7 +324,9 @@ test('фикстура наполнена: гейт меряет данные, �
           ? r.count > 0
           : r.kind === 'sum'
             ? r.count > 0
-            : r.value !== null;
+            : r.kind === 'latest'
+              ? r.value !== null
+              : false;
     expect(`${key}:${nonEmpty}`).toBe(`${key}:true`);
   }
   // Переполнение — отдельно: без него второй запрос счётчика («ещё N») гейтом не мерится.

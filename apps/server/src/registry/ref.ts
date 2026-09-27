@@ -32,7 +32,7 @@
 // зависят от порядка и гасят друг друга. Поэтому inverse у зеркала нет вовсе, а сходится оно
 // само: `syncRefMirror` зовётся и во внутреннем режиме undo. Проверяется это тестом
 // «undo правки категории возвращает и свойство, и зеркало-ребро» (`ref.test.ts`).
-import { type GraphId, newId, type PropertyType, ROLE_REF } from '@orbis/shared';
+import { APP_ASPECT, type GraphId, newId, type PropertyType, ROLE_REF } from '@orbis/shared';
 import type { QueryAst } from '@orbis/shared/query';
 import { type SQL, sql } from 'drizzle-orm';
 import type { Tx } from '../db/with-identity';
@@ -438,6 +438,12 @@ export async function syncRefMirror(
  * благодаря гейту `NOT (… = ANY(tags))`: источник, у которого тег уже стоял, в `RETURNING` не
  * попадает. Он уезжает в журнал и по нему же откат снимает пометку (Р-11-1, см.
  * `unmarkRefSources`), поэтому счётчиком тут не обойтись.
+ *
+ * ЗАПИСЬ-ПРИЛОЖЕНИЕ НЕ ПОМЕЧАЕТСЯ (срез 1б §4.4, РП-11): её ссылки — места (домашняя, разделы,
+ * «Открывать вместо»), архивное место клиент показывает плашкой и вычищает при следующей правке
+ * навигации; тег на приложении был бы вторым сигналом о том же и копился бы на каждой архивации
+ * раздела. Отсечка — по АСПЕКТУ источника, а не по свойству ребра: зеркало одно на пару концов
+ * (Д-5), и приложение, держащее цель ещё и своим свойством, по ребру не отличить.
  */
 export async function markRefSourcesNeedsReview(
   tx: Tx,
@@ -449,6 +455,7 @@ export async function markRefSourcesNeedsReview(
        SET tags = e.tags || ARRAY[${NEEDS_REVIEW_TAG}]::text[]
      WHERE e.graph_id = ${graphId}::uuid
        AND NOT (${NEEDS_REVIEW_TAG} = ANY(e.tags))
+       AND NOT (${APP_ASPECT} = ANY(e.aspects))
        AND EXISTS (SELECT 1 FROM relations r
                     WHERE r.target_id = ${archivedTargetId}::uuid
                       AND r.role = ${ROLE_REF} AND r.source_id = e.id)
@@ -472,6 +479,10 @@ export async function markRefSourcesNeedsReview(
  * откат одной операции стирал бы след другой.
  *
  * Возвращает id строк, с которых тег снят: тем же журналом мерится, что откат сработал.
+ *
+ * Запись-приложение отсечена симметрично пометке (срез 1б §4.4, РП-11): механизм `needs-review` по
+ * архивации цели приложений не касается вовсе — ни ставит, ни снимает. Тег, лёгший на запись до
+ * того, как она стала приложением, снимает человек.
  */
 export async function unmarkRefSources(
   tx: Tx,
@@ -485,6 +496,7 @@ export async function unmarkRefSources(
      WHERE e.graph_id = ${graphId}::uuid
        AND e.id = ANY(${uuidArray(sourceIds)})
        AND ${NEEDS_REVIEW_TAG} = ANY(e.tags)
+       AND NOT (${APP_ASPECT} = ANY(e.aspects))
        AND NOT EXISTS (SELECT 1 FROM relations r
                          JOIN entities t ON t.id = r.target_id
                         WHERE r.source_id = e.id AND r.role = ${ROLE_REF} AND t.archived)

@@ -501,3 +501,84 @@ describe('entity.blocks — пачка данных блоков (§6.3)', () =>
     expect(results.peek).toEqual({ ok: true, kind: 'rows', rows: [], more: 0 });
   });
 });
+
+describe('entity.blocks — бейдж раздела `badgeOf` (срез 1б §9.3, РП-8)', () => {
+  /** Страница с телом дословно — бейдж читает тело сервером. */
+  async function pageWithBody(user: GraphId, body: string): Promise<string> {
+    const created = await callerFor(user).entity.create({
+      input: { title: 'Раздел', tags: [], body, aspects: ['orbis/page'] },
+      source: 'ui',
+    });
+    return created.id;
+  }
+
+  // Первый блок — во вкладке контейнера, второй — ниже на верхнем уровне: считается ПЕРВЫЙ в
+  // порядке документа (обход в глубину, как у `bodyIssues`), а не первый на верхнем уровне.
+  const TWO_BLOCKS = [
+    'Шапка раздела',
+    '',
+    '{{tabs}}',
+    '{{tab: Задачи}}',
+    '{{query:aspect=orbis/task}}',
+    '{{/tab}}',
+    '{{/tabs}}',
+    '',
+    '{{query:aspect=orbis/financial}}',
+    '',
+  ].join('\n');
+
+  test('страница с двумя блоками (первый — во вкладке) — число первого в порядке документа', async () => {
+    const user = await freshGraph();
+    await seedWorld(user);
+    const section = await pageWithBody(user, TWO_BLOCKS);
+    const { results } = await callerFor(user).entity.blocks({
+      blocks: [{ key: 'badge', badgeOf: section }],
+    });
+    expect(results.badge).toEqual({ ok: true, kind: 'count', count: 7 });
+  });
+
+  test('страница без блоков данных — kind:none, а не отказ', async () => {
+    const user = await freshGraph();
+    const section = await pageWithBody(user, 'Просто текст без блоков.\n');
+    const { results } = await callerFor(user).entity.blocks({
+      blocks: [{ key: 'badge', badgeOf: section }],
+    });
+    expect(results.badge).toEqual({ ok: true, kind: 'none' });
+  });
+
+  test('чужой и несуществующий id — отказ бейджа (ok:false), не чужие данные', async () => {
+    const owner = await freshGraph();
+    await seedWorld(owner);
+    const foreign = await pageWithBody(owner, TWO_BLOCKS);
+    const stranger = await freshGraph();
+    const { results } = await callerFor(stranger).entity.blocks({
+      blocks: [
+        { key: 'foreign', badgeOf: foreign },
+        { key: 'missing', badgeOf: newId() },
+      ],
+    });
+    expect(asError(results.foreign).code).toBe('NOT_FOUND');
+    expect(asError(results.missing).code).toBe('NOT_FOUND');
+  });
+
+  test('пачка из текстового блока и двух бейджей — один вызов, одна транзакция', async () => {
+    const user = await freshGraph();
+    await seedWorld(user);
+    const first = await pageWithBody(user, TWO_BLOCKS);
+    const empty = await pageWithBody(user, 'Без блоков\n');
+    const counting = countingDb();
+    const { results } = await callerFor(user, counting.db).entity.blocks({
+      blocks: [
+        { key: 'text', text: 'aspect=orbis/financial, display=tile, aggregate=count' },
+        { key: 'b1', badgeOf: first },
+        { key: 'b2', badgeOf: empty },
+      ],
+    });
+    expect(results).toEqual({
+      text: { ok: true, kind: 'count', count: 2 },
+      b1: { ok: true, kind: 'count', count: 7 },
+      b2: { ok: true, kind: 'none' },
+    });
+    expect(counting.transactions()).toBe(1);
+  });
+});

@@ -160,6 +160,7 @@ import { recomputeProjectAncestors } from './ancestors';
 import { assertEntityProps } from './aspects-validate';
 import { bodyFieldsFromMarkdown } from './body-fields';
 import { ExecError } from './errors';
+import { applyHomeFollowUps, type HomeHook, homeHookOf } from './home';
 import {
   assertExtensionEnabled,
   assertExtensionPropsWritable,
@@ -346,6 +347,12 @@ interface PreparedOp {
   journal: JournalPlan;
   apply(ctx: ExecCtx): Promise<OpOutcome>;
   budgetHook?: BudgetHook;
+  /**
+   * Признак «первое место задаёт дом» (срез 1б §4.3): операция поставила записи новыми местами
+   * приложения. Считается на стадии подготовки, исполняется после стадии 5 follow-up'ом в тот же
+   * action (см. `applyHomeFollowUpsOf`).
+   */
+  homeHook?: HomeHook;
   /**
    * Сущности, чьё ПОДДЕРЕВО операция могла сдвинуть по правилу `nearest_ancestor` (§А8):
    * цель изменённого иерархического ребра либо сущность, у которой навесили/сняли
@@ -545,8 +552,11 @@ export async function execute(
       // Бюджет-хук A4 (§2.3): привязка/ребиндинг ТЕМ ЖЕ tx, операции — в тот же action.
       // Replay по client-UUID ничего не применял — хук не запускается (идемпотентность §5.3)
       let followUps: PreparedOp[] = [];
-      if (!ctx.internalUndo && out.replay !== true && plan.budgetHook) {
-        followUps = await applyBudgetFollowUps(ctx, [plan.budgetHook]);
+      if (!ctx.internalUndo && out.replay !== true) {
+        if (plan.budgetHook) followUps = await applyBudgetFollowUps(ctx, [plan.budgetHook]);
+        // «Дом» — после бюджет-хука: хук пишет рёбра конвертов, «дом» — свойство страницы; порядок
+        // между ними безразличен, а общий шов «после всех дописанных» держит один путь с пачкой.
+        followUps = [...followUps, ...(await applyHomeFollowUpsOf(ctx, [plan]))];
       }
       // Стадии 6–7. Внутренний режим undo: вместо action тем же tx пишется
       // undo-сообщение — undo не порождает нового action (undo неотменяем, §7.8).
@@ -726,7 +736,10 @@ async function executeBatch(
         ctx,
         plans.flatMap((p) => (p.budgetHook ? [p.budgetHook] : [])),
       );
-      const allPlans = [...plans, ...followUps];
+      // «Первое место задаёт дом» (§4.3) — тем же швом: дописанные правки в тот же action, в
+      // results не входят.
+      const homeFollowUps = await applyHomeFollowUpsOf(ctx, plans);
+      const allPlans = [...plans, ...followUps, ...homeFollowUps];
       // Пересчёт предков — после бюджет-хука (см. одиночный путь).
       const recomputeOps = await applyAncestorRecompute(ctx, allPlans);
       const refOps = await applyRefEffects(ctx, allPlans);
@@ -1585,6 +1598,31 @@ async function applyBudgetFollowUps(ctx: ExecCtx, hooks: BudgetHook[]): Promise<
   return applied;
 }
 
+/**
+ * Follow-up «первое место задаёт дом» (срез 1б §4.3, Д-6) — по образцу `applyBudgetFollowUps`:
+ * дописанная правка «Дом» страницы строится через `prepareOp` в ТОМ ЖЕ ctx и применяется сразу, её
+ * `journal.operations/inverse` входят в тот же action — один Undo снимает и место, и дом. Готовится
+ * без `BatchState`: к этому моменту все операции пачки применены, и читается записанное состояние.
+ *
+ * Механизм проставлен ЯВНО — `hook`, как у бюджет-хука: правка не автора, а следствие его действия
+ * (§4.3 «исполняет сервер»); свойство «Дом» без флагов, и гейт прав её пропускает при любом акторе.
+ * НЕ вызывается в internalUndo-режиме и на replay — вызывающие стоят за теми же условиями, что и
+ * бюджет-хук.
+ */
+async function applyHomeFollowUpsOf(
+  ctx: ExecCtx,
+  plans: readonly PreparedOp[],
+): Promise<PreparedOp[]> {
+  const hooks = plans.flatMap((p) => (p.homeHook ? [p.homeHook] : []));
+  if (hooks.length === 0) return [];
+  const hookCtx: ExecCtx = { ...ctx, mechanism: 'hook' };
+  return applyHomeFollowUps(ctx.tx, ctx.req.identity.graph, hooks, async (desc) => {
+    const plan = await prepareOp(hookCtx, desc.tool, desc.input);
+    await plan.apply(hookCtx);
+    return plan;
+  });
+}
+
 /** Несёт ли строка хоть один аспект стороны контура кэша. */
 function carriesContourSide(aspects: ReadonlySet<string>, row: EntityRow | null): boolean {
   // `=== true`, а не голая цепочка: у `?.` результат `boolean | undefined`, и предикат
@@ -2096,6 +2134,7 @@ async function prepareEntityCreate(
   return {
     journal,
     budgetHook: { before: null, after: values as EntityRow },
+    ...homeHookOf(null, values as EntityRow),
     ...refWrite,
     // Стадия 5: идемпотентная вставка по client-UUID (§5.3, §9.1)
     async apply(applyCtx: ExecCtx): Promise<OpOutcome> {
@@ -2546,6 +2585,7 @@ async function prepareEntityUpdate(
   return {
     journal,
     budgetHook: { before: current, after: afterRow },
+    ...homeHookOf(current, afterRow),
     ...ancestorRootsOnProjectChange(ctx.registry, input.id, before, state),
     // Ссылочная половина записи (§А6): проверка целей и зеркала — после стадии 5.
     ...refWriteOf(ctx, input.id, before, state, propsPatch),

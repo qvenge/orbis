@@ -1,5 +1,10 @@
 import type { AppRouter } from '@orbis/server/src/router';
-import { type BlockResult, type EntityBlocksInput, entityBlocksInput } from '@orbis/shared';
+import {
+  type BlockResult,
+  type EntityBlocksInput,
+  type EntityBlockTextItem,
+  entityBlocksInput,
+} from '@orbis/shared';
 import { type DefaultOptions, QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { type RenderResult, render } from '@testing-library/react';
 import { TRPCClientError, type TRPCLink } from '@trpc/client';
@@ -226,7 +231,7 @@ export function isTemplatesListCall(c: { path: string; input: unknown }): boolea
 
 /** Ответ одному блоку пачки: строки (сокращение для `kind:'rows'` без остатка) или сам результат. */
 export type BlockReplyValue = readonly WireEntityFixture[] | BlockResult;
-type BlockItem = EntityBlocksInput['blocks'][number];
+type BlockItem = EntityBlockTextItem;
 
 /**
  * Ответ `entity.blocks` по карте «ТЕКСТ блока → строки | BlockResult» — чтобы тесты заметок
@@ -261,6 +266,8 @@ export function blocksReply(
     return {
       results: Object.fromEntries(
         blocks.map((b) => {
+          // Бейдж раздела (`badgeOf`, срез 1б) карта текстов не описывает: «числа нет».
+          if (!('text' in b)) return [b.key, { ok: true, kind: 'none' } satisfies BlockResult];
           const entry = map[b.text.trim()];
           return [b.key, asResult(typeof entry === 'function' ? entry(b) : entry)];
         }),
@@ -271,7 +278,7 @@ export function blocksReply(
 
 /** Тексты блоков одного вызова `entity.blocks` в порядке пачки — для сверок «что ушло». */
 export function blockTexts(call: { input: unknown }): string[] {
-  return (call.input as EntityBlocksInput).blocks.map((b) => b.text);
+  return (call.input as EntityBlocksInput).blocks.flatMap((b) => ('text' in b ? [b.text] : []));
 }
 
 /**

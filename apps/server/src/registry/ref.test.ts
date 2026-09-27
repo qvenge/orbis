@@ -8,11 +8,15 @@
 import { afterAll, beforeAll, expect, test } from 'bun:test';
 import type { GraphId } from '@orbis/shared';
 import {
+  APP_ASPECT,
+  APP_HOME,
+  APP_NAV,
   BUILTIN_ASPECT_DEFS,
   BUILTIN_CONTRACT_DEFS,
   BUILTIN_PROPERTY_META,
   BUILTIN_RELATION_ROLE_META,
   newId,
+  PAGE_ASPECT,
 } from '@orbis/shared';
 import { assertStaticQuery, type QueryAst } from '@orbis/shared/query';
 import { sql } from 'drizzle-orm';
@@ -1039,4 +1043,96 @@ test('ref × merge: undo слияния возвращает подпись зе
   // «Байт-в-байт» (§7.8) — и для значения, и для подписи производного ребра.
   expect(await propsOf(user, y.id)).toMatchObject({ [a]: c });
   expect(await refEdges(user, y.id)).toEqual([{ target: c, property: a }]);
+});
+
+// ---------------------------------------------------------------------------
+// Срез 1б §4.4 (РП-11): приложение `needs-review` из-за архивации своего раздела не получает
+// ---------------------------------------------------------------------------
+
+test('ref: архив страницы-раздела — приложение БЕЗ needs-review, обычная запись со ссылкой на ту же страницу — с тегом', async () => {
+  const user = await freshGraph();
+  const sink = makeChatJournalSink();
+  const section = okEntity(
+    await execute(
+      db,
+      req(user, [
+        { tool: 'entity_create', input: { title: 'Раздел', tags: [], aspects: [PAGE_ASPECT] } },
+      ]),
+      { sink },
+    ),
+  ).id;
+  const app = okEntity(
+    await execute(
+      db,
+      req(user, [
+        {
+          tool: 'entity_create',
+          input: {
+            title: 'Приложение',
+            tags: [],
+            aspects: [APP_ASPECT],
+            props: { [APP_NAV]: [section], [APP_HOME]: section },
+          },
+        },
+      ]),
+      { sink },
+    ),
+  ).id;
+  // Обычная запись ссылается на ту же страницу своим ссылочным свойством.
+  const created = await execute(
+    db,
+    req(
+      user,
+      [
+        {
+          tool: 'property_create',
+          input: {
+            key: 'user/see_page',
+            label: { ru: 'См. страницу' },
+            description: { ru: 'Ссылка на страницу' },
+            type: { kind: 'ref', target: { filter: { aspect: PAGE_ASPECT } } },
+            status: 'active',
+          },
+        },
+      ],
+      { source: 'ui' },
+    ),
+  );
+  if (!created.ok) throw new Error(JSON.stringify(created.error));
+  const prop = (created.results[0] as { property: string }).property;
+  const note = okEntity(
+    await execute(
+      db,
+      req(user, [
+        {
+          tool: 'entity_create',
+          input: { title: 'Заметка', tags: [], props: { [prop]: section } },
+        },
+      ]),
+      { sink },
+    ),
+  ).id;
+
+  const archived = await execute(
+    db,
+    req(user, [{ tool: 'entity_update', input: { id: section, archived: true } }]),
+    { sink },
+  );
+  if (!archived.ok) throw new Error(JSON.stringify(archived.error));
+  expect(await tagsOf(user, app)).toEqual([]);
+  expect(await tagsOf(user, note)).toEqual(['needs-review']);
+
+  // Следующая правка навигации проходит (плашка — забота клиента): раздел вычищен, отказа нет.
+  const next = await execute(
+    db,
+    req(user, [{ tool: 'entity_update', input: { id: app, props: { [APP_NAV]: [] } } }]),
+    { sink },
+  );
+  expect(next.ok).toBe(true);
+  expect(await tagsOf(user, app)).toEqual([]);
+
+  const undone = await undoAction(db, { identity: personal(user), actionId: archived.actionId });
+  expect(undone.ok).toBe(true);
+  expect(await tagsOf(user, note)).toEqual([]);
+  expect(await tagsOf(user, app)).toEqual([]);
 });

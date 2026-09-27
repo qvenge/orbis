@@ -1,6 +1,7 @@
 // apps/server/src/routers/chat.ts
 // Роутер chat (§9.1): треды §4.5 (детерминированные id, ensure-семантика) и сообщения
 // §4.6 (append-only). Только трансляция: примитивы — chat/threads.ts и chat/messages.ts.
+import { chatThreadEntityInput } from '@orbis/shared';
 import { and, desc, eq, lt, or, type SQL } from 'drizzle-orm';
 import { z } from 'zod';
 import { appendMessageIdempotent, excludeInfraSystemRows } from '../chat/messages';
@@ -25,6 +26,27 @@ const BEFORE_CURSOR_RE =
   /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z(\|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})?$/;
 
 export const chatRouter = router({
+  /**
+   * Старая ссылка `/thread/<id>` → запись треда (срез 1б §7.1, РП-17): тред записи — её id,
+   * глобальный тред, неизвестный или чужой (RLS его не покажет) — `null`, и клиент ведёт на хост.
+   * Чтение, а не ensure: перевод ссылки ничего не заводит.
+   */
+  threadEntity: protectedProcedure
+    .input(chatThreadEntityInput)
+    .query(async ({ ctx, input }): Promise<{ entityId: string | null }> => {
+      const rows = await withIdentity(ctx.db, ctx.identity, (tx) =>
+        tx
+          .select({ entityId: chatThreads.entityId })
+          .from(chatThreads)
+          // Граф — явно, а не только RLS: участник нескольких графов видит их все, а ссылка
+          // переводится в записи ТЕКУЩЕГО графа.
+          .where(
+            and(eq(chatThreads.id, input.threadId), eq(chatThreads.graphId, ctx.identity.graph)),
+          ),
+      );
+      return { entityId: rows[0]?.entityId ?? null };
+    }),
+
   // Без entityId — глобальный тред владельца; ensure идемпотентен (§4.5)
   ensureThread: ownerOnlyProcedure
     .input(z.object({ entityId: z.string().uuid().optional() }).strict())

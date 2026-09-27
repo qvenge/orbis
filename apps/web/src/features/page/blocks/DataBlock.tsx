@@ -77,6 +77,9 @@ function isEmptyResult(r: BlockResult): boolean {
       return r.count === 0;
     case 'latest':
       return r.value === null;
+    // Ответ бейджа раздела (срез 1б §9.3) — блоку страницы не приходит; «нет числа» и есть пусто.
+    case 'none':
+      return true;
   }
 }
 

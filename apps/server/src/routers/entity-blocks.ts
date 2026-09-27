@@ -9,10 +9,12 @@ import {
   type EntityBlocksResult,
 } from '@orbis/shared';
 // Листовой сабпат, не баррель `@orbis/shared/doc`: нужна одна строка, а не редактор документа.
+import { type PageNode, parsePageText } from '@orbis/shared/doc/page-grammar';
 import { EMPTY_QUERY_MESSAGE } from '@orbis/shared/doc/placement';
 import type { QueryAst } from '@orbis/shared/query';
-import type { SQL } from 'drizzle-orm';
+import { and, eq, inArray, type SQL } from 'drizzle-orm';
 import type { Db } from '../db/client';
+import { entities } from '../db/schema';
 import { type Tx, withIdentity } from '../db/with-identity';
 import { ExecError } from '../errors';
 import type { Identity } from '../identity';
@@ -54,9 +56,12 @@ type Plan =
   | { kind: 'sum'; sql: SQL }
   | { kind: 'latest'; sql: SQL };
 
+/** `settled` — ответ блока известен без SQL: отказ разбора или бейдж страницы без блоков. */
 type Prepared =
-  | { key: string; kind: 'failed'; result: BlockResult }
+  | { key: string; kind: 'settled'; result: BlockResult }
   | { key: string; kind: 'planned'; plan: Plan; window: Window | null };
+
+type TextItem = Extract<EntityBlocksInput['blocks'][number], { text: string }>;
 
 /**
  * Отказ разбора/компиляции → ошибка блока в той же форме, что `queryErrorToTRPC` кладёт в
@@ -74,38 +79,122 @@ function compileFailure(e: unknown): BlockError {
 }
 
 /**
- * Разбор и компиляция одного блока — чисто, без SQL. Любой отказ остаётся отказом ЭТОГО блока.
+ * Разбор и компиляция одного текста запроса — чисто, без SQL. Любой отказ остаётся отказом ЭТОГО
+ * блока. `compile` решает вид ответа: блок — по проекции (`compileBlock`), бейдж — всегда число.
  *
  * Пустой текст отсекается ДО разбора (Р-21-8): грамматика принимает его законным пустым
  * фильтром, а сервер такой фильтр не отсекает — блок «не настроен» вернул бы все записи
  * владельца. Текст ОБРЕЗАЕТСЯ по краям перед разбором — так же, как у плашки тела
  * (`doc/placement.ts`) и блока в web: иначе позиция ошибки разошлась бы с их позицией.
  */
-function prepareBlock(
-  block: EntityBlocksInput['blocks'][number],
+function prepareQuery(
+  key: string,
+  rawText: string,
+  thisEntityId: string | null,
   base: CompileCtx,
   params: Parameters<typeof materializationWindow>[2],
+  compile: (ast: QueryAst, cctx: CompileCtx) => Plan,
 ): Prepared {
-  const text = block.text.trim();
+  const text = rawText.trim();
   if (text === '') {
     return {
-      key: block.key,
-      kind: 'failed',
+      key,
+      kind: 'settled',
       result: { ok: false, error: { code: 'EMPTY', message: EMPTY_QUERY_MESSAGE } },
     };
   }
-  const cctx: CompileCtx = { ...base, thisEntityId: block.thisEntityId ?? null };
+  const cctx: CompileCtx = { ...base, thisEntityId };
   try {
     const ast = parseQueryText(text, cctx);
     return {
-      key: block.key,
+      key,
       kind: 'planned',
-      plan: compileBlock(ast, cctx, block.limit),
+      plan: compile(ast, cctx),
       window: materializationWindow(ast, cctx.today, params),
     };
   } catch (e) {
-    return { key: block.key, kind: 'failed', result: { ok: false, error: compileFailure(e) } };
+    return { key, kind: 'settled', result: { ok: false, error: compileFailure(e) } };
   }
+}
+
+function prepareBlock(
+  block: TextItem,
+  base: CompileCtx,
+  params: Parameters<typeof materializationWindow>[2],
+): Prepared {
+  return prepareQuery(block.key, block.text, block.thisEntityId ?? null, base, params, (ast, c) =>
+    compileBlock(ast, c, block.limit),
+  );
+}
+
+/**
+ * Текст ПЕРВОГО блока данных (`{{query:…}}`) страницы в порядке документа — обход в глубину, как у
+ * `bodyIssues` (`doc/placement.ts`): блок во вкладке или колонке, стоящий выше, первее блока ниже на
+ * верхнем уровне. Сломанный контейнер (`broken`) внутрь не обходится — он не рисуется, и бейдж не
+ * считает то, чего владелец на странице не видит. `null` — блоков данных нет.
+ */
+function firstQueryText(nodes: readonly PageNode[]): string | null {
+  for (const node of nodes) {
+    if (node.kind === 'query') return node.text;
+    const parts =
+      node.kind === 'columns'
+        ? node.parts
+        : node.kind === 'tabs'
+          ? node.parts.map((t) => t.children)
+          : [];
+    for (const part of parts) {
+      const found = firstQueryText(part);
+      if (found !== null) return found;
+    }
+  }
+  return null;
+}
+
+/** Отказ бейджа: страницы нет или она чужая — RLS их не различает, и ответ один. */
+const BADGE_NOT_FOUND: BlockResult = {
+  ok: false,
+  error: { code: 'NOT_FOUND', message: 'страница раздела не найдена' },
+};
+
+/**
+ * Бейджи раздела (срез 1б §9.3, РП-8): тела страниц — ОДНИМ чтением на пачку, под той же
+ * идентичностью (чужая страница под RLS не видна — отказ, а не чужое число). Число — счёт первого
+ * блока данных (`compileCountAst`), что бы ни стояло в его проекции: бейдж — число записей раздела,
+ * а не плитка суммы. `thisEntityId` — сама страница: `this` в её блоке значит её, как на экране.
+ */
+async function prepareBadges(
+  tx: Tx,
+  identity: Identity,
+  items: ReadonlyArray<{ key: string; badgeOf: string }>,
+  base: CompileCtx,
+  params: Parameters<typeof materializationWindow>[2],
+): Promise<Map<string, Prepared>> {
+  const out = new Map<string, Prepared>();
+  if (items.length === 0) return out;
+  const ids = [...new Set(items.map((b) => b.badgeOf.toLowerCase()))];
+  const rows = await tx
+    .select({ id: entities.id, body: entities.body })
+    .from(entities)
+    .where(and(eq(entities.graphId, identity.graph), inArray(entities.id, ids)));
+  const bodies = new Map(rows.map((r) => [r.id, r.body]));
+  for (const item of items) {
+    const body = bodies.get(item.badgeOf.toLowerCase());
+    if (body === undefined) {
+      out.set(item.key, { key: item.key, kind: 'settled', result: BADGE_NOT_FOUND });
+      continue;
+    }
+    const text = firstQueryText(parsePageText(body ?? ''));
+    out.set(
+      item.key,
+      text === null
+        ? { key: item.key, kind: 'settled', result: { ok: true, kind: 'none' } }
+        : prepareQuery(item.key, text, item.badgeOf, base, params, (ast, c) => ({
+            kind: 'count',
+            sql: compileCountAst(ast, c),
+          })),
+    );
+  }
+  return out;
 }
 
 /**
@@ -193,7 +282,7 @@ async function executePlan(sp: Tx, plan: Plan): Promise<BlockResult> {
 async function executeAll(tx: Tx, prepared: Prepared[]): Promise<EntityBlocksResult> {
   const entries: [string, BlockResult][] = [];
   for (const p of prepared) {
-    if (p.kind === 'failed') {
+    if (p.kind === 'settled') {
       entries.push([p.key, p.result]);
       continue;
     }
@@ -222,7 +311,8 @@ async function executeAll(tx: Tx, prepared: Prepared[]): Promise<EntityBlocksRes
 }
 
 /**
- * Пачка блоков страницы (§6.3): до `BLOCKS_BATCH_CAP` блоков по ТЕКСТУ запроса.
+ * Пачка блоков страницы (§6.3): до `BLOCKS_BATCH_CAP` блоков по ТЕКСТУ запроса и бейджей разделов
+ * (`badgeOf`, срез 1б §9.3) — бейдж читает тело страницы в той же фазе 1 и дальше живёт как блок.
  *
  * Фаза 1 — ОДНА транзакция под идентичностью владельца: контекст (реестр, таймзона) снимается
  * один раз, каждый блок разбирается и компилируется в свой try/catch (отказ — результат блока
@@ -247,7 +337,17 @@ export async function runBlocks(
     const base = await queryContext(tx, identity.graph, null);
     // Триггеры и горизонт — из того же снимка, по которому блоки разобраны и исполнятся.
     const params = materializeRuleOf(base.reg).rule.params;
-    const prepared = blocks.map((b) => prepareBlock(b, base, params));
+    const badges = await prepareBadges(
+      tx,
+      identity,
+      blocks.flatMap((b) => ('badgeOf' in b ? [b] : [])),
+      base,
+      params,
+    );
+    // Порядок пачки сохраняется: ответ собирается в порядке входа, бейджи — на своих местах.
+    const prepared = blocks.map((b) =>
+      'badgeOf' in b ? (badges.get(b.key) as Prepared) : prepareBlock(b, base, params),
+    );
     const window = prepared.reduce<Window | null>(
       (acc, p) => (p.kind === 'planned' ? unionWindow(acc, p.window) : acc),
       null,

@@ -9,6 +9,7 @@
 import { agendaRouter } from './routers/agenda';
 import { agentRunRouter } from './routers/agent-run';
 import { aiRouter } from './routers/ai';
+import { appsRouter } from './routers/apps';
 import { budgetRouter } from './routers/budget';
 import { chatRouter } from './routers/chat';
 import { entityRouter } from './routers/entity';
@@ -50,6 +51,8 @@ export const appRouter = router({
   // Владельческая половина внутреннего исполнителя (V1.3, V1.6, V1.9, V1.14): «прогнать
   // сейчас», ответ на вопрос прогона, предложение и решение по нему, обзор рутины
   routine: routineRouter,
+  // Действия владельца над записью-приложением (срез 1б §8.6): выключение и архив одной пачкой
+  app: appsRouter,
 });
 
 export type AppRouter = typeof appRouter;

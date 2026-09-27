@@ -422,3 +422,33 @@ describe('ai.undo / ai.undoLast (§7.8)', () => {
     expect(missing.code).toBe('NOT_FOUND');
   });
 });
+
+describe('chat.threadEntity — старая ссылка на тред → запись (срез 1б §7.1, РП-17)', () => {
+  test('тред записи → её id; глобальный тред → null; неизвестный тред → null', async () => {
+    const user = await freshGraph();
+    const caller = callerFor(user);
+    const e = await caller.entity.create({
+      input: { title: 'Носитель треда', tags: [] },
+      source: 'fast_path',
+    });
+    const { threadId } = await caller.chat.ensureThread({ entityId: e.id });
+    expect(await caller.chat.threadEntity({ threadId })).toEqual({ entityId: e.id });
+
+    const global = await caller.chat.ensureThread({});
+    expect(await caller.chat.threadEntity({ threadId: global.threadId })).toEqual({
+      entityId: null,
+    });
+    expect(await caller.chat.threadEntity({ threadId: newId() })).toEqual({ entityId: null });
+  });
+
+  test('чужой тред под RLS не виден — null, а не чужая запись', async () => {
+    const owner = await freshGraph();
+    const e = await callerFor(owner).entity.create({
+      input: { title: 'Чужая запись', tags: [] },
+      source: 'fast_path',
+    });
+    const { threadId } = await callerFor(owner).chat.ensureThread({ entityId: e.id });
+    const stranger = await freshGraph();
+    expect(await callerFor(stranger).chat.threadEntity({ threadId })).toEqual({ entityId: null });
+  });
+});
