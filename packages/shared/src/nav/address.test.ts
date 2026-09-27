@@ -285,10 +285,17 @@ describe('листовость сабпата @orbis/shared/nav (первый к
     for (const s of found) expect(['../supply/etalons']).toContain(s);
   });
 
-  test('index.ts отдаёт только ./address', () => {
-    const found = specifiers(read('./index.ts'));
+  test('history-model.ts импортирует только ./address', () => {
+    const found = specifiers(read('./history-model.ts'));
     expect(found).toContain('./address');
     for (const s of found) expect(['./address']).toContain(s);
+  });
+
+  test('index.ts отдаёт только ./address и ./history-model', () => {
+    const found = specifiers(read('./index.ts'));
+    expect(found).toContain('./address');
+    expect(found).toContain('./history-model');
+    for (const s of found) expect(['./address', './history-model']).toContain(s);
   });
 
   test('положительный контроль: регэксп видит все формы', () => {
@@ -301,7 +308,9 @@ describe('листовость сабпата @orbis/shared/nav (первый к
     expect(specifiers("const m = await import ('../doc');")).toEqual(['../doc']);
     expect(specifiers("require('../doc')")).toEqual(['../doc']);
     // Корневой баррель — не листовой: сторож на нём покраснел бы.
-    expect(specifiers(read('../index.ts')).some((s) => s !== './address')).toBe(true);
+    expect(
+      specifiers(read('../index.ts')).some((s) => s !== './address' && s !== './history-model'),
+    ).toBe(true);
   });
 
   test('сабпат @orbis/shared/nav объявлен в exports', () => {
