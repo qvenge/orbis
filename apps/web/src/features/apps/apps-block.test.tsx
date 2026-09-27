@@ -14,6 +14,7 @@ import {
   unstubLaunchMode,
 } from '../../app/frame/frame-fixtures';
 import { noteRegistryVersion, resetRegistryVersionForTests } from '../../lib/registry/useRegistry';
+import { useNav } from '../../state/navigation';
 import { installCrashTrap, renderWithProviders } from '../../test/harness';
 import { BUILTIN_REGISTRY } from '../../test/registry';
 import {
@@ -28,6 +29,7 @@ import {
   MY_HOME,
   MY_ROW,
   MY_SECTION,
+  PLAIN,
   PROJ,
   PROJ_HOME,
   PROJ_ROW,
@@ -155,4 +157,23 @@ test('«список из заголовка» — раздел чужого д�
   await heading('Общая страница');
   await waitFor(() => expect(shownPath()).toBe(`/r/${HOST_PAGE}`));
   await waitFor(() => expect(frameIcon()).toHaveTextContent('🪐'));
+});
+
+test('m-2: раздел-не-страница — не ярлык «↗», открывается разделом своего приложения', async () => {
+  resetFrame(`/a/${MY}`);
+  const withRecord = appRow(MY, 'Мой дом', '🏡', {
+    'orbis/app_home': MY_HOME,
+    [APP_NAV]: [MY_SECTION, PLAIN],
+  });
+  renderApp(appsWorld({ apps: [withRecord] }));
+  await heading('Дом приложения');
+  fireEvent.click(frameIcon());
+  const row = await screen.findByTestId(`nav-section-${PLAIN}`);
+  await waitFor(() => expect(row).toHaveTextContent('Купить хлеб'));
+  expect(row).not.toHaveTextContent('↗');
+  fireEvent.click(row);
+  await heading('Купить хлеб');
+  expect(shownPath()).toBe(`/a/${MY}/r/${PLAIN}`);
+  await waitFor(() => expect(frameIcon()).toHaveTextContent('🏡'));
+  expect(useNav.getState().model.apps[MY]?.activeSection).toBe(PLAIN);
 });

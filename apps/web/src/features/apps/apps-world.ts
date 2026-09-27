@@ -21,7 +21,7 @@ import {
 import { frameHandler, frameWorld, PAGES, SHELL_ROW } from '../../app/frame/frame-fixtures';
 import { type MockHandler, type WireEntityFixture, wireEntity } from '../../test/harness';
 import { PAGE_TEMPLATES_QUERY } from '../page/usePageTemplates';
-import { APPS_QUERY, HOMED_PAGES_QUERY } from './useApps';
+import { APPS_QUERY, NAV_PAGES_QUERY } from './useApps';
 
 const id = (n: number) => `00000000-0000-4000-8000-0000000020${String(n).padStart(2, '0')}`;
 
@@ -152,9 +152,7 @@ export function appsHandler(w: AppsWorld): MockHandler {
       const q = (input as { query?: string }).query ?? '';
       if (q === APPS_QUERY) return [SHELL_ROW, ...w.apps];
       if (q === PAGE_TEMPLATES_QUERY) return w.templates;
-      if (q === HOMED_PAGES_QUERY) {
-        return all().filter((e) => e.aspects.includes(PAGE_ASPECT) && HOME_PROPERTY in e.props);
-      }
+      if (q === NAV_PAGES_QUERY) return all().filter((e) => e.aspects.includes(PAGE_ASPECT));
     }
     if (path === 'entity.blocks' && w.blockRows !== undefined) {
       const { blocks } = input as { blocks: { key: string; text?: string }[] };

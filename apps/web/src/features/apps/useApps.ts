@@ -1,4 +1,5 @@
 import { APP_DISABLED, APP_OPENS_OVER, type AppInfo, SUPPLY_KEY } from '@orbis/shared';
+import { HOST_SHELL_KEY } from '@orbis/shared/supply';
 import { useMemo } from 'react';
 import { trpc } from '../../trpc';
 import type { WireEntity } from '../entity-detail/record-host';
@@ -13,14 +14,12 @@ import type { WireEntity } from '../entity-detail/record-host';
 export const APPS_QUERY = 'aspect=orbis/app, archived=any';
 
 /**
- * Страницы с непустым «Домом» (§4.3) — для ярлыка «↗ Дом» у раздела чужого дома в листе разделов.
- * Страница без «Дома» принадлежит хосту, и в список ей попадать незачем. Спрашивает только
- * открытый лист: холодному старту запрос не нужен (С1б-16).
+ * Страницы графа — для ярлыка «↗ Дом» у раздела чужого дома в листе разделов (§4.3, §7.2). Нужны все,
+ * а не только с «Домом»: страница без «Дома» — хоста, и в чужом приложении она тоже ярлык, а раздел-
+ * не-страница ярлыком не бывает вовсе (у записи «Дома» нет) — отличить их можно только аспектом
+ * (гейт 20, m-2). Спрашивает только открытый лист: холодному старту запрос не нужен (С1б-16).
  */
-export const HOMED_PAGES_QUERY = 'aspect=orbis/page, has=orbis/home';
-
-/** Ключ эталона оболочки хоста: её запись — сам хост, а не «своё приложение». */
-const HOST_SHELL_KEY = 'host-shell';
+export const NAV_PAGES_QUERY = 'aspect=orbis/page';
 
 const NO_ROWS: WireEntity[] = [];
 

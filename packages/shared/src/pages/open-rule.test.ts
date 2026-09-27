@@ -11,6 +11,7 @@ import {
   openPlacesOf,
   placeContendersOf,
   recordPlaceChoice,
+  samePlaque,
 } from './open-rule';
 
 // Таблица случаев С1б-1: правило открытия записи с приложением в адресе (спека 1б §5.1–§5.3, §4.3,
@@ -571,6 +572,29 @@ describe('homePlaceOf — шаг 0 для домашней приложения 
       kind: 'fallback',
       plaque: { kind: 'reserved', key: 'budget' },
     });
+  });
+});
+
+describe('samePlaque — одна плашка на приложение и на вид (R-25, гейт 20 I-2)', () => {
+  test('по приложению / ссылке / виду; резерв и спор мест — по одному', () => {
+    const off = (appId: string) => ({ kind: 'app-off' as const, appId, archived: false });
+    expect(samePlaque(off(OFF), { ...off(OFF), archived: true })).toBe(true);
+    expect(samePlaque(off(OFF), off(ARCH))).toBe(false);
+    expect(samePlaque({ kind: 'app-unknown', ref: 'x' }, { kind: 'app-unknown', ref: 'x' })).toBe(
+      true,
+    );
+    expect(samePlaque({ kind: 'app-unknown', ref: 'x' }, { kind: 'app-unknown', ref: 'y' })).toBe(
+      false,
+    );
+    const nv = (appId: string) => ({ kind: 'no-view' as const, appId, alternatives: [] });
+    expect(samePlaque(nv(HOME), nv(HOME))).toBe(true);
+    expect(samePlaque(nv(HOME), nv(PROJ))).toBe(false);
+    const d = (c: string[]) => ({ kind: 'place-dispute' as const, contenders: c });
+    expect(samePlaque(d([HOME, PROJ]), d([HOME]))).toBe(true);
+    expect(
+      samePlaque({ kind: 'reserved', key: 'budget' }, { kind: 'reserved', key: 'budget' }),
+    ).toBe(true);
+    expect(samePlaque(off(OFF), { kind: 'app-unknown', ref: OFF })).toBe(false);
   });
 });
 

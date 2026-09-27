@@ -23,6 +23,7 @@ import { BUILTIN_PROPERTY_META } from '../registry/builtin-properties';
 import { BUILTIN_RELATION_ROLE_META } from '../registry/builtin-roles';
 import {
   etalonOf,
+  HOST_SHELL_KEY,
   HOST_TEMPLATE_ETALON_TEXT,
   HOST_TEMPLATE_KEY,
   isHostTemplateRecord,
@@ -74,6 +75,12 @@ describe('шаблон хоста (спека 1б §8.5, §9.2)', () => {
     expect(isHostTemplateRecord({ props: { [SUPPLY_KEY]: 'host-template' } })).toBe(true);
     expect(isHostTemplateRecord({ props: { [SUPPLY_KEY]: 'home' } })).toBe(false);
     expect(isHostTemplateRecord({ props: {} })).toBe(false);
+  });
+
+  test('HOST_SHELL_KEY — ключ единственного эталона-приложения (оболочки хоста)', () => {
+    expect(HOST_SHELL_KEY).toBe('host-shell');
+    const apps: string[] = SUPPLY_ETALONS.filter((e) => e.kind === 'app').map((e) => e.key);
+    expect(apps).toEqual([HOST_SHELL_KEY]);
   });
 });
 

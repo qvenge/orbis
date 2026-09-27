@@ -5,6 +5,7 @@ import { appRefOf, useNav } from '../../state/navigation';
 import { trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
 import { Card } from '../../ui/Card';
+import { useToast } from '../../ui/toast-store';
 import { useUpdateBatch } from '../page/useUpdateBatch';
 import type { OpenPlaquesProps } from './OpenPlaques';
 import { PlaceQuestion } from './PlaceQuestion';
@@ -110,7 +111,14 @@ function AppOff({
   title: string;
 }) {
   const utils = trpc.useUtils();
-  const enable = trpc.app.setDisabled.useMutation({ onSettled: () => invalidateGraph(utils) });
+  const { show } = useToast();
+  // Включается только приложение (R-33): расширения «Состава» — отдельное действие в «Приложения и
+  // расширения». Отказ — тостом: глобального обработчика ошибок мутаций нет, молчание читалось бы
+  // как «кнопка не работает» (гейт 20, m-3).
+  const enable = trpc.app.setDisabled.useMutation({
+    onSettled: () => invalidateGraph(utils),
+    onError: () => show(`Не удалось включить «${title}»`, 'danger'),
+  });
   const runBatch = useUpdateBatch();
   const id = plaque.appId;
   return (

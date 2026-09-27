@@ -51,7 +51,7 @@
  */
 import { PAGE_ASPECT } from '../constants';
 import type { Address, AppRef } from '../nav/address';
-import { RESERVED_APP_KEYS } from '../supply/etalons';
+import { HOST_SHELL_KEY, RESERVED_APP_KEYS } from '../supply/etalons';
 import {
   type ChoiceSubject,
   chooseTemplate,
@@ -94,9 +94,6 @@ export interface OpenDecision {
 
 type Frame = OpenDecision['frame'];
 const HOST_FRAME: Frame = { kind: 'host' };
-
-/** Ключ эталона оболочки хоста: `/a/host-shell` одинаков в любом графе и значит сам хост. */
-const HOST_SHELL_KEY = 'host-shell';
 
 /** Место в споре — только включённое неархивное приложение (§5.2 шаг 4, §5.3). */
 const isLive = (a: AppInfo) => !a.disabled && !a.archived;
@@ -165,11 +162,17 @@ function redirectOf(frame: Frame, place: AddressPlace): boolean {
   }
 }
 
-/** Одно приложение — одна плашка, даже если X — и A адреса, и дом страницы (выключено или не найдено). */
-function samePlaque(a: OpenPlaque, b: OpenPlaque): boolean {
+/**
+ * Одна и та же плашка: одно приложение — одна плашка, даже если X — и A адреса, и дом страницы
+ * (выключено или не найдено); резерв, «нет вида» в том же приложении и вопрос спора мест — по одному
+ * на экран. Общая для правила и для web: плашки решения, вызвавшего замену адреса (R-25), web
+ * сверяет с плашками нового решения этой же функцией — иначе одна плашка выходила дважды (гейт 20, I-2).
+ */
+export function samePlaque(a: OpenPlaque, b: OpenPlaque): boolean {
   if (a.kind === 'app-off' && b.kind === 'app-off') return a.appId === b.appId;
   if (a.kind === 'app-unknown' && b.kind === 'app-unknown') return a.ref === b.ref;
-  return false;
+  if (a.kind === 'no-view' && b.kind === 'no-view') return a.appId === b.appId;
+  return a.kind === b.kind && (a.kind === 'reserved' || a.kind === 'place-dispute');
 }
 function pushPlaque(plaques: OpenPlaque[], p: OpenPlaque): void {
   if (!plaques.some((q) => samePlaque(q, p))) plaques.push(p);

@@ -13,7 +13,7 @@ import {
   HOST_APP,
   type NavModel,
 } from '@orbis/shared/nav';
-import { etalonOf, type SupplyEtalon, type SupplyKey } from '@orbis/shared/supply';
+import { etalonOf, HOST_SHELL_KEY, type SupplyEtalon, type SupplyKey } from '@orbis/shared/supply';
 import { useMemo } from 'react';
 import { useSupplyRecords } from '../../features/page/useSupplyRecords';
 import { sectionRoot, useNav } from '../../state/navigation';
@@ -51,7 +51,6 @@ export interface AppShell {
   status: 'loading' | 'ok' | 'error';
 }
 
-const HOST_SHELL_KEY: SupplyKey = 'host-shell';
 /**
  * Своё приложение — id записи. Ключ поставки в адресе (`/a/<ключ>`) записью не читается: домашняя
  * приложения сперва разрешает его в id записи (`homePlaceOf`, `router.tsx`).

@@ -470,7 +470,9 @@ export function DetailScreen({ entityId, lead }: { entityId: string; lead?: Reac
           >
             <OpenPlaques
               plaques={
-                placeRequest === undefined
+                // Вопрос уже на экране (спор мест не решён) — второй по просьбе меню не нужен (гейт 20, m-1).
+                placeRequest === undefined ||
+                opening.plaques.some((p) => p.kind === 'place-dispute')
                   ? opening.plaques
                   : [
                       ...opening.plaques,

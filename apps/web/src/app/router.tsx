@@ -127,15 +127,17 @@ function HomeScreen({ app }: { app: string }) {
   );
   const target = place?.kind === 'app' ? place.id : app;
   const shell = useAppShell(target);
-  const fallback = place?.kind === 'fallback' || place?.kind === 'alias';
+  // Рамка — по ответу шага 0, в обе стороны: плашка — место в стопке хоста; приложение ожило
+  // («включить», «восстановить», правка агентом) — место обратно в рамку приложения (гейт 20, I-1).
+  const frame = place === null ? null : place.kind === 'app' ? place.id : HOST_APP;
   useEffect(() => {
-    if (!fallback) return;
+    if (frame === null) return;
     const nav = useNav.getState();
     if (place?.kind === 'alias') nav.replacePlace(HOST_HOME, HOST_APP);
-    else if (nav.model.activeApp !== HOST_APP) {
-      nav.replacePlace(currentEntry(nav.model).address, HOST_APP);
+    else if (nav.model.activeApp !== frame) {
+      nav.replacePlace(currentEntry(nav.model).address, frame);
     }
-  }, [fallback, place]);
+  }, [frame, place]);
   // Приложения ещё едут — не «домашней нет»: адрес может оказаться выключенным или чужим.
   if (app !== HOST_APP && apps.status === 'loading') return <ScreenFallback />;
   if (place?.kind === 'fallback') {

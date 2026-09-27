@@ -2,7 +2,7 @@ import { HOME_PROPERTY } from '@orbis/shared';
 import { type AppKey, HOST_APP } from '@orbis/shared/nav';
 import { useMemo } from 'react';
 import { createPortal } from 'react-dom';
-import { HOMED_PAGES_QUERY, useApps } from '../../features/apps/useApps';
+import { NAV_PAGES_QUERY, useApps } from '../../features/apps/useApps';
 import { useBadgeData } from '../../lib/query-blocks/useBadgeData';
 import { useNav } from '../../state/navigation';
 import { trpc } from '../../trpc';
@@ -26,8 +26,8 @@ import { type ShellSection, useAppShell } from './useAppShell';
  *
  * Раздел, чей «Дом» — другое приложение (или хост), — ярлык «↗ <Дом>» (§4.3, §7.2): страница
  * открывается в рамке своего дома, откуда бы ни пришла ссылка, и нажатие ведёт туда сразу, а не
- * через стопку этого приложения. «Дом» разделов — одним запросом страниц с «Домом», только пока лист
- * открыт (С1б-16).
+ * через стопку этого приложения. «Дом» разделов — одним запросом страниц (`NAV_PAGES_QUERY`), только
+ * пока лист открыт (С1б-16).
  */
 export function NavSheet({
   app,
@@ -40,22 +40,21 @@ export function NavSheet({
 }) {
   const shell = useAppShell(app, { withStoppedAt: true });
   const apps = useApps();
-  const homed = trpc.entity.query.useQuery({ query: HOMED_PAGES_QUERY });
-  /** Раздел → приложение его дома, если это не `app`; пустой «Дом» и оболочка хоста — хост. */
+  const pages = trpc.entity.query.useQuery({ query: NAV_PAGES_QUERY });
+  /**
+   * Раздел-страница → приложение её дома, если это не `app`; пустой «Дом» и оболочка хоста — хост.
+   * Раздел не-страница (навигация — ссылки на любые записи, §4.2) ярлыком не бывает: «Дома» у записи
+   * нет, она — обычный раздел этого приложения (гейт 20, m-2).
+   */
   const foreign = useMemo(() => {
     const out = new Map<string, AppKey>();
-    for (const r of homed.data ?? []) {
+    for (const r of pages.data ?? []) {
       const h = r.props[HOME_PROPERTY];
       const key = typeof h === 'string' && h !== '' && h !== apps.hostShell?.id ? h : HOST_APP;
       if (key !== app) out.set(r.id, key);
     }
-    // Страница без «Дома» в списке не приходит: в чужом приложении она — ярлык хоста.
-    if (app !== HOST_APP && homed.data !== undefined) {
-      for (const s of shell.sections)
-        if (!homed.data.some((r) => r.id === s.id)) out.set(s.id, HOST_APP);
-    }
     return out;
-  }, [homed.data, apps.hostShell, app, shell.sections]);
+  }, [pages.data, apps.hostShell, app]);
   const titleOf = (key: AppKey) =>
     key === HOST_APP ? (apps.hostShell?.title ?? 'Orbis') : (apps.byId.get(key)?.title ?? '…');
   const openSection = (id: string) => {

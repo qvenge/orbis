@@ -19,6 +19,7 @@ import { noteRegistryVersion, resetRegistryVersionForTests } from '../../lib/reg
 import { useNav } from '../../state/navigation';
 import { installCrashTrap, renderWithProviders, wireEntity } from '../../test/harness';
 import { BUILTIN_REGISTRY } from '../../test/registry';
+import { useToastStore } from '../../ui/toast-store';
 import {
   type AppsWorld,
   appRow,
@@ -30,6 +31,7 @@ import {
   IDEA,
   IDEA_ROW,
   MY,
+  MY_HOME,
   MY_ROW,
   NOTES,
   NOTES_ROW,
@@ -421,4 +423,99 @@ test('запись без мест из хоста — хост, адрес то
   expect(shownPath()).toBe(`/r/${PLAIN}`);
   expect(screen.queryByTestId('open-plaque')).toBeNull();
   expect(screen.queryByTestId('place-question')).toBeNull();
+});
+
+// ─── Раунд 1 гейта (I-1, I-2, m-1, m-3) ────────────────────────────────────────────────────────
+
+const OFF_MY = () =>
+  appRow(MY, 'Мой дом', '🏡', { 'orbis/app_home': MY_HOME, [APP_DISABLED]: true });
+
+test('I-1: домашняя /a/<выключенное> — «включить» возвращает место в рамку приложения', async () => {
+  resetFrame(`/a/${MY}`);
+  const { calls } = renderApp(appsWorld({ apps: [OFF_MY()] }));
+  const plaque = await screen.findByTestId('open-plaque', undefined, { timeout: 5000 });
+  await waitFor(() => expect(frameIcon()).toHaveTextContent('🪐'));
+  fireEvent.click(within(plaque).getByRole('button', { name: 'включить' }));
+  await heading('Дом приложения');
+  await waitFor(() => expect(frameIcon()).toHaveTextContent('🏡'));
+  expect(navModel().activeApp).toBe(MY);
+  expect(shownPath()).toBe(`/a/${MY}`);
+  expect(calls.filter((c) => c.path === 'app.setDisabled')).toHaveLength(1);
+});
+
+test('I-1: домашняя /a/<архивное> — «восстановить» возвращает место в рамку приложения', async () => {
+  resetFrame(`/a/${MY}`);
+  const archived = appRow(MY, 'Мой дом', '🏡', { 'orbis/app_home': MY_HOME }, { archived: true });
+  renderApp(appsWorld({ apps: [archived] }));
+  const plaque = await screen.findByTestId('open-plaque', undefined, { timeout: 5000 });
+  fireEvent.click(within(plaque).getByRole('button', { name: 'восстановить' }));
+  await heading('Дом приложения');
+  await waitFor(() => expect(frameIcon()).toHaveTextContent('🏡'));
+  expect(navModel().activeApp).toBe(MY);
+});
+
+test('I-1: плитка выключенного приложения на «Домой» → плашка → «включить» → его домашняя в его рамке', async () => {
+  resetFrame('/');
+  renderApp(appsWorld({ apps: [OFF_MY()] }));
+  await heading('Домой');
+  fireEvent.click(await screen.findByTestId(`app-tile-${MY}`));
+  const plaque = await screen.findByTestId('open-plaque');
+  expect(plaque).toHaveTextContent('Мой дом выключено');
+  await waitFor(() => expect(frameIcon()).toHaveTextContent('🪐'));
+  fireEvent.click(within(plaque).getByRole('button', { name: 'включить' }));
+  await heading('Дом приложения');
+  await waitFor(() => expect(frameIcon()).toHaveTextContent('🏡'));
+  expect(navModel().activeApp).toBe(MY);
+});
+
+test('m-3 / R-33: отказ «включить» — тост ошибки, не молча', async () => {
+  resetFrame(`/a/${MY}`);
+  useToastStore.setState({ toasts: [] });
+  renderApp(appsWorld({ apps: [OFF_MY()] }), (path) => {
+    if (path === 'app.setDisabled') throw new Error('отказ');
+    return undefined;
+  });
+  const plaque = await screen.findByTestId('open-plaque', undefined, { timeout: 5000 });
+  fireEvent.click(within(plaque).getByRole('button', { name: 'включить' }));
+  await waitFor(() =>
+    expect(useToastStore.getState().toasts).toMatchObject([
+      { title: 'Не удалось включить «Мой дом»', tone: 'danger' },
+    ]),
+  );
+  expect(frameIcon()).toHaveTextContent('🪐');
+});
+
+test('I-2: «Дом» страницы выключен и в старом, и в новом адресе — одна плашка, без двойных ключей', async () => {
+  const errors = vi.spyOn(console, 'error');
+  resetFrame(`/a/${MY}/r/${UTRO}`);
+  renderApp(
+    appsWorld({ apps: [MY_ROW, DACHA_ROW], records: [page(UTRO, 'Утро', DACHA, 'Утро.')] }),
+  );
+  await heading('Утро');
+  await waitFor(() => expect(shownPath()).toBe(`/r/${UTRO}`));
+  await waitFor(() => expect(screen.getAllByTestId('open-plaque')).toHaveLength(1));
+  expect(screen.getByTestId('open-plaque')).toHaveTextContent('Дача выключено');
+  expect(errors.mock.calls.flat().join(' ')).not.toContain('same key');
+  errors.mockRestore();
+});
+
+test('I-2: /a/<оболочка хоста>/r/<задача> при споре мест — один вопрос', async () => {
+  resetFrame(`/a/${SHELL}/r/${TASK}`);
+  renderApp(TWO_PLACES());
+  await heading('Починить кран');
+  await waitFor(() => expect(shownPath()).toBe(`/r/${TASK}`));
+  await screen.findByTestId('place-question');
+  await waitFor(() => expect(screen.getAllByTestId('place-question')).toHaveLength(1));
+});
+
+test('m-1: «Сменить, где открывать…» при открытом вопросе второго не добавляет', async () => {
+  resetFrame(`/r/${TASK}`);
+  renderApp(TWO_PLACES());
+  await screen.findByTestId('place-question');
+  fireEvent.click(screen.getByTestId('screen-menu'));
+  fireEvent.click(
+    await screen.findByRole('menuitem', { name: 'Сменить, где открывать такие записи' }),
+  );
+  await waitFor(() => expect(screen.queryByRole('menu')).toBeNull());
+  expect(screen.getAllByTestId('place-question')).toHaveLength(1);
 });

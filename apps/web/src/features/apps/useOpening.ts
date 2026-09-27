@@ -3,6 +3,7 @@ import {
   HOME_PROPERTY,
   type OpenDecision,
   type OpenPlaque,
+  samePlaque,
   type TemplateCandidate,
 } from '@orbis/shared';
 import { currentEntry, HOST_APP } from '@orbis/shared/nav';
@@ -115,8 +116,13 @@ export function useOpening(
     [templates, frameApp, shellId],
   );
   const own = decision?.plaques ?? NO_PLAQUES;
+  // Перенесённое — только то, чего новое решение не даёт само (R-25: пересчёт для нового адреса их
+  // «уже не даст»): «Дом» страницы выключен и в старом, и в новом адресе — плашка одна (гейт 20, I-2).
   const plaques = useMemo(
-    () => (carried === null ? own : [...carried.plaques, ...own]),
+    () =>
+      carried === null
+        ? own
+        : [...carried.plaques.filter((c) => !own.some((o) => samePlaque(c, o))), ...own],
     [carried, own],
   );
   return { frameApp, templates: framed, plaques };
