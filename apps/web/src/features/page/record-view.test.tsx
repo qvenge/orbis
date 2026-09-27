@@ -38,14 +38,18 @@ import { useToastStore } from '../../ui/toast-store';
 import { DetailScreen } from '../entity-detail/DetailScreen';
 import { BodyScreenProvider } from '../entity-detail/EntityBody';
 import {
+  hostTemplateRecord,
   STRUCTURE_FIXTURES,
   type StructureFixture,
   structureHandler,
 } from '../entity-detail/structure-fixtures';
 import { detailGetInput } from '../entity-detail/useEntityDetail';
+import { changeViewPlan } from './change-view';
+import { HOST_TEMPLATE_TEXT } from './host-template';
 import { RecordView } from './RecordView';
 import { DisputePlaque } from './TemplatePlaques';
 import { PAGE_TEMPLATES_QUERY } from './usePageTemplates';
+import { SUPPLY_RECORDS_QUERY } from './useSupplyRecords';
 
 /**
  * Поломка примитива по флагу — «шаблон бросает при рендере». Колонки есть только в шаблонах
@@ -327,6 +331,56 @@ describe('выбор шаблона (§4.2)', () => {
     });
     expect(await screen.findByTestId('page-tabs')).toBeInTheDocument();
     expect(await screen.findByTestId('broken-template')).toHaveTextContent('ошибка отрисовки');
+  });
+
+  test('запись шаблона хоста упала при рендере → эталон и плашка; «Изменить вид» копирует эталон, а не упавшее тело (гейт 17, M-1)', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    crash.columns = true;
+    const f = fixture('note-plain');
+    const crashing = hostTemplateRecord(
+      `{{title}}\n\nВид в колонках\n\n{{columns}}\n{{column}}\nа\n{{/column}}\n{{column}}\nб\n{{/column}}\n{{/columns}}\n\n{{body}}\n`,
+    );
+    const batches: unknown[] = [];
+    openRecord(
+      f,
+      { templates: [] },
+      {
+        over: (path, input) => {
+          if (
+            path === 'entity.query' &&
+            (input as { query?: string }).query === SUPPLY_RECORDS_QUERY
+          )
+            return [crashing];
+          if (path === 'entity.updateBatch') {
+            batches.push((input as { operations: unknown }).operations);
+            return { actionId: ACTION_ID, results: [] };
+          }
+          return undefined;
+        },
+      },
+    );
+    const plaque = await screen.findByTestId('host-template-broken');
+    expect(plaque).toHaveTextContent('ошибка отрисовки');
+    expect(await screen.findByTestId('page-tabs')).toBeInTheDocument();
+    expect(renderedTexts()).not.toContain('Вид в колонках');
+
+    fireEvent.keyDown(await screen.findByTestId('detail-menu'), { key: 'Enter' });
+    await screen.findByRole('menu');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Изменить вид только этой записи' }));
+    await waitFor(() => expect(batches).toHaveLength(1));
+    const plan = changeViewPlan(HOST_TEMPLATE_TEXT, f.entity.body);
+    if (plan.case !== 2) throw new Error('ожидался случай 2');
+    expect(batches[0]).toEqual([
+      {
+        tool: 'entity_update',
+        input: {
+          id: f.entity.id,
+          expectedUpdatedAt: f.entity.updatedAt,
+          body: plan.body,
+          aspects: { attach: [PAGE_ASPECT] },
+        },
+      },
+    ]);
   });
 
   test('ошибка списка шаблонов → шаблон хоста и плашка, экран работает (РП-14)', async () => {

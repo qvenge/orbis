@@ -48,6 +48,18 @@ export const SUPPLY_KEYS = [
 ] as const;
 export type SupplyKey = (typeof SUPPLY_KEYS)[number];
 
+/** Ключ эталона записи «Шаблон хоста» (§9.2). */
+export const HOST_TEMPLATE_KEY: SupplyKey = 'host-template';
+
+/**
+ * Запись — поставочный «Шаблон хоста» (§9.2): по ключу эталона, а не по аспекту или «Шаблону для» — у
+ * неё их нет, она запасной шаблон, а не кандидат. Один признак на весь web (род тела, баннер
+ * настройки, пункты меню): копии разошлись бы на первом переименовании ключа.
+ */
+export function isHostTemplateRecord(r: { props: Readonly<Record<string, unknown>> }): boolean {
+  return r.props[SUPPLY_KEY] === HOST_TEMPLATE_KEY;
+}
+
 /**
  * Зарезервированные ключи приложений (спека §3.4): `/a/budget…` до 1в — хост и плашка «Бюджет придёт
  * со следующим срезом». В варианты `orbis/supply_key` не входят — эталона у них пока нет.

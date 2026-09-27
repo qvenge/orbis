@@ -56,7 +56,7 @@ export function TabsContainer({
   memoryKey,
 }: {
   tabs: readonly { label: string; content: ReactNode; keepMounted: boolean }[];
-  /** Место контейнера в дереве (путь узла) — ключ в памяти вкладок экрана, если она есть. */
+  /** Место контейнера в дереве (устойчивое имя узла, `placeNames` рендерера) — ключ в памяти вкладок экрана. */
   memoryKey: string;
 }) {
   const memory = useContext(TabMemoryContext);

@@ -24,6 +24,8 @@ import { BUILTIN_RELATION_ROLE_META } from '../registry/builtin-roles';
 import {
   etalonOf,
   HOST_TEMPLATE_ETALON_TEXT,
+  HOST_TEMPLATE_KEY,
+  isHostTemplateRecord,
   LEGACY_ETALON_TEXTS,
   parseAppPrint,
   parsePagePrint,
@@ -65,6 +67,13 @@ describe('шаблон хоста (спека 1б §8.5, §9.2)', () => {
       emoji: '📄',
       text: HOST_TEMPLATE_ETALON_TEXT,
     });
+  });
+
+  test('isHostTemplateRecord — по ключу эталона «host-template», и только по нему', () => {
+    expect(HOST_TEMPLATE_KEY).toBe('host-template');
+    expect(isHostTemplateRecord({ props: { [SUPPLY_KEY]: 'host-template' } })).toBe(true);
+    expect(isHostTemplateRecord({ props: { [SUPPLY_KEY]: 'home' } })).toBe(false);
+    expect(isHostTemplateRecord({ props: {} })).toBe(false);
   });
 });
 

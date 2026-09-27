@@ -15,6 +15,7 @@ import {
   installCrashTrap,
   type MockHandler,
   renderWithProviders,
+  trpcError,
   type WireEntityFixture,
   wireEntity,
 } from '../../test/harness';
@@ -60,7 +61,8 @@ const uuid = (n: number): string => `00000000-0000-4000-8000-${String(n).padStar
 
 /**
  * Экран записи: обработчик экрана по варианту шаблона хоста; `templates` — ответ списка шаблонов
- * владельца, `supply` — ответ записей поставки вместо варианта.
+ * владельца, `supply` — ответ записей поставки вместо варианта; `supplyGate` держит этот ответ до
+ * своего разрешения, `supplyFails` — отказ одного этого запроса.
  */
 function open(
   f: StructureFixture,
@@ -68,6 +70,8 @@ function open(
     hostTemplate?: HostTemplateVariant;
     templates?: WireEntityFixture[];
     supply?: WireEntityFixture[];
+    supplyGate?: Promise<void>;
+    supplyFails?: boolean;
   } = {},
 ) {
   useNav.setState({
@@ -78,11 +82,15 @@ function open(
     f,
     opts.hostTemplate === undefined ? {} : { hostTemplate: opts.hostTemplate },
   );
-  const handler: MockHandler = (path, input, type) => {
+  const handler: MockHandler = async (path, input, type) => {
     const q = (input as { query?: unknown } | undefined)?.query;
     if (path === 'entity.query' && q === PAGE_TEMPLATES_QUERY) return opts.templates ?? [];
-    if (path === 'entity.query' && q === SUPPLY_RECORDS_QUERY && opts.supply !== undefined)
-      return opts.supply;
+    if (path === 'entity.query' && q === SUPPLY_RECORDS_QUERY) {
+      if (opts.supplyGate !== undefined) await opts.supplyGate;
+      if (opts.supplyFails === true)
+        throw trpcError('INTERNAL_SERVER_ERROR', 'поставка недоступна');
+      if (opts.supply !== undefined) return opts.supply;
+    }
     return base(path, input, type);
   };
   return renderWithProviders(<DetailScreen entityId={f.entity.id} />, handler, {
@@ -178,6 +186,60 @@ test('записи шаблона хоста нет — пункта «Наст�
   await screen.findByTestId('page-tabs');
   await new Promise((r) => setTimeout(r, 50));
   expect(await menuLabels()).not.toContain('Настроить шаблон хоста');
+});
+
+test('запрос записей поставки отказал — эталон кода без плашки «повреждён» и без «Настроить шаблон хоста» (R-29 (а))', async () => {
+  open(fixture('task'), { supplyFails: true });
+  expect(await screen.findByTestId('page-tabs')).toBeInTheDocument();
+  expect(await screen.findByTestId('tags-block')).toBeInTheDocument();
+  await new Promise((r) => setTimeout(r, 50));
+  expect(screen.queryByTestId('host-template-broken')).toBeNull();
+  expect(await menuLabels()).not.toContain('Настроить шаблон хоста');
+});
+
+test('у самой записи «Шаблон хоста» нет «Сделать шаблоном для…» и «Перестать быть страницей» (R-29 (б))', async () => {
+  open({ name: 'host-template', entity: hostTemplateRecord() });
+  await screen.findByTestId('template-preview-plaque');
+  const labels = await menuLabels();
+  expect(labels).toContain('Настроить');
+  expect(labels).not.toContain('Сделать шаблоном для…');
+  expect(labels).not.toContain('Перестать быть страницей');
+});
+
+test('запись показана своим шаблоном — сломанная запись шаблона хоста плашки не даёт (эталон не показан)', async () => {
+  const OWN = 'Вид задачи\n\n{{title}}\n\n{{body}}\n';
+  const own = wireEntity({
+    id: uuid(1702),
+    title: 'Задачи',
+    body: OWN,
+    bodyDoc: parseBody(OWN),
+    aspects: [PAGE_ASPECT],
+    createdAt: '2026-09-01T00:00:00.000Z',
+    props: { [TEMPLATE_FOR_PROPERTY]: ['orbis/task'] },
+  });
+  open(fixture('task'), { hostTemplate: 'broken', templates: [own] });
+  await waitFor(() => expect(pageTexts()).toContain('Вид задачи'));
+  await new Promise((r) => setTimeout(r, 50));
+  expect(screen.queryByTestId('host-template-broken')).toBeNull();
+});
+
+test('смена «эталон → запись шаблона хоста» не сбрасывает открытую вкладку (гейт 17, M-2)', async () => {
+  let release: () => void = () => {};
+  const supplyGate = new Promise<void>((r) => {
+    release = r;
+  });
+  const edited = hostTemplateRecord(`Своя строка шаблона хоста\n\n${HOST_TEMPLATE_RECORD_BODY}`);
+  open(fixture('task'), { supply: [edited], supplyGate });
+  // Записи поставки ещё едут — показан эталон кода; владелец уходит на «Детали».
+  const details = await screen.findByRole('tab', { name: 'Детали' });
+  fireEvent.mouseDown(details);
+  fireEvent.click(details);
+  await waitFor(() => expect(details).toHaveAttribute('aria-selected', 'true'));
+  expect(pageTexts()).not.toContain('Своя строка шаблона хоста');
+
+  release();
+  await waitFor(() => expect(pageTexts()).toContain('Своя строка шаблона хоста'));
+  expect(screen.getByRole('tab', { name: 'Детали' })).toHaveAttribute('aria-selected', 'true');
 });
 
 // --- (д) {{cards: own}} рядом с явной карточкой и «остальными» ----------------------------------

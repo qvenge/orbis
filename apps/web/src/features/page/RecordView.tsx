@@ -4,6 +4,7 @@ import { type BrokenTemplate, chooseTemplate, type TemplateCandidate } from '@or
 import { type PageNode, parsePageText } from '@orbis/shared/doc/page-grammar';
 import { templateBrokenReason } from '@orbis/shared/doc/placement';
 import type { ParseRegistry } from '@orbis/shared/query';
+import { HOST_TEMPLATE_KEY } from '@orbis/shared/supply';
 import { Component, type ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
 import { ThisEntityProvider } from '../../lib/query-blocks/this-entity';
 import { useFieldCatalog } from '../../lib/query-blocks/useFieldCatalog';
@@ -297,8 +298,23 @@ export function RecordView({
         : decide(entity.aspects, list, reg, registryFailed, crashed, override),
     [entity.aspects, list, reg, registryFailed, crashed, override, preview],
   );
-  const hostRecord = supply.byKey.get('host-template');
-  const hostSource = useMemo(() => hostSourceOf(hostRecord, reg), [hostRecord, reg]);
+  const hostRecord = supply.byKey.get(HOST_TEMPLATE_KEY);
+  /**
+   * Запись шаблона хоста, упавшая при рендере НА ЭТОЙ записи, — ключом «запись экрана + запись шаблона +
+   * её тело»: правка тела или переход на соседнюю запись снимают признак сами. Падение — та же поломка,
+   * что неразобранное (§9.2): показ идёт эталоном, и ВСЁ, что говорит о показанном (плашка, текст для
+   * «Изменить вид» в меню), говорит об эталоне, а не о теле, которое не отрисовалось.
+   */
+  const [hostCrash, setHostCrash] = useState<string | null>(null);
+  const hostCrashKey =
+    hostRecord === undefined ? null : `${entity.id}\n${hostRecord.id}\n${hostRecord.body}`;
+  const hostSource = useMemo(() => {
+    const source = hostSourceOf(hostRecord, reg);
+    return hostCrashKey !== null && hostCrash === hostCrashKey && source.broken === null
+      ? { ...ETALON_SOURCE, recordId: source.recordId, broken: RENDER_CRASH_REASON }
+      : source;
+  }, [hostRecord, reg, hostCrash, hostCrashKey]);
+  const markHostCrashed = useCallback(() => setHostCrash(hostCrashKey), [hostCrashKey]);
   const host = recordHostValue(reply, { planToFact, activeTab: 'record', readOnly });
   const titleOf = (id: string) => list.rows.find((r) => r.id === id)?.title ?? id;
 
@@ -379,7 +395,7 @@ export function RecordView({
             host={hostSource}
             entityId={entity.id}
             onOwnCrash={markCrashed}
-            {...(configureHost !== undefined && { onConfigureHost: configureHost })}
+            onHostCrash={markHostCrashed}
           />
         </div>
       </ThisEntityProvider>
@@ -392,13 +408,13 @@ function ShownTemplate({
   host,
   entityId,
   onOwnCrash,
-  onConfigureHost,
+  onHostCrash,
 }: {
   shown: Shown;
   host: HostSource;
   entityId: string;
   onOwnCrash: (templateId: string) => void;
-  onConfigureHost?: () => void;
+  onHostCrash: () => void;
 }) {
   if (shown.kind === 'wait') {
     return (
@@ -409,27 +425,16 @@ function ShownTemplate({
     );
   }
   if (shown.kind === 'host') {
-    // Эталон кода — последняя ступень перед базовым видом: упал и он — базовый вид (1а §4.2 шаг 8).
-    const etalon = (
-      <RenderBoundary resetKey={`${entityId}:host`} fallback={<BaseRecordView />}>
-        <TemplateTree scope="template:host" nodes={HOST_TEMPLATE_NODES} />
-      </RenderBoundary>
-    );
-    if (host.nodes === HOST_TEMPLATE_NODES) return etalon;
-    // Тело записи шаблона хоста, упавшее при рендере, — та же поломка, что неразобранное (§9.2
-    // гарантии): эталон кода и плашка с причиной «ошибка отрисовки».
+    // Одна граница и одно дерево на обе формы шаблона хоста: смена «эталон ↔ запись» (записи
+    // поставки приехали, запись починили или сломали) не перемонтирует вкладки и тело.
+    // Упала запись — ничего не рисуем сами: о падении узнаёт экран (`onCatch`), и следующим кадром
+    // здесь эталон, а над ним плашка. Упал эталон — последняя ступень, базовый вид (1а §4.2 шаг 8).
+    const record = host.nodes !== HOST_TEMPLATE_NODES;
     return (
       <RenderBoundary
-        resetKey={`${entityId}:host-record:${host.text}`}
-        fallback={
-          <>
-            <HostTemplateBrokenPlaque
-              reason={RENDER_CRASH_REASON}
-              {...(onConfigureHost !== undefined && { onConfigure: onConfigureHost })}
-            />
-            {etalon}
-          </>
-        }
+        resetKey={record ? `${entityId}:host-record:${host.text}` : `${entityId}:host`}
+        fallback={record ? null : <BaseRecordView />}
+        {...(record && { onCatch: onHostCrash })}
       >
         <TemplateTree scope="template:host" nodes={host.nodes} />
       </RenderBoundary>

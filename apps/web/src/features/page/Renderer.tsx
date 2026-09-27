@@ -196,7 +196,7 @@ export function Renderer({
     <BodyKindProvider kind={kind}>
       <RenderPlanContext.Provider value={plan}>
         <div data-testid="page-render" className="flex flex-col gap-6">
-          <NodeList nodes={nodes} prefix={[]} />
+          <NodeList nodes={nodes} prefix={[]} place="" />
           {/* Пока реестр едет, размещённые карточки неизвестны: дописанная сейчас карточка
               через мгновение переехала бы на своё место `{{card: X}}`. */}
           {appendUnplacedCards &&
@@ -227,20 +227,66 @@ function holdsThread(nodes: readonly PageNode[]): boolean {
   );
 }
 
-/** Список узлов одного уровня; `prefix` — путь части, в которой они лежат. */
-function NodeList({ nodes, prefix }: { nodes: readonly PageNode[]; prefix: readonly number[] }) {
-  // Ключ — порядок узла: дерево пересобирается из текста целиком, узлы не переставляются.
+/**
+ * Устойчивые имена узлов списка: вид узла и его номер среди узлов ТОГО ЖЕ вида (`tabs0`, `record1`),
+ * а не индекс в списке.
+ *
+ * Индекс сдвигается от пустых строк: эталон шаблона хоста разбирается в `[title, tags, tabs]`, а
+ * его каноническая печать в записи поставки — в `[title, text, tags, text, tabs]` (пустые абзацы
+ * между блоками). Ключ по индексу перемонтировал бы на смене «эталон ↔ запись» всё дерево вкладок с
+ * редактором тела и терял бы открытую вкладку (гейт 17, M-2). Пустые текстовые узлы не рисуются и
+ * сдвигают только номера текстовых узлов — у них нет своего состояния.
+ */
+function placeNames(nodes: readonly PageNode[]): string[] {
+  const seen = new Map<string, number>();
+  return nodes.map((node) => {
+    const n = seen.get(node.kind) ?? 0;
+    seen.set(node.kind, n + 1);
+    return `${node.kind}${n}`;
+  });
+}
+
+/**
+ * Список узлов одного уровня; `prefix` — путь части, в которой они лежат (по нему — плашки плана),
+ * `place` — её устойчивое имя (`placeNames`; по нему — ключи React и память вкладок).
+ */
+function NodeList({
+  nodes,
+  prefix,
+  place,
+}: {
+  nodes: readonly PageNode[];
+  prefix: readonly number[];
+  place: string;
+}) {
+  const names = placeNames(nodes);
   return (
     <>
-      {nodes.map((node, i) => (
-        <PageNodeView key={pathKey([...prefix, i])} node={node} path={[...prefix, i]} />
-      ))}
+      {nodes.map((node, i) => {
+        const name = names[i] as string;
+        return (
+          <PageNodeView
+            key={name}
+            node={node}
+            path={[...prefix, i]}
+            place={place === '' ? name : `${place}.${name}`}
+          />
+        );
+      })}
     </>
   );
 }
 
 /** Узел — место в тексте: плашка, если он здесь не работает, иначе свой вид. */
-function PageNodeView({ node, path }: { node: PageNode; path: readonly number[] }) {
+function PageNodeView({
+  node,
+  path,
+  place,
+}: {
+  node: PageNode;
+  path: readonly number[];
+  place: string;
+}) {
   const plan = useRenderPlan();
   const issue = plan.issues.get(pathKey(path));
   if (issue !== undefined) {
@@ -279,17 +325,19 @@ function PageNodeView({ node, path }: { node: PageNode; path: readonly number[] 
         <Columns>
           {node.parts.map((part, p) => (
             // biome-ignore lint/suspicious/noArrayIndexKey: колонки не переставляются — порядок и есть их имя
-            <NodeList key={p} nodes={part} prefix={[...path, p]} />
+            <NodeList key={p} nodes={part} prefix={[...path, p]} place={`${place}.${p}`} />
           ))}
         </Columns>
       );
     case 'tabs':
       return (
         <TabsContainer
-          memoryKey={pathKey(path)}
+          memoryKey={place}
           tabs={node.parts.map((tab, p) => ({
             label: tabShowLabel(tab.label, p),
-            content: <NodeList nodes={tab.children} prefix={[...path, p]} />,
+            content: (
+              <NodeList nodes={tab.children} prefix={[...path, p]} place={`${place}.${p}`} />
+            ),
             keepMounted: !holdsThread(tab.children),
           }))}
         />

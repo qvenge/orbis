@@ -1,3 +1,4 @@
+import { isHostTemplateRecord } from '@orbis/shared/supply';
 import { useEffect } from 'react';
 import { ThisEntityProvider } from '../../lib/query-blocks/this-entity';
 import { registerLeaveGuard } from '../../state/leave-guard';
@@ -8,7 +9,7 @@ import { useToast } from '../../ui/toast-store';
 import { leaveBody } from '../entity-detail/body-gate';
 import { bodyKindOf, EntityBody, useBodyScreen } from '../entity-detail/EntityBody';
 import { detailGetInput } from '../entity-detail/useEntityDetail';
-import { isHostTemplate, TemplateBanner, templateForOf } from './TemplateBanner';
+import { TemplateBanner, templateForOf } from './TemplateBanner';
 
 /**
  * Настройка страницы или шаблона (спека страниц 1а §9.1): тело — в ТОМ ЖЕ редакторе, что тело
@@ -63,7 +64,7 @@ export function ConfigureView({ targetId, onDone }: { targetId: string; onDone: 
     );
   }
   const isTemplate = bodyKindOf(entity) === 'template';
-  const host = isHostTemplate(entity.props);
+  const host = isHostTemplateRecord(entity);
   return (
     <div data-testid="configure-view" className="flex flex-col gap-4 px-4 pb-10 pt-5 md:px-6">
       <div className="flex items-center justify-between gap-2">

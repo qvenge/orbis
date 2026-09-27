@@ -1,5 +1,6 @@
 import { PAGE_ASPECT } from '@orbis/shared';
 import type { QueryAst } from '@orbis/shared/query';
+import { isHostTemplateRecord } from '@orbis/shared/supply';
 import { useId, useState } from 'react';
 import { aspectLabel } from '../../lib/registry/labels';
 import { useRegistry } from '../../lib/registry/useRegistry';
@@ -10,7 +11,7 @@ import { Skeleton } from '../../ui/Skeleton';
 import { detailGetInput } from '../entity-detail/useEntityDetail';
 import { PageView } from './PageView';
 import { RecordView } from './RecordView';
-import { isHostTemplate, templateForOf } from './TemplateBanner';
+import { templateForOf } from './TemplateBanner';
 
 type EntityGetReply = RouterOutputs['entity']['get'];
 
@@ -70,7 +71,7 @@ export function TemplatePreview({
   const labels = forAspects.map((id) => aspectLabel(reg, id));
   // Шаблон хоста (срез 1б §9.2) набора не имеет — он вид всех записей без своего шаблона, и
   // «Шаблон для: —» назвало бы его черновиком. Подходящая ему запись — любая (набор пуст).
-  const subject = isHostTemplate(entity.props)
+  const subject = isHostTemplateRecord(entity)
     ? 'Шаблон хоста'
     : `Шаблон для: ${labels.length === 0 ? '—' : labels.join(', ')}`;
 

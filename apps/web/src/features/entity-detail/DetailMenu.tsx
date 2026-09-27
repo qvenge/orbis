@@ -1,4 +1,5 @@
 import { contendersOf, PAGE_ASPECT, TEMPLATE_FOR_PROPERTY } from '@orbis/shared';
+import { isHostTemplateRecord } from '@orbis/shared/supply';
 import {
   Archive,
   ArchiveRestore,
@@ -347,6 +348,10 @@ export function DetailMenu({
   }
 
   function pageItems(v: Extract<DetailMenuView, { kind: 'page' }>): DropdownMenuItem[] {
+    // Запись «Шаблон хоста» (R-29 (б)): «Шаблон для…» сделал бы её с виду кандидатом, а кандидатом
+    // она не станет (её исключает `templatesFromRows`, §9.2), — пункт обещал бы то, чего не будет;
+    // «Перестать быть страницей» ломает запись поставки. Выводят её из поставки архивом.
+    const hostTemplate = isHostTemplateRecord(entity);
     return [
       {
         label: 'Настроить',
@@ -362,16 +367,20 @@ export function DetailMenu({
               onSelect: v.onOpenAsRecord,
             },
           ]),
-      {
-        label: TEMPLATE_FOR,
-        icon: <LayoutTemplate size={16} aria-hidden />,
-        onSelect: () =>
-          setDialog({
-            kind: 'template-for',
-            entityId: entity.id,
-            value: entity.props[TEMPLATE_FOR_PROPERTY],
-          }),
-      },
+      ...(hostTemplate
+        ? []
+        : [
+            {
+              label: TEMPLATE_FOR,
+              icon: <LayoutTemplate size={16} aria-hidden />,
+              onSelect: () =>
+                setDialog({
+                  kind: 'template-for',
+                  entityId: entity.id,
+                  value: entity.props[TEMPLATE_FOR_PROPERTY],
+                }),
+            },
+          ]),
       ...(v.onPreview === undefined
         ? []
         : [
@@ -383,24 +392,28 @@ export function DetailMenu({
           ]),
       // Снимается ТОЛЬКО аспект (РП-22): «Шаблон для» и «Главнее, чем» переживают снятие, и
       // возврат аспекта (Undo, «Сделать страницей») возвращает шаблон каким он был.
-      {
-        label: STOP_PAGE,
-        icon: <Undo2 size={16} aria-hidden />,
-        onSelect: () => {
-          if (!bodySettled()) return;
-          void runBatch(
-            [
-              {
-                tool: 'entity_update',
-                input: { id: entity.id, aspects: { detach: [PAGE_ASPECT] } },
-              },
-            ],
-            'Запись больше не страница',
-            { action: STOP_PAGE },
-          );
-        },
-      },
+      ...(hostTemplate ? [] : [stopPageItem()]),
     ];
+  }
+
+  function stopPageItem(): DropdownMenuItem {
+    return {
+      label: STOP_PAGE,
+      icon: <Undo2 size={16} aria-hidden />,
+      onSelect: () => {
+        if (!bodySettled()) return;
+        void runBatch(
+          [
+            {
+              tool: 'entity_update',
+              input: { id: entity.id, aspects: { detach: [PAGE_ASPECT] } },
+            },
+          ],
+          'Запись больше не страница',
+          { action: STOP_PAGE },
+        );
+      },
+    };
   }
 
   return (

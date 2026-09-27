@@ -1,4 +1,4 @@
-import { SUPPLY_KEY, TEMPLATE_FOR_PROPERTY } from '@orbis/shared';
+import { TEMPLATE_FOR_PROPERTY } from '@orbis/shared';
 import { aspectLabel } from '../../lib/registry/labels';
 import { useRegistry } from '../../lib/registry/useRegistry';
 import { Card } from '../../ui/Card';
@@ -7,11 +7,6 @@ import { Card } from '../../ui/Card';
 export function templateForOf(props: Readonly<Record<string, unknown>>): string[] {
   const value = props[TEMPLATE_FOR_PROPERTY];
   return Array.isArray(value) ? value.filter((x): x is string => typeof x === 'string') : [];
-}
-
-/** Запись поставки «Шаблон хоста» (срез 1б §9.2) — по ключу эталона, как её род тела. */
-export function isHostTemplate(props: Readonly<Record<string, unknown>>): boolean {
-  return props[SUPPLY_KEY] === 'host-template';
 }
 
 /** Подписи аспектов набора в кавычках: «„Проект“», «„Проект“ и „Задача“», «„A“, „B“ и „C“». */
