@@ -11,9 +11,17 @@
 // `writer`, задача 9): «принять», «оставить своё», «добавить». «Вернуть как было» — механизм `user`: оно
 // меняет только содержимое записи (к печати эталона, которая в записи уже лежит), и эталон записи не
 // трогает — после него запись снова «как в поставке» того же эталона.
+//
+// Запись поставки — та, что НЕСЁТ аспект «поставка» сейчас (R-17): снятый аспект — решение владельца
+// «вывести из поставки», и такой записи механизм не предлагает ничего и ничего в ней не пишет, хотя её
+// свойства эталона остаются (снятие аспекта значений не трогает, Р9).
 import {
+  APP_HOME,
+  APP_NAV,
+  APP_OPENS_OVER,
   type GraphId,
   newId,
+  SUPPLY_ASPECT,
   SUPPLY_DECLINED,
   SUPPLY_HASH,
   SUPPLY_KEY,
@@ -24,15 +32,17 @@ import {
   etalonOf,
   parseAppPrint,
   parsePagePrint,
+  printAppProps,
+  printPageRecord,
   SUPPLY_ETALONS,
   type SupplyEtalon,
   type SupplyKey,
   supplyStatusOf,
 } from '@orbis/shared/supply';
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, inArray, sql } from 'drizzle-orm';
 import type { Db } from '../db/client';
 import { entities } from '../db/schema';
-import { withIdentity } from '../db/with-identity';
+import { type Tx, withIdentity } from '../db/with-identity';
 import { ExecError, type ExecErrorCode } from '../errors';
 import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
@@ -55,11 +65,15 @@ export interface SupplyCtx {
 }
 
 /**
- * Пункт «Обновлений» (§9.1 п. 2–3). `update` — у живой записи ключа отпечаток не тот, что у эталона кода, и
- * владелец от этого эталона не отказывался; `new` — записи ключа нет вовсе (ни живой, ни в архиве).
- * `edited` — запись правлена владельцем («Принять все» её не берёт). `declined` — владелец отказывался от
- * ПРЕЖНЕГО эталона этой записи (отказ от нынешнего пункт убирает совсем): плашка может сказать «вы уже
- * оставляли своё — вот ещё более новый эталон».
+ * Пункт «Обновлений» (§9.1 п. 2–3). `update` — у живой записи поставки отпечаток не тот, что у эталона кода,
+ * и владелец от этого эталона не отказывался; `new` — записи ключа нет вовсе либо её архив — откат её же
+ * создания (R-18). `edited` — запись правлена владельцем («Принять все» её не берёт). `declined` — владелец
+ * отказывался от ПРЕЖНЕГО эталона этой записи (отказ от нынешнего пункт убирает совсем): плашка может
+ * сказать «вы уже оставляли своё — вот ещё более новый эталон».
+ *
+ * `etalonText` — печать НОВОГО эталона в этом графе (канон тела считает только сервер), `recordText` —
+ * нынешняя печать записи (`null` у новой): по этой паре «Сравнить» задачи 22 строит двусторонний дифф без
+ * шума канона.
  */
 export interface SupplyUpdate {
   key: SupplyKey;
@@ -67,6 +81,8 @@ export interface SupplyUpdate {
   recordId: string | null;
   edited: boolean;
   declined: boolean;
+  etalonText: string;
+  recordText: string | null;
 }
 
 interface SupplyRow {
@@ -83,9 +99,49 @@ interface SupplyRow {
 interface Snapshot {
   rows: SupplyRow[];
   reg: RegistrySnapshot;
+  /** Архивные записи, чей архив — откат их же создания (R-18): «как будто не добавляли». */
+  undoneCreation: ReadonlySet<string>;
 }
 
-/** Записи поставки графа (с архивными) и реестр — одной транзакцией чтения. */
+/**
+ * Архив записи — откат её создания, а не решение владельца (R-18)? Признак по журналу: последнее
+ * действие, создавшее запись (`entity_create` с её id), отменено, и ПОСЛЕ сообщения об отмене ни одно
+ * действие журнала её не трогало (ни одна операция с её id). Отмена создания — единственное, что делает
+ * inverse `entity_create` (`archived: true`); если владелец потом её восстанавливал и архивировал снова —
+ * это уже его решение, и предложения нет.
+ *
+ * Порядок — по `created_at` сообщений: это время начала транзакции записи журнала (`defaultNow`), а
+ * действия владельца над одной записью идут последовательно.
+ */
+async function archivedByUndoneCreation(tx: Tx, ids: readonly string[]): Promise<Set<string>> {
+  const out = new Set<string>();
+  for (const id of ids) {
+    const created = JSON.stringify({
+      actions: [{ operations: [{ op: 'entity_create', payload: { id } }] }],
+    });
+    const creations = await tx.execute(
+      sql`SELECT metadata -> 'actions' -> 0 ->> 'id' AS action_id FROM chat_messages
+          WHERE metadata @> ${created}::jsonb ORDER BY created_at DESC LIMIT 1`,
+    );
+    const actionId = creations[0]?.action_id as string | undefined;
+    if (actionId === undefined) continue;
+    const undoProbe = JSON.stringify({ type: 'undo', undoes: actionId });
+    const undos = await tx.execute(
+      sql`SELECT created_at FROM chat_messages WHERE metadata @> ${undoProbe}::jsonb LIMIT 1`,
+    );
+    const undoneAt = undos[0]?.created_at;
+    if (undoneAt === undefined) continue;
+    const touched = JSON.stringify({ actions: [{ operations: [{ payload: { id } }] }] });
+    const later = await tx.execute(
+      sql`SELECT 1 FROM chat_messages
+          WHERE created_at > ${undoneAt} AND metadata @> ${touched}::jsonb LIMIT 1`,
+    );
+    if (later.length === 0) out.add(id);
+  }
+  return out;
+}
+
+/** Записи с ключом эталона (с архивными и без аспекта) и реестр — одной транзакцией чтения. */
 async function snapshot(ctx: SupplyCtx): Promise<Snapshot> {
   const graph: GraphId = ctx.identity.graph;
   return withIdentity(ctx.db, ctx.identity, async (tx) => {
@@ -103,6 +159,10 @@ async function snapshot(ctx: SupplyCtx): Promise<Snapshot> {
       .from(entities)
       .where(and(eq(entities.graphId, graph), sql`${entities.props} ? ${SUPPLY_KEY}`));
     const reg = await effectiveRegistry(tx, graph);
+    const undoneCreation = await archivedByUndoneCreation(
+      tx,
+      rows.filter((r) => r.archived).map((r) => r.id),
+    );
     return {
       rows: rows.map((r) => ({
         ...r,
@@ -110,14 +170,21 @@ async function snapshot(ctx: SupplyCtx): Promise<Snapshot> {
         updatedAt: r.updatedAt.toISOString(),
       })),
       reg,
+      undoneCreation,
     };
   });
 }
 
 const keyOf = (r: SupplyRow): unknown => r.props[SUPPLY_KEY];
+/** Запись поставки сейчас — несёт аспект «поставка» (R-17). */
+const isSupply = (r: SupplyRow): boolean => r.aspects.includes(SUPPLY_ASPECT);
+/** Живая запись ключа — с аспектом или без: по ней решается, есть ли у ключа запись вообще. */
 const liveOf = (s: Snapshot, key: SupplyKey): SupplyRow | undefined =>
   s.rows.find((r) => keyOf(r) === key && !r.archived);
-/** Ключ → id живой записи этого графа: ссылки оболочки ставятся только на живые записи. */
+/**
+ * Ключ → id живой записи этого графа: ссылки оболочки ставятся только на живые записи. Снятый аспект
+ * ссылку не отнимает: страница, выведенная из поставки, — всё та же страница владельца в навигации.
+ */
 const resolverOf =
   (s: Snapshot): ResolveSupplyKey =>
   (k) =>
@@ -131,8 +198,16 @@ function etalonIn(etalons: readonly SupplyEtalon[], key: SupplyKey): SupplyEtalo
   return e;
 }
 
-/** Пункт обновления по живой записи или `null`, если предлагать нечего. */
-function updateOf(row: SupplyRow, e: SupplyEtalon): SupplyUpdate | null {
+/** Нынешняя печать записи — та же, с которой `supplyStatusOf` сравнивает `supply_text`. */
+function recordPrintOf(row: SupplyRow, key: SupplyKey): string {
+  return etalonOf(key).kind === 'app'
+    ? printAppProps({ title: row.title, emoji: row.emoji, props: row.props })
+    : printPageRecord({ title: row.title, emoji: row.emoji, body: row.body });
+}
+
+/** Пункт обновления по живой записи поставки или `null`, если предлагать нечего. */
+function updateOf(s: Snapshot, row: SupplyRow, e: SupplyEtalon): SupplyUpdate | null {
+  if (!isSupply(row)) return null;
   const hash = etalonHash(e);
   if (row.props[SUPPLY_HASH] === hash) return null;
   const declined = row.props[SUPPLY_DECLINED];
@@ -144,7 +219,16 @@ function updateOf(row: SupplyRow, e: SupplyEtalon): SupplyUpdate | null {
     recordId: row.id,
     edited: supplyStatusOf(row) === 'edited',
     declined: typeof declined === 'string',
+    etalonText: supplyTextOf(e, s.reg, resolverOf(s)),
+    recordText: recordPrintOf(row, e.key),
   };
+}
+
+/** Архивная запись ключа, которую «добавить» вернёт из архива: её архив — откат её же создания (R-18). */
+function restorableOf(s: Snapshot, key: SupplyKey): SupplyRow | undefined {
+  return s.rows.find(
+    (r) => keyOf(r) === key && r.archived && isSupply(r) && s.undoneCreation.has(r.id),
+  );
 }
 
 /** Что предлагает поставка этому графу. Ничего не пишет. */
@@ -156,15 +240,24 @@ export async function listUpdates(
   const out: SupplyUpdate[] = [];
   for (const e of etalons) {
     const all = s.rows.filter((r) => keyOf(r) === e.key);
-    if (all.length === 0) {
-      out.push({ key: e.key, kind: 'new', recordId: null, edited: false, declined: false });
+    const live = all.find((r) => !r.archived);
+    // Записи ключа нет — или её архив лишь откат «добавить» (R-18): поставка снова предлагает её.
+    // Архив владельцем — его решение (Р-29): ни обновления, ни возврата. Живая запись без аспекта
+    // «поставка» — выведена владельцем из поставки (R-17): ни обновлений, ни `new` для ключа.
+    if (all.length === 0 || (live === undefined && restorableOf(s, e.key) !== undefined)) {
+      out.push({
+        key: e.key,
+        kind: 'new',
+        recordId: null,
+        edited: false,
+        declined: false,
+        etalonText: supplyTextOf(e, s.reg, resolverOf(s)),
+        recordText: null,
+      });
       continue;
     }
-    // Запись ключа только в архиве — владелец её убрал; поставка не предлагает ни обновить её, ни
-    // вернуть (Р-29): архив — его решение.
-    const live = all.find((r) => !r.archived);
     if (live === undefined) continue;
-    const u = updateOf(live, e);
+    const u = updateOf(s, live, e);
     if (u !== null) out.push(u);
   }
   return out;
@@ -218,6 +311,9 @@ function acceptOps(
         tool: 'entity_update',
         input: {
           id: row.id,
+          // Правка места с другой вкладки между чтением и «принять» не перекрывается молча: у тела это
+          // держит `expectedUpdatedAt`, у свойств — предусловие на штамп записи (отказ `CONFLICT`).
+          precondition: [{ property: 'orbis/updated_at', in: [row.updatedAt] }],
           title: e.title,
           emoji: e.emoji,
           props: { ...place, ...supply },
@@ -248,7 +344,25 @@ function liveOrRefuse(s: Snapshot, key: SupplyKey): SupplyRow {
   if (row === undefined) {
     throw new ExecError('NOT_FOUND', `записи поставки «${key}» нет`, { key });
   }
+  if (!isSupply(row)) {
+    throw new ExecError(
+      'VALIDATION',
+      'запись выведена из поставки: аспекта «поставка» на ней нет',
+      {
+        key,
+        id: row.id,
+      },
+    );
+  }
   return row;
+}
+
+/**
+ * Шов гонки для тестов: вызывается между чтением записи и пачкой — там, где в бою успевает правка с другой
+ * вкладки. Боевые вызовы его не передают.
+ */
+export interface RaceSeam {
+  afterRead?: () => Promise<void>;
 }
 
 /** «Принять — прежняя версия сохранится» (§9.1 п. 2). Принять можно и отклонённое раньше. */
@@ -256,8 +370,10 @@ export async function acceptUpdate(
   ctx: SupplyCtx,
   key: SupplyKey,
   etalons: readonly SupplyEtalon[] = SUPPLY_ETALONS,
+  seam: RaceSeam = {},
 ): Promise<{ actionId: string }> {
   const s = await snapshot(ctx);
+  await seam.afterRead?.();
   const row = liveOrRefuse(s, key);
   const e = etalonIn(etalons, key);
   if (row.props[SUPPLY_HASH] === etalonHash(e)) {
@@ -286,7 +402,7 @@ export async function acceptAll(
   for (const e of etalons) {
     const row = liveOf(s, e.key);
     if (row === undefined) continue;
-    const u = updateOf(row, e);
+    const u = updateOf(s, row, e);
     if (u === null || u.edited) continue;
     accepted.push(e.key);
     ops.push(...acceptOps(row, e, s.reg, resolve));
@@ -310,7 +426,7 @@ export async function declineUpdate(
   const s = await snapshot(ctx);
   const row = liveOrRefuse(s, key);
   const e = etalonIn(etalons, key);
-  if (updateOf(row, e) === null) {
+  if (updateOf(s, row, e) === null) {
     throw new ExecError('VALIDATION', 'обновления нет: отказываться не от чего', { key });
   }
   return run(ctx, 'supply', `Оставить своё: «${row.title}»`, [
@@ -342,7 +458,19 @@ export async function revertToEtalon(
   const label = `Вернуть как было: «${row.title}»`;
   // Род печати — по ключу эталона, как у `supplyStatusOf`.
   if (etalonOf(key).kind === 'app') {
-    const print = parseAppPrint(text);
+    const print = await withoutArchivedTargets(ctx, parseAppPrint(text));
+    if (
+      printAppProps({ title: row.title, emoji: row.emoji, props: row.props }) ===
+      printAppProps(print)
+    ) {
+      throw new ExecError(
+        'VALIDATION',
+        'возвращать нечего: отличие от поставки — только записи в архиве',
+        {
+          key,
+        },
+      );
+    }
     const unset = APP_PRINT_PROPS.filter(
       (p) => row.props[p] !== undefined && print.props[p] === undefined,
     );
@@ -384,8 +512,55 @@ export async function revertToEtalon(
 }
 
 /**
- * «Добавить» (§9.1 п. 3): новая запись поставки в существующем графе — только по слову владельца. Запись
- * ключа уже есть (живая или в архиве) — отказ: архив — решение владельца, поставка его не отменяет.
+ * Ссылки места без архивных и несуществующих целей (R-16): печать эталона хранит id записей на момент,
+ * когда эталон пришёл, а исполнитель отказывает всему ссылочному значению с архивной целью («цель
+ * архивна»). Владелец, заархивировавший страницу из навигации, получает навигацию эталона без неё — и
+ * запись честно остаётся «изменено вами», пока страница в архиве.
+ */
+async function withoutArchivedTargets(
+  ctx: SupplyCtx,
+  print: ReturnType<typeof parseAppPrint>,
+): Promise<ReturnType<typeof parseAppPrint>> {
+  const refs = [APP_HOME, APP_NAV, APP_OPENS_OVER];
+  const ids = refs.flatMap((p) => {
+    const v = print.props[p];
+    return typeof v === 'string'
+      ? [v]
+      : Array.isArray(v)
+        ? v.filter((x) => typeof x === 'string')
+        : [];
+  });
+  if (ids.length === 0) return print;
+  const live = await withIdentity(ctx.db, ctx.identity, (tx) =>
+    tx
+      .select({ id: entities.id })
+      .from(entities)
+      .where(
+        and(
+          eq(entities.graphId, ctx.identity.graph),
+          inArray(entities.id, ids),
+          eq(entities.archived, false),
+        ),
+      ),
+  );
+  const alive = new Set(live.map((r) => r.id));
+  const props: Record<string, unknown> = { ...print.props };
+  for (const p of refs) {
+    const v = props[p];
+    if (typeof v === 'string' && !alive.has(v)) delete props[p];
+    if (Array.isArray(v)) {
+      const kept = v.filter((x) => typeof x === 'string' && alive.has(x));
+      if (kept.length > 0) props[p] = kept;
+      else delete props[p];
+    }
+  }
+  return { ...print, props };
+}
+
+/**
+ * «Добавить» (§9.1 п. 3): новая запись поставки в существующем графе — только по слову владельца. Живая
+ * запись ключа — отказ. Архивная: если её архив — откат её же «добавить» (R-18), запись возвращается из
+ * архива тем же действием, а не создаётся вторая; архив владельцем — отказ (Р-29: его решение).
  */
 export async function addSupplyRecord(
   ctx: SupplyCtx,
@@ -393,6 +568,12 @@ export async function addSupplyRecord(
   etalons: readonly SupplyEtalon[] = SUPPLY_ETALONS,
 ): Promise<{ actionId: string }> {
   const s = await snapshot(ctx);
+  const restorable = liveOf(s, key) === undefined ? restorableOf(s, key) : undefined;
+  if (restorable !== undefined) {
+    return run(ctx, 'supply', `Добавить из поставки: «${restorable.title}»`, [
+      { tool: 'entity_update', input: { id: restorable.id, archived: false } },
+    ]);
+  }
   const existing = s.rows.find((r) => keyOf(r) === key);
   if (existing !== undefined) {
     throw new ExecError(

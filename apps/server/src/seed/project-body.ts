@@ -1,5 +1,5 @@
 // apps/server/src/seed/project-body.ts
-// Заготовка тела проекта (С10). Живёт рядом с остальными сидами тел (smart-lists.ts),
+// Заготовка тела проекта (С10). Сид тела, как тела шести списков (`packages/shared/src/supply/lists.ts`),
 // но засевается не онбордингом, а executor'ом — см. needsProjectSeed в normalize.ts.
 
 /**

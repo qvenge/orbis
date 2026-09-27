@@ -914,7 +914,7 @@ export const PRODUCTION_QUERY_TEXTS: readonly ProductionQueryText[] = [
     owner: '10c',
   },
   {
-    where: 'apps/server/src/seed/smart-lists.ts:24 (daily-planning, блок 1 «Inbox»)',
+    where: 'packages/shared/src/supply/lists.ts:36 (daily-planning, блок 1 «Inbox»)',
     text: 'aspect=orbis/task, orbis/task_status=inbox, sortBy=orbis/created_at:desc, display=list, title=Inbox',
     verdict: null,
     spaceRisk: false,
@@ -922,7 +922,7 @@ export const PRODUCTION_QUERY_TEXTS: readonly ProductionQueryText[] = [
     owner: '21b',
   },
   {
-    where: 'apps/server/src/seed/smart-lists.ts:26 (daily-planning, блок 2 «Сегодня»)',
+    where: 'packages/shared/src/supply/lists.ts:38 (daily-planning, блок 2 «Сегодня»)',
     text: 'aspect=orbis/task, orbis/due_date=today|overdue, orbis/task_status=!done&!cancelled&!waiting, excludeBlocked=true, sortBy=orbis/priority:desc|orbis/due_date:asc, display=list, title=Сегодня',
     verdict: null,
     spaceRisk: false,
@@ -930,7 +930,7 @@ export const PRODUCTION_QUERY_TEXTS: readonly ProductionQueryText[] = [
     owner: '21b',
   },
   {
-    where: 'apps/server/src/seed/smart-lists.ts:28 (daily-planning, блок 3 «Ожидание»)',
+    where: 'packages/shared/src/supply/lists.ts:40 (daily-planning, блок 3 «Ожидание»)',
     text: 'aspect=orbis/task, orbis/task_status=waiting, sortBy=orbis/updated_at:asc, display=compact, title=Ожидание',
     verdict: null,
     spaceRisk: false,
@@ -938,7 +938,7 @@ export const PRODUCTION_QUERY_TEXTS: readonly ProductionQueryText[] = [
     owner: '21b',
   },
   {
-    where: 'apps/server/src/seed/smart-lists.ts:32 (upcoming, блок 1 «Ближайшие 7 дней»)',
+    where: 'packages/shared/src/supply/lists.ts:44 (upcoming, блок 1 «Ближайшие 7 дней»)',
     text: 'aspect=orbis/task, orbis/due_date=next_7d, orbis/task_status=!done&!cancelled, sortBy=orbis/due_date:asc|orbis/priority:desc, display=list, title="Ближайшие 7 дней"',
     verdict: null,
     spaceRisk: false,
@@ -946,7 +946,7 @@ export const PRODUCTION_QUERY_TEXTS: readonly ProductionQueryText[] = [
     owner: '21b',
   },
   {
-    where: 'apps/server/src/seed/smart-lists.ts:34 (upcoming, блок 2 «Позже»)',
+    where: 'packages/shared/src/supply/lists.ts:46 (upcoming, блок 2 «Позже»)',
     text: 'aspect=orbis/task, orbis/due_date=after_7d, orbis/task_status=!done&!cancelled, sortBy=orbis/due_date:asc, limit=30, display=compact, title=Позже',
     verdict: null,
     spaceRisk: false,
@@ -954,7 +954,7 @@ export const PRODUCTION_QUERY_TEXTS: readonly ProductionQueryText[] = [
     owner: '21b',
   },
   {
-    where: 'apps/server/src/seed/smart-lists.ts:36 (all-tasks)',
+    where: 'packages/shared/src/supply/lists.ts:48 (all-tasks)',
     text: 'aspect=orbis/task, orbis/task_status=!done&!cancelled, sortBy=orbis/updated_at:desc, display=list, title="Все незакрытые задачи"',
     verdict: null,
     spaceRisk: false,
@@ -962,7 +962,7 @@ export const PRODUCTION_QUERY_TEXTS: readonly ProductionQueryText[] = [
     owner: '21b',
   },
   {
-    where: 'apps/server/src/seed/smart-lists.ts:59 (horizon-year «Цели»)',
+    where: 'packages/shared/src/supply/lists.ts:79 (horizon-year «Цели»)',
     text: 'aspect=orbis/goal, sortBy=orbis/updated_at:desc, display=list, title=Цели',
     verdict: null,
     spaceRisk: false,
@@ -970,7 +970,7 @@ export const PRODUCTION_QUERY_TEXTS: readonly ProductionQueryText[] = [
     owner: '21b',
   },
   {
-    where: 'apps/server/src/seed/smart-lists.ts:69 (horizon-life)',
+    where: 'packages/shared/src/supply/lists.ts:89 (horizon-life)',
     text: 'tags=life, sortBy=orbis/updated_at:desc, display=list, title="Ценности и зоны ответственности"',
     verdict: null,
     spaceRisk: false,
@@ -978,7 +978,7 @@ export const PRODUCTION_QUERY_TEXTS: readonly ProductionQueryText[] = [
     owner: '21b',
   },
   {
-    where: 'apps/server/src/seed/smart-lists.ts:114 (routines, блок 1 «Ждут ответа»)',
+    where: 'packages/shared/src/supply/lists.ts:134 (routines, блок 1 «Ждут ответа»)',
     text: 'aspect=orbis/agent-run, orbis/run_outcome=checkpoint, sortBy=orbis/run_started_at:asc, display=list, title="Ждут ответа"',
     verdict: null,
     spaceRisk: false,
@@ -986,7 +986,7 @@ export const PRODUCTION_QUERY_TEXTS: readonly ProductionQueryText[] = [
     owner: '21b',
   },
   {
-    where: 'apps/server/src/seed/smart-lists.ts:116 (routines, блок 2 «Активные рутины»)',
+    where: 'packages/shared/src/supply/lists.ts:136 (routines, блок 2 «Активные рутины»)',
     text: 'aspect=orbis/routine, orbis/routine_stage=active, sortBy=orbis/updated_at:desc, display=list, title="Активные рутины"',
     verdict: null,
     spaceRisk: false,
@@ -994,7 +994,7 @@ export const PRODUCTION_QUERY_TEXTS: readonly ProductionQueryText[] = [
     owner: '21b',
   },
   {
-    where: 'apps/server/src/seed/smart-lists.ts:110 (ROUTINES_BATCH_QUERY, блок 3 «Пачка решений»)',
+    where: 'packages/shared/src/supply/lists.ts:130 (ROUTINES_BATCH_QUERY, блок 3 «Пачка решений»)',
     text: 'aspect=orbis/agent-run, orbis/undecided=true, sortBy=orbis/run_started_at:asc, display=list, title="Пачка решений"',
     verdict: null,
     spaceRisk: false,
