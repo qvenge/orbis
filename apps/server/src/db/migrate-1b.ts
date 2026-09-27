@@ -11,7 +11,7 @@
 //    `smart-list` снят; ТЕЛО НЕ МЕНЯЕТСЯ — правка владельца остаётся его правкой («изменено вами»);
 //  - записи поставки: шаблон хоста, «Домой», «Записи», оболочка хоста с навигацией «Записи» + закреплённые
 //    в их порядке без дублей;
-//  - Финансы выключаются в маске (`module_set` в той же пачке — один Undo).
+//  - Финансы выключаются в маске (`module_set` в той же пачке — одна запись журнала).
 // Прочие записи не трогаются. `pinnedEntities` и `installedViews` — тоже: колонки уходят позже (§8.6), и
 // до того перевод остаётся проверяемым по ним.
 //
@@ -24,6 +24,19 @@
 // `--apply --i-understand` — одна пачка на граф. Повтор на переведённом графе — «уже переведён», ноль
 // записей: признак тот же, что у заведения графа (задача 12), — оболочка хоста есть (с архивной).
 //
+// UNDO ПЕРЕВОДА — НЕ ОТКАТ (R-21). Отмена пачки возвращает списки к старой форме, а записи поставки, в
+// том числе оболочку хоста, лишь АРХИВИРУЕТ (обратное к `entity_create`). Архивная оболочка — признак
+// «переведён/заведён» (Р-29), поэтому после Undo ни повторный `--apply`, ни вход владельца граф не чинят.
+// Откат перевода — восстановление дампа, снятого перед `--apply` (`ops.ts dump`, ранбук §4.3); печать
+// `--apply` об этом предупреждает.
+//
+// ПРЕДУСЛОВИЕ — ПЕРЕСЕВ РЕЕСТРОВ СРЕЗА 1Б. Код перевода — 1б, а реестр читается прод-графа: без аспекта
+// «поставка» и свойств эталона канон тел и статусы в отчёте недостоверны, а пачка упала бы на неизвестном
+// аспекте. Поэтому план проверяет снимок реестра и отказывает с понятным текстом (`assertSlice1bRegistry`).
+//
+// `--report` ИДЁТ В ТРАНЗАКЦИИ READ ONLY — «только чтение» стережёт сервер, а не докблок (как `check` в
+// `ops.ts`): будущая запись, попавшая в план или в чтение реестра, упадёт, а не запишет в прод.
+//
 // СЧЁТЧИКИ R-7. Задача 5 перенесла поверхности и тулы Повестки в ядро (`planner/agenda` → `core/agenda`,
 // `action_planner_postpone_overdue` → `action_core_postpone_overdue`), а словарь стережёт ЗАПИСЬ, не
 // чтение: строки владельца на прежних именах реестр не роняют, но и не работают (подписку никто не
@@ -31,6 +44,8 @@
 // получит «неизвестный тул»). Перевод их не трогает — он не знает, чего хотел владелец, — а считает и
 // печатает: ожидается ноль, не ноль — предупреждение владельцу до `--apply`.
 import {
+  APP_ASPECT,
+  APP_HOME,
   APP_NAV,
   type GraphId,
   newId,
@@ -57,7 +72,10 @@ import { makeChatJournalSink } from '../executor/journal';
 import type { Identity } from '../identity';
 import { effectiveRegistry } from '../registry/cache';
 import { disabledExtensionsOf } from '../registry/extensions';
+import type { RegistrySnapshot } from '../registry/load';
 import type { ExecOperation } from '../routines/propose';
+import { GARDENER_SLUG, seedRoutineId } from '../seed/gardener';
+import { ROLLOVER_ROUTINE_SLUG } from '../seed/rollover-routine';
 import { etalonHash } from '../supply/hash';
 import {
   appEtalonProps,
@@ -81,6 +99,9 @@ const CREATED_KEYS = ['host-template', 'home', 'records', 'host-shell'] as const
 
 /** Тег, которым прежний онбординг помечал списки; в 1б его никто не читает (§9.4). */
 const SMART_LIST_TAG = 'smart-list';
+
+/** Рутины хоста, которые сеет только заведение НОВОГО графа (досевов нет, §8.6): отчёт их называет. */
+const HOST_ROUTINE_SLUGS = { gardener: GARDENER_SLUG, rollover: ROLLOVER_ROUTINE_SLUG } as const;
 
 /** Прежнее имя тула Повестки (до задачи 5) и снятые головы поверхностей (R-7). */
 const OLD_POSTPONE_TOOL = 'action_planner_postpone_overdue';
@@ -108,11 +129,15 @@ export interface Migrate1bList {
 }
 
 export interface Migrate1bNavSkip {
-  id: string;
+  /** `null` — битый элемент закреплённых без строкового id. */
+  id: string | null;
   title: string | null;
   /** `duplicate` — уже в навигации; `archived` — запись в архиве; `missing` — записи в графе нет. */
   reason: 'duplicate' | 'archived' | 'missing';
 }
+
+/** Рутина хоста в графе: есть, есть в архиве, нет. */
+export type HostRoutineState = 'present' | 'archived' | 'absent';
 
 export interface Migrate1bCounters {
   /** Собственные подписки графа на `planner/agenda`. */
@@ -141,6 +166,11 @@ export interface Migrate1bPlan {
   maskBefore: string[];
   maskAfter: string[];
   counters: Migrate1bCounters;
+  /**
+   * Садовник словаря и «Перенос остатков». Их сеет только заведение нового графа, досевов нет (§8.6):
+   * рутина, которой в графе нет к переводу, после него не появится никогда — решать до `--apply`.
+   */
+  hostRoutines: { gardener: HostRoutineState; rollover: HostRoutineState };
   /** Операции одной пачки `--apply`; пусто, если переводить нечего. */
   operations: ExecOperation[];
 }
@@ -207,14 +237,14 @@ async function rowsByIds(tx: Tx, graph: GraphId, ids: readonly string[]): Promis
   return rows.map((r) => ({ ...r, props: r.props ?? {} }));
 }
 
-/** Закреплённые в порядке `order` (при равенстве — в порядке хранения); битые элементы — `missing`. */
-function pinnedOrder(raw: unknown): string[] {
+/** Закреплённые в порядке `order` (при равенстве — в порядке хранения); битый элемент — `null`. */
+function pinnedOrder(raw: unknown): Array<string | null> {
   if (!Array.isArray(raw)) return [];
   return raw
     .map((p, i) => {
       const o = typeof p === 'object' && p !== null ? (p as Record<string, unknown>) : {};
       return {
-        id: typeof o.id === 'string' ? o.id.toLowerCase() : String(o.id),
+        id: typeof o.id === 'string' ? o.id.toLowerCase() : null,
         order: typeof o.order === 'number' ? o.order : Number.MAX_SAFE_INTEGER,
         i,
       };
@@ -223,11 +253,52 @@ function pinnedOrder(raw: unknown): string[] {
     .map((p) => p.id);
 }
 
+async function hostRoutinesOf(tx: Tx, graph: GraphId): Promise<Migrate1bPlan['hostRoutines']> {
+  const state = async (slug: string): Promise<HostRoutineState> => {
+    const rows = (await tx.execute(sql`
+      SELECT archived FROM entities
+       WHERE graph_id = ${graph}::uuid AND id = ${seedRoutineId(graph, slug)}::uuid`)) as unknown as Array<{
+      archived: boolean;
+    }>;
+    const r = rows[0];
+    return r === undefined ? 'absent' : r.archived ? 'archived' : 'present';
+  };
+  return {
+    gardener: await state(HOST_ROUTINE_SLUGS.gardener),
+    rollover: await state(HOST_ROUTINE_SLUGS.rollover),
+  };
+}
+
+/** Аспекты и свойства реестра среза 1б, без которых перевод не на что опереть (предусловие — пересев). */
+const SLICE_1B_ASPECTS = [PAGE_ASPECT, SUPPLY_ASPECT, APP_ASPECT] as const;
+const SLICE_1B_PROPERTIES = [SUPPLY_KEY, SUPPLY_HASH, SUPPLY_TEXT, APP_HOME, APP_NAV] as const;
+
+/**
+ * Реестр графа — среза 1б (пересев сделан)? Иначе отказ с понятным текстом: оператор, запустивший
+ * `migrate-1b` до `seed-registries` 1б, должен узнать порядок, а не получить статусы по старому реестру
+ * или отказ пачки «неизвестный аспект».
+ */
+export function assertSlice1bRegistry(reg: RegistrySnapshot): void {
+  const missing = [
+    ...SLICE_1B_ASPECTS.filter((a) => !reg.aspects.has(a)),
+    ...SLICE_1B_PROPERTIES.filter((p) => !reg.properties.has(p)),
+  ];
+  if (missing.length > 0) {
+    throw new ExecError(
+      'VALIDATION',
+      `реестр графа — не среза 1б (нет ${missing.join(', ')}): сначала пересев реестров среза 1б ` +
+        '(bun scripts/ops.ts seed-registries), затем migrate-1b',
+      { missing },
+    );
+  }
+}
+
 function emptyPlan(
   graph: GraphId,
   state: Migrate1bState,
   mask: readonly string[],
   counters: Migrate1bCounters,
+  hostRoutines: Migrate1bPlan['hostRoutines'],
 ): Migrate1bPlan {
   return {
     graph,
@@ -242,6 +313,7 @@ function emptyPlan(
     maskBefore: [...mask],
     maskAfter: [...mask],
     counters,
+    hostRoutines,
     operations: [],
   };
 }
@@ -253,11 +325,12 @@ function emptyPlan(
 export async function planMigrate1b(tx: Tx, graph: GraphId): Promise<Migrate1bPlan> {
   const counters = await countersOf(tx, graph);
   const mask = [...(await disabledExtensionsOf(tx, graph))];
+  const hostRoutines = await hostRoutinesOf(tx, graph);
 
   const shell = await tx.execute(sql`
     SELECT 1 FROM entities WHERE graph_id = ${graph}::uuid
        AND props @> ${JSON.stringify({ [SUPPLY_KEY]: 'host-shell' })}::jsonb LIMIT 1`);
-  if (shell.length > 0) return emptyPlan(graph, 'migrated', mask, counters);
+  if (shell.length > 0) return emptyPlan(graph, 'migrated', mask, counters, hostRoutines);
 
   const listKeys = SEED_SMART_LISTS.map((l) => l.slug);
   const listRows = await rowsByIds(
@@ -268,10 +341,11 @@ export async function planMigrate1b(tx: Tx, graph: GraphId): Promise<Migrate1bPl
   const listRow = (k: SupplyKey) => listRows.find((r) => r.id === supplyRecordId(graph, k));
   // Признак старой формы — тот же, что у заведения графа (`graphState`, задача 12).
   if (!listRows.some((r) => !r.aspects.includes(SUPPLY_ASPECT))) {
-    return emptyPlan(graph, 'unseeded', mask, counters);
+    return emptyPlan(graph, 'unseeded', mask, counters, hostRoutines);
   }
 
   const reg = await effectiveRegistry(tx, graph);
+  assertSlice1bRegistry(reg);
 
   // Записи поставки, которые создаёт перевод, в графе старой формы не существуют; id, занятый чужой
   // записью, — состояние недостижимое, и молча пропустить его значило бы навигацию на чужую запись.
@@ -357,19 +431,23 @@ export async function planMigrate1b(tx: Tx, graph: GraphId): Promise<Migrate1bPl
     pinned: unknown;
   }>;
   const pinned = pinnedOrder(settings[0]?.pinned);
-  const pinnedRows = await rowsByIds(tx, graph, pinned);
+  const pinnedRows = await rowsByIds(
+    tx,
+    graph,
+    pinned.filter((id): id is string => id !== null),
+  );
   const recordsId = supplyRecordId(graph, 'records');
   const nav: Array<{ id: string; title: string }> = [{ id: recordsId, title: 'Записи' }];
   const navSkipped: Migrate1bNavSkip[] = [];
   for (const id of pinned) {
-    const row = pinnedRows.find((r) => r.id === id);
+    const row = id === null ? undefined : pinnedRows.find((r) => r.id === id);
     if (row === undefined) navSkipped.push({ id, title: null, reason: 'missing' });
-    else if (nav.some((n) => n.id === id))
-      navSkipped.push({ id, title: row.title, reason: 'duplicate' });
+    else if (nav.some((n) => n.id === row.id))
+      navSkipped.push({ id: row.id, title: row.title, reason: 'duplicate' });
     // Архивная цель в навигации — отказ `цель архивна` всей пачки; закреплённая архивная запись
     // в сайдбаре не показывалась, так что из навигации владелец ничего не теряет.
-    else if (row.archived) navSkipped.push({ id, title: row.title, reason: 'archived' });
-    else nav.push({ id, title: row.title });
+    else if (row.archived) navSkipped.push({ id: row.id, title: row.title, reason: 'archived' });
+    else nav.push({ id: row.id, title: row.title });
   }
 
   // ---- записи поставки: эталон кода, у оболочки навигация — из закреплённых ----
@@ -408,6 +486,7 @@ export async function planMigrate1b(tx: Tx, graph: GraphId): Promise<Migrate1bPl
     maskBefore: mask,
     maskAfter: maskOff ? mask : [...mask, DISABLED_BY_MIGRATION],
     counters,
+    hostRoutines,
     // Порядок пачки: списки, затем страницы поставки, затем оболочка (ссылается на них), затем маска.
     operations: [...listOps, ...createOps, ...maskOps],
   };
@@ -455,6 +534,7 @@ export async function applyMigrate1b(
 }
 
 const STATUS_WORD = { etalon: 'как в поставке', edited: 'изменено вами' } as const;
+const ROUTINE_WORD = { present: 'есть', archived: 'в архиве', absent: 'нет' } as const;
 const SKIP_WORD = { duplicate: 'дубль', archived: 'в архиве', missing: 'записи нет' } as const;
 
 /** План графа — строками, как их прочтёт владелец. */
@@ -482,9 +562,9 @@ export function formatMigrate1bPlan(p: Migrate1bPlan): string[] {
     }
     out.push(`  навигация оболочки хоста: ${p.nav.map((n) => n.title).join(', ')}`);
     for (const s of p.navSkipped) {
-      out.push(
-        `    пропущено из закреплённых: ${s.title === null ? s.id : `«${s.title}»`} — ${SKIP_WORD[s.reason]}`,
-      );
+      const what =
+        s.title !== null ? `«${s.title}»` : (s.id ?? 'битый элемент закреплённых (без id)');
+      out.push(`    пропущено из закреплённых: ${what} — ${SKIP_WORD[s.reason]}`);
     }
     if (p.shellStatus !== null) out.push(`  оболочка хоста: ${STATUS_WORD[p.shellStatus]}`);
     out.push(
@@ -492,6 +572,13 @@ export function formatMigrate1bPlan(p: Migrate1bPlan): string[] {
     );
     out.push('  закреплённые и installedViews не трогаются; прочие записи графа не трогаются');
   }
+  const h = p.hostRoutines;
+  out.push(
+    `  рутины хоста: садовник — ${ROUTINE_WORD[h.gardener]}, «Перенос остатков» — ${ROUTINE_WORD[h.rollover]}` +
+      (h.gardener === 'present' && h.rollover === 'present'
+        ? ''
+        : ' (после перевода недостающую никто не посеет: досевов нет, §8.6)'),
+  );
   const c = p.counters;
   out.push(
     `  подписок на planner/agenda: ${c.agendaSubscriptions}; действий на снятых поверхностях ` +
@@ -541,9 +628,10 @@ const USAGE = [
 /**
  * Подтверждение: `--report` — отдельно; `--apply` — только вместе с `--i-understand`. Всё прочее —
  * отказ кодом 2 ДО открытия базы. Незнакомый флаг — отказ, а не «пропустим» (как у `resetWorldGate`):
- * опечатка иначе означала бы согласие, которого не давали. Слова-значения у `--i-understand` нет: в
- * отличие от `reset-world` перевод не разрушает (одна пачка с журналом и Undo), а `--report` рядом —
- * способ увидеть всё до записи.
+ * опечатка иначе означала бы согласие, которого не давали. Слова-значения у `--i-understand` нет:
+ * перевод не сносит данных (тела списков не трогаются, записи создаются, маска — одна строка), а
+ * `--report` рядом — способ увидеть всё до записи. Страховка перевода — НЕ Undo (R-21, шапка файла), а
+ * дамп, снятый перед `--apply` по ранбуку.
  */
 export function migrate1bGate(args: readonly string[]): Migrate1bGate {
   const known = new Set(['--report', '--apply', '--i-understand']);
@@ -580,10 +668,32 @@ export interface Migrate1bIo {
   error(line: string): void;
 }
 
+/** Одна строка печати `--apply` (R-21): Undo пачки не возвращает граф в исходное состояние. */
+export const UNDO_WARNING =
+  'ВНИМАНИЕ: Undo этого перевода — НЕ откат (списки вернутся к старой форме, записи поставки уйдут в архив, ' +
+  'а граф останется «переведённым»); откат — восстановление дампа, снятого перед --apply (ранбук §4.3).';
+
+/**
+ * План для `--report` — в транзакции READ ONLY (M-1 гейта): «только чтение» стережёт сервер, как у `check`
+ * в `ops.ts`. Переключение в read-only законно и после `set_config`/`SET LOCAL ROLE` в `withIdentity`
+ * (запрещён только обратный переход после первого снимка). `planner` — инъекция теста: пишущий план
+ * обязан упасть, а не записать.
+ */
+export async function reportMigrate1b(
+  db: Db,
+  who: Identity,
+  planner: (tx: Tx, graph: GraphId) => Promise<Migrate1bPlan> = planMigrate1b,
+): Promise<Migrate1bPlan> {
+  return withIdentity(db, who, async (tx) => {
+    await tx.execute(sql`SET LOCAL transaction_read_only = on`);
+    return planner(tx, who.graph);
+  });
+}
+
 /**
  * Операция целиком: подтверждение → по каждому графу план (и в `--apply` — пачка) → печать. Код 0 —
- * всё прошло; 1 — хоть один граф не переведён (прочие графы переводятся: пачки независимы); 2 — отказ
- * подтверждения.
+ * всё прошло; 1 — хоть один граф не переведён или остался без отчёта (прочие графы идут дальше: пачки
+ * независимы); 2 — отказ подтверждения.
  */
 export async function runMigrate1b(args: readonly string[], io: Migrate1bIo): Promise<number> {
   const gate = migrate1bGate(args);
@@ -596,10 +706,19 @@ export async function runMigrate1b(args: readonly string[], io: Migrate1bIo): Pr
   try {
     const whos = await io.identities(db);
     if (whos.length === 0) io.log('графов со строкой настроек нет — переводить нечего');
+    if (gate.mode === 'apply') io.log(UNDO_WARNING);
     for (const who of whos) {
+      // Сбой одного графа печатается и считается в код 1; прочие графы отчитываются/переводятся.
       if (gate.mode === 'report') {
-        const plan = await withIdentity(db, who, (tx) => planMigrate1b(tx, who.graph));
-        for (const line of formatMigrate1bPlan(plan)) io.log(line);
+        try {
+          const plan = await reportMigrate1b(db, who);
+          for (const line of formatMigrate1bPlan(plan)) io.log(line);
+        } catch (e) {
+          failed += 1;
+          io.error(
+            `граф ${who.graph}: отчёт не собран — ${e instanceof Error ? e.message : String(e)}`,
+          );
+        }
         continue;
       }
       try {

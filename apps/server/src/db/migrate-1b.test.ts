@@ -31,6 +31,7 @@ import { seedLegacyWorld } from '../../test/legacy-world';
 import { ExecError } from '../errors';
 import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
+import type { Identity } from '../identity';
 import { effectiveRegistry } from '../registry/cache';
 import { seedOwner, seedOwnerGraph } from '../seed/onboarding';
 import { seedCategoryId, seedSmartListId } from '../seed/world';
@@ -39,11 +40,14 @@ import { listUpdates } from '../supply/mechanism';
 import { canonicalPageText, supplyRecordId } from '../supply/records';
 import {
   applyMigrate1b,
+  assertSlice1bRegistry,
   formatMigrate1bPlan,
   MIGRATE_1B_LABEL,
   type Migrate1bIo,
   planMigrate1b,
+  reportMigrate1b,
   runMigrate1b,
+  UNDO_WARNING,
 } from './migrate-1b';
 import { DEFINITION_TABLES } from './reset-world';
 import { withIdentity } from './with-identity';
@@ -640,4 +644,118 @@ describe('runMigrate1b — обвязка ops.ts (гейт подтвержде�
 // Ключи фикстуры сверены с эталонами: список, которого нет в поставке, тест бы не заметил.
 test('ключи шести списков — ключи эталонов поставки', () => {
   for (const k of LIST_KEYS) expect(etalonOf(k as SupplyKey).kind).toBe('page');
+});
+
+describe('фикс-раунд 1 гейта (R-21, M-1…M-5)', () => {
+  test('M-1: --report — транзакция READ ONLY: план, попытавшийся записать, падает, граф цел', async () => {
+    const user = await freshGraph();
+    await seedLegacyWorld(user);
+    const before = await worldSnapshot(user);
+
+    const writing = reportMigrate1b(db, personal(user), async (tx, graph) => {
+      const p = await planMigrate1b(tx, graph);
+      await tx.execute(
+        sql`UPDATE user_settings SET disabled_modules = ARRAY['finance'] WHERE graph_id = ${graph}::uuid`,
+      );
+      return p;
+    });
+    const err = await writing.then(
+      () => null,
+      (e: unknown) => e,
+    );
+    // Драйвер оборачивает ошибку PG: причина — `read_only_sql_transaction` (25006), не права и не RLS.
+    const cause = (err as { cause?: { code?: string; message?: string } } | null)?.cause;
+    expect([cause?.code, cause?.message]).toEqual([
+      '25006',
+      'cannot execute UPDATE in a read-only transaction',
+    ]);
+    expect((await reportMigrate1b(db, personal(user))).state).toBe('legacy');
+    expect(await worldSnapshot(user)).toEqual(before);
+  });
+
+  test('M-2: --report — сбой одного графа печатается, остальные отчитываются, код 1', async () => {
+    const user = await freshGraph();
+    await seedLegacyWorld(user);
+    const lines: string[] = [];
+    const io = localIo(user, lines, { n: 0 });
+    const broken = { actor: 'не-uuid', graph: 'не-uuid' } as unknown as Identity;
+    const code = await runMigrate1b(['--report'], {
+      ...io,
+      identities: async () => [broken, personal(user)],
+    });
+    expect(code).toBe(1);
+    const text = lines.join('\n');
+    expect(text).toContain('ОШИБКА граф не-uuid: отчёт не собран');
+    expect(text).toContain(`граф ${user}:`);
+    expect(text).toContain('навигация оболочки хоста: Записи');
+  });
+
+  test('M-3: реестр не среза 1б — отказ с текстом о пересеве', async () => {
+    const user = await freshGraph();
+    const reg = await withIdentity(db, personal(user), (tx) => effectiveRegistry(tx, user));
+    expect(() => assertSlice1bRegistry(reg)).not.toThrow();
+    const aspects = new Map(reg.aspects);
+    aspects.delete(SUPPLY_ASPECT);
+    let err: unknown = null;
+    try {
+      assertSlice1bRegistry({ ...reg, aspects });
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(ExecError);
+    expect((err as ExecError).code).toBe('VALIDATION');
+    expect((err as ExecError).message).toContain('сначала пересев реестров среза 1б');
+    expect((err as ExecError).message).toContain(SUPPLY_ASPECT);
+  });
+
+  test('M-4: битый элемент закреплённых — «(без id)», а не «undefined»', async () => {
+    const user = await freshGraph();
+    await seedLegacyWorld(user);
+    await admin((a) =>
+      a.execute(sql`UPDATE user_settings
+                       SET "pinnedEntities" = "pinnedEntities" || '[{"order": 1}, null]'::jsonb
+                     WHERE graph_id = ${user}::uuid`),
+    );
+    const p = await plan(user);
+    expect(p.navSkipped).toEqual([
+      { id: null, title: null, reason: 'missing' },
+      { id: null, title: null, reason: 'missing' },
+    ]);
+    const text = formatMigrate1bPlan(p).join('\n');
+    expect(text).toContain(
+      'пропущено из закреплённых: битый элемент закреплённых (без id) — записи нет',
+    );
+    expect(text).not.toContain('undefined');
+  });
+
+  test('M-5: отчёт называет рутины хоста — на фикстуре их нет, в графе, заведённом 1б, есть', async () => {
+    const legacy = await freshGraph();
+    await seedLegacyWorld(legacy);
+    const seeded = await freshGraph();
+    await seedOwner(db, personal(seeded));
+
+    const a = await plan(legacy);
+    const b = await plan(seeded);
+
+    expect(a.hostRoutines).toEqual({ gardener: 'absent', rollover: 'absent' });
+    expect(b.hostRoutines).toEqual({ gardener: 'present', rollover: 'present' });
+    expect(formatMigrate1bPlan(a).join('\n')).toContain(
+      'рутины хоста: садовник — нет, «Перенос остатков» — нет (после перевода недостающую никто не посеет',
+    );
+    expect(formatMigrate1bPlan(b).join('\n')).toContain(
+      'рутины хоста: садовник — есть, «Перенос остатков» — есть',
+    );
+  });
+
+  test('R-21: печать --apply предупреждает, что Undo — не откат', async () => {
+    const user = await freshGraph();
+    await seedLegacyWorld(user);
+    const lines: string[] = [];
+    expect(await runMigrate1b(['--apply', '--i-understand'], localIo(user, lines, { n: 0 }))).toBe(
+      0,
+    );
+    expect(lines).toContain(UNDO_WARNING);
+    expect(UNDO_WARNING).toContain('Undo этого перевода — НЕ откат');
+    expect(UNDO_WARNING).toContain('восстановление дампа');
+  });
 });
