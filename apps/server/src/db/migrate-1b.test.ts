@@ -26,12 +26,19 @@ import {
   supplyStatusOf,
 } from '@orbis/shared/supply';
 import { sql } from 'drizzle-orm';
-import { adminDb, appDb, freshGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
+import {
+  adminDb,
+  appDb,
+  bumpRegistryVersion,
+  freshGraph,
+  personal,
+  requireEnv,
+  truncateAll,
+} from '../../test/helpers';
 import { seedLegacyWorld } from '../../test/legacy-world';
 import { ExecError } from '../errors';
 import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
-import type { Identity } from '../identity';
 import { effectiveRegistry } from '../registry/cache';
 import { seedOwner, seedOwnerGraph } from '../seed/onboarding';
 import { seedCategoryId, seedSmartListId } from '../seed/world';
@@ -676,16 +683,36 @@ describe('фикс-раунд 1 гейта (R-21, M-1…M-5)', () => {
   test('M-2: --report — сбой одного графа печатается, остальные отчитываются, код 1', async () => {
     const user = await freshGraph();
     await seedLegacyWorld(user);
+    // Второй граф прод-формы с битой строкой своего реестра (действие без шагов, положено админом мимо
+    // схемы записи): чтение реестра графа падает законно — ровно «сбой одного графа на проде».
+    const broken = await freshGraph();
+    await seedLegacyWorld(broken);
+    await admin((a) =>
+      a.execute(sql`
+        INSERT INTO action_definitions (id, graph_id, key, label, description, params, precondition,
+                                        steps, sensitivity, offered_by, module, batch_cap, rank,
+                                        status, over)
+        SELECT 'mine/broken', ${broken}::uuid, 'mine/broken', label, description, params,
+               precondition, '[]'::jsonb, sensitivity, offered_by, module, batch_cap, 900, status, over
+          FROM action_definitions WHERE graph_id IS NULL AND id = 'planner/postpone_overdue'`),
+    );
+    // Мимо реестровых операций версия реестра графа не сдвинулась бы, и кеш отдал бы прежний снимок.
+    await bumpRegistryVersion(broken);
+    expect(
+      await plan(broken).then(
+        () => null,
+        (e: unknown) => e,
+      ),
+    ).toBeInstanceOf(Error);
     const lines: string[] = [];
     const io = localIo(user, lines, { n: 0 });
-    const broken = { actor: 'не-uuid', graph: 'не-uuid' } as unknown as Identity;
     const code = await runMigrate1b(['--report'], {
       ...io,
-      identities: async () => [broken, personal(user)],
+      identities: async () => [personal(broken), personal(user)],
     });
     expect(code).toBe(1);
     const text = lines.join('\n');
-    expect(text).toContain('ОШИБКА граф не-uuid: отчёт не собран');
+    expect(text).toContain(`ОШИБКА граф ${broken}: отчёт не собран`);
     expect(text).toContain(`граф ${user}:`);
     expect(text).toContain('навигация оболочки хоста: Записи');
   });
