@@ -24,6 +24,7 @@ import {
   newId,
   type PreconditionMismatch,
   RULE_NEAREST_ANCESTOR,
+  type RuleDefinition,
   relationCreateInput,
   relationDeleteInput,
   setExtensionEnabledInput,
@@ -1951,7 +1952,7 @@ async function prepareEntityCreate(
     ctx.registry,
     ctx.disabledModules,
     ctx.mechanism,
-    touchedProperties(propsPatch),
+    propsWrittenBy(propsPatch, before),
   );
   // Гейт флагов (§А2-5/Б6) — ДО валидации значений: «вам сюда нельзя» честнее, чем
   // «ваше значение не той формы», когда запись запрещена независимо от значения.
@@ -2303,7 +2304,7 @@ async function prepareEntityUpdate(
         ctx.registry,
         ctx.disabledModules,
         ctx.mechanism,
-        touchedProperties(propsPatch),
+        propsWrittenBy(propsPatch, before),
         before.aspects.filter((a) => !state.aspects.includes(a)),
       );
       // Гейт флагов (§А2-5/Б6). Внутренний undo его ПРОПУСКАЕТ — ровно как семь проверок
@@ -2647,7 +2648,7 @@ async function prepareAttach(
     ctx.registry,
     ctx.disabledModules,
     ctx.mechanism,
-    touchedProperties(propsPatch),
+    propsWrittenBy(propsPatch, before),
   );
   // Гейт флагов (§А2-5/Б6) и стадия 2 — по итоговому состоянию; `DEPRECATED` — по
   // затронутым (свободное deprecated-значение не обязано запирать навешивание аспекта).
@@ -3542,6 +3543,21 @@ function registryPlan(type: ActionRecord['type'], tool: string, title: string): 
 }
 
 /**
+ * Свойства, которые патч РЕАЛЬНО меняет, — вход гейта «только чтение» (N-2 ре-ревью): `set` —
+ * всегда (это запись значения), `unset`/`replaced` — только когда значение на записи ЕСТЬ. `attach`
+ * кладёт в `replaced` все свойства носителя, не названные в `data`, и снятие отсутствующего ключа
+ * записью не является: иначе свой аспект, в составе которого есть свойство выключенного
+ * расширения, не навешивался бы даже на запись без этого поля.
+ */
+function propsWrittenBy(patch: PropsPatch, before: EntityState): Set<string> {
+  const written = new Set<string>(Object.keys(patch.set ?? {}));
+  for (const id of [...(patch.unset ?? []), ...(patch.replaced ?? [])]) {
+    if (Object.hasOwn(before.props, id)) written.add(id);
+  }
+  return written;
+}
+
+/**
  * Гейт R-8 для операции реестра — ТОЛЬКО вне внутреннего режима Undo: откат возвращает своё же
  * законно записанное (Ф-1б-18). Классификация операций и доводы — докблок
  * `assertRegistryTargetsEnabled` (`executor/invariants.ts`).
@@ -3556,22 +3572,32 @@ function registryGate(
 }
 
 /**
- * Свойства, которые правило НАЗЫВАЕТ в параметрах (что обязательно, что ставит, что уникально, куда
- * пишет движок) — строки параметров, обходом: у шаблонов разная форма (`property`, `set.property`,
- * `properties`, `targets.parent`), и перечень по шаблонам был бы вторым словарём рядом с
- * каталогом. Строка, не являющаяся свойством, гейт не трогает (не найдена в снимке — не
- * расширение). Условие `when` не обходится: чтение поля его не пишет.
+ * АДРЕСА ЗАПИСИ правила — свойства, которые оно ПИШЕТ: ставит (`default`, `on_enter_class.set`),
+ * снимает (`on_enter_class.on_leave.unset`), вычисляет (`nearest_ancestor.targets`), переносит на
+ * экземпляр (`materialize.inherit`/`own`). Гейт R-8 закрывает запись поля выключенного расширения
+ * льготой правил, а не чтение: правило, которое на свойство расширения лишь РЕАГИРУЕТ
+ * (`enter.property`, `{prop}` внутри `set.value`, `trigger_properties`) или его проверяет
+ * (`requires_when`/`forbidden_when`/`unique_among` — отказывают, но не пишут), поля не пишет и
+ * гейтом не останавливается (N-1 ре-ревью). Прочие шаблоны свойств записей не пишут.
+ * Перечень — по шаблонам, а не обходом строк: обход ловил и чтения (ложный отказ правилу,
+ * которое реагирует на стадию проекта и пишет только приоритет).
  */
-function rulePropertyRefs(params: unknown): string[] {
-  const out: string[] = [];
-  const walk = (node: unknown): void => {
-    if (typeof node === 'string') out.push(node);
-    else if (Array.isArray(node)) for (const x of node) walk(x);
-    else if (node !== null && typeof node === 'object')
-      for (const x of Object.values(node)) walk(x);
-  };
-  walk(params);
-  return out;
+function ruleWriteAddresses(rule: RuleDefinition): string[] {
+  switch (rule.template) {
+    case 'default':
+      return [rule.params.property];
+    case 'on_enter_class':
+      return [
+        ...(rule.params.set !== undefined ? [rule.params.set.property] : []),
+        ...(rule.params.on_leave?.unset ?? []),
+      ];
+    case 'nearest_ancestor':
+      return [rule.params.targets.parent, rule.params.targets.root];
+    case 'materialize':
+      return [...Object.values(rule.params.inherit).flat(), ...Object.keys(rule.params.own)];
+    default:
+      return [];
+  }
 }
 
 async function preparePropertyCreate(_ctx: ExecCtx, rawInput: unknown): Promise<PreparedOp> {
@@ -3753,13 +3779,13 @@ async function prepareAspectDeltaSet(_ctx: ExecCtx, rawInput: unknown): Promise<
     journal,
     async apply(applyCtx: ExecCtx): Promise<OpOutcome> {
       // Гейт R-8: настройка аспекта выключенного расширения — отказ; правила дельты (на ЛЮБОМ
-      // аспекте), называющие свойство выключенного расширения, — тоже: они писали бы его поле
-      // льготой правил. Отключённые правила поля не пишут и гейт не трогают.
+      // аспекте), ПИШУЩИЕ свойство выключенного расширения, — тоже: они писали бы его поле
+      // льготой правил. Отключённые правила и чтения поля гейт не трогают (`ruleWriteAddresses`).
       registryGate(applyCtx, 'aspect_delta_set', {
         aspects: [input.aspect],
         properties: (input.delta.rules ?? [])
           .filter((r) => r.enabled !== false)
-          .flatMap((r) => rulePropertyRefs(r.params)),
+          .flatMap((r) => ruleWriteAddresses(r)),
       });
       const before = await readAspectDelta(applyCtx.tx, applyCtx.req.identity.graph, input.aspect);
       // ПОЛЯ ПРАВИЛ ЭТОТ ТУЛ НЕ СТИРАЕТ МОЛЧА (Ф-Б2-27 (г), `aspectDeltaAfterSet`): не названные во входе
@@ -4287,7 +4313,7 @@ async function prepareRuleSet(_ctx: ExecCtx, rawInput: unknown): Promise<Prepare
     async apply(applyCtx: ExecCtx): Promise<OpOutcome> {
       const graphId = applyCtx.req.identity.graph;
       // Гейт R-8 (Minor-3 Fable): включённое правило на носителе выключенного расширения или
-      // называющее его свойство писало бы поле льготой правил на ближайшей правке ядра — запись
+      // ПИШУЩЕЕ его свойство писало бы поле льготой правил на ближайшей правке ядра — запись
       // «в два хода» мимо гейта полей. Отключение правила (`enabled: false`) поле не пишет —
       // разрешено, как и `rule_remove`.
       if (input.rule.enabled !== false) {
@@ -4295,7 +4321,7 @@ async function prepareRuleSet(_ctx: ExecCtx, rawInput: unknown): Promise<Prepare
           aspects: 'aspect' in input.target ? [input.target.aspect] : [],
           properties: [
             ...('property' in input.target ? [input.target.property] : []),
-            ...rulePropertyRefs(input.rule.params),
+            ...ruleWriteAddresses(input.rule),
           ],
         });
       }

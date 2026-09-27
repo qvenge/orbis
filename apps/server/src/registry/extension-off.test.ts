@@ -714,7 +714,8 @@ describe.each([...CASES])('выключенное расширение $ext (С1
         }),
       ),
     ).toMatchObject(registry);
-    // Правило на свойстве ЯДРА, называющее его свойство, — тоже: писало бы поле льготой правил.
+    // Правило на аспекте ЯДРА, ПИШУЩЕЕ его свойство (умолчание), — тоже: писало бы поле льготой
+    // правил на ближайшей правке ядра (N-1: гейтятся адреса записи, не чтения).
     const own = [...BUILTIN_PROPERTY_META].find((p) => p.module === c.ext)?.id ?? '';
     expect(
       refusalOf(
@@ -722,9 +723,8 @@ describe.each([...CASES])('выключенное расширение $ext (С1
           target: { aspect: 'orbis/task' },
           rule: {
             id: `user_task_${c.ext}_default`,
-            template: 'requires_when',
-            params: { property: own },
-            when: { op: '=', args: [{ prop: 'orbis/priority' }, { const: 'high' }] },
+            template: 'default',
+            params: { property: own, value: { const: 'x' } },
           },
         }),
       ),
@@ -780,6 +780,42 @@ test('все четыре выключены: JSON видимых тулов т�
   const sub = ch.chat.find((d) => d.name === 'subscription_set');
   expect(sub).toBeDefined();
   expect(JSON.stringify(sub)).toContain('core/agenda');
+});
+
+test('N-1: правило, которое свойство выключенного расширения лишь ЧИТАЕТ, заводится; пишущее — отказ (registry)', async () => {
+  const g = await newGraph();
+  await setEnabled(g, 'projects', false);
+  const onStage = (id: string, set: { property: string; value: unknown }) => ({
+    target: { aspect: 'orbis/task' },
+    rule: {
+      id,
+      template: 'on_enter_class',
+      params: { enter: { property: 'orbis/project_stage', in: ['done'] }, set },
+    },
+  });
+  // Реагирует на стадию проекта (чтение), пишет только приоритет (ядро) — поле Проектов не пишет.
+  const reads = await run(
+    g,
+    'rule_set',
+    onStage('user_stage_done_priority', { property: 'orbis/priority', value: { const: 'high' } }),
+  );
+  expect(reads.ok ? 'ok' : `${reads.error.code}: ${reads.error.message}`).toBe('ok');
+  // Пишет стадию проекта — запись поля выключенного расширения льготой правил.
+  expect(
+    refusalOf(
+      await run(
+        g,
+        'rule_set',
+        onStage('user_stage_done_stage', {
+          property: 'orbis/project_stage',
+          value: { const: 'paused' },
+        }),
+      ),
+    ),
+  ).toMatchObject({
+    code: 'MODULE_DISABLED',
+    details: { extension: 'projects', reason: 'registry', property: 'orbis/project_stage' },
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -1077,6 +1113,49 @@ describe('выключенные Финансы: обходы маски (С1б-
       ).ok,
     ).toBe(true);
     expect((await propsOf(g, note))['orbis/counterparty']).toBe('Кофе Хауз');
+  });
+
+  test('N-2. навешивание своего аспекта со свойством Финансов в составе: без значения — проходит; значение ставится или снимается — read_only', async () => {
+    const g = await newGraph();
+    const own = await run(g, 'aspect_create', {
+      key: 'user/purchase',
+      label: { ru: 'Покупка' },
+      description: { ru: 'Своя покупка владельца' },
+      properties: [{ propertyId: 'orbis/counterparty', required: false }],
+    });
+    if (!own.ok) throw new Error(`свой аспект: ${own.error.code} — ${own.error.message}`);
+    const bare = await created(g, {
+      title: 'Заметка без контрагента',
+      props: {},
+      aspects: ['orbis/note'],
+    });
+    const withValue = await created(g, {
+      title: 'Заметка с контрагентом',
+      props: { 'orbis/counterparty': 'Кофе Хауз' },
+      aspects: ['orbis/note'],
+    });
+    await setEnabled(g, 'finance', false);
+    const readOnly = {
+      code: 'MODULE_DISABLED',
+      details: { extension: 'finance', reason: 'read_only', property: 'orbis/counterparty' },
+    };
+    // Снимать нечего и ставить нечего — поле расширения не меняется, навешивание законно.
+    expect((await run(g, 'attach_user_purchase', { entity_id: bare, data: {} })).ok).toBe(true);
+    // Значение ставится — запись поля.
+    const other = await created(g, { title: 'Ещё заметка', props: {}, aspects: ['orbis/note'] });
+    expect(
+      refusalOf(
+        await run(g, 'attach_user_purchase', {
+          entity_id: other,
+          data: { 'orbis/counterparty': 'Такси' },
+        }),
+      ),
+    ).toMatchObject(readOnly);
+    // Значение было и снимается навешиванием без него — тоже запись поля.
+    expect(
+      refusalOf(await run(g, 'attach_user_purchase', { entity_id: withValue, data: {} })),
+    ).toMatchObject(readOnly);
+    expect((await propsOf(g, withValue))['orbis/counterparty']).toBe('Кофе Хауз');
   });
 
   test('14. правило памяти с областью orbis/money-movement создаётся и доходит до модели (язык жив)', async () => {
