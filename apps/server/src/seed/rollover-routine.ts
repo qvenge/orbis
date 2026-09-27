@@ -90,7 +90,8 @@ export const ROLLOVER_ROUTINE_BODY = `Ты переносишь остатки �
 /**
  * Сев рутины — ОТДЕЛЬНОЙ транзакцией, ПОСЛЕ сева мира и садовника, ТОЛЬКО при заведении графа
  * (`seed/setup-graph.ts`, срез 1б §8.6): на входе, где граф уже заведён, её не досевают (С1б-5). Проба
- * по PK — страховка прямого повторного вызова (тот же довод, что у `seedGardener`).
+ * по PK — ради точного ответа `seeded` (довод `seedGardener`: повтор и гонку гасит replay одиночного
+ * вызова исполнителя).
  */
 export async function seedRolloverRoutine(
   db: Db,
@@ -125,14 +126,7 @@ export async function seedRolloverRoutine(
   });
   // Отказ НЕ глушится — довод садовника: посеянная наполовину доверенность хуже отсутствующей, а
   // вызывающий (заведение графа) обязан узнать, что граф заведён не полностью (оболочка не запишется,
-  // следующий вход доведёт заведение, R-20).
-  if (!r.ok) {
-    // Гонка двух первых входов — «уже есть», а не поломка (довод садовника).
-    const raced = await withIdentity(db, who, (tx) =>
-      tx.execute(sql`SELECT 1 FROM entities WHERE id = ${id}::uuid AND graph_id = ${who.graph}`),
-    );
-    if (raced.length > 0) return { seeded: false, id };
-    throw new Error(`сев рутины «Перенос остатков»: ${r.error.code} ${r.error.message}`);
-  }
+  // следующий вход доведёт заведение, R-20). Гонку сюда не приводит — одиночный вызов на своём id: replay.
+  if (!r.ok) throw new Error(`сев рутины «Перенос остатков»: ${r.error.code} ${r.error.message}`);
   return { seeded: true, id };
 }

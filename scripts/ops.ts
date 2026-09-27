@@ -636,7 +636,9 @@ async function graphsCensus(): Promise<number> {
     for (const m of members)
       console.log(`членство ${m.grant_kind}: действующих ${m.active}, отозванных ${m.revoked}`);
     console.log(`грантов агентов: ${grants?.n}; без issued_by: ${grants?.no_issuer}`);
-    console.log(`строк user_settings (графы с пройденным онбордингом): ${settings?.n}`);
+    // Строка настроек — не признак заведённого графа (срез 1б §8.6: признак — запись оболочки хоста;
+    // после reset-world строка есть у незаведённого графа), поэтому печатается просто числом строк.
+    console.log(`строк user_settings: ${settings?.n}`);
     return ownerless?.n === 0 && grants?.no_issuer === 0 ? 0 : 1;
   });
 }

@@ -14,9 +14,8 @@
 //
 // ПОРЯДОК (РП-15, R-20): маска [] → 12 категорий → записи поставки БЕЗ оболочки → садовник → «Перенос
 // остатков» → маска ['finance'] → глобальный тред → ОБОЛОЧКА ХОСТА последней пачкой. Сев — ДО маски: при
-// выключенных Финансах пачка категорий получила бы `MODULE_DISABLED`. Маска снимается целиком, а не только
-// Финансы: после `reset-world` в сохранённой строке настроек может стоять любое из четырёх расширений
-// (Д-1), а граф заводится в одном виде.
+// выключенных Финансах пачка категорий получила бы `MODULE_DISABLED`. Когда маска снимается и ставится —
+// раздел «МАСКА» ниже.
 //
 // ПОЧЕМУ ОБОЛОЧКА — ПОСЛЕДНЕЙ (R-20, Р-29). Признак «граф заведён» обязан значить «заведён ЦЕЛИКОМ»:
 // оболочка, записанная раньше рутин и маски, при падении процесса посередине оставила бы граф без
@@ -24,6 +23,19 @@
 // оболочки нет, граф «не заведён», и каждый шаг до неё повторяем: id детерминированы (uuidv5), всё, что
 // уже есть, пропускается пробой по PK, маска идемпотентна. Вход после частичного заведения поэтому
 // доводит граф до конца тем же путём.
+//
+// МАСКА (фикс-раунд 1 задачи 12). Маска — слово владельца (`module_set`, журнал и Undo), и заведение
+// трогает её ровно настолько, насколько она ещё не его:
+//  - ПЕРВОЕ заведение (ни одной категории мира — новый граф, граф после `reset-world`, падение до первой
+//    пачки): маска снимается целиком (Д-1: после пересева в сохранённой строке может стоять что угодно, а
+//    граф заводится в одном виде), в конце — `['finance']`;
+//  - ДОВЕДЕНИЕ частичного заведения (категории есть, оболочки нет): маска НЕ снимается; Финансы в конце
+//    выключаются, только если в журнале графа нет ни одного `module_set` владельца. Выбран журнал, а не
+//    «шаг маски пройден»: между падением и следующим входом приложение работает (строка настроек есть),
+//    и владелец мог переключить расширение — это его журналированное действие, и молча отменять его
+//    записью без журнала нельзя. Если он его сказал, граф доводится с его маской как есть;
+//  - проигравший гонку вход (оболочку под замком строки настроек уже записал другой) маску не трогает.
+// Шаги маски обоих входов сериализует `FOR UPDATE` строки настроек.
 //
 // ТРАНЗАКЦИИ РАЗНЫЕ, И НАМЕРЕННО: `execute` открывает свою транзакцию на другом соединении (рулинг
 // Р-17-1), вложить его в транзакцию маски — дедлок на строке настроек. Атомарности на весь путь нет;
@@ -33,7 +45,12 @@
 // ЖУРНАЛА НЕТ (как у сева до 1б, решение 6 плана онбординга): заведение графа — не правка, и стать
 // «последним действием» для Undo оно не должно.
 import { type GraphId, ORBIS_NAMESPACE, SUPPLY_ASPECT, SUPPLY_KEY } from '@orbis/shared';
-import { SUPPLY_ETALONS, type SupplyEtalon, type SupplyKey } from '@orbis/shared/supply';
+import {
+  SEED_SMART_LISTS,
+  SUPPLY_ETALONS,
+  type SupplyEtalon,
+  type SupplyKey,
+} from '@orbis/shared/supply';
 import { sql } from 'drizzle-orm';
 import { v5 as uuidv5 } from 'uuid';
 import { ensureGlobalThread } from '../chat/threads';
@@ -46,10 +63,11 @@ import type { Identity } from '../identity';
 import { effectiveRegistry } from '../registry/cache';
 import { disabledExtensionsOf, setExtensionDisabled } from '../registry/extensions';
 import { supplyCreateOps, supplyRecordId } from '../supply/records';
+import { SEED_CATEGORIES } from './categories';
 import { seedGardener } from './gardener';
 import { ensurePersonalGraph } from './personal-graph';
 import { seedRolloverRoutine } from './rollover-routine';
-import { missingIds, seedOwnerWorld, seedSmartListId } from './world';
+import { missingIds, seedCategoryId, seedOwnerWorld, seedSmartListId } from './world';
 
 export interface SetupGraphOptions {
   /**
@@ -78,24 +96,102 @@ const SETUP_DISABLED_EXTENSION = 'finance';
 
 type GraphState = 'ready' | 'legacy' | 'new';
 
-/**
- * Состояние графа по одной пробе чтения. `ready` — оболочка хоста есть (с архивной); `legacy` — мир
- * старой формы: список «Daily Planning» на своём прежнем id без аспекта «поставка» (Э-18) — заводить
- * поверх него нельзя (сев упёрся бы в PK списков), переводить молча — тем более; `new` — иначе.
- */
-async function graphState(tx: Tx, graph: GraphId): Promise<GraphState> {
+/** Оболочка хоста есть (с архивной) — признак «граф заведён» (Р-29). */
+async function shellExists(tx: Tx, graph: GraphId): Promise<boolean> {
   const shell = await tx.execute(sql`
     SELECT 1 FROM entities
      WHERE graph_id = ${graph}::uuid
        AND props @> ${JSON.stringify({ [SUPPLY_KEY]: 'host-shell' })}::jsonb
      LIMIT 1`);
-  if (shell.length > 0) return 'ready';
+  return shell.length > 0;
+}
+
+/**
+ * Состояние графа по одной пробе чтения. `ready` — оболочка хоста есть (с архивной); `legacy` — мир
+ * старой формы (Э-18): ЛЮБОЙ из шести списков на своём прежнем id без аспекта «поставка». Не только
+ * «Daily Planning»: граф, где его строки нет, а пять других старой формы, иначе сошёл бы за новый —
+ * пачка страниц пропустила бы занятые id, оболочка поставила бы навигацию на записи вне поставки, и
+ * `migrate-1b` больше не предлагался бы. Заводить поверх такого мира нельзя, переводить молча — тем
+ * более; `new` — иначе.
+ */
+async function graphState(tx: Tx, graph: GraphId): Promise<GraphState> {
+  if (await shellExists(tx, graph)) return 'ready';
+  const listIds = SEED_SMART_LISTS.map((l) => seedSmartListId(graph, l.slug));
   const legacy = await tx.execute(sql`
     SELECT 1 FROM entities
      WHERE graph_id = ${graph}::uuid
-       AND id = ${seedSmartListId(graph, 'daily-planning')}::uuid
-       AND NOT (aspects @> ARRAY[${SUPPLY_ASPECT}]::text[])`);
+       AND id IN (${sql.join(
+         listIds.map((id) => sql`${id}::uuid`),
+         sql`, `,
+       )})
+       AND NOT (aspects @> ARRAY[${SUPPLY_ASPECT}]::text[])
+     LIMIT 1`);
   return legacy.length > 0 ? 'legacy' : 'new';
+}
+
+/**
+ * Заведение графа уже СЕЯЛО (есть хоть одна категория мира): пачка категорий — первый сев и атомарна,
+ * так что её отсутствие значит «ни один шаг сева не прошёл» — новый граф, граф после `reset-world` или
+ * падение до первой пачки. Архивная категория — тоже «есть».
+ */
+async function worldSeeded(tx: Tx, graph: GraphId): Promise<boolean> {
+  const ids = SEED_CATEGORIES.map((c) => seedCategoryId(graph, c.slug));
+  const rows = await tx.execute(sql`
+    SELECT 1 FROM entities
+     WHERE graph_id = ${graph}::uuid
+       AND id IN (${sql.join(
+         ids.map((id) => sql`${id}::uuid`),
+         sql`, `,
+       )})
+     LIMIT 1`);
+  return rows.length > 0;
+}
+
+/** Владелец уже сказал своё слово о маске: в журнале графа есть его `module_set` (с Undo — тоже слово). */
+async function ownerSetMask(tx: Tx, graph: GraphId): Promise<boolean> {
+  const rows = await tx.execute(sql`
+    SELECT 1 FROM chat_messages m JOIN chat_threads t ON t.id = m.thread_id
+     WHERE t.graph_id = ${graph}::uuid
+       AND m.metadata @> ${JSON.stringify({ actions: [{ type: 'module_set' }] })}::jsonb
+     LIMIT 1`);
+  return rows.length > 0;
+}
+
+/** Строка настроек под замком — сериализует шаги маски двух параллельных входов. */
+async function lockSettings(tx: Tx, graph: GraphId): Promise<void> {
+  await tx.execute(sql`SELECT 1 FROM user_settings WHERE graph_id = ${graph}::uuid FOR UPDATE`);
+}
+
+/**
+ * «Уже есть» у записи поставки — только если на её id лежит запись С ЭТИМ КЛЮЧОМ. Иначе id занят чужой
+ * записью (явный id `entity_create`), и молча пропустить её значило бы: у оболочки — вечное «граф не
+ * заведён» и перезапись маски на каждом входе (тихие записи навсегда), у страницы — навигацию на
+ * чужую запись. Состояние по замыслу недостижимое — поэтому отказ, а не обход.
+ */
+async function assertOwnSupplyIds(
+  db: Db,
+  who: Identity,
+  keys: readonly SupplyKey[],
+): Promise<void> {
+  const graph = who.graph;
+  const rows = (await withIdentity(db, who, (tx) =>
+    tx.execute(sql`
+      SELECT id::text AS id, props ->> ${SUPPLY_KEY} AS key FROM entities
+       WHERE graph_id = ${graph}::uuid AND id IN (${sql.join(
+         keys.map((k) => sql`${supplyRecordId(graph, k)}::uuid`),
+         sql`, `,
+       )})`),
+  )) as unknown as Array<{ id: string; key: string | null }>;
+  for (const k of keys) {
+    const row = rows.find((r) => r.id === supplyRecordId(graph, k));
+    if (row !== undefined && row.key !== k) {
+      throw new ExecError(
+        'INVARIANT',
+        `запись поставки «${k}» не заведена: её id занят чужой записью`,
+        { key: k, id: row.id },
+      );
+    }
+  }
 }
 
 /** batchId пачки записей поставки — детерминированный, как у пачки мира; у оболочки — свой. */
@@ -122,7 +218,10 @@ async function seedSupplyRecords(
   const graph = who.graph;
   const ids = keys.map((k) => supplyRecordId(graph, k));
   const missing = await missingIds(db, who, ids);
-  if (missing.size === 0) return false;
+  if (missing.size === 0) {
+    await assertOwnSupplyIds(db, who, keys);
+    return false;
+  }
 
   const reg = await withIdentity(db, who, (tx) => effectiveRegistry(tx, graph));
   const all: readonly SupplyKey[] = etalons.map((e) => e.key);
@@ -145,7 +244,10 @@ async function seedSupplyRecords(
   if (!r.ok) {
     // Гонка двух первых входов — единственный законный отказ, и он проверяется: записи на месте —
     // значит их завёл параллельный вход.
-    if ((await missingIds(db, who, ids)).size === 0) return false;
+    if ((await missingIds(db, who, ids)).size === 0) {
+      await assertOwnSupplyIds(db, who, keys);
+      return false;
+    }
     throw new Error(`сев записей поставки: ${r.error.code} ${r.error.message}`);
   }
   return true;
@@ -180,9 +282,9 @@ export async function setupGraph(
     );
   }
 
-  // Маска [] и строка настроек. Строку заводим здесь, а не ждём `setExtensionDisabled` в конце: тот
-  // завёл бы её с одной маской, а дефолты настроек — дело заведения графа.
-  await withIdentity(db, who, async (tx) => {
+  // Строка настроек и решение о маске — под замком строки. Строку заводим здесь, а не ждём
+  // `setExtensionDisabled` в конце: тот завёл бы её с одной маской, а дефолты настроек — дело заведения.
+  const plan = await withIdentity(db, who, async (tx) => {
     await tx
       .insert(userSettings)
       .values({
@@ -194,10 +296,18 @@ export async function setupGraph(
         updatedAt: clock(),
       })
       .onConflictDoNothing();
-    for (const ext of await disabledExtensionsOf(tx, graph)) {
-      await setExtensionDisabled(tx, graph, ext, false);
+    await lockSettings(tx, graph);
+    // Параллельный вход довёл граф, пока мы пробовали: ничего не пишем.
+    if (await shellExists(tx, graph)) return null;
+    const fresh = !(await worldSeeded(tx, graph));
+    if (fresh) {
+      for (const ext of await disabledExtensionsOf(tx, graph)) {
+        await setExtensionDisabled(tx, graph, ext, false);
+      }
     }
+    return { ownMask: fresh || !(await ownerSetMask(tx, graph)) };
   });
+  if (plan === null) return { seeded: false };
 
   const step = opts.afterStep ?? (() => {});
   const shellKeys = etalons.filter((e) => e.kind === 'app').map((e) => e.key);
@@ -208,19 +318,23 @@ export async function setupGraph(
   await seedSupplyRecords(db, who, clock, etalons, pageKeys, 'pages');
   await step('supply');
   // Садовник — после списков: он рутина и в «Рутинах» виден с первого открытия. Оба сева повторяемы
-  // (проба по PK) и переживают гонку (перепроверка после отказа).
+  // (проба по PK) и переживают гонку (одиночный `entity_create` на своём занятом id — replay).
   if (opts.routines ?? true) {
     await seedGardener(db, who, clock);
     await seedRolloverRoutine(db, who, clock);
   }
   await step('routines');
 
-  // Маска — у ОБОИХ входов гонки: проигравший снимал её до своего сева, и оставить её снятой значило бы
-  // завести граф с включёнными Финансами.
-  await withIdentity(db, who, async (tx) => {
-    await setExtensionDisabled(tx, graph, SETUP_DISABLED_EXTENSION, true);
+  // Маска Финансов — только если маска наша (см. «МАСКА» в шапке) и граф ещё не довёл параллельный вход:
+  // проигравший гонку, увидев оболочку под замком, маску не трогает вовсе.
+  const finished = await withIdentity(db, who, async (tx) => {
+    await lockSettings(tx, graph);
+    if (await shellExists(tx, graph)) return true;
+    if (plan.ownMask) await setExtensionDisabled(tx, graph, SETUP_DISABLED_EXTENSION, true);
     await ensureGlobalThread(tx, graph);
+    return false;
   });
+  if (finished) return { seeded: false };
   await step('mask');
 
   // Признак «граф заведён» — ПОСЛЕДНИМ (R-20). `seeded` — оболочку завёл этот вызов.

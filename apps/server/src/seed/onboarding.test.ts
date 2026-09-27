@@ -33,6 +33,7 @@ import { TRPCError } from '@trpc/server';
 import { sql } from 'drizzle-orm';
 import { adminDb, appDb, freshGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
 import { seedLegacyWorld } from '../../test/legacy-world';
+import { DEFINITION_TABLES } from '../db/reset-world';
 import { entities } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { assertEntityProps } from '../executor/aspects-validate';
@@ -160,45 +161,45 @@ async function rowOf(user: GraphId, id: string): Promise<RecordRow> {
 }
 
 /**
- * ВСЁ, что вход мог бы записать в граф владельца, одним снимком (админ-DSN, мимо RLS): число и
- * отпечаток строк `entities` (id, отметка правки, архив, тело, свойства, аспекты, теги — любая правка
- * мимо исполнителя или через него его сдвигает), рёбра, сообщения тредов (в них живёт журнал
- * действий), треды, версии тел, происхождения и строка настроек целиком — вместе с `updated_at`.
- * Сравнение «до» и «после» входа — проверка С1б-5 «на каждом входе онбординг ничего не пишет».
+ * ВСЁ, что вход мог бы записать в граф владельца, одним снимком (админ-DSN, мимо RLS): по каждой таблице
+ * графа — число строк и отпечаток их ПОЛНОГО содержимого (`to_jsonb` строки, упорядоченно), то есть любая
+ * правка, вставка или удаление, через исполнитель или мимо него, сдвигает снимок. Таблицы: записи, рёбра,
+ * треды и сообщения (в них живёт журнал действий), версии тел, происхождения, строка настроек (маска,
+ * `updated_at`), граф и членство, шесть реестров графа и дельты, кэш трат конвертов. Сравнение «до» и
+ * «после» входа — проверка С1б-5 «на каждом входе онбординг ничего не пишет».
  */
 async function worldSnapshot(user: GraphId): Promise<Record<string, unknown>> {
   const { db: admin, client: adminClient } = adminDb();
+  const digest = async (table: string, where: ReturnType<typeof sql>): Promise<unknown> =>
+    (
+      (await admin.execute(sql`
+      SELECT count(*)::int AS n,
+             md5(coalesce(string_agg(to_jsonb(x)::text, ';' ORDER BY to_jsonb(x)::text), '')) AS digest
+        FROM ${sql.raw(table)} x WHERE ${where}`)) as unknown as unknown[]
+    )[0];
+  const ofGraph = sql`x.graph_id = ${user}::uuid`;
   try {
-    const one = async (q: ReturnType<typeof sql>): Promise<unknown> =>
-      ((await admin.execute(q)) as unknown as unknown[])[0];
-    return {
-      entities: await one(sql`
-        SELECT count(*)::int AS n,
-               md5(coalesce(string_agg(
-                 id::text || '|' || updated_at::text || '|' || archived::text || '|' ||
-                 md5(coalesce(body, '')) || '|' || md5(props::text) || '|' ||
-                 array_to_string(aspects, ',') || '|' || array_to_string(tags, ','),
-                 ';' ORDER BY id), '')) AS digest
-          FROM entities WHERE graph_id = ${user}::uuid`),
-      relations: await one(sql`
-        SELECT count(*)::int AS n FROM relations r
-          JOIN entities e ON e.id = r.source_id WHERE e.graph_id = ${user}::uuid`),
-      messages: await one(sql`
-        SELECT count(*)::int AS n FROM chat_messages m
-          JOIN chat_threads t ON t.id = m.thread_id WHERE t.graph_id = ${user}::uuid`),
-      threads: await one(
-        sql`SELECT count(*)::int AS n FROM chat_threads WHERE graph_id = ${user}::uuid`,
+    const out: Record<string, unknown> = {
+      entities: await digest('entities', ofGraph),
+      relations: await digest(
+        'relations',
+        sql`x.source_id IN (SELECT id FROM entities WHERE graph_id = ${user}::uuid)`,
       ),
-      versions: await one(
-        sql`SELECT count(*)::int AS n FROM entity_versions WHERE graph_id = ${user}::uuid`,
+      threads: await digest('chat_threads', ofGraph),
+      messages: await digest(
+        'chat_messages',
+        sql`x.thread_id IN (SELECT id FROM chat_threads WHERE graph_id = ${user}::uuid)`,
       ),
-      origins: await one(
-        sql`SELECT count(*)::int AS n FROM entity_origins WHERE graph_id = ${user}::uuid`,
-      ),
-      settings: await one(
-        sql`SELECT to_jsonb(s) AS row FROM user_settings s WHERE graph_id = ${user}::uuid`,
-      ),
+      versions: await digest('entity_versions', ofGraph),
+      origins: await digest('entity_origins', ofGraph),
+      settings: await digest('user_settings', ofGraph),
+      graphs: await digest('graphs', sql`x.id = ${user}::uuid`),
+      members: await digest('graph_members', ofGraph),
+      deltas: await digest('registry_deltas', ofGraph),
+      spent: await digest('envelope_spent_cache', ofGraph),
     };
+    for (const table of DEFINITION_TABLES) out[table] = await digest(table, ofGraph);
+    return out;
   } finally {
     await adminClient.end();
   }
@@ -257,6 +258,21 @@ async function ownerEdit(user: GraphId, input: Record<string, unknown>): Promise
     { sink: journal },
   );
   if (!r.ok) throw new Error(`правка владельца: ${JSON.stringify(r.error)}`);
+}
+
+/** Переключение расширения владельцем — `module_set` через исполнитель, с журналом (как ручка настроек). */
+async function ownerModuleSet(user: GraphId, module: string, enabled: boolean): Promise<void> {
+  const r = await execute(
+    db,
+    {
+      identity: personal(user),
+      actorKind: 'owner',
+      source: 'ui',
+      operations: [{ tool: 'module_set', input: { module, enabled } }],
+    },
+    { sink: journal },
+  );
+  if (!r.ok) throw new Error(`module_set: ${JSON.stringify(r.error)}`);
 }
 
 /** Строку записи — физически, админ-DSN: в продукте так нельзя, фикстуре — можно (§8.6, Р-29). */
@@ -1023,7 +1039,7 @@ describe('заведение графа (§8.6, РП-15, С1б-5)', () => {
     expect(await worldSnapshot(user)).toEqual(before);
   });
 
-  test('(в) граф с правками владельца: блок пачки удалён из «Рутин», «Домой» в архиве, навигация изменена — вход не пишет ничего', async () => {
+  test('(в) граф с правками владельца: Финансы включены, блок пачки удалён из «Рутин», «Домой» в архиве, навигация изменена — вход не пишет ничего', async () => {
     const user = await freshGraph();
     const caller = callerFor(user);
     await caller.user.seedOnboarding();
@@ -1044,10 +1060,15 @@ describe('заведение графа (§8.6, РП-15, С1б-5)', () => {
         [APP_NAV]: [supplyRecordId(user, 'records'), seedSmartListId(user, 'daily-planning')],
       },
     });
+    // Самая вероятная правка после заведения: граф заводится с выключенными Финансами, владелец их
+    // включает. Вход не смеет вернуть маску к виду заведения (I-1 гейта).
+    await ownerModuleSet(user, 'finance', true);
+    expect(await disabledOf(user)).toEqual([]);
 
     const before = await worldSnapshot(user);
     expect(await caller.user.seedOnboarding()).toEqual({ seeded: false });
     expect(await worldSnapshot(user)).toEqual(before);
+    expect(await disabledOf(user)).toEqual([]);
     // Блок пачки не возвращён (Фокус ревью п. 4): правка владельца — его решение.
     expect((await rowOf(user, routinesId)).body).not.toContain(ROUTINES_BATCH_QUERY);
     expect((await rowOf(user, supplyRecordId(user, 'home'))).archived).toBe(true);
@@ -1110,6 +1131,97 @@ describe('заведение графа (§8.6, РП-15, С1б-5)', () => {
       expect([step, await callerFor(user).user.seedOnboarding()]).toEqual([step, { seeded: true }]);
       expect([step, await composition(user)]).toEqual([step, reference]);
     }
+  });
+
+  test('(л) доведение частичного заведения не трогает маску, которую владелец уже задал', async () => {
+    // Между падением и следующим входом приложение работает (строка настроек есть), и владелец вправе
+    // переключить расширение — его журналированное действие доведение не отменяет (фикс-раунд 1).
+    for (const step of ['supply', 'mask'] as const) {
+      const user = await freshGraph();
+      await setupGraph(db, personal(user), {
+        afterStep: (s) => {
+          if (s === step) throw new Error('падение');
+        },
+      }).catch(() => undefined);
+      await ownerModuleSet(user, 'goals', false);
+      const mask = await disabledOf(user);
+      expect([step, mask]).toEqual([step, expect.arrayContaining(['goals'])]);
+
+      expect([step, await callerFor(user).user.seedOnboarding()]).toEqual([step, { seeded: true }]);
+      expect([step, await disabledOf(user)]).toEqual([step, mask]);
+    }
+  });
+
+  test('(м) проигравший гонку вход маску не трогает: граф довёл другой, владелец включил Финансы', async () => {
+    const user = await freshGraph();
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    let paused: () => void = () => {};
+    const reached = new Promise<void>((r) => {
+      paused = r;
+    });
+    // «Медленный» вход: доходит до рутин и ждёт; тем временем другой вход доводит граф целиком.
+    const slow = setupGraph(db, personal(user), {
+      afterStep: async (s) => {
+        if (s === 'routines') {
+          paused();
+          await gate;
+        }
+      },
+    });
+    await reached;
+    expect(await setupGraph(db, personal(user))).toEqual({ seeded: true });
+    await ownerModuleSet(user, 'finance', true);
+    const before = await worldSnapshot(user);
+
+    release();
+    expect(await slow).toEqual({ seeded: false });
+    expect(await disabledOf(user)).toEqual([]);
+    expect(await worldSnapshot(user)).toEqual(before);
+  });
+
+  test('(н) id оболочки хоста занят чужой записью — явный отказ, а не вечное «граф не заведён»', async () => {
+    const user = await freshGraph();
+    const shellId = supplyRecordId(user, 'host-shell');
+    const r = await execute(db, {
+      identity: personal(user),
+      actorKind: 'owner',
+      source: 'ui',
+      operations: [{ tool: 'entity_create', input: { id: shellId, title: 'Чужая', tags: [] } }],
+    });
+    expect(r.ok).toBe(true);
+
+    for (let i = 0; i < 2; i++) {
+      const err = await callerFor(user)
+        .user.seedOnboarding()
+        .then(
+          () => null,
+          (e: unknown) => e,
+        );
+      expect(err).toBeInstanceOf(TRPCError);
+      expect((err as TRPCError).code).toBe('UNPROCESSABLE_CONTENT');
+      expect((err as TRPCError).message).toContain('занят чужой записью');
+    }
+  });
+
+  test('(о) мир старой формы без «Daily Planning» — всё равно GRAPH_NEEDS_MIGRATION, ни одной записи', async () => {
+    const user = await freshGraph();
+    await seedLegacyWorld(user);
+    await deleteRow(user, seedSmartListId(user, 'daily-planning'));
+    const before = await worldSnapshot(user);
+    const err = await callerFor(user)
+      .user.seedOnboarding()
+      .then(
+        () => null,
+        (e: unknown) => e,
+      );
+    expect((err as TRPCError).code).toBe('CONFLICT');
+    expect(((err as TRPCError).cause as { code?: string } | undefined)?.code).toBe(
+      'GRAPH_NEEDS_MIGRATION',
+    );
+    expect(await worldSnapshot(user)).toEqual(before);
   });
 
   test('(и) новый эталон и новая запись поставки на заведённом графе — только предложения, вход пишет ноль', async () => {
