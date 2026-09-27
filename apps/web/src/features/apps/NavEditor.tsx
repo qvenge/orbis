@@ -13,6 +13,7 @@ import { FIELD_CLASS } from '../../lib/registry/controls';
 import {
   ARCHIVED_NOTE,
   MISSING_NOTE,
+  type PickedRef,
   RefListControl,
   RefSearch,
   useRefRows,
@@ -109,14 +110,34 @@ export function NavEditor({ app, onClose }: { app: WireEntity; onClose: () => vo
     return o ? effectiveLabel(o.label, OWNER_LOCALE) : f;
   };
   const set = (patch: Partial<Draft>) => setDraft((d) => ({ ...d, ...patch }));
-  const home = draft.home === null ? undefined : homeRefs.byId.get(draft.home);
+  // Выбранная в поиске домашняя — её заголовок до ответа по новому id (гейт 21, M-4).
+  const [pickedHome, setPickedHome] = useState<(PickedRef & { id: string }) | null>(null);
+  const known = draft.home === null ? undefined : homeRefs.byId.get(draft.home);
+  const picked = pickedHome !== null && pickedHome.id === draft.home ? pickedHome : undefined;
+  const home = known ?? picked;
+  const homeArchived = known?.archived === true;
   const homeMissing = draft.home !== null && home === undefined && homeRefs.rows !== undefined;
+  const [saving, setSaving] = useState(false);
+  const [failed, setFailed] = useState(false);
 
-  function save() {
-    if (gone === null) return;
+  /**
+   * Диалог закрывается только ЗАПИСАННОЙ пачкой (гейт 21, M-3): отказ (правило каталога, сеть) оставляет
+   * черновик на экране — имя, порядок и форму не приходится набирать заново — и говорит об отказе
+   * здесь же, а не только тостом.
+   */
+  async function save() {
+    if (gone === null || saving) return;
     const op = navEditOperation(app, draft, gone);
-    onClose();
-    if (op !== null) void runBatch([op], 'Навигация сохранена', { action: CONFIGURE_NAV });
+    if (op === null) {
+      onClose();
+      return;
+    }
+    setSaving(true);
+    setFailed(false);
+    const ok = await runBatch([op], 'Навигация сохранена', { action: CONFIGURE_NAV });
+    setSaving(false);
+    if (ok) onClose();
+    else setFailed(true);
   }
 
   return (
@@ -153,16 +174,16 @@ export function NavEditor({ app, onClose }: { app: WireEntity; onClose: () => vo
           {draft.home !== null && (
             <div
               data-testid="nav-home"
-              {...(home?.archived === true && { 'data-archived': 'true' })}
+              {...(homeArchived && { 'data-archived': 'true' })}
               className={`flex min-h-11 items-center gap-2 rounded-md px-2 ${
-                home?.archived === true || homeMissing ? 'bg-surface-2 text-text-muted' : ''
+                homeArchived || homeMissing ? 'bg-surface-2 text-text-muted' : ''
               }`}
             >
               {home?.emoji && <span aria-hidden>{home.emoji}</span>}
               <span className="min-w-0 flex-1 truncate">
                 {home?.title ?? (homeMissing ? draft.home : '…')}
               </span>
-              {(home?.archived === true || homeMissing) && (
+              {(homeArchived || homeMissing) && (
                 <span className="text-2xs">{homeMissing ? MISSING_NOTE : ARCHIVED_NOTE}</span>
               )}
               <button
@@ -175,7 +196,15 @@ export function NavEditor({ app, onClose }: { app: WireEntity; onClose: () => vo
               </button>
             </div>
           )}
-          <RefSearch label="Сменить домашнюю" onPick={(id) => set({ home: id })} />
+          {/* Сама запись-приложение домашней не бывает (правило `app_home_not_self`). */}
+          <RefSearch
+            label="Сменить домашнюю"
+            exclude={[app.id]}
+            onPick={(id, p) => {
+              setPickedHome({ id, ...p });
+              set({ home: id });
+            }}
+          />
         </div>
 
         <label className="flex flex-col gap-1">
@@ -204,15 +233,24 @@ export function NavEditor({ app, onClose }: { app: WireEntity; onClose: () => vo
               label="Разделы"
               value={draft.nav}
               onChange={(nav) => set({ nav })}
+              exclude={[app.id]}
             />
           )}
         </div>
 
+        {failed && (
+          <p role="alert" className="text-danger">
+            Не удалось сохранить — правки на месте, можно исправить и повторить.
+          </p>
+        )}
         <div className="flex justify-end gap-2">
           <Button variant="ghost" onClick={onClose}>
             Отмена
           </Button>
-          <Button onClick={save} disabled={draft.title.trim() === '' || gone === null}>
+          <Button
+            onClick={() => void save()}
+            disabled={draft.title.trim() === '' || gone === null || saving}
+          >
             Сохранить
           </Button>
         </div>

@@ -305,34 +305,40 @@ function RecordMenu({
   }
 
   /**
-   * «Добавить в навигацию» или «Убрать из навигации» — для ТЕКУЩЕГО приложения (§9.3): стоит запись в
-   * навигации рамки — её можно убрать, иначе — добавить (выбор приложения, по умолчанию текущее, или
-   * «Новое приложение…»). Список приложений не приехал — пунктов нет: спросить «стоит ли» не у кого.
+   * «Добавить в навигацию» и рядом «Убрать из навигации» (§9.3, R-34). «Добавить» есть у живой записи
+   * всегда: в выборе — приложения, где её ещё нет, и «Новое приложение…» (без дублей, диалог).
+   * «Убрать» — когда запись стоит в навигации ТЕКУЩЕГО приложения. У архивной записи «Добавить» (и
+   * «Новое приложение…» за ним) нет: разделом или домашней её не поставить — сервер ответил бы «цель
+   * архивна» (гейт 21, M-2). «Убрать» у неё остаётся — убрать архивный раздел законно.
+   * Список приложений не приехал — пунктов нет: спросить «стоит ли» не у кого.
    */
   function navItems(): DropdownMenuItem[] {
     if (apps.status !== 'ok') return [];
     const rec = frame;
-    if (rec !== null && inNav(rec.nav, entity.id)) {
-      return [
-        {
-          label: REMOVE_FROM_NAV,
-          icon: <ListMinus size={16} aria-hidden />,
-          onSelect: () =>
-            void writeNav(
-              rec,
-              (nav) => withoutSection(nav, entity.id),
-              `Убрано из навигации «${rec.title}»`,
-              REMOVE_FROM_NAV,
-            ),
-        },
-      ];
-    }
+    const remove: DropdownMenuItem[] =
+      rec !== null && inNav(rec.nav, entity.id)
+        ? [
+            {
+              label: REMOVE_FROM_NAV,
+              icon: <ListMinus size={16} aria-hidden />,
+              onSelect: () =>
+                void writeNav(
+                  rec,
+                  (nav) => withoutSection(nav, entity.id),
+                  `Убрано из навигации «${rec.title}»`,
+                  REMOVE_FROM_NAV,
+                ),
+            },
+          ]
+        : [];
+    if (archived) return remove;
     return [
       {
         label: ADD_TO_NAV,
         icon: <ListPlus size={16} aria-hidden />,
         onSelect: () => setDialog({ kind: 'add-to-nav', entityId: entity.id }),
       },
+      ...remove,
     ];
   }
 

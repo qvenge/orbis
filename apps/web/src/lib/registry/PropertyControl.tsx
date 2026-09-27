@@ -39,8 +39,8 @@ import { useRegistry } from './useRegistry';
  * («Навигация» приложения), а этот модуль эагерен в каждом открытии записи (вес первого кадра,
  * сторож `LAZY_DETAIL_MODULES`).
  */
-const RefListControl = lazy(() =>
-  import('./RefListControl').then((m) => ({ default: m.RefListControl })),
+const RefListField = lazy(() =>
+  import('./RefListControl').then((m) => ({ default: m.RefListField })),
 );
 
 /**
@@ -111,7 +111,7 @@ export function PropertyControl({
   if (kind === 'ref-list')
     return (
       <Suspense fallback={null}>
-        <RefListControl def={def} label={label} value={value} onChange={onChange} />
+        <RefListField def={def} label={label} value={value} onChange={onChange} />
       </Suspense>
     );
   if (kind === 'boolean')

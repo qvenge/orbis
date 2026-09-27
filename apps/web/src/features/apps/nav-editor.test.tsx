@@ -184,9 +184,14 @@ function store(rows: WireEntityFixture[]) {
   return { handler, byId };
 }
 
-function renderApp(rows: WireEntityFixture[] = baseRows()) {
+function renderApp(rows: WireEntityFixture[] = baseRows(), opts: { rejectBatch?: boolean } = {}) {
   const s = store(rows);
-  const r = renderWithProviders(<App />, s.handler);
+  const r = renderWithProviders(<App />, (path, input, type) => {
+    // Отказ пачки по существу (правило каталога) — как ответил бы исполнитель.
+    if (opts.rejectBatch === true && path === 'entity.updateBatch')
+      throw trpcError('BAD_REQUEST', 'правило app_nav_not_self');
+    return s.handler(path, input, type);
+  });
   const batches = () =>
     r.calls
       .filter((c) => c.path === 'entity.updateBatch')
@@ -358,7 +363,7 @@ test('(б) своё приложение: раздел «Приложение «
 
 // ─── (в) «Добавить в навигацию» / «Убрать из навигации» / «Новое приложение…» ──────────────────
 
-test('(в) страница в хосте: «Добавить в навигацию» — текущее приложение по умолчанию → пачка; повтор — «Убрать из навигации»', async () => {
+test('(в) страница в хосте: «Добавить в навигацию» — текущее приложение по умолчанию → пачка; затем рядом «Убрать из навигации» (R-34)', async () => {
   resetFrame(`/r/${LOOSE}`);
   const { batches } = renderApp([...baseRows(), MY_ROW]);
   await heading('Общая страница');
@@ -376,12 +381,22 @@ test('(в) страница в хосте: «Добавить в навигац�
     { tool: 'entity_update', input: { id: SHELL, props: { [APP_NAV]: [...NAV_IDS, LOOSE] } } },
   ]);
 
-  // Без дублей: запись уже стоит — пункт сменился.
+  // R-34: запись уже стоит — рядом «Убрать из навигации»; «Добавить» остаётся (в другое приложение).
   await waitFor(async () => {
     const items = await ownItemsOnce();
     expect(items).toContain('Убрать из навигации');
-    expect(items).not.toContain('Добавить в навигацию');
+    expect(items).toContain('Добавить в навигацию');
   });
+  // Без дублей: в выборе текущее приложение, где запись уже стоит, не выбирается; по умолчанию —
+  // первое, где её ещё нет.
+  await openMenu();
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Добавить в навигацию' }));
+  const again = await screen.findByRole('dialog', { name: 'Добавить в навигацию' });
+  expect(within(again).getByRole('radio', { name: 'Orbis (уже здесь)' })).toBeDisabled();
+  expect(within(again).getByRole('radio', { name: 'Мой дом' })).toBeChecked();
+  fireEvent.click(within(again).getByRole('button', { name: 'Отмена' }));
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+
   await openMenu();
   fireEvent.click(screen.getByRole('menuitem', { name: 'Убрать из навигации' }));
   await waitFor(() => expect(batches()).toHaveLength(2));
@@ -525,4 +540,104 @@ test('(д) карточка аспекта «страница» — «Дом» �
   // Выдача — по цели свойства: записи-приложения (без оболочки хоста, правило каталога задачи 9).
   const asked = calls.find((c) => c.path === 'entity.query');
   expect(JSON.stringify(asked?.input)).toContain(APP_ASPECT);
+});
+
+// ─── Раунд 1 гейта ─────────────────────────────────────────────────────────────────────────────
+
+test('M-2: у архивной записи «Добавить в навигацию» нет — поставить её нельзя', async () => {
+  resetFrame(`/r/${LOOSE}`);
+  const rows = baseRows().map((r) => (r.id === LOOSE ? { ...r, archived: true } : r));
+  renderApp([...rows, MY_ROW]);
+  await heading('Общая страница');
+  const items = await ownItemsOnce();
+  expect(items).toContain('Разархивировать');
+  expect(items).not.toContain('Добавить в навигацию');
+});
+
+test('M-3: поиск редактора не предлагает само приложение ни разделом, ни домашней', async () => {
+  resetFrame(`/a/${MY}/r/${REPAIR}`);
+  renderApp([...baseRows(), MY_ROW]);
+  await heading('Ремонт');
+  const editor = await openNavEditor('Мой дом');
+  for (const name of ['Добавить: Разделы', 'Сменить домашнюю']) {
+    fireEvent.change(within(editor).getByRole('searchbox', { name }), { target: { value: 'дом' } });
+    const found = await within(editor).findByRole('list', { name: `Найдено: ${name}` });
+    await within(found).findByRole('button', { name: /Домой/ });
+    expect(within(found).queryByRole('button', { name: /Мой дом/ })).toBeNull();
+    fireEvent.change(within(editor).getByRole('searchbox', { name }), { target: { value: '' } });
+  }
+});
+
+test('M-3: отказ пачки — редактор не закрывается, черновик цел, отказ виден в нём', async () => {
+  resetFrame('/');
+  const { batches } = renderApp(baseRows(), { rejectBatch: true });
+  await heading('Домой');
+  const editor = await openNavEditor('Orbis');
+  await waitFor(() => expect(rowTitles(editor)).toEqual(HOST_TITLES));
+  fireEvent.change(within(editor).getByRole('textbox', { name: 'Имя' }), {
+    target: { value: 'Мой Orbis' },
+  });
+  fireEvent.click(within(editor).getByRole('button', { name: 'Выше: Upcoming' }));
+  fireEvent.click(within(editor).getByRole('button', { name: 'Сохранить' }));
+  await waitFor(() => expect(batches()).toHaveLength(1));
+  expect(await within(editor).findByRole('alert')).toHaveTextContent('Не удалось сохранить');
+  expect(screen.getByTestId('nav-editor')).toBe(editor);
+  expect(within(editor).getByRole('textbox', { name: 'Имя' })).toHaveValue('Мой Orbis');
+  expect(rowTitles(editor)).toEqual([
+    'Записи',
+    'Upcoming',
+    'Daily Planning',
+    'All Tasks',
+    'Год',
+    'Рутины',
+  ]);
+});
+
+test('M-5: архивная «Домашняя» — плашка в редакторе; нетронутая не пишется, правка проходит', async () => {
+  resetFrame(`/a/${MY}/r/${REPAIR}`);
+  const rows = baseRows().map((r) => (r.id === KITCHEN ? { ...r, archived: true } : r));
+  const { batches } = renderApp([...rows, MY_ROW]);
+  await heading('Ремонт');
+  const editor = await openNavEditor('Мой дом');
+  const home = await within(editor).findByTestId('nav-home');
+  await waitFor(() => expect(home).toHaveAttribute('data-archived', 'true'));
+  expect(within(home).getByText('в архиве')).toBeInTheDocument();
+  expect(home).toHaveTextContent('Кухня');
+
+  fireEvent.change(within(editor).getByRole('combobox', { name: 'Форма навигации' }), {
+    target: { value: 'home-hub' },
+  });
+  fireEvent.click(within(editor).getByRole('button', { name: 'Сохранить' }));
+  await waitFor(() => expect(batches()).toHaveLength(1));
+  // Домашнюю не трогали — её нет в правке (сервер отверг бы архивную цель).
+  expect(batches()).toEqual([
+    [{ tool: 'entity_update', input: { id: MY, props: { [APP_NAV_FORM]: 'home-hub' } } }],
+  ]);
+  await waitFor(() => expect(toastTitles()).toEqual(['Навигация сохранена']));
+});
+
+test('M-4: выбранная домашняя до ответа сервера — её заголовок, не uuid «не найдено»', async () => {
+  resetFrame('/');
+  const s = store(baseRows());
+  let release!: () => void;
+  const gate = new Promise<void>((r) => {
+    release = r;
+  });
+  renderWithProviders(<App />, async (path, input, type) => {
+    if (path === 'entity.resolveRefs' && (input as { ids: string[] }).ids.includes(LOOSE))
+      await gate;
+    return s.handler(path, input, type);
+  });
+  await heading('Домой');
+  const editor = await openNavEditor('Orbis');
+  fireEvent.change(within(editor).getByRole('searchbox', { name: 'Сменить домашнюю' }), {
+    target: { value: 'общая' },
+  });
+  fireEvent.click(await within(editor).findByRole('button', { name: 'Общая страница' }));
+  const home = within(editor).getByTestId('nav-home');
+  expect(home).toHaveTextContent('Общая страница');
+  expect(within(home).queryByText('не найдено')).toBeNull();
+  release();
+  await waitFor(() => expect(home).toHaveTextContent('Общая страница'));
+  expect(within(home).queryByText('не найдено')).toBeNull();
 });
