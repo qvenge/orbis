@@ -8,7 +8,12 @@ import { MoveBlock } from './move-block';
 import { EntityRefWithView } from './nodes/EntityChip';
 import { ColumnsWithView, ColumnWithView, TabsWithView, TabWithView } from './nodes/LayoutFrame';
 import { QueryBlockWithView } from './nodes/QueryWidget';
-import { AspectCardWithView, RecordBlockWithView } from './nodes/RecordBlockStub';
+import {
+  AspectCardWithView,
+  HostBlockWithView,
+  OwnCardsWithView,
+  RecordBlockWithView,
+} from './nodes/RecordBlockStub';
 import { UNIQUE_ID_TYPES } from './strip-ids';
 
 /**
@@ -29,7 +34,8 @@ import { UNIQUE_ID_TYPES } from './strip-ids';
  *
  * Страницы 1а (задача 16) тем же фильтром+concat заменили шесть узлов тела v3 — контейнеры,
  * части, блок обвязки и карточку — их версиями с NodeView (рамки и заглушки настройки, §9.1).
- * Имена и схема прежние, состав нод редактора по-прежнему равен составу документа. Финальная
+ * Имена и схема прежние, состав нод редактора по-прежнему равен составу документа. Срез 1б тем же
+ * приёмом поставил заглушки своих карточек и блоков хоста (`ownCards`, `hostBlock`). Финальная
  * фикс-волна среза добавила в конец плагинный `LayoutGuard` (глубина контейнеров, §5.2; место
  * узлов страницы с 1б держит схема — группа `pageBlock`): нод и марок он не заводит.
  *
@@ -48,6 +54,8 @@ const WITH_VIEW: ReadonlySet<string> = new Set([
   'tab',
   'recordBlock',
   'aspectCard',
+  'ownCards',
+  'hostBlock',
 ]);
 
 export const EDITOR_EXTENSIONS: AnyExtension[] = [
@@ -66,6 +74,10 @@ export const EDITOR_EXTENSIONS: AnyExtension[] = [
   TabWithView,
   RecordBlockWithView,
   AspectCardWithView,
+  // Срез 1б: свои карточки и блоки хоста — подписанными заглушками (на показе до задач 17, 18, 20 —
+  // плашкой рендерера).
+  OwnCardsWithView,
+  HostBlockWithView,
   // Блочные id сегодня не читает никто. Ставятся с первого дня потому, что на них ляжет будущий
   // блочный контракт агента (`body_replace_block(id, md)`): добавить их позже — мигрировать все
   // документы, добавить сейчас — один параметр расширения. В markdown-проекцию id не печатаются.

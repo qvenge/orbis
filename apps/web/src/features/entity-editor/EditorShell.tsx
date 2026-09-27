@@ -15,8 +15,10 @@ import {
   cardAspectTitle,
   cardStubLabel,
   columnFrameLabel,
+  hostStubLabel,
   LayoutFrameBox,
   LayoutStack,
+  ownCardsStubLabel,
   recordStubLabel,
   StubBox,
   tabFrameLabel,
@@ -173,6 +175,20 @@ function firstFrameNode(node: PageNode, kind: BodyKind, key: number): ReactNode 
       );
     case 'card':
       return <FirstFrameCard key={key} text={node.aspect} />;
+    // Свои карточки и блоки хоста (1б) — подписанными заглушками, как их NodeView в редакторе
+    // (`RecordBlockStub.tsx`): редактор подменяет первый кадр, и вид не должен дёрнуться.
+    case 'ownCards':
+      return (
+        <div key={key} data-query-widget="">
+          <StubBox label={ownCardsStubLabel()} />
+        </div>
+      );
+    case 'host':
+      return (
+        <div key={key} data-query-widget="">
+          <StubBox label={hostStubLabel(node.name)} />
+        </div>
+      );
     case 'broken':
       // `broken` всегда несёт проблему (`bodyIssues`) и сюда не доходит; ветка — ради полноты
       // разбора: пустоты вместо узла не бывает.

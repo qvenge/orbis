@@ -118,8 +118,15 @@ function scanMarkers(nodes: PageNode[]): { block: boolean; broken: boolean } {
   const found = { block: false, broken: false };
   const walk = (list: PageNode[]): void => {
     for (const node of list) {
-      if (node.kind === 'record' || node.kind === 'card') found.block = true;
-      else if (node.kind === 'broken') found.broken = true;
+      // Свои карточки и блоки хоста (1б) — тоже маркеры: строка `{{apps}}` в теле станет блоком.
+      if (
+        node.kind === 'record' ||
+        node.kind === 'card' ||
+        node.kind === 'ownCards' ||
+        node.kind === 'host'
+      ) {
+        found.block = true;
+      } else if (node.kind === 'broken') found.broken = true;
       else if (node.kind === 'columns') {
         found.block = true;
         for (const part of node.parts) walk(part);

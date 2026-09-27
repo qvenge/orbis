@@ -1,5 +1,10 @@
-import { AspectCard, RecordBlock } from '@orbis/shared/doc';
-import { RECORD_BLOCK_NAMES, type RecordBlockName } from '@orbis/shared/doc/page-grammar';
+import { AspectCard, HostBlock, OwnCards, RecordBlock } from '@orbis/shared/doc';
+import {
+  HOST_BLOCK_NAMES,
+  type HostBlockName,
+  RECORD_BLOCK_NAMES,
+  type RecordBlockName,
+} from '@orbis/shared/doc/page-grammar';
 import type { NodeViewProps } from '@tiptap/core';
 import { NodeViewWrapper, ReactNodeViewRenderer } from '@tiptap/react';
 import { useState } from 'react';
@@ -8,7 +13,14 @@ import { useFieldCatalog } from '../../../lib/query-blocks/useFieldCatalog';
 import { Button } from '../../../ui/Button';
 import { BlockPlaque } from '../../page/blocks/BlockPlaque';
 import { placementIssue } from '../EditorShell';
-import { cardAspectTitle, cardStubLabel, recordStubLabel, StubBox } from '../layout-parts';
+import {
+  cardAspectTitle,
+  cardStubLabel,
+  hostStubLabel,
+  ownCardsStubLabel,
+  recordStubLabel,
+  StubBox,
+} from '../layout-parts';
 import { AspectChooser } from './AspectChooser';
 
 /**
@@ -97,10 +109,59 @@ function CardStub({ node, updateAttributes, selected }: NodeViewProps) {
   );
 }
 
+/**
+ * Свои карточки `{{cards: own}}` (1б §8.5) — подписанной заглушкой, как `{{cards}}`: карточки
+ * рисует только показ. Где блок не работает (заметка) или стоит вторым — плашка, как у обвязки.
+ * `raw` — каноническая печать узла: из неё плашка и берёт имя блока.
+ */
+function OwnCardsStub({ selected }: NodeViewProps) {
+  const kind = useBodyKind();
+  const issue = placementIssue({ kind: 'ownCards', raw: `{{cards: own}}` }, kind);
+  return (
+    <NodeViewWrapper data-query-widget="" contentEditable={false}>
+      {issue !== undefined ? (
+        <Plaque message={issue.message} hint={issue.hint} />
+      ) : (
+        <StubBox label={ownCardsStubLabel()} selected={selected} />
+      )}
+    </NodeViewWrapper>
+  );
+}
+
+const HOST_KNOWN: ReadonlySet<string> = new Set(HOST_BLOCK_NAMES);
+
+/**
+ * Блок хоста — «Приложения» или «Записи» (1б §6.2 п. 3, §3.5) — подписанной заглушкой. В шаблоне и
+ * заметке — плашка места (РП-4). Незнакомое имя бывает только в документе клиента — показывается
+ * как написано, как у блока обвязки.
+ */
+function HostStub({ node, selected }: NodeViewProps) {
+  const kind = useBodyKind();
+  const raw = typeof node.attrs.name === 'string' ? node.attrs.name : '';
+  const name = HOST_KNOWN.has(raw) ? (raw as HostBlockName) : null;
+  const issue =
+    name === null ? undefined : placementIssue({ kind: 'host', name, raw: `{{${name}}}` }, kind);
+  return (
+    <NodeViewWrapper data-query-widget="" contentEditable={false}>
+      {issue !== undefined ? (
+        <Plaque message={issue.message} hint={issue.hint} />
+      ) : (
+        <StubBox label={name === null ? `{{${raw}}}` : hostStubLabel(name)} selected={selected} />
+      )}
+    </NodeViewWrapper>
+  );
+}
+
 /** Узлы схемы + внешний вид (довод — `LayoutFrame.tsx`: схема редактора равна схеме документа). */
 export const RecordBlockWithView = RecordBlock.extend({
   addNodeView: () => ReactNodeViewRenderer(RecordStub),
 });
 export const AspectCardWithView = AspectCard.extend({
   addNodeView: () => ReactNodeViewRenderer(CardStub),
+});
+export const OwnCardsWithView = OwnCards.extend({
+  addNodeView: () => ReactNodeViewRenderer(OwnCardsStub),
+});
+export const HostBlockWithView = HostBlock.extend({
+  addNodeView: () => ReactNodeViewRenderer(HostStub),
 });

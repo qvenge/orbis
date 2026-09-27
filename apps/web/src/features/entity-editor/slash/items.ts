@@ -1,8 +1,13 @@
-import { RECORD_BLOCK_NAMES, type RecordBlockName } from '@orbis/shared/doc/page-grammar';
+import {
+  HOST_BLOCK_NAMES,
+  type HostBlockName,
+  RECORD_BLOCK_NAMES,
+  type RecordBlockName,
+} from '@orbis/shared/doc/page-grammar';
 import { type BodyKind, kindsAllowing, layoutPlaceAllows } from '@orbis/shared/doc/placement';
 import type { QueryAst } from '@orbis/shared/query';
 import type { Editor } from '@tiptap/react';
-import { RECORD_BLOCK_TITLES } from '../layout-parts';
+import { HOST_BLOCK_TITLES, OWN_CARDS_TITLE, RECORD_BLOCK_TITLES } from '../layout-parts';
 import { MENTION_CHAR } from './suggestion';
 
 /**
@@ -27,8 +32,9 @@ export type SlashItem = {
    */
   kinds: readonly BodyKind[];
   /**
-   * Уместен ли пункт при ЭТОМ документе, сверх рода. Нужен одному «Телу записи»: в шаблоне оно
-   * показывается один раз (§5.3), и второй `{{body}}` меню не предлагает.
+   * Уместен ли пункт при ЭТОМ документе, сверх рода. Нужен «Телу записи» и «Своим карточкам»: в
+   * шаблоне они показываются один раз (§5.3, 1б §8.5), второй блок сделал бы шаблон «не
+   * разобранным» (R-4), и меню его не предлагает.
    */
   available?: (doc: SlashDoc) => boolean;
   /**
@@ -93,6 +99,40 @@ function hasBodyBlock(doc: SlashDoc): boolean {
     return undefined;
   });
   return found;
+}
+
+/** Есть ли в документе `{{cards: own}}` — второй показался бы плашкой «второй» (1б §8.5). */
+function hasOwnCardsBlock(doc: SlashDoc): boolean {
+  let found = false;
+  doc.descendants((node) => {
+    if (found) return false;
+    if (node.type.name === 'ownCards') found = true;
+    return undefined;
+  });
+  return found;
+}
+
+/**
+ * «Свои карточки» — только шаблону (план 1б, задача 8), хотя матрица пускает их и на страницу
+ * (РП-4: как карточка). Их место — шаблоны: шаблон хоста ставит одну строку вместо пяти
+ * `{{card: …}}` (1б §8.5), и карточки нужны записям, которые шаблон показывает. На странице строка,
+ * написанная текстом, работает — матрица её не ломает, меню её лишь не предлагает. Сужение
+ * матрицы, а не свой список: род, которого матрица не пускает, сюда не попадёт.
+ */
+const OWN_CARDS_KINDS: readonly BodyKind[] = kindsAllowing('own-cards').filter(
+  (kind) => kind === 'template',
+);
+
+/** Пункт блока хоста (1б §6.2 п. 3, §3.5): только странице — матрица `host` (РП-4). */
+function hostBlockItem(name: HostBlockName): SlashItem {
+  return {
+    id: `host:${name}`,
+    label: HOST_BLOCK_TITLES[name],
+    hint: 'блок страницы',
+    kinds: kindsAllowing('host'),
+    place: 'layout-block',
+    run: (e) => e.chain().focus().insertContent({ type: 'hostBlock', attrs: { name } }).run(),
+  };
 }
 
 /**
@@ -294,6 +334,16 @@ export const SLASH_ITEMS: readonly SlashItem[] = [
           .run(),
       ),
   },
+  {
+    id: 'own-cards',
+    label: OWN_CARDS_TITLE,
+    hint: 'блок записи',
+    kinds: OWN_CARDS_KINDS,
+    place: 'layout-block',
+    available: (doc) => !hasOwnCardsBlock(doc),
+    run: (e) => e.chain().focus().insertContent({ type: 'ownCards' }).run(),
+  },
+  ...HOST_BLOCK_NAMES.map(hostBlockItem),
 ];
 
 /**

@@ -169,6 +169,17 @@ describe('группа pageBlock — узлы страницы только в d
     () =>
       schema.nodeFromJSON({ type: 'doc', content }).check();
 
+  test('свои карточки и блоки хоста (1б) — узлы группы: верх и часть — да, цитата и пункт — нет', () => {
+    const own: J = { type: 'ownCards' };
+    const apps: J = { type: 'hostBlock', attrs: { name: 'apps' } };
+    expect(check(p(), own, apps, cols([own], [apps]), tabs([own, apps]))).not.toThrow();
+    expect(check(quote(own))).toThrow();
+    expect(check(bullet(p(), apps))).toThrow();
+    expect(check(cell(own))).toThrow();
+    expect(LAYOUT_NODES.has('ownCards')).toBe(true);
+    expect(LAYOUT_NODES.has('hostBlock')).toBe(true);
+  });
+
   test('схема отвергает: колонки под цитатой, вкладки в ячейке, блок в пункте, карточка под цитатой', () => {
     expect(check(quote(cols([p()], [p()])))).toThrow();
     expect(check(cell(tabs([p()])))).toThrow();

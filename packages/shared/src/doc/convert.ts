@@ -395,7 +395,8 @@ class RefDefsFound extends Error {}
  *
  * - `text` — прежним потокенным путём внутри куска. Кусок из одних пробелов узлов не даёт.
  * - `query` → `queryBlock {ast: null, text}` — непривязанным, как и прежде (`bindQueryBlocks`).
- * - `record` → `recordBlock`, `card` → `aspectCard {aspect: null, text}`.
+ * - `record` → `recordBlock`, `card` → `aspectCard {aspect: null, text}`;
+ *   `ownCards` → `ownCards`, `host` → `hostBlock {name}` (1б).
  * - контейнеры — рекурсивно; пустая часть — пустой абзац (часть схемы — `block+`).
  * - `broken` → `rawBlock` с ДОСЛОВНЫМ текстом. Хвостовые переводы строки срезаны, как у токенов
  *   выше: `raw` узлов препрохода несёт перевод своей строки, а разделитель между блоками ставит
@@ -420,6 +421,12 @@ function pageNodesToDoc(nodes: PageNode[]): JSONContent[] {
         break;
       case 'card':
         out.push({ type: 'aspectCard', attrs: { aspect: null, text: node.aspect } });
+        break;
+      case 'ownCards':
+        out.push({ type: 'ownCards' });
+        break;
+      case 'host':
+        out.push({ type: 'hostBlock', attrs: { name: node.name } });
         break;
       case 'columns':
         out.push({
@@ -536,13 +543,15 @@ const SKELETON_KINDS: ReadonlySet<string> = new Set([
   'tab',
   'recordBlock',
   'aspectCard',
+  'ownCards',
+  'hostBlock',
   'queryBlock',
 ]);
 
 /**
  * Скелет документа формата v3: последовательность и вложенность контейнеров, частей, блоков
- * обвязки, карточек и блоков данных — с атрибутами, которые печатаются в маркер (подпись
- * вкладки, имя блока, текст карточки).
+ * обвязки, карточек, своих карточек и блоков хоста (1б) и блоков данных — с атрибутами, которые
+ * печатаются в маркер (подпись вкладки, имя блока, текст карточки).
  *
  * Зачем сверка скелета сверх сверки текста. Схема документа ШИРЕ грамматики: место узла
  * страницы она держит сама (группа `pageBlock` только в doc/column/tab, спека 1б §10), но пускает
@@ -565,6 +574,9 @@ function skeleton(doc: JSONContent): string {
     if (type === 'tab') out.push(`tab:${trimmed(node.attrs?.label)}`);
     else if (type === 'recordBlock') out.push(`record:${String(node.attrs?.name)}`);
     else if (type === 'aspectCard') out.push(`card:${trimmed(node.attrs?.text)}`);
+    // Имя блока хоста — как у блока обвязки: чужое имя печатается `{{foo}}`, разбор оставит текст,
+    // скелет разойдётся — и документ уйдёт в `rawBlock`, а не ляжет парой, где body значит другое.
+    else if (type === 'hostBlock') out.push(`host:${String(node.attrs?.name)}`);
     else if (type !== null) out.push(type);
     const content = node.content ?? [];
     if (type !== null && content.length > 0) out.push('(');

@@ -14,6 +14,11 @@ import type { JSONContent } from '@tiptap/core';
  * 3 — формат тела v3 (спека страниц 1а §5.9): шесть новых нод — контейнеры `columns`/`column`,
  * `tabs`/`tab` и блоки обвязки `recordBlock`, `aspectCard`. Старые ноды и их атрибуты не
  * менялись, поэтому подъём v2 → v3 — один штамп без обхода дерева (`upgradeBodyDoc`).
+ *
+ * Срез 1б (задача 8) добавил два атома — `ownCards` и `hostBlock` — БЕЗ подъёма версии, решением
+ * плана 1б: прежние документы ни одного узла и атрибута не меняют, и подъём был бы тем же пустым
+ * штампом, что 2 → 3. Откат на код 1а атома не съест молча: схема 1а такой документ не примет
+ * (`bodyDocError`), и чтение пересоберёт тело из `body`, где маркер для неё — текст абзаца.
  */
 export const DOC_SCHEMA_VERSION = 3;
 
@@ -49,8 +54,10 @@ export const KNOWN_NODE_TYPES: ReadonlySet<string> = new Set([
   'hardBreak',
   'heading',
   'horizontalRule',
+  'hostBlock',
   'listItem',
   'orderedList',
+  'ownCards',
   'paragraph',
   'queryBlock',
   'rawBlock',

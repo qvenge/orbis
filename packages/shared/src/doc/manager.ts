@@ -1,5 +1,5 @@
 import { MarkdownManager } from '@tiptap/markdown';
-import { RECORD_BLOCK_NAMES } from './page-grammar';
+import { HOST_BLOCK_NAMES, RECORD_BLOCK_NAMES } from './page-grammar';
 
 /**
  * Подмена для intraword `_` на время экранирования. NUL взят намеренно: CommonMark требует
@@ -40,9 +40,19 @@ function escapeBlockStarter(text: string): string {
 /**
  * Имена маркеров тела v3 — те, что препроход (`page-grammar.ts`) узнаёт в начале строки. Список
  * собран из его же экспорта и слов контейнеров, карточки и блока данных: новое имя блока
- * обвязки попадает сюда само.
+ * обвязки или блока хоста попадает сюда само. `{{cards: own}}` (1б) покрыт именем `cards` — за ним
+ * `:` так же узнаётся, как `}`.
  */
-const MARKER_NAMES = [...RECORD_BLOCK_NAMES, 'columns', 'column', 'tabs', 'tab', 'card', 'query'];
+const MARKER_NAMES = [
+  ...RECORD_BLOCK_NAMES,
+  ...HOST_BLOCK_NAMES,
+  'columns',
+  'column',
+  'tabs',
+  'tab',
+  'card',
+  'query',
+];
 
 /**
  * Строка текста, начинающаяся маркером: `{{`, необязательный `/` закрытия, известное имя и `}`

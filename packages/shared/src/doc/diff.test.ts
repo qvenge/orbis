@@ -670,6 +670,32 @@ describe('формат v3: контейнеры и атомы в диффе (с�
     expect(units.filter((u) => u.kind !== 'same')).not.toEqual([]);
     expect(units[0]).toEqual({ kind: 'same', before: '{{title}}', after: '{{title}}' });
   });
+
+  test('свои карточки и блоки хоста (1б) — единицы диффа со своей печатью', () => {
+    const own: JSONContent = { type: 'ownCards' };
+    const host = (name: string): JSONContent => ({ type: 'hostBlock', attrs: { name } });
+    const flat = flattenBlocks(doc(p('а'), own, columns(column(host('apps')), column(p('б')))));
+    expect(flat.map((b) => [b.kind, b.text])).toEqual([
+      ['paragraph', 'а'],
+      ['ownCards', '{{cards: own}}'],
+      ['columns', '{{columns}}'],
+      ['column', '{{column}}'],
+      ['hostBlock', '{{apps}}'],
+      ['column', '{{column}}'],
+      ['paragraph', 'б'],
+    ]);
+    // Смена блока хоста видна: имя — в ключе и в тексте.
+    const units = unitsOf(diffBodyDocs(doc(own, host('apps')), doc(own, host('records'))));
+    expect(units[0]).toEqual({ kind: 'same', before: '{{cards: own}}', after: '{{cards: own}}' });
+    expect(units.filter((u) => u.kind !== 'same')).not.toEqual([]);
+    expect(units.map((u) => u.after).filter(Boolean)).toContain('{{records}}');
+    // Добавление своих карточек — добавленная единица.
+    const added = unitsOf(diffBodyDocs(doc(p('а')), doc(p('а'), own)));
+    expect(added.map((u) => [u.kind, u.after])).toEqual([
+      ['same', 'а'],
+      ['added', '{{cards: own}}'],
+    ]);
+  });
 });
 
 describe('листовость модуля', () => {

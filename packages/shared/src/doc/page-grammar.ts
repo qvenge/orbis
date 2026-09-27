@@ -10,7 +10,7 @@
  * внутри частей, а ошибки препроход видит сам и сохраняет дословную подстроку исходника.
  *
  * Одна копия правил маркеров (РП-6). Модуль — единственное место правил контейнеров, блоков
- * обвязки, карточки аспекта и открытия блока данных: поверх него идут `parseBody`, первый кадр
+ * обвязки, карточки аспекта, своих карточек и блоков хоста (1б) и открытия блока данных: поверх него идут `parseBody`, первый кадр
  * тела в web, рендерер показа, бейдж закреплённого и обёртка блока запроса. Держит это сторож
  * `scripts/grammar-copies.test.ts` — список законных мест регэкспов и строк-открытий маркера с
  * причинами. Одно известное исключение: `{{query:…}}` ещё распознаёт токенайзер `queryBlock`
@@ -39,6 +39,16 @@ export const RECORD_BLOCK_NAMES = [
 ] as const;
 export type RecordBlockName = (typeof RECORD_BLOCK_NAMES)[number];
 
+/**
+ * Блоки хоста (спека 1б §6.2 п. 3, §3.5): «Приложения» — переключатель приложений на «Домой», и
+ * «Записи» — обзор записей (сегодняшний экран Browser одним блоком). Не блоки обвязки: они не
+ * показывают запись `this`, а рисуют примитив хоста, и работают только на странице (матрица мест,
+ * РП-4, `placement.ts`). Отдельным списком, а не в `RECORD_BLOCK_NAMES`: иначе они попали бы в
+ * `recordBlock` с его матрицей и заглушками «блока записи».
+ */
+export const HOST_BLOCK_NAMES = ['apps', 'records'] as const;
+export type HostBlockName = (typeof HOST_BLOCK_NAMES)[number];
+
 export const GRAMMAR_ERROR_CODES = [
   'CONTAINER_UNCLOSED',
   'PART_UNCLOSED',
@@ -66,6 +76,8 @@ export type PageNode =
   | { kind: 'query'; text: string; raw: string } // {{query:…}}, возможно многострочный
   | { kind: 'record'; name: RecordBlockName; raw: string }
   | { kind: 'card'; aspect: string; raw: string } // ключ или «подпись в кавычках» как написано
+  | { kind: 'ownCards'; raw: string } // {{cards: own}} — свои карточки аспектов записи (1б §8.5)
+  | { kind: 'host'; name: HostBlockName; raw: string } // {{apps}}, {{records}} — блоки хоста
   | { kind: 'columns'; parts: PageNode[][]; raw: string }
   | { kind: 'tabs'; parts: { label: string; children: PageNode[] }[]; raw: string }
   | { kind: 'broken'; code: GrammarErrorCode; message: string; raw: string };
@@ -98,6 +110,10 @@ const CONTAINER_MARKER_RE = /^\{\{(\/?)(columns|column|tabs|tab)\}\}[ \t]*$/;
 const TAB_LABEL_RE = /^\{\{tab:[ \t]*(\S.*?)\}\}[ \t]*$/;
 const RECORD_BLOCK_RE =
   /^\{\{(title|tags|body|cards|subtasks|blockers|backlinks|versions|thread)\}\}[ \t]*$/;
+// Свои карточки — ровно `own` после `cards:` (пробелы вокруг — как у карточки): иной аргумент
+// (`{{cards: mine}}`) — незнакомая форма, текст (§5.7 1а). Блоки хоста — голые имена без аргумента.
+const OWN_CARDS_RE = /^\{\{cards:[ \t]*own\}\}[ \t]*$/;
+const HOST_BLOCK_RE = /^\{\{(apps|records)\}\}[ \t]*$/;
 const CARD_RE = /^\{\{card:[ \t]*(\S.*?)\}\}[ \t]*$/;
 // Блок данных — как у токенайзера `queryBlock` (`nodes/query-block.ts`): с начала строки до
 // ПЕРВОГО `}}`, переносы внутри допустимы. Без `}}` — текст: иначе опечатка съела бы хвост тела.
@@ -124,7 +140,7 @@ type Item =
   | { t: 'text'; start: number; end: number }
   | {
       t: 'node';
-      node: Extract<PageNode, { kind: 'query' | 'record' | 'card' }>;
+      node: Extract<PageNode, { kind: 'query' | 'record' | 'card' | 'ownCards' | 'host' }>;
       start: number;
       end: number;
     }
@@ -176,6 +192,15 @@ function lineAtom(src: string, body: string, start: number, end: number): Item |
     return {
       t: 'node',
       node: { kind: 'record', name: rec[1] as RecordBlockName, raw },
+      start,
+      end,
+    };
+  if (OWN_CARDS_RE.test(body)) return { t: 'node', node: { kind: 'ownCards', raw }, start, end };
+  const host = HOST_BLOCK_RE.exec(body);
+  if (host)
+    return {
+      t: 'node',
+      node: { kind: 'host', name: host[1] as HostBlockName, raw },
       start,
       end,
     };

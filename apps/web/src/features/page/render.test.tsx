@@ -217,6 +217,40 @@ test('{{body}} на странице — плашка BLOCK_MISPLACED; неза�
   expect(calls.some((c) => c.path.startsWith('entity.update'))).toBe(false);
 });
 
+test('{{records}}, {{apps}}, {{cards: own}} на странице — плашка на месте, соседние блоки живы (1б до задач 17, 18, 20)', async () => {
+  const body = 'Вступление\n\n{{records}}\n\n{{title}}\n\n{{apps}}\n\n{{cards: own}}\n\nХвост\n';
+  const { calls } = openPage(page(body));
+  const view = await screen.findByTestId('page-view');
+  expect(await within(view).findByText('Вступление')).toBeInTheDocument();
+  expect(within(view).getByText('Хвост')).toBeInTheDocument();
+  expect(await within(view).findByTestId('title-edit')).toHaveValue('Утро');
+  const plaques = within(view).getAllByTestId('block-unresolved');
+  expect(plaques).toHaveLength(3);
+  expect(plaques[0]).toHaveTextContent('Блок {{records}} этой версией не показывается');
+  expect(plaques[1]).toHaveTextContent('Блок {{apps}} этой версией не показывается');
+  expect(plaques[2]).toHaveTextContent('Блок {{cards: own}} этой версией не показывается');
+  // Плашка — на месте блока: между «Вступлением» и заголовком страницы.
+  const intro = within(view).getByText('Вступление');
+  const title = within(view).getByTestId('title-edit');
+  expect(
+    intro.compareDocumentPosition(plaques[0] as Node) & Node.DOCUMENT_POSITION_FOLLOWING,
+  ).toBeTruthy();
+  expect(
+    title.compareDocumentPosition(plaques[0] as Node) & Node.DOCUMENT_POSITION_PRECEDING,
+  ).toBeTruthy();
+  expect(within(view).queryByTestId('block-misplaced')).toBeNull();
+  expect(calls.some((c) => c.path.startsWith('entity.update'))).toBe(false);
+});
+
+test('блок хоста в шаблоне — плашка «не показывается в шаблоне», а не «этой версией» (РП-4)', async () => {
+  const body = '{{title}}\n\n{{records}}\n';
+  openPage(page(body, { title: 'Вид задачи', props: { [TEMPLATE_FOR_PROPERTY]: ['orbis/task'] } }));
+  const view = await screen.findByTestId('page-view');
+  const misplaced = await within(view).findByTestId('block-misplaced');
+  expect(misplaced).toHaveTextContent('Блок {{records}} не показывается в шаблоне.');
+  expect(within(view).queryByTestId('block-unresolved')).toBeNull();
+});
+
 test('один запрос записи: открытие страницы — РОВНО один entity.get с DETAIL_INCLUDE (РП-13, Э-14)', async () => {
   const text = 'aspect=orbis/task';
   const { calls } = openPage(

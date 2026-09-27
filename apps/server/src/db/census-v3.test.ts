@@ -319,9 +319,30 @@ test('узлы страницы не на месте — по сырому хр�
     { body: 'v2', bodyDoc: v2Doc({ type: 'blockquote', content: [TWO_COLUMNS] }) },
     // (7) Мусорная форма хранимого документа не роняет перепись.
     { body: 'мусор', bodyDoc: { v: 3 } },
+    // (8) Узел 1б (блок хоста) под цитатой — считается: перепись берёт узлы из `LAYOUT_NODES`.
+    {
+      body: 'хост',
+      bodyDoc: v3Doc({
+        type: 'blockquote',
+        content: [{ type: 'hostBlock', attrs: { name: 'records' } }],
+      }),
+    },
   ]);
   const r = await censusV3(corpus.io);
-  expect(r.total).toBe(7);
-  expect(r.pageNodesMisplaced).toBe(3);
-  expect(r.ids.pageNodesMisplaced).toEqual(['id-00000', 'id-00001', 'id-00005']);
+  expect(r.total).toBe(8);
+  expect(r.pageNodesMisplaced).toBe(4);
+  expect(r.ids.pageNodesMisplaced).toEqual(['id-00000', 'id-00001', 'id-00005', 'id-00007']);
+});
+
+test('строки своих карточек и блоков хоста (1б) в body — маркеры, станут блоками', async () => {
+  const corpus = fakeCorpus([
+    { body: 'до\n{{apps}}\nпосле', bodyDoc: null },
+    { body: '{{cards: own}}', bodyDoc: null },
+    { body: 'до\n{{records}}', bodyDoc: v2Doc(para('до'), para('{{records}}')) },
+    // Незнакомая форма — текст, не маркер (§5.7 1а).
+    { body: '{{cards: mine}}\n{{app}}', bodyDoc: null },
+  ]);
+  const r = await censusV3(corpus.io);
+  expect(r.ids.becomeBlocksNoDoc).toEqual(['id-00000', 'id-00001']);
+  expect(r.ids.markerInBodyWithDoc).toEqual(['id-00002']);
 });

@@ -154,7 +154,8 @@ const SIMILARITY_WORD_RE = /[\p{L}\p{N}]+/gu;
  * единица-заголовок (спека §5.9: «контейнеры и их части — единицы») — см. `layoutHeading`.
  *
  * Единицы (всё остальное): `paragraph`, `heading`, `codeBlock`, `rawBlock`, `queryBlock`,
- * `recordBlock`, `aspectCard`, `horizontalRule`, `listItem`, `taskItem`, `tableRow`. Список
+ * `recordBlock`, `aspectCard`, `ownCards`, `hostBlock` (1б), `horizontalRule`, `listItem`, `taskItem`,
+ * `tableRow`. Список
  * ЗАКРЫТЫМ не делается намеренно: нода-новичок схемы должна приезжать единицей сама собой, а
  * не исчезать из диффа молча.
  */
@@ -200,6 +201,7 @@ const KEY_ATTRS: Readonly<Record<string, readonly string[]>> = {
   // непривязанного и привязанного аспекта может совпасть, аспект различает их.
   aspectCard: ['aspect'],
   recordBlock: ['name'],
+  hostBlock: ['name'],
 };
 
 /** Блок в плоском виде: тип узла, ключ сопоставления и нормализованный текст для показа. */
@@ -272,6 +274,8 @@ function collectText(node: JSONContent | undefined, out: string[], breakText: st
   if (node.type === 'aspectCard' && typeof attrs.text === 'string') {
     out.push(`{{card: ${attrs.text}}}`);
   }
+  if (node.type === 'ownCards') out.push(`{{cards: own}}`);
+  if (node.type === 'hostBlock' && typeof attrs.name === 'string') out.push(`{{${attrs.name}}}`);
   if (breakText !== '' && node.type === 'hardBreak') out.push(breakText);
   for (const child of node.content ?? []) collectText(child, out, breakText);
 }

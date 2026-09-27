@@ -1,7 +1,7 @@
 // Листовой модуль: его рисует первый кадр тела (эагерный, `EditorShell`) и рендерер показа, а
 // оттуда нельзя дотянуться до барреля `@orbis/shared/doc` (сторожа `check-lazy-chunks.ts` и
 // `save.test.tsx`). Только листовые сабпаты и React.
-import type { RecordBlockName } from '@orbis/shared/doc/page-grammar';
+import type { HostBlockName, RecordBlockName } from '@orbis/shared/doc/page-grammar';
 import { aspectOfCardText } from '@orbis/shared/doc/placement';
 import { effectiveLabel, type ParseRegistry } from '@orbis/shared/query';
 import type { ReactNode } from 'react';
@@ -33,6 +33,19 @@ export const RECORD_BLOCK_TITLES: Readonly<Record<RecordBlockName, string>> = {
 export const recordStubLabel = (name: RecordBlockName): string => `[${RECORD_BLOCK_TITLES[name]}]`;
 
 export const cardStubLabel = (aspect: string): string => `[Карточка: ${aspect}]`;
+
+/** Имя блока своих карточек `{{cards: own}}` (словарь спеки 1б §1) — подпись заглушки и пункта «/». */
+export const OWN_CARDS_TITLE = 'Свои карточки';
+
+/** Имена блоков хоста (словарь спеки 1б §1) — подписи заглушек и пунктов «/». */
+export const HOST_BLOCK_TITLES: Readonly<Record<HostBlockName, string>> = {
+  apps: 'Приложения',
+  records: 'Записи',
+};
+
+/** Подписи заглушек 1б — теми же квадратными скобками, что у блоков обвязки: место, а не данные. */
+export const ownCardsStubLabel = (): string => `[${OWN_CARDS_TITLE}]`;
+export const hostStubLabel = (name: HostBlockName): string => `[${HOST_BLOCK_TITLES[name]}]`;
 
 /** Колонки нумеруются с единицы — так их считает человек, а не массив. */
 export const columnFrameLabel = (index: number): string => `Колонка ${index + 1}`;

@@ -25,7 +25,7 @@ import {
 } from './page-grammar';
 
 export type BodyKind = 'note' | 'page' | 'template';
-export type PlacedBlock = 'container' | 'record' | 'body' | 'card' | 'query';
+export type PlacedBlock = 'container' | 'record' | 'body' | 'card' | 'query' | 'own-cards' | 'host';
 
 /**
  * Матрица §5.5. Блоки обвязки (`record` — кроме `{{body}}`, и `card`) показывают запись
@@ -33,6 +33,10 @@ export type PlacedBlock = 'container' | 'record' | 'body' | 'card' | 'query';
  * в заметке они дали бы второй экземпляр на том же экране. Контейнеры в заметке не
  * показывались бы раскладкой (§9.1). `{{body}}` — место тела записи внутри шаблона, у страницы
  * тело и есть она сама.
+ *
+ * Срез 1б (РП-4): свои карточки `{{cards: own}}` — как карточка, они тоже показывают запись
+ * `this`. Блоки хоста `{{apps}}` и `{{records}}` — только страница: они не показывают запись вовсе,
+ * а рисуют примитив хоста, и в шаблоне повторились бы на экране каждой записи этого шаблона.
  */
 const MATRIX: Record<PlacedBlock, Record<BodyKind, boolean>> = {
   container: { note: false, page: true, template: true },
@@ -40,6 +44,8 @@ const MATRIX: Record<PlacedBlock, Record<BodyKind, boolean>> = {
   body: { note: false, page: false, template: true },
   card: { note: false, page: true, template: true },
   query: { note: true, page: true, template: true },
+  'own-cards': { note: false, page: true, template: true },
+  host: { note: false, page: true, template: false },
 };
 
 /** Матрица §5.5. */
@@ -83,13 +89,15 @@ export const CONTAINER_NODES: ReadonlySet<string> = new Set(['columns', 'tabs'])
 /** Группа схемы, в которую входят узлы страницы (`nodes/layout.ts`, `nodes/record-blocks.ts`). */
 export const PAGE_BLOCK_GROUP = 'pageBlock';
 /**
- * Узлы страницы — члены группы `pageBlock`: контейнеры, блок обвязки, карточка. Задача 8 плана 1б
- * добавляет сюда `ownCards` и `hostBlock`. Совпадение со схемой сторожит `schema.test.ts`.
+ * Узлы страницы — члены группы `pageBlock`: контейнеры, блок обвязки, карточка, свои карточки
+ * `ownCards` и блок хоста `hostBlock` (1б). Совпадение со схемой сторожит `schema.test.ts`.
  */
 export const LAYOUT_NODES: ReadonlySet<string> = new Set([
   ...CONTAINER_NODES,
   'recordBlock',
   'aspectCard',
+  'ownCards',
+  'hostBlock',
 ]);
 /**
  * Родители, в чьём `content` разрешена группа `pageBlock`: верх документа и части контейнеров.
@@ -165,13 +173,23 @@ export interface PlacementIssue {
 export const MISPLACED_HINT = 'работает на страницах и в шаблонах — сделать запись страницей?';
 
 /**
+ * Подсказка блока хоста в заметке (1б, РП-4). Общая `MISPLACED_HINT` здесь соврала бы: блок хоста
+ * в шаблоне не работает. В шаблоне подсказки нет вовсе, как у `{{body}}` на странице: шаблон
+ * страницей не делают, блок из него убирают.
+ */
+export const HOST_MISPLACED_HINT = 'работает только на страницах — сделать запись страницей?';
+
+/**
  * Плашка «второй» (РП-4): карточки записи рисуются один раз, лишний блок — подсказка на своём
  * месте, а не повтор. Тексты живут здесь одной формулировкой для `bodyIssues` и плана рендера
- * web, который ловит повтор разными написаниями; задача 8 распространит их на второй
- * `{{cards: own}}`.
+ * web, который ловит повтор разными написаниями; второй `{{cards: own}}` — своим текстом рядом.
  */
 export const SECOND_CARDS_MESSAGE =
   'Второй блок {{cards}}: карточки записи показываются один раз, лишний блок не рисуется.';
+
+/** Плашка второго `{{cards: own}}` (1б §8.5) — той же формулировкой, что у `{{cards}}`. */
+export const SECOND_OWN_CARDS_MESSAGE =
+  'Второй блок {{cards: own}}: свои карточки записи показываются один раз, лишний блок не рисуется.';
 
 /** Текст плашки второй карточки одного аспекта; `raw` — блок, как он написан. */
 export function secondCardMessage(raw: string): string {
@@ -206,6 +224,10 @@ function placedBlockOf(node: PageNode): PlacedBlock | null {
       return 'card';
     case 'query':
       return 'query';
+    case 'ownCards':
+      return 'own-cards';
+    case 'host':
+      return 'host';
     default:
       return null;
   }
@@ -221,6 +243,11 @@ function blockLabel(node: PageNode): string {
       return `Блок {{${node.name}}}`;
     case 'card':
       return `Блок {{card: ${node.aspect}}}`;
+    // Канонической печатью: `{{cards:own}}` и `{{cards: own}}` — один блок, и плашка зовёт его одинаково.
+    case 'ownCards':
+      return 'Блок {{cards: own}}';
+    case 'host':
+      return `Блок {{${node.name}}}`;
     default:
       return 'Блок';
   }
@@ -237,6 +264,14 @@ function misplaced(
     return {
       code: 'BLOCK_MISPLACED',
       message: `Блок {{body}} работает только в шаблоне, ${KIND_WORD[kind]} он не показывается.`,
+      path,
+    };
+  }
+  if (block === 'host') {
+    return {
+      code: 'BLOCK_MISPLACED',
+      message: `${blockLabel(node)} не показывается ${KIND_WORD[kind]}.`,
+      ...(kind === 'note' && { hint: HOST_MISPLACED_HINT }),
       path,
     };
   }
@@ -306,9 +341,9 @@ function queryIssue(
  * контейнера, а контейнер в заметке не работает вовсе (§5.5), и совет вроде «колонок бывает от
  * 2 до 4» звал бы чинить то, что и после починки не заработает.
  *
- * Второй `{{cards}}` и повтор `{{card: X}}` ОДИНАКОВЫМ текстом — `SECOND_BLOCK` здесь; разные
- * написания одного аспекта (ключ и подпись) без реестра не узнать — их ловит план рендера web,
- * где реестр есть. Неуместные и лежащие в `broken` блоки не считаются: они и так не рисуются.
+ * Второй `{{cards}}`, второй `{{cards: own}}` и повтор `{{card: X}}` ОДИНАКОВЫМ текстом —
+ * `SECOND_BLOCK` здесь; разные написания одного аспекта (ключ и подпись) без реестра не узнать —
+ * их ловит план рендера web, где реестр есть. Неуместные и лежащие в `broken` блоки не считаются: они и так не рисуются.
  */
 export function bodyIssues(
   nodes: readonly PageNode[],
@@ -318,6 +353,7 @@ export function bodyIssues(
   const out: PlacementIssue[] = [];
   let bodies = 0;
   let cards = 0;
+  let ownCards = 0;
   const cardTexts = new Set<string>();
 
   const visit = (list: readonly PageNode[], prefix: number[]) => {
@@ -346,6 +382,13 @@ export function bodyIssues(
         cards += 1;
         if (cards > 1) {
           out.push({ code: 'SECOND_BLOCK', message: SECOND_CARDS_MESSAGE, path });
+        }
+        return;
+      }
+      if (node.kind === 'ownCards') {
+        ownCards += 1;
+        if (ownCards > 1) {
+          out.push({ code: 'SECOND_BLOCK', message: SECOND_OWN_CARDS_MESSAGE, path });
         }
         return;
       }

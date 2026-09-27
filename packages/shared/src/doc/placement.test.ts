@@ -14,6 +14,7 @@ import {
   blockAllowedIn,
   bodyIssues,
   EMPTY_QUERY_MESSAGE,
+  HOST_MISPLACED_HINT,
   kindsAllowing,
   layoutMisplaced,
   layoutPlaceAllows,
@@ -21,6 +22,7 @@ import {
   nodeAt,
   type PlacedBlock,
   SECOND_CARDS_MESSAGE,
+  SECOND_OWN_CARDS_MESSAGE,
   secondCardMessage,
   templateBrokenReason,
 } from './placement';
@@ -70,6 +72,84 @@ describe('матрица §5.5', () => {
       card: [false, true, true],
       query: [true, true, true],
     });
+  });
+});
+
+describe('матрица мест 1б: свои карточки и блоки хоста (РП-4)', () => {
+  test('own-cards — как карточка (заметка ✗, страница ✓, шаблон ✓); host — только страница', () => {
+    const kinds: BodyKind[] = ['note', 'page', 'template'];
+    const row = (b: PlacedBlock) => kinds.map((k) => blockAllowedIn(b, k));
+    expect(row('own-cards')).toEqual([false, true, true]);
+    expect(row('own-cards')).toEqual(row('card'));
+    expect(row('host')).toEqual([false, true, false]);
+    expect(kindsAllowing('own-cards')).toEqual(['page', 'template']);
+    expect(kindsAllowing('host')).toEqual(['page']);
+  });
+
+  test('{{cards: own}} в заметке — BLOCK_MISPLACED с MISPLACED_HINT; на странице и в шаблоне — нет', () => {
+    const found = issues('текст\n{{cards: own}}\n', 'note');
+    expect(found).toEqual([
+      {
+        code: 'BLOCK_MISPLACED',
+        message: 'Блок {{cards: own}} не показывается в заметке.',
+        hint: MISPLACED_HINT,
+        path: [1],
+      },
+    ]);
+    expect(issues('текст\n{{cards: own}}\n', 'page')).toEqual([]);
+    expect(issues('текст\n{{cards: own}}\n', 'template')).toEqual([]);
+  });
+
+  test('блок хоста в шаблоне — BLOCK_MISPLACED без подсказки; в заметке — с подсказкой «сделать страницей»; на странице — нет', () => {
+    expect(issues('{{records}}\n', 'template')).toEqual([
+      {
+        code: 'BLOCK_MISPLACED',
+        message: 'Блок {{records}} не показывается в шаблоне.',
+        path: [0],
+      },
+    ]);
+    expect(issues('до\n{{apps}}\n', 'note')).toEqual([
+      {
+        code: 'BLOCK_MISPLACED',
+        message: 'Блок {{apps}} не показывается в заметке.',
+        hint: HOST_MISPLACED_HINT,
+        path: [1],
+      },
+    ]);
+    // Подсказка «работает на страницах и в шаблонах» блоку хоста соврала бы: в шаблоне он не работает.
+    expect(HOST_MISPLACED_HINT).not.toContain('шаблон');
+    expect(issues('{{apps}}\n{{records}}\n', 'page')).toEqual([]);
+  });
+
+  test('шаблон с блоком хоста — «не разобран» с причиной места (R-4)', () => {
+    expect(templateBrokenReason('{{title}}\n{{apps}}\n', REG)).toBe(
+      'Блок {{apps}} не показывается в шаблоне.',
+    );
+    expect(templateBrokenReason('{{title}}\n{{cards: own}}\n', REG)).toBeNull();
+  });
+
+  test('второй {{cards: own}} — SECOND_BLOCK на втором, сквозь контейнеры; {{cards}} рядом — не повтор', () => {
+    expect(issues('{{cards: own}}\n{{cards}}\n{{cards:own}}\n', 'template')).toEqual([
+      { code: 'SECOND_BLOCK', message: SECOND_OWN_CARDS_MESSAGE, path: [2] },
+    ]);
+    const text = '{{cards: own}}\n{{tabs}}\n{{tab: А}}\n{{cards: own}}\n{{/tab}}\n{{/tabs}}\n';
+    const nodes = parsePageText(text);
+    const found = bodyIssues(nodes, 'page', REG);
+    expect(found).toMatchObject([{ code: 'SECOND_BLOCK', path: [1, 0, 0] }]);
+    expect(nodeAt(nodes, found[0]?.path ?? [])).toMatchObject({ kind: 'ownCards' });
+    expect(templateBrokenReason('{{cards: own}}\n{{cards: own}}\n', REG)).toBe(
+      SECOND_OWN_CARDS_MESSAGE,
+    );
+    // Текст плашки — рядом с `SECOND_CARDS_MESSAGE` одной формулировкой, но про свой блок.
+    expect(SECOND_OWN_CARDS_MESSAGE).toContain('{{cards: own}}');
+    expect(SECOND_OWN_CARDS_MESSAGE).not.toBe(SECOND_CARDS_MESSAGE);
+  });
+
+  test('в заметке два {{cards: own}} — две BLOCK_MISPLACED: неуместные не считаются', () => {
+    expect(issues('{{cards: own}}\n{{cards: own}}\n', 'note').map((i) => i.code)).toEqual([
+      'BLOCK_MISPLACED',
+      'BLOCK_MISPLACED',
+    ]);
   });
 });
 

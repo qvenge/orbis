@@ -1,10 +1,11 @@
 import { Node } from '@tiptap/core';
-import { RECORD_BLOCK_NAMES } from '../page-grammar';
+import { HOST_BLOCK_NAMES, RECORD_BLOCK_NAMES } from '../page-grammar';
 import { PAGE_BLOCK_GROUP } from '../placement';
 
 /**
  * Блоки обвязки записи тела v3 (спека страниц 1а §5.3): `{{title}}`, `{{tags}}`, … и карточка
- * аспекта `{{card: …}}`. Оба — атомы: показывают запись `this`, своего текста у них нет.
+ * аспекта `{{card: …}}`. Оба — атомы: показывают запись `this`, своего текста у них нет. Срез 1б
+ * добавил атомы своих карточек `{{cards: own}}` и блоков хоста `{{apps}}`, `{{records}}` (ниже).
  *
  * Разбора markdown у нод нет: маркеры распознаёт только листовой препроход `page-grammar.ts`
  * (одна копия правил, РП-6), узлы собирает `parseBody`.
@@ -87,4 +88,52 @@ export const AspectCard = Node.create({
   ],
   renderMarkdown: (node: { attrs?: { text?: unknown } }) =>
     `{{card: ${typeof node.attrs?.text === 'string' ? node.attrs.text : ''}}}`,
+});
+
+/**
+ * Свои карточки аспектов записи — `{{cards: own}}` (спека 1б §8.5): карточки всех её аспектов,
+ * у которых есть своя карточка, в порядке рангов. Атом без атрибутов: аргумент у маркера один
+ * (`own`), и хранить нечего. Печать — канон с одним пробелом, как у `{{card: …}}`; её же строка —
+ * в `collectText` диффа (равенство сторожит тест `convert.test.ts`, «печатная форма атомов»).
+ */
+export const OwnCards = Node.create({
+  name: 'ownCards',
+  group: PAGE_BLOCK_GROUP,
+  atom: true,
+  parseHTML: () => [{ tag: 'div[data-own-cards]' }],
+  renderHTML: () => ['div', { 'data-own-cards': '' }],
+  renderMarkdown: () => `{{cards: own}}`,
+});
+
+const HOST_NAMES: ReadonlySet<string> = new Set(HOST_BLOCK_NAMES);
+
+/**
+ * Блок хоста — `{{apps}}` («Приложения») или `{{records}}` («Записи»), спека 1б §6.2 п. 3, §3.5.
+ * Отдельный узел, а не `recordBlock` с новым именем: у блока обвязки своя клетка матрицы мест и
+ * свои заглушки «блока записи», а блок хоста записи `this` не показывает и работает только на
+ * странице (РП-4).
+ *
+ * `name` — одно из `HOST_BLOCK_NAMES`; чужое имя — только в документе клиента, и рубежи те же, что
+ * у `recordBlock` (докблок выше): вставка HTML его не создаёт, а печать `{{foo}}` при повторном
+ * разборе — текст, и страховка записи уводит такой документ в `rawBlock`.
+ */
+export const HostBlock = Node.create({
+  name: 'hostBlock',
+  group: PAGE_BLOCK_GROUP,
+  atom: true,
+  addAttributes: () => ({ name: { default: null } }),
+  parseHTML: () => [
+    {
+      tag: 'div[data-host-block]',
+      getAttrs: (el: HTMLElement) => {
+        const name = el.getAttribute('data-host-block');
+        return name !== null && HOST_NAMES.has(name) ? { name } : false;
+      },
+    },
+  ],
+  renderHTML: ({ HTMLAttributes }) => ['div', { 'data-host-block': HTMLAttributes.name ?? '' }],
+  renderMarkdown: (node: { attrs?: { name?: unknown } }) => {
+    const name = node.attrs?.name;
+    return typeof name === 'string' ? `{{${name}}}` : '';
+  },
 });

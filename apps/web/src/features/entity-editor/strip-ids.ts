@@ -34,6 +34,9 @@ export const UNIQUE_ID_TYPES: readonly string[] = [
   'tab',
   'recordBlock',
   'aspectCard',
+  // Срез 1б: свои карточки и блоки хоста — такие же атомы страницы.
+  'ownCards',
+  'hostBlock',
 ];
 
 /**
@@ -81,6 +84,7 @@ export const NODE_ATTR_DEFAULTS: Readonly<Record<string, Readonly<Record<string,
   tab: { label: '' },
   recordBlock: { name: null },
   aspectCard: { aspect: null, text: '' },
+  hostBlock: { name: null },
 };
 
 /**

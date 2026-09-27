@@ -1440,6 +1440,30 @@ describe('грамматика v3: разбор → печать → разбо�
     expect(roundTrip('{{card: orbis/goal}}')).toBe('{{card: orbis/goal}}');
   });
 
+  test('свои карточки и блоки хоста (1б): узлы ownCards и hostBlock, круг без потерь', () => {
+    expect(nodesOf('{{cards: own}}')).toEqual([{ type: 'ownCards' }]);
+    expect(nodesOf('{{apps}}')).toEqual([{ type: 'hostBlock', attrs: { name: 'apps' } }]);
+    expect(nodesOf('{{records}}')).toEqual([{ type: 'hostBlock', attrs: { name: 'records' } }]);
+    for (const marker of ['{{cards: own}}', '{{apps}}', '{{records}}']) {
+      expect(roundTrip(`до\n${marker}\nпосле`)).toBe(`до\n\n${marker}\n\nпосле`);
+    }
+    // Каноническая печать своих карточек — с одним пробелом, как у `{{card: …}}`.
+    expect(roundTrip('{{cards:own}}  ')).toBe('{{cards: own}}');
+    // В части контейнера — тоже узлы, и документ проходит схему.
+    const md =
+      '{{columns}}\n{{column}}\n{{cards: own}}\n{{/column}}\n{{column}}\n{{records}}\n{{/column}}\n{{/columns}}';
+    const [columns] = nodesOf(md);
+    expect(columns?.content?.map((c) => c.content?.[0]?.type)).toEqual(['ownCards', 'hostBlock']);
+    expect(bodyDocError(parseBody(md))).toBeUndefined();
+    expect(roundTrip(md)).toBe(md);
+  });
+
+  test('незнакомая форма ({{cards: mine}}, {{app}}, {{records: x}}) — абзац с текстом', () => {
+    for (const md of ['{{cards: mine}}', '{{app}}', '{{records: x}}']) {
+      expect(nodesOf(md)).toEqual([para(md)]);
+    }
+  });
+
   test('контейнер в части другого контейнера (глубина 2) — круг без потерь', () => {
     const md = [
       '{{columns}}',
@@ -1529,6 +1553,10 @@ describe('грамматика v3: разбор → печать → разбо�
       '{{columns}}',
       '{{/column}}',
       '{{/tabs}}',
+      // 1б: блоки хоста и свои карточки (`{{cards: own}}` экранируется именем `cards`).
+      '{{apps}}',
+      '{{records}}',
+      '{{cards: own}}',
     ]) {
       const doc = { v: DOC_SCHEMA_VERSION, doc: { type: 'doc', content: [para(text)] } };
       const printed = serializeBody(doc);
@@ -1621,6 +1649,9 @@ describe('грамматика v3: разбор → печать → разбо�
       { type: 'recordBlock', attrs: { name: 'title' } },
       { type: 'aspectCard', attrs: { aspect: 'orbis/goal', text: 'orbis/goal' } },
       { type: 'aspectCard', attrs: { aspect: null, text: '"Цель"' } },
+      { type: 'ownCards' },
+      { type: 'hostBlock', attrs: { name: 'apps' } },
+      { type: 'hostBlock', attrs: { name: 'records' } },
     ]) {
       const doc = { type: 'doc', content: [atom] };
       expect(serializeBody(doc)).toBe(blockText(atom));
@@ -1685,6 +1716,9 @@ describe('схема шире грамматики: пределы и сверк
     ['карточка с пустым текстом', { type: 'aspectCard', attrs: { aspect: null, text: '' } }],
     ['карточка с переводом строки', { type: 'aspectCard', attrs: { aspect: null, text: 'a\nb' } }],
     ['подпись вкладки с переводом строки', tabs(tab('раз\nдва', p('а')))],
+    // 1б: блок хоста с чужим именем печатается `{{foo}}` — разбор оставит текст, скелет разойдётся.
+    ['блок хоста с чужим именем', { type: 'hostBlock', attrs: { name: 'нет-такого' } }],
+    ['блок хоста без имени (null)', { type: 'hostBlock', attrs: { name: null } }],
   ];
 
   // Место узла страницы — предел схемы с 1б (группа `pageBlock`, спека 1б §10, 1а новое-9):
@@ -1725,6 +1759,20 @@ describe('схема шире грамматики: пределы и сверк
         content: [{ type: 'aspectCard', attrs: { aspect: null, text: 'orbis/goal' } }],
       },
     ],
+    // 1б: свои карточки и блок хоста — в группе `pageBlock`, их место держит та же схема.
+    ['свои карточки под цитатой', { type: 'blockquote', content: [{ type: 'ownCards' }] }],
+    [
+      'блок хоста в пункте списка',
+      {
+        type: 'bulletList',
+        content: [
+          {
+            type: 'listItem',
+            content: [p('пункт'), { type: 'hostBlock', attrs: { name: 'apps' } }],
+          },
+        ],
+      },
+    ],
   ];
 
   test.each(rejected)('%s: схема отвергает — bodyDocError определён', (_name, node) => {
@@ -1757,6 +1805,8 @@ describe('схема шире грамматики: пределы и сверк
         content: [
           { type: 'aspectCard', attrs: { aspect: 'orbis/goal', text: 'orbis/goal' } },
           { type: 'recordBlock', attrs: { name: 'title' } },
+          { type: 'ownCards' },
+          { type: 'hostBlock', attrs: { name: 'records' } },
           cols(
             column(p('а'), { type: 'queryBlock', attrs: { ast: null, text: 'aspect=orbis/task' } }),
             column(p('б')),

@@ -10,7 +10,7 @@ import { Column, Columns, Tab, Tabs } from './nodes/layout';
 import { OrbisListItem } from './nodes/list-item';
 import { QueryBlock } from './nodes/query-block';
 import { RawBlock } from './nodes/raw';
-import { AspectCard, RecordBlock } from './nodes/record-blocks';
+import { AspectCard, HostBlock, OwnCards, RecordBlock } from './nodes/record-blocks';
 
 /** Белый список протоколов. Сужает ссылки isAllowedUri — опция `protocols` у Tiptap
  *  РАСШИРЯЕТ базовый список, а не сужает (проверено ревью), поэтому её здесь нет. */
@@ -64,4 +64,7 @@ export const DOC_EXTENSIONS: AnyExtension[] = [
   Tab,
   RecordBlock,
   AspectCard,
+  // Срез 1б (§8.5, §6.2 п. 3): свои карточки записи и блоки хоста — атомы группы `pageBlock`.
+  OwnCards,
+  HostBlock,
 ];

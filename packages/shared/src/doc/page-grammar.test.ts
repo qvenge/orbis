@@ -7,6 +7,7 @@ import {
   GRAMMAR_ERROR_CODES,
   GRAMMAR_ERROR_MESSAGES,
   type GrammarErrorCode,
+  HOST_BLOCK_NAMES,
   type PageNode,
   parsePageText,
   RECORD_BLOCK_NAMES,
@@ -499,6 +500,78 @@ describe('блоки обвязки §5.3', () => {
       { kind: 'record', name: 'title', raw: '{{title}}\n' },
       text('хвост'),
     ]);
+  });
+});
+
+describe('свои карточки и блоки хоста (спека 1б §8.5, §6.2 п. 3, §3.5)', () => {
+  test('имена блоков хоста — «Приложения» и «Записи»', () => {
+    expect(HOST_BLOCK_NAMES).toEqual(['apps', 'records']);
+  });
+
+  test.each([
+    ['{{cards: own}}', { kind: 'ownCards', raw: '{{cards: own}}' }],
+    ['{{cards:own}}  ', { kind: 'ownCards', raw: '{{cards:own}}  ' }],
+    ['{{cards:\town}}\n', { kind: 'ownCards', raw: '{{cards:\town}}\n' }],
+    ['{{apps}}', { kind: 'host', name: 'apps', raw: '{{apps}}' }],
+    ['{{records}}\r\n', { kind: 'host', name: 'records', raw: '{{records}}\r\n' }],
+    ['{{apps}} \t\n', { kind: 'host', name: 'apps', raw: '{{apps}} \t\n' }],
+  ])('%p — узел, raw — строка целиком', (src, node) => {
+    expect(parse(src)).toEqual([node as PageNode]);
+  });
+
+  test('{{cards}} и {{cards: own}} — разные блоки: «остальные» и «свои»', () => {
+    expect(parse('{{cards}}\n{{cards: own}}\n')).toEqual([
+      { kind: 'record', name: 'cards', raw: '{{cards}}\n' },
+      { kind: 'ownCards', raw: '{{cards: own}}\n' },
+    ]);
+  });
+
+  test('между абзацами и в части контейнера — узлы; склейка = вход байт-в-байт', () => {
+    const src = lines(
+      'вступление',
+      '{{apps}}',
+      '{{columns}}',
+      '{{column}}',
+      '{{cards: own}}',
+      '{{/column}}',
+      '{{column}}',
+      '{{records}}',
+      '{{/column}}',
+      '{{/columns}}',
+      'хвост',
+    );
+    const nodes = parse(src);
+    expect(nodes.map((n) => n.kind)).toEqual(['text', 'host', 'columns', 'text']);
+    const columns = nodes[2];
+    if (columns?.kind !== 'columns') throw new Error('ожидались колонки');
+    expect(columns.parts).toEqual([
+      [{ kind: 'ownCards', raw: '{{cards: own}}\n' }],
+      [{ kind: 'host', name: 'records', raw: '{{records}}\n' }],
+    ]);
+  });
+
+  test.each([
+    '{{cards: mine}}',
+    '{{cards: own}} x',
+    '{{cards: own x}}',
+    '{{cards: Own}}',
+    '{{cards own}}',
+    '{{app}}',
+    '{{Apps}}',
+    '{{records: x}}',
+    '{{records:}}',
+    '{{apps}} хвост',
+    ' {{records}}',
+    'x {{apps}}',
+    '{{/apps}}',
+  ])('незнакомая форма %p — текст (§5.7 1а)', (src) => {
+    expect(parse(src)).toEqual([text(src)]);
+    expect(parse(`${src}\n`)).toEqual([text(`${src}\n`)]);
+  });
+
+  test('внутри забора кода — текст', () => {
+    const src = lines('```', '{{cards: own}}', '{{apps}}', '{{records}}', '```');
+    expect(parse(src)).toEqual([text(src)]);
   });
 });
 

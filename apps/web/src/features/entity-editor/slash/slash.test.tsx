@@ -437,6 +437,51 @@ test('у шаблона — и «Тело записи», пока его в д�
   expect(labelsOf()).toContain('Заголовок записи');
 });
 
+// --- `/` в 1б: свои карточки и блоки хоста по матрице мест (РП-4) --------------------------------
+
+test('у шаблона — «Свои карточки», без «Записей» и «Приложений»; пункт вставляет узел ownCards', async () => {
+  const { h } = await mountEditor('привет', api({}), 'template');
+  await userEvent.keyboard(' /');
+  await screen.findByTestId('slash-menu');
+  const labels = labelsOf();
+  expect(labels).toContain('Свои карточки');
+  expect(labels).not.toContain('Записи');
+  expect(labels).not.toContain('Приложения');
+  await userEvent.keyboard('свои');
+  await waitFor(() => expect(rows()).toEqual(['Свои карточкиблок записи']));
+  await userEvent.keyboard('{Enter}');
+  await waitFor(() =>
+    expect(h.editor?.getJSON().content?.map((n) => n.type)).toEqual(['paragraph', 'ownCards']),
+  );
+});
+
+test('у страницы — «Записи» и «Приложения», без «Своих карточек»; пункт вставляет hostBlock', async () => {
+  const { h } = await mountEditor('привет', api({}), 'page');
+  await userEvent.keyboard(' /');
+  await screen.findByTestId('slash-menu');
+  const labels = labelsOf();
+  expect(labels).toContain('Записи');
+  expect(labels).toContain('Приложения');
+  expect(labels).not.toContain('Свои карточки');
+  await userEvent.keyboard('прилож');
+  await waitFor(() => expect(rows()).toEqual(['Приложенияблок страницы']));
+  await userEvent.keyboard('{Enter}');
+  await waitFor(() =>
+    expect(h.editor?.getJSON().content?.map((n) => n.type)).toEqual(['paragraph', 'hostBlock']),
+  );
+  expect(h.editor?.getJSON().content?.[1]?.attrs?.name).toBe('apps');
+});
+
+test('у заметки — ни «Своих карточек», ни «Записей», ни «Приложений»', async () => {
+  await mountEditor('привет', api({}), 'note');
+  await userEvent.keyboard(' /');
+  await screen.findByTestId('slash-menu');
+  const labels = labelsOf();
+  for (const hidden of ['Свои карточки', 'Записи', 'Приложения']) {
+    expect(labels, hidden).not.toContain(hidden);
+  }
+});
+
 test('Enter по скрытому пункту его не вставляет: фильтр и выбор — один список', async () => {
   // Заметка: «Колонок» в меню нет — Enter после `/колон` не находит пункта, контейнер не встаёт.
   const note = await mountEditor('привет', api({}), 'note');
