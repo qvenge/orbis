@@ -20,6 +20,8 @@
 //   bun scripts/ops.ts census-v3      # только чтение: что изменит формат тела v3 (станут блоками, display=)
 //   bun scripts/ops.ts backfill-body-doc  # конверсия тел в body_doc — ТОЛЬКО после audit-bodies
 //   bun scripts/ops.ts reset-world --confirm <PROD_REF> --i-understand RESET  # РАЗРУШАЮЩАЯ (РП-7)
+//   bun scripts/ops.ts migrate-1b --report                # только чтение: план перевода данных среза 1б
+//   bun scripts/ops.ts migrate-1b --apply --i-understand  # разовый перевод данных среза 1б (РП-16)
 //   bun scripts/ops.ts ping           # связность и версия PostgreSQL
 //   bun scripts/ops.ts issue-pat <uuid аккаунта> [метка] [--scope worker]  # headless-токен (§9.3)
 import { join } from 'node:path';
@@ -48,6 +50,7 @@ import {
   drizzleBackfillIo,
 } from '../apps/server/src/db/backfill-body-doc';
 import { type CensusV3Row, censusV3, formatCensusV3 } from '../apps/server/src/db/census-v3';
+import { runMigrate1b } from '../apps/server/src/db/migrate-1b';
 import {
   REGISTRY_DELTAS_QUERY,
   REGISTRY_DRIFT_QUERIES,
@@ -60,7 +63,11 @@ import {
   seedRegistries,
   seedRegistriesReport,
 } from '../apps/server/src/db/seed-registries';
-import { identityOfPerson, parseAccountId } from '../apps/server/src/identity';
+import {
+  identitiesForScheduler,
+  identityOfPerson,
+  parseAccountId,
+} from '../apps/server/src/identity';
 import { issuePatGrant, NotGraphOwnerError } from '../apps/server/src/oauth/grants';
 import { PAT_USAGE, parsePatArgs } from '../apps/server/src/oauth/pat-args';
 import {
@@ -583,6 +590,29 @@ async function resetWorldOp(args: string[]): Promise<number> {
   });
 }
 
+/**
+ * Разовый перевод данных среза 1б (РП-16, спека §12): граф старой формы → записи поставки, навигация
+ * оболочки хоста из закреплённых, шесть списков → страницы поставки, Финансы выключены — одной пачкой
+ * исполнителя на граф с подписью журнала. `--report` печатает план и ничего не пишет.
+ *
+ * Логика, гейт подтверждения и печать — в `db/migrate-1b.ts` под тестом на фикстуре прод-формы; здесь
+ * обвязка, как у `reset-world`. Графы — те же пары «граф, владелец», что обходит планировщик
+ * (`identitiesForScheduler`: графы со строкой настроек); запись идёт под идентичностью владельца
+ * (`withIdentity` делает `SET LOCAL ROLE authenticated` — админская роль это умеет).
+ */
+async function migrate1bOp(args: string[]): Promise<number> {
+  return runMigrate1b(args, {
+    readDsn,
+    openDb: (dsn) => {
+      const sql = postgres(dsn, { max: 1 });
+      return { db: drizzle(sql, { schema }), close: () => sql.end() };
+    },
+    identities: identitiesForScheduler,
+    log: (line) => console.log(line),
+    error: (line) => console.error(line),
+  });
+}
+
 async function ping(): Promise<number> {
   await withDb(async (sql) => {
     const [row] = await sql<{ version: string }[]>`SELECT version()`;
@@ -755,6 +785,12 @@ const OPS: Record<string, { run: (args: string[]) => Promise<number>; help: stri
       'РАЗРУШАЮЩАЯ: снести МИР графов и журнал (сами графы и членство сохраняются), ' +
       'пользовательские строки реестров и дельты; ' +
       'пересеять шесть реестров. Требует --confirm <PROD_REF> и --i-understand RESET',
+  },
+  'migrate-1b': {
+    run: migrate1bOp,
+    help:
+      'разовый перевод данных среза 1б: --report — только план (ничего не пишет); ' +
+      '--apply --i-understand — одна пачка исполнителя на граф с подписью журнала',
   },
   ping: { run: ping, help: 'связность и версия PostgreSQL' },
   dump: {
