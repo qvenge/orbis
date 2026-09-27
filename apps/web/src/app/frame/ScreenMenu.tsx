@@ -2,10 +2,13 @@ import { EllipsisVertical, LayoutGrid, Puzzle, Settings } from 'lucide-react';
 import {
   type ComponentType,
   createContext,
+  lazy,
   type ReactElement,
   type ReactNode,
+  Suspense,
   useContext,
   useMemo,
+  useState,
 } from 'react';
 import { useNav } from '../../state/navigation';
 import type { DropdownMenuItem } from '../../ui/DropdownMenu';
@@ -49,6 +52,11 @@ export function ScreenMenuProvider<P extends object>({
 /** Меню экрана без своих пунктов — только раздел «Хост». Одна ссылка на загрузчик на приложение. */
 const loadHostMenu = () => import('./HostMenu').then((m) => m.HostMenu);
 
+/** «Все приложения» — лист нужен после жеста, не первому кадру (`AllAppsSheet`). */
+const AllAppsSheet = lazy(() =>
+  import('../../features/apps/AllAppsSheet').then((m) => ({ default: m.AllAppsSheet })),
+);
+
 /** Номер загрузчика — ключ слота: другой экран — другое содержимое, и слот встаёт заново. */
 const loaderIds = new WeakMap<object, number>();
 let nextLoaderId = 0;
@@ -66,17 +74,18 @@ function loaderKey(load: object): number {
  * стабильный триггер общей механики (`ui/LazyMenuSlot`, задача 1): один узел от первого кадра,
  * открывается с первого нажатия и при медленном чанке пунктов.
  *
- * Раздел «Хост»: «Все приложения» (задача 20 наполнит переключателем; пока — «Домой» хоста, где
- * будет блок «Приложения»), «Приложения и расширения» и «Настройки» — экран настроек.
+ * Раздел «Хост»: «Все приложения» — лист с тем же списком, что блок «Приложения» на «Домой»
+ * (`AllAppsSheet`, §6.2 п. 3), «Приложения и расширения» и «Настройки» — экран настроек.
  */
 export function ScreenMenu(): ReactElement {
   const source = useContext(ScreenMenuContext);
+  const [allApps, setAllApps] = useState(false);
   const hostItems = useMemo<DropdownMenuItem[]>(
     () => [
       {
         label: 'Все приложения',
         icon: <LayoutGrid size={16} aria-hidden />,
-        onSelect: () => useNav.getState().goHome(),
+        onSelect: () => setAllApps(true),
       },
       {
         label: 'Приложения и расширения',
@@ -97,23 +106,30 @@ export function ScreenMenu(): ReactElement {
     [source?.props, hostItems],
   );
   return (
-    <LazyMenuSlot
-      key={loaderKey(load)}
-      load={load}
-      menuProps={menuProps}
-      renderTrigger={(t) => (
-        <button
-          type="button"
-          aria-label="Меню"
-          title="Меню"
-          data-testid="screen-menu"
-          {...t}
-          className={HOST_CONTROL}
-        >
-          <EllipsisVertical size={18} aria-hidden />
-        </button>
+    <>
+      <LazyMenuSlot
+        key={loaderKey(load)}
+        load={load}
+        menuProps={menuProps}
+        renderTrigger={(t) => (
+          <button
+            type="button"
+            aria-label="Меню"
+            title="Меню"
+            data-testid="screen-menu"
+            {...t}
+            className={HOST_CONTROL}
+          >
+            <EllipsisVertical size={18} aria-hidden />
+          </button>
+        )}
+      />
+      {allApps && (
+        <Suspense fallback={null}>
+          <AllAppsSheet onClose={() => setAllApps(false)} />
+        </Suspense>
       )}
-    />
+    </>
   );
 }
 

@@ -1,6 +1,14 @@
-import { contendersOf, PAGE_ASPECT, TEMPLATE_FOR_PROPERTY } from '@orbis/shared';
+import {
+  contendersOf,
+  openPlacesOf,
+  PAGE_ASPECT,
+  placeContendersOf,
+  TEMPLATE_FOR_PROPERTY,
+  type TemplateCandidate,
+} from '@orbis/shared';
 import { isHostTemplateRecord } from '@orbis/shared/supply';
 import {
+  AppWindow,
   Archive,
   ArchiveRestore,
   Code,
@@ -10,6 +18,7 @@ import {
   History,
   LayoutTemplate,
   Link2,
+  MapPin,
   PanelsTopLeft,
   Scale,
   SlidersHorizontal,
@@ -17,8 +26,10 @@ import {
 } from 'lucide-react';
 import { useState } from 'react';
 import type { ScreenMenuContentProps } from '../../app/frame/ScreenMenu';
+import { useNav } from '../../state/navigation';
 import { DropdownMenu, type DropdownMenuItem } from '../../ui/DropdownMenu';
 import { useToast } from '../../ui/toast-store';
+import type { Apps } from '../apps/useApps';
 import { ChangeViewDialog } from '../page/ChangeViewDialog';
 import { type ChangeViewPlan, changeViewPlan, TEXT_BEFORE_VIEW_CHANGE } from '../page/change-view';
 import type { RecordShown } from '../page/RecordView';
@@ -49,6 +60,8 @@ export type DetailMenuView =
        * «Настроить шаблон хоста» (срез 1б §9.2) — настройка записи поставки «Шаблон хоста».
        */
       onConfigureTemplate: (templateId: string) => void;
+      /** Места записи (срез 1б §5.4): «Открыть в [приложение]» и «Сменить, где открывать такие записи». */
+      places?: PlacesMenu;
     }
   | {
       kind: 'page';
@@ -70,6 +83,20 @@ export type DetailMenuView =
       templateTitle: string;
       onOpenTemplate: () => void;
     };
+
+/**
+ * Вход пунктов мест (срез 1б §5.4): P считается здесь, в ленивом меню, а не в экране записи —
+ * пунктам нужен весь список шаблонов (места — приложения с подходящим шаблоном), а не шаблоны рамки.
+ */
+export interface PlacesMenu {
+  apps: Apps;
+  /** Все шаблоны владельца и приложений (`templatesFromRows`), не только рамки. */
+  templates: readonly TemplateCandidate[];
+  /** Рамка экрана: «открыть в» ней же пунктом не предлагается. `null` — хост. */
+  frameApp: string | null;
+  /** «Сменить, где открывать такие записи» — вопрос спора мест с этими спорящими. */
+  onChange: (contenders: readonly string[]) => void;
+}
 
 /**
  * Раздел «Этот экран» одного меню «⋯» (срез 1б §6.4) на экране записи: пункты записи или страницы,
@@ -245,10 +272,48 @@ function RecordMenu({
     ];
   }
 
+  /**
+   * «Открыть в [приложение]» — разово, для каждого места P, кроме своей рамки (переход — новый шаг,
+   * «‹» вернёт), и «Сменить, где открывать такие записи» — при споре мест (P ≥ 2) и при сделанном
+   * выборе тоже (§5.3, §5.4). Список приложений не приехал — пунктов нет: места не посчитать.
+   */
+  function placeItems(p: PlacesMenu | undefined): DropdownMenuItem[] {
+    if (p === undefined || p.apps.status !== 'ok') return [];
+    const input = {
+      record: { id: entity.id, aspects: entity.aspects, home: null },
+      apps: p.apps.apps,
+      hostShellId: p.apps.hostShell?.id ?? null,
+      templates: p.templates,
+      isBroken: () => null,
+    };
+    const contenders = placeContendersOf(input);
+    return [
+      ...openPlacesOf(input)
+        .filter((id) => id !== p.frameApp)
+        .map((id) => ({
+          key: `open-in:${id}`,
+          label: `Открыть в «${p.apps.byId.get(id)?.title || id}»`,
+          icon: <AppWindow size={16} aria-hidden />,
+          onSelect: () => useNav.getState().openRecord(entity.id, { app: id }),
+        })),
+      ...(contenders === null
+        ? []
+        : [
+            {
+              label: 'Сменить, где открывать такие записи',
+              icon: <MapPin size={16} aria-hidden />,
+              onSelect: () => p.onChange(contenders),
+            },
+          ]),
+    ];
+  }
+
   function recordItems(v: Extract<DetailMenuView, { kind: 'record' }>): DropdownMenuItem[] {
     const { shown, templates } = v;
     // Выбор не решён — пункты вида ждут его: «Изменить вид» скопировал бы не тот шаблон.
-    if (shown === null || shown.templateId === null) return [makePageItem()];
+    if (shown === null || shown.templateId === null) {
+      return [...placeItems(v.places), makePageItem()];
+    }
     const shownId = shown.templateId;
     // Пустой заголовок — не подпись: пункт «Открыть через „“» не назвал бы шаблон вовсе.
     const titleOf = (id: string) => templates.rows.find((r) => r.id === id)?.title || id;
@@ -321,6 +386,7 @@ function RecordMenu({
               onSelect: () => v.onChangeDispute(contenders),
             },
           ]),
+      ...placeItems(v.places),
       makePageItem(),
     ];
   }

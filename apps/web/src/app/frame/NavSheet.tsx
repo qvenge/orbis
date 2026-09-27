@@ -1,7 +1,11 @@
-import type { AppKey } from '@orbis/shared/nav';
+import { HOME_PROPERTY } from '@orbis/shared';
+import { type AppKey, HOST_APP } from '@orbis/shared/nav';
+import { useMemo } from 'react';
 import { createPortal } from 'react-dom';
+import { HOMED_PAGES_QUERY, useApps } from '../../features/apps/useApps';
 import { useBadgeData } from '../../lib/query-blocks/useBadgeData';
 import { useNav } from '../../state/navigation';
+import { trpc } from '../../trpc';
 import { NavBadge } from '../../ui/NavBadge';
 import { type ShellSection, useAppShell } from './useAppShell';
 
@@ -19,6 +23,11 @@ import { type ShellSection, useAppShell } from './useAppShell';
  * подложка покрыла бы одну шапку, касание по экрану лист не закрывало бы, а капсула кнопок хоста
  * ложилась бы поверх листа (гейт 19, Fable M-5). Слои: кнопки хоста `z-30` < подложка `z-40` <
  * лист `z-50`. Лист стоит под строкой присутствия хоста (её высота — `h-14`).
+ *
+ * Раздел, чей «Дом» — другое приложение (или хост), — ярлык «↗ <Дом>» (§4.3, §7.2): страница
+ * открывается в рамке своего дома, откуда бы ни пришла ссылка, и нажатие ведёт туда сразу, а не
+ * через стопку этого приложения. «Дом» разделов — одним запросом страниц с «Домом», только пока лист
+ * открыт (С1б-16).
  */
 export function NavSheet({
   app,
@@ -30,9 +39,30 @@ export function NavSheet({
   onClose: () => void;
 }) {
   const shell = useAppShell(app, { withStoppedAt: true });
+  const apps = useApps();
+  const homed = trpc.entity.query.useQuery({ query: HOMED_PAGES_QUERY });
+  /** Раздел → приложение его дома, если это не `app`; пустой «Дом» и оболочка хоста — хост. */
+  const foreign = useMemo(() => {
+    const out = new Map<string, AppKey>();
+    for (const r of homed.data ?? []) {
+      const h = r.props[HOME_PROPERTY];
+      const key = typeof h === 'string' && h !== '' && h !== apps.hostShell?.id ? h : HOST_APP;
+      if (key !== app) out.set(r.id, key);
+    }
+    // Страница без «Дома» в списке не приходит: в чужом приложении она — ярлык хоста.
+    if (app !== HOST_APP && homed.data !== undefined) {
+      for (const s of shell.sections)
+        if (!homed.data.some((r) => r.id === s.id)) out.set(s.id, HOST_APP);
+    }
+    return out;
+  }, [homed.data, apps.hostShell, app, shell.sections]);
+  const titleOf = (key: AppKey) =>
+    key === HOST_APP ? (apps.hostShell?.title ?? 'Orbis') : (apps.byId.get(key)?.title ?? '…');
   const openSection = (id: string) => {
     onClose();
-    useNav.getState().openSection(app, id);
+    const home = foreign.get(id);
+    if (home === undefined) useNav.getState().openSection(app, id);
+    else useNav.getState().openRecord(id, { app: home });
   };
   return createPortal(
     <>
@@ -69,6 +99,7 @@ export function NavSheet({
                 <SectionRow
                   section={s}
                   active={s.id === activeSection}
+                  home={foreign.has(s.id) ? titleOf(foreign.get(s.id) as AppKey) : null}
                   onOpen={() => openSection(s.id)}
                 />
               )}
@@ -84,10 +115,13 @@ export function NavSheet({
 function SectionRow({
   section,
   active,
+  home,
   onOpen,
 }: {
   section: ShellSection;
   active: boolean;
+  /** Заголовок чужого дома раздела — ярлык «↗ Дом»; `null` — раздел этого приложения. */
+  home: string | null;
   onOpen: () => void;
 }) {
   const { badge } = useBadgeData(section.id);
@@ -108,6 +142,7 @@ function SectionRow({
           <span className="text-text-secondary"> · {section.stoppedAt}</span>
         )}
       </span>
+      {home !== null && <span className="text-xs text-text-muted">↗ {home}</span>}
       <NavBadge count={badge} label="в разделе" data-testid={`nav-badge-${section.id}`} />
     </button>
   );

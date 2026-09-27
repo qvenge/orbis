@@ -1,6 +1,6 @@
 import { PAGE_ASPECT } from '@orbis/shared';
 import { buildAddress, currentEntry, HOST_APP } from '@orbis/shared/nav';
-import { useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { type ReactNode, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { FrameAppContext } from '../../app/frame/FrameApp';
 import { ScreenMenuProvider } from '../../app/frame/ScreenMenu';
 import { NotFoundScreen } from '../../app/NotFoundScreen';
@@ -14,6 +14,9 @@ import { Button } from '../../ui/Button';
 import { Input } from '../../ui/Input';
 import { Skeleton } from '../../ui/Skeleton';
 import { useToast } from '../../ui/toast-store';
+import { OpenPlaques } from '../apps/OpenPlaques';
+import { useApps } from '../apps/useApps';
+import { useOpening } from '../apps/useOpening';
 import { ConfigureView } from '../page/ConfigureView';
 import { PageView } from '../page/PageView';
 import { type DisputeRequest, type RecordShown, RecordView } from '../page/RecordView';
@@ -33,7 +36,11 @@ const TASK = 'orbis/task';
 const ASSIGNMENT = 'orbis/assignment';
 const PROJECT = 'orbis/project';
 
-export function DetailScreen({ entityId }: { entityId: string }) {
+/**
+ * `lead` — то, что домашняя приложения ставит над своим содержимым под заголовком экрана: плитки
+ * разделов формы «домашняя как центр» (срез 1б §6.2 п. 2; их рисует роутер, экран лишь даёт место).
+ */
+export function DetailScreen({ entityId, lead }: { entityId: string; lead?: ReactNode }) {
   const { get, setArchived, conflict, dismissConflict } = useEntityDetail(entityId);
   const utils = trpc.useUtils();
   const openRecord = useOpenRecord();
@@ -56,6 +63,14 @@ export function DetailScreen({ entityId }: { entityId: string }) {
    * после него из `RecordView`. Один запрос на экран (С1б-16).
    */
   const supply = useSupplyRecords();
+  /**
+   * Правило открытия (срез 1б §5): записи-приложения — тем же ключом и с тем же HTTP, что запись и
+   * шаблоны (С1б-16); решение — рамка, плашки, замена адреса и шаблоны рамки (`useOpening`).
+   */
+  const apps = useApps();
+  const opening = useOpening(get.data?.entity, apps, templates);
+  /** «Сменить, где открывать такие записи» (§5.4) — вопрос спора мест по просьбе меню. */
+  const [placeRequest, setPlaceRequest] = useState<DisputeRequest | undefined>(undefined);
   // §3.5 «Скопировать ссылку». Буфер обмена — не данность: его нет в http-контексте,
   // а разрешение пользователь может и не дать. На отказе показываем саму ссылку
   // (manualLink), чтобы копирование осталось возможным руками, а не превратилось в
@@ -170,6 +185,7 @@ export function DetailScreen({ entityId }: { entityId: string }) {
     // из её места в истории.
     setOpenVia(viaOf(topView));
     setDisputeRequest(undefined);
+    setPlaceRequest(undefined);
     setMode(null);
     // Слой переезжает на соседнюю запись вместе с экраном (монтируется без key), и его
     // собственное состояние обнуляет `key` ниже. Но признак живёт ЗДЕСЬ, и один кадр между
@@ -186,6 +202,8 @@ export function DetailScreen({ entityId }: { entityId: string }) {
   if (prevPlaceRef.current !== placeKey) {
     prevPlaceRef.current = placeKey;
     setOpenVia(viaOf(topView));
+    // Вопрос «где открывать» по просьбе меню — про место, откуда спросили: ответ сам меняет место.
+    setPlaceRequest(undefined);
   }
   const { show } = useToast();
 
@@ -358,7 +376,14 @@ export function DetailScreen({ entityId }: { entityId: string }) {
           : {
               kind: 'record',
               shown: recordShown?.entityId === entity.id ? recordShown : null,
-              templates,
+              templates: opening.templates,
+              places: {
+                apps,
+                templates: templates.templates,
+                frameApp: opening.frameApp,
+                onChange: (contenders) =>
+                  setPlaceRequest((prev) => ({ contenders, n: (prev?.n ?? 0) + 1 })),
+              },
               onOpenVia: (templateId) =>
                 setOpenVia(templateId === 'host' ? HOST_VIEW : { templateId }),
               onChangeDispute: (contenders) =>
@@ -370,6 +395,7 @@ export function DetailScreen({ entityId }: { entityId: string }) {
   return (
     <ScreenMenuProvider items={loadDetailMenu} props={menuProps}>
       <ScreenHeader title={entity.title} />
+      {lead}
       <TabMemoryProvider value={tabs}>
         <BodyScreenProvider
           value={{
@@ -442,6 +468,22 @@ export function DetailScreen({ entityId }: { entityId: string }) {
             data-testid="record-area"
             className={`mx-auto w-full max-w-3xl${proposalOpen ? ' hidden' : ''}`}
           >
+            <OpenPlaques
+              plaques={
+                placeRequest === undefined
+                  ? opening.plaques
+                  : [
+                      ...opening.plaques,
+                      {
+                        kind: 'place-dispute',
+                        contenders: placeRequest.contenders,
+                        key: `asked-${placeRequest.n}`,
+                      },
+                    ]
+              }
+              apps={apps}
+              record={entity}
+            />
             {/* Страница — своим телом (спека страниц 1а §4.2 шаг 1); любая другая запись — через
             шаблон по функции выбора (§4.2): свой шаблон владельца или шаблон хоста (§8.1). Оба —
             над тем же ответом `entity.get` этого экрана, второго запроса записи нет (РП-13).
@@ -469,6 +511,7 @@ export function DetailScreen({ entityId }: { entityId: string }) {
                 reply={get.data}
                 onShown={setRecordShown}
                 onConfigureTemplate={configure}
+                templates={opening.templates}
                 {...(openVia !== undefined && { override: openVia })}
                 {...(disputeRequest !== undefined && !isPage && { disputeRequest })}
               />

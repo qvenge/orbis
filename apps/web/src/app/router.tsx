@@ -1,12 +1,16 @@
+import { homePlaceOf } from '@orbis/shared';
 import { type Address, buildAddress, currentEntry, HOST_APP } from '@orbis/shared/nav';
 import { ArchiveRestore, Search } from 'lucide-react';
 import { lazy, Suspense, useEffect, useMemo } from 'react';
+import { OpenPlaques } from '../features/apps/OpenPlaques';
+import { NavTilesSlot } from '../features/apps/slots';
+import { useApps } from '../features/apps/useApps';
 import { ChatScreen } from '../features/chat/ChatScreen';
 import { useSupplyRecords } from '../features/page/useSupplyRecords';
 import { MemoryScreen } from '../features/settings/MemoryScreen';
 import { SettingsScreen } from '../features/settings/SettingsScreen';
 import { invalidateGraph } from '../lib/invalidate';
-import { appKeyOf, type NavOverlay, useNav } from '../state/navigation';
+import { appKeyOf, HOST_HOME, type NavOverlay, useNav } from '../state/navigation';
 import { trpc } from '../trpc';
 import { Button } from '../ui/Button';
 import { EmptyState } from '../ui/EmptyState';
@@ -42,8 +46,8 @@ export function resetDetailScreenModuleForTests(): void {
 
 /**
  * Экран по текущему месту модели (спека 1б §7.1): `home` и `record` — экран записи (страница своим
- * телом, запись — шаблоном; правило открытия встраивает задача 20), экраны хоста — чат, настройки,
- * память, поиск. Над содержимым — контекст приложения рамки для ссылок (`FrameAppContext`, §7.2).
+ * телом, запись — шаблоном; рамку и место уточняет правило открытия, `useOpening`), экраны хоста —
+ * чат, настройки, память, поиск. Над содержимым — контекст приложения рамки для ссылок (`FrameAppContext`, §7.2).
  *
  * <main> — единственный вертикальный скролл-контейнер уровня приложения: sticky-шапка внутри экранов
  * прилипает к его верху. Отступ снизу — под капсулу кнопок хоста (§6.2 п. 4).
@@ -101,10 +105,57 @@ function PlaceScreen({ address }: { address: Address }) {
 /**
  * Домашняя приложения (⌂, `/`, `/a/<приложение>`) — запись «Домашняя» его оболочки экраном записи.
  * «Домой» в архиве — плашка «Домашняя в архиве — [восстановить]» (спека §6.6), а не пустота.
+ *
+ * Адрес `/a/<ref>` сперва проходит шаг 0 правила открытия (`homePlaceOf`, Фокус ревью п. 3):
+ * выключенное, архивное или «не-приложение» — хост и плашка, адрес держит плашку, а рамка — хост
+ * (место переезжает в стопку хоста: рамку рисует `model.activeApp`, R-22); оболочка хоста —
+ * синоним `/`. Живое приложение по ключу поставки — его запись. Форма «домашняя как центр» —
+ * плитки разделов над содержимым домашней (§6.2 п. 2).
  */
 function HomeScreen({ app }: { app: string }) {
-  const shell = useAppShell(app);
-  if (shell.home !== null) return <DetailScreen entityId={shell.home} />;
+  const apps = useApps();
+  const place = useMemo(
+    () =>
+      app === HOST_APP || apps.status !== 'ok'
+        ? null
+        : homePlaceOf({
+            app: { kind: 'app', ref: app },
+            apps: apps.apps,
+            hostShellId: apps.hostShell?.id ?? null,
+          }),
+    [app, apps],
+  );
+  const target = place?.kind === 'app' ? place.id : app;
+  const shell = useAppShell(target);
+  const fallback = place?.kind === 'fallback' || place?.kind === 'alias';
+  useEffect(() => {
+    if (!fallback) return;
+    const nav = useNav.getState();
+    if (place?.kind === 'alias') nav.replacePlace(HOST_HOME, HOST_APP);
+    else if (nav.model.activeApp !== HOST_APP) {
+      nav.replacePlace(currentEntry(nav.model).address, HOST_APP);
+    }
+  }, [fallback, place]);
+  // Приложения ещё едут — не «домашней нет»: адрес может оказаться выключенным или чужим.
+  if (app !== HOST_APP && apps.status === 'loading') return <ScreenFallback />;
+  if (place?.kind === 'fallback') {
+    return (
+      <>
+        <ScreenHeader title="Приложение" />
+        <OpenPlaques plaques={[place.plaque]} apps={apps} record={null} />
+      </>
+    );
+  }
+  if (shell.home !== null) {
+    return (
+      <DetailScreen
+        entityId={shell.home}
+        {...(shell.navForm === 'home-hub' && {
+          lead: <NavTilesSlot app={target} />,
+        })}
+      />
+    );
+  }
   if (shell.homeArchived !== null) return <HomeArchived id={shell.homeArchived.id} />;
   if (shell.status === 'loading') return <ScreenFallback />;
   return (

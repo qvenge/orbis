@@ -5,8 +5,10 @@ import type { TemplateCandidate, TemplateChoice } from './choose-template';
 import {
   type AppInfo,
   chooseOpening,
+  homePlaceOf,
   type OpenDecision,
   type OpenInput,
+  openPlacesOf,
   placeContendersOf,
   recordPlaceChoice,
 } from './open-rule';
@@ -534,6 +536,64 @@ describe('placeContendersOf — P для «Сменить, где открыва
     expect(placeContendersOf({ ...base, record: page(null), templates: TWO })).toBeNull();
     const record = { id: HOME, aspects: [T], home: null };
     expect(placeContendersOf({ ...base, record, templates: TWO })).toBeNull();
+  });
+});
+
+describe('homePlaceOf — шаг 0 для домашней приложения /a/<ref> (Фокус ревью п. 3)', () => {
+  const base = { apps: APPS, hostShellId: SHELL };
+  test('хост, оболочка хоста по id и по ключу', () => {
+    expect(homePlaceOf({ ...base, app: HOST })).toEqual({ kind: 'host' });
+    expect(homePlaceOf({ ...base, app: at(SHELL) })).toEqual({ kind: 'alias' });
+    expect(homePlaceOf({ ...base, app: at('host-shell') })).toEqual({ kind: 'alias' });
+  });
+  test('живое приложение — по id и по ключу поставки (живое важнее архивной копии ключа)', () => {
+    expect(homePlaceOf({ ...base, app: at(HOME) })).toEqual({ kind: 'app', id: HOME });
+    const apps = [
+      app('k-old', { supplyKey: 'k', archived: true }),
+      app('k-new', { supplyKey: 'k' }),
+    ];
+    expect(homePlaceOf({ ...base, apps, app: at('k') })).toEqual({ kind: 'app', id: 'k-new' });
+  });
+  test('выключенное, архивное, не найдено, резерв — хост и плашка', () => {
+    expect(homePlaceOf({ ...base, app: at(OFF) })).toEqual({
+      kind: 'fallback',
+      plaque: { kind: 'app-off', appId: OFF, archived: false },
+    });
+    expect(homePlaceOf({ ...base, app: at(ARCH) })).toEqual({
+      kind: 'fallback',
+      plaque: { kind: 'app-off', appId: ARCH, archived: true },
+    });
+    expect(homePlaceOf({ ...base, app: at('r-plain') })).toEqual({
+      kind: 'fallback',
+      plaque: { kind: 'app-unknown', ref: 'r-plain' },
+    });
+    expect(homePlaceOf({ ...base, app: at('budget') })).toEqual({
+      kind: 'fallback',
+      plaque: { kind: 'reserved', key: 'budget' },
+    });
+  });
+});
+
+describe('openPlacesOf — P любой длины для «⋯ → Открыть в [приложение]» (§5.4)', () => {
+  const base = { record: TASK, apps: APPS, hostShellId: SHELL, isBroken: ok };
+  const T_HOME = tpl('t-home', [T], HOME);
+
+  test('одно место — тоже пункт; выключенные и архивные вне P; порядок — как у спора', () => {
+    expect(openPlacesOf({ ...base, templates: [T_HOME] })).toEqual([HOME]);
+    const all = [
+      T_HOME,
+      tpl('t-proj', [T], PROJ),
+      tpl('t-off', [T], OFF),
+      tpl('t-arch', [T], ARCH),
+    ];
+    expect(openPlacesOf({ ...base, templates: all })).toEqual([PROJ, HOME].sort());
+    expect(openPlacesOf({ ...base, templates: [] })).toEqual([]);
+  });
+
+  test('страница и запись-приложение мест не имеют', () => {
+    expect(openPlacesOf({ ...base, record: page(null), templates: [T_HOME] })).toEqual([]);
+    const record = { id: PROJ, aspects: [T], home: null };
+    expect(openPlacesOf({ ...base, record, templates: [T_HOME] })).toEqual([]);
   });
 });
 

@@ -11,6 +11,7 @@ import { TRPCClientError, type TRPCLink } from '@trpc/client';
 import { observable } from '@trpc/server/observable';
 import { type ReactNode, StrictMode, Suspense } from 'react';
 import { afterAll, afterEach, beforeAll, expect } from 'vitest';
+import { APPS_QUERY } from '../features/apps/useApps';
 import { PAGE_TEMPLATES_QUERY } from '../features/page/usePageTemplates';
 import { SUPPLY_RECORDS_QUERY } from '../features/page/useSupplyRecords';
 import { QueryBatchProvider } from '../lib/query-blocks/batch';
@@ -222,12 +223,20 @@ export function isSupplyRecordsCall(c: { path: string; input: unknown }): boolea
   );
 }
 
+/** Вызов — список записей-приложений (срез 1б, `useApps`: правило открытия)? Экран шлёт его на каждом открытии. */
+export function isAppsListCall(c: { path: string; input: unknown }): boolean {
+  return (
+    c.path === 'entity.query' && (c.input as { query?: unknown } | undefined)?.query === APPS_QUERY
+  );
+}
+
 /**
- * Один из двух списков, которые экран записи читает на КАЖДОМ открытии (шаблоны владельца и записи
- * поставки), — сьюты, считающие свои `entity.query`, отделяют их этим предикатом.
+ * Один из трёх списков, которые экран записи читает на КАЖДОМ открытии (шаблоны владельца, записи
+ * поставки и приложения), — сьюты, считающие свои `entity.query`, отделяют их этим предикатом.
+ * Умолчание ответа — пустой список: «приложений нет» — мир, в котором сьюты писались (всё в хосте).
  */
 export function isRecordScreenListCall(c: { path: string; input: unknown }): boolean {
-  return isTemplatesListCall(c) || isSupplyRecordsCall(c);
+  return isTemplatesListCall(c) || isSupplyRecordsCall(c) || isAppsListCall(c);
 }
 
 /** Ответ одному блоку пачки: строки (сокращение для `kind:'rows'` без остатка) или сам результат. */

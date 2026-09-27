@@ -13,6 +13,7 @@ import {
   APP_NAV_FORM,
   type BlockResult,
   entityBlocksInput,
+  HOME_PROPERTY,
   PAGE_ASPECT,
   SUPPLY_ASPECT,
   SUPPLY_KEY,
@@ -20,6 +21,7 @@ import {
 import { HOME_SECTION, HOST_APP, initialModel, type NavModel } from '@orbis/shared/nav';
 import { etalonOf, type SupplyKey } from '@orbis/shared/supply';
 import { act } from '@testing-library/react';
+import { APPS_QUERY } from '../../features/apps/useApps';
 import { SUPPLY_RECORDS_QUERY } from '../../features/page/useSupplyRecords';
 import { resetNavForTests, useNav } from '../../state/navigation';
 import {
@@ -108,8 +110,22 @@ export const RECORDS_WORLD: readonly WireEntityFixture[] = [
     aspects: [APP_ASPECT],
     props: { [APP_HOME]: MY_HOME, [APP_NAV]: [MY_SECTION] },
   }),
-  wireEntity({ id: MY_HOME, title: 'Дом приложения', aspects: [PAGE_ASPECT], body: 'Дом.' }),
-  wireEntity({ id: MY_SECTION, title: 'Ремонт', aspects: [PAGE_ASPECT], body: 'Ремонт.' }),
+  // «Дом» = «Мой дом»: первое место задаёт дом (спека 1б §4.3), и правило открытия показывает эти
+  // страницы в его рамке (§7.2). Без «Дома» раздел был бы ярлыком хоста, и страница ушла бы в хост.
+  wireEntity({
+    id: MY_HOME,
+    title: 'Дом приложения',
+    aspects: [PAGE_ASPECT],
+    body: 'Дом.',
+    props: { [HOME_PROPERTY]: MY_APP },
+  }),
+  wireEntity({
+    id: MY_SECTION,
+    title: 'Ремонт',
+    aspects: [PAGE_ASPECT],
+    body: 'Ремонт.',
+    props: { [HOME_PROPERTY]: MY_APP },
+  }),
 ];
 
 export interface FrameWorld {
@@ -169,6 +185,8 @@ export function frameHandler(world: FrameWorld = frameWorld()): MockHandler {
       case 'entity.query': {
         const q = (input as { query?: string }).query ?? '';
         if (q === SUPPLY_RECORDS_QUERY) return world.supply;
+        // Записи-приложения (`useApps`): оболочка хоста и «Мой дом» — как их отдал бы сервер.
+        if (q === APPS_QUERY) return world.all.filter((e) => e.aspects.includes(APP_ASPECT));
         if (q.includes('sortBy=orbis/updated_at:desc')) return world.recordsList;
         return [];
       }

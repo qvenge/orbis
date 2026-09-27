@@ -47,7 +47,7 @@
  * Плашки шага 0 при `redirect:true` (A выключено, а шаг 1 или 4 увёл в другое приложение — буква
  * §5.2: «дальше — как A = хост», «одно → сразу туда»; R-25) живут в решении, вызвавшем замену:
  * пересчёт для заменённого адреса их уже не даст. Показать их до следующего перехода — забота web
- * (задача 20); функция остаётся функцией адреса.
+ * (`features/apps/useOpening.ts`); функция остаётся функцией адреса.
  */
 import { PAGE_ASPECT } from '../constants';
 import type { Address, AppRef } from '../nav/address';
@@ -126,7 +126,10 @@ type AddressPlace =
   | { kind: 'fallback' } // шаг 0 с плашкой: хост, адрес держит плашку
   | { kind: 'app'; app: AppInfo };
 
-function addressPlace(input: OpenInput, plaques: OpenPlaque[]): AddressPlace {
+function addressPlace(
+  input: Pick<OpenInput, 'app' | 'apps' | 'hostShellId'>,
+  plaques: OpenPlaque[],
+): AddressPlace {
   if (input.app.kind === 'host') return { kind: 'host' };
   const ref = input.app.ref;
   if (ref === HOST_SHELL_KEY || (input.hostShellId !== null && ref === input.hostShellId)) {
@@ -297,15 +300,52 @@ export function chooseOpening(input: OpenInput): OpenDecision {
 }
 
 /**
+ * Шаг 0 для домашней приложения (`/a/<ref>`): записи ещё нет — правилу открытия нечего открывать, но
+ * адрес на выключенное, архивное или «не-приложение» обязан дать хост и плашку, а не пустоту (Фокус
+ * ревью п. 3). Те же ответы, что у шага 0 `chooseOpening`: одна копия разбора адреса.
+ *  - `host` — адрес хоста; `alias` — оболочка хоста: хост, адрес нормализуется до `/`;
+ *  - `app` — живое приложение (по id или ключу поставки) — его домашняя в его рамке;
+ *  - `fallback` — хост и плашка; адрес держит плашку («включить» вернёт в то самое приложение).
+ */
+export type HomePlace =
+  | { kind: 'host' }
+  | { kind: 'alias' }
+  | { kind: 'app'; id: string }
+  | { kind: 'fallback'; plaque: OpenPlaque };
+
+export function homePlaceOf(input: Pick<OpenInput, 'app' | 'apps' | 'hostShellId'>): HomePlace {
+  const plaques: OpenPlaque[] = [];
+  const place = addressPlace(input, plaques);
+  switch (place.kind) {
+    case 'host':
+    case 'alias':
+      return place;
+    case 'app':
+      return { kind: 'app', id: place.app.id };
+    case 'fallback':
+      return { kind: 'fallback', plaque: plaques[0] as OpenPlaque };
+  }
+}
+
+/**
  * P (≥ 2) — для «Сменить, где открывать такие записи»; иначе null. Запомненный выбор спорящих не
  * отменяет (как `contendersOf` 1а): пункт меню есть и при сделанном выборе. У страницы и у
  * записи-приложения спора мест нет — их место решают шаг 1 и Р-20.
  */
 export function placeContendersOf(input: Omit<OpenInput, 'app'>): readonly string[] | null {
-  if (input.record.aspects.includes(PAGE_ASPECT)) return null;
-  if (appRecordTarget(input) !== null) return null;
-  const p = placesOf(input, { aspects: input.record.aspects });
-  return p.length > 1 ? p.map((x) => x.id) : null;
+  const p = openPlacesOf(input);
+  return p.length > 1 ? p : null;
+}
+
+/**
+ * P любой длины — для пунктов «⋯ → Открыть в [приложение]» (§5.4: «разово, для каждого приложения
+ * из P»): у единственного места пункт тоже есть — из чужой рамки туда иначе не попасть. Тот же
+ * порядок и тот же отбор, что у спора мест; у страницы и записи-приложения мест нет (шаг 1, Р-20).
+ */
+export function openPlacesOf(input: Omit<OpenInput, 'app'>): readonly string[] {
+  if (input.record.aspects.includes(PAGE_ASPECT)) return [];
+  if (appRecordTarget(input) !== null) return [];
+  return placesOf(input, { aspects: input.record.aspects }).map((x) => x.id);
 }
 
 const sameList = (a: readonly string[], b: readonly string[]) =>

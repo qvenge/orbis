@@ -90,16 +90,25 @@ const LAZY_EDITOR_MODULES = ['BodyEditor', 'MarkdownToggle'];
  * ввод нужны одной странице, а рендерер страниц эагерен в каждом открытии записи (спека 1б §12, Н-9).
  * Точка лени — `features/browser/RecordsBlockSlot.tsx` (с задачи 19 единственное место показа —
  * рендерер страниц: экран «Обзор» снят); статический импорт блока схлопнул бы чанк в чанк записи.
+ *
+ * `OpenPlaqueList` и `AppsBlock` (срез 1б, задача 20): плашки правила открытия с вопросом спора мест
+ * и блок «Приложения» нужны редкой записи и редкой странице, а правило открытия считается на каждом
+ * открытии. Точки лени — `features/apps/OpenPlaques.tsx` и `features/apps/slots.tsx`. У `AppsBlock`
+ * второй ленивый импортёр — лист «Все приложения», поэтому его держит и ребро ниже (как `RecordsBlock`).
  */
-const LAZY_DETAIL_MODULES = ['DetailMenu', 'RecordsBlock'];
+const LAZY_DETAIL_MODULES = ['DetailMenu', 'RecordsBlock', 'OpenPlaqueList', 'AppsBlock'];
 
 /**
  * Ленивые модули рамки хоста (срез 1б, задача 19): `HostMenu` — содержимое одного меню «⋯» на
  * экранах без своих пунктов (чат, настройки, «Не найдено», кадры загрузки и ошибки). Кнопка «⋯» —
  * эагерная на каждом экране (`app/frame/ScreenMenu.tsx`), Radix-меню — только нажатием. Статический
  * импорт `HostMenu` в рамку утащил бы Radix-меню во входной чанк и в первый кадр каждой записи.
+ *
+ * Задача 20: лист разделов `NavSheet` (с бейджами и ярлыками «↗ Дом»), лист «Все приложения»
+ * `AllAppsSheet` и плитки «домашней как центр» `NavTiles` — после жеста или на редкой форме; входной
+ * чанк входит в замыкание экрана записи, и их вес там лишний (РП-25, замер в отчёте задачи 20).
  */
-const LAZY_FRAME_MODULES = ['HostMenu'];
+const LAZY_FRAME_MODULES = ['HostMenu', 'NavSheet', 'AllAppsSheet', 'NavTiles'];
 
 /**
  * ТРЕТЬЯ проверка — СОСТАВ чанка, а не его наличие (Ш1, задача 11).
@@ -144,6 +153,13 @@ const FORBIDDEN_EDGES: readonly { from: string; to: string; hint: string }[] = [
     hint:
       "Ищите импортёра: `grep -rn \"RecordsBlock'\" apps/web/src --include='*.ts*'` — блок\n" +
       'грузится только через `features/browser/RecordsBlockSlot.tsx` (своя точка лени, спека 1б §12).',
+  },
+  {
+    from: 'DetailScreen',
+    to: 'AppsBlock',
+    hint:
+      "Ищите импортёра: `grep -rn \"AppsBlock'\" apps/web/src --include='*.ts*'` — блок «Приложения»\n" +
+      'грузится только через `features/apps/slots.tsx` и лист «Все приложения» (задача 20).',
   },
 ];
 

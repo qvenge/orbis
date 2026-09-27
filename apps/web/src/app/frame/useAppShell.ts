@@ -52,7 +52,10 @@ export interface AppShell {
 }
 
 const HOST_SHELL_KEY: SupplyKey = 'host-shell';
-/** Своё приложение — id записи; ключ поставки в адресе (`/a/<ключ>`) записью не читается (задача 20). */
+/**
+ * Своё приложение — id записи. Ключ поставки в адресе (`/a/<ключ>`) записью не читается: домашняя
+ * приложения сперва разрешает его в id записи (`homePlaceOf`, `router.tsx`).
+ */
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const HOST_ETALON = etalonOf(HOST_SHELL_KEY) as Extract<SupplyEtalon, { kind: 'app' }>;
 

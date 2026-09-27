@@ -29,6 +29,7 @@ import {
 } from '../../test/harness';
 import { BUILTIN_REGISTRY, registryReply } from '../../test/registry';
 import { queryClient, type RouterOutputs } from '../../trpc';
+import { APPS_QUERY } from '../apps/useApps';
 import { SUPPLY_RECORDS_QUERY } from '../page/useSupplyRecords';
 import { DetailScreen } from './DetailScreen';
 import { type DetailStructure, snapshotDetailStructure } from './structure-snapshot';
@@ -576,6 +577,9 @@ export function structureHandler(
       case 'entity.query': {
         // Записи поставки (`useSupplyRecords`): шаблон хоста по варианту фикстуры.
         if ((input as { query?: unknown }).query === SUPPLY_RECORDS_QUERY) return supplyRows;
+        // Записи-приложения (`useApps`, правило открытия): своих приложений у фикстуры нет —
+        // экран в хосте, как снят эталон 1а (оболочку хоста правило читает как сам хост).
+        if ((input as { query?: unknown }).query === APPS_QUERY) return [];
         const text = JSON.stringify(input);
         // История прогонов (useTicketRuns): дети записи с аспектом прогона.
         if (text.includes('orbis/agent-run')) return RUNS_BY_PARENT[main.id] ?? [];

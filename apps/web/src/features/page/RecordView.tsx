@@ -25,7 +25,7 @@ import {
   RegistryErrorPlaque,
   TemplatesErrorPlaque,
 } from './TemplatePlaques';
-import { usePageTemplates } from './usePageTemplates';
+import { type PageTemplates, usePageTemplates } from './usePageTemplates';
 import { useSupplyRecords } from './useSupplyRecords';
 
 type EntityGetReply = RouterOutputs['entity']['get'];
@@ -234,6 +234,7 @@ export function RecordView({
   disputeRequest,
   onConfigureTemplate,
   preview,
+  templates,
 }: {
   reply: EntityGetReply;
   /** «Открыть через X» / «через шаблон хоста» (§8.4) — разовый выбор экрана, не запоминается. */
@@ -252,9 +253,16 @@ export function RecordView({
    * другой. Плашек выбора при этом нет: выбора не было.
    */
   preview?: TemplateText;
+  /**
+   * Шаблоны рамки (срез 1б §5.1: шаблоны принадлежат приложениям) — экран записи отдаёт выбору
+   * только шаблоны приложения, в рамке которого запись показана (`useOpening`). Не задан — весь
+   * список (предпросмотр, тесты показа 1а).
+   */
+  templates?: PageTemplates;
 }) {
   const { entity } = reply;
-  const list = usePageTemplates();
+  const all = usePageTemplates();
+  const list = templates ?? all;
   const supply = useSupplyRecords();
   const { registry, failed } = useFieldCatalog();
   /**

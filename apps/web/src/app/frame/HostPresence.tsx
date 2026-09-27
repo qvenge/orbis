@@ -1,10 +1,16 @@
 import { HOME_SECTION } from '@orbis/shared/nav';
 import { ChevronDown, ChevronLeft, House } from 'lucide-react';
-import { useState } from 'react';
+import { lazy, Suspense, useState } from 'react';
 import { useNav, useShowBack } from '../../state/navigation';
-import { NavSheet } from './NavSheet';
 import { HOST_CONTROL, ScreenMenu } from './ScreenMenu';
 import { sectionTitleOf, useAppShell } from './useAppShell';
+
+/**
+ * Лист разделов — после жеста, не первому кадру (РП-25): он нужен, когда владелец раскрыл «▾», а с
+ * ним едут бейджи разделов и ярлыки «↗ Дом» (запрос страниц с «Домом»). Пока чанк едет — ничего:
+ * «▾» уже отметил `aria-expanded`, лист встанет следующим кадром.
+ */
+const NavSheet = lazy(() => import('./NavSheet').then((m) => ({ default: m.NavSheet })));
 
 /**
  * Присутствие хоста (спека 1б §6.1, §6.2 п. 1, §6.6): верхняя строка «‹ · иконка · раздел ▾ · ⌂ ⋯».
@@ -70,7 +76,9 @@ export function HostPresence() {
       </button>
       <ScreenMenu />
       {sheet && withList && (
-        <NavSheet app={app} activeSection={section} onClose={() => setSheet(false)} />
+        <Suspense fallback={null}>
+          <NavSheet app={app} activeSection={section} onClose={() => setSheet(false)} />
+        </Suspense>
       )}
     </div>
   );

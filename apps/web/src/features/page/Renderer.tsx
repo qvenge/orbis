@@ -15,6 +15,7 @@ import { useOpenRecord } from '../../app/useOpenRecord';
 import { Markdown } from '../../lib/markdown/Markdown';
 import { BodyKindProvider } from '../../lib/query-blocks/body-kind';
 import { useFieldCatalog } from '../../lib/query-blocks/useFieldCatalog';
+import { AppsBlockSlot } from '../apps/slots';
 import { RecordsBlockSlot } from '../browser/RecordsBlockSlot';
 import { OwnCards } from '../entity-detail/OwnCards';
 import { AspectCardFor, OWN_ASPECT_CARDS, RestCards } from '../entity-detail/own-cards';
@@ -44,7 +45,7 @@ import { TabsContainer } from './TabsContainer';
  *
  * Проблемы тела (`bodyIssues`, §5.5, §5.8) — плашками на месте своего узла: неуместный блок,
  * второй `{{body}}`, второй блок карточек, сломанный контейнер. Остальное тело рисуется: одна ошибка не гасит страницу.
- * Блок 1б, которого показ ещё не умеет (`{{apps}}`), — временной плашкой (`UnshownBlock`).
+ * Блоки хоста 1б — «Записи» (своей точкой лени) и «Приложения» (переключатель, срез 1б §6.2 п. 3).
  *
  * Известное расхождение с настройкой (как у первого кадра, `page-grammar.ts`): блок с отступом в
  * пункте списка препроход не видит, и на показе он — текстом, а в редакторе настройки — виджетом.
@@ -323,11 +324,8 @@ function PageNodeView({
     case 'host':
       // «Записи» — своей точкой лени (спека 1б §12, Н-9): рендерер эагерен в экране записи, а блок
       // нужен одной странице. Запись открывается в текущем разделе — поверх этой страницы.
-      return node.name === 'records' ? (
-        <RecordsBlockSlot onOpen={openEntity} />
-      ) : (
-        <UnshownBlock raw={node.raw} />
-      );
+      // «Приложения» — тоже своей точкой лени: плитки нужны «Домой» и редкой странице.
+      return node.name === 'records' ? <RecordsBlockSlot onOpen={openEntity} /> : <AppsBlockSlot />;
     case 'columns':
       return (
         <Columns>
@@ -415,22 +413,4 @@ function CardNode({ text, raw }: { text: string; raw: string }) {
     );
   }
   return <AspectCardFor aspectId={aspect.id} />;
-}
-
-/**
- * Временная плашка блока хоста 1б, которого этот рендерер ещё не рисует: `{{apps}}` («Приложения»).
- * Грамматика узнаёт его раньше, чем web умеет его показать (задача 8 плана 1б): тела поставки с
- * новыми маркерами печатаются окончательно уже сейчас, а пустое место вместо блока спрятало бы его
- * (§6.5 1а — пустоты вместо ошибки не бывает). Тон спокойный (`unresolved`): блок на своём месте,
- * чинить нечего.
- *
- * Почему временная и кто снимает (план 1б — внутрисрезовая плашка, в реестр §15 спеки не входит):
- * `host` с именем `apps` — задача 20 (переключатель приложений) заменяет эту ветку настоящим блоком,
- * и функция уходит. Ветку `ownCards` сняла задача 17 (`OwnCardsNode`), `records` — задача 18
- * (`RecordsBlockSlot`).
- */
-function UnshownBlock({ raw }: { raw: string }) {
-  return (
-    <BlockPlaque tone="unresolved" message={`Блок ${raw.trim()} этой версией не показывается.`} />
-  );
 }

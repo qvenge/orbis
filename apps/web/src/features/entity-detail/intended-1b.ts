@@ -47,7 +47,16 @@ export function withSupplyRecords(golden: Record<string, number>): Record<string
   return plusQueries(golden, 1);
 }
 
-/** Запросы, которые ОБЯЗАН сделать экран записи 1б на фикстуре эталона: эталон 1а + два списка. */
+/**
+ * 1б §5.2, С1б-16: ровно один запрос записей-приложений (`useApps`, `APPS_QUERY`) — правило открытия
+ * на каждом открытии записи. Идёт той же HTTP-пачкой, что `entity.get` (`httpBatchLink`), и не ждёт
+ * её; экран, меню и плитки читают его одним ключом.
+ */
+export function withAppsList(golden: Record<string, number>): Record<string, number> {
+  return plusQueries(golden, 1);
+}
+
+/** Запросы, которые ОБЯЗАН сделать экран записи 1б на фикстуре эталона: эталон 1а + три списка. */
 export function INTENDED_1B_REQUESTS(golden: Record<string, number>): Record<string, number> {
-  return withSupplyRecords(withTemplatesList(golden));
+  return withAppsList(withSupplyRecords(withTemplatesList(golden)));
 }
