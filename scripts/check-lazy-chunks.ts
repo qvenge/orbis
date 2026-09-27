@@ -112,6 +112,9 @@ const LAZY_DETAIL_MODULES = [
   'AppsBlock',
   'RefListControl',
   'SupplyPlaque',
+  // Задача 23: плашка выключенного расширения с «Включить» — переключатель с тостом и отменой нужен
+  // только записи с выключенным расширением (точка лени — `entity-detail/AspectSection.tsx`).
+  'ExtensionOffPlaque',
 ];
 
 /**

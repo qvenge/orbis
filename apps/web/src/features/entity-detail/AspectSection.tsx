@@ -14,8 +14,16 @@
 //
 // Правки уезжают НОВОЙ формой (§А1-1): значение — `props` по id свойства, снятие — `unset`,
 // снятие аспекта — `aspects.detach`. Старой карты «аспект → поля» этот экран больше не шлёт.
-import type { AspectDefinition, PropertyDefinition, RowRegistry } from '@orbis/shared';
+import {
+  type AspectDefinition,
+  type ExtensionId,
+  isExtensionEnabled,
+  type PropertyDefinition,
+  type RowRegistry,
+} from '@orbis/shared';
+import { lazy, Suspense } from 'react';
 import { useRefTitle } from '../../lib/entity-ref/RefField';
+import { invalidateBudget } from '../../lib/invalidate';
 import { displayText, valueText } from '../../lib/registry/format';
 import { aspectLabel, fieldLabel, type RegistryLookup } from '../../lib/registry/labels';
 import { PropertyControl } from '../../lib/registry/PropertyControl';
@@ -23,11 +31,19 @@ import { rowRegistryOf, touchesMoneyContract } from '../../lib/registry/row';
 import { useRegistry } from '../../lib/registry/useRegistry';
 import { type RouterOutputs, trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
-import { invalidateBudget } from '../budget/useBudget';
+import { useDisabledExtensions } from '../settings/extension-mask';
 import { useHostReadOnly } from './record-host';
 import { useEntityUpdate } from './useEntityDetail';
 
 type Entity = RouterOutputs['entity']['get']['entity'];
+
+/**
+ * Плашка выключенного расширения — ЛЕНИВО (вес первого кадра: докблок `ExtensionOffPlaque.tsx`).
+ * Пока чанк едет, на месте плашки пусто, но поля уже только читаются — это решает маска, а не плашка.
+ */
+const ExtensionOffPlaque = lazy(() =>
+  import('./ExtensionOffPlaque').then((m) => ({ default: m.ExtensionOffPlaque })),
+);
 
 /**
  * Тронула ли ОТПРАВЛЕННАЯ правка то, от чего зависят серверные агрегаты.
@@ -80,6 +96,10 @@ function useAspectEdits(entity: Entity) {
   // Предпросмотр шаблона (хост `readOnly`): значения — текстом по типу свойства (`displayText`),
   // без контролов и без «Снять аспект» — запись взята для примера (1а новое-5).
   const readOnly = useHostReadOnly();
+  // Маска выключенных расширений (срез 1б §8.3): поля выключенного расширения — только чтение,
+  // его аспект не снимается. Решает КОЛОНКА `module` свойства и аспекта — ровно та, по которой
+  // отказывает сервер (задача 7), поэтому экран не обещает правки, которую сервер отвергнет.
+  const disabled = useDisabledExtensions();
   const { mutation, conflict } = useEntityUpdate(entity.id, {
     /**
      * Денежные агрегаты считает сервер, и `invalidateGraph` о них не знает по построению (он
@@ -119,14 +139,22 @@ function useAspectEdits(entity: Entity) {
     mutation.mutate({ id: entity.id, aspects: { detach: [aspectId] } });
   }
 
-  return { registry, conflict, readOnly, writeProp, detach };
+  return { registry, conflict, readOnly, disabled, writeProp, detach };
 }
 
 type AspectEdits = ReturnType<typeof useAspectEdits>;
 
-/** Строки свойств для одного id — общие у секции аспекта и у секции «Свойства». */
+/**
+ * Строки свойств для одного id — общие у секции аспекта и у секции «Свойства».
+ *
+ * Только чтение — ПО СВОЙСТВУ, а не по секции: сервер отказывает ровно по `module` свойства, и у
+ * финансовой записи при выключенных Финансах сумма, валюта, направление и дата (стандартные
+ * свойства ядра, `module: null`, Р-7) правятся, а категория — нет. То же правило — в секции
+ * «Свойства»: значение, пережившее снятие аспекта, остаётся свойством своего расширения.
+ */
 function rowFor(entity: Entity, edits: AspectEdits, propertyId: string) {
   const props = entity.props as Record<string, unknown>;
+  const module = edits.registry.property(propertyId)?.module;
   return (
     <PropertyRow
       key={propertyId}
@@ -134,7 +162,7 @@ function rowFor(entity: Entity, edits: AspectEdits, propertyId: string) {
       propertyId={propertyId}
       selfId={entity.id}
       value={props[propertyId]}
-      readOnly={edits.readOnly}
+      readOnly={edits.readOnly || !isExtensionEnabled(module, edits.disabled)}
       onChange={(v) => edits.writeProp(propertyId, v)}
     />
   );
@@ -148,7 +176,13 @@ function ConflictAlert() {
   );
 }
 
-/** Секция одного аспекта: подпись, «Снять аспект», строки его состава из реестра. */
+/**
+ * Секция одного аспекта: подпись, «Снять аспект», строки его состава из реестра. У аспекта
+ * выключенного расширения на месте «Снять аспект» — плашка «Расширение «…» выключено — [Включить]»
+ * (§8.3): снять такой аспект сервер не даст, а пустое место не сказало бы почему. Плашка стоит
+ * здесь, в секции, — одно место и для своих карточек (цель и финансы рисуют секцию своего аспекта),
+ * и для общих (`{{cards}}`: проект, репозиторий).
+ */
 function SectionView({
   entity,
   aspect,
@@ -159,13 +193,16 @@ function SectionView({
   edits: AspectEdits;
 }) {
   const label = aspectLabel(edits.registry, aspect.id);
+  // Маска несёт только id словаря (`useDisabledExtensions`), поэтому «выключен» значит «аспект
+  // известного расширения» — приведение ниже не угадывает.
+  const off = !isExtensionEnabled(aspect.module, edits.disabled);
   return (
     // Notion-style свойства: секция без карточной рамки, значения — тихие контролы без бордера
     // (hover подсказывает редактируемость).
     <section data-testid={`aspect-${aspect.id}`} className="flex flex-col gap-1">
       <div className="flex items-center justify-between">
         <p className="text-2xs font-medium uppercase tracking-wide text-text-muted">{label}</p>
-        {!edits.readOnly && (
+        {!edits.readOnly && !off && (
           <Button
             variant="ghost"
             size="sm"
@@ -179,6 +216,11 @@ function SectionView({
           </Button>
         )}
       </div>
+      {off && (
+        <Suspense fallback={null}>
+          <ExtensionOffPlaque extension={aspect.module as ExtensionId} />
+        </Suspense>
+      )}
       <dl className="grid grid-cols-[minmax(7rem,max-content)_1fr] items-center gap-x-3 gap-y-0.5 text-sm">
         {orderedProperties(aspect).map((ref) => rowFor(entity, edits, ref.propertyId))}
       </dl>

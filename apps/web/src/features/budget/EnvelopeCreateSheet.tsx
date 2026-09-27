@@ -6,7 +6,7 @@
 // комбинации §2.1 держит серверная нормализация NULL→defaultCurrency (бэклог A7).
 import { type FormEvent, useState } from 'react';
 import { RefField, useRefTitle } from '../../lib/entity-ref/RefField';
-import { invalidateGraph } from '../../lib/invalidate';
+import { invalidateBudget, invalidateGraph } from '../../lib/invalidate';
 import { useRegistry } from '../../lib/registry/useRegistry';
 import { trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
@@ -15,7 +15,6 @@ import { Sheet } from '../../ui/Sheet';
 import { Spinner } from '../../ui/Spinner';
 import { useToast } from '../../ui/toast-store';
 import { FINANCE_CATEGORY } from './categories';
-import { invalidateBudget } from './useBudget';
 
 /** Границы календарного месяца 'YYYY-MM' — дефолт периода конверта (§3.1). */
 function monthRange(month: string): { start: string; end: string } {

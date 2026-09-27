@@ -20,7 +20,6 @@ import { type RouterOutputs, trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
 import { Card } from '../../ui/Card';
 import { Skeleton } from '../../ui/Skeleton';
-import { isRecurringTemplate } from '../../features/agenda/useAgenda';
 import { NativeRow } from '../../features/entity-detail/NativeRow';
 import { monthGenitive, monthTitle, Section } from './BudgetScreen';
 import {
@@ -32,7 +31,8 @@ import {
 } from '../../features/budget/EnvelopeCard';
 import { QuickAddBar } from '../../features/budget/QuickAddBar';
 import { TX_PAGE_SIZE } from '../../features/budget/txQuery';
-import { todayISO } from '../../features/budget/useBudget';
+import { todayISO } from '../../lib/dates';
+import { isRecurringTemplate } from '../../lib/recurrence';
 
 type QueryEntity = RouterOutputs['entity']['query'][number];
 

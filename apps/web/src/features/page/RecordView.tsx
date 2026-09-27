@@ -6,11 +6,11 @@ import { templateBrokenReason } from '@orbis/shared/doc/placement';
 import type { ParseRegistry } from '@orbis/shared/query';
 import { HOST_TEMPLATE_KEY } from '@orbis/shared/supply';
 import { Component, type ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
+import { useExtensionRecordHooks } from '../../app/extension-registry';
 import { ThisEntityProvider } from '../../lib/query-blocks/this-entity';
 import { useFieldCatalog } from '../../lib/query-blocks/useFieldCatalog';
 import type { RouterOutputs } from '../../trpc';
 import { Skeleton } from '../../ui/Skeleton';
-import { usePlanToFactPrompt } from '../budget/usePlanToFactPrompt';
 import { RecordHostProvider, recordHostValue, type WireEntity } from '../entity-detail/record-host';
 import { SupplyPlaqueSlot } from '../supply/SupplyPlaqueSlot';
 import { BaseRecordView } from './BaseRecordView';
@@ -275,9 +275,9 @@ export function RecordView({
   const [registryFailed, setRegistryFailed] = useState(false);
   if (failed && !registryFailed) setRegistryFailed(true);
   const reg = registry?.parse ?? null;
-  // «План → факт» — состояние хоста (Ф-1а-18): поднимает его чекбокс `{{title}}`, показывает
-  // карточка `orbis/financial`, где бы шаблон их ни поставил.
-  const planToFact = usePlanToFactPrompt();
+  // Реакции расширений — состояние хоста (Ф-1а-18): «план → факт» поднимает чекбокс `{{title}}`,
+  // показывает карточка `orbis/financial`, где бы шаблон их ни поставил.
+  const extensionHooks = useExtensionRecordHooks();
   /**
    * Шаблоны, упавшие при рендере НА ЭТОЙ записи. Поломка отрисовки зависит от данных записи, и на
    * соседней записи тот же шаблон вправе отрисоваться: память привязана к id и на переходе (экран
@@ -324,7 +324,7 @@ export function RecordView({
       : source;
   }, [hostRecord, reg, hostCrash, hostCrashKey]);
   const markHostCrashed = useCallback(() => setHostCrash(hostCrashKey), [hostCrashKey]);
-  const host = recordHostValue(reply, { planToFact, openTab: 'record', readOnly });
+  const host = recordHostValue(reply, { extensionHooks, openTab: 'record', readOnly });
   const titleOf = (id: string) => list.rows.find((r) => r.id === id)?.title ?? id;
 
   const shownId =

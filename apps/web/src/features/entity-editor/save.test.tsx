@@ -1590,6 +1590,13 @@ test('модули первого кадра не тянут схему реда
     '../apps/useOpening.ts',
     '../apps/OpenPlaques.tsx',
     '../apps/slots.tsx',
+    // Выключенное расширение (срез 1б, задача 23): маску (листовой `extension-mask.ts`) читают секции
+    // аспектов, строка записи и реакции расширений реестра на каждом открытии — эагерно; общие
+    // помощники ядра переехали из каталогов расширений в `lib/`. Сама плашка с «Включить»
+    // (`ExtensionOffPlaque.tsx`) — ленивая, сторожится своим чанком (check-lazy-chunks).
+    '../settings/extension-mask.ts',
+    '../../lib/invalidate.ts',
+    '../../lib/dates.ts',
   ]) {
     expect(
       runtimeImports(file).filter((s) => EDITOR_WEIGHT.test(s)),

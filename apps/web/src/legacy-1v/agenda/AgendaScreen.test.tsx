@@ -16,7 +16,7 @@ import { ActiveScreen } from '../../app/router';
 import { useNav } from '../../state/navigation';
 import { type MockHandler, renderWithProviders, trpcError, wireEntity } from '../../test/harness';
 import { registryReply } from '../../test/registry';
-import { todayISO } from '../../features/budget/useBudget';
+import { todayISO } from '../../lib/dates';
 import { AgendaScreen } from './AgendaScreen';
 
 const TZ = 'Europe/Moscow';

@@ -7,9 +7,10 @@
 import { type AgendaListResult, type AgendaRow, addDays } from '@orbis/shared';
 import { screen } from '@testing-library/react';
 import { expect, test } from 'vitest';
+import { todayISO } from '../../lib/dates';
+import { isRecurringTemplate } from '../../lib/recurrence';
 import { type MockHandler, renderWithProviders, wireEntity } from '../../test/harness';
-import { todayISO } from '../budget/useBudget';
-import { isRecurringTemplate, useAgendaDays, useAgendaOverdue } from './useAgenda';
+import { useAgendaDays, useAgendaOverdue } from './useAgenda';
 
 const TZ = 'Europe/Moscow';
 const today = todayISO(TZ);

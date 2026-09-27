@@ -25,7 +25,7 @@ import { VersionsCard } from './VersionsCard';
  * её карточка `orbis/financial`, которую шаблон вправе поставить в другую вкладку (Ф-1а-18).
  */
 export function TitleBlock() {
-  const { entity, planToFact } = useRecordHost();
+  const { entity, extensionHooks } = useRecordHost();
   // Флаг `conflict` этого экземпляра никуда не выведен — и не может зажечься: заголовок и
   // чекбокс сервер проводит по LWW, версию он сверяет только у правок тела (`executor.ts`, гейт
   // §5.2 под `body || bodyDoc`), так что 409 у них не бывает. Откат при прочих отказах — в
@@ -45,7 +45,7 @@ export function TitleBlock() {
         onToggleTask={(done) => {
           toggleTask(done);
           // Данные сущности ДО перевода: planned ещё true — карточка на переходе в done
-          if (done) planToFact.onTaskDone(entity);
+          if (done) extensionHooks.onTaskDone(entity);
         }}
         onSaveTitle={saveTitle}
       />

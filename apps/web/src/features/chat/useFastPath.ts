@@ -2,6 +2,7 @@ import {
   type EntityCreateInput,
   type FastPathCategory,
   type FastPathCtx,
+  isExtensionEnabled,
   newId,
   parseFastPath,
   retryCreateId,
@@ -58,6 +59,21 @@ type FastPathMeta = { entityId?: string; text: string; status: 'confirmed' | 'pe
 function fastPathCard(create: EntityCreateInput): Record<string, unknown> {
   return { ...(create.props ?? {}), title: create.title };
 }
+
+/** Создание быстрого ввода под маской (§8.4): Финансы выключены — обычная запись с текстом ввода, без финансового аспекта. */
+export function createUnderMask(
+  create: EntityCreateInput,
+  text: string,
+  disabled: readonly string[],
+): EntityCreateInput {
+  // §8.4: при выключенных Финансах быстрый ввод расхода финансовую запись не создаёт — текст становится обычной записью
+  // той же формы, что быстрый ввод «＋» без контекста (QuickCapture, root). id сохраняется: буфер идемпотентен по id.
+  if (isExtensionEnabled('finance', disabled)) return create;
+  return { id: create.id, title: text, tags: [] };
+}
+
+/** Контекст парсера и маска выключенных расширений — из одних и тех же настроек (`user.getSettings`). */
+type Loaded = { ctx: FastPathCtx; disabled: readonly string[] };
 
 export function useFastPath(threadId: string) {
   const queryClient = useQueryClient();
@@ -127,11 +143,14 @@ export function useFastPath(threadId: string) {
   }
 
   // Онлайн: свежий ctx (getData() тёплый кэш → иначе fetch, staleTime 30s).
-  async function loadCtx(): Promise<FastPathCtx> {
+  async function loadCtx(): Promise<Loaded> {
     const cats =
       utils.entity.query.getData(CATEGORY_QUERY) ??
       (await utils.entity.query.fetch(CATEGORY_QUERY));
     const settings = utils.user.getSettings.getData() ?? (await utils.user.getSettings.fetch());
+    // Маска — из тех же настроек, второго чтения нет (срез 1б §8.4, fast-path — отступление §15).
+    // Поля нет (ответ сервера до 1б в кэше) — «включено», как у `useExtensionEnabled`.
+    const disabled = settings.disabledModules ?? [];
     // Правила — getData-first, ровно как категории. Блокирующий fetch здесь означал бы
     // СЕТЬ ПЕРЕД КАЖДЫМ вводом: успешный create инвалидирует весь префикс entity.query, а
     // fetchQuery на инвалидированной query перечитывает независимо от staleTime. Карточка
@@ -142,7 +161,7 @@ export function useFastPath(threadId: string) {
     const cached = utils.entity.query.getData(MEMORY_RULES_QUERY);
     if (cached !== undefined) {
       refreshRules();
-      return mapCtx(cats, settings, cached);
+      return { ctx: mapCtx(cats, settings, cached), disabled };
     }
     // Холодный кэш (правила в этой сессии не читались): один раз ждём — иначе первый ввод
     // молча уехал бы на одни алиасы. Цена та же, что уже платят категории. Отказ запроса
@@ -161,26 +180,32 @@ export function useFastPath(threadId: string) {
       console.warn('[fast-path] правила памяти не загрузились, разбираем по алиасам:', e);
       rules = undefined;
     }
-    return mapCtx(cats, settings, rules);
+    return { ctx: mapCtx(cats, settings, rules), disabled };
   }
 
   // Офлайн: ТОЛЬКО тёплый кэш (без fetch) — иначе onlineManager заморозит запрос и submit зависнет (§2.6).
-  function cachedCtx(): FastPathCtx {
-    return mapCtx(
-      utils.entity.query.getData(CATEGORY_QUERY),
-      utils.user.getSettings.getData(),
-      utils.entity.query.getData(MEMORY_RULES_QUERY),
-    );
+  // Маски в кэше нет — «включено», как у `useExtensionEnabled`: сервер при сливе буфера последняя линия.
+  function cachedCtx(): Loaded {
+    const settings = utils.user.getSettings.getData();
+    return {
+      ctx: mapCtx(
+        utils.entity.query.getData(CATEGORY_QUERY),
+        settings,
+        utils.entity.query.getData(MEMORY_RULES_QUERY),
+      ),
+      disabled: settings?.disabledModules ?? [],
+    };
   }
 
   // Возвращает id синтетического сообщения; повторный вызов с тем же messageId ПЕРЕПИСЫВАЕТ
   // карточку (upsertNewest дедупит по id) — так «⚡ без AI» деградирует в «⏳ ждёт отправки».
   function insertCard(
-    card: Record<string, unknown>,
+    create: EntityCreateInput,
     note: string,
     fastPath: FastPathMeta,
     messageId: string = newId(),
   ): string {
+    const card = fastPathCard(create);
     const synthetic: ChatMessage = {
       id: messageId,
       threadId,
@@ -192,7 +217,9 @@ export function useFastPath(threadId: string) {
             kind: 'entity_card',
             entityId: fastPath.entityId ?? '',
             title: String(card.title ?? ''),
-            aspects: ['orbis/financial'],
+            // Аспекты — ровно те, с которыми запись создаётся: при выключенных Финансах их нет
+            // (`createUnderMask`), и карточка не должна обещать финансовую запись.
+            aspects: create.aspects ?? [],
             keyFields: card,
           },
         ],
@@ -221,19 +248,20 @@ export function useFastPath(threadId: string) {
   async function submit(text: string): Promise<void> {
     // Гейт !online — ДО любого сетевого ctx: офлайн строим ctx только из кэша, сеть не трогаем (§2.6).
     if (!online) {
-      const ctx = cachedCtx();
+      const { ctx, disabled } = cachedCtx();
       const parsed = parseFastPath(text, ctx);
       if (parsed.ok) {
+        const toCreate = createUnderMask(parsed.create, text, disabled);
         // Уверенный (категории прогреты) → retry-буфер + «⏳ ждёт отправки».
         try {
-          enqueueCreate(parsed.create, 'fast_path');
+          enqueueCreate(toCreate, 'fast_path');
         } catch {
           // localStorage недоступен (квота, private mode): Composer уже очистил поле —
           // молча потерять ввод нельзя, возвращаем его пользователю текстом заметки.
           insertSystemNote(`Не удалось сохранить запись офлайн — скопируйте текст: «${text}»`);
           return;
         }
-        insertCard(fastPathCard(parsed.create), '⏳ ждёт отправки', {
+        insertCard(toCreate, '⏳ ждёт отправки', {
           text,
           status: 'pending',
         });
@@ -248,7 +276,7 @@ export function useFastPath(threadId: string) {
       return;
     }
 
-    const ctx = await loadCtx();
+    const { ctx, disabled } = await loadCtx();
     const parsed = parseFastPath(text, ctx);
     if (!parsed.ok) {
       // Неуверенно → LLM-путь (ошибку и потерю текста закрывает useSendMessage.onError, §3).
@@ -256,15 +284,17 @@ export function useFastPath(threadId: string) {
       return;
     }
 
-    // Онлайн + уверенно → мгновенная карточка «⚡ без AI» + entity.create (оптимизм §2.5).
-    const card = fastPathCard(parsed.create);
-    const cardId = insertCard(card, '⚡ без AI', {
-      entityId: parsed.create.id,
+    // Онлайн + уверенно → мгновенная карточка «⚡ без AI» + entity.create (оптимизм §2.5). Одна
+    // переменная на все места отправки: буфер, create, повтор CONFLICT — иначе одно из них ушло бы
+    // финансовой записью мимо маски.
+    const toCreate = createUnderMask(parsed.create, text, disabled);
+    const cardId = insertCard(toCreate, '⚡ без AI', {
+      entityId: toCreate.id,
       text,
       status: 'confirmed',
     });
     try {
-      await create.mutateAsync({ input: parsed.create, source: 'fast_path' });
+      await create.mutateAsync({ input: toCreate, source: 'fast_path' });
       // §5.1: созданная сущность обязана появиться в списках Browser и счётчиках.
       // invalidateGraph, а не query-only: открытая цель считает прогресс на чтении
       // entity.get, и без него полоса осталась бы вчерашней (Р17).
@@ -282,24 +312,29 @@ export function useFastPath(threadId: string) {
         // Замещающий id ОДИН на всю ветку и детерминирован по исходному (retryCreateId):
         // тот же id уйдёт и в повтор, и в буфер, поэтому потерянный ответ не порождает
         // вторую сущность — сервер отвечает replay-успехом на свою же строку.
-        const retryId = retryCreateId(parsed.create.id ?? '');
+        const retryId = retryCreateId(toCreate.id ?? '');
         try {
           await create.mutateAsync({
-            input: { ...parsed.create, id: retryId },
+            input: { ...toCreate, id: retryId },
             source: 'fast_path',
           });
           // Карточка была вставлена ДО запроса с отвергнутым id: без переписи её «Разобрать
           // с AI» архивировал бы ЧУЖУЮ строку (NOT_FOUND), а тап открывал бы пустоту.
           // upsertNewest дедупит по messageId — карточка обновляется на месте, не мигая.
-          insertCard(card, '⚡ без AI', { entityId: retryId, text, status: 'confirmed' }, cardId);
+          insertCard(
+            toCreate,
+            '⚡ без AI',
+            { entityId: retryId, text, status: 'confirmed' },
+            cardId,
+          );
           invalidateGraph(utils);
           void utils.budget.invalidate();
         } catch {
           // Второй отказ не разбираем по кодам: карточка деградирует в «⏳ ждёт отправки»
           // тем же путём, что транспортный сбой ниже, — ввод уходит в буфер С ТЕМ ЖЕ
           // замещающим id (буфер идемпотентен по client-UUID).
-          insertCard(card, '⏳ ждёт отправки', { text, status: 'pending' }, cardId);
-          enqueueCreate({ ...parsed.create, id: retryId }, 'fast_path');
+          insertCard(toCreate, '⏳ ждёт отправки', { text, status: 'pending' }, cardId);
+          enqueueCreate({ ...toCreate, id: retryId }, 'fast_path');
           void flushBuffer();
         }
         return;
@@ -318,8 +353,8 @@ export function useFastPath(threadId: string) {
       // Транспортный сбой: карточка деградирует в «⏳ ждёт отправки» — без entityId, то есть
       // без «Разобрать с AI» (02 §2.5: действия недоступны до подтверждения сервером).
       // Иначе reparse архивировал бы несуществующий id, а буфер позже создал вторую сущность.
-      insertCard(card, '⏳ ждёт отправки', { text, status: 'pending' }, cardId);
-      enqueueCreate(parsed.create, 'fast_path');
+      insertCard(toCreate, '⏳ ждёт отправки', { text, status: 'pending' }, cardId);
+      enqueueCreate(toCreate, 'fast_path');
       void flushBuffer();
     }
   }

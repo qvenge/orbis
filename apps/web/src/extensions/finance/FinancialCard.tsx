@@ -12,12 +12,12 @@ const FINANCIAL = 'orbis/financial';
 
 /**
  * Карточка «план → факт» (§2.7) — по состоянию ХОСТА: поднимает его чекбокс `{{title}}`, где бы
- * тот ни стоял (Ф-1а-18).
+ * тот ни стоял (Ф-1а-18), через реакции расширений реестра (`useExtensionRecordHooks`).
  */
 function PlanToFactSlot() {
-  const { planToFact } = useRecordHost();
-  if (planToFact.prompt === null) return null;
-  return <PlannedToFactCard prompt={planToFact.prompt} onClose={planToFact.dismiss} />;
+  const { finance } = useRecordHost().extensionHooks;
+  if (finance.prompt === null) return null;
+  return <PlannedToFactCard prompt={finance.prompt} onClose={finance.dismiss} />;
 }
 
 export function FinancialCard() {

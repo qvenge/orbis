@@ -38,7 +38,7 @@ import { Card } from '../../ui/Card';
 import { Input } from '../../ui/Input';
 import { Spinner } from '../../ui/Spinner';
 import { FINANCE_CATEGORY, toOption } from '../../features/budget/categories';
-import { invalidateBudget } from '../../features/budget/useBudget';
+import { invalidateBudget } from '../../lib/invalidate';
 import {
   decodeCsvBytes,
   detectDelimiter,

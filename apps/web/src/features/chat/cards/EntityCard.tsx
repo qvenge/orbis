@@ -10,6 +10,7 @@ import { Card } from '../../../ui/Card';
 import { useCategoryTitle } from '../../budget/categories';
 // Валютный символ — общий envelopeView (B4-прецедент QuickAddBar), маппинг не дублируем
 import { envelopeView } from '../../budget/EnvelopeCard';
+import { useExtensionEnabled } from '../../settings/extension-mask';
 import type { EntityCardData } from './types';
 
 // inline-правка полей аспекта — на detail-экране (Task 14); в чат-карточке read-only + Undo + тап в detail (MVP §2.3)
@@ -48,7 +49,11 @@ export function EntityCard({
   const occurredOn = card.keyFields['orbis/occurred_on'];
   const direction = card.keyFields['orbis/direction'];
   const planned = card.keyFields['orbis/planned'];
+  // При выключенных Финансах остатка нет, и запроса конверта тоже (срез 1б §8.4); строка категории
+  // в сетке полей остаётся — это показ значения записи (§8.3 «записи видны»). Отступление §15.
+  const financeOn = useExtensionEnabled('finance');
   const wantRemaining =
+    financeOn &&
     confirmed &&
     !undone &&
     isFinancial &&

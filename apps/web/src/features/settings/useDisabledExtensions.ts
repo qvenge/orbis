@@ -1,30 +1,13 @@
-import {
-  EXTENSION_MANIFESTS,
-  type ExtensionId,
-  effectiveLabel,
-  OWNER_LOCALE,
-  SWITCHABLE_EXTENSION_IDS,
-} from '@orbis/shared';
-import { useCallback, useMemo } from 'react';
+import { EXTENSION_MANIFESTS, type ExtensionId, effectiveLabel, OWNER_LOCALE } from '@orbis/shared';
+import { useCallback } from 'react';
 import { invalidateGraph } from '../../lib/invalidate';
 import { trpc } from '../../trpc';
 import { useToast } from '../../ui/toast-store';
 import { UNDO_FAILED } from '../page/useUpdateBatch';
 
-const NONE: readonly ExtensionId[] = [];
-
-const isExtension = (v: unknown): v is ExtensionId =>
-  typeof v === 'string' && (SWITCHABLE_EXTENSION_IDS as readonly string[]).includes(v);
-
-/**
- * Выключенные расширения — маска владельца (`user.getSettings().disabledModules`, срез 1б §8.3).
- * Настройки не приехали — пусто: «выключено» без ответа сервера было бы догадкой.
- */
-export function useDisabledExtensions(): readonly ExtensionId[] {
-  const settings = trpc.user.getSettings.useQuery();
-  const raw = settings.data?.disabledModules;
-  return useMemo(() => (raw === undefined ? NONE : raw.filter(isExtension)), [raw]);
-}
+// Чтение маски живёт в листовом модуле (вес первого кадра записи, см. его докблок); здесь — тот же
+// интерфейс задачи 22 для настроек и плашки «Включить».
+export { useDisabledExtensions, useExtensionEnabled } from './extension-mask';
 
 /** Имя расширения владельцу — подпись манифеста в его локали. */
 export function extensionName(ext: ExtensionId): string {

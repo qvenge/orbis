@@ -11,13 +11,13 @@ import { parsePageText } from '@orbis/shared/doc/page-grammar';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
+import { useExtensionRecordHooks } from '../../app/extension-registry';
 import { BodyKindProvider } from '../../lib/query-blocks/body-kind';
 import { noteRegistryVersion, resetRegistryVersionForTests } from '../../lib/registry/useRegistry';
 import { installCrashTrap, type MockHandler, renderWithProviders } from '../../test/harness';
 import { navAt } from '../../test/nav';
 import { BUILTIN_REGISTRY } from '../../test/registry';
 import { queryClient } from '../../trpc';
-import { usePlanToFactPrompt } from '../budget/usePlanToFactPrompt';
 import { Renderer } from '../page/Renderer';
 import { BodyScreenProvider, type BodyScreenValue, bodyKindOf } from './EntityBody';
 import { AspectCardFor, RestCards } from './own-cards';
@@ -63,11 +63,11 @@ const SCREEN: BodyScreenValue = {
  */
 function Host({ id, children }: { id: string; children: ReactNode }) {
   const { get } = useEntityDetail(id);
-  const planToFact = usePlanToFactPrompt();
+  const extensionHooks = useExtensionRecordHooks();
   if (get.data === undefined) return null;
   return (
     <RecordHostProvider
-      value={recordHostValue(get.data, { planToFact, openTab: 'record', readOnly: false })}
+      value={recordHostValue(get.data, { extensionHooks, openTab: 'record', readOnly: false })}
     >
       <BodyScreenProvider value={SCREEN}>{children}</BodyScreenProvider>
     </RecordHostProvider>

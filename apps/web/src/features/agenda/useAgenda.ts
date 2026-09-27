@@ -7,8 +7,8 @@
 // ответом — клиент группирует ТОЙ ЖЕ зоной, иначе строки у полуночи уехали бы в соседнюю
 // секцию. Дата-арифметика — addDays из @orbis/shared, «сегодня» — поле ответа.
 import { type AgendaRow, addDays } from '@orbis/shared';
+import { todayISO } from '../../lib/dates';
 import { type RouterOutputs, trpc } from '../../trpc';
-import { todayISO } from '../budget/useBudget';
 
 export type AgendaEntity = RouterOutputs['entity']['query'][number];
 
@@ -37,19 +37,6 @@ function stringProp(e: AgendaEntity, propertyId: string): string | null {
 }
 
 export const endAt = (e: AgendaEntity) => stringProp(e, 'orbis/end_at');
-
-/**
- * Шаблон повторения — сущность с заданным `orbis/recurrence`. ПОВЕСТКЕ БОЛЬШЕ НЕ НУЖЕН: там
- * шаблоны прячет набор `templates` контракта повторения, объявленный подпиской (§Б5-6), а не
- * второй фильтр на клиенте.
- *
- * Функция жива ради двух читателей вне Повестки — `budget/CategoryScreen.tsx` и
- * `budget/TransactionsScreen.tsx`: своей подписки у Финансов в Б-1 ещё нет, и до неё они
- * фильтруют шаблоны сами (Б-2).
- */
-export function isRecurringTemplate(e: AgendaEntity): boolean {
-  return e.props['orbis/recurrence'] !== undefined;
-}
 
 function intl(tz: string | undefined, opts: Intl.DateTimeFormatOptions, locale: string) {
   return new Intl.DateTimeFormat(locale, { ...(tz ? { timeZone: tz } : {}), ...opts });

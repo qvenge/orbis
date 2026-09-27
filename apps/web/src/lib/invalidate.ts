@@ -71,3 +71,13 @@ export function invalidateGraph(utils: ReturnType<typeof trpc.useUtils>): void {
   // плашка молчала бы «Вы правили…» до конца `staleTime`, а «Принять все» называл бы правленую.
   void utils.supply.updates.invalidate();
 }
+
+/**
+ * Денежные агрегаты сервера (`budget.*`: остаток конверта, бейдж тревог) — звать после любой правки
+ * операций и конвертов (03-budget, B2+). Общий помощник (срез 1б §8.4, границы кода): его зовут и
+ * секции записи ядра (правка суммы — свойство ядра, Р-7), и экраны Финансов; обновление агрегатов
+ * при выключенных Финансах безвредно и остаётся (§8.4 п. 7).
+ */
+export function invalidateBudget(utils: ReturnType<typeof trpc.useUtils>): Promise<void> {
+  return utils.budget.invalidate();
+}

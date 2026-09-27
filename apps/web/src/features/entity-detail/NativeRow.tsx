@@ -10,6 +10,7 @@ import { Badge } from '../../ui/Badge';
 import { Checkbox } from '../../ui/Checkbox';
 import { formatDay } from '../browser/EntityRow';
 import { useCategoryTitle } from '../budget/categories';
+import { useExtensionEnabled } from '../settings/extension-mask';
 import { useHostReadOnly } from './record-host';
 
 type Entity = RouterOutputs['entity']['query'][number];
@@ -164,10 +165,15 @@ function MemoryRow({
  * Бейдж категории — свой компонент ради ХУКА (D6c п.2): хук обязан быть безусловным, а запрос
  * категорий не должен уходить с каждой нефинансовой строки. Пока значение неизвестно — бейджа нет
  * вовсе (D6d п.1): иначе на холодном кэше мелькал бы uuid.
+ *
+ * При выключенных Финансах бейджа нет, и запрос категорий не уходит вовсе (срез 1б §8.4): пустая
+ * ссылка выдачу не поднимает. Маску спрашивает только строка С категорией — у прочих строк этого
+ * компонента нет. Отступление §15 (код ядра знает Финансы, адрес снятия — срез 2).
  */
 function CategoryBadge({ categoryRef }: { categoryRef: string }) {
-  const { title, isPending, isError } = useCategoryTitle(categoryRef);
-  if (isPending || isError) return null;
+  const financeOn = useExtensionEnabled('finance');
+  const { title, isPending, isError } = useCategoryTitle(financeOn ? categoryRef : '');
+  if (!financeOn || isPending || isError) return null;
   return <Badge>{title}</Badge>;
 }
 

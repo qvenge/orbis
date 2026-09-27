@@ -15,29 +15,6 @@ export function monthShift(month: string, delta: -1 | 1): string {
 }
 
 /**
- * «Сегодня» 'YYYY-MM-DD' в таймзоне пользователя (03-budget §2.3): до загрузки
- * настроек / при битой tz — таймзона браузера (не роняем рендер). Общая для
- * CategoryScreen (дата запроса конверта) и QuickAddBar (occurred_on §3.6).
- */
-export function todayISO(tz?: string): string {
-  try {
-    return new Intl.DateTimeFormat('en-CA', {
-      ...(tz ? { timeZone: tz } : {}),
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-    }).format(new Date());
-  } catch {
-    return todayISO(); // невалидная tz из настроек
-  }
-}
-
-/** Инвалидация budget-запросов — звать после любой мутации транзакций/конвертов (B2+). */
-export function invalidateBudget(utils: ReturnType<typeof trpc.useUtils>) {
-  return utils.budget.invalidate();
-}
-
-/**
  * Overview месяца (§3.1). На mount ровно один budget.postDue: due-инстансы
  * recurring переходят planned→fact до чтения агрегатов (сервер идемпотентен,
  * overview сам гоняет конвейер §2.8 — вызов здесь закрывает гонку кэша).

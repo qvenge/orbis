@@ -1,8 +1,8 @@
 import { parsePageText } from '@orbis/shared/doc/page-grammar';
 import { useMemo, useRef } from 'react';
+import { useExtensionRecordHooks } from '../../app/extension-registry';
 import { ThisEntityProvider } from '../../lib/query-blocks/this-entity';
 import { type RouterOutputs, trpc } from '../../trpc';
-import { usePlanToFactPrompt } from '../budget/usePlanToFactPrompt';
 import { type BodyGate, BodyScreenProvider, bodyKindOf } from '../entity-detail/EntityBody';
 import { RecordHostProvider, recordHostValue } from '../entity-detail/record-host';
 import { detailGetInput } from '../entity-detail/useEntityDetail';
@@ -25,13 +25,13 @@ export function PageView({ reply }: { reply: EntityGetReply }) {
   const utils = trpc.useUtils();
   // Тела своим редактором страница не ставит — регистрироваться сюда некому; реф нужен форме.
   const bodyGate = useRef<BodyGate | null>(null);
-  // «План → факт» — состояние хоста, как на экране записи (Ф-1а-18): поднимает его чекбокс
-  // `{{title}}`, показывает карточка `orbis/financial`, где бы та ни стояла.
-  const planToFact = usePlanToFactPrompt();
+  // Реакции расширений — состояние хоста, как на экране записи (Ф-1а-18): «план → факт» поднимает
+  // чекбокс `{{title}}`, показывает карточка `orbis/financial`, где бы та ни стояла.
+  const extensionHooks = useExtensionRecordHooks();
   const nodes = useMemo(() => parsePageText(entity.body), [entity.body]);
   const kind = bodyKindOf(entity);
   // Корень хоста — вне вкладок: блок, стоящий не во вкладке, виден всегда (`openTab`).
-  const host = recordHostValue(reply, { planToFact, openTab: 'page', readOnly: false });
+  const host = recordHostValue(reply, { extensionHooks, openTab: 'page', readOnly: false });
   return (
     <RecordHostProvider value={host}>
       {/* Экран тела. Своим телом страница редактор записи не ставит (`{{body}}` на странице —

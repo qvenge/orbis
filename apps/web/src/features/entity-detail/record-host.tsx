@@ -1,6 +1,6 @@
 import { createContext, type ReactNode, useContext } from 'react';
+import type { ExtensionRecordHooks } from '../../app/extension-registry';
 import type { RouterOutputs } from '../../trpc';
-import type { usePlanToFactPrompt } from '../budget/usePlanToFactPrompt';
 
 /**
  * Хост записи: данные, которые примитивы обвязки (`title`, `body`, `card: X`, `subtasks`, …;
@@ -13,7 +13,7 @@ import type { usePlanToFactPrompt } from '../budget/usePlanToFactPrompt';
  * запроса записи хост не заводит.
  *
  * Два поля — не данные запроса, а СВЯЗИ экрана, которые разрез обязан сохранить (Ф-1а-18):
- * `planToFact` и `openTab`. Разведка нашла их как пропы между частями одной вкладки; шаблон
+ * `extensionHooks` (прежде `planToFact`) и `openTab`. Разведка нашла их как пропы между частями одной вкладки; шаблон
  * разносит эти части по разным местам дерева, и держать их можно только выше обоих.
  */
 
@@ -33,13 +33,14 @@ export interface RecordHostValue {
   goalProgress?: GoalProgress;
   thread: WireThread | null;
   /**
-   * Состояние карточки «план → факт» (§2.7) — общее у `{{title}}` и карточки `orbis/financial`.
+   * Реакции расширений на события записи (`useExtensionRecordHooks` реестра карточек) — сегодня
+   * «план → факт» Финансов (§2.7): общее состояние у `{{title}}` и карточки `orbis/financial`.
    *
-   * Поднимает его ТОЛЬКО чекбокс заголовка (единственный мутационный путь, `usePlanToFactPrompt`),
-   * а показывает карточка финансов. Шаблон вправе поставить их в разные вкладки: состояние,
-   * живущее в одном из двух, карточка не увидела бы никогда.
+   * Поднимает его ТОЛЬКО чекбокс заголовка (единственный мутационный путь), а показывает карточка
+   * финансов. Шаблон вправе поставить их в разные вкладки: состояние, живущее в одном из двух,
+   * карточка не увидела бы никогда. Тип — из реестра: ядро не знает каталога Финансов (§8.4).
    */
-  planToFact: ReturnType<typeof usePlanToFactPrompt>;
+  extensionHooks: ExtensionRecordHooks;
   /**
    * Открытая вкладка, на которой стоит блок; `null` — вкладка блока сейчас скрыта.
    *
@@ -116,7 +117,7 @@ export function TabPartHost({
  */
 export function recordHostValue(
   reply: EntityGetReply,
-  screen: Pick<RecordHostValue, 'planToFact' | 'openTab' | 'readOnly'>,
+  screen: Pick<RecordHostValue, 'extensionHooks' | 'openTab' | 'readOnly'>,
 ): RecordHostValue {
   return {
     entity: reply.entity,

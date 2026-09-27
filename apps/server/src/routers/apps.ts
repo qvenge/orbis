@@ -78,7 +78,7 @@ async function runAppBatch(
   ctx: { db: Db; identity: Identity },
   label: string,
   appUpdate: Record<string, unknown>,
-  modules: ReadonlyArray<{ module: string; enabled: boolean }>,
+  extensions: ReadonlyArray<{ module: string; enabled: boolean }>,
 ): Promise<{ actionId: string }> {
   const r = await execute(
     ctx.db,
@@ -93,7 +93,7 @@ async function runAppBatch(
       batchLabel: label,
       operations: [
         { tool: 'entity_update', input: appUpdate },
-        ...modules.map((m) => ({ tool: 'module_set', input: m })),
+        ...extensions.map((m) => ({ tool: 'module_set', input: m })),
       ],
     },
     { sink },
