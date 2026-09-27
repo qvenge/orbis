@@ -61,8 +61,17 @@ test('«назад» на «Домой» отпущен, но уйти неку�
   expect(window.history.length).toBe(2);
 
   // Дно стопки хоста: «назад» отпущен, `history.back()` с первой записи — пустая операция.
+  const push = vi.spyOn(window.history, 'pushState');
   await systemBack();
   expect(screen.getByRole('heading', { level: 1, name: 'Домой' })).toBeInTheDocument();
+  // Охранная сама НЕ вернулась: иначе второе нажатие, которым человек закрывает Orbis с дна, снова
+  // было бы перехвачено, и приложение не закрывалось бы вовсе. Мы на базовой записи, над ней ничего.
+  expect(push).not.toHaveBeenCalled();
+  expect((window.history.state as { guard?: boolean } | null)?.guard).toBeUndefined();
+  // Второе нажатие без переходов: перехвата нет, охранная не ставится (браузер закрыл бы Orbis).
+  await systemBack();
+  expect(push).not.toHaveBeenCalled();
+  push.mockRestore();
 
   // Человек остался и пошёл дальше.
   fireEvent.click(screen.getByTestId('nav-switch'));

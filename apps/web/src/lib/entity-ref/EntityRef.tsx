@@ -4,8 +4,8 @@ import { useNoteRegistryVersion } from '../registry/useRegistry';
 
 /**
  * Человеко-читаемая ссылка на сущность по id (вместо сырого UUID в UI).
- * Per-id entity.get уже используется PinnedList — React Query кэширует и дедупит,
- * списки короткие, сервер не трогаем. Пока грузится — skeleton под короткий текст;
+ * Per-id entity.get — React Query кэширует и дедупит одинаковые id, списки связей короткие,
+ * сервер не трогаем. Пока грузится — skeleton под короткий текст;
  * ошибка/нет данных — укороченный моноширинный id; успех — title.
  */
 export function EntityRef({ id, onOpen }: { id: string; onOpen?: (id: string) => void }) {

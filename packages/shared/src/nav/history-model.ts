@@ -268,7 +268,9 @@ function leaveSection(model: NavModel): NavModel {
 
 function applySection(model: NavModel, a: Extract<NavAction, { type: 'section' }>): NavModel {
   const isCurrent = a.app === model.activeApp && activeSectionOf(model, a.app) === a.section;
-  const m = isCurrent ? model : leaveSection(model);
+  // Уход из текущего раздела (R-31). Повторное нажатие на свой раздел исключением не делается:
+  // оно всё равно сводит стопку к корню, и снятый заранее экран хоста ничего не меняет.
+  const m = leaveSection(model);
   const existing = stackAt(m, a.app, a.section);
   // Повторное нажатие на текущий раздел — его корень; другой раздел — его стопка как есть (app
   // продолжит «назад» по ней, site покажет её верх — последнее место); нет стопки — заводится от root.
@@ -278,10 +280,8 @@ function applySection(model: NavModel, a: Extract<NavAction, { type: 'section' }
 
 function applySwitchApp(model: NavModel, a: Extract<NavAction, { type: 'switch-app' }>): NavModel {
   // Другое приложение или его домашняя — уход из текущего раздела (R-31). Иконка текущего
-  // приложения на его домашней — не уход: домашняя и так становится корнем.
-  const leaves =
-    a.app !== model.activeApp || activeSectionOf(model, model.activeApp) !== HOME_SECTION;
-  const m = leaves ? leaveSection(model) : model;
+  // приложения на его домашней исключением не делается: домашняя и так сводится к корню.
+  const m = leaveSection(model);
   const nav = own(m.apps, a.app);
   const restorable =
     !a.toHome && nav && a.app !== m.activeApp && stackAt(m, a.app, nav.activeSection);
