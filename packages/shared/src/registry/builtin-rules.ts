@@ -1,4 +1,6 @@
 import {
+  APP_HOME,
+  APP_NAV,
   APP_OPENS_OVER,
   ROLE_INSTANCE_OF,
   RULE_NEAREST_ANCESTOR,
@@ -468,6 +470,43 @@ export const RULE_APP_OPENS_OVER_NOT_SELF: RuleDefinitionInput = {
 };
 
 /**
+ * «Домашняя» приложения — не оно само (рулинг R-13 п. 2, I-2 гейта задачи 9). У «Домашней» цели нет
+ * (РП-3, «любая запись»), и запись-приложение в ней законна как значение — кроме самой себя:
+ * самоссылка доехала бы до зеркала `syncRefMirror` и CHECK `rel_no_self`, и владелец, выбравший «эту»
+ * запись в «⋯ → Сделать домашней», получил бы 500. Строка превращает это в именованный отказ
+ * `INVARIANT app_home_not_self` до эффектов ссылок. Скаляр — `=` БЕЗ стража: `empty` определён только
+ * над списком (чекер отвергает его на скалярной ссылке, `EXPR_TYPE`), а `=` с отсутствующим значением
+ * тотален сам — сравнение с `null` ложно (`expr/eval.ts`, `compare`), и приложение без «Домашней»
+ * правило не задевает.
+ */
+export const RULE_APP_HOME_NOT_SELF: RuleDefinitionInput = {
+  id: 'app_home_not_self',
+  template: 'forbidden_when',
+  undo: 'check',
+  when: { op: '=', args: [{ ctx: '$self' }, { prop: APP_HOME }] },
+  params: { property: APP_HOME },
+};
+
+/**
+ * «Навигация» приложения — без себя (рулинг R-13 п. 2): раздел, указывающий на само приложение, дал бы
+ * ту же сырую `rel_no_self`, например при «⋯ → Добавить в навигацию» из рамки самой оболочки (спека
+ * §6.4, §9.3). Форма — близнец `app_opens_over_not_self`: список, `in` со стражем `not(empty)`.
+ */
+export const RULE_APP_NAV_NOT_SELF: RuleDefinitionInput = {
+  id: 'app_nav_not_self',
+  template: 'forbidden_when',
+  undo: 'check',
+  when: {
+    op: 'and',
+    args: [
+      { op: 'not', args: [{ op: 'empty', args: [{ prop: APP_NAV }] }] },
+      { op: 'in', args: [{ ctx: '$self' }, { prop: APP_NAV }] },
+    ],
+  },
+  params: { property: APP_NAV },
+};
+
+/**
  * ЗАВИСИМОСТИ ВКЛЮЧЁННОСТИ СИСТЕМНЫХ ПРАВИЛ (§Б4-4 «отключить», Fable M-2 задачи 14): правило-ключ
  * держится на правилах-значениях и включённым без них быть не может. Пара «чего ждём»: запрет
  * `waiting_for_only_when_waiting` законен только при уборке `waiting_for` — выключи уборку при
@@ -503,7 +542,7 @@ export const BUILTIN_RULES_BY_CARRIER: Readonly<Record<string, readonly RuleDefi
   'orbis/project': [RULE_NEAREST_ANCESTOR_ROW],
   'orbis/schedule': [RULE_MATERIALIZE],
   'orbis/page': [RULE_PAGE_WINS_OVER_NEEDS_TEMPLATE, RULE_PAGE_WINS_OVER_NOT_SELF],
-  'orbis/app': [RULE_APP_OPENS_OVER_NOT_SELF],
+  'orbis/app': [RULE_APP_HOME_NOT_SELF, RULE_APP_NAV_NOT_SELF, RULE_APP_OPENS_OVER_NOT_SELF],
   'orbis/supply': [RULE_SUPPLY_KEY_UNIQUE],
   ref: [RULE_MIRROR_REF],
   dependency: [RULE_DEPENDENCY_ACYCLIC],

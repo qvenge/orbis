@@ -8,12 +8,16 @@
 import { afterAll, beforeAll, expect, test } from 'bun:test';
 import {
   APP_ASPECT,
+  APP_DISABLED,
+  APP_HOME,
+  APP_NAV,
   APP_OPENS_OVER,
   type GraphId,
   HOME_PROPERTY,
   newId,
   PAGE_ASPECT,
   SUPPLY_ASPECT,
+  SUPPLY_HASH,
   SUPPLY_KEY,
 } from '@orbis/shared';
 import { appDb, freshGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
@@ -189,4 +193,128 @@ test('записи поставки видны в обычной выдаче: �
   expect(byPage.map((r) => r.id)).toContain(records);
   const bySupply = await caller.entity.query({ query: `aspect=${SUPPLY_ASPECT}` });
   expect(bySupply.map((r) => r.id)).toContain(records);
+});
+
+// ---------------------------------------------------------------------------
+// Фикс-раунд 1 (рулинг R-13): гарантия `writer` на реестровых операциях и «без себя» у «Домашней» и
+// «Навигации».
+// ---------------------------------------------------------------------------
+
+/** Код и `reason` отказа одной строкой; успех — «ok». */
+function refusal(r: ExecuteResult): string {
+  if (r.ok) return 'ok';
+  const d = (r.error.details ?? {}) as { reason?: string; invariant?: string };
+  return `${r.error.code}/${d.invariant ?? d.reason ?? '-'}`;
+}
+
+test('R-13 п. 1: правило каталога, ПИШУЩЕЕ свойство с writer, — отказ COMPUTED_WRITE/writer (default ключа поставки, «Выключено»)', async () => {
+  const graph = await freshGraph();
+  // Поддельная оболочка: умолчание ключа поставки на «поставке» — запись владельца получила бы host-shell.
+  const forge = await run(graph, 'rule_set', {
+    target: { aspect: SUPPLY_ASPECT },
+    rule: {
+      id: 'forge_key',
+      template: 'default',
+      params: { property: SUPPLY_KEY, value: { const: 'host-shell' } },
+    },
+  });
+  expect(refusal(forge)).toBe('COMPUTED_WRITE/writer');
+  // Выключение правкой записи: умолчание «Выключено» на «приложении» (Н-8).
+  const disable = await run(graph, 'rule_set', {
+    target: { aspect: APP_ASPECT },
+    rule: {
+      id: 'auto_disable',
+      template: 'default',
+      params: { property: APP_DISABLED, value: { const: true } },
+    },
+  });
+  expect(refusal(disable)).toBe('COMPUTED_WRITE/writer');
+  // Тот же обход дельтой аспекта — тоже отказ.
+  const viaDelta = await run(graph, 'aspect_delta_set', {
+    aspect: APP_ASPECT,
+    delta: {
+      rules: [
+        {
+          id: 'auto_disable',
+          template: 'default',
+          params: { property: APP_DISABLED, value: { const: true } },
+        },
+      ],
+    },
+  });
+  expect(refusal(viaDelta)).toBe('COMPUTED_WRITE/writer');
+
+  // Сквозная проверка: запись владельца после отказов ключа не получила.
+  const app = await run(graph, 'entity_create', {
+    title: 'Своё приложение',
+    tags: [],
+    aspects: [APP_ASPECT],
+  });
+  if (!app.ok) throw new Error(`создание не прошло: ${JSON.stringify(app.error)}`);
+  const props = (app.results[0] as WireEntity).props;
+  expect(Object.hasOwn(props, APP_DISABLED)).toBe(false);
+});
+
+test('R-13 п. 1: правило, только ЧИТАЮЩЕЕ ключ поставки, законно', async () => {
+  const graph = await freshGraph();
+  const reads = await run(graph, 'rule_set', {
+    target: { aspect: SUPPLY_ASPECT },
+    rule: {
+      id: 'records_need_hash',
+      template: 'requires_when',
+      when: { op: '=', args: [{ prop: SUPPLY_KEY }, { const: 'records' }] },
+      params: { property: SUPPLY_HASH },
+    },
+  });
+  expect(refusal(reads)).toBe('ok');
+});
+
+test('R-13 п. 1: property_merge своего свойства В свойство с writer — отказ COMPUTED_WRITE/writer', async () => {
+  const graph = await freshGraph();
+  const own = await run(graph, 'property_create', {
+    key: 'user/forged-hash',
+    label: { ru: 'Поддельный отпечаток' },
+    description: { ru: 'Проба обхода гарантии writer слиянием' },
+    type: { kind: 'text' },
+    status: 'active',
+  });
+  if (!own.ok) throw new Error(`свойство не заведено: ${JSON.stringify(own.error)}`);
+  const merged = await run(graph, 'property_merge', {
+    source: 'user/forged-hash',
+    into: SUPPLY_HASH,
+  });
+  expect(refusal(merged)).toBe('COMPUTED_WRITE/writer');
+});
+
+test('R-13 п. 2: «Домашняя» и «Навигация» приложения на само приложение — INVARIANT, не 500 (rel_no_self)', async () => {
+  const graph = await freshGraph();
+  const self = newId();
+  const home = await run(graph, 'entity_create', {
+    id: self,
+    title: 'Сам себе дом',
+    tags: [],
+    aspects: [APP_ASPECT],
+    props: { [APP_HOME]: self },
+  });
+  expect(verdict(home)).toBe('INVARIANT/app_home_not_self');
+
+  const selfNav = newId();
+  const other = okId(await run(graph, 'entity_create', { title: 'Раздел', tags: [], aspects: [] }));
+  const nav = await run(graph, 'entity_create', {
+    id: selfNav,
+    title: 'Сам себе раздел',
+    tags: [],
+    aspects: [APP_ASPECT],
+    props: { [APP_NAV]: [other, selfNav] },
+  });
+  expect(verdict(nav)).toBe('INVARIANT/app_nav_not_self');
+
+  // Позитив: домашняя и разделы — другие записи; стражи `not(empty)` пускают пустые.
+  const good = await run(graph, 'entity_create', {
+    title: 'Чтение',
+    tags: [],
+    aspects: [APP_ASPECT],
+    props: { [APP_HOME]: other, [APP_NAV]: [other] },
+  });
+  expect(verdict(good)).toBe('ok');
 });

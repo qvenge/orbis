@@ -1277,7 +1277,9 @@ const ENTRIES: readonly PropertyEntry[] = [
       ru: 'Какой эталон поставки хоста принесла эта запись; по нему ищутся записи поставки и собираются обновления',
       en: 'Which host supply etalon this record came from; supply records and updates are found by it',
     },
-    // Десять ключей РП-6; `budget` зарезервирован (спека §3.4) и до 1в в варианты не входит.
+    // Десять ключей РП-6; `budget` зарезервирован (спека §3.4) и до 1в в варианты не входит. Две
+    // служебные записи (шаблон хоста, оболочка хоста «Orbis») подписаны по роли, а не заголовком:
+    // «Orbis» в карточке ключа не сказал бы, что это оболочка.
     type: {
       kind: 'select',
       options: options(
@@ -1285,9 +1287,11 @@ const ENTRIES: readonly PropertyEntry[] = [
         ['host-shell', 'Оболочка хоста', 'Host shell'],
         ['home', 'Домой', 'Home'],
         ['records', 'Записи', 'Records'],
-        ['daily-planning', 'План на день', 'Daily planning'],
-        ['upcoming', 'Предстоящее', 'Upcoming'],
-        ['all-tasks', 'Все задачи', 'All tasks'],
+        // Подписи списков — ДОСЛОВНО заголовки их записей (спека §9.4, `SEED_SMART_LISTS`): ключ в карточке
+        // «Поставки» и в фильтре не называет список третьим именем (M-1 гейта задачи 9).
+        ['daily-planning', 'Daily Planning', 'Daily Planning'],
+        ['upcoming', 'Upcoming', 'Upcoming'],
+        ['all-tasks', 'All Tasks', 'All Tasks'],
         ['horizon-year', 'Год', 'Year'],
         ['horizon-life', 'Жизнь', 'Life'],
         ['routines', 'Рутины', 'Routines'],

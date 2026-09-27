@@ -710,6 +710,16 @@ describe('гейт created_by: system (§А4-4, отказ ROLE_SYSTEM_ONLY)', (
     expect(await relCount(ticket.id, run.id, 'run')).toBe(1);
   });
 
+  test('18а. механизмы supply и app-toggle системных ролей не ставят — как владелец (M-3 гейта задачи 9)', async () => {
+    const ticket = await createEntity({ title: 'Тикет механизмов 1б' });
+    const run = await createEntity({ title: 'Прогон механизмов 1б' });
+    for (const mechanism of ['supply', 'app-toggle'] as const) {
+      const denied = err(await createRelation(ticket.id, run.id, 'run', { mechanism }));
+      expect(`${mechanism}: ${denied.error.code}`).toBe(`${mechanism}: ROLE_SYSTEM_ONLY`);
+    }
+    expect(await relCount(ticket.id, run.id, 'run')).toBe(0);
+  });
+
   test('19. хук бюджета ставит envelope-binding САМ (mechanism hook), а тот же вызов владельцем — ROLE_SYSTEM_ONLY', async () => {
     // Хук не зовёт execute — он строит операции в том же контексте и без ЯВНОЙ простановки
     // механизма унаследовал бы `user`, то есть отказал бы системе в её собственной привязке.

@@ -9,6 +9,8 @@ import { BUILTIN_RELATION_ROLE_META } from './builtin-roles';
 import {
   BUILTIN_RULE_REQUIRES,
   BUILTIN_RULES_BY_CARRIER,
+  RULE_APP_HOME_NOT_SELF,
+  RULE_APP_NAV_NOT_SELF,
   RULE_APP_OPENS_OVER_NOT_SELF,
   RULE_ASSIGNMENT_GRANT_FORBIDDEN,
   RULE_ASSIGNMENT_GRANT_REQUIRED,
@@ -66,7 +68,10 @@ describe('системные строки каталога правил (§Б4-1
       // Срез 1а §3.2: «Главнее, чем» только у шаблона; ссылка на себя — отказ.
       'page_wins_over_needs_template_for',
       'page_wins_over_not_self',
-      // Срез 1б (РП-3): уникальность живой записи поставки на ключ; «Открывать вместо» без себя.
+      // Срез 1б (РП-3): уникальность живой записи поставки на ключ; «Домашняя», «Навигация» и
+      // «Открывать вместо» без себя (R-13 п. 2 — именованный отказ вместо `rel_no_self`).
+      'app_home_not_self',
+      'app_nav_not_self',
       'app_opens_over_not_self',
       'supply_key_unique',
       'mirror_ref',
@@ -120,6 +125,8 @@ describe('системные строки каталога правил (§Б4-1
       RULE_TASK_STATUS_DEFAULT.undo,
       RULE_SUPPLY_KEY_UNIQUE.undo,
       RULE_APP_OPENS_OVER_NOT_SELF.undo,
+      RULE_APP_HOME_NOT_SELF.undo,
+      RULE_APP_NAV_NOT_SELF.undo,
     ]).toEqual([
       'check',
       'check',
@@ -137,6 +144,8 @@ describe('системные строки каталога правил (§Б4-1
       'check',
       'check',
       undefined,
+      'check',
+      'check',
       'check',
       'check',
     ]);
@@ -168,7 +177,21 @@ describe('системные строки каталога правил (§Б4-1
       params: { properties: ['orbis/supply_key'] },
     });
     expect(RULE_SUPPLY_KEY_UNIQUE.scope).toBeUndefined();
-    expect(BUILTIN_RULES_BY_CARRIER['orbis/app']).toEqual([RULE_APP_OPENS_OVER_NOT_SELF]);
+    expect(BUILTIN_RULES_BY_CARRIER['orbis/app']).toEqual([
+      RULE_APP_HOME_NOT_SELF,
+      RULE_APP_NAV_NOT_SELF,
+      RULE_APP_OPENS_OVER_NOT_SELF,
+    ]);
+    // «Домашняя» — скаляр: `=` без стража (`empty` — только над списком; `=` с null ложно).
+    expect(RULE_APP_HOME_NOT_SELF.when).toEqual({
+      op: '=',
+      args: [{ ctx: '$self' }, { prop: 'orbis/app_home' }],
+    });
+    expect(RULE_APP_NAV_NOT_SELF).toMatchObject({
+      id: 'app_nav_not_self',
+      template: 'forbidden_when',
+      params: { property: 'orbis/app_nav' },
+    });
     // Страж `not(empty)` перед `in` — как у `page_wins_over_not_self`: без него `when` отказал бы
     // EXPR_VALUE на каждом приложении без «Открывать вместо».
     expect(RULE_APP_OPENS_OVER_NOT_SELF).toMatchObject({

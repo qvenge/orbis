@@ -97,6 +97,20 @@ function roleName(def: RelationRoleDefinition | undefined, role: string): string
  * `ctx` собран в объект, а не разложен по позиционным аргументам, ровно потому, что все его
  * поля отвечают на один вопрос — «от чьего имени и что именно пишется».
  */
+/**
+ * Механизмы, которые в гейте `created_by: system` стоят НАРАВНЕ с правкой владельца (M-3 гейта
+ * задачи 9; принцип «любой механизм отнесён к гейту ЯВНО» — `invariants.ts`). `app-toggle` — это
+ * действие владельца «Выключить приложение», `supply` — перенос эталона в запись: оба пишут свойства
+ * записей, а не рёбра системных ролей (зеркало `ref` ставит `syncRefMirror` мимо этого гейта), и
+ * право ставить `run`/`envelope-binding`/`instance-of` им не нужно. Закрыто — чтобы процедура,
+ * однажды принявшая операции извне, не унаследовала его молча.
+ */
+const OWNER_LIKE_MECHANISMS: ReadonlySet<MutationMechanism> = new Set<MutationMechanism>([
+  'user',
+  'supply',
+  'app-toggle',
+]);
+
 export async function assertRoleConstraints(
   tx: Tx,
   reg: RegistrySnapshot,
@@ -129,7 +143,11 @@ export async function assertRoleConstraints(
       role: key.role,
     });
   }
-  if (def.constraints.created_by === 'system' && ctx.mechanism === 'user' && !ctx.undoReplay) {
+  if (
+    def.constraints.created_by === 'system' &&
+    OWNER_LIKE_MECHANISMS.has(ctx.mechanism) &&
+    !ctx.undoReplay
+  ) {
     throw new ExecError(
       'ROLE_SYSTEM_ONLY',
       `связь роли «${roleName(def, key.role)}» ${ctx.op === 'delete' ? 'снимает' : 'ставит'} сервер, а не пользователь (§А4-4)`,

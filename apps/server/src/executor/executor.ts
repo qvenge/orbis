@@ -165,6 +165,7 @@ import {
   assertExtensionPropsWritable,
   assertGrantAlive,
   assertRegistryTargetsEnabled,
+  assertRegistryWritersUntouched,
   assertRoutineRelationUntouchable,
   assertRoutineUntouchable,
   resolveEntityTitles,
@@ -3572,6 +3573,16 @@ function registryGate(
 }
 
 /**
+ * Гейт R-13 для операции реестра — свойства, которые она ЗАПИШЕТ мимо патча (адреса записи правил,
+ * концы слияния), не несут `flags.writer`. Вне внутреннего режима Undo — по тому же доводу, что
+ * `registryGate`. Доводы — докблок `assertRegistryWritersUntouched` (`executor/invariants.ts`).
+ */
+function writerGate(applyCtx: ExecCtx, operation: string, properties: readonly string[]): void {
+  if (applyCtx.internalUndo !== undefined) return;
+  assertRegistryWritersUntouched(applyCtx.registry, operation, properties);
+}
+
+/**
  * АДРЕСА ЗАПИСИ правила — свойства, которые оно ПИШЕТ: ставит (`default`, `on_enter_class.set`),
  * снимает (`on_enter_class.on_leave.unset`), вычисляет (`nearest_ancestor.targets`), переносит на
  * экземпляр (`materialize.inherit`/`own`). Гейт R-8 закрывает запись поля выключенного расширения
@@ -3676,6 +3687,8 @@ async function preparePropertyMerge(_ctx: ExecCtx, rawInput: unknown): Promise<P
       // `into` свойства выключенного расширения было бы записью его поля мимо трёх точек
       // исполнителя. Источник — «для порядка»: встроенным он не бывает (`MERGE_BUILTIN`).
       registryGate(applyCtx, 'property_merge', { properties: [input.source, input.into] });
+      // Гейт R-13: слияние в свойство с `writer` (или из него) записало бы его значения SQL-ом.
+      writerGate(applyCtx, 'property_merge', [input.source, input.into]);
       const merged = await mergeProperty(applyCtx.tx, applyCtx.req.identity.graph, input);
       // §Б5-5: слияние переписало props носителей — состав spent мог измениться у любого
       // конверта. Половина владельца в `registry_version` тоже сдвинулась (`registry/ops.ts`)
@@ -3781,12 +3794,15 @@ async function prepareAspectDeltaSet(_ctx: ExecCtx, rawInput: unknown): Promise<
       // Гейт R-8: настройка аспекта выключенного расширения — отказ; правила дельты (на ЛЮБОМ
       // аспекте), ПИШУЩИЕ свойство выключенного расширения, — тоже: они писали бы его поле
       // льготой правил. Отключённые правила и чтения поля гейт не трогают (`ruleWriteAddresses`).
+      const deltaWrites = (input.delta.rules ?? [])
+        .filter((r) => r.enabled !== false)
+        .flatMap((r) => ruleWriteAddresses(r));
       registryGate(applyCtx, 'aspect_delta_set', {
         aspects: [input.aspect],
-        properties: (input.delta.rules ?? [])
-          .filter((r) => r.enabled !== false)
-          .flatMap((r) => ruleWriteAddresses(r)),
+        properties: deltaWrites,
       });
+      // Гейт R-13: правило дельты, ПИШУЩЕЕ свойство с `writer`, писало бы его льготой правил.
+      writerGate(applyCtx, 'aspect_delta_set', deltaWrites);
       const before = await readAspectDelta(applyCtx.tx, applyCtx.req.identity.graph, input.aspect);
       // ПОЛЯ ПРАВИЛ ЭТОТ ТУЛ НЕ СТИРАЕТ МОЛЧА (Ф-Б2-27 (г), `aspectDeltaAfterSet`): не названные во входе
       // `rules`/`rulesDisabled` переносятся из прежней дельты, названное поле — замена (так пишет единица
@@ -4324,6 +4340,9 @@ async function prepareRuleSet(_ctx: ExecCtx, rawInput: unknown): Promise<Prepare
             ...ruleWriteAddresses(input.rule),
           ],
         });
+        // Гейт R-13: правило, ПИШУЩЕЕ свойство с `writer` (умолчание ключа поставки, «Выключено»),
+        // писало бы его на любой правке записи мимо единственного писателя. Чтения — законны.
+        writerGate(applyCtx, 'rule_set', ruleWriteAddresses(input.rule));
       }
       const target = await resolveRuleTarget(applyCtx.tx, graphId, input.target);
       const before = target.rules.find((r) => r.id === input.rule.id) ?? null;

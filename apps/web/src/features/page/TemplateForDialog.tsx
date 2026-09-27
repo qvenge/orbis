@@ -3,6 +3,7 @@ import {
   effectiveLabel,
   OWNER_LOCALE,
   PAGE_ASPECT,
+  SUPPLY_ASPECT,
   TEMPLATE_FOR_PROPERTY,
   TEMPLATE_WINS_OVER_PROPERTY,
 } from '@orbis/shared';
@@ -16,8 +17,13 @@ import type { UpdateBatchOperation } from './useUpdateBatch';
 /**
  * Чипы диалога: без служебных аспектов и без самой «страницы». Шаблон для прогонов агента или для
  * страниц владелец руками не собирает, а чип, который предлагает такое, звал бы сделать это.
+ *
+ * «Поставка» (срез 1б) — тоже нет: это метка механизма поставки (Э-19), флаг `service` у неё снят
+ * только ради видимости записей в выдачах. Шаблон «для Поставки» перехватил бы вид записей поставки,
+ * которые не страницы, — прежде всего оболочки хоста (M-2 гейта задачи 9).
  */
-const offered = (a: AspectDefinition) => !a.service && a.id !== PAGE_ASPECT;
+export const offeredForTemplate = (a: AspectDefinition) =>
+  !a.service && a.id !== PAGE_ASPECT && a.id !== SUPPLY_ASPECT;
 
 const listOf = (v: unknown): string[] =>
   Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
@@ -107,7 +113,7 @@ export function TemplateForDialog({
             label={label}
             value={draft}
             onChange={(v) => setDraft(listOf(v))}
-            offered={offered}
+            offered={offeredForTemplate}
           />
         )}
         <div className="flex justify-end gap-2">

@@ -322,6 +322,37 @@ export function assertRegistryTargetsEnabled(
 }
 
 /**
+ * ГАРАНТИЯ `writer` НА РЕЕСТРОВЫХ ОПЕРАЦИЯХ (рулинг R-13 п. 1, I-1 гейта задачи 9). Свойство с
+ * `flags.writer` пишет только названный механизм (РП-3), а гейт исполнителя (`assertPropsWritable`)
+ * видит лишь ПАТЧ. Две операции реестра пишут значения мимо патча: правило каталога — льготой правил
+ * на ближайшей правке записи (`default` на «поставке» подделал бы ключ оболочки хоста, на «приложении» —
+ * выключил бы его без `app-toggle`, Н-8), и `property_merge` — SQL-ом прямо в строках записей. Поэтому
+ * реестр отказывает правилу, ПИШУЩЕМУ такое свойство (адреса записи — `ruleWriteAddresses`
+ * исполнителя; чтения и проверки — `requires_when`, `unique_among`, `{prop}` в условии — законны), и
+ * слиянию с таким свойством на любом конце.
+ *
+ * Отказ — `COMPUTED_WRITE` с `reason: 'writer'`, как у гейта полей: это тот же запрет по ОБЪЕКТУ, и
+ * провод у него один. Свойство адресуется id или ключом; не найденное в снимке — своё, заведённое
+ * пачкой раньше, и флага `writer` у него не бывает (свои строки флагов не несут, `registry/ops.ts`).
+ * Откаты (`*_undo`) мимо — вызывающие ставят гейт только вне внутреннего режима Undo.
+ */
+export function assertRegistryWritersUntouched(
+  reg: RegistrySnapshot,
+  operation: string,
+  properties: readonly string[],
+): void {
+  for (const ref of properties) {
+    const def = reg.properties.get(ref) ?? [...reg.properties.values()].find((p) => p.key === ref);
+    if (def?.flags.writer === undefined) continue;
+    throw new ExecError(
+      'COMPUTED_WRITE',
+      `свойство «${def.id}» пишет только механизм «${def.flags.writer}» — операция «${operation}» записала бы его мимо него (РП-3)`,
+      { property: def.id, operation, reason: 'writer', writer: def.flags.writer },
+    );
+  }
+}
+
+/**
  * Тот же запрет по объекту для связей (V1.10, инвариант 6): рутина не привязывает ничего к
  * рутине или прогону и не отвязывает от них. Достаточно ОДНОГО конца-объекта — направление
  * связи ничего не меняет: и `parent` рутина→сущность, и обратная правят граф вокруг рутины.
