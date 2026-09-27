@@ -257,17 +257,137 @@ describe.each(MODES)('общее для обоих режимов: %s', (mode) =
     expect(stackOf(r.model)).toEqual([RECORDS_ROOT, CHAT, rec(1)]);
   });
 
-  test('(8) replace меняет верх стопки, source сохраняется, эффект replace', () => {
-    const refined = rec(5, YR);
+  test('(8) replace в том же приложении меняет верх стопки; source и view на месте; эффект replace', () => {
+    const refined = rec(6, XR);
+    for (const app of [undefined, X]) {
+      const r = run(
+        hostWithSections(),
+        [
+          open(rec(5, XR), X),
+          { type: 'view', patch: { tab: 'Связи' } },
+          app === undefined
+            ? { type: 'replace', address: refined }
+            : { type: 'replace', address: refined, app },
+        ],
+        mode,
+      );
+      expect(r.model.activeApp).toBe(X);
+      expect(r.model.apps[X]?.stacks[HOME_SECTION]).toEqual([
+        { address: refined, source: { app: HOST_APP, section: RECORDS }, view: { tab: 'Связи' } },
+      ]);
+      expect(r.last).toEqual({ history: 'replace' });
+    }
+  });
+
+  describe('(8) replace в другое приложение (R-22): рамка = активное приложение', () => {
+    // У X уже есть стопка раздела `s`; в хосте открыта запись, правило открытия уточнило её в X.
+    function redirected() {
+      return run(
+        hostWithSections(),
+        [
+          { type: 'switch-app', app: X, home: X_HOME },
+          { type: 'section', app: X, section: 's', root: rec(10, XR) },
+          open(rec(11, XR), X),
+          { type: 'switch-app', app: HOST_APP, home: HOST_HOME },
+          open(rec(1)),
+          { type: 'view', patch: { tab: 'Связи' } },
+          { type: 'replace', address: rec(1, XR), app: X },
+        ],
+        mode,
+      );
+    }
+
+    test('запись переехала в стопку активного раздела X с источником; эффект replace', () => {
+      const r = redirected();
+      expect(r.last).toEqual({ history: 'replace' });
+      expect(r.model.activeApp).toBe(X);
+      expect(r.model.apps[X]?.activeSection).toBe('s');
+      expect(r.model.apps[X]?.stacks.s).toEqual([
+        { address: rec(10, XR) },
+        { address: rec(11, XR) },
+        {
+          address: rec(1, XR),
+          source: { app: HOST_APP, section: RECORDS },
+          view: { tab: 'Связи' },
+        },
+      ]);
+      expect(stackOf(r.model, HOST_APP, RECORDS)).toEqual([RECORDS_ROOT]);
+    });
+
+    test('«‹» ведёт туда, откуда пришли (РП-21): app — в «Записи» хоста, site — назад браузера', () => {
+      const m = redirected().model;
+      const r = navReduce(m, BACK, mode);
+      if (mode === 'app') {
+        expect(r.effect).toEqual({ history: 'none' });
+        expect(r.model.activeApp).toBe(HOST_APP);
+        expect(r.model.apps[HOST_APP]?.activeSection).toBe(RECORDS);
+        expect(currentEntry(r.model).address).toEqual(RECORDS_ROOT);
+        expect(stackOf(r.model, X, 's')).toEqual([rec(10, XR), rec(11, XR)]);
+      } else {
+        expect(r).toEqual({ model: m, effect: { history: 'back' } });
+      }
+    });
+
+    test('иконка X теперь — иконка текущего приложения: домашняя X', () => {
+      const r = navReduce(redirected().model, { type: 'switch-app', app: X, home: X_HOME }, mode);
+      expect(r.model.activeApp).toBe(X);
+      expect(r.model.apps[X]?.activeSection).toBe(HOME_SECTION);
+      expect(stackOf(r.model)).toEqual([X_HOME]);
+    });
+
+    test('persistOf пишет адрес X в раздел X, не в раздел хоста', () => {
+      const p = persistOf(redirected().model);
+      expect(p.activeApp).toBe(X);
+      expect(p.apps[X]?.last.s).toEqual(rec(1, XR));
+      expect(p.apps[HOST_APP]?.last[RECORDS]).toEqual(RECORDS_ROOT);
+    });
+
+    test('запись, уже пришедшая из третьего приложения, сохраняет свой источник', () => {
+      const r = run(
+        hostWithSections(),
+        [open(rec(5, YR), Y), { type: 'replace', address: rec(5, XR), app: X }],
+        mode,
+      );
+      expect(r.model.activeApp).toBe(X);
+      expect(r.model.apps[X]?.stacks[HOME_SECTION]).toEqual([
+        { address: rec(5, XR), source: { app: HOST_APP, section: RECORDS } },
+      ]);
+      expect(r.model.apps[Y]?.stacks[HOME_SECTION]).toBeUndefined();
+    });
+
+    test('единственная запись хоста (вход по ссылке) — хосту места не остаётся, источника нет', () => {
+      const r = navReduce(
+        initialModel(rec(1)),
+        { type: 'replace', address: rec(1, XR), app: X },
+        mode,
+      );
+      expect(r.model.activeApp).toBe(X);
+      expect(r.model.apps[X]?.stacks[HOME_SECTION]).toEqual([{ address: rec(1, XR) }]);
+      expect(r.model.apps[HOST_APP]?.stacks[HOME_SECTION]).toBeUndefined();
+      expect(canGoBack(r.model)).toBe(false);
+    });
+  });
+
+  test('switch-app с toHome (R-23) — домашняя приложения, а не его последнее место', () => {
     const r = run(
       hostWithSections(),
-      [open(rec(5, XR), X), { type: 'replace', address: refined }],
+      [open(rec(1)), { type: 'switch-app', app: X, home: X_HOME }, open(rec(2, XR), X)],
       mode,
     );
-    expect(r.model.apps[X]?.stacks[HOME_SECTION]).toEqual([
-      { address: refined, source: { app: HOST_APP, section: RECORDS } },
-    ]);
-    expect(r.last).toEqual({ history: 'replace' });
+    const home = navReduce(
+      r.model,
+      { type: 'switch-app', app: HOST_APP, home: HOST_HOME, toHome: true },
+      mode,
+    );
+    expect(home.model.activeApp).toBe(HOST_APP);
+    expect(home.model.apps[HOST_APP]?.activeSection).toBe(HOME_SECTION);
+    expect(stackOf(home.model)).toEqual([HOST_HOME]);
+    expect(home.effect).toEqual({ history: push });
+    // Разделы хоста не тронуты: «Записи» вернутся нажатием на раздел.
+    expect(stackOf(home.model, HOST_APP, RECORDS)).toEqual([RECORDS_ROOT, rec(1)]);
+    // Без toHome — последнее место хоста.
+    const last = navReduce(r.model, { type: 'switch-app', app: HOST_APP, home: HOST_HOME }, mode);
+    expect(currentEntry(last.model).address).toEqual(rec(1));
   });
 
   test('(8а) view пишет состояние в верх стопки, null снимает ключ; эффект replace', () => {
@@ -293,6 +413,18 @@ describe.each(MODES)('общее для обоих режимов: %s', (mode) =
     );
     expect(buildAddress(currentEntry(r.model).address)).toBe(`/r/${id(1)}`);
     expect(JSON.stringify(persistOf(r.model))).not.toContain('Связи');
+  });
+
+  test('разделы с одинаковым верхом — разные места: переход между ними — честный переход', () => {
+    // «Записи» → ссылка на корень «Сегодня» (в стопку «Записей»), затем раздел «Сегодня» с тем же верхом.
+    const r = run(
+      hostWithSections(),
+      [open(TODAY_ROOT), { type: 'section', app: HOST_APP, section: TODAY, root: TODAY_ROOT }],
+      mode,
+    );
+    expect(currentEntry(r.model).address).toEqual(TODAY_ROOT);
+    expect(r.model.apps[HOST_APP]?.activeSection).toBe(TODAY);
+    expect(r.last).toEqual({ history: push });
   });
 
   test('(9) переключение раздела показывает его последнее место', () => {
@@ -559,8 +691,6 @@ describe('(11) сохранение orbis:nav:v2', () => {
           [HOST_APP]: { activeSection: 'нет', last: good.apps[HOST_APP]?.last },
         },
       },
-      // Нет хоста — «назад» с дна приложения вёл бы в никуда.
-      { v: 2, activeApp: X, apps: { [X]: good.apps[X] } },
       // Битые адреса.
       {
         v: 2,
@@ -639,6 +769,19 @@ describe('(11) сохранение orbis:nav:v2', () => {
     for (const raw of bad) expect(restoreFrom(raw)).toBeNull();
   });
 
+  test('restoreFrom: без стопки хоста (вход по ссылке сразу в приложение) — модель; назад с дна — выход', () => {
+    const m = restoreFrom({
+      v: 2,
+      activeApp: X,
+      apps: {
+        [X]: { activeSection: HOME_SECTION, last: { [HOME_SECTION]: rec(1, XR) } },
+        [HOST_APP]: { activeSection: HOME_SECTION, last: {} },
+      },
+    }) as NavModel;
+    expect(currentEntry(m)).toEqual({ address: rec(1, XR) });
+    expect(navReduce(m, BACK, 'app').effect).toEqual({ history: 'exit' });
+  });
+
   test('restoreFrom: ключи-имена свойств Object.prototype — обычные ключи, не прототип', () => {
     const raw = JSON.parse(
       `{"v":2,"activeApp":"host","apps":{"host":{"activeSection":"__proto__","last":{"__proto__":${JSON.stringify(HOST_HOME)},"constructor":${JSON.stringify(rec(1))}}}}}`,
@@ -713,11 +856,13 @@ describe('тотальность: любое действие над любой 
           root: address,
         };
       case 2:
-        return { type: 'switch-app', app, home: HOMES[app] as Address };
+        return pick(3)
+          ? { type: 'switch-app', app, home: HOMES[app] as Address }
+          : { type: 'switch-app', app, home: HOMES[app] as Address, toHome: true };
       case 3:
         return { type: 'host-screen', address: pick(2) ? CHAT : SEARCH };
       case 4:
-        return { type: 'replace', address };
+        return pick(2) ? { type: 'replace', address } : { type: 'replace', address, app };
       case 5:
         return { type: 'view', patch: pick(2) ? { tab: `t${pick(3)}` } : { tab: null } };
       default:
@@ -729,8 +874,6 @@ describe('тотальность: любое действие над любой 
     const nav = m.apps[m.activeApp] as AppNav;
     expect(Object.hasOwn(m.apps, m.activeApp)).toBe(true);
     expect(nav.stacks[nav.activeSection]?.length ?? 0).toBeGreaterThan(0);
-    const host = m.apps[HOST_APP] as AppNav;
-    expect(host.stacks[host.activeSection]?.length ?? 0).toBeGreaterThan(0);
     for (const a of Object.values(m.apps))
       for (const s of Object.values(a.stacks) as StackEntry[][])
         expect(s.length).toBeGreaterThan(0);

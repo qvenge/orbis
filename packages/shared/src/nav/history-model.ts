@@ -6,6 +6,11 @@
 // «модель + действие + режим → модель + эффект для истории браузера», поэтому в экранах нет
 // «если PWA»: web применяет эффект, модель одна.
 //
+// Рамка на экране = `model.activeApp` (R-22; задачи 19, 20): приложение, в рамке которого показан
+// верх стопки, — всегда активное приложение модели. Поэтому уточнение места правилом открытия в
+// ДРУГОЕ приложение (`replace` с `app`) переносит запись в стопку этого приложения, а не оставляет
+// её в стопке хоста под чужой рамкой — иначе иконка, сайдбар и сохранение смотрели бы не туда.
+//
 // Почему модель одна, а не две: «как сайт» отличается от «как приложение» только тем, кто ведёт
 // «назад» (браузер или стопка) и сколько записей в истории браузера. Место, которое видит владелец,
 // в обоих режимах одинаково — две модели разошлись бы на первом же переключении раздела.
@@ -18,13 +23,16 @@
 // | open из экрана хоста             | экран хоста снят; источник — раздел под ним          | replace    | push      |
 // | section на активном разделе      | стопка до корня                                      | replace    | push      |
 // | section / switch-app на другое   | его стопка (site показывает её верх — последнее место) | replace  | push      |
-// | switch-app на текущем            | домашняя приложения: HOME_SECTION, [home]            | replace    | push      |
+// | switch-app на текущем / toHome   | домашняя приложения: HOME_SECTION, [home]            | replace    | push      |
 // | host-screen (кнопки хоста)       | поверх текущего раздела; поверх экрана хоста — вместо | replace   | push      |
 // | replace (РП-21)                  | верх стопки уточнён, `source` и `view` на месте       | replace    | replace   |
+// | replace с `app` ≠ активного      | верх перенесён в стопку `app`, `source` = откуда      | replace    | replace   |
 // | view                             | состояние экрана в верх стопки, `null` снимает ключ   | replace    | replace   |
 // | back                             | app: по стопке / в источник / в хост / выход          | none, exit | back      |
 // В режиме сайта переход на то же место, что уже на экране, — `replace`, не `push`: так же поступает
-// браузер с переходом на текущий URL, и «назад» не упирается в запись-двойник.
+// браузер с переходом на текущий URL, и «назад» не упирается в запись-двойник. «То же место» — то же
+// приложение, тот же раздел и тот же адрес верха: одна запись в разделах «Записи» и «Сегодня» — два
+// места с разными заголовками, и каждое — честная запись истории.
 // Боковой чат на десктопе и окно ⌘K — не элементы истории: их ссылка — обычный `open` из содержимого.
 //
 // Функция тотальна: любое действие над любой моделью даёт модель — действие с адресом заводит
@@ -33,7 +41,9 @@
 // не применено».
 //
 // Инварианты, которые модель держит сама: стопок-пустышек нет (опустевшая стопка удаляется), у
-// активного приложения и у хоста активная стопка есть. Ключи приложений и разделов — данные
+// активного приложения активная стопка есть. У хоста её может не быть: вход по ссылке сразу в
+// приложение (`replace` с `app` на единственной записи) хосту места не оставляет — «назад» с дна
+// тогда выход, а ⌂ хоста заводит его домашнюю. Ключи приложений и разделов — данные
 // владельца (id записей), поэтому словари читаются только по СВОИМ ключам (`Object.hasOwn`), а
 // пишутся через `Object.fromEntries`: раздел по имени `constructor` или `__proto__` — обычный ключ.
 
@@ -86,9 +96,13 @@ export interface NavModel {
 export type NavAction =
   | { type: 'open'; address: Address; app: AppKey; from: 'content' | 'host-screen' } // переход по ссылке
   | { type: 'section'; app: AppKey; section: SectionKey; root: Address } // нажатие на раздел / ⌂ приложения
-  | { type: 'switch-app'; app: AppKey; home: Address } // рейка, «Приложения», ⌂ хоста
+  // рейка, «Приложения», ⌂ хоста. `toHome` (R-23): открыть домашнюю приложения, а не его последнее
+  // место, — так ⌂ хоста открывает «Домой» (спека §6.6) из любого приложения одним переходом.
+  | { type: 'switch-app'; app: AppKey; home: Address; toHome?: boolean }
   | { type: 'host-screen'; address: Address } // чат (телефон), поиск, быстрый ввод, настройки
-  | { type: 'replace'; address: Address } // РП-21: правило открытия уточнило место
+  // РП-21: правило открытия уточнило место. `app` (R-22) — приложение, в рамке которого место теперь
+  // показывается; другое, чем активное, — запись переезжает в его стопку (см. рамку в шапке модуля).
+  | { type: 'replace'; address: Address; app?: AppKey }
   | { type: 'view'; patch: Readonly<Record<string, string | null>> } // экран записал своё состояние в верх стопки
   | { type: 'back' };
 
@@ -96,7 +110,10 @@ export type NavEffect =
   | { history: 'push' } // site: честная запись истории
   | { history: 'replace' } // app: одна запись; site: замена (РП-21)
   | { history: 'back' } // site: «‹» = history.back()
-  | { history: 'none' } // app: перехваченный назад отработан моделью
+  // app: «назад» (кнопка «‹» или перехваченный системный жест) отработан моделью. Новых записей
+  // истории нет, но место на экране сменилось: web ОБЯЗАН заменить адрес в строке на адрес нового
+  // верха (`history.replaceState`) — иначе перезагрузка открыла бы снятое место.
+  | { history: 'none' }
   | { history: 'exit' }; // app: дно стопки корневого приложения — отпустить системный назад (Android закрывает Orbis)
 
 export const NAV_STORAGE_KEY = 'orbis:nav:v2';
@@ -234,9 +251,11 @@ function applySection(model: NavModel, a: Extract<NavAction, { type: 'section' }
 
 function applySwitchApp(model: NavModel, a: Extract<NavAction, { type: 'switch-app' }>): NavModel {
   const nav = own(model.apps, a.app);
-  const restorable = nav && a.app !== model.activeApp && stackAt(model, a.app, nav.activeSection);
+  const restorable =
+    !a.toHome && nav && a.app !== model.activeApp && stackAt(model, a.app, nav.activeSection);
   if (restorable) return { ...model, activeApp: a.app };
-  // Иконка текущего приложения (или приложение без стопки) — его домашняя; стопки разделов не трогаются.
+  // Иконка текущего приложения, ⌂ (`toHome`) или приложение без стопки — его домашняя; стопки
+  // разделов не трогаются.
   const home = rootEntry(stackAt(model, a.app, HOME_SECTION), a.home);
   return { ...putStack(model, a.app, HOME_SECTION, [home], HOME_SECTION), activeApp: a.app };
 }
@@ -272,6 +291,32 @@ function patchView(top: StackEntry, patch: Readonly<Record<string, string | null
   return entries.length > 0 ? { ...rest, view: Object.fromEntries(entries) } : rest;
 }
 
+/**
+ * Уточнение места в другом приложении (R-22): верх текущей стопки снимается и ложится в стопку
+ * активного раздела `app` — рамка на экране и есть активное приложение. Источник — «откуда пришли»
+ * (РП-21): у записи, уже пришедшей из третьего приложения, — её прежний источник (текущий раздел
+ * был лишь транзитом); иначе — текущий раздел, если в нём что-то осталось. `view` едет с записью:
+ * это тот же экран.
+ */
+function applyReplaceToApp(model: NavModel, address: Address, app: AppKey): NavModel {
+  const cur = model.activeApp;
+  const curSection = activeSectionOf(model, cur);
+  const stack = activeStack(model) ?? [];
+  const top = stack[stack.length - 1];
+  const rest = stack.slice(0, -1);
+  const source = top?.source ?? (rest.length > 0 ? { app: cur, section: curSection } : undefined);
+  const moved: StackEntry = { address };
+  if (source) moved.source = source;
+  if (top?.view) moved.view = top.view;
+  const m = stack.length > 0 ? putStack(model, cur, curSection, rest) : model;
+  const targetSection = activeSectionOf(m, app);
+  const targetStack = stackAt(m, app, targetSection) ?? [];
+  return {
+    ...putStack(m, app, targetSection, [...targetStack, moved], targetSection),
+    activeApp: app,
+  };
+}
+
 /** «Назад» приложения (app): по стопке, в источник, с дна — в хост, с дна хоста — выход. */
 function backInApp(model: NavModel): { model: NavModel; effect: NavEffect } {
   const app = model.activeApp;
@@ -299,12 +344,23 @@ function backInApp(model: NavModel): { model: NavModel; effect: NavEffect } {
   return { model, effect: { history: 'exit' } };
 }
 
+/** Место на экране: приложение, раздел и адрес верха (M-1 гейта: адреса мало — разные разделы). */
+function samePlace(a: NavModel, b: NavModel): boolean {
+  const ta = topOf(a);
+  const tb = topOf(b);
+  return (
+    ta !== undefined &&
+    tb !== undefined &&
+    a.activeApp === b.activeApp &&
+    activeSectionOf(a, a.activeApp) === activeSectionOf(b, b.activeApp) &&
+    sameAddress(ta.address, tb.address)
+  );
+}
+
 /** Эффект перехода: app — одна запись истории (замена URL), site — честная запись, если место сменилось. */
 function moveEffect(before: NavModel, after: NavModel, mode: LaunchMode): NavEffect {
   if (mode === 'app') return { history: 'replace' };
-  const a = topOf(before);
-  const b = topOf(after);
-  return a && b && sameAddress(a.address, b.address) ? { history: 'replace' } : { history: 'push' };
+  return samePlace(before, after) ? { history: 'replace' } : { history: 'push' };
 }
 
 export function navReduce(
@@ -324,7 +380,10 @@ export function navReduce(
       return move(applyHostScreen(model, action.address));
     case 'replace':
       return {
-        model: mapTop(model, (top) => ({ ...top, address: action.address })),
+        model:
+          action.app !== undefined && action.app !== model.activeApp
+            ? applyReplaceToApp(model, action.address, action.app)
+            : mapTop(model, (top) => ({ ...top, address: action.address })),
         effect: { history: 'replace' },
       };
     case 'view':
@@ -435,8 +494,8 @@ function addressOf(x: unknown): Address | null {
 /**
  * Сохранение → модель со стопками `[последнее место]`. Любая чужая форма — `null` (web начнёт с
  * `initialModel`): старое `orbis:nav:v1` (`{state:{activeTab,…}}`) не читается и не переносится
- * (§7.3), битое место не угадывается. Обязательны активная стопка активного приложения и хоста —
- * иначе модель нарушила бы свои инварианты.
+ * (§7.3), битое место не угадывается. Обязательна активная стопка активного приложения — иначе
+ * модель нарушила бы свой инвариант; хоста может не быть (см. инварианты в шапке).
  */
 export function restoreFrom(raw: unknown): NavModel | null {
   if (!isObj(raw) || raw.v !== 2 || typeof raw.activeApp !== 'string' || !isObj(raw.apps))
@@ -453,7 +512,5 @@ export function restoreFrom(raw: unknown): NavModel | null {
     apps.push([app, { activeSection: nav.activeSection, stacks: Object.fromEntries(stacks) }]);
   }
   const model: NavModel = { activeApp: raw.activeApp, apps: Object.fromEntries(apps) };
-  if (!activeStack(model) || !stackAt(model, HOST_APP, activeSectionOf(model, HOST_APP)))
-    return null;
-  return model;
+  return activeStack(model) ? model : null;
 }
