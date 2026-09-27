@@ -114,7 +114,12 @@ export type ExecErrorCode =
   | 'RULE_CONFLICT'
   /** §Б3-3: `deref` в C-области правила записи — имя из shared (см. докблок выше), бросает чекер E по
    *  флагу области `derefDenied`. `details: {path, rule?, template}` (задача 1). */
-  | typeof DEREF_IN_CONSTRAINT;
+  | typeof DEREF_IN_CONSTRAINT
+  // --- Срез 1б: страницы и приложения ---
+  /** Спека 1б §8.6, Э-18: граф старой формы (списки без аспекта «поставка», оболочки хоста нет) —
+   *  вход его не заводит и ничего не пишет; переводит его прод-процедура `migrate-1b` (задача 13).
+   *  Бросает `setupGraph` (задача 12). */
+  | 'GRAPH_NEEDS_MIGRATION';
 
 export class ExecError extends Error {
   readonly code: ExecErrorCode;
@@ -195,6 +200,12 @@ const TRPC_CODE_BY_EXEC: Record<ExecErrorCode, TRPCError['code']> = {
   BATCH_UNBOUNDED: 'BAD_REQUEST',
   RULE_CONFLICT: 'BAD_REQUEST',
   [DEREF_IN_CONSTRAINT]: 'BAD_REQUEST',
+  // --- Срез 1б ---
+  // 409 — как у REGISTRY_CONFLICT: состояние графа разошлось с тем, на которое рассчитан код, и снимает
+  // это не другой ввод, а перевод данных (`migrate-1b`). НЕ 412: `PRECONDITION_FAILED` на проводе занят
+  // «клиент устарел» — web-линк на любой такой ответ показывает экран обновления, а `cause` по HTTP не
+  // сериализуется (R-19). У `seedOnboarding` другого CONFLICT нет — по нему web и ветвится.
+  GRAPH_NEEDS_MIGRATION: 'CONFLICT',
 };
 
 export function execErrorToTRPC(error: StructuredError): TRPCError {

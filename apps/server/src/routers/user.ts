@@ -13,7 +13,7 @@ import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { userSettings } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
-import { execErrorToTRPC } from '../errors';
+import { ExecError, execErrorToTRPC } from '../errors';
 import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
 import { exportData, type OrbisExport } from '../export';
@@ -53,11 +53,19 @@ const journalSink = makeChatJournalSink();
 export const userRouter = router({
   // §9.3: сид/настройки/экспорт — управление аккаунтом, PAT-агенту закрыто (ownerOnly);
   // read-путь getSettings остаётся protectedProcedure — агенту нужны timezone/currency.
-  // Идемпотентно (02 §7): { seeded: false } — «онбординг уже был», ответ про фазу настроек,
-  // а не про граф (сев мира идёт на каждом заходе и держится пробой по PK, Р-24-6). Транзакций
-  // ТРИ, а не одна: мир пачкой через исполнитель, настройки с тредом, садовник словаря
-  // (рулинг Р-17-1, разбор — в докблоке seedOwner).
-  seedOnboarding: ownerOnlyProcedure.mutation(({ ctx }) => seedOwner(ctx.db, ctx.identity)),
+  // Заведение графа (срез 1б §8.6, РП-15): `{seeded: true}` — граф завёл этот вызов, `{seeded:
+  // false}` — граф уже заведён, и вход не записал НИЧЕГО (С1б-5). Граф старой формы — отказ
+  // `GRAPH_NEEDS_MIGRATION` структурной ошибкой, как у прочих ручек исполнителя.
+  seedOnboarding: ownerOnlyProcedure.mutation(async ({ ctx }) => {
+    try {
+      return await seedOwner(ctx.db, ctx.identity);
+    } catch (e) {
+      if (e instanceof ExecError) {
+        throw execErrorToTRPC({ code: e.code, message: e.message, details: e.details });
+      }
+      throw e;
+    }
+  }),
 
   getSettings: protectedProcedure.query(
     ({ ctx }): Promise<WireUserSettings> =>

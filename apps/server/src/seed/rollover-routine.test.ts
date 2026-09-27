@@ -6,6 +6,7 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { type GraphId, newId } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
+import { enableFinanceForTest } from '../../test/finance-on';
 import { appDb, freshGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
 import { activeRoutines, type RoutineRow, routineById } from '../agent-loop/queries';
 import { withIdentity } from '../db/with-identity';
@@ -20,6 +21,7 @@ import { agentLoopHelpers, T0 } from '../test/agent-loop-helpers';
 import { type RoutineRef, routineToolAllowed } from '../tools/registry';
 import { createCallerFactory } from '../trpc';
 import { seedRoutineId } from './gardener';
+import { seedOwnerGraph } from './onboarding';
 import {
   ROLLOVER_ROUTINE_ALLOWED_TOOLS,
   ROLLOVER_ROUTINE_BODY,
@@ -65,11 +67,22 @@ describe('сид рутины «Перенос остатков» (В-4, Р-29)'
     const id = seedRoutineId(owner, ROLLOVER_ROUTINE_SLUG);
     expect(await routineTitles(owner)).toContain(ROLLOVER_ROUTINE_TITLE);
     expect(await seedRolloverRoutine(db, personal(owner))).toEqual({ seeded: false, id });
-    // Одна, а не две: и прямой повтор сева, и повтор ручки держит проба по PK.
+    // Одна, а не две: прямой повтор сева держит проба по PK, повтор ручки — признак «граф заведён».
     expect(await callerFor(owner).user.seedOnboarding()).toEqual({ seeded: false });
     expect((await routineTitles(owner)).filter((t) => t === ROLLOVER_ROUTINE_TITLE)).toHaveLength(
       1,
     );
+  });
+
+  test('рутина сеется ТОЛЬКО при заведении графа: граф заведён без рутин — вход её не досевает (С1б-5)', async () => {
+    // Досевов на входе больше нет (спека 1б §8.6): «Перенос остатков» — часть заведения графа, а вход,
+    // на котором оболочка хоста уже есть, не пишет ничего. Граф, заведённый входом фикстур без рутин
+    // (`seedOwnerGraph`), так и остаётся без неё.
+    const owner = await freshGraph();
+    await seedOwnerGraph(db, personal(owner));
+    expect(await routineTitles(owner)).not.toContain(ROLLOVER_ROUTINE_TITLE);
+    expect(await callerFor(owner).user.seedOnboarding()).toEqual({ seeded: false });
+    expect(await routineTitles(owner)).not.toContain(ROLLOVER_ROUTINE_TITLE);
   });
 
   test('доверенность: белый список РОВНО budget_rollover; стадия paused — включает владелец (рулинг 10-1)', async () => {
@@ -165,6 +178,8 @@ describe('прогон рутины «Перенос остатков» (Р-К-3
   test('вызов budget_rollover из прогона — ОТЛОЖЕННАЯ единица; конвертов нет до «Принять», после — есть, с атрибуцией прогона', async () => {
     const owner = await freshGraph();
     await callerFor(owner).user.seedOnboarding();
+    // Сьют проверяет перенос остатков Финансов — включены явно (РП-36): граф заводится с выключенными.
+    await enableFinanceForTest(owner);
     const category = await anyCategory(owner);
     const categoryId = category.id;
     const routineId = seedRoutineId(owner, ROLLOVER_ROUTINE_SLUG);

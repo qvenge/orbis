@@ -193,20 +193,17 @@ describe('сид садовника словаря (Р-17-1)', () => {
     expect(await routineRows(owner)).toHaveLength(1);
   });
 
-  test('садовник ДОСЕВАЕТСЯ владельцу, у которого онбординг уже был, а садовника нет (почему проба по PK, а не guard настроек)', async () => {
-    // Сценарий Р-17-1 живьём: первая фаза закоммитилась, вторая упала (кончился коннекшн,
-    // отказ валидатора — что угодно). Guard настроек на следующем заходе ответил бы
-    // «онбординг уже был» и не досеял бы садовника НИКОГДА.
+  test('садовник сеется ТОЛЬКО при заведении графа: граф заведён без рутин — вход его не досевает (С1б-5)', async () => {
+    // Досевов на входе больше нет (спека 1б §8.6, уточнение Н-4): садовник — часть заведения графа,
+    // а вход, на котором оболочка хоста уже есть, не пишет ничего. Граф, заведённый входом фикстур
+    // без рутин (`seedOwnerGraph`), так и остаётся без садовника.
     const owner = await freshGraph();
     await seedOwnerGraph(db, personal(owner));
     expect(await routineRows(owner)).toHaveLength(0);
 
     const caller = callerFor(owner);
-    // Ручка честно говорит «онбординг уже был» — и всё-таки досевает садовника.
     expect(await caller.user.seedOnboarding()).toEqual({ seeded: false });
-    const rows = await routineRows(owner);
-    expect(rows).toHaveLength(1);
-    expect(rows[0]?.id).toBe(seedRoutineId(owner, GARDENER_SLUG));
+    expect(await routineRows(owner)).toHaveLength(0);
   });
 
   test('доверенность садовника: act, белый список РОВНО property_merge, понедельник 09:00, стадия active', async () => {

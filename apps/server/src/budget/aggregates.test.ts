@@ -9,6 +9,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import type { GraphId } from '@orbis/shared';
 import { type BudgetOverview, type BudgetStatusResult, newId } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
+import { enableFinanceForTest } from '../../test/finance-on';
 import {
   appDb,
   executeWithFixtureCategories as execute,
@@ -186,6 +187,8 @@ function envById(ov: BudgetOverview, id: string) {
 beforeAll(async () => {
   await truncateAll();
   await seedOwnerGraph(db, personal(userA));
+  // Сьют проверяет Финансы — включены явно (РП-36): граф заводится с выключенными, как в бою.
+  await enableFinanceForTest(userA);
 
   // Иерархия §2.10: родительская категория → дочерняя (relation parent)
   catParent = (
@@ -338,6 +341,7 @@ describe('«конверт-родитель» — одна роль envelope-bin
 
   beforeAll(async () => {
     await seedOwnerGraph(db, personal(userC));
+    await enableFinanceForTest(userC);
     envC = (await exec(userC, 'entity_create', envelope(catC, cmStart, cmEnd, '10000.00'))).id;
     // Транзакция ЧУЖОЙ категории — авто-привязка (A4) её к этому конверту не ставит…
     txnManual = (await exec(userC, 'entity_create', txn(catOther, '700.00', today))).id;

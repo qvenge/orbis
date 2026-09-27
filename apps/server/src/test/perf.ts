@@ -12,6 +12,7 @@ import type { GraphId } from '@orbis/shared';
 import { newId, ORBIS_NAMESPACE } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import { v5 as uuidv5 } from 'uuid';
+import { enableFinanceForTest } from '../../test/finance-on';
 import { adminDb, personal } from '../../test/helpers';
 import type { Db } from '../db/client';
 import { execute } from '../executor/executor';
@@ -183,6 +184,8 @@ const PRIORITIES = ['low', 'medium', 'high'] as const;
  */
 export async function seedPerfFixture(db: Db, graphId: GraphId): Promise<void> {
   await seedOwnerGraph(db, personal(graphId));
+  // Сьют проверяет Финансы — включены явно (РП-36): граф заводится с выключенными, как в бою.
+  await enableFinanceForTest(graphId);
 
   const today = todayInSeedTz();
   const curStart = monthStart(today);

@@ -42,7 +42,10 @@ import {
   ROUTINE_TOOLS_PROPERTY,
 } from '../../apps/server/src/policy/confirmation.ts';
 import { effectiveRegistry } from '../../apps/server/src/registry/cache.ts';
-import { disabledExtensionsOf } from '../../apps/server/src/registry/extensions.ts';
+import {
+  disabledExtensionsOf,
+  setExtensionDisabled,
+} from '../../apps/server/src/registry/extensions.ts';
 import type { RegistrySnapshot } from '../../apps/server/src/registry/load.ts';
 import { buildRoutineContext } from '../../apps/server/src/routines/context.ts';
 import { routineHistory } from '../../apps/server/src/routines/lifecycle.ts';
@@ -207,11 +210,17 @@ export interface ProbeOwner {
 /**
  * Свежий владелец стенда: боевой сид мира (`seedOwner`) на СЛУЧАЙНОМ графе — чужих данных стенд
  * не трогает. `seeded: false` значило бы, что граф не наш, и канал собрался бы по чужому реестру.
+ *
+ * ФИНАНСЫ ВКЛЮЧАЮТСЯ ЯВНО (РП-36): с 1б заведение графа выключает их, а замеры промпта и пробы П1/П3/П4
+ * ведутся при «всех расширениях включены», как до 1б, — иначе `prompt-size` разошёлся бы с прежним
+ * замером по причине, не связанной с промптом. Прямой записью маски, мимо исполнителя: сообщение
+ * журнала `module_set` легло бы в глобальный тред и вошло бы в контекст замера.
  */
 export async function probeOwner(db: Db): Promise<ProbeOwner> {
   const who = identityOfPerson(parseAccountId(crypto.randomUUID()));
   const seeded = await seedOwner(db, who);
   if (!seeded.seeded) throw new Error('сид владельца стенда вернул seeded: false — граф не наш');
+  await withIdentity(db, who, (tx) => setExtensionDisabled(tx, who.graph, 'finance', false));
   const threadId = await withIdentity(db, who, (tx) => ensureGlobalThread(tx, who.graph));
   return { who, threadId };
 }

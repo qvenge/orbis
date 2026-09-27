@@ -22,6 +22,7 @@ import {
 } from '@orbis/shared';
 import { TRPCError } from '@trpc/server';
 import { and, eq, sql } from 'drizzle-orm';
+import { enableFinanceForTest } from '../../test/finance-on';
 import {
   adminDb,
   appDb,
@@ -85,6 +86,8 @@ function ownerCaller(user: GraphId, provider?: LLMProvider, entitlements?: Entit
 async function freshOwner(): Promise<{ user: GraphId; foodId: string; transportId: string }> {
   const user = await freshGraph();
   await seedOwnerGraph(db, personal(user));
+  // Сьют проверяет Финансы — включены явно (РП-36): граф заводится с выключенными, как в бою.
+  await enableFinanceForTest(user);
   return {
     user,
     foodId: seedCategoryId(user, 'food'),

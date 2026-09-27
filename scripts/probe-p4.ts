@@ -61,6 +61,7 @@ import { identityOfPerson, parseAccountId } from '../apps/server/src/identity';
 import { type LLMProviderEnv, makeLLMProvider } from '../apps/server/src/llm/provider';
 import type { LLMProvider } from '../apps/server/src/llm/types';
 import { approvePending } from '../apps/server/src/policy/pending';
+import { setExtensionDisabled } from '../apps/server/src/registry/extensions';
 import { startBucketRun } from '../apps/server/src/routines/lifecycle';
 import { isReportTruncated, type RunEnd, runRoutineRun } from '../apps/server/src/routines/runner';
 import { GARDENER_SLUG, GARDENER_TITLE, seedRoutineId } from '../apps/server/src/seed/gardener';
@@ -531,6 +532,10 @@ async function main(): Promise<number> {
       console.error('Замер не состоялся (это код 2, а не сбой пробы).');
       throw new ProbeAbort(2);
     }
+    // Финансы — ЯВНО (РП-36): с 1б заведение графа их выключает, а проба П4 ведётся при «всех
+    // расширениях включены», как до 1б. Прямой записью маски: сообщение журнала `module_set` легло бы
+    // в глобальный тред и вошло бы в контекст пробы.
+    await withIdentity(db, who, (tx) => setExtensionDisabled(tx, owner, 'finance', false));
     const threadId = await withIdentity(db, who, (tx) => ensureGlobalThread(tx, owner));
 
     const deps = { provider, model: provider.modelId };

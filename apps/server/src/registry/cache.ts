@@ -10,7 +10,7 @@
 //   grep -rc 'effectiveRegistry(' apps/server/src --include='*.ts' \
 //     | grep -v test | grep -v ':0' | grep -v 'registry/cache.ts'
 //   → entity-read.ts:1, export.ts:1, routers/registry.ts:2, agent-loop/verbs.ts:1,
-//     seed/onboarding.ts:1, tools/registry.ts:1, llm/context.ts:1, tools/dispatch.ts:1,
+//     seed/setup-graph.ts:1, tools/registry.ts:1, llm/context.ts:1, tools/dispatch.ts:1,
 //     routines/propose.ts:1, routines/lifecycle.ts:1, executor/executor.ts:2,
 //     query/context.ts:1
 // ЧЕТЫРЕ СБОРКИ РЕЕСТРА ТУЛОВ входят сюда двумя адресами: `tools/dispatch.ts` зовёт

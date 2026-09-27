@@ -18,6 +18,7 @@ import {
   type RegistryDbRow,
   type RegistryDbRows,
 } from '@orbis/shared';
+import { etalonOf, SUPPLY_KEYS } from '@orbis/shared/supply';
 import { sql } from 'drizzle-orm';
 import postgres from 'postgres';
 import {
@@ -35,6 +36,7 @@ import { execute } from '../executor/executor';
 import { previewMergeConflicts, type RegistryDeltaRow } from '../registry/deltas';
 import { seedOwner } from '../seed/onboarding';
 import { SEED_WORLD_SIZE } from '../seed/world';
+import { supplyRecordId } from '../supply/records';
 import { REGISTRY_DELTAS_QUERY, REGISTRY_DRIFT_QUERIES } from './registry-drift';
 import {
   DEFINITION_TABLES,
@@ -82,6 +84,21 @@ async function count(table: string, where = 'TRUE'): Promise<number> {
     sql`SELECT count(*)::int AS n FROM ${sql.raw(table)} WHERE ${sql.raw(where)}`,
   )) as unknown as { n: number }[];
   return rows[0]?.n ?? 0;
+}
+
+/** Разделов в навигации оболочки хоста по эталону — столько рёбер «навигации» заводит заведение графа. */
+function etalonShellNavLength(): number {
+  const shell = etalonOf('host-shell');
+  if (shell.kind !== 'app') throw new Error('эталон оболочки хоста — не приложение');
+  return shell.nav.length;
+}
+
+/** Маска выключенных расширений владельца — пересев строку настроек сохраняет вместе с ней. */
+async function disabledOf(graph: string): Promise<string[]> {
+  const rows = (await admin.execute(
+    sql`SELECT disabled_modules FROM user_settings WHERE graph_id = ${graph}::uuid`,
+  )) as unknown as Array<{ disabled_modules: string[] }>;
+  return rows[0]?.disabled_modules ?? [];
 }
 
 async function systemVersion(): Promise<number> {
@@ -225,8 +242,8 @@ describe('reset-world — состав пересева на живой базе
   beforeAll(async () => {
     await truncateAll();
 
-    // Мир владельца — боевым путём: 20 сущностей через исполнитель (18 мира + две рутины: садовник и
-    // «Перенос остатков»), настройки, глобальный тред.
+    // Мир владельца — боевым путём заведения графа: 24 записи через исполнитель (12 категорий, десять
+    // записей поставки, две рутины: садовник и «Перенос остатков»), настройки, маска, глобальный тред.
     await seedOwner(app, personal(owner));
 
     // Собственное свойство владельца в реестре + дельта поверх системного аспекта: ровно то,
@@ -276,8 +293,9 @@ describe('reset-world — состав пересева на живой базе
     if (entity === undefined || second === undefined) {
       throw new Error('онбординг не посеял двух сущностей');
     }
-    // Ребро и сообщение треда — БОЕВЫМ путём, и они здесь не для полноты картины: онбординг
-    // не пишет ни того, ни другого, поэтому без них «relations и chat_messages снесены»
+    // Ребро и сообщение треда — БОЕВЫМ путём, и они здесь не для полноты картины: сообщений
+    // онбординг не пишет вовсе, а рёбра пишет только ссылочными свойствами оболочки хоста (см. счёт
+    // ниже) — поэтому без них «relations и chat_messages снесены»
     // доказывалось бы не данными, а только тем, что TRUNCATE без CASCADE упал бы на FK. Для
     // таблицы, которая однажды выйдет из-под FK, этого пина не будет вовсе.
     const edge = await execute(app, {
@@ -346,7 +364,8 @@ describe('reset-world — состав пересева на живой базе
 
     // Отчёт называет снесённое поимённо — по нему оператор сверяет масштаб.
     expect(report.world.entities).toBe(SEED_WORLD_SIZE + 2);
-    expect(report.world.relations).toBe(1);
+    // Рёбра: одно фикстуры плюс ссылки оболочки хоста — «Домашняя» и разделы навигации (§6.5).
+    expect(report.world.relations).toBe(1 + 1 + etalonShellNavLength());
     expect(report.world.chat_messages).toBe(1);
     expect(report.world.entity_origins).toBe(1);
     expect(report.world.entity_versions).toBe(1);
@@ -402,35 +421,49 @@ describe('reset-world — состав пересева на живой базе
     expect(await count('ai_usage')).toBe(1);
   });
 
-  test('шов: тот же владелец после пересева получает мир ЦЕЛИКОМ, а пины — живые id (Р-24-6)', async () => {
+  test('шов: после пересева вход заводит граф ЗАНОВО целиком — мир, записи поставки, маска Финансов, без MODULE_DISABLED (Д-1, Р-29)', async () => {
     // Тот самый шаг (9) runbook: владелец заходит в приложение после операции. Строку
-    // `user_settings` пересев СОХРАНЯЕТ (в ней пины и дефолты), и пока «свежесть» владельца
-    // определялась по ней, заход досевал четыре сущности из девятнадцати, а три пина
-    // сайдбара указывали на снесённые id. Проба идёт ПОСЛЕ пересева в этом же describe —
-    // именно в том состоянии базы, которое оставляет операция.
+    // `user_settings` пересев СОХРАНЯЕТ — вместе с маской, где Финансы уже выключены заведением
+    // графа. Маркер «граф заведён» — оболочка хоста, её пересев снёс; значит вход заводит граф
+    // заново, и маску он обязан сначала снять: сев 12 категорий при выключенных Финансах получил бы
+    // отказ `MODULE_DISABLED`. Проба идёт ПОСЛЕ пересева в этом же describe — в том состоянии базы,
+    // которое оставляет операция.
     expect(await count('entities', `graph_id = '${owner}'`)).toBe(0);
+    expect(await disabledOf(owner)).toEqual(['finance']);
 
     const again = await seedOwner(app, personal(owner));
-    // `seeded: false` — строка настроек на месте, онбординг «уже был». Мир при этом посеян:
-    // ответ про фазу настроек, а не про граф (см. докблок `seedOwner`).
-    expect(again.seeded).toBe(false);
+    expect(again.seeded).toBe(true);
     expect(await count('entities', `graph_id = '${owner}'`)).toBe(SEED_WORLD_SIZE + 2);
-
-    // Пины сходятся сами: id мира детерминированы от owner + слаг, и после пересева
-    // возвращаются те же. Проверяется НЕ формула, а то, что каждая закреплённая сущность
-    // существует, — иначе сайдбар покажет сырые uuid.
-    const settings = (await admin.execute(
-      sql`SELECT "pinnedEntities" AS pinned FROM user_settings WHERE graph_id = ${owner}::uuid`,
-    )) as unknown as Array<{ pinned: Array<{ id: string }> }>;
-    const pinned = settings[0]?.pinned ?? [];
-    expect(pinned.length).toBeGreaterThan(0);
-    for (const pin of pinned) {
-      expect([pin.id, await count('entities', `id = '${pin.id}'`)]).toEqual([pin.id, 1]);
+    for (const key of SUPPLY_KEYS) {
+      expect([key, await count('entities', `id = '${supplyRecordId(owner, key)}'`)]).toEqual([
+        key,
+        1,
+      ]);
     }
+    expect(await disabledOf(owner)).toEqual(['finance']);
 
-    // Повторный заход ничего не удваивает — идемпотентность держит проба по PK, а не guard.
-    await seedOwner(app, personal(owner));
+    // Повторный заход ничего не удваивает — граф заведён, вход не пишет.
+    expect((await seedOwner(app, personal(owner))).seeded).toBe(false);
     expect(await count('entities', `graph_id = '${owner}'`)).toBe(SEED_WORLD_SIZE + 2);
+  });
+
+  test('шов: маска до пересева любая (Цели и Проекты выключены) — после заведения графа ровно Финансы', async () => {
+    await admin.execute(
+      sql`UPDATE user_settings SET disabled_modules = ARRAY['goals','projects']::text[]
+           WHERE graph_id = ${owner}::uuid`,
+    );
+    const raw = postgres(ADMIN_DSN, { max: 1 });
+    try {
+      await resetWorld(raw, ADMIN_DSN);
+    } finally {
+      await raw.end();
+    }
+    expect(await count('entities', `graph_id = '${owner}'`)).toBe(0);
+    expect(await disabledOf(owner)).toEqual(['goals', 'projects']);
+
+    expect((await seedOwner(app, personal(owner))).seeded).toBe(true);
+    expect(await count('entities', `graph_id = '${owner}'`)).toBe(SEED_WORLD_SIZE + 2);
+    expect(await disabledOf(owner)).toEqual(['finance']);
   });
 
   test('после пересева `check` чист: дрейфа реестров нет, конфликтов слияния нет', async () => {

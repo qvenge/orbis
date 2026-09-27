@@ -22,6 +22,7 @@ import {
   ROLE_CATEGORY_PARENT,
 } from '@orbis/shared';
 import { v5 as uuidv5 } from 'uuid';
+import { enableFinanceForTest } from '../../test/finance-on';
 import GOLDEN from '../../test/golden/budget-engine.json';
 import {
   appDb,
@@ -140,6 +141,8 @@ const catSubs = seedCategoryId(owner, 'subscriptions');
 beforeAll(async () => {
   await truncateAll();
   await seedOwnerGraph(db, personal(owner), GOLDEN_CLOCK);
+  // Сьют проверяет Финансы — включены явно (РП-36): граф заводится с выключенными, как в бою.
+  await enableFinanceForTest(owner);
   const catParent = (
     await exec('entity_create', {
       id: gid('category:hobby'),

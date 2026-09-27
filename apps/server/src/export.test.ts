@@ -34,7 +34,7 @@ afterAll(async () => {
 });
 
 describe('user.exportData (§9.4)', () => {
-  test('после сидирования: 20 сущностей, настройки, глобальный тред, 0 aspectDefinitions', async () => {
+  test('после сидирования: 24 записи, настройки, глобальный тред, 0 aspectDefinitions', async () => {
     const user = await freshGraph();
     const caller = callerFor(user);
     await caller.user.seedOnboarding();
@@ -47,8 +47,9 @@ describe('user.exportData (§9.4)', () => {
     expect(typeof exp.exportedAt).toBe('string');
     expect(exp.exportedAt.endsWith('Z')).toBe(true);
 
-    // 18 мира + две рутины (садовник и «Перенос остатков», задача 10 Б-2).
-    expect(exp.entities.length).toBe(20);
+    // 22 мира (12 категорий + 10 записей поставки хоста, срез 1б §9.1) + две рутины (садовник и
+    // «Перенос остатков», задача 10 Б-2).
+    expect(exp.entities.length).toBe(24);
     for (const e of exp.entities) {
       expect(() => entitySchema.parse(e)).not.toThrow();
       // Форма — новая и ТОЛЬКО новая: старой карты и мешка `meta` в дампе нет вовсе.

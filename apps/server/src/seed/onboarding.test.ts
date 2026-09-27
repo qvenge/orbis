@@ -1,37 +1,53 @@
 // apps/server/src/seed/onboarding.test.ts
-// Интеграционные тесты Task 13: онбординг-сидирование (02 §7) через createCallerFactory
-// против живой БД. Граф мира сеет `seed/world.ts` ЧЕРЕЗ исполнитель; настройки и тред —
-// напрямую в tx под withIdentity, мимо журнала
-// (решение 6 плана): 12 категорий §7.1 + 6 smart lists §7.2 (три исходных, два верхних
-// горизонта планирования (E4) и «Рутины» (V1.9)) + настройки §7.3 + глобальный тред.
+// Заведение графа (срез 1б §8.6, РП-15, С1б-5) через createCallerFactory против живой БД: один раз, при
+// отсутствии оболочки хоста — 12 категорий Финансов (механизм `seed`), десять записей поставки хоста
+// (механизм `supply`), садовник и «Перенос остатков», маска Финансов, глобальный тред. На каждом
+// следующем входе — ноль записей; граф старой формы — отказ `GRAPH_NEEDS_MIGRATION` без записи.
 
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { GraphId } from '@orbis/shared';
 import {
+  APP_HOME,
+  APP_NAV,
+  APP_NAV_FORM,
   BUILTIN_ASPECT_IDS,
   BUILTIN_PROPERTY_META,
   BUILTIN_RELATION_ROLE_META,
   CORE_PROPERTY_IDS,
+  PAGE_ASPECT,
   ROLE_DEPENDENCY,
+  SUPPLY_ASPECT,
+  SUPPLY_KEY,
 } from '@orbis/shared';
 import { OWNER_LOCALE, parseQueryAst, toParseRegistry } from '@orbis/shared/query';
 import { AGENDA_QUERY_TEXTS } from '@orbis/shared/query/fixtures';
+import {
+  SUPPLY_ETALONS,
+  SUPPLY_KEYS,
+  type SupplyEtalon,
+  supplyStatusOf,
+} from '@orbis/shared/supply';
 import { TRPCError } from '@trpc/server';
-import { and, eq, inArray, sql } from 'drizzle-orm';
+import { sql } from 'drizzle-orm';
 import { adminDb, appDb, freshGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
+import { seedLegacyWorld } from '../../test/legacy-world';
 import { entities } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { assertEntityProps } from '../executor/aspects-validate';
 import { execute } from '../executor/executor';
+import { makeChatJournalSink } from '../executor/journal';
 import { parseGraphId } from '../identity';
 import { effectiveRegistry } from '../registry/cache';
 import { validateEntityProps } from '../registry/validate-props';
 import { appRouter } from '../router';
 import { SEED_CATEGORIES } from '../seed/categories';
-import { seedSmartListId } from '../seed/onboarding';
+import { GARDENER_SLUG, seedRoutineId } from '../seed/gardener';
+import { seedCategoryId, seedSmartListId } from '../seed/onboarding';
 import { ensurePersonalGraph } from '../seed/personal-graph';
+import { ROLLOVER_ROUTINE_SLUG } from '../seed/rollover-routine';
+import { setupGraph } from '../seed/setup-graph';
 import {
   ALL_TASKS_BODY,
   DAILY_PLANNING_BODY,
@@ -45,6 +61,8 @@ import {
   UPCOMING_BODY,
 } from '../seed/smart-lists';
 import { SEED_WORLD_SIZE, WORLD_SEED_MECHANISM } from '../seed/world';
+import { listUpdates } from '../supply/mechanism';
+import { supplyRecordId } from '../supply/records';
 import { agentLoopHelpers } from '../test/agent-loop-helpers';
 import { createCallerFactory } from '../trpc';
 
@@ -82,6 +100,172 @@ async function counts(
       sql`SELECT count(*)::int AS n FROM chat_threads WHERE graph_id = ${user}`,
     );
     return { entities: Number(e[0]?.n), settings: Number(s[0]?.n), threads: Number(t[0]?.n) };
+  } finally {
+    await adminClient.end();
+  }
+}
+
+/** Маска выключенных расширений графа (админ-DSN). */
+async function disabledOf(user: GraphId): Promise<string[]> {
+  const { db: admin, client: adminClient } = adminDb();
+  try {
+    const rows = (await admin.execute(
+      sql`SELECT disabled_modules FROM user_settings WHERE graph_id = ${user}::uuid`,
+    )) as unknown as Array<{ disabled_modules: string[] }>;
+    return rows[0]?.disabled_modules ?? [];
+  } finally {
+    await adminClient.end();
+  }
+}
+
+interface RecordRow {
+  title: string;
+  emoji: string | null;
+  body: string;
+  tags: string[];
+  aspects: string[];
+  props: Record<string, unknown>;
+  archived: boolean;
+  updatedAt: string;
+}
+
+/** Строка записи владельца (админ-DSN) — в той форме, по которой `supplyStatusOf` судит «как в поставке». */
+async function rowOf(user: GraphId, id: string): Promise<RecordRow> {
+  const { db: admin, client: adminClient } = adminDb();
+  try {
+    const rows = (await admin.execute(
+      sql`SELECT title, emoji, body, tags, aspects, props, archived, updated_at
+            FROM entities WHERE graph_id = ${user}::uuid AND id = ${id}::uuid`,
+    )) as unknown as Array<
+      Omit<RecordRow, 'updatedAt' | 'body'> & {
+        body: string | null;
+        updated_at: string | Date;
+      }
+    >;
+    const r = rows[0];
+    if (r === undefined) throw new Error(`записи ${id} нет`);
+    return {
+      title: r.title,
+      emoji: r.emoji,
+      body: r.body ?? '',
+      tags: r.tags,
+      aspects: r.aspects,
+      props: r.props,
+      archived: r.archived,
+      updatedAt: new Date(r.updated_at).toISOString(),
+    };
+  } finally {
+    await adminClient.end();
+  }
+}
+
+/**
+ * ВСЁ, что вход мог бы записать в граф владельца, одним снимком (админ-DSN, мимо RLS): число и
+ * отпечаток строк `entities` (id, отметка правки, архив, тело, свойства, аспекты, теги — любая правка
+ * мимо исполнителя или через него его сдвигает), рёбра, сообщения тредов (в них живёт журнал
+ * действий), треды, версии тел, происхождения и строка настроек целиком — вместе с `updated_at`.
+ * Сравнение «до» и «после» входа — проверка С1б-5 «на каждом входе онбординг ничего не пишет».
+ */
+async function worldSnapshot(user: GraphId): Promise<Record<string, unknown>> {
+  const { db: admin, client: adminClient } = adminDb();
+  try {
+    const one = async (q: ReturnType<typeof sql>): Promise<unknown> =>
+      ((await admin.execute(q)) as unknown as unknown[])[0];
+    return {
+      entities: await one(sql`
+        SELECT count(*)::int AS n,
+               md5(coalesce(string_agg(
+                 id::text || '|' || updated_at::text || '|' || archived::text || '|' ||
+                 md5(coalesce(body, '')) || '|' || md5(props::text) || '|' ||
+                 array_to_string(aspects, ',') || '|' || array_to_string(tags, ','),
+                 ';' ORDER BY id), '')) AS digest
+          FROM entities WHERE graph_id = ${user}::uuid`),
+      relations: await one(sql`
+        SELECT count(*)::int AS n FROM relations r
+          JOIN entities e ON e.id = r.source_id WHERE e.graph_id = ${user}::uuid`),
+      messages: await one(sql`
+        SELECT count(*)::int AS n FROM chat_messages m
+          JOIN chat_threads t ON t.id = m.thread_id WHERE t.graph_id = ${user}::uuid`),
+      threads: await one(
+        sql`SELECT count(*)::int AS n FROM chat_threads WHERE graph_id = ${user}::uuid`,
+      ),
+      versions: await one(
+        sql`SELECT count(*)::int AS n FROM entity_versions WHERE graph_id = ${user}::uuid`,
+      ),
+      origins: await one(
+        sql`SELECT count(*)::int AS n FROM entity_origins WHERE graph_id = ${user}::uuid`,
+      ),
+      settings: await one(
+        sql`SELECT to_jsonb(s) AS row FROM user_settings s WHERE graph_id = ${user}::uuid`,
+      ),
+    };
+  } finally {
+    await adminClient.end();
+  }
+}
+
+/**
+ * Состав графа без привязки к id (они выводятся из id графа): число записей, категорий и рутин, рёбер,
+ * тредов и строк настроек, маска и статус каждой записи поставки — сверка «итог как у целого заведения».
+ */
+async function composition(user: GraphId): Promise<Record<string, unknown>> {
+  const { db: admin, client: adminClient } = adminDb();
+  const n = async (q: ReturnType<typeof sql>): Promise<number> =>
+    Number(((await admin.execute(q)) as unknown as Array<{ n: number }>)[0]?.n);
+  try {
+    return {
+      entities: await n(
+        sql`SELECT count(*)::int AS n FROM entities WHERE graph_id = ${user}::uuid`,
+      ),
+      categories: await n(sql`SELECT count(*)::int AS n FROM entities
+        WHERE graph_id = ${user}::uuid AND aspects @> ARRAY['orbis/category']::text[]`),
+      routines: await n(sql`SELECT count(*)::int AS n FROM entities
+        WHERE graph_id = ${user}::uuid AND aspects @> ARRAY['orbis/routine']::text[]`),
+      relations: await n(sql`SELECT count(*)::int AS n FROM relations r
+        JOIN entities e ON e.id = r.source_id WHERE e.graph_id = ${user}::uuid`),
+      threads: await n(
+        sql`SELECT count(*)::int AS n FROM chat_threads WHERE graph_id = ${user}::uuid`,
+      ),
+      settings: await n(
+        sql`SELECT count(*)::int AS n FROM user_settings WHERE graph_id = ${user}::uuid`,
+      ),
+      mask: await disabledOf(user),
+      supply: await Promise.all(
+        SUPPLY_KEYS.map(async (k) => [
+          k,
+          supplyStatusOf(await rowOf(user, supplyRecordId(user, k))),
+        ]),
+      ),
+    };
+  } finally {
+    await adminClient.end();
+  }
+}
+
+const journal = makeChatJournalSink();
+
+/** Правка владельца обычным путём — исполнитель, механизм `user`, журнал. */
+async function ownerEdit(user: GraphId, input: Record<string, unknown>): Promise<void> {
+  const r = await execute(
+    db,
+    {
+      identity: personal(user),
+      actorKind: 'owner',
+      source: 'ui',
+      operations: [{ tool: 'entity_update', input }],
+    },
+    { sink: journal },
+  );
+  if (!r.ok) throw new Error(`правка владельца: ${JSON.stringify(r.error)}`);
+}
+
+/** Строку записи — физически, админ-DSN: в продукте так нельзя, фикстуре — можно (§8.6, Р-29). */
+async function deleteRow(user: GraphId, id: string): Promise<void> {
+  const { db: admin, client: adminClient } = adminDb();
+  try {
+    await admin.execute(
+      sql`DELETE FROM entities WHERE graph_id = ${user}::uuid AND id = ${id}::uuid`,
+    );
   } finally {
     await adminClient.end();
   }
@@ -150,21 +334,22 @@ describe('user.seedOnboarding (02 §7): состав и одноразовост
     });
   });
 
-  test('создаёт личный граф, ровно 12+6+две рутины сущностей, настройки и глобальный тред; повтор → {seeded:false}, ни граф, ни count не растут', async () => {
+  test('создаёт личный граф, 12 категорий + 10 записей поставки + две рутины, настройки и глобальный тред; повтор → {seeded:false} и ни одной записи', async () => {
     // Аккаунт БЕЗ графа — обычной фикстурой `freshGraph()` строка `graphs` уже была бы заведена,
-    // и сев графа первым шагом `seedOwnerGraph` (D44) проверять было бы нечем.
+    // и сев графа первым шагом `setupGraph` (D44) проверять было бы нечем.
     const user = parseGraphId(crypto.randomUUID());
     const caller = callerFor(user);
 
     const first = await caller.user.seedOnboarding();
     expect(first).toEqual({ seeded: true });
-    expect(await counts(user)).toEqual({ entities: 20, settings: 1, threads: 1 });
+    expect(await counts(user)).toEqual({ entities: 24, settings: 1, threads: 1 });
     expect(await graphRows(user)).toEqual({ graphs: 1, ownerRefOk: 1, members: 1, issuedByOk: 1 });
-    // …и число 20 — не литерал из воздуха: мир владельца (`seed/world.ts`, 12 категорий +
-    // 6 смарт-листов) плюс ДВЕ рутины, каждую из которых сеет отдельная транзакция: садовник и
-    // «Перенос остатков» модуля Финансы (задача 10 Б-2). Сложи кто-нибудь в набор седьмой
-    // список — литерал выше покраснеет, и вот эта строка скажет, почему.
-    expect(SEED_WORLD_SIZE + 2).toBe(20);
+    // …и число 24 — не литерал из воздуха: мир владельца (`seed/world.ts`, 12 категорий + десять
+    // записей поставки хоста: шаблон, оболочка, «Домой», «Записи», шесть списков) плюс ДВЕ рутины —
+    // садовник и «Перенос остатков». Сложи кто-нибудь в поставку одиннадцатую запись — литерал
+    // выше покраснеет, и вот эта строка скажет, почему.
+    expect(SEED_WORLD_SIZE).toBe(SEED_CATEGORIES.length + SUPPLY_ETALONS.length);
+    expect(SEED_WORLD_SIZE + 2).toBe(24);
 
     // Глобальный тред — с NULL entity_id (§4.5)
     const { db: admin, client: adminClient } = adminDb();
@@ -177,20 +362,19 @@ describe('user.seedOnboarding (02 §7): состав и одноразовост
       await adminClient.end();
     }
 
-    // Одноразовость §7: повторный вызов ничего не добавляет — включая личный граф
-    // (`seedOwnerGraph` идёт вторым заходом целиком, `ensurePersonalGraph` идемпотентен).
+    // Повторный вход (С1б-5, §8.6): граф заведён — вход не пишет НИЧЕГО, включая личный граф.
+    const before = await worldSnapshot(user);
     const second = await caller.user.seedOnboarding();
     expect(second).toEqual({ seeded: false });
-    expect(await counts(user)).toEqual({ entities: 20, settings: 1, threads: 1 });
+    expect(await worldSnapshot(user)).toEqual(before);
     expect(await graphRows(user)).toEqual({ graphs: 1, ownerRefOk: 1, members: 1, issuedByOk: 1 });
   });
 
-  test('конкурентные два seedOnboarding под разными коннекшнами → без дублей (детерминированные id + ON CONFLICT)', async () => {
+  test('гонка двух первых входов под разными коннекшнами: один заводит граф, второй — {seeded:false} без ошибки, дублей нет', async () => {
     // Аккаунт БЕЗ графа — как у соседнего кейса выше и по той же причине: с `freshGraph()` строка
     // `graphs` и грант owner заведены ОБВЯЗКОЙ до первого вызова, обе гонящиеся транзакции проходят
-    // `ensurePersonalGraph` (D44, новый ПЕРВЫЙ шаг сева) по идемпотентной ветке, и гонка не задевает
-    // ровно то, ради чего кейс писался. Измерено фикс-волной: мутация «сеять граф ПОСЛЕ мира» на
-    // `freshGraph()` была зелёной, на свежем uuid — красная (FK первой же записи мира).
+    // `ensurePersonalGraph` (D44, ПЕРВЫЙ шаг заведения) по идемпотентной ветке, и гонка не задевает
+    // ровно то, ради чего кейс писался.
     const user = parseGraphId(crypto.randomUUID());
     const a = appDb();
     const b = appDb();
@@ -207,8 +391,14 @@ describe('user.seedOnboarding (02 §7): состав и одноразовост
         db: b.db,
         clientVersion: null,
       });
-      await Promise.all([callerA.user.seedOnboarding(), callerB.user.seedOnboarding()]);
-      expect(await counts(user)).toEqual({ entities: 20, settings: 1, threads: 1 });
+      const results = await Promise.all([
+        callerA.user.seedOnboarding(),
+        callerB.user.seedOnboarding(),
+      ]);
+      expect(results.map((r) => r.seeded).sort()).toEqual([false, true]);
+      expect(await counts(user)).toEqual({ entities: 24, settings: 1, threads: 1 });
+      // Маска — ровно Финансы: проигравший не оставил её снятой (он снимал её до своего сева).
+      expect(await disabledOf(user)).toEqual(['finance']);
     } finally {
       await a.client.end();
       await b.client.end();
@@ -288,10 +478,10 @@ describe('категории §7.1', () => {
  * второй правды. Здесь посеянное прогоняется через тот же валидатор, что и запись владельца.
  *
  * Core-значения сид пишет ЗАКОННО и пишет их в КОЛОНКИ (`title`, `created_at`, `updated_at`
- * у каждой из 20 строк) — проба это и показывает: колонки заполнены, а `props` о них молчит.
+ * у каждой из 24 строк) — проба это и показывает: колонки заполнены, а `props` о них молчит.
  */
 describe('сид против запрета core-проекций в props (§А1-3, единица 15-бис)', () => {
-  test('все 20 посеянных строк проходят валидатор реестра: core-значения — в колонках, в props их нет', async () => {
+  test('все 24 посеянные строки проходят валидатор реестра: core-значения — в колонках, в props их нет', async () => {
     const user = await freshGraph();
     const caller = callerFor(user);
     await caller.user.seedOnboarding();
@@ -318,7 +508,7 @@ describe('сид против запрета core-проекций в props (§�
       }));
     });
 
-    expect(rows.length).toBe(20);
+    expect(rows.length).toBe(24);
     for (const row of rows) {
       expect([row.title, row.violations]).toEqual([row.title, []]);
       // Прямая половина того же утверждения: значение колонки есть, а адреса в props нет.
@@ -435,55 +625,39 @@ describe('smart lists §7.2 / §3.3', () => {
     }
   });
 
-  test('шесть сущностей smart-list: tags, emoji, детерминированный id, порядок pinned', async () => {
+  // §9.4: шесть списков — записи поставки. Страница, эталон, ключ, прежний детерминированный id сева
+  // (ссылки владельца на них переживают 1б), тег `smart-list` ушёл — его никто не читает.
+  test('шесть списков — страницы поставки: аспекты, ключ, «как в поставке», прежние id, тега smart-list нет', async () => {
     const user = await freshGraph();
-    const caller = callerFor(user);
-    await caller.user.seedOnboarding();
+    await callerFor(user).user.seedOnboarding();
 
-    const rows = await caller.entity.query({
-      query: 'tags=smart-list, sortBy=orbis/created_at:asc',
-    });
-    expect(rows.length).toBe(6);
-    for (const r of rows) expect(r.tags).toEqual(['smart-list']);
-
-    const byId = new Map(rows.map((r) => [r.id, r]));
-    const daily = byId.get(seedSmartListId(user, 'daily-planning'));
-    const upcoming = byId.get(seedSmartListId(user, 'upcoming'));
-    const allTasks = byId.get(seedSmartListId(user, 'all-tasks'));
-    expect(daily?.title).toBe('Daily Planning');
-    expect(daily?.emoji).toBe('☀️');
-    expect(daily?.body).toBe(DAILY_PLANNING_BODY);
-    expect(upcoming?.title).toBe('Upcoming');
-    expect(upcoming?.emoji).toBe('🗓️');
-    expect(allTasks?.title).toBe('All Tasks');
-    expect(allTasks?.emoji).toBe('📋');
-  });
-
-  // E4: два верхних горизонта планирования — отдельные сущности со своими слагами.
-  test('два горизонта: заголовки Год/Жизнь на детерминированных id', async () => {
-    const user = await freshGraph();
-    const caller = callerFor(user);
-    await caller.user.seedOnboarding();
-
-    const rows = await caller.entity.query({
-      query: 'tags=smart-list, sortBy=orbis/created_at:asc',
-    });
-    const byId = new Map(rows.map((r) => [r.id, r]));
-    const expected: Array<[string, string, string]> = [
+    const expected: Array<[SeedSmartList['slug'], string, string]> = [
+      ['daily-planning', 'Daily Planning', '☀️'],
+      ['upcoming', 'Upcoming', '🗓️'],
+      ['all-tasks', 'All Tasks', '📋'],
       ['horizon-year', 'Год', '🎯'],
       ['horizon-life', 'Жизнь', '🧭'],
+      ['routines', 'Рутины', '⏰'],
     ];
+    expect(expected.map(([slug]) => slug)).toEqual(SEED_SMART_LISTS.map((l) => l.slug));
     for (const [slug, title, emoji] of expected) {
-      const row = byId.get(seedSmartListId(user, slug));
-      expect(row?.title).toBe(title);
-      expect(row?.emoji).toBe(emoji);
-      expect(row?.tags).toEqual(['smart-list']);
+      const row = await rowOf(user, seedSmartListId(user, slug));
+      expect([slug, row.title, row.emoji]).toEqual([slug, title, emoji]);
+      expect(row.aspects).toEqual(expect.arrayContaining([PAGE_ASPECT, SUPPLY_ASPECT]));
+      expect(row.props[SUPPLY_KEY]).toBe(slug);
+      expect([slug, supplyStatusOf(row)]).toEqual([slug, 'etalon']);
+      expect(row.tags).not.toContain('smart-list');
     }
+    expect((await rowOf(user, seedSmartListId(user, 'daily-planning'))).body).toBe(
+      DAILY_PLANNING_BODY,
+    );
+    // Тега `smart-list` нет ни на одной записи графа — поиск по нему пуст.
+    expect(await callerFor(user).entity.query({ query: 'tags=smart-list' })).toEqual([]);
   });
 });
 
 describe('настройки §7.3 (getSettings / updateSettings)', () => {
-  test('getSettings: дефолты §7.3; pinnedEntities в порядке daily/upcoming/allTasks/Год/Рутины', async () => {
+  test('getSettings: дефолты §7.3; закреплённых и установленных видов нет', async () => {
     const user = await freshGraph();
     const caller = callerFor(user);
     await caller.user.seedOnboarding();
@@ -493,15 +667,10 @@ describe('настройки §7.3 (getSettings / updateSettings)', () => {
     expect(s.defaultCurrency).toBe('RUB');
     expect(s.weekStartDay).toBe('monday');
     expect(s.plan).toBe('dev');
-    // E4: из двух горизонтов закрепляется только «Год» — «Жизнь» живёт в Browser по тегу
-    // smart-list (цена закрепления — entity.count на каждую правку графа).
-    expect(s.pinnedEntities).toEqual([
-      { id: seedSmartListId(user, 'daily-planning'), order: 0 },
-      { id: seedSmartListId(user, 'upcoming'), order: 1 },
-      { id: seedSmartListId(user, 'all-tasks'), order: 2 },
-      { id: seedSmartListId(user, 'horizon-year'), order: 3 },
-      { id: seedSmartListId(user, 'routines'), order: 4 },
-    ]);
+    // Закреплённые стали навигацией оболочки хоста (§9.3): `pinnedEntities` и `installedViews`
+    // заведение графа не пишет (РП-15), колонки остаются пустыми до их удаления.
+    expect(s.pinnedEntities).toEqual([]);
+    expect(s.installedViews).toEqual([]);
   });
 
   test('updateSettings: частичная правка меняет заданные поля, остальные не трогает', async () => {
@@ -566,79 +735,6 @@ describe('ownerOnly (§9.3): агент против владельца', () => 
     // владельцу гейт не мешает: правка проходит
     const upd = await owner.user.updateSettings({ timezone: 'Asia/Almaty' });
     expect(upd.timezone).toBe('Asia/Almaty');
-  });
-});
-
-// Task A9 (слайс 2, §4.4): view `orbis-budget` в installedViews. Новые пользователи
-// получают его при сидировании; засиденные ДО слайса 2 (пустой installedViews) —
-// идемпотентный бэкфилл при повторном user.seedOnboarding, без дублей и без потери
-// прочих значений/полей.
-describe('installedViews: orbis-budget (§4.4, слайс 2)', () => {
-  test('новый пользователь получает orbis-budget при первом сидировании', async () => {
-    const user = await freshGraph();
-    const caller = callerFor(user);
-    await caller.user.seedOnboarding();
-
-    const s = await caller.user.getSettings();
-    expect(s.installedViews).toEqual(['orbis-budget']);
-  });
-
-  test('пользователь без orbis-budget получает его при повторном seedOnboarding; повтор не дублирует', async () => {
-    const user = await freshGraph();
-    const caller = callerFor(user);
-    await caller.user.seedOnboarding();
-
-    // Симулируем засиденного ДО слайса 2: installedViews пуст
-    await caller.user.updateSettings({ installedViews: [] });
-    expect((await caller.user.getSettings()).installedViews).toEqual([]);
-
-    // Повторный онбординг: guard → { seeded: false }, но бэкфилл дописывает view
-    expect(await caller.user.seedOnboarding()).toEqual({ seeded: false });
-    expect((await caller.user.getSettings()).installedViews).toEqual(['orbis-budget']);
-
-    // Ещё один повтор — без дубля
-    expect(await caller.user.seedOnboarding()).toEqual({ seeded: false });
-    expect((await caller.user.getSettings()).installedViews).toEqual(['orbis-budget']);
-  });
-
-  test('кастомные значения installedViews не теряются при бэкфилле', async () => {
-    const user = await freshGraph();
-    const caller = callerFor(user);
-    await caller.user.seedOnboarding();
-
-    await caller.user.updateSettings({ installedViews: ['some-custom-view'] });
-    await caller.user.seedOnboarding();
-
-    const iv = (await caller.user.getSettings()).installedViews;
-    expect(iv).toContain('some-custom-view');
-    expect(iv).toContain('orbis-budget');
-    expect(iv.length).toBe(2);
-  });
-
-  test('бэкфилл не трогает остальные поля user_settings', async () => {
-    const user = await freshGraph();
-    const caller = callerFor(user);
-    await caller.user.seedOnboarding();
-
-    await caller.user.updateSettings({
-      timezone: 'Asia/Almaty',
-      weekStartDay: 'sunday',
-      installedViews: [],
-    });
-    await caller.user.seedOnboarding();
-
-    const s = await caller.user.getSettings();
-    expect(s.installedViews).toEqual(['orbis-budget']);
-    expect(s.timezone).toBe('Asia/Almaty');
-    expect(s.weekStartDay).toBe('sunday');
-    expect(s.defaultCurrency).toBe('RUB');
-    expect(s.pinnedEntities).toEqual([
-      { id: seedSmartListId(user, 'daily-planning'), order: 0 },
-      { id: seedSmartListId(user, 'upcoming'), order: 1 },
-      { id: seedSmartListId(user, 'all-tasks'), order: 2 },
-      { id: seedSmartListId(user, 'horizon-year'), order: 3 },
-      { id: seedSmartListId(user, 'routines'), order: 4 },
-    ]);
   });
 });
 
@@ -719,142 +815,6 @@ describe('горизонты показывают обещанное (§3.3, E4)
   });
 });
 
-// Task E4 (слайс 3, §7.2): два верхних горизонта планирования. Новые пользователи получают
-// их первым же сидированием; засиденные ДО E4 — идемпотентным бэкфиллом в guard-ветке
-// (по образцу orbis-budget): досеваются ровно недостающие списки, «Год» дописывается
-// в pinnedEntities с order = max+1, повтор не создаёт дублей.
-describe('горизонты планирования: бэкфилл (§7.2, E4)', () => {
-  const HORIZONS = ['horizon-year', 'horizon-life'];
-
-  /** Симуляция пользователя, засиденного ДО E4: часть горизонтов удалена админ-DSN (мимо RLS). */
-  async function deleteHorizons(user: GraphId, slugs: readonly string[]): Promise<void> {
-    const { db: admin, client: adminClient } = adminDb();
-    try {
-      await admin.delete(entities).where(
-        and(
-          eq(entities.graphId, user),
-          inArray(
-            entities.id,
-            slugs.map((s) => seedSmartListId(user, s)),
-          ),
-        ),
-      );
-    } finally {
-      await adminClient.end();
-    }
-  }
-
-  const basePins = (user: GraphId) => [
-    { id: seedSmartListId(user, 'daily-planning'), order: 0 },
-    { id: seedSmartListId(user, 'upcoming'), order: 1 },
-    { id: seedSmartListId(user, 'all-tasks'), order: 2 },
-  ];
-
-  test('новый пользователь получает оба горизонта и закрепление «Года» за один проход', async () => {
-    const user = await freshGraph();
-    const caller = callerFor(user);
-    expect(await caller.user.seedOnboarding()).toEqual({ seeded: true });
-
-    const lists = await caller.entity.query({ query: 'tags=smart-list' });
-    expect(lists.length).toBe(6);
-    const ids = new Set(lists.map((r) => r.id));
-    for (const slug of HORIZONS) expect(ids.has(seedSmartListId(user, slug))).toBe(true);
-    expect((await caller.user.getSettings()).pinnedEntities).toEqual([
-      ...basePins(user),
-      { id: seedSmartListId(user, 'horizon-year'), order: 3 },
-      { id: seedSmartListId(user, 'routines'), order: 4 },
-    ]);
-  });
-
-  test('засиденный ДО E4: повторный seedOnboarding досевает оба горизонта и пин; повтор не дублирует', async () => {
-    const user = await freshGraph();
-    const caller = callerFor(user);
-    await caller.user.seedOnboarding();
-
-    // Откат к состоянию «до E4»: горизонтов нет, закреплены только три старых списка
-    await deleteHorizons(user, HORIZONS);
-    await caller.user.updateSettings({ pinnedEntities: basePins(user) });
-    expect(await counts(user)).toEqual({ entities: 18, settings: 1, threads: 1 });
-
-    // Guard возвращает { seeded: false }, но бэкфилл дописывает недостающее
-    expect(await caller.user.seedOnboarding()).toEqual({ seeded: false });
-    expect(await counts(user)).toEqual({ entities: 20, settings: 1, threads: 1 });
-    expect((await caller.entity.query({ query: 'tags=smart-list' })).length).toBe(6);
-    expect((await caller.user.getSettings()).pinnedEntities).toEqual([
-      ...basePins(user),
-      { id: seedSmartListId(user, 'horizon-year'), order: 3 },
-      { id: seedSmartListId(user, 'routines'), order: 4 },
-    ]);
-
-    // Ещё два повтора — ни новых сущностей, ни второго закрепления «Года»
-    expect(await caller.user.seedOnboarding()).toEqual({ seeded: false });
-    expect(await caller.user.seedOnboarding()).toEqual({ seeded: false });
-    expect(await counts(user)).toEqual({ entities: 20, settings: 1, threads: 1 });
-    expect((await caller.user.getSettings()).pinnedEntities.length).toBe(5);
-  });
-
-  test('досевается РОВНО недостающее: удалён один горизонт — вставлен один, пин не тронут', async () => {
-    const user = await freshGraph();
-    const caller = callerFor(user);
-    await caller.user.seedOnboarding();
-
-    await deleteHorizons(user, ['horizon-life']);
-    expect(await counts(user)).toEqual({ entities: 19, settings: 1, threads: 1 });
-    const settingsBefore = await caller.user.getSettings();
-
-    expect(await caller.user.seedOnboarding()).toEqual({ seeded: false });
-    expect(await counts(user)).toEqual({ entities: 20, settings: 1, threads: 1 });
-    const settingsAfter = await caller.user.getSettings();
-    expect(settingsAfter.pinnedEntities).toEqual(settingsBefore.pinnedEntities);
-    // «Год» уже закреплён — updated_at настроек бэкфилл не сдвигает
-    expect(settingsAfter.updatedAt).toBe(settingsBefore.updatedAt);
-  });
-
-  test('кастомные закрепления не теряются: «Год» дописывается в конец', async () => {
-    const user = await freshGraph();
-    const caller = callerFor(user);
-    await caller.user.seedOnboarding();
-
-    const custom = crypto.randomUUID();
-    await caller.user.updateSettings({ pinnedEntities: [{ id: custom, order: 0 }] });
-    await caller.user.seedOnboarding();
-
-    expect((await caller.user.getSettings()).pinnedEntities).toEqual([
-      { id: custom, order: 0 },
-      { id: seedSmartListId(user, 'horizon-year'), order: 1 },
-      { id: seedSmartListId(user, 'routines'), order: 2 },
-    ]);
-  });
-
-  // Круг правок 1, М1: после открепления в order остаются дыры — [0, 7] при длине 2.
-  // По длине массива новый пин получил бы order 2 и встал бы В СЕРЕДИНУ сайдбара, хотя
-  // и код, и тест обещают «в конец». Берём max(order)+1.
-  test('дыра в order: «Год» получает max(order)+1, а не длину массива', async () => {
-    const user = await freshGraph();
-    const caller = callerFor(user);
-    await caller.user.seedOnboarding();
-
-    const daily = seedSmartListId(user, 'daily-planning');
-    const allTasks = seedSmartListId(user, 'all-tasks');
-    // Пользователь открепил два списка из четырёх — порядковые номера остались прежними
-    await caller.user.updateSettings({
-      pinnedEntities: [
-        { id: daily, order: 0 },
-        { id: allTasks, order: 7 },
-      ],
-    });
-
-    await caller.user.seedOnboarding();
-
-    expect((await caller.user.getSettings()).pinnedEntities).toEqual([
-      { id: daily, order: 0 },
-      { id: allTasks, order: 7 },
-      { id: seedSmartListId(user, 'horizon-year'), order: 8 },
-      { id: seedSmartListId(user, 'routines'), order: 9 },
-    ]);
-  });
-});
-
 // Задача 14 (V1.9, V1.14) и D42: шестой сидируемый список — «Рутины». ТРИ блока, и
 // порядок в нём — не косметика: бейдж закреплённой сущности считает ПЕРВЫЙ query-блок body
 // (§3.2), поэтому первым стоит «Ждут ответа» — то, что требует действия владельца и
@@ -866,9 +826,8 @@ describe('горизонты планирования: бэкфилл (§7.2, E4
 // пусто. `stage=` — неоднозначен (orbis/project и orbis/routine), и запрос без `aspect=`
 // не скомпилировался бы вовсе.
 //
-// Бэкфилл — двумя разными механизмами: сама сущность досевается по образцу горизонтов (E4,
-// своим набором в guard-ветке), а её ТЕЛО — условным UPDATE по байт-в-байт совпадению со
-// старым сидом (D42): правленое владельцем тело сид не переписывает.
+// Досевов у «Рутин» больше нет (спека 1б §8.6): список — запись поставки, заводится один раз при
+// заведении графа, а новый эталон его тела приходит только предложением (§9.1).
 describe('смарт-лист «Рутины» (§3.3, §7.2, V1.9, D42)', () => {
   const helpers = agentLoopHelpers(db);
 
@@ -880,74 +839,21 @@ describe('смарт-лист «Рутины» (§3.3, §7.2, V1.9, D42)', () =>
     return new Set(rows.map((r) => r.id));
   }
 
-  /** Симуляция владельца, засиденного ДО V1: списка нет, закреплены первые четыре. */
-  async function deleteRoutinesList(user: GraphId): Promise<void> {
-    const { db: admin, client: adminClient } = adminDb();
-    try {
-      await admin
-        .delete(entities)
-        .where(and(eq(entities.graphId, user), eq(entities.id, seedSmartListId(user, 'routines'))));
-    } finally {
-      await adminClient.end();
-    }
-  }
-
-  const pinsBeforeV1 = (user: GraphId) => [
-    { id: seedSmartListId(user, 'daily-planning'), order: 0 },
-    { id: seedSmartListId(user, 'upcoming'), order: 1 },
-    { id: seedSmartListId(user, 'all-tasks'), order: 2 },
-    { id: seedSmartListId(user, 'horizon-year'), order: 3 },
-  ];
-
-  test('новый владелец: шесть списков, «Рутины» шестым и пятым закреплением', async () => {
+  test('новый владелец: «Рутины» — страница поставки с тремя блоками, последний раздел навигации хоста', async () => {
     const user = await freshGraph();
     const caller = callerFor(user);
     expect(await caller.user.seedOnboarding()).toEqual({ seeded: true });
 
-    const rows = await caller.entity.query({
-      query: 'tags=smart-list, sortBy=orbis/created_at:asc',
-    });
-    expect(rows.length).toBe(6);
-    const routines = rows.find((r) => r.id === seedSmartListId(user, 'routines'));
-    expect(routines?.title).toBe('Рутины');
-    expect(routines?.emoji).toBe('⏰');
-    expect(routines?.tags).toEqual(['smart-list']);
-    expect(routines?.body).toBe(ROUTINES_LIST_BODY);
+    const routines = await rowOf(user, seedSmartListId(user, 'routines'));
+    expect(routines.title).toBe('Рутины');
+    expect(routines.emoji).toBe('⏰');
+    expect(routines.tags).toEqual([]);
+    expect(routines.body).toBe(ROUTINES_LIST_BODY);
+    expect(queryBlocksOf(routines.body).length).toBe(3);
 
-    expect((await caller.user.getSettings()).pinnedEntities).toEqual([
-      ...pinsBeforeV1(user),
-      { id: seedSmartListId(user, 'routines'), order: 4 },
-    ]);
-  });
-
-  test('засиденный ДО V1: повторный seedOnboarding досевает список и пин; повтор идемпотентен', async () => {
-    const user = await freshGraph();
-    const caller = callerFor(user);
-    await caller.user.seedOnboarding();
-
-    // Откат к состоянию «до V1»: списка нет, в сайдбаре четыре прежних закрепления
-    await deleteRoutinesList(user);
-    await caller.user.updateSettings({ pinnedEntities: pinsBeforeV1(user) });
-    expect(await counts(user)).toEqual({ entities: 19, settings: 1, threads: 1 });
-
-    // Guard отдаёт { seeded: false } — досев живёт в его же ветке
-    expect(await caller.user.seedOnboarding()).toEqual({ seeded: false });
-    expect(await counts(user)).toEqual({ entities: 20, settings: 1, threads: 1 });
-    const list = (await caller.entity.query({ query: 'tags=smart-list' })).find(
-      (r) => r.id === seedSmartListId(user, 'routines'),
-    );
-    expect(list?.title).toBe('Рутины');
-    expect(list?.body).toBe(ROUTINES_LIST_BODY);
-    expect((await caller.user.getSettings()).pinnedEntities).toEqual([
-      ...pinsBeforeV1(user),
-      { id: seedSmartListId(user, 'routines'), order: 4 },
-    ]);
-
-    // Ещё два повтора — ни второй сущности, ни второго закрепления
-    expect(await caller.user.seedOnboarding()).toEqual({ seeded: false });
-    expect(await caller.user.seedOnboarding()).toEqual({ seeded: false });
-    expect(await counts(user)).toEqual({ entities: 20, settings: 1, threads: 1 });
-    expect((await caller.user.getSettings()).pinnedEntities.length).toBe(5);
+    const shell = await rowOf(user, supplyRecordId(user, 'host-shell'));
+    const nav = shell.props[APP_NAV] as string[];
+    expect(nav[nav.length - 1]).toBe(seedSmartListId(user, 'routines'));
   });
 
   test('«Ждут ответа» находит прогон с исходом checkpoint и не находит отвеченный', async () => {
@@ -1043,258 +949,195 @@ describe('смарт-лист «Рутины» (§3.3, §7.2, V1.9, D42)', () =>
     expect(waiting.has(checkpoint.runId)).toBe(true);
     expect(waiting.has(undecided.runId)).toBe(false);
   });
+});
 
-  // Решение 6 плана — самое чувствительное место среза. Тело «Рутин» у существующего
-  // владельца могло быть правлено руками, и сид чужого не переписывает: он ДОПИСЫВАЕТ
-  // недостающий блок, а признак «недостаёт» спрашивает у документа, а не у байтов (§А12-3).
-  describe('бэкфилл тела: третий блок существующему владельцу', () => {
-    /**
-     * Тело «Рутин» БЕЗ блока пачки — состояние владельца, засиденного до D42.
-     *
-     * ВЫЧИСЛЯЕТСЯ ИЗ СИДА, а не заморожено копией. Копия («править нельзя никогда») была
-     * платой за побайтовый признак и первой же сменой формы запроса превращалась в мусор:
-     * сравнить key-форму нового сида со старой грамматикой в теле владельца нельзя ни при
-     * какой правке литерала. Признак теперь спрашивает документ, и образец «до» честно
-     * получается из «после» снятием ровно того блока, который бэкфилл и дописывает.
-     */
-    /**
-     * ТЕЛО «РУТИН», КАКОЕ ЛЕЖИТ У ВЛАДЕЛЬЦА В ПРОДЕ СЕЙЧАС — дословно из `696dda3`
-     * (`git show 696dda3:apps/server/src/seed/smart-lists.ts`), старой грамматикой §6.1.
-     *
-     * Это ЕДИНСТВЕННОЕ состояние, ради которого бэкфилл D42 существует, и именно его
-     * первая редакция этой задачи не покрыла: тест ставил `body_doc = NULL`, но подсовывал
-     * тело НОВОЙ key-формы — то есть владельца, которого не бывает. Строгий разбор старую
-     * форму отвергает, дерева у блоков нет, и признак «пачка уже показана», спрашивающий
-     * ТОЛЬКО дерево, отвечал «нет» — бэкфилл дописывал ВТОРОЙ блок пачки рядом с живым.
-     *
-     * Литерал заморожен как ВХОД, а не как образец сверки: подогнать его под сегодняшний
-     * сид нельзя (у владельца в базе лежит именно эта строка), но и выключить он ничего не
-     * может — сравнения с ним в коде нет.
-     */
-    const PROD_ROUTINES_BODY_D42 = `Рутины — то, что Orbis делает сам по расписанию, и то, что ждёт вашего ответа.
+// С1б-5, РП-15, Р-29: заведение графа — ОДНА запись онбординга. Признак «граф заведён» — запись поставки
+// «оболочка хоста», в том числе архивная; вход, где она есть, не пишет ничего (§0.2 п. 2).
+describe('заведение графа (§8.6, РП-15, С1б-5)', () => {
+  test('(а) новый граф: 12 категорий, десять записей поставки, рутины, маска Финансов, пустые закреплённые, глобальный тред', async () => {
+    const user = await freshGraph();
+    expect(await callerFor(user).user.seedOnboarding()).toEqual({ seeded: true });
 
-{{query: aspect=orbis/agent-run, outcome=checkpoint, sortBy=started_at:asc, display=list, title=Ждут ответа}}
+    const { db: admin, client: adminClient } = adminDb();
+    try {
+      const cats = await admin.execute(
+        sql`SELECT count(*)::int AS n FROM entities
+             WHERE graph_id = ${user}::uuid AND aspects @> ARRAY['orbis/category']::text[]`,
+      );
+      expect(Number(cats[0]?.n)).toBe(12);
+      const threads = await admin.execute(
+        sql`SELECT count(*)::int AS n FROM chat_threads
+             WHERE graph_id = ${user}::uuid AND entity_id IS NULL`,
+      );
+      expect(Number(threads[0]?.n)).toBe(1);
+    } finally {
+      await adminClient.end();
+    }
 
-{{query: aspect=orbis/routine, stage=active, sortBy=updated_at:desc, display=list, title=Активные рутины}}
+    // Десять записей поставки: каждая — «как в поставке», со своим ключом и детерминированным id.
+    for (const key of SUPPLY_KEYS) {
+      const row = await rowOf(user, supplyRecordId(user, key));
+      expect([key, row.aspects.includes(SUPPLY_ASPECT)]).toEqual([key, true]);
+      expect([key, row.props[SUPPLY_KEY]]).toEqual([key, key]);
+      expect([key, supplyStatusOf(row)]).toEqual([key, 'etalon']);
+      expect([key, row.archived]).toEqual([key, false]);
+    }
+    expect((await rowOf(user, supplyRecordId(user, 'host-template'))).aspects).toContain(
+      PAGE_ASPECT,
+    );
+    expect((await rowOf(user, supplyRecordId(user, 'home'))).title).toBe('Домой');
+    expect((await rowOf(user, supplyRecordId(user, 'records'))).title).toBe('Записи');
 
-{{query: aspect=orbis/agent-run, undecided=true, sortBy=started_at:asc, display=list, title=Пачка решений}}`;
+    // Оболочка хоста (§6.5): домашняя — «Домой», навигация — «Записи» и пять списков, форма —
+    // «список из заголовка».
+    const shell = await rowOf(user, supplyRecordId(user, 'host-shell'));
+    expect(shell.props[APP_HOME]).toBe(supplyRecordId(user, 'home'));
+    expect(shell.props[APP_NAV]).toEqual(
+      ['records', 'daily-planning', 'upcoming', 'all-tasks', 'horizon-year', 'routines'].map((k) =>
+        supplyRecordId(user, k as (typeof SUPPLY_KEYS)[number]),
+      ),
+    );
+    expect(shell.props[APP_NAV_FORM]).toBe('header-list');
 
-    /** То же тело ДО D42 — двухблочное: у владельца V1 третьего блока нет вовсе. */
-    const PROD_ROUTINES_BODY_BEFORE_D42 = PROD_ROUTINES_BODY_D42.slice(
-      0,
-      PROD_ROUTINES_BODY_D42.indexOf('\n\n{{query: aspect=orbis/agent-run, undecided=true'),
+    // Рутины — только при заведении графа; «Перенос остатков» на паузе.
+    expect((await rowOf(user, seedRoutineId(user, GARDENER_SLUG))).aspects).toEqual([
+      'orbis/routine',
+    ]);
+    const rollover = await rowOf(user, seedRoutineId(user, ROLLOVER_ROUTINE_SLUG));
+    expect(rollover.props['orbis/routine_stage']).toBe('paused');
+
+    // Маска с выключенными Финансами (§8.6), закреплённых и установленных видов нет (РП-15).
+    expect(await disabledOf(user)).toEqual(['finance']);
+    const s = await callerFor(user).user.getSettings();
+    expect(s.installedViews).toEqual([]);
+    expect(s.pinnedEntities).toEqual([]);
+  });
+
+  test('(б) повторные входы на заведённом графе — {seeded:false} и НОЛЬ записей', async () => {
+    const user = await freshGraph();
+    const caller = callerFor(user);
+    await caller.user.seedOnboarding();
+    const before = await worldSnapshot(user);
+    expect(await caller.user.seedOnboarding()).toEqual({ seeded: false });
+    expect(await caller.user.seedOnboarding()).toEqual({ seeded: false });
+    expect(await worldSnapshot(user)).toEqual(before);
+  });
+
+  test('(в) граф с правками владельца: блок пачки удалён из «Рутин», «Домой» в архиве, навигация изменена — вход не пишет ничего', async () => {
+    const user = await freshGraph();
+    const caller = callerFor(user);
+    await caller.user.seedOnboarding();
+
+    const routinesId = seedSmartListId(user, 'routines');
+    const batchBlock = `\n\n{{query:${ROUTINES_BATCH_QUERY}}}`;
+    expect(ROUTINES_LIST_BODY).toContain(batchBlock);
+    const withoutBatch = ROUTINES_LIST_BODY.replace(batchBlock, '');
+    await ownerEdit(user, {
+      id: routinesId,
+      body: withoutBatch,
+      expectedUpdatedAt: (await rowOf(user, routinesId)).updatedAt,
+    });
+    await ownerEdit(user, { id: supplyRecordId(user, 'home'), archived: true });
+    await ownerEdit(user, {
+      id: supplyRecordId(user, 'host-shell'),
+      props: {
+        [APP_NAV]: [supplyRecordId(user, 'records'), seedSmartListId(user, 'daily-planning')],
+      },
+    });
+
+    const before = await worldSnapshot(user);
+    expect(await caller.user.seedOnboarding()).toEqual({ seeded: false });
+    expect(await worldSnapshot(user)).toEqual(before);
+    // Блок пачки не возвращён (Фокус ревью п. 4): правка владельца — его решение.
+    expect((await rowOf(user, routinesId)).body).not.toContain(ROUTINES_BATCH_QUERY);
+    expect((await rowOf(user, supplyRecordId(user, 'home'))).archived).toBe(true);
+  });
+
+  test('(г) оболочка хоста в архиве — граф заведён, вход ничего не пишет (Р-29)', async () => {
+    const user = await freshGraph();
+    const caller = callerFor(user);
+    await caller.user.seedOnboarding();
+    await ownerEdit(user, { id: supplyRecordId(user, 'host-shell'), archived: true });
+
+    const before = await worldSnapshot(user);
+    expect(await caller.user.seedOnboarding()).toEqual({ seeded: false });
+    expect(await worldSnapshot(user)).toEqual(before);
+    expect((await rowOf(user, supplyRecordId(user, 'host-shell'))).archived).toBe(true);
+  });
+
+  test('(д) мир старой формы без оболочки хоста — отказ GRAPH_NEEDS_MIGRATION, ни одной записи', async () => {
+    const user = await freshGraph();
+    await seedLegacyWorld(user);
+    const before = await worldSnapshot(user);
+
+    const err = await callerFor(user)
+      .user.seedOnboarding()
+      .then(
+        () => null,
+        (e: unknown) => e,
+      );
+    expect(err).toBeInstanceOf(TRPCError);
+    // CONFLICT, а не PRECONDITION_FAILED: тот на проводе значит «клиент устарел» (R-19).
+    expect((err as TRPCError).code).toBe('CONFLICT');
+    expect(((err as TRPCError).cause as { code?: string } | undefined)?.code).toBe(
+      'GRAPH_NEEDS_MIGRATION',
+    );
+    expect(await worldSnapshot(user)).toEqual(before);
+  });
+
+  // R-20: признак «граф заведён» (оболочка хоста) пишется ПОСЛЕДНИМ, и каждый шаг до него повторяем —
+  // вход после падения посреди заведения доводит граф до того же вида, что у целого заведения.
+  test('(к) падение после каждого шага заведения — следующий вход завершает, итог как у целого заведения', async () => {
+    const whole = await freshGraph();
+    await callerFor(whole).user.seedOnboarding();
+    const reference = await composition(whole);
+
+    for (const step of ['world', 'supply', 'routines', 'mask'] as const) {
+      const user = await freshGraph();
+      const crashed = await setupGraph(db, personal(user), {
+        afterStep: (s) => {
+          if (s === step) throw new Error(`падение после шага «${s}»`);
+        },
+      }).then(
+        () => null,
+        (e: unknown) => e,
+      );
+      expect([step, (crashed as Error | null)?.message]).toEqual([
+        step,
+        `падение после шага «${step}»`,
+      ]);
+      // Признака нет — граф не заведён, и вход доводит его до конца.
+      expect([step, await callerFor(user).user.seedOnboarding()]).toEqual([step, { seeded: true }]);
+      expect([step, await composition(user)]).toEqual([step, reference]);
+    }
+  });
+
+  test('(и) новый эталон и новая запись поставки на заведённом графе — только предложения, вход пишет ноль', async () => {
+    const user = await freshGraph();
+    await callerFor(user).user.seedOnboarding();
+    // Записи «Записи» и одной категории нет (удалены физически фикстурой: в продукте так нельзя) —
+    // «никогда не было» и «удалил» вход не различает и не досевает ни то, ни другое.
+    await deleteRow(user, supplyRecordId(user, 'records'));
+    await deleteRow(user, seedCategoryId(user, 'food'));
+    // «Новый релиз»: эталон «Upcoming» другой (инъекция списка эталонов).
+    const next: SupplyEtalon[] = SUPPLY_ETALONS.map((e) =>
+      e.kind !== 'app' && e.key === 'upcoming'
+        ? { ...e, text: `${e.text}\n\nНовая строка релиза.` }
+        : e,
     );
 
-    const BATCH_BLOCK = `\n\n{{query:${ROUTINES_BATCH_QUERY}}}`;
-    const ROUTINES_BODY_WITHOUT_BATCH = (() => {
-      const at = ROUTINES_LIST_BODY.indexOf(BATCH_BLOCK);
-      if (at < 0) throw new Error('в теле «Рутин» нет блока пачки — образец «до» не построить');
-      return ROUTINES_LIST_BODY.slice(0, at);
-    })();
+    const before = await worldSnapshot(user);
+    expect(await setupGraph(db, personal(user), { etalons: next })).toEqual({ seeded: false });
+    expect(await callerFor(user).user.seedOnboarding()).toEqual({ seeded: false });
+    expect(await worldSnapshot(user)).toEqual(before);
 
-    /** Тело списка «Рутины», его `body_doc`, индекс запросов и отметка правки — админским DSN. */
-    async function routinesBody(
-      user: GraphId,
-    ): Promise<{ body: string; bodyDoc: unknown; queryRefs: string[]; updatedAt: Date }> {
-      const { db: admin, client: adminClient } = adminDb();
-      try {
-        const rows = await admin
-          .select({
-            body: entities.body,
-            bodyDoc: entities.bodyDoc,
-            queryRefs: entities.queryRefs,
-            updatedAt: entities.updatedAt,
-          })
-          .from(entities)
-          .where(
-            and(eq(entities.graphId, user), eq(entities.id, seedSmartListId(user, 'routines'))),
-          );
-        const row = rows[0];
-        if (row === undefined) throw new Error('списка «Рутины» нет');
-        return row;
-      } finally {
-        await adminClient.end();
-      }
-    }
-
-    /**
-     * Откат строки к состоянию «как у владельца, засиденного ДО D42»: тело без третьего
-     * блока и ПУСТЫЕ производные колонки.
-     *
-     * `body_doc = NULL` и `query_refs = {}` здесь не украшение, а предмет проверки: сид до
-     * этой задачи писал только `body`, и предикат, спрашивающий колонку `query_refs`, у
-     * такого владельца был бы ложен ВСЕГДА — то есть бэкфилл молча выключился бы ровно на
-     * тех, ради кого он существует (рулинг Р-21b-5).
-     */
-    async function setRoutinesBody(user: GraphId, body: string): Promise<void> {
-      const { db: admin, client: adminClient } = adminDb();
-      try {
-        await admin
-          .update(entities)
-          .set({
-            body,
-            bodyDoc: null,
-            bodyRefs: [],
-            queryRefs: [],
-            // Отметка правки — заведомо в прошлом: по её сдвигу видно, ЗАДЕЛ ли UPDATE
-            // строку, и «повтор — no-op» проверяется фактом, а не совпадением тел
-            updatedAt: new Date('2026-08-01T00:00:00.000Z'),
-          })
-          .where(
-            and(eq(entities.graphId, user), eq(entities.id, seedSmartListId(user, 'routines'))),
-          );
-      } finally {
-        await adminClient.end();
-      }
-    }
-
-    test('бэкфилл D42: тело владельца с блоком пачки — no-op; без блока — блок добавлен; текст владельца не затёрт', async () => {
-      const user = await freshGraph();
-      const caller = callerFor(user);
-      await caller.user.seedOnboarding();
-
-      // 1. Свежесидированное тело блок пачки УЖЕ несёт — бэкфилл обязан промолчать.
-      const seeded = await routinesBody(user);
-      expect(seeded.queryRefs).toContain('orbis/undecided');
-      expect(await caller.user.seedOnboarding()).toEqual({ seeded: false });
-      const untouched = await routinesBody(user);
-      expect(untouched.body).toBe(ROUTINES_LIST_BODY);
-      expect(untouched.updatedAt.toISOString()).toBe(seeded.updatedAt.toISOString());
-
-      // 2. Владелец «до D42»: тело без третьего блока, производные колонки пусты — ровно
-      //    то, что оставлял сид до этой задачи.
-      await setRoutinesBody(user, ROUTINES_BODY_WITHOUT_BATCH);
-      expect(await caller.user.seedOnboarding()).toEqual({ seeded: false });
-      const filled = await routinesBody(user);
-      expect(filled.body).toBe(ROUTINES_LIST_BODY);
-      // Блок доехал не только в markdown: документ собран и ПРИВЯЗАН, индекс заполнен —
-      // иначе следующий обход держателей свойства этот список не нашёл бы.
-      expect(filled.bodyDoc).not.toBeNull();
-      expect(filled.queryRefs).toContain('orbis/undecided');
-      expect(filled.updatedAt.toISOString()).not.toBe('2026-08-01T00:00:00.000Z');
-
-      // 3. Идемпотентность построением: блок в теле есть — строку больше никто не трогает.
-      expect(await caller.user.seedOnboarding()).toEqual({ seeded: false });
-      const repeated = await routinesBody(user);
-      expect(repeated.body).toBe(ROUTINES_LIST_BODY);
-      expect(repeated.updatedAt.toISOString()).toBe(filled.updatedAt.toISOString());
-      expect(await counts(user)).toEqual({ entities: 20, settings: 1, threads: 1 });
-    });
-
-    test('ПРАВЛЕНОЕ владельцем тело: блок ДОПИСАН, а написанное владельцем цело', async () => {
-      // Байтовый признак здесь отказывал: любая правка владельца — и бэкфилл молчал
-      // навсегда. Признак «блока нет» отвечает на нужный вопрос, а дописывание в конец
-      // сохраняет чужой текст (перезапись уничтожила бы его без следа — версий у
-      // мимо-executor'ного сида нет).
-      const user = await freshGraph();
-      const caller = callerFor(user);
-      await caller.user.seedOnboarding();
-      const note = 'Моя заметка: не трогать.';
-      await setRoutinesBody(user, `${ROUTINES_BODY_WITHOUT_BATCH}\n\n${note}`);
-
-      expect(await caller.user.seedOnboarding()).toEqual({ seeded: false });
-      const after = await routinesBody(user);
-      expect(after.body).toContain(note);
-      expect(after.body).toContain(`{{query:${ROUTINES_BATCH_QUERY}}}`);
-      expect(after.queryRefs).toContain('orbis/undecided');
-      // Блок дописан В КОНЕЦ: заметка владельца осталась там, где он её написал.
-      expect(after.body.indexOf(note)).toBeLessThan(after.body.indexOf('orbis/undecided'));
-      expect(queryBlocksOf(after.body).length).toBe(3);
-    });
-
-    test('свой блок владельца на то же свойство считается пачкой — сид второй не навязывает', async () => {
-      // Признак спрашивает АДРЕС СВОЙСТВА, а не заголовок и не текст: владелец, собравший
-      // свой список отложенного, второй такой же блок получить не должен.
-      const user = await freshGraph();
-      const caller = callerFor(user);
-      await caller.user.seedOnboarding();
-      await setRoutinesBody(
-        user,
-        `${ROUTINES_BODY_WITHOUT_BATCH}\n\n{{query:aspect=orbis/agent-run, orbis/undecided=true, sortBy=orbis/updated_at:desc, display=list, title=Отложенное}}`,
-      );
-
-      expect(await caller.user.seedOnboarding()).toEqual({ seeded: false });
-      const after = await routinesBody(user);
-      expect(queryBlocksOf(after.body).length).toBe(3);
-      expect(after.body).not.toContain('Пачка решений');
-      expect(after.updatedAt.toISOString()).toBe('2026-08-01T00:00:00.000Z');
-    });
-
-    test('ПРОД-ТЕЛО старой грамматики: блок пачки виден и БЕЗ дерева — второго не дописывается', async () => {
-      // Признак обязан пережить ровно ту смену формы, ради которой он и заведён. У
-      // прод-тела дерева нет ни у одного блока: строгий разбор старую грамматику отвергает
-      // (проба на HEAD: `query_refs` = []). Спрашивать только дерево значило бы ответить
-      // «пачки нет» там, где она есть третьим блоком, и дописать её второй раз.
-      const user = await freshGraph();
-      const caller = callerFor(user);
-      await caller.user.seedOnboarding();
-      await setRoutinesBody(user, PROD_ROUTINES_BODY_D42);
-
-      expect(await caller.user.seedOnboarding()).toEqual({ seeded: false });
-      const after = await routinesBody(user);
-      expect(after.body).toBe(PROD_ROUTINES_BODY_D42);
-      expect(queryBlocksOf(after.body).length).toBe(3);
-      // Строку никто не тронул — ни телом, ни отметкой правки.
-      expect(after.updatedAt.toISOString()).toBe('2026-08-01T00:00:00.000Z');
-      // Контроль осмысленности: блоки этого тела и правда НЕ разбираются — иначе тест
-      // проверял бы ветку дерева, а не текстовую.
-      expect(after.bodyDoc).toBeNull();
-      expect(after.queryRefs).toEqual([]);
-    });
-
-    test('ПРОД-ТЕЛО до D42 (два блока старой грамматики): блок пачки ДОПИСАН один раз', async () => {
-      // Обратная сторона: у владельца V1 пачки нет, и текстовый признак обязан это увидеть
-      // — иначе фикс первого теста превратился бы в «никогда не досеваем».
-      const user = await freshGraph();
-      const caller = callerFor(user);
-      await caller.user.seedOnboarding();
-      await setRoutinesBody(user, PROD_ROUTINES_BODY_BEFORE_D42);
-
-      expect(await caller.user.seedOnboarding()).toEqual({ seeded: false });
-      const after = await routinesBody(user);
-      expect(queryBlocksOf(after.body).length).toBe(3);
-      expect(after.body).toContain(`{{query:${ROUTINES_BATCH_QUERY}}}`);
-      // Старые блоки владельца целы — их формат не наше дело, наше дело не потерять текст.
-      expect(after.body).toContain('{{query: aspect=orbis/routine, stage=active,');
-
-      // И ПОВТОР — no-op: тело теперь смешанное (два неразобранных блока и один
-      // разобранный), и признак обязан работать на такой смеси.
-      expect(await caller.user.seedOnboarding()).toEqual({ seeded: false });
-      const repeated = await routinesBody(user);
-      expect(queryBlocksOf(repeated.body).length).toBe(3);
-      expect(repeated.updatedAt.toISOString()).toBe(after.updatedAt.toISOString());
-    });
-
-    test('имя пачки в ЗАКАВЫЧЕННОМ значении неразобранного блока — не адрес: блок дописан', async () => {
-      // Текстовый путь признака читает ИМЯ ПОЛЯ, а не подстроку: подпись, которую владелец
-      // написал сам, адресом не является. Без снятия кавычек признак ответил бы «пачка уже
-      // есть» на блоке, где её нет, и владелец не получил бы её никогда.
-      const user = await freshGraph();
-      const caller = callerFor(user);
-      await caller.user.seedOnboarding();
-      await setRoutinesBody(
-        user,
-        `${PROD_ROUTINES_BODY_BEFORE_D42}\n\n{{query: aspect=orbis/routine, stage=active, title="про undecided=да"}}`,
-      );
-
-      expect(await caller.user.seedOnboarding()).toEqual({ seeded: false });
-      const after = await routinesBody(user);
-      expect(queryBlocksOf(after.body).length).toBe(4);
-      expect(after.body).toContain(`{{query:${ROUTINES_BATCH_QUERY}}}`);
-      // Подпись владельца цела — её никто не трогал.
-      expect(after.body).toContain('title="про undecided=да"');
-    });
-
-    test('владелец, засиденный ДО «Рутин» вовсе: досев вставляет список сразу с тремя блоками', async () => {
-      const user = await freshGraph();
-      const caller = callerFor(user);
-      await caller.user.seedOnboarding();
-      await deleteRoutinesList(user);
-
-      expect(await caller.user.seedOnboarding()).toEqual({ seeded: false });
-      expect((await routinesBody(user)).body).toBe(ROUTINES_LIST_BODY);
-      expect(queryBlocksOf((await routinesBody(user)).body).length).toBe(3);
-    });
+    const updates = await listUpdates({ db, identity: personal(user) }, next);
+    expect(updates.map((u) => [u.key, u.kind])).toEqual(
+      expect.arrayContaining([
+        ['records', 'new'],
+        ['upcoming', 'update'],
+      ]),
+    );
   });
 });
 

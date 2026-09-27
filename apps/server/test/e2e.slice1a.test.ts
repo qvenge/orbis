@@ -18,7 +18,9 @@ import { DEFAULT_TIMEZONE, todayInTimeZone } from '../src/query/context';
 import { appRouter } from '../src/router';
 import { SEED_CATEGORIES } from '../src/seed/categories';
 import { seedCategoryId } from '../src/seed/onboarding';
+import { supplyRecordId } from '../src/supply/records';
 import { createCallerFactory } from '../src/trpc';
+import { enableFinanceForTest } from './finance-on';
 import { appDb, mintGraph, personal, requireEnv, truncateAll } from './helpers';
 
 /**
@@ -49,6 +51,15 @@ async function trpcError(p: Promise<unknown>): Promise<TRPCError> {
   throw new Error('ожидался TRPCError, вызов успешен');
 }
 
+/** id оболочки хоста графа (срез 1б §6.5). */
+const shellId = (graph: GraphId): string => supplyRecordId(graph, 'host-shell');
+
+/**
+ * Рёбра, которые заведение графа ставит зеркалами ссылочных свойств оболочки хоста: «Домашняя» и
+ * шесть разделов навигации (§6.5).
+ */
+const SHELL_EDGES = 1 + 6;
+
 /** Метаданные audit-/undo-сообщения журнала (§4.6/§7.8). */
 type JournalMeta = { actions?: ActionRecord[]; type?: string; undoes?: string };
 
@@ -76,19 +87,22 @@ describe('e2e слайс 1a: день из 02 §5 (два пользовател
   });
 
   // ── Шаг 1: онбординг-сид A ────────────────────────────────────────────────
-  test('шаг 1: seedOnboarding(A) — 20 сущностей (12 категорий + 6 списков + садовник словаря + перенос остатков), настройки, глобальный тред', async () => {
+  test('шаг 1: seedOnboarding(A) — 24 записи (12 категорий + 10 записей поставки + садовник словаря + перенос остатков), настройки, глобальный тред', async () => {
     const seeded = await a.user.seedOnboarding();
     expect(seeded).toEqual({ seeded: true });
 
     // Идемпотентность §7: повтор ничего не создаёт
     expect(await a.user.seedOnboarding()).toEqual({ seeded: false });
+    // День сценария — расход и планируемая покупка: сьют проверяет Финансы, и включены они явно (РП-36),
+    // заведение графа выключает их, как в бою.
+    await enableFinanceForTest(userA);
 
-    // 12 категорий + 6 smart lists (три исходных, два горизонта E4, «Рутины» V1.9) +
-    // садовник словаря (§А2-7, Задача 17) + «Перенос остатков» (задача 10 Б-2) = 20
+    // 12 категорий + 10 записей поставки хоста (шаблон, оболочка, «Домой», «Записи», шесть списков —
+    // срез 1б §9.1) + садовник словаря (§А2-7, Задача 17) + «Перенос остатков» (задача 10 Б-2) = 24
     const cats = await a.entity.query({ query: 'tags=category' });
     expect(cats.length).toBe(12);
-    const lists = await a.entity.query({ query: 'tags=smart-list' });
-    expect(lists.length).toBe(6);
+    const pages = await a.entity.query({ query: 'aspect=orbis/page' });
+    expect(pages.length).toBe(10 - 1); // все записи поставки, кроме оболочки хоста (приложение)
 
     // Настройки §7.3 — дефолты стартового набора
     const settings = await a.user.getSettings();
@@ -233,7 +247,8 @@ describe('e2e слайс 1a: день из 02 §5 (два пользовател
     });
     laterId = later.id;
 
-    const lists = await a.entity.query({ query: 'tags=smart-list' });
+    // Шесть списков с 1б — страницы поставки (§9.4); прочие страницы поставки блоков запроса не несут.
+    const lists = await a.entity.query({ query: 'aspect=orbis/page' });
     expect(lists.length).toBeGreaterThanOrEqual(6);
     const blocks = lists.flatMap((e) =>
       [...(e.body ?? '').matchAll(/\{\{query:([\s\S]*?)\}\}/g)].map((m) => (m[1] as string).trim()),
@@ -252,7 +267,7 @@ describe('e2e слайс 1a: день из 02 §5 (два пользовател
       expect(typeof count).toBe('number');
     }
     // ОСМЫСЛЕННОСТЬ ВЫДАЧИ, а не «вызов не бросил». Блок «Сегодня» отбирает РОВНО одну
-    // сущность графа — задачу со сроком сегодня; всё остальное (20 сидированных, расход
+    // сущность графа — задачу со сроком сегодня; всё остальное (24 сидированных, расход
     // «Обед») в него не попадает ни по аспекту, ни по сроку. Точный набор, а не «непусто»
     // и не «все с аспектом task»: обе крайности — пустая выдача и выдача целиком — обязаны
     // краснеть, и обе краснеют (проверено двумя противоположными мутациями `tokenCond`).
@@ -361,15 +376,15 @@ describe('e2e слайс 1a: день из 02 §5 (два пользовател
   });
 
   // ── Шаг 7: экспорт содержит ВЕСЬ граф A (сущности, связи, сообщения, настройки) ─
-  test('шаг 7: exportData(A) — 24 сущности, 3 связи (dependency + два зеркала ref), 1 тред, 8 сообщений (вкл. audit и undo)', async () => {
+  test('шаг 7: exportData(A) — 28 записей, 3 связи дня (dependency + два зеркала ref) и ссылки оболочки хоста, 1 тред, 8 сообщений (вкл. audit и undo)', async () => {
     const exp = await a.user.exportData();
     expect(exp.format).toBe('orbis-export');
     // v2 (§С5): сущности новой формы плюс строки реестров ВЛАДЕЛЬЦА (Задача 13c).
     expect(exp.version).toBe(2);
 
-    // 20 сидов + «Обед» + «купить кроссовки» + «Продлить страховку» (контроль шага 4b) +
-    // «Дождаться зарплаты» = 24
-    expect(exp.entities.length).toBe(24);
+    // 24 сида + «Обед» + «купить кроссовки» + «Продлить страховку» (контроль шага 4b) +
+    // «Дождаться зарплаты» = 28
+    expect(exp.entities.length).toBe(28);
     for (const e of exp.entities) expect(() => entitySchema.parse(e)).not.toThrow();
     const expIds = new Set(exp.entities.map((e) => e.id));
     expect(expIds.has(obedId)).toBe(true);
@@ -383,13 +398,16 @@ describe('e2e слайс 1a: день из 02 §5 (два пользовател
     expect(obed?.props['orbis/amount']).toBe('340.00');
     expect(obed?.props['orbis/occurred_on']).toBe('2026-07-03');
 
-    // Три связи: одна роли `dependency` (шаг 6) и два зеркала ссылочных свойств (§А6-2) —
+    // Три связи дня: одна роли `dependency` (шаг 6) и два зеркала ссылочных свойств (§А6-2) —
     // «Обед» и «купить кроссовки» несут `orbis/finance_category`, и на каждую категорию
-    // исполнитель поставил ребро роли `ref` с подписью свойства в `meta`.
-    const byRole = new Map(exp.relations.map((r) => [r.role, r]));
-    expect(exp.relations.length).toBe(3);
+    // исполнитель поставил ребро роли `ref` с подписью свойства в `meta`. Рёбра оболочки хоста
+    // (зеркала её «Домашней» и разделов навигации) — заведения графа, а не дня: отделяются по источнику.
+    const dayRelations = exp.relations.filter((r) => r.sourceId !== shellId(userA));
+    expect(exp.relations.length - dayRelations.length).toBe(SHELL_EDGES);
+    const byRole = new Map(dayRelations.map((r) => [r.role, r]));
+    expect(dayRelations.length).toBe(3);
     expect(byRole.has('dependency')).toBe(true);
-    const refEdges = exp.relations.filter((r) => r.role === 'ref');
+    const refEdges = dayRelations.filter((r) => r.role === 'ref');
     expect(refEdges.length).toBe(2);
     expect(new Set(refEdges.map((r) => r.sourceId))).toEqual(new Set([obedId, sneakersId]));
     for (const edge of refEdges) {
@@ -439,18 +457,19 @@ describe('e2e слайс 1a: день из 02 §5 (два пользовател
     const foreign = await trpcError(b.ai.undo({ actionId: updateActionId }));
     expect(foreign.code).toBe('NOT_FOUND');
 
-    // Срез изоляции №3: экспорт B — только его 20 сидов, без данных A
+    // Срез изоляции №3: экспорт B — только его 24 сида, без данных A
     const bExp = await b.user.exportData();
-    expect(bExp.entities.length).toBe(20);
-    expect(bExp.relations.length).toBe(0);
+    expect(bExp.entities.length).toBe(24);
+    expect(bExp.relations.length).toBe(SHELL_EDGES);
+    expect(bExp.relations.every((r) => r.sourceId === shellId(userB))).toBe(true);
     expect(bExp.chatThreads.length).toBe(1);
     expect(bExp.chatMessages.length).toBe(0);
     expect(new Set(bExp.entities.map((e) => e.id)).has(obedId)).toBe(false);
 
     // Граф A не тронут вмешательствами B (перекрёстная проверка изоляции)
     const aExp = await a.user.exportData();
-    expect(aExp.entities.length).toBe(24);
-    expect(aExp.relations.length).toBe(3);
+    expect(aExp.entities.length).toBe(28);
+    expect(aExp.relations.length).toBe(3 + SHELL_EDGES);
     // «купить кроссовки» так и осталась inbox (B её не отменял/менял)
     const aSneakers = aExp.entities.find((e) => e.id === sneakersId);
     expect(aSneakers?.props['orbis/task_status']).toBe('inbox');

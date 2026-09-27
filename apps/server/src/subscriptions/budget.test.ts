@@ -21,6 +21,7 @@ import {
 import type { ExprNode } from '@orbis/shared/expr';
 import { eq, type SQL, sql } from 'drizzle-orm';
 import { PgDialect } from 'drizzle-orm/pg-core';
+import { enableFinanceForTest } from '../../test/finance-on';
 import {
   appDb,
   executeWithFixtureCategories as execute,
@@ -181,6 +182,8 @@ let plannedTxnId = '';
 beforeAll(async () => {
   await truncateAll();
   await seedOwnerGraph(db, personal(userA));
+  // Сьют проверяет Финансы — включены явно (РП-36): граф заводится с выключенными, как в бою.
+  await enableFinanceForTest(userA);
   catParent = (
     await exec(userA, 'entity_create', {
       title: 'Хобби',
@@ -458,6 +461,7 @@ describe('область `where` ведомости и списка (B3 I-1)', (
   test('живая дельта со слотом в where: entity_create траты не падает (хук кэша, :625)', async () => {
     const user = await freshGraph();
     await seedOwnerGraph(db, personal(user));
+    await enableFinanceForTest(user);
     const cat = seedCategoryId(user, 'food');
     const env = await exec(user, 'entity_create', envelope(cat, cmStart, cmEnd, '10000.00'));
     const def = await withIdentity(db, personal(user), async (tx) =>
@@ -525,6 +529,7 @@ describe('ведомость spent (§2.2, П2 №1)', () => {
     // половину своих расходов; считай он шаблон операцией — увидел бы двойной.
     const user = await freshGraph();
     await seedOwnerGraph(db, personal(user));
+    await enableFinanceForTest(user);
     const cat = newId();
     const env = await exec(user, 'entity_create', envelope(cat, cmStart, cmEnd, '10000.00'));
     const tpl = await exec(user, 'entity_create', {
@@ -828,6 +833,7 @@ describe('«живой конверт» §Б5-4 №5: alive: true (Important-1 �
   async function archivedWithEdge(slug: 'food' | 'transport', amount: string) {
     const user = await freshGraph();
     await seedOwnerGraph(db, personal(user));
+    await enableFinanceForTest(user);
     const cat = seedCategoryId(user, slug);
     const env = await exec(user, 'entity_create', envelope(cat, cmStart, cmEnd, '5000.00'));
     const spend = await exec(user, 'entity_create', txn(cat, amount, today));
@@ -963,6 +969,7 @@ describe('rollover: параметры перехода — из строки к
   test('exact_calendar_month даёт границы месяца; чужой carry — структурный отказ', async () => {
     const user = await freshGraph();
     await seedOwnerGraph(db, personal(user));
+    await enableFinanceForTest(user);
     const cat = seedCategoryId(user, 'food');
     const r = await rolloverCreate(db, personal(user), {
       month: nextMonth,
@@ -1119,6 +1126,7 @@ describe('prefer во всех половинах Budget (Ф-Б2-25): списо
   test('без prefer — SLOT_AMBIGUOUS; с prefer против ранга — все величины из одного аспекта', async () => {
     const g = await freshGraph();
     await seedOwnerGraph(db, personal(g));
+    await enableFinanceForTest(g);
     await seedCustomAspect(g, TWIN_MV_ASPECT);
     await seedCustomAspect(g, TWIN_ENV_ASPECT);
     const food = seedCategoryId(g, 'food');

@@ -24,6 +24,7 @@ import {
   newId,
 } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
+import { enableFinanceForTest } from '../../test/finance-on';
 import { adminDb, appDb, mintGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
 import { execute } from '../executor/executor';
 import type { ExecuteRequest, WireEntity } from '../executor/types';
@@ -249,6 +250,8 @@ function entityOfRow(rowIndex: number): string {
 beforeAll(async () => {
   await truncateAll();
   await seedOwnerGraph(db, personal(user));
+  // Сьют проверяет Финансы — включены явно (РП-36): граф заводится с выключенными, как в бою.
+  await enableFinanceForTest(user);
 
   // Два конверта ОДНОЙ категории — соседние месяцы (§7.1: майский и июньский)
   envMay = (await exec('entity_create', envelope('2026-05-01', '2026-05-31'))).id;

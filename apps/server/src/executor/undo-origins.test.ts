@@ -19,6 +19,7 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { type CanonicalRow, externalRowId, newId } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
+import { enableFinanceForTest } from '../../test/finance-on';
 import {
   adminDb,
   appDb,
@@ -210,6 +211,8 @@ async function assertUndoneState(): Promise<void> {
 beforeAll(async () => {
   await truncateAll();
   await seedOwnerGraph(db, personal(user));
+  // Сьют проверяет Финансы — включены явно (РП-36): граф заводится с выключенными, как в бою.
+  await enableFinanceForTest(user);
 
   // Подготовка МИМО executor и журнала (raw-вставки, как seedOnboarding): журнал
   // владельца должен содержать РОВНО ОДИН action — импорт, иначе второй undoLast

@@ -8,6 +8,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:tes
 import type { GraphId } from '@orbis/shared';
 import { addDays, EXTENSION_IDS, recurringInstanceId } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
+import { enableFinanceForTest } from '../../test/finance-on';
 import {
   appDb,
   executeWithFixtureCategories as execute,
@@ -97,6 +98,8 @@ async function seedOne(input: Record<string, unknown>): Promise<string> {
 beforeAll(async () => {
   await truncateAll();
   await seedOwnerGraph(db, personal(owner));
+  // Сьют проверяет Финансы — включены явно (РП-36): граф заводится с выключенными, как в бою.
+  await enableFinanceForTest(owner);
   noteId = await seedOne({ title: 'Заметка', tags: [], props: {}, aspects: ['orbis/note'] });
   attachNoteId = await seedOne({
     title: 'Заметка для attach',

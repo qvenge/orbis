@@ -38,9 +38,9 @@ test('первый вход: getSettings NOT_FOUND → seedOnboarding → рен
   expect(calls.some((c) => c.path === 'user.seedOnboarding')).toBe(true);
 });
 
-// A9: seedOnboarding вызывается безусловно раз за сессию — сервер идемпотентен
-// ({seeded:false}) и дописывает orbis-budget засиденным до слайса 2 (бэкфилл).
-test('повторный вход БЕЗ orbis-budget: seedOnboarding вызван, рендер не ждёт его; после ответа — refetch настроек', async () => {
+// seedOnboarding вызывается безусловно раз за сессию: признак «граф заведён» — оболочка хоста, а не
+// строка настроек (срез 1б §8.6); на заведённом графе сервер отвечает {seeded:false} и ничего не пишет.
+test('повторный вход: seedOnboarding вызван, рендер не ждёт его; после ответа — refetch настроек', async () => {
   let seedDone = false;
   const { calls } = renderWithProviders(
     <OnboardingGate>
@@ -50,7 +50,7 @@ test('повторный вход БЕЗ orbis-budget: seedOnboarding вызва
       if (path === 'user.getSettings')
         return seedDone ? { ...settings, installedViews: ['orbis-budget'] } : settings;
       if (path === 'user.seedOnboarding') {
-        // Медленный бэкфилл: рендер приложения не должен его ждать
+        // Медленный ответ: рендер приложения не должен его ждать
         return new Promise((resolve) =>
           setTimeout(() => {
             seedDone = true;
@@ -64,13 +64,13 @@ test('повторный вход БЕЗ orbis-budget: seedOnboarding вызва
   // Приложение рендерится, пока мутация ещё висит
   await waitFor(() => expect(screen.getByTestId('app')).toBeInTheDocument());
   expect(calls.some((c) => c.path === 'user.seedOnboarding')).toBe(true);
-  // После {seeded:false} настройки перечитаны — Budget-вкладка появится в этой же сессии
+  // После ответа настройки перечитаны
   await waitFor(() =>
     expect(calls.filter((c) => c.path === 'user.getSettings').length).toBeGreaterThan(1),
   );
 });
 
-test('повторный вход С orbis-budget: seedOnboarding всё равно вызван (безусловность), рендер не заблокирован', async () => {
+test('повторный вход С настройками: seedOnboarding всё равно вызван (безусловность), рендер не заблокирован', async () => {
   const { calls } = renderWithProviders(
     <OnboardingGate>
       <div data-testid="app">app</div>
@@ -127,4 +127,43 @@ test('ошибка seedOnboarding: ветка восстановления (не
       seedCallsBefore,
     ),
   );
+});
+
+// Срез 1б (Э-18, R-19): граф старой формы — сервер отвечает CONFLICT, и экран перевода показывается
+// даже при существующей строке настроек: фоновый отказ здесь обязан остановить приложение.
+test('граф старой формы: seedOnboarding → CONFLICT при существующих настройках — экран перевода, приложение не рисуется', async () => {
+  renderWithProviders(
+    <OnboardingGate>
+      <div data-testid="app">app</div>
+    </OnboardingGate>,
+    (path) => {
+      if (path === 'user.getSettings') return settings;
+      if (path === 'user.seedOnboarding') throw trpcError('CONFLICT');
+      throw new Error(`unexpected ${path}`);
+    },
+  );
+  await waitFor(() =>
+    expect(screen.getByText('Граф нужно перевести на новую версию:')).toBeInTheDocument(),
+  );
+  expect(screen.getByText('bun scripts/ops.ts migrate-1b')).toBeInTheDocument();
+  expect(screen.queryByTestId('app')).not.toBeInTheDocument();
+});
+
+test('иной отказ seedOnboarding без настроек — прежний «Не удалось загрузить настройки», экрана перевода нет', async () => {
+  renderWithProviders(
+    <OnboardingGate>
+      <div data-testid="app">app</div>
+    </OnboardingGate>,
+    (path) => {
+      if (path === 'user.getSettings') throw trpcError('NOT_FOUND');
+      if (path === 'user.seedOnboarding') throw trpcError('INTERNAL_SERVER_ERROR');
+      throw new Error(`unexpected ${path}`);
+    },
+  );
+  await waitFor(() =>
+    expect(
+      screen.getByText('Не удалось загрузить настройки. Повторите позже.'),
+    ).toBeInTheDocument(),
+  );
+  expect(screen.queryByText('Граф нужно перевести на новую версию:')).not.toBeInTheDocument();
 });
