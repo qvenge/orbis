@@ -513,6 +513,7 @@ describe('вклад одного движения — из декларации
         today: '2026-07-10',
         timeZone: DEFAULT_TIMEZONE,
         weekStart: 'monday' as const,
+        ownerCurrency: 'RUB',
         reg,
         thisEntityId: null,
       };

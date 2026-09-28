@@ -200,7 +200,8 @@ export function frameHandler(world: FrameWorld = frameWorld()): MockHandler {
         return {
           results: Object.fromEntries(
             blocks.map((b): [string, BlockResult] => {
-              if ('text' in b) return [b.key, { ok: true, kind: 'rows', rows: [], more: 0 }];
+              if ('text' in b)
+                return [b.key, { ok: true, kind: 'rows', rows: [], more: 0, closedIds: [] }];
               const n = world.badges[b.badgeOf];
               return [
                 b.key,

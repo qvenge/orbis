@@ -1190,12 +1190,14 @@ describe('dispatchTool: user_query — агрегация SQL-ем (решени
     });
     expect(r.status).toBe('ok');
     if (r.status !== 'ok') return;
-    expect(r.result).toBe('300.75');
+    // Суммы по валютам (спека 1в §3.6): записи без валюты — в валюте владельца (RUB по умолчанию).
+    const sums = [{ currency: 'RUB', sum: '300.75', count: 2 }];
+    expect(r.result).toEqual({ sums });
     expect(r.card).toEqual({
       kind: 'query_result',
       count: 2,
       entityIds: [],
-      aggregate: { op: 'sum', value: '300.75' },
+      aggregate: { op: 'sum', value: '300.75', sums },
     });
   });
 
@@ -1206,7 +1208,9 @@ describe('dispatchTool: user_query — агрегация SQL-ем (решени
       field: 'orbis/amount',
     });
     expect(r.status).toBe('ok');
-    if (r.status === 'ok') expect(r.result).toBe('300.75');
+    if (r.status === 'ok') {
+      expect(r.result).toEqual({ sums: [{ currency: 'RUB', sum: '300.75', count: 2 }] });
+    }
   });
 
   test('count: число сущностей выборки; field не требуется', async () => {
@@ -1299,7 +1303,7 @@ describe('dispatchTool: user_query материализует окно запр�
     if (r.status !== 'ok') return;
     // еженедельно с завтра: в окне next_7d ровно один инстанс (шаблон без occurred_on
     // в выборку не попадает) — сумма именно свеже-материализованного инстанса
-    expect(r.result).toBe('150.00');
+    expect(r.result).toEqual({ sums: [{ currency: 'RUB', sum: '150.00', count: 1 }] });
 
     const count = await dispatchTool(ctxFor({ identity: personal(userC) }), 'user_query', {
       query: 'aspect=orbis/financial, orbis/occurred_on=next_7d',

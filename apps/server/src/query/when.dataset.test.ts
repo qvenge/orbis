@@ -60,6 +60,7 @@ async function ctx(): Promise<CompileCtx> {
     today: TODAY,
     timeZone: TIME_ZONE,
     weekStart: 'monday',
+    ownerCurrency: 'RUB',
     reg,
     thisEntityId: null,
   };
@@ -129,6 +130,19 @@ describe('С1в-1: значение «когда» и адреса слотов 
     // Строка одна на запись, даже при двух привязках слота (§С8-21) — дублей нет.
     expect(got.length).toBe(new Set(got).size);
     expect(sorted(got)).toEqual(sorted(expected));
+  });
+
+  // Перенос ревью задачи 2: `in` у слота с моментом — поэлементно, как текст `a|b`: день 07-16 — по
+  // дню (T9 начинается завтра), момент 07-17 09:00 — по моменту (E1 и T10 — ровно тогда).
+  test('дерево `in` у слота с моментом: день и момент вместе — каждый в своей форме', async () => {
+    const got = await names({
+      filter: {
+        prop: { contract: 'orbis/when', slot: 'moment' },
+        op: 'in',
+        value: ['2026-07-16', '2026-07-17T09:00:00+07:00'],
+      },
+    });
+    expect(sorted(got)).toEqual(sorted(['T9', 'E1', 'T10']));
   });
 
   test('дерево `in` по значению: хоть одна дата в списке дней', async () => {
@@ -269,6 +283,7 @@ describe('С1в-1: правило значения на записи', () => {
       today: TODAY,
       timeZone: TIME_ZONE,
       weekStart: 'monday',
+      ownerCurrency: 'RUB',
       reg,
     };
     const rows = await withIdentity(db, personal(other), (tx) =>
@@ -353,9 +368,11 @@ describe('С1в-1 (г): окно материализации от адреса 
     });
     const week = results.week;
     if (week === undefined || !week.ok || week.kind !== 'rows') throw new Error('блок недели');
-    const instance = week.rows.find((r) => r.id !== templateId);
-    expect(instance).toBeDefined();
-    expect(String(instance?.props['orbis/start_at'])).toContain(today);
+    // Экземпляров в окне два (сегодня и через неделю — оба внутри `next_7d`), и с 1в строки идут по
+    // `id` (§3.5), а id экземпляра от порядка создания не зависит: ищется ЭКЗЕМПЛЯР ЭТОЙ НЕДЕЛИ, а не
+    // первая строка выдачи (прежний «первый» держался на физическом порядке вставки).
+    const instances = week.rows.filter((r) => r.id !== templateId);
+    expect(instances.some((r) => String(r.props['orbis/start_at']).includes(today))).toBe(true);
     expect(week.rows.some((r) => r.id === templateId)).toBe(false);
   });
 });
@@ -411,6 +428,7 @@ describe('С1в-1 (д): ранг привязок у слота не-даты (�
     today: TODAY,
     timeZone: TIME_ZONE,
     weekStart: 'monday',
+    ownerCurrency: 'RUB',
     reg: reg(twinRank),
   });
   const order = (text: string) => {

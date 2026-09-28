@@ -70,7 +70,7 @@ import { ExecError } from '../errors';
 import { compileClassMembership, compileContractPredicate } from '../expr/compile';
 import { type ExprEvalScope, evalExpr } from '../expr/eval';
 import { CORE_COLUMN, type CompileCtx, castedExpr } from '../query/compile-ast';
-import { ownerTimeZone, WEEK_START } from '../query/context';
+import { ownerQuerySettings, WEEK_START } from '../query/context';
 import { disabledExtensionsOf } from '../registry/extensions';
 import type { RegistrySnapshot } from '../registry/load';
 import { toWireEntity } from '../wire';
@@ -103,9 +103,10 @@ export interface BudgetArgs {
 /**
  * Аргументы ведомостей ВНУТРИ движка. Валюта по умолчанию — НЕ поле `BudgetArgs`: его форму реестр
  * закрепил как `{month, today}`, и внешние читатели зовут движок ровно так. Валюту читает
- * `budgetOverviewOf` (`defaultCurrencyOf`) и передаёт вглубь этим типом; в `CompileCtx` поля под неё
- * нет и заводить его нельзя — контекст компиляции общий с Q, а валюта владельца к разбору запроса
- * отношения не имеет.
+ * `runLedgers` (`ownerQuerySettings` — одна выборка с поясом) и передаёт вглубь этим типом. С 1в она
+ * есть и в `CompileCtx` (`ownerCurrency`: сумма плитки по валютам, спека 1в §3.6) — то же значение
+ * того же чтения; поле здесь остаётся, потому что ведомости читают его не компилятором Q, а своими
+ * вычислителями декларации.
  *
  * `defaults` — карта умолчаний ЧТЕНИЯ из реестра (Р-К-29): движок обязан передать её в ОБА
  * вычислителя декларации (`envelopeLedgers`, `runList`), иначе `planned = false` в SQL отвечал бы
@@ -116,7 +117,7 @@ export interface LedgerArgs extends BudgetArgs {
   defaults: ReadonlyMap<string, ExprScalar>;
   /**
    * Зона владельца — Р-33; в Б-1 компилятор ведомостей стоял на `DEFAULT_TIMEZONE`, то есть считал
-   * дни чужой зоной. Читает `runLedgers` (`ownerTimeZone`) и кладёт ОДНО значение и в `cctx.timeZone`
+   * дни чужой зоной. Читает `runLedgers` (`ownerQuerySettings`) и кладёт ОДНО значение и в `cctx.timeZone`
    * (SQL-бэкенд, `AT TIME ZONE`), и сюда — в оба конструктора области интерпретатора: две зоны у
    * одной ведомости развели бы день момента в SQL и в TS (паритет — `expr/parity.test.ts`).
    */
@@ -1183,18 +1184,20 @@ async function runLedgers(
   reg: RegistrySnapshot,
   narrow: LedgerNarrowing = {},
 ): Promise<LedgerRun> {
-  const timeZone = await ownerTimeZone(tx, graphId);
+  const settings = await ownerQuerySettings(tx, graphId);
+  const timeZone = settings.timeZone;
   const cctx: CompileCtx = {
     graphId,
     today: args.today,
     timeZone,
     weekStart: WEEK_START,
+    ownerCurrency: settings.currency,
     reg,
     thisEntityId: null,
   };
   const la: LedgerArgs = {
     ...args,
-    defaultCurrency: await defaultCurrencyOf(tx, graphId),
+    defaultCurrency: settings.currency,
     defaults: propertyDefaultsOf(reg),
     timeZone,
   };

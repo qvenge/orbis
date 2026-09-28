@@ -652,7 +652,8 @@ describe('ai.sendMessage (ж): user_query sum по decimal', () => {
 
     const payload = toolResultPayload(lastOf(scripted.requests[1]), 'user_query');
     expect(payload.status).toBe('ok');
-    expect(payload.result).toBe('30.30'); // точная строка суммы
+    // Точная строка суммы, по валютам (спека 1в §3.6): без валюты — валюта владельца.
+    expect(payload.result).toEqual({ sums: [{ currency: 'RUB', sum: '30.30', count: 2 }] });
     expect(cardsOf(r.assistantMessage)[0]).toMatchObject({
       kind: 'query_result',
       aggregate: { op: 'sum', value: '30.30' },

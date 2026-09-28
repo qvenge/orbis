@@ -41,6 +41,8 @@
 // собирает предикат равенства и оборачивает его тем же `negated`.
 import {
   type AspectDefinition,
+  type BlockSum,
+  bindingIndexOf,
   type GraphId,
   hasValidCalendar,
   type PropertyDefinition,
@@ -109,6 +111,12 @@ export interface CompileCtx {
    * Боевое значение ставит `queryContext` (константа «понедельник», вопрос владельцу В-1).
    */
   weekStart: WeekStart;
+  /**
+   * Валюта владельца (`user_settings.defaultCurrency`) — валюта денежной записи БЕЗ своей валюты
+   * (правило контракта «движения денег», спека 1в §3.6). Обязательное по той же причине, что
+   * `weekStart`; ставят сборщики контекста одной выборкой настроек (`ownerQuerySettings`).
+   */
+  ownerCurrency: string;
   reg: RegistrySnapshot;
   /** Сущность-хозяин query-блока (для `of: 'this'`); null/отсутствие — контекста нет. */
   thisEntityId?: string | null;
@@ -581,6 +589,11 @@ export interface CondExpr {
   param(value: QueryScalar): SQL;
   /** Литерал-граница рядом с токеном: календарный день. */
   dayParam(value: QueryScalar): SQL;
+  /**
+   * Форма сравнения литерала (у слота с моментом — `day` или `at`). Нет — форма у всех литералов одна.
+   * Читает её только `in`: «хоть одно из» сравнивает каждый литерал в его форме (перенос ревью задачи 2).
+   */
+  formOf?(value: QueryScalar): string;
 }
 
 /** Выражение свойства — ровно те функции, из которых условие собиралось до 1в (эталон SQL прежний). */
@@ -620,9 +633,24 @@ export function exprCond(e: CondExpr, op: QueryPropOp, value: unknown, ctx: Comp
     case 'range':
       return rangeCond(e, value as QueryRangeValue, ctx);
     case 'in': {
+      // «Хоть одно из» — то же, чем текст `a|b` является после разбора (`or` из `eq`): каждый литерал
+      // сравнивается в СВОЕЙ форме. У слота с моментом день и момент рядом законны (день — по дню,
+      // момент — по моменту), а одна левая сторона на весь список отказала бы дереву в том, что его же
+      // текст выражает (перенос ревью задачи 2). Литералы одной формы — одна форма `IN (…)`, как до 1в.
       const values = value as QueryScalar[];
-      const params = values.map((v) => e.param(v));
-      return sql`${e.comparable(values)} IN (${sql.join(params, sql`, `)})`;
+      const byForm = new Map<string, QueryScalar[]>();
+      for (const v of values) {
+        const form = e.formOf?.(v) ?? '';
+        byForm.set(form, [...(byForm.get(form) ?? []), v]);
+      }
+      const parts = [...byForm.values()].map(
+        (group) =>
+          sql`${e.comparable(group)} IN (${sql.join(
+            group.map((v) => e.param(v)),
+            sql`, `,
+          )})`,
+      );
+      return parts.length === 1 ? (parts[0] as SQL) : sql`(${sql.join(parts, sql` OR `)})`;
     }
     case 'contains':
       // Зеркало долга п. 1: `contains` на скаляре печатается тем же `p=v`, что и `eq`, и
@@ -979,13 +1007,16 @@ function topLevelConds(ast: QueryAst): readonly QueryFilterNode[] {
   return 'and' in ast.filter ? ast.filter.and : [ast.filter];
 }
 
-function compileOrderBy(ast: QueryAst, ctx: CompileCtx): SQL | null {
-  if (!ast.sortBy || ast.sortBy.length === 0) return null;
+/**
+ * УСТОЙЧИВЫЙ ПОРЯДОК (спека 1в §3.5, РП-8): `e.id` — ПОСЛЕДНИЙ ключ сортировки каждой выборки канона,
+ * без `sortBy` — единственный. Без него строки с равными ключами (и вся выдача без `sortBy`) шли в
+ * порядке, которого Postgres не обещает: под `limit` менялся даже НАБОР строк блока, а «последнее» по
+ * порядку блока (§3.7) зависело бы от плана запроса.
+ */
+function compileOrderBy(ast: QueryAst, ctx: CompileCtx): SQL {
   const positive = topLevelConds(ast);
-  return sql.join(
-    ast.sortBy.map((s) => sortItem(s, positive, ctx)),
-    sql`, `,
-  );
+  const keys = (ast.sortBy ?? []).map((s) => sortItem(s, positive, ctx));
+  return sql.join([...keys, sql`e.id ASC`], sql`, `);
 }
 
 // ─────────────────────────── Точки входа ───────────────────────────
@@ -993,10 +1024,7 @@ function compileOrderBy(ast: QueryAst, ctx: CompileCtx): SQL | null {
 /** Полный SELECT: WHERE + ORDER BY + LIMIT (кап 500 без `limit`). */
 // ОБХОДЧИК-Q: compile
 export function compileQueryAst(ast: QueryAst, ctx: CompileCtx): SQL {
-  let q = sql`SELECT ${sql.raw(ENTITY_SELECT_COLUMNS)} FROM entities e WHERE ${compileWhere(ast, ctx)}`;
-  const order = compileOrderBy(ast, ctx);
-  if (order) q = sql`${q} ORDER BY ${order}`;
-  return sql`${q} LIMIT ${ast.limit ?? DEFAULT_LIMIT}`;
+  return sql`SELECT ${sql.raw(ENTITY_SELECT_COLUMNS)} FROM entities e WHERE ${compileWhere(ast, ctx)} ORDER BY ${compileOrderBy(ast, ctx)} LIMIT ${ast.limit ?? DEFAULT_LIMIT}`;
 }
 
 /** COUNT(*) для бейджей (02 §3.2): те же условия, но без `limit`/`sortBy`/капа. */
@@ -1033,40 +1061,119 @@ function numericRef(
 }
 
 /**
- * Агрегация `user_query` (§9.2) и `aggregate: "sum"` целей (§11.3): count + sum одним
- * SELECT по той же выборке, что `compileQueryAst`, но БЕЗ limit. Сумма считается
- * `numeric` и отдаётся текстом — точность decimal-строк не теряется во float (§3.3).
+ * Сумма ОДНИМ ЧИСЛОМ — `aggregate: "sum"` прогресса цели (§11.3): count + sum одним SELECT по той же
+ * выборке, что `compileQueryAst`, но БЕЗ limit. Сумма считается `numeric` и отдаётся текстом —
+ * точность decimal-строк не теряется во float (§3.3).
  *
- * `currencyPropertyId` — только у плитки суммы блока страницы (срез 1а, РП-20): третья колонка
- * `currencies` — различные непустые значения валюты у суммированных записей, тем же проходом.
- * Сумма по записям в разных валютах бессмысленна, и плитка обязана это показать, а не сложить
- * рубли с долларами. Прежние вызывающие (`user_query`, цели) параметра не передают — их SQL
- * побайтно прежний; держит это точный пин строки в `compile-ast.test.ts` («sum без свойства
- * валюты…»). Эталон `test/golden/query-sql.json` агрегатов не покрывает и гарантией не служит.
+ * Одним числом — только у цели (В-5): она сравнивает сумму с ОДНИМ числом цели, и раздельные валюты
+ * ей сравнивать не с чем (остаток — срезу Бюджета). Плитка страницы и `user_query` считают по валютам
+ * — `compileSumByCurrencyAst`. SQL этой формы пиннит точная строка в `compile-ast.test.ts`.
  */
-export function compileSumAst(
-  ast: QueryAst,
-  field: QueryFieldRef,
-  ctx: CompileCtx,
-  currencyPropertyId?: string,
-): SQL {
+export function compileSumAst(ast: QueryAst, field: QueryFieldRef, ctx: CompileCtx): SQL {
   const ref = numericRef(field, ctx, 'sum');
-  if (currencyPropertyId === undefined) {
-    return sql`SELECT count(*) AS count, sum(${ref.value})::text AS sum FROM entities e WHERE ${compileWhere(ast, ctx)}`;
-  }
-  const currency = propRef(currencyPropertyId, ctx).text;
-  return sql`SELECT count(*) AS count, sum(${ref.value})::text AS sum, coalesce(array_agg(DISTINCT ${currency} ORDER BY ${currency}) FILTER (WHERE ${currency} IS NOT NULL), '{}') AS currencies FROM entities e WHERE ${compileWhere(ast, ctx)}`;
+  return sql`SELECT count(*) AS count, sum(${ref.value})::text AS sum FROM entities e WHERE ${compileWhere(ast, ctx)}`;
+}
+
+/** Контракт «движения денег»: его слот `amount` делает свойство денежным (спека 1в §3.6). */
+const MONEY_CONTRACT = 'orbis/money-movement';
+
+/**
+ * ВАЛЮТА ДЕНЕЖНОЙ ЗАПИСИ (спека 1в §3.6, РП-7) — выражение над строкой `e` или `null`, если поле ни у
+ * одной привязки не денежное (сумма тогда — числом, без валюты).
+ *
+ * Денежно поле, которое аспект, СТОЯЩИЙ НА ЗАПИСИ, привязал к слоту `amount` «движения денег»; у адреса
+ * слота `orbis/money-movement.amount` — все такие привязки. Валюта — слот `currency` ТОЙ ЖЕ привязки
+ * (свойство или константа `fixed`), нет значения — валюта владельца (`ownerCurrency`). Привязки — в
+ * порядке ранга аспекта (`bindingIndexOf`), первая стоящая на записи решает: то же правило, что у
+ * колонки таблицы (`rowMoneyCurrencyOf`, `@orbis/shared`). Запись без такой привязки (то же свойство
+ * без аспекта) — `NULL`: число, не деньги.
+ *
+ * У адреса слота ветка требует ещё и значения суммы у привязки: значение адреса — первая привязка С
+ * ЗНАЧЕНИЕМ (`addressNumericSql`), и валюта обязана быть её, а не соседней пустой.
+ */
+export function moneyCurrencyExpr(field: QueryFieldRef, cctx: CompileCtx): SQL | null {
+  const address = isContractAddress(field);
+  if (address && (field.contract !== MONEY_CONTRACT || field.slot !== 'amount')) return null;
+  const hits = bindingIndexOf(cctx.reg)
+    .byContract(MONEY_CONTRACT)
+    .filter((b) => b.bind.amount !== undefined && (address || b.bind.amount === field));
+  if (hits.length === 0) return null;
+  const whens = hits.map((b) => {
+    const bound = b.bind.currency;
+    const fixed = b.fixed.currency;
+    const own =
+      bound !== undefined
+        ? sql`NULLIF(props->>${lit(bound)}, '')`
+        : typeof fixed === 'string' && fixed !== ''
+          ? sql`${fixed}::text`
+          : sql`NULL::text`;
+    const on = sql`aspects @> ARRAY[${lit(b.aspectId)}]`;
+    const when = address ? sql`${on} AND props ? ${lit(b.bind.amount as string)}` : on;
+    return sql`WHEN ${when} THEN COALESCE(${own}, ${cctx.ownerCurrency})`;
+  });
+  return sql`CASE ${sql.join(whens, sql` `)} ELSE NULL END`;
 }
 
 /**
- * `latest` целей (§11.3): значение числового свойства у ПОСЛЕДНЕЙ сущности той же выборки.
- * «Последняя» = максимум `updated_at` (единственный индексированный core-порядок), ничья
- * снимается `id DESC`. Строки без значения в кандидаты не попадают: правка соседней записи
- * не должна обнулять «последнее измерение» цели.
+ * СУММА ПО ВАЛЮТАМ (спека 1в §3.6) — плитка страницы и `user_query` агента: строка на валюту
+ * `(currency, sum, count, total)`. `count` — записей со значением в этой валюте, `total` — всех записей
+ * выборки в группе (их сумма — счёт выборки, как у прежней плитки). Порядок строк — в JS
+ * (`sumsOf`): правило провода знает валюту владельца, а SQL-сортировка знала бы только алфавит.
+ * Не денежное поле — одна группа с валютой `NULL`.
+ */
+export function compileSumByCurrencyAst(
+  ast: QueryAst,
+  field: QueryFieldRef,
+  cctx: CompileCtx,
+): SQL {
+  const ref = numericRef(field, cctx, 'sum');
+  const currency = moneyCurrencyExpr(field, cctx) ?? sql`NULL::text`;
+  return sql`SELECT ${currency} AS currency, sum(${ref.value})::text AS sum, count(${ref.present})::int AS count, count(*)::int AS total FROM entities e WHERE ${compileWhere(ast, cctx)} GROUP BY 1`;
+}
+
+/**
+ * Строки `compileSumByCurrencyAst` → провод: группы без значения отброшены (сумма без слагаемых — не
+ * «0 без валюты»), порядок — валюта владельца, прочие по алфавиту, не денежные (`null`) последними.
+ * `count` — счёт всей выборки.
+ */
+export function sumsOf(
+  rows: readonly Record<string, unknown>[],
+  ownerCurrency: string,
+): { count: number; sums: BlockSum[] } {
+  const rank = (c: string | null) => (c === ownerCurrency ? 0 : c === null ? 2 : 1);
+  const sums = rows
+    .filter((r) => Number(r.count) > 0)
+    .map((r) => ({
+      currency: (r.currency as string | null) ?? null,
+      sum: (r.sum as string | null) ?? '0',
+      count: Number(r.count),
+    }))
+    .sort(
+      (a, b) =>
+        rank(a.currency) - rank(b.currency) ||
+        (a.currency ?? '').localeCompare(b.currency ?? '', 'en'),
+    );
+  return { count: rows.reduce((n, r) => n + Number(r.total ?? 0), 0), sums };
+}
+
+/**
+ * «ПОСЛЕДНЕЕ» (спека 1в §3.7): значение числового поля у ПЕРВОЙ записи в порядке блока (`sortBy`,
+ * устойчивый — с `id` последним ключом); без `sortBy` — как до 1в, последняя правка (максимум
+ * `updated_at`, ничья — `id DESC`). Строки без значения в кандидаты не попадают: правка соседней записи
+ * не должна обнулять «последнее измерение». Вторая колонка — валюта той же записи (`moneyCurrencyExpr`;
+ * не денежное — `NULL`).
+ *
+ * Компилятор ОДИН на плитку страницы и прогресс цели (`goals/progress.ts`): `sortBy` источника цели
+ * читается тем же правилом (цели с `sortBy` — в перепись §3.4).
  */
 export function compileLatestAst(ast: QueryAst, field: QueryFieldRef, ctx: CompileCtx): SQL {
   const ref = numericRef(field, ctx, 'latest');
-  return sql`SELECT ${ref.value}::text AS value FROM entities e WHERE ${compileWhere(ast, ctx)} AND ${ref.present} IS NOT NULL ORDER BY updated_at DESC, id DESC LIMIT 1`;
+  const currency = moneyCurrencyExpr(field, ctx) ?? sql`NULL::text`;
+  const order =
+    ast.sortBy !== undefined && ast.sortBy.length > 0
+      ? compileOrderBy(ast, ctx)
+      : sql`updated_at DESC, id DESC`;
+  return sql`SELECT ${ref.value}::text AS value, ${currency} AS currency FROM entities e WHERE ${compileWhere(ast, ctx)} AND ${ref.present} IS NOT NULL ORDER BY ${order} LIMIT 1`;
 }
 
 /**

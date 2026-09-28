@@ -64,7 +64,7 @@ import { entities, entityOrigins, entityVersions, relations } from '../db/schema
 import { type Tx, withIdentity } from '../db/with-identity';
 import { resolveEntitlement } from '../entitlements';
 import type { CompileCtx } from '../query/compile-ast';
-import { ownerTimeZone, todayInTimeZone, WEEK_START } from '../query/context';
+import { ownerQuerySettings, todayInTimeZone, WEEK_START } from '../query/context';
 import { effectiveRegistry, parseRegistryOfSnapshot } from '../registry/cache';
 import { type AspectDelta, aspectDeltaAfterRemove, aspectDeltaAfterSet } from '../registry/deltas';
 import { disabledExtensionsOf, setExtensionDisabled } from '../registry/extensions';
@@ -282,14 +282,15 @@ function contourOf(ctx: ExecCtx): BudgetContour {
  */
 function compileCtxOf(ctx: ExecCtx): Promise<CompileCtx> {
   ctx.compileCtx ??= (async () => {
-    const timeZone = await ownerTimeZone(ctx.tx, ctx.req.identity.graph);
+    const settings = await ownerQuerySettings(ctx.tx, ctx.req.identity.graph);
     return {
       graphId: ctx.req.identity.graph,
       reg: ctx.registry,
       thisEntityId: null,
-      timeZone,
-      today: todayInTimeZone(timeZone, ctx.clock()),
+      timeZone: settings.timeZone,
+      today: todayInTimeZone(settings.timeZone, ctx.clock()),
       weekStart: WEEK_START,
+      ownerCurrency: settings.currency,
     };
   })();
   return ctx.compileCtx;

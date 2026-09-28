@@ -72,6 +72,7 @@ const CTX: CompileCtx = {
   today: '2026-07-03',
   timeZone: 'Europe/Moscow',
   weekStart: 'monday',
+  ownerCurrency: 'RUB',
   reg: REG,
   thisEntityId: '00000000-0000-7000-8000-0000000000f1',
 };
@@ -109,6 +110,23 @@ describe('golden: Q-AST → SQL (новый компилятор, §А5-7)', () 
       expect(flat(q.sql)).toBe(g.sql);
       expect(q.params).toEqual(g.params);
     });
+  }
+});
+
+// Устойчивый порядок (спека 1в §3.5, РП-8): `id` — последний ключ сортировки каждой выборки канона,
+// без `sortBy` — единственный. Без него строки с равными ключами (и вся выдача без `sortBy`) шли в
+// порядке, который Postgres не обещает, и под `limit` менялся даже НАБОР строк. Сверка — по самому
+// эталону: правило записано в нём, и компилятор, потерявший ключ, разойдётся с эталоном выше.
+test('каждый эталон кончается ключом e.id: с sortBy — последним, без — единственным (§3.5)', () => {
+  for (const g of GOLDENS) {
+    const order = g.sql.slice(g.sql.lastIndexOf(' ORDER BY ') + ' ORDER BY '.length);
+    if (g.ast.sortBy !== undefined && g.ast.sortBy.length > 0) {
+      expect(order).toMatch(/, e\.id ASC LIMIT \$\d+$/);
+    } else {
+      expect(order).toMatch(/^e\.id ASC LIMIT \$\d+$/);
+    }
+    // Счёт (бейдж) порядка не несёт вовсе.
+    if (g.countSql !== undefined) expect(g.countSql).not.toContain('ORDER BY');
   }
 });
 

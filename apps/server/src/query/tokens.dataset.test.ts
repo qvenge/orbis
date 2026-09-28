@@ -134,6 +134,7 @@ async function ctxOf(graph: typeof daysGraph): Promise<CompileCtx> {
     today: TODAY,
     timeZone: TIME_ZONE,
     weekStart: 'monday',
+    ownerCurrency: 'RUB',
     reg,
     thisEntityId: null,
   };

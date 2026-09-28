@@ -28,7 +28,9 @@ import {
   compileLatestAst,
   compileQueryAst,
   compileSumAst,
+  compileSumByCurrencyAst,
   ENTITY_SELECT_COLUMNS,
+  moneyCurrencyExpr,
   propertyLocalDateExpr,
 } from './compile-ast';
 
@@ -54,6 +56,7 @@ function ctxOf(over: Partial<CompileCtx> = {}): CompileCtx {
     today: '2026-07-03',
     timeZone: 'Europe/Moscow',
     weekStart: 'monday',
+    ownerCurrency: 'RUB',
     reg: snapshot(),
     thisEntityId: '00000000-0000-7000-8000-0000000000f1',
     ...over,
@@ -629,16 +632,41 @@ describe('токен в роли ГРАНИЦЫ: два края (спека 1в
 
 describe('адрес слота с моментом: литералы одного условия — одного вида (перенос гейта 1, Minor-1)', () => {
   const moment = { contract: 'orbis/when', slot: 'moment' };
-  test('день рядом с моментом в range и in — отказ TYPE, а не «день BETWEEN date AND timestamptz»', () => {
+  test('день рядом с моментом в range — отказ TYPE, а не «день BETWEEN date AND timestamptz»', () => {
     for (const filter of [
       { prop: moment, op: 'range', value: { from: '2026-07-16', to: '2026-07-17T12:00:00+07:00' } },
       { prop: moment, op: 'range', value: { from: '2026-07-16T09:00:00+07:00', to: '2026-07-17' } },
-      { prop: moment, op: 'in', value: ['2026-07-16', '2026-07-17T12:00:00+07:00'] },
     ] as QueryFilterNode[]) {
       const r = refusal(() => sqlOf(filter));
       expect(r.reason, JSON.stringify(filter)).toBe('TYPE');
       expect(r.message, JSON.stringify(filter)).toContain('одного вида');
     }
+  });
+
+  // Перенос ревью задачи 2: у `in` левой стороны одной на все литералы нет — это «хоть одно из», и
+  // каждый литерал сравнивается в своей форме, как у текста `a|b` (разбор даёт `or` из `eq`). Отказ
+  // `TYPE` здесь был бы разночтением дерева и текста одного и того же запроса.
+  test('in с днём и моментом — поэлементно: день по дню, момент по моменту', () => {
+    const got = dialect.sqlToQuery(
+      compileQueryAst(
+        {
+          filter: {
+            prop: moment,
+            op: 'in',
+            value: ['2026-07-16', '2026-07-17T09:00:00+07:00'],
+          } as QueryFilterNode,
+        },
+        CTX,
+      ),
+    );
+    const flat = got.sql.replaceAll(/\s+/g, ' ');
+    expect(flat).toMatch(/\(sv\.day IN \(\$\d+::date\) OR sv\.at IN \(\$\d+::timestamptz\)\)/);
+    expect(got.params).toContain('2026-07-16');
+    expect(got.params).toContain('2026-07-17T09:00:00+07:00');
+    // Одного вида — одна форма `IN (…)`, как до переноса.
+    expect(
+      sqlOf({ prop: moment, op: 'in', value: ['2026-07-16', '2026-07-17'] } as QueryFilterNode),
+    ).toMatch(/sv\.day IN \(\$\d+::date, \$\d+::date\)/);
   });
 
   test('оба дня — по дню, оба момента — по моменту', () => {
@@ -672,6 +700,26 @@ describe('адрес слота с моментом: литералы одног
   });
 });
 
+// Перенос ревью задачи 2: край `overdue` у значения «когда» (К-2: условие, предфильтр и ключ
+// сортировки) читается из ОДНОЙ таблицы краёв (`tokenEdges`: конец — вчера), а не записан рядом
+// руками как «< сегодня». Вторая копия правила краёв разошлась бы с таблицей на первой её правке.
+describe('overdue значения «когда» — край из таблицы краёв (перенос ревью 2)', () => {
+  test('условие, предфильтр и ключ сортировки читают конец overdue (вчера), а не «сегодня»', () => {
+    const got = dialect.sqlToQuery(
+      compileQueryAst(
+        {
+          filter: { prop: { contract: 'orbis/when' }, op: 'eq', value: { token: 'overdue' } },
+          sortBy: [{ field: { contract: 'orbis/when' }, dir: 'asc' }],
+        } as QueryAst,
+        CTX,
+      ),
+    );
+    // CTX.today = 2026-07-03: края overdue — [—; 2026-07-02].
+    expect(got.params).toContain('2026-07-02');
+    expect(got.params).not.toContain('2026-07-03');
+  });
+});
+
 describe('рекурсивный обход: кап глубины — константа компилятора', () => {
   test('кап в SQL совпадает с QUERY_DEPTH_CAP канона (§А5-7)', () => {
     const sql = sqlOf({
@@ -699,17 +747,26 @@ describe('агрегаты: тип свойства решает, можно л�
     expect(latest).toContain(`props->>'orbis/amount' IS NOT NULL`);
   });
 
-  test('sum без свойства валюты — SQL прежних вызывающих (user_query, цели) дословно; с валютой — третья колонка', () => {
-    // Пин ТОЧНЫЙ, а не `toContain`: параметр валюты заведён ради плитки страницы (РП-20), и
-    // эталон `test/golden/query-sql.json` агрегатов не покрывает — без этой строки валюта,
-    // подставленная всем вызывающим по умолчанию, прошла бы незамеченной.
+  test('sum одним числом — SQL прогресса цели дословно (В-5); по валютам — отдельный компилятор', () => {
+    // Пин ТОЧНЫЙ, а не `toContain`: сумма одним числом осталась ОДНОМУ вызывающему — прогрессу цели
+    // (В-5: цель сравнивает сумму с одним числом). Плитка и `user_query` считают по валютам
+    // (`compileSumByCurrencyAst`), и валюта, протёкшая сюда, прошла бы незамеченной: эталон
+    // `test/golden/query-sql.json` агрегатов не покрывает.
     const legacy = dialect.sqlToQuery(compileSumAst(ast, 'orbis/amount', CTX));
     expect(legacy.sql).toBe(
       "SELECT count(*) AS count, sum((props->>'orbis/amount')::numeric)::text AS sum FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND aspects @> ARRAY['orbis/financial']",
     );
-    const tile = dialect.sqlToQuery(compileSumAst(ast, 'orbis/amount', CTX, 'orbis/currency')).sql;
-    expect(tile).toContain(
-      `coalesce(array_agg(DISTINCT props->>'orbis/currency' ORDER BY props->>'orbis/currency') FILTER (WHERE props->>'orbis/currency' IS NOT NULL), '{}') AS currencies`,
+    const byCurrency = dialect.sqlToQuery(compileSumByCurrencyAst(ast, 'orbis/amount', CTX));
+    // Валюта — по привязке «движения денег» аспекта НА ЗАПИСИ; нет значения — валюта владельца.
+    expect(byCurrency.sql).toContain(
+      `CASE WHEN aspects @> ARRAY['orbis/financial'] THEN COALESCE(NULLIF(props->>'orbis/currency', ''), $1) ELSE NULL END`,
+    );
+    expect(byCurrency.params[0]).toBe('RUB');
+    expect(byCurrency.sql).toMatch(/ GROUP BY 1$/);
+    // Не денежное свойство — валюты нет вовсе (а не валюта владельца).
+    expect(moneyCurrencyExpr('orbis/counterparty', CTX)).toBeNull();
+    expect(rawSql(compileSumByCurrencyAst(ast, 'orbis/step_count', ctxOf()))).toContain(
+      'NULL::text AS currency',
     );
   });
 

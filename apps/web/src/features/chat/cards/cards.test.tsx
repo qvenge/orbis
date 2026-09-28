@@ -141,6 +141,88 @@ test('серверная форма агрегата (sum + entityIds:[]) → ч
   expect(screen.queryByRole('button', { name: /показать список/i })).not.toBeInTheDocument();
 });
 
+// Сумма `user_query` по валютам (спека 1в §3.6, В-5): новая карточка несёт `sums` рядом с прежним
+// `value`, и печатаются суммы тем же форматом, что плитка страницы. Карточки хранятся в журнале чата
+// (`chat_messages.metadata.cards`), журнал только дополняется — карточка прежней формы (без `sums`)
+// из истории рисуется своим числом, а не падает и не пустеет.
+test('query_result прежней формы (sum без sums) из истории → число без падения', () => {
+  renderWithProviders(
+    <div>
+      {renderCards(
+        msg([
+          {
+            kind: 'query_result',
+            count: 2,
+            entityIds: [],
+            aggregate: { op: 'sum', value: '300.75' },
+          },
+        ]),
+      )}
+    </div>,
+    entityGet,
+  );
+  expect(screen.getByTestId('qr-aggregate')).toHaveTextContent(/^300.75$/);
+  expect(screen.getByTestId('qr-count')).toHaveTextContent('Записей: 2');
+});
+
+test('query_result с суммами по валютам → строка валют, как у плитки', () => {
+  renderWithProviders(
+    <div>
+      {renderCards(
+        msg([
+          {
+            kind: 'query_result',
+            count: 3,
+            entityIds: [],
+            aggregate: {
+              op: 'sum',
+              value: '12000',
+              sums: [
+                { currency: 'RUB', sum: '12000', count: 1 },
+                { currency: 'USD', sum: '50', count: 1 },
+                { currency: null, sum: '100', count: 1 },
+              ],
+            },
+          },
+        ]),
+      )}
+    </div>,
+    entityGet,
+  );
+  expect(screen.getByTestId('qr-aggregate')).toHaveTextContent(/^12 000 ₽ · 50 \$ · 100$/);
+  expect(screen.queryByTestId('qb-currencies')).not.toBeInTheDocument();
+});
+
+test('query_result с больше чем тремя валютами → плашка «разные валюты», как у плитки', () => {
+  renderWithProviders(
+    <div>
+      {renderCards(
+        msg([
+          {
+            kind: 'query_result',
+            count: 4,
+            entityIds: [],
+            aggregate: {
+              op: 'sum',
+              value: '12000',
+              sums: ['RUB', 'EUR', 'KZT', 'USD'].map((currency) => ({
+                currency,
+                sum: '1',
+                count: 1,
+              })),
+            },
+          },
+        ]),
+      )}
+    </div>,
+    entityGet,
+  );
+  expect(screen.getByTestId('qr-aggregate')).toHaveTextContent('4 валюты');
+  expect(screen.getByTestId('qb-currencies')).toHaveTextContent(
+    'разные валюты: RUB, EUR, KZT, USD',
+  );
+});
+
 test('query_result без aggregate → native-список: title через entity.get, не сырой id', async () => {
   renderWithProviders(
     <div>{renderCards(msg([{ kind: 'query_result', count: 2, entityIds: ['a', 'b'] }]))}</div>,

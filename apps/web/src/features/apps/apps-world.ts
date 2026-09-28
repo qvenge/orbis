@@ -167,6 +167,7 @@ export function appsHandler(w: AppsWorld): MockHandler {
               kind: 'rows',
               rows: (b.text !== undefined && w.blockRows?.[b.text.trim()]) || [],
               more: 0,
+              closedIds: [],
             },
           ]),
         ),

@@ -57,6 +57,7 @@ const GOLDEN_CTX: CompileCtx = {
   today: '2026-08-27',
   timeZone: 'Europe/Moscow',
   weekStart: 'monday',
+  ownerCurrency: 'RUB',
   reg: GOLDEN_REG,
   thisEntityId: null,
 };

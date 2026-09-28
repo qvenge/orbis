@@ -23,20 +23,14 @@ import {
   compileCountAst,
   compileLatestAst,
   compileQueryAst,
-  compileSumAst,
+  compileSumByCurrencyAst,
+  sumsOf,
 } from '../query/compile-ast';
 import { queryContext } from '../query/context';
 import { parseQueryText } from '../query/parse-text';
 import { materializationWindow, materializeInstances } from '../recurring/materialize';
 import { materializeRuleOf } from '../rules/carriers';
 import { toWireEntityFromSql } from '../wire';
-
-/**
- * Свойство валюты суммированных записей (РП-20). Литерал, а не роль контракта: плитка суммы
- * страницы — не расчёт движения денег, ей нужна ровно та колонка, что пишет каталог правил
- * (`default_currency` кладёт умолчание в неё же).
- */
-const CURRENCY_PROPERTY = 'orbis/currency';
 
 /**
  * Текст отказа исполнения блока — ОДИН на все падения базы. Сообщение Postgres наружу не идёт:
@@ -49,11 +43,17 @@ export const EXECUTION_FAILED_MESSAGE =
 
 type Window = { from: string; to: string };
 
+/**
+ * `closedIds` строк (провод 1в, `BlockResult`): поле заведено с подъёмом версии клиента `0.5.0`, чтобы
+ * провод менялся один раз; какие записи закрыты в Повестке, считает задача 6 — до неё список пуст.
+ */
+const NO_CLOSED_IDS: string[] = [];
+
 /** Скомпилированный блок: SQL готов ДО первого обращения к базе. */
 type Plan =
   | { kind: 'rows'; sql: SQL; countSql: SQL; limit: number }
   | { kind: 'count'; sql: SQL }
-  | { kind: 'sum'; sql: SQL }
+  | { kind: 'sum'; sql: SQL; ownerCurrency: string }
   | { kind: 'latest'; sql: SQL };
 
 /** `settled` — ответ блока известен без SQL: отказ разбора или бейдж страницы без блоков. */
@@ -213,7 +213,13 @@ function compileBlock(ast: QueryAst, cctx: CompileCtx, blockLimit: number | unde
     const agg = ast.aggregate;
     if (agg.fn === 'count') return { kind: 'count', sql: compileCountAst(ast, cctx) };
     if (agg.fn === 'sum') {
-      return { kind: 'sum', sql: compileSumAst(ast, agg.field, cctx, CURRENCY_PROPERTY) };
+      // По валютам (спека 1в §3.6): денежность и валюта — по привязке «движения денег» аспекта на
+      // записи, а не литерал свойства валюты (до 1в запись без валюты терялась из списка валют).
+      return {
+        kind: 'sum',
+        sql: compileSumByCurrencyAst(ast, agg.field, cctx),
+        ownerCurrency: cctx.ownerCurrency,
+      };
     }
     return { kind: 'latest', sql: compileLatestAst(ast, agg.field, cctx) };
   }
@@ -238,7 +244,13 @@ async function executePlan(sp: Tx, plan: Plan): Promise<BlockResult> {
     case 'rows': {
       const raw = [...(await sp.execute(plan.sql))] as Record<string, unknown>[];
       if (raw.length <= plan.limit) {
-        return { ok: true, kind: 'rows', rows: raw.map(toWireEntityFromSql), more: 0 };
+        return {
+          ok: true,
+          kind: 'rows',
+          rows: raw.map(toWireEntityFromSql),
+          more: 0,
+          closedIds: NO_CLOSED_IDS,
+        };
       }
       const counted = await sp.execute(plan.countSql);
       // Не меньше одной: лишняя строка уже увидена, а счётчик — отдельный statement и под
@@ -250,6 +262,7 @@ async function executePlan(sp: Tx, plan: Plan): Promise<BlockResult> {
         kind: 'rows',
         rows: raw.slice(0, plan.limit).map(toWireEntityFromSql),
         more,
+        closedIds: NO_CLOSED_IDS,
       };
     }
     case 'count': {
@@ -257,19 +270,18 @@ async function executePlan(sp: Tx, plan: Plan): Promise<BlockResult> {
       return { ok: true, kind: 'count', count: Number(rows[0]?.count) };
     }
     case 'sum': {
-      const row = (await sp.execute(plan.sql))[0] as Record<string, unknown> | undefined;
-      return {
-        ok: true,
-        kind: 'sum',
-        // sum по пустой выборке — SQL NULL: плитка показывает ноль, а не отказ (как у целей).
-        sum: (row?.sum as string | null | undefined) ?? '0',
-        count: Number(row?.count ?? 0),
-        currencies: (row?.currencies as string[] | undefined) ?? [],
-      };
+      // Пустая выборка — ни одной строки группировки: `sums: []`, плитка показывает ноль, не отказ.
+      const rows = [...(await sp.execute(plan.sql))] as Record<string, unknown>[];
+      return { ok: true, kind: 'sum', ...sumsOf(rows, plan.ownerCurrency) };
     }
     case 'latest': {
       const row = (await sp.execute(plan.sql))[0] as Record<string, unknown> | undefined;
-      return { ok: true, kind: 'latest', value: (row?.value as string | null | undefined) ?? null };
+      return {
+        ok: true,
+        kind: 'latest',
+        value: (row?.value as string | null | undefined) ?? null,
+        currency: (row?.currency as string | null | undefined) ?? null,
+      };
     }
   }
 }

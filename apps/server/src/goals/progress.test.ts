@@ -302,6 +302,46 @@ describe('computeGoalProgress: агрегаты §11.3', () => {
     expect(empty.unsupported).toBeUndefined();
   });
 
+  test('aggregate=latest с sortBy в запросе источника — первая строка порядка, а не последняя правка (спека 1в §3.7)', async () => {
+    // Компилятор «последнего» общий с плиткой страницы: `sortBy` источника задаёт порядок, и
+    // «последнее» — его первая строка. Правка самой ранней по дате записи делает её последней по
+    // updated_at — без правила 1в цель показала бы её.
+    const user = await freshGraph();
+    const caller = callerFor(user);
+    const categoryRef = await ensureCategory(user);
+    const add = (title: string, amount: string, occurredOn: string) =>
+      caller.entity.create({
+        input: { title, ...income(categoryRef, amount, ['weigh'], occurredOn) },
+        source: 'ui',
+      });
+    const early = await add('Замер 1', '82.5', '2026-07-01');
+    await add('Замер 3', '80.5', '2026-07-03');
+    await add('Замер 2', '81.0', '2026-07-02');
+    await caller.entity.update({ id: early.id, title: 'Замер 1 (уточнён)' });
+
+    const sorted = await progressOf(user, {
+      progress_source: {
+        query: 'aspect=orbis/financial, tags=weigh, sortBy=orbis/occurred_on:desc',
+        aggregate: 'latest',
+        field: 'orbis/amount',
+      },
+      target_value: '100',
+    });
+    expect(sorted.current).toBe('80.5');
+    expect(sorted.unsupported).toBeUndefined();
+
+    // Без sortBy — как до 1в: последняя правка.
+    const byEdit = await progressOf(user, {
+      progress_source: {
+        query: 'aspect=orbis/financial, tags=weigh',
+        aggregate: 'latest',
+        field: 'orbis/amount',
+      },
+      target_value: '100',
+    });
+    expect(byEdit.current).toBe('82.5');
+  });
+
   test('пустая выборка даёт 0, а не ошибку (§6.4: пустота ≠ ошибка)', async () => {
     const user = await freshGraph();
     const p = await progressOf(user, {

@@ -155,7 +155,7 @@ async function seedWorld(user: GraphId): Promise<{ projectId: string; childIds: 
 }
 
 describe('entity.blocks — пачка данных блоков (§6.3)', () => {
-  test('три блока — один вызов, три результата: строки с «ещё N», дети проекта, сумма с валютами', async () => {
+  test('три блока — один вызов, три результата: строки с «ещё N», дети проекта, сумма по валютам', async () => {
     const user = await freshGraph();
     const { projectId, childIds } = await seedWorld(user);
     const { results } = await callerFor(user).entity.blocks({
@@ -179,7 +179,12 @@ describe('entity.blocks — пачка данных блоков (§6.3)', () =>
     expect(children.more).toBe(0);
 
     const spent = asKind(results.spent, 'sum');
-    expect(spent).toEqual({ ok: true, kind: 'sum', sum: '350.50', count: 2, currencies: ['RUB'] });
+    expect(spent).toEqual({
+      ok: true,
+      kind: 'sum',
+      count: 2,
+      sums: [{ currency: 'RUB', sum: '350.50', count: 2 }],
+    });
   });
 
   test('limit блока важнее limit текста: «ещё N» раскрывается подъёмом limit', async () => {
@@ -199,7 +204,7 @@ describe('entity.blocks — пачка данных блоков (§6.3)', () =>
     expect(all.more).toBe(0);
   });
 
-  test('плитки count и latest; сумма по пустой выборке — «0» без валют', async () => {
+  test('плитки count и latest; сумма по пустой выборке — ни одной суммы', async () => {
     const user = await freshGraph();
     await seedWorld(user);
     const { results } = await callerFor(user).entity.blocks({
@@ -217,11 +222,11 @@ describe('entity.blocks — пачка данных блоков (§6.3)', () =>
     });
     expect(results.n).toEqual({ ok: true, kind: 'count', count: 7 });
     // Последняя по updated_at — вторая созданная запись.
-    expect(results.last).toEqual({ ok: true, kind: 'latest', value: '250.50' });
-    expect(results.none).toEqual({ ok: true, kind: 'sum', sum: '0', count: 0, currencies: [] });
+    expect(results.last).toEqual({ ok: true, kind: 'latest', value: '250.50', currency: 'RUB' });
+    expect(results.none).toEqual({ ok: true, kind: 'sum', count: 0, sums: [] });
   });
 
-  test('валюты суммы — различные непустые значения суммированных записей; запись без валюты их не пополняет', async () => {
+  test('сумма по валютам раздельно; запись без валюты — в валюте владельца (дефект 1а: терялась, спека 1в §3.6)', async () => {
     const user = await freshGraph();
     await seedWorld(user);
     const category = await ensureCategory(user);
@@ -251,9 +256,11 @@ describe('entity.blocks — пачка данных блоков (§6.3)', () =>
     expect(results.mixed).toEqual({
       ok: true,
       kind: 'sum',
-      sum: '352.50',
       count: 4,
-      currencies: ['RUB', 'USD'],
+      sums: [
+        { currency: 'RUB', sum: '351.50', count: 3 },
+        { currency: 'USD', sum: '1.00', count: 1 },
+      ],
     });
   });
 
@@ -498,7 +505,7 @@ describe('entity.blocks — пачка данных блоков (§6.3)', () =>
     const { results } = await callerFor(stranger).entity.blocks({
       blocks: [{ key: 'peek', text: 'children_of=this', thisEntityId: projectId }],
     });
-    expect(results.peek).toEqual({ ok: true, kind: 'rows', rows: [], more: 0 });
+    expect(results.peek).toEqual({ ok: true, kind: 'rows', rows: [], more: 0, closedIds: [] });
   });
 });
 

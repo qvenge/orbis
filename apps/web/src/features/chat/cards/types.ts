@@ -1,3 +1,5 @@
+import type { BlockSum } from '@orbis/shared';
+
 /**
  * Карточка записи (02 §2.3). Оба адреса — НОВОЙ правды (§А1-1), и это не косметика:
  * `aspects` — просто список навешенного (полей у него больше нет, Р9), а ключи `keyFields`
@@ -20,7 +22,11 @@ export type QueryResultData = {
   title?: string;
   count: number;
   entityIds: string[];
-  aggregate?: { op: 'sum' | 'count'; value: string };
+  /**
+   * `sums` — суммы по валютам (спека 1в §3.6), только у карточек после 1в: журнал чата только
+   * дополняется, и прежняя карточка без `sums` рисуется своим `value`.
+   */
+  aggregate?: { op: 'sum' | 'count'; value: string; sums?: BlockSum[] };
 };
 /**
  * Плашка подтверждения. Ключ `diff` — id СВОЙСТВА либо имя поля записи (`title`, `tags`,

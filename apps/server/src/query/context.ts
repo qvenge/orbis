@@ -1,8 +1,9 @@
 // apps/server/src/query/context.ts
 // CompileCtx запроса (§А5-7) — общий хелпер роутера entity (tRPC) и диспатча тулов
 // LLM/MCP (tools/dispatch.ts): снимок реестров — на запрос (§А10-1, из процессного кеша по
-// `(владелец, его версия, системная)` — `registry/cache.ts`); timezone — из user_settings владельца (RLS скоупит
-// выборку), без строки (онбординг-сидирование — Task 13 1a) — дефолт 'Europe/Moscow';
+// `(владелец, его версия, системная)` — `registry/cache.ts`); timezone и валюта — из user_settings
+// владельца одной выборкой (RLS скоупит её), без строки (онбординг-сидирование — Task 13 1a) —
+// дефолты 'Europe/Moscow' и 'RUB';
 // today — «сегодня» в этой таймзоне (en-CA даёт ровно YYYY-MM-DD). Вызывается ТОЛЬКО
 // под withIdentity.
 //
@@ -33,20 +34,47 @@ export function isValidTimeZone(timezone: string): boolean {
   }
 }
 
+/** Валюта владельца при отсутствующей строке настроек — умолчание схемы `user_settings.defaultCurrency`. */
+export const DEFAULT_CURRENCY = 'RUB';
+
+/** Настройки владельца, которые читает КАЖДЫЙ сборщик контекста компиляции. */
+export interface OwnerQuerySettings {
+  timeZone: string;
+  currency: string;
+}
+
 /**
- * Таймзона владельца из user_settings — под ЕГО identity (RLS скоупит выборку). Без строки
- * (онбординг не пройден) — дефолт. Валидация зоны стоит на входе (routers/user.ts), но
- * строка может прийти из БД мимо него (старая запись, админ-скрипт): RangeError означал бы
- * 500 на КАЖДОМ чтении графа (а у планировщика — сломанный тик по всем рутинам владельца),
- * поэтому мусор деградирует до дефолта, а не роняет вызывающего.
+ * Пояс и валюта владельца из user_settings — ОДНОЙ выборкой, под ЕГО identity (RLS скоупит её).
+ * Без строки (онбординг не пройден) — умолчания. Валидация зоны стоит на входе (routers/user.ts), но
+ * строка может прийти из БД мимо него (старая запись, админ-скрипт): RangeError означал бы 500 на
+ * КАЖДОМ чтении графа (а у планировщика — сломанный тик по всем рутинам владельца), поэтому мусор
+ * деградирует до дефолта, а не роняет вызывающего.
+ *
+ * Одна функция на все сборщики контекста (`queryContext`, `executor.ts` `compileCtxOf`,
+ * `actions/resolve.ts`, `subscriptions/budget.ts`) и на чтение валюты Бюджетом (`defaultCurrencyOf`):
+ * валюта владельца — правило контракта «движения денег» (спека 1в §3.6), и второе чтение с другим
+ * умолчанием разошлось бы с плиткой суммы на первом же графе без строки настроек.
  */
-export async function ownerTimeZone(tx: Tx, graph: GraphId): Promise<string> {
+export async function ownerQuerySettings(tx: Tx, graph: GraphId): Promise<OwnerQuerySettings> {
   const rows = await tx
-    .select({ timezone: userSettings.timezone })
+    .select({ timezone: userSettings.timezone, currency: userSettings.defaultCurrency })
     .from(userSettings)
     .where(eq(userSettings.graphId, graph));
   const stored = rows[0]?.timezone ?? DEFAULT_TIMEZONE;
-  return isValidTimeZone(stored) ? stored : DEFAULT_TIMEZONE;
+  return {
+    timeZone: isValidTimeZone(stored) ? stored : DEFAULT_TIMEZONE,
+    currency: rows[0]?.currency ?? DEFAULT_CURRENCY,
+  };
+}
+
+/** Таймзона владельца — см. `ownerQuerySettings` (там же правило умолчания и мусора). */
+export async function ownerTimeZone(tx: Tx, graph: GraphId): Promise<string> {
+  return (await ownerQuerySettings(tx, graph)).timeZone;
+}
+
+/** Валюта владельца — см. `ownerQuerySettings`. */
+export async function ownerCurrency(tx: Tx, graph: GraphId): Promise<string> {
+  return (await ownerQuerySettings(tx, graph)).currency;
 }
 
 /**
@@ -64,9 +92,14 @@ export function todayInTimeZone(timeZone: string, now: Date = new Date()): strin
 /**
  * Начало недели для токена `this_week` — КОНСТАНТА «понедельник» по букве спеки 1в §3.4 («начало
  * недели — понедельник, константа 1в»). Настройка владельца `weekStartDay` (`monday|sunday`, «Общие»)
- * уже существует (Д-18), и читать ли её здесь — вопрос владельцу В-1: ответ «да» — правка этой одной
- * строки (прочитать `user_settings` рядом с поясом). До ответа владелец с «воскресеньем» видит
- * `this_week` с понедельника.
+ * уже существует (Д-18), и читать ли её здесь — вопрос владельцу В-1. До ответа владелец с
+ * «воскресеньем» видит `this_week` с понедельника.
+ *
+ * Цена ответа «да» — не одна строка: константу читают ЧЕТЫРЕ сборщика контекста (`queryContext`
+ * ниже, `executor.ts` `compileCtxOf`, `actions/resolve.ts` `queryTargets`, `subscriptions/budget.ts`
+ * `runLedgers`). Все четыре уже читают настройки владельца одной выборкой `ownerQuerySettings` (пояс,
+ * валюта), поэтому ответ «да» — поле `weekStartDay` в этой выборке и `settings.weekStart` вместо
+ * константы у тех же четырёх; окно материализации и разбор берут неделю из контекста.
  */
 export const WEEK_START: WeekStart = 'monday';
 
@@ -76,13 +109,14 @@ export async function queryContext(
   thisEntityId: string | null,
 ): Promise<CompileCtx> {
   const reg = await effectiveRegistry(tx, graph);
-  const timeZone = await ownerTimeZone(tx, graph);
+  const settings = await ownerQuerySettings(tx, graph);
   return {
     graphId: graph,
     reg,
     thisEntityId,
-    today: todayInTimeZone(timeZone),
-    timeZone,
+    today: todayInTimeZone(settings.timeZone),
+    timeZone: settings.timeZone,
     weekStart: WEEK_START,
+    ownerCurrency: settings.currency,
   };
 }

@@ -46,6 +46,7 @@ import { compileClassMembership } from '../expr/compile';
 import {
   type CompileCtx,
   type CondExpr,
+  dayTokenCond,
   exprCond,
   lit,
   negated,
@@ -228,10 +229,10 @@ function valuePrefilter(
     }
   }
   if (properties.size === 0) return sql`false`;
-  const overdue = node.op === 'eq' && isTokenValue(node.value) && node.value.token === 'overdue';
+  // `overdue` особого случая здесь не требует: необходимое условие К-2 — «хоть одна дата позади», то
+  // есть та же форма `=overdue` над днём свойства, край — из таблицы краёв (`dayTokenCond`).
   const parts = [...properties].sort().map((propertyId) => {
     const day = propertyValueExprs(propertyId, cctx).day();
-    if (overdue) return sql`${day} < ${cctx.today}::date`;
     const expr: CondExpr = {
       name,
       of: `поля '${name}'`,
@@ -303,6 +304,8 @@ function datedExpr(
       return days === 0 ? at : day;
     },
     param: (v) => (!momentLiterals || isDay(v) ? dayLiteral(name, v) : moment(v)),
+    // `in` сравнивает каждый литерал в его форме: день — с днём, момент — с моментом.
+    formOf: (v) => (!momentLiterals || isDay(v) ? 'day' : 'at'),
     // Граница рядом с токеном — день; момент ISO переводится в день пояса владельца.
     dayParam: (v) =>
       !momentLiterals || isDay(v)
@@ -355,9 +358,14 @@ function isTokenValue(value: unknown): value is { token: string } {
   return typeof value === 'object' && value !== null && !Array.isArray(value) && 'token' in value;
 }
 
-/** «Все даты позади, и хотя бы одна есть» (К-2) — `overdue` у значения контракта. */
+/**
+ * «Все даты позади, и хотя бы одна есть» (К-2) — `overdue` у значения контракта. «Позади» — внутри
+ * окна `=overdue` из таблицы краёв (`dayTokenCond`: не позже его конца), а не своё «< сегодня» рядом:
+ * вторая копия правила краёв разошлась бы с таблицей на первой её правке (перенос ревью задачи 2).
+ */
 function valueOverdue(dates: SQL, cctx: CompileCtx): SQL {
-  return sql`(EXISTS (SELECT 1 FROM ${dates} w) AND NOT EXISTS (SELECT 1 FROM ${dates} w WHERE w.day >= ${cctx.today}::date))`;
+  const behind = dayTokenCond(sql.raw('w.day'), 'overdue', cctx);
+  return sql`(EXISTS (SELECT 1 FROM ${dates} w) AND NOT EXISTS (SELECT 1 FROM ${dates} w WHERE NOT (${behind})))`;
 }
 
 /**
@@ -398,23 +406,6 @@ export function addressCond(node: QueryPropNodeWithAddress, cctx: CompileCtx): S
     : scalarExpr(name, kind);
   const cond = exprCond(expr, node.op, node.value, cctx);
   return sql`(${aspectsAny(slotBindings(slotAddr, cctx).map((r) => r.binding))} AND EXISTS (SELECT 1 FROM ${values} WHERE ${cond}))`;
-}
-
-/**
- * Условие ОДНОЙ даты — для ключа сортировки: у `overdue` значения контракта это «эта дата раньше
- * сегодня» (К-2 — про запись целиком, а ключ выбирается среди её дат), прочие формы — как в
- * условии.
- */
-function perDateCond(
-  expr: CondExpr,
-  node: QueryPropNodeWithAddress,
-  alias: 'w' | 'sv',
-  cctx: CompileCtx,
-): SQL {
-  if (node.op === 'eq' && isTokenValue(node.value) && node.value.token === 'overdue') {
-    return sql`${sql.raw(`${alias}.day`)} < ${cctx.today}::date`;
-  }
-  return exprCond(expr, node.op, node.value, cctx);
 }
 
 /**
@@ -467,7 +458,10 @@ export function addressSortKey(
     kind.kind === 'slot' && kind.kinds.includes('timestamp'),
     cctx,
   );
-  const each = conds.map((n) => perDateCond(expr, n, alias, cctx));
+  // Условие ОДНОЙ даты — общий шаг `exprCond`: у `overdue` значения контракта это «эта дата внутри
+  // окна `=overdue`» (К-2 — про запись целиком, а ключ выбирается среди её дат), прочие формы — как в
+  // условии. Край — из таблицы краёв, своей копии здесь нет.
+  const each = conds.map((n) => exprCond(expr, n.op, n.value, cctx));
   const all = sql.join(each, sql` AND `);
   const any = sql.join(each, sql` OR `);
   return sql`COALESCE((SELECT min(${at}) FROM ${from} WHERE ${all}), (SELECT min(${at}) FROM ${from} WHERE ${any}))`;

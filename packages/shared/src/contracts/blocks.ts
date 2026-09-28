@@ -105,21 +105,36 @@ export interface BlockError {
 }
 
 /**
+ * Сумма одной валюты плитки (спека 1в §3.6, РП-7). `currency: null` — строки не денежные (свойство не
+ * привязано слотом `amount` «движения денег» аспекта на записи: калории, часы): их сумма — число без
+ * символа. `sum` — текстом (`numeric` без потери точности decimal-строк), `count` — записей с
+ * значением в этой валюте.
+ */
+export interface BlockSum {
+  currency: string | null;
+  sum: string;
+  count: number;
+}
+
+/**
  * Ответ по одному блоку. Вид — по проекции запроса: `display=tile` → агрегат плитки
  * (`count` | `sum` | `latest`), иначе строки.
  *
  * Строки — wire-форма сущности (`Entity`, схема `schemas/entity`): её же отдаёт `entity.query`.
- * `more` — сколько строк выборки не поместилось в `limit` (0 — всё показано).
+ * `more` — сколько строк выборки не поместилось в `limit` (0 — всё показано). `closedIds` — провод
+ * среза 1в (спека §3.5–§3.7, §5.1 «Формат»): поле заведено с подъёмом версии клиента `0.5.0`, чтобы
+ * провод менялся ОДИН раз; заполняет его задача 6 (до неё — пустой массив).
  *
- * `sum` — текстом (`numeric` без потери точности decimal-строк); `currencies` — различные
- * непустые значения `orbis/currency` у суммированных записей: плитка суммы по записям в
- * разных валютах не имеет смысла, и клиент обязан это увидеть, а не сложить рубли с долларами.
+ * `sum` — суммы ПО ВАЛЮТАМ раздельно (§3.6): рубли с долларами не складываются. Порядок — валюта
+ * владельца, прочие по алфавиту, не денежные (`null`) последними; пустая выборка — `sums: []`.
+ * `count` — записей выборки. `latest` — значение первой записи в порядке блока (без `sortBy` —
+ * последней правки) и её валюта (`null` — не денежное, §3.7).
  */
 export type BlockResult =
-  | { ok: true; kind: 'rows'; rows: Entity[]; more: number }
+  | { ok: true; kind: 'rows'; rows: Entity[]; more: number; closedIds: string[] }
   | { ok: true; kind: 'count'; count: number }
-  | { ok: true; kind: 'sum'; sum: string; count: number; currencies: string[] }
-  | { ok: true; kind: 'latest'; value: string | null }
+  | { ok: true; kind: 'sum'; count: number; sums: BlockSum[] }
+  | { ok: true; kind: 'latest'; value: string | null; currency: string | null }
   // Бейдж страницы без блоков данных: числа нет, и это не отказ — раздел рисуется без бейджа.
   | { ok: true; kind: 'none' }
   | { ok: false; error: BlockError };

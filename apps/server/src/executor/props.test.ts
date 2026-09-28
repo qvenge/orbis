@@ -1308,6 +1308,7 @@ describe('списочные пути несут новую форму', () => {
             today: '2026-08-26',
             timeZone: 'Europe/Moscow',
             weekStart: 'monday',
+            ownerCurrency: 'RUB',
           }),
         )),
       ] as Array<Record<string, unknown>>;

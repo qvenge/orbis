@@ -22,6 +22,7 @@ import {
   aspectToolJsonSchema,
   attachToolName,
   BATCH_CAP_DEFAULT,
+  type BlockSum,
   BUILTIN_RELATION_ROLE_META,
   effectiveLabel,
   extensionOfTool,
@@ -237,7 +238,12 @@ export type Card =
       title?: string;
       count: number;
       entityIds: string[];
-      aggregate?: { op: 'sum' | 'count'; value: string };
+      /**
+       * `sums` — суммы по валютам (спека 1в §3.6), только у новых карточек `sum`: карточки хранятся в
+       * журнале чата (`chat_messages.metadata.cards`), журнал только дополняется, и прежняя карточка
+       * без `sums` рисуется своим `value`. `value` — сумма первой валюты по правилу провода.
+       */
+      aggregate?: { op: 'sum' | 'count'; value: string; sums?: BlockSum[] };
     }
   | {
       kind: 'confirmation_card';

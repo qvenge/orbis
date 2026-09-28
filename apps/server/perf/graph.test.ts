@@ -166,6 +166,7 @@ beforeAll(async () => {
         today: '2026-07-03',
         timeZone: 'Europe/Moscow',
         weekStart: 'monday',
+        ownerCurrency: 'RUB',
         reg,
       }),
     )),
@@ -180,6 +181,7 @@ beforeAll(async () => {
         today: '2026-07-03',
         timeZone: 'Europe/Moscow',
         weekStart: 'monday',
+        ownerCurrency: 'RUB',
         reg,
       }),
     )),
@@ -205,6 +207,7 @@ test('корпус наполнен: обход идёт по данным, а �
     today: '2026-07-03',
     timeZone: 'Europe/Moscow',
     weekStart: 'monday' as const,
+    ownerCurrency: 'RUB',
     reg,
   };
   const rows = await withIdentity(db, personal(GRAPH_OWNER_ID), async (tx) => [
@@ -235,6 +238,7 @@ test('П6: descendants_of под RLS и пересчёт предков на п�
     today: '2026-07-03',
     timeZone: 'Europe/Moscow',
     weekStart: 'monday' as const,
+    ownerCurrency: 'RUB',
     reg,
   };
 

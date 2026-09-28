@@ -104,6 +104,7 @@ function searchHandler(): MockHandler {
         kind: 'rows',
         rows: (found?.rows ?? []).map(row) as never,
         more: found?.more ?? 0,
+        closedIds: [],
       });
     }
   }
@@ -119,7 +120,13 @@ function searchHandler(): MockHandler {
     const results = { ...(answer as { results: Record<string, BlockResult> }).results };
     for (const b of entityBlocksInput.parse(input).blocks) {
       if ('text' in b)
-        results[b.key] = byText.get(b.text) ?? { ok: true, kind: 'rows', rows: [], more: 0 };
+        results[b.key] = byText.get(b.text) ?? {
+          ok: true,
+          kind: 'rows',
+          rows: [],
+          more: 0,
+          closedIds: [],
+        };
     }
     return { results };
   };

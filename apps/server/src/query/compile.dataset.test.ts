@@ -38,6 +38,8 @@ requireEnv();
 const { db, client } = appDb();
 const USER_A = mintGraph();
 const USER_B = mintGraph();
+/** Владелец таблицы устойчивого порядка (спека 1в §3.5): свои пять задач, чужие ему не видны. */
+const USER_S = mintGraph();
 
 /** «Сегодня» датасета — все due_date/updated_at эталона расставлены вокруг этой даты. */
 const TODAY = '2026-07-03';
@@ -571,6 +573,7 @@ function ctx(): CompileCtx {
     today: TODAY,
     timeZone: TIMEZONE,
     weekStart: 'monday',
+    ownerCurrency: 'RUB',
     reg,
     thisEntityId: null,
   };
@@ -1367,5 +1370,49 @@ describe('фикстура прямого INSERT не проходит молч�
         },
       ]),
     ).not.toThrow();
+  });
+});
+
+// Устойчивый порядок (спека 1в §3.5, РП-8): `id` — последний ключ сортировки, без `sortBy` —
+// единственный. Строки вставлены в порядке УБЫВАНИЯ id: без ключа Postgres отдаёт их в порядке
+// кучи, то есть как вставлены, — и равные по приоритету задачи, и первые две выдачи без `sortBy`
+// шли бы от старшего id. Три прогона — «всегда», а не «в этот раз».
+describe('устойчивый порядок: id — последний ключ (спека 1в §3.5)', () => {
+  const STABLE = [1, 2, 3, 4, 5].map((n) => `019eb300-d5e1-7000-8000-0000000000c${n}`);
+  const HIGH = new Set([STABLE[0], STABLE[2], STABLE[4]]);
+
+  beforeAll(async () => {
+    const rows: DatasetRow[] = [...STABLE].reverse().map((id) => ({
+      id,
+      graphId: USER_S,
+      title: `Порядок ${id.slice(-2)}`,
+      tags: ['stable'],
+      props: {
+        'orbis/task_status': 'inbox',
+        'orbis/priority': HIGH.has(id) ? 'high' : 'low',
+      },
+      aspects: ['orbis/task'],
+      createdAt: new Date('2026-06-20T08:00:00Z'),
+      updatedAt: new Date('2026-06-20T08:00:00Z'),
+    }));
+    await withIdentity(db, personal(USER_S), async (tx) => {
+      await tx.insert(entities).values(datasetRows(reg, rows));
+    });
+  });
+
+  test('равный приоритет под sortBy=orbis/priority:desc — по id, в трёх прогонах', async () => {
+    for (let i = 0; i < 3; i++) {
+      const rows = await run(
+        USER_S,
+        'tags=stable, orbis/priority=high, sortBy=orbis/priority:desc',
+      );
+      expect(ids(rows)).toEqual([STABLE[0], STABLE[2], STABLE[4]]);
+    }
+  });
+
+  test('без sortBy с limit=2 над пятью записями — всегда два наименьших id', async () => {
+    for (let i = 0; i < 3; i++) {
+      expect(ids(await run(USER_S, 'tags=stable, limit=2'))).toEqual([STABLE[0], STABLE[1]]);
+    }
   });
 });

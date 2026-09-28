@@ -317,6 +317,7 @@ async function engineOn<T>(
         today,
         timeZone: DEFAULT_TIMEZONE,
         weekStart: 'monday',
+        ownerCurrency: 'RUB',
         reg,
         thisEntityId: null,
       },

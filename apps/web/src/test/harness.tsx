@@ -262,8 +262,9 @@ export function blocksReply(
   map: Readonly<Record<string, BlockReplyValue | ((block: BlockItem) => BlockReplyValue)>>,
 ): (path: string, input: unknown) => unknown | undefined {
   const asResult = (v: BlockReplyValue | undefined): BlockResult => {
-    if (v === undefined) return { ok: true, kind: 'rows', rows: [], more: 0 };
-    if (Array.isArray(v)) return { ok: true, kind: 'rows', rows: v as never, more: 0 };
+    if (v === undefined) return { ok: true, kind: 'rows', rows: [], more: 0, closedIds: [] };
+    if (Array.isArray(v))
+      return { ok: true, kind: 'rows', rows: v as never, more: 0, closedIds: [] };
     return v as BlockResult;
   };
   return (path, input) => {

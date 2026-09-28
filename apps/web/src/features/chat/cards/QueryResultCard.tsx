@@ -1,5 +1,6 @@
 import { EntityRef } from '../../../lib/entity-ref/EntityRef';
 import { aggregateLabel } from '../../../lib/field-labels';
+import { formatSums } from '../../../lib/format';
 import { Card } from '../../../ui/Card';
 import type { QueryResultData } from './types';
 
@@ -9,6 +10,10 @@ export function QueryResultCard({ card }: { card: QueryResultData }) {
   // Сервер шлёт entityIds:[] в двух РАЗНЫХ случаях: поиск ничего не нашёл (тогда карточка
   // обязана сказать это словами) и агрегат (id он не выбирает по замыслу — dispatch.ts:426).
   const hasList = card.entityIds.length > 0;
+  // Суммы по валютам (спека 1в §3.6) — тем же `formatSums`, что плитка страницы. Карточка из
+  // истории чата (до 1в) `sums` не несёт — её число печатается как было, `value`.
+  const sums = card.aggregate?.sums;
+  const summary = sums === undefined ? null : formatSums(sums);
   return (
     <Card data-testid="query-result-card" className="flex flex-col gap-2">
       {card.title && <p className="text-sm font-medium">{card.title}</p>}
@@ -21,8 +26,13 @@ export function QueryResultCard({ card }: { card: QueryResultData }) {
             data-testid="qr-aggregate"
             className="text-2xl font-semibold tabular-nums tracking-tight"
           >
-            {card.aggregate.value}
+            {summary === null ? card.aggregate.value : summary.text}
           </span>
+          {summary?.note && (
+            <p data-testid="qb-currencies" role="note" className="text-warning text-xs">
+              {summary.note}
+            </p>
+          )}
           {/* count у агрегата — это count(*) по ВСЕЙ выборке (`compile-ast.ts`, compileSumAst), то есть
               число, которого на экране больше нет нигде. У op='count' оно совпадает со
               значением агрегата — дубль не печатаем. */}

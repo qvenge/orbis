@@ -16,6 +16,7 @@ import {
   attachAspectInput,
   BATCH_CAP_DEFAULT,
   type BatchExecuteInput,
+  type BlockSum,
   batchExecuteInput,
   budgetStatusInput,
   type EntityUpdatePreconditionItem,
@@ -109,7 +110,8 @@ import {
   type CompileCtx,
   compileCountAst,
   compileQueryAst,
-  compileSumAst,
+  compileSumByCurrencyAst,
+  sumsOf,
 } from '../query/compile-ast';
 import { parseQueryText, parseRegistryOf } from '../query/parse-text';
 import { queryWithMaterialization } from '../recurring/with-materialization';
@@ -1050,16 +1052,19 @@ async function runUserQuery(ctx: ToolCallCtx, input: unknown): Promise<ToolDispa
           card: aggregateCard(ast, count, { op: 'count', value: String(count) }),
         };
       }
-      // aggregate === 'sum'; field проверен выше
+      // aggregate === 'sum'; field проверен выше. По валютам (спека 1в §3.6, В-5): модель получает
+      // суммы раздельно — сложить рубли с долларами ей не из чего, — карточка печатает их как плитка.
       const field = parsed.field as string;
-      const compiled = compileSumAst(ast, sumProperty(field, cctx), cctx);
-      const rows = await tx.execute(compiled);
-      const count = Number(rows[0]?.count);
-      const value = (rows[0]?.sum as string | null) ?? '0'; // пустая выборка: sum NULL → '0'
+      const compiled = compileSumByCurrencyAst(ast, sumProperty(field, cctx), cctx);
+      const rows = [...(await tx.execute(compiled))] as Record<string, unknown>[];
+      const { count, sums } = sumsOf(rows, cctx.ownerCurrency);
+      // `value` — прежнее поле карточки: сумма первой валюты по правилу провода (пусто — '0'); его
+      // читает история чата, у новых карточек рядом лежат `sums`.
+      const value = sums[0]?.sum ?? '0';
       return {
         status: 'ok',
-        result: value,
-        card: aggregateCard(ast, count, { op: 'sum', value }),
+        result: { sums },
+        card: aggregateCard(ast, count, { op: 'sum', value, sums }),
       };
     },
   });
@@ -1067,7 +1072,7 @@ async function runUserQuery(ctx: ToolCallCtx, input: unknown): Promise<ToolDispa
 
 /**
  * Имя поля агрегата → id свойства. Не резолвится — структурная VALIDATION с именем, которое
- * прислала модель: у `compileSumAst` на руках был бы только несуществующий id, и отказ
+ * прислала модель: у `compileSumByCurrencyAst` на руках был бы только несуществующий id, и отказ
  * назвал бы его вместо того, что написал вызывающий.
  *
  * Аспекты САМОГО ЗАПРОСА в резолве больше не участвуют, и это следствие сноса старой формы:
@@ -1088,7 +1093,7 @@ function sumProperty(field: string, cctx: CompileCtx): string {
 function aggregateCard(
   ast: QueryAst,
   count: number,
-  aggregate: { op: 'sum' | 'count'; value: string },
+  aggregate: { op: 'sum' | 'count'; value: string; sums?: BlockSum[] },
 ): Card {
   return {
     kind: 'query_result',

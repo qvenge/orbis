@@ -1516,7 +1516,7 @@ const bodyHandler =
         results: Object.fromEntries(
           blocks.map((b) => [
             b.key,
-            { ok: true, kind: 'rows', rows: [found('Разобрать Inbox')], more: 0 },
+            { ok: true, kind: 'rows', rows: [found('Разобрать Inbox')], more: 0, closedIds: [] },
           ]),
         ),
       };

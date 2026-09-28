@@ -1,6 +1,6 @@
 import type { BlockResult } from '@orbis/shared';
 import type { QueryAggregate } from '@orbis/shared/query';
-import { formatMoneyWithCurrency } from '../../../lib/format';
+import { formatMoneyWithCurrency, formatSums } from '../../../lib/format';
 import { displayText, EMPTY_TEXT } from '../../../lib/registry/format';
 import { useRegistry } from '../../../lib/registry/useRegistry';
 import { Card } from '../../../ui/Card';
@@ -9,9 +9,9 @@ import { ConfigureButton } from './BlockPlaque';
 type TileResult = Extract<BlockResult, { kind: 'count' | 'sum' | 'latest' }>;
 
 /**
- * Число плитки текстом. Сумма печатается с символом валюты, только когда валюта ОДНА: рубли с
- * долларами сервер сложил бы честно как числа, но символ при такой сумме был бы ложью (РП-20) —
- * и это вслух говорит плашка под числом. `latest` — значение по ТИПУ свойства агрегата.
+ * Число плитки текстом. Сумма — по валютам раздельно (спека 1в §3.6): сервер не складывает рубли с
+ * долларами, строку печатает общий `formatSums` (тот же, что у карточки `user_query`). `latest`
+ * денежное — с символом своей валюты (§3.7), иначе значение по ТИПУ свойства агрегата.
  */
 // ОБХОДЧИК-Q: web-tile-form
 function tileValue(
@@ -23,15 +23,13 @@ function tileValue(
     case 'count':
       return String(result.count);
     case 'sum':
-      return formatMoneyWithCurrency(
-        result.sum,
-        result.currencies.length === 1 ? (result.currencies[0] ?? null) : null,
-      );
+      return formatSums(result.sums).text;
     case 'latest': {
       if (result.value === null) return EMPTY_TEXT;
+      if (result.currency !== null) return formatMoneyWithCurrency(result.value, result.currency);
       const field = aggregate !== undefined && aggregate.fn !== 'count' ? aggregate.field : '';
       // Адрес контракта (1в) — не свойство: у него нет подписи типа в реестре, и значение
-      // печатается как есть, без поиска свойства по строке-ключу. Валюта — задача 3.
+      // печатается как есть, без поиска свойства по строке-ключу.
       if (typeof field !== 'string') return displayText(undefined, result.value, registry);
       return displayText(registry.property(field), result.value, registry);
     }
@@ -55,7 +53,7 @@ export function TileForm({
   onConfigure?: () => void;
 }) {
   const registry = useRegistry();
-  const mixed = result.kind === 'sum' && result.currencies.length > 1 ? result.currencies : null;
+  const note = result.kind === 'sum' ? formatSums(result.sums).note : null;
   return (
     <Card data-testid="qb-tile" className="flex flex-col gap-1">
       <div className="flex items-start justify-between gap-2">
@@ -65,9 +63,9 @@ export function TileForm({
         {onConfigure && <ConfigureButton onClick={onConfigure} />}
       </div>
       {heading && <p className="text-sm text-text-secondary">{heading}</p>}
-      {mixed && (
+      {note && (
         <p data-testid="qb-currencies" role="note" className="text-warning text-xs">
-          разные валюты: {mixed.join(', ')}
+          {note}
         </p>
       )}
     </Card>
