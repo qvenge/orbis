@@ -47,6 +47,7 @@ import {
   APP_ASPECT,
   APP_HOME,
   APP_NAV,
+  BUILTIN_PROPERTY_META,
   type GraphId,
   newId,
   PAGE_ASPECT,
@@ -126,12 +127,26 @@ export interface Migrate1bList {
   status: 'etalon' | 'edited';
 }
 
+/**
+ * Предел «Навигации» оболочки — `max` типа свойства в реестре поставки (`orbis/app_nav`): навигация из
+ * закреплённых длиннее него отвергла бы пачку перевода целиком (финал 1б, B1 m-1).
+ */
+export const NAV_MAX: number = (() => {
+  const t = BUILTIN_PROPERTY_META.find((p) => p.id === APP_NAV)?.type as
+    | { max?: number }
+    | undefined;
+  return typeof t?.max === 'number' ? t.max : Number.POSITIVE_INFINITY;
+})();
+
 export interface Migrate1bNavSkip {
   /** `null` — битый элемент закреплённых без строкового id. */
   id: string | null;
   title: string | null;
-  /** `duplicate` — уже в навигации; `archived` — запись в архиве; `missing` — записи в графе нет. */
-  reason: 'duplicate' | 'archived' | 'missing';
+  /**
+   * `duplicate` — уже в навигации; `archived` — запись в архиве; `missing` — записи в графе нет;
+   * `overflow` — сверх предела «Навигации» (`NAV_MAX`): навигация длиннее отвергла бы всю пачку.
+   */
+  reason: 'duplicate' | 'archived' | 'missing' | 'overflow';
 }
 
 /** Рутина хоста в графе: есть, есть в архиве, нет. */
@@ -423,7 +438,7 @@ export async function planMigrate1b(tx: Tx, graph: GraphId): Promise<Migrate1bPl
     });
   }
 
-  // ---- навигация оболочки: «Записи» + закреплённые по `order`, без дублей и архивных ----
+  // ---- навигация оболочки: «Записи» + закреплённые по `order`, без дублей и архивных, в пределе ----
   const settings = (await tx.execute(sql`
     SELECT "pinnedEntities" AS pinned FROM user_settings WHERE graph_id = ${graph}::uuid`)) as unknown as Array<{
     pinned: unknown;
@@ -445,6 +460,10 @@ export async function planMigrate1b(tx: Tx, graph: GraphId): Promise<Migrate1bPl
     // Архивная цель в навигации — отказ `цель архивна` всей пачки; закреплённая архивная запись
     // в сайдбаре не показывалась, так что из навигации владелец ничего не теряет.
     else if (row.archived) navSkipped.push({ id: row.id, title: row.title, reason: 'archived' });
+    // Предел «Навигации» (финал 1б, B1 m-1): длиннее — отказ `VALIDATION` всей пачки на `--apply`, и
+    // перевод графа невозможен без ручной правки. Лишнее отчёт называет до `--apply`.
+    else if (nav.length >= NAV_MAX)
+      navSkipped.push({ id: row.id, title: row.title, reason: 'overflow' });
     else nav.push({ id: row.id, title: row.title });
   }
 
@@ -533,7 +552,12 @@ export async function applyMigrate1b(
 
 const STATUS_WORD = { etalon: 'как в поставке', edited: 'изменено вами' } as const;
 const ROUTINE_WORD = { present: 'есть', archived: 'в архиве', absent: 'нет' } as const;
-const SKIP_WORD = { duplicate: 'дубль', archived: 'в архиве', missing: 'записи нет' } as const;
+const SKIP_WORD = {
+  duplicate: 'дубль',
+  archived: 'в архиве',
+  missing: 'записи нет',
+  overflow: `сверх предела навигации (${NAV_MAX} разделов)`,
+} as const;
 
 /** План графа — строками, как их прочтёт владелец. */
 export function formatMigrate1bPlan(p: Migrate1bPlan): string[] {

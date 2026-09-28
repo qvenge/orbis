@@ -50,6 +50,7 @@ import {
   formatMigrate1bPlan,
   MIGRATE_1B_LABEL,
   type Migrate1bIo,
+  NAV_MAX,
   planMigrate1b,
   reportMigrate1b,
   runMigrate1b,
@@ -544,6 +545,95 @@ describe('applyMigrate1b — --apply: одна пачка исполнителя
     const mineAfter = await rowOf(user, mine);
     expect(mineAfter.updatedAt).toBe(mineBefore.updatedAt);
     expect(mineAfter.props[HOME_PROPERTY]).toBeUndefined();
+  });
+
+  test('(в) финал B2 M-3: список в архиве переводится, отсутствующего нет — план и --apply называют оба', async () => {
+    const user = await freshGraph();
+    await seedLegacyWorld(user);
+    await ownerUpdate(user, { id: listId(user, 'horizon-life'), archived: true });
+    await admin((a) =>
+      a.execute(sql`DELETE FROM entities WHERE id = ${listId(user, 'upcoming')}::uuid`),
+    );
+
+    const p = await plan(user);
+    expect(p.missingLists).toEqual(['upcoming']);
+    expect(p.lists.map((l) => [l.key, l.archived])).toEqual(
+      LIST_KEYS.filter((k) => k !== 'upcoming').map((k) => [k, k === 'horizon-life']),
+    );
+    expect(p.navSkipped.map((s) => [s.id, s.reason])).toEqual([
+      [listId(user, 'upcoming'), 'missing'],
+    ]);
+    const printed = formatMigrate1bPlan(p).join('\n');
+    expect(printed).toContain('upcoming — списка в графе нет');
+    expect(printed).toContain('«Жизнь» — как в поставке прежней версии');
+    expect(printed).toContain('; в архиве');
+
+    const out = await applyMigrate1b(db, personal(user));
+    expect(out.status).toBe('migrated');
+    // Архивный список переведён: аспекты и свойства эталона на месте, архив не снят, тело то же.
+    const life = await rowOf(user, listId(user, 'horizon-life'));
+    expect(life.archived).toBe(true);
+    expect(life.aspects).toEqual(expect.arrayContaining([PAGE_ASPECT, SUPPLY_ASPECT]));
+    expect(life.props[SUPPLY_KEY]).toBe('horizon-life');
+    expect(life.body).toBe(LEGACY_ETALON_TEXTS['horizon-life'] as string);
+    expect(supplyStatusOf(life)).toBe('etalon');
+    // Отсутствующий не создан; оболочка — без него.
+    const upcoming = await admin(
+      (a) =>
+        a.execute(
+          sql`SELECT 1 FROM entities WHERE id = ${listId(user, 'upcoming')}::uuid`,
+        ) as unknown as Promise<unknown[]>,
+    );
+    expect(upcoming).toHaveLength(0);
+    const shell = await rowOf(user, supplyRecordId(user, 'host-shell'));
+    expect(shell.props[APP_NAV]).toEqual([
+      supplyRecordId(user, 'records'),
+      ...PINNED_KEYS.filter((k) => k !== 'upcoming').map((k) => listId(user, k)),
+    ]);
+    expect(supplyStatusOf(shell)).toBe(p.shellStatus);
+  });
+
+  test('(в) финал B1 m-1: закреплённых больше предела навигации — лишние «сверх предела», --apply проходит', async () => {
+    const user = await freshGraph();
+    await seedLegacyWorld(user);
+    const created = await execute(
+      db,
+      {
+        identity: personal(user),
+        actorKind: 'owner',
+        source: 'ui',
+        batchId: crypto.randomUUID(),
+        operations: Array.from({ length: NAV_MAX }, (_, i) => ({
+          tool: 'entity_create',
+          input: { title: `Раздел ${i + 1}`, tags: [] },
+        })),
+      },
+      { sink: journal },
+    );
+    if (!created.ok) throw new Error(JSON.stringify(created.error));
+    const ids = created.results.map((r) => (r as { id: string }).id);
+    await setPinned(
+      user,
+      ids.map((id, order) => ({ id, order })),
+    );
+
+    const p = await plan(user);
+    // «Записи» + NAV_MAX − 1 закреплённых; последняя — сверх предела.
+    expect(p.nav).toHaveLength(NAV_MAX);
+    expect(p.navSkipped.map((s) => [s.id, s.reason])).toEqual([
+      [ids[NAV_MAX - 1] ?? null, 'overflow'],
+    ]);
+    expect(formatMigrate1bPlan(p).join('\n')).toContain(
+      `«Раздел ${NAV_MAX}» — сверх предела навигации (${NAV_MAX} разделов)`,
+    );
+
+    const out = await applyMigrate1b(db, personal(user));
+    expect(out.status).toBe('migrated');
+    const shell = await rowOf(user, supplyRecordId(user, 'host-shell'));
+    expect(shell.props[APP_NAV]).toEqual([
+      supplyRecordId(user, 'records'),
+      ...ids.slice(0, NAV_MAX - 1),
+    ]);
   });
 
   test('(г) повторный перевод — «уже переведён», ноль записей', async () => {

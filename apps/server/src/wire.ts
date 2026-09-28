@@ -200,7 +200,12 @@ export function registryVersionOf(v: { systemVersion: number; ownerVersion: numb
   return `${v.systemVersion}.${v.ownerVersion}`;
 }
 
-/** Один pinned-элемент сайдбара (§4.4): сущность + порядок. */
+/**
+ * Элемент колонки `pinnedEntities` (§4.4 до 1б): запись + порядок. Закреплённых в сайдбаре больше нет
+ * (срез 1б §9.3: их место заняла навигация оболочки хоста). По смыслу колонку читает только перевод
+ * данных `migrate-1b` — навигацией оболочки становятся именно они; провод настроек отдаёт её как есть,
+ * web её не читает (§8.6: поле перестаёт использоваться, колонка уходит позже).
+ */
 export interface PinnedEntity {
   id: string;
   order: number;

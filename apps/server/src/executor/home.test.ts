@@ -349,3 +349,34 @@ test('attach аспекта «приложение» с навигацией —
   okAction(await run(graph, 'attach_orbis_app', { entity_id: host, data: { [APP_NAV]: [p1] } }));
   expect(await homeOf(graph, p1)).toBe(host);
 });
+
+// ─── финал 1б: регистр id (B1 m-2) и выключенное приложение (Fable M-2) ──────────────────────
+
+test('id места верхним регистром — отказ проверки ссылок: containment «Дома» по нижнему регистру держится (B1 m-2)', async () => {
+  // «Первое место» ищет держателей containment'ом по `p.id::text` (нижний регистр). Держится это
+  // только потому, что значение `ref` верхним регистром в граф не попадает ни у одного актора.
+  const graph = await freshGraph();
+  const p1 = await page(graph, 'P1');
+  const a = await app(graph, 'Приложение A');
+  for (const props of [{ [APP_NAV]: [p1.toUpperCase()] }, { [APP_HOME]: p1.toUpperCase() }]) {
+    const r = await run(graph, 'entity_update', { id: a, props });
+    expect(r.ok ? null : (r.error.details as { reason?: string } | undefined)?.reason).toBe(
+      'REF_TARGET',
+    );
+  }
+  expect(await homeOf(graph, p1)).toBeUndefined();
+});
+
+test('выключенное приложение первым местом страницы не становится — «Дом» не ставится (Fable M-2)', async () => {
+  const graph = await freshGraph();
+  const p1 = await page(graph, 'Утро');
+  const a = await app(graph, 'Дача');
+  await callerFor(graph).app.setDisabled({ appId: a, disabled: true, extensions: [] });
+  okAction(await run(graph, 'entity_update', { id: a, props: { [APP_NAV]: [p1] } }));
+  expect(await homeOf(graph, p1)).toBeUndefined();
+  // Контроль: та же пачка на включённом приложении «Дом» ставит (тест не пуст по построению).
+  const p2 = await page(graph, 'Вечер');
+  const b = await app(graph, 'Сад');
+  okAction(await run(graph, 'entity_update', { id: b, props: { [APP_NAV]: [p2] } }));
+  expect(await homeOf(graph, p2)).toBe(b);
+});

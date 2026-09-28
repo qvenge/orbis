@@ -62,6 +62,7 @@ import { execute } from '../executor/executor';
 import type { Identity } from '../identity';
 import { effectiveRegistry } from '../registry/cache';
 import { disabledExtensionsOf, setExtensionDisabled } from '../registry/extensions';
+import { lockOwnerRegistry } from '../registry/ops';
 import { supplyCreateOps, supplyRecordId } from '../supply/records';
 import { SEED_CATEGORIES } from './categories';
 import { seedGardener } from './gardener';
@@ -147,18 +148,35 @@ async function worldSeeded(tx: Tx, graph: GraphId): Promise<boolean> {
   return rows.length > 0;
 }
 
-/** Владелец уже сказал своё слово о маске: в журнале графа есть его `module_set` (с Undo — тоже слово). */
+/**
+ * Владелец уже сказал своё слово о ФИНАНСАХ — расширении, которое заведение выключает: в журнале графа
+ * есть операция `module_set` по `finance` (с Undo — тоже слово). Проба — по ОПЕРАЦИИ, а не по типу
+ * действия (финал 1б, остатки М-9, М-10): `module_set` приходит и одиночным действием, и внутри пачки
+ * `app.setDisabled` (тип `batch`), — а слово о другом расширении Финансы не касается, и заведение
+ * доводит их до выключения, как задумано.
+ */
 async function ownerSetMask(tx: Tx, graph: GraphId): Promise<boolean> {
+  const probe = {
+    actions: [
+      { operations: [{ op: 'module_set', payload: { module: SETUP_DISABLED_EXTENSION } }] },
+    ],
+  };
   const rows = await tx.execute(sql`
     SELECT 1 FROM chat_messages m JOIN chat_threads t ON t.id = m.thread_id
      WHERE t.graph_id = ${graph}::uuid
-       AND m.metadata @> ${JSON.stringify({ actions: [{ type: 'module_set' }] })}::jsonb
+       AND m.metadata @> ${JSON.stringify(probe)}::jsonb
      LIMIT 1`);
   return rows.length > 0;
 }
 
-/** Строка настроек под замком — сериализует шаги маски двух параллельных входов. */
+/**
+ * Замки шагов маски: реестра владельца, затем строки настроек. Строка сериализует шаги маски двух
+ * параллельных входов; замок реестра — с `module_set` исполнителя (финал 1б, остаток М-12): тот
+ * читает прежнюю маску для Undo под этим замком, и запись маски мимо него дала бы Undo по устаревшей
+ * маске. Порядок — глобальный «advisory → строки» исполнителя: обратный — взаимная блокировка.
+ */
 async function lockSettings(tx: Tx, graph: GraphId): Promise<void> {
+  await lockOwnerRegistry(tx, graph);
   await tx.execute(sql`SELECT 1 FROM user_settings WHERE graph_id = ${graph}::uuid FOR UPDATE`);
 }
 
@@ -218,10 +236,10 @@ async function seedSupplyRecords(
   const graph = who.graph;
   const ids = keys.map((k) => supplyRecordId(graph, k));
   const missing = await missingIds(db, who, ids);
-  if (missing.size === 0) {
-    await assertOwnSupplyIds(db, who, keys);
-    return false;
-  }
+  // Чужая запись на id поставки — отказ ДО пачки при любом числе недостающих (финал 1б, остаток М-11):
+  // иначе занятый id молча пропускался бы, а оболочка ставила бы навигацию на чужую запись.
+  await assertOwnSupplyIds(db, who, keys);
+  if (missing.size === 0) return false;
 
   const reg = await withIdentity(db, who, (tx) => effectiveRegistry(tx, graph));
   const all: readonly SupplyKey[] = etalons.map((e) => e.key);
@@ -285,6 +303,9 @@ export async function setupGraph(
   // Строка настроек и решение о маске — под замком строки. Строку заводим здесь, а не ждём
   // `setExtensionDisabled` в конце: тот завёл бы её с одной маской, а дефолты настроек — дело заведения.
   const plan = await withIdentity(db, who, async (tx) => {
+    // Замок реестра — ПЕРВЫМ statement'ом (порядок «advisory → строки», см. `lockSettings`): вставка
+    // строки настроек ниже уже берёт её замок.
+    await lockOwnerRegistry(tx, graph);
     await tx
       .insert(userSettings)
       .values({

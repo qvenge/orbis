@@ -376,7 +376,11 @@ test('матрица покрывает словарь расширений це
 // Матрица С1б-4 по четырём расширениям
 // ---------------------------------------------------------------------------
 
-describe.each([...CASES])('выключенное расширение $ext (С1б-4)', (c) => {
+// Имя блока — через `%s` из пары [ext, случай]: bun 1.2.7 не подставляет `$ext` из объекта, и
+// четыре блока звались бы одинаково — по падению не понять, какое расширение сломано (финал B2 M-1).
+describe.each(
+  CASES.map((c) => [c.ext, c] as const),
+)('выключенное расширение %s (С1б-4)', (_ext, c) => {
   interface World {
     g: GraphId;
     cat: string;
@@ -454,6 +458,47 @@ describe.each([...CASES])('выключенное расширение $ext (С1
     const prompt = await promptChannels(g);
     expect(extensionIdsIn(prompt.chat).filter((id) => own.includes(id))).toEqual([]);
     expect(extensionIdsIn(prompt.routine).filter((id) => own.includes(id))).toEqual([]);
+    // И следы — имена тулов, поверхности, ключи действий расширения (финал B2 M-2): каналы промпта
+    // стерегутся не слабее тулов (`leaksOf`).
+    expect(extensionMarksIn(prompt.chat, c.ext)).toEqual([]);
+    expect(extensionMarksIn(prompt.routine, c.ext)).toEqual([]);
+  });
+
+  test('4а. путь attach: свой аспект с полем расширения — значение ставится → read_only, без значения — законно', async () => {
+    // Путь attach гейта полей на КАЖДОМ расширении (финал 1б, мутации: N-2 держал только Финансы).
+    // Свой граф: тул своего аспекта с полем расширения в составе — отдельная тема видимости (N-2),
+    // в мир блока он не входит.
+    const g = await newGraph();
+    const cat2 = await category(g, 'Транспорт');
+    const [prop, value] =
+      Object.entries(c.extEdit(cat2)).find(
+        ([id]) => BUILTIN_PROPERTY_META.find((m) => m.id === id)?.module === c.ext,
+      ) ?? [];
+    if (prop === undefined) throw new Error(`у случая ${c.ext} нет поля расширения в extEdit`);
+    const ownKey = `user/with_${c.ext}`;
+    const own = await run(g, 'aspect_create', {
+      key: ownKey,
+      label: { ru: `Со своим полем ${c.ext}` },
+      description: { ru: 'Свой аспект владельца с полем расширения' },
+      properties: [{ propertyId: prop, required: false }],
+    });
+    if (!own.ok) throw new Error(`свой аспект: ${own.error.code} — ${own.error.message}`);
+    const target = await created(g, { title: `Цель навешивания ${c.ext}`, props: {} });
+    await setEnabled(g, c.ext, false);
+    const ownAttach = { tool: attachToolName(ownKey), target, prop, value };
+    expect(
+      refusalOf(
+        await run(g, ownAttach.tool, {
+          entity_id: ownAttach.target,
+          data: { [ownAttach.prop]: ownAttach.value },
+        }),
+      ),
+    ).toMatchObject({
+      code: 'MODULE_DISABLED',
+      details: { extension: c.ext, reason: 'read_only', property: ownAttach.prop },
+    });
+    expect((await propsOf(g, ownAttach.target))[ownAttach.prop]).toBeUndefined();
+    expect((await run(g, ownAttach.tool, { entity_id: ownAttach.target, data: {} })).ok).toBe(true);
   });
 
   test('2. property_catalog: ни одного свойства расширения, его аспектов нет среди носителей', async () => {

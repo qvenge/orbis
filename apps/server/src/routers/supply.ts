@@ -17,6 +17,14 @@ import { ownerOnlyProcedure, router } from '../trpc';
 
 const keyInput = z.object({ key: z.enum(SUPPLY_KEYS) }).strict();
 
+/**
+ * «Вернуть как было» — с версией записи, которую видел клиент (финал 1б, B1 m-3): возврат не снимет
+ * то, чего диалог не показал. Необязательна: без неё — версия, прочитанная сервером.
+ */
+const revertInput = z
+  .object({ key: z.enum(SUPPLY_KEYS), expectedUpdatedAt: z.string().min(1).optional() })
+  .strict();
+
 /** Отказ механизма — структурной ошибкой tRPC, как у прочих ручек исполнителя. */
 async function guarded<T>(fn: () => Promise<T>): Promise<T> {
   try {
@@ -44,8 +52,10 @@ export const supplyRouter = router({
     .mutation(({ ctx, input }) => guarded(() => declineUpdate(ctx, input.key))),
   /** «Вернуть как было». */
   revert: ownerOnlyProcedure
-    .input(keyInput)
-    .mutation(({ ctx, input }) => guarded(() => revertToEtalon(ctx, input.key))),
+    .input(revertInput)
+    .mutation(({ ctx, input }) =>
+      guarded(() => revertToEtalon(ctx, input.key, input.expectedUpdatedAt)),
+    ),
   /** «Добавить» новую запись поставки. */
   add: ownerOnlyProcedure
     .input(keyInput)

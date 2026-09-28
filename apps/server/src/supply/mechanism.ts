@@ -442,9 +442,21 @@ export async function declineUpdate(
 export async function revertToEtalon(
   ctx: SupplyCtx,
   key: SupplyKey,
+  expectedUpdatedAt?: string,
 ): Promise<{ actionId: string }> {
   const s = await snapshot(ctx);
   const row = liveOrRefuse(s, key);
+  // Версия, которую видел клиент (финал 1б, B1 m-3): диалог оболочки назвал исчезающие разделы по
+  // ЕГО копии записи, и возврат поверх правки, пришедшей после (агент добавил раздел), снял бы то, чего
+  // диалог не называл. Сверка — здесь и предусловием в пачке (гонка после чтения), как у «Принять».
+  if (expectedUpdatedAt !== undefined && expectedUpdatedAt !== row.updatedAt) {
+    throw new ExecError(
+      'STALE_VERSION',
+      'запись изменилась, пока был открыт диалог, — откройте «Вернуть как было» ещё раз',
+      { key },
+    );
+  }
+  const version = expectedUpdatedAt ?? row.updatedAt;
   const text = row.props[SUPPLY_TEXT];
   if (typeof text !== 'string') {
     throw new ExecError('VALIDATION', 'у записи нет текста эталона — возвращать не к чему', {
@@ -478,6 +490,7 @@ export async function revertToEtalon(
         tool: 'entity_update',
         input: {
           id: row.id,
+          precondition: [{ property: 'orbis/updated_at', in: [version] }],
           title: print.title,
           emoji: print.emoji,
           props: print.props,
@@ -504,7 +517,7 @@ export async function revertToEtalon(
         id: row.id,
         title: print.title,
         emoji: print.emoji,
-        ...(bodyChanged && { body: print.body, expectedUpdatedAt: row.updatedAt }),
+        ...(bodyChanged && { body: print.body, expectedUpdatedAt: version }),
       },
     },
   ]);

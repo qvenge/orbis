@@ -9,6 +9,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { GraphId } from '@orbis/shared';
 import {
+  APP_ASPECT,
   APP_HOME,
   APP_NAV,
   APP_NAV_FORM,
@@ -1075,6 +1076,11 @@ describe('заведение графа (§8.6, РП-15, С1б-5)', () => {
     const caller = callerFor(user);
     await caller.user.seedOnboarding();
     await ownerEdit(user, { id: supplyRecordId(user, 'host-shell'), archived: true });
+    // Работа, которую признак обязан запретить (гейт финала B2 I-1): записи «Записи» нет (удалена
+    // фикстурой — в продукте так нельзя; то же, что новый ключ поставки нового релиза). На целиком
+    // заведённом графе каждый шаг доведения — пустая запись, и снимок совпал бы при любом ответе
+    // признака; без «Записей» вход, не узнавший архивную оболочку, заведёт её заново.
+    await deleteRow(user, supplyRecordId(user, 'records'));
 
     const before = await worldSnapshot(user);
     expect(await caller.user.seedOnboarding()).toEqual({ seeded: false });
@@ -1132,6 +1138,8 @@ describe('заведение графа (§8.6, РП-15, С1б-5)', () => {
   test('(л) доведение частичного заведения не трогает маску, которую владелец уже задал', async () => {
     // Между падением и следующим входом приложение работает (строка настроек есть), и владелец вправе
     // переключить расширение — его журналированное действие доведение не отменяет (фикс-раунд 1).
+    // Слово о ДРУГОМ расширении Финансы не касается (финал 1б, М-10): их доведение выключает, как
+    // задумано заведением, а маску владельца по прочим расширениям не трогает.
     for (const step of ['supply', 'mask'] as const) {
       const user = await freshGraph();
       await setupGraph(db, personal(user), {
@@ -1140,12 +1148,90 @@ describe('заведение графа (§8.6, РП-15, С1б-5)', () => {
         },
       }).catch(() => undefined);
       await ownerModuleSet(user, 'goals', false);
-      const mask = await disabledOf(user);
-      expect([step, mask]).toEqual([step, expect.arrayContaining(['goals'])]);
+      expect([step, await disabledOf(user)]).toEqual([step, expect.arrayContaining(['goals'])]);
 
       expect([step, await callerFor(user).user.seedOnboarding()]).toEqual([step, { seeded: true }]);
-      expect([step, await disabledOf(user)]).toEqual([step, mask]);
+      expect([step, [...(await disabledOf(user))].sort()]).toEqual([step, ['finance', 'goals']]);
     }
+  });
+
+  test('(л) слово владельца о Финансах — и одиночным `module_set`, и внутри пачки приложения (М-9) — доведение не отменяет', async () => {
+    for (const how of ['module_set', 'app-batch'] as const) {
+      const user = await freshGraph();
+      await setupGraph(db, personal(user), {
+        afterStep: (s) => {
+          if (s === 'supply') throw new Error('падение');
+        },
+      }).catch(() => undefined);
+      if (how === 'module_set') {
+        await ownerModuleSet(user, 'finance', true);
+      } else {
+        // «Включить приложение» с Финансами в «Составе» — пачка `app-toggle` (тип действия `batch`).
+        const created = await execute(
+          db,
+          {
+            identity: personal(user),
+            actorKind: 'owner',
+            source: 'ui',
+            operations: [
+              {
+                tool: 'entity_create',
+                input: { title: 'Деньги', tags: [], aspects: [APP_ASPECT] },
+              },
+            ],
+          },
+          { sink: journal },
+        );
+        if (!created.ok) throw new Error(JSON.stringify(created.error));
+        const appId = (created.results[0] as { id: string }).id;
+        await callerFor(user).app.setDisabled({ appId, disabled: false, extensions: ['finance'] });
+      }
+      expect([how, await disabledOf(user)]).toEqual([how, []]);
+
+      expect([how, await callerFor(user).user.seedOnboarding()]).toEqual([how, { seeded: true }]);
+      expect([how, await disabledOf(user)]).toEqual([how, []]);
+    }
+  });
+
+  test('(л) шаги маски заведения ждут замка реестра владельца (М-12): `module_set` и маска — по очереди', async () => {
+    const user = await freshGraph();
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    let held: () => void = () => {};
+    const locked = new Promise<void>((r) => {
+      held = r;
+    });
+    // Замок реестра держит «параллельный `module_set`» — отдельная транзакция своего соединения.
+    const holder = db.transaction(async (tx) => {
+      await tx.execute(
+        sql`SELECT pg_advisory_xact_lock(hashtextextended(${`${user}:registry`}, 0))`,
+      );
+      held();
+      await gate;
+    });
+    await locked;
+    let done = false;
+    const setup = setupGraph(db, personal(user)).then((r) => {
+      done = true;
+      return r;
+    });
+    // Замок отпускается при любом исходе: иначе упавшая проверка оставила бы открытую транзакцию, и
+    // сьют повис бы на закрытии соединения.
+    let blocked: { done: boolean; settings: number };
+    try {
+      await new Promise((r) => setTimeout(r, 300));
+      blocked = { done, settings: (await counts(user)).settings };
+    } finally {
+      release();
+      await holder;
+    }
+    // Шаг маски (снятие маски первого заведения) стоял в очереди за замком: ни строки настроек, ни
+    // мира ещё не было.
+    expect(blocked).toEqual({ done: false, settings: 0 });
+    expect(await setup).toEqual({ seeded: true });
+    expect(await disabledOf(user)).toEqual(['finance']);
   });
 
   test('(м) проигравший гонку вход маску не трогает: граф довёл другой, владелец включил Финансы', async () => {
@@ -1199,6 +1285,35 @@ describe('заведение графа (§8.6, РП-15, С1б-5)', () => {
       expect(err).toBeInstanceOf(TRPCError);
       expect((err as TRPCError).code).toBe('UNPROCESSABLE_CONTENT');
       expect((err as TRPCError).message).toContain('занят чужой записью');
+    }
+  });
+
+  test('(н) id страницы поставки занят чужой записью при прочих недостающих — явный отказ до пачки (М-11)', async () => {
+    const user = await freshGraph();
+    // «Записи» — не id прежнего списка (те узнаются как мир старой формы, (д)/(о)).
+    const recordsId = supplyRecordId(user, 'records');
+    const r = await execute(db, {
+      identity: personal(user),
+      actorKind: 'owner',
+      source: 'ui',
+      operations: [{ tool: 'entity_create', input: { id: recordsId, title: 'Чужая', tags: [] } }],
+    });
+    expect(r.ok).toBe(true);
+    const err = await callerFor(user)
+      .user.seedOnboarding()
+      .then(
+        () => null,
+        (e: unknown) => e,
+      );
+    expect(err).toBeInstanceOf(TRPCError);
+    expect((err as TRPCError).message).toContain('«records»');
+    expect((err as TRPCError).message).toContain('занят чужой записью');
+    // Ни одной записи поставки: пачка страниц не ушла.
+    for (const key of ['home', 'upcoming', 'host-shell'] as const) {
+      const rows = await withIdentity(db, personal(user), (tx) =>
+        tx.execute(sql`SELECT 1 FROM entities WHERE id = ${supplyRecordId(user, key)}::uuid`),
+      );
+      expect([key, rows.length]).toEqual([key, 0]);
     }
   });
 

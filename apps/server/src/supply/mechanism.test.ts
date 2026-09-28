@@ -462,6 +462,50 @@ describe('(е) «вернуть как было»', () => {
     expect(place(back.props)).toEqual(place(edited.props));
   });
 
+  test('финал B1 m-3: оболочка изменилась после того, что видел клиент, — отказ STALE_VERSION, ничего не записано', async () => {
+    const graph = await freshGraph();
+    await seedSupply(graph);
+    const id = supplyRecordId(graph, 'host-shell');
+    const mine = await execute(
+      db,
+      {
+        identity: personal(graph),
+        actorKind: 'owner',
+        source: 'ui',
+        operations: [{ tool: 'entity_create', input: { title: 'Раздел A', tags: [] } }],
+      },
+      { sink },
+    );
+    if (!mine.ok) throw new Error('создание страницы');
+    const a = (mine.results[0] as { id: string }).id;
+    await ownerEdit(graph, { id, props: { [APP_NAV]: [supplyRecordId(graph, 'records'), a] } });
+    // Клиент открыл диалог на этой версии («исчезнет: A»)…
+    const seen = (await rowOf(graph, id)).updatedAt;
+    // …а тем временем агент по просьбе владельца добавил раздел B.
+    await new Promise((r) => setTimeout(r, 5));
+    const other = await execute(
+      db,
+      {
+        identity: personal(graph),
+        actorKind: 'owner',
+        source: 'ui',
+        operations: [{ tool: 'entity_create', input: { title: 'Раздел B', tags: [] } }],
+      },
+      { sink },
+    );
+    if (!other.ok) throw new Error('создание страницы');
+    const b = (other.results[0] as { id: string }).id;
+    await ownerEdit(graph, { id, props: { [APP_NAV]: [supplyRecordId(graph, 'records'), a, b] } });
+    const before = await rowOf(graph, id);
+
+    const err = await execErrorOf(revertToEtalon(ctxOf(graph), 'host-shell', seen));
+    expect(err.code).toBe('STALE_VERSION');
+    expect(await rowOf(graph, id)).toEqual(before);
+    // Та версия, что на сервере, — возврат проходит.
+    await revertToEtalon(ctxOf(graph), 'host-shell', before.updatedAt);
+    expect(statusOf(await rowOf(graph, id))).toBe('etalon');
+  });
+
   test('запись и так как в поставке — отказ VALIDATION', async () => {
     const graph = await freshGraph();
     await seedSupply(graph);
