@@ -1576,6 +1576,10 @@ test('модули первого кадра не тянут схему реда
     '../../app/ScreenHeader.tsx',
     '../../app/frame/HostPresence.tsx',
     '../../app/frame/NavSheet.tsx',
+    // Задача 25: строки разделов — общий код листа и сайдбара десктопа (грузятся с листом); шапка
+    // выбирает форму по ширине (`useViewport`) — оба достижимы из шапки экрана записи.
+    '../../app/frame/SectionList.tsx',
+    '../../app/frame/useViewport.ts',
     '../../app/frame/useAppShell.ts',
     '../../app/frame/ScreenMenu.tsx',
     '../../app/frame/FrameApp.tsx',

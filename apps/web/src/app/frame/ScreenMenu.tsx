@@ -123,6 +123,7 @@ export function ScreenMenu(): ReactElement {
             aria-label="Меню"
             title="Меню"
             data-testid="screen-menu"
+            data-host="menu"
             {...t}
             className={HOST_CONTROL}
           >

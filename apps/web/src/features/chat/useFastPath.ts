@@ -15,6 +15,7 @@ import { useFlushBuffer, useOnline, useRetryBuffer } from '../../state/retry';
 import { isConflict, mapSendError } from '../../state/retry-send';
 import { trpc } from '../../trpc';
 import { MEMORY_RULES_QUERY, MEMORY_RULES_STALE_TIME, RULES_SCOPE } from './memoryRules';
+import { withRecordContext } from './record-context';
 import { type ChatMessage, chatThreadKey, upsertNewest, useSendMessage } from './useChatThread';
 
 /** Экспортирован ради пиннинга: боевой текст обязан разбираться каноном (§А5-3). */
@@ -363,6 +364,15 @@ export function useFastPath(threadId: string) {
     }
   }
 
+  /**
+   * Сообщение про запись (чип «Про: …» в поле ввода, спека 1б §6.4, РП-27): ссылка на запись первой
+   * строкой — и сразу агенту. С контекстом быстрый путь не пробуется: «такси 500» про запись
+   * «Переезд» — вопрос агенту, а не расход.
+   */
+  function submitWithContext(text: string, entityId: string): void {
+    sendMessage(withRecordContext(text, entityId));
+  }
+
   // «Разобрать с AI»: снять fast-сущность (archived) и отправить исходную строку LLM-путём.
   // Архив гарантирует «одна строка ≠ две сущности» (D-плана): первая (fast) уходит, LLM создаёт свою.
   function reparse(entityId: string, text: string): void {
@@ -383,5 +393,5 @@ export function useFastPath(threadId: string) {
   }
 
   // isSending — pending LLM-отправки (typing-индикатор в ChatScreen); проброс строго аддитивен.
-  return { submit, reparse, retry: retryMessage, isSending };
+  return { submit, submitWithContext, reparse, retry: retryMessage, isSending };
 }

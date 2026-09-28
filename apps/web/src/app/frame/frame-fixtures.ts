@@ -254,6 +254,26 @@ export function stubLaunchMode(mode: 'app' | 'site'): void {
   })) as unknown as typeof window.matchMedia;
 }
 
+/**
+ * Ширина и режим запуска для теста двух рамок (задача 25): `desktop` — `DESKTOP_QUERY` сбывается,
+ * прочие запросы — только `standalone` режима приложения. Литерал брейкпоинта свой, а не импорт
+ * `DESKTOP_QUERY`: съедь обе стороны вместе — и тест не заметил бы подмены порога.
+ */
+export function stubViewport(desktop: boolean, mode: 'app' | 'site' = 'site'): void {
+  window.matchMedia = ((query: string) => ({
+    matches:
+      (desktop && query === '(min-width: 768px)') ||
+      (mode === 'app' && query.includes('standalone')),
+    media: query,
+    onchange: null,
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    addListener: () => {},
+    removeListener: () => {},
+    dispatchEvent: () => false,
+  })) as unknown as typeof window.matchMedia;
+}
+
 /** Снять заглушку режима: вкладка браузера без `matchMedia`, как jsdom по умолчанию. */
 export function unstubLaunchMode(): void {
   delete (window as { matchMedia?: unknown }).matchMedia;

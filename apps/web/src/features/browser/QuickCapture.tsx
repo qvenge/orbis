@@ -6,11 +6,10 @@ import { trpc } from '../../trpc';
 import { Spinner } from '../../ui/Spinner';
 import { useToast } from '../../ui/toast-store';
 
-// §3.7 / D-g: текст → title БЕЗ интерпретации. Контекст задаёт теги/связь.
-export type CaptureContext =
-  | { kind: 'root' }
-  | { kind: 'smart-list' }
-  | { kind: 'entity'; parentId: string };
+// §3.7 / D-g: текст → title БЕЗ интерпретации. Контекст задаёт связь: `entity` — подзадача записи
+// («＋» на записи, спека 1б §6.4, РП-9), `root` — без контекста. Вариант `smart-list` снят (§9.4):
+// смарт-листы стали страницами, а «＋» на странице — без контекста.
+export type CaptureContext = { kind: 'root' } | { kind: 'entity'; parentId: string };
 
 export function QuickCapture({ context }: { context: CaptureContext }) {
   const [text, setText] = useState('');
@@ -33,7 +32,7 @@ export function QuickCapture({ context }: { context: CaptureContext }) {
     // НОВАЯ форма (§А1-1): статус — плоским свойством, аспект — ЯВНЫМ списком. Старая карта
     // вешала `orbis/task` самим фактом ключа `status`; без списка запись под родителем
     // родилась бы не задачей — без чекбокса и мимо Повестки.
-    const subtask = context.kind !== 'root';
+    const subtask = context.kind === 'entity';
     const tags: string[] = [];
     // Ошибка мутации — toast, введённый текст НЕ очищается (ввод не теряется).
     try {

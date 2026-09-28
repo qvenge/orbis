@@ -380,15 +380,18 @@ describe('(д) одно меню «⋯»: «Этот экран» и «Хост�
 
 // ─── (е) «＋» ───────────────────────────────────────────────────────────────────────────────────
 
-test('(е) «＋» открывает быстрый ввод без контекста (root)', async () => {
-  resetFrame(`/r/${BREAD}`);
+// Задача 19 пинила «＋» без контекста на записи; задача 25 дала «＋» контекст места (РП-9, В-6): на
+// записи — подзадача (`features/chat/chat-context-ui.test.tsx`), а без контекста — на странице. Пин
+// «быстрый ввод открывается и пишет без интерпретации» остаётся здесь — на странице раздела.
+test('(е) «＋» открывает быстрый ввод; на странице — без контекста (root)', async () => {
+  resetFrame(`/r/${UPCOMING}`);
   const { calls } = renderWithProviders(<App />, (path, input, type) => {
     if (path === 'entity.create') {
       return wireEntity({ id: (input as { input: { id: string } }).input.id, title: 'Молоко' });
     }
     return frameHandler()(path, input, type);
   });
-  await heading('Купить хлеб');
+  await heading('Upcoming');
   fireEvent.click(
     within(screen.getByTestId('host-buttons')).getByRole('button', { name: 'Новая запись' }),
   );

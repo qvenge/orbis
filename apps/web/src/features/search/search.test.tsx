@@ -172,12 +172,16 @@ const back = () =>
     within(screen.getByTestId('host-presence')).getByRole('button', { name: 'Назад' }),
   );
 
-/** Старт на «Домой» и переход в раздел «Upcoming» листом разделов — как человек. */
+/**
+ * Старт на «Домой» и переход в раздел «Upcoming» — как человек: на телефоне листом разделов
+ * («раздел ▾»), на десктопе — сайдбаром навигации (задача 25: «раздел ▾» там не рисуется).
+ */
 async function startOnUpcoming() {
   resetFrame('/');
   const r = renderApp();
   await heading('Домой');
-  fireEvent.click(screen.getByTestId('nav-switch'));
+  const sheet = screen.queryByTestId('nav-switch');
+  if (sheet !== null) fireEvent.click(sheet);
   fireEvent.click(await screen.findByTestId(`nav-section-${UPCOMING}`));
   await heading('Upcoming');
   return r;

@@ -4,6 +4,7 @@ import { lazy, Suspense, useState } from 'react';
 import { useNav, useShowBack } from '../../state/navigation';
 import { HOST_CONTROL, ScreenMenu } from './ScreenMenu';
 import { sectionTitleOf, useAppShell } from './useAppShell';
+import { useIsDesktop } from './useViewport';
 
 /**
  * Лист разделов — после жеста, не первому кадру (РП-25): он нужен, когда владелец раскрыл «▾», а с
@@ -14,6 +15,9 @@ const NavSheet = lazy(() => import('./NavSheet').then((m) => ({ default: m.NavSh
 
 /**
  * Присутствие хоста (спека 1б §6.1, §6.2 п. 1, §6.6): верхняя строка «‹ · иконка · раздел ▾ · ⌂ ⋯».
+ * На десктопе (§6.3) — шапка содержимого «‹ · заголовок · ⋯»: ⌂ живёт в тёмной рейке хоста, «раздел
+ * ▾» — в сайдбаре навигации (`DesktopFrame`), и второй раз их здесь нет. Роль каждого элемента хоста
+ * — атрибут `data-host` (`host-elements.ts`): тест двух ширин сверяет один набор по ролям (С1б-7).
  * Рисует хост одинаково на ЛЮБОМ экране — её ставит `ScreenHeader`, который рисует каждый экран,
  * включая «Не найдено», кадр загрузки и кадр ошибки чанка (РП-19, Д-15), — и приложение не может её
  * спрятать или перекрыть: иначе оно «заперло» бы человека.
@@ -32,21 +36,37 @@ export function HostPresence() {
   const shell = useAppShell(app);
   const showBack = useShowBack();
   const [sheet, setSheet] = useState(false);
+  const desktop = useIsDesktop();
   const withList = shell.navForm === 'header-list';
+  const back = showBack && (
+    <button
+      type="button"
+      aria-label="Назад"
+      data-testid="host-back"
+      data-host="back"
+      onClick={() => useNav.getState().back()}
+      className={HOST_CONTROL}
+    >
+      <ChevronLeft size={20} aria-hidden />
+    </button>
+  );
+
+  if (desktop) {
+    return (
+      <div data-testid="host-presence" className="relative flex h-14 items-center gap-2 px-2">
+        {back}
+        <span className="min-w-0 truncate px-2 text-sm font-medium">
+          {sectionTitleOf(shell, section)}
+        </span>
+        <span className="flex-1" />
+        <ScreenMenu />
+      </div>
+    );
+  }
 
   return (
     <div data-testid="host-presence" className="relative flex h-14 items-center gap-2 px-2">
-      {showBack && (
-        <button
-          type="button"
-          aria-label="Назад"
-          data-testid="host-back"
-          onClick={() => useNav.getState().back()}
-          className={HOST_CONTROL}
-        >
-          <ChevronLeft size={20} aria-hidden />
-        </button>
-      )}
+      {back}
       <button
         type="button"
         data-testid="nav-switch"
@@ -69,6 +89,7 @@ export function HostPresence() {
         type="button"
         aria-label="Домой"
         data-testid="host-home"
+        data-host="home"
         onClick={() => useNav.getState().goHome()}
         className={HOST_CONTROL}
       >
