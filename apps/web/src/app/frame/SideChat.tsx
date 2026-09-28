@@ -1,7 +1,9 @@
 import { HOST_APP } from '@orbis/shared/nav';
 import { X } from 'lucide-react';
 import { ChatPanel } from '../../features/chat/ChatPanel';
+import { ReloadButton } from '../ChunkErrorBoundary';
 import { type FrameApp, FrameAppContext } from './FrameApp';
+import { PartBoundary } from './PartBoundary';
 import { useSideChat } from './side-chat-store';
 import { useChatContext } from './useChatContext';
 
@@ -39,9 +41,20 @@ export function SideChat() {
         </button>
       </header>
       <div className="flex min-h-0 flex-1 flex-col">
-        <FrameAppContext.Provider value={SIDE_FRAME}>
-          <ChatPanel context={context} />
-        </FrameAppContext.Provider>
+        {/* Упавшая карточка сообщения — кадр в колонке чата, а не белый экран (гейт 25, I-1):
+            повторное открытие чата пробует заново (граница новая). */}
+        <PartBoundary
+          fallback={
+            <div role="alert" className="flex flex-col items-center gap-3 p-6 text-sm text-danger">
+              <span>Не удалось показать чат</span>
+              <ReloadButton />
+            </div>
+          }
+        >
+          <FrameAppContext.Provider value={SIDE_FRAME}>
+            <ChatPanel context={context} />
+          </FrameAppContext.Provider>
+        </PartBoundary>
       </div>
     </aside>
   );

@@ -76,3 +76,39 @@ export function HostRail() {
     </nav>
   );
 }
+
+/**
+ * Кадр упавшей рейки (гейт 25, I-1): та же тёмная колонка, ⌂ и «Настройки» — элементы хоста рисуются
+ * всегда (§6.6); без списка приложений (он и упал). Приложения остаются в «⋯ → Все приложения».
+ */
+export function HostRailFallback() {
+  return (
+    <nav
+      aria-label="Приложения"
+      data-testid="host-rail"
+      data-failed=""
+      className="flex w-14 shrink-0 flex-col items-center gap-1 bg-host py-2"
+    >
+      <button
+        type="button"
+        aria-label="Домой"
+        title="Домой"
+        data-host="home"
+        onClick={() => useNav.getState().goHome()}
+        className={RAIL_BUTTON}
+      >
+        <House size={18} aria-hidden />
+      </button>
+      <span className="flex-1" />
+      <button
+        type="button"
+        aria-label="Настройки"
+        title="Настройки"
+        onClick={() => openSettings('general')}
+        className={RAIL_BUTTON}
+      >
+        <Settings size={18} aria-hidden />
+      </button>
+    </nav>
+  );
+}

@@ -24,7 +24,7 @@ type State = { failed: boolean; shownFor: string | undefined };
  * сервис-воркера — хук (`useFreshReload`). Не голый reload: под старым воркером он отдаёт старый
  * прекеш (Л-5).
  */
-function ReloadButton() {
+export function ReloadButton() {
   const reload = useFreshReload();
   return (
     <Button

@@ -18,7 +18,7 @@ import { noteRegistryVersion, resetRegistryVersionForTests } from '../../lib/reg
 import { useNav } from '../../state/navigation';
 import { installCrashTrap, renderWithProviders, wireEntity } from '../../test/harness';
 import { BUILTIN_REGISTRY } from '../../test/registry';
-import { resetDesktopFrameLoadForTests } from '../AppShell';
+import { preloadDesktopFrame, resetDesktopFrameLoadForTests } from '../AppShell';
 import {
   ALL_TASKS,
   BREAD,
@@ -433,4 +433,83 @@ describe('(а) десктоп, чанк рамки ещё не приехал и
     await heading('Чат');
     expect(shownPath()).toBe('/chat');
   });
+});
+
+// ─── гейт 25, I-1: упавшая часть рамки десктопа — кадр на её месте, остальное живёт ─────────────
+
+describe('(г) десктоп: ошибка рисования в части рамки вне <main>', () => {
+  const expectHostSet = () => {
+    const roles = hostRoles();
+    expect(roles).toHaveLength(new Set(roles).size);
+    expect([...roles].sort()).toEqual([...HOST_ELEMENTS].sort());
+  };
+
+  test('карточка сообщения бокового чата бросает — кадр в колонке чата; основная область и элементы хоста на месте', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    stubViewport(true);
+    resetFrame('/');
+    renderApp(
+      frameWorld({
+        // Карточка неожиданной формы (`null` вместо объекта) — рисование карточек бросает.
+        chat: [{ ...chatMessage('m1', 'сломано'), metadata: { cards: [null] } }],
+      }),
+    );
+    await byTestId('host-rail');
+    await openBreadFromUpcoming();
+    fireEvent.click(chatButton());
+    const side = await screen.findByRole('complementary', { name: 'Чат' }, { timeout: 5000 });
+    expect(await within(side).findByRole('alert')).toHaveTextContent('Не удалось показать чат');
+    expect(screen.getByRole('heading', { level: 1, name: 'Купить хлеб' })).toBeInTheDocument();
+    expect(screen.getByTestId('app-sidebar')).toBeInTheDocument();
+    expectHostSet();
+    // Закрыть и открыть — новая граница, новая попытка (кадр снова: данные те же).
+    fireEvent.click(within(side).getByRole('button', { name: 'Закрыть' }));
+    await waitFor(() => expect(screen.queryByRole('complementary', { name: 'Чат' })).toBeNull());
+    expect(chatButton()).toHaveAttribute('aria-pressed', 'false');
+  });
+
+  test('рейка бросает — на её месте ⌂ и «Настройки»; набор элементов хоста полный', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    stubViewport(true);
+    resetFrame(`/r/${BREAD}`);
+    const base = frameWorld();
+    renderApp(
+      frameWorld({
+        all: [
+          ...base.all,
+          // Приложение без эмодзи и без имени — рейка берёт первую букву имени и бросает.
+          wireEntity({
+            id: OFF_APP,
+            title: null as unknown as string,
+            aspects: [APP_ASPECT],
+            props: { [APP_NAV]: [] },
+          }),
+        ],
+      }),
+    );
+    await heading('Купить хлеб');
+    await byTestId('host-rail');
+    await waitFor(() => expect(screen.getByTestId('host-rail')).toHaveAttribute('data-failed'));
+    expectHostSet();
+    fireEvent.click(within(screen.getByTestId('host-rail')).getByRole('button', { name: 'Домой' }));
+    await heading('Домой');
+    expect(shownPath()).toBe('/');
+  });
+});
+
+// ─── гейт 25, m-6: чанк рамки десктопа уже есть — без кадра рамки телефона ─────────────────────
+
+test('(а) десктоп: модуль рамки уже загружен — первый кадр сразу в рамке десктопа', async () => {
+  resetDesktopFrameLoadForTests();
+  await preloadDesktopFrame();
+  stubViewport(true);
+  resetFrame(`/r/${BREAD}`);
+  renderApp();
+  // Синхронно, без ожидания: фолбэка (рамки телефона с ⌂ в строке присутствия) не было.
+  expect(screen.getByTestId('host-rail')).toBeInTheDocument();
+  expect(screen.getByTestId('desktop-frame')).toBeInTheDocument();
+  await heading('Купить хлеб');
+  expect(
+    within(screen.getByTestId('host-presence')).queryByRole('button', { name: 'Домой' }),
+  ).toBeNull();
 });

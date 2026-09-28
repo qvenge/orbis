@@ -1,4 +1,4 @@
-import { lazy, Suspense } from 'react';
+import { type ComponentType, lazy, Suspense, useState } from 'react';
 import { useSearchDialog } from '../features/search/search-dialog-store';
 import { useSearchHotkey } from '../features/search/useSearchHotkey';
 import { ChunkErrorBoundary } from './ChunkErrorBoundary';
@@ -29,7 +29,26 @@ function PhoneFrame() {
   );
 }
 
-const loadDesktopFrame = () => import('./frame/DesktopFrame');
+/** Модуль рамки десктопа, когда он уже приехал: рисуется напрямую, без `lazy` и фолбэка. */
+let loadedDesktopFrame: ComponentType | null = null;
+
+const loadDesktopFrame = () =>
+  import('./frame/DesktopFrame').then((m) => {
+    loadedDesktopFrame = m.DesktopFrame;
+    return m;
+  });
+
+/**
+ * Запросить чанк рамки десктопа заранее. Приехал до первого рендера — рамка десктопа рисуется сразу,
+ * без кадра рамки телефона и без второго монтажа экрана (гейт 25, m-6). Отказ здесь молчит: его
+ * покажет `lazy` (рамкой телефона).
+ */
+export function preloadDesktopFrame(): Promise<void> {
+  return loadDesktopFrame().then(
+    () => {},
+    () => {},
+  );
+}
 
 /**
  * Рамка десктопа — ленивым чанком (задача 25, R-35/R-36): рейка хоста, сайдбар и боковой чат нужны
@@ -46,9 +65,9 @@ const lazyDesktopFrame = () =>
   );
 let DesktopFrame = lazyDesktopFrame();
 
-// Десктоп на старте — чанк рамки в путь сразу, при загрузке модуля (гейт 25, m-5): иначе он ждал бы
-// первого рендера, а экран записи внутри него — ещё и его. Отказ здесь молчит: его покажет `lazy`.
-if (isDesktop()) void loadDesktopFrame().catch(() => {});
+// Десктоп на старте — чанк рамки в путь сразу, при загрузке модуля (гейт 25, m-5, m-6): иначе он
+// ждал бы первого рендера, а экран записи внутри него — ещё и его.
+if (isDesktop()) void preloadDesktopFrame();
 
 /**
  * Забыть загрузку рамки десктопа — ТОЛЬКО для тестов: `lazy` помнит и удачу, и отказ навсегда, а тест
@@ -56,6 +75,21 @@ if (isDesktop()) void loadDesktopFrame().catch(() => {});
  */
 export function resetDesktopFrameLoadForTests(): void {
   DesktopFrame = lazyDesktopFrame();
+  loadedDesktopFrame = null;
+}
+
+/**
+ * Рамка десктопа: модуль уже есть — напрямую, иначе — `lazy` с рамкой телефона на время загрузки.
+ * Выбор — один раз на монтирование слота: смена типа компонента посреди жизни (lazy → прямой)
+ * перемонтировала бы рамку и экран в ней.
+ */
+function DesktopSlot() {
+  const [Frame] = useState<ComponentType>(() => loadedDesktopFrame ?? DesktopFrame);
+  return (
+    <Suspense fallback={<PhoneFrame />}>
+      <Frame />
+    </Suspense>
+  );
 }
 
 /**
@@ -79,13 +113,7 @@ export function AppShell() {
   const searchOpen = useSearchDialog((s) => s.open);
   return (
     <>
-      {desktop ? (
-        <Suspense fallback={<PhoneFrame />}>
-          <DesktopFrame />
-        </Suspense>
-      ) : (
-        <PhoneFrame />
-      )}
+      {desktop ? <DesktopSlot /> : <PhoneFrame />}
       {searchOpen && (
         <div className="fixed inset-x-0 top-0 z-50 bg-surface empty:hidden">
           <ChunkErrorBoundary resetKey="search-dialog">
