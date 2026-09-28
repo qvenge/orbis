@@ -583,6 +583,91 @@ describe.each(MODES)('общее для обоих режимов: %s', (mode) =
   });
 });
 
+describe.each(
+  MODES,
+)('replace на домашнюю приложения — корень HOME_SECTION (финал C1 M-1): %s', (mode) => {
+  test('запись-приложение X из раздела X «s» → домашняя X в HOME_SECTION, «s» без домашней наверху', () => {
+    // В X открыт раздел «s»; ссылка из содержимого на запись-приложение X, правило открытия
+    // заменило её домашней X.
+    const r = run(
+      initialModel(HOST_HOME),
+      [
+        { type: 'switch-app', app: X, home: X_HOME },
+        { type: 'section', app: X, section: 's', root: rec(10, XR) },
+        open(rec(20, XR), X),
+        { type: 'replace', address: X_HOME, app: X },
+      ],
+      mode,
+    );
+    expect(r.last).toEqual({ history: 'replace' });
+    expect(r.model.activeApp).toBe(X);
+    expect(r.model.apps[X]?.activeSection).toBe(HOME_SECTION);
+    expect(r.model.apps[X]?.stacks[HOME_SECTION]).toEqual([
+      { address: X_HOME, source: { app: X, section: 's' } },
+    ]);
+    // Последнее место «s» — его корень, не домашняя.
+    expect(stackOf(r.model, X, 's')).toEqual([rec(10, XR)]);
+    expect(persistOf(r.model).apps[X]?.last.s).toEqual(rec(10, XR));
+  });
+
+  test('синоним хоста (`/a/<оболочка>`) → `/` на «Домой» хоста: стопка [/], без двойника и «‹» в то же место', () => {
+    const SHELL = id(77);
+    const r = run(
+      initialModel(HOST_HOME),
+      [
+        {
+          type: 'switch-app',
+          app: SHELL,
+          home: { kind: 'home', app: { kind: 'app', ref: SHELL } },
+        },
+        { type: 'replace', address: HOST_HOME, app: HOST_APP },
+      ],
+      mode,
+    );
+    expect(r.model.activeApp).toBe(HOST_APP);
+    expect(r.model.apps[HOST_APP]?.activeSection).toBe(HOME_SECTION);
+    expect(r.model.apps[HOST_APP]?.stacks[HOME_SECTION]).toEqual([{ address: HOST_HOME }]);
+    expect(canGoBack(r.model)).toBe(false);
+  });
+
+  test('синоним хоста из раздела хоста «Записи» — `/` не ложится на верх «Записей»', () => {
+    const SHELL = id(77);
+    const r = run(
+      hostWithSections(),
+      [
+        {
+          type: 'switch-app',
+          app: SHELL,
+          home: { kind: 'home', app: { kind: 'app', ref: SHELL } },
+        },
+        { type: 'replace', address: HOST_HOME, app: HOST_APP },
+      ],
+      mode,
+    );
+    expect(r.model.apps[HOST_APP]?.activeSection).toBe(HOME_SECTION);
+    expect(stackOf(r.model)).toEqual([HOST_HOME]);
+    expect(stackOf(r.model, HOST_APP, RECORDS)).toEqual([RECORDS_ROOT]);
+  });
+
+  test('запись-приложение из хоста → домашняя X с источником: «‹» (app) возвращает в раздел хоста', () => {
+    const r = run(
+      hostWithSections(),
+      [open(rec(30)), { type: 'replace', address: X_HOME, app: X }],
+      mode,
+    );
+    expect(r.model.activeApp).toBe(X);
+    expect(r.model.apps[X]?.stacks[HOME_SECTION]).toEqual([
+      { address: X_HOME, source: { app: HOST_APP, section: RECORDS } },
+    ]);
+    expect(stackOf(r.model, HOST_APP, RECORDS)).toEqual([RECORDS_ROOT]);
+    if (mode === 'app') {
+      const b = navReduce(r.model, BACK, mode);
+      expect(b.model.activeApp).toBe(HOST_APP);
+      expect(currentEntry(b.model).address).toEqual(RECORDS_ROOT);
+    }
+  });
+});
+
 describe('поведение «как приложение» (app): назад по стопке', () => {
   test('(1) open, open, back → первая запись; эффект none', () => {
     const r = run(hostWithSections(), [open(rec(1)), open(rec(2)), BACK], 'app');

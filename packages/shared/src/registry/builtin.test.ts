@@ -30,6 +30,7 @@ import {
 } from '../contracts/agent-loop';
 import { exprNodeSchema } from '../expr/ast';
 import { assertStaticQuery } from '../query/static';
+import { HOST_SHELL_KEY } from '../supply/etalons';
 import { checkImplements } from './bindings';
 import { BUILTIN_ASPECT_DEFS } from './builtin-aspects';
 import { BUILTIN_CONTRACT_DEFS, CONTRACT_IDS, SENSITIVITY_FACTS } from './builtin-contracts';
@@ -972,7 +973,7 @@ const APP_NOT_HOST_SHELL = JSON.stringify({
   filter: {
     and: [
       { aspect: 'orbis/app' },
-      { not: { prop: 'orbis/supply_key', op: 'eq', value: 'host-shell' } },
+      { not: { prop: 'orbis/supply_key', op: 'eq', value: HOST_SHELL_KEY } },
     ],
   },
 });

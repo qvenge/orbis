@@ -46,6 +46,8 @@ import {
 } from '../constants';
 import type { QueryAst } from '../query/ast';
 import { queryAstJsonSchema } from '../query/ast-json-schema';
+// Листовой модуль поставки (импортирует только `../constants` и `./lists`) — цикла нет.
+import { HOST_SHELL_KEY } from '../supply/etalons';
 import { extensionSelectOptions } from './extensions';
 import { type PropertyDefinition, propertyDefinitionSchema } from './property-type';
 import type { SelectOption } from './types';
@@ -251,11 +253,12 @@ const RUN_USAGE_SCHEMA = {
  * хоста. «Хост — это пустой „Дом“» (спека §4.3): держит это проверка членства цели на сервере
  * (`registry/ref.ts`, Д-20), а не правило E. Отрицание в компиляторе тотально
  * (`NOT COALESCE(x, false)`), поэтому приложение без ключа поставки (своё приложение владельца)
- * в множество входит.
+ * в множество входит. Ключ — `HOST_SHELL_KEY`, одна константа на всех читателей: литерал здесь при
+ * согласованном переименовании ключа молча снял бы запрет (финал 1б, наблюдение A).
  */
 const APP_NOT_HOST_SHELL: QueryAst = {
   filter: {
-    and: [{ aspect: APP_ASPECT }, { not: { prop: SUPPLY_KEY, op: 'eq', value: 'host-shell' } }],
+    and: [{ aspect: APP_ASPECT }, { not: { prop: SUPPLY_KEY, op: 'eq', value: HOST_SHELL_KEY } }],
   },
 };
 

@@ -194,6 +194,14 @@ describe('словарь 1б в эталонах (спека §1, РП-35)', () 
       expect(life.text).toContain(q);
     }
   });
+
+  test('«Год» не отправляет искать «Жизнь» в «Записи»: страницы там скрыты по умолчанию (§9.6, финал A M-2)', () => {
+    const year = etalonOf('horizon-year');
+    if (year.kind === 'app') throw new Error('горизонт — не страница');
+    const ladder = year.text.split('\n').find((l) => l.startsWith('Лестница горизонтов'));
+    expect(ladder).toContain('её находят поиском');
+    expect(ladder).not.toContain('«Записях»');
+  });
 });
 
 describe('прежние эталоны (РП-35, В-9)', () => {

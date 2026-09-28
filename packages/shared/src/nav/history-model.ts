@@ -28,6 +28,7 @@
 // | host-screen (кнопки хоста)       | поверх текущего раздела; поверх экрана хоста — вместо | replace   | push      |
 // | replace (РП-21)                  | верх стопки уточнён, `source` и `view` на месте       | replace    | replace   |
 // | replace с `app` ≠ активного      | верх перенесён в стопку `app`, `source` = откуда      | replace    | replace   |
+// | replace на домашнюю приложения   | верх снят; HOME_SECTION = [home], `source` = откуда   | replace    | replace   |
 // | view                             | состояние экрана в верх стопки, `null` снимает ключ   | replace    | replace   |
 // | back                             | app: по стопке / в источник / в хост / выход          | none, exit | back      |
 // | back { atFirstEntry } (R-24)     | site: как app — «‹» хоста ведёт внутри Orbis          | как без    | push      |
@@ -99,8 +100,9 @@ export interface NavModel {
 export type NavAction =
   | { type: 'open'; address: Address; app: AppKey; from: 'content' | 'host-screen' } // переход по ссылке
   | { type: 'section'; app: AppKey; section: SectionKey; root: Address } // нажатие на раздел / ⌂ приложения
-  // рейка, «Приложения», ⌂ хоста. `toHome` (R-23): открыть домашнюю приложения, а не его последнее
-  // место, — так ⌂ хоста открывает «Домой» (спека §6.6) из любого приложения одним переходом.
+  // рейка, «Приложения», ⌂. `toHome` (R-23, R-38): открыть домашнюю приложения, а не его последнее
+  // место, — так ⌂ рейки открывает «Домой» хоста из любого приложения, а ⌂ телефона — домашнюю
+  // приложения рамки одним переходом.
   | { type: 'switch-app'; app: AppKey; home: Address; toHome?: boolean }
   | { type: 'host-screen'; address: Address } // чат (телефон), поиск, быстрый ввод, настройки
   // РП-21: правило открытия уточнило место. `app` (R-22) — приложение, в рамке которого место теперь
@@ -351,6 +353,34 @@ function applyReplaceToApp(model: NavModel, address: Address, app: AppKey): NavM
   };
 }
 
+/** Адрес — домашняя приложения `app` (хост — `/`, своё — `/a/<app>`). */
+function isHomeOf(address: Address, app: AppKey): boolean {
+  if (address.kind !== 'home') return false;
+  return address.app.kind === 'host' ? app === HOST_APP : address.app.ref === app;
+}
+
+/**
+ * Уточнение места домашней приложения (финал 1б, C1 M-1, Fable M-1): правило открытия заменило
+ * запись-приложение его домашней, синоним хоста — `/`. Домашняя — корень `HOME_SECTION` (§7.3), а
+ * не верх стопки того раздела, что был активен: иначе «Сад» с домашней наверху сохранился бы
+ * последним местом раздела, а «Домой» поверх «Домой» дал бы «‹» на то же место. Верх текущей стопки
+ * снимается (это замена, не шаг), стопка домашней становится `[home]` — прежний корень со своим
+ * `view`, если это то же место, — с источником, как у `applyReplaceToApp`: «‹» с неё ведёт туда,
+ * откуда пришли.
+ */
+function applyReplaceHome(model: NavModel, address: Address, app: AppKey): NavModel {
+  const cur = model.activeApp;
+  const curSection = activeSectionOf(model, cur);
+  const stack = activeStack(model) ?? [];
+  const top = stack[stack.length - 1];
+  const rest = stack.slice(0, -1);
+  const source = top?.source ?? (rest.length > 0 ? { app: cur, section: curSection } : undefined);
+  const m = stack.length > 0 ? putStack(model, cur, curSection, rest) : model;
+  const root = rootEntry(stackAt(m, app, HOME_SECTION), address);
+  if (source && !(source.app === app && source.section === HOME_SECTION)) root.source = source;
+  return { ...putStack(m, app, HOME_SECTION, [root], HOME_SECTION), activeApp: app };
+}
+
 /** «Назад» приложения (app): по стопке, в источник, с дна — в хост, с дна хоста — выход. */
 function backInApp(model: NavModel): { model: NavModel; effect: NavEffect } {
   const app = model.activeApp;
@@ -425,14 +455,17 @@ export function navReduce(
       return move(applySwitchApp(model, action));
     case 'host-screen':
       return move(applyHostScreen(model, action.address));
-    case 'replace':
+    case 'replace': {
+      const target = action.app ?? model.activeApp;
       return {
-        model:
-          action.app !== undefined && action.app !== model.activeApp
-            ? applyReplaceToApp(model, action.address, action.app)
+        model: isHomeOf(action.address, target)
+          ? applyReplaceHome(model, action.address, target)
+          : target !== model.activeApp
+            ? applyReplaceToApp(model, action.address, target)
             : mapTop(model, (top) => ({ ...top, address: action.address })),
         effect: { history: 'replace' },
       };
+    }
     case 'view':
       return {
         model: mapTop(model, (top) => patchView(top, action.patch)),
