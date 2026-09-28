@@ -56,6 +56,7 @@ const GOLDEN_CTX: CompileCtx = {
   graphId: parseGraphId('00000000-0000-7000-8000-0000000000a1'),
   today: '2026-08-27',
   timeZone: 'Europe/Moscow',
+  weekStart: 'monday',
   reg: GOLDEN_REG,
   thisEntityId: null,
 };

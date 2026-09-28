@@ -283,7 +283,16 @@
                       "type": "object",
                       "properties": {
                         "token": {
-                          "enum": ["today", "overdue", "next_7d", "after_7d"]
+                          "enum": [
+                            "today",
+                            "overdue",
+                            "next_7d",
+                            "after_7d",
+                            "this_week",
+                            "next_14d",
+                            "this_month",
+                            "last_month"
+                          ]
                         }
                       },
                       "required": ["token"],
@@ -412,7 +421,16 @@
                           "type": "object",
                           "properties": {
                             "token": {
-                              "enum": ["today", "overdue", "next_7d", "after_7d"]
+                              "enum": [
+                                "today",
+                                "overdue",
+                                "next_7d",
+                                "after_7d",
+                                "this_week",
+                                "next_14d",
+                                "this_month",
+                                "last_month"
+                              ]
                             }
                           },
                           "required": ["token"],
@@ -429,7 +447,16 @@
                           "type": "object",
                           "properties": {
                             "token": {
-                              "enum": ["today", "overdue", "next_7d", "after_7d"]
+                              "enum": [
+                                "today",
+                                "overdue",
+                                "next_7d",
+                                "after_7d",
+                                "this_week",
+                                "next_14d",
+                                "this_month",
+                                "last_month"
+                              ]
                             }
                           },
                           "required": ["token"],
@@ -1386,7 +1413,16 @@
                           "type": "object",
                           "properties": {
                             "token": {
-                              "enum": ["today", "overdue", "next_7d", "after_7d"]
+                              "enum": [
+                                "today",
+                                "overdue",
+                                "next_7d",
+                                "after_7d",
+                                "this_week",
+                                "next_14d",
+                                "this_month",
+                                "last_month"
+                              ]
                             }
                           },
                           "required": ["token"],
@@ -1515,7 +1551,16 @@
                               "type": "object",
                               "properties": {
                                 "token": {
-                                  "enum": ["today", "overdue", "next_7d", "after_7d"]
+                                  "enum": [
+                                    "today",
+                                    "overdue",
+                                    "next_7d",
+                                    "after_7d",
+                                    "this_week",
+                                    "next_14d",
+                                    "this_month",
+                                    "last_month"
+                                  ]
                                 }
                               },
                               "required": ["token"],
@@ -1532,7 +1577,16 @@
                               "type": "object",
                               "properties": {
                                 "token": {
-                                  "enum": ["today", "overdue", "next_7d", "after_7d"]
+                                  "enum": [
+                                    "today",
+                                    "overdue",
+                                    "next_7d",
+                                    "after_7d",
+                                    "this_week",
+                                    "next_14d",
+                                    "this_month",
+                                    "last_month"
+                                  ]
                                 }
                               },
                               "required": ["token"],
@@ -2020,7 +2074,16 @@
                           "type": "object",
                           "properties": {
                             "token": {
-                              "enum": ["today", "overdue", "next_7d", "after_7d"]
+                              "enum": [
+                                "today",
+                                "overdue",
+                                "next_7d",
+                                "after_7d",
+                                "this_week",
+                                "next_14d",
+                                "this_month",
+                                "last_month"
+                              ]
                             }
                           },
                           "required": ["token"],
@@ -2149,7 +2212,16 @@
                               "type": "object",
                               "properties": {
                                 "token": {
-                                  "enum": ["today", "overdue", "next_7d", "after_7d"]
+                                  "enum": [
+                                    "today",
+                                    "overdue",
+                                    "next_7d",
+                                    "after_7d",
+                                    "this_week",
+                                    "next_14d",
+                                    "this_month",
+                                    "last_month"
+                                  ]
                                 }
                               },
                               "required": ["token"],
@@ -2166,7 +2238,16 @@
                               "type": "object",
                               "properties": {
                                 "token": {
-                                  "enum": ["today", "overdue", "next_7d", "after_7d"]
+                                  "enum": [
+                                    "today",
+                                    "overdue",
+                                    "next_7d",
+                                    "after_7d",
+                                    "this_week",
+                                    "next_14d",
+                                    "this_month",
+                                    "last_month"
+                                  ]
                                 }
                               },
                               "required": ["token"],
@@ -4370,7 +4451,16 @@
                               "required": ["token"],
                               "properties": {
                                 "token": {
-                                  "enum": ["today", "overdue", "next_7d", "after_7d"]
+                                  "enum": [
+                                    "today",
+                                    "overdue",
+                                    "next_7d",
+                                    "after_7d",
+                                    "this_week",
+                                    "next_14d",
+                                    "this_month",
+                                    "last_month"
+                                  ]
                                 }
                               },
                               "additionalProperties": false
@@ -4499,7 +4589,16 @@
                                   "required": ["token"],
                                   "properties": {
                                     "token": {
-                                      "enum": ["today", "overdue", "next_7d", "after_7d"]
+                                      "enum": [
+                                        "today",
+                                        "overdue",
+                                        "next_7d",
+                                        "after_7d",
+                                        "this_week",
+                                        "next_14d",
+                                        "this_month",
+                                        "last_month"
+                                      ]
                                     }
                                   },
                                   "additionalProperties": false
@@ -4516,7 +4615,16 @@
                                   "required": ["token"],
                                   "properties": {
                                     "token": {
-                                      "enum": ["today", "overdue", "next_7d", "after_7d"]
+                                      "enum": [
+                                        "today",
+                                        "overdue",
+                                        "next_7d",
+                                        "after_7d",
+                                        "this_week",
+                                        "next_14d",
+                                        "this_month",
+                                        "last_month"
+                                      ]
                                     }
                                   },
                                   "additionalProperties": false
@@ -5228,7 +5336,16 @@
                                   "required": ["token"],
                                   "properties": {
                                     "token": {
-                                      "enum": ["today", "overdue", "next_7d", "after_7d"]
+                                      "enum": [
+                                        "today",
+                                        "overdue",
+                                        "next_7d",
+                                        "after_7d",
+                                        "this_week",
+                                        "next_14d",
+                                        "this_month",
+                                        "last_month"
+                                      ]
                                     }
                                   },
                                   "additionalProperties": false
@@ -5357,7 +5474,16 @@
                                       "required": ["token"],
                                       "properties": {
                                         "token": {
-                                          "enum": ["today", "overdue", "next_7d", "after_7d"]
+                                          "enum": [
+                                            "today",
+                                            "overdue",
+                                            "next_7d",
+                                            "after_7d",
+                                            "this_week",
+                                            "next_14d",
+                                            "this_month",
+                                            "last_month"
+                                          ]
                                         }
                                       },
                                       "additionalProperties": false
@@ -5374,7 +5500,16 @@
                                       "required": ["token"],
                                       "properties": {
                                         "token": {
-                                          "enum": ["today", "overdue", "next_7d", "after_7d"]
+                                          "enum": [
+                                            "today",
+                                            "overdue",
+                                            "next_7d",
+                                            "after_7d",
+                                            "this_week",
+                                            "next_14d",
+                                            "this_month",
+                                            "last_month"
+                                          ]
                                         }
                                       },
                                       "additionalProperties": false

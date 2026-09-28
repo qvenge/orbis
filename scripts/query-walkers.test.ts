@@ -43,8 +43,8 @@ interface QueryWalker {
 
 /**
  * Перечень обходчиков дерева запроса — раздел «Обходчики дерева запроса» плана 1в (с 26-й строкой
- * `web-tile-form` — рулинг координатора R-4, docs-коммит `6acf05bf`). Строки задач 2
- * (`token-boundary`), 4 (`bind-query`, `placement-issue`, `page-only`, `substitute-params`) и 5
+ * `web-tile-form` — рулинг координатора R-4, docs-коммит `6acf05bf`; 27-я — `token-boundary` задачи 2).
+ * Строки задач 4 (`bind-query`, `placement-issue`, `page-only`, `substitute-params`) и 5
  * (`web-form-parse`, `web-field-rows`, `web-block-parse`, `web-text-editor`, `web-query-widget`)
  * добавляют эти задачи вместе со своими пометками.
  */
@@ -102,6 +102,12 @@ export const QUERY_WALKERS: ReadonlyArray<QueryWalker> = [
     file: 'packages/shared/src/doc/convert.ts',
     entry: 'queryRefsFromDoc',
     does: 'A: объект адреса в индекс свойств не едет',
+  },
+  {
+    name: 'token-boundary',
+    file: 'packages/shared/src/query/tokens.ts',
+    entry: 'tokenBoundaryForms',
+    does: 'A: токен-граница у адреса учитывается наравне со свойством (обход по форме узла, не по полю)',
   },
   {
     name: 'compile',
@@ -265,8 +271,9 @@ function firstCodeLineAfter(file: string, line: number): string {
 test('перечень обходчиков: имена уникальны, число пиннится', () => {
   const names = QUERY_WALKERS.map((w) => w.name);
   expect(new Set(names).size).toBe(names.length);
-  // 26 строк задачи 1 (25 плана + `web-tile-form`, рулинг R-4); задачи 2, 4, 5 добавят свои (РП-3).
-  expect(QUERY_WALKERS.length).toBe(26);
+  // 26 строк задачи 1 (25 плана + `web-tile-form`, рулинг R-4) и `token-boundary` задачи 2; задачи 4, 5
+  // добавят свои (РП-3).
+  expect(QUERY_WALKERS.length).toBe(27);
 });
 
 test('слово пометки встречается только строкой-комментарием пометки, не в прозе', () => {

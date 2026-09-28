@@ -1307,6 +1307,7 @@ describe('списочные пути несут новую форму', () => {
             thisEntityId: note.id,
             today: '2026-08-26',
             timeZone: 'Europe/Moscow',
+            weekStart: 'monday',
           }),
         )),
       ] as Array<Record<string, unknown>>;

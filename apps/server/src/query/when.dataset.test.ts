@@ -55,7 +55,14 @@ beforeAll(async () => {
 /** Контекст компиляции с зафиксированными «сегодня» и поясом — реестр владельца из базы. */
 async function ctx(): Promise<CompileCtx> {
   const reg = await withIdentity(db, personal(graph), (tx) => effectiveRegistry(tx, graph));
-  return { graphId: graph, today: TODAY, timeZone: TIME_ZONE, reg, thisEntityId: null };
+  return {
+    graphId: graph,
+    today: TODAY,
+    timeZone: TIME_ZONE,
+    weekStart: 'monday',
+    reg,
+    thisEntityId: null,
+  };
 }
 
 function parse(text: string, c: CompileCtx): QueryAst {
@@ -257,7 +264,13 @@ describe('С1в-1: правило значения на записи', () => {
     });
     if (!made.ok) throw new Error(`запись: ${made.error.code} ${made.error.message}`);
     const reg = await withIdentity(db, personal(other), (tx) => effectiveRegistry(tx, other));
-    const c: CompileCtx = { graphId: other, today: TODAY, timeZone: TIME_ZONE, reg };
+    const c: CompileCtx = {
+      graphId: other,
+      today: TODAY,
+      timeZone: TIME_ZONE,
+      weekStart: 'monday',
+      reg,
+    };
     const rows = await withIdentity(db, personal(other), (tx) =>
       tx.execute(compileQueryAst(parse('orbis/when=overdue', c), c)),
     );
@@ -397,6 +410,7 @@ describe('С1в-1 (д): ранг привязок у слота не-даты (�
     graphId: parseGraphId('00000000-0000-7000-8000-0000000000a1'),
     today: TODAY,
     timeZone: TIME_ZONE,
+    weekStart: 'monday',
     reg: reg(twinRank),
   });
   const order = (text: string) => {

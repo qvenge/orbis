@@ -71,6 +71,7 @@ const CTX: CompileCtx = {
   graphId: parseGraphId('00000000-0000-7000-8000-0000000000a1'),
   today: '2026-07-03',
   timeZone: 'Europe/Moscow',
+  weekStart: 'monday',
   reg: REG,
   thisEntityId: '00000000-0000-7000-8000-0000000000f1',
 };

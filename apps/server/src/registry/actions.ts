@@ -43,7 +43,13 @@ import {
 } from '@orbis/shared/expr';
 // Q map-действия: тип дерева и узла фильтра — подпуть запросов (как у `tools/dispatch.ts`); оттуда же
 // «списочность» свойства — решение языка, общее с чекером E (`typedOfProp`).
-import { isListPropertyType, type QueryAst, type QueryFilterNode } from '@orbis/shared/query';
+import {
+  isListPropertyType,
+  type QueryAst,
+  type QueryFilterNode,
+  TOKEN_EDGE_MESSAGE,
+  tokenBoundaryForms,
+} from '@orbis/shared/query';
 import { z } from 'zod';
 import { ExecError } from '../errors';
 import { ROUTINE_UNTOUCHABLE_OBJECTS } from '../executor/invariants';
@@ -591,9 +597,21 @@ function attachAspectOf(reg: RegistrySnapshot, tool: string) {
  *
  * Адрес контракта в `prop` (1в: «просроченные по „когда“» — `orbis/when=overdue`) законен: это
  * предикат множества целей, как любой другой, и компилирует его общий компилятор.
+ *
+ * Токен-граница без нужного края (`<overdue`, `>after_7d`; спека 1в §3.4) — отказ ЗАПИСИ, тем же
+ * `TOKEN_EDGE`, что у разбора и компилятора: `over` компилируется только на прогоне, и без этой
+ * проверки декларация легла бы в реестр и отказывала бы при каждом запуске. Край от «сегодня» не
+ * зависит, поэтому проверка — без контекста компиляции.
  */
 // ОБХОДЧИК-Q: action-query
 export function assertActionQuery(key: string, over: QueryAst): void {
+  const edge = tokenBoundaryForms(over).find((f) => f.verdict === 'refused');
+  if (edge !== undefined) {
+    bad('TOKEN_EDGE', key, TOKEN_EDGE_MESSAGE(edge.token, edge.form), {
+      token: edge.token,
+      form: edge.form,
+    });
+  }
   for (const field of ['sortBy', 'limit', 'display', 'title'] as const) {
     if (over[field] !== undefined) {
       bad(

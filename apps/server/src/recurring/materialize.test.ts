@@ -754,11 +754,11 @@ describe('materializationWindow — детект окна по ДЕРЕВУ (ч�
   const win = (query: string) => {
     const parsed = parseQueryAst(query, REG);
     if (!parsed.ok) throw new Error(`${parsed.error.code}: ${parsed.error.message}`);
-    return materializationWindow(parsed.ast, today, MATERIALIZE_PARAMS, REG);
+    return materializationWindow(parsed.ast, today, MATERIALIZE_PARAMS, REG, 'monday');
   };
   /** Окно по готовому дереву — там, где текст плоской грамматики его не выражает (§А5-3д). */
   const winAst = (filter: QueryFilterNode) =>
-    materializationWindow({ filter }, today, MATERIALIZE_PARAMS, REG);
+    materializationWindow({ filter }, today, MATERIALIZE_PARAMS, REG, 'monday');
 
   test('горизонт правила меняет окно: 30 дней вместо 14', () => {
     const parsed = parseQueryAst('orbis/due_date>2026-07-01', REG);
@@ -768,6 +768,7 @@ describe('materializationWindow — детект окна по ДЕРЕВУ (ч�
       today,
       { ...MATERIALIZE_PARAMS, horizon_days: 30 },
       REG,
+      'monday',
     );
     expect(w).toEqual({ from: '2026-07-02', to: addDays(today, 30) });
   });
@@ -781,6 +782,7 @@ describe('materializationWindow — детект окна по ДЕРЕВУ (ч�
         today,
         { ...MATERIALIZE_PARAMS, trigger_properties: ['orbis/start_at'] },
         REG,
+        'monday',
       ),
     ).toBeNull();
   });
@@ -807,6 +809,39 @@ describe('materializationWindow — детект окна по ДЕРЕВУ (ч�
     expect(win('orbis/start_at=next_7d')).toEqual({ from: today, to: '2026-07-17' });
     expect(win('orbis/start_at=after_7d')).toEqual({ from: '2026-07-18', to: '2026-07-24' });
     expect(win('orbis/occurred_on=overdue')).toEqual({ from: today, to: today });
+  });
+
+  test('1в §3.4: окно от краёв — новые токены и два края в сравнениях (сегодня — пятница 07-10)', () => {
+    // `=T` — [начало; конец]; прошлое в окне законно — его обрежет ретро-пол `materializeInstances`.
+    expect(win('orbis/start_at=next_14d')).toEqual({ from: today, to: '2026-07-24' });
+    expect(win('orbis/start_at=this_week')).toEqual({ from: '2026-07-06', to: '2026-07-12' });
+    expect(win('orbis/start_at=this_month')).toEqual({ from: '2026-07-01', to: '2026-07-31' });
+    expect(win('orbis/start_at=last_month')).toEqual({ from: '2026-06-01', to: '2026-06-30' });
+    // Начало недели — параметр (В-1): с воскресенья неделя 07-05…07-11.
+    const sunday = parseQueryAst('orbis/start_at=this_week', REG);
+    if (!sunday.ok) throw new Error(sunday.error.message);
+    expect(materializationWindow(sunday.ast, today, MATERIALIZE_PARAMS, REG, 'sunday')).toEqual({
+      from: '2026-07-05',
+      to: '2026-07-11',
+    });
+    // `<T` — до дня перед НАЧАЛОМ: у next_7d начало сегодня, окна «до сегодня» нет.
+    expect(win('orbis/start_at<next_7d')).toBeNull();
+    expect(win('orbis/start_at<after_7d')).toEqual({ from: today, to: '2026-07-17' });
+    // `>T` — со дня после КОНЦА до горизонта; `>overdue` — с сегодня.
+    expect(win('orbis/start_at>next_7d')).toEqual({ from: '2026-07-18', to: '2026-07-24' });
+    expect(win('orbis/start_at>overdue')).toEqual({ from: today, to: '2026-07-24' });
+    // `range`: from — начало, to — конец.
+    expect(win('orbis/start_at>=after_7d')).toEqual({ from: '2026-07-18', to: '2026-07-24' });
+    expect(win('orbis/start_at<=next_7d')).toEqual({ from: today, to: '2026-07-17' });
+    expect(win('orbis/start_at=this_week..next_14d')).toEqual({
+      from: '2026-07-06',
+      to: '2026-07-24',
+    });
+    // Форма без нужного края окна не даёт (дерево отвергнет компилятор, `TOKEN_EDGE`).
+    expect(winAst({ prop: 'orbis/start_at', op: 'lt', value: { token: 'overdue' } })).toBeNull();
+    expect(
+      winAst({ prop: 'orbis/start_at', op: 'range', value: { to: { token: 'after_7d' } } }),
+    ).toBeNull();
   });
 
   test('объединение условий — минимальный from, максимальный to', () => {
@@ -934,6 +969,25 @@ describe('хук entity.query/count (§5.4: любой запрос диапаз
     // count тем же окном видит те же строки (материализация уже идемпотентна)
     const { count } = await caller.entity.count({ query: 'orbis/start_at=next_7d' });
     expect(count).toBe(9);
+  });
+
+  test('1в §3.4: entity.query со start_at=next_14d материализует окно [сегодня; сегодня+14]', async () => {
+    const owner = await freshGraph();
+    const caller = callerFor(owner);
+    const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Moscow' }).format(
+      new Date(),
+    );
+    const templateId = await createTemplate(owner, {
+      title: 'Ежедневный созвон на две недели',
+      props: dailyScheduleProps(today),
+      aspects: ['orbis/schedule'],
+    });
+    const results = await caller.entity.query({ query: 'orbis/start_at=next_14d' });
+    const ids = new Set(results.map((r) => r.id));
+    // Экземпляр на сегодня+12 — за краем прежнего next_7d — создан и в выдаче.
+    expect(ids.has(recurringInstanceId(templateId, addDays(today, 12)))).toBe(true);
+    // 15 экземпляров [сегодня; сегодня+14] (горизонт правила) + сам шаблон.
+    expect(results.length).toBe(16);
   });
 
   test('окно запроса — по триггерам СТРОКИ правила: свойство, снятое с перечня, материализацию не будит', async () => {

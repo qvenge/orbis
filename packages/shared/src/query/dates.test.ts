@@ -15,8 +15,17 @@ function parsed(text: string): QueryAst {
   return r.ast;
 }
 
-test('RELATIVE_DATE_TOKENS — ровно четыре токена грамматики', () => {
-  expect([...RELATIVE_DATE_TOKENS]).toEqual(['today', 'overdue', 'next_7d', 'after_7d']);
+test('RELATIVE_DATE_TOKENS — ровно восемь токенов языка (с 1в, спека §3.4)', () => {
+  expect([...RELATIVE_DATE_TOKENS]).toEqual([
+    'today',
+    'overdue',
+    'next_7d',
+    'after_7d',
+    'this_week',
+    'next_14d',
+    'this_month',
+    'last_month',
+  ]);
 });
 
 test('относительный токен — не абсолютная дата', () => {

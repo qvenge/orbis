@@ -234,6 +234,7 @@ function valuePrefilter(
     if (overdue) return sql`${day} < ${cctx.today}::date`;
     const expr: CondExpr = {
       name,
+      of: `поля '${name}'`,
       day: () => day,
       comparable: () => day,
       param: (v) => dayLiteral(name, v),
@@ -255,7 +256,15 @@ function dayLiteral(name: string, value: QueryScalar): SQL {
   return sql`${value}::date`;
 }
 
-/** Выражение условия над датами строки `alias` (`w` — значение «даты», `sv` — слот с датой). */
+/**
+ * Выражение условия над датами строки `alias` (`w` — значение «даты», `sv` — слот с датой).
+ *
+ * У слота с `timestamp` среди видов литерал дня сравнивается с ДНЁМ значения, момент — с МОМЕНТОМ.
+ * Литералы одного условия (`range`, `in`) обязаны быть одного вида: левая сторона у условия одна, и
+ * `sv.day BETWEEN $::date AND $::timestamptz` сравнил бы день с моментом — событие 07-17 20:00
+ * попадало бы в «..2026-07-17T12:00». Отказ `TYPE` тем же текстом, что у разбора (эталон — свойство
+ * `timestamp`, которое дня рядом с моментом не принимает вовсе; перенос гейта задачи 1, Minor-1).
+ */
 function datedExpr(
   name: string,
   alias: 'w' | 'sv',
@@ -278,9 +287,21 @@ function datedExpr(
   };
   return {
     name,
+    of: `поля '${name}'`,
     day: () => day,
     // Литерал дня сравнивается с днём, момент — с моментом (у слота с `timestamp`).
-    comparable: (sample) => (!momentLiterals || isDay(sample) ? day : at),
+    comparable: (samples) => {
+      if (!momentLiterals) return day;
+      const days = samples.filter(isDay).length;
+      if (days !== 0 && days !== samples.length) {
+        return fail(
+          'TYPE',
+          `условие у поля '${name}': литералы одного вида — все дни или все моменты ISO 8601; получено ${samples.map((v) => `'${String(v)}'`).join(', ')}`,
+          { property: name },
+        );
+      }
+      return days === 0 ? at : day;
+    },
     param: (v) => (!momentLiterals || isDay(v) ? dayLiteral(name, v) : moment(v)),
     // Граница рядом с токеном — день; момент ISO переводится в день пояса владельца.
     dayParam: (v) =>
@@ -296,10 +317,11 @@ function scalarExpr(name: string, kind: Extract<AddressKind, { kind: 'slot' }>):
   const numeric = first === 'number' || first === 'decimal';
   return {
     name,
+    of: `поля '${name}'`,
     day: () =>
       fail(
         'TYPE',
-        `относительное время и сравнение по дате применимы только к свойствам date/timestamp; '${name}' — ${kind.kinds.join('|')}`,
+        `относительное время и сравнение по дате применимы только к полям с датой (date/timestamp); поле '${name}' — ${kind.kinds.join('|')}`,
         { property: name },
       ),
     comparable: () => sql.raw('sv.v'),

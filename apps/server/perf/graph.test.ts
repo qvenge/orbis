@@ -165,6 +165,7 @@ beforeAll(async () => {
         graphId: GRAPH_OWNER_ID,
         today: '2026-07-03',
         timeZone: 'Europe/Moscow',
+        weekStart: 'monday',
         reg,
       }),
     )),
@@ -178,6 +179,7 @@ beforeAll(async () => {
         graphId: GRAPH_OWNER_ID,
         today: '2026-07-03',
         timeZone: 'Europe/Moscow',
+        weekStart: 'monday',
         reg,
       }),
     )),
@@ -202,6 +204,7 @@ test('корпус наполнен: обход идёт по данным, а �
     graphId: GRAPH_OWNER_ID,
     today: '2026-07-03',
     timeZone: 'Europe/Moscow',
+    weekStart: 'monday' as const,
     reg,
   };
   const rows = await withIdentity(db, personal(GRAPH_OWNER_ID), async (tx) => [
@@ -227,7 +230,13 @@ test('корпус наполнен: обход идёт по данным, а �
 }, 300_000);
 
 test('П6: descendants_of под RLS и пересчёт предков на поддереве ≥5k', async () => {
-  const ctx = { graphId: GRAPH_OWNER_ID, today: '2026-07-03', timeZone: 'Europe/Moscow', reg };
+  const ctx = {
+    graphId: GRAPH_OWNER_ID,
+    today: '2026-07-03',
+    timeZone: 'Europe/Moscow',
+    weekStart: 'monday' as const,
+    reg,
+  };
 
   // Два наблюдения рядом с гейтом (порога не несут, но без них порог нечем толковать):
   // обход ОТ КОРНЯ (весь корпус) и выгрузка ВСЕГО поддерева вместо страницы.

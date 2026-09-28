@@ -28,6 +28,7 @@ import { ExecError } from '../errors';
 import { type ExprEvalScope, evalExpr } from '../expr/eval';
 import { BULK_THRESHOLD, factsFromOperations } from '../policy/confirmation';
 import { type CompileCtx, compileWhere } from '../query/compile-ast';
+import { WEEK_START } from '../query/context';
 import { actionHash, paramLiteralType } from '../registry/actions';
 import type { RegistrySnapshot } from '../registry/load';
 import { literalFormViolation } from '../registry/validate-props';
@@ -385,6 +386,7 @@ async function queryTargets(
     graphId,
     today: args.today,
     timeZone: args.timeZone,
+    weekStart: WEEK_START,
     reg,
     thisEntityId: null,
   };

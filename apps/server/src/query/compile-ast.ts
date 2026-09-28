@@ -62,6 +62,10 @@ import {
   type QueryRelPredicate,
   type QueryScalar,
   type QuerySortField,
+  TOKEN_EDGE_MESSAGE,
+  type TokenForm,
+  tokenEdges,
+  type WeekStart,
 } from '@orbis/shared/query';
 import { type SQL, sql } from 'drizzle-orm';
 import { ExecError } from '../errors';
@@ -99,6 +103,12 @@ export interface CompileCtx {
   today: string;
   /** IANA-таймзона владельца — по ней date-токены читают timestamp-свойства. */
   timeZone: string;
+  /**
+   * Начало недели для токена `this_week` (спека 1в §3.4). Обязательное, а не с умолчанием: контекст
+   * собирают несколько мест, и забытое поле обязано быть ошибкой типов, а не молчаливым понедельником.
+   * Боевое значение ставит `queryContext` (константа «понедельник», вопрос владельцу В-1).
+   */
+  weekStart: WeekStart;
   reg: RegistrySnapshot;
   /** Сущность-хозяин query-блока (для `of: 'this'`); null/отсутствие — контекста нет. */
   thisEntityId?: string | null;
@@ -437,41 +447,41 @@ export function propertyLocalDateExpr(propertyId: string, ctx: CompileCtx): SQL 
 }
 
 /**
- * Условие относительного времени (§6.1, нормативная таблица) — форма ровно та же, что у
- * старого компилятора: `next_7d` включает обе границы, `after_7d` строго дальше.
+ * ДВА КРАЯ ТОКЕНА (спека 1в §3.4) — одно правило для всех восьми токенов: край, который читает
+ * форма (`edgeOf`), — календарный день из `tokenEdges` по «сегодня» и началу недели контекста; он
+ * едет ПАРАМЕТРОМ `$::date`. Края нет — отказ `TOKEN_EDGE` тем же текстом, что у разбора: дерево,
+ * пришедшее мимо разбора (вход `ast` роутера и тула, `over` действия, источник прогресса цели),
+ * обязано отказать так же, как текст.
  *
- * Над ГОТОВОЙ календарной датой `d`, а не над свойством (1в): тот же шаг читают даты значения
- * «когда» и значения слота (`contract-sql.ts`) — вторая копия таблицы токенов разошлась бы с
- * этой на первой правке §6.1 (задача 2 переводит её на два края).
+ * Правило одного «якоря» (до 1в: `<next_7d` — «< сегодня+7») снято: `<T` — раньше НАЧАЛА `T`, `>T` —
+ * позже КОНЦА, и у всех токенов одинаково. Перепись сохранённых деревьев — `tokenBoundaryForms`.
  */
-export function dayTokenCond(d: SQL, token: QueryDateToken, ctx: CompileCtx): SQL {
-  switch (token) {
-    case 'today':
-      return sql`${d} = ${ctx.today}::date`;
-    case 'overdue':
-      return sql`${d} < ${ctx.today}::date`;
-    case 'next_7d':
-      return sql`${d} BETWEEN ${ctx.today}::date AND ${ctx.today}::date + 7`;
-    case 'after_7d':
-      return sql`${d} > ${ctx.today}::date + 7`;
+function tokenEdgeParam(
+  e: CondExpr,
+  token: QueryDateToken,
+  form: Exclude<TokenForm, 'eq'>,
+  ctx: CompileCtx,
+): SQL {
+  const edges = tokenEdges(token, ctx.today, ctx.weekStart);
+  const day = form === 'lt' || form === 'gte' ? edges.start : edges.end;
+  if (day === null) {
+    return fail('TOKEN_EDGE', TOKEN_EDGE_MESSAGE(token, form), { property: e.name, token, form });
   }
+  return sql`${day}::date`;
 }
 
 /**
- * Токен В РОЛИ ГРАНИЦЫ (`>`, `<`, `range`) — это ДЕНЬ, вокруг которого токен определён:
- * `today`/`overdue` — сегодня, `next_7d`/`after_7d` — сегодня+7. Направление задаёт сам
- * оператор, поэтому у границы смысл один и от направления не зависит: `"срок"<=today` —
- * «не позже сегодня», `"срок">=today` — «не раньше сегодня».
+ * `=T` над готовой календарной датой `d`: `[начало; конец]`, открытый край — одностороннее сравнение
+ * (`=overdue` — «не позже вчера», `=after_7d` — «не раньше сегодня+8»).
  *
- * Правило названо здесь потому, что канон его не даёт: §А5-7 разрешает токен в любой
- * границе `range`, а §6.1 описывает токены как готовые УСЛОВИЯ (`today` = «= сегодня»).
- * Растащить эти два смысла молча — значит получить `"срок"<=next_7d`, который у одного
- * читателя «не позже конца недели», а у другого «не позже сегодня».
+ * Над ДНЁМ, а не над свойством (1в): тот же шаг читают даты значения «когда» и значения слота
+ * (`contract-sql.ts`) — вторая копия таблицы токенов разошлась бы с этой.
  */
-export function tokenAnchor(token: QueryDateToken, ctx: CompileCtx): SQL {
-  return token === 'next_7d' || token === 'after_7d'
-    ? sql`${ctx.today}::date + 7`
-    : sql`${ctx.today}::date`;
+export function dayTokenCond(d: SQL, token: QueryDateToken, ctx: CompileCtx): SQL {
+  const { start, end } = tokenEdges(token, ctx.today, ctx.weekStart);
+  if (start !== null && end !== null) return sql`${d} BETWEEN ${start}::date AND ${end}::date`;
+  if (start !== null) return sql`${d} >= ${start}::date`;
+  return sql`${d} <= ${end}::date`;
 }
 
 // ─────────────────────────── Предикаты свойства ───────────────────────────
@@ -557,10 +567,16 @@ function listPropCond(ref: PropRef, op: QueryPropOp, value: unknown): SQL {
 export interface CondExpr {
   /** Имя в отказах: id свойства или ключ адреса. */
   name: string;
+  /** Как отказ называет поле (словарь спеки §1 1в): `свойства 'x'` / `поля 'x'` — родительный падеж. */
+  of: string;
   /** Календарный день значения; не дата — отказ `TYPE` (гейт времени). */
   day(): SQL;
-  /** Сравнимое значение под литерал `sample` (у слота с моментом — день или момент по форме литерала). */
-  comparable(sample: QueryScalar): SQL;
+  /**
+   * Сравнимое значение под литералы условия `samples` (у слота с моментом — день или момент по
+   * форме литерала). Литералы одного условия (`range`, `in`) — одного вида: левая сторона у условия
+   * одна, и день рядом с моментом — отказ `TYPE` (перенос гейта задачи 1, Minor-1).
+   */
+  comparable(samples: readonly QueryScalar[]): SQL;
   /** Литерал правой стороны: форма проверена, каст — по виду значения. */
   param(value: QueryScalar): SQL;
   /** Литерал-граница рядом с токеном: календарный день. */
@@ -571,6 +587,7 @@ export interface CondExpr {
 function propertyExpr(ref: PropRef, ctx: CompileCtx): CondExpr {
   return {
     name: ref.def.id,
+    of: `свойства '${ref.def.id}'`,
     day: () => dateExpr(ref, ctx),
     comparable: () => comparable(ref),
     param: (v) => scalarParam(ref.def, v),
@@ -605,7 +622,7 @@ export function exprCond(e: CondExpr, op: QueryPropOp, value: unknown, ctx: Comp
     case 'in': {
       const values = value as QueryScalar[];
       const params = values.map((v) => e.param(v));
-      return sql`${e.comparable(values[0] as QueryScalar)} IN (${sql.join(params, sql`, `)})`;
+      return sql`${e.comparable(values)} IN (${sql.join(params, sql`, `)})`;
     }
     case 'contains':
       // Зеркало долга п. 1: `contains` на скаляре печатается тем же `p=v`, что и `eq`, и
@@ -613,20 +630,22 @@ export function exprCond(e: CondExpr, op: QueryPropOp, value: unknown, ctx: Comp
       // Подстрока в языке уже есть и называется `search=`.
       return fail(
         'TYPE',
-        `оператор 'contains' не определён для скалярного свойства '${e.name}': ` +
+        `оператор 'contains' не определён для скалярного ${e.of}: ` +
           `вхождение элемента бывает у списка, а поиск подстроки — это search=`,
         { property: e.name, op },
       );
   }
 }
 
-/** Сравнение со скаляром ИЛИ с относительным временем (§6.1). */
+/** Сравнение со скаляром ИЛИ с токеном: `<T` — раньше начала, `>T` — позже конца (§3.4). */
 function boundCond(e: CondExpr, op: '=' | '>' | '<', bound: QueryBound, ctx: CompileCtx): SQL {
   if (isToken(bound)) {
-    if (op === '=') return dayTokenCond(e.day(), bound.token, ctx);
-    return sql`${e.day()} ${sql.raw(op)} ${tokenAnchor(bound.token, ctx)}`;
+    // День — ПЕРВЫМ: не дата — отказ вида (`TYPE`) важнее отказа края.
+    const day = e.day();
+    if (op === '=') return dayTokenCond(day, bound.token, ctx);
+    return sql`${day} ${sql.raw(op)} ${tokenEdgeParam(e, bound.token, op === '<' ? 'lt' : 'gt', ctx)}`;
   }
-  return sql`${e.comparable(bound)} ${sql.raw(op)} ${e.param(bound)}`;
+  return sql`${e.comparable([bound])} ${sql.raw(op)} ${e.param(bound)}`;
 }
 
 /**
@@ -635,24 +654,26 @@ function boundCond(e: CondExpr, op: '=' | '>' | '<', bound: QueryBound, ctx: Com
  *
  * Если хотя бы одна граница — токен, сравнение идёт по КАЛЕНДАРНОЙ ДАТЕ (обе стороны),
  * иначе — по типу значения. Смешивать нельзя: `timestamptz` слева и `date` справа сравнимы,
- * но означали бы не то, что просил автор запроса (полночь вместо всего дня).
+ * но означали бы не то, что просил автор запроса (полночь вместо всего дня). Токен-граница читает
+ * свой край (§3.4): `from` — начало, `to` — конец.
  */
 function rangeCond(e: CondExpr, value: QueryRangeValue, ctx: CompileCtx): SQL {
   const { from, to } = value;
   if (from === undefined && to === undefined) {
-    return fail('SYNTAX', `range без границ у свойства '${e.name}'`, { property: e.name });
+    return fail('SYNTAX', `range без границ у ${e.of}`, { property: e.name });
   }
   const byDate = isToken(from) || isToken(to);
-  const left = byDate ? e.day() : e.comparable((from ?? to) as QueryScalar);
-  const side = (b: QueryBound): SQL => {
-    if (isToken(b)) return tokenAnchor(b.token, ctx);
+  const literals = [from, to].filter((b): b is QueryScalar => b !== undefined && !isToken(b));
+  const left = byDate ? e.day() : e.comparable(literals);
+  const side = (b: QueryBound, form: 'gte' | 'lte'): SQL => {
+    if (isToken(b)) return tokenEdgeParam(e, b.token, form, ctx);
     return byDate ? e.dayParam(b) : e.param(b);
   };
   if (from !== undefined && to !== undefined) {
-    return sql`${left} BETWEEN ${side(from)} AND ${side(to)}`;
+    return sql`${left} BETWEEN ${side(from, 'gte')} AND ${side(to, 'lte')}`;
   }
-  if (from !== undefined) return sql`${left} >= ${side(from)}`;
-  return sql`${left} <= ${side(to as QueryBound)}`;
+  if (from !== undefined) return sql`${left} >= ${side(from, 'gte')}`;
+  return sql`${left} <= ${side(to as QueryBound, 'lte')}`;
 }
 
 // ─────────────────────────── Реляционные предикаты ───────────────────────────

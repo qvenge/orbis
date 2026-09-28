@@ -36,6 +36,9 @@ import {
   type QueryFieldRef,
   type QueryFilterNode,
   type QueryRangeValue,
+  type TokenForm,
+  tokenEdges,
+  type WeekStart,
 } from '@orbis/shared/query';
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import type { Db } from '../db/client';
@@ -129,12 +132,19 @@ export function instantOfLocal(dateISO: string, time: WallClock['time'], timeZon
  * Поддерево под `not` окно НЕ СУЖАЕТ и вклада не даёт: «срок не сегодня» не обещает, что
  * сегодняшних инстансов в выдаче не будет, — они просто отберутся другим условием.
  *
- * Правила по узлам: относительный токен разворачивается в свой диапазон (`overdue` и
- * прочий «открытый низ» — только сегодня и будущее: прошлое лениво не порождаем),
- * литеральная 'YYYY-MM-DD' — окно этого дня, `range` — [from; to] с подстановкой открытой
- * границы (низ — сегодня, верх — горизонт правила), `gt`/`lt` — от следующего дня и до дня
- * перед. Несколько условий объединяются в [min from; max to]; горизонт и ретро-пол строки
- * `materialize` обрезает `materializeInstances` — окно здесь не клампится.
+ * Правила по узлам — от КРАЁВ токена (спека 1в §3.4, `tokenEdges`, то же правило, что у
+ * компилятора): `=T` — [начало; конец], открытое начало — сегодня (у `overdue` окно
+ * [сегодня; сегодня]: прошлое лениво не порождаем, прежний пин), открытый конец — горизонт; `>T` —
+ * [конец+1; горизонт]; `<T` — [сегодня; начало−1]; `range` — `from` читает начало, `to` — конец, с
+ * подстановкой открытой границы (низ — сегодня, верх — горизонт правила). Литеральная 'YYYY-MM-DD'
+ * — окно этого дня, `gt`/`lt` с литералом — от следующего дня и до дня перед. Окно, у которого
+ * конец раньше начала (`<next_7d` — «до сегодня»), вклада не даёт. Форма без нужного края
+ * (`<overdue`) окна не даёт — такое дерево отвергает компилятор (`TOKEN_EDGE`). Несколько условий
+ * объединяются в [min from; max to]; горизонт и ретро-пол строки `materialize` обрезает
+ * `materializeInstances` — окно здесь не клампится.
+ *
+ * Начало недели (`this_week`) — пятый аргумент: тот же `weekStart`, по которому компилирует запрос
+ * зовущий (`CompileCtx`), иначе окно и выдача разошлись бы на неделе с воскресенья.
  *
  * Триггеры и горизонт — ПАРАМЕТРЫ строки каталога (`params`: `trigger_properties`,
  * `horizon_days`), третьим аргументом, а не константы файла: функция чистая и снимка не читает,
@@ -149,7 +159,7 @@ export function instantOfLocal(dateISO: string, time: WallClock['time'], timeZon
  * ЧЕМ ЭТО ОТЛИЧАЕТСЯ ОТ ПЛОСКОГО ОБХОДА, который был до Задачи 9b, — двумя местами, и оба
  * РАСШИРЯЮТ окно, а не сужают (то есть могут породить лишние инстансы, но не спрятать
  * нужные): старый брал `range` только когда ОБЕ границы литеральные даты, новый
- * подставляет открытую; старый игнорировал токен в `>`/`<`, новый переводит его в якорь.
+ * подставляет открытую; старый игнорировал токен в `>`/`<`, новый переводит его в край.
  * Расширение намеренное: канон выражает `<=`/`>=` односторонним `range`, и «пропустить»
  * такое условие значило бы отдать владельцу пустой список там, где он ждёт инстансы.
  */
@@ -162,38 +172,47 @@ export function materializationWindow(
     aspects: ReadonlyMap<string, AspectDefinition>;
     contracts: ReadonlyMap<string, ContractDefinition>;
   },
+  weekStart: WeekStart,
 ): { from: string; to: string } | null {
   let from: string | null = null;
   let to: string | null = null;
   const widen = (f: string, t: string) => {
+    // Пустое окно (конец раньше начала) вклада не даёт: `<next_7d` — «до сегодня», а прошлое
+    // лениво не порождаем.
+    if (t < f) return;
     from = from === null || f < from ? f : from;
     to = to === null || t > to ? t : to;
   };
   const horizon = () => addDays(today, params.horizon_days);
 
-  /** Диапазон, который токен задаёт САМ ПО СЕБЕ (позиция равенства). */
+  /** Диапазон, который токен задаёт САМ ПО СЕБЕ (позиция равенства): [начало; конец]. */
   const tokenWindow = (token: QueryDateToken): { from: string; to: string } => {
-    switch (token) {
-      case 'today':
-      case 'overdue': // открытый низ: материализуем только сегодня и будущее
-        return { from: today, to: today };
-      case 'next_7d':
-        return { from: today, to: addDays(today, 7) };
-      case 'after_7d':
-        return { from: addDays(today, 8), to: horizon() };
-    }
+    const edges = tokenEdges(token, today, weekStart);
+    const lo = edges.start ?? today;
+    // Открытое начало — «сегодня и будущее»: у `overdue` (конец — вчера) окно — сегодняшний день,
+    // как до 1в (пин `materialize.test.ts`).
+    return { from: lo, to: edges.end === null ? horizon() : edges.end < lo ? lo : edges.end };
   };
 
-  /** День, ВОКРУГ которого токен определён, — когда он стоит границей диапазона. */
-  const tokenAnchor = (token: QueryDateToken): string =>
-    token === 'next_7d' || token === 'after_7d' ? addDays(today, 7) : today;
-
-  /** Календарный день границы: литерал 'YYYY-MM-DD', токен — его якорь; иначе null. */
-  const boundDay = (bound: QueryBound | undefined): string | null => {
+  /**
+   * Календарный день границы: литерал 'YYYY-MM-DD'; у токена — край, который читает форма
+   * (`gt`/`lte` — конец, `lt`/`gte` — начало). Края нет или литерал не дата — null.
+   */
+  const boundDay = (
+    bound: QueryBound | undefined,
+    form: Exclude<TokenForm, 'eq'>,
+  ): string | null => {
     if (bound === undefined) return null;
-    if (typeof bound === 'object') return tokenAnchor(bound.token);
+    if (typeof bound === 'object') {
+      const edges = tokenEdges(bound.token, today, weekStart);
+      return form === 'gt' || form === 'lte' ? edges.end : edges.start;
+    }
     return typeof bound === 'string' && DATE_RE.test(bound) ? bound : null;
   };
+
+  /** Граница-токен, у которой нет нужного края. */
+  const isMissingEdge = (bound: QueryBound | undefined, day: string | null): boolean =>
+    typeof bound === 'object' && day === null;
 
   /** Свойства за полем: у свойства — оно само, у адреса — привязанные к слоту (слотам с ролью). */
   const propertiesOf = (field: QueryFieldRef): readonly string[] => {
@@ -219,33 +238,36 @@ export function materializationWindow(
           widen(w.from, w.to);
           return;
         }
-        const day = boundDay(value as QueryBound);
+        // Литерал дня: у него оба «края» — сам день.
+        const day = boundDay(value as QueryBound, 'gte');
         if (day !== null) widen(day, day);
         return;
       }
       case 'in': {
         for (const v of value as unknown[]) {
-          const day = boundDay(v as QueryBound);
+          const day = boundDay(v as QueryBound, 'gte');
           if (day !== null) widen(day, day);
         }
         return;
       }
       case 'gt': {
-        // Строго после X; верх не ограничен → горизонт правила от сегодня.
-        const day = boundDay(value as QueryBound);
+        // Строго после X (у токена — после конца); верх не ограничен → горизонт правила.
+        const day = boundDay(value as QueryBound, 'gt');
         if (day !== null) widen(addDays(day, 1), horizon());
         return;
       }
       case 'lt': {
-        // Строго до X — открытый низ: материализуем только сегодня и будущее (как overdue).
-        const day = boundDay(value as QueryBound);
+        // Строго до X (у токена — до начала) — открытый низ: только сегодня и будущее.
+        const day = boundDay(value as QueryBound, 'lt');
         if (day !== null) widen(today, addDays(day, -1));
         return;
       }
       case 'range': {
         const range = value as QueryRangeValue;
-        const lo = boundDay(range.from);
-        const hi = boundDay(range.to);
+        const lo = boundDay(range.from, 'gte');
+        const hi = boundDay(range.to, 'lte');
+        // Токен без нужного края (`from=overdue`) — окна нет: дерево отвергнет компилятор.
+        if (isMissingEdge(range.from, lo) || isMissingEdge(range.to, hi)) return;
         if (lo === null && hi === null) return;
         // Открытая граница берётся оттуда же, откуда её брали сравнения: низ — сегодня,
         // верх — горизонт. `range` несёт и `<=`/`>=` — у канона своих операторов для них нет.

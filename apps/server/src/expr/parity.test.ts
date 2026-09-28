@@ -75,6 +75,7 @@ for (const c of CASES) {
       graphId: owner,
       today: c.today,
       timeZone: c.tz,
+      weekStart: 'monday',
       reg,
       thisEntityId: null,
     };

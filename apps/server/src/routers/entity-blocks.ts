@@ -113,7 +113,7 @@ function prepareQuery(
       plan: compile(ast, cctx),
       // Реестр — тот же снимок, что разбирал блок: окно от адреса контракта считается по его
       // привязкам (1в §3.4).
-      window: materializationWindow(ast, cctx.today, params, cctx.reg),
+      window: materializationWindow(ast, cctx.today, params, cctx.reg, cctx.weekStart),
     };
   } catch (e) {
     return { key, kind: 'settled', result: { ok: false, error: compileFailure(e) } };

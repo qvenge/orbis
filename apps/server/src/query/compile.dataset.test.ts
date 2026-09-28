@@ -566,7 +566,14 @@ const DAILY_TODAY_CLASS =
 let reg: RegistrySnapshot;
 
 function ctx(): CompileCtx {
-  return { graphId: USER_A, today: TODAY, timeZone: TIMEZONE, reg, thisEntityId: null };
+  return {
+    graphId: USER_A,
+    today: TODAY,
+    timeZone: TIMEZONE,
+    weekStart: 'monday',
+    reg,
+    thisEntityId: null,
+  };
 }
 
 function astOf(query: string): QueryAst {

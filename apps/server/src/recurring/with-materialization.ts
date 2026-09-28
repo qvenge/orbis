@@ -61,6 +61,7 @@ export async function queryWithMaterialization<T>(
       cctx.today,
       materializeRuleOf(cctx.reg).rule.params,
       cctx.reg,
+      cctx.weekStart,
     );
     if (window) return { kind: 'materialize', window, ast, cctx };
     return { kind: 'done', result: await opts.run(tx, ast, cctx) };

@@ -70,7 +70,7 @@ import { ExecError } from '../errors';
 import { compileClassMembership, compileContractPredicate } from '../expr/compile';
 import { type ExprEvalScope, evalExpr } from '../expr/eval';
 import { CORE_COLUMN, type CompileCtx, castedExpr } from '../query/compile-ast';
-import { ownerTimeZone } from '../query/context';
+import { ownerTimeZone, WEEK_START } from '../query/context';
 import { disabledExtensionsOf } from '../registry/extensions';
 import type { RegistrySnapshot } from '../registry/load';
 import { toWireEntity } from '../wire';
@@ -1188,6 +1188,7 @@ async function runLedgers(
     graphId,
     today: args.today,
     timeZone,
+    weekStart: WEEK_START,
     reg,
     thisEntityId: null,
   };

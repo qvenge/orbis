@@ -15,7 +15,12 @@
  * «orbis/task_status».
  */
 
-import type { QueryBound, QueryDateToken, QueryFilterNode } from '@orbis/shared/query';
+import {
+  QUERY_DATE_TOKEN_LABELS,
+  type QueryBound,
+  type QueryDateToken,
+  type QueryFilterNode,
+} from '@orbis/shared/query';
 import { useId, useRef } from 'react';
 import {
   boundNode,
@@ -37,12 +42,14 @@ export const FIELD_CLS =
 export const ROW_BUTTON_CLS =
   'shrink-0 cursor-pointer rounded-control border border-line px-2 py-1 text-text-secondary text-xs transition hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40';
 
-const DATE_TOKEN_LABELS: Array<[QueryDateToken, string]> = [
-  ['today', 'сегодня'],
-  ['overdue', 'просрочено'],
-  ['next_7d', 'ближайшие 7 дней'],
-  ['after_7d', 'позже 7 дней'],
-];
+/**
+ * Токены дат с подписями — из ОДНОГО словаря `@orbis/shared/query` (спека 1в §3.4, РП-17): свой
+ * список здесь разошёлся бы с переключателем параметра и печатью на первом новом токене. Порядок —
+ * порядок языка.
+ */
+const DATE_TOKEN_OPTIONS = Object.entries(QUERY_DATE_TOKEN_LABELS) as Array<
+  [QueryDateToken, string]
+>;
 
 /** Относительное время вместо литерала (§А5-7). */
 function isToken(value: QueryBound): value is { token: QueryDateToken } {
@@ -263,7 +270,7 @@ function BoundInput({
           onValue(picked === 'exact' ? '' : { token: picked as QueryDateToken });
         }}
       >
-        {DATE_TOKEN_LABELS.map(([token, text]) => (
+        {DATE_TOKEN_OPTIONS.map(([token, text]) => (
           <option key={token} value={token}>
             {text}
           </option>

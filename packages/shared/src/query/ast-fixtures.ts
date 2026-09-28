@@ -753,6 +753,8 @@ export const INEXPRESSIBLE_QUERY_TEXTS: readonly { text: string; code: QueryPars
   // контракта, который его не объявляет.
   { text: 'orbis/when.nope=today', code: 'UNKNOWN_SLOT' },
   { text: 'orbis/completable=open', code: 'NO_CONTRACT_VALUE' },
+  // Токены дат (спека 1в §3.4): сравнение с краем, которого у токена нет (`overdue` без начала).
+  { text: 'orbis/due_date<overdue', code: 'TOKEN_EDGE' },
   { text: 'archived>1', code: 'RESERVED' },
   // Слово грамматики в позиции ИМЕНИ СВОЙСТВА — второй путь к тому же коду (§А5-3а/В11).
   { text: 'sortBy=limit:asc', code: 'RESERVED' },

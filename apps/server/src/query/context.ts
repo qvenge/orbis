@@ -13,6 +13,7 @@
 // два чтения: реестр читается пятью запросами, и второй его загрузкой ради разбора текста
 // платил бы каждый вызов entity.query.
 import type { GraphId } from '@orbis/shared';
+import type { WeekStart } from '@orbis/shared/query';
 import { eq } from 'drizzle-orm';
 import { userSettings } from '../db/schema';
 import type { Tx } from '../db/with-identity';
@@ -60,6 +61,15 @@ export function todayInTimeZone(timeZone: string, now: Date = new Date()): strin
   return new Intl.DateTimeFormat('en-CA', { timeZone }).format(now);
 }
 
+/**
+ * Начало недели для токена `this_week` — КОНСТАНТА «понедельник» по букве спеки 1в §3.4 («начало
+ * недели — понедельник, константа 1в»). Настройка владельца `weekStartDay` (`monday|sunday`, «Общие»)
+ * уже существует (Д-18), и читать ли её здесь — вопрос владельцу В-1: ответ «да» — правка этой одной
+ * строки (прочитать `user_settings` рядом с поясом). До ответа владелец с «воскресеньем» видит
+ * `this_week` с понедельника.
+ */
+export const WEEK_START: WeekStart = 'monday';
+
 export async function queryContext(
   tx: Tx,
   graph: GraphId,
@@ -67,5 +77,12 @@ export async function queryContext(
 ): Promise<CompileCtx> {
   const reg = await effectiveRegistry(tx, graph);
   const timeZone = await ownerTimeZone(tx, graph);
-  return { graphId: graph, reg, thisEntityId, today: todayInTimeZone(timeZone), timeZone };
+  return {
+    graphId: graph,
+    reg,
+    thisEntityId,
+    today: todayInTimeZone(timeZone),
+    timeZone,
+    weekStart: WEEK_START,
+  };
 }

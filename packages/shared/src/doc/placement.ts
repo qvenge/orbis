@@ -15,8 +15,9 @@
  */
 
 import { EMPTY_QUERY_MESSAGE } from '../contracts/block-messages';
-import { absoluteDateIn, RELATIVE_DATE_TOKENS } from '../query/dates';
+import { absoluteDateIn } from '../query/dates';
 import { effectiveLabel, type ParseRegistry, parseQueryAst } from '../query/parse-ast';
+import { QUERY_DATE_TOKEN_LABELS } from '../query/tokens';
 import {
   CONTAINER_LIMITS,
   type GrammarErrorCode,
@@ -204,7 +205,8 @@ export function secondCardMessage(raw: string): string {
  */
 export { EMPTY_QUERY_MESSAGE };
 
-const DATE_HINT = `замените на относительный токен: ${RELATIVE_DATE_TOKENS.join(', ')}`;
+/** Подсказка — перечень токенов из словаря (`tokens.ts`, РП-17): второго списка нет. */
+const DATE_HINT = `замените на относительный токен: ${Object.keys(QUERY_DATE_TOKEN_LABELS).join(', ')}`;
 
 const KIND_WORD: Record<BodyKind, string> = {
   note: 'в заметке',

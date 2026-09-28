@@ -67,6 +67,7 @@ import type {
   QuerySortField,
 } from './ast';
 import { PROJECTION_RULE_MESSAGES, QUERY_DATE_TOKENS, QUERY_DISPLAY_MODES } from './ast';
+import { TOKEN_EDGE_MESSAGE, type TokenForm, tokenEdgeMissing } from './tokens';
 
 // ─────────────────────────── Реестр разбора ───────────────────────────
 
@@ -147,6 +148,8 @@ export const QUERY_PARSE_CODES = [
   // контракта, который значения не объявляет (подсказка называет его слоты).
   'UNKNOWN_SLOT',
   'NO_CONTRACT_VALUE',
+  // Токены дат (спека 1в §3.4): сравнение с краем, которого у токена нет (`<overdue`, `>after_7d`).
+  'TOKEN_EDGE',
 ] as const;
 export type QueryParseCode = (typeof QUERY_PARSE_CODES)[number];
 
@@ -569,6 +572,20 @@ interface FieldTarget {
   address: AddressKind | null;
 }
 
+/**
+ * Имя поля в отказе — словарём спеки (§1 1в): свойство — «свойство», адрес слота и значение
+ * контракта — «поле». Адрес свойством не называется: у него нет определения в реестре свойств, и
+ * «свойство 'orbis/when'» отправило бы владельца искать то, чего нет.
+ */
+function fieldWord(field: FieldTarget): string {
+  return field.prop === null ? `поле '${field.name}'` : `'${field.name}'`;
+}
+
+/** Множественное «к свойствам …» / «к полям …» — там, где отказ называет класс полей. */
+function fieldsWord(field: FieldTarget): string {
+  return field.prop === null ? 'полям' : 'свойствам';
+}
+
 function propertyTarget(prop: PropertyDefinition): FieldTarget {
   return {
     ref: prop.id,
@@ -597,7 +614,7 @@ function addressScalar(name: string, kind: AddressKind, el: Part): QueryScalar {
     kinds.includes('date') && (DATE_LITERAL_RE.test(el.text) || !kinds.includes('timestamp'));
   const k = day ? 'date' : kinds.includes('timestamp') ? 'timestamp' : (kinds[0] as string);
   if (k === 'select') return unquote(el.text, el.offset);
-  return parseScalar({ key: name, type: { kind: k } } as PropertyDefinition, el);
+  return parseScalar({ key: name, type: { kind: k } } as PropertyDefinition, el, 'поле');
 }
 
 function addressTarget(ref: QueryContractAddress, name: string, kind: AddressKind): FieldTarget {
@@ -728,11 +745,15 @@ export function acceptsDateTokenKind(kind: PropertyType['kind']): boolean {
  * ЗАПИСИ (`registry/value-schema.ts`), а фильтр по значению вне границ — законный запрос,
  * который честно вернёт пусто.
  */
-function parseScalar(prop: PropertyDefinition, el: Part): QueryScalar {
+function parseScalar(
+  prop: PropertyDefinition,
+  el: Part,
+  noun: 'свойство' | 'поле' = 'свойство',
+): QueryScalar {
   const text = unquote(el.text, el.offset);
   const type = prop.type;
   const bad = (expected: string): never =>
-    fail('TYPE', `свойство '${prop.key}' ожидает ${expected}, получено '${text}'`, el.offset);
+    fail('TYPE', `${noun} '${prop.key}' ожидает ${expected}, получено '${text}'`, el.offset);
   switch (type.kind) {
     case 'number': {
       if (!DECIMAL_LITERAL_RE.test(text)) return bad('число');
@@ -766,7 +787,7 @@ function parseScalar(prop: PropertyDefinition, el: Part): QueryScalar {
     case 'json':
       return fail(
         'TYPE',
-        `по свойству '${prop.key}' фильтровать нечем: значение — вложенный объект (kind json)`,
+        `по ${noun === 'поле' ? 'полю' : 'свойству'} '${prop.key}' фильтровать нечем: значение — вложенный объект (kind json)`,
         el.offset,
       );
     default:
@@ -788,13 +809,41 @@ function parseBound(field: FieldTarget, el: Part): Bound {
     if (!field.tokens) {
       fail(
         'TYPE',
-        `относительное время '${raw}' применимо только к свойствам типа date/timestamp; '${field.name}' — ${field.kindText}`,
+        `относительное время '${raw}' применимо только к ${fieldsWord(field)} типа date/timestamp; ${fieldWord(field)} — ${field.kindText}`,
         el.offset,
       );
     }
     return { token: raw as QueryDateToken };
   }
   return field.scalar(el);
+}
+
+/**
+ * Край токена, который читает форма, обязан существовать (спека 1в §3.4): `<overdue` — «раньше
+ * начала», а начала у `overdue` нет. Отказ — с позицией токена и подсказкой (`TOKEN_EDGE_MESSAGE`,
+ * тот же текст у компилятора). Литерал края не читает — проверять нечего.
+ */
+function assertTokenEdge(bound: Bound, form: Exclude<TokenForm, 'eq'>, el: Part): void {
+  if (typeof bound === 'object' && tokenEdgeMissing(bound.token, form)) {
+    fail('TOKEN_EDGE', TOKEN_EDGE_MESSAGE(bound.token, form), el.offset);
+  }
+}
+
+/**
+ * Литералы диапазона у адреса — одного вида (перенос гейта задачи 1, Minor-1): у слота
+ * `timestamp|date` литерал дня сравнивается по ДНЮ значения, момент — по МОМЕНТУ, и диапазон «день
+ * .. момент» не имеет одной левой стороны — `день BETWEEN date AND timestamptz` сравнил бы день с
+ * моментом (событие вечером последнего дня попало бы в выдачу). Эталон — свойство `timestamp`: день
+ * рядом с моментом оно не принимает вовсе. Токен рядом с литералом законен — сравнение по дню.
+ */
+function assertSameLiteralForm(field: FieldTarget, from: Bound, to: Bound, offset: number): void {
+  if (field.address === null || typeof from !== 'string' || typeof to !== 'string') return;
+  if (DATE_LITERAL_RE.test(from) === DATE_LITERAL_RE.test(to)) return;
+  fail(
+    'TYPE',
+    `диапазон у поля '${field.name}': края одного вида — оба дня или оба момента ISO 8601; получено '${from}' и '${to}'`,
+    offset,
+  );
 }
 
 // ─────────────────────────── Разбор конструкций ───────────────────────────
@@ -1075,11 +1124,14 @@ function parsePropNode(field: FieldTarget, t: Token): QueryFilterNode {
     if (!field.ordered || listy) {
       fail(
         'TYPE',
-        `оператор '${t.op}' применим к свойствам с линейным порядком; '${field.name}' — ${field.kindText}${listy ? ' (список)' : ''}`,
+        `оператор '${t.op}' применим к ${fieldsWord(field)} с линейным порядком; ${fieldWord(field)} — ${field.kindText}${listy ? ' (список)' : ''}`,
         t.opOffset,
       );
     }
-    const bound = parseBound(field, trimPart(value));
+    const el = trimPart(value);
+    const bound = parseBound(field, el);
+    const form = t.op === '<=' ? 'lte' : t.op === '>=' ? 'gte' : t.op === '>' ? 'gt' : 'lt';
+    assertTokenEdge(bound, form, el);
     // `<=`/`>=` — ВКЛЮЧАЮЩИЙ range: отдельных gte/lte в каноне нет (§А5-7, находка 8).
     if (t.op === '<=') return { prop: field.ref, op: 'range', value: { to: bound } };
     if (t.op === '>=') return { prop: field.ref, op: 'range', value: { from: bound } };
@@ -1099,7 +1151,7 @@ function parsePropNode(field: FieldTarget, t: Token): QueryFilterNode {
     if (!field.ordered || listy) {
       fail(
         'TYPE',
-        `диапазон применим к свойствам с линейным порядком; '${field.name}' — ${field.kindText}`,
+        `диапазон применим к ${fieldsWord(field)} с линейным порядком; ${fieldWord(field)} — ${field.kindText}`,
         t.valueOffset,
       );
     }
@@ -1107,11 +1159,12 @@ function parsePropNode(field: FieldTarget, t: Token): QueryFilterNode {
     const to = trimPart({ text: t.value.slice(dots + 2), offset: t.valueOffset + dots + 2 });
     if (from.text === '') fail('SYNTAX', 'диапазон: пустая левая граница', t.valueOffset);
     if (to.text === '') fail('SYNTAX', 'диапазон: пустая правая граница', to.offset);
-    return {
-      prop: field.ref,
-      op: 'range',
-      value: { from: parseBound(field, from), to: parseBound(field, to) },
-    };
+    const lo = parseBound(field, from);
+    assertTokenEdge(lo, 'gte', from);
+    const hi = parseBound(field, to);
+    assertTokenEdge(hi, 'lte', to);
+    assertSameLiteralForm(field, lo, hi, t.valueOffset);
+    return { prop: field.ref, op: 'range', value: { from: lo, to: hi } };
   }
 
   const pipe = findOutsideQuotes(t.value, '|');

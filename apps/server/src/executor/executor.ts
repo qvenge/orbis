@@ -64,7 +64,7 @@ import { entities, entityOrigins, entityVersions, relations } from '../db/schema
 import { type Tx, withIdentity } from '../db/with-identity';
 import { resolveEntitlement } from '../entitlements';
 import type { CompileCtx } from '../query/compile-ast';
-import { ownerTimeZone, todayInTimeZone } from '../query/context';
+import { ownerTimeZone, todayInTimeZone, WEEK_START } from '../query/context';
 import { effectiveRegistry, parseRegistryOfSnapshot } from '../registry/cache';
 import { type AspectDelta, aspectDeltaAfterRemove, aspectDeltaAfterSet } from '../registry/deltas';
 import { disabledExtensionsOf, setExtensionDisabled } from '../registry/extensions';
@@ -289,6 +289,7 @@ function compileCtxOf(ctx: ExecCtx): Promise<CompileCtx> {
       thisEntityId: null,
       timeZone,
       today: todayInTimeZone(timeZone, ctx.clock()),
+      weekStart: WEEK_START,
     };
   })();
   return ctx.compileCtx;

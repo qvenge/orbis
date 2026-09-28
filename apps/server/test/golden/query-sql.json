@@ -189,11 +189,12 @@
       "display": "list",
       "title": "Сегодня"
     },
-    "sql": "SELECT id, graph_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND (aspects @> ARRAY['orbis/task'] AND ((props->>'orbis/due_date')::date = $2::date OR (props->>'orbis/due_date')::date < $3::date) AND NOT COALESCE((props->>'orbis/task_status' = $4 OR props->>'orbis/task_status' = $5 OR props->>'orbis/task_status' = $6), false) AND NOT COALESCE(EXISTS (SELECT 1 FROM relations r JOIN entities b ON b.id = r.source_id WHERE r.target_id = e.id AND r.role = $7 AND NOT COALESCE((b.aspects @> ARRAY['orbis/task'] AND b.props->>'orbis/task_status' IN ('done', 'cancelled')), false)), false)) ORDER BY CASE props->>'orbis/priority' WHEN 'low' THEN 1 WHEN 'medium' THEN 2 WHEN 'high' THEN 3 END DESC NULLS LAST, (props->>'orbis/due_date')::date ASC NULLS LAST LIMIT $8",
+    "sql": "SELECT id, graph_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND (aspects @> ARRAY['orbis/task'] AND ((props->>'orbis/due_date')::date BETWEEN $2::date AND $3::date OR (props->>'orbis/due_date')::date <= $4::date) AND NOT COALESCE((props->>'orbis/task_status' = $5 OR props->>'orbis/task_status' = $6 OR props->>'orbis/task_status' = $7), false) AND NOT COALESCE(EXISTS (SELECT 1 FROM relations r JOIN entities b ON b.id = r.source_id WHERE r.target_id = e.id AND r.role = $8 AND NOT COALESCE((b.aspects @> ARRAY['orbis/task'] AND b.props->>'orbis/task_status' IN ('done', 'cancelled')), false)), false)) ORDER BY CASE props->>'orbis/priority' WHEN 'low' THEN 1 WHEN 'medium' THEN 2 WHEN 'high' THEN 3 END DESC NULLS LAST, (props->>'orbis/due_date')::date ASC NULLS LAST LIMIT $9",
     "params": [
       "orbis/agent-run",
       "2026-07-03",
       "2026-07-03",
+      "2026-07-02",
       "done",
       "cancelled",
       "waiting",
@@ -402,8 +403,8 @@
         }
       ]
     },
-    "sql": "SELECT id, graph_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND ((props->>'orbis/start_at')::timestamptz AT TIME ZONE $2)::date BETWEEN $3::date AND $4::date + 7 ORDER BY (props->>'orbis/start_at')::timestamptz ASC NULLS LAST LIMIT $5",
-    "params": ["orbis/agent-run", "Europe/Moscow", "2026-07-03", "2026-07-03", 500]
+    "sql": "SELECT id, graph_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND ((props->>'orbis/start_at')::timestamptz AT TIME ZONE $2)::date BETWEEN $3::date AND $4::date ORDER BY (props->>'orbis/start_at')::timestamptz ASC NULLS LAST LIMIT $5",
+    "params": ["orbis/agent-run", "Europe/Moscow", "2026-07-03", "2026-07-10", 500]
   },
   {
     "name": "children_of=<uuid> и parents_of=this без via — семейство иерархии из реестра",
@@ -454,8 +455,8 @@
         }
       }
     },
-    "sql": "SELECT id, graph_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND (created_at AT TIME ZONE $2)::date = $3::date LIMIT $4",
-    "params": ["orbis/agent-run", "Europe/Moscow", "2026-07-03", 500]
+    "sql": "SELECT id, graph_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND (created_at AT TIME ZONE $2)::date BETWEEN $3::date AND $4::date LIMIT $5",
+    "params": ["orbis/agent-run", "Europe/Moscow", "2026-07-03", "2026-07-03", 500]
   },
   {
     "name": "OR литерала и date-токена по одному свойству: orbis/due_date=overdue|2026-08-01",
@@ -478,8 +479,8 @@
         ]
       }
     },
-    "sql": "SELECT id, graph_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND ((props->>'orbis/due_date')::date < $2::date OR (props->>'orbis/due_date')::date = $3::date) LIMIT $4",
-    "params": ["orbis/agent-run", "2026-07-03", "2026-08-01", 500]
+    "sql": "SELECT id, graph_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND ((props->>'orbis/due_date')::date <= $2::date OR (props->>'orbis/due_date')::date = $3::date) LIMIT $4",
+    "params": ["orbis/agent-run", "2026-07-02", "2026-08-01", 500]
   },
   {
     "name": "Слитое свойство В1: orbis/finance_category одно на financial и budget (ref — текстовая проекция)",
@@ -548,8 +549,8 @@
       "display": "list",
       "title": "Ближайшие 7 дней"
     },
-    "sql": "SELECT id, graph_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND (aspects @> ARRAY['orbis/task'] AND (props->>'orbis/due_date')::date BETWEEN $2::date AND $3::date + 7 AND NOT COALESCE((props->>'orbis/task_status' = $4 OR props->>'orbis/task_status' = $5), false)) ORDER BY (props->>'orbis/due_date')::date ASC NULLS LAST, CASE props->>'orbis/priority' WHEN 'low' THEN 1 WHEN 'medium' THEN 2 WHEN 'high' THEN 3 END DESC NULLS LAST LIMIT $6",
-    "params": ["orbis/agent-run", "2026-07-03", "2026-07-03", "done", "cancelled", 500]
+    "sql": "SELECT id, graph_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND (aspects @> ARRAY['orbis/task'] AND (props->>'orbis/due_date')::date BETWEEN $2::date AND $3::date AND NOT COALESCE((props->>'orbis/task_status' = $4 OR props->>'orbis/task_status' = $5), false)) ORDER BY (props->>'orbis/due_date')::date ASC NULLS LAST, CASE props->>'orbis/priority' WHEN 'low' THEN 1 WHEN 'medium' THEN 2 WHEN 'high' THEN 3 END DESC NULLS LAST LIMIT $6",
+    "params": ["orbis/agent-run", "2026-07-03", "2026-07-10", "done", "cancelled", 500]
   },
   {
     "name": "Upcoming «Позже» (02 §3.3): after_7d + limit=30",
@@ -595,8 +596,8 @@
       "display": "compact",
       "title": "Позже"
     },
-    "sql": "SELECT id, graph_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND (aspects @> ARRAY['orbis/task'] AND (props->>'orbis/due_date')::date > $2::date + 7 AND NOT COALESCE((props->>'orbis/task_status' = $3 OR props->>'orbis/task_status' = $4), false)) ORDER BY (props->>'orbis/due_date')::date ASC NULLS LAST LIMIT $5",
-    "params": ["orbis/agent-run", "2026-07-03", "done", "cancelled", 30]
+    "sql": "SELECT id, graph_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND (aspects @> ARRAY['orbis/task'] AND (props->>'orbis/due_date')::date >= $2::date AND NOT COALESCE((props->>'orbis/task_status' = $3 OR props->>'orbis/task_status' = $4), false)) ORDER BY (props->>'orbis/due_date')::date ASC NULLS LAST LIMIT $5",
+    "params": ["orbis/agent-run", "2026-07-11", "done", "cancelled", 30]
   },
   {
     "name": "Диапазон core-проекции timestamp: orbis/updated_at=a..b",
@@ -842,8 +843,8 @@
         ]
       }
     },
-    "sql": "SELECT id, graph_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND ((props->>'orbis/due_date')::date < $2::date OR ((props->>'orbis/start_at')::timestamptz AT TIME ZONE $3)::date < $4::date) LIMIT $5",
-    "params": ["orbis/agent-run", "2026-07-03", "Europe/Moscow", "2026-07-03", 500]
+    "sql": "SELECT id, graph_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND ((props->>'orbis/due_date')::date <= $2::date OR ((props->>'orbis/start_at')::timestamptz AT TIME ZONE $3)::date <= $4::date) LIMIT $5",
+    "params": ["orbis/agent-run", "2026-07-02", "Europe/Moscow", "2026-07-02", 500]
   },
   {
     "name": "children_of via=subitem — одна названная роль вместо семейства",
@@ -967,7 +968,7 @@
     "params": ["orbis/agent-run", "1000", 500]
   },
   {
-    "name": "label-форма + <= токеном: \"Срок\"<=today — включающий range с якорем «сегодня»",
+    "name": "label-форма + <= токеном: \"Срок\"<=today — включающий range по концу токена (сегодня, 1в §3.4)",
     "query": "\"Срок\"<=today",
     "ast": {
       "filter": {
@@ -1214,7 +1215,15 @@
       "display": "list",
       "title": "Сегодня"
     },
-    "sql": "SELECT id, graph_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND (aspects @> ARRAY['orbis/task'] AND ((props->>'orbis/due_date')::date = $2::date OR (props->>'orbis/due_date')::date < $3::date) AND (e.aspects @> ARRAY['orbis/task'] AND e.props->>'orbis/task_status' IN ('inbox', 'planned', 'in_progress', 'waiting')) AND NOT COALESCE(props->>'orbis/task_status' = $4, false) AND NOT COALESCE(EXISTS (SELECT 1 FROM relations r JOIN entities b ON b.id = r.source_id WHERE r.target_id = e.id AND r.role = $5 AND NOT COALESCE((b.aspects @> ARRAY['orbis/task'] AND b.props->>'orbis/task_status' IN ('done', 'cancelled')), false)), false)) ORDER BY CASE props->>'orbis/priority' WHEN 'low' THEN 1 WHEN 'medium' THEN 2 WHEN 'high' THEN 3 END DESC NULLS LAST, (props->>'orbis/due_date')::date ASC NULLS LAST LIMIT $6",
-    "params": ["orbis/agent-run", "2026-07-03", "2026-07-03", "waiting", "dependency", 500]
+    "sql": "SELECT id, graph_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND (aspects @> ARRAY['orbis/task'] AND ((props->>'orbis/due_date')::date BETWEEN $2::date AND $3::date OR (props->>'orbis/due_date')::date <= $4::date) AND (e.aspects @> ARRAY['orbis/task'] AND e.props->>'orbis/task_status' IN ('inbox', 'planned', 'in_progress', 'waiting')) AND NOT COALESCE(props->>'orbis/task_status' = $5, false) AND NOT COALESCE(EXISTS (SELECT 1 FROM relations r JOIN entities b ON b.id = r.source_id WHERE r.target_id = e.id AND r.role = $6 AND NOT COALESCE((b.aspects @> ARRAY['orbis/task'] AND b.props->>'orbis/task_status' IN ('done', 'cancelled')), false)), false)) ORDER BY CASE props->>'orbis/priority' WHEN 'low' THEN 1 WHEN 'medium' THEN 2 WHEN 'high' THEN 3 END DESC NULLS LAST, (props->>'orbis/due_date')::date ASC NULLS LAST LIMIT $7",
+    "params": [
+      "orbis/agent-run",
+      "2026-07-03",
+      "2026-07-03",
+      "2026-07-02",
+      "waiting",
+      "dependency",
+      500
+    ]
   }
 ]

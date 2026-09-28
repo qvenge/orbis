@@ -512,6 +512,7 @@ describe('вклад одного движения — из декларации
         graphId: user,
         today: '2026-07-10',
         timeZone: DEFAULT_TIMEZONE,
+        weekStart: 'monday' as const,
         reg,
         thisEntityId: null,
       };

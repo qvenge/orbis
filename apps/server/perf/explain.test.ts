@@ -174,6 +174,7 @@ const ctx = () => ({
   graphId: GRAPH_OWNER_ID,
   today: '2026-07-03',
   timeZone: 'Europe/Moscow',
+  weekStart: 'monday' as const,
   reg,
 });
 

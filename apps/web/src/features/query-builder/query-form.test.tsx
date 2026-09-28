@@ -1,6 +1,6 @@
 import { DAILY_PLANNING_BODY, UPCOMING_BODY } from '@orbis/server/src/seed/smart-lists';
 import { parsePageText } from '@orbis/shared/doc/page-grammar';
-import { parseQueryAst, printQueryAst } from '@orbis/shared/query';
+import { parseQueryAst, printQueryAst, QUERY_DATE_TOKEN_LABELS } from '@orbis/shared/query';
 import { FIXTURE_PARSE_REGISTRY as REG } from '@orbis/shared/query/fixtures';
 import { fireEvent, screen, within } from '@testing-library/react';
 import { expect, test, vi } from 'vitest';
@@ -375,6 +375,30 @@ test('date-свойство правится относительными ток
   fireEvent.change(screen.getByLabelText('Срок: значение 2'), { target: { value: 'next_7d' } });
   save();
   expect(saved(onSave)).toBe('aspect=orbis/task, orbis/due_date=today|next_7d');
+});
+
+test('1в §3.4: строка даты предлагает восемь подписей словаря токенов (РП-17) и точное значение', async () => {
+  const { onSave } = await openForm('aspect=orbis/task, orbis/due_date=today');
+  const select = screen.getByLabelText('Срок: значение 1') as HTMLSelectElement;
+  expect([...select.options].map((o) => [o.value, o.text])).toEqual([
+    ...Object.entries(QUERY_DATE_TOKEN_LABELS),
+    ['exact', 'точное значение'],
+  ]);
+  // Подписи — ровно спеки (словарь, а не локальный список web).
+  expect([...select.options].map((o) => o.text)).toEqual([
+    'сегодня',
+    'просрочено',
+    '7 дней',
+    'позже 7 дней',
+    'эта неделя',
+    '14 дней',
+    'этот месяц',
+    'прошлый месяц',
+    'точное значение',
+  ]);
+  fireEvent.change(select, { target: { value: 'this_month' } });
+  save();
+  expect(saved(onSave)).toBe('aspect=orbis/task, orbis/due_date=this_month');
 });
 
 test('date-свойство принимает точную дату вместо токена', async () => {
