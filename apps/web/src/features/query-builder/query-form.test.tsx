@@ -691,3 +691,20 @@ test('у контролов формы есть связанные подпис�
     expect(screen.getByLabelText(label)).toBeInTheDocument();
   }
 });
+
+// Язык контрактов (спека 1в §3.1–§3.2): адрес контракта строки поля не получает, но форма его не
+// теряет — узел доезжает до печати нетронутым, как аспект или связь.
+test('форма над `orbis/when=next_7d, aspect=orbis/task`: аспект отмечен, адрес на месте после печати', async () => {
+  const { onSave } = await openForm('orbis/when=next_7d, aspect=orbis/task, limit=30');
+  expect(screen.getByRole('checkbox', { name: /Задача/ })).toBeChecked();
+  fireEvent.change(screen.getByLabelText('Лимит выдачи'), { target: { value: '5' } });
+  save();
+  expect(saved(onSave)).toBe('orbis/when=next_7d, aspect=orbis/task, limit=5');
+});
+
+test('сортировка по значению «когда» переживает правку направления — адрес остаётся адресом', async () => {
+  const { onSave } = await openForm('aspect=orbis/task, sortBy=orbis/when:asc');
+  fireEvent.change(screen.getByLabelText('Направление 1'), { target: { value: 'desc' } });
+  save();
+  expect(saved(onSave)).toBe('aspect=orbis/task, sortBy=orbis/when:desc');
+});

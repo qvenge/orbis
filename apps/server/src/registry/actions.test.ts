@@ -21,7 +21,14 @@ import { withIdentity } from '../db/with-identity';
 // Имена реестровых тулов читаются, а не правятся (tools/* — задача 7): пин рулинга 6-1 обязан
 // видеть и тулы, которые заведут следующие задачи, а не список, переписанный сюда руками.
 import { REGISTRY_TOOL_NAMES } from '../tools/registry-tools';
-import { actionExprScope, actionHash, assertAction, stepFactsOf, stepReversible } from './actions';
+import {
+  actionExprScope,
+  actionHash,
+  assertAction,
+  assertActionQuery,
+  stepFactsOf,
+  stepReversible,
+} from './actions';
 import { effectiveRegistry } from './cache';
 import type { RegistrySnapshot } from './load';
 
@@ -671,4 +678,18 @@ test('шаг entity_update со снятием аспекта — ACTION_STEP_IN
   });
   // Пустой список снятия — не снятие.
   expect(verdict(detaching([]))).toBe('ok');
+});
+
+test('assertActionQuery: адрес контракта в множестве целей законен (спека 1в §3.1, РП-3)', () => {
+  // «Просроченные по „когда“» — предикат множества целей, как любой другой: проекции и `this` нет.
+  expect(() =>
+    assertActionQuery('user/postpone', {
+      filter: {
+        and: [
+          { prop: { contract: 'orbis/when' }, op: 'eq', value: { token: 'overdue' } },
+          { class: { contract: 'orbis/completable', set: 'open' } },
+        ],
+      },
+    }),
+  ).not.toThrow();
 });

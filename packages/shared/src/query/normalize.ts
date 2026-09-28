@@ -28,7 +28,7 @@
  * отказывать здесь нельзя (нормализация не гейт, и второго ответа на «сколько уровней
  * законно» не заводится), а гейт, которому этот отказ принадлежит, стоит следом.
  */
-import type { QueryAst, QueryFilterNode, QueryRelPredicate } from './ast';
+import type { QueryAst, QueryFieldRef, QueryFilterNode, QueryRelPredicate } from './ast';
 import { QUERY_TREE_DEPTH_CAP, queryTreeExceedsDepth } from './ast';
 import { resolvePropertyFieldId } from './field-ref';
 import type { ParseRegistry } from './parse-ast';
@@ -47,6 +47,16 @@ function resolveByKeyOrId(
 
 function normalizeProperty(name: string, reg: ParseRegistry): string {
   return resolvePropertyFieldId(name, reg) ?? name;
+}
+
+/**
+ * Поле запроса (1в): свойство — как `normalizeProperty`, адрес контракта — ключ контракта → id
+ * (та же мерка «сначала id, потом key», что у `class`); слот — имя внутри контракта, второй оси
+ * адресации у него нет. Контракт вне реестра остаётся как есть — отказ называет компилятор.
+ */
+function normalizeField(ref: QueryFieldRef, reg: ParseRegistry): QueryFieldRef {
+  if (typeof ref === 'string') return normalizeProperty(ref, reg);
+  return { ...ref, contract: resolveByKeyOrId(ref.contract, reg.contracts) };
 }
 
 function normalizeRel(rel: QueryRelPredicate, reg: ParseRegistry): QueryRelPredicate {
@@ -70,7 +80,7 @@ function normalizeNode(node: QueryFilterNode, reg: ParseRegistry): QueryFilterNo
   if ('and' in node) return { and: node.and.map((n) => normalizeNode(n, reg)) };
   if ('or' in node) return { or: node.or.map((n) => normalizeNode(n, reg)) };
   if ('not' in node) return { not: normalizeNode(node.not, reg) };
-  if ('prop' in node) return { ...node, prop: normalizeProperty(node.prop, reg) };
+  if ('prop' in node) return { ...node, prop: normalizeField(node.prop, reg) };
   if ('has' in node) return { has: normalizeProperty(node.has, reg) };
   if ('aspect' in node) return { aspect: resolveByKeyOrId(node.aspect, reg.aspects) };
   if ('rel' in node) return { rel: normalizeRel(node.rel, reg) };
@@ -90,16 +100,17 @@ function normalizeNode(node: QueryFilterNode, reg: ParseRegistry): QueryFilterNo
  *
  * Дерево глубже `QUERY_TREE_DEPTH_CAP` возвращается нетронутым — см. шапку файла.
  */
+// ОБХОДЧИК-Q: normalize
 export function normalizeQueryAst(ast: QueryAst, reg: ParseRegistry): QueryAst {
   if (queryTreeExceedsDepth(ast, QUERY_TREE_DEPTH_CAP)) return ast;
-  const sortBy = ast.sortBy?.map((s) => ({ ...s, field: normalizeProperty(s.field, reg) }));
+  const sortBy = ast.sortBy?.map((s) => ({ ...s, field: normalizeField(s.field, reg) }));
   // Адреса проекции блока данных (§5.4) — те же точки записи имени свойства, что `sortBy`:
   // дерево блока приезжает и атрибутом тела, мимо разбора, и key там законен так же.
   const columns = ast.columns?.map((c) => ({ field: normalizeProperty(c.field, reg) }));
   const aggregate =
     ast.aggregate === undefined || ast.aggregate.fn === 'count'
       ? ast.aggregate
-      : { ...ast.aggregate, field: normalizeProperty(ast.aggregate.field, reg) };
+      : { ...ast.aggregate, field: normalizeField(ast.aggregate.field, reg) };
   return {
     ...ast,
     filter: ast.filter === null ? null : normalizeNode(ast.filter, reg),

@@ -776,8 +776,35 @@ function resolveBinding(
  * разделение постов: называет её гейт записи `checkImplements`, а движок обязан работать на
  * том, что понимает, иначе один несогласованный пересев уронил бы Agenda и Budget целиком.
  * Следа в индексе такая привязка не оставляет намеренно: потребителю нечего с ней делать.
+ *
+ * МЕМО ПО СНИМКУ (Ф-1в-18). С 1в компилятор зовёт индекс на КАЖДЫЙ адрес слота и значение
+ * «когда» в запросе, а сборка — сортировка всех аспектов и разбор всех привязок. Снимок реестра
+ * кешируется по версиям (`registry/load.ts`), то есть одни и те же словари живут между запросами,
+ * и индекс над ними считается один раз. Ключ — ПАРА словарей (`aspects`, `contracts`), а не
+ * объект-обёртка: вызывающие собирают обёртку литералом на месте (`{aspects, contracts}`), и
+ * мемо по ней не попадало бы никогда. `WeakMap` — снимок, вытесненный из кеша, уносит свой индекс.
+ * Условие корректности — словари снимка после первого чтения не меняются на месте; сборщики
+ * (`load.ts`, `applyDeltas`, пробы операций реестра) кладут строки в НОВЫЕ словари до выдачи.
  */
+const INDEX_MEMO = new WeakMap<object, WeakMap<object, BindingIndex>>();
+
 export function bindingIndexOf(reg: {
+  aspects: ReadonlyMap<string, AspectDefinition>;
+  contracts: ReadonlyMap<string, ContractDefinition>;
+}): BindingIndex {
+  let perAspects = INDEX_MEMO.get(reg.aspects);
+  if (perAspects === undefined) {
+    perAspects = new WeakMap();
+    INDEX_MEMO.set(reg.aspects, perAspects);
+  }
+  const cached = perAspects.get(reg.contracts);
+  if (cached !== undefined) return cached;
+  const built = buildBindingIndex(reg);
+  perAspects.set(reg.contracts, built);
+  return built;
+}
+
+function buildBindingIndex(reg: {
   aspects: ReadonlyMap<string, AspectDefinition>;
   contracts: ReadonlyMap<string, ContractDefinition>;
 }): BindingIndex {

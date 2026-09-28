@@ -46,6 +46,7 @@
 import { ROLE_DEPENDENCY } from '../constants';
 import { HHMM_RE, hasValidCalendar } from '../date';
 import { type ContractDefinition, contractSetKind } from '../registry/contract-type';
+import { type AddressKind, addressKindOf, contractValueRuleOf } from '../registry/contract-value';
 import type {
   AspectDefinition,
   PropertyDefinition,
@@ -56,7 +57,9 @@ import type {
   QueryAggregate,
   QueryAst,
   QueryColumn,
+  QueryContractAddress,
   QueryDateToken,
+  QueryFieldRef,
   QueryFilterNode,
   QueryRelKind,
   QueryRelPredicate,
@@ -140,6 +143,10 @@ export const QUERY_PARSE_CODES = [
   'RESERVED',
   'UNKNOWN_CONTRACT',
   'UNKNOWN_SET',
+  // Язык контрактов (спека 1в §3.1–§3.2): адрес слота, которого у контракта нет, и значение
+  // контракта, который значения не объявляет (подсказка называет его слоты).
+  'UNKNOWN_SLOT',
+  'NO_CONTRACT_VALUE',
 ] as const;
 export type QueryParseCode = (typeof QUERY_PARSE_CODES)[number];
 
@@ -537,6 +544,135 @@ function resolveContract(raw: string, offset: number, ctx: Ctx): ContractDefinit
   return fail('UNKNOWN_CONTRACT', `неизвестный контракт '${raw}'`, offset);
 }
 
+// ─────────────────────────── Поле запроса: свойство или адрес контракта ───────────────────────────
+
+/**
+ * Поле запроса, как его видит разбор значения: ЧТО кладётся в дерево (`ref`) и ПО КАКИМ
+ * ПРАВИЛАМ читается значение. У свойства правила даёт его тип в реестре (§А2-2), у адреса —
+ * вид адреса (`addressKindOf`, 1в §3.1–§3.3). Одна форма на оба случая — чтобы разбор
+ * операторов, диапазонов и списков (`parsePropNode`) остался одним, а не раздвоился.
+ */
+interface FieldTarget {
+  ref: QueryFieldRef;
+  /** Имя в сообщениях — ключ свойства или адрес, как в тексте. */
+  name: string;
+  /** Вид в сообщениях: тип свойства (`date`) или вид адреса (`даты`, `timestamp|date`). */
+  kindText: string;
+  list: boolean;
+  ordered: boolean;
+  /** Принимает ли относительное время вместо литерала. */
+  tokens: boolean;
+  scalar(el: Part): QueryScalar;
+  /** Определение свойства — у адреса его нет. */
+  prop: PropertyDefinition | null;
+  /** Вид адреса — у свойства его нет. */
+  address: AddressKind | null;
+}
+
+function propertyTarget(prop: PropertyDefinition): FieldTarget {
+  return {
+    ref: prop.id,
+    name: prop.key,
+    kindText: prop.type.kind,
+    list: isListPropertyType(prop.type),
+    ordered: isOrderedPropertyKind(prop.type.kind),
+    tokens: acceptsDateTokenKind(prop.type.kind),
+    scalar: (el) => parseScalar(prop, el),
+    prop,
+    address: null,
+  };
+}
+
+/**
+ * Литерал у адреса (1в §3.1, §3.3) — тем же `parseScalar`, что у свойства, по виду адреса:
+ * значение «даты» сравнивается по ДНЯМ записи — литерал дня; слот с датой — литерал дня, слот с
+ * моментом — момент ISO (у `any_of(timestamp|date)` — по форме литерала); прочие виды — по ПЕРВОМУ
+ * виду слота. Вариантов `select` у слота нет (они у привязанного свойства, у каждого аспекта
+ * свои), поэтому значение select-слота — строка без сверки. Вторая копия разбора литералов по
+ * виду разошлась бы с `parseScalar` на первой правке формы значения.
+ */
+function addressScalar(name: string, kind: AddressKind, el: Part): QueryScalar {
+  const kinds = kind.kind === 'dates' ? ['date'] : kind.kinds;
+  const day =
+    kinds.includes('date') && (DATE_LITERAL_RE.test(el.text) || !kinds.includes('timestamp'));
+  const k = day ? 'date' : kinds.includes('timestamp') ? 'timestamp' : (kinds[0] as string);
+  if (k === 'select') return unquote(el.text, el.offset);
+  return parseScalar({ key: name, type: { kind: k } } as PropertyDefinition, el);
+}
+
+function addressTarget(ref: QueryContractAddress, name: string, kind: AddressKind): FieldTarget {
+  const kinds = kind.kind === 'dates' ? null : kind.kinds;
+  return {
+    ref,
+    name,
+    kindText: kinds === null ? 'даты' : kinds.join('|'),
+    list: false,
+    ordered: kinds === null || kinds.every((k) => isOrderedPropertyKind(k)),
+    tokens: kinds === null || kinds.some((k) => acceptsDateTokenKind(k)),
+    scalar: (el) => addressScalar(name, kind, el),
+    prop: null,
+    address: kind,
+  };
+}
+
+/**
+ * Адрес контракта по имени из текста или `null`, если имя — не адрес (1в §3.1–§3.2):
+ *  - `<ключ контракта>.<слот>` — адрес слота; делится по ПОСЛЕДНЕЙ точке (ключи контрактов
+ *    точек не содержат, `NAMESPACED_KEY_RE`), контракт — `kind:'slots'`, слот обязан быть;
+ *  - `<ключ контракта>` — значение контракта; контракт обязан его объявить.
+ * Контракт — только ключом, как у `class=` (докблок `resolveContract`).
+ */
+function resolveAddress(raw: string, offset: number, ctx: Ctx): FieldTarget | null {
+  const dot = raw.lastIndexOf('.');
+  if (dot > 0) {
+    const c = ctx.byContractKey.get(raw.slice(0, dot));
+    if (c !== undefined) {
+      const slot = raw.slice(dot + 1);
+      const slots = c.kind === 'slots' ? c.slots.map((s) => s.name) : [];
+      if (!slots.includes(slot)) {
+        fail(
+          'UNKNOWN_SLOT',
+          `у контракта '${c.key}' нет слота '${slot}'; есть: ${slots.join(', ') || 'ни одного'}`,
+          offset + dot + 1,
+        );
+      }
+      const ref: QueryContractAddress = { contract: c.id, slot };
+      const kind = addressKindOf(ref, ctx.reg);
+      if (kind === null) {
+        return fail('TYPE', `слот '${raw}' — роль ребра: адресовать нечего`, offset);
+      }
+      return addressTarget(ref, raw, kind);
+    }
+  }
+  const c = ctx.byContractKey.get(raw);
+  if (c === undefined) return null;
+  if (contractValueRuleOf(c) === null) {
+    const slots = c.kind === 'slots' ? c.slots.map((s) => `${c.key}.${s.name}`) : [];
+    return fail(
+      'NO_CONTRACT_VALUE',
+      `у контракта нет значения — адресуйте слот: ${slots.join(', ') || 'слотов нет'}`,
+      offset,
+    );
+  }
+  return addressTarget({ contract: c.id }, raw, { kind: 'dates' });
+}
+
+/**
+ * Поле запроса по имени из текста (1в, РП-2): СНАЧАЛА свойство (как до 1в: ключ, подпись,
+ * слово грамматики), затем адрес контракта, иначе — прежний `UNKNOWN_FIELD`. Порядок — норма:
+ * ключ контракта может совпасть с ключом свойства (`orbis/recurrence`), и имя обязано остаться
+ * свойством; контракт, объявивший значение, такого совпадения иметь не вправе (сторож ключей
+ * поставки — `registry/builtin.test.ts`).
+ */
+function resolveField(raw: string, offset: number, ctx: Ctx): FieldTarget {
+  if (isLabelForm(raw) || ctx.byPropertyKey.has(raw) || RESERVED_WORDS.has(raw)) {
+    return propertyTarget(resolveProperty(raw, offset, ctx));
+  }
+  const address = resolveAddress(raw, offset, ctx);
+  if (address !== null) return address;
+  return propertyTarget(resolveProperty(raw, offset, ctx));
+}
+
 // ─────────────────────────── Значения по типу свойства ───────────────────────────
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -641,21 +777,24 @@ function parseScalar(prop: PropertyDefinition, el: Part): QueryScalar {
 
 type Bound = QueryScalar | { token: QueryDateToken };
 
-/** Литерал ИЛИ относительное время; токен допустим только у date/timestamp (§А5-7). */
-function parseBound(prop: PropertyDefinition, el: Part): Bound {
+/**
+ * Литерал ИЛИ относительное время; токен допустим только у date/timestamp (§А5-7) — у свойства,
+ * у слота с датой и у значения «даты» (1в §3.3).
+ */
+function parseBound(field: FieldTarget, el: Part): Bound {
   if (el.text === '') fail('SYNTAX', 'пустой элемент значения', el.offset);
   const raw = el.text.startsWith('"') ? null : el.text;
   if (raw !== null && DATE_TOKENS.has(raw)) {
-    if (!acceptsDateTokenKind(prop.type.kind)) {
+    if (!field.tokens) {
       fail(
         'TYPE',
-        `относительное время '${raw}' применимо только к свойствам типа date/timestamp; '${prop.key}' — ${prop.type.kind}`,
+        `относительное время '${raw}' применимо только к свойствам типа date/timestamp; '${field.name}' — ${field.kindText}`,
         el.offset,
       );
     }
     return { token: raw as QueryDateToken };
   }
-  return parseScalar(prop, el);
+  return field.scalar(el);
 }
 
 // ─────────────────────────── Разбор конструкций ───────────────────────────
@@ -787,15 +926,16 @@ function parseSortBy(t: Token, ctx: Ctx): QuerySortField[] {
     if (dir !== 'asc' && dir !== 'desc') {
       fail('SYNTAX', `sortBy: направление asc или desc, получено '${dir}'`, el.offset + colon + 1);
     }
-    const prop = resolveProperty(name.text, name.offset, ctx);
-    if (isListPropertyType(prop.type) || prop.type.kind === 'json') {
+    const field = resolveField(name.text, name.offset, ctx);
+    // У адреса «нет порядка» — вид json среди видов слота (значение «даты» упорядочено всегда).
+    if (field.list || field.kindText.split('|').includes('json')) {
       fail(
         'TYPE',
-        `sortBy: по свойству '${prop.key}' сортировать нельзя — у значения нет линейного порядка`,
+        `sortBy: по ${field.prop === null ? 'адресу' : 'свойству'} '${field.name}' сортировать нельзя — у значения нет линейного порядка`,
         name.offset,
       );
     }
-    return { field: prop.id, dir };
+    return { field: field.ref, dir };
   });
 }
 
@@ -845,9 +985,26 @@ function parseAggregate(t: Token, ctx: Ctx): QueryAggregate {
   if (name.text === '') {
     return fail('SYNTAX', `aggregate=${fn}: пустое имя свойства после ':'`, name.offset);
   }
-  const prop = resolveProperty(name.text, name.offset, ctx);
-  assertNumericAggregate(prop, fn, name.offset);
-  return { fn, field: prop.id };
+  const field = resolveField(name.text, name.offset, ctx);
+  if (field.prop !== null) assertNumericAggregate(field.prop, fn, name.offset);
+  else assertNumericAddress(field, fn, name.offset);
+  return { fn, field: field.ref };
+}
+
+/**
+ * Числовой адрес агрегата (1в §3.1): значение «даты» — отказ, слот — только числового вида
+ * (`number`/`decimal` каждый вид слота). Та же проверка, что сервер делает на исполнении.
+ */
+function assertNumericAddress(field: FieldTarget, fn: string, offset: number): void {
+  const kind = field.address;
+  const kinds = kind === null || kind.kind === 'dates' ? [] : kind.kinds;
+  if (kinds.length === 0 || !kinds.every((k) => k === 'number' || k === 'decimal')) {
+    fail(
+      'TYPE',
+      `aggregate=${fn}: '${field.name}' — ${kinds.length === 0 ? 'даты не суммируются' : field.kindText}; только number или decimal`,
+      offset,
+    );
+  }
 }
 
 /**
@@ -868,7 +1025,13 @@ function parseColumns(t: Token, ctx: Ctx): QueryColumn[] {
   return splitPartBy({ text: value, offset: t.valueOffset }, '|').map((raw) => {
     const el = trimPart(raw);
     if (el.text === '') fail('SYNTAX', 'пустой элемент columns', el.offset);
-    return { field: resolveProperty(el.text, el.offset, ctx).id };
+    const field = resolveField(el.text, el.offset, ctx);
+    // Заголовок колонки — подпись СВОЙСТВА (1в §3.1); у адреса её нет, и в 1в колонки — только
+    // свойства. Отказ, а не молча первое привязанное свойство: запись без него дала бы пустую ячейку.
+    if (field.prop === null) {
+      fail('TYPE', `columns: '${field.name}' — адрес; в columns — только свойства`, el.offset);
+    }
+    return { field: field.prop.id };
   });
 }
 
@@ -902,41 +1065,41 @@ function parseTags(t: Token): QueryFilterNode {
   return nodes.length === 1 ? (nodes[0] as QueryFilterNode) : { or: nodes };
 }
 
-/** Предикат свойства: оператор + значение (§А5-7). */
-function parsePropNode(prop: PropertyDefinition, t: Token): QueryFilterNode {
+/** Предикат поля — свойства или адреса контракта (1в): оператор + значение (§А5-7). */
+function parsePropNode(field: FieldTarget, t: Token): QueryFilterNode {
   const value: Part = { text: t.value, offset: t.valueOffset };
-  const listy = isListPropertyType(prop.type);
+  const listy = field.list;
   const eqOp = listy ? ('contains' as const) : ('eq' as const);
 
   if (t.op === '>' || t.op === '<' || t.op === '>=' || t.op === '<=') {
-    if (!isOrderedPropertyKind(prop.type.kind) || listy) {
+    if (!field.ordered || listy) {
       fail(
         'TYPE',
-        `оператор '${t.op}' применим к свойствам с линейным порядком; '${prop.key}' — ${prop.type.kind}${listy ? ' (список)' : ''}`,
+        `оператор '${t.op}' применим к свойствам с линейным порядком; '${field.name}' — ${field.kindText}${listy ? ' (список)' : ''}`,
         t.opOffset,
       );
     }
-    const bound = parseBound(prop, trimPart(value));
+    const bound = parseBound(field, trimPart(value));
     // `<=`/`>=` — ВКЛЮЧАЮЩИЙ range: отдельных gte/lte в каноне нет (§А5-7, находка 8).
-    if (t.op === '<=') return { prop: prop.id, op: 'range', value: { to: bound } };
-    if (t.op === '>=') return { prop: prop.id, op: 'range', value: { from: bound } };
-    return { prop: prop.id, op: t.op === '>' ? 'gt' : 'lt', value: bound };
+    if (t.op === '<=') return { prop: field.ref, op: 'range', value: { to: bound } };
+    if (t.op === '>=') return { prop: field.ref, op: 'range', value: { from: bound } };
+    return { prop: field.ref, op: t.op === '>' ? 'gt' : 'lt', value: bound };
   }
 
   if (t.op === '!=') {
-    const bound = parseBound(prop, trimPart(value));
+    const bound = parseBound(field, trimPart(value));
     // У списка «не равно» невыразимо одним оператором: отрицается вхождение элемента.
     return listy
-      ? { not: { prop: prop.id, op: 'contains', value: bound } }
-      : { prop: prop.id, op: 'ne', value: bound };
+      ? { not: { prop: field.ref, op: 'contains', value: bound } }
+      : { prop: field.ref, op: 'ne', value: bound };
   }
 
   const dots = findRangeDots(t.value);
   if (dots !== -1) {
-    if (!isOrderedPropertyKind(prop.type.kind) || listy) {
+    if (!field.ordered || listy) {
       fail(
         'TYPE',
-        `диапазон применим к свойствам с линейным порядком; '${prop.key}' — ${prop.type.kind}`,
+        `диапазон применим к свойствам с линейным порядком; '${field.name}' — ${field.kindText}`,
         t.valueOffset,
       );
     }
@@ -945,9 +1108,9 @@ function parsePropNode(prop: PropertyDefinition, t: Token): QueryFilterNode {
     if (from.text === '') fail('SYNTAX', 'диапазон: пустая левая граница', t.valueOffset);
     if (to.text === '') fail('SYNTAX', 'диапазон: пустая правая граница', to.offset);
     return {
-      prop: prop.id,
+      prop: field.ref,
       op: 'range',
-      value: { from: parseBound(prop, from), to: parseBound(prop, to) },
+      value: { from: parseBound(field, from), to: parseBound(field, to) },
     };
   }
 
@@ -969,7 +1132,7 @@ function parsePropNode(prop: PropertyDefinition, t: Token): QueryFilterNode {
         fail('SYNTAX', `в &-форме каждый элемент начинается с '!'`, el.offset);
       }
       const inner = trimPart({ text: el.text.slice(1), offset: el.offset + 1 });
-      return { prop: prop.id, op: eqOp, value: parseBound(prop, inner) } as QueryFilterNode;
+      return { prop: field.ref, op: eqOp, value: parseBound(field, inner) } as QueryFilterNode;
     });
     return { not: nodes.length === 1 ? (nodes[0] as QueryFilterNode) : { or: nodes } };
   }
@@ -979,9 +1142,9 @@ function parsePropNode(prop: PropertyDefinition, t: Token): QueryFilterNode {
     const el = elements[0] as Part;
     if (el.text.startsWith('!')) {
       const inner = trimPart({ text: el.text.slice(1), offset: el.offset + 1 });
-      return { not: { prop: prop.id, op: eqOp, value: parseBound(prop, inner) } };
+      return { not: { prop: field.ref, op: eqOp, value: parseBound(field, inner) } };
     }
-    return { prop: prop.id, op: eqOp, value: parseBound(prop, el) };
+    return { prop: field.ref, op: eqOp, value: parseBound(field, el) };
   }
   const nodes = elements.map((el) => {
     if (el.text.startsWith('!')) {
@@ -991,7 +1154,7 @@ function parsePropNode(prop: PropertyDefinition, t: Token): QueryFilterNode {
         el.offset,
       );
     }
-    return { prop: prop.id, op: eqOp, value: parseBound(prop, el) } as QueryFilterNode;
+    return { prop: field.ref, op: eqOp, value: parseBound(field, el) } as QueryFilterNode;
   });
   // §А5-3: анкор «anyOf → or». Узел `in` каноничен, но текстом не порождается: у плоской
   // грамматики для `in` и `or` одна форма `p=a|b`, и печать обеих даёт её же.
@@ -1270,13 +1433,13 @@ function dispatch(t: Token, ctx: Ctx, acc: Acc): void {
           t.keyOffset,
         );
       }
-      const prop = resolveProperty(t.key, t.keyOffset, ctx);
-      push(parsePropNode(prop, t));
+      push(parsePropNode(resolveField(t.key, t.keyOffset, ctx), t));
     }
   }
 }
 
 /** Разбирает текст §А5-3 в канонический Q-AST; отказы — структурные, с кодом и позицией. */
+// ОБХОДЧИК-Q: parse
 export function parseQueryAst(text: string, reg: ParseRegistry): ParseAstResult {
   try {
     return { ok: true, ast: parseOrThrow(text, reg) };

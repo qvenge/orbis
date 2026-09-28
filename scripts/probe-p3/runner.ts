@@ -26,6 +26,7 @@ import {
   queryAstSchema,
 } from '@orbis/shared';
 import {
+  fieldRefKey,
   normalizeQueryAst,
   type ParseRegistry,
   parseQueryAst,
@@ -168,6 +169,13 @@ function valueEq(entityValue: unknown, wanted: unknown): boolean {
   return entityValue !== undefined && scalarEq(entityValue, wanted);
 }
 
+/**
+ * Узел запроса на сущности мира-заглушки. Адрес контракта в `prop` (спека 1в §3.1–§3.2) —
+ * ОТКАЗ «форма вне пробы», а не «не знаю»: значение адреса считается по привязкам аспектов
+ * записи, у мира-заглушки их нет, и трёхзначное `undefined` молча оставило бы в выдаче ВСЕ
+ * записи — обоим вариантам одинаково, то есть сравнение каналов этого бы не заметило.
+ */
+// ОБХОДЧИК-Q: probe-p3
 function evalNode(node: QueryFilterNode, e: WorldEntity): Tri {
   if ('and' in node) {
     const vs = node.and.map((n) => evalNode(n, e));
@@ -203,6 +211,12 @@ function evalNode(node: QueryFilterNode, e: WorldEntity): Tri {
   }
   if ('archived' in node) return node.archived === 'any';
   if ('prop' in node) {
+    if (typeof node.prop !== 'string') {
+      throw new ExecError(
+        'VALIDATION',
+        `форма вне пробы: адрес контракта '${fieldRefKey(node.prop)}' стенд §С8-30 не моделирует`,
+      );
+    }
     const v = e.props[node.prop];
     switch (node.op) {
       case 'eq':

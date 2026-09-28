@@ -13,6 +13,7 @@ type TileResult = Extract<BlockResult, { kind: 'count' | 'sum' | 'latest' }>;
  * долларами сервер сложил бы честно как числа, но символ при такой сумме был бы ложью (РП-20) —
  * и это вслух говорит плашка под числом. `latest` — значение по ТИПУ свойства агрегата.
  */
+// ОБХОДЧИК-Q: web-tile-form
 function tileValue(
   result: TileResult,
   aggregate: QueryAggregate | undefined,
@@ -29,6 +30,9 @@ function tileValue(
     case 'latest': {
       if (result.value === null) return EMPTY_TEXT;
       const field = aggregate !== undefined && aggregate.fn !== 'count' ? aggregate.field : '';
+      // Адрес контракта (1в) — не свойство: у него нет подписи типа в реестре, и значение
+      // печатается как есть, без поиска свойства по строке-ключу. Валюта — задача 3.
+      if (typeof field !== 'string') return displayText(undefined, result.value, registry);
       return displayText(registry.property(field), result.value, registry);
     }
   }

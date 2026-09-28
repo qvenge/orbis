@@ -25,7 +25,7 @@ import type {
   QueryDisplayMode,
   QueryFilterNode,
 } from '@orbis/shared/query';
-import { isExcludeBlockedSugar } from '@orbis/shared/query';
+import { fieldRefKey, isExcludeBlockedSugar } from '@orbis/shared/query';
 import { useId, useMemo, useState } from 'react';
 import type { QueryRegistry } from '../../lib/query-blocks/catalog';
 import { useFieldCatalog } from '../../lib/query-blocks/useFieldCatalog';
@@ -50,17 +50,29 @@ import {
 
 type Nodes = QueryFilterNode[];
 
-/** Агрегат плитки как значение `<select>`: `count` | `sum:<id>` | `latest:<id>`. */
+/**
+ * Агрегат плитки как значение `<select>`: `count` | `sum:<поле>` | `latest:<поле>`. Поле — ключом
+ * `fieldRefKey`: у адреса контракта (1в, `sum:orbis/money-movement.amount`) значение — объект, и
+ * строкой его делает только ключ.
+ */
 function aggregateValue(agg: QueryAggregate | undefined): string {
   if (agg === undefined || agg.fn === 'count') return 'count';
-  return `${agg.fn}:${agg.field}`;
+  return `${agg.fn}:${fieldRefKey(agg.field)}`;
 }
 
-function aggregateOf(value: string): QueryAggregate {
+/**
+ * Значение `<select>` → агрегат. Поле, чей ключ совпал с полем ТЕКУЩЕГО агрегата, берётся из него
+ * как есть: адрес контракта форма не собирает (в списке только свойства), и смена одной функции
+ * `sum` → `latest` не должна превращать адрес в строку-id несуществующего свойства.
+ */
+// ОБХОДЧИК-Q: web-builder-form
+function aggregateOf(value: string, current: QueryAggregate | undefined): QueryAggregate {
   const colon = value.indexOf(':');
   if (colon === -1) return { fn: 'count' };
   const fn = value.slice(0, colon) === 'latest' ? 'latest' : 'sum';
-  return { fn, field: value.slice(colon + 1) };
+  const key = value.slice(colon + 1);
+  const kept = current !== undefined && current.fn !== 'count' ? current.field : undefined;
+  return { fn, field: kept !== undefined && fieldRefKey(kept) === key ? kept : key };
 }
 type PatchNodes = (fn: (nodes: Nodes) => Nodes) => void;
 
@@ -446,9 +458,18 @@ function FormBody({
                 id={id}
                 className={FIELD_CLS}
                 value={aggregateValue(ast.aggregate)}
-                onChange={(e) => patch({ aggregate: aggregateOf(e.target.value) })}
+                onChange={(e) => patch({ aggregate: aggregateOf(e.target.value, ast.aggregate) })}
               >
                 <option value="count">количество записей</option>
+                {/* Адрес контракта в агрегате (1в) форма не собирает, но и не теряет: текущее
+                    значение — в списке своей строкой, как поле, исчезнувшее из реестра. */}
+                {ast.aggregate !== undefined &&
+                  ast.aggregate.fn !== 'count' &&
+                  typeof ast.aggregate.field !== 'string' && (
+                    <option value={aggregateValue(ast.aggregate)}>
+                      {aggregateValue(ast.aggregate).replace(':', ': ')}
+                    </option>
+                  )}
                 {aggregateFieldIds(registry).flatMap((fid) => {
                   const ref = fieldRef(fid, registry);
                   const label = ref?.label ?? fid;
@@ -810,15 +831,26 @@ function SortRows({
         <div key={i} className="flex items-center gap-1">
           <select
             aria-label={`Поле сортировки ${i + 1}`}
-            value={s.field}
+            value={fieldRefKey(s.field)}
             className={`${FIELD_CLS} min-w-0 flex-1`}
             onChange={(e) =>
-              write(sort.map((x, k) => (k === i ? { ...x, field: e.target.value } : x)))
+              write(
+                sort.map((x, k) =>
+                  // Ключ текущего поля — то же поле (адрес контракта остаётся объектом, 1в).
+                  k === i
+                    ? {
+                        ...x,
+                        field: e.target.value === fieldRefKey(x.field) ? x.field : e.target.value,
+                      }
+                    : x,
+                ),
+              )
             }
           >
             {/* Текущее значение — всегда в списке: свойство могло исчезнуть из реестра, но
-                выбрасывать его из селекта значило бы менять запрос молча. */}
-            {[...new Set([s.field, ...options])].map((id) => (
+                выбрасывать его из селекта значило бы менять запрос молча. Адрес контракта —
+                тем же правилом, ключом `fieldRefKey`. */}
+            {[...new Set([fieldRefKey(s.field), ...options])].map((id) => (
               <option key={id} value={id}>
                 {nameOf(id)}
               </option>
@@ -879,7 +911,7 @@ function SortRows({
         >
           <option value="">—</option>
           {options
-            .filter((id) => !sort.some((s) => s.field === id))
+            .filter((id) => !sort.some((s) => fieldRefKey(s.field) === id))
             .map((id) => (
               <option key={id} value={id}>
                 {nameOf(id)}

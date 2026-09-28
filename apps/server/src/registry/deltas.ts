@@ -283,8 +283,14 @@ export interface SystemDefinitions {
  * здесь была бы ВТОРЫМ местом, чья глубина упирается в стек интерпретатора. Гейт записи
  * определения (ВХОД-ДЕРЕВА 4, `registry/ops.ts`) кап держит, но заводить второго читателя,
  * чья прочность зависит от чужой константы, всё равно незачем: итерация стоит столько же.
+ * Адрес контракта (1в) и прочие узлы — «не называет» молча: форму `scope` держит гейт записи
+ * (`assertScopeShape`, отказ `SCOPE_SHAPE`), и второго отказа здесь не заводится.
  */
-function scopeNamesAspect(node: QueryFilterNode | null | undefined, aspectId: string): boolean {
+// ОБХОДЧИК-Q: scope-names-aspect
+export function scopeNamesAspect(
+  node: QueryFilterNode | null | undefined,
+  aspectId: string,
+): boolean {
   if (node === null || node === undefined) return false;
   const stack: QueryFilterNode[] = [node];
   while (stack.length > 0) {

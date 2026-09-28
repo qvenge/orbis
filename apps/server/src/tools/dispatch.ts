@@ -969,6 +969,7 @@ async function undoSummary(
  * невидимо до первой своей строки). Неизвестное имя нормализация оставляет как есть —
  * отказ по-прежнему называет компилятор.
  */
+// ОБХОДЧИК-Q: entity-query-tool
 async function runEntityQuery(ctx: ToolCallCtx, input: unknown): Promise<ToolDispatchResult> {
   assertQueryTreeDepth(input);
   const parsed = parseEnvelope(entityQueryInput, input, 'entity_query');

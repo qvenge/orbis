@@ -717,9 +717,12 @@ export function bodyDocError(input: BodyDoc | JSONContent): string | undefined {
  * `entities.query_refs` — по нему слияние свойства находит тела, которые на него ссылаются,
  * не обходя корпус (`registry/ops.ts`).
  *
- * Имена КОНТРАКТОВ и НАБОРОВ (`class.contract`, `rel.sourceNotIn.contract`, Б-1) в индекс НЕ
- * едут, и это не пропуск: индекс обслуживает слияние СВОЙСТВ — оно переписывает адреса
- * свойств в телах, — а контракт слиянию не подлежит вовсе (`property_merge` работает по
+ * Имена КОНТРАКТОВ и НАБОРОВ (`class.contract`, `rel.sourceNotIn.contract`, Б-1) и АДРЕСА
+ * КОНТРАКТА в `prop`/`field` (`{contract, slot}`, спека 1в §3.1) в индекс НЕ едут, и это не
+ * пропуск: `add` берёт только строку, а объект адреса обходится как узел, чьи ключи
+ * (`contract`, `slot`) в список имён свойств не входят. Причина одна: индекс обслуживает
+ * слияние СВОЙСТВ — оно переписывает адреса свойств в телах, — а контракт слиянию не подлежит
+ * вовсе (`property_merge` работает по
  * свойствам, §Б1-2). Ехать сюда контракту стало бы нужно, только если появится операция,
  * переписывающая его имя.
  *
@@ -731,6 +734,7 @@ export function bodyDocError(input: BodyDoc | JSONContent): string | undefined {
  * Регистр приводится к нижнему — сравнение `text[]` в PG регистрозависимо, а uuid в дереве
  * приходит как написан.
  */
+// ОБХОДЧИК-Q: refs-index
 export function queryRefsFromDoc(input: BodyDoc | JSONContent): string[] {
   const refs = new Set<string>();
   const add = (value: unknown): void => {

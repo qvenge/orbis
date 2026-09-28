@@ -18,6 +18,7 @@ export * from './builtin-roles';
 export * from './builtin-rules';
 export * from './builtin-subscriptions';
 export * from './contract-type';
+export * from './contract-value';
 // Словарь расширений и поверхностей (§Б5-1, §Б8-1, спека 1б §4.1): по нему отказывает
 // `SURFACE_UNKNOWN` и по нему же собираются имена снимков поверхностей — второго списка имён в
 // корпусе нет (Р-К-10).

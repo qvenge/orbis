@@ -56,7 +56,12 @@ export async function queryWithMaterialization<T>(
     const ast = opts.parse(cctx);
     // Триггеры и горизонт — параметры строки `materialize` из того же снимка, по которому запрос
     // разобран и будет исполнен (`cctx.reg`): второй снимок разошёлся бы с первым.
-    const window = materializationWindow(ast, cctx.today, materializeRuleOf(cctx.reg).rule.params);
+    const window = materializationWindow(
+      ast,
+      cctx.today,
+      materializeRuleOf(cctx.reg).rule.params,
+      cctx.reg,
+    );
     if (window) return { kind: 'materialize', window, ast, cctx };
     return { kind: 'done', result: await opts.run(tx, ast, cctx) };
   });

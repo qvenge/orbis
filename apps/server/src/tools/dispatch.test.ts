@@ -6734,3 +6734,33 @@ describe('budget_rollover (§Б6-5 ревизии 4, В-4): инструмент
     expect(await envelopesOf(owner)).toBe(0);
   });
 });
+
+describe('entity_query и язык контрактов (спека 1в §3.8)', () => {
+  test('адрес слота и значение «когда» — текстом и деревом; неизвестный слот — VALIDATION', async () => {
+    const task = await seedEntity(userA, {
+      title: 'Срок сегодня языком «когда»',
+      tags: [],
+      aspects: ['orbis/task'],
+      props: { 'orbis/task_status': 'planned', 'orbis/due_date': '2000-01-01' },
+    });
+    const byText = await dispatchTool(ctxFor(), 'entity_query', {
+      query: 'orbis/when.deadline=2000-01-01',
+    });
+    expect(byText.status).toBe('ok');
+    if (byText.status === 'ok') {
+      expect((byText.result as Array<{ id: string }>).map((e) => e.id)).toContain(task.id);
+    }
+    // Вход `ast:` — мимо разбора: адрес с КЛЮЧОМ контракта нормализуется и компилируется.
+    const byAst = await dispatchTool(ctxFor(), 'entity_query', {
+      ast: { filter: { prop: { contract: 'orbis/when' }, op: 'eq', value: '2000-01-01' } },
+    });
+    expect(byAst.status).toBe('ok');
+    if (byAst.status === 'ok') {
+      expect((byAst.result as Array<{ id: string }>).map((e) => e.id)).toContain(task.id);
+    }
+    const bad = await dispatchTool(ctxFor(), 'entity_query', {
+      ast: { filter: { prop: { contract: 'orbis/when', slot: 'nope' }, op: 'eq', value: 'x' } },
+    });
+    expectError(bad, 'VALIDATION');
+  });
+});

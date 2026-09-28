@@ -75,14 +75,56 @@ export const QUERY_AGGREGATE_FNS = ['count', 'sum', 'latest'] as const;
 export type QueryAggregateFn = (typeof QUERY_AGGREGATE_FNS)[number];
 
 /**
+ * АДРЕС КОНТРАКТА (спека 1в §3.1–§3.2): со `slot` — адрес слота (`orbis/when.deadline` —
+ * значения свойств, которые привязали к слоту аспекты, стоящие на записи), без `slot` — значение
+ * контракта (`orbis/when` — «даты» записи по правилу контракта, `registry/contract-value.ts`).
+ * `contract` — id контракта (§А5-2: в дереве лежат id; ключ резолвит разбор или нормализация).
+ *
+ * ПОЧЕМУ ОБЪЕДИНЕНИЕ ТИПОВ ПОЛЯ, А НЕ НОВЫЙ КЛЮЧ УЗЛА (Д-1 плана 1в). Узлы фильтра разбираются
+ * цепочками `'x' in node` с тихим хвостом, и новый вид узла TypeScript замечает только там, где
+ * есть исчерпывающий разбор (компиляция, печать); обходчики, читающие дерево по ключам
+ * (`rewriteAst`, `propertyNamesInAst`, `queryRefsFromDoc`), пропустили бы узел `{addr: …}`
+ * молча. Адрес же ложится В ТО ЖЕ ПОЛЕ `prop`/`field`, и каждый обходчик, читавший его
+ * строкой, получает ошибку типа — дефект виден при сборке, а не в выдаче. Обходчики, читающие
+ * сырое JSON, названы перечнем со сторожем (`scripts/query-walkers.test.ts`).
+ */
+export interface QueryContractAddress {
+  contract: string;
+  slot?: string;
+}
+
+/**
+ * Поле запроса: id свойства (как до 1в) или адрес контракта. `prop` у предиката, `field` у
+ * `sortBy` и `aggregate` (и `group` — задача 6). `columns[].field` — только строка: заголовок
+ * колонки — подпись свойства, у адреса её нет (§3.1).
+ */
+export type QueryFieldRef = string | QueryContractAddress;
+
+/** Адрес ли поле — объект, а не строка id свойства. Вход — недоверенный: проверка структурная. */
+export function isContractAddress(f: unknown): f is QueryContractAddress {
+  return typeof f === 'object' && f !== null && !Array.isArray(f) && 'contract' in f;
+}
+
+/**
+ * Ключ поля одной строкой: id свойства как есть, адрес — `контракт.слот` или `контракт`. Для
+ * ключей React, значений `<select>`, сравнения полей и сообщений; печать запроса зовёт то же
+ * правило, подставив КЛЮЧ контракта вместо id (`print.ts`).
+ */
+export function fieldRefKey(f: QueryFieldRef): string {
+  if (typeof f === 'string') return f;
+  return f.slot === undefined ? f.contract : `${f.contract}.${f.slot}`;
+}
+
+/**
  * Агрегат плитки. Адрес свойства лежит под ключом `field` НАМЕРЕННО: по этому имени дерево
  * уже обходят индекс адресов тела (`queryRefsFromDoc`, `doc/convert.ts`) и переписывание
  * при слиянии свойств (`rewriteAst`, `apps/server/src/registry/ops.ts`) — новое имя ключа
- * выпало бы из обоих молча.
+ * выпало бы из обоих молча. С 1в поле — `QueryFieldRef`: сумма по адресу слота
+ * (`sum:orbis/money-movement.amount`, закладка Бюджета).
  */
-export type QueryAggregate = { fn: 'count' } | { fn: 'sum' | 'latest'; field: string };
+export type QueryAggregate = { fn: 'count' } | { fn: 'sum' | 'latest'; field: QueryFieldRef };
 
-/** Колонка таблицы блока данных — адрес свойства под тем же ключом `field` (см. выше). */
+/** Колонка таблицы блока данных — адрес СВОЙСТВА под тем же ключом `field` (см. выше). */
 export interface QueryColumn {
   field: string;
 }
@@ -226,7 +268,7 @@ export type QueryFilterNode =
   | { and: QueryFilterNode[] }
   | { or: QueryFilterNode[] }
   | { not: QueryFilterNode }
-  | { prop: string; op: QueryPropOp; value: QueryPropValue }
+  | { prop: QueryFieldRef; op: QueryPropOp; value: QueryPropValue }
   | { has: string }
   | { aspect: string }
   | { tag: string }
@@ -236,8 +278,11 @@ export type QueryFilterNode =
   | { class: { contract: string; set: string } };
 
 export interface QuerySortField {
-  /** id свойства (§А5-7) — доменного или core-проекции §А1-3 (`orbis/updated_at`). */
-  field: string;
+  /**
+   * id свойства (§А5-7) — доменного или core-проекции §А1-3 (`orbis/updated_at`), — либо адрес
+   * контракта (1в §3.1, §3.3: ключ записи по значению «когда» — ранняя из её дат).
+   */
+  field: QueryFieldRef;
   dir: 'asc' | 'desc';
 }
 
@@ -262,6 +307,21 @@ export interface QueryAst {
 // ─────────────────────────── zod-схема канона ───────────────────────────
 
 const idSchema = z.string().min(1);
+
+/**
+ * Форма имени слота в адресе — ТА ЖЕ, что `SLOT_KEY_RE` у контракта (`registry/property-type.ts`).
+ * Копия, а не импорт: этот файл — лист пакета (шапка), и ребро в реестр замкнуло бы цикл
+ * инициализации zod-схем. Совпадение пиннит `ast.test.ts`. Существование слота проверяют разбор
+ * и компилятор по реестру; схема держит только форму — вход `ast:` тула идёт мимо разбора.
+ */
+export const ADDRESS_SLOT_RE = /^[a-z][a-z0-9_]*$/;
+
+const addressSchema = z
+  .object({ contract: idSchema, slot: z.string().regex(ADDRESS_SLOT_RE, 'имя слота').optional() })
+  .strict();
+
+/** Поле запроса: id свойства или адрес контракта (1в §3.1). У `columns` — только `idSchema`. */
+const fieldRefSchema = z.union([idSchema, addressSchema]);
 
 /**
  * `of` — «uuid | this» ДОСЛОВНО по §А5-7, и сужение живёт в схеме, а не только в парсере:
@@ -292,10 +352,14 @@ const rangeSchema = z
  * и разошлись бы уже в компиляторе — там, где чинить дороже всего.
  */
 const propNodeSchema = z.union([
-  z.object({ prop: idSchema, op: z.enum(['eq', 'ne', 'gt', 'lt']), value: boundSchema }).strict(),
-  z.object({ prop: idSchema, op: z.literal('in'), value: z.array(scalarSchema).min(1) }).strict(),
-  z.object({ prop: idSchema, op: z.literal('contains'), value: scalarSchema }).strict(),
-  z.object({ prop: idSchema, op: z.literal('range'), value: rangeSchema }).strict(),
+  z
+    .object({ prop: fieldRefSchema, op: z.enum(['eq', 'ne', 'gt', 'lt']), value: boundSchema })
+    .strict(),
+  z
+    .object({ prop: fieldRefSchema, op: z.literal('in'), value: z.array(scalarSchema).min(1) })
+    .strict(),
+  z.object({ prop: fieldRefSchema, op: z.literal('contains'), value: scalarSchema }).strict(),
+  z.object({ prop: fieldRefSchema, op: z.literal('range'), value: rangeSchema }).strict(),
 ]);
 
 /**
@@ -426,13 +490,13 @@ export const queryFilterNodeSchema: z.ZodType<QueryFilterNode, z.ZodTypeDef, unk
 );
 
 export const querySortFieldSchema = z
-  .object({ field: idSchema, dir: z.enum(['asc', 'desc']) })
+  .object({ field: fieldRefSchema, dir: z.enum(['asc', 'desc']) })
   .strict();
 
 /** Дискриминированный союз по `fn`: у `count` поля нет, у `sum`/`latest` оно обязательно. */
 export const queryAggregateSchema = z.discriminatedUnion('fn', [
   z.object({ fn: z.literal('count') }).strict(),
-  z.object({ fn: z.enum(['sum', 'latest']), field: idSchema }).strict(),
+  z.object({ fn: z.enum(['sum', 'latest']), field: fieldRefSchema }).strict(),
 ]);
 
 export const queryColumnSchema = z.object({ field: idSchema }).strict();
@@ -455,6 +519,7 @@ export const PROJECTION_RULE_MESSAGES = {
   columnsNeedTable: 'columns — только у display=table',
 } as const;
 
+// ОБХОДЧИК-Q: schema
 export const queryAstSchema: z.ZodType<QueryAst, z.ZodTypeDef, unknown> = z
   .object({
     // `filter` ОБЯЗАТЕЛЕН и nullable, а не optional: «фильтра нет» — это решение автора

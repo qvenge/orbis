@@ -53,12 +53,14 @@ import { createCallerFactory } from '../trpc';
 import { effectiveRegistry } from './cache';
 import type { SubscriptionRow } from './load';
 import {
+  assertScopeShape,
   collectPropertyHolders,
   deprecateOwnAction,
   disableSystemRuleDelta,
   execErrorOfImplementsIssue,
   lockOwnerRegistry,
   mergeProperty,
+  propertyNamesInAst,
   readActionRow,
   readContractDelta,
   readOwnAspect,
@@ -68,6 +70,7 @@ import {
   removeOwnSubscription,
   restoreAspectRow,
   rewriteAst,
+  rewriteQueryTextKeys,
   setAspectDelta,
   setContractDelta,
   setOwnAction,
@@ -6257,5 +6260,57 @@ describe('фикс-раунд 4 задачи 16: откат одного пра�
     await undo(g, settings.actionId);
     expect(await rowOf(g)).toBeNull();
     expect(await deltaRows(g)).toBe(0);
+  });
+});
+
+describe('обходчики реестра и адрес контракта (спека 1в §3.1, РП-3)', () => {
+  const addr = { contract: 'orbis/when', slot: 'deadline' };
+  const tree = {
+    filter: {
+      and: [
+        { prop: addr, op: 'eq', value: { token: 'today' } },
+        { prop: 'orbis/due_date', op: 'eq', value: { token: 'today' } },
+      ],
+    },
+    sortBy: [{ field: { contract: 'orbis/when' }, dir: 'asc' }],
+  };
+
+  test('rewriteAst: объект адреса не трогается, свойство рядом — переписывается', () => {
+    expect(rewriteAst(tree, new Set(['orbis/due_date', 'orbis/when']), 'user/x')).toEqual({
+      ...tree,
+      filter: {
+        and: [
+          { prop: addr, op: 'eq', value: { token: 'today' } },
+          { prop: 'user/x', op: 'eq', value: { token: 'today' } },
+        ],
+      },
+    });
+  });
+
+  test('propertyNamesInAst: адрес — не имя свойства', () => {
+    const names = new Set<string>();
+    propertyNamesInAst(tree, names);
+    expect([...names]).toEqual(['orbis/due_date']);
+  });
+
+  test('rewriteQueryTextKeys: ключ перед точкой — контракт адреса, не свойство', () => {
+    // `orbis/recurrence` — и ключ свойства, и ключ контракта: слияние свойства контракт не трогает.
+    expect(
+      rewriteQueryTextKeys(
+        'orbis/recurrence.template_marker=true, has=orbis/recurrence',
+        new Set(['orbis/recurrence']),
+        'user/rec',
+      ),
+    ).toBe('orbis/recurrence.template_marker=true, has=user/rec');
+  });
+
+  test('assertScopeShape: адрес в scope — отказ SCOPE_SHAPE', () => {
+    let reason: unknown = null;
+    try {
+      assertScopeShape({ prop: addr, op: 'eq', value: '2026-07-17' });
+    } catch (e) {
+      reason = (e as { details?: { reason?: unknown } }).details?.reason;
+    }
+    expect(reason).toBe('SCOPE_SHAPE');
   });
 });

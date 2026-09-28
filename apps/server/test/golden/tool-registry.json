@@ -31,8 +31,27 @@
                 "type": "object",
                 "properties": {
                   "field": {
-                    "type": "string",
-                    "minLength": 1
+                    "oneOf": [
+                      {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "contract": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "slot": {
+                            "type": "string",
+                            "pattern": "^[a-z][a-z0-9_]*$"
+                          }
+                        },
+                        "required": ["contract"],
+                        "additionalProperties": false
+                      }
+                    ]
                   },
                   "dir": {
                     "enum": ["asc", "desc"]
@@ -72,8 +91,27 @@
                       "enum": ["sum", "latest"]
                     },
                     "field": {
-                      "type": "string",
-                      "minLength": 1
+                      "oneOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "contract": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "slot": {
+                              "type": "string",
+                              "pattern": "^[a-z][a-z0-9_]*$"
+                            }
+                          },
+                          "required": ["contract"],
+                          "additionalProperties": false
+                        }
+                      ]
                     }
                   },
                   "required": ["fn", "field"],
@@ -211,8 +249,27 @@
               "type": "object",
               "properties": {
                 "prop": {
-                  "type": "string",
-                  "minLength": 1
+                  "oneOf": [
+                    {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "contract": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "slot": {
+                          "type": "string",
+                          "pattern": "^[a-z][a-z0-9_]*$"
+                        }
+                      },
+                      "required": ["contract"],
+                      "additionalProperties": false
+                    }
+                  ]
                 },
                 "op": {
                   "enum": ["eq", "ne", "gt", "lt"]
@@ -242,8 +299,27 @@
               "type": "object",
               "properties": {
                 "prop": {
-                  "type": "string",
-                  "minLength": 1
+                  "oneOf": [
+                    {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "contract": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "slot": {
+                          "type": "string",
+                          "pattern": "^[a-z][a-z0-9_]*$"
+                        }
+                      },
+                      "required": ["contract"],
+                      "additionalProperties": false
+                    }
+                  ]
                 },
                 "op": {
                   "const": "in"
@@ -263,8 +339,27 @@
               "type": "object",
               "properties": {
                 "prop": {
-                  "type": "string",
-                  "minLength": 1
+                  "oneOf": [
+                    {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "contract": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "slot": {
+                          "type": "string",
+                          "pattern": "^[a-z][a-z0-9_]*$"
+                        }
+                      },
+                      "required": ["contract"],
+                      "additionalProperties": false
+                    }
+                  ]
                 },
                 "op": {
                   "const": "contains"
@@ -280,8 +375,27 @@
               "type": "object",
               "properties": {
                 "prop": {
-                  "type": "string",
-                  "minLength": 1
+                  "oneOf": [
+                    {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "contract": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "slot": {
+                          "type": "string",
+                          "pattern": "^[a-z][a-z0-9_]*$"
+                        }
+                      },
+                      "required": ["contract"],
+                      "additionalProperties": false
+                    }
+                  ]
                 },
                 "op": {
                   "const": "range"
@@ -1022,8 +1136,27 @@
                 "type": "object",
                 "properties": {
                   "field": {
-                    "type": "string",
-                    "minLength": 1
+                    "oneOf": [
+                      {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "contract": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "slot": {
+                            "type": "string",
+                            "pattern": "^[a-z][a-z0-9_]*$"
+                          }
+                        },
+                        "required": ["contract"],
+                        "additionalProperties": false
+                      }
+                    ]
                   },
                   "dir": {
                     "enum": ["asc", "desc"]
@@ -1063,8 +1196,27 @@
                       "enum": ["sum", "latest"]
                     },
                     "field": {
-                      "type": "string",
-                      "minLength": 1
+                      "oneOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "contract": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "slot": {
+                              "type": "string",
+                              "pattern": "^[a-z][a-z0-9_]*$"
+                            }
+                          },
+                          "required": ["contract"],
+                          "additionalProperties": false
+                        }
+                      ]
                     }
                   },
                   "required": ["fn", "field"],
@@ -1200,8 +1352,27 @@
                   "type": "object",
                   "properties": {
                     "prop": {
-                      "type": "string",
-                      "minLength": 1
+                      "oneOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "contract": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "slot": {
+                              "type": "string",
+                              "pattern": "^[a-z][a-z0-9_]*$"
+                            }
+                          },
+                          "required": ["contract"],
+                          "additionalProperties": false
+                        }
+                      ]
                     },
                     "op": {
                       "enum": ["eq", "ne", "gt", "lt"]
@@ -1231,8 +1402,27 @@
                   "type": "object",
                   "properties": {
                     "prop": {
-                      "type": "string",
-                      "minLength": 1
+                      "oneOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "contract": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "slot": {
+                              "type": "string",
+                              "pattern": "^[a-z][a-z0-9_]*$"
+                            }
+                          },
+                          "required": ["contract"],
+                          "additionalProperties": false
+                        }
+                      ]
                     },
                     "op": {
                       "const": "in"
@@ -1252,8 +1442,27 @@
                   "type": "object",
                   "properties": {
                     "prop": {
-                      "type": "string",
-                      "minLength": 1
+                      "oneOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "contract": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "slot": {
+                              "type": "string",
+                              "pattern": "^[a-z][a-z0-9_]*$"
+                            }
+                          },
+                          "required": ["contract"],
+                          "additionalProperties": false
+                        }
+                      ]
                     },
                     "op": {
                       "const": "contains"
@@ -1269,8 +1478,27 @@
                   "type": "object",
                   "properties": {
                     "prop": {
-                      "type": "string",
-                      "minLength": 1
+                      "oneOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "contract": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "slot": {
+                              "type": "string",
+                              "pattern": "^[a-z][a-z0-9_]*$"
+                            }
+                          },
+                          "required": ["contract"],
+                          "additionalProperties": false
+                        }
+                      ]
                     },
                     "op": {
                       "const": "range"
@@ -1542,8 +1770,27 @@
                 "type": "object",
                 "properties": {
                   "field": {
-                    "type": "string",
-                    "minLength": 1
+                    "oneOf": [
+                      {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "contract": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "slot": {
+                            "type": "string",
+                            "pattern": "^[a-z][a-z0-9_]*$"
+                          }
+                        },
+                        "required": ["contract"],
+                        "additionalProperties": false
+                      }
+                    ]
                   },
                   "dir": {
                     "enum": ["asc", "desc"]
@@ -1583,8 +1830,27 @@
                       "enum": ["sum", "latest"]
                     },
                     "field": {
-                      "type": "string",
-                      "minLength": 1
+                      "oneOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "contract": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "slot": {
+                              "type": "string",
+                              "pattern": "^[a-z][a-z0-9_]*$"
+                            }
+                          },
+                          "required": ["contract"],
+                          "additionalProperties": false
+                        }
+                      ]
                     }
                   },
                   "required": ["fn", "field"],
@@ -1720,8 +1986,27 @@
                   "type": "object",
                   "properties": {
                     "prop": {
-                      "type": "string",
-                      "minLength": 1
+                      "oneOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "contract": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "slot": {
+                              "type": "string",
+                              "pattern": "^[a-z][a-z0-9_]*$"
+                            }
+                          },
+                          "required": ["contract"],
+                          "additionalProperties": false
+                        }
+                      ]
                     },
                     "op": {
                       "enum": ["eq", "ne", "gt", "lt"]
@@ -1751,8 +2036,27 @@
                   "type": "object",
                   "properties": {
                     "prop": {
-                      "type": "string",
-                      "minLength": 1
+                      "oneOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "contract": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "slot": {
+                              "type": "string",
+                              "pattern": "^[a-z][a-z0-9_]*$"
+                            }
+                          },
+                          "required": ["contract"],
+                          "additionalProperties": false
+                        }
+                      ]
                     },
                     "op": {
                       "const": "in"
@@ -1772,8 +2076,27 @@
                   "type": "object",
                   "properties": {
                     "prop": {
-                      "type": "string",
-                      "minLength": 1
+                      "oneOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "contract": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "slot": {
+                              "type": "string",
+                              "pattern": "^[a-z][a-z0-9_]*$"
+                            }
+                          },
+                          "required": ["contract"],
+                          "additionalProperties": false
+                        }
+                      ]
                     },
                     "op": {
                       "const": "contains"
@@ -1789,8 +2112,27 @@
                   "type": "object",
                   "properties": {
                     "prop": {
-                      "type": "string",
-                      "minLength": 1
+                      "oneOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "contract": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "slot": {
+                              "type": "string",
+                              "pattern": "^[a-z][a-z0-9_]*$"
+                            }
+                          },
+                          "required": ["contract"],
+                          "additionalProperties": false
+                        }
+                      ]
                     },
                     "op": {
                       "const": "range"
@@ -3996,8 +4338,27 @@
                           "enum": ["eq", "ne", "gt", "lt"]
                         },
                         "prop": {
-                          "type": "string",
-                          "minLength": 1
+                          "oneOf": [
+                            {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            {
+                              "type": "object",
+                              "required": ["contract"],
+                              "properties": {
+                                "slot": {
+                                  "type": "string",
+                                  "pattern": "^[a-z][a-z0-9_]*$"
+                                },
+                                "contract": {
+                                  "type": "string",
+                                  "minLength": 1
+                                }
+                              },
+                              "additionalProperties": false
+                            }
+                          ]
                         },
                         "value": {
                           "anyOf": [
@@ -4027,8 +4388,27 @@
                           "const": "in"
                         },
                         "prop": {
-                          "type": "string",
-                          "minLength": 1
+                          "oneOf": [
+                            {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            {
+                              "type": "object",
+                              "required": ["contract"],
+                              "properties": {
+                                "slot": {
+                                  "type": "string",
+                                  "pattern": "^[a-z][a-z0-9_]*$"
+                                },
+                                "contract": {
+                                  "type": "string",
+                                  "minLength": 1
+                                }
+                              },
+                              "additionalProperties": false
+                            }
+                          ]
                         },
                         "value": {
                           "type": "array",
@@ -4048,8 +4428,27 @@
                           "const": "contains"
                         },
                         "prop": {
-                          "type": "string",
-                          "minLength": 1
+                          "oneOf": [
+                            {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            {
+                              "type": "object",
+                              "required": ["contract"],
+                              "properties": {
+                                "slot": {
+                                  "type": "string",
+                                  "pattern": "^[a-z][a-z0-9_]*$"
+                                },
+                                "contract": {
+                                  "type": "string",
+                                  "minLength": 1
+                                }
+                              },
+                              "additionalProperties": false
+                            }
+                          ]
                         },
                         "value": {
                           "type": ["string", "number", "boolean"]
@@ -4065,8 +4464,27 @@
                           "const": "range"
                         },
                         "prop": {
-                          "type": "string",
-                          "minLength": 1
+                          "oneOf": [
+                            {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            {
+                              "type": "object",
+                              "required": ["contract"],
+                              "properties": {
+                                "slot": {
+                                  "type": "string",
+                                  "pattern": "^[a-z][a-z0-9_]*$"
+                                },
+                                "contract": {
+                                  "type": "string",
+                                  "minLength": 1
+                                }
+                              },
+                              "additionalProperties": false
+                            }
+                          ]
                         },
                         "value": {
                           "type": "object",
@@ -4383,8 +4801,27 @@
                                     "enum": ["asc", "desc"]
                                   },
                                   "field": {
-                                    "type": "string",
-                                    "minLength": 1
+                                    "oneOf": [
+                                      {
+                                        "type": "string",
+                                        "minLength": 1
+                                      },
+                                      {
+                                        "type": "object",
+                                        "required": ["contract"],
+                                        "properties": {
+                                          "slot": {
+                                            "type": "string",
+                                            "pattern": "^[a-z][a-z0-9_]*$"
+                                          },
+                                          "contract": {
+                                            "type": "string",
+                                            "minLength": 1
+                                          }
+                                        },
+                                        "additionalProperties": false
+                                      }
+                                    ]
                                   }
                                 },
                                 "additionalProperties": false
@@ -4429,8 +4866,27 @@
                                       "enum": ["sum", "latest"]
                                     },
                                     "field": {
-                                      "type": "string",
-                                      "minLength": 1
+                                      "oneOf": [
+                                        {
+                                          "type": "string",
+                                          "minLength": 1
+                                        },
+                                        {
+                                          "type": "object",
+                                          "required": ["contract"],
+                                          "properties": {
+                                            "slot": {
+                                              "type": "string",
+                                              "pattern": "^[a-z][a-z0-9_]*$"
+                                            },
+                                            "contract": {
+                                              "type": "string",
+                                              "minLength": 1
+                                            }
+                                          },
+                                          "additionalProperties": false
+                                        }
+                                      ]
                                     }
                                   },
                                   "additionalProperties": false
@@ -4568,8 +5024,27 @@
                                     "enum": ["asc", "desc"]
                                   },
                                   "field": {
-                                    "type": "string",
-                                    "minLength": 1
+                                    "oneOf": [
+                                      {
+                                        "type": "string",
+                                        "minLength": 1
+                                      },
+                                      {
+                                        "type": "object",
+                                        "required": ["contract"],
+                                        "properties": {
+                                          "slot": {
+                                            "type": "string",
+                                            "pattern": "^[a-z][a-z0-9_]*$"
+                                          },
+                                          "contract": {
+                                            "type": "string",
+                                            "minLength": 1
+                                          }
+                                        },
+                                        "additionalProperties": false
+                                      }
+                                    ]
                                   }
                                 },
                                 "additionalProperties": false
@@ -4614,8 +5089,27 @@
                                       "enum": ["sum", "latest"]
                                     },
                                     "field": {
-                                      "type": "string",
-                                      "minLength": 1
+                                      "oneOf": [
+                                        {
+                                          "type": "string",
+                                          "minLength": 1
+                                        },
+                                        {
+                                          "type": "object",
+                                          "required": ["contract"],
+                                          "properties": {
+                                            "slot": {
+                                              "type": "string",
+                                              "pattern": "^[a-z][a-z0-9_]*$"
+                                            },
+                                            "contract": {
+                                              "type": "string",
+                                              "minLength": 1
+                                            }
+                                          },
+                                          "additionalProperties": false
+                                        }
+                                      ]
                                     }
                                   },
                                   "additionalProperties": false
@@ -4702,8 +5196,27 @@
                               "enum": ["eq", "ne", "gt", "lt"]
                             },
                             "prop": {
-                              "type": "string",
-                              "minLength": 1
+                              "oneOf": [
+                                {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                {
+                                  "type": "object",
+                                  "required": ["contract"],
+                                  "properties": {
+                                    "slot": {
+                                      "type": "string",
+                                      "pattern": "^[a-z][a-z0-9_]*$"
+                                    },
+                                    "contract": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    }
+                                  },
+                                  "additionalProperties": false
+                                }
+                              ]
                             },
                             "value": {
                               "anyOf": [
@@ -4733,8 +5246,27 @@
                               "const": "in"
                             },
                             "prop": {
-                              "type": "string",
-                              "minLength": 1
+                              "oneOf": [
+                                {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                {
+                                  "type": "object",
+                                  "required": ["contract"],
+                                  "properties": {
+                                    "slot": {
+                                      "type": "string",
+                                      "pattern": "^[a-z][a-z0-9_]*$"
+                                    },
+                                    "contract": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    }
+                                  },
+                                  "additionalProperties": false
+                                }
+                              ]
                             },
                             "value": {
                               "type": "array",
@@ -4754,8 +5286,27 @@
                               "const": "contains"
                             },
                             "prop": {
-                              "type": "string",
-                              "minLength": 1
+                              "oneOf": [
+                                {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                {
+                                  "type": "object",
+                                  "required": ["contract"],
+                                  "properties": {
+                                    "slot": {
+                                      "type": "string",
+                                      "pattern": "^[a-z][a-z0-9_]*$"
+                                    },
+                                    "contract": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    }
+                                  },
+                                  "additionalProperties": false
+                                }
+                              ]
                             },
                             "value": {
                               "type": ["string", "number", "boolean"]
@@ -4771,8 +5322,27 @@
                               "const": "range"
                             },
                             "prop": {
-                              "type": "string",
-                              "minLength": 1
+                              "oneOf": [
+                                {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                {
+                                  "type": "object",
+                                  "required": ["contract"],
+                                  "properties": {
+                                    "slot": {
+                                      "type": "string",
+                                      "pattern": "^[a-z][a-z0-9_]*$"
+                                    },
+                                    "contract": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    }
+                                  },
+                                  "additionalProperties": false
+                                }
+                              ]
                             },
                             "value": {
                               "type": "object",
@@ -5089,8 +5659,27 @@
                                         "enum": ["asc", "desc"]
                                       },
                                       "field": {
-                                        "type": "string",
-                                        "minLength": 1
+                                        "oneOf": [
+                                          {
+                                            "type": "string",
+                                            "minLength": 1
+                                          },
+                                          {
+                                            "type": "object",
+                                            "required": ["contract"],
+                                            "properties": {
+                                              "slot": {
+                                                "type": "string",
+                                                "pattern": "^[a-z][a-z0-9_]*$"
+                                              },
+                                              "contract": {
+                                                "type": "string",
+                                                "minLength": 1
+                                              }
+                                            },
+                                            "additionalProperties": false
+                                          }
+                                        ]
                                       }
                                     },
                                     "additionalProperties": false
@@ -5135,8 +5724,27 @@
                                           "enum": ["sum", "latest"]
                                         },
                                         "field": {
-                                          "type": "string",
-                                          "minLength": 1
+                                          "oneOf": [
+                                            {
+                                              "type": "string",
+                                              "minLength": 1
+                                            },
+                                            {
+                                              "type": "object",
+                                              "required": ["contract"],
+                                              "properties": {
+                                                "slot": {
+                                                  "type": "string",
+                                                  "pattern": "^[a-z][a-z0-9_]*$"
+                                                },
+                                                "contract": {
+                                                  "type": "string",
+                                                  "minLength": 1
+                                                }
+                                              },
+                                              "additionalProperties": false
+                                            }
+                                          ]
                                         }
                                       },
                                       "additionalProperties": false
@@ -5274,8 +5882,27 @@
                                         "enum": ["asc", "desc"]
                                       },
                                       "field": {
-                                        "type": "string",
-                                        "minLength": 1
+                                        "oneOf": [
+                                          {
+                                            "type": "string",
+                                            "minLength": 1
+                                          },
+                                          {
+                                            "type": "object",
+                                            "required": ["contract"],
+                                            "properties": {
+                                              "slot": {
+                                                "type": "string",
+                                                "pattern": "^[a-z][a-z0-9_]*$"
+                                              },
+                                              "contract": {
+                                                "type": "string",
+                                                "minLength": 1
+                                              }
+                                            },
+                                            "additionalProperties": false
+                                          }
+                                        ]
                                       }
                                     },
                                     "additionalProperties": false
@@ -5320,8 +5947,27 @@
                                           "enum": ["sum", "latest"]
                                         },
                                         "field": {
-                                          "type": "string",
-                                          "minLength": 1
+                                          "oneOf": [
+                                            {
+                                              "type": "string",
+                                              "minLength": 1
+                                            },
+                                            {
+                                              "type": "object",
+                                              "required": ["contract"],
+                                              "properties": {
+                                                "slot": {
+                                                  "type": "string",
+                                                  "pattern": "^[a-z][a-z0-9_]*$"
+                                                },
+                                                "contract": {
+                                                  "type": "string",
+                                                  "minLength": 1
+                                                }
+                                              },
+                                              "additionalProperties": false
+                                            }
+                                          ]
                                         }
                                       },
                                       "additionalProperties": false

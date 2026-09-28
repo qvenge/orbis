@@ -83,7 +83,8 @@ export function aspectsOf(nodes: readonly QueryFilterNode[]): string[] {
 
 /** Лист «свойство равно значению» — из них складываются списки `anyOf`/`noneOf`. */
 function eqLeaf(node: QueryFilterNode): { prop: string; value: QueryBound } | null {
-  if (!('prop' in node)) return null;
+  // Адрес контракта (1в) строки формы не получает — см. `positive`.
+  if (!('prop' in node) || typeof node.prop !== 'string') return null;
   if (node.op !== 'eq' && node.op !== 'contains') return null;
   return { prop: node.prop, value: node.value as QueryBound };
 }
@@ -111,7 +112,10 @@ function positive(node: QueryFilterNode): FieldNodeView | null {
     if (same === null) return null;
     return { prop: same.prop, op: 'anyOf', values: same.values, from: null, to: null };
   }
-  if (!('prop' in node)) return null;
+  // Адрес контракта (спека 1в §3.1: `orbis/when=…`, `orbis/when.deadline=…`) — не свойство:
+  // строки поля у него нет, и узел доезжает до печати нетронутым, как аспект или связь. Строка,
+  // собранная из адреса по подписи свойства, переписала бы его в id несуществующего свойства.
+  if (!('prop' in node) || typeof node.prop !== 'string') return null;
   const base = { prop: node.prop, values: [] as QueryBound[], from: null, to: null };
   switch (node.op) {
     case 'eq':
@@ -136,7 +140,8 @@ function positive(node: QueryFilterNode): FieldNodeView | null {
   }
 }
 
-/** Узел → строка поля; `null` — конструкция не про свойство (аспект, тег, связь, поиск). */
+/** Узел → строка поля; `null` — конструкция не про свойство (аспект, тег, связь, поиск, адрес). */
+// ОБХОДЧИК-Q: web-builder-model
 export function fieldNodeView(node: QueryFilterNode): FieldNodeView | null {
   if ('not' in node) {
     const inner = positive(node.not);

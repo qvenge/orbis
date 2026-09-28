@@ -49,6 +49,8 @@ const FACT_LABEL: Record<SensitivityFact, { ru: string; en: string }> = {
 // Хелперы записи: девять слотов money-movement объектами заняли бы полсотни строк, а нормативно
 // в них ровно четыре поля. Образец — `options(...)` в `builtin-properties.ts:39-41`.
 type Slot = z.input<typeof contractSlotSchema>;
+// `role` — роль слота в значении контракта (§3.2 спеки 1в); без роли ключа в объекте нет вовсе,
+// чтобы строка реестра прочих контрактов не менялась на пересеве (сид сверяет jsonb целиком).
 const s = (
   name: string,
   kind: Slot['type'],
@@ -56,7 +58,15 @@ const s = (
   ru: string,
   en: string,
   status = false,
-): Slot => ({ name, type: kind, required, label: { ru, en }, status });
+  role?: 'plan' | 'fact',
+): Slot => ({
+  name,
+  type: kind,
+  required,
+  label: { ru, en },
+  status,
+  ...(role === undefined ? {} : { value_role: role }),
+});
 const anyOf = (...kinds: string[]) => ({ kind: 'any_of', kinds }) as Slot['type'];
 const k = (kind: string) => ({ kind }) as Slot['type'];
 const c = (key: string, ru: string, en: string) => ({ key, label: { ru, en } });
@@ -98,11 +108,21 @@ const ENTRIES: readonly (SlotsEntry | FactsEntry)[] = [
       ru: 'Привязка ко времени: момент (событие) и срок (дедлайн) — два разных слота.',
       en: 'Time binding: a moment (event) and a deadline — two distinct slots.',
     },
-    // Оба НЕобязательны: аспект вправе реализовать один из двух (задача — срок, событие — момент),
-    // а §Б2-3 делает членство в контракте динамическим.
+    // Все НЕобязательны: аспект вправе реализовать любой набор слотов (задача — срок и время
+    // завершения, событие — момент, конец и «весь день»), а §Б2-3 делает членство в контракте
+    // динамическим.
+    //
+    // ЗНАЧЕНИЕ «ДАТЫ» (§3.2/§4.2 спеки 1в): контракт адресуется целиком (`orbis/when=today`), потому
+    // что у его слотов есть роли. `done` — факт, `moment` и `deadline` — планы; правило «даты»
+    // (факт первым, закрытое без времени закрытия — вне времени) — закрытый набор в коде,
+    // `contract-value.ts`. `end` и `all_day` ролей не несут: это подробности момента для показа,
+    // в значение они не входят.
     slots: [
-      s('moment', anyOf('timestamp', 'date'), false, 'Момент', 'Moment'),
-      s('deadline', k('date'), false, 'Срок', 'Deadline'),
+      s('moment', anyOf('timestamp', 'date'), false, 'Момент', 'Moment', false, 'plan'),
+      s('deadline', k('date'), false, 'Срок', 'Deadline', false, 'plan'),
+      s('done', anyOf('timestamp', 'date'), false, 'Завершено', 'Done', false, 'fact'),
+      s('end', anyOf('timestamp', 'date'), false, 'Конец', 'End'),
+      s('all_day', k('boolean'), false, 'Весь день', 'All day'),
     ],
     module: null,
   },

@@ -18,6 +18,7 @@
 // Числа печатаются ВСЕГДА (все замеры поимённо, не только итог), включая зелёный прогон:
 // дрейф обязан быть виден глазами, а не только по красному.
 import { afterAll, beforeAll, expect, test } from 'bun:test';
+import { parseQueryAst, type QueryAst, toParseRegistry } from '@orbis/shared/query';
 import { sql } from 'drizzle-orm';
 import { withIdentity } from '../src/db/with-identity';
 import { recomputeProjectAncestors } from '../src/executor/ancestors';
@@ -66,6 +67,21 @@ const BUDGETS_MS = {
   'descendants_of:subtree': 100,
   /** Пересчёт предков на поддереве ≥ 5000 узлов. */
   'recompute:subtree5k': 1000,
+  /**
+   * Значение «когда» (спека 1в С1в-14): страница Повестки по корпусу из 50 000 задач со сроками.
+   * Калибровка 1в, задача 1: порога в спеке нет — p95 первого прогона × 3, вверх до 10 мс
+   * (p95 = 142,8 мс → 430). Прогон ДО предфильтра значения (`valuePrefilter`, `contract-sql.ts`)
+   * давал 681,1 мс: коррелированный подзапрос дат считался на каждой из 50 000 строк.
+   */
+  'when:value-next_7d': 430,
+  /** Адрес слота `deadline` с `overdue` — калибровка 1в, задача 1 (p95 = 10,5 мс → 40). */
+  'when:slot-deadline': 40,
+} as const;
+
+/** Запросы замера «когда» — тексты, как их пишет блок страницы (спека 1в С1в-14). */
+const WHEN_QUERIES = {
+  'when:value-next_7d': 'orbis/when=next_7d, sortBy=orbis/when:asc, limit=200',
+  'when:slot-deadline': 'orbis/when.deadline=overdue',
 } as const;
 
 /**
@@ -266,10 +282,28 @@ test('П6: descendants_of под RLS и пересчёт предков на п�
   });
   expect(cleared.recomputed).toBeGreaterThanOrEqual(4900);
 
+  // Язык контрактов (1в): значение «когда» и адрес слота на том же корпусе, под RLS.
+  const whenMs: Partial<Record<keyof typeof WHEN_QUERIES, number>> = {};
+  for (const [key, text] of Object.entries(WHEN_QUERIES) as [keyof typeof WHEN_QUERIES, string][]) {
+    const parsed = parseQueryAst(text, toParseRegistry(reg, 'ru'));
+    if (!parsed.ok) throw new Error(`${key}: ${parsed.error.code} ${parsed.error.message}`);
+    const ast: QueryAst = parsed.ast;
+    const hits = await withIdentity(db, personal(GRAPH_OWNER_ID), (tx) =>
+      tx.execute(compileCountAst(ast, ctx)),
+    );
+    // Сторож выборки: замер по пустому множеству ничего бы не мерил.
+    expect(Number((hits[0] as { count?: unknown })?.count)).toBeGreaterThan(0);
+    whenMs[key] = await measureP95(key, P95_RUNS, () =>
+      withIdentity(db, personal(GRAPH_OWNER_ID), (tx) => tx.execute(compileQueryAst(ast, ctx))),
+    );
+  }
+
   const over: string[] = [];
   for (const [key, ms] of [
     ['descendants_of:subtree', subtree],
     ['recompute:subtree5k', recompute],
+    ['when:value-next_7d', whenMs['when:value-next_7d'] ?? Number.POSITIVE_INFINITY],
+    ['when:slot-deadline', whenMs['when:slot-deadline'] ?? Number.POSITIVE_INFINITY],
   ] as const) {
     // Строка про порог П6 печатается на КАЖДОМ прогоне и для достигнутого порога тоже:
     // «достигнут» — такой же факт замера, как «не достигнут», и исчезнуть из вывода он не

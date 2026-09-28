@@ -1822,3 +1822,18 @@ describe('схема шире грамматики: пределы и сверк
     expect(bodyPairFromDoc(bound).doc).toBe(bound);
   });
 });
+
+describe('1в: язык контрактов в индексе адресов тела', () => {
+  test('адрес слота и значение контракта в индекс не едут; свойства рядом — едут', () => {
+    const md = [
+      '{{query:orbis/when.deadline=today, orbis/when=overdue, orbis/task_status=inbox, sortBy=orbis/when:asc}}',
+    ].join('\n');
+    const doc = bindQueryBlocks(parseBody(md), REG);
+    const refs = queryRefsFromDoc(doc);
+    // Обход не упал и нашёл свойство рядом: блок разобран, дерево в атрибуте есть.
+    expect(refs).toContain('orbis/task_status');
+    // Индекс обслуживает слияние СВОЙСТВ: объект адреса не свойство, его части — не адреса.
+    expect(refs.some((r) => r.includes('orbis/when') || r === 'deadline')).toBe(false);
+    expect(refs.every((r) => typeof r === 'string')).toBe(true);
+  });
+});

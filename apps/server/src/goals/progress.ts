@@ -343,6 +343,7 @@ export async function goalProgressFor(
  * `graphId` не нужен вовсе: скомпилированный SQL фильтра по графу не содержит, изоляцию
  * даёт RLS через identity транзакции.
  */
+// ОБХОДЧИК-Q: goal-progress
 export async function computeGoalProgress(
   tx: Tx,
   ctx: CompileCtx,
@@ -397,7 +398,9 @@ export async function computeGoalProgress(
 
   // Имя поля агрегата резолвится ДО компиляции и своим ярлыком: у компилятора канона на
   // руках был бы только id, и «нет такого свойства» стало бы неотличимо от неизвестного id
-  // внутри самого запроса — то есть `invalid_field` и `invalid_query` слились бы.
+  // внутри самого запроса — то есть `invalid_field` и `invalid_query` слились бы. Поле цели —
+  // только СВОЙСТВО: ключ адреса контракта (`orbis/money-movement.amount`, 1в) резолвер не
+  // принимает, и цель получает `invalid_field`. Адрес в самом дереве `query` — дело компилятора.
   let property = '';
   if (src.aggregate !== 'count') {
     const resolved = resolvePropertyFieldId(src.field, parseRegistryOf(ctx));

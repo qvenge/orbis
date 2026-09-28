@@ -73,3 +73,34 @@ test('фикстуры, помеченные статическими, прох�
   expect(AST_FIXTURES.filter((f) => f.static).length).toBeGreaterThanOrEqual(2);
   expect(AST_FIXTURES.filter((f) => !f.static).length).toBeGreaterThanOrEqual(5);
 });
+
+test('1в: адрес слота и значение контракта статичны с литералом, с токеном — отказ', () => {
+  expect(() =>
+    assertStaticQuery({
+      filter: { prop: { contract: 'orbis/when' }, op: 'eq', value: '2026-07-17' },
+    }),
+  ).not.toThrow();
+  expect(() =>
+    assertStaticQuery({
+      filter: { prop: { contract: 'orbis/when', slot: 'deadline' }, op: 'eq', value: '2026-07-17' },
+    }),
+  ).not.toThrow();
+  expect(
+    reject({
+      filter: {
+        prop: { contract: 'orbis/when', slot: 'deadline' },
+        op: 'eq',
+        value: { token: 'today' },
+      },
+    }),
+  ).toBe(SCOPE_NOT_STATIC);
+  // Сообщение называет адрес ключом, а не `[object Object]`.
+  try {
+    assertStaticQuery({
+      filter: { prop: { contract: 'orbis/when' }, op: 'range', value: { to: { token: 'today' } } },
+    });
+    throw new Error('ожидался отказ');
+  } catch (e) {
+    expect((e as ScopeNotStaticError).reason).toContain("'orbis/when'");
+  }
+});

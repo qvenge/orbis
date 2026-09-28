@@ -136,3 +136,38 @@ test('exclusive_classes: схема даёт boolean каждому контра
   expect(exclusiveOf('orbis/completable')).toBe(false); // класс `active` собирает четыре варианта
   expect(exclusiveOf('orbis/delegable')).toBe(true);
 });
+
+/** Контракт с одним слотом заданного типа и ролью — проба правила «роль только у даты» (§3.2 спеки 1в). */
+function withRole(type: unknown, role: unknown) {
+  return {
+    ...ROW,
+    slots: [{ name: 'at', type, required: false, label: { ru: 'Когда' }, value_role: role }],
+    classes: [],
+    sets: {},
+  };
+}
+
+test('роль слота в значении: у слота с датой принята, у прочих — отказ (§3.2 спеки 1в)', () => {
+  const fact = contractDefinitionSchema.parse(withRole({ kind: 'date' }, 'fact'));
+  expect(fact.slots?.[0]?.value_role).toBe('fact');
+  // any_of с датой среди видов — тоже «слот с датой»: `moment` и `done` у «когда» такие.
+  const plan = contractDefinitionSchema.parse(
+    withRole({ kind: 'any_of', kinds: ['timestamp', 'date'] }, 'plan'),
+  );
+  expect(plan.slots?.[0]?.value_role).toBe('plan');
+  expect(
+    contractDefinitionSchema.parse(withRole({ kind: 'timestamp' }, 'plan')).slots?.[0]?.value_role,
+  ).toBe('plan');
+  const decimal = contractDefinitionSchema.safeParse(withRole({ kind: 'decimal' }, 'fact'));
+  expect(decimal.success).toBe(false);
+  expect(decimal.error?.issues.map((i) => i.message)).toContain(
+    'роль в значении — только у слота с датой',
+  );
+  // Роль вне закрытого набора `plan|fact` — отказ, а не молча принятая строка.
+  expect(contractDefinitionSchema.safeParse(withRole({ kind: 'date' }, 'maybe')).success).toBe(
+    false,
+  );
+  // Без роли — прежняя форма: слот в значение не входит.
+  const none = contractDefinitionSchema.parse({ ...ROW });
+  expect(none.slots?.[0]?.value_role).toBeUndefined();
+});

@@ -20,12 +20,13 @@
  */
 import type {
   QueryAst,
+  QueryFieldRef,
   QueryFilterNode,
   QueryPropValue,
   QueryRelPredicate,
   QueryScalar,
 } from './ast';
-import { QUERY_DATE_TOKENS } from './ast';
+import { fieldRefKey, QUERY_DATE_TOKENS } from './ast';
 import { effectiveLabel, isExcludeBlockedSugar, type ParseRegistry } from './parse-ast';
 
 export type QueryPrintForm = 'key' | 'label';
@@ -103,6 +104,11 @@ function quoteAlways(value: string): string {
 
 interface Names {
   prop(id: string): string;
+  /**
+   * Поле запроса (1в): свойство — как `prop`, адрес контракта — `контракт.слот`/`контракт` КЛЮЧОМ
+   * контракта в обеих формах (у контракта label-формы нет — см. `contract` ниже).
+   */
+  field(ref: QueryFieldRef): string;
   aspect(id: string): string;
   role(id: string): string;
   contract(id: string): string;
@@ -138,6 +144,10 @@ function names(reg: ParseRegistry, form: QueryPrintForm): Names {
     // это `SYNTAX: лишние символы после закрывающей кавычки`, то есть `parse(print(a)) ≡ a`
     // ломается ровно на этом узле. Нерезолвенный id печатается собой — печать тотальна.
     contract: (id) => reg.contracts.get(id)?.key ?? id,
+    field: (ref) =>
+      typeof ref === 'string'
+        ? pick(reg.properties.get(ref), ref)
+        : fieldRefKey({ ...ref, contract: reg.contracts.get(ref.contract)?.key ?? ref.contract }),
     // Реестр нужен и здесь: сахар — это КОНКРЕТНЫЕ id роли и свойства, а в дереве лежат id,
     // не ключи. Через `Names` (а не пятым параметром `printNode`), потому что это ровно тот
     // же класс знания — «как назвать/опознать запись реестра».
@@ -159,7 +169,7 @@ function printBound(value: unknown): string {
 
 /** Предикат свойства-«равенства», из которых складываются |- и &-списки. */
 interface EqLeaf {
-  prop: string;
+  prop: QueryFieldRef;
   op: 'eq' | 'contains';
   value: QueryPropValue;
 }
@@ -176,7 +186,10 @@ function asSamePropList(nodes: readonly QueryFilterNode[]): EqLeaf[] | null {
   for (const node of nodes) {
     const leaf = asEqLeaf(node);
     if (!leaf) return null;
-    if (leaves.length > 0 && (leaves[0] as EqLeaf).prop !== leaf.prop) return null;
+    // Поле сравнивается КЛЮЧОМ: адрес — объект, и `!==` по ссылке развёл бы два равных адреса.
+    if (leaves.length > 0 && fieldRefKey((leaves[0] as EqLeaf).prop) !== fieldRefKey(leaf.prop)) {
+      return null;
+    }
     leaves.push(leaf);
   }
   return leaves.length > 0 ? leaves : null;
@@ -214,7 +227,7 @@ function printNode(node: QueryFilterNode, n: Names): string {
   if ('or' in node) {
     const list = asSamePropList(node.or);
     if (list) {
-      return `${n.prop((list[0] as EqLeaf).prop)}=${list.map((l) => printBound(l.value)).join('|')}`;
+      return `${n.field((list[0] as EqLeaf).prop)}=${list.map((l) => printBound(l.value)).join('|')}`;
     }
     const tags = asTagList(node.or);
     if (tags) return printTagList(tags);
@@ -233,11 +246,11 @@ function printNode(node: QueryFilterNode, n: Names): string {
     if ('or' in inner) {
       const list = asSamePropList(inner.or);
       if (list) {
-        return `${n.prop((list[0] as EqLeaf).prop)}=${list.map((l) => `!${printBound(l.value)}`).join('&')}`;
+        return `${n.field((list[0] as EqLeaf).prop)}=${list.map((l) => `!${printBound(l.value)}`).join('&')}`;
       }
     }
     const leaf = asEqLeaf(inner);
-    if (leaf) return `${n.prop(leaf.prop)}=!${printBound(leaf.value)}`;
+    if (leaf) return `${n.field(leaf.prop)}=!${printBound(leaf.value)}`;
     // `excludeTags=a|b` парсер даёт как `not(or(tag…))`, и своей ветки этому случаю НЕ
     // нужно: общий хвост ниже печатает `!` + свод из ветки `or`, то есть ровно `!tags=a|b`.
     // Отдельная ветка здесь была — и оказалась мёртвой: мутация «снять её» не меняла ни
@@ -249,7 +262,7 @@ function printNode(node: QueryFilterNode, n: Names): string {
     return `!${printNode(inner, n)}`;
   }
   if ('prop' in node) {
-    const name = n.prop(node.prop);
+    const name = n.field(node.prop);
     switch (node.op) {
       case 'eq':
       case 'contains':
@@ -302,6 +315,7 @@ function printNode(node: QueryFilterNode, n: Names): string {
 }
 
 /** Печатает Q-AST в текст грамматики §А5-3: `key` — канон, `label` — для человека. */
+// ОБХОДЧИК-Q: print
 export function printQueryAst(ast: QueryAst, reg: ParseRegistry, form: QueryPrintForm): string {
   const n = names(reg, form);
   const parts: string[] = [];
@@ -312,7 +326,7 @@ export function printQueryAst(ast: QueryAst, reg: ParseRegistry, form: QueryPrin
     else parts.push(printNode(ast.filter, n));
   }
   if (ast.sortBy) {
-    parts.push(`sortBy=${ast.sortBy.map((s) => `${n.prop(s.field)}:${s.dir}`).join('|')}`);
+    parts.push(`sortBy=${ast.sortBy.map((s) => `${n.field(s.field)}:${s.dir}`).join('|')}`);
   }
   if (ast.limit !== undefined) parts.push(`limit=${ast.limit}`);
   if (ast.display !== undefined) parts.push(`display=${ast.display}`);
@@ -323,7 +337,9 @@ export function printQueryAst(ast: QueryAst, reg: ParseRegistry, form: QueryPrin
   }
   if (ast.aggregate !== undefined) {
     const agg = ast.aggregate;
-    parts.push(agg.fn === 'count' ? 'aggregate=count' : `aggregate=${agg.fn}:${n.prop(agg.field)}`);
+    parts.push(
+      agg.fn === 'count' ? 'aggregate=count' : `aggregate=${agg.fn}:${n.field(agg.field)}`,
+    );
   }
   if (ast.hideEmpty === true) parts.push('hide_empty');
   if (ast.title !== undefined) parts.push(`title=${quoteQueryValue(ast.title)}`);

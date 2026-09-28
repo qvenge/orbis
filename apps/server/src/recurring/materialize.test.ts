@@ -754,16 +754,21 @@ describe('materializationWindow — детект окна по ДЕРЕВУ (ч�
   const win = (query: string) => {
     const parsed = parseQueryAst(query, REG);
     if (!parsed.ok) throw new Error(`${parsed.error.code}: ${parsed.error.message}`);
-    return materializationWindow(parsed.ast, today, MATERIALIZE_PARAMS);
+    return materializationWindow(parsed.ast, today, MATERIALIZE_PARAMS, REG);
   };
   /** Окно по готовому дереву — там, где текст плоской грамматики его не выражает (§А5-3д). */
   const winAst = (filter: QueryFilterNode) =>
-    materializationWindow({ filter }, today, MATERIALIZE_PARAMS);
+    materializationWindow({ filter }, today, MATERIALIZE_PARAMS, REG);
 
   test('горизонт правила меняет окно: 30 дней вместо 14', () => {
     const parsed = parseQueryAst('orbis/due_date>2026-07-01', REG);
     if (!parsed.ok) throw new Error(`${parsed.error.code}: ${parsed.error.message}`);
-    const w = materializationWindow(parsed.ast, today, { ...MATERIALIZE_PARAMS, horizon_days: 30 });
+    const w = materializationWindow(
+      parsed.ast,
+      today,
+      { ...MATERIALIZE_PARAMS, horizon_days: 30 },
+      REG,
+    );
     expect(w).toEqual({ from: '2026-07-02', to: addDays(today, 30) });
   });
 
@@ -771,11 +776,25 @@ describe('materializationWindow — детект окна по ДЕРЕВУ (ч�
     const parsed = parseQueryAst('orbis/due_date=today', REG);
     if (!parsed.ok) throw new Error(`${parsed.error.code}: ${parsed.error.message}`);
     expect(
-      materializationWindow(parsed.ast, today, {
-        ...MATERIALIZE_PARAMS,
-        trigger_properties: ['orbis/start_at'],
-      }),
+      materializationWindow(
+        parsed.ast,
+        today,
+        { ...MATERIALIZE_PARAMS, trigger_properties: ['orbis/start_at'] },
+        REG,
+      ),
     ).toBeNull();
+  });
+
+  test('1в §3.4: окно от адреса «когда» — привязанные свойства ∩ триггеры правила', () => {
+    // Значение «когда»: планы `start_at`/`due_date` — триггеры, окно — как у свойства-даты.
+    expect(win('orbis/when=next_7d')).toEqual({ from: today, to: '2026-07-17' });
+    expect(win('orbis/when=2026-07-12')).toEqual({ from: '2026-07-12', to: '2026-07-12' });
+    // Адрес слота: `moment` привязан к `start_at` — триггер.
+    expect(win('orbis/when.moment=today')).toEqual({ from: today, to: today });
+    // `done` привязан к `completed_at`, а оно не триггер (Ф-1в-19): окна нет.
+    expect(win('orbis/when.done=today')).toBeNull();
+    // Слот не-даты окна не даёт вовсе.
+    expect(win('orbis/money-movement.amount>1000')).toBeNull();
   });
 
   test('запрос без date/timestamp-условий — окна нет', () => {

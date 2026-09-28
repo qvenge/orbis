@@ -1199,3 +1199,31 @@ describe('неканоническая форма дерева источник�
     });
   }
 });
+
+describe('цель и язык контрактов (спека 1в §3.1, РП-3)', () => {
+  test('адрес в дереве query — компилятор; ключ адреса в field — invalid_field', async () => {
+    const user = await freshGraph();
+    const ast: QueryAst = {
+      filter: { prop: { contract: 'orbis/when' }, op: 'eq', value: { token: 'today' } },
+    };
+    const counted = await withIdentity(db, personal(user), async (tx) =>
+      computeGoalProgress(tx, await queryContext(tx, user, null), {
+        progressSource: { query: ast, aggregate: 'count' },
+        targetValue: '10',
+      }),
+    );
+    expect(counted.unsupported).toBeUndefined();
+    expect(counted.current).toBe('0');
+    const field = await withIdentity(db, personal(user), async (tx) =>
+      computeGoalProgress(tx, await queryContext(tx, user, null), {
+        progressSource: {
+          query: { filter: { aspect: 'orbis/financial' } },
+          aggregate: 'sum',
+          field: 'orbis/money-movement.amount',
+        },
+        targetValue: '10',
+      }),
+    );
+    expect(field.unsupported).toBe('invalid_field');
+  });
+});

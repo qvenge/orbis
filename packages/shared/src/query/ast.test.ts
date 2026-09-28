@@ -7,7 +7,11 @@
 
 import { expect, test } from 'bun:test';
 import Ajv from 'ajv';
+import { SLOT_KEY_RE } from '../registry/property-type';
 import {
+  ADDRESS_SLOT_RE,
+  fieldRefKey,
+  isContractAddress,
   QUERY_REL_ANCHOR,
   QUERY_TREE_DEPTH_CAP,
   queryAstSchema,
@@ -354,4 +358,63 @@ test('§5.4: проекция блока данных — обе схемы пр
   for (const fixture of AST_FIXTURES) {
     expect(both(fixture.ast), fixture.name).toEqual([true, true]);
   }
+});
+
+test('1в §3.1: адрес контракта — в prop, sortBy и aggregate; в columns — нет (zod ≡ JSON Schema)', () => {
+  const validate = validator();
+  const strict = strictValidator();
+  const when = { contract: 'orbis/when' };
+  const deadline = { contract: 'orbis/when', slot: 'deadline' };
+  const amount = { contract: 'orbis/money-movement', slot: 'amount' };
+  const cases: [unknown, boolean, string][] = [
+    [{ filter: { prop: deadline, op: 'eq', value: { token: 'today' } } }, true, 'адрес слота'],
+    [{ filter: { prop: when, op: 'range', value: { from: '2026-07-15' } } }, true, 'значение'],
+    [
+      { filter: { prop: when, op: 'in', value: ['2026-07-16', '2026-07-18'] } },
+      true,
+      'in по значению',
+    ],
+    [{ filter: { not: { prop: when, op: 'eq', value: { token: 'next_7d' } } } }, true, 'отрицание'],
+    [{ filter: null, sortBy: [{ field: when, dir: 'asc' }] }, true, 'sortBy по значению'],
+    [
+      { filter: null, display: 'tile', aggregate: { fn: 'sum', field: amount } },
+      true,
+      'сумма по адресу слота',
+    ],
+    [
+      { filter: null, display: 'table', columns: [{ field: deadline }] },
+      false,
+      'адрес в columns — только свойства',
+    ],
+    // Форма адреса строгая: лишний ключ, пустой контракт, слот не той формы — отказ.
+    [{ filter: { prop: { ...deadline, extra: 1 }, op: 'eq', value: 'x' } }, false, 'лишний ключ'],
+    [{ filter: { prop: { contract: '' }, op: 'eq', value: 'x' } }, false, 'пустой контракт'],
+    [{ filter: { prop: { slot: 'deadline' }, op: 'eq', value: 'x' } }, false, 'без контракта'],
+    [
+      { filter: { prop: { contract: 'orbis/when', slot: 'Dead-line' }, op: 'eq', value: 'x' } },
+      false,
+      'слот не той формы',
+    ],
+    [{ filter: { has: deadline } }, false, 'has — только свойство'],
+  ];
+  for (const [ast, expected, why] of cases) {
+    expect(queryAstSchema.safeParse(ast).success, `zod: ${why}`).toBe(expected);
+    expect(validate(ast) as boolean, `ajv: ${why}`).toBe(expected);
+    expect(strict(ast) as boolean, `strict ajv: ${why}`).toBe(expected);
+  }
+});
+
+test('1в: fieldRefKey — ключ поля одной строкой; isContractAddress различает формы', () => {
+  expect(fieldRefKey({ contract: 'orbis/when', slot: 'deadline' })).toBe('orbis/when.deadline');
+  expect(fieldRefKey({ contract: 'orbis/when' })).toBe('orbis/when');
+  expect(fieldRefKey('orbis/due_date')).toBe('orbis/due_date');
+  expect(isContractAddress({ contract: 'orbis/when' })).toBe(true);
+  expect(isContractAddress('orbis/when')).toBe(false);
+  expect(isContractAddress(null)).toBe(false);
+  expect(isContractAddress(['orbis/when'])).toBe(false);
+});
+
+test('1в: форма слота в адресе — та же, что имя слота контракта (ast.ts — лист, копия под сторожем)', () => {
+  expect(ADDRESS_SLOT_RE.source).toBe(SLOT_KEY_RE.source);
+  expect(ADDRESS_SLOT_RE.flags).toBe(SLOT_KEY_RE.flags);
 });

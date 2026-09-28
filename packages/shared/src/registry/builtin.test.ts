@@ -37,6 +37,7 @@ import { BUILTIN_CONTRACT_DEFS, CONTRACT_IDS, SENSITIVITY_FACTS } from './builti
 import { BUILTIN_PROPERTY_META, CORE_PROPERTY_IDS } from './builtin-properties';
 import { BUILTIN_RELATION_ROLE_META } from './builtin-roles';
 import { contractSetKind, isPredicateSet } from './contract-type';
+import { contractValueRuleOf } from './contract-value';
 import { EXTENSION_IDS, EXTENSION_MANIFESTS } from './extensions';
 import { aspectDefinitionSchema, writableFromTool } from './property-type';
 
@@ -175,7 +176,12 @@ const A8: Record<AspectId, readonly Row[]> = {
  */
 const B2: Partial<Record<AspectId, readonly unknown[]>> = {
   'orbis/schedule': [
-    { contract: 'orbis/when', bind: { moment: 'orbis/start_at' }, value_map: [], fixed: {} },
+    {
+      contract: 'orbis/when',
+      bind: { moment: 'orbis/start_at', end: 'orbis/end_at', all_day: 'orbis/all_day' },
+      value_map: [],
+      fixed: {},
+    },
     {
       contract: 'orbis/recurrence',
       bind: { template_marker: 'orbis/recurrence' },
@@ -200,7 +206,12 @@ const B2: Partial<Record<AspectId, readonly unknown[]>> = {
         { slot: 'status', variant: 'cancelled', class: 'cancelled' },
       ],
     },
-    { contract: 'orbis/when', bind: { deadline: 'orbis/due_date' }, value_map: [], fixed: {} },
+    {
+      contract: 'orbis/when',
+      bind: { deadline: 'orbis/due_date', done: 'orbis/completed_at' },
+      value_map: [],
+      fixed: {},
+    },
     {
       contract: 'orbis/delegable',
       bind: { status: 'orbis/task_status', waiting_for: 'orbis/waiting_for' },
@@ -795,7 +806,9 @@ function slotSig(id: string): string[] {
   const def = BUILTIN_CONTRACT_DEFS.find((c) => c.id === id);
   return (def?.slots ?? []).map((s) => {
     const k = s.type.kind === 'any_of' ? `any_of(${s.type.kinds.join('|')})` : s.type.kind;
-    return `${s.name}:${k}:${s.required ? 'req' : 'opt'}${s.status ? ':status' : ''}`;
+    // Роль в значении (§3.2 спеки 1в) — суффиксом: слот без роли в значение не входит.
+    const role = s.value_role === undefined ? '' : `:${s.value_role}`;
+    return `${s.name}:${k}:${s.required ? 'req' : 'opt'}${s.status ? ':status' : ''}${role}`;
   });
 }
 const cById = new Map(BUILTIN_CONTRACT_DEFS.map((c) => [c.id, c]));
@@ -848,9 +861,30 @@ test('orbis/delegable: классы однозначны, cancelled вне со�
   expect(del?.value_map.map((m) => m.variant)).not.toContain('cancelled');
 });
 
+test('контракт с объявленным значением не совпадает ключом ни с одним свойством (§3.1 спеки 1в)', () => {
+  // Разбор `orbis/when=…` сперва ищет СВОЙСТВО с таким ключом (РП-2): совпади ключ контракта со
+  // значением с ключом свойства — адрес значения стал бы недостижим из текста, и никто бы этого
+  // не заметил. Сегодня ключ делит со свойством только `orbis/recurrence`, а значения он не объявляет.
+  const withValue = BUILTIN_CONTRACT_DEFS.filter((c) => contractValueRuleOf(c) !== null);
+  expect(withValue.map((c) => c.key)).toEqual(['orbis/when']);
+  const propertyKeys = new Set(BUILTIN_PROPERTY_META.map((p) => p.key));
+  expect(withValue.filter((c) => propertyKeys.has(c.key)).map((c) => c.key)).toEqual([]);
+  // Сторож не пустой: пересечение контракта и свойства в поставке ЕСТЬ — просто без значения.
+  const recurrence = BUILTIN_CONTRACT_DEFS.find((c) => c.key === 'orbis/recurrence');
+  expect(propertyKeys.has('orbis/recurrence')).toBe(true);
+  expect(recurrence !== undefined && contractValueRuleOf(recurrence)).toBe(null);
+});
+
 test('слоты, классы и наборы — дословно §Б1-2', () => {
   expect(slotSig('orbis/completable')).toEqual(['status:select:req:status']);
-  expect(slotSig('orbis/when')).toEqual(['moment:any_of(timestamp|date):opt', 'deadline:date:opt']);
+  // §4.1 спеки 1в: три новых слота; роли «план/факт» — значение «даты» (§3.2).
+  expect(slotSig('orbis/when')).toEqual([
+    'moment:any_of(timestamp|date):opt:plan',
+    'deadline:date:opt:plan',
+    'done:any_of(timestamp|date):opt:fact',
+    'end:any_of(timestamp|date):opt',
+    'all_day:boolean:opt',
+  ]);
   expect(slotSig('orbis/recurrence')).toEqual([
     'template_marker:any_of(boolean|json):opt:status',
     'origin_role:relation_role:opt',

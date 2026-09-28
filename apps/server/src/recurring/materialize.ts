@@ -16,20 +16,26 @@
 // случайно, сливать их нельзя (Р-14). Строки нет или она выключена — `Error` сборки
 // (Р-И-17): порождать инстансы по числам, которых нет в реестре, движок не вправе.
 import {
+  type AspectDefinition,
   addDays,
   BUILTIN_ASPECT_DEFS,
+  bindingIndexOf,
+  type ContractDefinition,
   expandRecurrence,
   isExtensionEnabled,
   materializeBatchId,
   type RecurrenceRule,
   recurringInstanceId,
+  slotsWithRole,
 } from '@orbis/shared';
-import type {
-  QueryAst,
-  QueryBound,
-  QueryDateToken,
-  QueryFilterNode,
-  QueryRangeValue,
+import {
+  isContractAddress,
+  type QueryAst,
+  type QueryBound,
+  type QueryDateToken,
+  type QueryFieldRef,
+  type QueryFilterNode,
+  type QueryRangeValue,
 } from '@orbis/shared/query';
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import type { Db } from '../db/client';
@@ -134,6 +140,12 @@ export function instantOfLocal(dateISO: string, time: WallClock['time'], timeZon
  * `horizon_days`), третьим аргументом, а не константы файла: функция чистая и снимка не читает,
  * параметры ей отдаёт вызывающий из того же снимка, по которому исполняет запрос.
  *
+ * АДРЕС КОНТРАКТА (спека 1в §3.4): окно считается и от адреса слота, и от значения «когда» —
+ * по свойствам, которые к адресу привязали аспекты (у значения — к слотам с ролью), ∩ триггеры
+ * правила. Потому четвёртый аргумент — словари снимка: какие свойства стоят за `orbis/when`,
+ * знают только привязки. `orbis/when=next_7d` даёт окно по `start_at`/`due_date`, а
+ * `orbis/when.done=today` — нет: `completed_at` триггером не объявлен (Ф-1в-19).
+ *
  * ЧЕМ ЭТО ОТЛИЧАЕТСЯ ОТ ПЛОСКОГО ОБХОДА, который был до Задачи 9b, — двумя местами, и оба
  * РАСШИРЯЮТ окно, а не сужают (то есть могут породить лишние инстансы, но не спрятать
  * нужные): старый брал `range` только когда ОБЕ границы литеральные даты, новый
@@ -141,10 +153,15 @@ export function instantOfLocal(dateISO: string, time: WallClock['time'], timeZon
  * Расширение намеренное: канон выражает `<=`/`>=` односторонним `range`, и «пропустить»
  * такое условие значило бы отдать владельцу пустой список там, где он ждёт инстансы.
  */
+// ОБХОДЧИК-Q: materialize-window
 export function materializationWindow(
   ast: QueryAst,
   today: string,
   params: MaterializeParams,
+  reg: {
+    aspects: ReadonlyMap<string, AspectDefinition>;
+    contracts: ReadonlyMap<string, ContractDefinition>;
+  },
 ): { from: string; to: string } | null {
   let from: string | null = null;
   let to: string | null = null;
@@ -178,8 +195,22 @@ export function materializationWindow(
     return typeof bound === 'string' && DATE_RE.test(bound) ? bound : null;
   };
 
-  const visitProp = (node: { prop: string; op: string; value: unknown }): void => {
-    if (!params.trigger_properties.includes(node.prop)) return;
+  /** Свойства за полем: у свойства — оно само, у адреса — привязанные к слоту (слотам с ролью). */
+  const propertiesOf = (field: QueryFieldRef): readonly string[] => {
+    if (!isContractAddress(field)) return [field];
+    const contract = reg.contracts.get(field.contract);
+    if (contract === undefined) return [];
+    const slots =
+      field.slot === undefined
+        ? [...slotsWithRole(contract, 'plan'), ...slotsWithRole(contract, 'fact')]
+        : [field.slot];
+    return bindingIndexOf(reg)
+      .byContract(field.contract)
+      .flatMap((b) => slots.flatMap((s) => (b.bind[s] === undefined ? [] : [b.bind[s] as string])));
+  };
+
+  const visitProp = (node: { prop: QueryFieldRef; op: string; value: unknown }): void => {
+    if (!propertiesOf(node.prop).some((p) => params.trigger_properties.includes(p))) return;
     const value = node.value;
     switch (node.op) {
       case 'eq': {

@@ -27,6 +27,19 @@ export const contractSlotTypeSchema = z.union([
   z.object({ kind: z.literal('any_of'), kinds: z.array(z.enum(PROPERTY_KINDS)).min(2) }).strict(),
 ]);
 
+/** Роли слота в значении контракта (§3.2 спеки 1в): «план» и «факт». Закрытый набор. */
+export const CONTRACT_VALUE_ROLES = ['plan', 'fact'] as const;
+export type ContractValueRole = (typeof CONTRACT_VALUE_ROLES)[number];
+
+/** Отказ разбора реестра, когда роль в значении стоит у слота без даты (§3.2 спеки 1в). */
+export const VALUE_ROLE_NEEDS_DATE = 'роль в значении — только у слота с датой';
+
+/** Несёт ли тип слота дату: `date`/`timestamp` сами или среди видов `any_of`. */
+function slotTypeHasDate(type: z.infer<typeof contractSlotTypeSchema>): boolean {
+  const kinds = type.kind === 'any_of' ? type.kinds : [type.kind];
+  return kinds.some((k) => k === 'date' || k === 'timestamp');
+}
+
 export const contractSlotSchema = z
   .object({
     name: z.string().regex(SLOT_KEY_RE, 'имя слота'),
@@ -35,8 +48,28 @@ export const contractSlotSchema = z
     label: localizedTextSchema,
     /** Слот-СТАТУС: его варианты ложатся на классы контракта через `value_map` (§Б2-2). */
     status: z.boolean().default(false),
+    /**
+     * Роль слота в значении контракта (§3.2 спеки 1в): «план» или «факт». Нет роли — слот в
+     * значение не входит. Признак ВНУТРИ слота, а не поле верхнего уровня контракта: новое поле
+     * верхнего уровня было бы колонкой `contract_definitions` и миграцией (как `exclusive_classes`
+     * в 0022), а `slots` — jsonb. Цена названа в плане (РП-4, Ф-1в-14): схема строгая, и строка с
+     * ролью, посеянная раньше выкатки кода, роняет разбор реестра у СТАРОГО кода — окно В-2.
+     * Какое правило значения читает роли — решает код (`contract-value.ts`), не данные.
+     */
+    value_role: z.enum(CONTRACT_VALUE_ROLES).optional(),
   })
-  .strict();
+  .strict()
+  // Роль — только у слота с датой: единственное правило значения в 1в — «даты» (К-1), и роль у
+  // суммы или статуса дала бы значение, которого правило не умеет считать, — молча пустое.
+  .superRefine((slot, ctx) => {
+    if (slot.value_role !== undefined && !slotTypeHasDate(slot.type)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['value_role'],
+        message: VALUE_ROLE_NEEDS_DATE,
+      });
+    }
+  });
 export type ContractSlot = z.infer<typeof contractSlotSchema>;
 
 export const contractClassSchema = z

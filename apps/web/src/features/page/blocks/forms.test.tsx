@@ -231,6 +231,19 @@ test('tile latest — значение', async () => {
   expect(within(tile).getByTestId('qb-tile-value')).toHaveTextContent('72.5');
 });
 
+// Обходчик `web-tile-form` (спека 1в, рулинг R-4): `latest` над адресом контракта — значение без
+// поиска свойства по строке-ключу; плитка рисуется, а не падает. Валюта адреса — задача 3.
+test('tile latest по адресу слота — значение, без падения', async () => {
+  const text =
+    'aspect=orbis/financial, display=tile, aggregate=latest:orbis/money-movement.amount, title=Последняя';
+  renderWithProviders(
+    <DataBlock text={text} />,
+    handler({ [text]: { ok: true, kind: 'latest', value: '72.5' } }),
+  );
+  const tile = await screen.findByTestId('qb-tile');
+  expect(within(tile).getByTestId('qb-tile-value')).toHaveTextContent('72.5');
+});
+
 test('«ещё 2» раскрывается на месте — второй вызов пачкой из одного с бо́льшим limit', async () => {
   const text = 'aspect=orbis/task, limit=3';
   const rows = ['р1', 'р2', 'р3', 'р4', 'р5'].map((id) => task(id));

@@ -87,6 +87,7 @@ function compileFailure(e: unknown): BlockError {
  * владельца. Текст ОБРЕЗАЕТСЯ по краям перед разбором — так же, как у плашки тела
  * (`doc/placement.ts`) и блока в web: иначе позиция ошибки разошлась бы с их позицией.
  */
+// ОБХОДЧИК-Q: entity-blocks
 function prepareQuery(
   key: string,
   rawText: string,
@@ -110,7 +111,9 @@ function prepareQuery(
       key,
       kind: 'planned',
       plan: compile(ast, cctx),
-      window: materializationWindow(ast, cctx.today, params),
+      // Реестр — тот же снимок, что разбирал блок: окно от адреса контракта считается по его
+      // привязкам (1в §3.4).
+      window: materializationWindow(ast, cctx.today, params, cctx.reg),
     };
   } catch (e) {
     return { key, kind: 'settled', result: { ok: false, error: compileFailure(e) } };

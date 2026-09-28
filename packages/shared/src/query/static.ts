@@ -14,6 +14,7 @@
  * не должно.
  */
 import type { QueryAst, QueryBound, QueryFilterNode, QueryPropValue } from './ast';
+import { fieldRefKey } from './ast';
 
 export const SCOPE_NOT_STATIC = 'SCOPE_NOT_STATIC';
 
@@ -56,11 +57,13 @@ function walk(node: QueryFilterNode): void {
     walk(node.not);
     return;
   }
+  // Адрес контракта (1в §3.1) статичен так же, как свойство: множество задаёт значение, а не
+  // «сегодня». Нестатичен только токен в значении — и у адреса, и у свойства.
   if ('prop' in node) {
     const token = hasDateToken(node.value);
     if (token !== null) {
       throw new ScopeNotStaticError(
-        `относительное время '${token}' у свойства '${node.prop}' — множество менялось бы каждый день`,
+        `относительное время '${token}' у поля '${fieldRefKey(node.prop)}' — множество менялось бы каждый день`,
       );
     }
     return;
@@ -81,6 +84,7 @@ function walk(node: QueryFilterNode): void {
  * Реестра не спрашивает намеренно: гейт структурный, и его обязаны проходить одинаково
  * сид (без БД), исполнитель (в транзакции) и конструктор в браузере.
  */
+// ОБХОДЧИК-Q: static
 export function assertStaticQuery(ast: QueryAst): void {
   // Настройки показа блока данных (§5.4) — тоже проекция: множеству ни плитка, ни колонки,
   // ни «прятать пустое» ничего не добавляют, а молча принятые они выглядели бы как смысл.

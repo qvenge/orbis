@@ -29,6 +29,7 @@ import {
   ruleMergeContextOf,
   type SubscriptionDelta,
   type SystemDefinitions,
+  scopeNamesAspect,
   threeWayMerge,
   UNKNOWN_PREV_SYSTEM,
 } from './deltas';
@@ -1304,4 +1305,15 @@ describe('карта классов дельты (§Б2-2)', () => {
       completableOf(after, 'orbis/task')?.value_map.filter((m) => m.variant === 'done'),
     ).toEqual([{ slot: 'status', variant: 'done', class: 'done' }]);
   });
+});
+
+test('scopeNamesAspect: адрес контракта «не называет» аспект молча (спека 1в, РП-3)', () => {
+  // Форму `scope` держит гейт записи (`assertScopeShape` — SCOPE_SHAPE); читатель лишь не падает.
+  const addr = {
+    prop: { contract: 'orbis/when', slot: 'deadline' },
+    op: 'eq' as const,
+    value: 'x',
+  };
+  expect(scopeNamesAspect(addr, 'orbis/task')).toBe(false);
+  expect(scopeNamesAspect({ and: [addr, { aspect: 'orbis/task' }] }, 'orbis/task')).toBe(true);
 });

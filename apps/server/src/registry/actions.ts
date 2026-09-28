@@ -588,8 +588,12 @@ function attachAspectOf(reg: RegistrySnapshot, tool: string) {
  * действие (Р-К-25). Запрещено здесь другое: ПРОЕКЦИЯ (порядок и усечение задаёт кап и
  * `ORDER BY id` резолва — задача 7) и `this` (у действия нет записи-хозяина, в которой лежал
  * бы запрос).
+ *
+ * Адрес контракта в `prop` (1в: «просроченные по „когда“» — `orbis/when=overdue`) законен: это
+ * предикат множества целей, как любой другой, и компилирует его общий компилятор.
  */
-function assertActionQuery(key: string, over: QueryAst): void {
+// ОБХОДЧИК-Q: action-query
+export function assertActionQuery(key: string, over: QueryAst): void {
   for (const field of ['sortBy', 'limit', 'display', 'title'] as const) {
     if (over[field] !== undefined) {
       bad(

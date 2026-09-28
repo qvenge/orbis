@@ -214,9 +214,11 @@ function assertRegistryQuery(where: string, ast: unknown): void {
  * (`registry/deltas.ts`) — он ищет в дереве узел `aspect` и на всём остальном отвечает
  * «не называет». То есть `scope` вида `orbis/task_status=done` УЖЕ сегодня означал бы
  * «свойство показывается по условию, которого ни один читатель реестра не проверяет».
- * Запрет снимается вместе с читателем, умеющим считать произвольное множество.
+ * Запрет снимается вместе с читателем, умеющим считать произвольное множество. Адрес контракта
+ * (1в, `{prop: {contract, slot}}`) — такой же узел `prop` и получает тот же отказ `SCOPE_SHAPE`.
  */
-function assertScopeShape(node: QueryFilterNode | null): void {
+// ОБХОДЧИК-Q: scope-shape
+export function assertScopeShape(node: QueryFilterNode | null): void {
   if (node === null) return;
   const stack: QueryFilterNode[] = [node];
   while (stack.length > 0) {
@@ -947,9 +949,11 @@ const PROGRESS_SOURCE = 'orbis/progress_source';
 /**
  * Все имена свойств, названные деревом: `prop`, `has`, `sortBy`. Контракты и наборы (`class`,
  * `rel.sourceNotIn`, Б-1) сюда не входят: слияние переписывает СВОЙСТВА, а контракт слиянию
- * не подлежит.
+ * не подлежит. Адрес контракта в `prop`/`field` (1в) — объект, а не строка: имени свойства он не
+ * несёт, и его ключи (`contract`, `slot`) в список не попадают.
  */
-function propertyNamesInAst(value: unknown, out: Set<string>): void {
+// ОБХОДЧИК-Q: property-names
+export function propertyNamesInAst(value: unknown, out: Set<string>): void {
   const stack: unknown[] = [value];
   while (stack.length > 0) {
     const node = stack.pop();
@@ -983,14 +987,20 @@ const KEY_TOKEN_RE = /[a-z][a-z0-9-]*\/[a-z][a-z0-9_-]*/g;
  * Предел назван: значение, которому кавычки не понадобились, от имени поля неотличимо. Цена
  * ошибки здесь мала — блок и так не разбирается, — а альтернатива (не переписывать текст
  * вовсе) оставляла бы висячее имя поглощённого свойства.
+ *
+ * Ключ, за которым идёт ТОЧКА, — не свойство, а контракт адреса слота (спека 1в §3.1:
+ * `orbis/recurrence.template_marker`): ключ контракта вправе совпасть с ключом свойства
+ * (`orbis/recurrence` — и то и другое), и слияние свойства не должно переписывать контракт.
  */
-function rewriteQueryTextKeys(text: string, from: ReadonlySet<string>, to: string): string {
+// ОБХОДЧИК-Q: rewrite-text-keys
+export function rewriteQueryTextKeys(text: string, from: ReadonlySet<string>, to: string): string {
   const masked = maskQuotedValues(text);
   let out = '';
   let cut = 0;
   for (const m of masked.matchAll(KEY_TOKEN_RE)) {
     const at = m.index as number;
     if (!from.has(m[0])) continue;
+    if (masked[at + m[0].length] === '.') continue;
     out += text.slice(cut, at) + to;
     cut = at + m[0].length;
   }
@@ -1531,7 +1541,11 @@ function uuidArray(ids: readonly string[]): SQL {
  * Экспорт — ради пина: держателей с E-правилами у слияния пока нет (правила на строках реестра —
  * держатель задачи 16), и без прямого теста ветка `$touched` ждала бы первого потребителя
  * непроверенной.
+ *
+ * Адрес контракта в `prop`/`field` (1в) — объект: условие «строка из `from`» его не задевает, а
+ * рекурсия внутрь находит ключи `contract`/`slot`, которых переписывание не трогает.
  */
+// ОБХОДЧИК-Q: rewrite-ast
 export function rewriteAst(value: unknown, from: ReadonlySet<string>, to: string): unknown {
   if (Array.isArray(value)) return value.map((v) => rewriteAst(v, from, to));
   if (typeof value !== 'object' || value === null) return value;

@@ -16,7 +16,7 @@
  * второго способа назвать свойство больше нет ни у текста запроса, ни у поля агрегата.
  * `aspectsNamedInQueryAst` пережил обе даты — он про канон, а не про старую форму.
  */
-import type { QueryAst, QueryFilterNode } from './ast';
+import type { QueryAst, QueryFieldRef, QueryFilterNode } from './ast';
 import type { ParseRegistry } from './parse-ast';
 
 /**
@@ -52,8 +52,17 @@ export function aspectsNamedInQueryAst(ast: QueryAst): Set<string> {
  *
  * Неизвестный адрес возвращает `undefined` — отказ называет вызывающий, у каждого из двух
  * входов он свой (`UNKNOWN_FIELD` у агрегата, `invalid_query` у прогресса цели).
+ *
+ * Адрес контракта (1в §3.1) — тоже `undefined`: это не свойство, и резолвить его в id свойства
+ * значило бы выбрать одну привязку из многих молча. Вызывающий, которому адрес законен
+ * (нормализация дерева), разводит формы сам; прочие отказывают, как на неизвестном имени.
  */
-export function resolvePropertyFieldId(field: string, reg: ParseRegistry): string | undefined {
+// ОБХОДЧИК-Q: field-ref
+export function resolvePropertyFieldId(
+  field: QueryFieldRef,
+  reg: ParseRegistry,
+): string | undefined {
+  if (typeof field !== 'string') return undefined;
   if (reg.properties.has(field)) return field;
   for (const prop of reg.properties.values()) {
     if (prop.key === field) return prop.id;
