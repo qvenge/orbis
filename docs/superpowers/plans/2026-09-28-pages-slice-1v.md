@@ -314,6 +314,7 @@
 | `web-text-editor` | `apps/web/src/features/query-builder/QueryTextEditor.tsx` (живой разбор) | — | место из рода тела | то же | 5 |
 | `web-ref-query` | `apps/web/src/lib/entity-ref/RefField.tsx` (`refQueryAst`) | дерево цели проезжает как есть | базовая схема цели — отказ на сервере | то же | 1 |
 | `web-query-widget` | `apps/web/src/features/entity-editor/nodes/QueryWidget.tsx` (`astOf`) | — | `pageQueryAstSchema` | то же | 5 |
+| `web-tile-form` | `apps/web/src/features/page/blocks/TileForm.tsx` (`tileValue`) | `latest` над адресом — значение без поиска свойства по строке (не падает); валюта — задача 3 | — | — | 1, 3 |
 
 ## Карта файлов
 
