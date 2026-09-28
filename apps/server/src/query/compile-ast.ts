@@ -337,6 +337,22 @@ function isToken(value: unknown): value is { token: QueryDateToken } {
 }
 
 /**
+ * Граница без ссылки на параметр страницы (1в §5.1). Ссылка до компилятора доезжать не должна:
+ * пачка блоков подставляет значения раньше (`substituteParams`), прочие входы отвергают `$` схемой
+ * и разбором. Доехавшая — отказ `UNKNOWN_PARAM` с именем, а не SQL-параметр `[object Object]`.
+ */
+function substituted<T>(bound: T | { param: string }): T {
+  if (typeof bound === 'object' && bound !== null && 'param' in bound) {
+    return fail(
+      'UNKNOWN_PARAM',
+      `параметр «${bound.param}» не подставлен: значение приходит только с блоком страницы`,
+      { name: bound.param },
+    );
+  }
+  return bound as T;
+}
+
+/**
  * Гейт значения предиката: ВИД и ФОРМА литерала — по схеме значения свойства (§А7-1).
  *
  * Проверка нужна ровно потому, что вход `ast:` тула (§А5-4) идёт МИМО парсера и с Задачи 9b
@@ -666,7 +682,8 @@ export function exprCond(e: CondExpr, op: QueryPropOp, value: unknown, ctx: Comp
 }
 
 /** Сравнение со скаляром ИЛИ с токеном: `<T` — раньше начала, `>T` — позже конца (§3.4). */
-function boundCond(e: CondExpr, op: '=' | '>' | '<', bound: QueryBound, ctx: CompileCtx): SQL {
+function boundCond(e: CondExpr, op: '=' | '>' | '<', raw: QueryBound, ctx: CompileCtx): SQL {
+  const bound = substituted(raw);
   if (isToken(bound)) {
     // День — ПЕРВЫМ: не дата — отказ вида (`TYPE`) важнее отказа края.
     const day = e.day();
@@ -686,14 +703,15 @@ function boundCond(e: CondExpr, op: '=' | '>' | '<', bound: QueryBound, ctx: Com
  * свой край (§3.4): `from` — начало, `to` — конец.
  */
 function rangeCond(e: CondExpr, value: QueryRangeValue, ctx: CompileCtx): SQL {
-  const { from, to } = value;
+  const from = value.from === undefined ? undefined : substituted(value.from);
+  const to = value.to === undefined ? undefined : substituted(value.to);
   if (from === undefined && to === undefined) {
     return fail('SYNTAX', `range без границ у ${e.of}`, { property: e.name });
   }
   const byDate = isToken(from) || isToken(to);
   const literals = [from, to].filter((b): b is QueryScalar => b !== undefined && !isToken(b));
   const left = byDate ? e.day() : e.comparable(literals);
-  const side = (b: QueryBound, form: 'gte' | 'lte'): SQL => {
+  const side = (b: Exclude<QueryBound, { param: string }>, form: 'gte' | 'lte'): SQL => {
     if (isToken(b)) return tokenEdgeParam(e, b.token, form, ctx);
     return byDate ? e.dayParam(b) : e.param(b);
   };
@@ -701,7 +719,7 @@ function rangeCond(e: CondExpr, value: QueryRangeValue, ctx: CompileCtx): SQL {
     return sql`${left} BETWEEN ${side(from, 'gte')} AND ${side(to, 'lte')}`;
   }
   if (from !== undefined) return sql`${left} >= ${side(from, 'gte')}`;
-  return sql`${left} <= ${side(to as QueryBound, 'lte')}`;
+  return sql`${left} <= ${side(to as Exclude<QueryBound, { param: string }>, 'lte')}`;
 }
 
 // ─────────────────────────── Реляционные предикаты ───────────────────────────

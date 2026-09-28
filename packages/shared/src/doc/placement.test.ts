@@ -266,6 +266,52 @@ describe('bodyIssues — второй блок карточек (SECOND_BLOCK, 1
   });
 });
 
+describe('параметр страницы {{param}} (спека 1в §5.1)', () => {
+  const PARAM = '{{param: period, type=period, default=next_7d, options=next_7d|next_14d}}\n';
+
+  test('строка матрицы param: заметка ✗, страница ✓, шаблон ✓', () => {
+    const kinds: BodyKind[] = ['note', 'page', 'template'];
+    expect(kinds.map((k) => blockAllowedIn('param', k))).toEqual([false, true, true]);
+    expect(kindsAllowing('param')).toEqual(['page', 'template']);
+  });
+
+  test('в заметке — BLOCK_MISPLACED с MISPLACED_HINT; на странице и в шаблоне — без проблем', () => {
+    expect(issues(`текст\n${PARAM}`, 'note')).toEqual([
+      {
+        code: 'BLOCK_MISPLACED',
+        message: 'Блок {{param: period}} не показывается в заметке.',
+        hint: MISPLACED_HINT,
+        path: [1],
+      },
+    ]);
+    expect(issues(`текст\n${PARAM}`, 'page')).toEqual([]);
+    expect(issues(`текст\n${PARAM}`, 'template')).toEqual([]);
+  });
+
+  test('второй параметр с тем же именем — SECOND_BLOCK; разные имена — без проблем', () => {
+    const found = issues(`${PARAM}${PARAM}`, 'page');
+    expect(found).toMatchObject([{ code: 'SECOND_BLOCK', path: [1] }]);
+    expect(found[0]?.message).toContain('period');
+    const two =
+      '{{param: a, type=period, default=today, options=today}}\n' +
+      '{{param: b, type=period, default=today, options=today}}\n';
+    expect(issues(two, 'page')).toEqual([]);
+  });
+
+  test('блок с $period на странице — ни QUERY_INVALID, ни PAGE_ONLY; литерал даты в другом блоке — ABSOLUTE_DATE только у него', () => {
+    const body = `${PARAM}{{query: aspect=orbis/task, orbis/due_date=$period}}\n${ABS_QUERY}`;
+    for (const kind of ['page', 'template'] as const) {
+      expect(issues(body, kind)).toMatchObject([{ code: 'ABSOLUTE_DATE', path: [2] }]);
+    }
+  });
+
+  test('блок с $period в заметке — QUERY_INVALID с подсказкой «только в блоках страниц и шаблонов»', () => {
+    const found = issues('{{query: aspect=orbis/task, orbis/due_date=$period}}\n', 'note');
+    expect(found).toMatchObject([{ code: 'QUERY_INVALID', path: [0] }]);
+    expect(found[0]?.message).toContain('только в блоках страниц и шаблонов');
+  });
+});
+
 describe('bodyIssues — блок данных', () => {
   test('абсолютная дата на странице и в шаблоне — ABSOLUTE_DATE с подсказкой токенов; в заметке — нет (С1а-9)', () => {
     for (const kind of ['page', 'template'] as const) {

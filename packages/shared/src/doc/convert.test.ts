@@ -1458,6 +1458,31 @@ describe('грамматика v3: разбор → печать → разбо�
     expect(roundTrip(md)).toBe(md);
   });
 
+  test('параметр страницы (1в §5.1): атом paramBlock с текстом маркера дословно, круг без потерь', () => {
+    const marker =
+      '{{param:period ,type=period, default=next_7d, options=next_7d|next_14d, title="Горизонт"}}';
+    expect(nodesOf(marker)).toEqual([{ type: 'paramBlock', attrs: { text: marker } }]);
+    // Хвостовые пробелы строки маркера в атрибут не едут — как у прочих маркеров.
+    expect(nodesOf(`${marker}  `)).toEqual([{ type: 'paramBlock', attrs: { text: marker } }]);
+    expect(roundTrip(`до\n${marker}\nпосле`)).toBe(`до\n\n${marker}\n\nпосле`);
+    // Маркер с ошибкой блока — тоже атом: текст сохраняется, плашку рисует показ.
+    const broken = '{{param: period, type=month, default=today, options=today}}';
+    expect(nodesOf(broken)).toEqual([{ type: 'paramBlock', attrs: { text: broken } }]);
+    expect(roundTrip(broken)).toBe(broken);
+    // В части контейнера — узел, документ проходит схему.
+    const md = `{{tabs}}\n{{tab: А}}\n${marker}\n{{/tab}}\n{{/tabs}}`;
+    const [tabsNode] = nodesOf(md);
+    expect(tabsNode?.content?.[0]?.content?.[0]).toEqual({
+      type: 'paramBlock',
+      attrs: { text: marker },
+    });
+    expect(bodyDocError(parseBody(md))).toBeUndefined();
+    expect(roundTrip(md)).toBe(md);
+    // Абзац, чей текст начинается маркером параметра, при печати экранируется — блоком не станет.
+    const pasted = { type: 'doc', content: [para(marker)] };
+    expect(nodesOf(serializeBody(pasted))).toEqual([para(marker)]);
+  });
+
   test('незнакомая форма ({{cards: mine}}, {{app}}, {{records: x}}) — абзац с текстом', () => {
     for (const md of ['{{cards: mine}}', '{{app}}', '{{records: x}}']) {
       expect(nodesOf(md)).toEqual([para(md)]);
@@ -1652,6 +1677,10 @@ describe('грамматика v3: разбор → печать → разбо�
       { type: 'ownCards' },
       { type: 'hostBlock', attrs: { name: 'apps' } },
       { type: 'hostBlock', attrs: { name: 'records' } },
+      {
+        type: 'paramBlock',
+        attrs: { text: '{{param: p, type=period, default=today, options=today|next_7d}}' },
+      },
     ]) {
       const doc = { type: 'doc', content: [atom] };
       expect(serializeBody(doc)).toBe(blockText(atom));
@@ -1719,6 +1748,9 @@ describe('схема шире грамматики: пределы и сверк
     // 1б: блок хоста с чужим именем печатается `{{foo}}` — разбор оставит текст, скелет разойдётся.
     ['блок хоста с чужим именем', { type: 'hostBlock', attrs: { name: 'нет-такого' } }],
     ['блок хоста без имени (null)', { type: 'hostBlock', attrs: { name: null } }],
+    // 1в: текст параметра, который разбор маркером не узнает (текст абзаца), — скелет разойдётся.
+    ['параметр не маркером', { type: 'paramBlock', attrs: { text: 'просто текст' } }],
+    ['параметр без текста (null)', { type: 'paramBlock', attrs: { text: null } }],
   ];
 
   // Место узла страницы — предел схемы с 1б (группа `pageBlock`, спека 1б §10, 1а новое-9):

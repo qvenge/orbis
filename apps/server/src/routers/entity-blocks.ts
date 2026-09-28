@@ -9,7 +9,7 @@ import {
   type EntityBlocksResult,
 } from '@orbis/shared';
 // Листовой сабпат, не баррель `@orbis/shared/doc`: нужна одна строка, а не редактор документа.
-import { type PageNode, parsePageText } from '@orbis/shared/doc/page-grammar';
+import { type PageNode, paramDeclsOf, parsePageText } from '@orbis/shared/doc/page-grammar';
 import { EMPTY_QUERY_MESSAGE } from '@orbis/shared/doc/placement';
 import type { QueryAst } from '@orbis/shared/query';
 import { and, eq, inArray, type SQL } from 'drizzle-orm';
@@ -27,6 +27,7 @@ import {
   sumsOf,
 } from '../query/compile-ast';
 import { queryContext } from '../query/context';
+import { substituteParams } from '../query/params';
 import { parseQueryText } from '../query/parse-text';
 import { materializationWindow, materializeInstances } from '../recurring/materialize';
 import { materializeRuleOf } from '../rules/carriers';
@@ -86,12 +87,18 @@ function compileFailure(e: unknown): BlockError {
  * фильтром, а сервер такой фильтр не отсекает — блок «не настроен» вернул бы все записи
  * владельца. Текст ОБРЕЗАЕТСЯ по краям перед разбором — так же, как у плашки тела
  * (`doc/placement.ts`) и блока в web: иначе позиция ошибки разошлась бы с их позицией.
+ *
+ * Параметр страницы (1в §5.1, РП-6): блок пачки — блок тела страницы, разбор идёт с местом `page`
+ * (`$`-ссылка законна), затем `substituteParams` ставит значения `values` на место ссылок — ДО окна
+ * материализации и компиляции: оба читают токен, а ссылки не знают. Нет значения или оно не токен —
+ * отказ этого блока, как любой отказ разбора.
  */
 // ОБХОДЧИК-Q: entity-blocks
 function prepareQuery(
   key: string,
   rawText: string,
   thisEntityId: string | null,
+  values: Readonly<Record<string, string>>,
   base: CompileCtx,
   params: Parameters<typeof materializationWindow>[2],
   compile: (ast: QueryAst, cctx: CompileCtx) => Plan,
@@ -106,7 +113,7 @@ function prepareQuery(
   }
   const cctx: CompileCtx = { ...base, thisEntityId };
   try {
-    const ast = parseQueryText(text, cctx);
+    const ast = substituteParams(parseQueryText(text, cctx, { place: 'page' }), values);
     return {
       key,
       kind: 'planned',
@@ -125,8 +132,14 @@ function prepareBlock(
   base: CompileCtx,
   params: Parameters<typeof materializationWindow>[2],
 ): Prepared {
-  return prepareQuery(block.key, block.text, block.thisEntityId ?? null, base, params, (ast, c) =>
-    compileBlock(ast, c, block.limit),
+  return prepareQuery(
+    block.key,
+    block.text,
+    block.thisEntityId ?? null,
+    block.params ?? {},
+    base,
+    params,
+    (ast, c) => compileBlock(ast, c, block.limit),
   );
 }
 
@@ -164,6 +177,12 @@ const BADGE_NOT_FOUND: BlockResult = {
  * идентичностью (чужая страница под RLS не видна — отказ, а не чужое число). Число — счёт первого
  * блока данных (`compileCountAst`), что бы ни стояло в его проекции: бейдж — число записей раздела,
  * а не плитка суммы. `thisEntityId` — сама страница: `this` в её блоке значит её, как на экране.
+ *
+ * Параметр страницы (1в §5.1): бейдж считает первый блок данных ПО УМОЛЧАНИЯМ — `default` из
+ * объявлений `{{param}}` того же тела (`paramDeclsOf`; сам `{{param}}` блоком данных не является и
+ * «первым» не бывает). Значения экрана бейдж не знает и знать не должен: число раздела в навигации
+ * одно на все открытия страницы. Ссылка на имя без объявления или на параметр с ошибкой блока —
+ * отказ бейджа `UNKNOWN_PARAM`, как у блока.
  */
 async function prepareBadges(
   tx: Tx,
@@ -186,12 +205,16 @@ async function prepareBadges(
       out.set(item.key, { key: item.key, kind: 'settled', result: BADGE_NOT_FOUND });
       continue;
     }
-    const text = firstQueryText(parsePageText(body ?? ''));
+    const nodes = parsePageText(body ?? '');
+    const text = firstQueryText(nodes);
+    const defaults = Object.fromEntries(
+      [...paramDeclsOf(nodes)].map(([name, decl]) => [name, decl.default]),
+    );
     out.set(
       item.key,
       text === null
         ? { key: item.key, kind: 'settled', result: { ok: true, kind: 'none' } }
-        : prepareQuery(item.key, text, item.badgeOf, base, params, (ast, c) => ({
+        : prepareQuery(item.key, text, item.badgeOf, defaults, base, params, (ast, c) => ({
             kind: 'count',
             sql: compileCountAst(ast, c),
           })),

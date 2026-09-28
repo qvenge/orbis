@@ -8,7 +8,7 @@
  */
 import { expect, test } from 'bun:test';
 import { propertyDefinitionSchema } from '../registry/property-type';
-import { queryAstSchema } from './ast';
+import { PAGE_ONLY_HINT, queryAstSchema } from './ast';
 import {
   AST_FIXTURES,
   FIXTURE_PARSE_REGISTRY,
@@ -951,4 +951,75 @@ test('1в (перенос ревью 1, M-1): отказ у адреса наз�
   expect(err('orbis/due_date=банан').message).toContain("свойство 'orbis/due_date' ожидает");
   expect(err('orbis/priority>high').message).toContain('применим к свойствам с линейным порядком');
   expect(err('orbis/priority=today').message).toContain('применимо только к свойствам типа');
+});
+
+// ─────────────────────────── Параметр страницы (1в §5.1, РП-5, РП-6) ───────────────────────────
+
+const PAGE = { place: 'page' } as const;
+
+test('1в §5.1: `$<имя>` на месте значения-границы — только с местом page; дерево несёт {param}', () => {
+  const eq = parseQueryAst('orbis/when=$period', REG, PAGE);
+  expect(eq.ok && eq.ast.filter).toEqual({
+    prop: { contract: 'orbis/when' },
+    op: 'eq',
+    value: { param: 'period' },
+  });
+  // Там же, где токен: сравнения, односторонняя граница, диапазон, свойство даты.
+  const forms = parseQueryAst(
+    'orbis/due_date>$a, orbis/due_date<=$b, orbis/start_at=$c..today, orbis/when.deadline!=$d',
+    REG,
+    PAGE,
+  );
+  expect(forms.ok && forms.ast.filter).toEqual({
+    and: [
+      { prop: 'orbis/due_date', op: 'gt', value: { param: 'a' } },
+      { prop: 'orbis/due_date', op: 'range', value: { to: { param: 'b' } } },
+      {
+        prop: 'orbis/start_at',
+        op: 'range',
+        value: { from: { param: 'c' }, to: { token: 'today' } },
+      },
+      { prop: { contract: 'orbis/when', slot: 'deadline' }, op: 'ne', value: { param: 'd' } },
+    ],
+  });
+});
+
+test('1в §3.8: без места `$` — отказ PAGE_ONLY с подсказкой и позицией ссылки', () => {
+  const e = parseQueryAst('aspect=orbis/task, orbis/when=$period', REG);
+  expect(e.ok).toBe(false);
+  if (e.ok) return;
+  expect(e.error.code).toBe('PAGE_ONLY');
+  expect(e.error.message).toContain(PAGE_ONLY_HINT);
+  expect(e.error.position).toBe('aspect=orbis/task, orbis/when='.length);
+});
+
+test('1в §5.1: `$x` у поля не-даты — TYPE «параметр типа period — только у дат»', () => {
+  const e = parseQueryAst('orbis/title=$x', REG, PAGE);
+  expect(e.ok ? 'разобралось' : e.error.code).toBe('TYPE');
+  if (!e.ok) expect(e.error.message).toContain('параметр типа period — только у дат');
+});
+
+test('1в §5.1: литерал в кавычках "$x" — строка, печать берёт его в кавычки, обратный разбор — литерал', () => {
+  for (const opts of [undefined, PAGE]) {
+    const r = parseQueryAst('orbis/title="$x"', REG, opts);
+    expect(r.ok && r.ast.filter).toEqual({ prop: 'orbis/title', op: 'eq', value: '$x' });
+    if (!r.ok) continue;
+    const printed = printQueryAst(r.ast, REG, 'key');
+    expect(printed).toBe('orbis/title="$x"');
+    const back = parseQueryAst(printed, REG, opts);
+    expect(back.ok && back.ast).toEqual(r.ast);
+  }
+});
+
+test('1в §5.1: печать ссылки — `$имя`, обратный разбор с местом page — то же дерево', () => {
+  const r = parseQueryAst('orbis/when=$period, orbis/due_date=$a..$b', REG, PAGE);
+  if (!r.ok) throw new Error(r.error.message);
+  const printed = printQueryAst(r.ast, REG, 'key');
+  expect(printed).toBe('orbis/when=$period, orbis/due_date=$a..$b');
+  const back = parseQueryAst(printed, REG, PAGE);
+  expect(back.ok && back.ast).toEqual(r.ast);
+});
+
+test('1в §5.1: ссылка с неверным именем — не ссылка: `$пери-од` у даты — отказ TYPE литерала', () => {
+  expect(err('orbis/due_date=$пери-од').code).toBe('TYPE');
 });

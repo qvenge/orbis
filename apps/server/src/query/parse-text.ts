@@ -18,6 +18,7 @@
 
 import {
   OWNER_LOCALE,
+  type ParseOptions,
   type ParseRegistry,
   parseQueryAst,
   type QueryAst,
@@ -45,9 +46,12 @@ export function parseRegistryOf(ctx: CompileCtx): ParseRegistry {
  *
  * Контекст, а не `(tx, graphId)`: снимок реестра уже снят вызывающим (`queryContext`) и
  * лежит в `ctx.reg` — второе его чтение стоило бы пять запросов к БД на каждый разбор.
+ *
+ * `opts.place` (1в §3.8, РП-5): `page` — только у блоков тела страницы (`entity.blocks`); все
+ * прочие входы зовут без места, и `$`-ссылка у них — отказ `PAGE_ONLY` с подсказкой.
  */
-export function parseQueryText(text: string, ctx: CompileCtx): QueryAst {
-  const parsed = parseQueryAst(text, parseRegistryOf(ctx));
+export function parseQueryText(text: string, ctx: CompileCtx, opts: ParseOptions = {}): QueryAst {
+  const parsed = parseQueryAst(text, parseRegistryOf(ctx), opts);
   if (parsed.ok) return parsed.ast;
   throw new ExecError('VALIDATION', parsed.error.message, {
     reason: parsed.error.code,

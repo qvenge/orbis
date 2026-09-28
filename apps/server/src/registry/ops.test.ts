@@ -19,7 +19,7 @@ import {
   ruleDefinitionSchema,
   type SubscriptionDefinition,
 } from '@orbis/shared';
-import { parseQueryAst, toParseRegistry } from '@orbis/shared/query';
+import { PAGE_ONLY_HINT, parseQueryAst, toParseRegistry } from '@orbis/shared/query';
 import { sql } from 'drizzle-orm';
 import { OWN_ACTION_DECL as DECL } from '../../test/fixtures/action-seed';
 import {
@@ -496,6 +496,42 @@ describe('гейты записи определения — четвёртый 
     // Гейт обязан стоять НА ПУТИ ЗАПИСИ, а не рядом: строки в базе после отказа нет.
     expect(e.code).toBe('SCOPE_NOT_STATIC');
     expect(await propertyRow('user/moving-scope')).toBeUndefined();
+  });
+
+  test('$-ссылка в scope и в ref.target — структурный отказ с подсказкой «только в блоках страниц» (1в §3.8)', async () => {
+    const withParam = {
+      filter: {
+        and: [
+          { aspect: 'orbis/task' },
+          { prop: 'orbis/due_date', op: 'eq', value: { param: 'period' } },
+        ],
+      },
+    };
+    const scope = err(
+      await run('property_create', {
+        key: 'user/param-scope',
+        label: { ru: 'Параметр в области' },
+        description: { ru: '$ вне страницы' },
+        type: { kind: 'number' },
+        status: 'active',
+        scope: withParam,
+      }),
+    );
+    expect(scope.code).toBe('VALIDATION');
+    expect(JSON.stringify(scope)).toContain(PAGE_ONLY_HINT);
+    expect(await propertyRowByKey(owner, 'user/param-scope')).toBeUndefined();
+    const target = err(
+      await run('property_create', {
+        key: 'user/param-ref',
+        label: { ru: 'Параметр в цели' },
+        description: { ru: '$ вне страницы' },
+        type: { kind: 'ref', target: withParam },
+        status: 'active',
+      }),
+    );
+    expect(target.code).toBe('VALIDATION');
+    expect(JSON.stringify(target)).toContain(PAGE_ONLY_HINT);
+    expect(await propertyRowByKey(owner, 'user/param-ref')).toBeUndefined();
   });
 
   test('scope формы «свойство=значение» — отказ SCOPE_SHAPE (№24: только aspect=/tags=)', async () => {

@@ -16,6 +16,8 @@
 import { canonicalJson, type PropertyDefinition, type PropertyType } from '@orbis/shared';
 import {
   normalizeQueryAst,
+  PAGE_ONLY_HINT,
+  pageOnlyFeatureIn,
   QUERY_TREE_DEPTH_CAP,
   queryAstSchema,
   queryTreeExceedsDepth,
@@ -215,6 +217,12 @@ const QUERY_AST_VALUE_PATH: Readonly<Record<string, string>> = {
  * и на глубоком входе переполняет стек внутри собственного разбора), затем схема канона, и
  * только валидное дерево переписывается. Неканоническое уходит дальше НЕТРОНУТЫМ — и его
  * отвергает ajv стадией 2 ровно тем же кодом, что и до появления нормализации.
+ *
+ * ОДНО ИСКЛЮЧЕНИЕ — `$`-ссылка на параметр страницы (1в §3.8, РП-5). Дерево со ссылкой базовая
+ * схема отвергает, и ajv стадии 2 отказал бы тоже — но стеной «must NOT have additional properties»
+ * по каждой ветке union'а, без слова о причине. Здесь причина известна точно, и отказ называет её
+ * подсказкой `PAGE_ONLY_HINT` (тот же текст, что у разбора и схемы): значение свойства пишет модель,
+ * и ей нужен ответ, из которого можно выправиться.
  */
 export function normalizeQueryAstValues(reg: RegistrySnapshot, patch: PropsPatch): void {
   if (patch.set === undefined) return;
@@ -226,7 +234,15 @@ export function normalizeQueryAstValues(reg: RegistrySnapshot, patch: PropsPatch
     const raw = holder[path];
     if (queryTreeExceedsDepth(raw, QUERY_TREE_DEPTH_CAP)) continue;
     const parsed = queryAstSchema.safeParse(raw);
-    if (!parsed.success) continue;
+    if (!parsed.success) {
+      if (pageOnlyFeatureIn(raw) !== null) {
+        throw new ExecError('VALIDATION', `значение «${propertyId}»: ${PAGE_ONLY_HINT}`, {
+          reason: 'PAGE_ONLY',
+          propertyId,
+        });
+      }
+      continue;
+    }
     patch.set[propertyId] = { ...holder, [path]: normalizeQueryAst(parsed.data, parseReg) };
   }
 }

@@ -303,6 +303,34 @@ test('смарт-лист переживает набор рядом с ним �
   expect(serializeBody(next)).toContain('{{query: aspect=orbis/task, orbis/task_status=inbox}}');
 });
 
+test('параметр страницы (1в §5.1): открыть → правка соседнего абзаца → сохранить — маркер цел', async () => {
+  // Фокус ревью п. 3 плана 1в: узел `paramBlock` редактор держит (он в схеме документа), и правка
+  // рядом не превращает маркер в текст и не теряет его. Открытие само onChange не зовёт.
+  const onChange = vi.fn();
+  const h = held();
+  const marker =
+    '{{param: period, type=period, default=next_7d, options=next_7d|next_14d, title="Горизонт"}}';
+  const md = `привет\n\n${marker}\n\n{{query: aspect=orbis/task, orbis/due_date=$period}}`;
+  renderWithProviders(
+    <BodyEditor doc={parseBody(md)} onChange={onChange} onReady={(e) => (h.editor = e)} />,
+    handler,
+  );
+  const area = (await screen.findByTestId('body-editor')).querySelector('[contenteditable]');
+  await waitFor(() => expect(h.editor).not.toBeNull());
+  await new Promise((r) => setTimeout(r, 0));
+  expect(onChange).not.toHaveBeenCalled();
+  h.editor?.commands.focus('start');
+  const firstParagraph = (area as HTMLElement).querySelector('p');
+  await userEvent.type(firstParagraph as HTMLElement, '!');
+  await waitFor(() => expect(onChange).toHaveBeenCalled());
+  const next = onChange.mock.calls.at(-1)?.[0] as { doc: { content?: { type: string }[] } };
+  expect(next.doc.content?.map((n) => n.type)).toEqual(['paragraph', 'paramBlock', 'queryBlock']);
+  const body = serializeBody(next);
+  expect(body).toContain(`\n\n${marker}\n\n`);
+  // Круг «сохранённый текст → разбор» даёт тот же атом с тем же текстом.
+  expect(parseBody(body).doc.content?.[1]).toEqual({ type: 'paramBlock', attrs: { text: marker } });
+});
+
 // --- Б5: белый список протоколов --------------------------------------------------------
 
 test('setLink: проходит только белый список протоколов схемы', async () => {

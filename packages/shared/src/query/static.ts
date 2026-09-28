@@ -33,6 +33,24 @@ function isToken(value: QueryBound | undefined): boolean {
   return typeof value === 'object' && value !== null && 'token' in value;
 }
 
+/**
+ * Ссылка на параметр страницы в значении (1в §3.8): множество зависело бы от переключателя на
+ * странице. До этого места ссылку не пускает базовая схема (`queryAstSchema`), а сторож стоит и
+ * здесь — он структурный и зовётся на дереве, пришедшем любым путём.
+ */
+function paramRef(value: QueryPropValue): string | null {
+  const bounds =
+    typeof value === 'object' && value !== null && !Array.isArray(value)
+      ? 'param' in value || 'token' in value
+        ? [value]
+        : [(value as { from?: QueryBound }).from, (value as { to?: QueryBound }).to]
+      : [];
+  for (const b of bounds) {
+    if (typeof b === 'object' && b !== null && 'param' in b) return b.param;
+  }
+  return null;
+}
+
 /** Есть ли относительное время в значении предиката — включая обе границы `range`. */
 function hasDateToken(value: QueryPropValue): string | null {
   if (Array.isArray(value)) return null; // список литералов — токенов в нём нет по схеме
@@ -60,6 +78,12 @@ function walk(node: QueryFilterNode): void {
   // Адрес контракта (1в §3.1) статичен так же, как свойство: множество задаёт значение, а не
   // «сегодня». Нестатичен только токен в значении — и у адреса, и у свойства.
   if ('prop' in node) {
+    const param = paramRef(node.value);
+    if (param !== null) {
+      throw new ScopeNotStaticError(
+        `ссылка '$${param}' на параметр страницы у поля '${fieldRefKey(node.prop)}' — множество зависело бы от переключателя страницы`,
+      );
+    }
     const token = hasDateToken(node.value);
     if (token !== null) {
       throw new ScopeNotStaticError(

@@ -23,6 +23,12 @@ export const BLOCKS_BATCH_CAP = 30;
  */
 export const BLOCK_ROWS_CAP = 500;
 
+/**
+ * Потолок значений параметров у одного блока (спека 1в §5.1): блок ссылается на параметры своей
+ * страницы, и их — единицы; потолок только отсекает мусорный вход, на смысл не влияет.
+ */
+export const BLOCK_PARAMS_CAP = 16;
+
 /** Потолок пачки правок: выбор шаблона и смена вида пишут единицы операций, не десятки. */
 export const UPDATE_BATCH_CAP = 20;
 
@@ -40,6 +46,16 @@ export const entityBlockTextItem = z
       .int(BLOCK_ITEM_MESSAGES.limitRange)
       .min(1, BLOCK_ITEM_MESSAGES.limitRange)
       .max(BLOCK_ROWS_CAP, BLOCK_ITEM_MESSAGES.limitRange)
+      .optional(),
+    /**
+     * Значения параметров страницы, на которые ссылается блок (`$<имя>`, спека 1в §5.1, РП-6): имя →
+     * токен даты. Форма здесь — только «строки, не больше потолка»: ЗНАЧЕНИЕ проверяет сервер ПО
+     * БЛОКУ (`substituteParams`) — плохое значение или отсутствующее имя роняют один блок, а не
+     * пачку, как любая ошибка блока (изоляция §6.3 1а).
+     */
+    params: z
+      .record(z.string().min(1).max(64), z.string().max(64))
+      .refine((p) => Object.keys(p).length <= BLOCK_PARAMS_CAP, BLOCK_ITEM_MESSAGES.paramsTooMany)
       .optional(),
   })
   .strict();

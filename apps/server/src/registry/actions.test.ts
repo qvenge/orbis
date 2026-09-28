@@ -11,6 +11,7 @@ import {
   BUILTIN_ACTION_DEFS,
   type SensitivityFact,
 } from '@orbis/shared';
+import { PAGE_ONLY_HINT } from '@orbis/shared/query';
 import {
   ACTION_FIXTURES,
   GRANTS_AUTONOMY_UNDERDECLARED,
@@ -92,6 +93,22 @@ test('в `over` запрещена проекция и «this», относит�
     over: { filter: { rel: { kind: 'children_of', of: 'this' } } },
   };
   expect(() => assertAction(withThis, { reg, systemSeed: true })).toThrow(/this/);
+});
+
+test('в `over` $-ссылка — отказ формы с подсказкой «только в блоках страниц и шаблонов» (1в §3.8)', () => {
+  const withParam = {
+    ...BUILTIN_ACTION_DEFS[1],
+    over: { filter: { prop: 'orbis/due_date', op: 'eq', value: { param: 'period' } } },
+  };
+  let caught: unknown;
+  try {
+    assertAction(withParam, { reg, systemSeed: true });
+  } catch (e) {
+    caught = e;
+  }
+  expect(caught).toMatchObject({ code: 'VALIDATION', details: { reason: 'ACTION_MALFORMED' } });
+  const issues = (caught as { details: { issues: string[] } }).details.issues;
+  expect(issues.some((i) => i.includes(PAGE_ONLY_HINT))).toBe(true);
 });
 
 // Р-19: кап 0 — это не «кап есть», а испорченная форма: вердикт МЕНЯЕТСЯ на отказ формы, а не

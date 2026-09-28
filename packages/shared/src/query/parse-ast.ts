@@ -40,8 +40,9 @@
  *
  * Токенайзер (маска кавычек, нарезка, снятие кавычек) был КОПИЕЙ токенайзера старого
  * парсера (`parse.ts:186-306`): выносить общий модуль было нельзя, пока обе грамматики жили
- * рядом. Старый парсер снят Задачей 21b целиком, и копия осталась единственной — выносить
- * теперь не из чего и не во что.
+ * рядом. Старый парсер снят Задачей 21b целиком. С 1в маску и снятие кавычек читает и маркер
+ * параметра страницы (`doc/page-grammar.ts`, подпись `title="…"`), поэтому они вынесены в лист
+ * `lexicon.ts` — одна копия правил кавычек на оба разбора.
  */
 import { ROLE_DEPENDENCY } from '../constants';
 import { HHMM_RE, hasValidCalendar } from '../date';
@@ -56,6 +57,7 @@ import { effectiveLabel, OWNER_LOCALE, type PropertyType } from '../registry/typ
 import type {
   QueryAggregate,
   QueryAst,
+  QueryBound,
   QueryColumn,
   QueryContractAddress,
   QueryDateToken,
@@ -66,7 +68,13 @@ import type {
   QueryScalar,
   QuerySortField,
 } from './ast';
-import { PROJECTION_RULE_MESSAGES, QUERY_DATE_TOKENS, QUERY_DISPLAY_MODES } from './ast';
+import {
+  PAGE_ONLY_HINT,
+  PROJECTION_RULE_MESSAGES,
+  QUERY_DATE_TOKENS,
+  QUERY_DISPLAY_MODES,
+} from './ast';
+import { PARAM_NAME_RE, quoteMask, unquoteValue } from './lexicon';
 import { TOKEN_EDGE_MESSAGE, type TokenForm, tokenEdgeMissing } from './tokens';
 
 // ─────────────────────────── Реестр разбора ───────────────────────────
@@ -150,8 +158,20 @@ export const QUERY_PARSE_CODES = [
   'NO_CONTRACT_VALUE',
   // Токены дат (спека 1в §3.4): сравнение с краем, которого у токена нет (`<overdue`, `>after_7d`).
   'TOKEN_EDGE',
+  // Параметр страницы (спека 1в §3.8, §5.1): `$<имя>` вне блока страницы или шаблона.
+  'PAGE_ONLY',
 ] as const;
 export type QueryParseCode = (typeof QUERY_PARSE_CODES)[number];
+
+/**
+ * Место текста запроса (спека 1в §3.8, РП-5): `page` — блок данных тела страницы или шаблона, где
+ * законны ссылка на параметр `$<имя>` (и группировка — задача 6). Без места — все прочие входы
+ * (`entity_query`, рутины, заметка, `ref.target`, область правил): там `$` — отказ `PAGE_ONLY`.
+ * Умолчание — «не страница»: вход, забывший назвать место, отказывает, а не пропускает молча.
+ */
+export interface ParseOptions {
+  place?: 'page';
+}
 
 export type ParseAstResult =
   | { ok: true; ast: QueryAst }
@@ -177,24 +197,6 @@ function fail(code: QueryParseCode, message: string, position: number): never {
 interface Part {
   text: string;
   offset: number;
-}
-
-/** Маска «символ вне кавычек»; `unclosedAt` — позиция незакрытой кавычки, иначе -1. */
-function quoteMask(text: string): { outside: boolean[]; unclosedAt: number } {
-  const outside = new Array<boolean>(text.length).fill(false);
-  let quoteOpen = -1;
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i];
-    if (quoteOpen !== -1) {
-      if (ch === '\\' && (text[i + 1] === '"' || text[i + 1] === '\\')) i++;
-      else if (ch === '"') quoteOpen = -1;
-    } else if (ch === '"') {
-      quoteOpen = i;
-    } else {
-      outside[i] = true;
-    }
-  }
-  return { outside, unclosedAt: quoteOpen };
 }
 
 /**
@@ -276,35 +278,13 @@ function trimPart(part: Part): Part {
 }
 
 /**
- * Снимает обрамляющие кавычки и разэкранирует `\"`, `\\` и `\}`.
- *
- * Третий экран — не грамматика, а РАЗМЕТКА ТЕЛА: печать разводит `}` бэкслешем, чтобы
- * значение с `}}` не закрыло обёртку `{{query:…}}` смарт-листа (см. `print.ts`), и без
- * симметричного снятия `parse(print(a)) ≡ a` перестало бы держаться на таком значении.
+ * Снимает обрамляющие кавычки — правилом `unquoteValue` (`lexicon.ts`, одна копия на текст запроса и
+ * маркер параметра страницы); отказ становится `SYNTAX` с позицией в тексте запроса.
  */
 function unquote(raw: string, offset: number): string {
-  if (!raw.startsWith('"')) {
-    const q = raw.indexOf('"');
-    if (q !== -1) fail('SYNTAX', 'кавычки допустимы только вокруг всего значения', offset + q);
-    return raw;
-  }
-  let out = '';
-  let i = 1;
-  for (; i < raw.length; i++) {
-    const ch = raw[i];
-    if (ch === '\\' && (raw[i + 1] === '"' || raw[i + 1] === '\\' || raw[i + 1] === '}')) {
-      out += raw[i + 1];
-      i++;
-      continue;
-    }
-    if (ch === '"') break;
-    out += ch;
-  }
-  if (i >= raw.length) fail('SYNTAX', 'незакрытая кавычка', offset);
-  if (i !== raw.length - 1) {
-    fail('SYNTAX', 'лишние символы после закрывающей кавычки', offset + i + 1);
-  }
-  return out;
+  const r = unquoteValue(raw);
+  if (!r.ok) fail('SYNTAX', r.message, offset + r.at);
+  return r.value;
 }
 
 /** Операторы грамматики. Двухсимвольные ищутся первыми — иначе `<=` съелось бы как `<`. */
@@ -405,6 +385,8 @@ const RESERVED_WORDS: ReadonlySet<string> = new Set([
 
 interface Ctx {
   reg: ParseRegistry;
+  /** Место текста (`ParseOptions`): `page` пускает ссылку на параметр. */
+  place: 'page' | null;
   byPropertyKey: Map<string, PropertyDefinition>;
   byPropertyLabel: Map<string, PropertyDefinition[]>;
   byAspectKey: Map<string, AspectDefinition>;
@@ -429,9 +411,10 @@ function pushLabel<T>(index: Map<string, T[]>, label: string, item: T): void {
   else index.set(key, [item]);
 }
 
-function buildCtx(reg: ParseRegistry): Ctx {
+function buildCtx(reg: ParseRegistry, place: 'page' | null): Ctx {
   const ctx: Ctx = {
     reg,
+    place,
     byPropertyKey: new Map(),
     byPropertyLabel: new Map(),
     byAspectKey: new Map(),
@@ -796,15 +779,35 @@ function parseScalar(
   }
 }
 
-type Bound = QueryScalar | { token: QueryDateToken };
+type Bound = QueryBound;
 
 /**
- * Литерал ИЛИ относительное время; токен допустим только у date/timestamp (§А5-7) — у свойства,
- * у слота с датой и у значения «даты» (1в §3.3).
+ * Литерал ИЛИ относительное время ИЛИ ссылка на параметр страницы; токен допустим только у
+ * date/timestamp (§А5-7) — у свойства, у слота с датой и у значения «даты» (1в §3.3).
+ *
+ * Ссылка `$<имя>` (спека 1в §5.1, РП-6) стоит там же, где токен: параметр в 1в — один тип `period`,
+ * и его значение — токен даты, поэтому место ссылки — место токена. Узнаётся она по форме без
+ * кавычек: `$` + имя `PARAM_NAME_RE`. Литерал с ведущим `$` пишется в кавычках (печать ставит их
+ * сама, `print.ts`); `$` с именем не той формы — не ссылка, а литерал (у даты — отказ `TYPE`).
+ * Порядок отказов: сначала место (`PAGE_ONLY` — ссылка вне страницы не значит ничего, у какого бы
+ * поля она ни стояла), потом вид поля.
  */
-function parseBound(field: FieldTarget, el: Part): Bound {
+function parseBound(field: FieldTarget, el: Part, ctx: Ctx): Bound {
   if (el.text === '') fail('SYNTAX', 'пустой элемент значения', el.offset);
   const raw = el.text.startsWith('"') ? null : el.text;
+  if (raw?.startsWith('$') && PARAM_NAME_RE.test(raw.slice(1))) {
+    if (ctx.place !== 'page') {
+      fail('PAGE_ONLY', `ссылка '${raw}' на параметр страницы: ${PAGE_ONLY_HINT}`, el.offset);
+    }
+    if (!field.tokens) {
+      fail(
+        'TYPE',
+        `ссылка '${raw}': параметр типа period — только у дат; ${fieldWord(field)} — ${field.kindText}`,
+        el.offset,
+      );
+    }
+    return { param: raw.slice(1) };
+  }
   if (raw !== null && DATE_TOKENS.has(raw)) {
     if (!field.tokens) {
       fail(
@@ -824,7 +827,9 @@ function parseBound(field: FieldTarget, el: Part): Bound {
  * тот же текст у компилятора). Литерал края не читает — проверять нечего.
  */
 function assertTokenEdge(bound: Bound, form: Exclude<TokenForm, 'eq'>, el: Part): void {
-  if (typeof bound === 'object' && tokenEdgeMissing(bound.token, form)) {
+  // Ссылка на параметр края не читает сама: значение приходит пачкой, и край проверяет компилятор
+  // уже подставленного токена (`TOKEN_EDGE` — отказ блока).
+  if (typeof bound === 'object' && 'token' in bound && tokenEdgeMissing(bound.token, form)) {
     fail('TOKEN_EDGE', TOKEN_EDGE_MESSAGE(bound.token, form), el.offset);
   }
 }
@@ -1115,7 +1120,7 @@ function parseTags(t: Token): QueryFilterNode {
 }
 
 /** Предикат поля — свойства или адреса контракта (1в): оператор + значение (§А5-7). */
-function parsePropNode(field: FieldTarget, t: Token): QueryFilterNode {
+function parsePropNode(field: FieldTarget, t: Token, ctx: Ctx): QueryFilterNode {
   const value: Part = { text: t.value, offset: t.valueOffset };
   const listy = field.list;
   const eqOp = listy ? ('contains' as const) : ('eq' as const);
@@ -1129,7 +1134,7 @@ function parsePropNode(field: FieldTarget, t: Token): QueryFilterNode {
       );
     }
     const el = trimPart(value);
-    const bound = parseBound(field, el);
+    const bound = parseBound(field, el, ctx);
     const form = t.op === '<=' ? 'lte' : t.op === '>=' ? 'gte' : t.op === '>' ? 'gt' : 'lt';
     assertTokenEdge(bound, form, el);
     // `<=`/`>=` — ВКЛЮЧАЮЩИЙ range: отдельных gte/lte в каноне нет (§А5-7, находка 8).
@@ -1139,7 +1144,7 @@ function parsePropNode(field: FieldTarget, t: Token): QueryFilterNode {
   }
 
   if (t.op === '!=') {
-    const bound = parseBound(field, trimPart(value));
+    const bound = parseBound(field, trimPart(value), ctx);
     // У списка «не равно» невыразимо одним оператором: отрицается вхождение элемента.
     return listy
       ? { not: { prop: field.ref, op: 'contains', value: bound } }
@@ -1159,9 +1164,9 @@ function parsePropNode(field: FieldTarget, t: Token): QueryFilterNode {
     const to = trimPart({ text: t.value.slice(dots + 2), offset: t.valueOffset + dots + 2 });
     if (from.text === '') fail('SYNTAX', 'диапазон: пустая левая граница', t.valueOffset);
     if (to.text === '') fail('SYNTAX', 'диапазон: пустая правая граница', to.offset);
-    const lo = parseBound(field, from);
+    const lo = parseBound(field, from, ctx);
     assertTokenEdge(lo, 'gte', from);
-    const hi = parseBound(field, to);
+    const hi = parseBound(field, to, ctx);
     assertTokenEdge(hi, 'lte', to);
     assertSameLiteralForm(field, lo, hi, t.valueOffset);
     return { prop: field.ref, op: 'range', value: { from: lo, to: hi } };
@@ -1185,7 +1190,7 @@ function parsePropNode(field: FieldTarget, t: Token): QueryFilterNode {
         fail('SYNTAX', `в &-форме каждый элемент начинается с '!'`, el.offset);
       }
       const inner = trimPart({ text: el.text.slice(1), offset: el.offset + 1 });
-      return { prop: field.ref, op: eqOp, value: parseBound(field, inner) } as QueryFilterNode;
+      return { prop: field.ref, op: eqOp, value: parseBound(field, inner, ctx) } as QueryFilterNode;
     });
     return { not: nodes.length === 1 ? (nodes[0] as QueryFilterNode) : { or: nodes } };
   }
@@ -1195,9 +1200,9 @@ function parsePropNode(field: FieldTarget, t: Token): QueryFilterNode {
     const el = elements[0] as Part;
     if (el.text.startsWith('!')) {
       const inner = trimPart({ text: el.text.slice(1), offset: el.offset + 1 });
-      return { not: { prop: field.ref, op: eqOp, value: parseBound(field, inner) } };
+      return { not: { prop: field.ref, op: eqOp, value: parseBound(field, inner, ctx) } };
     }
-    return { prop: field.ref, op: eqOp, value: parseBound(field, el) };
+    return { prop: field.ref, op: eqOp, value: parseBound(field, el, ctx) };
   }
   const nodes = elements.map((el) => {
     if (el.text.startsWith('!')) {
@@ -1207,7 +1212,7 @@ function parsePropNode(field: FieldTarget, t: Token): QueryFilterNode {
         el.offset,
       );
     }
-    return { prop: field.ref, op: eqOp, value: parseBound(field, el) } as QueryFilterNode;
+    return { prop: field.ref, op: eqOp, value: parseBound(field, el, ctx) } as QueryFilterNode;
   });
   // §А5-3: анкор «anyOf → or». Узел `in` каноничен, но текстом не порождается: у плоской
   // грамматики для `in` и `or` одна форма `p=a|b`, и печать обеих даёт её же.
@@ -1486,16 +1491,23 @@ function dispatch(t: Token, ctx: Ctx, acc: Acc): void {
           t.keyOffset,
         );
       }
-      push(parsePropNode(resolveField(t.key, t.keyOffset, ctx), t));
+      push(parsePropNode(resolveField(t.key, t.keyOffset, ctx), t, ctx));
     }
   }
 }
 
-/** Разбирает текст §А5-3 в канонический Q-AST; отказы — структурные, с кодом и позицией. */
+/**
+ * Разбирает текст §А5-3 в канонический Q-AST; отказы — структурные, с кодом и позицией.
+ * `opts.place` — место текста (`ParseOptions`): без него `$`-ссылка — отказ `PAGE_ONLY`.
+ */
 // ОБХОДЧИК-Q: parse
-export function parseQueryAst(text: string, reg: ParseRegistry): ParseAstResult {
+export function parseQueryAst(
+  text: string,
+  reg: ParseRegistry,
+  opts: ParseOptions = {},
+): ParseAstResult {
   try {
-    return { ok: true, ast: parseOrThrow(text, reg) };
+    return { ok: true, ast: parseOrThrow(text, reg, opts.place ?? null) };
   } catch (e) {
     if (e instanceof QueryAstParseError) {
       return { ok: false, error: { code: e.code, message: e.message, position: e.position } };
@@ -1504,11 +1516,11 @@ export function parseQueryAst(text: string, reg: ParseRegistry): ParseAstResult 
   }
 }
 
-function parseOrThrow(text: string, reg: ParseRegistry): QueryAst {
+function parseOrThrow(text: string, reg: ParseRegistry, place: 'page' | null): QueryAst {
   // Переводы строк — те же разделители; замена 1:1 сохраняет длину, поэтому позиции
   // ошибок остаются честными индексами в исходной строке.
   const normalized = text.replace(/[\n\r]/g, ' ');
-  const ctx = buildCtx(reg);
+  const ctx = buildCtx(reg, place);
   const parts = splitTopLevel(normalized);
   for (const part of parts) {
     // Скобки — форма ПЕЧАТИ невыразимого дерева (`print.ts`), а не грамматики v1 (§А5-3д).

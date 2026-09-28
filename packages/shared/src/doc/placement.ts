@@ -26,7 +26,15 @@ import {
 } from './page-grammar';
 
 export type BodyKind = 'note' | 'page' | 'template';
-export type PlacedBlock = 'container' | 'record' | 'body' | 'card' | 'query' | 'own-cards' | 'host';
+export type PlacedBlock =
+  | 'container'
+  | 'record'
+  | 'body'
+  | 'card'
+  | 'query'
+  | 'own-cards'
+  | 'host'
+  | 'param';
 
 /**
  * Матрица §5.5. Блоки обвязки (`record` — кроме `{{body}}`, и `card`) показывают запись
@@ -38,6 +46,10 @@ export type PlacedBlock = 'container' | 'record' | 'body' | 'card' | 'query' | '
  * Срез 1б (РП-4): свои карточки `{{cards: own}}` — как карточка, они тоже показывают запись
  * `this`. Блоки хоста `{{apps}}` и `{{records}}` — только страница: они не показывают запись вовсе,
  * а рисуют примитив хоста, и в шаблоне повторились бы на экране каждой записи этого шаблона.
+ *
+ * Срез 1в (§5.1): параметр страницы `{{param: …}}` — страница и шаблон. В заметке переключателю
+ * негде жить: значение параметра — состояние экрана страницы, а заметка — документ; ссылки `$` в её
+ * блоках данных всё равно отвергнет разбор без места (`PAGE_ONLY`).
  */
 const MATRIX: Record<PlacedBlock, Record<BodyKind, boolean>> = {
   container: { note: false, page: true, template: true },
@@ -47,6 +59,7 @@ const MATRIX: Record<PlacedBlock, Record<BodyKind, boolean>> = {
   query: { note: true, page: true, template: true },
   'own-cards': { note: false, page: true, template: true },
   host: { note: false, page: true, template: false },
+  param: { note: false, page: true, template: true },
 };
 
 /** Матрица §5.5. */
@@ -91,7 +104,8 @@ export const CONTAINER_NODES: ReadonlySet<string> = new Set(['columns', 'tabs'])
 export const PAGE_BLOCK_GROUP = 'pageBlock';
 /**
  * Узлы страницы — члены группы `pageBlock`: контейнеры, блок обвязки, карточка, свои карточки
- * `ownCards` и блок хоста `hostBlock` (1б). Совпадение со схемой сторожит `schema.test.ts`.
+ * `ownCards`, блок хоста `hostBlock` (1б) и параметр `paramBlock` (1в). Совпадение со схемой
+ * сторожит `schema.test.ts`.
  */
 export const LAYOUT_NODES: ReadonlySet<string> = new Set([
   ...CONTAINER_NODES,
@@ -99,6 +113,7 @@ export const LAYOUT_NODES: ReadonlySet<string> = new Set([
   'aspectCard',
   'ownCards',
   'hostBlock',
+  'paramBlock',
 ]);
 /**
  * Родители, в чьём `content` разрешена группа `pageBlock`: верх документа и части контейнеров.
@@ -192,6 +207,14 @@ export const SECOND_CARDS_MESSAGE =
 export const SECOND_OWN_CARDS_MESSAGE =
   'Второй блок {{cards: own}}: свои карточки записи показываются один раз, лишний блок не рисуется.';
 
+/**
+ * Плашка второго параметра с тем же именем (1в §5.1, механизм «второй» 1б): объявление действует
+ * первое, лишний блок не рисуется.
+ */
+export function secondParamMessage(name: string): string {
+  return `Второй параметр «${name}»: действует первый, лишний блок не рисуется.`;
+}
+
 /** Текст плашки второй карточки одного аспекта; `raw` — блок, как он написан. */
 export function secondCardMessage(raw: string): string {
   return `Второй ${raw.trim()}: карточка этого аспекта уже стоит выше, лишняя не рисуется.`;
@@ -230,6 +253,8 @@ function placedBlockOf(node: PageNode): PlacedBlock | null {
       return 'own-cards';
     case 'host':
       return 'host';
+    case 'param':
+      return 'param';
     default:
       return null;
   }
@@ -250,6 +275,9 @@ function blockLabel(node: PageNode): string {
       return 'Блок {{cards: own}}';
     case 'host':
       return `Блок {{${node.name}}}`;
+    // Именем, а не строкой целиком: маркер длинный, а плашка называет, КАКОЙ параметр.
+    case 'param':
+      return node.decl === null ? 'Блок {{param}}' : `Блок {{param: ${node.decl.name}}}`;
     default:
       return 'Блок';
   }
@@ -285,6 +313,13 @@ function misplaced(
   };
 }
 
+/**
+ * Проблема блока данных. Место разбора — по роду тела (1в §3.8, РП-5): на странице и в шаблоне
+ * `$`-ссылка законна (`place: 'page'`), в заметке — отказ `PAGE_ONLY` с подсказкой, плашкой
+ * `QUERY_INVALID`. Правило абсолютной даты на блоке со ссылкой работает как обычно: ссылка —
+ * не литерал (`absoluteDateIn`).
+ */
+// ОБХОДЧИК-Q: placement-issue
 function queryIssue(
   text: string,
   kind: BodyKind,
@@ -298,7 +333,7 @@ function queryIssue(
   // деревом «весь корпус», шаблон с таким блоком считался бы разобранным, а блок данных
   // вернул бы все записи владельца.
   if (inner === '') return { code: 'QUERY_INVALID', message: EMPTY_QUERY_MESSAGE, path };
-  const parsed = parseQueryAst(inner, reg);
+  const parsed = parseQueryAst(inner, reg, kind === 'note' ? {} : { place: 'page' });
   if (!parsed.ok) {
     const { message, position } = parsed.error;
     return {
@@ -343,8 +378,8 @@ function queryIssue(
  * контейнера, а контейнер в заметке не работает вовсе (§5.5), и совет вроде «колонок бывает от
  * 2 до 4» звал бы чинить то, что и после починки не заработает.
  *
- * Второй `{{cards}}`, второй `{{cards: own}}` и повтор `{{card: X}}` ОДИНАКОВЫМ текстом —
- * `SECOND_BLOCK` здесь; разные написания одного аспекта (ключ и подпись) без реестра не узнать —
+ * Второй `{{cards}}`, второй `{{cards: own}}`, повтор `{{card: X}}` ОДИНАКОВЫМ текстом и второй
+ * параметр с тем же именем (1в) — `SECOND_BLOCK` здесь; разные написания одного аспекта (ключ и подпись) без реестра не узнать —
  * их ловит план рендера web, где реестр есть. Неуместные и лежащие в `broken` блоки не считаются: они и так не рисуются.
  */
 export function bodyIssues(
@@ -357,6 +392,7 @@ export function bodyIssues(
   let cards = 0;
   let ownCards = 0;
   const cardTexts = new Set<string>();
+  const paramNames = new Set<string>();
 
   const visit = (list: readonly PageNode[], prefix: number[]) => {
     list.forEach((node, i) => {
@@ -391,6 +427,19 @@ export function bodyIssues(
         ownCards += 1;
         if (ownCards > 1) {
           out.push({ code: 'SECOND_BLOCK', message: SECOND_OWN_CARDS_MESSAGE, path });
+        }
+        return;
+      }
+      // Второй параметр с тем же именем (1в §5.1). Параметр с ошибкой блока в счёт не идёт: его
+      // объявление не действует и так, а плашку ошибки рисует показ по `problem`.
+      if (node.kind === 'param') {
+        const name = node.decl?.name;
+        if (name !== undefined) {
+          if (paramNames.has(name)) {
+            out.push({ code: 'SECOND_BLOCK', message: secondParamMessage(name), path });
+          } else {
+            paramNames.add(name);
+          }
         }
         return;
       }

@@ -22,11 +22,11 @@
 import type { JSONContent } from '@tiptap/core';
 import {
   type ParseRegistry,
+  pageQueryAstSchema,
   parseQueryAst,
   printQueryAst,
   QUERY_TREE_DEPTH_CAP,
   type QueryAst,
-  queryAstSchema,
   queryTreeExceedsDepth,
 } from '../query';
 import { QUERY_BLOCK_CLOSE } from './nodes/query-block';
@@ -46,11 +46,14 @@ interface QueryBlockAttrs {
  * уже в печати. ГЛУБИНА меряется ДО схемы и по той же причине, что у остальных четырёх входов:
  * `queryAstSchema` рекурсивна через `z.lazy` и на достаточно глубоком входе исчерпывает стек
  * ВНУТРИ собственного разбора.
+ *
+ * СХЕМА — СТРАНИЧНАЯ (`pageQueryAstSchema`, 1в §3.8, РП-5): query-блок тела и есть блок страницы или
+ * шаблона, где `$`-ссылка законна. См. докблок `bindQueryBlocks` — чего эта привязка не знает.
  */
 function astFromAttrs(raw: unknown): QueryAst | undefined {
   if (raw === null || raw === undefined) return undefined;
   if (queryTreeExceedsDepth(raw, QUERY_TREE_DEPTH_CAP)) return undefined;
-  const parsed = queryAstSchema.safeParse(raw);
+  const parsed = pageQueryAstSchema.safeParse(raw);
   return parsed.success ? parsed.data : undefined;
 }
 
@@ -71,7 +74,7 @@ export function bindAttrs(attrs: Record<string, unknown>, reg: ParseRegistry): Q
     // Пустой текст НЕ разбирается намеренно (Р-21-8): `parseQueryAst('')` отвечает
     // `{filter: null}` — законным деревом «весь корпус владельца», — и пустая заготовка молча
     // сменила бы смысл на «все сущности». Незакрытый блок остаётся незакрытым.
-    const parsed = parseQueryAst(text, reg);
+    const parsed = parseQueryAst(text, reg, { place: 'page' });
     if (parsed.ok) ast = parsed.ast;
   }
   if (ast === undefined) return { ast: null, text };
@@ -114,7 +117,16 @@ function bindCardAttrs(
  * Блоки документа — привязанными к реестру: query-блоки и карточки аспектов. Вход не
  * мутируется, и узлы без них возвращаются ТЕМИ ЖЕ объектами: чтение обязано отдавать вход, а
  * не свою копию, иначе блочные id (UniqueID — чужой схеме атрибут) терялись бы на каждом круге.
+ *
+ * МЕСТО БЛОКА — «СТРАНИЦА» ВСЕГДА (1в §3.8, РП-5): дерево — `pageQueryAstSchema`, текст — разбор с
+ * `place: 'page'`. Рода тела (заметка, страница, шаблон) функция не знает — его знает вид записи, а
+ * не документ, — поэтому дерево с `$`-ссылкой осядет и в `body_doc` заметки. Это не дыра: отказ в
+ * заметке держат плашка места (`bodyIssues` разбирает блок заметки без места — `QUERY_INVALID` с
+ * подсказкой) и web (задача 5), а сервер (`entity.blocks`) на таком блоке без значений вернёт отказ
+ * блока `UNKNOWN_PARAM` — значений параметра у заметки нет. Отказать здесь значило бы стирать дерево
+ * страничного блока, стоит телу побыть заметкой, — текст бы остался, но привязка скакала бы с видом.
  */
+// ОБХОДЧИК-Q: bind-query
 export function bindQueryBlocks(input: BodyDoc, reg: ParseRegistry): BodyDoc {
   const doc = bindNode(input.doc, reg);
   return doc === input.doc ? input : { v: input.v, doc };

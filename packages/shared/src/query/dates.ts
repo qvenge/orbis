@@ -24,11 +24,14 @@ import { acceptsDateTokenKind, type ParseRegistry } from './parse-ast';
  */
 export const RELATIVE_DATE_TOKENS = QUERY_DATE_TOKENS;
 
-/** Первое абсолютное значение: скаляр или элемент списка, токен пропускается. */
+/**
+ * Первое абсолютное значение: скаляр или элемент списка; токен и ссылка на параметр страницы (1в
+ * §5.1 — её значение всегда токен) пропускаются — абсолютной даты в них нет.
+ */
 function firstLiteral(values: readonly (QueryBound | undefined)[]): string | null {
   for (const v of values) {
     if (v === undefined) continue;
-    if (typeof v === 'object' && v !== null && 'token' in v) continue;
+    if (typeof v === 'object' && v !== null && ('token' in v || 'param' in v)) continue;
     return String(v);
   }
   return null;
@@ -64,7 +67,12 @@ function walk(node: QueryFilterNode, reg: DatesRegistry): { prop: string; value:
   const value = node.value;
   let literal: string | null;
   if (Array.isArray(value)) literal = firstLiteral(value);
-  else if (typeof value === 'object' && value !== null && !('token' in value)) {
+  else if (
+    typeof value === 'object' &&
+    value !== null &&
+    !('token' in value) &&
+    !('param' in value)
+  ) {
     // `range`: нижняя граница первой — «первая» в порядке чтения текста `a..b`.
     literal = firstLiteral([value.from, value.to]);
   } else literal = firstLiteral([value]);

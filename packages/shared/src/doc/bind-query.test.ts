@@ -436,3 +436,28 @@ describe('upgradeBodyDoc: цепочка v1 → v2 → v3', () => {
     expect(nodes[1]?.attrs?.ast).not.toBeNull();
   });
 });
+
+describe('bindQueryBlocks и параметр страницы (1в §5.1, РП-5)', () => {
+  test('текст с `$period` разбирается с местом page: дерево несёт {param}, печать — `$period`', () => {
+    const b = block(bound('{{query:aspect=orbis/task, orbis/due_date=$period}}'));
+    expect(b.ast?.filter).toEqual({
+      and: [
+        { aspect: 'orbis/task' },
+        { prop: 'orbis/due_date', op: 'eq', value: { param: 'period' } },
+      ],
+    });
+    expect(b.text).toBe('aspect=orbis/task, orbis/due_date=$period');
+  });
+
+  test('дерево с {param} в атрибуте принимается схемой страниц; привязка идемпотентна', () => {
+    const ast: QueryAst = { filter: { prop: 'orbis/due_date', op: 'eq', value: { param: 'p' } } };
+    const input = {
+      v: DOC_SCHEMA_VERSION,
+      doc: { type: 'doc', content: [{ type: 'queryBlock', attrs: { ast, text: 'мусор' } }] },
+    };
+    const once = bindQueryBlocks(input, REG) as unknown as BodyLike;
+    expect(block(once)).toEqual({ ast, text: 'orbis/due_date=$p' });
+    const twice = bindQueryBlocks(once as never, REG) as unknown as BodyLike;
+    expect(block(twice)).toEqual(block(once));
+  });
+});

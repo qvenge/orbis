@@ -8,7 +8,10 @@ import {
   GRAMMAR_ERROR_MESSAGES,
   type GrammarErrorCode,
   HOST_BLOCK_NAMES,
+  PARAM_NAME_RE,
+  PARAM_TYPES,
   type PageNode,
+  paramDeclsOf,
   parsePageText,
   RECORD_BLOCK_NAMES,
 } from './page-grammar';
@@ -575,6 +578,150 @@ describe('свои карточки и блоки хоста (спека 1б §8
   });
 });
 
+describe('параметр страницы {{param: …}} (спека 1в §5.1)', () => {
+  const HORIZON =
+    '{{param: period, type=period, default=next_7d, options=next_7d|next_14d, title="Горизонт"}}';
+
+  /** Узел параметра по одной строке маркера; не параметр — падение с тем, что пришло. */
+  const paramOf = (src: string) => {
+    const [node] = parse(src);
+    if (node?.kind !== 'param')
+      throw new Error(`ожидался параметр, получено ${JSON.stringify(node)}`);
+    return node;
+  };
+
+  test('пример спеки — узел с объявлением; raw — строка целиком', () => {
+    expect(parse(`${HORIZON}\n`)).toEqual([
+      {
+        kind: 'param',
+        raw: `${HORIZON}\n`,
+        decl: {
+          name: 'period',
+          type: 'period',
+          default: 'next_7d',
+          options: ['next_7d', 'next_14d'],
+          title: 'Горизонт',
+        },
+        problem: null,
+      },
+    ]);
+  });
+
+  test('без title — подписи нет (null); пробелы вокруг ключей и значений не важны', () => {
+    expect(
+      paramOf('{{param:p ,type = period,  default=today , options=today|this_week }}').decl,
+    ).toEqual({
+      name: 'p',
+      type: 'period',
+      default: 'today',
+      options: ['today', 'this_week'],
+      title: null,
+    });
+  });
+
+  test('подпись в кавычках — правилами кавычек текста запроса: экраны \\" \\\\ \\} и запятая внутри', () => {
+    const node = paramOf(
+      '{{param: p, type=period, default=today, options=today, title="Дни, \\"горизонт\\" \\}\\}"}}',
+    );
+    expect(node.decl?.title).toBe('Дни, "горизонт" }}');
+  });
+
+  test.each([
+    [
+      '{{param: period, type=period, default=today, options=next_7d|next_14d}}',
+      'умолчание — один из вариантов',
+    ],
+    ['{{param: period, type=period, options=next_7d|next_14d}}', 'умолчание обязательно'],
+    ['{{param: period, type=period, default=next_7d}}', 'вариантов'],
+    ['{{param: period, type=period, default=next_7d, options=}}', 'вариантов'],
+    ['{{param: period, default=next_7d, options=next_7d}}', 'type'],
+    ['{{param: period, type=month, default=next_7d, options=next_7d}}', 'month'],
+    [
+      `{{param: p, type=period, default=today, options=${[
+        'today',
+        'overdue',
+        'next_7d',
+        'after_7d',
+        'this_week',
+        'next_14d',
+        'this_month',
+        'last_month',
+        'today',
+      ].join('|')}}}`,
+      'вариантов',
+    ],
+    ['{{param: p, type=period, default=soon, options=soon}}', 'soon'],
+    ['{{param: пери-од, type=period, default=today, options=today}}', 'пери-од'],
+    ['{{param: p, type=period, default=today, options=today, colour=red}}', 'colour'],
+    ['{{param: p, type=period, type=period, default=today, options=today}}', 'type'],
+    ['{{param: p, type=period, default=today, options=today, title="без конца}}', 'кавычк'],
+  ])('%p — узел параметра с ошибкой блока, объявления нет', (src, fragment) => {
+    const node = paramOf(src);
+    expect(node.decl).toBeNull();
+    expect(node.problem).toContain(fragment);
+    expect(node.raw).toBe(src);
+  });
+
+  test('восемь вариантов — предел, девятый — ошибка', () => {
+    const eight = [
+      'today',
+      'overdue',
+      'next_7d',
+      'after_7d',
+      'this_week',
+      'next_14d',
+      'this_month',
+      'last_month',
+    ] as const;
+    const node = paramOf(`{{param: p, type=period, default=today, options=${eight.join('|')}}}`);
+    expect(node.problem).toBeNull();
+    expect(node.decl?.options).toEqual(eight);
+  });
+
+  test.each([
+    '{{param: period, type=period, default=today, options=today',
+    '{{param:}}',
+    '{{param: }}',
+    '{{param period}}',
+    '{{params: p, type=period, default=today, options=today}}',
+    ' {{param: p, type=period, default=today, options=today}}',
+    '{{param: p, type=period, default=today, options=today}} хвост',
+  ])('незнакомая форма %p — текст (§5.7 1а)', (src) => {
+    expect(parse(src)).toEqual([text(src)]);
+  });
+
+  test('в части контейнера — узел; paramDeclsOf — обход в глубину, первое имя выигрывает, ошибки не в счёт', () => {
+    const src = lines(
+      '{{param: a, type=period, default=today, options=today|next_7d}}',
+      '{{tabs}}',
+      '{{tab: X}}',
+      '{{param: b, type=period, default=next_14d, options=next_14d}}',
+      '{{param: a, type=period, default=next_7d, options=next_7d}}',
+      '{{param: c, type=period, default=soon, options=soon}}',
+      '{{/tab}}',
+      '{{/tabs}}',
+    );
+    const nodes = parse(src);
+    expect(nodes.map((n) => n.kind)).toEqual(['param', 'tabs']);
+    const decls = paramDeclsOf(nodes);
+    expect([...decls.keys()]).toEqual(['a', 'b']);
+    expect(decls.get('a')?.default).toBe('today');
+    expect(decls.get('b')?.options).toEqual(['next_14d']);
+  });
+
+  test('внутри забора кода — текст', () => {
+    const src = lines('```', HORIZON, '```');
+    expect(parse(src)).toEqual([text(src)]);
+  });
+
+  test('имя параметра и типы — закрытые наборы 1в', () => {
+    expect(PARAM_TYPES).toEqual(['period']);
+    for (const ok of ['period', 'p_1', 'A9']) expect(PARAM_NAME_RE.test(ok)).toBe(true);
+    for (const bad of ['', 'пери-од', 'a-b', 'a b', '$a'])
+      expect(PARAM_NAME_RE.test(bad)).toBe(false);
+  });
+});
+
 describe('текстом остаётся всё незнакомое §5.7', () => {
   test.each([
     'x {{title}} y',
@@ -1031,15 +1178,24 @@ describe('листовость модуля', () => {
   const REEXPORT_RE = /^\s*export\b[^;]*\bfrom\s*['"]/m;
   const DYNAMIC_RE = /\brequire\s*\(|\bimport\s*\(/;
 
-  test('исходник page-grammar.ts не импортирует ничего', () => {
-    // Строже, чем у diff.ts: здесь нет даже типовых импортов. Модуль читают первый кадр записи и
-    // рендерер экрана, и любой импорт — кандидат протащить tiptap или marked в эагерный чанк.
+  test('исходник page-grammar.ts импортирует только лист лексики запроса, а тот — ничего', () => {
+    // Модуль читают первый кадр записи и рендерер экрана, и любой импорт — кандидат протащить
+    // tiptap или marked в эагерный чанк. С 1в (§5.1) разрешён ровно один — `../query/lexicon`:
+    // маркер параметра читает слова языка запроса (токены дат, имя, кавычки), а сам лист лексики
+    // не импортирует НИЧЕГО, так что вес за ним не тянется.
     const src = read('./page-grammar.ts');
-    expect(src).not.toMatch(IMPORT_RE);
-    // Реэкспорт тянет модуль так же, как импорт: `export { parseBody } from './convert'` протащил
-    // бы схему Tiptap, не написав ни одного `import` (поймано ревью: прежний сторож молчал).
-    expect(src).not.toMatch(REEXPORT_RE);
+    const specifiers = [
+      ...src.matchAll(/^\s*(?:import|export)\b[^;]*?\bfrom\s*['"]([^'"]+)['"]/gm),
+    ].map((m) => m[1]);
+    expect(specifiers.length).toBeGreaterThan(0);
+    expect(new Set(specifiers)).toEqual(new Set(['../query/lexicon']));
     expect(src).not.toMatch(DYNAMIC_RE);
+    // Импорт без `from` (побочный эффект) тоже тянет модуль — его нет.
+    expect(src).not.toMatch(/^\s*import\s*['"]/m);
+    const lexicon = read('../query/lexicon.ts');
+    expect(lexicon).not.toMatch(IMPORT_RE);
+    expect(lexicon).not.toMatch(REEXPORT_RE);
+    expect(lexicon).not.toMatch(DYNAMIC_RE);
     // Положительный контроль: те же регэкспы срабатывают на тяжёлом соседе и на образцах —
     // иначе зелёный сторож мог бы значить лишь сломанный регэксп.
     expect(read('./convert.ts')).toMatch(IMPORT_RE);

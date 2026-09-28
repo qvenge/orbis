@@ -19,6 +19,7 @@ export { buildCatalogFromRegistry } from './catalog';
 export * from './dates';
 export * from './field-ref';
 export * from './normalize';
+export * from './page-only';
 export * from './parse-ast';
 export * from './print';
 export * from './static';

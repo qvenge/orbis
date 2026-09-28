@@ -8,6 +8,7 @@ import { OrbisDocument } from './nodes/document';
 import { EntityRef } from './nodes/entity-ref';
 import { Column, Columns, Tab, Tabs } from './nodes/layout';
 import { OrbisListItem } from './nodes/list-item';
+import { ParamBlock } from './nodes/param-block';
 import { QueryBlock } from './nodes/query-block';
 import { RawBlock } from './nodes/raw';
 import { AspectCard, HostBlock, OwnCards, RecordBlock } from './nodes/record-blocks';
@@ -67,4 +68,6 @@ export const DOC_EXTENSIONS: AnyExtension[] = [
   // Срез 1б (§8.5, §6.2 п. 3): свои карточки записи и блоки хоста — атомы группы `pageBlock`.
   OwnCards,
   HostBlock,
+  // Срез 1в (§5.1): параметр страницы — атом группы `pageBlock`.
+  ParamBlock,
 ];

@@ -62,15 +62,18 @@ const DATE_TOKEN_WORDS: ReadonlySet<string> = new Set(QUERY_DATE_TOKENS);
 const QUOTE_TRIGGER_RE = /[\s,=|&<>!"\\()}]/;
 
 /**
- * Кавычки нужны ещё в трёх случаях, где неквотированный текст вернулся бы ДРУГИМ AST:
+ * Кавычки нужны ещё в четырёх случаях, где неквотированный текст вернулся бы ДРУГИМ AST:
  * `..` разобрался бы диапазоном; пустая строка — «пустое значение»; слово относительного
- * времени (`today`) стало бы токеном, а не литералом.
+ * времени (`today`) стало бы токеном, а не литералом; ведущий `$` (1в §5.1) — ссылкой на параметр
+ * страницы. У `$` кавычки ставятся на ЛЮБОЙ литерал с ним в начале, а не только на `$<имя>`:
+ * правило проще формы имени, и разойтись с `PARAM_NAME_RE` ему нечем.
  */
 function needsQuote(value: string): boolean {
   if (value === '') return true;
   if (value !== value.trim()) return true;
   if (value.includes('..')) return true;
   if (DATE_TOKEN_WORDS.has(value)) return true;
+  if (value.startsWith('$')) return true;
   return QUOTE_TRIGGER_RE.test(value);
 }
 
@@ -160,9 +163,13 @@ function printScalar(value: QueryScalar): string {
   return String(value);
 }
 
+/** Граница: токен — словом, ссылка на параметр — `$<имя>` (1в §5.1), литерал — по правилу кавычек. */
 function printBound(value: unknown): string {
   if (typeof value === 'object' && value !== null && 'token' in value) {
     return String((value as { token: string }).token);
+  }
+  if (typeof value === 'object' && value !== null && 'param' in value) {
+    return `$${String((value as { param: string }).param)}`;
   }
   return printScalar(value as QueryScalar);
 }

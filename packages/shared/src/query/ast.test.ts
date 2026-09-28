@@ -12,6 +12,8 @@ import {
   ADDRESS_SLOT_RE,
   fieldRefKey,
   isContractAddress,
+  PAGE_ONLY_HINT,
+  pageQueryAstSchema,
   QUERY_REL_ANCHOR,
   QUERY_TREE_DEPTH_CAP,
   queryAstSchema,
@@ -417,4 +419,43 @@ test('1в: fieldRefKey — ключ поля одной строкой; isContra
 test('1в: форма слота в адресе — та же, что имя слота контракта (ast.ts — лист, копия под сторожем)', () => {
   expect(ADDRESS_SLOT_RE.source).toBe(SLOT_KEY_RE.source);
   expect(ADDRESS_SLOT_RE.flags).toBe(SLOT_KEY_RE.flags);
+});
+
+test('1в §3.8, РП-5: `{param}` — базовая схема отвергает с PAGE_ONLY_HINT, схема страниц принимает; JSON Schema тула — нет', () => {
+  const validate = validator();
+  const withParam = [
+    { filter: { prop: 'orbis/due_date', op: 'eq', value: { param: 'period' } } },
+    { filter: { prop: { contract: 'orbis/when' }, op: 'range', value: { from: { param: 'a' } } } },
+    {
+      filter: {
+        or: [
+          { aspect: 'orbis/task' },
+          { not: { prop: 'orbis/due_date', op: 'lt', value: { param: 'p' } } },
+        ],
+      },
+    },
+  ];
+  for (const ast of withParam) {
+    const base = queryAstSchema.safeParse(ast);
+    expect(base.success, JSON.stringify(ast)).toBe(false);
+    if (!base.success) {
+      expect(base.error.issues.map((i) => i.message)).toContain(PAGE_ONLY_HINT);
+    }
+    expect(pageQueryAstSchema.safeParse(ast).success, JSON.stringify(ast)).toBe(true);
+    expect(validate(ast), JSON.stringify(ast)).toBe(false);
+  }
+  // Форма ссылки — имя PARAM_NAME_RE, объект строгий; в `in` (список скаляров) ссылки нет.
+  for (const bad of [
+    { filter: { prop: 'orbis/due_date', op: 'eq', value: { param: 'пери-од' } } },
+    { filter: { prop: 'orbis/due_date', op: 'eq', value: { param: 'p', token: 'today' } } },
+    { filter: { prop: 'orbis/due_date', op: 'in', value: [{ param: 'p' }] } },
+  ]) {
+    expect(pageQueryAstSchema.safeParse(bad).success, JSON.stringify(bad)).toBe(false);
+  }
+  // Дерево без ссылки обе схемы судят одинаково.
+  for (const fixture of AST_FIXTURES) {
+    expect(pageQueryAstSchema.safeParse(fixture.ast).success).toBe(
+      queryAstSchema.safeParse(fixture.ast).success,
+    );
+  }
 });

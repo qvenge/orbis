@@ -5,7 +5,7 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import type { GraphId } from '@orbis/shared';
 import { entitySchema, entityThreadId, globalThreadId } from '@orbis/shared';
-import { QUERY_TREE_DEPTH_CAP } from '@orbis/shared/query';
+import { PAGE_ONLY_HINT, QUERY_TREE_DEPTH_CAP } from '@orbis/shared/query';
 import { TRPCError } from '@trpc/server';
 import { sql } from 'drizzle-orm';
 import { adminDb, appDb, freshGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
@@ -354,6 +354,22 @@ describe('entity.query / entity.count (§6.3–6.4)', () => {
       caller.entity.query({ ast: { filter: { aspect: 'orbis/task' }, display: 'tile' } }),
     );
     expect(bad.code).toBe('BAD_REQUEST');
+  });
+
+  test('$-ссылка вне страницы — отказ с подсказкой и деревом, и текстом (1в §3.8)', async () => {
+    const caller = callerFor(await freshGraph());
+    const byAst = await trpcError(
+      caller.entity.query({
+        ast: { filter: { prop: 'orbis/due_date', op: 'eq', value: { param: 'period' } } } as never,
+      }),
+    );
+    expect(byAst.code).toBe('BAD_REQUEST');
+    expect(byAst.message).toContain(PAGE_ONLY_HINT);
+    const byText = await trpcError(
+      caller.entity.query({ query: 'aspect=orbis/task, orbis/due_date=$period' }),
+    );
+    expect(byText.code).toBe('BAD_REQUEST');
+    expect(byText.message).toContain(PAGE_ONLY_HINT);
   });
 
   test('РОВНО одно из двух: и текст, и дерево — отказ; ни одного — тоже', async () => {

@@ -6,6 +6,7 @@ export * from './convert';
 export { OrbisMarkdownManager } from './manager';
 export { BODY_REF_RE, EntityRef } from './nodes/entity-ref';
 export { Column, Columns, Tab, Tabs } from './nodes/layout';
+export { ParamBlock } from './nodes/param-block';
 export { QUERY_BLOCK_CLOSE, QueryBlock } from './nodes/query-block';
 export { RawBlock } from './nodes/raw';
 export { AspectCard, HostBlock, OwnCards, RecordBlock } from './nodes/record-blocks';

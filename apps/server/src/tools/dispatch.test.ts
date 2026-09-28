@@ -16,6 +16,7 @@ import {
   newId,
   type PropertyDefinition,
 } from '@orbis/shared';
+import { PAGE_ONLY_HINT } from '@orbis/shared/query';
 import { eq, inArray, sql } from 'drizzle-orm';
 import { OWN_ACTION_DECL } from '../../test/fixtures/action-seed';
 import {
@@ -6766,5 +6767,86 @@ describe('entity_query и язык контрактов (спека 1в §3.8)',
       ast: { filter: { prop: { contract: 'orbis/when', slot: 'nope' }, op: 'eq', value: 'x' } },
     });
     expectError(bad, 'VALIDATION');
+    // Причина — именно неизвестный слот, а не любой другой отказ проверки (перенос гейта задачи 1,
+    // Minor-2): без неё тест зеленел бы и на отказе схемы, и на отказе нормализации.
+    if (bad.status === 'error') {
+      expect((bad.error.details as { reason?: string } | undefined)?.reason).toBe('UNKNOWN_SLOT');
+    }
+  });
+
+  test('адрес с КЛЮЧОМ контракта, у которого ключ ≠ id, нормализуется в id (перенос гейта 1, Minor-2)', async () => {
+    // У встроенных контрактов ключ = id (`orbis/when`), и снятие нормализации адреса такой тест
+    // не краснит. Здесь — контракт владельца: копия `orbis/when` с id ≠ ключу (строку реестра
+    // кладёт админский DSN, как у прочих проб своих контрактов, `registry/load.test.ts`).
+    const owner = await freshGraph();
+    const contractId = newId();
+    const { db: admin, client: adminClient } = adminDb();
+    try {
+      await admin.execute(sql`
+        INSERT INTO contract_definitions
+          (id, graph_id, key, label, description, kind, slots, classes, sets, facts, module, rank)
+        SELECT ${contractId}, ${owner}::uuid, 'user/when-copy', label, description, kind, slots,
+               classes, sets, facts, NULL, 1000
+        FROM contract_definitions WHERE graph_id IS NULL AND id = 'orbis/when'`);
+      await bumpOwnerRegistryVersion(admin, owner);
+    } finally {
+      await adminClient.end();
+    }
+    const byKey = await dispatchTool(ctxFor({ identity: personal(owner) }), 'entity_query', {
+      ast: { filter: { prop: { contract: 'user/when-copy' }, op: 'eq', value: '2000-01-01' } },
+    });
+    // Ключ резолвлен в id — компилятор знает контракт; без нормализации отказ UNKNOWN_CONTRACT.
+    expect(byKey.status).toBe('ok');
+    const unknown = await dispatchTool(ctxFor({ identity: personal(owner) }), 'entity_query', {
+      ast: { filter: { prop: { contract: 'user/nope' }, op: 'eq', value: '2000-01-01' } },
+    });
+    expectError(unknown, 'VALIDATION');
+  });
+
+  test('$-ссылка в entity_query — отказ с подсказкой «только в блоках страниц» текстом и деревом (1в §3.8, С1в-8)', async () => {
+    const byText = await dispatchTool(ctxFor(), 'entity_query', {
+      query: 'aspect=orbis/task, orbis/due_date=$period',
+    });
+    expectError(byText, 'VALIDATION');
+    if (byText.status === 'error') {
+      expect((byText.error.details as { reason?: string }).reason).toBe('PAGE_ONLY');
+      expect(byText.error.message).toContain(PAGE_ONLY_HINT);
+    }
+    const byAst = await dispatchTool(ctxFor(), 'entity_query', {
+      ast: { filter: { prop: 'orbis/due_date', op: 'eq', value: { param: 'period' } } },
+    });
+    expectError(byAst, 'VALIDATION');
+    if (byAst.status === 'error') expect(JSON.stringify(byAst.error)).toContain(PAGE_ONLY_HINT);
+  });
+
+  test('$-ссылка в orbis/progress_source — структурный отказ записи с подсказкой, цель не создана (1в §3.8)', async () => {
+    const owner = await freshGraph();
+    const r = await execute(db, {
+      identity: personal(owner),
+      actorKind: 'owner',
+      source: 'ui',
+      operations: [
+        {
+          tool: 'entity_create',
+          input: {
+            title: 'Цель с параметром',
+            tags: [],
+            aspects: ['orbis/goal'],
+            props: {
+              'orbis/progress_source': {
+                query: { filter: { prop: 'orbis/due_date', op: 'eq', value: { param: 'p' } } },
+                aggregate: 'count',
+              },
+              'orbis/target_value': '24',
+            },
+          },
+        },
+      ],
+    });
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.error.code).toBe('VALIDATION');
+      expect(JSON.stringify(r.error)).toContain(PAGE_ONLY_HINT);
+    }
   });
 });

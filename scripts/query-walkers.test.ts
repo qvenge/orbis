@@ -44,16 +44,16 @@ interface QueryWalker {
 /**
  * Перечень обходчиков дерева запроса — раздел «Обходчики дерева запроса» плана 1в (с 26-й строкой
  * `web-tile-form` — рулинг координатора R-4, docs-коммит `6acf05bf`; 27-я — `token-boundary` задачи 2).
- * Строки задач 4 (`bind-query`, `placement-issue`, `page-only`, `substitute-params`) и 5
- * (`web-form-parse`, `web-field-rows`, `web-block-parse`, `web-text-editor`, `web-query-widget`)
- * добавляют эти задачи вместе со своими пометками.
+ * Строки задачи 4 (`bind-query`, `placement-issue`, `page-only`, `substitute-params`) стоят с их
+ * пометками; строки задачи 5 (`web-form-parse`, `web-field-rows`, `web-block-parse`,
+ * `web-text-editor`, `web-query-widget`) добавит она вместе со своими пометками.
  */
 export const QUERY_WALKERS: ReadonlyArray<QueryWalker> = [
   {
     name: 'schema',
     file: 'packages/shared/src/query/ast.ts',
     entry: 'queryAstSchema',
-    does: 'A: адрес принят в prop/sortBy/aggregate, в columns — отказ формы',
+    does: 'A: адрес принят в prop/sortBy/aggregate, в columns — отказ формы; P: базовая схема — отказ с PAGE_ONLY_HINT, pageQueryAstSchema — принят',
   },
   {
     name: 'json-schema',
@@ -65,13 +65,13 @@ export const QUERY_WALKERS: ReadonlyArray<QueryWalker> = [
     name: 'parse',
     file: 'packages/shared/src/query/parse-ast.ts',
     entry: 'parseQueryAst',
-    does: 'A: свойство → адрес слота → значение контракта → UNKNOWN_FIELD (UNKNOWN_SLOT, NO_CONTRACT_VALUE)',
+    does: 'A: свойство → адрес слота → значение контракта → UNKNOWN_FIELD (UNKNOWN_SLOT, NO_CONTRACT_VALUE); P: `$имя` только с place page, иначе PAGE_ONLY',
   },
   {
     name: 'print',
     file: 'packages/shared/src/query/print.ts',
     entry: 'printQueryAst',
-    does: 'A: `контракт.слот` / `контракт` ключом контракта в обеих формах',
+    does: 'A: `контракт.слот` / `контракт` ключом контракта в обеих формах; P: `$имя`, литерал с ведущим `$` — в кавычках',
   },
   {
     name: 'normalize',
@@ -83,13 +83,13 @@ export const QUERY_WALKERS: ReadonlyArray<QueryWalker> = [
     name: 'static',
     file: 'packages/shared/src/query/static.ts',
     entry: 'assertStaticQuery',
-    does: 'A: адрес статичен (не токен); токен в значении — отказ, как у свойства',
+    does: 'A: адрес статичен (не токен); токен в значении — отказ, как у свойства; P: ссылка — отказ',
   },
   {
     name: 'absolute-date',
     file: 'packages/shared/src/query/dates.ts',
     entry: 'absoluteDateIn',
-    does: 'A: литерал у адреса слота с датой и у значения «даты» — находка',
+    does: 'A: литерал у адреса слота с датой и у значения «даты» — находка; P: ссылка — не литерал',
   },
   {
     name: 'field-ref',
@@ -110,10 +110,28 @@ export const QUERY_WALKERS: ReadonlyArray<QueryWalker> = [
     does: 'A: токен-граница у адреса учитывается наравне со свойством (обход по форме узла, не по полю)',
   },
   {
+    name: 'page-only',
+    file: 'packages/shared/src/query/page-only.ts',
+    entry: 'pageOnlyFeatureIn',
+    does: 'P: находит {param} в любой границе под and/or/not; G: ключ group у корня',
+  },
+  {
+    name: 'bind-query',
+    file: 'packages/shared/src/doc/bind-query.ts',
+    entry: 'bindQueryBlocks',
+    does: 'A, P, G: дерево — pageQueryAstSchema, текст — разбор с местом page (род тела неизвестен)',
+  },
+  {
+    name: 'placement-issue',
+    file: 'packages/shared/src/doc/placement.ts',
+    entry: 'queryIssue',
+    does: 'P, G: разбор с местом по роду тела — page/template → page, заметка — отказ PAGE_ONLY',
+  },
+  {
     name: 'compile',
     file: 'apps/server/src/query/compile-ast.ts',
     entry: 'compileQueryAst',
-    does: 'A: ветка адреса — contract-sql; сортировка, сумма и «последнее» по адресу',
+    does: 'A: ветка адреса — contract-sql; сортировка, сумма и «последнее» по адресу; P: доехавшая ссылка — отказ UNKNOWN_PARAM',
   },
   {
     name: 'contract-sql',
@@ -125,7 +143,13 @@ export const QUERY_WALKERS: ReadonlyArray<QueryWalker> = [
     name: 'materialize-window',
     file: 'apps/server/src/recurring/materialize.ts',
     entry: 'materializationWindow',
-    does: 'A: окно от свойств, привязанных к адресу, ∩ триггеры правила',
+    does: 'A: окно от свойств, привязанных к адресу, ∩ триггеры правила; P: не подставлена — Error программиста',
+  },
+  {
+    name: 'substitute-params',
+    file: 'apps/server/src/query/params.ts',
+    entry: 'substituteParams',
+    does: 'P: {param} → {token} значения пачки; нет значения — UNKNOWN_PARAM, не токен — PARAM_VALUE',
   },
   {
     name: 'rewrite-ast',
@@ -173,13 +197,13 @@ export const QUERY_WALKERS: ReadonlyArray<QueryWalker> = [
     name: 'entity-blocks',
     file: 'apps/server/src/routers/entity-blocks.ts',
     entry: 'prepareQuery',
-    does: 'A: компилятор; окно материализации получает реестр',
+    does: 'A: компилятор; окно материализации получает реестр; P: разбор с place page → substituteParams (бейдж — умолчания тела)',
   },
   {
     name: 'entity-query-tool',
     file: 'apps/server/src/tools/dispatch.ts',
     entry: 'runEntityQuery',
-    does: 'A: принят',
+    does: 'A: принят; P: текст — PAGE_ONLY, дерево — отказ базовой схемы',
   },
   {
     name: 'probe-p3',
@@ -271,9 +295,10 @@ function firstCodeLineAfter(file: string, line: number): string {
 test('перечень обходчиков: имена уникальны, число пиннится', () => {
   const names = QUERY_WALKERS.map((w) => w.name);
   expect(new Set(names).size).toBe(names.length);
-  // 26 строк задачи 1 (25 плана + `web-tile-form`, рулинг R-4) и `token-boundary` задачи 2; задачи 4, 5
-  // добавят свои (РП-3).
-  expect(QUERY_WALKERS.length).toBe(27);
+  // 26 строк задачи 1 (25 плана + `web-tile-form`, рулинг R-4), `token-boundary` задачи 2 и четыре
+  // строки задачи 4 (`page-only`, `bind-query`, `placement-issue`, `substitute-params`); задача 5
+  // добавит свои (РП-3).
+  expect(QUERY_WALKERS.length).toBe(31);
 });
 
 test('слово пометки встречается только строкой-комментарием пометки, не в прозе', () => {

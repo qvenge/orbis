@@ -696,6 +696,26 @@ describe('формат v3: контейнеры и атомы в диффе (с�
       ['added', '{{cards: own}}'],
     ]);
   });
+
+  test('параметр страницы (1в §5.1) — одна единица «параметр»: смена default — одна правка, не построчно', () => {
+    const param = (dflt: string): JSONContent => ({
+      type: 'paramBlock',
+      attrs: {
+        text: `{{param: period, type=period, default=${dflt}, options=next_7d|next_14d, title="Горизонт"}}`,
+      },
+    });
+    const flat = flattenBlocks(doc(p('а'), param('next_7d'), p('б')));
+    expect(flat.map((b) => b.kind)).toEqual(['paragraph', 'paramBlock', 'paragraph']);
+    expect(flat[1]?.text).toBe(
+      '{{param: period, type=period, default=next_7d, options=next_7d|next_14d, title="Горизонт"}}',
+    );
+    const units = unitsOf(
+      diffBodyDocs(doc(p('а'), param('next_7d'), p('б')), doc(p('а'), param('next_14d'), p('б'))),
+    );
+    expect(units.map((u) => u.kind)).toEqual(['same', 'changed', 'same']);
+    expect(at(units, 1).before).toContain('default=next_7d');
+    expect(at(units, 1).after).toContain('default=next_14d');
+  });
 });
 
 describe('листовость модуля', () => {

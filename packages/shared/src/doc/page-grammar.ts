@@ -20,11 +20,24 @@
  * вторая рано или поздно разъехалась бы с этой, и человек видел бы на первом кадре один разбор,
  * а в редакторе через мгновение — другой.
  *
- * Модуль листовой ПО ЗАКОНУ — без единого импорта. Его статически тянет экран записи, а из
- * `DetailScreen` нельзя дотянуться до барреля `@orbis/shared/doc` (сторожа
- * `scripts/check-lazy-chunks.ts` и `save.test.tsx`): любой импорт здесь — кандидат протащить
- * tiptap или marked в эагерный чанк. Поэтому свой мини-сканер заборов кода вместо лексера.
+ * Модуль листовой ПО ЗАКОНУ. Его статически тянет экран записи, а из `DetailScreen` нельзя
+ * дотянуться до барреля `@orbis/shared/doc` (сторожа `scripts/check-lazy-chunks.ts` и
+ * `save.test.tsx`): любой импорт здесь — кандидат протащить tiptap или marked в эагерный чанк.
+ * Поэтому свой мини-сканер заборов кода вместо лексера. Единственный импорт — лист лексики запроса
+ * `query/lexicon.ts` (1в §5.1, сам без единого импорта): маркер параметра читает слова языка
+ * запроса — токены дат, форму имени и правило кавычек подписи, — и вторая их копия здесь
+ * разошлась бы с разбором запроса. Список разрешённых импортов держит тест листовости.
  */
+
+import {
+  PARAM_NAME_RE,
+  QUERY_DATE_TOKENS,
+  type QueryDateToken,
+  quoteMask,
+  unquoteValue,
+} from '../query/lexicon';
+
+export { PARAM_NAME_RE };
 
 export const RECORD_BLOCK_NAMES = [
   'title',
@@ -48,6 +61,29 @@ export type RecordBlockName = (typeof RECORD_BLOCK_NAMES)[number];
  */
 export const HOST_BLOCK_NAMES = ['apps', 'records'] as const;
 export type HostBlockName = (typeof HOST_BLOCK_NAMES)[number];
+
+/**
+ * Параметр страницы (спека 1в §5.1): `{{param: <имя>, type=period, default=<токен>,
+ * options=<т1>|<т2>…, title=<подпись>}}` — переключатель на месте блока, значение которого блоки
+ * данных той же страницы читают ссылкой `$<имя>`. Типов в 1в один — `period` (§14: путь
+ * расширения по осям), варианты — токены дат, от одного до восьми.
+ *
+ * Канон маркера (печать и эталон поставки): ключи в этом порядке — имя, `type`, `default`,
+ * `options`, `title`; `title` — по правилу кавычек текста запроса; без подписи ключа нет. Разбор
+ * порядка ключей не требует: маркер пишет и человек.
+ */
+export const PARAM_TYPES = ['period'] as const;
+export type ParamType = (typeof PARAM_TYPES)[number];
+export const PARAM_OPTIONS_MAX = 8;
+
+/** Объявление параметра — разобранный маркер без ошибки блока. `title: null` — подписи нет. */
+export interface PageParamDecl {
+  name: string;
+  type: ParamType;
+  default: QueryDateToken;
+  options: readonly QueryDateToken[];
+  title: string | null;
+}
 
 export const GRAMMAR_ERROR_CODES = [
   'CONTAINER_UNCLOSED',
@@ -78,6 +114,10 @@ export type PageNode =
   | { kind: 'card'; aspect: string; raw: string } // ключ или «подпись в кавычках» как написано
   | { kind: 'ownCards'; raw: string } // {{cards: own}} — свои карточки аспектов записи (1б §8.5)
   | { kind: 'host'; name: HostBlockName; raw: string } // {{apps}}, {{records}} — блоки хоста
+  // {{param: …}} — параметр страницы (1в §5.1). `problem` — «ошибка блока параметра» (неверное
+  // умолчание, нет типа, 0 или больше 8 вариантов, чужой токен, плохое имя, незнакомый ключ):
+  // узел остаётся параметром, текст — дословно, а объявления нет (`decl: null`).
+  | { kind: 'param'; raw: string; decl: PageParamDecl | null; problem: string | null }
   | { kind: 'columns'; parts: PageNode[][]; raw: string }
   | { kind: 'tabs'; parts: { label: string; children: PageNode[] }[]; raw: string }
   | { kind: 'broken'; code: GrammarErrorCode; message: string; raw: string };
@@ -115,6 +155,9 @@ const RECORD_BLOCK_RE =
 const OWN_CARDS_RE = /^\{\{cards:[ \t]*own\}\}[ \t]*$/;
 const HOST_BLOCK_RE = /^\{\{(apps|records)\}\}[ \t]*$/;
 const CARD_RE = /^\{\{card:[ \t]*(\S.*?)\}\}[ \t]*$/;
+// Параметр страницы — одна строка по образцу карточки: аргументы начинаются с НЕпробельного символа,
+// разбор линейный; `}}` внутри подписи экранируется (`\}`), и строка кончается ПОСЛЕДНИМ `}}`.
+const PARAM_RE = /^\{\{param:[ \t]*(\S.*?)\}\}[ \t]*$/;
 // Блок данных — как у токенайзера `queryBlock` (`nodes/query-block.ts`): с начала строки до
 // ПЕРВОГО `}}`, переносы внутри допустимы. Без `}}` — текст: иначе опечатка съела бы хвост тела.
 const QUERY_OPEN = '{{query:';
@@ -140,7 +183,10 @@ type Item =
   | { t: 'text'; start: number; end: number }
   | {
       t: 'node';
-      node: Extract<PageNode, { kind: 'query' | 'record' | 'card' | 'ownCards' | 'host' }>;
+      node: Extract<
+        PageNode,
+        { kind: 'query' | 'record' | 'card' | 'ownCards' | 'host' | 'param' }
+      >;
       start: number;
       end: number;
     }
@@ -212,7 +258,87 @@ function lineAtom(src: string, body: string, start: number, end: number): Item |
       start,
       end,
     };
+  const param = PARAM_RE.exec(body);
+  if (param) {
+    return {
+      t: 'node',
+      node: { kind: 'param', raw, ...paramDecl(param[1] as string) },
+      start,
+      end,
+    };
+  }
   return null;
+}
+
+const DATE_TOKENS: ReadonlySet<string> = new Set(QUERY_DATE_TOKENS);
+const PARAM_KEYS: readonly string[] = ['type', 'default', 'options', 'title'];
+const PARAM_KINDS: readonly string[] = PARAM_TYPES;
+
+/**
+ * Аргументы `{{param: …}}` → объявление или ошибка блока (§5.1). Аргументы — через запятую ВНЕ
+ * кавычек (та же маска, что у текста запроса), первый — имя, прочие — `ключ=значение`. Проверки
+ * идут в порядке чтения маркера — имя, ключи, тип, варианты, умолчание, подпись, — и первая
+ * найденная ошибка и есть плашка: человек чинит по одной, и сообщение о следствии («умолчание не из
+ * вариантов») при неверных вариантах звало бы чинить не то.
+ *
+ * Тексты коротки нарочно: модуль — в эагерном замыкании экрана записи (порог веса РП-25), а плашка
+ * стоит на месте блока, рядом с самим маркером, и называет, ЧТО в нём не так.
+ */
+function paramDecl(args: string): { decl: PageParamDecl | null; problem: string | null } {
+  const bad = (problem: string) => ({ decl: null, problem });
+  const { outside, unclosedAt } = quoteMask(args);
+  if (unclosedAt !== -1) return bad('незакрытая кавычка');
+  const parts: string[] = [];
+  let from = 0;
+  for (let i = 0; i <= args.length; i++) {
+    if (i === args.length || (outside[i] && args[i] === ',')) {
+      parts.push(args.slice(from, i).trim());
+      from = i + 1;
+    }
+  }
+  const [name = '', ...rest] = parts;
+  if (!PARAM_NAME_RE.test(name)) return bad(`имя — латиница, цифры и _, а не '${name}'`);
+  // Ключи — только четыре известных и каждый один раз: ключ проверен списком до записи, поэтому
+  // `in` по простому объекту здесь не встретит имён прототипа.
+  const v: Record<string, string> = {};
+  for (const part of rest) {
+    const eq = part.indexOf('=');
+    const key = part.slice(0, eq).trim();
+    if (eq === -1 || !PARAM_KEYS.includes(key) || key in v) {
+      return bad(`незнакомый или повторный ключ '${part}'`);
+    }
+    v[key] = part.slice(eq + 1).trim();
+  }
+  if (v.type === undefined) return bad(`нет type=${PARAM_TYPES.join('|')}`);
+  if (!PARAM_KINDS.includes(v.type)) {
+    return bad(`тип '${v.type}' неизвестен: есть ${PARAM_TYPES.join(', ')}`);
+  }
+  const options = v.options ? v.options.split('|').map((o) => o.trim()) : [];
+  if (options.length === 0 || options.length > PARAM_OPTIONS_MAX) {
+    return bad(`вариантов — от 1 до ${PARAM_OPTIONS_MAX} через |`);
+  }
+  const alien = options.find((o) => !DATE_TOKENS.has(o));
+  if (alien !== undefined) return bad(`вариант '${alien}' — не токен даты`);
+  if (new Set(options).size < options.length) return bad('варианты повторяются');
+  if (!v.default) return bad('умолчание обязательно: default=<вариант>');
+  if (!options.includes(v.default)) return bad(`умолчание — один из вариантов, не '${v.default}'`);
+  let title: string | null = null;
+  if (v.title !== undefined) {
+    const t = unquoteValue(v.title);
+    // Пустая подпись — ошибка, а не «подписи нет»: без ключа `title` параметр и так зовётся именем.
+    if (!t.ok || t.value === '') return bad(`подпись: ${t.ok ? 'пустая' : t.message}`);
+    title = t.value;
+  }
+  return {
+    decl: {
+      name,
+      type: v.type as ParamType,
+      default: v.default as QueryDateToken,
+      options: options as QueryDateToken[],
+      title,
+    },
+    problem: null,
+  };
 }
 
 /** Плоский поток лексем: забор кода гасит всё, смежный текст склеен в одну лексему. */
@@ -441,5 +567,34 @@ export function parsePageText(text: string): PageNode[] {
       i = next;
     }
   }
+  return out;
+}
+
+/**
+ * Объявления параметров тела: обход в глубину, как у `bodyIssues` (`placement.ts`), — параметр во
+ * вкладке выше считается раньше параметра ниже на верхнем уровне. Первое имя выигрывает (второй
+ * блок с тем же именем — плашка «второй», его объявление не действует); параметр с ошибкой блока
+ * объявления не даёт — ссылка на него получит отказ «не объявлен», как и должно. Сломанный
+ * контейнер внутрь не обходится: он не рисуется. Зовут сервер (бейдж раздела — умолчания первого
+ * блока, `routers/entity-blocks.ts`) и web (переключатель, значения пачки — задача 5).
+ */
+export function paramDeclsOf(nodes: readonly PageNode[]): ReadonlyMap<string, PageParamDecl> {
+  const out = new Map<string, PageParamDecl>();
+  const visit = (list: readonly PageNode[]): void => {
+    for (const node of list) {
+      if (node.kind === 'param') {
+        if (node.decl !== null && !out.has(node.decl.name)) out.set(node.decl.name, node.decl);
+        continue;
+      }
+      const parts =
+        node.kind === 'columns'
+          ? node.parts
+          : node.kind === 'tabs'
+            ? node.parts.map((t) => t.children)
+            : [];
+      for (const part of parts) visit(part);
+    }
+  };
+  visit(nodes);
   return out;
 }

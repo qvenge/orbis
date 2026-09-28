@@ -30,6 +30,7 @@ import {
 } from '@orbis/shared';
 import {
   isContractAddress,
+  pageOnlyFeatureIn,
   type QueryAst,
   type QueryBound,
   type QueryDateToken,
@@ -162,6 +163,11 @@ export function instantOfLocal(dateISO: string, time: WallClock['time'], timeZon
  * подставляет открытую; старый игнорировал токен в `>`/`<`, новый переводит его в край.
  * Расширение намеренное: канон выражает `<=`/`>=` односторонним `range`, и «пропустить»
  * такое условие значило бы отдать владельцу пустой список там, где он ждёт инстансы.
+ *
+ * ССЫЛКА НА ПАРАМЕТР СТРАНИЦЫ (1в §5.1) сюда доехать не может: пачка блоков подставляет значения
+ * (`substituteParams`) раньше окна, прочие входы отвергают `$` схемой и разбором. Дерево со ссылкой —
+ * ошибка программиста, и она громкая (`Error`), а не тихий «сегодня»: окно от неизвестного горизонта
+ * породило бы не те инстансы молча.
  */
 // ОБХОДЧИК-Q: materialize-window
 export function materializationWindow(
@@ -174,6 +180,9 @@ export function materializationWindow(
   },
   weekStart: WeekStart,
 ): { from: string; to: string } | null {
+  if (pageOnlyFeatureIn(ast) === 'param') {
+    throw new Error('параметр не подставлен: окно материализации считается после substituteParams');
+  }
   let from: string | null = null;
   let to: string | null = null;
   const widen = (f: string, t: string) => {
@@ -203,7 +212,7 @@ export function materializationWindow(
     form: Exclude<TokenForm, 'eq'>,
   ): string | null => {
     if (bound === undefined) return null;
-    if (typeof bound === 'object') {
+    if (typeof bound === 'object' && 'token' in bound) {
       const edges = tokenEdges(bound.token, today, weekStart);
       return form === 'gt' || form === 'lte' ? edges.end : edges.start;
     }

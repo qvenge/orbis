@@ -119,11 +119,13 @@ function scanMarkers(nodes: PageNode[]): { block: boolean; broken: boolean } {
   const walk = (list: PageNode[]): void => {
     for (const node of list) {
       // Свои карточки и блоки хоста (1б) — тоже маркеры: строка `{{apps}}` в теле станет блоком.
+      // Параметр страницы (1в §5.1) — тоже: строка `{{param: …}}` станет атомом `paramBlock`.
       if (
         node.kind === 'record' ||
         node.kind === 'card' ||
         node.kind === 'ownCards' ||
-        node.kind === 'host'
+        node.kind === 'host' ||
+        node.kind === 'param'
       ) {
         found.block = true;
       } else if (node.kind === 'broken') found.broken = true;

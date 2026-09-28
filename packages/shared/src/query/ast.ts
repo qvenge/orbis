@@ -29,25 +29,16 @@
  * ПОВЕДЕНИЕ, которое реформа обязалась не менять, — без адреса проверить это негде.
  */
 import { z } from 'zod';
+import { PARAM_NAME_RE, QUERY_DATE_TOKENS, type QueryDateToken } from './lexicon';
+import { pageOnlyFeatureIn } from './page-only';
 
 /**
- * Относительное время запроса. Первые четыре — те же, что у дореформенной грамматики
- * (`grammar.ts:18`); четыре новых 1в (спека §3.4) — В КОНЕЦ, чтобы порядок прежних (списки выбора,
- * перечни в схемах тулов) не сдвинулся. Их разворачивает компилятор по «сегодня» и таймзоне
- * владельца, и потому запрос с токеном НЕ статичен (см. `static.ts`). Края каждого токена и
- * подписи — `tokens.ts`.
+ * Относительное время запроса (`QUERY_DATE_TOKENS`, `QueryDateToken`) и форма имени параметра
+ * (`PARAM_NAME_RE`) — определены в листе `lexicon.ts` (их читает и препроход тела, которому этот
+ * файл с zod недоступен), здесь — реэкспорт под именем канона: потребители берут их отсюда, как
+ * до 1в.
  */
-export const QUERY_DATE_TOKENS = [
-  'today',
-  'overdue',
-  'next_7d',
-  'after_7d',
-  'this_week',
-  'next_14d',
-  'this_month',
-  'last_month',
-] as const;
-export type QueryDateToken = (typeof QUERY_DATE_TOKENS)[number];
+export { PARAM_NAME_RE, QUERY_DATE_TOKENS, type QueryDateToken } from './lexicon';
 
 /** Операторы предиката свойства — закрытый набор §А5-7. */
 export const QUERY_PROP_OPS = ['eq', 'ne', 'gt', 'lt', 'range', 'in', 'contains'] as const;
@@ -205,13 +196,28 @@ export type QueryScalar = string | number | boolean;
 export interface QueryTokenValue {
   token: QueryDateToken;
 }
-export type QueryBound = QueryScalar | QueryTokenValue;
+/**
+ * Ссылка на параметр страницы `$<имя>` (спека 1в §5.1, РП-6) — на месте значения-границы, там же,
+ * где токен. Значение подставляет СЕРВЕР до окна материализации и компиляции (`substituteParams`,
+ * `apps/server/src/query/params.ts`) из входа пачки `entity.blocks`; до компиляции ссылка не
+ * доезжает. Законна только в блоках страниц и шаблонов (§3.8): базовая схема `queryAstSchema` её
+ * отвергает, принимает — `pageQueryAstSchema`.
+ */
+export interface QueryParamValue {
+  param: string;
+}
+export type QueryBound = QueryScalar | QueryTokenValue | QueryParamValue;
 /** Границы `range` ВКЛЮЧАЮЩИЕ с обеих сторон; хотя бы одна обязана присутствовать. */
 export interface QueryRangeValue {
   from?: QueryBound;
   to?: QueryBound;
 }
-export type QueryPropValue = QueryScalar | QueryTokenValue | QueryScalar[] | QueryRangeValue;
+export type QueryPropValue =
+  | QueryScalar
+  | QueryTokenValue
+  | QueryParamValue
+  | QueryScalar[]
+  | QueryRangeValue;
 
 /**
  * Реляционный предикат §А5-7. Форма СВЯЗАНА с `kind`, и связь эта нормативная, а не
@@ -350,7 +356,13 @@ const relTargetSchema = z.string().regex(REL_TARGET_RE, 'ожидается UUID
 
 const scalarSchema = z.union([z.string(), z.number(), z.boolean()]);
 const tokenSchema = z.object({ token: z.enum(QUERY_DATE_TOKENS) }).strict();
-const boundSchema = z.union([scalarSchema, tokenSchema]);
+/**
+ * Ссылка на параметр — В СТРУКТУРНОЙ схеме, общей у обеих схем дерева: отвергает её не форма, а
+ * место (уточнение `queryAstSchema` ниже). Так отказ вне страницы называет причину подсказкой
+ * «только в блоках страниц и шаблонов», а не безликим «Invalid input» union'а.
+ */
+const paramSchema = z.object({ param: z.string().regex(PARAM_NAME_RE, 'имя параметра') }).strict();
+const boundSchema = z.union([scalarSchema, tokenSchema, paramSchema]);
 const rangeSchema = z
   .object({ from: boundSchema.optional(), to: boundSchema.optional() })
   .strict()
@@ -532,8 +544,14 @@ export const PROJECTION_RULE_MESSAGES = {
   columnsNeedTable: 'columns — только у display=table',
 } as const;
 
-// ОБХОДЧИК-Q: schema
-export const queryAstSchema: z.ZodType<QueryAst, z.ZodTypeDef, unknown> = z
+/**
+ * Подсказка отказа `$`-ссылки и группировки вне страницы (спека 1в §3.8, РП-5) — одна строка на
+ * уточнение схемы, отказ разбора `PAGE_ONLY` (`parse-ast.ts`) и плашку места в web.
+ */
+export const PAGE_ONLY_HINT = '$-ссылка и group работают только в блоках страниц и шаблонов';
+
+/** Структурная схема дерева — общая у обеих (ниже): форма и согласованность проекции. */
+const queryAstShapeSchema = z
   .object({
     // `filter` ОБЯЗАТЕЛЕН и nullable, а не optional: «фильтра нет» — это решение автора
     // запроса (весь корпус), и оно должно быть записано, а не выведено из отсутствия ключа.
@@ -561,3 +579,31 @@ export const queryAstSchema: z.ZodType<QueryAst, z.ZodTypeDef, unknown> = z
       issue('columns', PROJECTION_RULE_MESSAGES.columnsNeedTable);
     }
   });
+
+/**
+ * ДВЕ СХЕМЫ ИЗ ОДНОЙ ФОРМЫ (РП-5). `queryAstSchema` — все входы дерева, кроме тела страницы: вход
+ * `ast:` тула и роутера, `orbis/progress_source`, `scope`, `ref.target`, `over` действия. `$`-ссылка
+ * (и группировка — задача 6) там отказ с `PAGE_ONLY_HINT`: ни значения параметра, ни страницы, на
+ * которой он объявлен, у этих входов нет, и принятая ссылка стала бы тихим «ничего не выбрано» или
+ * ошибкой компиляции на каждом чтении. `pageQueryAstSchema` — атрибут query-блока тела
+ * (`doc/bind-query.ts`) и виджет web: там ссылку подставит сервер из входа пачки.
+ *
+ * Уточнение, а не вторая форма: форма одна (`queryAstShapeSchema`), и схемы не разъедутся на новом
+ * узле. Сторож статичности (`static.ts`) и JSON Schema тула (`ast-json-schema.ts`, ссылки нет вовсе)
+ * держат то же правило со своих сторон.
+ */
+// ОБХОДЧИК-Q: schema
+export const queryAstSchema: z.ZodType<QueryAst, z.ZodTypeDef, unknown> =
+  queryAstShapeSchema.superRefine((ast, ctx) => {
+    const feature = pageOnlyFeatureIn(ast);
+    if (feature !== null) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [feature === 'param' ? 'filter' : 'group'],
+        message: PAGE_ONLY_HINT,
+      });
+    }
+  });
+
+/** Дерево блока данных тела страницы или шаблона: `$`-ссылка законна (см. `queryAstSchema`). */
+export const pageQueryAstSchema: z.ZodType<QueryAst, z.ZodTypeDef, unknown> = queryAstShapeSchema;

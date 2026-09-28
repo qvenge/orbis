@@ -25,4 +25,5 @@ export const BLOCK_ITEM_MESSAGES = {
   textTooLong: `текст запроса длиннее ${BLOCK_TEXT_MAX} знаков`,
   thisNotId: 'контекст this — не id записи: блок не может его разрешить',
   limitRange: 'limit блока — целое число от 1 до потолка строк',
+  paramsTooMany: 'слишком много значений параметров',
 } as const;
