@@ -18,7 +18,13 @@ export function useChatContext(
   where: 'screen' | 'side',
 ): { entityId: string; title: string } | null {
   const model = useNav((s) => s.model);
-  const place = useMemo(() => chatContextOf(model, where), [model, where]);
+  const overlay = useNav((s) => s.overlay);
+  // Плашка поверх модели (старая ссылка `/budget`, резерв; гейт 25, m-1) — человек видит её, а не
+  // место модели под ней: ссылка на невидимую запись агенту ничего верного не скажет.
+  const place = useMemo(
+    () => (overlay === null ? chatContextOf(model, where) : null),
+    [model, overlay, where],
+  );
   // Оболочку читает и присутствие хоста — тем же ключом; для записи она не нужна, но хук безусловен.
   const shell = useAppShell(place?.kind === 'home' ? place.app : HOST_APP);
   const entityId =

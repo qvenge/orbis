@@ -18,6 +18,7 @@ import { noteRegistryVersion, resetRegistryVersionForTests } from '../../lib/reg
 import { useNav } from '../../state/navigation';
 import { installCrashTrap, renderWithProviders, wireEntity } from '../../test/harness';
 import { BUILTIN_REGISTRY } from '../../test/registry';
+import { resetDesktopFrameLoadForTests } from '../AppShell';
 import {
   ALL_TASKS,
   BREAD,
@@ -340,5 +341,96 @@ describe('(г) боковой чат — не элемент истории (§6
     await heading('Чат');
     expect(shownPath()).toBe('/chat');
     expect(screen.queryByRole('complementary', { name: 'Чат' })).toBeNull();
+  });
+});
+
+// ─── гейт 25, m-4: узкий десктоп с открытым боковым чатом ──────────────────────────────────────
+
+describe.each([
+  ['узкий десктоп (≈ 800 px): чат занимает место сайдбара', false],
+  ['широкий десктоп (≥ 1100 px): сайдбар на месте', true],
+] as const)('(г) %s', (_name, wide) => {
+  test('основная область и капсула кнопок хоста на месте', async () => {
+    stubViewport(true, 'site', wide);
+    resetFrame('/');
+    renderApp();
+    await byTestId('host-rail');
+    await openBreadFromUpcoming();
+    expect(screen.getByTestId('app-sidebar')).toBeInTheDocument();
+    fireEvent.click(chatButton());
+    await screen.findByRole('complementary', { name: 'Чат' }, { timeout: 5000 });
+    expect(screen.queryByTestId('app-sidebar') !== null).toBe(wide);
+    expect(screen.getByTestId('host-rail')).toBeInTheDocument();
+    // Капсула — в основной колонке, рядом с содержимым, а не на сайдбаре или в чате.
+    const main = screen.getByTestId('screen-content');
+    expect(main.parentElement).toContainElement(hostButtons());
+    expect(
+      within(main).getByRole('heading', { level: 1, name: 'Купить хлеб' }),
+    ).toBeInTheDocument();
+    fireEvent.click(chatButton());
+    await waitFor(() => expect(screen.getByTestId('app-sidebar')).toBeInTheDocument());
+  });
+});
+
+// ─── гейт 25, m-5: чанк рамки десктопа едет или отказал — элементы хоста на месте (§6.6) ──────
+
+describe('(а) десктоп, чанк рамки ещё не приехал или отказал', () => {
+  const gate = { wait: Promise.resolve() as Promise<void>, down: false };
+
+  beforeEach(() => {
+    vi.doMock('./DesktopFrame', async (importOriginal) => {
+      await gate.wait;
+      if (gate.down) throw new Error('Failed to fetch dynamically imported module');
+      return importOriginal();
+    });
+    resetDesktopFrameLoadForTests();
+  });
+
+  afterEach(() => {
+    vi.doUnmock('./DesktopFrame');
+    gate.wait = Promise.resolve();
+    gate.down = false;
+    resetDesktopFrameLoadForTests();
+  });
+
+  const expectHostSet = () => {
+    const roles = hostRoles();
+    expect(roles).toHaveLength(new Set(roles).size);
+    expect([...roles].sort()).toEqual([...HOST_ELEMENTS].sort());
+  };
+
+  test('пока едет — рамка телефона со всеми элементами хоста; приехал — рамка десктопа', async () => {
+    let release!: () => void;
+    gate.wait = new Promise<void>((r) => {
+      release = r;
+    });
+    stubViewport(true);
+    resetFrame('/');
+    renderApp();
+    await openBreadFromUpcoming();
+    expect(screen.queryByTestId('host-rail')).toBeNull();
+    expectHostSet();
+    expect(
+      within(screen.getByTestId('host-presence')).getByRole('button', { name: 'Домой' }),
+    ).toBeInTheDocument();
+    release();
+    await byTestId('host-rail');
+    await heading('Купить хлеб');
+    expectHostSet();
+  });
+
+  test('отказал — рамка телефона остаётся рабочей: элементы хоста, 💬 — экран чата', async () => {
+    gate.down = true;
+    stubViewport(true);
+    resetFrame('/');
+    renderApp();
+    await openBreadFromUpcoming();
+    await act(async () => {});
+    expect(screen.queryByTestId('host-rail')).toBeNull();
+    expectHostSet();
+    expect(chatButton()).not.toHaveAttribute('aria-pressed');
+    fireEvent.click(chatButton());
+    await heading('Чат');
+    expect(shownPath()).toBe('/chat');
   });
 });

@@ -3,7 +3,7 @@ import { currentEntry } from '@orbis/shared/nav';
 import { useQueryClient } from '@tanstack/react-query';
 import { getQueryKey } from '@trpc/react-query';
 import { MessageSquare, Plus, Search } from 'lucide-react';
-import { useState } from 'react';
+import { useCallback, useContext, useState, useSyncExternalStore } from 'react';
 import { QuickCapture } from '../../features/browser/QuickCapture';
 import { openSearch } from '../../features/search/open-search';
 import { useNav } from '../../state/navigation';
@@ -11,6 +11,7 @@ import { useRetryBuffer } from '../../state/retry';
 import { type RouterOutputs, trpc } from '../../trpc';
 import { NavBadge } from '../../ui/NavBadge';
 import { CHAT_ABOUT_VIEW, captureContextOf, chatContextOf } from './chat-context';
+import { DesktopFrameContext } from './frame-kind';
 import { useSideChat } from './side-chat-store';
 import { useIsDesktop } from './useViewport';
 
@@ -26,40 +27,65 @@ const BUTTON_PRESSED = `${BUTTON_BASE} bg-host-foreground text-host hover:opacit
 
 /**
  * 💬 телефона: общий чат — экраном хоста поверх текущего раздела (§7.3). С экрана хоста (настройки,
- * поиск) чат встаёт ВМЕСТО него, и место под чатом — уже не то, откуда звали: метка
- * `CHAT_ABOUT_VIEW` говорит экрану чата «без чипа» (§6.4: экраны хоста — без контекста). Метку
- * ставит только новый экран чата: повторное 💬 на чате модель не меняет.
+ * поиск) чат встаёт ВМЕСТО него, и место под чатом — уже не то, откуда звали; с плашки поверх модели
+ * (старая ссылка `/budget`, резерв) место под чатом человек вовсе не видел. Метка `CHAT_ABOUT_VIEW`
+ * говорит экрану чата «без чипа» (§6.4: экраны хоста — без контекста). Метку ставит только новый
+ * экран чата: повторное 💬 на чате модель не меняет.
  */
 function openChatScreen(): void {
   const nav = useNav.getState();
   const before = currentEntry(nav.model).address;
-  if (nav.overlay === null && before.kind === 'host-screen' && before.screen === 'chat') return;
+  const fromOverlay = nav.overlay !== null;
+  if (!fromOverlay && before.kind === 'host-screen' && before.screen === 'chat') return;
   nav.openHostScreen('chat');
   const after = currentEntry(useNav.getState().model).address;
-  if (before.kind === 'host-screen' && after.kind === 'host-screen' && after.screen === 'chat') {
+  const notFromPlace = fromOverlay || before.kind === 'host-screen';
+  if (notFromPlace && after.kind === 'host-screen' && after.screen === 'chat') {
     useNav.getState().setView({ [CHAT_ABOUT_VIEW]: 'none' });
   }
 }
 
+/** Что известно о записи места: страница, не страница или ещё ничего (ответа `entity.get` нет). */
+type RecordKind = 'page' | 'record' | 'unknown';
+
+/**
+ * Страница ли запись — по аспектам из кеша `entity.get` (экран записи его читает; своего запроса
+ * «＋» не делает) с ПОДПИСКОЙ на кеш: ответ, приехавший после открытия «＋», меняет контекст (гейт 25,
+ * m-1). Ключ `entity.get` экрана записи несёт ещё и `include` — берём любой ответ по этому id
+ * (частичное совпадение ключа): форма ключа — дело экрана записи.
+ */
+function useRecordKind(id: string | null): RecordKind {
+  const queryClient = useQueryClient();
+  const subscribe = useCallback(
+    (onChange: () => void) => queryClient.getQueryCache().subscribe(onChange),
+    [queryClient],
+  );
+  const read = useCallback((): RecordKind => {
+    if (id === null) return 'unknown';
+    const entity = queryClient
+      .getQueriesData<RouterOutputs['entity']['get']>({
+        queryKey: getQueryKey(trpc.entity.get, { id }, 'query'),
+      })
+      .map(([, data]) => data?.entity)
+      .find((e) => e !== undefined);
+    if (entity === undefined) return 'unknown';
+    return entity.aspects.includes(PAGE_ASPECT) ? 'page' : 'record';
+  }, [queryClient, id]);
+  return useSyncExternalStore(subscribe, read, read);
+}
+
 /**
  * Быстрый ввод «＋» с контекстом места основной области (§6.4, РП-9, В-6): на записи — подзадача, на
- * странице, домашней и экранах хоста — без контекста. Страница ли это — по аспектам записи из кеша
- * `entity.get` (экран записи его уже прочёл); отдельного запроса «＋» не делает.
+ * странице, домашней и экранах хоста — без контекста. Пока не известно, страница ли это, — без
+ * контекста: лишняя подзадача под страницей хуже, чем запись без родителя. Плашка поверх модели
+ * (старая ссылка, резерв) — тоже без контекста: запись под ней человек не видит.
  */
 function HostCapture() {
   const model = useNav((s) => s.model);
-  const queryClient = useQueryClient();
-  const place = chatContextOf(model, 'side');
-  // Ключ `entity.get` экрана записи несёт ещё и `include` — берём любой ответ по этому id
-  // (частичное совпадение ключа), а не точный ключ экрана: его форма — дело экрана записи.
-  const isPage =
-    place?.kind === 'record' &&
-    queryClient
-      .getQueriesData<RouterOutputs['entity']['get']>({
-        queryKey: getQueryKey(trpc.entity.get, { id: place.id }, 'query'),
-      })
-      .some(([, data]) => data?.entity.aspects.includes(PAGE_ASPECT) === true);
-  return <QuickCapture context={captureContextOf(place, isPage)} />;
+  const overlay = useNav((s) => s.overlay);
+  const place = overlay === null ? chatContextOf(model, 'side') : null;
+  const kind = useRecordKind(place?.kind === 'record' ? place.id : null);
+  return <QuickCapture context={captureContextOf(place, kind !== 'record')} />;
 }
 
 /**
@@ -81,7 +107,11 @@ function HostCapture() {
 export function HostButtons() {
   const pending = useRetryBuffer((s) => s.size);
   const [capture, setCapture] = useState(false);
-  const desktop = useIsDesktop();
+  // Окно поиска или экран — по ширине (окно ⌘K живёт вне рамки); остальное — по рамке, в которой
+  // нарисована капсула (`DesktopFrameContext`): рамка телефона на ширине десктопа (чанк рамки десктопа
+  // едет или отказал) — телефонные 💬 и место капсулы.
+  const wide = useIsDesktop();
+  const desktop = useContext(DesktopFrameContext);
   const sideChat = useSideChat((s) => s.open);
   return (
     <div
@@ -102,7 +132,7 @@ export function HostButtons() {
           aria-label="Поиск"
           data-testid="host-search"
           data-host="search"
-          onClick={() => openSearch(desktop)}
+          onClick={() => openSearch(wide)}
           className={BUTTON}
         >
           <Search size={18} aria-hidden />

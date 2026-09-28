@@ -256,13 +256,15 @@ export function stubLaunchMode(mode: 'app' | 'site'): void {
 
 /**
  * Ширина и режим запуска для теста двух рамок (задача 25): `desktop` — `DESKTOP_QUERY` сбывается,
- * прочие запросы — только `standalone` режима приложения. Литерал брейкпоинта свой, а не импорт
- * `DESKTOP_QUERY`: съедь обе стороны вместе — и тест не заметил бы подмены порога.
+ * `wide` — ещё и широкий десктоп (`WIDE_DESKTOP_QUERY`, ≥ 1100 px; `false` — узкий, ≈ 800 px), прочие
+ * запросы — только `standalone` режима приложения. Литералы порогов свои, а не импорт: съедь обе
+ * стороны вместе — и тест не заметил бы подмены порога.
  */
-export function stubViewport(desktop: boolean, mode: 'app' | 'site' = 'site'): void {
+export function stubViewport(desktop: boolean, mode: 'app' | 'site' = 'site', wide = true): void {
   window.matchMedia = ((query: string) => ({
     matches:
       (desktop && query === '(min-width: 768px)') ||
+      (desktop && wide && query === '(min-width: 1100px)') ||
       (mode === 'app' && query.includes('standalone')),
     media: query,
     onchange: null,

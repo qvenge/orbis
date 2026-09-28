@@ -58,7 +58,11 @@ afterEach(() => {
   resetFrame('/');
 });
 
-function renderApp() {
+/**
+ * `hold` — ответ `entity.get` по этому id ждёт `release()` (холодный старт: экран записи ещё не прочёл
+ * запись, а «＋» уже нажат).
+ */
+function renderApp(hold?: { id: string; until: Promise<void> }) {
   const base = frameWorld();
   const world = frameWorld({
     all: [
@@ -72,7 +76,10 @@ function renderApp() {
     ],
   });
   const answer = frameHandler(world);
-  return renderWithProviders(<App />, (path, input, type) => {
+  return renderWithProviders(<App />, async (path, input, type) => {
+    if (path === 'entity.get' && hold !== undefined && (input as { id: string }).id === hold.id) {
+      await hold.until;
+    }
     switch (path) {
       case 'ai.sendMessage': {
         const { id } = input as { id: string };
@@ -105,6 +112,13 @@ function renderApp() {
 
 const heading = (name: string) =>
   screen.findByRole('heading', { level: 1, name }, { timeout: 5000 });
+/**
+ * Рамка десктопа — ленивый чанк: пока он едет, стоит рамка телефона (гейт 25, m-5), и её 💬 открыл бы
+ * экран чата. Десктопный тест жмёт кнопки хоста только после приезда рейки.
+ */
+async function frameReady(desktop: boolean) {
+  if (desktop) await screen.findByTestId('host-rail', {}, { timeout: 5000 });
+}
 const hostButton = (name: RegExp) =>
   within(screen.getByTestId('host-buttons')).getByRole('button', { name });
 
@@ -197,6 +211,7 @@ describe('(б) десктоп: чип бокового чата — текуща
     resetFrame(`/r/${BREAD}`);
     const { calls } = renderApp();
     await heading('Купить хлеб');
+    await frameReady(true);
     fireEvent.click(hostButton(/Чат/));
     const side = await screen.findByRole('complementary', { name: 'Чат' }, { timeout: 5000 });
     expect(await within(side).findByText('Про: Купить хлеб')).toBeInTheDocument();
@@ -211,6 +226,12 @@ describe('(б) десктоп: чип бокового чата — текуща
     expect(await within(side).findByText('Про: Заметка')).toBeInTheDocument();
     send(side, 'а тут?');
     await waitFor(() => expect(sent(calls)).toContain(withRecordContext('а тут?', NOTE)));
+
+    // Назад на первую запись — снова новый контекст: снятие чипа прежней записи не живёт дольше
+    // самого контекста (гейт 25, m-2).
+    act(() => useNav.getState().openRecord(BREAD));
+    await heading('Купить хлеб');
+    expect(await within(side).findByText('Про: Купить хлеб')).toBeInTheDocument();
   });
 });
 
@@ -243,6 +264,7 @@ describe.each([
     resetFrame(`/r/${TASK}`);
     const { calls } = renderApp();
     await heading('Починить кран');
+    await frameReady(desktop);
     const input = await capture(calls, 'купить прокладку');
     expect(input.aspects).toEqual(['orbis/task']);
     await waitFor(() => expect(related(calls)).toHaveLength(1));
@@ -254,6 +276,7 @@ describe.each([
     resetFrame(`/r/${UPCOMING}`);
     const { calls } = renderApp();
     await heading('Upcoming');
+    await frameReady(desktop);
     const input = await capture(calls, 'идея');
     expect(input.aspects).toBeUndefined();
     await act(async () => {});
@@ -262,18 +285,111 @@ describe.each([
 });
 
 test.each([
-  ['/chat', 'Чат'],
-  ['/settings', 'Настройки'],
-])('(в) телефон: «＋» на экране хоста %s — без контекста', async (path, title) => {
-  stubViewport(false);
-  resetFrame(path);
+  ['телефон', 'chat', false, 'Чат'],
+  ['телефон', 'settings', false, 'Настройки'],
+  ['десктоп', 'chat', true, 'Чат'],
+  ['десктоп', 'settings', true, 'Настройки'],
+] as const)('(в) %s: «＋» на экране хоста %s — без контекста', async (_w, hostScreen, desktop, title) => {
+  // Экран хоста лежит поверх записи-задачи: «＋» про экран, а не про место под ним (гейт 25, m-3).
+  stubViewport(desktop);
+  resetFrame(`/r/${TASK}`);
   const { calls } = renderApp();
+  await heading('Починить кран');
+  await frameReady(desktop);
+  act(() => useNav.getState().openHostScreen(hostScreen));
   await heading(title);
   expect(useNav.getState().model.activeApp).toBe(HOST_APP);
   const input = await capture(calls, 'мысль');
   expect(input.aspects).toBeUndefined();
   await act(async () => {});
   expect(related(calls)).toEqual([]);
+});
+
+// ─── гейт 25, m-1: «＋» не знает, страница ли место, — без контекста; плашка поверх модели ─────────
+
+test('(в) «＋» на странице, пока её запись не прочтена, — без контекста; и после приезда тоже', async () => {
+  let release!: () => void;
+  const until = new Promise<void>((r) => {
+    release = r;
+  });
+  stubViewport(false);
+  resetFrame(`/r/${UPCOMING}`);
+  const { calls } = renderApp({ id: UPCOMING, until });
+  await screen.findByTestId('host-buttons');
+  const early = await capture(calls, 'рано');
+  expect(early.aspects).toBeUndefined();
+  release();
+  await heading('Upcoming');
+  // Форма «＋» ещё открыта (второе нажатие закрыло бы её): пишем в неё же.
+  const form = screen.getByTestId('quick-capture-form');
+  fireEvent.change(within(form).getByRole('textbox', { name: 'Быстрая запись' }), {
+    target: { value: 'поздно' },
+  });
+  fireEvent.submit(form);
+  await waitFor(() => expect(created(calls)).toHaveLength(2));
+  const late = (created(calls)[1]?.input as { input: { aspects?: string[] } }).input;
+  expect(late.aspects).toBeUndefined();
+  await act(async () => {});
+  expect(related(calls)).toEqual([]);
+});
+
+test('(в) «＋» на записи-задаче, чья запись приехала после открытия «＋», — подзадача (подписка на кеш)', async () => {
+  let release!: () => void;
+  const until = new Promise<void>((r) => {
+    release = r;
+  });
+  stubViewport(false);
+  resetFrame(`/r/${TASK}`);
+  const { calls } = renderApp({ id: TASK, until });
+  await screen.findByTestId('host-buttons');
+  fireEvent.click(hostButton(/Новая запись/));
+  await screen.findByTestId('quick-capture-form');
+  release();
+  await heading('Починить кран');
+  // «＋» открыт ДО ответа — `capture` жмёт «＋» ещё раз и закрыл бы его: пишем в открытую форму.
+  const form = screen.getByTestId('quick-capture-form');
+  fireEvent.change(within(form).getByRole('textbox', { name: 'Быстрая запись' }), {
+    target: { value: 'подзадача' },
+  });
+  fireEvent.submit(form);
+  await waitFor(() => expect(related(calls)).toHaveLength(1));
+  expect(related(calls)[0]?.input).toMatchObject({ source_id: TASK, role: ROLE_SUBITEM });
+});
+
+const BUDGET_OVERLAY = { kind: 'reserved', key: 'budget', path: '/budget' } as const;
+
+test('(в) телефон: плашка поверх записи-задачи — «＋» без контекста, 💬 без чипа', async () => {
+  stubViewport(false);
+  resetFrame(`/r/${TASK}`);
+  const { calls } = renderApp();
+  await heading('Починить кран');
+  act(() => useNav.setState({ overlay: BUDGET_OVERLAY }));
+  await screen.findByText(/Бюджет придёт/);
+  const input = await capture(calls, 'под плашкой');
+  expect(input.aspects).toBeUndefined();
+  await act(async () => {});
+  expect(related(calls)).toEqual([]);
+
+  fireEvent.click(hostButton(/Чат/));
+  await heading('Чат');
+  await screen.findByRole('textbox', { name: 'Сообщение' });
+  await act(async () => {});
+  expect(screen.queryByText(/^Про:/)).toBeNull();
+});
+
+test('(б) десктоп: плашка поверх записи — чип бокового чата снят, ушла — вернулся', async () => {
+  stubViewport(true);
+  resetFrame(`/r/${TASK}`);
+  renderApp();
+  await heading('Починить кран');
+  await frameReady(true);
+  fireEvent.click(hostButton(/Чат/));
+  const side = await screen.findByRole('complementary', { name: 'Чат' }, { timeout: 5000 });
+  expect(await within(side).findByText('Про: Починить кран')).toBeInTheDocument();
+  act(() => useNav.setState({ overlay: BUDGET_OVERLAY }));
+  await waitFor(() => expect(within(side).queryByText(/^Про:/)).toBeNull());
+  act(() => useNav.setState({ overlay: null }));
+  expect(await within(side).findByText('Про: Починить кран')).toBeInTheDocument();
 });
 
 test('(в) вариант контекста `smart-list` снят (§9.4) — typecheck держит', () => {

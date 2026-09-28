@@ -3,7 +3,7 @@ import { useSearchDialog } from '../features/search/search-dialog-store';
 import { useSearchHotkey } from '../features/search/useSearchHotkey';
 import { ChunkErrorBoundary } from './ChunkErrorBoundary';
 import { HostButtons } from './frame/HostButtons';
-import { useIsDesktop } from './frame/useViewport';
+import { isDesktop, useIsDesktop } from './frame/useViewport';
 import { ActiveScreen } from './router';
 
 /**
@@ -15,25 +15,47 @@ const SearchDialog = lazy(() =>
 );
 
 /**
- * Рамка десктопа — ленивым чанком (задача 25, R-35/R-36): рейка хоста, сайдбар и боковой чат нужны
- * только ширине десктопа, телефону их код ни к чему, а входной чанк входит в замыкание экрана записи.
+ * Рамка телефона: содержимое экрана и кнопки хоста внизу справа — на месте прежнего нижнего ряда
+ * вкладок (РП-19). Она же стоит на ширине десктопа, пока едет чанк рамки десктопа или если он не
+ * приехал: элементы хоста рисуются всегда (§6.6, гейт 25 m-5) — ⌂, «⋯», 🔍, 💬, ＋ телефонной формы
+ * (форму элементы берут у рамки, `DesktopFrameContext`, а не у ширины).
  */
-const DesktopFrame = lazy(() =>
-  import('./frame/DesktopFrame').then((m) => ({ default: m.DesktopFrame })),
-);
-
-/**
- * Пока едет чанк рамки десктопа — её силуэт (тёмная рейка, светлый сайдбар, пустая основная
- * область), а не телефонная форма: та смонтировала бы экран, который тут же перемонтировался бы
- * в рамке десктопа, и мигнула бы другой раскладкой.
- */
-function DesktopFrameFallback() {
+function PhoneFrame() {
   return (
-    <div className="flex h-full bg-surface">
-      <div className="w-14 shrink-0 bg-host" />
-      <div className="w-60 shrink-0 border-r border-line" />
+    <div className="flex h-full flex-col bg-surface">
+      <ActiveScreen />
+      <HostButtons />
     </div>
   );
+}
+
+const loadDesktopFrame = () => import('./frame/DesktopFrame');
+
+/**
+ * Рамка десктопа — ленивым чанком (задача 25, R-35/R-36): рейка хоста, сайдбар и боковой чат нужны
+ * только ширине десктопа, телефону их код ни к чему, а входной чанк входит в замыкание экрана записи.
+ * Отказ загрузки — рамка телефона, а не пустота (§6.6): с ней работает всё, кроме рейки, сайдбара и
+ * бокового чата; лечение — перезагрузка (`chunk-reload.ts`).
+ */
+const lazyDesktopFrame = () =>
+  lazy(() =>
+    loadDesktopFrame().then(
+      (m) => ({ default: m.DesktopFrame }),
+      () => ({ default: PhoneFrame }),
+    ),
+  );
+let DesktopFrame = lazyDesktopFrame();
+
+// Десктоп на старте — чанк рамки в путь сразу, при загрузке модуля (гейт 25, m-5): иначе он ждал бы
+// первого рендера, а экран записи внутри него — ещё и его. Отказ здесь молчит: его покажет `lazy`.
+if (isDesktop()) void loadDesktopFrame().catch(() => {});
+
+/**
+ * Забыть загрузку рамки десктопа — ТОЛЬКО для тестов: `lazy` помнит и удачу, и отказ навсегда, а тест
+ * медленного и отказавшего чанка обязан видеть загрузку заново.
+ */
+export function resetDesktopFrameLoadForTests(): void {
+  DesktopFrame = lazyDesktopFrame();
 }
 
 /**
@@ -41,17 +63,15 @@ function DesktopFrameFallback() {
  * (`useIsDesktop`), а не CSS-классом: вторая, скрытая стилем рамка дала бы в DOM второй набор
  * элементов хоста (повторы ролей, тест двух ширин) и работала бы для экранных чтецов.
  *
- *  - телефон: содержимое экрана и кнопки хоста внизу справа — на месте прежнего нижнего ряда вкладок
- *    (РП-19). Нижней навигации нет ни в одной форме (§6.1 правило зон): навигация — сверху, в
- *    присутствии хоста;
+ *  - телефон (`PhoneFrame`). Нижней навигации нет ни в одной форме (§6.1 правило зон): навигация —
+ *    сверху, в присутствии хоста;
  *  - десктоп: рейка хоста, сайдбар навигации, основная область с капсулой кнопок хоста и боковой чат
- *    (`DesktopFrame`, ленивый).
+ *    (`DesktopFrame`, ленивый; пока едет или не приехал — рамка телефона).
  *
  * Здесь же — поиск хоста на всё приложение, один раз (§6.3, §6.4): горячая клавиша ⌘K / Ctrl+K и окно
  * поиска десктопа. Окно стоит вне `<main>` и вне истории (§7.3). Граница ошибок — своя: окно не под
  * границей `<main>`, и не приехавший чанк окна иначе уронил бы корень приложения; кадр ошибки — сверху
- * с «Обновить» (лечение отказа `lazy` — только перезагрузка, см. `ChunkErrorBoundary`). Та же граница
- * — у рамки десктопа.
+ * с «Обновить» (лечение отказа `lazy` — только перезагрузка, см. `ChunkErrorBoundary`).
  */
 export function AppShell() {
   useSearchHotkey();
@@ -60,16 +80,11 @@ export function AppShell() {
   return (
     <>
       {desktop ? (
-        <ChunkErrorBoundary resetKey="desktop-frame">
-          <Suspense fallback={<DesktopFrameFallback />}>
-            <DesktopFrame />
-          </Suspense>
-        </ChunkErrorBoundary>
+        <Suspense fallback={<PhoneFrame />}>
+          <DesktopFrame />
+        </Suspense>
       ) : (
-        <div className="flex h-full flex-col bg-surface">
-          <ActiveScreen />
-          <HostButtons />
-        </div>
+        <PhoneFrame />
       )}
       {searchOpen && (
         <div className="fixed inset-x-0 top-0 z-50 bg-surface empty:hidden">

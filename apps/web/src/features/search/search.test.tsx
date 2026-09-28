@@ -180,6 +180,10 @@ async function startOnUpcoming() {
   resetFrame('/');
   const r = renderApp();
   await heading('Домой');
+  // Десктоп: пока едет ленивый чанк рамки десктопа, стоит рамка телефона (гейт 25, m-5) — ждём рейку.
+  if (window.matchMedia?.('(min-width: 768px)').matches) {
+    await screen.findByTestId('host-rail', {}, { timeout: 5000 });
+  }
   const sheet = screen.queryByTestId('nav-switch');
   if (sheet !== null) fireEvent.click(sheet);
   fireEvent.click(await screen.findByTestId(`nav-section-${UPCOMING}`));
