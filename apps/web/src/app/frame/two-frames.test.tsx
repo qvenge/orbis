@@ -53,6 +53,8 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  // Глушение `console.error` в тестах I-1 не тянется на следующие тесты файла.
+  vi.restoreAllMocks();
   unstubLaunchMode();
   act(() => useSideChat.setState({ open: false }));
   resetFrame('/');
@@ -128,6 +130,7 @@ describe.each([
 
 const OFF_APP = '00000000-0000-4000-8000-000000002540';
 const GONE_APP = '00000000-0000-4000-8000-000000002541';
+const NAMELESS_APP = '00000000-0000-4000-8000-000000002542';
 
 describe('(б) десктоп: тёмная рейка хоста «куда» (§6.3)', () => {
   test('⌂ — домашняя хоста; приложение — одним нажатием, активное отмечено; выключенное приглушено, архивного нет; «Настройки» внизу', async () => {
@@ -143,6 +146,12 @@ describe('(б) десктоп: тёмная рейка хоста «куда» (
             title: 'Отпуск',
             aspects: [APP_ASPECT],
             props: { [APP_NAV]: [], [APP_DISABLED]: true },
+          }),
+          wireEntity({
+            id: NAMELESS_APP,
+            title: '',
+            aspects: [APP_ASPECT],
+            props: { [APP_NAV]: [] },
           }),
           wireEntity({
             id: GONE_APP,
@@ -176,6 +185,11 @@ describe('(б) десктоп: тёмная рейка хоста «куда» (
     expect(off).toHaveAttribute('data-disabled');
     expect(off.className).toContain('opacity-50');
     expect(within(rail).queryByRole('button', { name: /Старое/ })).toBeNull();
+
+    // Приложение без имени — названная кнопка с видимым глифом, а не пустая (гейт 25, m-7).
+    const nameless = within(rail).getByRole('button', { name: 'Без названия' });
+    expect(nameless).toHaveAttribute('title', 'Без названия');
+    expect(nameless.textContent?.trim()).not.toBe('');
 
     const settings = within(rail).getByRole('button', { name: 'Настройки' });
     // «Настройки» — внизу рейки: последняя кнопка.

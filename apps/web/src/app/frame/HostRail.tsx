@@ -44,7 +44,11 @@ export function HostRail() {
       </button>
       <span aria-hidden className="my-1 h-px w-6 shrink-0 bg-white/20" />
       {shown.map((a) => {
-        const label = a.disabled ? `${a.title}, выключено` : a.title;
+        // Приложение без имени (заведено через MCP или пачкой) — не невидимая безымянная кнопка
+        // (WCAG 4.1.2, гейт 25 m-7): подпись «Без названия», глиф — заглушка, как у плитки `AppsBlock`.
+        const title = a.title.trim();
+        const name = title === '' ? 'Без названия' : title;
+        const label = a.disabled ? `${name}, выключено` : name;
         return (
           <button
             key={a.id}
@@ -58,7 +62,7 @@ export function HostRail() {
             className={`${RAIL_BUTTON} ${a.disabled ? 'opacity-50' : ''}`}
           >
             <span aria-hidden className="text-lg leading-none">
-              {a.row.emoji ?? a.title.trim().charAt(0).toUpperCase()}
+              {a.row.emoji || title.charAt(0).toUpperCase() || '▫️'}
             </span>
           </button>
         );
