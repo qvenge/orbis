@@ -505,7 +505,7 @@ beforeAll(async () => {
         params: { occurred_on: OCCURRED_ON },
         batch_id: batchOf(OWNER.action, 'purchase'),
       },
-      { today: OCCURRED_ON, timeZone: 'Europe/Moscow' },
+      { today: OCCURRED_ON, timeZone: 'Europe/Moscow', ownerCurrency: 'RUB' },
     ),
   );
   const r = await execute(
@@ -546,6 +546,7 @@ beforeAll(async () => {
     const r = await resolveAction(tx, reg, OWNER.tasks, call, {
       today: OCCURRED_ON,
       timeZone: 'Europe/Moscow',
+      ownerCurrency: 'RUB',
     });
     return classifyToolCall(
       actionCallFacts(reg, r.decl, r.operations, r.targets, chatCtx(OWNER.tasks)),
@@ -624,7 +625,7 @@ describe('§С8-27 plan-to-fact: код и декларация дают оди�
           await effectiveRegistry(tx, owner),
           owner,
           { action: 'finance/plan-to-fact', self: id, params: { occurred_on: OCCURRED_ON } },
-          { today: OCCURRED_ON, timeZone: 'Europe/Moscow' },
+          { today: OCCURRED_ON, timeZone: 'Europe/Moscow', ownerCurrency: 'RUB' },
         ).then(
           () => ({ code: 'нет отказа', reason: undefined }),
           (e: unknown) => ({

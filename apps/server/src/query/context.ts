@@ -98,8 +98,9 @@ export function todayInTimeZone(timeZone: string, now: Date = new Date()): strin
  * Цена ответа «да» — не одна строка: константу читают ЧЕТЫРЕ сборщика контекста (`queryContext`
  * ниже, `executor.ts` `compileCtxOf`, `actions/resolve.ts` `queryTargets`, `subscriptions/budget.ts`
  * `runLedgers`). Все четыре уже читают настройки владельца одной выборкой `ownerQuerySettings` (пояс,
- * валюта), поэтому ответ «да» — поле `weekStartDay` в этой выборке и `settings.weekStart` вместо
- * константы у тех же четырёх; окно материализации и разбор берут неделю из контекста.
+ * валюта; резолв действия — через `actionDateArgs`, `actions/precondition.ts`), поэтому ответ «да» —
+ * поле `weekStartDay` в этой выборке (и в `ActionDateArgs`) и неделя из настроек вместо константы у
+ * тех же четырёх; окно материализации и разбор берут неделю из контекста.
  */
 export const WEEK_START: WeekStart = 'monday';
 

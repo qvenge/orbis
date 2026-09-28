@@ -259,6 +259,34 @@ test('tile sum — не денежные строки (валюта null): чи�
   expect(within(tile).getByTestId('qb-tile-value')).toHaveTextContent(/^12 000 ₽ · 100$/);
 });
 
+// Порог «больше трёх» считает ВАЛЮТЫ (спека 1в §3.6): не денежная сумма валютой не является.
+test('tile sum — три валюты и не денежное число: одной строкой, плашки нет', async () => {
+  const tile = await sumTile([
+    { currency: 'RUB', sum: '12000', count: 1 },
+    { currency: 'EUR', sum: '20', count: 1 },
+    { currency: 'USD', sum: '50', count: 1 },
+    { currency: null, sum: '100', count: 1 },
+  ]);
+  expect(within(tile).getByTestId('qb-tile-value')).toHaveTextContent(
+    /^12 000 ₽ · 20 € · 50 \$ · 100$/,
+  );
+  expect(screen.queryByTestId('qb-currencies')).toBeNull();
+});
+
+test('tile sum — четыре валюты и не денежное число: «4 валюты · 100», в плашке только валюты', async () => {
+  const tile = await sumTile([
+    { currency: 'RUB', sum: '12000', count: 1 },
+    { currency: 'EUR', sum: '20', count: 1 },
+    { currency: 'KZT', sum: '5', count: 1 },
+    { currency: 'USD', sum: '50', count: 1 },
+    { currency: null, sum: '100', count: 1 },
+  ]);
+  expect(within(tile).getByTestId('qb-tile-value')).toHaveTextContent(/^4 валюты · 100$/);
+  expect(screen.getByTestId('qb-currencies')).toHaveTextContent(
+    /^разные валюты: RUB, EUR, KZT, USD$/,
+  );
+});
+
 test('tile sum — пустая выборка: «0»', async () => {
   const tile = await sumTile([]);
   expect(within(tile).getByTestId('qb-tile-value')).toHaveTextContent(/^0$/);

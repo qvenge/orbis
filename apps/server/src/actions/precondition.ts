@@ -21,15 +21,20 @@ import { entities } from '../db/schema';
 import type { Tx } from '../db/with-identity';
 import { ExecError } from '../errors';
 import { type ExprEvalScope, evalExpr } from '../expr/eval';
-import { ownerTimeZone, todayInTimeZone } from '../query/context';
+import { ownerQuerySettings, todayInTimeZone } from '../query/context';
 import type { RegistrySnapshot } from '../registry/load';
 import type { TargetRow } from '../routines/propose';
 import { type EntityScopeInput, entityEvalScope, relationFactsOf } from '../rules/scope';
 
-/** «Сегодня» и зона владельца — то, чем резолв читает date-токены Q и предусловия. */
+/**
+ * «Сегодня», зона и валюта владельца — то, чем резолв читает date-токены Q и предусловия. Валюта —
+ * поле контекста компиляции `over` (`CompileCtx.ownerCurrency`, спека 1в §3.6): она едет сюда той же
+ * выборкой настроек, что зона (`ownerQuerySettings`), а не вторым чтением в резолве.
+ */
 export interface ActionDateArgs {
   today: string;
   timeZone: string;
+  ownerCurrency: string;
 }
 
 /**
@@ -42,8 +47,12 @@ export async function actionDateArgs(
   graphId: GraphId,
   clock?: () => Date,
 ): Promise<ActionDateArgs> {
-  const timeZone = await ownerTimeZone(tx, graphId);
-  return { today: todayInTimeZone(timeZone, clock?.() ?? new Date()), timeZone };
+  const { timeZone, currency } = await ownerQuerySettings(tx, graphId);
+  return {
+    today: todayInTimeZone(timeZone, clock?.() ?? new Date()),
+    timeZone,
+    ownerCurrency: currency,
+  };
 }
 
 /**

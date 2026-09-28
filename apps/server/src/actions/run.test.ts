@@ -33,7 +33,7 @@ const { db, client } = appDb();
 const TODAY = '2026-09-16';
 // Полдень по Москве (зона владельца по умолчанию): «сегодня» резолва — ровно TODAY.
 const NOW = new Date(`${TODAY}T09:00:00.000Z`);
-const ARGS = { today: TODAY, timeZone: 'Europe/Moscow' };
+const ARGS = { today: TODAY, timeZone: 'Europe/Moscow', ownerCurrency: 'RUB' };
 const CATEGORY = newId();
 
 let owner: GraphId;

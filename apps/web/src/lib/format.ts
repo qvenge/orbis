@@ -47,31 +47,36 @@ export function formatMoneyWithCurrency(amount: string, currency: string | null)
   return `${number} ${CURRENCY_SYMBOL[currency] ?? currency}`;
 }
 
-/** Сколько валют сумма печатает одной строкой (спека 1в §3.6); больше — плашка «разные валюты». */
+/** Сколько ВАЛЮТ сумма печатает одной строкой (спека 1в §3.6); больше — плашка «разные валюты». */
 export const SUMS_INLINE_MAX = 3;
 
 /**
  * Суммы по валютам (провод `BlockSum[]`, спека 1в §3.6) — ОДНА функция на плитку страницы и
  * карточку `user_query` в чате: одна валюта — «12 000 ₽», две–три — «12 000 ₽ · 50 $» в порядке
- * провода (валюта владельца, прочие по алфавиту, без валюты — последней, числом без символа).
- * Больше трёх — не склейка, а число валют и плашка `note` с их перечнем: строка из четырёх сумм
- * читалась бы как одна. Пустые суммы (пустая выборка) — «0».
+ * провода (валюта владельца, прочие по алфавиту, не денежное — последним, числом без символа).
+ * Порог считает ВАЛЮТЫ: не денежная сумма (`currency: null`) валютой не является и к ним не
+ * прибавляется. Валют больше трёх — не склейка, а число валют (и не денежное число рядом) и плашка
+ * `note` с их перечнем: строка из четырёх сумм читалась бы как одна. Пустые суммы — «0».
  */
 export function formatSums(sums: readonly { currency: string | null; sum: string }[]): {
   text: string;
   note: string | null;
 } {
   if (sums.length === 0) return { text: '0', note: null };
-  if (sums.length <= SUMS_INLINE_MAX) {
+  const currencies = sums.flatMap((s) => (s.currency === null ? [] : [s.currency]));
+  if (currencies.length <= SUMS_INLINE_MAX) {
     return {
       text: sums.map((s) => formatMoneyWithCurrency(s.sum, s.currency)).join(' · '),
       note: null,
     };
   }
-  const n = sums.length;
+  const n = currencies.length;
+  const plain = sums
+    .filter((s) => s.currency === null)
+    .map((s) => formatMoneyWithCurrency(s.sum, null));
   return {
-    text: `${n} ${plural(n, 'валюта', 'валюты', 'валют')}`,
-    note: `разные валюты: ${sums.map((s) => s.currency ?? 'без валюты').join(', ')}`,
+    text: [`${n} ${plural(n, 'валюта', 'валюты', 'валют')}`, ...plain].join(' · '),
+    note: `разные валюты: ${currencies.join(', ')}`,
   };
 }
 
