@@ -1,7 +1,7 @@
-import { SUPPLY_KEY } from '@orbis/shared';
+import { SUPPLY_ASPECT, SUPPLY_KEY } from '@orbis/shared';
 // Листовой сабпат, не корень пакета: экран записи тянет этот модуль эагерно (сторожа
 // `check-lazy-chunks.ts` и `save.test.tsx`), а эталоны поставки — данные без тяжёлых импортов.
-import { SUPPLY_KEYS, type SupplyKey } from '@orbis/shared/supply';
+import { HOST_SHELL_KEY, SUPPLY_KEYS, type SupplyKey } from '@orbis/shared/supply';
 import { useMemo } from 'react';
 import { trpc } from '../../trpc';
 import type { WireEntity } from '../entity-detail/record-host';
@@ -16,6 +16,24 @@ import type { WireEntity } from '../entity-detail/record-host';
  * не показывается (§9.2 гарантии — «в архиве → эталон из кода»).
  */
 export const SUPPLY_RECORDS_QUERY = 'aspect=orbis/supply';
+
+/**
+ * Запись поставки ключа `key` — ОДНО определение на весь web (финал 1б, Fable M-3): запись НЕСЁТ
+ * аспект «поставка» и ключ эталона. Снятый аспект — «выведено из поставки» (R-17): такая запись уже
+ * не оболочка хоста ни для рамки (`useAppShell` — по записям этого хука), ни для меню и правила
+ * открытия (`useApps.hostShell`); иначе рамка рисовалась бы по эталону, а «Настроить навигацию»
+ * правила бы запись, чьей навигации на экране нет. Архив здесь не решается: он — дело читателя.
+ */
+export function isSupplyRecordOf(
+  row: { aspects: readonly string[]; props: Readonly<Record<string, unknown>> },
+  key: SupplyKey,
+): boolean {
+  return row.aspects.includes(SUPPLY_ASPECT) && row.props[SUPPLY_KEY] === key;
+}
+
+/** Оболочка хоста — запись поставки `host-shell` (`isSupplyRecordOf`). */
+export const isHostShellRow = (row: Parameters<typeof isSupplyRecordOf>[0]): boolean =>
+  isSupplyRecordOf(row, HOST_SHELL_KEY);
 
 const isSupplyKey = (v: unknown): v is SupplyKey =>
   typeof v === 'string' && (SUPPLY_KEYS as readonly string[]).includes(v);
@@ -42,7 +60,7 @@ export function useSupplyRecords(): SupplyRecords {
       const key = row.props[SUPPLY_KEY];
       // Живая запись на ключ одна (правило `unique_among` аспекта «поставка»); первая — на случай,
       // если данные, внесённые до правила, держат две.
-      if (isSupplyKey(key) && !out.has(key)) out.set(key, row);
+      if (isSupplyKey(key) && isSupplyRecordOf(row, key) && !out.has(key)) out.set(key, row);
     }
     return out;
   }, [rows]);

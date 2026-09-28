@@ -16,6 +16,12 @@ type Props = {
    * kind'а (DetailScreen со сменой entityId) это стоило бы состояния экрана.
    */
   resetKey: string;
+  /**
+   * Свой кадр провала вместо кадра экрана. Для границы ВНЕ `<main>` (окно ⌘K): кадр экрана несёт
+   * шапку с присутствием хоста, а она там — второй набор элементов хоста поверх рамки (С1б-7) и
+   * окно, которое нечем закрыть (финал 1б, C1 M-5).
+   */
+  failed?: ReactNode;
 };
 type State = { failed: boolean; shownFor: string | undefined };
 
@@ -83,6 +89,7 @@ export class ChunkErrorBoundary extends Component<Props, State> {
 
   render() {
     if (!this.state.failed) return this.props.children;
+    if (this.props.failed !== undefined) return this.props.failed;
     return (
       <>
         {/* Шапка — по той же причине, по какой она есть у ScreenFallback (там же и разбор):

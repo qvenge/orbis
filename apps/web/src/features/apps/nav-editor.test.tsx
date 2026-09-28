@@ -10,6 +10,7 @@
  */
 import {
   APP_ASPECT,
+  APP_DISABLED,
   APP_HOME,
   APP_NAV,
   APP_NAV_FORM,
@@ -416,6 +417,18 @@ test('(в) приложение, где запись уже стоит, в ди�
   expect(within(dialog).getByRole('radio', { name: 'Мой дом (уже здесь)' })).toBeDisabled();
 });
 
+test('(в) выключенное приложение в диалоге — с пометкой «выключено» (финал 1б, Fable M-2)', async () => {
+  resetFrame(`/r/${LOOSE}`);
+  const off = { ...MY_ROW, props: { ...MY_ROW.props, [APP_DISABLED]: true } };
+  renderApp([...baseRows(), off]);
+  await heading('Общая страница');
+  await openMenu();
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Добавить в навигацию' }));
+  const dialog = await screen.findByRole('dialog', { name: 'Добавить в навигацию' });
+  expect(within(dialog).getByRole('radio', { name: 'Мой дом (выключено)' })).toBeEnabled();
+  expect(within(dialog).queryByRole('radio', { name: 'Мой дом' })).toBeNull();
+});
+
 test('(в) Фокус ревью п. 2: добавление в навигацию с архивным разделом — архивный вычищен, пачка проходит', async () => {
   resetFrame(`/r/${LOOSE}`);
   const rows = baseRows().map((r) => (r.id === YEAR ? { ...r, archived: true } : r));
@@ -640,4 +653,18 @@ test('M-4: выбранная домашняя до ответа сервера 
   release();
   await waitFor(() => expect(home).toHaveTextContent('Общая страница'));
   expect(within(home).queryByText('не найдено')).toBeNull();
+});
+
+test('Fable M-3: оболочка без аспекта «поставка» (выведена, R-17) — не оболочка ни рамке, ни меню', async () => {
+  resetFrame('/');
+  const rows = baseRows().map((r) =>
+    r.id === SHELL ? { ...r, aspects: r.aspects.filter((a) => a !== SUPPLY_ASPECT) } : r,
+  );
+  renderApp(rows);
+  await heading('Домой');
+  await openMenu();
+  await screen.findByRole('group', { name: 'Хост' });
+  // Рамка хоста — по эталону (записи поставки «host-shell» нет); «Настроить навигацию» не правит
+  // запись, чьей навигации на экране нет.
+  expect(screen.queryByRole('group', { name: 'Приложение «Orbis»' })).toBeNull();
 });

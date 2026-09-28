@@ -22,12 +22,16 @@ import {
   frameWorld,
   GLOBAL_THREAD,
   MY_APP,
+  MY_HOME,
   MY_SECTION,
   NOTE,
   NOTE_THREAD,
   navModel,
+  PAGES,
   RECORDS,
+  RECORDS_WORLD,
   resetFrame,
+  SHELL_ROW,
   shownPath,
   stubLaunchMode,
   UPCOMING,
@@ -110,6 +114,29 @@ test('(а) /browser — страница «Записи» разделом хо�
   await heading('Записи');
   expect(shownPath()).toBe(`/r/${RECORDS}`);
   expect(screen.getByTestId('nav-switch')).toHaveTextContent('Записи');
+});
+
+test('(а) /browser при «Записях» в архиве — «Домой» хоста, а не сохранённое место (финал C1 M-2)', async () => {
+  resetFrame('/browser');
+  // Сохранённое активное место — запись в «Моём доме»: фолбэк не должен её показать.
+  localStorage.setItem(
+    NAV_STORAGE_KEY,
+    JSON.stringify({
+      v: 2,
+      activeApp: MY_APP,
+      apps: {
+        [MY_APP]: {
+          activeSection: 'home',
+          last: { home: { kind: 'record', app: { kind: 'app', ref: MY_APP }, id: MY_SECTION } },
+        },
+      },
+    }),
+  );
+  renderApp(frameWorld({ supply: [SHELL_ROW, ...PAGES.filter((p) => p.id !== RECORDS)] }));
+  await heading('Домой');
+  expect(shownPath()).toBe('/');
+  expect(navModel().activeApp).toBe('host');
+  expect(navModel().apps.host?.activeSection).toBe('home');
 });
 
 test.each([
@@ -369,12 +396,28 @@ test('(ж) повторное нажатие на активный раздел 
   expect(navModel().apps.host?.stacks[UPCOMING]).toHaveLength(1);
 });
 
-test('⌂ хоста из приложения — «Домой» хоста одним переходом (R-23)', async () => {
+test('⌂ телефона в приложении — его домашняя в его рамке (R-38, спека §4.2, приёмка №3)', async () => {
   resetFrame(`/a/${MY_APP}/r/${MY_SECTION}`);
   renderApp();
   await heading('Ремонт');
   expect(navModel().activeApp).toBe(MY_APP);
   expect(screen.getByTestId('nav-switch')).toHaveTextContent('🏡');
+  fireEvent.click(
+    within(screen.getByTestId('host-presence')).getByRole('button', {
+      name: 'Домашняя приложения',
+    }),
+  );
+  await heading('Дом приложения');
+  expect(shownPath()).toBe(`/a/${MY_APP}`);
+  expect(navModel().activeApp).toBe(MY_APP);
+  expect(navModel().apps[MY_APP]?.activeSection).toBe('home');
+  expect(screen.getByTestId('nav-switch')).toHaveTextContent('🏡');
+});
+
+test('⌂ телефона в хосте — «Домой» хоста (R-23 для хоста в силе)', async () => {
+  resetFrame(`/r/${BREAD}`);
+  renderApp();
+  await heading('Купить хлеб');
   fireEvent.click(
     within(screen.getByTestId('host-presence')).getByRole('button', { name: 'Домой' }),
   );
@@ -382,11 +425,27 @@ test('⌂ хоста из приложения — «Домой» хоста о�
   expect(shownPath()).toBe('/');
   expect(navModel().activeApp).toBe('host');
   expect(navModel().apps.host?.activeSection).toBe('home');
-  expect(screen.getByTestId('nav-switch')).toHaveTextContent('🪐');
-  // Место приложения не потеряно: его стопка — где была.
-  expect(navModel().apps[MY_APP]?.stacks.home?.map((e) => e.address)).toContainEqual({
-    kind: 'record',
-    app: { kind: 'app', ref: MY_APP },
-    id: MY_SECTION,
-  });
+});
+
+test('домашняя своего приложения в архиве — ⌂ показывает плашку «Домашняя в архиве» (§6.6, R-38)', async () => {
+  const all = [SHELL_ROW, ...PAGES, ...RECORDS_WORLD].map((e) =>
+    e.id === MY_HOME ? { ...e, archived: true } : e,
+  );
+  resetFrame(`/a/${MY_APP}/r/${MY_SECTION}`);
+  const { calls } = renderApp(frameWorld({ all }));
+  await heading('Ремонт');
+  fireEvent.click(
+    within(screen.getByTestId('host-presence')).getByRole('button', {
+      name: 'Домашняя приложения',
+    }),
+  );
+  const plaque = await screen.findByTestId('home-archived');
+  expect(plaque).toHaveTextContent('Домашняя в архиве');
+  expect(navModel().activeApp).toBe(MY_APP);
+  fireEvent.click(within(plaque).getByRole('button', { name: 'Восстановить' }));
+  await waitFor(() =>
+    expect(calls.filter((c) => c.path === 'entity.update').map((c) => c.input)).toEqual([
+      { id: MY_HOME, archived: false },
+    ]),
+  );
 });

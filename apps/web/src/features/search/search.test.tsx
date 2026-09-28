@@ -497,3 +497,22 @@ test('M-3: Ctrl+K в русской раскладке (key «л», code KeyK) �
   fireEvent.keyDown(window, { key: 'л', code: 'KeyK' });
   expect(navModel()).toEqual(model);
 });
+
+test('M-6: Colemak/Dvorak — физическая K с латинской буквой (Ctrl+E, Ctrl+T) остаётся браузеру', async () => {
+  stubViewport(true);
+  await startOnUpcoming();
+  for (const key of ['e', 't']) {
+    const ev = new KeyboardEvent('keydown', { key, code: 'KeyK', ctrlKey: true, cancelable: true });
+    act(() => {
+      window.dispatchEvent(ev);
+    });
+    expect([key, ev.defaultPrevented, useSearchDialog.getState().open]).toEqual([
+      key,
+      false,
+      false,
+    ]);
+  }
+  // Буква «k» на любой физической клавише (Dvorak: K на месте QWERTY «V») — поиск.
+  fireEvent.keyDown(window, { key: 'k', code: 'KeyV', ctrlKey: true });
+  expect(useSearchDialog.getState().open).toBe(true);
+});

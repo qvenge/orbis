@@ -83,8 +83,33 @@ const BY_IDLE: Mount = { focusAt: null };
  * (путь длины 1): проблемы вложенных узлов спрашиваются, когда до них дойдёт очередь, а блоков
  * данных — их собственным `DataBlock` по настоящему реестру (довод `NO_REGISTRY`).
  */
-export function placementIssue(node: PageNode, kind: BodyKind): PlacementIssue | undefined {
-  return bodyIssues([node], kind, NO_REGISTRY).find((i) => i.path.length === 1);
+export function placementIssue(
+  node: PageNode,
+  kind: BodyKind,
+  repeat = false,
+): PlacementIssue | undefined {
+  if (!repeat) return bodyIssues([node], kind, NO_REGISTRY).find((i) => i.path.length === 1);
+  // Тот же блок уже стоит в документе раньше (остаток М-1, финал 1б C2 M-5): проблема ВТОРОГО из
+  // двух одинаковых — `SECOND_BLOCK` тем же текстом, что у показа; неуместный остаётся неуместным.
+  return bodyIssues([node, node], kind, NO_REGISTRY).find(
+    (i) => i.path.length === 1 && i.path[0] === 1,
+  );
+}
+
+/**
+ * Пути узлов, которые в документе ВТОРЫЕ (`SECOND_BLOCK`: второй `{{cards}}`, второй `{{cards: own}}`,
+ * повтор `{{card: X}}`), — по всему документу, а не по узлу: у одиночного узла повтора не бывает
+ * (остаток М-1, финал 1б C2 M-5). Ключ — путь `bodyIssues` через точку.
+ */
+function secondBlocksOf(
+  nodes: readonly PageNode[],
+  kind: BodyKind,
+): ReadonlyMap<string, PlacementIssue> {
+  return new Map(
+    bodyIssues(nodes, kind, NO_REGISTRY)
+      .filter((i) => i.code === 'SECOND_BLOCK')
+      .map((i) => [i.path.join('.'), i]),
+  );
 }
 
 /** Карточка аспекта в первом кадре — подписью по реестру, без данных (§9.1). */
@@ -97,9 +122,19 @@ function FirstFrameCard({ text }: { text: string }) {
   );
 }
 
-/** Узлы части контейнера — тем же правилом, что узлы верхнего уровня; пустые (null) отброшены. */
-function firstFrameNodes(nodes: readonly PageNode[], kind: BodyKind): ReactNode[] {
-  return nodes.map((node, i) => firstFrameNode(node, kind, i)).filter((n) => n !== null);
+/**
+ * Узлы части контейнера — тем же правилом, что узлы верхнего уровня; пустые (null) отброшены.
+ * `second` — вторые блоки документа (`secondBlocksOf`), `prefix` — путь части в формате `bodyIssues`.
+ */
+function firstFrameNodes(
+  nodes: readonly PageNode[],
+  kind: BodyKind,
+  second: ReadonlyMap<string, PlacementIssue>,
+  prefix: readonly number[] = [],
+): ReactNode[] {
+  return nodes
+    .map((node, i) => firstFrameNode(node, kind, i, second, [...prefix, i]))
+    .filter((n) => n !== null);
 }
 
 /**
@@ -115,7 +150,13 @@ function firstFrameNodes(nodes: readonly PageNode[], kind: BodyKind): ReactNode[
  *    `LayoutFrame`, `RecordBlockStub`), — иначе подъём редактора менял бы тело под руками.
  *    Раскладкой и данными обвязки рисует показ (рендерер страниц), а не тело в правке.
  */
-function firstFrameNode(node: PageNode, kind: BodyKind, key: number): ReactNode {
+function firstFrameNode(
+  node: PageNode,
+  kind: BodyKind,
+  key: number,
+  second: ReadonlyMap<string, PlacementIssue>,
+  path: readonly number[],
+): ReactNode {
   if (node.kind === 'text') {
     const text = node.text.trim();
     return text === '' ? null : <FrameMarkdown key={key} source={text} />;
@@ -129,7 +170,7 @@ function firstFrameNode(node: PageNode, kind: BodyKind, key: number): ReactNode 
       </div>
     );
   }
-  const issue = placementIssue(node, kind);
+  const issue = second.get(path.join('.')) ?? placementIssue(node, kind);
   if (issue !== undefined) {
     // Без признака data-query-widget, в отличие от живого блока: плашка — не виджет со своим
     // смыслом, а место в тексте, и касание её зовёт редактор, где этот текст и правится. Тон — тем
@@ -150,7 +191,7 @@ function firstFrameNode(node: PageNode, kind: BodyKind, key: number): ReactNode 
           {node.parts.map((part, p) => (
             // biome-ignore lint/suspicious/noArrayIndexKey: части не переставляются — порядок и есть их имя
             <LayoutFrameBox key={p} label={columnFrameLabel(p)}>
-              {firstFrameNodes(part, kind)}
+              {firstFrameNodes(part, kind, second, [...path, p])}
             </LayoutFrameBox>
           ))}
         </LayoutStack>
@@ -161,7 +202,7 @@ function firstFrameNode(node: PageNode, kind: BodyKind, key: number): ReactNode 
           {node.parts.map((tab, p) => (
             // biome-ignore lint/suspicious/noArrayIndexKey: части не переставляются — порядок и есть их имя
             <LayoutFrameBox key={p} label={tabFrameLabel(tab.label)}>
-              {firstFrameNodes(tab.children, kind)}
+              {firstFrameNodes(tab.children, kind, second, [...path, p])}
             </LayoutFrameBox>
           ))}
         </LayoutStack>
@@ -294,7 +335,8 @@ export function EditorShell({
   const kind = useBodyKind();
   // Ключ узла — его порядок в тексте тела: узлы первого кадра не переставляются, только
   // пересобираются из текста целиком.
-  const frame = firstFrameNodes(parsePageText(markdown), kind);
+  const nodes = parsePageText(markdown);
+  const frame = firstFrameNodes(nodes, kind, secondBlocksOf(nodes, kind));
   // Оба ослабления a11y — одной строкой ниже: у многострочного `//`-комментария биом читает
   // как подавление только ПОСЛЕДНЮЮ строку, и первое правило осталось бы неподавленным.
   // Довод тот же, что у DetailScreen: клавиатурного двойника у этого жеста нет и не нужно —

@@ -15,7 +15,11 @@ import {
 } from '@orbis/shared/doc';
 import { GRAMMAR_ERROR_MESSAGES } from '@orbis/shared/doc/page-grammar';
 import type { BodyKind } from '@orbis/shared/doc/placement';
-import { MISPLACED_HINT } from '@orbis/shared/doc/placement';
+import {
+  MISPLACED_HINT,
+  SECOND_OWN_CARDS_MESSAGE,
+  secondCardMessage,
+} from '@orbis/shared/doc/placement';
 import { FIXTURE_PARSE_REGISTRY } from '@orbis/shared/query/fixtures';
 import { cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -518,4 +522,38 @@ describe('подпись вкладки правится в рамке наст�
     expect(tabLabels(editor)).toEqual(['План', '']);
     expect(onChange).not.toHaveBeenCalled();
   });
+});
+
+// --- финал 1б, C2 M-5 (остаток М-1): второй блок карточек — плашка «второй» и в настройке ---------
+
+test('шаблон: второй {{cards: own}} — плашка «второй» в первом кадре и в редакторе; удалили первый — плашки нет', async () => {
+  const md = '{{cards: own}}\n\nмежду\n\n{{cards: own}}';
+  mountFirstFrame('template', md);
+  await waitFor(() => expect(stubLabels()).toEqual(['[Свои карточки]']));
+  expect(screen.getByTestId('block-misplaced')).toHaveTextContent(SECOND_OWN_CARDS_MESSAGE);
+  cleanup();
+
+  const { h } = mountEditor('template', md);
+  await waitFor(() => expect(h.editor).not.toBeNull());
+  await waitFor(() => expect(stubLabels()).toEqual(['[Свои карточки]']));
+  expect(screen.getByTestId('block-misplaced')).toHaveTextContent(SECOND_OWN_CARDS_MESSAGE);
+  // Первый блок удалён — оставшийся уже не второй: плашка уходит без правки его самого.
+  const editor = h.editor as Editor;
+  editor.commands.deleteRange({ from: 0, to: editor.state.doc.child(0).nodeSize });
+  await waitFor(() => expect(screen.queryByTestId('block-misplaced')).toBeNull());
+  expect(stubLabels()).toEqual(['[Свои карточки]']);
+});
+
+test('шаблон: повтор {{card: X}} одинаковым текстом — плашка «второй» в обоих кадрах', async () => {
+  const md = '{{card: orbis/task}}\n\n{{card: orbis/task}}';
+  const message = secondCardMessage('{{card: orbis/task}}');
+  mountFirstFrame('template', md);
+  await waitFor(() => expect(screen.getByTestId('block-misplaced')).toHaveTextContent(message));
+  expect(screen.getAllByTestId('block-misplaced')).toHaveLength(1);
+  cleanup();
+
+  const { h } = mountEditor('template', md);
+  await waitFor(() => expect(h.editor).not.toBeNull());
+  await waitFor(() => expect(screen.getByTestId('block-misplaced')).toHaveTextContent(message));
+  expect(screen.getAllByTestId('block-misplaced')).toHaveLength(1);
 });

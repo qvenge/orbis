@@ -9,9 +9,10 @@
  * (`MockHandler`, третий аргумент), а не список имён процедур: новая кнопка с новой процедурой
  * иначе прошла бы мимо сторожа.
  */
-import { PAGE_ASPECT, TEMPLATE_FOR_PROPERTY } from '@orbis/shared';
+import { PAGE_ASPECT, SUPPLY_ASPECT, SUPPLY_KEY, TEMPLATE_FOR_PROPERTY } from '@orbis/shared';
 import { parseBody } from '@orbis/shared/doc';
 import type { QueryAst } from '@orbis/shared/query';
+import { printPageRecord } from '@orbis/shared/supply/print';
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { noteRegistryVersion, resetRegistryVersionForTests } from '../../lib/registry/useRegistry';
@@ -234,8 +235,12 @@ const READING_MUTATIONS: ReadonlySet<string> = new Set(['entity.blocks']);
  * Мир предпросмотра: экран — шаблон, подходящая запись — `record` (связи, версия, прогоны, пачка).
  * Каждая мутация складывается в `mutations`: после обхода их быть не должно.
  */
-function openPreview(record: StructureFixture, forAspects: string[]) {
-  const tpl = templateFor(forAspects);
+function openPreview(
+  record: StructureFixture,
+  forAspects: string[],
+  opts: { tpl?: WireEntityFixture; updates?: readonly unknown[] } = {},
+) {
+  const tpl = opts.tpl ?? templateFor(forAspects);
   navAt(TPL);
   const withRelations: StructureFixture = {
     ...record,
@@ -285,6 +290,7 @@ function openPreview(record: StructureFixture, forAspects: string[]) {
       ];
     }
     if (path === 'routine.runUnits') return RUN_UNITS;
+    if (path === 'supply.updates') return opts.updates ?? [];
     if (path === 'chat.listMessages') return THREAD_MESSAGES;
     return recordScreen(path, input);
   };
@@ -470,4 +476,51 @@ test('финансы: ссылка в секции аспекта — назва
   expect(category).not.toHaveTextContent(uuid(900));
   await pokeEverything(root);
   expect(mutations).toEqual([]);
+});
+
+/** Предложение обновления поставки о записи `recordId` — как его отдаёт `supply.updates`. */
+const updateFor = (recordId: string, key: string) => ({
+  key,
+  kind: 'update',
+  recordId,
+  edited: false,
+  declined: false,
+  etalonText: printPageRecord({ title: 'Новое', emoji: null, body: 'Новое.' }),
+  recordText: printPageRecord({ title: 'Старое', emoji: null, body: 'Старое.' }),
+});
+
+test('запись поставки в предпросмотре — плашки обновления с «Принять»/«Оставить своё» нет (финал 1б, C2 M-2)', async () => {
+  const ticket = STRUCTURE_FIXTURES.find((f) => f.name === 'ticket');
+  if (ticket === undefined) throw new Error('нет фикстуры ticket');
+  const supplied: StructureFixture = {
+    ...ticket,
+    entity: { ...ticket.entity, aspects: [...ticket.entity.aspects, SUPPLY_ASPECT] },
+  };
+  const { mutations } = openPreview(supplied, ['orbis/task', 'orbis/assignment'], {
+    updates: [updateFor(supplied.entity.id, 'routines')],
+  });
+  const root = await previewRoot('Обновить зависимости');
+  await settle();
+  expect(within(root).queryByTestId('supply-plaque')).toBeNull();
+  await pokeEverything(root);
+  expect(mutations).toEqual([]);
+});
+
+test('«Шаблон хоста» с предложением обновления — плашка о самой записи видна по умолчанию (финал 1б, C2 M-3)', async () => {
+  const ticket = STRUCTURE_FIXTURES.find((f) => f.name === 'ticket');
+  if (ticket === undefined) throw new Error('нет фикстуры ticket');
+  const hostTpl = wireEntity({
+    id: TPL,
+    title: 'Шаблон хоста',
+    body: HOST_TEMPLATE_TEXT,
+    bodyDoc: parseBody(HOST_TEMPLATE_TEXT),
+    aspects: [PAGE_ASPECT, SUPPLY_ASPECT],
+    props: { [SUPPLY_KEY]: 'host-template' },
+  });
+  openPreview(ticket, [], { tpl: hostTpl, updates: [updateFor(TPL, 'host-template')] });
+  const root = await previewRoot('Обновить зависимости');
+  // По умолчанию на экране — запись-пример; предложение — о записи шаблона, над предпросмотром.
+  const plaque = await screen.findByTestId('supply-plaque', {}, { timeout: 5000 });
+  expect(root.contains(plaque)).toBe(false);
+  expect(screen.getAllByTestId('supply-plaque')).toHaveLength(1);
 });

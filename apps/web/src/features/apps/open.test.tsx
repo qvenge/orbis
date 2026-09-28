@@ -412,6 +412,27 @@ test('(з) чип на запись-оболочку хоста — «/», «Д�
   await heading('Домой');
   await waitFor(() => expect(shownPath()).toBe('/'));
   await waitFor(() => expect(frameIcon()).toHaveTextContent('🪐'));
+  // Домашняя — корень HOME_SECTION хоста одной записью, не двойник поверх «Домой» (финал C1 M-1).
+  const host = useNav.getState().model.apps.host;
+  expect(host?.activeSection).toBe('home');
+  expect(host?.stacks.home?.map((e) => e.address)).toEqual([
+    { kind: 'home', app: { kind: 'host' } },
+  ]);
+});
+
+test('(з) чип на своё приложение изнутри него — домашняя одной записью в HOME_SECTION (финал C1 M-1)', async () => {
+  resetFrame(`/a/${MY}/r/${CHIPS}`);
+  const note = wireEntity({ id: CHIPS, title: 'Ссылки', body: `Дом: [[entity:${MY}]]` });
+  renderApp(appsWorld({ records: [note] }));
+  await heading('Ссылки');
+  fireEvent.click(await screen.findByRole('link', { name: MY }));
+  await heading('Дом приложения');
+  await waitFor(() => expect(shownPath()).toBe(`/a/${MY}`));
+  const my = useNav.getState().model.apps[MY];
+  expect(my?.activeSection).toBe('home');
+  expect(my?.stacks.home?.map((e) => e.address)).toEqual([
+    { kind: 'home', app: { kind: 'app', ref: MY } },
+  ]);
 });
 
 // Соседи, на которых правило не должно спотыкаться: обычная запись без мест и не-приложения.

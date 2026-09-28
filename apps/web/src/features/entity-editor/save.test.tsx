@@ -1601,6 +1601,9 @@ test('модули первого кадра не тянут схему реда
     '../settings/extension-mask.ts',
     '../../lib/invalidate.ts',
     '../../lib/dates.ts',
+    // Вкладка настроек, которую открывает «⋯ → Настройки» (`ScreenMenu`, задача 22): стор и переход
+    // — эагерно из меню экрана записи (финал 1б, C2 M-4).
+    '../settings/settings-tab.ts',
   ]) {
     expect(
       runtimeImports(file).filter((s) => EDITOR_WEIGHT.test(s)),

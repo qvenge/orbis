@@ -6,7 +6,8 @@ import {
   type RecordBlockName,
 } from '@orbis/shared/doc/page-grammar';
 import type { NodeViewProps } from '@tiptap/core';
-import { NodeViewWrapper, ReactNodeViewRenderer } from '@tiptap/react';
+import type { Node as PmNode } from '@tiptap/pm/model';
+import { NodeViewWrapper, ReactNodeViewRenderer, useEditorState } from '@tiptap/react';
 import { useState } from 'react';
 import { useBodyKind } from '../../../lib/query-blocks/body-kind';
 import { useFieldCatalog } from '../../../lib/query-blocks/useFieldCatalog';
@@ -47,12 +48,49 @@ function Plaque({ message, hint }: { message: string; hint: string | undefined }
   return <BlockPlaque tone="misplaced" message={message} {...(hint !== undefined && { hint })} />;
 }
 
-function RecordStub({ node, selected }: NodeViewProps) {
+/**
+ * Стоит ли такой же блок в документе РАНЬШЕ этого узла (порядок документа — порядок `bodyIssues`):
+ * тогда этот — второй, и на его месте плашка «второй» (остаток М-1, финал 1б C2 M-5), как у показа
+ * и первого кадра. Подписка — `useEditorState`: NodeView перерисовывается только при правке СВОЕГО
+ * узла, а «второй» меняется правкой соседа (удалили первый — плашка обязана уйти).
+ */
+function useRepeated(
+  editor: NodeViewProps['editor'],
+  getPos: NodeViewProps['getPos'],
+  same: (n: PmNode) => boolean,
+): boolean {
+  return (
+    useEditorState({
+      editor,
+      selector: ({ editor: e }) => {
+        const at = getPos();
+        if (e === null || typeof at !== 'number') return false;
+        let earlier = false;
+        e.state.doc.descendants((n, pos) => {
+          if (earlier || pos >= at) return false;
+          if (same(n)) earlier = true;
+          return !earlier;
+        });
+        return earlier;
+      },
+    }) ?? false
+  );
+}
+
+function RecordStub({ node, selected, editor, getPos }: NodeViewProps) {
   const kind = useBodyKind();
   const raw = typeof node.attrs.name === 'string' ? node.attrs.name : '';
   const name = KNOWN.has(raw) ? (raw as RecordBlockName) : null;
+  // Повторяется только `{{cards}}` (РП-4): прочие блоки обвязки «второго» не знают.
+  const repeated = useRepeated(
+    editor,
+    getPos,
+    (n) => name === 'cards' && n.type.name === 'recordBlock' && n.attrs.name === 'cards',
+  );
   const issue =
-    name === null ? undefined : placementIssue({ kind: 'record', name, raw: `{{${name}}}` }, kind);
+    name === null
+      ? undefined
+      : placementIssue({ kind: 'record', name, raw: `{{${name}}}` }, kind, repeated);
   return (
     <NodeViewWrapper data-query-widget="" contentEditable={false}>
       {issue !== undefined ? (
@@ -72,13 +110,23 @@ function RecordStub({ node, selected }: NodeViewProps) {
  * сервер вернул бы карточке прежний ключ, и смена молча не состоялась бы. По новому тексту id
  * проставит та же привязка при записи.
  */
-function CardStub({ node, updateAttributes, selected }: NodeViewProps) {
+function CardStub({ node, updateAttributes, selected, editor, getPos }: NodeViewProps) {
   const kind = useBodyKind();
   const { registry } = useFieldCatalog();
   const [choosing, setChoosing] = useState(false);
   const text = typeof node.attrs.text === 'string' ? node.attrs.text : '';
   const aspectId = typeof node.attrs.aspect === 'string' ? node.attrs.aspect : null;
-  const issue = placementIssue({ kind: 'card', aspect: text, raw: `{{card: ${text}}}` }, kind);
+  // Повтор — ОДИНАКОВЫМ текстом, как у `bodyIssues` (разные написания одного аспекта узнаёт показ).
+  const repeated = useRepeated(
+    editor,
+    getPos,
+    (n) => n.type.name === 'aspectCard' && String(n.attrs.text ?? '').trim() === text.trim(),
+  );
+  const issue = placementIssue(
+    { kind: 'card', aspect: text.trim(), raw: `{{card: ${text}}}` },
+    kind,
+    repeated,
+  );
   if (issue !== undefined) {
     return (
       <NodeViewWrapper data-query-widget="" contentEditable={false}>
@@ -114,9 +162,10 @@ function CardStub({ node, updateAttributes, selected }: NodeViewProps) {
  * рисует только показ. Где блок не работает (заметка) или стоит вторым — плашка, как у обвязки.
  * `raw` — каноническая печать узла: из неё плашка и берёт имя блока.
  */
-function OwnCardsStub({ selected }: NodeViewProps) {
+function OwnCardsStub({ selected, editor, getPos }: NodeViewProps) {
   const kind = useBodyKind();
-  const issue = placementIssue({ kind: 'ownCards', raw: `{{cards: own}}` }, kind);
+  const repeated = useRepeated(editor, getPos, (n) => n.type.name === 'ownCards');
+  const issue = placementIssue({ kind: 'ownCards', raw: `{{cards: own}}` }, kind, repeated);
   return (
     <NodeViewWrapper data-query-widget="" contentEditable={false}>
       {issue !== undefined ? (

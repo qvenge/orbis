@@ -256,6 +256,16 @@ describe('(в) десктоп: сайдбар навигации текущег�
     fireEvent.click(row);
     await heading('Ремонт');
     expect(shownPath()).toBe(`/a/${MY_APP}/r/${MY_SECTION}`);
+    // Одна стопка (§7.3): «Ремонт» лёг поверх домашней, а не завёл раздел — как плитка.
+    expect(navModel().activeApp).toBe(MY_APP);
+    expect(navModel().apps[MY_APP]?.activeSection).toBe('home');
+    expect(navModel().apps[MY_APP]?.stacks.home).toHaveLength(2);
+    expect(Object.keys(navModel().apps[MY_APP]?.stacks ?? {})).toEqual(['home']);
+    // «‹» — на домашнюю приложения, а не в хост.
+    fireEvent.click(within(screen.getByTestId('host-presence')).getByTestId('host-back'));
+    await heading('Дом приложения');
+    expect(shownPath()).toBe(`/a/${MY_APP}`);
+    expect(navModel().activeApp).toBe(MY_APP);
   });
 });
 

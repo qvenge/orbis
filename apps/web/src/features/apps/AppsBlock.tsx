@@ -1,3 +1,4 @@
+import { HOST_APP } from '@orbis/shared/nav';
 import { useNav } from '../../state/navigation';
 import { useApps } from './useApps';
 
@@ -10,12 +11,20 @@ import { useApps } from './useApps';
  * Оболочки хоста среди плиток нет (хост — ⌂), архивных — тоже: архив и есть «удалить приложение»
  * (§8.6). Выключенное нажимается: его адрес покажет плашку «выключено — [включить]».
  *
- * `onPick` — хозяину плиток (лист «Все приложения» закрывается выбором).
+ * `onPick` — хозяину плиток (лист «Все приложения» закрывается выбором). `withHost` — лист «Все
+ * приложения» (R-38): на телефоне ⌂ открывает домашнюю приложения рамки, и путь в хост из приложения —
+ * «‹» по журналу и хост первой плиткой этого листа. На «Домой» (сам хост) плитка хоста ни к чему.
  */
-export function AppsBlock({ onPick }: { onPick?: () => void }) {
-  const { apps, status } = useApps();
+export function AppsBlock({
+  onPick,
+  withHost = false,
+}: {
+  onPick?: () => void;
+  withHost?: boolean;
+}) {
+  const { apps, status, hostShell } = useApps();
   const shown = apps.filter((a) => !a.archived);
-  if (status === 'ok' && shown.length === 0) {
+  if (!withHost && status === 'ok' && shown.length === 0) {
     return (
       <p data-testid="apps-block" className="text-sm text-text-muted">
         Своих приложений пока нет
@@ -24,6 +33,22 @@ export function AppsBlock({ onPick }: { onPick?: () => void }) {
   }
   return (
     <div data-testid="apps-block" className="grid grid-cols-3 gap-2 sm:grid-cols-4">
+      {withHost && (
+        <button
+          type="button"
+          data-testid="app-tile-host"
+          onClick={() => {
+            onPick?.();
+            useNav.getState().switchApp(HOST_APP);
+          }}
+          className="flex min-h-20 cursor-pointer flex-col items-center justify-center gap-1 rounded-card border border-line bg-surface p-2 text-center text-sm transition hover:bg-surface-2"
+        >
+          <span aria-hidden className="text-2xl">
+            {hostShell?.emoji ?? '🪐'}
+          </span>
+          <span className="line-clamp-2">{hostShell?.title ?? 'Orbis'}</span>
+        </button>
+      )}
       {shown.map((a) => (
         <button
           key={a.id}

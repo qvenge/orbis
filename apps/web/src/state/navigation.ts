@@ -92,8 +92,14 @@ export interface NavState {
   openSection(app: AppKey, section: SectionKey): void;
   /** Переключатель приложений: его стопка (приложение) или последнее место (сайт). */
   switchApp(app: AppKey): void;
-  /** ⌂ хоста (R-23): «Домой» хоста одним переходом из любого приложения. */
+  /** ⌂ рейки десктопа (R-23, R-38): «Домой» хоста одним переходом из любого приложения. */
   goHome(): void;
+  /**
+   * ⌂ присутствия хоста на телефоне (R-38; спека §4.2 «Домашняя — что открывает ⌂ приложения»,
+   * приёмка №3): домашняя приложения РАМКИ одним переходом; у хоста — «Домой». Путь из приложения в
+   * хост на телефоне — «‹» по журналу и «⋯ → Все приложения» (там есть хост).
+   */
+  goFrameHome(): void;
   openHostScreen(s: HostScreen, q?: string): void;
   /** «‹» хоста. В режиме сайта на первой записи вкладки идёт по модели (R-24). */
   back(): void;
@@ -178,6 +184,10 @@ export const useNav = create<NavState>()((set, get) => ({
     go({ type: 'section', app, section, root: sectionRoot(app, section) }),
   switchApp: (app) => go({ type: 'switch-app', app, home: { kind: 'home', app: appRefOf(app) } }),
   goHome: () => go({ type: 'switch-app', app: HOST_APP, home: HOST_HOME, toHome: true }),
+  goFrameHome: () => {
+    const app = get().model.activeApp;
+    go({ type: 'switch-app', app, home: { kind: 'home', app: appRefOf(app) }, toHome: true });
+  },
   openHostScreen: (screen, q) =>
     go({
       type: 'host-screen',

@@ -1,7 +1,8 @@
 import { type ComponentType, lazy, Suspense, useState } from 'react';
 import { useSearchDialog } from '../features/search/search-dialog-store';
 import { useSearchHotkey } from '../features/search/useSearchHotkey';
-import { ChunkErrorBoundary } from './ChunkErrorBoundary';
+import { Button } from '../ui/Button';
+import { ChunkErrorBoundary, ReloadButton } from './ChunkErrorBoundary';
 import { HostButtons } from './frame/HostButtons';
 import { isDesktop, useIsDesktop } from './frame/useViewport';
 import { ActiveScreen } from './router';
@@ -104,8 +105,9 @@ function DesktopSlot() {
  *
  * Здесь же — поиск хоста на всё приложение, один раз (§6.3, §6.4): горячая клавиша ⌘K / Ctrl+K и окно
  * поиска десктопа. Окно стоит вне `<main>` и вне истории (§7.3). Граница ошибок — своя: окно не под
- * границей `<main>`, и не приехавший чанк окна иначе уронил бы корень приложения; кадр ошибки — сверху
- * с «Обновить» (лечение отказа `lazy` — только перезагрузка, см. `ChunkErrorBoundary`).
+ * границей `<main>`, и не приехавший чанк окна иначе уронил бы корень приложения. Кадр ошибки —
+ * свой (`SearchDialogFailed`), без шапки экрана: присутствие хоста в ней было бы вторым набором
+ * элементов хоста поверх рамки (С1б-7), а окно — не закрыть (финал 1б, C1 M-5).
  */
 export function AppShell() {
   useSearchHotkey();
@@ -116,7 +118,7 @@ export function AppShell() {
       {desktop ? <DesktopSlot /> : <PhoneFrame />}
       {searchOpen && (
         <div className="fixed inset-x-0 top-0 z-50 bg-surface empty:hidden">
-          <ChunkErrorBoundary resetKey="search-dialog">
+          <ChunkErrorBoundary resetKey="search-dialog" failed={<SearchDialogFailed />}>
             <Suspense fallback={null}>
               <SearchDialog />
             </Suspense>
@@ -124,5 +126,27 @@ export function AppShell() {
         </div>
       )}
     </>
+  );
+}
+
+/**
+ * Чанк окна ⌘K не приехал: «Обновить» (лечение отказа `lazy` — только перезагрузка,
+ * `ChunkErrorBoundary`) и «Закрыть» — окно снимается, рамка под ним на месте.
+ */
+function SearchDialogFailed() {
+  return (
+    <div
+      role="alert"
+      data-testid="search-dialog-failed"
+      className="mx-auto flex max-w-xl flex-col items-center gap-3 p-6 text-sm text-danger"
+    >
+      <span>Не удалось открыть поиск</span>
+      <div className="flex gap-2">
+        <ReloadButton />
+        <Button variant="ghost" onClick={() => useSearchDialog.getState().hide()}>
+          Закрыть
+        </Button>
+      </div>
+    </div>
   );
 }

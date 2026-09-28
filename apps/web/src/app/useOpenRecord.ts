@@ -5,7 +5,7 @@ import { FrameAppContext } from './frame/FrameApp';
 
 /**
  * Открыть запись по ссылке из экрана (спека 1б §7.2): ссылка из содержимого несёт приложение рамки,
- * из экрана хоста (чат, карточки чата, поиск, память) — хост. Дальше место уточняет правило открытия
+ * из экрана хоста (чат, карточки чата, поиск, настройки, память) — хост. Дальше место уточняет правило открытия
  * на экране записи (`features/apps/useOpening.ts`): одно место — замена адреса на его рамку,
  * запись-приложение — его домашняя (`openApp`, Р-20), спор мест — вопрос. Здесь правила нет
  * намеренно: аспектов записи по ссылке ещё не знает никто, а решение без них было бы догадкой.
@@ -17,8 +17,12 @@ export function useOpenRecord(): (id: string) => void {
   return useCallback(
     (id: string) => {
       const nav = useNav.getState();
-      if (frame?.via === 'host-screen') {
-        nav.openRecord(id, { app: HOST_APP, from: 'host-screen' });
+      if (frame?.via === 'host-screen' || frame?.via === 'host-page') {
+        // Чат и поиск снимаются переходом; настройки и память остаются под записью (§7.3).
+        nav.openRecord(id, {
+          app: HOST_APP,
+          from: frame.via === 'host-screen' ? 'host-screen' : 'content',
+        });
         return;
       }
       nav.openRecord(id, { app: frame?.app ?? nav.model.activeApp, from: 'content' });

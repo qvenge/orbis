@@ -60,9 +60,10 @@ test('каждый переход спрашивает стража ухода: 
     s.openSection('host', B);
     s.switchApp(APP);
     s.goHome();
+    s.goFrameHome();
     s.openHostScreen('chat');
     s.back();
-    expect(asked).toBe(7);
+    expect(asked).toBe(8);
     expect(useNav.getState().model).toBe(before);
     expect(effects).toEqual([]);
   } finally {
@@ -82,11 +83,32 @@ test('состояние экрана и уточнение места стра�
   }
 });
 
-test('⌂ хоста — «Домой» хоста из любого приложения, а не последнее место хоста (R-23)', () => {
+test('⌂ рейки — «Домой» хоста из любого приложения, а не последнее место хоста (R-23, R-38)', () => {
   useNav.getState().openRecord(B);
   useNav.getState().openRecord(A, { app: APP });
   useNav.getState().goHome();
   expect(useNav.getState().model.activeApp).toBe('host');
+  expect(topAddress()).toEqual({ kind: 'home', app: { kind: 'host' } });
+});
+
+test('⌂ телефона — домашняя приложения РАМКИ, а не «Домой» хоста (R-38, спека §4.2)', () => {
+  useNav.getState().openRecord(A, { app: APP });
+  useNav.getState().openSection(APP, B);
+  useNav.getState().goFrameHome();
+  const m = useNav.getState().model;
+  expect(m.activeApp).toBe(APP);
+  expect(m.apps[APP]?.activeSection).toBe('home');
+  expect(topAddress()).toEqual({ kind: 'home', app: { kind: 'app', ref: APP } });
+  // Стопка раздела на месте: ⌂ приложения его не сносит.
+  expect(m.apps[APP]?.stacks[B]).toHaveLength(1);
+});
+
+test('⌂ телефона в рамке хоста — «Домой» хоста (R-23 для хоста в силе)', () => {
+  useNav.getState().openSection('host', A);
+  useNav.getState().openRecord(B);
+  useNav.getState().goFrameHome();
+  expect(useNav.getState().model.activeApp).toBe('host');
+  expect(useNav.getState().model.apps.host?.activeSection).toBe('home');
   expect(topAddress()).toEqual({ kind: 'home', app: { kind: 'host' } });
 });
 

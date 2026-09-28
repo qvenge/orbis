@@ -9,7 +9,7 @@
  *
  * Модель истории среза 1б (`@orbis/shared/nav`) — чистая функция и стража НЕ зовёт: `mayLeave()`
  * зовёт стор навигации (`state/navigation.ts`) первой строкой КАЖДОГО перехода — `openRecord`,
- * `openAddress`, `openSection`, `switchApp`, `goHome`, `openHostScreen`, `back`, — до `navReduce`, и
+ * `openAddress`, `openSection`, `switchApp`, `goHome`, `goFrameHome`, `openHostScreen`, `back`, — до `navReduce`, и
  * при «нет» просто не применяет действие (РП-33); системный «назад» спрашивает его в `popstate`
  * (`app/history.ts`). Переход мимо стража снова терял бы правку молча.
  *

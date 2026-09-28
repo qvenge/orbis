@@ -63,10 +63,17 @@ export function ActiveScreen() {
   const model = useNav((s) => s.model);
   const overlay = useNav((s) => s.overlay);
   const address = currentEntry(model).address;
-  const hostScreen = address.kind === 'host-screen';
+  // Какой экран хоста — важно ссылкам с него: чат и поиск снимаются переходом, настройки и память
+  // остаются в стопке (§7.3; финал 1б, C1 M-3).
+  const hostScreen = address.kind === 'host-screen' ? address.screen : null;
   const frame = useMemo<FrameApp>(
     () =>
-      hostScreen ? { app: HOST_APP, via: 'host-screen' } : { app: model.activeApp, via: 'content' },
+      hostScreen === null
+        ? { app: model.activeApp, via: 'content' }
+        : {
+            app: HOST_APP,
+            via: hostScreen === 'chat' || hostScreen === 'search' ? 'host-screen' : 'host-page',
+          },
     [hostScreen, model.activeApp],
   );
   const place = overlay !== null ? overlay.path : buildAddress(address);

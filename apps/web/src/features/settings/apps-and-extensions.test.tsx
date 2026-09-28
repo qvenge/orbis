@@ -262,6 +262,11 @@ test('(в) «Выключить приложение»: место и «Цели
   const { callsOf } = render();
   const dialog = await openAppDialog(WORK, 'Выключить приложение');
   expect(within(dialog).getByTestId('disable-app-place')).toHaveTextContent('Место «Работа»');
+  // Диалог обещает то, что будет (§8.6, финал C1 M-4): плитка остаётся приглушённой, а не пропадает.
+  expect(within(dialog).getByTestId('disable-app-place')).toHaveTextContent(
+    'останется приглушённой, с пометкой «выключено»',
+  );
+  expect(within(dialog).getByTestId('disable-app-place')).not.toHaveTextContent('пропадёт');
   const goals = within(dialog).getByRole('checkbox', { name: 'Цели' });
   expect(goals).toBeChecked();
   // «Проекты» держит включённая «Учёба» — не сирота; «Цели» у выключенной «Дачи» — не держит.

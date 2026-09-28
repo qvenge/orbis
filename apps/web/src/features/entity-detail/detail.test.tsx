@@ -257,6 +257,30 @@ test('снятие галочки у закрытой задачи — снят�
   });
 });
 
+test('снятие галочки: пока правка летит, чекбокс на месте и снят (финал 1б, C2 M-1)', async () => {
+  const closed = {
+    ...entity,
+    props: { 'orbis/task_status': 'done', 'orbis/completed_at': '2026-09-01T10:00:00.000Z' },
+  };
+  const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
+    if (path === 'entity.get')
+      return { entity: closed, relations: [], thread: { threadId: 'th1', messages: [] } };
+    // Ответ не приходит: на экране — только оптимистичный патч.
+    if (path === 'entity.update') return new Promise(() => {});
+    return registryReply(path) ?? {};
+  });
+  await waitFor(() => expect(screen.getByRole('heading', { name: 'Задача' })).toBeInTheDocument());
+  fireEvent.click(screen.getByRole('checkbox', { name: /готово/i }));
+  await waitFor(() => expect(calls.some((c) => c.path === 'entity.update')).toBe(true));
+  // На провод ушёл `unset`, а строка не потеряла контрол, по которому нажали.
+  expect(calls.find((c) => c.path === 'entity.update')?.input).toEqual({
+    id: 'e1',
+    unset: ['orbis/task_status'],
+  });
+  const box = screen.getByRole('checkbox', { name: /готово/i });
+  expect(box).not.toBeChecked();
+});
+
 /*
  * Прежняя проверка «inline body-правка шлёт expectedUpdatedAt = точная строка updatedAt» ушла
  * вместе с самим путём: тело больше не сохраняется по blur из textarea, а уезжает

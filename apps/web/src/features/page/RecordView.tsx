@@ -399,8 +399,10 @@ export function RecordView({
               rows={list.rows}
             />
           )}
-          {/* Обновление поставки — предложение на самой записи (срез 1б §9.1 п. 2). */}
-          <SupplyPlaqueSlot entity={entity} />
+          {/* Обновление поставки — предложение на самой записи (срез 1б §9.1 п. 2). В предпросмотре
+              шаблона запись взята для примера — только чтение целиком (§10, С1б-13): «Принять» и
+              «Оставить своё» пишут в граф, их там нет (финал 1б, C2 M-2). */}
+          {!readOnly && <SupplyPlaqueSlot entity={entity} />}
           <ShownTemplate
             shown={decision.shown}
             host={hostSource}

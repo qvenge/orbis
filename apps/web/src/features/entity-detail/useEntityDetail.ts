@@ -1,3 +1,4 @@
+import { RULE_TASK_STATUS_DEFAULT } from '@orbis/shared';
 import type { JSONContent } from '@tiptap/core';
 import { TRPCClientError } from '@trpc/client';
 import { useRef, useState } from 'react';
@@ -168,6 +169,19 @@ function settleBodyDraft(vars: UpdateInput, err?: unknown): void {
  * Аргумент — `vars` отправки, а не замыкание вызывающего: колбэк переживает размонтирование
  * и обязан решать по тому, ЧТО УЕХАЛО, а не по тому, что было на экране в момент рендера.
  */
+/**
+ * Оптимистичный патч, отличный от того, что уходит на сервер, — по ОБЪЕКТУ правки (финал 1б, C2 M-1).
+ * Снятие галочки шлёт `unset` статуса (значение возврата решает строка каталога), но тот же `unset`
+ * патчем удалил бы статус из кеша: проекция строки без статуса отдаёт `checkbox: null`, и чекбокс
+ * размонтировался бы под пальцем на два RTT (ответ + перечитывание). На время полёта экран ставит
+ * значение возврата поставки; перечитывание в `onSettled` заменяет его тем, что записал сервер.
+ * Карта слабая и по объекту — на провод поле не попадает, и отдельного канала в мутацию не нужно.
+ */
+const OPTIMISTIC = new WeakMap<UpdateInput, UpdateInput>();
+
+/** Значение возврата из закрытия на время полёта — строка `default` каталога поставки (Б-2 №98). */
+const REOPEN_STATUS = (RULE_TASK_STATUS_DEFAULT.params as { value: { const: string } }).value.const;
+
 export function useEntityUpdate(
   entityId: string,
   opts: { onSettled?: (vars: UpdateInput) => void } = {},
@@ -251,8 +265,9 @@ export function useEntityUpdate(
       setConflict(false);
       await utils.entity.get.cancel(input);
       const prev = utils.entity.get.getData(input);
+      const shown = OPTIMISTIC.get(vars) ?? vars;
       utils.entity.get.setData(input, (old) =>
-        old ? { ...old, entity: applyPatch(old.entity, vars) } : old,
+        old ? { ...old, entity: applyPatch(old.entity, shown) } : old,
       );
       seqRef.current += 1;
       latestRef.current[vars.id] = {
@@ -369,11 +384,14 @@ export function useRecordEdits(entityId: string, entity: Entity | undefined) {
    * сменивший умолчание, не упрётся в экран. Копия правила здесь расходилась бы с сервером.
    */
   function toggleTask(done: boolean) {
-    mutation.mutate(
-      done
-        ? { id: entityId, props: { 'orbis/task_status': 'done' } }
-        : { id: entityId, unset: ['orbis/task_status'] },
-    );
+    if (done) {
+      mutation.mutate({ id: entityId, props: { 'orbis/task_status': 'done' } });
+      return;
+    }
+    const vars: UpdateInput = { id: entityId, unset: ['orbis/task_status'] };
+    // Чекбокс не пропадает на время полёта (C2 M-1): в кеше — значение возврата, на проводе — `unset`.
+    OPTIMISTIC.set(vars, { id: entityId, props: { 'orbis/task_status': REOPEN_STATUS } });
+    mutation.mutate(vars);
   }
 
   // Правки ТЕЛА здесь нет и быть не должно: тело уехало на автосохранение по паузе

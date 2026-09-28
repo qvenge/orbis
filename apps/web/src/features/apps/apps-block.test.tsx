@@ -90,7 +90,7 @@ test('{{apps}} на «Домой» — плитки своих приложен�
   await waitFor(() => expect(frameIcon()).toHaveTextContent('🏡'));
 });
 
-test('«⋯ → Все приложения» — тот же список; нажатие переключает приложение', async () => {
+test('«⋯ → Все приложения» — хост и тот же список; нажатие переключает приложение (R-38)', async () => {
   resetFrame(`/a/${MY}`);
   renderApp(WORLD());
   await heading('Дом приложения');
@@ -102,11 +102,27 @@ test('«⋯ → Все приложения» — тот же список; на
     within(sheet)
       .getAllByTestId(/^app-tile-/)
       .map((t) => t.textContent),
-  ).toEqual(['🏡Мой дом', '📁Проекты', '🌲Дача выключено']);
+  ).toEqual(['🪐Orbis', '🏡Мой дом', '📁Проекты', '🌲Дача выключено']);
   fireEvent.click(within(sheet).getByTestId(`app-tile-${PROJ}`));
   await heading('Проекты: домашняя');
   expect(shownPath()).toBe(`/a/${PROJ}`);
   expect(screen.queryByRole('dialog', { name: 'Все приложения' })).toBeNull();
+});
+
+test('путь в хост из приложения на телефоне — плитка хоста в «Все приложения» (R-38)', async () => {
+  resetFrame(`/a/${MY}`);
+  renderApp(WORLD());
+  await heading('Дом приложения');
+  fireEvent.click(screen.getByTestId('screen-menu'));
+  const host = await screen.findByRole('group', { name: 'Хост' });
+  fireEvent.click(within(host).getByRole('menuitem', { name: 'Все приложения' }));
+  const sheet = await screen.findByRole('dialog', { name: 'Все приложения' });
+  fireEvent.click(within(sheet).getByTestId('app-tile-host'));
+  await heading('Домой');
+  expect(shownPath()).toBe('/');
+  expect(useNav.getState().model.activeApp).toBe('host');
+  expect(screen.queryByRole('dialog', { name: 'Все приложения' })).toBeNull();
+  await waitFor(() => expect(frameIcon()).toHaveTextContent('🪐'));
 });
 
 test('второй {{apps}} на странице — два списка без плашки (R-27)', async () => {

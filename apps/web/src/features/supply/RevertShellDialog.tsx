@@ -111,7 +111,12 @@ export function RevertShellDialog({ row, onClose }: { row: WireEntity; onClose: 
             disabled={!known || noop || busy}
             onClick={() => {
               setBusy(true);
-              void run({ kind: 'revert', key: HOST_SHELL_KEY }).then((ok) => {
+              // Версия записи, по которой диалог назвал исчезающие разделы (B1 m-3).
+              void run({
+                kind: 'revert',
+                key: HOST_SHELL_KEY,
+                expectedUpdatedAt: row.updatedAt,
+              }).then((ok) => {
                 setBusy(false);
                 if (ok) onClose();
               });

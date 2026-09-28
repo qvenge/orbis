@@ -79,7 +79,9 @@ export function acceptAllScope(updates: readonly SupplyUpdate[]): SupplyUpdate[]
 
 /** Действие владельца над поставкой — одно на кнопку. */
 export type SupplyAct =
-  | { kind: 'accept' | 'decline' | 'revert' | 'add'; key: SupplyKey }
+  | { kind: 'accept' | 'decline' | 'add'; key: SupplyKey }
+  // Версия записи, по которой клиент показал, что изменится (финал 1б, B1 m-3): сервер сверяет её.
+  | { kind: 'revert'; key: SupplyKey; expectedUpdatedAt?: string }
   | { kind: 'accept-all' };
 
 export const SUPPLY_FAILED = 'Не удалось выполнить действие поставки';
@@ -128,7 +130,11 @@ export function useSupplyAction(): (act: SupplyAct) => Promise<boolean> {
               : act.kind === 'decline'
                 ? await m.decline.mutate(input)
                 : act.kind === 'revert'
-                  ? await m.revert.mutate(input)
+                  ? await m.revert.mutate(
+                      act.expectedUpdatedAt === undefined
+                        ? input
+                        : { ...input, expectedUpdatedAt: act.expectedUpdatedAt },
+                    )
                   : await m.add.mutate(input);
           actionId = r.actionId;
         }

@@ -9,6 +9,7 @@ import { Button } from '../../ui/Button';
 import { Card } from '../../ui/Card';
 import { Skeleton } from '../../ui/Skeleton';
 import { detailGetInput } from '../entity-detail/useEntityDetail';
+import { SupplyPlaqueSlot } from '../supply/SupplyPlaqueSlot';
 import { PageView } from './PageView';
 import { RecordView } from './RecordView';
 import { templateForOf } from './TemplateBanner';
@@ -75,8 +76,15 @@ export function TemplatePreview({
     ? 'Шаблон хоста'
     : `Шаблон для: ${labels.length === 0 ? '—' : labels.join(', ')}`;
 
+  // Плашка обновления поставки — о САМОЙ записи шаблона (шаблон хоста — запись поставки, §9.1 п. 2):
+  // по умолчанию на экране чужая запись-пример, и без этой строки предложение на записи было бы
+  // видно только при выборе «сама страница» (финал 1б, C2 M-3). «Сама страница» рисует её сама
+  // (`PageView`); у предпросмотра черновика плашки нет — там правят черновик, а не запись.
+  const ownPlaque = onClose === undefined && (waiting || chosen !== entity.id);
+
   return (
     <div className="flex flex-col gap-2">
+      {ownPlaque && <SupplyPlaqueSlot entity={entity} />}
       <Card
         role="note"
         data-testid="template-preview-plaque"

@@ -1,8 +1,14 @@
-import { APP_DISABLED, APP_OPENS_OVER, type AppInfo, SUPPLY_KEY } from '@orbis/shared';
-import { HOST_SHELL_KEY } from '@orbis/shared/supply';
+import {
+  APP_DISABLED,
+  APP_OPENS_OVER,
+  type AppInfo,
+  SUPPLY_ASPECT,
+  SUPPLY_KEY,
+} from '@orbis/shared';
 import { useMemo } from 'react';
 import { trpc } from '../../trpc';
 import type { WireEntity } from '../entity-detail/record-host';
+import { isHostShellRow } from '../page/useSupplyRecords';
 
 /**
  * Все записи-приложения графа (срез 1б §4.2, §5.2): живые, выключенные и архивные — правилу открытия
@@ -31,7 +37,10 @@ export interface Apps {
   /** Приложения без оболочки хоста — вход правила открытия (`OpenInput.apps`) и плитки. */
   apps: readonly AppRecord[];
   byId: ReadonlyMap<string, AppRecord>;
-  /** Запись-оболочка хоста (живая, иначе любая): `/a/<она>` и ссылка на неё — сам хост. */
+  /**
+   * Запись-оболочка хоста (живая, иначе архивная; с аспектом «поставка» — `isHostShellRow`):
+   * `/a/<она>` и ссылка на неё — сам хост.
+   */
   hostShell: WireEntity | null;
   /**
    * `loading` — списка ещё нет, и правило открытия не зовут: без списка любое приложение адреса
@@ -45,7 +54,8 @@ function infoOf(row: WireEntity): AppInfo {
   const over = row.props[APP_OPENS_OVER];
   return {
     id: row.id,
-    supplyKey: typeof key === 'string' ? key : null,
+    // Ключ поставки — только у записи поставки (с аспектом, R-17): у выведенной он лишь след.
+    supplyKey: typeof key === 'string' && row.aspects.includes(SUPPLY_ASPECT) ? key : null,
     title: row.title,
     disabled: row.props[APP_DISABLED] === true,
     archived: row.archived,
@@ -59,8 +69,9 @@ export function useApps(): Apps {
   const rows = q.data ?? NO_ROWS;
   const status = q.data !== undefined ? 'ok' : q.isError ? 'error' : 'loading';
   return useMemo(() => {
-    const shells = rows.filter((r) => r.props[SUPPLY_KEY] === HOST_SHELL_KEY);
-    const own = rows.filter((r) => r.props[SUPPLY_KEY] !== HOST_SHELL_KEY);
+    // Оболочка хоста — одним определением с рамкой (`isHostShellRow`, финал 1б Fable M-3).
+    const shells = rows.filter(isHostShellRow);
+    const own = rows.filter((r) => !isHostShellRow(r));
     const byId = new Map(own.map((r) => [r.id, { ...infoOf(r), row: r }]));
     return {
       apps: [...byId.values()],

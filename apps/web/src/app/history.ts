@@ -301,7 +301,15 @@ export function settleOverlay(
           },
           mode,
         ).model
-      : enterAddress(model, target.address, mode);
+      : target.address.kind === 'home' && target.address.app.kind === 'host'
+        ? // `/` посредника — «Домой» хоста (§7.1; `/browser` без «Записей»), а не сохранённое место:
+          // `enterAddress` на `/` модель не трогает — это правило старта в режиме приложения (R-32).
+          navReduce(
+            model,
+            { type: 'switch-app', app: HOST_APP, home: HOST_HOME, toHome: true },
+            mode,
+          ).model
+        : enterAddress(model, target.address, mode);
   setNavState({ model: next, overlay: null });
   if (mode === 'app') writeAppPlace();
   else window.history.replaceState(snapshot(), '', urlNow());

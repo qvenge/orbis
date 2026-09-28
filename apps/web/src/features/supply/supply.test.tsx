@@ -264,7 +264,12 @@ test('(е′) «/» → «⋯» → «Приложение «Orbis»»: «Изм
   const confirm = within(dialog).getByRole('button', { name: 'Вернуть как было' });
   await waitFor(() => expect(confirm).toBeEnabled());
   fireEvent.click(confirm);
-  await waitFor(() => expect(callsOf('supply.revert')).toEqual([{ key: 'host-shell' }]));
+  // С версией записи, по которой диалог назвал исчезающие разделы (финал 1б, B1 m-3).
+  await waitFor(() =>
+    expect(callsOf('supply.revert')).toEqual([
+      { key: 'host-shell', expectedUpdatedAt: SHELL_ROW.updatedAt },
+    ]),
+  );
 });
 
 test('(е′) оболочка как в поставке: «Как в поставке», «Вернуть как было» нет', async () => {

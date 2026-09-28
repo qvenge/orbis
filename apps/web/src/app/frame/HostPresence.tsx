@@ -1,4 +1,4 @@
-import { HOME_SECTION } from '@orbis/shared/nav';
+import { HOME_SECTION, HOST_APP } from '@orbis/shared/nav';
 import { ChevronDown, ChevronLeft, House } from 'lucide-react';
 import { lazy, Suspense, useContext, useState } from 'react';
 import { useNav, useShowBack } from '../../state/navigation';
@@ -24,9 +24,10 @@ const NavSheet = lazy(() => import('./NavSheet').then((m) => ({ default: m.NavSh
  * спрятать или перекрыть: иначе оно «заперло» бы человека.
  *
  * Рамка — по активному приложению модели (R-22). «‹» — только когда есть куда (`useShowBack`), ⌂ —
- * «Домой» хоста одним переходом (R-23), «⋯» — одно меню экрана (§6.4). Навигация приложения — в форме
- * его оболочки: «список из заголовка» раскрывает лист разделов; у «домашней как центр» постоянной
- * навигации нет — заголовок без ▾ (разделы — плитки на домашней).
+ * домашняя приложения рамки одним переходом, у хоста — «Домой» (R-38, спека §4.2; в хост из
+ * приложения ведут «‹» по журналу и «⋯ → Все приложения»), «⋯» — одно меню экрана (§6.4).
+ * Навигация приложения — в форме его оболочки: «список из заголовка» раскрывает лист разделов;
+ * у «домашней как центр» постоянной навигации нет — заголовок без ▾ (разделы — плитки на домашней).
  */
 export function HostPresence() {
   const model = useNav((s) => s.model);
@@ -90,10 +91,10 @@ export function HostPresence() {
       <span className="flex-1" />
       <button
         type="button"
-        aria-label="Домой"
+        aria-label={app === HOST_APP ? 'Домой' : 'Домашняя приложения'}
         data-testid="host-home"
         data-host="home"
-        onClick={() => useNav.getState().goHome()}
+        onClick={() => useNav.getState().goFrameHome()}
         className={HOST_CONTROL}
       >
         <House size={18} aria-hidden />

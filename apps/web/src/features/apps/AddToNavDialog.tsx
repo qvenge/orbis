@@ -5,7 +5,11 @@ import { ADD_TO_NAV, type FrameRecord, useNavWrite } from './frame-menu';
 import { inNav, navOf, withSection } from './nav-edit';
 import type { Apps } from './useApps';
 
-/** Место в выборе: оболочка хоста и живые свои приложения. */
+/**
+ * Место в выборе: оболочка хоста и неархивные свои приложения. Выключенное — в выборе с пометкой
+ * «выключено» (финал 1б, Fable M-2): поставить в него можно, но «Дом» бездомной странице сервер ему
+ * не даёт (`executor/home.ts`), и владелец должен видеть, куда ставит.
+ */
 function candidatesOf(apps: Apps): FrameRecord[] {
   const shell = apps.hostShell;
   return [
@@ -74,6 +78,7 @@ export function AddToNavDialog({
           <legend className="sr-only">Приложение</legend>
           {candidates.map((c) => {
             const already = inNav(c.nav, entityId);
+            const off = apps.byId.get(c.id)?.disabled === true;
             return (
               <label
                 key={c.id}
@@ -94,7 +99,7 @@ export function AddToNavDialog({
                 {/* Пометка — тем же текстом, что заголовок: отдельный элемент слепил бы доступное
                     имя в «Мой домуже здесь». */}
                 <span className="min-w-0 flex-1 truncate">
-                  {already ? `${c.title} (уже здесь)` : c.title}
+                  {already ? `${c.title} (уже здесь)` : off ? `${c.title} (выключено)` : c.title}
                 </span>
               </label>
             );

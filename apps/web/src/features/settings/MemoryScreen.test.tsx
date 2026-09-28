@@ -120,10 +120,10 @@ test('MemoryScreen: пояснение, что AI помнит и как эти�
   expect(screen.getByTestId('memory-intro')).toHaveTextContent(/правил/i);
 });
 
-test('MemoryScreen: тап по правилу открывает запись из хоста поверх текущего раздела (экран хоста снят)', async () => {
+test('MemoryScreen: тап по правилу открывает запись из хоста; экран памяти остаётся под ней (§7.3, финал C1 M-3)', async () => {
   useNav.getState().openHostScreen('memory');
   renderWithProviders(
-    <FrameAppContext.Provider value={{ app: 'host', via: 'host-screen' }}>
+    <FrameAppContext.Provider value={{ app: 'host', via: 'host-page' }}>
       <MemoryScreen />
     </FrameAppContext.Provider>,
     (path) => (path === 'entity.query' ? [rule] : {}),
@@ -131,9 +131,11 @@ test('MemoryScreen: тап по правилу открывает запись �
   await waitFor(() => expect(screen.getByTestId('memory-row')).toBeInTheDocument());
   fireEvent.click(screen.getByTestId('memory-row'));
   expect(topAddress()).toEqual(recordAddress('r1'));
-  // Экран памяти снят: «‹» с записи ведёт в раздел, а не обратно в память (§7.3).
+  // Экран памяти не снят: «‹» с правила возвращает в список, а не в раздел под настройками (§7.3
+  // снимает экран хоста только у перехода из чата и поиска).
   expect(useNav.getState().model.apps.host?.stacks.home?.map((e) => e.address.kind)).toEqual([
     'home',
+    'host-screen',
     'record',
   ]);
 });
@@ -191,4 +193,22 @@ test('роутер: адрес /settings/memory рисует экран памя
     return {};
   });
   await waitFor(() => expect(screen.getByTestId('memory-intro')).toBeInTheDocument());
+});
+
+test('роутер: правило, открытое с /settings/memory, ложится поверх памяти — «‹» вернёт в список (финал C1 M-3)', async () => {
+  resetNavForTests();
+  window.history.replaceState(null, '', '/settings/memory');
+  renderWithProviders(<App />, (path) => {
+    if (path === 'user.getSettings') return settings;
+    if (path === 'chat.ensureThread') return { threadId: 't1' };
+    if (path === 'chat.listMessages') return [];
+    if (path === 'entity.query') return [rule];
+    return {};
+  });
+  fireEvent.click(await screen.findByTestId('memory-row'));
+  expect(topAddress()).toEqual(recordAddress('r1'));
+  const stack = useNav.getState().model.apps.host?.stacks.home ?? [];
+  expect(stack.map((e) => e.address.kind)).toContain('host-screen');
+  expect(stack[stack.length - 2]?.address).toEqual({ kind: 'host-screen', screen: 'memory' });
+  window.history.replaceState(null, '', '/');
 });

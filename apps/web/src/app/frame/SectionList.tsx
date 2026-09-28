@@ -65,8 +65,12 @@ export function SectionList({
   const openSection = (id: string) => {
     onPicked?.();
     const home = foreign.get(id);
-    if (home === undefined) useNav.getState().openSection(app, id);
-    else useNav.getState().openRecord(id, { app: home });
+    if (home !== undefined) useNav.getState().openRecord(id, { app: home });
+    // «Домашняя как центр» (§7.3, С1б-3): разделов нет — одна стопка. Строка сайдбара десктопа —
+    // тот же переход в стопке домашней, что плитка (`NavTiles`): иначе два жеста в одно место на
+    // одном экране дали бы две истории, и «‹» с «раздела» вела бы в хост, а не на домашнюю.
+    else if (shell.navForm === 'home-hub') useNav.getState().openRecord(id, { app });
+    else useNav.getState().openSection(app, id);
   };
   return (
     <>
