@@ -657,7 +657,7 @@ Constraints: `CHECK (source_id != target_id)` (запрет связи с сам
 | `tag_mappings` | text[] NOT NULL default `{}` | Теги, намекающие на аспект (подсказки AI и конструктора) |
 | `aggregations` | jsonb default `{}` | Клапан под декларацию материализации агрегатов (§12 п.1). Используется кэшем `spent` (`envelope_spent_cache`, срез Б-1) |
 | `view_config` | jsonb default `{}` | Подсказки рендеринга для generic-views: `keyFields` (ключевые свойства строки), иконка |
-| `module` | text | Модуль-владелец; NULL = ядро |
+| `module` | text | Расширение-владелец (с 1б, D46; имя колонки — наследие слова «модуль»); NULL = ядро |
 | `rank` | integer NOT NULL | Порядок объявления — им же упорядочены `attach_*`-тулы |
 | `created_at` | timestamptz NOT NULL | |
 
@@ -893,7 +893,7 @@ RLS проверяется **pgTAP-сьютом до деплоя схемы**, 
 | `aspect_definitions` | Аспект: набор свойств, инструкции, служебность (§4.3) | 16 встроенных строк (13 — срез А, `orbis/page` — срез 1а, `orbis/app` и `orbis/supply` — срез 1б) |
 | `relation_role_definitions` | Роль ребра: стороны, иерархичность, ограничения (§4.2) | 11 встроенных строк |
 | `contract_definitions` | Контракт: слоты, классы, наборы | 7 встроенных строк: 6 — срез Б-1, контракт делегирования `orbis/delegable` — срез Б-2 |
-| `subscription_definitions` | Подписка поверхности на контракт | 2 встроенные строки (срез Б-1) |
+| `subscription_definitions` | Подписка поверхности на контракт | 2 встроенные строки (срез Б-1): `orbis/budget-overview` — поверхность `finance/budget-overview` (расширение Финансы); `orbis/agenda` — поверхность **`core/agenda`** (с 1б — ядро; до 1б `planner/agenda`). Имя поверхности — `<расширение или core>/<имя>`, запись стережёт `SURFACE_RE` (`packages/shared/src/registry/extensions.ts`); при чтении поверхность — свободный текст (неизвестная просто не показывается). Экран Повестки в 1б выключен, подписка жива; снимает её спека 1в §6.5 |
 | `action_definitions` | Действие: параметры, шаги, чувствительность | **2 встроенных действия** (срез Б-2): `finance/plan-to-fact` и «отложить просроченные» — с 1б ключ `core/postpone_overdue` (тул `action_core_postpone_overdue`), `id` строки прежний, `planner/postpone_overdue`: сид действий — upsert по `id` без удаления, и смена `id` оставила бы на проде вторую строку (РП-2 плана 1б) |
 | `registry_deltas` | Персональные правки владельца поверх системных определений | живая |
 | `registry_system` | Одна строка: версия system-реестра и время последнего сева | живая |
