@@ -133,6 +133,47 @@ const GONE_APP = '00000000-0000-4000-8000-000000002541';
 const NAMELESS_APP = '00000000-0000-4000-8000-000000002542';
 
 describe('(б) десктоп: тёмная рейка хоста «куда» (§6.3)', () => {
+  test('⌂ рейки ИЗ ПРИЛОЖЕНИЯ — «Домой» хоста, а не домашняя приложения рамки (R-38, раунд 2 финала I-1)', async () => {
+    stubViewport(true);
+    resetFrame(`/a/${MY_APP}/r/${MY_SECTION}`);
+    renderApp();
+    const rail = await byTestId('host-rail');
+    await heading('Ремонт');
+    expect(navModel().activeApp).toBe(MY_APP);
+    fireEvent.click(within(rail).getByRole('button', { name: 'Домой' }));
+    await heading('Домой');
+    expect(shownPath()).toBe('/');
+    expect(navModel().activeApp).toBe(HOST_APP);
+  });
+
+  test('кадр отказа рейки: ⌂ ИЗ ПРИЛОЖЕНИЯ — тоже «Домой» хоста (R-38, раунд 2 финала I-1)', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    stubViewport(true);
+    resetFrame(`/a/${MY_APP}/r/${MY_SECTION}`);
+    const base = frameWorld();
+    renderApp(
+      frameWorld({
+        all: [
+          ...base.all,
+          // Приложение без имени — рейка бросает (как в тесте кадра отказа ниже).
+          wireEntity({
+            id: OFF_APP,
+            title: null as unknown as string,
+            aspects: [APP_ASPECT],
+            props: { [APP_NAV]: [] },
+          }),
+        ],
+      }),
+    );
+    await heading('Ремонт');
+    await waitFor(() => expect(screen.getByTestId('host-rail')).toHaveAttribute('data-failed'));
+    expect(navModel().activeApp).toBe(MY_APP);
+    fireEvent.click(within(screen.getByTestId('host-rail')).getByRole('button', { name: 'Домой' }));
+    await heading('Домой');
+    expect(shownPath()).toBe('/');
+    expect(navModel().activeApp).toBe(HOST_APP);
+  });
+
   test('⌂ — домашняя хоста; приложение — одним нажатием, активное отмечено; выключенное приглушено, архивного нет; «Настройки» внизу', async () => {
     stubViewport(true);
     resetFrame(`/r/${BREAD}`);

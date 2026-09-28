@@ -443,8 +443,10 @@ export async function revertToEtalon(
   ctx: SupplyCtx,
   key: SupplyKey,
   expectedUpdatedAt?: string,
+  seam: RaceSeam = {},
 ): Promise<{ actionId: string }> {
   const s = await snapshot(ctx);
+  await seam.afterRead?.();
   const row = liveOrRefuse(s, key);
   // Версия, которую видел клиент (финал 1б, B1 m-3): диалог оболочки назвал исчезающие разделы по
   // ЕГО копии записи, и возврат поверх правки, пришедшей после (агент добавил раздел), снял бы то, чего

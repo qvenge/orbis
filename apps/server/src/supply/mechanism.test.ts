@@ -721,6 +721,25 @@ describe('Fable M-1: «принять» оболочки не перекрыва
     expect(row.props[APP_NAV]).toEqual(mine);
     expect(row.props[SUPPLY_HASH]).toBe(etalonHash(etalonOf('host-shell')));
   });
+
+  test('раунд 2 финала, m-1: «Вернуть как было» — правка навигации между чтением и пачкой → CONFLICT, правка цела', async () => {
+    const graph = await freshGraph();
+    await seedSupply(graph);
+    const shell = supplyRecordId(graph, 'host-shell');
+    const records = supplyRecordId(graph, 'records');
+    // Оболочка изменена владельцем — возвращать есть что.
+    await ownerEdit(graph, { id: shell, props: { [APP_NAV]: [records] } });
+    const seen = (await rowOf(graph, shell)).updatedAt;
+    // Между снимком механизма и пачкой агент по просьбе владельца меняет навигацию ещё раз.
+    const later = [records, supplyRecordId(graph, 'home')];
+    const err = await execErrorOf(
+      revertToEtalon(ctxOf(graph), 'host-shell', seen, {
+        afterRead: () => ownerEdit(graph, { id: shell, props: { [APP_NAV]: later } }),
+      }),
+    );
+    expect(err.code).toBe('CONFLICT');
+    expect((await rowOf(graph, shell)).props[APP_NAV]).toEqual(later);
+  });
 });
 
 /**
