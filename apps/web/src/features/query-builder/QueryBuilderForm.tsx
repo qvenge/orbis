@@ -27,6 +27,7 @@ import type {
 } from '@orbis/shared/query';
 import { fieldRefKey, isExcludeBlockedSugar } from '@orbis/shared/query';
 import { useId, useMemo, useState } from 'react';
+import { placeOf, useBodyKind } from '../../lib/query-blocks/body-kind';
 import type { QueryRegistry } from '../../lib/query-blocks/catalog';
 import { useFieldCatalog } from '../../lib/query-blocks/useFieldCatalog';
 import { Button } from '../../ui/Button';
@@ -92,9 +93,11 @@ export function QueryBuilderForm({
   onEditAsText: (query: string) => void;
 }) {
   const { registry } = useFieldCatalog();
+  // Место текста по роду тела (1в §3.8): разбор и обратная печать блока страницы пускают `$<имя>`.
+  const place = placeOf(useBodyKind());
   const initialAst = useMemo(
-    () => (registry ? parseForForm(initial, registry) : null),
-    [registry, initial],
+    () => (registry ? parseForForm(initial, registry, place) : null),
+    [registry, initial, place],
   );
 
   // Состояние заводится, как только приехал реестр: до него разобрать блок нечем.
@@ -130,12 +133,12 @@ export function QueryBuilderForm({
   }, [ast, limit.value]);
 
   const printed = useMemo(
-    () => (effective && registry ? printQuery(effective, registry) : null),
-    [effective, registry],
+    () => (effective && registry ? printQuery(effective, registry, place) : null),
+    [effective, registry, place],
   );
   const initialPrinted = useMemo(
-    () => (initialAst && registry ? printQuery(initialAst, registry) : null),
-    [initialAst, registry],
+    () => (initialAst && registry ? printQuery(initialAst, registry, place) : null),
+    [initialAst, registry, place],
   );
 
   let body: React.ReactNode;

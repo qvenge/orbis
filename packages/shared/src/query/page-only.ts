@@ -52,7 +52,7 @@ export function pageOnlyFeatureIn(ast: unknown): 'param' | 'group' | null {
 
 /**
  * Имена параметров, на которые ссылается дерево, — без повторов, в порядке первого появления. По
- * ним клиент собирает значения элемента пачки (задача 5): лишнее не шлётся, недостающее видно.
+ * ним клиент собирает значения элемента пачки (`DataBlock` web): лишнее не шлётся, недостающее видно.
  */
 export function paramNamesIn(ast: unknown): readonly string[] {
   return [...new Set(allParamNames(ast))];

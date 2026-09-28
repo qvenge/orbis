@@ -2,13 +2,22 @@ import type { BodyDoc } from '@orbis/shared/doc'; // ТОЛЬКО type — фа�
 // Листовые сабпаты, не баррель: препроход и матрица мест без tiptap и marked (вес первого кадра).
 import { type PageNode, parsePageText } from '@orbis/shared/doc/page-grammar';
 import { type BodyKind, bodyIssues, type PlacementIssue } from '@orbis/shared/doc/placement';
-import { lazy, type MouseEvent, type ReactNode, Suspense, useEffect, useState } from 'react';
+import {
+  lazy,
+  type MouseEvent,
+  type ReactNode,
+  Suspense,
+  useEffect,
+  useMemo,
+  useState,
+} from 'react';
 import { useOpenRecord } from '../../app/useOpenRecord';
 import { Markdown } from '../../lib/markdown/Markdown';
 import { useBodyKind } from '../../lib/query-blocks/body-kind';
 import { QueryBlock } from '../../lib/query-blocks/QueryBlock';
 import { useFieldCatalog } from '../../lib/query-blocks/useFieldCatalog';
 import { BlockPlaque, issueTone } from '../page/blocks/BlockPlaque';
+import { PageParamsProvider } from '../page/params';
 import { NO_REGISTRY } from '../page/render-plan';
 import { BODY_BOX_CLASS, BODY_PLACEHOLDER } from './body-box';
 import {
@@ -19,6 +28,7 @@ import {
   LayoutFrameBox,
   LayoutStack,
   ownCardsStubLabel,
+  paramStubLabel,
   recordStubLabel,
   StubBox,
   tabFrameLabel,
@@ -230,11 +240,17 @@ function firstFrameNode(
           <StubBox label={hostStubLabel(node.name)} />
         </div>
       );
-    // Параметр страницы (1в §5.1): переключатель параметра — задача 5 среза 1в (вид на показе,
-    // заглушка в редакторе и здесь — одним приёмом). До неё первый кадр узел не рисует, как и
-    // редактор (у `paramBlock` пока нет NodeView); плашки места и «второй» выше рисуются как у всех.
+    // Параметр страницы (1в §5.1) — подписанной заглушкой, как его NodeView в редакторе: переключатель
+    // рисует только показ. Узел без объявления сюда не доходит — ошибка блока (`PARAM_INVALID`),
+    // «второй» и неуместный — плашками выше.
     case 'param':
-      return null;
+      return (
+        node.decl && (
+          <div key={key} data-query-widget="">
+            <StubBox label={paramStubLabel(node.decl)} />
+          </div>
+        )
+      );
     case 'broken':
       // `broken` всегда несёт проблему (`bodyIssues`) и сюда не доходит; ветка — ради полноты
       // разбора: пустоты вместо узла не бывает.
@@ -340,7 +356,7 @@ export function EditorShell({
   const kind = useBodyKind();
   // Ключ узла — его порядок в тексте тела: узлы первого кадра не переставляются, только
   // пересобираются из текста целиком.
-  const nodes = parsePageText(markdown);
+  const nodes = useMemo(() => parsePageText(markdown), [markdown]);
   const frame = firstFrameNodes(nodes, kind, secondBlocksOf(nodes, kind));
   // Оба ослабления a11y — одной строкой ниже: у многострочного `//`-комментария биом читает
   // как подавление только ПОСЛЕДНЮЮ строку, и первое правило осталось бы неподавленным.
@@ -358,7 +374,10 @@ export function EditorShell({
     >
       {/* Приглашение к вводу там, где вводить нельзя, звало бы в никуда. */}
       {frame.length === 0 && !readOnly && <p className="text-text-muted">{BODY_PLACEHOLDER}</p>}
-      {frame}
+      {/* Параметры страницы (1в §5.1): в настройке — умолчания объявлений тела, без состояния
+          экрана; блоки с `$` просят данные с ними, а не отказ. Редактор ставит свой провайдер —
+          по живому документу (`QueryWidget`). */}
+      <PageParamsProvider nodes={nodes}>{frame}</PageParamsProvider>
     </div>
   );
   // `doc === null` перекрывает даже поднятое намерение: жест «хочу редактор» законен, а вот

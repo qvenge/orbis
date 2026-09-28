@@ -720,6 +720,17 @@ describe('параметр страницы {{param: …}} (спека 1в §5.1
     for (const bad of ['', 'пери-од', 'a-b', 'a b', '$a'])
       expect(PARAM_NAME_RE.test(bad)).toBe(false);
   });
+
+  // Перенос гейта задачи 4 (M-2): ключ `params` элемента пачки — не длиннее 64 знаков, и имя
+  // длиннее роняло бы ВСЮ пачку `entity.blocks` схемой входа. Предел — в самой форме имени (одна
+  // правда): такого имени не даст ни объявление, ни ссылка, ни дерево.
+  test('имя параметра — до 64 знаков: 65-й — ошибка блока объявления', () => {
+    expect(PARAM_NAME_RE.test('a'.repeat(64))).toBe(true);
+    expect(PARAM_NAME_RE.test('a'.repeat(65))).toBe(false);
+    const [node] = parse(`{{param: ${'a'.repeat(70)}, type=period, default=today, options=today}}`);
+    expect(node).toMatchObject({ kind: 'param', decl: null });
+    expect(node?.kind === 'param' && node.problem).toContain('до 64');
+  });
 });
 
 describe('текстом остаётся всё незнакомое §5.7', () => {

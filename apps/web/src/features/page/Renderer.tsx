@@ -9,12 +9,14 @@ import {
   type PlacementIssue,
   secondCardMessage,
 } from '@orbis/shared/doc/placement';
+import { currentEntry } from '@orbis/shared/nav';
 import type { ParseRegistry } from '@orbis/shared/query';
 import { createContext, type ReactNode, useContext, useMemo } from 'react';
 import { useOpenRecord } from '../../app/useOpenRecord';
 import { Markdown } from '../../lib/markdown/Markdown';
 import { BodyKindProvider } from '../../lib/query-blocks/body-kind';
 import { useFieldCatalog } from '../../lib/query-blocks/useFieldCatalog';
+import { useNav } from '../../state/navigation';
 import { AppsBlockSlot } from '../apps/slots';
 import { RecordsBlockSlot } from '../browser/RecordsBlockSlot';
 import { OwnCards } from '../entity-detail/OwnCards';
@@ -23,7 +25,9 @@ import { RECORD_BLOCK_COMPONENTS } from '../entity-detail/record-blocks';
 import { recordStubLabel, tabShowLabel } from '../entity-editor/layout-parts';
 import { BlockPlaque, issueTone, REGISTRY_FAILED_MESSAGE } from './blocks/BlockPlaque';
 import { DataBlock } from './blocks/DataBlock';
+import { ParamSwitchSlot } from './blocks/ParamSwitchSlot';
 import { Columns } from './Columns';
+import { PageParamsProvider } from './params';
 import {
   forEachRendered,
   isCardsBlock,
@@ -46,6 +50,10 @@ import { TabsContainer } from './TabsContainer';
  * Проблемы тела (`bodyIssues`, §5.5, §5.8) — плашками на месте своего узла: неуместный блок,
  * второй `{{body}}`, второй блок карточек, сломанный контейнер. Остальное тело рисуется: одна ошибка не гасит страницу.
  * Блоки хоста 1б — «Записи» (своей точкой лени) и «Приложения» (переключатель, срез 1б §6.2 п. 3).
+ * Параметр страницы (1в §5.1) — переключателем на месте блока (своей точкой лени); его значения
+ * блоки данных дерева читают из `PageParamsProvider`: объявления — из этого дерева, выбранное —
+ * из состояния экрана в истории (верх стопки навигации — это и есть показанная запись, где бы её ни
+ * открыли: разделом, по ссылке, из «Записей», ярлыком в чужом приложении).
  *
  * Известное расхождение с настройкой (как у первого кадра, `page-grammar.ts`): блок с отступом в
  * пункте списка препроход не видит, и на показе он — текстом, а в редакторе настройки — виджетом.
@@ -188,6 +196,7 @@ export function Renderer({
   const reg = registry?.parse ?? null;
   const regFailed = reg === null && failed;
   const ownBody = useContext(OwnBodyContext);
+  const view = useNav((s) => currentEntry(s.model).view);
   const plan = useMemo(
     () => planRender(nodes, kind, reg, regFailed, ownBody),
     [nodes, kind, reg, regFailed, ownBody],
@@ -196,20 +205,22 @@ export function Renderer({
     // Род тела — у всех блоков данных дерева: абсолютная дата законна в заметке и ошибка на
     // странице и в шаблоне (§5.6). Ставит его рендерер, а не вызывающий: род дерева и есть `kind`.
     <BodyKindProvider kind={kind}>
-      <RenderPlanContext.Provider value={plan}>
-        <div data-testid="page-render" className="flex flex-col gap-6">
-          <NodeList nodes={nodes} prefix={[]} place="" />
-          {/* Пока реестр едет, размещённые карточки неизвестны: дописанная сейчас карточка
+      <PageParamsProvider nodes={nodes} view={view}>
+        <RenderPlanContext.Provider value={plan}>
+          <div data-testid="page-render" className="flex flex-col gap-6">
+            <NodeList nodes={nodes} prefix={[]} place="" />
+            {/* Пока реестр едет, размещённые карточки неизвестны: дописанная сейчас карточка
               через мгновение переехала бы на своё место `{{card: X}}`. */}
-          {appendUnplacedCards &&
-            !plan.hasCards &&
-            (reg !== null ? (
-              <RestCards placed={plan.placed} />
-            ) : (
-              regFailed && <BlockPlaque message={REGISTRY_FAILED_MESSAGE} />
-            ))}
-        </div>
-      </RenderPlanContext.Provider>
+            {appendUnplacedCards &&
+              !plan.hasCards &&
+              (reg !== null ? (
+                <RestCards placed={plan.placed} />
+              ) : (
+                regFailed && <BlockPlaque message={REGISTRY_FAILED_MESSAGE} />
+              ))}
+          </div>
+        </RenderPlanContext.Provider>
+      </PageParamsProvider>
     </BodyKindProvider>
   );
 }
@@ -327,10 +338,9 @@ function PageNodeView({
       // «Приложения» — тоже своей точкой лени: плитки нужны «Домой» и редкой странице.
       return node.name === 'records' ? <RecordsBlockSlot onOpen={openEntity} /> : <AppsBlockSlot />;
     case 'param':
-      // Параметр страницы (1в §5.1): переключатель параметра — задача 5 среза 1в. До неё узел не
-      // рисуется, а блоки с `$`-ссылкой показывают отказ сервера (`UNKNOWN_PARAM`: значений пачка
-      // ещё не шлёт); плашки места и «второй» рисуются выше, как у прочих блоков.
-      return null;
+      // Параметр страницы (1в §5.1) — переключатель на месте блока. Узел без объявления сюда не
+      // доходит: ошибка блока — `PARAM_INVALID`, плашкой выше, как «второй» и неуместный.
+      return node.decl && <ParamSwitchSlot decl={node.decl} />;
     case 'columns':
       return (
         <Columns>

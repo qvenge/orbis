@@ -297,7 +297,7 @@ function paramDecl(args: string): { decl: PageParamDecl | null; problem: string 
     }
   }
   const [name = '', ...rest] = parts;
-  if (!PARAM_NAME_RE.test(name)) return bad(`имя — латиница, цифры и _, а не '${name}'`);
+  if (!PARAM_NAME_RE.test(name)) return bad(`имя — латиница, цифры и _ (до 64), а не '${name}'`);
   // Ключи — только четыре известных и каждый один раз: ключ проверен списком до записи, поэтому
   // `in` по простому объекту здесь не встретит имён прототипа.
   const v: Record<string, string> = {};
@@ -576,7 +576,8 @@ export function parsePageText(text: string): PageNode[] {
  * блок с тем же именем — плашка «второй», его объявление не действует); параметр с ошибкой блока
  * объявления не даёт — ссылка на него получит отказ «не объявлен», как и должно. Сломанный
  * контейнер внутрь не обходится: он не рисуется. Зовут сервер (бейдж раздела — умолчания первого
- * блока, `routers/entity-blocks.ts`) и web (переключатель, значения пачки — задача 5).
+ * блока, `routers/entity-blocks.ts`), проблемы тела (`bodyIssues` — ссылка на необъявленное имя) и
+ * web (переключатель и значения пачки — `features/page/params.tsx`).
  */
 export function paramDeclsOf(nodes: readonly PageNode[]): ReadonlyMap<string, PageParamDecl> {
   const out = new Map<string, PageParamDecl>();

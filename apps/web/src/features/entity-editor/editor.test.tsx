@@ -1,5 +1,6 @@
 import { SEED_SMART_LISTS } from '@orbis/server/src/seed/smart-lists';
 import { DOC_EXTENSIONS, DOC_SCHEMA_VERSION, parseBody, serializeBody } from '@orbis/shared/doc';
+import { MISPLACED_HINT } from '@orbis/shared/doc/placement';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { getSchema } from '@tiptap/core';
@@ -319,6 +320,10 @@ test('параметр страницы (1в §5.1): открыть → прав
   await waitFor(() => expect(h.editor).not.toBeNull());
   await new Promise((r) => setTimeout(r, 0));
   expect(onChange).not.toHaveBeenCalled();
+  // Тело без рода страницы — заметка: на месте узла плашка места (задача 5), текст узла — в документе.
+  const plaque = await screen.findByTestId('block-misplaced');
+  expect(plaque).toHaveTextContent('Блок {{param: period}} не показывается в заметке.');
+  expect(plaque).toHaveTextContent(MISPLACED_HINT);
   h.editor?.commands.focus('start');
   const firstParagraph = (area as HTMLElement).querySelector('p');
   await userEvent.type(firstParagraph as HTMLElement, '!');
@@ -489,6 +494,42 @@ test('копия ПРИВЯЗАННОГО смарт-листа возвраща
   const block = (editor.getJSON().content ?? []).find((n) => n.type === 'queryBlock');
   expect(block?.attrs?.ast).toEqual(ast);
   expect(block?.attrs?.text).toBe('aspect=orbis/task, sortBy=orbis/updated_at:desc, title=Задачи');
+});
+
+test('1в §5.1: копия блока со ссылкой $period возвращается с деревом {param} (страничная схема узла)', async () => {
+  // Обходчик `web-query-widget`: узел не знает, заметка он или страница, и дерево со ссылкой на
+  // параметр законно на странице. Базовая схема отвергла бы его, и вставка теряла бы дерево.
+  vi.stubGlobal('ClipboardEvent', FakeClipboardEvent);
+  const ast = {
+    filter: {
+      and: [
+        { aspect: 'orbis/task' },
+        { prop: 'orbis/due_date', op: 'eq', value: { param: 'period' } },
+      ],
+    },
+  };
+  const text = 'aspect=orbis/task, orbis/due_date=$period';
+  const h = held();
+  renderWithProviders(
+    <BodyEditor
+      doc={{
+        v: DOC_SCHEMA_VERSION,
+        doc: { type: 'doc', content: [{ type: 'queryBlock', attrs: { ast, text } }] },
+      }}
+      onChange={vi.fn()}
+      onReady={(e) => (h.editor = e)}
+    />,
+    handler,
+  );
+  await waitFor(() => expect(h.editor).not.toBeNull());
+  const editor = h.editor as Editor;
+  editor.commands.selectAll();
+  const html = editor.view.serializeForClipboard(editor.state.selection.content()).dom.innerHTML;
+  expect(html).toContain('data-ast=');
+  editor.view.pasteHTML(html);
+  const block = (editor.getJSON().content ?? []).find((n) => n.type === 'queryBlock');
+  expect(block?.attrs?.ast).toEqual(ast);
+  expect(block?.attrs?.text).toBe(text);
 });
 
 test('копия ИЗНУТРИ редактора вставляется целой: чип, смарт-лист и разметка живы', async () => {

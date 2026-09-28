@@ -20,6 +20,9 @@ import {
   type QueryBound,
   type QueryDateToken,
   type QueryFilterNode,
+  type QueryParamValue,
+  type TokenForm,
+  tokenEdgeMissing,
 } from '@orbis/shared/query';
 import { useId, useRef } from 'react';
 import {
@@ -54,6 +57,11 @@ const DATE_TOKEN_OPTIONS = Object.entries(QUERY_DATE_TOKEN_LABELS) as Array<
 /** Относительное время вместо литерала (§А5-7). */
 function isToken(value: QueryBound): value is { token: QueryDateToken } {
   return typeof value === 'object' && value !== null && 'token' in value;
+}
+
+/** Ссылка на параметр страницы `$<имя>` вместо значения (1в §5.1). */
+function isParam(value: QueryBound): value is QueryParamValue {
+  return typeof value === 'object' && value !== null && 'param' in value;
 }
 
 /** Текст литерала для поля ввода; у токена литерала нет — там пусто. */
@@ -180,6 +188,7 @@ export function FieldRow({
       {(operator === 'gt' || operator === 'lt') && view !== null && (
         <BoundInput
           field={field}
+          form={operator}
           label={`${label}: значение`}
           dateLabel={`${label}: дата`}
           value={view.from ?? ''}
@@ -190,6 +199,7 @@ export function FieldRow({
         <div className="flex gap-2">
           <BoundInput
             field={field}
+            form="gte"
             label={`${label}: от`}
             dateLabel={`${label}: от, дата`}
             value={view.from ?? ''}
@@ -197,6 +207,7 @@ export function FieldRow({
           />
           <BoundInput
             field={field}
+            form="lte"
             label={`${label}: до`}
             dateLabel={`${label}: до, дата`}
             value={view.to ?? ''}
@@ -230,15 +241,30 @@ function buildNode(
   return boundNode(field, op, carried ?? '');
 }
 
-/** Одна граница сравнения/диапазона либо одно значение списка. */
+/**
+ * Одна граница сравнения/диапазона либо одно значение списка.
+ *
+ * Ссылка на параметр страницы (`$<имя>`, 1в §5.1) — подписью только для чтения: значение
+ * подставит сервер по переключателю страницы, а у формы для ссылки ни выбора, ни ввода нет. Узел
+ * при этом не трогается — печать формы отдаёт ту же ссылку.
+ *
+ * Токены даты — только те, у кого есть край, который читает форма условия (`form`, 1в §3.4): иначе
+ * сохранение отказало бы `TOKEN_EDGE` за выбор, который форма сама предложила. Выбранный сейчас
+ * токен остаётся в списке и без края — селект обязан показывать правду о блоке, а отказ разбора
+ * виден при сохранении.
+ */
+// ОБХОДЧИК-Q: web-field-rows
 function BoundInput({
   field,
+  form,
   label,
   dateLabel,
   value,
   onValue,
 }: {
   field: FieldRef;
+  /** Форма условия (`=`, `<`, `>`, граница `from`/`to`) — по ней сужаются токены даты. */
+  form: TokenForm;
   /** Доступное имя единственного контрола (у дат — селекта «токен или точное значение»). */
   label: string;
   /** Доступное имя поля точного значения — оно появляется рядом с селектом токенов. */
@@ -246,6 +272,16 @@ function BoundInput({
   value: QueryBound;
   onValue: (v: QueryBound) => void;
 }) {
+  if (isParam(value)) {
+    return (
+      <input
+        aria-label={label}
+        readOnly
+        value={`$${value.param}`}
+        className={`${FIELD_CLS} w-full font-mono text-text-muted`}
+      />
+    );
+  }
   if (!isDateLike(field)) {
     return (
       <input
@@ -270,7 +306,9 @@ function BoundInput({
           onValue(picked === 'exact' ? '' : { token: picked as QueryDateToken });
         }}
       >
-        {DATE_TOKEN_OPTIONS.map(([token, text]) => (
+        {DATE_TOKEN_OPTIONS.filter(
+          ([token]) => !tokenEdgeMissing(token, form) || (isToken(value) && value.token === token),
+        ).map(([token, text]) => (
           <option key={token} value={token}>
             {text}
           </option>
@@ -368,6 +406,7 @@ function ConditionValues({
         >
           <BoundInput
             field={field}
+            form="eq"
             label={`${label}: значение ${i + 1}`}
             dateLabel={`${label}: дата ${i + 1}`}
             value={value}

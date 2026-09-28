@@ -1,21 +1,44 @@
 import { bindQueryBlockAttrs, QUERY_BLOCK_CLOSE, QueryBlock } from '@orbis/shared/doc';
-import { type QueryAst, queryAstSchema } from '@orbis/shared/query';
+import { parsePageText } from '@orbis/shared/doc/page-grammar';
+import { pageQueryAstSchema, type QueryAst } from '@orbis/shared/query';
 import type { Attributes, NodeViewProps } from '@tiptap/core';
-import { NodeViewWrapper, ReactNodeViewRenderer } from '@tiptap/react';
-import { useState } from 'react';
+import { NodeViewWrapper, ReactNodeViewRenderer, useEditorState } from '@tiptap/react';
+import { useMemo, useState } from 'react';
 import { useFieldCatalog } from '../../../lib/query-blocks/useFieldCatalog';
 import { useToast } from '../../../ui/toast-store';
 import { DataBlock } from '../../page/blocks/DataBlock';
+import { PageParamsProvider } from '../../page/params';
 import { QueryBlockEditor } from '../../query-builder/QueryBlockEditor';
 
-/** Дерево из атрибута ноды — или null, если его там нет или оно битое (attrs — сырой JSON). */
+/**
+ * Дерево из атрибута ноды — или null, если его там нет или оно битое (attrs — сырой JSON).
+ *
+ * Схема — страничная (`pageQueryAstSchema`, 1в §3.8): узел не знает, в заметке он или на странице,
+ * а дерево со ссылкой `$<имя>` законно на странице и в шаблоне. Отказ в заметке держит разбор ТЕКСТА
+ * блоком данных (место по роду тела) — дерево атрибута виджету для данных не нужно (см. ниже); та же
+ * схема — у привязки документа на сервере (`bind-query.ts`).
+ */
+// ОБХОДЧИК-Q: web-query-widget
 function astOf(raw: unknown): QueryAst | null {
   if (raw === null || raw === undefined) return null;
-  const parsed = queryAstSchema.safeParse(raw);
+  const parsed = pageQueryAstSchema.safeParse(raw);
   return parsed.success ? parsed.data : null;
 }
 
-function Widget({ node, updateAttributes }: NodeViewProps) {
+/**
+ * Маркеры параметров документа редактора одной строкой — в порядке документа (первое имя
+ * выигрывает, как у `paramDeclsOf`). Строка, а не узлы: подписка `useEditorState` сравнивает
+ * результат, и правка соседнего абзаца блок данных не перерисовывает.
+ */
+function paramMarkers(editor: NodeViewProps['editor'] | null): string {
+  const out: string[] = [];
+  editor?.state.doc.descendants((n) => {
+    if (n.type.name === 'paramBlock' && typeof n.attrs.text === 'string') out.push(n.attrs.text);
+  });
+  return out.join('\n\n');
+}
+
+function Widget({ node, updateAttributes, editor }: NodeViewProps) {
   // Атрибуты ноды типизированы как Record<string, any> — сужаем на входе, а не по месту.
   // `text` — печатная key-форма привязанного дерева (либо исходная строка, если блок не
   // разобран). Текст берётся ДОСЛОВНО, без trim: у неразобранного блока это единственное, что
@@ -27,6 +50,10 @@ function Widget({ node, updateAttributes }: NodeViewProps) {
   // адресов тела), виджету оно не нужно.
   const text = typeof node.attrs.text === 'string' ? node.attrs.text : '';
   const [editing, setEditing] = useState(false);
+  // Параметры страницы (1в §5.1): в настройке — умолчания объявлений ЖИВОГО документа редактора, а
+  // не сохранённого тела: только что вставленный `{{param}}` сразу даёт блоку своё умолчание.
+  const markers = useEditorState({ editor, selector: ({ editor: e }) => paramMarkers(e) }) ?? '';
+  const paramNodes = useMemo(() => parsePageText(markers), [markers]);
   const { show } = useToast();
   // Реестр нужен ровно ЗДЕСЬ и ровно на сохранение: форма отдаёт ТЕКСТ (её перевод на дерево —
   // отдельное решение, Р-21-6), а в ноде обязано лежать дерево. Реестра может не быть (он едет
@@ -86,7 +113,9 @@ function Widget({ node, updateAttributes }: NodeViewProps) {
     // contentEditable={false} — чтобы каретка не заходила внутрь виджета: в документе от него
     // только атрибуты запроса, набирать внутри нечего.
     <NodeViewWrapper data-query-widget="" contentEditable={false}>
-      <DataBlock text={text} onConfigure={() => setEditing(true)} />
+      <PageParamsProvider nodes={paramNodes}>
+        <DataBlock text={text} onConfigure={() => setEditing(true)} />
+      </PageParamsProvider>
       {editing && (
         // initial — текущий ТЕКСТ ноды (key-печать дерева либо неразобранная строка), а не
         // снимок при открытии. У detail снимок был нужен потому, что body под модалкой мог

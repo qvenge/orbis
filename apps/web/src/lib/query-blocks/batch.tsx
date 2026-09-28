@@ -201,20 +201,27 @@ export function QueryBatchProvider({ children }: { children: ReactNode }) {
  * `this` — часть ключа: один и тот же текст с `children_of=this` у двух записей — два разных
  * запроса, и без него второй блок получил бы строки первого из кеша.
  *
- * Прежние данные держатся ТОЛЬКО при смене `limit` («ещё N»: без них раскрываемый список мигал
- * бы загрузкой на месте уже показанных строк). Сменился текст или `this` — это другой запрос, и
- * чужие строки под ним были бы неправдой (тот же довод, что у `useTicketRuns`).
+ * `params` — значения параметров страницы, на которые ссылается текст (`$<имя>`, спека 1в §5.1):
+ * едут полем элемента, подстановка — на сервере. Они — часть ключа (другое значение — другой
+ * запрос); объектом, а не своей строкой пар: хеш ключа react-query сортирует ключи объекта сам, и
+ * порядок ключей ничего не значит. Пустые значения — без поля и с тем же ключом, что без них.
+ *
+ * Прежние данные держатся при смене `limit` («ещё N»: без них раскрываемый список мигал бы
+ * загрузкой на месте уже показанных строк) и значений параметров (переключатель на странице: строки
+ * прежнего периода видны до ответа, а не «Загрузка…»). Сменился текст или `this` — это другой
+ * запрос, и чужие строки под ним были бы неправдой (тот же довод, что у `useTicketRuns`).
  */
 export function useBlockData(
   text: string,
-  opts: { limit?: number } = {},
+  opts: { limit?: number; params?: Readonly<Record<string, string>> } = {},
 ): UseQueryResult<BlockResult> {
   const batcher = useBlockBatcher('useBlockData');
   const thisEntityId = useThisEntityId();
   const trimmed = text.trim();
-  const limit = opts.limit;
+  const { limit } = opts;
+  const params = opts.params && Object.keys(opts.params).length > 0 ? opts.params : null;
   return useQuery({
-    queryKey: [QUERY_BLOCK_KEY, trimmed, thisEntityId ?? null, limit ?? null],
+    queryKey: [QUERY_BLOCK_KEY, trimmed, thisEntityId ?? null, limit ?? null, params],
     queryFn: () => {
       if (trimmed === '') {
         return Promise.reject(new BlockDataError({ code: 'EMPTY', message: EMPTY_QUERY_MESSAGE }));
@@ -223,6 +230,7 @@ export function useBlockData(
         text: trimmed,
         ...(thisEntityId !== null && { thisEntityId }),
         ...(limit !== undefined && { limit }),
+        ...(params && { params }),
       };
       const checked = blockAskSchema.safeParse(ask);
       if (!checked.success) {

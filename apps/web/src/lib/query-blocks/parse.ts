@@ -1,5 +1,10 @@
 import { parsePageText } from '@orbis/shared/doc/page-grammar';
-import { type ParseAstResult, type ParseRegistry, parseQueryAst } from '@orbis/shared/query';
+import {
+  type ParseAstResult,
+  type ParseOptions,
+  type ParseRegistry,
+  parseQueryAst,
+} from '@orbis/shared/query';
 
 /**
  * Разбор ТЕЛА блока: обёртку `{{query:…}}` снимаем здесь, внутрь идёт содержимое (§2: обёртку
@@ -16,9 +21,17 @@ import { type ParseAstResult, type ParseRegistry, parseQueryAst } from '@orbis/s
  *
  * Обёртку узнаёт препроход тела (`parsePageText`), а не свой регэксп: маркеры `{{…}}` знает одна
  * копия правил (РП-6), и вторая рано или поздно разошлась бы с ней.
+ *
+ * `opts` — место текста по роду тела (`placeOf`, спека 1в §3.8): на странице и в шаблоне ссылка
+ * `$<имя>` разбирается в `{param}`, в заметке — отказ `PAGE_ONLY` плашкой блока.
  */
-export function parseBlock(blockText: string, reg: ParseRegistry): ParseAstResult {
+// ОБХОДЧИК-Q: web-block-parse
+export function parseBlock(
+  blockText: string,
+  reg: ParseRegistry,
+  opts: ParseOptions = {},
+): ParseAstResult {
   const wrapped = parsePageText(blockText).find((n) => n.kind === 'query');
   const inner = (wrapped?.kind === 'query' ? wrapped.text : blockText).trim();
-  return parseQueryAst(inner, reg);
+  return parseQueryAst(inner, reg, opts);
 }

@@ -8,7 +8,8 @@
  * на экране и нормой в редакторе.
  *
  * Модуль листовой: импортирует только `page-grammar`, разбор запроса с датами
- * (`query/parse-ast`, `query/dates`) и строки отказов (`contracts/block-messages`, без импортов). Его тянет экран записи, а оттуда нельзя дотянуться до
+ * (`query/parse-ast`, `query/dates`), обход ссылок на параметры (`query/page-only`, без импортов) и
+ * строки отказов (`contracts/block-messages`, без импортов). Его тянет экран записи, а оттуда нельзя дотянуться до
  * барреля `@orbis/shared/doc` (tiptap, marked; сторожа `scripts/check-lazy-chunks.ts` и
  * `save.test.tsx`). Разбор запроса несёт zod (`query/ast.ts`), но экран записи уже держит его
  * через корневой `@orbis/shared`, так что нового веса в чанк это не добавляет.
@@ -16,12 +17,15 @@
 
 import { EMPTY_QUERY_MESSAGE } from '../contracts/block-messages';
 import { absoluteDateIn } from '../query/dates';
+import { paramNamesIn } from '../query/page-only';
 import { effectiveLabel, type ParseRegistry, parseQueryAst } from '../query/parse-ast';
 import { QUERY_DATE_TOKEN_LABELS } from '../query/tokens';
 import {
   CONTAINER_LIMITS,
   type GrammarErrorCode,
   type PageNode,
+  type PageParamDecl,
+  paramDeclsOf,
   parsePageText,
 } from './page-grammar';
 
@@ -176,7 +180,10 @@ export type PlacementIssueCode =
   | 'SECOND_BODY'
   | 'SECOND_BLOCK'
   | 'ABSOLUTE_DATE'
-  | 'QUERY_INVALID';
+  | 'QUERY_INVALID'
+  // Параметр страницы (1в §5.1): ошибка блока `{{param}}` (неверное умолчание, чужой токен…) и
+  // ссылка `$<имя>` блока данных на имя, которого тело не объявляет.
+  | 'PARAM_INVALID';
 
 export interface PlacementIssue {
   code: PlacementIssueCode;
@@ -213,6 +220,14 @@ export const SECOND_OWN_CARDS_MESSAGE =
  */
 export function secondParamMessage(name: string): string {
   return `Второй параметр «${name}»: действует первый, лишний блок не рисуется.`;
+}
+
+/**
+ * Ссылка `$<имя>` на параметр, которого тело не объявляет (1в §5.1): «ошибка блока с плашкой». Одна
+ * формулировка на плашку блока данных в web и на причину «шаблон не разобран».
+ */
+export function undeclaredParamMessage(name: string, kind: BodyKind): string {
+  return `параметр «${name}» не объявлен ${KIND_WORD[kind]}`;
 }
 
 /** Текст плашки второй карточки одного аспекта; `raw` — блок, как он написан. */
@@ -317,7 +332,8 @@ function misplaced(
  * Проблема блока данных. Место разбора — по роду тела (1в §3.8, РП-5): на странице и в шаблоне
  * `$`-ссылка законна (`place: 'page'`), в заметке — отказ `PAGE_ONLY` с подсказкой, плашкой
  * `QUERY_INVALID`. Правило абсолютной даты на блоке со ссылкой работает как обычно: ссылка —
- * не литерал (`absoluteDateIn`).
+ * не литерал (`absoluteDateIn`). Ссылка на имя, которого нет среди объявлений тела (`declared`),
+ * — `PARAM_INVALID`; проверяется после даты — порядок тот же, что у плашек блока данных в web.
  */
 // ОБХОДЧИК-Q: placement-issue
 function queryIssue(
@@ -325,6 +341,7 @@ function queryIssue(
   kind: BodyKind,
   reg: ParseRegistry,
   path: number[],
+  declared: ReadonlyMap<string, PageParamDecl>,
 ): PlacementIssue | null {
   // Без краевых пробелов — как разбирает блок данных (`lib/query-blocks/parse.ts` в web):
   // иначе позиция в плашке тела и в плашке самого блока разошлись бы на пробел после `query:`.
@@ -350,7 +367,12 @@ function queryIssue(
   // id, а `parseQueryAst` уже перевёл key (`user/deadline`) в id. Дерево с key в `prop`
   // прошло бы правило молча — у своих свойств владельца key ≠ id (перенос ревью задачи 6).
   const found = absoluteDateIn(parsed.ast, reg);
-  if (found === null) return null;
+  if (found === null) {
+    const missing = paramNamesIn(parsed.ast).find((n) => !declared.has(n));
+    return missing === undefined
+      ? null
+      : { code: 'PARAM_INVALID', message: undeclaredParamMessage(missing, kind), path };
+  }
   const def = reg.properties.get(found.prop);
   const name = def ? effectiveLabel(def.label, reg.locale) : found.prop;
   return {
@@ -381,6 +403,9 @@ function queryIssue(
  * Второй `{{cards}}`, второй `{{cards: own}}`, повтор `{{card: X}}` ОДИНАКОВЫМ текстом и второй
  * параметр с тем же именем (1в) — `SECOND_BLOCK` здесь; разные написания одного аспекта (ключ и подпись) без реестра не узнать —
  * их ловит план рендера web, где реестр есть. Неуместные и лежащие в `broken` блоки не считаются: они и так не рисуются.
+ *
+ * Параметр страницы (1в §5.1) на странице и в шаблоне: ошибка блока `{{param}}` и ссылка блока данных
+ * на необъявленное имя — `PARAM_INVALID` (шаблон с таким блоком к выбору не предлагается).
  */
 export function bodyIssues(
   nodes: readonly PageNode[],
@@ -393,6 +418,8 @@ export function bodyIssues(
   let ownCards = 0;
   const cardTexts = new Set<string>();
   const paramNames = new Set<string>();
+  // Объявления — со всего тела, а не «выше блока»: переключатель ниже блока законен (§5.1).
+  const declared = paramDeclsOf(nodes);
 
   const visit = (list: readonly PageNode[], prefix: number[]) => {
     list.forEach((node, i) => {
@@ -430,16 +457,21 @@ export function bodyIssues(
         }
         return;
       }
-      // Второй параметр с тем же именем (1в §5.1). Параметр с ошибкой блока в счёт не идёт: его
-      // объявление не действует и так, а плашку ошибки рисует показ по `problem`.
+      // Второй параметр с тем же именем (1в §5.1). Параметр с ошибкой блока в счёт «второго» не
+      // идёт — его объявление не действует; сама ошибка — `PARAM_INVALID` с текстом препрохода:
+      // плашка на месте блока и причина «шаблон не разобран» (перенос гейта задачи 4, M-4).
       if (node.kind === 'param') {
         const name = node.decl?.name;
-        if (name !== undefined) {
-          if (paramNames.has(name)) {
-            out.push({ code: 'SECOND_BLOCK', message: secondParamMessage(name), path });
-          } else {
-            paramNames.add(name);
-          }
+        if (name === undefined) {
+          out.push({
+            code: 'PARAM_INVALID',
+            message: `${blockLabel(node)}: ${node.problem}.`,
+            path,
+          });
+        } else if (paramNames.has(name)) {
+          out.push({ code: 'SECOND_BLOCK', message: secondParamMessage(name), path });
+        } else {
+          paramNames.add(name);
         }
         return;
       }
@@ -465,7 +497,7 @@ export function bodyIssues(
         return;
       }
       if (node.kind === 'query') {
-        const issue = queryIssue(node.text, kind, reg, path);
+        const issue = queryIssue(node.text, kind, reg, path, declared);
         if (issue) out.push(issue);
         return;
       }

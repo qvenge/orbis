@@ -28,6 +28,7 @@
 
 import type { PropertyKind } from '@orbis/shared';
 import type {
+  ParseOptions,
   QueryAst,
   QueryBound,
   QueryDisplayMode,
@@ -389,10 +390,13 @@ export type Printed = {
  * разводит `}` бэкслешем (`query/print.ts`), разбор снимает экран тем же правилом, и `}}` в
  * напечатанной key-форме не появляется в принципе. Барьер остался там, где он ещё нужен, — на
  * СЫРОМ тексте, который до дерева не доехал (`QueryTextEditor`, `QueryWidget.save`).
+ *
+ * `opts` — место текста по роду тела (`placeOf`, 1в §3.8): обратный разбор блока страницы со
+ * ссылкой `$<имя>` без места отказал бы `PAGE_ONLY`, и форма не дала бы сохранить законный блок.
  */
-export function printQuery(ast: QueryAst, reg: QueryRegistry): Printed {
+export function printQuery(ast: QueryAst, reg: QueryRegistry, opts: ParseOptions = {}): Printed {
   const text = printQueryAst(ast, reg.parse, 'key');
-  const back = parseQueryAst(text, reg.parse);
+  const back = parseQueryAst(text, reg.parse, opts);
   return { text, error: back.ok ? null : back.error.message };
 }
 
@@ -404,11 +408,19 @@ export function printQuery(ast: QueryAst, reg: QueryRegistry): Printed {
  * Разбор СТРОГИЙ: тела сидированных смарт-листов переведены в key-форму (Задача 21b), и
  * мост старой грамматики, который держал «Настроить» открытым на них формой, а не текстовым
  * редактором, удалён вместе с ней.
+ *
+ * Разбор — с местом по роду тела (`opts`, 1в §3.8): блок страницы со ссылкой `$<имя>` правится
+ * формой (строка ссылки — только для чтения), блок заметки с ней — строковым редактором с отказом.
  */
-export function parseForForm(initial: string, reg: QueryRegistry): QueryAst | null {
-  const r = parseQueryAst(initial.trim(), reg.parse);
+// ОБХОДЧИК-Q: web-form-parse
+export function parseForForm(
+  initial: string,
+  reg: QueryRegistry,
+  opts: ParseOptions = {},
+): QueryAst | null {
+  const r = parseQueryAst(initial.trim(), reg.parse, opts);
   if (!r.ok) return null;
-  return printQuery(r.ast, reg).text === null ? null : r.ast;
+  return printQuery(r.ast, reg, opts).text === null ? null : r.ast;
 }
 
 /**

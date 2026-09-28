@@ -8,7 +8,7 @@
  */
 import { expect, test } from 'bun:test';
 import { propertyDefinitionSchema } from '../registry/property-type';
-import { PAGE_ONLY_HINT, queryAstSchema } from './ast';
+import { PAGE_ONLY_HINT, pageQueryAstSchema, queryAstSchema } from './ast';
 import {
   AST_FIXTURES,
   FIXTURE_PARSE_REGISTRY,
@@ -982,6 +982,24 @@ test('1в §5.1: `$<имя>` на месте значения-границы —
       { prop: { contract: 'orbis/when', slot: 'deadline' }, op: 'ne', value: { param: 'd' } },
     ],
   });
+});
+
+test('1в §5.1 (M-2 гейта 4): `$` + имя длиннее 64 — не ссылка; схема дерева такое имя отвергает', () => {
+  const long = 'a'.repeat(65);
+  const r = parseQueryAst(`orbis/due_date=$${long}`, REG, PAGE);
+  // Не ссылка: разбор читает `$aaa…` литералом (и у даты отвергает его как не-дату), а не `{param}`.
+  expect(r.ok ? JSON.stringify(r.ast) : r.error.code).not.toContain('param');
+  if (!r.ok) expect(r.error.code).not.toBe('PAGE_ONLY');
+  expect(
+    pageQueryAstSchema.safeParse({
+      filter: { prop: 'orbis/due_date', op: 'eq', value: { param: long } },
+    }).success,
+  ).toBe(false);
+  expect(
+    pageQueryAstSchema.safeParse({
+      filter: { prop: 'orbis/due_date', op: 'eq', value: { param: 'a'.repeat(64) } },
+    }).success,
+  ).toBe(true);
 });
 
 test('1в §3.8: без места `$` — отказ PAGE_ONLY с подсказкой и позицией ссылки', () => {

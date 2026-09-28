@@ -1,7 +1,9 @@
-import { AspectCard, HostBlock, OwnCards, RecordBlock } from '@orbis/shared/doc';
+import { AspectCard, HostBlock, OwnCards, ParamBlock, RecordBlock } from '@orbis/shared/doc';
 import {
   HOST_BLOCK_NAMES,
   type HostBlockName,
+  type PageNode,
+  parsePageText,
   RECORD_BLOCK_NAMES,
   type RecordBlockName,
 } from '@orbis/shared/doc/page-grammar';
@@ -12,13 +14,14 @@ import { useState } from 'react';
 import { useBodyKind } from '../../../lib/query-blocks/body-kind';
 import { useFieldCatalog } from '../../../lib/query-blocks/useFieldCatalog';
 import { Button } from '../../../ui/Button';
-import { BlockPlaque } from '../../page/blocks/BlockPlaque';
+import { BlockPlaque, issueTone } from '../../page/blocks/BlockPlaque';
 import { placementIssue } from '../EditorShell';
 import {
   cardAspectTitle,
   cardStubLabel,
   hostStubLabel,
   ownCardsStubLabel,
+  paramStubLabel,
   recordStubLabel,
   StubBox,
 } from '../layout-parts';
@@ -201,6 +204,51 @@ function HostStub({ node, selected }: NodeViewProps) {
   );
 }
 
+/** Имя параметра из текста маркера — для счёта «второго»; ошибка блока — без имени. */
+function paramNameOf(text: unknown): string | null {
+  const [node] = typeof text === 'string' ? parsePageText(text) : [];
+  return node?.kind === 'param' ? (node.decl?.name ?? null) : null;
+}
+
+/**
+ * Параметр страницы (1в §5.1) — подписанной заглушкой «[Параметр «Горизонт»: 7 дней | 14 дней]»,
+ * только для чтения: переключатель рисует показ, а маркер правится текстом (правка разметкой).
+ * Проблема — плашкой тем же правилом, что у первого кадра и показа (`placementIssue`): в заметке —
+ * «работает на страницах и в шаблонах», второй с тем же именем — «второй», ошибка блока — с текстом
+ * ошибки. Узел — атом: текст маркера в документе остаётся нетронутым в любом случае.
+ */
+function ParamStub({ node, selected, editor, getPos }: NodeViewProps) {
+  const kind = useBodyKind();
+  const text = typeof node.attrs.text === 'string' ? node.attrs.text : '';
+  const [parsed] = parsePageText(text);
+  // Текст, который препроход маркером не узнаёт, бывает только в документе клиента (`param-block.ts`)
+  // — ошибкой блока, а не пустотой.
+  const param: Extract<PageNode, { kind: 'param' }> =
+    parsed?.kind === 'param'
+      ? parsed
+      : { kind: 'param', raw: text, decl: null, problem: 'маркер не узнан' };
+  const name = param.decl?.name ?? null;
+  const repeated = useRepeated(
+    editor,
+    getPos,
+    (n) => name !== null && n.type.name === 'paramBlock' && paramNameOf(n.attrs.text) === name,
+  );
+  const issue = placementIssue(param, kind, repeated);
+  return (
+    <NodeViewWrapper data-query-widget="" contentEditable={false}>
+      {issue !== undefined ? (
+        <BlockPlaque
+          tone={issueTone(issue)}
+          message={issue.message}
+          {...(issue.hint !== undefined && { hint: issue.hint })}
+        />
+      ) : (
+        param.decl && <StubBox label={paramStubLabel(param.decl)} selected={selected} />
+      )}
+    </NodeViewWrapper>
+  );
+}
+
 /** Узлы схемы + внешний вид (довод — `LayoutFrame.tsx`: схема редактора равна схеме документа). */
 export const RecordBlockWithView = RecordBlock.extend({
   addNodeView: () => ReactNodeViewRenderer(RecordStub),
@@ -213,4 +261,7 @@ export const OwnCardsWithView = OwnCards.extend({
 });
 export const HostBlockWithView = HostBlock.extend({
   addNodeView: () => ReactNodeViewRenderer(HostStub),
+});
+export const ParamBlockWithView = ParamBlock.extend({
+  addNodeView: () => ReactNodeViewRenderer(ParamStub),
 });

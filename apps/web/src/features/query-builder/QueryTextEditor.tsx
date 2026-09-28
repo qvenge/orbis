@@ -11,6 +11,7 @@
 // ложную опору (ревью раунда 2).
 import { BLOCK_END, parseQueryAst } from '@orbis/shared/query';
 import { useId, useMemo, useRef, useState } from 'react';
+import { placeOf, useBodyKind } from '../../lib/query-blocks/body-kind';
 import { useFieldCatalog } from '../../lib/query-blocks/useFieldCatalog';
 import { Button } from '../../ui/Button';
 import { Dialog } from '../../ui/Dialog';
@@ -40,7 +41,11 @@ const FIELD_CLS =
  * запроса уедет текстом заметки, а `{{query:` в этом хвосте заведёт ЛИШНИЙ блок и сдвинет
  * нумерацию — на первом блоке стоит бейдж pinned-сущности (§3.2). Кавычки тут не спасают
  * (грамматики рендерер не знает), поэтому единственный выход — не пустить такую строку.
+ *
+ * Живой разбор — с местом по роду тела (`placeOf`, 1в §3.8): в блоке страницы и шаблона `$<имя>`
+ * законна, в заметке — отказ `PAGE_ONLY` с подсказкой.
  */
+// ОБХОДЧИК-Q: web-text-editor
 export function QueryTextEditor({
   initial,
   onSave,
@@ -57,6 +62,7 @@ export function QueryTextEditor({
   const brokenId = useId();
 
   const { registry } = useFieldCatalog();
+  const place = placeOf(useBodyKind());
   // В поле лежит ВНУТРЕННОСТЬ {{query:…}} — обёртку приставит сериализация документа. Края
   // текста разбору не помеха, а вот в атрибут ноды они уезжают как есть, и это НАМЕРЕННО:
   // текст блока принадлежит тому, кто его написал, и подстриженный край означал бы правку
@@ -78,8 +84,8 @@ export function QueryTextEditor({
   // ровно то, что примет `entity.query`. Мост старой формы стоял здесь, пока сидированные
   // тела были написаны ею; Задача 21b перевела их в key-форму и мост удалила.
   const parsed = useMemo(
-    () => (registry ? parseQueryAst(text.trim(), registry.parse) : null),
-    [registry, text],
+    () => (registry ? parseQueryAst(text.trim(), registry.parse, place) : null),
+    [registry, text, place],
   );
   const error = parsed?.ok === false ? parsed.error : null;
   // Проверяем ВЕСЬ текст поля, а не тримленный: у `}}` на краю разбора может и не быть, а

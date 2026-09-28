@@ -44,9 +44,9 @@ interface QueryWalker {
 /**
  * Перечень обходчиков дерева запроса — раздел «Обходчики дерева запроса» плана 1в (с 26-й строкой
  * `web-tile-form` — рулинг координатора R-4, docs-коммит `6acf05bf`; 27-я — `token-boundary` задачи 2).
- * Строки задачи 4 (`bind-query`, `placement-issue`, `page-only`, `substitute-params`) стоят с их
- * пометками; строки задачи 5 (`web-form-parse`, `web-field-rows`, `web-block-parse`,
- * `web-text-editor`, `web-query-widget`) добавит она вместе со своими пометками.
+ * Строки задачи 4 (`bind-query`, `placement-issue`, `page-only`, `substitute-params`) и задачи 5
+ * (`web-form-parse`, `web-field-rows`, `web-block-parse`, `web-text-editor`, `web-query-widget`)
+ * стоят с их пометками.
  */
 export const QUERY_WALKERS: ReadonlyArray<QueryWalker> = [
   {
@@ -59,7 +59,7 @@ export const QUERY_WALKERS: ReadonlyArray<QueryWalker> = [
     name: 'json-schema',
     file: 'packages/shared/src/query/ast-json-schema.ts',
     entry: 'queryAstJsonSchema',
-    does: 'A: FIELD_REF = oneOf(строка, объект адреса) — вердикты совпадают с zod',
+    does: 'A: FIELD_REF = oneOf(строка, объект адреса) — вердикты совпадают с zod; P: {param} JSON Schema тула не допускает (агенту ссылка не положена)',
   },
   {
     name: 'parse',
@@ -77,7 +77,7 @@ export const QUERY_WALKERS: ReadonlyArray<QueryWalker> = [
     name: 'normalize',
     file: 'packages/shared/src/query/normalize.ts',
     entry: 'normalizeQueryAst',
-    does: 'A: ключ контракта → id в prop/sortBy/aggregate; слот как есть',
+    does: 'A: ключ контракта → id в prop/sortBy/aggregate; слот как есть; P: ссылка — как есть',
   },
   {
     name: 'static',
@@ -95,19 +95,19 @@ export const QUERY_WALKERS: ReadonlyArray<QueryWalker> = [
     name: 'field-ref',
     file: 'packages/shared/src/query/field-ref.ts',
     entry: 'resolvePropertyFieldId',
-    does: 'A: адрес — undefined (отказывает зовущий)',
+    does: 'A: адрес — undefined (отказывает зовущий); P: не касается (поле, а не значение)',
   },
   {
     name: 'refs-index',
     file: 'packages/shared/src/doc/convert.ts',
     entry: 'queryRefsFromDoc',
-    does: 'A: объект адреса в индекс свойств не едет',
+    does: 'A: объект адреса в индекс свойств не едет; P: не касается (значение, а не свойство)',
   },
   {
     name: 'token-boundary',
     file: 'packages/shared/src/query/tokens.ts',
     entry: 'tokenBoundaryForms',
-    does: 'A: токен-граница у адреса учитывается наравне со свойством (обход по форме узла, не по полю)',
+    does: 'A: токен-граница у адреса учитывается наравне со свойством (обход по форме узла, не по полю); P: не касается (ссылка — не токен)',
   },
   {
     name: 'page-only',
@@ -137,7 +137,7 @@ export const QUERY_WALKERS: ReadonlyArray<QueryWalker> = [
     name: 'contract-sql',
     file: 'apps/server/src/query/contract-sql.ts',
     entry: 'addressCond',
-    does: 'A: SQL по привязкам аспектов записи; ключ сортировки РП-21',
+    does: 'A: SQL по привязкам аспектов записи; ключ сортировки РП-21; P: не касается (до SQL ссылка подставлена)',
   },
   {
     name: 'materialize-window',
@@ -155,43 +155,43 @@ export const QUERY_WALKERS: ReadonlyArray<QueryWalker> = [
     name: 'rewrite-ast',
     file: 'apps/server/src/registry/ops.ts',
     entry: 'rewriteAst',
-    does: 'A: объект адреса не трогается; field строкой переписывается',
+    does: 'A: объект адреса не трогается; field строкой переписывается; P: не касается (значение не переписывается)',
   },
   {
     name: 'property-names',
     file: 'apps/server/src/registry/ops.ts',
     entry: 'propertyNamesInAst',
-    does: 'A: адрес — не имя свойства',
+    does: 'A: адрес — не имя свойства; P: не касается (значение, а не свойство)',
   },
   {
     name: 'rewrite-text-keys',
     file: 'apps/server/src/registry/ops.ts',
     entry: 'rewriteQueryTextKeys',
-    does: 'A: часть до точки — не свойство',
+    does: 'A: часть до точки — не свойство; P: не касается',
   },
   {
     name: 'scope-shape',
     file: 'apps/server/src/registry/ops.ts',
     entry: 'assertScopeShape',
-    does: 'A: в scope — отказ SCOPE_SHAPE',
+    does: 'A: в scope — отказ SCOPE_SHAPE; P: базовая схема — отказ',
   },
   {
     name: 'scope-names-aspect',
     file: 'apps/server/src/registry/deltas.ts',
     entry: 'scopeNamesAspect',
-    does: 'A: смотрит только aspect, прочее тихо (форму держит scope-shape)',
+    does: 'A: смотрит только aspect, прочее тихо (форму держит scope-shape); P: базовая схема — отказ',
   },
   {
     name: 'action-query',
     file: 'apps/server/src/registry/actions.ts',
     entry: 'assertActionQuery',
-    does: 'A: принят',
+    does: 'A: принят; P: базовая схема — отказ',
   },
   {
     name: 'goal-progress',
     file: 'apps/server/src/goals/progress.ts',
     entry: 'computeGoalProgress',
-    does: 'A: адрес в field — invalid_field; в дереве — компилятор',
+    does: 'A: адрес в field — invalid_field; в дереве — компилятор; P: отказ схемы',
   },
   {
     name: 'entity-blocks',
@@ -209,31 +209,61 @@ export const QUERY_WALKERS: ReadonlyArray<QueryWalker> = [
     name: 'probe-p3',
     file: 'scripts/probe-p3/runner.ts',
     entry: 'evalNode',
-    does: 'A: отказ «форма вне пробы»',
+    does: 'A: отказ «форма вне пробы»; P: не касается (проба — деревья без ссылок)',
   },
   {
     name: 'web-builder-model',
     file: 'apps/web/src/features/query-builder/model.ts',
     entry: 'fieldNodeView',
-    does: 'A: у адреса строки формы нет, узел сохраняется при печати',
+    does: 'A: у адреса строки формы нет, узел сохраняется при печати; P: строка поля со ссылкой — только чтение, узел сохраняется',
   },
   {
     name: 'web-builder-form',
     file: 'apps/web/src/features/query-builder/QueryBuilderForm.tsx',
     entry: 'aggregateOf',
-    does: 'A: значение <select> — fieldRefKey, узел сохраняется',
+    does: 'A: значение <select> — fieldRefKey, узел сохраняется; P: не касается (агрегат — поле)',
   },
   {
     name: 'web-tile-form',
     file: 'apps/web/src/features/page/blocks/TileForm.tsx',
     entry: 'tileValue',
-    does: 'A: latest над адресом — значение без поиска свойства по строке (не падает); валюта — задача 3',
+    does: 'A: latest над адресом — значение без поиска свойства по строке (не падает); валюта — задача 3; P: не касается (подставлено сервером)',
   },
   {
     name: 'web-ref-query',
     file: 'apps/web/src/lib/entity-ref/RefField.tsx',
     entry: 'refQueryAst',
-    does: 'A: дерево цели проезжает как есть',
+    does: 'A: дерево цели проезжает как есть; P: базовая схема цели — отказ на сервере',
+  },
+  {
+    name: 'web-form-parse',
+    file: 'apps/web/src/features/query-builder/model.ts',
+    entry: 'parseForForm',
+    does: 'P, G: разбор и обратная печать — с местом по роду тела (page/template → page, заметка — без места)',
+  },
+  {
+    name: 'web-field-rows',
+    file: 'apps/web/src/features/query-builder/FieldRows.tsx',
+    entry: 'BoundInput',
+    does: 'P: граница-ссылка — подпись `$имя` только для чтения (не [object Object]), узел сохраняется',
+  },
+  {
+    name: 'web-block-parse',
+    file: 'apps/web/src/lib/query-blocks/parse.ts',
+    entry: 'parseBlock',
+    does: 'P, G: место из рода тела — page/template → page, заметка — отказ PAGE_ONLY плашкой блока',
+  },
+  {
+    name: 'web-text-editor',
+    file: 'apps/web/src/features/query-builder/QueryTextEditor.tsx',
+    entry: 'QueryTextEditor',
+    does: 'P, G: живой разбор — с местом по роду тела',
+  },
+  {
+    name: 'web-query-widget',
+    file: 'apps/web/src/features/entity-editor/nodes/QueryWidget.tsx',
+    entry: 'astOf',
+    does: 'P, G: дерево атрибута — pageQueryAstSchema (место знает тело, а не узел)',
   },
 ];
 
@@ -295,10 +325,17 @@ function firstCodeLineAfter(file: string, line: number): string {
 test('перечень обходчиков: имена уникальны, число пиннится', () => {
   const names = QUERY_WALKERS.map((w) => w.name);
   expect(new Set(names).size).toBe(names.length);
-  // 26 строк задачи 1 (25 плана + `web-tile-form`, рулинг R-4), `token-boundary` задачи 2 и четыре
-  // строки задачи 4 (`page-only`, `bind-query`, `placement-issue`, `substitute-params`); задача 5
-  // добавит свои (РП-3).
-  expect(QUERY_WALKERS.length).toBe(31);
+  // 26 строк задачи 1 (25 плана + `web-tile-form`, рулинг R-4), `token-boundary` задачи 2, четыре
+  // строки задачи 4 (`page-only`, `bind-query`, `placement-issue`, `substitute-params`) и пять задачи 5
+  // (`web-form-parse`, `web-field-rows`, `web-block-parse`, `web-text-editor`, `web-query-widget`).
+  expect(QUERY_WALKERS.length).toBe(36);
+});
+
+// Перенос ревью задачи 4 (Fable M-1): таблица плана задаёт каждому обходчику решение о `$`-ссылке —
+// хотя бы «не касается». Строка без части `P` прятала бы, что о ссылке никто не подумал.
+test('каждая строка перечня называет решение о $-ссылке (часть P)', () => {
+  const silent = QUERY_WALKERS.filter((w) => !/(^|[\s;,])P[:,]/.test(w.does)).map((w) => w.name);
+  expect(silent).toEqual([]);
 });
 
 test('слово пометки встречается только строкой-комментарием пометки, не в прозе', () => {

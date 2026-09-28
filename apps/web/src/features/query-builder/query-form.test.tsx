@@ -1,12 +1,16 @@
 import { DAILY_PLANNING_BODY, UPCOMING_BODY } from '@orbis/server/src/seed/smart-lists';
 import { parsePageText } from '@orbis/shared/doc/page-grammar';
+import type { BodyKind } from '@orbis/shared/doc/placement';
 import { parseQueryAst, printQueryAst, QUERY_DATE_TOKEN_LABELS } from '@orbis/shared/query';
 import { FIXTURE_PARSE_REGISTRY as REG } from '@orbis/shared/query/fixtures';
-import { fireEvent, screen, within } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { expect, test, vi } from 'vitest';
+import { BodyKindProvider } from '../../lib/query-blocks/body-kind';
 import { type MockHandler, renderWithProviders } from '../../test/harness';
 import { registryReply } from '../../test/registry';
+import { QueryBlockEditor } from './QueryBlockEditor';
 import { QueryBuilderForm } from './QueryBuilderForm';
+import { QueryTextEditor } from './QueryTextEditor';
 
 /** Тексты блоков данных тела — препроходом, которым их читает первый кадр (РП-6). */
 const queryBlocks = (body: string): string[] =>
@@ -731,4 +735,79 @@ test('сортировка по значению «когда» пережива
   fireEvent.change(screen.getByLabelText('Направление 1'), { target: { value: 'desc' } });
   save();
   expect(saved(onSave)).toBe('aspect=orbis/task, sortBy=orbis/when:desc');
+});
+
+// ─────────────── Параметр страницы в конструкторе (спека 1в §5.1, РП-5; обходчики web) ───────────────
+
+/** Форма под родом тела — как в редакторе страницы или заметки (род — контекстом экрана). */
+async function openFormIn(kind: BodyKind, initial: string) {
+  const onSave = vi.fn();
+  renderWithProviders(
+    <BodyKindProvider kind={kind}>
+      <QueryBlockEditor initial={initial} onSave={onSave} onCancel={() => {}} />
+    </BodyKindProvider>,
+    aspectsHandler,
+  );
+  return { onSave };
+}
+
+test('страница: строка условия с $period — `$period` только для чтения, печать сохраняет ссылку', async () => {
+  const initial = 'aspect=orbis/task, orbis/due_date=$period, limit=30';
+  const { onSave } = await openFormIn('page', initial);
+  // Форма, а не текстовый редактор: разбор и обратная печать — с местом страницы.
+  await screen.findByLabelText('Лимит выдачи');
+  const ref = screen.getByLabelText('Срок: значение 1') as HTMLInputElement;
+  expect(ref.value).toBe('$period');
+  expect(ref.readOnly).toBe(true);
+  expect(document.body.textContent).not.toContain('[object Object]');
+  fireEvent.change(screen.getByLabelText('Лимит выдачи'), { target: { value: '5' } });
+  save();
+  expect(saved(onSave)).toBe('aspect=orbis/task, orbis/due_date=$period, limit=5');
+});
+
+test('заметка: блок с $period — строковый редактор с отказом «только в блоках страниц и шаблонов»', async () => {
+  await openFormIn('note', 'aspect=orbis/task, orbis/due_date=$period');
+  expect(await screen.findByTestId('query-text-error')).toHaveTextContent(
+    'только в блоках страниц и шаблонов',
+  );
+});
+
+test('страница: строковый редактор разбирает $period без отказа', async () => {
+  renderWithProviders(
+    <BodyKindProvider kind="template">
+      <QueryTextEditor
+        initial="aspect=orbis/task, orbis/due_date=$period"
+        onSave={() => {}}
+        onCancel={() => {}}
+      />
+    </BodyKindProvider>,
+    aspectsHandler,
+  );
+  const field = await screen.findByTestId('query-text-edit');
+  // Реестр приехал — разбор идёт (опечатка в имени свойства даёт отказ), а ссылка отказа не даёт.
+  fireEvent.change(field, { target: { value: 'aspect=orbis/task, orbis/due_dat=$period' } });
+  expect(await screen.findByTestId('query-text-error')).toBeInTheDocument();
+  fireEvent.change(field, { target: { value: 'aspect=orbis/task, orbis/due_date=$period' } });
+  await waitFor(() => expect(screen.queryByTestId('query-text-error')).toBeNull());
+});
+
+// Перенос из задачи 2: токен без нужного края для оператора строки сохранение отвергло бы
+// (`TOKEN_EDGE`), поэтому форма его не предлагает. Знание краёв — из `@orbis/shared/query`.
+const tokensOf = (label: string) =>
+  [...(screen.getByLabelText(label) as HTMLSelectElement).options]
+    .map((o) => o.value)
+    .filter((v) => v !== 'exact');
+
+test('токены строки даты сужены по оператору: у `<` нет overdue, у `>` нет after_7d, у `=` — все восемь', async () => {
+  const all = Object.keys(QUERY_DATE_TOKEN_LABELS);
+  const without = (t: string) => all.filter((x) => x !== t);
+  await openForm('aspect=orbis/task, orbis/due_date<today');
+  expect(tokensOf('Срок: значение')).toEqual(without('overdue'));
+  fireEvent.change(screen.getByLabelText('Срок'), { target: { value: 'gt' } });
+  expect(tokensOf('Срок: значение')).toEqual(without('after_7d'));
+  fireEvent.change(screen.getByLabelText('Срок'), { target: { value: 'range' } });
+  expect(tokensOf('Срок: от')).toEqual(without('overdue'));
+  expect(tokensOf('Срок: до')).toEqual(without('after_7d'));
+  fireEvent.change(screen.getByLabelText('Срок'), { target: { value: 'anyOf' } });
+  expect(tokensOf('Срок: значение 1')).toEqual(all);
 });

@@ -1,13 +1,18 @@
 import { BLOCK_ROWS_CAP, type BlockResult } from '@orbis/shared';
-import { bodyIssues, EMPTY_QUERY_MESSAGE } from '@orbis/shared/doc/placement';
-import { absoluteDateIn, type QueryAst } from '@orbis/shared/query';
+import {
+  bodyIssues,
+  EMPTY_QUERY_MESSAGE,
+  undeclaredParamMessage,
+} from '@orbis/shared/doc/placement';
+import { absoluteDateIn, paramNamesIn, type QueryAst } from '@orbis/shared/query';
 import { type ReactNode, useMemo, useState } from 'react';
 import { BlockDataError, useBlockData } from '../../../lib/query-blocks/batch';
-import { useBodyKind } from '../../../lib/query-blocks/body-kind';
+import { placeOf, useBodyKind } from '../../../lib/query-blocks/body-kind';
 import { parseBlock } from '../../../lib/query-blocks/parse';
 import { useThisEntityId } from '../../../lib/query-blocks/this-entity';
 import { useFieldCatalog } from '../../../lib/query-blocks/useFieldCatalog';
 import { Card } from '../../../ui/Card';
+import { usePageParams } from '../params';
 import { BlockPlaque, ConfigureButton, REGISTRY_FAILED_MESSAGE } from './BlockPlaque';
 import { CompactForm } from './CompactForm';
 import { ListForm } from './ListForm';
@@ -91,17 +96,20 @@ function isEmptyResult(r: BlockResult): boolean {
 function LoadedBlock({
   text,
   ast,
+  params,
   heading,
   onConfigure,
 }: {
   text: string;
   ast: QueryAst;
+  /** Значения параметров страницы, на которые ссылается блок (`$<имя>`); подставит сервер. */
+  params: Readonly<Record<string, string>>;
   heading: string | undefined;
   onConfigure?: () => void;
 }) {
   // «ещё N» поднимает `limit` ЭТОГО блока — новый ключ, просьба пачкой из одного.
   const [limit, setLimit] = useState<number | undefined>(undefined);
-  const data = useBlockData(text, { limit });
+  const data = useBlockData(text, { limit, params });
 
   // §6.5: ошибка блока — плашка с причиной; пустоты вместо ошибки не бывает.
   if (data.isError) {
@@ -214,7 +222,12 @@ function RowsBody({
  *  3. отказ разбора — плашка с позицией;
  *  4. вне заметки — абсолютная дата в запросе — плашка с подсказкой токенов (§5.6, С1а-9):
  *     формулировка из `bodyIssues`, одна на плашку тела и плашку блока;
- *  5. иначе — данные.
+ *  5. ссылка `$<имя>` на параметр, которого страница не объявляет, — плашка до запроса (1в §5.1);
+ *  6. иначе — данные: значения параметров — только тех имён, на которые ссылается блок (ключ кеша
+ *     не зависит от чужих параметров), подстановка — на сервере (текст уходит с `$`).
+ *
+ * Разбор — с местом по роду тела (`placeOf`, 1в §3.8): на странице и в шаблоне `$` законна, в
+ * заметке — отказ `PAGE_ONLY` плашкой п. 3.
  *
  * `title` — явный заголовок снаружи (перекрывает `title=` блока); им пользуется обёртка
  * `QueryBlock`, сохранившая прежнюю сигнатуру.
@@ -231,10 +244,11 @@ export function DataBlock({
   const { registry, failed } = useFieldCatalog();
   const kind = useBodyKind();
   const thisId = useThisEntityId();
+  const { values } = usePageParams();
   const empty = text.trim() === '';
   const parsed = useMemo(
-    () => (empty || registry === null ? null : parseBlock(text, registry.parse)),
-    [empty, registry, text],
+    () => (empty || registry === null ? null : parseBlock(text, registry.parse, placeOf(kind))),
+    [empty, registry, text, kind],
   );
   const dateIssue = useMemo(() => {
     if (kind === 'note' || registry === null || parsed === null || !parsed.ok) return null;
@@ -271,6 +285,18 @@ export function DataBlock({
       />
     );
   }
+  const names = paramNamesIn(parsed.ast);
+  const missing = names.find((n) => !Object.hasOwn(values, n));
+  if (missing !== undefined) {
+    return (
+      <BlockPlaque
+        message={`Ошибка запроса: ${undeclaredParamMessage(missing, kind)}`}
+        {...configure}
+      />
+    );
+  }
+  // `fromEntries`, а не присваивание по ключу: законное имя `__proto__` ушло бы в прототип.
+  const params = Object.fromEntries(names.map((n) => [n, values[n] as string]));
   return (
     // key по тексту И записи `this`: другой запрос — другой блок, и раскрытое «ещё N» старого к нему
     // не относится; тот же шаблон на соседней записи (экран монтируется без key) — тоже другой блок.
@@ -278,6 +304,7 @@ export function DataBlock({
       key={`${text.trim()}:${thisId ?? ''}`}
       text={text}
       ast={parsed.ast}
+      params={params}
       heading={title ?? parsed.ast.title}
       {...configure}
     />

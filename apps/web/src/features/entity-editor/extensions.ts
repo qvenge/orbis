@@ -12,6 +12,7 @@ import {
   AspectCardWithView,
   HostBlockWithView,
   OwnCardsWithView,
+  ParamBlockWithView,
   RecordBlockWithView,
 } from './nodes/RecordBlockStub';
 import { UNIQUE_ID_TYPES } from './strip-ids';
@@ -56,6 +57,7 @@ const WITH_VIEW: ReadonlySet<string> = new Set([
   'aspectCard',
   'ownCards',
   'hostBlock',
+  'paramBlock',
 ]);
 
 export const EDITOR_EXTENSIONS: AnyExtension[] = [
@@ -78,6 +80,8 @@ export const EDITOR_EXTENSIONS: AnyExtension[] = [
   // плашкой рендерера).
   OwnCardsWithView,
   HostBlockWithView,
+  // Срез 1в (§5.1): параметр страницы — подписанной заглушкой; переключатель рисует только показ.
+  ParamBlockWithView,
   // Блочные id сегодня не читает никто. Ставятся с первого дня потому, что на них ляжет будущий
   // блочный контракт агента (`body_replace_block(id, md)`): добавить их позже — мигрировать все
   // документы, добавить сейчас — один параметр расширения. В markdown-проекцию id не печатаются.

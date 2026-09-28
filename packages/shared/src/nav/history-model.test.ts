@@ -1076,6 +1076,105 @@ describe('(11) сохранение orbis:nav:v2', () => {
     expect(currentEntry(first.model)).toEqual({ address: HOST_HOME });
   });
 
+  // Параметр страницы (спека 1в §5.1, РП-15): значение живёт в записи стопки экрана, а у раздела
+  // переживает перезапуск ВМЕСТЕ с последним местом раздела. Карта `views` — рядом с `last` в
+  // сохранении приложения (у каждого приложения свой раздел `home`, общая карта их смешала бы).
+  describe('значения параметров страницы (1в §5.1)', () => {
+    /** «Записи» хоста активны; на корне раздела выбран «14 дней», рядом — ключи чата и вкладки. */
+    function withParam(): NavModel {
+      return run(
+        hostWithSections(),
+        [{ type: 'view', patch: { 'param:period': 'next_14d', about: 'none', tab: 'Связи' } }],
+        'app',
+      ).model;
+    }
+
+    test('persistOf пишет views[раздел] приложения — только ключи param:*; about и tab — нет', () => {
+      const p = persistOf(withParam());
+      expect(p.apps[HOST_APP]?.views).toEqual({ [RECORDS]: { 'param:period': 'next_14d' } });
+      const text = JSON.stringify(p);
+      expect(text).not.toContain('about');
+      expect(text).not.toContain('Связи');
+    });
+
+    test('restoreFrom кладёт значение в view восстановленного места раздела', () => {
+      const m = restoreFrom(JSON.parse(JSON.stringify(persistOf(withParam())))) as NavModel;
+      expect(currentEntry(m)).toEqual({
+        address: RECORDS_ROOT,
+        view: { 'param:period': 'next_14d' },
+      });
+      // Прочие разделы — без состояния.
+      expect(m.apps[HOST_APP]?.stacks[TODAY]).toEqual([{ address: TODAY_ROOT }]);
+    });
+
+    test('значение едет с ПОСЛЕДНИМ местом раздела: страница глубже корня — её значение', () => {
+      const m = run(
+        hostWithSections(),
+        [open(rec(7)), { type: 'view', patch: { 'param:period': 'this_week' } }],
+        'app',
+      ).model;
+      const restored = restoreFrom(persistOf(m)) as NavModel;
+      expect(currentEntry(restored)).toEqual({
+        address: rec(7),
+        view: { 'param:period': 'this_week' },
+      });
+    });
+
+    test('значение не с последнего места не сохраняется: после страницы открыта задача — views нет', () => {
+      const m = run(
+        hostWithSections(),
+        [{ type: 'view', patch: { 'param:period': 'next_14d' } }, open(rec(8))],
+        'app',
+      ).model;
+      expect(persistOf(m).apps[HOST_APP]).not.toHaveProperty('views');
+    });
+
+    test('сохранение без views (старый клиент) читается как раньше — место без состояния', () => {
+      const old = {
+        v: 2,
+        activeApp: HOST_APP,
+        apps: { [HOST_APP]: { activeSection: RECORDS, last: { [RECORDS]: RECORDS_ROOT } } },
+      };
+      expect(currentEntry(restoreFrom(old) as NavModel)).toEqual({ address: RECORDS_ROOT });
+    });
+
+    test('новая форма для старого клиента — лишний ключ: те же поля v2, та же модель без состояния', () => {
+      const persisted = JSON.parse(JSON.stringify(persistOf(withParam())));
+      // Клиент до 1в читает у сохранения ровно `v`, `activeApp`, `apps[*].activeSection` и
+      // `apps[*].last`; новое — только ключ `views` рядом с `last`, и его он не видит.
+      expect(Object.keys(persisted).sort()).toEqual(['activeApp', 'apps', 'v']);
+      expect(Object.keys(persisted.apps[HOST_APP]).sort()).toEqual([
+        'activeSection',
+        'last',
+        'views',
+      ]);
+      const stripped = {
+        ...persisted,
+        apps: { [HOST_APP]: { activeSection: RECORDS, last: persisted.apps[HOST_APP].last } },
+      };
+      const a = restoreFrom(persisted) as NavModel;
+      const b = restoreFrom(stripped) as NavModel;
+      expect(a.activeApp).toBe(b.activeApp);
+      expect(stackOf(a, HOST_APP, RECORDS)).toEqual(stackOf(b, HOST_APP, RECORDS) as Address[]);
+    });
+
+    test('битые views не роняют навигацию: значение отброшено, место восстановлено', () => {
+      const good = persistOf(withParam());
+      const host = good.apps[HOST_APP] as NonNullable<(typeof good.apps)[string]>;
+      for (const views of [
+        'x',
+        [],
+        { [RECORDS]: 'x' },
+        { [RECORDS]: { 'param:period': 5 } },
+        // Ключ не параметра — чужое сохранение: не переносится в состояние экрана.
+        { [RECORDS]: { tab: 'Связи' } },
+      ]) {
+        const m = restoreFrom({ ...good, apps: { [HOST_APP]: { ...host, views } } }) as NavModel;
+        expect(currentEntry(m)).toEqual({ address: RECORDS_ROOT });
+      }
+    });
+  });
+
   test('restoreFrom: ключи-имена свойств Object.prototype — обычные ключи, не прототип', () => {
     const raw = JSON.parse(
       `{"v":2,"activeApp":"host","apps":{"host":{"activeSection":"__proto__","last":{"__proto__":${JSON.stringify(HOST_HOME)},"constructor":${JSON.stringify(rec(1))}}}}}`,
