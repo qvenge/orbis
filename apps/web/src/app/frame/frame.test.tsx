@@ -408,3 +408,48 @@ test('(е) «＋» открывает быстрый ввод; на страни
   expect(create.input.aspects).toBeUndefined();
   expect(calls.filter((c) => c.path === 'relation.create')).toEqual([]);
 });
+
+// Смоук 1б: всплывашка «＋» не закрывалась ни Escape, ни нажатием мимо и висела над новым местом.
+test('(е) «＋» закрывается Escape (фокус — на ＋), нажатием мимо и сменой места; нажатие внутри — не закрывает', async () => {
+  resetFrame(`/r/${UPCOMING}`);
+  renderApp();
+  await heading('Upcoming');
+  const plus = within(screen.getByTestId('host-buttons')).getByRole('button', {
+    name: 'Новая запись',
+  });
+  const open = async () => {
+    fireEvent.click(plus);
+    expect(plus).toHaveAttribute('aria-expanded', 'true');
+    return screen.findByTestId('host-capture');
+  };
+
+  // Нажатие внутри — не «мимо».
+  const capture = await open();
+  const input = within(capture).getByLabelText('Быстрая запись');
+  fireEvent.pointerDown(input);
+  expect(screen.getByTestId('host-capture')).toBeInTheDocument();
+
+  // Escape — закрыта, фокус на ＋.
+  fireEvent.keyDown(input, { key: 'Escape' });
+  expect(screen.queryByTestId('host-capture')).toBeNull();
+  expect(plus).toHaveAttribute('aria-expanded', 'false');
+  expect(plus).toHaveFocus();
+
+  // Нажатие мимо — закрыта.
+  await open();
+  fireEvent.pointerDown(screen.getByRole('heading', { level: 1, name: 'Upcoming' }));
+  expect(screen.queryByTestId('host-capture')).toBeNull();
+
+  // Повторный ＋ по-прежнему переключатель: нажатие на него не «мимо».
+  await open();
+  fireEvent.pointerDown(plus);
+  fireEvent.click(plus);
+  expect(screen.queryByTestId('host-capture')).toBeNull();
+
+  // Смена места — закрыта; вернувшись, человек её открытой не застаёт.
+  await open();
+  act(() => useNav.getState().openRecord(BREAD));
+  await heading('Купить хлеб');
+  expect(screen.queryByTestId('host-capture')).toBeNull();
+  expect(plus).toHaveAttribute('aria-expanded', 'false');
+});

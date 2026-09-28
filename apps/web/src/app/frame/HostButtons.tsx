@@ -3,10 +3,10 @@ import { currentEntry } from '@orbis/shared/nav';
 import { useQueryClient } from '@tanstack/react-query';
 import { getQueryKey } from '@trpc/react-query';
 import { MessageSquare, Plus, Search } from 'lucide-react';
-import { useCallback, useContext, useState, useSyncExternalStore } from 'react';
+import { useCallback, useContext, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { QuickCapture } from '../../features/browser/QuickCapture';
 import { openSearch } from '../../features/search/open-search';
-import { useNav } from '../../state/navigation';
+import { placeKeyOf, useNav } from '../../state/navigation';
 import { useRetryBuffer } from '../../state/retry';
 import { type RouterOutputs, trpc } from '../../trpc';
 import { NavBadge } from '../../ui/NavBadge';
@@ -89,6 +89,14 @@ function HostCapture() {
 }
 
 /**
+ * Ключ места для «＋»: место основной области (`placeKeyOf`) и плашка поверх модели. Смена любого из
+ * них — «человек ушёл», и быстрый ввод закрывается: его контекст (подзадача записи) — про прежнее место.
+ */
+function captureKeyOf(s: ReturnType<typeof useNav.getState>): string {
+  return `${placeKeyOf(s.model)} | ${s.overlay?.path ?? ''}`;
+}
+
+/**
  * Кнопки хоста внизу справа (спека 1б §6.2 п. 4, §6.3, §6.4): [🔍 | 💬 | ＋] на всех экранах и на
  * обеих ширинах — одно место на месте прежнего нижнего ряда вкладок (РП-19). Капсула тёмная сплошная,
  * как присутствие хоста (доверие, §6.2 п. 5); отступ от низа — не меньше безопасной зоны. Телефон —
@@ -100,13 +108,44 @@ function HostCapture() {
  *  - 💬 — телефон: общий чат экраном хоста поверх текущего раздела (§7.3); десктоп: открывает и
  *    закрывает боковой чат (`useSideChat`, не элемент истории), активное подсвечено. Бейдж — очередь
  *    офлайн-записей (они уходят из чата);
- *  - ＋ — быстрый ввод с контекстом места (`HostCapture`).
+ *  - ＋ — быстрый ввод с контекстом места (`HostCapture`). Всплывашка закрывается повторным ＋, Escape
+ *    (фокус — обратно на ＋), нажатием мимо неё и сменой места (смоук 1б: оставалась висеть).
  *
  * Роли — `data-host` (`host-elements.ts`, тест двух ширин).
  */
 export function HostButtons() {
   const pending = useRetryBuffer((s) => s.size);
   const [capture, setCapture] = useState(false);
+  const popupRef = useRef<HTMLDivElement>(null);
+  const plusRef = useRef<HTMLButtonElement>(null);
+  // Смена места закрывает «＋» — при рендере, а не эффектом: кадра со всплывашкой над новым местом нет.
+  const place = useNav(captureKeyOf);
+  const [openedAt, setOpenedAt] = useState(place);
+  if (openedAt !== place) {
+    setOpenedAt(place);
+    if (capture) setCapture(false);
+  }
+  useEffect(() => {
+    if (!capture) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      setCapture(false);
+      plusRef.current?.focus();
+    };
+    // Нажатие мимо: всё, что вне всплывашки и не сам ＋ (его нажатие — переключатель, onClick).
+    const onDown = (e: Event) => {
+      const t = e.target;
+      if (!(t instanceof Node)) return;
+      if (popupRef.current?.contains(t) || plusRef.current?.contains(t)) return;
+      setCapture(false);
+    };
+    document.addEventListener('keydown', onKey);
+    document.addEventListener('pointerdown', onDown, true);
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      document.removeEventListener('pointerdown', onDown, true);
+    };
+  }, [capture]);
   // Окно поиска или экран — по ширине (окно ⌘K живёт вне рамки); остальное — по рамке, в которой
   // нарисована капсула (`DesktopFrameContext`): рамка телефона на ширине десктопа (чанк рамки десктопа
   // едет или отказал) — телефонные 💬 и место капсулы.
@@ -120,6 +159,7 @@ export function HostButtons() {
     >
       {capture && (
         <div
+          ref={popupRef}
           data-testid="host-capture"
           className="pointer-events-auto w-[min(92vw,28rem)] rounded-card border border-line bg-surface pt-3 shadow-pop"
         >
@@ -156,6 +196,7 @@ export function HostButtons() {
           />
         </button>
         <button
+          ref={plusRef}
           type="button"
           aria-label="Новая запись"
           aria-expanded={capture}

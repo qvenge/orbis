@@ -72,6 +72,18 @@ afterAll(async () => {
 });
 
 const LIST_KEYS = SEED_SMART_LISTS.map((l) => l.slug);
+/**
+ * Списки фикстуры прод-формы, пришедшие с ПРЕЖНИМ эталоном (РП-35, R-39): три исходных — тела до §Б1-2,
+ * «Год» и «Жизнь» — до словаря 1б. Перечень явный, а не `Object.keys(LEGACY_ETALON_TEXTS)`: иначе
+ * пропажа прежнего текста увела бы и фикстуру, и ожидание в «нынешний» эталон разом — и тест молчал бы.
+ */
+const LEGACY_KEYS: readonly SupplyKey[] = [
+  'daily-planning',
+  'upcoming',
+  'all-tasks',
+  'horizon-year',
+  'horizon-life',
+];
 /** Закреплённые фикстуры прод-формы — в их порядке (`seedLegacyWorld`). */
 const PINNED_KEYS = [
   'daily-planning',
@@ -276,7 +288,7 @@ describe('planMigrate1b — --report: план без единой записи'
       LIST_KEYS.map((k) => [
         k,
         listId(user, k),
-        k === 'horizon-year' || k === 'horizon-life' ? 'legacy' : 'current',
+        LEGACY_KEYS.includes(k) ? 'legacy' : 'current',
         'etalon',
       ]),
     );
@@ -413,8 +425,9 @@ describe('applyMigrate1b — --apply: одна пачка исполнителя
       expect([k, now.props[SUPPLY_KEY]]).toEqual([k, k]);
       expect([k, supplyStatusOf(now)]).toEqual([k, 'etalon']);
     }
-    // «Год» и «Жизнь» совпали с ПРЕЖНИМ эталоном: в записи — его печать и отпечаток (РП-35, В-9).
-    for (const k of ['horizon-year', 'horizon-life'] as const) {
+    // Три исходных списка, «Год» и «Жизнь» совпали с ПРЕЖНИМ эталоном: в записи — его печать и
+    // отпечаток (РП-35, В-9, R-39).
+    for (const k of LEGACY_KEYS) {
       const e = etalonOf(k);
       if (e.kind === 'app') throw new Error('список — не приложение');
       const legacy = LEGACY_ETALON_TEXTS[k] as string;
@@ -430,10 +443,9 @@ describe('applyMigrate1b — --apply: одна пачка исполнителя
     }
     // Новый эталон приходит предложением сразу — и только им.
     const updates = await listUpdates({ db, identity: personal(user) });
-    expect(updates.map((u) => [u.key, u.kind, u.edited])).toEqual([
-      ['horizon-year', 'update', false],
-      ['horizon-life', 'update', false],
-    ]);
+    expect(updates.map((u) => [u.key, u.kind, u.edited])).toEqual(
+      LEGACY_KEYS.map((k) => [k, 'update' as const, false]),
+    );
 
     // Записи поставки созданы и «как в поставке»; оболочка — навигация из закреплённых.
     for (const k of ['host-template', 'home', 'records', 'host-shell'] as const) {
@@ -499,7 +511,78 @@ describe('applyMigrate1b — --apply: одна пачка исполнителя
     expect(supplyStatusOf(now)).toBe('edited');
     expect(now.props[SUPPLY_HASH]).toBe(etalonHash(etalonOf('horizon-year')));
     const updates = await listUpdates({ db, identity: personal(user) });
-    expect(updates.map((u) => u.key)).toEqual(['horizon-life']);
+    expect(updates.map((u) => u.key)).toEqual(LEGACY_KEYS.filter((k) => k !== 'horizon-year'));
+  });
+
+  test('(б) R-39: три исходных списка с телом до §Б1-2 — «как в поставке прежней версии», не «изменено вами»; новый эталон — предложением', async () => {
+    const user = await freshGraph();
+    await seedLegacyWorld(user);
+    const TRIO = ['daily-planning', 'upcoming', 'all-tasks'] as const;
+    // Фикстура — прод-форма: тела этих списков закрытость ещё перечисляют статусами (как прод до
+    // `93d34cac`), а нынешний эталон — набором контракта.
+    for (const k of TRIO) {
+      const row = await rowOf(user, listId(user, k));
+      expect([k, row.body.includes('orbis/task_status=!done&!cancelled')]).toEqual([k, true]);
+      expect([k, row.body.includes('class=orbis/completable:open')]).toEqual([k, false]);
+    }
+
+    const p = await plan(user);
+    for (const k of TRIO) {
+      expect([k, p.lists.find((l) => l.key === k)]).toMatchObject([
+        k,
+        { etalon: 'legacy', status: 'etalon' },
+      ]);
+    }
+    const printed = formatMigrate1bPlan(p).join('\n');
+    for (const title of ['Daily Planning', 'Upcoming', 'All Tasks']) {
+      expect(printed).toContain(
+        `«${title}» — как в поставке прежней версии (новый эталон придёт предложением в «Обновлениях»)`,
+      );
+      expect(printed).not.toContain(`«${title}» — изменено вами`);
+    }
+
+    await applyMigrate1b(db, personal(user));
+    const reg = await withIdentity(db, personal(user), (tx) => effectiveRegistry(tx, user));
+    for (const k of TRIO) {
+      const now = await rowOf(user, listId(user, k));
+      const e = etalonOf(k);
+      if (e.kind === 'app') throw new Error('список — не приложение');
+      const legacy = LEGACY_ETALON_TEXTS[k] as string;
+      expect([k, supplyStatusOf(now)]).toEqual([k, 'etalon']);
+      expect([k, now.props[SUPPLY_HASH]]).toEqual([k, etalonHash({ ...e, text: legacy })]);
+      expect([k, now.props[SUPPLY_TEXT]]).toEqual([
+        k,
+        printPageRecord({ title: e.title, emoji: e.emoji, body: canonicalPageText(legacy, reg) }),
+      ]);
+    }
+    const updates = await listUpdates({ db, identity: personal(user) });
+    for (const k of TRIO) {
+      expect([k, updates.find((u) => u.key === k)]).toMatchObject([
+        k,
+        { kind: 'update', edited: false },
+      ]);
+    }
+  });
+
+  test('(б) R-39: список с НЫНЕШНИМ телом (граф посеян после §Б1-2) — эталон нынешний, «как в поставке», предложения нет', async () => {
+    const user = await freshGraph();
+    await seedLegacyWorld(user);
+    const id = listId(user, 'all-tasks');
+    const e = etalonOf('all-tasks');
+    if (e.kind === 'app') throw new Error('список — не приложение');
+    await admin((a) => a.execute(sql`UPDATE entities SET body = ${e.text} WHERE id = ${id}::uuid`));
+
+    const p = await plan(user);
+    expect(p.lists.find((l) => l.key === 'all-tasks')).toMatchObject({
+      etalon: 'current',
+      status: 'etalon',
+    });
+    await applyMigrate1b(db, personal(user));
+    const now = await rowOf(user, id);
+    expect(supplyStatusOf(now)).toBe('etalon');
+    expect(now.props[SUPPLY_HASH]).toBe(etalonHash(e));
+    const updates = await listUpdates({ db, identity: personal(user) });
+    expect(updates.map((u) => u.key)).toEqual(LEGACY_KEYS.filter((k) => k !== 'all-tasks'));
   });
 
   test('(в) закреплённые с дублем, своей страницей и архивной записью — навигация без дубля, своя в конце по order, архивная пропущена, «изменено вами»', async () => {

@@ -32,6 +32,7 @@ import {
   SUPPLY_ETALONS,
   SUPPLY_KEYS,
   type SupplyEtalon,
+  type SupplyKey,
 } from './etalons';
 import { SEED_SMART_LISTS } from './lists';
 import {
@@ -204,9 +205,24 @@ describe('словарь 1б в эталонах (спека §1, РП-35)', () 
   });
 });
 
-describe('прежние эталоны (РП-35, В-9)', () => {
+describe('прежние эталоны (РП-35, В-9, R-39)', () => {
   // Перенос литералов из `apps/server/src/seed/smart-lists.ts` ДО правки задачи 11 — дословно: по ним
-  // перевод данных задачи 13 узнаёт «как в поставке» прежней версии.
+  // перевод данных задачи 13 узнаёт «как в поставке» прежней версии. Три исходных списка — тела ДО
+  // §Б1-2 (`git show 93d34cac^:apps/server/src/seed/smart-lists.ts`): с ними прод посеян, и репетиция
+  // перевода нашла их тела байт-в-байт (длины 492/372/138).
+  const OLD_DAILY = `Утренний обзор: разобрать Inbox, пройтись по списку «Сегодня».
+
+{{query:aspect=orbis/task, orbis/task_status=inbox, sortBy=orbis/created_at:desc, display=list, title=Inbox}}
+
+{{query:aspect=orbis/task, orbis/due_date=today|overdue, orbis/task_status=!done&!cancelled&!waiting, excludeBlocked=true, sortBy=orbis/priority:desc|orbis/due_date:asc, display=list, title=Сегодня}}
+
+{{query:aspect=orbis/task, orbis/task_status=waiting, sortBy=orbis/updated_at:asc, display=compact, title=Ожидание}}`;
+  const OLD_UPCOMING = `Горизонт планирования: неделя и дальше.
+
+{{query:aspect=orbis/task, orbis/due_date=next_7d, orbis/task_status=!done&!cancelled, sortBy=orbis/due_date:asc|orbis/priority:desc, display=list, title="Ближайшие 7 дней"}}
+
+{{query:aspect=orbis/task, orbis/due_date=after_7d, orbis/task_status=!done&!cancelled, sortBy=orbis/due_date:asc, limit=30, display=compact, title=Позже}}`;
+  const OLD_ALL_TASKS = `{{query:aspect=orbis/task, orbis/task_status=!done&!cancelled, sortBy=orbis/updated_at:desc, display=list, title="Все незакрытые задачи"}}`;
   const OLD_YEAR = `Горизонт «год»: цели. Годовой срок задачи грамматика не выражает, поэтому длинный горизонт держится целями — сущностями с аспектом orbis/goal, прогресс которых считает сервер. Недавно тронутые сверху.
 
 Лестница горизонтов целиком: день — список «Daily Planning», неделя и месяц — список «Upcoming», год — этот список, жизнь — список «Жизнь». «Жизнь» не закреплена в сайдбаре: её находит Browser по тегу smart-list.
@@ -222,11 +238,22 @@ describe('прежние эталоны (РП-35, В-9)', () => {
 
 {{query:tags=life, sortBy=orbis/updated_at:desc, display=list, title="Ценности и зоны ответственности"}}`;
 
-  test('ровно «Год» и «Жизнь», прежние тела дословно, каждое отличается от нового эталона', () => {
-    expect(Object.keys(LEGACY_ETALON_TEXTS).sort()).toEqual(['horizon-life', 'horizon-year']);
+  test('ровно три исходных списка, «Год» и «Жизнь», прежние тела дословно, каждое отличается от нового эталона', () => {
+    expect(Object.keys(LEGACY_ETALON_TEXTS).sort()).toEqual([
+      'all-tasks',
+      'daily-planning',
+      'horizon-life',
+      'horizon-year',
+      'upcoming',
+    ]);
+    expect(LEGACY_ETALON_TEXTS['daily-planning']).toBe(OLD_DAILY);
+    expect(LEGACY_ETALON_TEXTS.upcoming).toBe(OLD_UPCOMING);
+    expect(LEGACY_ETALON_TEXTS['all-tasks']).toBe(OLD_ALL_TASKS);
     expect(LEGACY_ETALON_TEXTS['horizon-year']).toBe(OLD_YEAR);
     expect(LEGACY_ETALON_TEXTS['horizon-life']).toBe(OLD_LIFE);
-    for (const key of ['horizon-year', 'horizon-life'] as const) {
+    // Длины — те, что репетиция сняла с прод-тел (UTF-16, как `String#length`).
+    expect([OLD_DAILY.length, OLD_UPCOMING.length, OLD_ALL_TASKS.length]).toEqual([492, 372, 138]);
+    for (const key of Object.keys(LEGACY_ETALON_TEXTS) as SupplyKey[]) {
       const e = etalonOf(key);
       if (e.kind === 'app') throw new Error('горизонт — не страница');
       expect(e.text).not.toBe(LEGACY_ETALON_TEXTS[key] as string);

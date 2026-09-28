@@ -1355,8 +1355,9 @@ setup-db.ts  →  db:migrate  →  seed-registries.ts  →  test:rls
 Третий шаг сеет ТРИ реестра — свойства, роли рёбер, аспекты (реформа свойств D43); контракты,
 подписки и действия миграция `0014` создаёт пустыми, их сид — срез Б-1.
 
-Практический вывод один: новую базу (локальный стенд, CI, БД после восстановления §4.3)
-готовить только `bun run db:prepare`. Порядок здесь не стилистический — переставив шаги,
+Практический вывод один: новую базу (локальный стенд, CI) готовить только `bun run db:prepare`.
+БД после восстановления §4.3 — по порядку тамошней врезки: `setup-db.ts` ДО данных, права с
+эталона ПОСЛЕ (миграции по восстановленной базе — no-op и прав не вернут). Порядок здесь не стилистический — переставив шаги,
 получишь отказ на середине с частично накатанной схемой.
 
 ## 2. Секреты (Render Environment, `sync: false`)
@@ -1605,9 +1606,53 @@ gpg --decrypt orbis-backup-<ts>.sql.gpg > orbis-backup-<ts>.sql
 > на первой же строке. Проверить: `psql --version`. Если версия ниже — восстанавливать через
 > контейнер: `docker run --rm -i -v "$PWD:/in" postgres:17-alpine psql "<DSN>" -v ON_ERROR_STOP=1 -f /in/orbis-backup-<ts>.sql`.
 
+> **Дамп снят БЕЗ ПРАВ (`--no-privileges`, `scripts/backup.sh`): в нём нет ни одного `GRANT`/`REVOKE`,
+> зато политики RLS называют роль `orbis_app`, а функции — `auth.uid()`.** Поэтому голый `psql -f`
+> по свежему проекту либо оборвётся, либо поднимет базу, где приложение ничего не видит
+> (`relation … does not exist` при живой таблице — нет `USAGE` на `public`; `permission denied for
+> table entities`). Порядок ниже прогнан на локальном Supabase (28.09.2026, репетиция 1б и повтор
+> для этой врезки): после шага (4) права всех таблиц, функций и схемы совпали с эталоном байт-в-байт.
+> `db:migrate` права НЕ вернёт: журнал drizzle приезжает в дампе, и миграции — no-op.
+
+`TARGET_DSN` — админ-DSN целевого проекта (session-пулер, как выше).
+
 ```bash
-psql 'postgresql://postgres.<TARGET_REF>:<pwd>@<POOLER_HOST>:5432/postgres' \
-  -v ON_ERROR_STOP=1 -f orbis-backup-<ts>.sql
+# (1) ДО данных: роль orbis_app (политики дампа её называют) и канонический auth.uid().
+#     Пароль — тот же ORBIS_APP_PASSWORD, что у сервиса в Render (иначе поменять и там).
+DATABASE_URL_ADMIN="$TARGET_DSN" ORBIS_APP_PASSWORD='<пароль orbis_app>' bun scripts/setup-db.ts
+#     Не Supabase, а голый Postgres (репетиция): setup-db упадёт «auth.uid() не найдена» —
+#     сначала CREATE SCHEMA auth и функцию CANONICAL_AUTH_UID дословно из scripts/setup-db.ts,
+#     плюс GRANT USAGE ON SCHEMA auth / EXECUTE ON FUNCTION auth.uid() TO anon, authenticated,
+#     service_role, orbis_app.
+
+# (2) Дамп сам делает CREATE SCHEMA public — в пустом проекте её снести (ТОЛЬКО в пустом!).
+psql "$TARGET_DSN" -v ON_ERROR_STOP=1 -c 'DROP SCHEMA public CASCADE'
+
+# (3) Данные.
+psql "$TARGET_DSN" -v ON_ERROR_STOP=1 -f orbis-backup-<ts>.sql
+
+# (4) Права — с эталона: локальный Supabase после `bun run db:prepare` на ТОМ ЖЕ коммите, что и
+#     прод дампа (число строк drizzle.__drizzle_migrations на эталоне и в цели обязано совпасть).
+#     Первая строка — USAGE на public для PUBLIC: у эталона он «по умолчанию» и pg_dump его не
+#     печатает, а без него orbis_app (NOINHERIT) не дойдёт до своих прямых грантов — планировщик
+#     и OAuth. Строки `FOR ROLE postgres` — права будущих таблиц будущих миграций.
+{ echo 'GRANT USAGE ON SCHEMA public TO PUBLIC;'
+  docker exec supabase_db_orbis pg_dump -U postgres -d postgres --schema-only \
+    --schema public --schema drizzle \
+  | grep -E '^(GRANT|REVOKE) |^ALTER DEFAULT PRIVILEGES FOR ROLE postgres '
+} > grants.sql
+psql "$TARGET_DSN" -v ON_ERROR_STOP=1 -1 -f grants.sql
+
+# (5) Сверка: права таблиц, функций и USAGE ролей — как у эталона; пустой diff = совпало.
+Q="SELECT 'r:'||relname, relacl::text FROM pg_class
+     WHERE relnamespace IN ('public'::regnamespace,'drizzle'::regnamespace) AND relkind IN ('r','v','S','p')
+   UNION ALL SELECT 'f:'||oid::regprocedure::text, proacl::text FROM pg_proc
+     WHERE pronamespace = 'public'::regnamespace
+   UNION ALL SELECT 'u:'||r, has_schema_privilege(r, 'public', 'USAGE')::text
+     FROM unnest(ARRAY['anon','authenticated','service_role','orbis_app']) r
+   ORDER BY 1"
+diff <(docker exec supabase_db_orbis psql -U postgres -d postgres -At -c "$Q") \
+     <(psql "$TARGET_DSN" -At -c "$Q") && echo 'права совпали'
 ```
 
 Проверка после восстановления — все **21** таблица прод-схемы на месте (одиннадцать исходных,

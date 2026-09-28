@@ -147,9 +147,25 @@ export function etalonOf(key: SupplyKey): SupplyEtalon {
 /**
  * Прежние эталоны (до 1б) — ТОЛЬКО для перевода данных задачи 13 (РП-35, В-9): тело прод-списка,
  * совпавшее с прежним эталоном, — «как в поставке» старой версии, и новый эталон приходит ему
- * предложением. Литералы — дословный перенос тел «Года» и «Жизни» до правки словарём 1б.
+ * предложением. Литералы — дословный перенос тел «Года» и «Жизни» до правки словарём 1б и тел Daily
+ * Planning, Upcoming и All Tasks до §Б1-2 (R-39: прод их посеял до `93d34cac`, где закрытость ещё
+ * перечислялась статусами `orbis/task_status=!done&!cancelled`, а не набором `class=orbis/completable:
+ * open`; литералы — `git show 93d34cac^:apps/server/src/seed/smart-lists.ts`).
  */
 export const LEGACY_ETALON_TEXTS: Readonly<Partial<Record<SupplyKey, string>>> = {
+  'daily-planning': `Утренний обзор: разобрать Inbox, пройтись по списку «Сегодня».
+
+{{query:aspect=orbis/task, orbis/task_status=inbox, sortBy=orbis/created_at:desc, display=list, title=Inbox}}
+
+{{query:aspect=orbis/task, orbis/due_date=today|overdue, orbis/task_status=!done&!cancelled&!waiting, excludeBlocked=true, sortBy=orbis/priority:desc|orbis/due_date:asc, display=list, title=Сегодня}}
+
+{{query:aspect=orbis/task, orbis/task_status=waiting, sortBy=orbis/updated_at:asc, display=compact, title=Ожидание}}`,
+  upcoming: `Горизонт планирования: неделя и дальше.
+
+{{query:aspect=orbis/task, orbis/due_date=next_7d, orbis/task_status=!done&!cancelled, sortBy=orbis/due_date:asc|orbis/priority:desc, display=list, title="Ближайшие 7 дней"}}
+
+{{query:aspect=orbis/task, orbis/due_date=after_7d, orbis/task_status=!done&!cancelled, sortBy=orbis/due_date:asc, limit=30, display=compact, title=Позже}}`,
+  'all-tasks': `{{query:aspect=orbis/task, orbis/task_status=!done&!cancelled, sortBy=orbis/updated_at:desc, display=list, title="Все незакрытые задачи"}}`,
   'horizon-year': `Горизонт «год»: цели. Годовой срок задачи грамматика не выражает, поэтому длинный горизонт держится целями — сущностями с аспектом orbis/goal, прогресс которых считает сервер. Недавно тронутые сверху.
 
 Лестница горизонтов целиком: день — список «Daily Planning», неделя и месяц — список «Upcoming», год — этот список, жизнь — список «Жизнь». «Жизнь» не закреплена в сайдбаре: её находит Browser по тегу smart-list.
