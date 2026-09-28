@@ -3817,7 +3817,7 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>" -- docs/pr
 - [ ] **Шаг 11:** мерж и деплой (Ф-1а-23): `cd /Users/birzhan/projects/orbis && git push origin pages-slice-1b:main` →
   автодеплой → `mcp__render__list_deploys`/`get_deploy` до `live`; коммит = HEAD `main`. Время окна (пересев → live) — в
   `progress.md`.
-- [ ] **Шаг 12:** `cd $W && bun scripts/ops.ts check` — все ✓; `census` — то же N; `curl -s https://orbis-64q4.onrender.com/health`
+- [ ] **Шаг 12:** `cd $W && bun scripts/ops.ts check` — все ✓; `census` — N шага 6 + 4 × G (G — число графов, переведённых `migrate-1b --apply`: он создаёт четыре записи поставки на граф, `CREATED_KEYS`; эррата гейта задачи 26); `curl -s https://orbis-64q4.onrender.com/health`
   — `status: ok` без `registryDrift`.
 - [ ] **Шаг 13: смоук и живая приёмка владельца** (Chrome владельца и PWA на телефоне; после деплоя — «Обновить», Л-5):
   семь сценариев спеки §13 «Живая приёмка владельца» по порядку; стрелка «назад» окна приложения, установленного на
