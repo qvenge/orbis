@@ -146,8 +146,12 @@ const GRAMMAR_OPERATOR = /[=<>]/;
  * Шаблон-заполнитель `<имя>` — не запрос: его угловые скобки ОБРАМЛЯЮТ слово, а не сравнивают.
  * С 1в описание `entity_query` показывает форму адреса слота «<контракт>.<слот>» (§3.8), и без
  * этого отсева она ушла бы в разбор как пример.
+ *
+ * Заполнитель — ОДНО СЛОВО КИРИЛЛИЦЕЙ, а не «любая пара скобок без пробела» (перенос гейта задачи 11,
+ * Minor-1): прежний `<[^<>\s]+>` съедал и два сравнения подряд — «orbis/amount<100,orbis/amount>5»
+ * терял `<100,orbis/amount>`, оставался без оператора и молча выпадал из проверки разбором.
  */
-const PLACEHOLDER = /<[^<>\s]+>/g;
+const PLACEHOLDER = /<[а-яё]+>/giu;
 
 /** Образцы запросов из текста описания: фрагмент в ёлочках, внутри которого есть оператор. */
 function grammarExamples(description: string): string[] {
@@ -576,6 +580,10 @@ describe('buildToolRegistry: состав (§9.2 + §7.6)', () => {
         'Смотри «что по бюджету?»: «tags=work» и «amount>100» — вот это запросы, а «<контракт>.<слот>» — форма.',
       ),
     ).toEqual(['tags=work', 'amount>100']);
+    // Два сравнения без пробела — пример, а не заполнитель: он обязан дойти до разбора.
+    expect(grammarExamples('Диапазон: «orbis/amount<100,orbis/amount>5».')).toEqual([
+      'orbis/amount<100,orbis/amount>5',
+    ]);
 
     const def = defOf(await registryFor(userB), 'entity_query');
     const examples = grammarExamples(def.description);

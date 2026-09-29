@@ -164,6 +164,26 @@ const WEB_PATHSPEC = [
   ':(glob)apps/web/src/**/*.tsx',
   ':(exclude,glob)apps/web/src/**/*.test.*',
 ];
+/**
+ * Шаблон ИСКЛЮЧЁННЫЙ pathspec'ом (`null` — pathspec не исключение). Формы git: длинная `:(магия,…)шаблон`
+ * со словом `exclude` и короткая `:<подпись>[:]шаблон`, где подпись — символы `/!^`, а `!`/`^` значат
+ * исключение. Стражу «нет исключений каталогов» мало искать подстроку `:(exclude)`: `:(exclude,glob)dir/**`
+ * и `:!dir/` исключают каталог так же молча.
+ */
+function excludedPattern(spec: string): string | null {
+  const long = /^:\(([^)]*)\)([\s\S]*)$/.exec(spec);
+  if (long !== null) {
+    const words = (long[1] as string).split(',').map((w) => w.trim());
+    return words.includes('exclude') ? (long[2] as string) : null;
+  }
+  const short = /^:([/!^]*):?([\s\S]*)$/.exec(spec);
+  if (short === null) return null;
+  return /[!^]/.test(short[1] as string) ? (short[2] as string) : null;
+}
+
+/** Законное исключение охвата — тестовые файлы, а не каталог. */
+const TEST_FILES_PATTERN = /\*\.test\.\*$/;
+
 /** Боевой код обоих приложений и пакетов — охват (3). */
 const ALL_PATHSPEC = [
   ':(glob)apps/*/src/**/*.ts',
@@ -540,9 +560,37 @@ describe('сторожа границ кода и словаря (срез 1б �
 
   test('(а) в охвате нет исключений каталогов: только тесты вне охвата (срез 1в §8.1)', () => {
     // Исключённый каталог выпадает из всех трёх стражей молча; 1в снял последний (`legacy-1v`).
-    // `:(exclude,glob)…*.test.*` — исключение тестов, не каталога, и сюда не попадает.
-    const dirExcludes = [...WEB_PATHSPEC, ...ALL_PATHSPEC].filter((s) => s.includes(':(exclude)'));
+    // Исключение тестов (`…*.test.*`) — не каталог и законно; любое другое исключение — в любой форме
+    // pathspec git (перенос гейта задачи 12, m-2) — провал.
+    const dirExcludes = [...WEB_PATHSPEC, ...ALL_PATHSPEC].filter((s) => {
+      const pattern = excludedPattern(s);
+      return pattern !== null && !TEST_FILES_PATTERN.test(pattern);
+    });
     expect(dirExcludes).toEqual([]);
+  });
+
+  test('(а) распознаватель исключений pathspec: длинная и короткая формы git', () => {
+    // Длинная форма: слово `exclude` среди магии в скобках, в любом порядке и с соседями.
+    expect(excludedPattern(':(exclude)apps/web/src/legacy/')).toBe('apps/web/src/legacy/');
+    expect(excludedPattern(':(exclude,glob)apps/web/src/legacy/**')).toBe('apps/web/src/legacy/**');
+    expect(excludedPattern(':(glob,exclude)apps/web/src/**/*.test.*')).toBe(
+      'apps/web/src/**/*.test.*',
+    );
+    expect(excludedPattern(':(top, exclude ,icase)apps/x')).toBe('apps/x');
+    // Короткая форма: `!` или `^` в подписи магии, с `/` и без, с завершающим `:` и без.
+    expect(excludedPattern(':!apps/web/src/legacy/')).toBe('apps/web/src/legacy/');
+    expect(excludedPattern(':^apps/web/src/legacy/')).toBe('apps/web/src/legacy/');
+    expect(excludedPattern(':/!apps/x')).toBe('apps/x');
+    expect(excludedPattern(':!/:apps/x')).toBe('apps/x');
+    // Не исключения.
+    for (const spec of [
+      ':(glob)apps/web/src/**/*.ts',
+      'apps/web/src',
+      ':(top)apps/x',
+      ':/apps/x',
+    ]) {
+      expect([spec, excludedPattern(spec)]).toEqual([spec, null]);
+    }
   });
 
   test('(а) каждый каталог расширения есть в дереве', () => {

@@ -20,6 +20,10 @@
 //   bun scripts/ops.ts census-v3      # только чтение: что изменит формат тела v3 (станут блоками, display=)
 //   bun scripts/ops.ts backfill-body-doc  # конверсия тел в body_doc — ТОЛЬКО после audit-bodies
 //   bun scripts/ops.ts reset-world --confirm <PROD_REF> --i-understand RESET  # РАЗРУШАЮЩАЯ (РП-7)
+//   bun scripts/ops.ts migrate-1v --report                           # только чтение: отчёт среза 1в (ДО миграции 0023)
+//   bun scripts/ops.ts migrate-1v --drop-agenda-rows --i-understand  # подписки/дельты владельца на Повестку (§6.5)
+//   bun scripts/ops.ts migrate-1v --apply --i-understand             # перевод графа среза 1в: одна пачка (§6.6)
+//   ORBIS_REHEARSAL_DSN=<DSN> bun scripts/ops.ts migrate-1v --rehearsal <режим>  # репетиция: только localhost
 //   bun scripts/ops.ts ping           # связность и версия PostgreSQL
 //   bun scripts/ops.ts issue-pat <uuid аккаунта> [метка] [--scope worker]  # headless-токен (§9.3)
 import { join } from 'node:path';
@@ -48,6 +52,7 @@ import {
   drizzleBackfillIo,
 } from '../apps/server/src/db/backfill-body-doc';
 import { type CensusV3Row, censusV3, formatCensusV3 } from '../apps/server/src/db/census-v3';
+import { runMigrate1v } from '../apps/server/src/db/migrate-1v';
 import {
   REGISTRY_DELTAS_QUERY,
   REGISTRY_DRIFT_QUERIES,
@@ -60,7 +65,11 @@ import {
   seedRegistries,
   seedRegistriesReport,
 } from '../apps/server/src/db/seed-registries';
-import { identityOfPerson, parseAccountId } from '../apps/server/src/identity';
+import {
+  identitiesForScheduler,
+  identityOfPerson,
+  parseAccountId,
+} from '../apps/server/src/identity';
 import { issuePatGrant, NotGraphOwnerError } from '../apps/server/src/oauth/grants';
 import { PAT_USAGE, parsePatArgs } from '../apps/server/src/oauth/pat-args';
 import {
@@ -583,6 +592,31 @@ async function resetWorldOp(args: string[]): Promise<number> {
   });
 }
 
+/**
+ * Прод-операция среза 1в (спека 1в §6.5, §6.6, §10; РП-14): `--report` ДО миграции `0023` (без загрузки
+ * реестра), `--drop-agenda-rows` по слову владельца, `--apply` — одна пачка исполнителя на граф с источником
+ * `system` (Повестка, навигация хоста, «Год», Upcoming), `--rehearsal` — DSN локальной базы репетиции.
+ *
+ * Логика, гейт, сторож DSN репетиции и печать — в `db/migrate-1v.ts` под тестом на фикстуре прод-формы; здесь
+ * обвязка, как у `reset-world`. Графы — пары «граф, владелец» планировщика (`identitiesForScheduler`);
+ * перевод идёт под идентичностью владельца (`withIdentity` делает `SET LOCAL ROLE authenticated`).
+ * `--rehearsal` подменяет ровно DSN: Ключница при нём не читается вовсе, а DSN из окружения пропускается
+ * только с хостом `localhost`/`127.0.0.1` (сторож — `rehearsalDsnRefusal`).
+ */
+async function migrate1vOp(args: string[]): Promise<number> {
+  return runMigrate1v(args, {
+    readDsn,
+    rehearsalDsn: () => process.env.ORBIS_REHEARSAL_DSN,
+    open: (dsn) => {
+      const sql = postgres(dsn, { max: 1 });
+      return { sql, db: drizzle(sql, { schema }), close: () => sql.end() };
+    },
+    identities: identitiesForScheduler,
+    log: (line) => console.log(line),
+    error: (line) => console.error(line),
+  });
+}
+
 async function ping(): Promise<number> {
   await withDb(async (sql) => {
     const [row] = await sql<{ version: string }[]>`SELECT version()`;
@@ -755,6 +789,12 @@ const OPS: Record<string, { run: (args: string[]) => Promise<number>; help: stri
       'РАЗРУШАЮЩАЯ: снести МИР графов и журнал (сами графы и членство сохраняются), ' +
       'пользовательские строки реестров и дельты; ' +
       'пересеять шесть реестров. Требует --confirm <PROD_REF> и --i-understand RESET',
+  },
+  'migrate-1v': {
+    run: migrate1vOp,
+    help:
+      'срез 1в: --report (только чтение, ДО миграции 0023) | --drop-agenda-rows --i-understand | ' +
+      '--apply --i-understand (одна пачка на граф, источник system); --rehearsal — DSN из ORBIS_REHEARSAL_DSN, только localhost',
   },
   ping: { run: ping, help: 'связность и версия PostgreSQL' },
   dump: {
