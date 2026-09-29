@@ -5,7 +5,16 @@ import { describe, expect, test } from 'bun:test';
 import { BUILTIN_ASPECT_DEFS } from './builtin-aspects';
 import { BUILTIN_CONTRACT_DEFS } from './builtin-contracts';
 import type { AspectDefinition } from './property-type';
-import { M14_ROW_ELEMENTS, rowMoneyCurrencyOf, rowProjectionOf, rowStatusPropertyOf } from './row';
+import {
+  declaredSlot,
+  M14_ROW_ELEMENTS,
+  type RowElementRule,
+  rowAllDayOf,
+  rowCategoryRefOf,
+  rowMoneyCurrencyOf,
+  rowProjectionOf,
+  rowStatusPropertyOf,
+} from './row';
 
 const REG = {
   aspects: new Map(BUILTIN_ASPECT_DEFS.map((a) => [a.id, a])),
@@ -202,5 +211,97 @@ describe('rowMoneyCurrencyOf: деньги колонки — по валюте 
     expect(
       rowMoneyCurrencyOf({ aspects: [], props: { 'orbis/amount': '10' } }, REG, 'orbis/amount'),
     ).toBeUndefined();
+  });
+});
+
+describe('rowAllDayOf: «весь день» — слот all_day контракта «когда» (1в §4.3, Б-2 №100)', () => {
+  // Аспект владельца со СВОИМ свойством «весь день»: код его не знает, строка обязана прочесть
+  // признак через привязку, а не по id встроенного `orbis/all_day`.
+  const BASE = BUILTIN_ASPECT_DEFS[1];
+  if (BASE === undefined) throw new Error('встроенных аспектов нет — пробу не из чего собрать');
+  const TRIP: AspectDefinition = {
+    ...BASE,
+    id: 'user/trip',
+    key: 'user/trip',
+    rank: 99,
+    properties: [],
+    implements: [
+      {
+        contract: 'orbis/when',
+        bind: { moment: 'user/trip_day', all_day: 'user/allday' },
+        fixed: {},
+        value_map: [],
+      },
+    ],
+  };
+  const REG_TRIP = {
+    aspects: new Map([...REG.aspects, ['user/trip', TRIP]]),
+    contracts: REG.contracts,
+  };
+  test('аспект владельца, реализующий «когда» своим свойством, — истина', () => {
+    const e = {
+      aspects: ['user/trip'],
+      props: { 'user/trip_day': '2026-10-01', 'user/allday': true },
+    };
+    expect(rowAllDayOf(e, REG_TRIP)).toBe(true);
+    expect(rowAllDayOf({ ...e, props: { 'user/allday': false } }, REG_TRIP)).toBe(false);
+  });
+  test('встроенное расписание — через свою привязку', () => {
+    expect(
+      rowAllDayOf({ aspects: ['orbis/schedule'], props: { 'orbis/all_day': true } }, REG),
+    ).toBe(true);
+  });
+  test('orbis/all_day пережило снятие аспекта расписания (Р9) — ложь', () => {
+    expect(rowAllDayOf({ aspects: [], props: { 'orbis/all_day': true } }, REG)).toBe(false);
+    // У задачи «когда» есть, но слот all_day она не привязывает: сырое значение не читается.
+    expect(rowAllDayOf(task({ 'orbis/all_day': true }), REG)).toBe(false);
+  });
+});
+
+describe('имена слотов строки — из поля slots правила элемента (Б-2 №78 п. 43)', () => {
+  const amountRule = M14_ROW_ELEMENTS.find((r) => r.element === 'amount');
+  if (amountRule === undefined) throw new Error('правила элемента суммы нет');
+  test('правило суммы объявляет все слоты, которые читает строка', () => {
+    expect(amountRule.slots).toEqual(['amount', 'direction', 'currency', 'category']);
+  });
+  test('declaredSlot: слот вне правила — отказ, а не тихое чтение', () => {
+    expect(declaredSlot(amountRule, 'currency')).toBe('currency');
+    expect(() => declaredSlot({ element: 'amount', slots: ['amount'] }, 'currency')).toThrow(
+      'слот не объявлен правилом',
+    );
+  });
+  /**
+   * Подменённый реестр правил: правило суммы без `currency`. Каждый читатель валюты обязан упасть —
+   * значит, имя слота он берёт из правила, а не литералом мимо него. Правило — модульная константа,
+   * поэтому подмена на время теста и возврат в `finally`.
+   */
+  test('правило без currency — чтение валюты бросает у всех читателей', () => {
+    const rule = amountRule as { slots?: RowElementRule['slots'] };
+    const saved = rule.slots;
+    rule.slots = ['amount', 'direction', 'category'];
+    try {
+      const money = {
+        aspects: ['orbis/financial'],
+        props: { 'orbis/amount': '10', 'orbis/currency': 'USD' },
+      };
+      expect(() => rowMoneyCurrencyOf(money, REG, 'orbis/amount')).toThrow(
+        'слот не объявлен правилом',
+      );
+      expect(() => rowProjectionOf(money, REG)).toThrow('слот не объявлен правилом');
+    } finally {
+      rule.slots = saved;
+    }
+  });
+  test('правило без category — чтение категории бросает', () => {
+    const rule = amountRule as { slots?: RowElementRule['slots'] };
+    const saved = rule.slots;
+    rule.slots = ['amount', 'direction', 'currency'];
+    try {
+      expect(() => rowCategoryRefOf({ aspects: ['orbis/financial'], props: {} }, REG)).toThrow(
+        'слот не объявлен правилом',
+      );
+    } finally {
+      rule.slots = saved;
+    }
   });
 });

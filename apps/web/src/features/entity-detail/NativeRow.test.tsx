@@ -635,3 +635,52 @@ test('M14: у платежа со сроком чекбокс, дата и су�
   expect(screen.getByText('10 сент.')).toBeInTheDocument();
   expect(screen.getByTestId('native-amount')).toHaveTextContent('−1 200.00');
 });
+
+/**
+ * «Весь день» — слот `all_day` контракта «когда» (1в §4.3, Б-2 №100), а не сырое `orbis/all_day`:
+ * аспект владельца со своим булевым свойством получает бейдж, а значение, пережившее снятие
+ * расписания (Р9), бейджа не даёт.
+ */
+const tripAspect = (): AspectDefinition => {
+  const task = BUILTIN_REGISTRY.aspects.find((a) => a.id === 'orbis/task');
+  if (task === undefined) throw new Error('встроенного аспекта задачи нет');
+  return {
+    ...task,
+    id: 'user/trip',
+    key: 'user/trip',
+    rank: 99,
+    properties: [],
+    implements: [
+      {
+        contract: 'orbis/when',
+        bind: { moment: 'user/trip_day', all_day: 'user/allday' },
+        fixed: {},
+        value_map: [],
+      },
+    ],
+  };
+};
+const withTripAspect: MockHandler = (path) =>
+  path === 'registry.effective'
+    ? { ...BUILTIN_REGISTRY, aspects: [...BUILTIN_REGISTRY.aspects, tripAspect()] }
+    : {};
+
+test('«весь день» — бейдж у записи аспекта владельца со своим свойством (слот all_day)', async () => {
+  renderWithProviders(
+    <NativeRow
+      entity={row({ 'user/trip_day': '2026-10-01', 'user/allday': true }, ['user/trip'])}
+      onToggleTask={() => {}}
+    />,
+    withTripAspect,
+  );
+  expect(await screen.findByText('весь день')).toBeInTheDocument();
+});
+
+test('«весь день»: orbis/all_day без аспекта расписания (снят, Р9) — бейджа нет', async () => {
+  renderWithProviders(
+    <NativeRow entity={row({ 'orbis/all_day': true }, ['orbis/note'])} onToggleTask={() => {}} />,
+    registryHandler,
+  );
+  await screen.findByText('Обед');
+  expect(screen.queryByText('весь день')).toBeNull();
+});

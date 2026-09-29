@@ -1,9 +1,15 @@
+import { rowAllDayOf } from '@orbis/shared';
 import { useState } from 'react';
 import { useRefTitle } from '../../lib/entity-ref/RefField';
 import { formatMoney, type MoneyTone } from '../../lib/format';
 import { displayText } from '../../lib/registry/format';
 import { classLabel, fieldLabel } from '../../lib/registry/labels';
-import { useRowCategoryRef, useRowProjection, useRowStatusProperty } from '../../lib/registry/row';
+import {
+  rowRegistryOf,
+  useRowCategoryRef,
+  useRowProjection,
+  useRowStatusProperty,
+} from '../../lib/registry/row';
 import { useRegistry } from '../../lib/registry/useRegistry';
 import type { RouterOutputs } from '../../trpc';
 import { Badge } from '../../ui/Badge';
@@ -282,8 +288,9 @@ export function NativeRow({
           <Badge key={`${b.contract}:${b.cls}`}>{classLabel(registry, b.contract, b.cls)}</Badge>
         ),
       )}
-      {/* raw_value вне M14: «весь день» — свойство записи, контракта «признак суток» в v1 нет */}
-      {props['orbis/all_day'] === true && <Badge>весь день</Badge>}
+      {/* «весь день» — слот `all_day` контракта «когда» (1в §4.3): у аспекта владельца своё
+          свойство, а значение, пережившее снятие расписания (Р9), бейджа не даёт */}
+      {rowAllDayOf(entity, rowRegistryOf(registry.data)) && <Badge>весь день</Badge>}
       {catRef !== null && <CategoryBadge categoryRef={catRef} />}
       {fields.length > 0 && (
         <dl className="flex gap-2 text-xs text-text-secondary">

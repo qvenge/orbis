@@ -203,14 +203,16 @@ function RowsBody({
   onMore: (limit: number) => void;
 }) {
   const display = ast.display ?? 'compact';
+  // «Закрыто» — признак сервера (`closedIds`, п. 42), одним множеством на все формы.
+  const closed = new Set(result.closedIds);
   return (
     <>
       {display === 'list' ? (
-        <ListForm rows={result.rows} />
+        <ListForm rows={result.rows} closed={closed} />
       ) : display === 'table' ? (
-        <TableForm rows={result.rows} columns={ast.columns} />
+        <TableForm rows={result.rows} columns={ast.columns} closed={closed} />
       ) : (
-        <CompactForm rows={result.rows} />
+        <CompactForm rows={result.rows} closed={closed} />
       )}
       <MoreTail shown={result.rows.length} more={result.more} pending={pending} onMore={onMore} />
     </>

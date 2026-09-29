@@ -19,7 +19,7 @@ import {
   wireEntity,
 } from '../../../test/harness';
 import { recordAddress, topAddress } from '../../../test/nav';
-import { registryReply } from '../../../test/registry';
+import { BUILTIN_REGISTRY, registryReply } from '../../../test/registry';
 import { EditorShell } from '../../entity-editor/EditorShell';
 import { REGISTRY_FAILED_MESSAGE } from './BlockPlaque';
 import { DataBlock } from './DataBlock';
@@ -186,6 +186,66 @@ test('table с columns: деньги — с валютой привязки су
   const table = await screen.findByRole('table');
   await waitFor(() => expect(within(table).getByText('1 500.00 $')).toBeInTheDocument());
 });
+
+/**
+ * «Закрыто» в формах блока — признак СЕРВЕРА (`closedIds`, Б-2 №78 п. 42), а не проекция строки:
+ * набор `closed`, заданный условием, строка не вычисляет (`setClasses` отдаёт `[]`), и зачёркивание
+ * по проекции расходилось бы с фильтром блока. Реестр ниже — встроенный, но с предикатным набором.
+ */
+const PREDICATE_CLOSED_REGISTRY = {
+  ...BUILTIN_REGISTRY,
+  contracts: BUILTIN_REGISTRY.contracts.map((c) =>
+    c.id === 'orbis/completable' && c.kind === 'slots'
+      ? { ...c, sets: { ...c.sets, closed: { op: '==', args: [{ slot: 'status' }, 'done'] } } }
+      : c,
+  ),
+};
+const closedHandler =
+  (text: string, rows: unknown[], closedIds: string[], predicate: boolean): MockHandler =>
+  (path, input) =>
+    path === 'registry.effective'
+      ? predicate
+        ? PREDICATE_CLOSED_REGISTRY
+        : BUILTIN_REGISTRY
+      : (blocksReply({
+          [text]: { ok: true, kind: 'rows', rows: rows as never, more: 0, closedIds },
+        })(path, input) ?? {});
+
+for (const display of ['list', 'compact', 'table'] as const) {
+  test(`${display}: строка из closedIds зачёркнута, хотя проекция «открыто» (предикатный набор)`, async () => {
+    const text = `aspect=orbis/task, display=${display}`;
+    renderWithProviders(
+      <DataBlock text={text} />,
+      closedHandler(
+        text,
+        [
+          task('Закрыта', { 'orbis/task_status': 'done', 'orbis/due_date': '2026-07-18' }),
+          task('Открыта', { 'orbis/due_date': '2026-07-19' }),
+        ],
+        ['Закрыта'],
+        true,
+      ),
+    );
+    if (display !== 'compact') await screen.findByText('18 июл.');
+    expect(await screen.findByText('Закрыта')).toHaveClass('line-through');
+    expect(screen.getByText('Открыта')).not.toHaveClass('line-through');
+  });
+
+  test(`${display}: строка вне closedIds не зачёркнута, хотя проекция «закрыто»`, async () => {
+    const text = `aspect=orbis/task, display=${display}`;
+    renderWithProviders(
+      <DataBlock text={text} />,
+      closedHandler(
+        text,
+        [task('Сделана', { 'orbis/task_status': 'done', 'orbis/due_date': '2026-07-18' })],
+        [],
+        false,
+      ),
+    );
+    if (display !== 'compact') await screen.findByText('18 июл.');
+    expect(await screen.findByText('Сделана')).not.toHaveClass('line-through');
+  });
+}
 
 test('tile count — число и подпись title', async () => {
   const text = 'aspect=orbis/task, display=tile, aggregate=count, title=Задач';

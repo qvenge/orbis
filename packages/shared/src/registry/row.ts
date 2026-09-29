@@ -10,7 +10,11 @@ import type { ContractDefinition } from './contract-type';
 import type { AspectDefinition } from './property-type';
 
 export type RowElementKind = 'checkbox' | 'title' | 'date' | 'amount' | 'progress' | 'badges';
-/** `slots` — приоритет: выигрывает первый заполненный (у даты — `deadline`, иначе `moment`). */
+/**
+ * `slots` — слоты контракта, которые элемент читает (Б-2 №78 п. 43): имя слота берётся отсюда через
+ * `declaredSlot`, а не литералом мимо правила. У даты порядок — приоритет: выигрывает первый
+ * заполненный (`deadline`, иначе `moment`).
+ */
 export interface RowElementRule {
   element: RowElementKind;
   contract?: string;
@@ -25,7 +29,7 @@ export const M14_ROW_ELEMENTS: readonly RowElementRule[] = [
   {
     element: 'amount',
     contract: 'orbis/money-movement',
-    slots: ['amount', 'direction', 'currency'],
+    slots: ['amount', 'direction', 'currency', 'category'],
   },
   // Контракта `orbis/progress` в Б-1 нет (В-2): элемент объявлен и всегда пуст — полоса включается
   // Б-3 одной строкой сида, без правки этого файла.
@@ -77,11 +81,24 @@ function ruleOf(element: RowElementKind): RowElementRule {
   if (rule === undefined) throw new Error(`M14: правила элемента ${element} нет`);
   return rule;
 }
-/** Классы набора. Предикатный набор (§Б1-1) чистой функцией не вычисляется — пусто. */
+/**
+ * Классы набора. Предикатный набор (§Б1-1) строка не вычисляет — пусто; истина у блоков данных —
+ * `closedIds` сервера (1в, п. 42), и формы блока зачёркивают по нему, а не по проекции.
+ */
 function setClasses(reg: RowRegistry, contract: string, set: string): readonly string[] {
   const sets = reg.contracts.get(contract)?.sets;
   const value = sets == null ? undefined : sets[set];
   return Array.isArray(value) ? (value as readonly string[]) : [];
+}
+
+/**
+ * Имя слота, ОБЪЯВЛЕННОЕ правилом элемента (Б-2 №78 п. 43): правило — источник, какие слоты строка
+ * читает. Слот вне `slots` — ошибка кода, а не пустой элемент: тихое чтение литералом и было дефектом.
+ */
+export function declaredSlot(rule: RowElementRule, name: string): string {
+  if (rule.slots?.includes(name) !== true)
+    throw new Error(`M14: слот не объявлен правилом: ${name}`);
+  return name;
 }
 
 /**
@@ -169,7 +186,7 @@ export function rowStatusPropertyOf(entity: RowEntity, reg: RowRegistry): string
 export function rowCategoryRefOf(entity: RowEntity, reg: RowRegistry): string | null {
   const rule = ruleOf('amount');
   for (const b of bindingsOn(indexOf(reg), entity, reg, rule.contract ?? '')) {
-    const value = slotValue(b, entity, 'category');
+    const value = slotValue(b, entity, declaredSlot(rule, 'category'));
     if (typeof value === 'string' && value !== '') return value;
   }
   return null;
@@ -189,11 +206,26 @@ export function rowMoneyCurrencyOf(
 ): string | null | undefined {
   const rule = ruleOf('amount');
   for (const b of bindingsOn(indexOf(reg), entity, reg, rule.contract ?? '')) {
-    if (b.bind.amount !== propertyId) continue;
-    const currency = slotValue(b, entity, 'currency');
+    if (b.bind[declaredSlot(rule, 'amount')] !== propertyId) continue;
+    const currency = slotValue(b, entity, declaredSlot(rule, 'currency'));
     return typeof currency === 'string' && currency !== '' ? currency : null;
   }
   return undefined;
+}
+
+/**
+ * «Весь день» — слот `all_day` контракта «когда» у привязки, стоящей на записи (1в §4.3, Б-2 №100):
+ * первая по `rank` привязка, где слот заполнен. Не сырое `orbis/all_day`: аспект владельца несёт
+ * своё свойство, а значение, пережившее снятие расписания (Р9), бейджа давать не должно. Элементом
+ * M14 не является (подробность момента, в значение «даты» не входит, §4.2) — поэтому литерал слота
+ * контракта, а не `declaredSlot`.
+ */
+export function rowAllDayOf(entity: RowEntity, reg: RowRegistry): boolean {
+  for (const b of bindingsOn(indexOf(reg), entity, reg, ruleOf('date').contract ?? '')) {
+    const value = slotValue(b, entity, 'all_day');
+    if (typeof value === 'boolean') return value;
+  }
+  return false;
 }
 
 /** Несёт ли свойство хоть один аспект, СТОЯЩИЙ на записи (Р9). */
@@ -227,14 +259,18 @@ export function rowProjectionOf(entity: RowEntity, reg: RowRegistry): RowProject
   const amountRule = ruleOf('amount');
   let amount: RowProjection['amount'] = null;
   for (const b of bindingsOn(idx, entity, reg, amountRule.contract ?? '')) {
-    const raw = slotValue(b, entity, 'amount');
+    const raw = slotValue(b, entity, declaredSlot(amountRule, 'amount'));
     if (typeof raw !== 'string' || raw === '') continue;
-    const currency = slotValue(b, entity, 'currency');
+    const currency = slotValue(b, entity, declaredSlot(amountRule, 'currency'));
+    const dir = declaredSlot(amountRule, 'direction');
     amount = {
       amount: raw,
-      // Направление — КЛАСС money-movement; промах (значения нет, вариант не отнесён) читается как
-      // расход: тот же дефолт, что стоял в строке до реформы (`?? 'expense'`).
-      direction: classOf(b, entity)?.cls === 'inflow' ? 'inflow' : 'outflow',
+      // Направление — КЛАСС money-movement по слоту направления; промах (значения нет, вариант не
+      // отнесён) читается как расход: тот же дефолт, что стоял в строке до реформы (`?? 'expense'`).
+      direction:
+        b.classOfVariant.get(dir)?.get(String(slotValue(b, entity, dir))) === 'inflow'
+          ? 'inflow'
+          : 'outflow',
       currency: typeof currency === 'string' && currency !== '' ? currency : null,
     };
     break;
