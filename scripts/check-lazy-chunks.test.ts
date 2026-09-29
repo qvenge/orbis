@@ -10,7 +10,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { gzipSync } from 'node:zlib';
-import { checkBudgets, closureOf, parseBudgetArgs } from './check-lazy-chunks.ts';
+import { checkBudgets, checkClosureText, closureOf, parseBudgetArgs } from './check-lazy-chunks.ts';
 
 const dirs: string[] = [];
 
@@ -113,4 +113,35 @@ test('разбор флагов: неизвестный флаг и кривое
     file: [{ chunk: 'DetailScreen', max: 34889 }],
     closure: [{ chunk: 'DetailScreen', max: 1 }],
   });
+});
+
+test('содержимое замыкания (R-19): маркер в статическом соседе — код 1; только в ленивом — код 0; нет в источнике — код 1', () => {
+  const rule = {
+    chunk: 'D',
+    text: 'МАРКЕР-СЛОВАРЯ',
+    source: 'src/dict.ts',
+    hint: 'подсказка',
+  };
+  const source = (text: string) => (path: string) => (path === 'src/dict.ts' ? text : '');
+  // D статически тянет S, лениво — L: маркер в S — в первом кадре, в L — нет.
+  const leaked = assets({
+    'D-1.js': 'import{a}from"./S-2.js";const l=()=>import("./L-3.js");',
+    'S-2.js': 'export const a="МАРКЕР-СЛОВАРЯ";',
+    'L-3.js': 'export const b=1;',
+  });
+  const over = checkClosureText(leaked, [rule], source('x МАРКЕР-СЛОВАРЯ y'));
+  expect(over.code).toBe(1);
+  expect(over.lines.join('\n')).toContain('S-2.js');
+  expect(over.lines.join('\n')).toContain('подсказка');
+
+  const lazy = assets({
+    'D-1.js': 'import{a}from"./S-2.js";const l=()=>import("./L-3.js");',
+    'S-2.js': 'export const a=1;',
+    'L-3.js': 'export const b="МАРКЕР-СЛОВАРЯ";',
+  });
+  expect(checkClosureText(lazy, [rule], source('x МАРКЕР-СЛОВАРЯ y')).code).toBe(0);
+  // Маркер переписан в источнике — проверка не зеленеет вечно, а требует нового текста.
+  const stale = checkClosureText(lazy, [rule], source('другой текст'));
+  expect(stale.code).toBe(1);
+  expect(stale.lines.join('\n')).toContain('устарела');
 });

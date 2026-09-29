@@ -429,6 +429,77 @@ export function checkBudgets(dir: string, budgets: Budgets): { code: 0 | 1; line
   return { code: failed ? 1 : 0, lines };
 }
 
+// --- Запрещённое содержимое замыкания (R-19 среза 1в) ---------------------------------------
+
+/** Текст, которого в эагерном замыкании чанка быть не должно, и файл-источник этого текста. */
+export interface ClosureTextRule {
+  chunk: string;
+  text: string;
+  source: string;
+  hint: string;
+}
+
+/**
+ * Встроенный словарь свойств (`BUILTIN_PROPERTY_META`, ≈7 КБ gzip, с каноном Q-AST внутри
+ * `orbis/progress_source`) web не читает — реестр ему отдаёт сервер, — и сборщик его выбрасывает
+ * (R-19 среза 1в: вызов со словарём помечен чистым, `contracts/budget.ts` не ищет по словарю на
+ * верхнем уровне). Вернуть его в первый кадр экрана записи может одна строка — снятая аннотация
+ * или новый поиск по словарю при загрузке модуля, — и порог замыкания это НЕ ловит: запас после
+ * R-19 больше веса словаря (замерено мутацией: без аннотации — 329 380 Б при пороге 329 400).
+ * Поэтому отдельная проверка — по ТЕКСТУ описания свойства, который есть только в словаре.
+ *
+ * Позитивный контроль — текст обязан стоять в `source`: переписанное описание иначе сделало бы
+ * проверку вечным «ok» (маркер пропал бы из сборки вместе с источником).
+ */
+const FORBIDDEN_CLOSURE_TEXT: readonly ClosureTextRule[] = [
+  {
+    chunk: 'DetailScreen',
+    text: 'Деньги приходят или уходят',
+    source: 'packages/shared/src/registry/builtin-properties.ts',
+    hint:
+      'Встроенный словарь свойств приехал в первый кадр. Проверьте аннотацию чистоты у\n' +
+      '`BUILTIN_PROPERTY_META` и что ни один модуль, который грузит web, не читает словарь на\n' +
+      'верхнем уровне (образец — `DIRECTION_OPTIONS` в `contracts/budget.ts`).',
+  },
+];
+
+/**
+ * Проверка содержимого замыкания. Код 1 — текст найден в замыкании чанка либо отсутствует в своём
+ * источнике (маркер устарел); чанка нет ровно одного — тоже код 1, как у порогов.
+ */
+export function checkClosureText(
+  dir: string,
+  rules: readonly ClosureTextRule[],
+  readSource: (path: string) => string = (path) => readFileSync(path, 'utf8'),
+): { code: 0 | 1; lines: string[] } {
+  const files = readdirSync(dir);
+  const lines: string[] = [];
+  for (const rule of rules) {
+    if (!readSource(rule.source).includes(rule.text)) {
+      lines.push(
+        `check-lazy-chunks: маркер «${rule.text}» не найден в ${rule.source} — проверка ` +
+          `содержимого ${rule.chunk} устарела; выберите текст, который там есть.`,
+      );
+      continue;
+    }
+    const found = chunkFilesIn(files, rule.chunk);
+    if (found.length !== 1) {
+      lines.push(`check-lazy-chunks: чанков ${rule.chunk}-*.js не ровно один (${found.length}).`);
+      continue;
+    }
+    const hit = closureOf(dir, found[0] as string).find((f) =>
+      readFileSync(`${dir}/${f}`, 'utf8').includes(rule.text),
+    );
+    if (hit !== undefined) {
+      lines.push(
+        `check-lazy-chunks: в эагерном замыкании ${found[0]} (файл ${hit}) — «${rule.text}» ` +
+          `из ${rule.source}.\n${rule.hint}`,
+      );
+    }
+  }
+  return { code: lines.length === 0 ? 0 : 1, lines };
+}
+
 // --- Проверка сборки ------------------------------------------------------------------------
 
 function main(argv: readonly string[]): void {
@@ -559,6 +630,11 @@ function main(argv: readonly string[]): void {
     console.error(weight.lines.join('\n'));
     process.exit(1);
   }
+  const content = checkClosureText(ASSETS_DIR, FORBIDDEN_CLOSURE_TEXT);
+  if (content.code !== 0) {
+    console.error(content.lines.join('\n'));
+    process.exit(1);
+  }
 
   console.log(
     `check-lazy-chunks: ok — отдельные чанки на месте у всех ${guarded.length} ` +
@@ -567,7 +643,8 @@ function main(argv: readonly string[]): void {
       `${LAZY_DETAIL_MODULES.length} ленивых модулей экрана записи + ` +
       `${LAZY_FRAME_MODULES.length} ленивых модулей рамки), список экранов сверен с роутером, ` +
       `состав чанков сверен по запрещённым рёбрам (${FORBIDDEN_EDGES.length}) ` +
-      `(${FORBIDDEN_EDGES.map((e) => `${e.from} ↛ ${e.to}`).join(', ')}).`,
+      `(${FORBIDDEN_EDGES.map((e) => `${e.from} ↛ ${e.to}`).join(', ')}), ` +
+      `содержимое замыканий — по ${FORBIDDEN_CLOSURE_TEXT.length} маркеру (R-19).`,
   );
   for (const line of weight.lines) console.log(line);
 }

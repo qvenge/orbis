@@ -4,7 +4,7 @@
 // Все суммы — decimal-строки (01-arch §3.3); формулы считает ТОЛЬКО сервер
 // (aggregates.ts), клиент отображает готовые значения.
 import { z } from 'zod';
-import { BUILTIN_PROPERTY_META } from '../registry/builtin-properties';
+import { DIRECTION_OPTIONS } from '../registry/builtin-properties';
 import { entitySchema } from '../schemas/entity';
 
 const decimal = z.string().regex(/^-?\d+(\.\d+)?$/, 'decimal-строка');
@@ -18,14 +18,13 @@ const decimal = z.string().regex(/^-?\d+(\.\d+)?$/, 'decimal-строка');
  * бы, если бы вариант однажды разошёлся — а провалиться в этом месте должно ГРОМКО:
  * `comingUp` едет и в web, и в LLM-тул `budget_status`.
  *
- * `z.enum` требует непустого кортежа литералов, поэтому список раскрывается в него явно, а
- * `assert` ловит две поломки сразу: свойство исчезло из реестра и оно перестало быть `select`.
+ * `z.enum` требует непустого кортежа литералов, поэтому список раскрывается в него явно. Источник —
+ * `DIRECTION_OPTIONS`, то самое значение, которым объявлено свойство, а не поиск по словарю на
+ * верхнем уровне модуля: этот модуль едет в web, и поиск утянул бы туда весь словарь свойств
+ * (R-19 среза 1в). Две поломки, которые ловила прежняя проверка при загрузке, — свойство исчезло
+ * из реестра или перестало быть `select` с этими вариантами, — ловит `budget.test.ts`.
  */
-const DIRECTION_TYPE = BUILTIN_PROPERTY_META.find((p) => p.id === 'orbis/direction')?.type;
-if (DIRECTION_TYPE?.kind !== 'select') {
-  throw new Error('contracts/budget: orbis/direction нет в реестре или он больше не select');
-}
-const [DIRECTION_FIRST, ...DIRECTION_REST] = DIRECTION_TYPE.options.map((o) => o.key);
+const [DIRECTION_FIRST, ...DIRECTION_REST] = DIRECTION_OPTIONS.map((o) => o.key);
 const direction = z.enum([DIRECTION_FIRST as string, ...DIRECTION_REST]);
 const dateString = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'ISO date YYYY-MM-DD');
 /** Месяц Overview (§3.1): заголовок периода с переключателем [◀ месяц ▶]. */

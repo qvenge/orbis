@@ -29,6 +29,7 @@ import {
   TASK_STATUSES,
 } from '../contracts/agent-loop';
 import { exprNodeSchema } from '../expr/ast';
+import { queryAstJsonSchema } from '../query/ast-json-schema';
 import { assertStaticQuery } from '../query/static';
 import { HOST_SHELL_KEY } from '../supply/etalons';
 import { checkImplements } from './bindings';
@@ -1286,4 +1287,54 @@ test('цель «Дома» и «Открывать вместо» — стат�
     expect(() => assertStaticQuery(target)).not.toThrow();
     expect(JSON.stringify(type.target)).toBe(APP_NOT_HOST_SHELL);
   }
+});
+
+/**
+ * R-19 среза 1в: схема значения `orbis/progress_source` собирается функцией (вызов с аннотацией
+ * чистоты, чтобы web выбросил словарь вместе с каноном), а не литералом модуля.
+ *
+ * Сам маркер аннотации в этом докблоке НЕ пишется намеренно: транспилятор bun читает его в
+ * комментарии прямо перед вызовом `test(…)` как аннотацию и выбрасывает регистрацию теста —
+ * тест молча исчезал из прогона (замерено: 24 теста вместо 25, ни pass, ни fail). Строка сида обязана остаться
+ * байт-в-байт прежней — поэтому сравнение ТЕКСТОМ JSON (порядок ключей входит), а ожидание
+ * выписано в форме прежнего литерала: тело канона без `$schema`/`$defs` в обеих ветках `query`,
+ * `$defs` канона — в корне.
+ */
+test('строка orbis/progress_source: схема значения — прежний литерал байт-в-байт (R-19)', () => {
+  const { $schema: _dialect, $defs, ...body } = queryAstJsonSchema;
+  const query = {
+    anyOf: [
+      body,
+      {
+        type: 'object',
+        properties: { text: { type: 'string', minLength: 1 } },
+        required: ['text'],
+        additionalProperties: false,
+      },
+    ],
+  };
+  const expected = {
+    anyOf: [
+      {
+        type: 'object',
+        properties: { query, aggregate: { const: 'count' } },
+        required: ['query', 'aggregate'],
+        additionalProperties: false,
+      },
+      {
+        type: 'object',
+        properties: {
+          query,
+          aggregate: { type: 'string', enum: ['sum', 'latest'] },
+          field: { type: 'string', minLength: 1 },
+        },
+        required: ['query', 'aggregate', 'field'],
+        additionalProperties: false,
+      },
+    ],
+    $defs,
+  };
+  const type = BUILTIN_PROPERTY_META.find((p) => p.id === 'orbis/progress_source')?.type;
+  if (type?.kind !== 'json') throw new Error('orbis/progress_source перестал быть json');
+  expect(JSON.stringify(type.schema)).toBe(JSON.stringify(expected));
 });

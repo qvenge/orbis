@@ -91,14 +91,6 @@ const RECURRENCE_SCHEMA = {
 };
 
 /**
- * Тело канона Q-AST без служебных ключей верхнего уровня: `$schema` (в подсхеме ajv в
- * strict-режиме его не ждут) и `$defs` (переезжает в корень `PROGRESS_SOURCE_SCHEMA` —
- * `$ref: '#/$defs/node'` отсчитывается от КОРНЯ компилируемой схемы, а корнем здесь
- * становится схема свойства, а не сам канон).
- */
-const { $schema: _AST_DIALECT, $defs: QUERY_AST_DEFS, ...QUERY_AST_BODY } = queryAstJsonSchema;
-
-/**
  * Сохранённый запрос источника прогресса (§А5-2): ДЕРЕВО, а не текст.
  *
  * Вторая ветка — `{text}` — не послабление, а та самая форма, которую §А5-2 оставляет
@@ -127,17 +119,19 @@ const { $schema: _AST_DIALECT, $defs: QUERY_AST_DEFS, ...QUERY_AST_BODY } = quer
  * вынесено координатору отдельно; вместе со схемой снимется ветка `'text' in src.query`
  * (`goals/progress.ts`), сегодня дающая честный `invalid_query` на чтении.
  */
-const PROGRESS_QUERY_SCHEMA = {
-  anyOf: [
-    QUERY_AST_BODY,
-    {
-      type: 'object',
-      properties: { text: { type: 'string', minLength: 1 } },
-      required: ['text'],
-      additionalProperties: false,
-    },
-  ],
-};
+function progressQuerySchema(queryAstBody: Record<string, unknown>): Record<string, unknown> {
+  return {
+    anyOf: [
+      queryAstBody,
+      {
+        type: 'object',
+        properties: { text: { type: 'string', minLength: 1 } },
+        required: ['text'],
+        additionalProperties: false,
+      },
+    ],
+  };
+}
 
 /**
  * `goal.progress_source` — `aspects.ts:131-142`. Дискриминируемый союз, а не объект с
@@ -150,27 +144,52 @@ const PROGRESS_QUERY_SCHEMA = {
  * скомпилированной схемы; схема свойства и есть тот корень (`propertyValueJsonSchema` для
  * kind `json` отдаёт `type.schema` как есть).
  */
-const PROGRESS_SOURCE_SCHEMA = {
-  anyOf: [
-    {
-      type: 'object',
-      properties: { query: PROGRESS_QUERY_SCHEMA, aggregate: { const: 'count' } },
-      required: ['query', 'aggregate'],
-      additionalProperties: false,
-    },
-    {
-      type: 'object',
-      properties: {
-        query: PROGRESS_QUERY_SCHEMA,
-        aggregate: { type: 'string', enum: ['sum', 'latest'] },
-        field: { type: 'string', minLength: 1 },
+function progressSourceSchema(): Record<string, unknown> {
+  // Тело канона Q-AST без служебных ключей верхнего уровня: `$schema` (в подсхеме ajv в
+  // strict-режиме его не ждут) и `$defs` (переезжает в корень схемы свойства — `$ref:
+  // '#/$defs/node'` отсчитывается от КОРНЯ компилируемой схемы, а корень здесь — схема свойства).
+  const { $schema: _AST_DIALECT, $defs: QUERY_AST_DEFS, ...QUERY_AST_BODY } = queryAstJsonSchema;
+  const query = progressQuerySchema(QUERY_AST_BODY);
+  return {
+    anyOf: [
+      {
+        type: 'object',
+        properties: { query, aggregate: { const: 'count' } },
+        required: ['query', 'aggregate'],
+        additionalProperties: false,
       },
-      required: ['query', 'aggregate', 'field'],
-      additionalProperties: false,
-    },
-  ],
-  $defs: QUERY_AST_DEFS,
-};
+      {
+        type: 'object',
+        properties: {
+          query,
+          aggregate: { type: 'string', enum: ['sum', 'latest'] },
+          field: { type: 'string', minLength: 1 },
+        },
+        required: ['query', 'aggregate', 'field'],
+        additionalProperties: false,
+      },
+    ],
+    $defs: QUERY_AST_DEFS,
+  };
+}
+/**
+ * Константа модуля — ВЫЗОВОМ с пометкой `@__PURE__` (R-19 среза 1в): web этот словарь не читает
+ * (реестр ему отдаёт сервер), и сборщик выбрасывает неиспользуемое значение вместе с каноном
+ * Q-AST — но только если вызов помечен чистым: деструктуризация с остатком для него — возможный
+ * побочный эффект. Значение и строка сида — те же, что у прежнего литерала (пин —
+ * `builtin.test.ts`, «строка orbis/progress_source»).
+ */
+const PROGRESS_SOURCE_SCHEMA = /* @__PURE__ */ progressSourceSchema();
+
+/**
+ * Варианты `orbis/direction` — одним значением на определение свойства и wire-схему бюджета
+ * (`contracts/budget.ts`): та читает их отсюда, а не поиском по `BUILTIN_PROPERTY_META`, чтобы
+ * словарь не ехал в web (см. докблок словаря). Совпадение со строкой реестра — `budget.test.ts`.
+ */
+export const DIRECTION_OPTIONS: SelectOption[] = options(
+  ['income', 'Доход', 'Income'],
+  ['expense', 'Расход', 'Expense'],
+);
 
 /** `agent-run.proposal` — `aspects.ts:234-254`. */
 const RUN_PROPOSAL_SCHEMA = {
@@ -431,7 +450,7 @@ const ENTRIES: readonly PropertyEntry[] = [
     description: { ru: 'Деньги приходят или уходят', en: 'Money comes in or goes out' },
     type: {
       kind: 'select',
-      options: options(['income', 'Доход', 'Income'], ['expense', 'Расход', 'Expense']),
+      options: DIRECTION_OPTIONS,
     },
     module: null, // стандартное свойство ядра, Р-7
   },
@@ -1341,15 +1360,22 @@ const ENTRIES: readonly PropertyEntry[] = [
 /**
  * Встроенный словарь свойств: 86 доменных (`storage: 'props'`) + 4 core-проекции.
  * `key` встроенного изначально равен `id` (§А2-1), `graph_id` — NULL, статус — `active`.
+ *
+ * `@__PURE__` (R-19 среза 1в): словарь читают сервер, сид и тесты; web его не читает — реестр
+ * ему отдаёт сервер. Без пометки сборщик считал бы `parse` возможным побочным эффектом и вёз бы
+ * словарь (≈7 КБ gzip, с каноном Q-AST внутри `orbis/progress_source`) в первый кадр экрана записи.
+ * Поэтому же в модулях, которые web грузит, словарь не читается на верхнем уровне
+ * (`contracts/budget.ts` берёт варианты направления из `DIRECTION_OPTIONS`).
  */
-export const BUILTIN_PROPERTY_META: readonly PropertyDefinition[] = ENTRIES.map((entry, index) =>
-  propertyDefinitionSchema.parse({
-    ...entry,
-    graphId: null,
-    key: entry.id,
-    status: 'active',
-    rank: index + 1,
-  }),
+export const BUILTIN_PROPERTY_META: readonly PropertyDefinition[] = /* @__PURE__ */ ENTRIES.map(
+  (entry, index) =>
+    propertyDefinitionSchema.parse({
+      ...entry,
+      graphId: null,
+      key: entry.id,
+      status: 'active',
+      rank: index + 1,
+    }),
 );
 
 /** Свойства ядра §А1-3: хранятся колонкой, адресуются как свойства. */
