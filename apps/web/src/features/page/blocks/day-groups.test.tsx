@@ -103,11 +103,23 @@ const GROUPS: BlockDayGroup[] = [
     rows: [
       {
         entity: meet as never,
-        at: { slot: 'moment', value: '2026-09-26T17:30:00.000Z', end: null, allDay: false },
+        at: {
+          slot: 'moment',
+          value: '2026-09-26T17:30:00.000Z',
+          end: null,
+          allDay: false,
+          untimed: false,
+        },
       },
       {
         entity: report as never,
-        at: { slot: 'done', value: '2026-09-27T16:40:00.000Z', end: null, allDay: false },
+        at: {
+          slot: 'done',
+          value: '2026-09-27T16:40:00.000Z',
+          end: null,
+          allDay: false,
+          untimed: false,
+        },
       },
     ],
   },
@@ -117,11 +129,17 @@ const GROUPS: BlockDayGroup[] = [
     rows: [
       {
         entity: t7 as never,
-        at: { slot: 'deadline', value: '2026-09-29', end: null, allDay: false },
+        at: { slot: 'deadline', value: '2026-09-29', end: null, allDay: false, untimed: true },
       },
       {
         entity: t9 as never,
-        at: { slot: 'moment', value: '2026-09-29T03:00:00.000Z', end: null, allDay: false },
+        at: {
+          slot: 'moment',
+          value: '2026-09-29T03:00:00.000Z',
+          end: null,
+          allDay: false,
+          untimed: false,
+        },
       },
     ],
   },
@@ -202,6 +220,49 @@ test('дата строки не повторяет день группы — в
   expect(rowOf('T7')).not.toHaveTextContent('сент.');
   // Встреча в 00:30 +07 — день 27.09 по ответу (в браузере UTC — 26.09): даты нет.
   expect(rowOf('Встреча')).not.toHaveTextContent('сент.');
+});
+
+test('дата строки СО временем — в поясе ответа (I-1): «28 сент.», а не «27 сент.» браузера в UTC', async () => {
+  // Сделано 27.09 23:40 +07 (группа 27.09 по done), начало 28.09 00:30 +07 (в UTC — 27.09 17:30), срока
+  // нет: элемент даты строки — момент начала. Его день по ответу — 28.09 ≠ дня группы → печатается,
+  // и печатается днём ОТВЕТА; в поясе браузера (UTC) под «Сегодня · вс, 27 сентября» стояло бы «27 сент.».
+  const late = wireEntity({
+    id: id(9),
+    title: 'Поздно',
+    aspects: ['orbis/task', 'orbis/schedule'],
+    props: {
+      'orbis/task_status': 'done',
+      'orbis/completed_at': '2026-09-27T16:40:00.000Z',
+      'orbis/start_at': '2026-09-27T17:30:00.000Z',
+    },
+  });
+  renderFeed(TEXT, {
+    ok: true,
+    kind: 'groups',
+    groups: [
+      {
+        day: '2026-09-27',
+        rows: [
+          {
+            entity: late as never,
+            at: {
+              slot: 'done',
+              value: '2026-09-27T16:40:00.000Z',
+              end: null,
+              allDay: false,
+              untimed: false,
+            },
+          },
+        ],
+      },
+    ],
+    more: 0,
+    closedIds: [id(9)],
+  });
+  await screen.findAllByTestId('day-group');
+  await waitFor(() => expect(rowOf('Поздно')).toHaveTextContent('28 сент.'));
+  expect(rowOf('Поздно')).not.toHaveTextContent('27 сент.');
+  expect(within(rowOf('Поздно')).getByTestId('qb-time')).toHaveTextContent('сделано 23:40');
 });
 
 test('закрытые — по closedIds сервера, независимо от проекции', async () => {

@@ -12,6 +12,7 @@ import {
   APP_ASPECT,
   APP_DISABLED,
   type BlockResult,
+  type EntityBlocksResult,
   entityBlocksInput,
   PAGE_ASPECT,
 } from '@orbis/shared';
@@ -117,7 +118,8 @@ function searchHandler(): MockHandler {
     }
     const answer = base(path, input, type);
     if (path !== 'entity.blocks') return answer;
-    const results = { ...(answer as { results: Record<string, BlockResult> }).results };
+    const reply = answer as EntityBlocksResult;
+    const results = { ...reply.results };
     for (const b of entityBlocksInput.parse(input).blocks) {
       if ('text' in b)
         results[b.key] = byText.get(b.text) ?? {
@@ -128,7 +130,8 @@ function searchHandler(): MockHandler {
           closedIds: [],
         };
     }
-    return { results };
+    // Верх пачки (`today`, `timeZone`) — из ответа рамки, не срезается.
+    return { ...reply, results } satisfies EntityBlocksResult;
   };
 }
 

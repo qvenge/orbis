@@ -1,3 +1,4 @@
+import type { BlockResult, EntityBlocksResult } from '@orbis/shared';
 import { MISPLACED_HINT } from '@orbis/shared/doc/placement';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { useState } from 'react';
@@ -7,6 +8,8 @@ import { ThisEntityProvider } from '../../../lib/query-blocks/this-entity';
 import { useBadgeData } from '../../../lib/query-blocks/useBadgeData';
 import { resetNavForTests } from '../../../state/navigation';
 import {
+  BLOCKS_TIME_ZONE,
+  BLOCKS_TODAY,
   blocksReply,
   blockTexts,
   installCrashTrap,
@@ -436,12 +439,14 @@ test('бейджи разделов (badgeOf) — одной пачкой entity
         const items = (input as { blocks: { key: string; badgeOf: string }[] }).blocks;
         return {
           results: Object.fromEntries(
-            items.map((b) => [
+            items.map((b): [string, BlockResult] => [
               b.key,
-              { ok: true, kind: 'count', count: counts[pages.indexOf(b.badgeOf)] },
+              { ok: true, kind: 'count', count: counts[pages.indexOf(b.badgeOf)] ?? 0 },
             ]),
           ),
-        };
+          today: BLOCKS_TODAY,
+          timeZone: BLOCKS_TIME_ZONE,
+        } satisfies EntityBlocksResult;
       }
       return registryReply(path) ?? {};
     },

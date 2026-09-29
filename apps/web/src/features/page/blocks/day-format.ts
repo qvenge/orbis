@@ -10,7 +10,7 @@
  * (`features/agenda/useAgenda.ts`, `localDay`/`localTime` — модуль удаляет задача 10 среза) с тем же
  * запасом на битую зону.
  */
-import { type BlockRowAt, rowAtUntimed } from '@orbis/shared';
+import type { BlockRowAt } from '@orbis/shared';
 
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -87,18 +87,41 @@ export function dayHeaderLabel(day: string, today: string): string {
  * Группировка по свойству или адресу слота (`slot: null`, одна дата без приоритета) читается как
  * момент: со временем — время, дата — «весь день» (сервер ставит ей `allDay`, `BlockRowAt`).
  *
- * «Без времени» — правило сервера `rowAtUntimed` (shared), а не своя проверка значения: по нему же
- * сервер ставит такие строки первыми в дне, и подпись не расходится с порядком.
+ * «Без времени» — признак сервера `at.untimed`, а не своя проверка значения: по нему же сервер ставит
+ * такие строки первыми в дне, и подпись не расходится с порядком.
+ *
+ * `end` — дата без часов (слот `end` — `timestamp | date`): время конца не печатается — в день
+ * момента это «09:00», а не «09:00–07:00» (полночь UTC даты в поясе ответа); в другой день — «→ дд.мм».
  */
 export function rowTimeLabel(at: BlockRowAt, day: string, timeZone: string): string {
   if (at.slot === 'deadline') return 'срок';
-  const untimed = rowAtUntimed(at);
   if (at.slot === 'done')
-    return untimed ? 'сделано' : `сделано ${timeInTimeZone(at.value, timeZone)}`;
-  if (untimed) return 'весь день';
+    return at.untimed ? 'сделано' : `сделано ${timeInTimeZone(at.value, timeZone)}`;
+  if (at.untimed) return 'весь день';
   const start = timeInTimeZone(at.value, timeZone);
   if (at.end === null) return start;
   const endDay = dayInTimeZone(at.end, timeZone);
-  if (endDay === day) return `${start}–${timeInTimeZone(at.end, timeZone)}`;
+  if (endDay === day)
+    return DAY_RE.test(at.end) ? start : `${start}–${timeInTimeZone(at.end, timeZone)}`;
   return `${start} → ${endDay.slice(8, 10)}.${endDay.slice(5, 7)}`;
+}
+
+/** «18 июл.» дня — тот же вид, что у даты строки `EntityRow` (`formatDay`). */
+const ROW_DATE_FMT = new Intl.DateTimeFormat('ru-RU', {
+  day: 'numeric',
+  month: 'short',
+  timeZone: 'UTC',
+});
+
+/**
+ * Дата строки ленты (элемент даты `EntityRow`) в поясе ответа: `null` — её день совпадает с днём
+ * группы и не печатается (§5.2); иначе подпись дня В ПОЯСЕ ОТВЕТА. Решать «печатать ли» в поясе ответа,
+ * а печатать в поясе браузера нельзя: встреча 28.09 00:30 по времени владельца в UTC-браузере
+ * подписалась бы «27 сент.» под заголовком «Сегодня · вс, 27 сентября».
+ */
+export function rowDateLabel(value: string, day: string | null, timeZone: string): string | null {
+  const own = dayInTimeZone(value, timeZone);
+  if (own === day) return null;
+  const at = Date.parse(`${own}T00:00:00Z`);
+  return Number.isNaN(at) ? value : ROW_DATE_FMT.format(at);
 }

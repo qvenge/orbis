@@ -1,5 +1,10 @@
 import { DAILY_PLANNING_BODY } from '@orbis/server/src/seed/smart-lists';
-import { bodyDraftNoteId, PAGE_ASPECT } from '@orbis/shared';
+import {
+  type BlockResult,
+  bodyDraftNoteId,
+  type EntityBlocksResult,
+  PAGE_ASPECT,
+} from '@orbis/shared';
 import { type BodyDoc, parseBody, serializeBody } from '@orbis/shared/doc';
 import { parsePageText } from '@orbis/shared/doc/page-grammar';
 import { onlineManager } from '@tanstack/react-query';
@@ -10,6 +15,8 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { useRegistry } from '../../lib/registry/useRegistry';
 import { useNav } from '../../state/navigation';
 import {
+  BLOCKS_TIME_ZONE,
+  BLOCKS_TODAY,
   blocksReply,
   blockTexts,
   installCrashTrap,
@@ -1514,12 +1521,20 @@ const bodyHandler =
       const { blocks } = input as { blocks: { key: string }[] };
       return {
         results: Object.fromEntries(
-          blocks.map((b) => [
+          blocks.map((b): [string, BlockResult] => [
             b.key,
-            { ok: true, kind: 'rows', rows: [found('Разобрать Inbox')], more: 0, closedIds: [] },
+            {
+              ok: true,
+              kind: 'rows',
+              rows: [found('Разобрать Inbox')] as never,
+              more: 0,
+              closedIds: [],
+            },
           ]),
         ),
-      };
+        today: BLOCKS_TODAY,
+        timeZone: BLOCKS_TIME_ZONE,
+      } satisfies EntityBlocksResult;
     }
     return registryReply(path) ?? {};
   };

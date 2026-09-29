@@ -3,7 +3,7 @@ import { useOpenRecord } from '../../../app/useOpenRecord';
 import type { BlockData } from '../../../lib/query-blocks/batch';
 import { useRowProjection } from '../../../lib/registry/row';
 import { EntityRow } from '../../browser/EntityRow';
-import { dayHeaderLabel, dayInTimeZone, rowTimeLabel } from './day-format';
+import { dayHeaderLabel, rowDateLabel, rowTimeLabel } from './day-format';
 
 export interface DayGroupsProps {
   /** Ответ блока вида `groups` с верхом пачки — «сегодня» и пояс владельца (`batch.tsx`). */
@@ -38,12 +38,13 @@ function TimeCell({ row, ctx }: { row: BlockGroupRow; ctx: RowCtx }) {
  * `list` — строка `EntityRow`, как у формы `ListForm`, с колонкой времени. Дата строки (элемент
  * строки фактов) не печатается, если её день В ПОЯСЕ ОТВЕТА совпадает с днём группы (§5.2, как
  * `showRowDate` прежнего экрана): «начать во вторник, срок в четверг» во вторнике показывает срок,
- * а встреча в 00:30 по времени владельца не получает вчерашнюю дату браузера в UTC.
+ * а встреча в 00:30 по времени владельца не получает вчерашнюю дату браузера в UTC. Печатаемая дата —
+ * тоже в поясе ответа (`dateLabel`): `EntityRow` сам печатает момент в поясе браузера.
  */
 function ListRow({ row, ctx }: { row: BlockGroupRow; ctx: RowCtx }) {
   const openEntity = useOpenRecord();
   const date = useRowProjection(row.entity).date;
-  const showDate = date === null || dayInTimeZone(date.value, ctx.timeZone) !== ctx.day;
+  const dateLabel = date === null ? null : rowDateLabel(date.value, ctx.day, ctx.timeZone);
   return (
     <li data-testid="qb-item">
       <button
@@ -52,7 +53,12 @@ function ListRow({ row, ctx }: { row: BlockGroupRow; ctx: RowCtx }) {
         className={`${ROW_BUTTON} rounded-lg px-1.5 py-1.5 transition hover:bg-surface-2`}
       >
         <TimeCell row={row} ctx={ctx} />
-        <EntityRow entity={row.entity} showDate={showDate} closed={ctx.closed.has(row.entity.id)} />
+        <EntityRow
+          entity={row.entity}
+          showDate={dateLabel !== null}
+          {...(dateLabel !== null && { dateLabel })}
+          closed={ctx.closed.has(row.entity.id)}
+        />
       </button>
     </li>
   );

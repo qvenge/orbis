@@ -103,25 +103,35 @@ describe('лента `orbis/when=next_7d, group=day:orbis/when` (§5.2)', () => 
 
   test('колонка времени — дата, поставившая запись в день, и её подробности', async () => {
     const g = await groupsOf(FEED);
-    expect(rowOf(g, 'E2')?.at).toMatchObject({ slot: 'moment', end: null, allDay: true });
+    expect(rowOf(g, 'E2')?.at).toMatchObject({
+      slot: 'moment',
+      end: null,
+      allDay: true,
+      untimed: true,
+    });
     expect(rowOf(g, 'T11a')?.at).toEqual({
       slot: 'done',
       value: '2026-07-15',
       end: null,
       allDay: false,
+      // done-дата: не «весь день», но без времени — «сделано» без часов, первой в дне.
+      untimed: true,
     });
     const t3 = rowOf(g, 'T3')?.at;
     expect(t3?.slot).toBe('done');
     expect(instant(t3?.value)).toBe(instant(localIso('2026-07-15', '16:05', TZ)));
+    expect(t3?.untimed).toBe(false);
     const e1 = rowOf(g, 'E1')?.at;
     expect(e1?.slot).toBe('moment');
     expect(instant(e1?.value)).toBe(instant(localIso('2026-07-17', '09:00', TZ)));
     expect(instant(e1?.end)).toBe(instant(localIso('2026-07-17', '10:30', TZ)));
+    expect(e1?.untimed).toBe(false);
     expect(rowOf(g, 'T7')?.at).toEqual({
       slot: 'deadline',
       value: '2026-07-16',
       end: null,
       allDay: false,
+      untimed: true,
     });
     // «Начать завтра, срок через три дня» — в дне начала, дата строки (срок 07-18) — у web.
     const t9 = rowOf(g, 'T9')?.at;
@@ -162,6 +172,7 @@ describe('ключ группы (§3.3, РП-21)', () => {
       value: '2026-07-14',
       end: null,
       allDay: true,
+      untimed: true,
     });
     expect(rowOf(g, 'E1')?.at).toBeNull();
   });

@@ -44,13 +44,12 @@ function dayOf(value: string, fmt: Intl.DateTimeFormat): string {
 }
 
 /**
- * «Без времени» (§5.2): «весь день», срок, дата без часов (у `done`-даты `allDay` — `false`, её выдаёт
- * вид значения). ОДНА ПРАВДА на порядок внутри дня (сервер: без времени — первыми) и на колонку
- * времени web (`rowTimeLabel`: «весь день», «срок», «сделано» без часов) — вторая копия правила по
- * регулярке в web разошлась бы с порядком и напечатала бы «сделано 00:00».
+ * Дата строки с признаком «без времени» (§5.2): «весь день», срок, дата без часов (у `done`-даты
+ * `allDay` — `false`, её выдаёт вид значения). Признак едет в ответе (`BlockRowAt.untimed`): одна
+ * правда на порядок внутри дня (без времени — первыми) и на колонку времени web.
  */
-export function rowAtUntimed(at: BlockRowAt): boolean {
-  return at.allDay || at.slot === 'deadline' || DAY_RE.test(at.value);
+function withUntimed(at: Omit<BlockRowAt, 'untimed'>): BlockRowAt {
+  return { ...at, untimed: at.allDay || at.slot === 'deadline' || DAY_RE.test(at.value) };
 }
 
 /**
@@ -99,11 +98,16 @@ export function layoutDayGroups(input: {
       .filter((v): v is string => typeof v === 'string' && dayOf(v, fmt) === day)
       .sort((a, b) => Date.parse(a) - Date.parse(b));
     const value = own[0] ?? keyAt;
-    return { slot: null, value, end: null, allDay: DAY_RE.test(value) };
+    return withUntimed({ slot: null, value, end: null, allDay: DAY_RE.test(value) });
   };
 
   /** Дата значения «когда» в дне по приоритету и подробности её привязки. */
-  const chosen = (row: DayGroupInputRow, day: string, keyAt: string, contract: string) => {
+  const chosen = (
+    row: DayGroupInputRow,
+    day: string,
+    keyAt: string,
+    contract: string,
+  ): BlockRowAt => {
     const inDay = row.dates.filter((x) => x.day === day);
     for (const slot of PRIORITY) {
       const pick = inDay
@@ -112,14 +116,14 @@ export function layoutDayGroups(input: {
       if (pick === undefined) continue;
       const raw = bound(row.entity, pick.aspect, contract, slot);
       const value = typeof raw === 'string' ? raw : pick.at;
-      if (slot !== 'moment') return { slot, value, end: null, allDay: false } satisfies BlockRowAt;
+      if (slot !== 'moment') return withUntimed({ slot, value, end: null, allDay: false });
       const end = bound(row.entity, pick.aspect, contract, 'end');
       const allDay =
         DAY_RE.test(value) || bound(row.entity, pick.aspect, contract, 'all_day') === true;
-      return { slot, value, end: typeof end === 'string' ? end : null, allDay };
+      return withUntimed({ slot, value, end: typeof end === 'string' ? end : null, allDay });
     }
     // Ключ без даты в своём дне (быть не должно: ключ — одна из дат) — момент ключа, без слота.
-    return { slot: null, value: keyAt, end: null, allDay: false } satisfies BlockRowAt;
+    return withUntimed({ slot: null, value: keyAt, end: null, allDay: false });
   };
 
   const byDay = new Map<string, BlockGroupRow[]>();
@@ -154,8 +158,8 @@ export function layoutDayGroups(input: {
     const list = byDay.get(day) ?? [];
     // Стабильная сортировка: без времени — первыми в порядке входа, затем по моменту.
     const rowsOfDay = [...list].sort((a, b) => {
-      const ua = rowAtUntimed(a.at as BlockRowAt);
-      const ub = rowAtUntimed(b.at as BlockRowAt);
+      const ua = (a.at as BlockRowAt).untimed;
+      const ub = (b.at as BlockRowAt).untimed;
       if (ua || ub) return ua === ub ? 0 : ua ? -1 : 1;
       return Date.parse((a.at as BlockRowAt).value) - Date.parse((b.at as BlockRowAt).value);
     });

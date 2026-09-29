@@ -10,12 +10,7 @@ import { BUILTIN_ASPECT_DEFS } from '../registry/builtin-aspects';
 import { BUILTIN_CONTRACT_DEFS } from '../registry/builtin-contracts';
 import type { AspectDefinition } from '../registry/property-type';
 import type { Entity } from '../schemas/entity';
-import {
-  type DayGroupField,
-  type DayGroupInputRow,
-  layoutDayGroups,
-  rowAtUntimed,
-} from './day-groups';
+import { type DayGroupField, type DayGroupInputRow, layoutDayGroups } from './day-groups';
 
 const TZ = 'Asia/Novosibirsk';
 const WHEN: DayGroupField = { kind: 'value', contract: 'orbis/when' };
@@ -159,6 +154,7 @@ describe('какая дата поставила запись в день — do
       value: '2026-07-19T10:00:00+07:00',
       end: null,
       allDay: false,
+      untimed: false,
     });
   });
 
@@ -180,6 +176,7 @@ describe('какая дата поставила запись в день — do
       value: '2026-07-15T16:05:00+07:00',
       end: null,
       allDay: false,
+      untimed: false,
     });
   });
 
@@ -218,6 +215,7 @@ describe('подробности колонки времени — привяз�
       value: '2026-07-17T09:00:00+07:00',
       end: '2026-07-17T10:30:00+07:00',
       allDay: false,
+      untimed: false,
     });
   });
 
@@ -245,6 +243,7 @@ describe('подробности колонки времени — привяз�
       value: '2026-07-15T00:00:00+07:00',
       end: null,
       allDay: true,
+      untimed: true,
     });
   });
 
@@ -259,6 +258,7 @@ describe('подробности колонки времени — привяз�
       value: '2026-07-16',
       end: null,
       allDay: true,
+      untimed: true,
     });
   });
 });
@@ -326,6 +326,7 @@ describe('группировка по свойству и по адресу сл
       value: '2026-07-18',
       end: null,
       allDay: true,
+      untimed: true,
     });
     const start = layout([event('e', '2026-07-17T09:00:00+07:00')], null, 0, {
       kind: 'property',
@@ -336,6 +337,7 @@ describe('группировка по свойству и по адресу сл
       value: '2026-07-17T09:00:00+07:00',
       end: null,
       allDay: false,
+      untimed: false,
     });
   });
 
@@ -371,26 +373,32 @@ describe('группировка по свойству и по адресу сл
       value: '2026-07-17T09:00:00+07:00',
       end: null,
       allDay: false,
+      untimed: false,
     });
   });
 });
 
-describe('rowAtUntimed — одна правда «без времени» для порядка сервера и подписи web', () => {
-  const at = (slot: 'done' | 'moment' | 'deadline' | null, value: string, allDay = false) => ({
-    slot,
-    value,
-    end: null,
-    allDay,
-  });
+describe('untimed — признак «без времени» в ответе: одна правда для порядка сервера и подписи web', () => {
+  const one = (row: DayGroupInputRow) => layout([row], null).groups[0]?.rows[0]?.at?.untimed;
   test('весь день, срок, дата без часов (и у done, где allDay — false) — без времени', () => {
-    expect(rowAtUntimed(at('moment', '2026-07-15T02:00:00.000Z', true))).toBe(true);
-    expect(rowAtUntimed(at('deadline', '2026-07-15T02:00:00.000Z'))).toBe(true);
-    expect(rowAtUntimed(at('done', '2026-07-15'))).toBe(true);
-    expect(rowAtUntimed(at(null, '2026-07-15'))).toBe(true);
+    expect(one(event('e', '2026-07-15T00:00:00+07:00', { 'orbis/all_day': true }))).toBe(true);
+    expect(one(taskDue('a', '2026-07-15'))).toBe(true);
+    const doneDate: DayGroupInputRow = {
+      entity: entity('t', ['orbis/task'], { 'orbis/completed_at': '2026-07-15' }),
+      keyAt: midnight('2026-07-15'),
+      dates: [d('done', midnight('2026-07-15'), '2026-07-15', 'orbis/task')],
+    };
+    const at = layout([doneDate], null).groups[0]?.rows[0]?.at;
+    expect(at?.allDay).toBe(false);
+    expect(at?.untimed).toBe(true);
   });
   test('момент со временем — со временем (в т.ч. done: «сделано 16:05»)', () => {
-    expect(rowAtUntimed(at('moment', '2026-07-15T02:00:00.000Z'))).toBe(false);
-    expect(rowAtUntimed(at('done', '2026-07-15T09:05:00.000Z'))).toBe(false);
-    expect(rowAtUntimed(at(null, '2026-07-15T02:00:00.000Z'))).toBe(false);
+    expect(one(event('e', '2026-07-15T09:00:00+07:00'))).toBe(false);
+    const done: DayGroupInputRow = {
+      entity: entity('t', ['orbis/task'], { 'orbis/completed_at': '2026-07-15T16:05:00+07:00' }),
+      keyAt: '2026-07-15T09:05:00.000Z',
+      dates: [d('done', '2026-07-15T09:05:00.000Z', '2026-07-15', 'orbis/task')],
+    };
+    expect(one(done)).toBe(false);
   });
 });

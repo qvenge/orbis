@@ -7,7 +7,13 @@
  */
 import type { BlockRowAt } from '@orbis/shared';
 import { afterAll, beforeAll, expect, test } from 'vitest';
-import { dayHeaderLabel, dayInTimeZone, rowTimeLabel, timeInTimeZone } from './day-format';
+import {
+  dayHeaderLabel,
+  dayInTimeZone,
+  rowDateLabel,
+  rowTimeLabel,
+  timeInTimeZone,
+} from './day-format';
 
 const NSK = 'Asia/Novosibirsk';
 const savedTz = process.env.TZ;
@@ -24,6 +30,7 @@ const at = (over: Partial<BlockRowAt>): BlockRowAt => ({
   value: '2026-09-27T02:00:00.000Z',
   end: null,
   allDay: false,
+  untimed: false,
   ...over,
 });
 
@@ -68,23 +75,55 @@ test('колонка времени — семь форм §5.2', () => {
   // end в другой день — «→ дд.мм» дня конца в поясе ответа.
   expect(rowTimeLabel(at({ end: '2026-09-30T03:00:00.000Z' }), day, NSK)).toBe('09:00 → 30.09');
   // all_day привязки и moment-дата — «весь день».
-  expect(rowTimeLabel(at({ allDay: true }), day, NSK)).toBe('весь день');
-  expect(rowTimeLabel(at({ value: '2026-09-27', allDay: true }), day, NSK)).toBe('весь день');
+  expect(rowTimeLabel(at({ allDay: true, untimed: true }), day, NSK)).toBe('весь день');
+  expect(rowTimeLabel(at({ value: '2026-09-27', allDay: true, untimed: true }), day, NSK)).toBe(
+    'весь день',
+  );
   // deadline — «срок» (и датой, и моментом).
-  expect(rowTimeLabel(at({ slot: 'deadline', value: '2026-09-27' }), day, NSK)).toBe('срок');
-  expect(rowTimeLabel(at({ slot: 'deadline' }), day, NSK)).toBe('срок');
-  // done — «сделано 23:40» в поясе ответа (Фокус ревью п. 1); done-дата — «сделано», не «сделано 00:00»
-  // (сервер отдаёт у done `allDay: false` — признак «без времени» один, `rowAtUntimed` shared).
+  expect(rowTimeLabel(at({ slot: 'deadline', value: '2026-09-27', untimed: true }), day, NSK)).toBe(
+    'срок',
+  );
+  expect(rowTimeLabel(at({ slot: 'deadline', untimed: true }), day, NSK)).toBe('срок');
+  // done — «сделано 23:40» в поясе ответа (Фокус ревью п. 1); done-дата — «сделано», не «сделано 00:00»:
+  // у done `allDay: false`, «без времени» — признак сервера `untimed`, своей проверки значения нет.
   expect(rowTimeLabel(at({ slot: 'done', value: '2026-09-27T16:40:00.000Z' }), day, NSK)).toBe(
     'сделано 23:40',
   );
-  expect(rowTimeLabel(at({ slot: 'done', value: '2026-09-27' }), day, NSK)).toBe('сделано');
+  expect(rowTimeLabel(at({ slot: 'done', value: '2026-09-27', untimed: true }), day, NSK)).toBe(
+    'сделано',
+  );
+});
+
+test('колонка читает признак сервера untimed, а не вид значения', () => {
+  // Признак сервера — правда: «без времени» при моменте-ISO — «весь день»; и наоборот.
+  expect(rowTimeLabel(at({ untimed: true }), '2026-09-27', NSK)).toBe('весь день');
+  expect(rowTimeLabel(at({ slot: 'done', untimed: true }), '2026-09-27', NSK)).toBe('сделано');
+});
+
+test('end — дата без часов: в день момента время конца не печатается, в другой день — «→ дд.мм»', () => {
+  // Не «09:00–07:00» (полночь UTC даты в поясе ответа).
+  expect(rowTimeLabel(at({ end: '2026-09-27' }), '2026-09-27', NSK)).toBe('09:00');
+  expect(rowTimeLabel(at({ end: '2026-09-30' }), '2026-09-27', NSK)).toBe('09:00 → 30.09');
+});
+
+test('дата строки ленты: день группы — не печатается; иначе подпись дня в поясе ответа', () => {
+  // 28.09 00:30 +07 — в UTC ещё 27.09: подпись «28 сент.», а не «27 сент.» браузера.
+  expect(rowDateLabel('2026-09-27T17:30:00.000Z', '2026-09-27', NSK)).toBe('28 сент.');
+  expect(rowDateLabel('2026-09-27T17:30:00.000Z', '2026-09-28', NSK)).toBeNull();
+  expect(rowDateLabel('2026-10-01', '2026-09-29', NSK)).toBe('1 окт.');
+  expect(rowDateLabel('2026-09-29', '2026-09-29', NSK)).toBeNull();
+  // «Без даты» (day: null) — дата печатается всегда.
+  expect(rowDateLabel('2026-09-29', null, NSK)).toBe('29 сент.');
 });
 
 test('группировка по свойству или адресу слота (slot: null): момент — время, дата — «весь день»', () => {
   expect(rowTimeLabel(at({ slot: null }), '2026-09-27', NSK)).toBe('09:00');
   expect(
-    rowTimeLabel(at({ slot: null, value: '2026-09-27', allDay: true }), '2026-09-27', NSK),
+    rowTimeLabel(
+      at({ slot: null, value: '2026-09-27', allDay: true, untimed: true }),
+      '2026-09-27',
+      NSK,
+    ),
   ).toBe('весь день');
 });
 

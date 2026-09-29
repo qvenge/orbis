@@ -36,6 +36,9 @@ export function formatDay(value: string): string {
  * `showDate={false}` гасит ровно дату — для списков, где дату строки подписывает сам
  * список (§4.2); сумма не гасится никогда, её печатать больше некому.
  *
+ * `dateLabel` — готовая подпись даты строки (лента по дням печатает её в поясе ОТВЕТА, 1в §5.2); без
+ * неё — `formatDay` значения (момент — в поясе браузера).
+ *
  * `closed` — признак «закрыто» от СЕРВЕРА (`closedIds` ответа блока, 1в §5.2, п. 42): набор
  * `closed`, заданный предикатом, строка не вычисляет, и зачёркивание по проекции расходилось бы с
  * фильтром. Задан — поверх проекции (и `true`, и `false`); не задан — по проекции.
@@ -43,10 +46,12 @@ export function formatDay(value: string): string {
 export function EntityRow({
   entity,
   showDate = true,
+  dateLabel,
   closed: closedBy,
 }: {
   entity: Entity;
   showDate?: boolean;
+  dateLabel?: string;
   closed?: boolean;
 }) {
   const props = entity.props;
@@ -66,10 +71,10 @@ export function EntityRow({
    * — показывал бы сохранённый заголовок, то есть имя категории, которое могло устареть
    * после её переименования. Смысл В7 в том, что подпись ПРОИЗВОДНАЯ, а не копия.
    *
-   * Вызывателей у этого компонента ТРИ (греп `<EntityRow`): `browser/EntityList`,
-   * `settings/MemoryScreen`, `agenda/AgendaScreen`. Правило одинаково во всех трёх; в
-   * Повестку запись памяти просто не попадает — она отбирает по аспектам расписания и
-   * задачи, — но исключением это не является и в перечне стоять обязано.
+   * Вызывателей у этого компонента ЧЕТЫРЕ (греп `<EntityRow` по сборке, без `legacy-1v`):
+   * `browser/EntityList`, `settings/MemoryScreen`, `page/blocks/ListForm` (блок `display=list`) и
+   * `page/blocks/DayGroups` (лента по дням 1в §5.2). Правило одинаково во всех: блок страницы
+   * может выбрать и записи памяти.
    *
    * ЧЕГО ЭТО НЕ ПОКРЫВАЕТ, названо вслух: `entity-detail/NativeRow` (экран записи)
    * показывает сохранённый заголовок как есть — там он РЕДАКТИРУЕТСЯ, и поле обязано
@@ -128,7 +133,7 @@ export function EntityRow({
       </span>
       {ruleTargetResolved && <span className="text-xs text-text-muted">{ruleTargetTitle}</span>}
       {showDate && row.date !== null && (
-        <span className="text-xs text-text-muted">{formatDay(row.date.value)}</span>
+        <span className="text-xs text-text-muted">{dateLabel ?? formatDay(row.date.value)}</span>
       )}
       {money !== null && (
         <span className={`text-xs font-medium tabular-nums ${AMOUNT_TONE_CLASS[money.tone]}`}>
