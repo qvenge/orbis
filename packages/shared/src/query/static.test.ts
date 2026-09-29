@@ -110,3 +110,29 @@ test('1в §3.8: группировка — проекция страницы, �
     SCOPE_NOT_STATIC,
   );
 });
+
+test('1в §3.8: ссылка на параметр страницы `$p` — отказ у самого сторожа (М-1 ревью A)', () => {
+  // До сторожа ссылку отвергает базовая схема, но сторож структурный — зовётся на дереве любого пути.
+  const cases: Array<Parameters<typeof assertStaticQuery>[0]> = [
+    { filter: { prop: 'orbis/due_date', op: 'eq', value: { param: 'p' } } },
+    { filter: { prop: { contract: 'orbis/when' }, op: 'gt', value: { param: 'p' } } },
+    { filter: { prop: 'orbis/due_date', op: 'range', value: { from: { param: 'p' } } } },
+    { filter: { prop: 'orbis/due_date', op: 'range', value: { to: { param: 'p' } } } },
+    {
+      filter: {
+        and: [
+          { aspect: 'orbis/task' },
+          { not: { prop: { contract: 'orbis/when' }, op: 'eq', value: { param: 'p' } } },
+        ],
+      },
+    },
+  ];
+  for (const ast of cases) {
+    expect(reject(ast)).toBe(SCOPE_NOT_STATIC);
+    try {
+      assertStaticQuery(ast);
+    } catch (e) {
+      expect((e as ScopeNotStaticError).reason).toContain("'$p'");
+    }
+  }
+});

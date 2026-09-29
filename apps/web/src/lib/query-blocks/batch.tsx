@@ -51,7 +51,9 @@ type BlockAsk = Omit<EntityBlockTextItem, 'key'> | Omit<EntityBlockBadgeItem, 'k
  * Прочие виды — как пришли: верх пачки им не нужен.
  */
 export type BlockData =
-  | Exclude<BlockResult, { kind: 'groups' }>
+  | Exclude<BlockResult, { kind: 'groups' | 'rows' }>
+  // Строки — с поясом ответа: форма `list` печатает дату строки в нём, а не в поясе браузера (М-2 ревью C).
+  | (Extract<BlockResult, { kind: 'rows' }> & { timeZone: string })
   | (Extract<BlockResult, { kind: 'groups' }> & { today: string; timeZone: string });
 type Pending = { ask: BlockAsk; resolve: (r: BlockData) => void; reject: (e: unknown) => void };
 
@@ -155,7 +157,13 @@ export function QueryBatchProvider({ children }: { children: ReactNode }) {
               }),
             );
           } else if (r.ok) {
-            p.resolve(r.kind === 'groups' ? { ...r, today, timeZone } : r);
+            p.resolve(
+              r.kind === 'groups'
+                ? { ...r, today, timeZone }
+                : r.kind === 'rows'
+                  ? { ...r, timeZone }
+                  : r,
+            );
           } else {
             p.reject(new BlockDataError(r.error));
           }

@@ -685,7 +685,22 @@ describe('адрес слота с моментом: литералы одног
     ).toContain('sv.at BETWEEN $');
   });
 
-  test('отказ у адреса называет «поле» (перенос ревью 1, M-1)', () => {
+  test('дерево мимо разбора: контракт без значения — NO_CONTRACT_VALUE со слотами, как у разбора (Minor-1 ревью Fable)', () => {
+    const r = refusal(() =>
+      sqlOf({
+        prop: { contract: 'orbis/completable' },
+        op: 'eq',
+        value: 'open',
+      } as QueryFilterNode),
+    );
+    expect(r.reason).toBe('NO_CONTRACT_VALUE');
+    // Тот же текст, что у разбора (`parse-ast.test.ts`): подсказка — слоты, а не имя контракта.
+    expect(r.message).toContain(
+      'у контракта нет значения — адресуйте слот: orbis/completable.status',
+    );
+  });
+
+  test('отказ у адреса называет «адрес слота» (М-2 финального ревью A; прежде — перенос ревью 1, M-1)', () => {
     const r = refusal(() =>
       sqlOf({
         prop: { contract: 'orbis/money-movement', slot: 'amount' },
@@ -694,7 +709,10 @@ describe('адрес слота с моментом: литералы одног
       } as QueryFilterNode),
     );
     expect(r.reason).toBe('TYPE');
-    expect(r.message).toContain("поле 'orbis/money-movement.amount'");
+    expect(r.message).toContain(
+      "только к адресам с датой (date/timestamp); адрес слота 'orbis/money-movement.amount'",
+    );
+    expect(r.message).not.toMatch(/(^|[^а-яё])пол(е|я|ю|ям|ей)([^а-яё]|$)/i);
     expect(r.message).not.toContain('свойств');
   });
 });
@@ -809,5 +827,51 @@ describe('экспорты для движков подписок (§Б5-6)', ()
       'updated_at',
       'archived',
     ]);
+  });
+});
+
+/**
+ * ФОРМА SQL ЗНАЧЕНИЯ «КОГДА» (M-2 финального ревью B2b). Время языка контрактов держит только локальный
+ * `perf/graph.test.ts` (в CI его нет), паритет форм (`when.dataset.test.ts`) сверяет выдачу, а не путь;
+ * эталона `query-sql.json` с `orbis/when` нет — его SQL (≈2 КБ) по правилу файла выводится руками, и
+ * снять его с компилятора нельзя. Поэтому здесь пиннится ФОРМА — ровно два решения перфа, которые иначе
+ * CI не заметил бы: даты «когда» считаются одним `LEFT JOIN LATERAL` на запись (R-21), а не
+ * коррелированными подзапросами у каждого читателя, и положительная форма идёт с предфильтром по сырым
+ * свойствам (`valuePrefilter`) ДО `EXISTS` по датам.
+ */
+describe('форма SQL значения «когда»: LATERAL и предфильтр (M-2 финального ревью B2b)', () => {
+  const text = dialect
+    .sqlToQuery(
+      compileQueryAst(
+        {
+          filter: { prop: { contract: 'orbis/when' }, op: 'eq', value: { token: 'next_7d' } },
+          sortBy: [{ field: { contract: 'orbis/when' }, dir: 'asc' }],
+        },
+        CTX,
+      ),
+    )
+    .sql.replaceAll(/\s+/g, ' ');
+  const where = text.slice(text.indexOf(' WHERE true '), text.indexOf(' ORDER BY '));
+  const orderBy = text.slice(text.indexOf(' ORDER BY '));
+
+  test('даты — один LEFT JOIN LATERAL в FROM; условие и ключ читают его массив, VALUES в них нет', () => {
+    const lateral =
+      'LEFT JOIN LATERAL (SELECT array_agg(ROW(d.slot, d.at, d.day, d.aspect)) AS wd FROM';
+    expect(text.split(lateral)).toHaveLength(2);
+    expect(text.indexOf(lateral)).toBeLessThan(text.indexOf(' WHERE true '));
+    expect(where).not.toContain('(VALUES');
+    expect(orderBy).not.toContain('(VALUES');
+    expect(where).toContain('FROM unnest(__wd0.wd)');
+    expect(orderBy).toContain('FROM unnest(__wd0.wd)');
+  });
+
+  test('положительная форма — предфильтр по сырым свойствам слотов с ролью, затем EXISTS по датам', () => {
+    const exists = where.indexOf('EXISTS (SELECT 1 FROM (SELECT u.slot');
+    expect(exists).toBeGreaterThan(0);
+    const pre = where.slice(0, exists);
+    for (const property of ['orbis/completed_at', 'orbis/due_date', 'orbis/start_at']) {
+      expect([property, pre.includes(`props->>'${property}'`)]).toEqual([property, true]);
+    }
+    expect(pre).toMatch(/BETWEEN \$\d+::date AND \$\d+::date\) AND $/);
   });
 });

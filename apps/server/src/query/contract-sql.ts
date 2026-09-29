@@ -97,9 +97,14 @@ function kindOrFail(addr: QueryContractAddress, cctx: CompileCtx): AddressKind {
   const kind = addressKindOf(addr, cctx.reg);
   if (kind !== null) return kind;
   if (addr.slot === undefined) {
-    return fail('NO_CONTRACT_VALUE', `у контракта нет значения — адресуйте слот: '${name}'`, {
-      contract: addr.contract,
-    });
+    // Подсказка — слоты контракта, как у разбора текста (`parse-ast.ts`, PRD 01 §6.5; Minor-1 ревью Fable):
+    // «адресуйте слот» без списка слотов отправило бы агента гадать их имена.
+    const slots = c.kind === 'slots' ? c.slots.map((s) => `${c.key}.${s.name}`) : [];
+    return fail(
+      'NO_CONTRACT_VALUE',
+      `у контракта нет значения — адресуйте слот: ${slots.join(', ') || 'слотов нет'}`,
+      { contract: addr.contract },
+    );
   }
   const slot = c.kind === 'slots' ? c.slots.find((s) => s.name === addr.slot) : undefined;
   if (slot === undefined) {
@@ -293,7 +298,7 @@ function valuePrefilter(
     const day = propertyValueExprs(propertyId, cctx).day();
     const expr: CondExpr = {
       name,
-      of: `поля '${name}'`,
+      of: `адреса '${name}'`,
       day: () => day,
       comparable: () => day,
       param: (v) => dayLiteral(name, v),
@@ -346,7 +351,7 @@ function datedExpr(
   };
   return {
     name,
-    of: `поля '${name}'`,
+    of: `адреса '${name}'`,
     day: () => day,
     // Литерал дня сравнивается с днём, момент — с моментом (у слота с `timestamp`).
     comparable: (samples) => {
@@ -355,7 +360,7 @@ function datedExpr(
       if (days !== 0 && days !== samples.length) {
         return fail(
           'TYPE',
-          `условие у поля '${name}': литералы одного вида — все дни или все моменты ISO 8601; получено ${samples.map((v) => `'${String(v)}'`).join(', ')}`,
+          `условие у адреса '${name}': литералы одного вида — все дни или все моменты ISO 8601; получено ${samples.map((v) => `'${String(v)}'`).join(', ')}`,
           { property: name },
         );
       }
@@ -378,11 +383,11 @@ function scalarExpr(name: string, kind: Extract<AddressKind, { kind: 'slot' }>):
   const numeric = first === 'number' || first === 'decimal';
   return {
     name,
-    of: `поля '${name}'`,
+    of: `адреса '${name}'`,
     day: () =>
       fail(
         'TYPE',
-        `относительное время и сравнение по дате применимы только к полям с датой (date/timestamp); поле '${name}' — ${kind.kinds.join('|')}`,
+        `относительное время и сравнение по дате применимы только к адресам с датой (date/timestamp); адрес слота '${name}' — ${kind.kinds.join('|')}`,
         { property: name },
       ),
     comparable: () => sql.raw('sv.v'),
@@ -581,7 +586,8 @@ export function groupKeySql(
   if (isContractAddress(field)) {
     const kind = kindOrFail(field, cctx);
     if (!isDated(kind)) {
-      return fail('TYPE', `group=day: поле '${addressName(field, cctx)}' — не дата`, {
+      const noun = field.slot === undefined ? 'значение контракта' : 'адрес слота';
+      return fail('TYPE', `group=day: ${noun} '${addressName(field, cctx)}' — не дата`, {
         property: addressName(field, cctx),
       });
     }

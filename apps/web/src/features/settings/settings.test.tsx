@@ -33,6 +33,14 @@ test('GeneralForm сабмитит частичный апдейт (только
   });
 });
 
+test('«Начало недели» подписано: на «эту неделю» в запросах пока не влияет (Minor-2 ревью Fable, В-1)', () => {
+  renderWithProviders(<GeneralForm settings={settings as never} />, () => ({}));
+  const select = screen.getByLabelText('Начало недели');
+  expect(select).toHaveAccessibleDescription(
+    'На «эту неделю» в запросах пока не влияет — неделя считается с понедельника.',
+  );
+});
+
 test('сегмент темы: клик «Тёмная» → data-theme + localStorage, в patch тема НЕ попадает', async () => {
   localStorage.removeItem('orbis:theme');
   document.documentElement.removeAttribute('data-theme');

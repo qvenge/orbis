@@ -10,7 +10,12 @@
 // истинно при любом теле), экземпляры `today+1` и `today+8` в горизонте материализации (14 дней),
 // `today+15` — за ним. Сверх таблицы — `LONG`: «начать послезавтра, срок через 20 дней» — даты и в
 // горизонте, и за ним; ровно она различает «Дальше» с отрицанием `=$period` и без него (без отрицания
-// она стояла бы и в ленте, и в «Дальше»). Часы пачки — один момент `NOW` на весь сьют (вход `now` у `runBlocks`), «сегодня»
+// она стояла бы и в ленте, и в «Дальше»). Ещё два шаблона повтора держат фильтр шаблонов в двух других
+// блоках (I-1 финального ревью): `TPL_PAST` — шаблон повторяющейся задачи, старт и срок `today−10`, статус
+// «запланирована»: открытый, все даты позади — без `!class=orbis/recurrence:templates` он стоял бы в
+// «Просрочено» и давал +1 бейджу; `TPL_FAR` — ежемесячный шаблон расписания со стартом `today+30`, за
+// горизонтом материализации: без фильтра он стоял бы в «Дальше». Их экземпляры в окна сьюта не попадают
+// (ближайший — не раньше `today+18`, горизонт материализации — 14 дней, «назавтра» — `today+15`). Часы пачки — один момент `NOW` на весь сьют (вход `now` у `runBlocks`), «сегодня»
 // мира считается от него же: сьют, начатый у полуночи, не разъедется на двое суток.
 //
 // Тексты блоков — из тела записи «Повестка» (`parsePageText`), а не литералы: приёмка держит ровно
@@ -48,13 +53,15 @@ const NOW = new Date();
 const TODAY = new Intl.DateTimeFormat('en-CA', { timeZone: TZ }).format(NOW);
 const TOMORROW_NOW = new Date(NOW.getTime() + 24 * 60 * 60 * 1000);
 
-type Name = WhenName | 'I1' | 'I8' | 'TPL' | 'LONG';
+type Name = WhenName | 'I1' | 'I8' | 'TPL' | 'LONG' | 'TPL_PAST' | 'TPL_FAR';
 
 let graph: GraphId;
 let world: WhenWorld;
 let agendaId: string;
 let template: string;
 let long: string;
+let tplPast: string;
+let tplFar: string;
 /** Тексты трёх блоков тела Повестки по порядку: «Просрочено», лента, «Дальше». */
 let texts: [string, string, string];
 
@@ -111,6 +118,33 @@ beforeAll(async () => {
   });
   if (!l.ok) throw new Error(`запись LONG: ${l.error.code} — ${l.error.message}`);
   long = (l.results[0] as { id: string }).id;
+  const createOne = async (title: string, aspects: string[], props: Record<string, unknown>) => {
+    const r1 = await execute(db, {
+      identity: personal(graph),
+      actorKind: 'owner',
+      source: 'ui',
+      mechanism: 'user',
+      operations: [{ tool: 'entity_create', input: { title, tags: [], aspects, props } }],
+    });
+    if (!r1.ok) throw new Error(`${title}: ${r1.error.code} — ${r1.error.message}`);
+    return (r1.results[0] as { id: string }).id;
+  };
+  tplPast = await createOne(
+    'TPL_PAST ежемесячная задача, старт и срок позади',
+    ['orbis/schedule', 'orbis/task'],
+    {
+      'orbis/start_at': localIso(addDays(TODAY, -10), '09:00', TZ),
+      'orbis/due_date': addDays(TODAY, -10),
+      'orbis/task_status': 'planned',
+      'orbis/timezone': TZ,
+      'orbis/recurrence': { freq: 'monthly', interval: 1 },
+    },
+  );
+  tplFar = await createOne('TPL_FAR ежемесячная встреча за горизонтом', ['orbis/schedule'], {
+    'orbis/start_at': localIso(addDays(TODAY, 30), '09:00', TZ),
+    'orbis/timezone': TZ,
+    'orbis/recurrence': { freq: 'monthly', interval: 1 },
+  });
 
   agendaId = supplyRecordId(graph, 'agenda');
   const rows = await withIdentity(db, personal(graph), (tx) =>
@@ -131,22 +165,23 @@ const I = (offset: number) => recurringInstanceId(template, addDays(TODAY, offse
 function nameOf(id: string): Name {
   if (id === template) return 'TPL';
   if (id === long) return 'LONG';
+  if (id === tplPast) return 'TPL_PAST';
+  if (id === tplFar) return 'TPL_FAR';
   if (id === I(1)) return 'I1';
   if (id === I(8)) return 'I8';
   const name = world.nameOf.get(id);
   if (name === undefined) throw new Error(`в выдаче запись вне мира: ${id}`);
   return name;
 }
-const idOf = (name: Name): string =>
-  name === 'TPL'
-    ? template
-    : name === 'LONG'
-      ? long
-      : name === 'I1'
-        ? I(1)
-        : name === 'I8'
-          ? I(8)
-          : world.ids[name];
+const EXTRA_IDS: Partial<Record<Name, () => string>> = {
+  TPL: () => template,
+  LONG: () => long,
+  TPL_PAST: () => tplPast,
+  TPL_FAR: () => tplFar,
+  I1: () => I(1),
+  I8: () => I(8),
+};
+const idOf = (name: Name): string => EXTRA_IDS[name]?.() ?? world.ids[name as WhenName];
 /** Имена с РАВНЫМ ключом — в порядке их id (последний ключ сортировки, §3.5). */
 const byId = (...names: Name[]) => [...names].sort((a, b) => (idOf(a) < idOf(b) ? -1 : 1));
 
@@ -198,7 +233,7 @@ describe('Повестка на 7 дней (С1в-6, §6.1)', () => {
   test('лента по дням: встречи, сроки и сделанное сегодня; шаблона нет; закрытые — в closedIds', async () => {
     const { feed } = await agenda('next_7d');
     expect(days(feed.groups)).toEqual([
-      [TODAY, [...byId('E2', 'T11a'), 'T3']],
+      [TODAY, [...byId('E2', 'T11a'), 'T12', 'T3']],
       [addDays(TODAY, 1), ['T7', ...byId('T9', 'I1')]],
       [addDays(TODAY, 2), byId('E1', 'T10', 'LONG')],
       [addDays(TODAY, 3), ['T1']],
@@ -209,7 +244,9 @@ describe('Повестка на 7 дней (С1в-6, §6.1)', () => {
     ]);
     expect(feed.more).toBe(0);
     const closed = feed.closedIds.map(nameOf);
-    expect(closed).toEqual(expect.arrayContaining(['T3', 'T11a']));
+    // С1в-6: сделанное сегодня — в «Сегодня» зачёркнутым, в том числе бывшее просроченное (T3) и задача
+    // без срока (T12, M-4 финального ревью B2b).
+    expect(closed).toEqual(expect.arrayContaining(['T3', 'T11a', 'T12']));
     // Шаблон стоит в горизонте (старт завтра) — фильтр шаблонов в ленте несущий: без него шаблон стоял
     // бы в ленте рядом со своим экземпляром.
     expect(feedNames(feed)).not.toContain('TPL');
@@ -241,12 +278,39 @@ describe('Повестка на 7 дней (С1в-6, §6.1)', () => {
     for (const open of openNames) {
       expect([open, count(open)]).toEqual([open, 1]);
     }
-    // Без дат «когда» — ни в одном; сделанное вчера (T4) ушло; шаблон повтора — ни в одном.
-    for (const none of ['T5', 'T6', 'T11b', 'N1', 'T4', 'TPL', 'F1'] as const) {
+    // Без дат «когда» — ни в одном; сделанное вчера (T4) ушло; шаблоны повторов — ни в одном.
+    for (const none of [
+      'T5',
+      'T6',
+      'T11b',
+      'N1',
+      'T4',
+      'TPL',
+      'TPL_PAST',
+      'TPL_FAR',
+      'F1',
+    ] as const) {
       expect([none, count(none)]).toEqual([none, 0]);
     }
     expect(new Set(seen).size).toBe(seen.length);
   });
+});
+
+describe('шаблоны повторов — ни в одном блоке (§5.2, I-1 финального ревью)', () => {
+  // Каждый шаблон здесь прошёл бы в свой блок без `!class=orbis/recurrence:templates` именно этого блока:
+  // TPL_PAST — открытый, все даты позади (в «Просрочено»), TPL_FAR — дата за горизонтом и ни одной в нём
+  // (в «Дальше»). Оба горизонта: у «Дальше» на 14 дней свой край.
+  for (const period of ['next_7d', 'next_14d'] as const) {
+    test(`${period}: TPL_PAST не в «Просрочено», TPL_FAR не в «Дальше», ни один — не в ленте`, async () => {
+      const a = await agenda(period);
+      expect(rowNames(a.overdue)).toEqual(['T2']);
+      expect(rowNames(a.overdue)).not.toContain('TPL_PAST');
+      expect(rowNames(a.later)).not.toContain('TPL_FAR');
+      expect(rowNames(a.later)).not.toContain('TPL_PAST');
+      expect(feedNames(a.feed)).not.toContain('TPL_PAST');
+      expect(feedNames(a.feed)).not.toContain('TPL_FAR');
+    });
+  }
 });
 
 describe('Повестка на 14 дней и «завтра»', () => {
@@ -265,9 +329,10 @@ describe('Повестка на 14 дней и «завтра»', () => {
   // После тестов, где считаются экземпляры: пачка «назавтра» материализует горизонт от завтра — экземпляр
   // `today+15`, которого «Дальше» на 14 дней выше не ждёт. Ниже в сьюте — только бейдж: он считает
   // «Просрочено», экземпляр за горизонтом его не касается.
-  test('назавтра сделанное сегодня (T3) из ленты уходит', async () => {
+  test('назавтра сделанное сегодня (T3, T12) из ленты уходит', async () => {
     const { feed } = await agenda('next_7d', TOMORROW_NOW);
     expect(feedNames(feed)).not.toContain('T3');
+    expect(feedNames(feed)).not.toContain('T12');
     expect(feed.groups[0]?.day).toBe(addDays(TODAY, 1));
   });
 });

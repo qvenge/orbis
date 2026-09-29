@@ -31,6 +31,7 @@ export function GeneralForm({ settings }: { settings: Settings }) {
   const tzId = useId();
   const curId = useId();
   const wsdId = useId();
+  const wsdHintId = useId();
 
   function submit(e: FormEvent) {
     e.preventDefault();
@@ -68,6 +69,7 @@ export function GeneralForm({ settings }: { settings: Settings }) {
         <select
           id={wsdId}
           aria-label="Начало недели"
+          aria-describedby={wsdHintId}
           value={weekStartDay}
           onChange={(e) => setWeekStartDay(e.target.value as typeof weekStartDay)}
           className="rounded-control border border-line bg-surface px-3 py-2"
@@ -75,6 +77,11 @@ export function GeneralForm({ settings }: { settings: Settings }) {
           <option value="monday">Понедельник</option>
           <option value="sunday">Воскресенье</option>
         </select>
+        {/* Неделя токена «эта неделя» — константа «понедельник» (срез 1в, вопрос владельцу В-1,
+            `WEEK_START` в `query/context.ts`): настройка молча не действовала бы (Minor-2 ревью Fable). */}
+        <span id={wsdHintId} className="text-xs text-text-muted">
+          На «эту неделю» в запросах пока не влияет — неделя считается с понедельника.
+        </span>
       </label>
       {/* Тема — только клиентская настройка (localStorage), в серверный patch НЕ попадает. */}
       <fieldset className="flex flex-col gap-1 text-sm">

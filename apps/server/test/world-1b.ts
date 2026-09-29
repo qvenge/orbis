@@ -33,9 +33,10 @@ import { personal } from './helpers';
  * ГРАФ ФОРМЫ ПРОДА ПОСЛЕ СРЕЗА 1Б — вход прод-операции `migrate-1v` (задача 13 среза 1в).
  *
  * Зачем фикстура, а не нынешнее заведение графа: код 1в заводит граф с Повесткой и без Upcoming, а прод
- * заведён релизом 1б — с Upcoming в навигации хоста и прежним «Годом». Эталоны 1б — ЛИТЕРАЛАМИ ниже: код
- * их больше не несёт (Повестка на месте Upcoming, «Год» переписан), а фикстура обязана держать ровно то,
- * что лежит в проде, даже когда код уйдёт дальше.
+ * заведён релизом 1б — с Upcoming в навигации хоста и прежним «Годом». Эталоны 1б, которые код 1в
+ * изменил, — ЛИТЕРАЛАМИ ниже (Повестка на месте Upcoming, «Год» переписан); прочие берутся из кода, и то,
+ * что фикстура держит ровно прод, даже когда код уйдёт дальше, закреплено отпечатками релиза 1б
+ * (`ETALON_HASHES_1B`) — сдвиг кода покраснит их сверку, а не молча сдвинет фикстуру.
  */
 
 /**
@@ -94,6 +95,28 @@ export const ETALONS_1B: readonly SupplyEtalon[] = [
   pageEtalon('horizon-life'),
   pageEtalon('routines'),
 ];
+
+/**
+ * ОТПЕЧАТКИ ЭТАЛОНОВ РЕЛИЗА 1Б — литералами (M-3 финального ревью B2b). Семь эталонов выше берутся из
+ * ЖИВОГО кода (`pageEtalon`, `etalonOf`), а докблок файла обещает «ровно прод»: правка тела
+ * `DAILY_PLANNING_BODY`, `ROUTINES_LIST_BODY` или шаблона хоста в этой ветке сдвинула бы фикстуру вместе с
+ * кодом, и `migrate-1v.test.ts` проверял бы уже не прод-состояние. Числа сняты КОДОМ РЕЛИЗА 1Б, а не этим:
+ * `git archive ae3b710d packages/shared apps/server/src/supply/hash.ts`, затем `etalonHash` тех лет над его
+ * `SUPPLY_ETALONS` (sha256 кодовой формы: `printAppEtalon` / `printPageRecord`). Равенство `etalonHash(e)` у
+ * каждого `ETALONS_1B` этим числам — тест `migrate-1v.test.ts` «фикстура 1б — отпечатки релиза».
+ */
+export const ETALON_HASHES_1B: Readonly<Record<string, string>> = {
+  'host-template': '197e737993856a5c123160d536c23847bf2a038515caa181179ede9b19d500d4',
+  'host-shell': '913e61f34397a6b85db0ccb02157ea20775bacadf6efd5a99a0c6bfdd8ced800',
+  home: 'b5dde645338fae89aa6eadd88bee6d93048a3985fd00604f5fe3241d6dd3b5f3',
+  records: '83ff6cba6a2fdf5219ee6f90e1461f4d3bb957ced5727524c83d594a7b40081c',
+  'daily-planning': 'd17e7892b46a44622091e168a4d9ee7dd6857d2f5c98508f986fb6cdd097e3ef',
+  upcoming: 'b91c7aa928355985cdb995c4c78cb0e9396d9a38ef5e95a7857ce7be24d9a5a8',
+  'all-tasks': 'c553d69e740e9876a3143b5b214e9c46b9149d89dae0aadfabd4a36ca99de7a7',
+  'horizon-year': 'b7b8a41e22829d52150fffecd5f95bd63bd22c55288af51288918b7c4f6acde6',
+  'horizon-life': '0a574ad0c64cc24f60e91c68cf941d86551439d38a2b6898aa4e0ad7fb7d3845',
+  routines: '3fa734d26c7a48cc20fa5c0ea10956caf0b551e9b1b6229b61d727cf060f1af6',
+};
 
 /** Эталон 1б по ключу (с `upcoming`). */
 export function etalon1b(key: SupplyKeyValue): SupplyEtalon {

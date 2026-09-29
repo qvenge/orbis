@@ -53,7 +53,7 @@ import {
   drizzleBackfillIo,
 } from '../apps/server/src/db/backfill-body-doc';
 import { type CensusV3Row, censusV3, formatCensusV3 } from '../apps/server/src/db/census-v3';
-import { runMigrate1v } from '../apps/server/src/db/migrate-1v';
+import { migrate1vIo, runMigrate1v } from '../apps/server/src/db/migrate-1v';
 import {
   REGISTRY_DELTAS_QUERY,
   REGISTRY_DRIFT_QUERIES,
@@ -66,11 +66,7 @@ import {
   seedRegistries,
   seedRegistriesReport,
 } from '../apps/server/src/db/seed-registries';
-import {
-  identitiesForScheduler,
-  identityOfPerson,
-  parseAccountId,
-} from '../apps/server/src/identity';
+import { identityOfPerson, parseAccountId } from '../apps/server/src/identity';
 import { issuePatGrant, NotGraphOwnerError } from '../apps/server/src/oauth/grants';
 import { PAT_USAGE, parsePatArgs } from '../apps/server/src/oauth/pat-args';
 import {
@@ -599,24 +595,24 @@ async function resetWorldOp(args: string[]): Promise<number> {
  * `system` (Повестка, навигация хоста, «Год», Upcoming), `--undo` — отмена этой пачки (запись журнала скрыта
  * из ленты, и другого пути к Undo у владельца нет), `--rehearsal` — DSN локальной базы репетиции.
  *
- * Логика, гейт, сторож DSN репетиции и печать — в `db/migrate-1v.ts` под тестом на фикстуре прод-формы; здесь
- * обвязка, как у `reset-world`. Графы — пары «граф, владелец» планировщика (`identitiesForScheduler`);
+ * Логика, гейт, сторож DSN репетиции, печать и сборка IO (`migrate1vIo`) — в `db/migrate-1v.ts` под тестом на
+ * фикстуре прод-формы; здесь — Ключница, окружение и драйвер. Графы — пары «граф, владелец» планировщика (`identitiesForScheduler`);
  * перевод идёт под идентичностью владельца (`withIdentity` делает `SET LOCAL ROLE authenticated`).
  * `--rehearsal` подменяет ровно DSN: Ключница при нём не читается вовсе, а DSN из окружения пропускается
  * только с хостом `localhost`/`127.0.0.1` (сторож — `rehearsalDsnRefusal`).
  */
 async function migrate1vOp(args: string[]): Promise<number> {
-  return runMigrate1v(args, {
-    readDsn,
-    rehearsalDsn: () => process.env.ORBIS_REHEARSAL_DSN,
-    open: (dsn) => {
-      const sql = postgres(dsn, { max: 1 });
-      return { sql, db: drizzle(sql, { schema }), close: () => sql.end() };
-    },
-    identities: identitiesForScheduler,
-    log: (line) => console.log(line),
-    error: (line) => console.error(line),
-  });
+  // Сборка IO — `migrate1vIo` модуля операции (под тестом); здесь — только Ключница, окружение и драйвер.
+  return runMigrate1v(
+    args,
+    migrate1vIo({
+      readDsn,
+      env: process.env,
+      openSql: (dsn) => postgres(dsn, { max: 1 }),
+      log: (line) => console.log(line),
+      error: (line) => console.error(line),
+    }),
+  );
 }
 
 async function ping(): Promise<number> {

@@ -6,7 +6,7 @@ import {
 } from '@orbis/shared/doc/placement';
 import { absoluteDateIn, paramNamesIn, type QueryAst } from '@orbis/shared/query';
 import { type ReactNode, useMemo, useState } from 'react';
-import { BlockDataError, useBlockData } from '../../../lib/query-blocks/batch';
+import { type BlockData, BlockDataError, useBlockData } from '../../../lib/query-blocks/batch';
 import { placeOf, useBodyKind } from '../../../lib/query-blocks/body-kind';
 import { parseBlock } from '../../../lib/query-blocks/parse';
 import { useThisEntityId } from '../../../lib/query-blocks/this-entity';
@@ -111,8 +111,15 @@ function LoadedBlock({
   heading: string | undefined;
   onConfigure?: () => void;
 }) {
-  // «ещё N» поднимает `limit` ЭТОГО блока — новый ключ, просьба пачкой из одного.
-  const [limit, setLimit] = useState<number | undefined>(undefined);
+  // «ещё N» поднимает `limit` ЭТОГО блока — новый ключ, просьба пачкой из одного. Поднятый `limit`
+  // помнит, при каких значениях параметров его подняли (М-1 ревью C): другой горизонт — другой запрос, и
+  // раскрытое «ещё N» прежнего к нему не относится. Сброс — здесь, а не пересозданием блока по `key`:
+  // пересозданный блок потерял бы прежние строки на время запроса (`placeholderData` живёт в наблюдателе),
+  // и переключатель мигал бы «Загрузкой…».
+  const paramsKey = JSON.stringify(Object.entries(params).sort(([a], [b]) => (a < b ? -1 : 1)));
+  const [raised, setRaised] = useState<{ paramsKey: string; limit: number } | null>(null);
+  const limit = raised !== null && raised.paramsKey === paramsKey ? raised.limit : undefined;
+  const setLimit = (next: number) => setRaised({ paramsKey, limit: next });
   const data = useBlockData(text, { limit, params });
 
   // §6.5: ошибка блока — плашка с причиной; пустоты вместо ошибки не бывает.
@@ -197,7 +204,7 @@ function RowsBody({
   pending,
   onMore,
 }: {
-  result: Extract<BlockResult, { kind: 'rows' }>;
+  result: Extract<BlockData, { kind: 'rows' }>;
   ast: QueryAst;
   pending: boolean;
   onMore: (limit: number) => void;
@@ -208,7 +215,7 @@ function RowsBody({
   return (
     <>
       {display === 'list' ? (
-        <ListForm rows={result.rows} closed={closed} />
+        <ListForm rows={result.rows} closed={closed} timeZone={result.timeZone} />
       ) : display === 'table' ? (
         <TableForm rows={result.rows} columns={ast.columns} closed={closed} />
       ) : (
@@ -336,6 +343,8 @@ export function DataBlock({
   return (
     // key по тексту И записи `this`: другой запрос — другой блок, и раскрытое «ещё N» старого к нему
     // не относится; тот же шаблон на соседней записи (экран монтируется без key) — тоже другой блок.
+    // Значений параметров в key нет намеренно: смена горизонта блок не пересоздаёт (прежние строки
+    // видны до ответа), а «ещё N» сбрасывает сам `LoadedBlock` — поднятый `limit` помнит свои значения.
     <LoadedBlock
       key={`${text.trim()}:${thisId ?? ''}`}
       text={text}

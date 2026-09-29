@@ -243,10 +243,14 @@ async function prepareBadges(
 }
 
 /**
- * ПЕРИОД БЛОКА для пустых дней (§5.2) — интервал условия `=T` на ТОМ ЖЕ поле, что группировка, среди
- * детей верхнего `and` (параметры уже подставлены): токен — его края (`tokenEdges`, §3.4), литерал дня —
- * этот день, `range` — края обеих границ (токен `from` — его начало, `to` — конец). Края нет (`overdue`,
- * `after_7d`), граница-момент или условия нет — `null`: рисуются только непустые дни.
+ * ПЕРИОД БЛОКА для пустых дней (§5.2) — ПЕРЕСЕЧЕНИЕ интервалов всех условий `=T` на ТОМ ЖЕ поле, что
+ * группировка, среди детей верхнего `and` (параметры уже подставлены): токен — его края (`tokenEdges`,
+ * §3.4), литерал дня — этот день, `range` — края обеих границ (токен `from` — его начало, `to` — конец).
+ * Пересечение, а не первое условие (М-2 ревью B1): ключ дня — дата, удовлетворяющая ВСЕМ условиям на
+ * адресе (`addressSortKey`), и `=this_month, =today` с периодом месяца нарисовал бы 30 «свободных» дней,
+ * которых блок показать не может. Открытый край одного условия (`overdue` — без начала, `after_7d` — без
+ * конца) берёт край у другого; края нет ни у одного, граница-момент, пустое пересечение или условия нет —
+ * `null`: рисуются только непустые дни.
  */
 function groupPeriod(ast: QueryAst, field: QueryFieldRef, cctx: CompileCtx): Period | null {
   const key = fieldRefKey(field);
@@ -257,6 +261,8 @@ function groupPeriod(ast: QueryAst, field: QueryFieldRef, cctx: CompileCtx): Per
     }
     return null;
   };
+  let start: string | null = null;
+  let end: string | null = null;
   for (const n of topLevelConds(ast)) {
     if (!('prop' in n) || fieldRefKey(n.prop) !== key) continue;
     if (isContractAddress(n.prop) !== isContractAddress(field)) continue;
@@ -269,11 +275,11 @@ function groupPeriod(ast: QueryAst, field: QueryFieldRef, cctx: CompileCtx): Per
               end: dayOf((n.value as { to?: QueryBound }).to, 'end'),
             }
           : null;
-    if (range?.start && range.end && range.start <= range.end) {
-      return { start: range.start, end: range.end };
-    }
+    if (range === null) continue;
+    if (range.start !== null && (start === null || range.start > start)) start = range.start;
+    if (range.end !== null && (end === null || range.end < end)) end = range.end;
   }
-  return null;
+  return start !== null && end !== null && start <= end ? { start, end } : null;
 }
 
 /** Поле группы для раскладки: значение контракта, адрес слота или свойство. */

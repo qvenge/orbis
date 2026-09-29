@@ -559,17 +559,21 @@ interface FieldTarget {
 }
 
 /**
- * Имя поля в отказе — словарём спеки (§1 1в): свойство — «свойство», адрес слота и значение
- * контракта — «поле». Адрес свойством не называется: у него нет определения в реестре свойств, и
- * «свойство 'orbis/when'» отправило бы владельца искать то, чего нет.
+ * Имя адреса в отказе — словом словаря 1в (§1): «адрес слота» (`orbis/when.deadline`) и «значение
+ * контракта» (`orbis/when`); у свойства — его ключ без слова, как было. Одно слово на понятие (правило
+ * владельца 12.09, М-2 ревью A): соседние отказы про тот же адрес (`sortBy`, `columns`, диапазон,
+ * литерал) называют его «адресом», слова «поле» у адреса нет. Адрес свойством не называется: у него нет
+ * определения в реестре свойств, и «свойство 'orbis/when'» отправило бы владельца искать то, чего нет.
  */
 function fieldWord(field: FieldTarget): string {
-  return field.prop === null ? `поле '${field.name}'` : `'${field.name}'`;
+  if (field.prop !== null) return `'${field.name}'`;
+  const slot = typeof field.ref === 'object' && field.ref.slot !== undefined;
+  return slot ? `адрес слота '${field.name}'` : `значение контракта '${field.name}'`;
 }
 
-/** Множественное «к свойствам …» / «к полям …» — там, где отказ называет класс полей. */
+/** Множественное «к свойствам …» / «к адресам …» — там, где отказ называет класс. */
 function fieldsWord(field: FieldTarget): string {
-  return field.prop === null ? 'полям' : 'свойствам';
+  return field.prop === null ? 'адресам' : 'свойствам';
 }
 
 function propertyTarget(prop: PropertyDefinition): FieldTarget {
@@ -600,7 +604,8 @@ function addressScalar(name: string, kind: AddressKind, el: Part): QueryScalar {
     kinds.includes('date') && (DATE_LITERAL_RE.test(el.text) || !kinds.includes('timestamp'));
   const k = day ? 'date' : kinds.includes('timestamp') ? 'timestamp' : (kinds[0] as string);
   if (k === 'select') return unquote(el.text, el.offset);
-  return parseScalar({ key: name, type: { kind: k } } as PropertyDefinition, el, 'поле');
+  const noun = kind.kind === 'dates' ? 'значение контракта' : 'адрес слота';
+  return parseScalar({ key: name, type: { kind: k } } as PropertyDefinition, el, noun);
 }
 
 function addressTarget(ref: QueryContractAddress, name: string, kind: AddressKind): FieldTarget {
@@ -734,7 +739,7 @@ export function acceptsDateTokenKind(kind: PropertyType['kind']): boolean {
 function parseScalar(
   prop: PropertyDefinition,
   el: Part,
-  noun: 'свойство' | 'поле' = 'свойство',
+  noun: 'свойство' | 'адрес слота' | 'значение контракта' = 'свойство',
 ): QueryScalar {
   const text = unquote(el.text, el.offset);
   const type = prop.type;
@@ -773,7 +778,7 @@ function parseScalar(
     case 'json':
       return fail(
         'TYPE',
-        `по ${noun === 'поле' ? 'полю' : 'свойству'} '${prop.key}' фильтровать нечем: значение — вложенный объект (kind json)`,
+        `по ${noun === 'свойство' ? 'свойству' : 'адресу'} '${prop.key}' фильтровать нечем: значение — вложенный объект (kind json)`,
         el.offset,
       );
     default:
@@ -849,7 +854,7 @@ function assertSameLiteralForm(field: FieldTarget, from: Bound, to: Bound, offse
   if (DATE_LITERAL_RE.test(from) === DATE_LITERAL_RE.test(to)) return;
   fail(
     'TYPE',
-    `диапазон у поля '${field.name}': края одного вида — оба дня или оба момента ISO 8601; получено '${from}' и '${to}'`,
+    `диапазон у адреса '${field.name}': края одного вида — оба дня или оба момента ISO 8601; получено '${from}' и '${to}'`,
     offset,
   );
 }
@@ -1110,10 +1115,14 @@ function parseGroup(t: Token, ctx: Ctx): QueryGroup {
   const value = requireOp(t, '=');
   const colon = value.indexOf(':');
   if (colon === -1 || value.slice(0, colon) !== 'day') {
-    fail('SYNTAX', `group: ожидается day:<поле с датой> (в 1в — только day)`, t.valueOffset);
+    fail(
+      'SYNTAX',
+      `group: ожидается day:<свойство или адрес с датой> (в 1в — только day)`,
+      t.valueOffset,
+    );
   }
   const name = trimPart({ text: value.slice(colon + 1), offset: t.valueOffset + colon + 1 });
-  if (name.text === '') fail('SYNTAX', `group=day: пустое имя поля`, name.offset);
+  if (name.text === '') fail('SYNTAX', `group=day: пустое имя свойства или адреса`, name.offset);
   const field = resolveField(name.text, name.offset, ctx);
   if (field.list || !field.tokens) {
     fail('TYPE', `group=day: ${fieldWord(field)} — не дата (${field.kindText})`, name.offset);

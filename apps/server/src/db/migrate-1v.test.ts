@@ -30,7 +30,13 @@ import { supplyStatusOf } from '@orbis/shared/supply/print';
 import { and, eq, sql } from 'drizzle-orm';
 import type { Sql, TransactionSql } from 'postgres';
 import { adminDb, appDb, freshGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
-import { NAV_1B_KEYS, OWNER_LINE, seedWorld1b } from '../../test/world-1b';
+import {
+  ETALON_HASHES_1B,
+  ETALONS_1B,
+  NAV_1B_KEYS,
+  OWNER_LINE,
+  seedWorld1b,
+} from '../../test/world-1b';
 import { excludeInfraSystemRows } from '../chat/messages';
 import { ExecError } from '../errors';
 import { execute } from '../executor/executor';
@@ -54,6 +60,7 @@ import {
   MIGRATE_1V_LABEL,
   type Migrate1vIo,
   migrate1vGate,
+  migrate1vIo,
   rehearsalDsnRefusal,
   reportMigrate1v,
   runMigrate1v,
@@ -312,8 +319,9 @@ async function execErrorOf(p: Promise<unknown>): Promise<ExecError> {
 }
 
 /**
- * IO операции для теста — как в `ops.ts`: пул и drizzle на ОДНОМ админском соединении (перевод идёт под
- * идентичностью владельца через `withIdentity`, удаление — админом); графы — заданные, а не все графы базы.
+ * IO операции для теста — по образцу боевого `migrate1vIo` (его зовёт `ops.ts`; сам он — под тестом «боевой
+ * IO» ниже): пул и drizzle на ОДНОМ админском соединении (перевод идёт под идентичностью владельца через
+ * `withIdentity`, удаление — админом); графы — заданные, а не все графы базы.
  */
 function testIo(
   whos: Identity[],
@@ -526,6 +534,18 @@ describe('(б) перепись: формы с токеном-границей, 
       'orbis/x=this_month',
       'orbis/y!=$a1',
     ]);
+    // М-2 ревью B2a: под отрицанием значения (`=!a`, `!a&!b`) — тот же литерал; печать — как написано.
+    expect(
+      textQueryFindings('orbis/x=!this_month, orbis/y=!this_month&!last_month, orbis/z=!$period')
+        .literals,
+    ).toEqual([
+      'orbis/x=!this_month',
+      'orbis/y=!this_month',
+      'orbis/y=!last_month',
+      'orbis/z=!$period',
+    ]);
+    expect(textQueryFindings('orbis/x=!"this_month"').literals).toEqual([]);
+    expect(textQueryFindings('orbis/when=!$period', new Set(['period'])).literals).toEqual([]);
     // Слова грамматики значения-токена не несут; закавыченный `$` — литерал, законный всегда.
     expect(textQueryFindings('title=this_month, orbis/x="$abc"').literals).toEqual([]);
     expect(textQueryFindings('orbis/when=$period', new Set(['period'])).literals).toEqual([]);
@@ -973,6 +993,11 @@ describe('(л) --rehearsal — только локальная база', () => 
   test('разбор хоста: пароль с @, host= в параметрах, несколько хостов, похожий домен', () => {
     expect(rehearsalDsnRefusal('postgres://u@localhost/db')).toBeNull();
     expect(rehearsalDsnRefusal('postgresql://u:p@127.0.0.1:5432/db')).toBeNull();
+    // Пароль с `@` — хост после ПОСЛЕДНЕГО `@` authority; `@` в параметрах после локального хоста не мешает.
+    expect(
+      rehearsalDsnRefusal('postgres://postgres:p@ss@127.0.0.1:54322/orbis_rehearsal'),
+    ).toBeNull();
+    expect(rehearsalDsnRefusal('postgres://u@localhost/db?application_name=a@b')).toBeNull();
     for (const dsn of [
       undefined,
       '',
@@ -982,6 +1007,11 @@ describe('(л) --rehearsal — только локальная база', () => 
       'postgres://u@localhost,db.example.com/db',
       'postgres://u@127.0.0.1.example.com/db',
       'postgres://localhost@db.example.com/db',
+      // М-1 ревью B2a: `@` в пути или параметрах — не хост; драйвер идёт на prod.example.com.
+      'postgres://u:p@prod.example.com/db?x=@localhost',
+      'postgres://u:p@prod.example.com:5432/db@localhost',
+      'postgres://u:p@prod.example.com?x=@127.0.0.1',
+      'postgres://u:p@prod.example.com#@localhost',
     ]) {
       expect([dsn, rehearsalDsnRefusal(dsn) === null]).toEqual([dsn, false]);
     }
@@ -1018,10 +1048,15 @@ describe('фикс-круг 1: дельты, роль, переменная ре
     }
   });
 
-  test('Fable Minor-1: --report и --drop-agenda-rows ролью без BYPASSRLS — код 1, ни одного счёта', async () => {
+  test('Fable Minor-1 (+ М-3 ревью B2a): --report, --drop-agenda-rows и --apply ролью без BYPASSRLS — код 1, ни одного счёта', async () => {
     const graph = await freshGraph();
     await seedWorld1b(db, graph, 'prod');
-    for (const mode of [['--report'], ['--drop-agenda-rows', '--i-understand']]) {
+    const before = await worldSnapshot(graph);
+    for (const mode of [
+      ['--report'],
+      ['--drop-agenda-rows', '--i-understand'],
+      ['--apply', '--i-understand'],
+    ]) {
       const t = testIo([personal(graph)], {
         // Роль приложения: FORCE RLS без идентичности — ноль строк.
         open: () => {
@@ -1029,10 +1064,11 @@ describe('фикс-круг 1: дельты, роль, переменная ре
           return { sql: c, db: d, close: () => c.end() };
         },
       });
-      expect(await runMigrate1v(mode, t.io)).toBe(1);
+      expect([mode[0], await runMigrate1v(mode, t.io)]).toEqual([mode[0], 1]);
       expect(t.err[0]).toContain('НЕ несёт BYPASSRLS');
       expect(t.out).toEqual([]);
     }
+    expect(await worldSnapshot(graph)).toEqual(before);
   });
 
   test('Fable Minor-2: ORBIS_REHEARSAL_DSN без --rehearsal — код 2 до Ключницы и базы', async () => {
@@ -1140,6 +1176,70 @@ describe('фикс-круг 1: дельты, роль, переменная ре
   });
 });
 
+// M-3 финального ревью B2b: эталоны 1б фикстуры берутся частью из живого кода — их отпечатки обязаны
+// совпасть с отпечатками КОДА РЕЛИЗА 1б (`ae3b710d`, литералы `ETALON_HASHES_1B`). Код, ушедший дальше,
+// краснеет здесь, а не сдвигает «прод-состояние» тестов перевода молча.
+test('фикстура 1б — отпечатки релиза ae3b710d у каждого эталона ETALONS_1B', () => {
+  expect(Object.fromEntries(ETALONS_1B.map((e) => [e.key as string, etalonHash(e)]))).toEqual(
+    ETALON_HASHES_1B,
+  );
+});
+
+// M-5 финального ревью B2b: боевой IO (`migrate1vIo`, его зовёт `scripts/ops.ts`) — тот самый, а не копия
+// теста: переменная репетиции из окружения, пул и drizzle на одном соединении, графы — планировщика.
+describe('боевой IO операции (migrate1vIo — его зовёт ops.ts)', () => {
+  test('окружение, одно соединение пула и drizzle, графы планировщика; readDsn/печать — насквозь', async () => {
+    const graph = await freshGraph();
+    await seedWorld1b(db, graph, 'prod');
+    const { client } = adminDb();
+    const opened: string[] = [];
+    const out: string[] = [];
+    const err: string[] = [];
+    let dsnRead = 0;
+    const deps = {
+      readDsn: () => {
+        dsnRead += 1;
+        return 'postgres://prod-из-ключницы';
+      },
+      openSql: (dsn: string) => {
+        opened.push(dsn);
+        return client;
+      },
+      log: (l: string) => out.push(l),
+      error: (l: string) => err.push(l),
+    };
+    const io = migrate1vIo({ ...deps, env: {} });
+    expect(io.rehearsalDsn()).toBeUndefined();
+    expect(
+      migrate1vIo({
+        ...deps,
+        env: { ORBIS_REHEARSAL_DSN: 'postgres://u@127.0.0.1/r' },
+      }).rehearsalDsn(),
+    ).toBe('postgres://u@127.0.0.1/r');
+    // Переменная репетиции без флага — отказ кодом 2 ДО Ключницы и базы, печать — через `error` зависимостей.
+    const stray = migrate1vIo({
+      ...deps,
+      env: { ORBIS_REHEARSAL_DSN: 'postgres://u@127.0.0.1/r' },
+    });
+    expect(await runMigrate1v(['--report'], stray)).toBe(2);
+    expect(err[0]).toContain('задана без --rehearsal');
+    expect([dsnRead, opened]).toEqual([0, []]);
+    expect(io.readDsn()).toBe('postgres://prod-из-ключницы');
+
+    const o = io.open('postgres://из-ключницы');
+    try {
+      expect(opened).toEqual(['postgres://из-ключницы']);
+      // Пул отчёта и drizzle перевода — одно соединение.
+      expect(o.sql).toBe(client);
+      expect((o.db as unknown as { $client: unknown }).$client).toBe(client);
+      // Графы — планировщика: граф со строкой настроек и его владелец.
+      expect(await io.identities(o.db)).toContainEqual(personal(graph));
+    } finally {
+      await o.close();
+    }
+  });
+});
+
 describe('фикс-круг 2', () => {
   test('ре-ревью rm-2: --undo судит о действии с названным id, а не о первом действии записи', async () => {
     const graph = await freshGraph();
@@ -1163,6 +1263,38 @@ describe('фикс-круг 2', () => {
     const t = testIo([personal(graph)]);
     expect(await runMigrate1v(['--undo', named, '--i-understand'], t.io)).toBe(1);
     expect(t.err[0]).toContain('не пачка migrate-1v');
+    expect(await worldSnapshot(graph)).toEqual(before);
+  });
+
+  // Мутации I-3 финального ревью: отказ держат ДВА условия — источник `system` И подпись В-4, — и каждое
+  // по отдельности. Прежние тесты брали чужое действие `ui` с подписью «Правка» — его отсекали оба разом.
+  test('I-3: --undo — системная пачка ДРУГОЙ операции и подпись В-4 не от system — обе отказ', async () => {
+    const graph = await freshGraph();
+    await seedWorld1b(db, graph, 'prod');
+    const otherSystem = newId();
+    const labelNotSystem = newId();
+    const journal = (actionId: string, source: string, title: string) =>
+      admin(({ db: a }) =>
+        a.execute(sql`INSERT INTO chat_messages (id, thread_id, role, content, metadata)
+          SELECT ${newId()}::uuid, t.id, 'system', 'пачка', ${JSON.stringify({
+            actions: [{ id: actionId, source }],
+            cards: [{ title }],
+          })}::jsonb
+            FROM chat_threads t WHERE t.graph_id = ${graph}::uuid LIMIT 1`),
+      );
+    // Системная пачка другой операции: источник тот же, подпись чужая.
+    await journal(otherSystem, 'system', 'Материализация повторов');
+    // Подпись В-4, но источник — не `system`.
+    await journal(labelNotSystem, 'ui', MIGRATE_1V_LABEL);
+    const before = await worldSnapshot(graph);
+    for (const actionId of [otherSystem, labelNotSystem]) {
+      const t = testIo([personal(graph)]);
+      expect([actionId, await runMigrate1v(['--undo', actionId, '--i-understand'], t.io)]).toEqual([
+        actionId,
+        1,
+      ]);
+      expect(t.err[0]).toContain('не пачка migrate-1v');
+    }
     expect(await worldSnapshot(graph)).toEqual(before);
   });
 });

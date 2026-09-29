@@ -20,7 +20,15 @@ import {
 import { parseQueryAst, type QueryAst, toParseRegistry } from '@orbis/shared/query';
 import { eq, sql } from 'drizzle-orm';
 import { PgDialect } from 'drizzle-orm/pg-core';
-import { adminDb, appDb, freshGraph, personal, requireEnv } from '../../test/helpers';
+import {
+  adminDb,
+  appDb,
+  type CustomAspectSpec,
+  freshGraph,
+  personal,
+  requireEnv,
+  seedCustomAspect,
+} from '../../test/helpers';
 import { seedWhenWorld, type WhenName, type WhenWorld } from '../../test/when-world';
 import { entities } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
@@ -105,21 +113,22 @@ const sorted = (xs: readonly string[]) => [...xs].sort();
 
 /** Таблица С1в-1: запрос → множество имён (порядок не сверяется). */
 const SET_CASES: ReadonlyArray<[string, WhenName[]]> = [
-  ['orbis/when=today', ['E2', 'T3', 'T11a']],
+  // T12 — задача без срока, закрытая сегодня (С1в-6): её дата — только время закрытия.
+  ['orbis/when=today', ['E2', 'T3', 'T11a', 'T12']],
   // У T8 дата впереди; сделанное вчера — истинно (§3.3: «просроченное» пишется с class=open).
   ['orbis/when=overdue', ['T2', 'T4']],
   ['orbis/when=overdue, class=orbis/completable:open', ['T2']],
-  ['orbis/when=next_7d', ['E1', 'E2', 'T1', 'T3', 'T7', 'T9', 'T10', 'T11a']],
+  ['orbis/when=next_7d', ['E1', 'E2', 'T1', 'T3', 'T7', 'T9', 'T10', 'T11a', 'T12']],
   ['orbis/when=2026-07-17', ['E1', 'T10']],
   ['orbis/when=2026-07-16..2026-07-18', ['E1', 'T1', 'T7', 'T9', 'T10']],
   ['orbis/when<2026-07-15', ['T2', 'T4', 'T8']],
-  ['orbis/when<=2026-07-15', ['E2', 'T2', 'T3', 'T4', 'T8', 'T11a']],
+  ['orbis/when<=2026-07-15', ['E2', 'T2', 'T3', 'T4', 'T8', 'T11a', 'T12']],
   ['orbis/when>2026-07-22', ['T8']],
   ['orbis/when>=2026-07-18', ['T1', 'T8', 'T9', 'T10']],
   // Два сравнения — не интервал: у T8 07-14 ≤ 22 и 08-14 ≥ 15.
   [
     'orbis/when>=2026-07-15, orbis/when<=2026-07-22',
-    ['E1', 'E2', 'T1', 'T3', 'T7', 'T8', 'T9', 'T10', 'T11a'],
+    ['E1', 'E2', 'T1', 'T3', 'T7', 'T8', 'T9', 'T10', 'T11a', 'T12'],
   ],
   // Запись без дат проходит отрицание.
   ['!orbis/when=next_7d', ['T2', 'T4', 'T5', 'T6', 'T8', 'T11b', 'N1', 'F1']],
@@ -129,7 +138,7 @@ const SET_CASES: ReadonlyArray<[string, WhenName[]]> = [
   // Адрес слота — сырые значения: правило значения не действует.
   ['orbis/when.deadline=next_7d', ['T1', 'T4', 'T5', 'T7', 'T9']],
   // T11a — привязка аспекта владельца, дата-факт.
-  ['orbis/when.done=today', ['T3', 'T11a']],
+  ['orbis/when.done=today', ['T3', 'T11a', 'T12']],
   ['orbis/when.moment=2026-07-19', ['T10']],
   // Две привязки одного слота — хоть одна; строка одна.
   ['orbis/when.moment=2026-07-17', ['E1', 'T10']],
@@ -169,7 +178,9 @@ describe('С1в-1: значение «когда» и адреса слотов 
       'orbis/when>=2026-07-15, orbis/when<=2026-07-22, sortBy=orbis/when:asc',
     );
     expect(got[0]).toBe('T8');
-    expect(sorted(got)).toEqual(sorted(['E1', 'E2', 'T1', 'T3', 'T7', 'T8', 'T9', 'T10', 'T11a']));
+    expect(sorted(got)).toEqual(
+      sorted(['E1', 'E2', 'T1', 'T3', 'T7', 'T8', 'T9', 'T10', 'T11a', 'T12']),
+    );
   });
 
   test('ключ — ранняя из дат, удовлетворяющих условию: T8 с ключом 08-14 в конце', async () => {
@@ -182,8 +193,16 @@ describe('С1в-1: значение «когда» и адреса слотов 
 
   test('next_7d по ключу: разные ключи идут по возрастанию', async () => {
     const got = await names('orbis/when=next_7d, sortBy=orbis/when:asc');
-    // Равные ключи (E2/T11a — 07-15 00:00, E1/T10 — 07-17 09:00) — группой, в любом порядке.
-    const groups: WhenName[][] = [['E2', 'T11a'], ['T3'], ['T7'], ['T9'], ['E1', 'T10'], ['T1']];
+    // Равные ключи (E2/T11a — 07-15 00:00, E1/T10 — 07-17 09:00) — группой, в любом порядке; T12 — 11:20.
+    const groups: WhenName[][] = [
+      ['E2', 'T11a'],
+      ['T12'],
+      ['T3'],
+      ['T7'],
+      ['T9'],
+      ['E1', 'T10'],
+      ['T1'],
+    ];
     let at = 0;
     for (const g of groups) {
       expect(sorted(got.slice(at, at + g.length))).toEqual(sorted(g));
@@ -343,6 +362,104 @@ describe('С1в-1: правило значения на записи', () => {
       tx.execute(compileQueryAst(parse('orbis/when.deadline=overdue', c), c)),
     );
     expect([...raw]).toHaveLength(1);
+  });
+
+  // «ФАКТ ПЕРВЫМ» (§3.2 п. 1, I-1 мутационного ревью): есть значение у факт-слота — плановых дат у записи
+  // нет, И ЭТО НЕ ТО ЖЕ, что «закрытое без времени закрытия — без дат». В мире таблицы у каждой записи с
+  // фактом статус закрытый, и два правила там неразличимы. Здесь — аспект владельца БЕЗ завершаемости
+  // (набора `closed` у записи нет вовсе), привязавший `moment` и `done`: момент завтра, факт сегодня →
+  // значение — только сегодня. Сверяются обе формы дат: сборщик (LATERAL) и `compileWhere` вне сборщика
+  // (коррелированный подзапрос) — правило живёт в общем источнике, и снятое, оно краснеет в обеих.
+  test('(б″) факт первым: `done` вне набора closed вытесняет план — только дата `done`', async () => {
+    const other = await freshGraph();
+    const LOG: CustomAspectSpec = {
+      key: 'user/when-log',
+      label: { ru: 'Журнал «когда»', en: 'When log' },
+      description: {
+        ru: 'Аспект владельца: момент и дата-факт, без завершаемости.',
+        en: 'Owner aspect: moment and done date, no completable.',
+      },
+      module: null,
+      properties: [
+        { key: 'wl_at', type: { kind: 'timestamp' } },
+        { key: 'wl_done', type: { kind: 'date' } },
+      ],
+      implements: [
+        {
+          contract: 'orbis/when',
+          bind: { moment: 'user/wl_at', done: 'user/wl_done' },
+          value_map: [],
+          fixed: {},
+        },
+      ],
+    };
+    await seedCustomAspect(other, LOG);
+    const make = async (title: string, props: Record<string, unknown>): Promise<string> => {
+      const r = await execute(db, {
+        identity: personal(other),
+        actorKind: 'owner',
+        source: 'ui',
+        operations: [
+          { tool: 'entity_create', input: { title, tags: [], aspects: [LOG.key], props } },
+        ],
+      });
+      if (!r.ok) throw new Error(`${title}: ${r.error.code} ${r.error.message}`);
+      return (r.results[0] as { id: string }).id;
+    };
+    // FACT: момент завтра, факт сегодня. PLAN: тот же момент, факта нет — контроль, что завтрашний
+    // момент без факта даёт дату (закрытости у записи нет ни у одной из двух).
+    const fact = await make('FACT момент завтра, сделано сегодня', {
+      'user/wl_at': '2026-07-16T10:00:00+07:00',
+      'user/wl_done': '2026-07-15',
+    });
+    const plan = await make('PLAN момент завтра, факта нет', {
+      'user/wl_at': '2026-07-16T10:00:00+07:00',
+    });
+    const reg = await withIdentity(db, personal(other), (tx) => effectiveRegistry(tx, other));
+    const base: CompileCtx = {
+      graphId: other,
+      today: TODAY,
+      timeZone: TIME_ZONE,
+      weekStart: 'monday',
+      ownerCurrency: 'RUB',
+      reg,
+    };
+    const label = (id: string) => (id === fact ? 'FACT' : id === plan ? 'PLAN' : id);
+    // Сборщик SELECT'а — LATERAL (`whenLateral` даёт он сам).
+    const viaLateral = async (text: string) =>
+      [
+        ...(await withIdentity(db, personal(other), (tx) =>
+          tx.execute(compileQueryAst(parse(text, base), base)),
+        )),
+      ]
+        .map((r) => label((r as { id: string }).id))
+        .sort();
+    // `compileWhere` без карты `whenLateral` — коррелированный подзапрос дат.
+    const viaCorrelated = async (text: string) =>
+      [
+        ...(await withIdentity(db, personal(other), (tx) =>
+          tx.execute(
+            sql`SELECT e.id FROM entities e WHERE ${compileWhere(parse(text, base), base)} ORDER BY e.id`,
+          ),
+        )),
+      ]
+        .map((r) => label((r as { id: string }).id))
+        .sort();
+    const CASES: ReadonlyArray<[string, string[]]> = [
+      ['orbis/when=2026-07-16', ['PLAN']],
+      ['orbis/when=2026-07-15', ['FACT']],
+      ['orbis/when>2026-07-15', ['PLAN']],
+      // Адрес слота — сырые значения: момент FACT на месте.
+      ['orbis/when.moment=2026-07-16', ['FACT', 'PLAN']],
+    ];
+    // Обе формы — одним сравнением на всю таблицу: порча правила видна сразу в каждой форме и фразе.
+    const got: Record<string, { lateral: string[]; correlated: string[] }> = {};
+    const want: Record<string, { lateral: string[]; correlated: string[] }> = {};
+    for (const [text, expected] of CASES) {
+      got[text] = { lateral: await viaLateral(text), correlated: await viaCorrelated(text) };
+      want[text] = { lateral: expected, correlated: expected };
+    }
+    expect(got).toEqual(want);
   });
 
   test('(в) неизвестный слот в entity.query — VALIDATION, reason UNKNOWN_SLOT', async () => {

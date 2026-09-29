@@ -117,6 +117,8 @@ function openPage(
   opts: {
     gate?: Promise<void>;
     stack?: { app: string; section: string; addresses: Address[] };
+    /** Ответы блоков сверх Q1/Q2 — по тексту блока. */
+    replies?: Parameters<typeof blocksReply>[0];
   } = {},
 ) {
   const s = opts.stack ?? {
@@ -126,7 +128,7 @@ function openPage(
   };
   navStack(s.app, s.section, s.addresses);
   const screenHandler = structureHandler({ name: 'page', entity, extra: {} });
-  const blocks = blocksReply({ [Q1]: byPeriod, [Q2]: byPeriod });
+  const blocks = blocksReply({ [Q1]: byPeriod, [Q2]: byPeriod, ...opts.replies });
   const handler: MockHandler = async (path, input) => {
     if (path === 'entity.blocks' && opts.gate) {
       const asked = (input as { blocks: Item[] }).blocks;
@@ -277,6 +279,43 @@ test('два параметра, три блока: смена horizon пере�
     items(calls)[0]?.map((b) => [b.text, b.params]),
     [[QH, { horizon: 'this_week' }]],
   ]);
+});
+
+// М-1 ревью C: раскрытое «ещё N» — просьба ПРИ ЭТИХ значениях параметров. Другой горизонт — другой
+// запрос: блок уходит без поднятого `limit`, а прежние строки видны до ответа (блок не пересоздан).
+test('«ещё N», раскрытое на 7 днях, не переживает смену горизонта: блок на 14 днях — без поднятого limit', async () => {
+  const QM = 'aspect=orbis/task, orbis/due_date=$period, limit=1';
+  const body = `${PARAM}\n\n{{query: ${QM}}}\n`;
+  const reply = (b: { params?: Record<string, string>; limit?: number }) => ({
+    ok: true as const,
+    kind: 'rows' as const,
+    rows: [row(3, `строка ${b.params?.period} limit ${b.limit ?? '—'}`)],
+    more: b.limit === undefined ? 4 : 0,
+    closedIds: [],
+  });
+  const { calls } = openPage(page(body), { replies: { [QM]: reply } });
+  await screen.findByText('строка next_7d limit —');
+  fireEvent.click(screen.getByRole('button', { name: 'ещё 4' }));
+  await screen.findByText('строка next_7d limit 5');
+  const asks = () =>
+    items(calls)
+      .flat()
+      .filter((b) => b.text === QM)
+      .map((b) => [b.params?.period, (b as { limit?: number }).limit]);
+  expect(asks()).toEqual([
+    ['next_7d', undefined],
+    ['next_7d', 5],
+  ]);
+
+  const group = await screen.findByRole('radiogroup', { name: 'Горизонт' });
+  fireEvent.click(within(group).getByRole('radio', { name: '14 дней' }));
+  await screen.findByText('строка next_14d limit —');
+  expect(asks()).toEqual([
+    ['next_7d', undefined],
+    ['next_7d', 5],
+    ['next_14d', undefined],
+  ]);
+  expect(screen.getByRole('button', { name: 'ещё 4' })).toBeTruthy();
 });
 
 describe('плашки (§5.1)', () => {

@@ -559,14 +559,26 @@ describe('сторожа границ кода и словаря (срез 1б �
   });
 
   test('(а) в охвате нет исключений каталогов: только тесты вне охвата (срез 1в §8.1)', () => {
-    // Исключённый каталог выпадает из всех трёх стражей молча; 1в снял последний (`legacy-1v`).
-    // Исключение тестов (`…*.test.*`) — не каталог и законно; любое другое исключение — в любой форме
-    // pathspec git (перенос гейта задачи 12, m-2) — провал.
-    const dirExcludes = [...WEB_PATHSPEC, ...ALL_PATHSPEC].filter((s) => {
+    // Исключённый каталог выпадает из всех стражей молча; 1в снял последний (`legacy-1v`). Исключение
+    // тестов (`…*.test.*`) — не каталог и законно; любое другое исключение — в любой форме pathspec git
+    // (перенос гейта задачи 12, m-2) — провал. Проверяются ВСЕ ЧЕТЫРЕ pathspec стражей, включая охваты (2)
+    // словаря — сервер и реестры shared (M-1 финального ревью B2b: прежде смотрели только web и общий).
+    // Законное исключение не-тестов одно и названо поимённо: SQL миграций — не код с текстами отказов.
+    const ALLOWED_DIR_EXCLUDES = new Set(['apps/server/src/db/migrations/']);
+    const dirExcludes = [
+      ...WEB_PATHSPEC,
+      ...ALL_PATHSPEC,
+      ...SERVER_PATHSPEC,
+      ...REGISTRY_PATHSPEC,
+    ].filter((s) => {
       const pattern = excludedPattern(s);
-      return pattern !== null && !TEST_FILES_PATTERN.test(pattern);
+      return (
+        pattern !== null && !TEST_FILES_PATTERN.test(pattern) && !ALLOWED_DIR_EXCLUDES.has(pattern)
+      );
     });
     expect(dirExcludes).toEqual([]);
+    // Разрешённое исключение действительно стоит там, где названо (иначе список разрешённого устарел).
+    expect(SERVER_PATHSPEC.map(excludedPattern)).toContain('apps/server/src/db/migrations/');
   });
 
   test('(а) распознаватель исключений pathspec: длинная и короткая формы git', () => {

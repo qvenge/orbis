@@ -937,21 +937,33 @@ test('1в (перенос гейта 1, Minor-1): края диапазона у
   expect(parseQueryAst('orbis/when.moment=today..2026-07-17T12:00:00+07:00', REG).ok).toBe(true);
 });
 
-test('1в (перенос ревью 1, M-1): отказ у адреса называет «поле», у свойства — как было', () => {
+test('1в (М-2 финального ревью A): отказ у адреса называет «адрес слота» / «значение контракта», у свойства — как было', () => {
   const order = err('orbis/completable.status>x');
   expect(order.code).toBe('TYPE');
-  expect(order.message).toContain("поле 'orbis/completable.status'");
+  expect(order.message).toContain(
+    "к адресам с линейным порядком; адрес слота 'orbis/completable.status'",
+  );
   expect(order.message).not.toContain('свойств');
   const range = err('orbis/completable.status=a..b');
-  expect(range.message).toContain("поле 'orbis/completable.status'");
+  expect(range.message).toContain("адрес слота 'orbis/completable.status'");
   expect(range.message).not.toContain('свойств');
   const token = err('orbis/money-movement.amount=today');
-  expect(token.message).toContain("поле 'orbis/money-movement.amount'");
+  expect(token.message).toContain(
+    "только к адресам типа date/timestamp; адрес слота 'orbis/money-movement.amount'",
+  );
   expect(token.message).not.toContain('свойств');
   const literal = err('orbis/when.deadline=2026-07-17T09:00');
-  expect(literal.message).toContain("поле 'orbis/when.deadline' ожидает дату");
+  expect(literal.message).toContain("адрес слота 'orbis/when.deadline' ожидает дату");
   const value = err('orbis/when=2026-07-17T09:00:00Z');
-  expect(value.message).toContain("поле 'orbis/when' ожидает дату");
+  expect(value.message).toContain("значение контракта 'orbis/when' ожидает дату");
+  const group = parseQueryAst('group=day:orbis/money-movement.amount', REG, { place: 'page' });
+  expect(group.ok ? null : group.error.message).toContain(
+    "group=day: адрес слота 'orbis/money-movement.amount' — не дата",
+  );
+  // Слова «поле» у адреса нет ни в одном из отказов выше.
+  for (const m of [order, range, token, literal, value].map((e) => e.message)) {
+    expect(m).not.toMatch(/(^|[^а-яё])пол(е|я|ю|ям|ей)([^а-яё]|$)/i);
+  }
   // Свойство — прежние слова.
   expect(err('orbis/due_date=банан').message).toContain("свойство 'orbis/due_date' ожидает");
   expect(err('orbis/priority>high').message).toContain('применим к свойствам с линейным порядком');

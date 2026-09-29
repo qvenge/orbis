@@ -53,12 +53,13 @@ import {
 import { etalonOf, type SupplyEtalon } from '@orbis/shared/supply';
 import { supplyStatusOf } from '@orbis/shared/supply/print';
 import { and, eq, sql } from 'drizzle-orm';
+import { drizzle } from 'drizzle-orm/postgres-js';
 import type { ISql, Sql } from 'postgres';
 import { ExecError, type ExecErrorCode } from '../errors';
 import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
 import { undoAction } from '../executor/undo';
-import { type Identity, parseGraphId } from '../identity';
+import { type Identity, identitiesForScheduler, parseGraphId } from '../identity';
 import { effectiveRegistry } from '../registry/cache';
 import { bumpOwnerRegistryVersion } from '../registry/version';
 import type { ExecOperation } from '../routines/propose';
@@ -71,6 +72,7 @@ import {
 } from '../supply/records';
 import { describeRoleAccess } from './backfill-body-doc';
 import type { Db } from './client';
+import * as schema from './schema';
 import { entities } from './schema';
 import { withIdentity } from './with-identity';
 
@@ -275,15 +277,19 @@ export function textQueryFindings(
       continue;
     }
     for (const el of splitOutside(value, valueMask, (c) => c === '|' || c === '&')) {
-      const v = el.trim();
+      // Отрицание значения (`=!a`, `!a&!b`) разбор снимает у каждого элемента и читает остаток той же
+      // границей (`parse-ast.ts`, М-2 ревью B2a): `=!this_month` у text/select — тот же отказ `TYPE`, `=!$period`
+      // вне страницы — тот же `PAGE_ONLY`. Печатается элемент как написан — с `!`.
+      const shown = el.trim();
+      const v = shown.startsWith('!') ? shown.slice(1).trim() : shown;
       if (v.startsWith('"')) continue;
-      if (TOKENS_1V.has(v)) literals.push(`${key}${op}${v}`);
+      if (TOKENS_1V.has(v)) literals.push(`${key}${op}${shown}`);
       else if (
         v.startsWith('$') &&
         PARAM_NAME_RE.test(v.slice(1)) &&
         !declaredParams.has(v.slice(1))
       ) {
-        literals.push(`${key}${op}${v}`);
+        literals.push(`${key}${op}${shown}`);
       }
     }
   }
@@ -1027,9 +1033,11 @@ export function migrate1vGate(args: readonly string[]): Migrate1vGate {
 const REHEARSAL_HOSTS: ReadonlySet<string> = new Set(['localhost', '127.0.0.1']);
 
 /**
- * Отказ DSN репетиции или `null`. Хост — после ПОСЛЕДНЕГО `@` (пароль может содержать `@`), до порта или
- * пути; хост в параметрах (`?host=`) и несколько хостов через запятую — отказ: их разбирает драйвер, и
- * сторож, прочитавший «localhost» в одном месте, пустил бы на прод через другое.
+ * Отказ DSN репетиции или `null`. Хост разбирается ТАК ЖЕ, как его берёт драйвер (postgres.js: `new URL`,
+ * М-1 ревью B2a): authority — до ПЕРВОГО `/`, `?` или `#`; хост — после ПОСЛЕДНЕГО `@` внутри неё (пароль
+ * может содержать `@`), до порта. `@` в пути или параметрах (`…@prod/db?x=@localhost`) хостом не считается.
+ * Хост в параметрах (`?host=`) и несколько хостов через запятую — отказ: их разбирает драйвер, и сторож,
+ * прочитавший «localhost» в одном месте, пустил бы на прод через другое.
  */
 export function rehearsalDsnRefusal(dsn: string | undefined): string | null {
   const local = 'migrate-1v: репетиция — только локальная база (localhost или 127.0.0.1)';
@@ -1039,9 +1047,11 @@ export function rehearsalDsnRefusal(dsn: string | undefined): string | null {
   const m = /^postgres(?:ql)?:\/\/(.*)$/.exec(dsn.trim());
   if (m === null) return `${local}: DSN не postgres://…`;
   const rest = m[1] as string;
-  const authority = rest.slice(rest.lastIndexOf('@') + 1);
-  const host = /^([^:/?#]*)/.exec(authority)?.[1] ?? '';
-  const query = authority.includes('?') ? authority.slice(authority.indexOf('?')) : '';
+  const end = rest.search(/[/?#]/);
+  const authority = end === -1 ? rest : rest.slice(0, end);
+  const hostPort = authority.slice(authority.lastIndexOf('@') + 1);
+  const host = /^([^:]*)/.exec(hostPort)?.[1] ?? '';
+  const query = rest.includes('?') ? rest.slice(rest.indexOf('?')) : '';
   if (!REHEARSAL_HOSTS.has(host) || /[?&]host=/i.test(query))
     return `${local}; получен хост «${host}»`;
   return null;
@@ -1059,6 +1069,34 @@ export interface Migrate1vIo {
   identities(db: Db): Promise<Identity[]>;
   log(line: string): void;
   error(line: string): void;
+}
+
+/**
+ * Боевой ввод-вывод операции — то, что зовёт `scripts/ops.ts` (M-5 финального ревью B2b: прежде склейка жила
+ * в `ops.ts`, и тест держал свою копию). Снаружи — только то, чего модуль сервера знать не должен: Ключница
+ * (`readDsn`), окружение, открытие соединения драйвером и печать. Сборка — здесь, под тестом
+ * (`migrate-1v.test.ts`, «боевой IO»): переменная репетиции — `ORBIS_REHEARSAL_DSN` окружения; пул и drizzle —
+ * на ОДНОМ соединении (отчёт читает сырым пулом, перевод пишет drizzle — одна база, одна роль); графы —
+ * пары «граф, владелец» планировщика (`identitiesForScheduler`: графы со строкой настроек).
+ */
+export function migrate1vIo(deps: {
+  readDsn(): string;
+  env: Readonly<Record<string, string | undefined>>;
+  openSql(dsn: string): Sql;
+  log(line: string): void;
+  error(line: string): void;
+}): Migrate1vIo {
+  return {
+    readDsn: deps.readDsn,
+    rehearsalDsn: () => deps.env.ORBIS_REHEARSAL_DSN,
+    open: (dsn) => {
+      const pool = deps.openSql(dsn);
+      return { sql: pool, db: drizzle(pool, { schema }), close: () => pool.end() };
+    },
+    identities: identitiesForScheduler,
+    log: deps.log,
+    error: deps.error,
+  };
 }
 
 /** Печать `--apply` до пачки: как отменить и чем отмена является (шапка файла). */
@@ -1103,10 +1141,11 @@ export async function runMigrate1v(args: readonly string[], io: Migrate1vIo): Pr
   const { sql: pool, db, close } = io.open(dsn);
   let failed = 0;
   try {
-    if (gate.mode === 'report' || gate.mode === 'drop') {
+    if (gate.mode === 'report' || gate.mode === 'drop' || gate.mode === 'apply') {
       // Сырой пул мимо идентичности: под FORCE RLS роль без BYPASSRLS видит ноль строк молча — отчёт из
       // нулей выглядел бы как «всё чисто», а удаление ничего бы не удалило (Fable Minor-1; образец —
-      // `censusV3Op`).
+      // `censusV3Op`). У `--apply` список графов (`identitiesForScheduler`) той же ролью пуст — «делать
+      // нечего» с кодом 0 оператор ранбука прочёл бы как «перевод прошёл» (М-3 ревью B2a).
       const who = await describeRoleAccess(db);
       if (!who.bypassRls) {
         io.error(

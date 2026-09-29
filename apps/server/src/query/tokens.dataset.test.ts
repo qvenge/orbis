@@ -249,18 +249,21 @@ describe('(в) два края на выдаче: срок задачи, вос�
 
 describe('(в) те же края над значением «когда» (мир С1в-1)', () => {
   const VALUE_CASES: ReadonlyArray<[string, WhenName[]]> = [
-    ['orbis/when=this_week', ['E1', 'E2', 'T1', 'T2', 'T3', 'T4', 'T7', 'T8', 'T9', 'T10', 'T11a']],
+    [
+      'orbis/when=this_week',
+      ['E1', 'E2', 'T1', 'T2', 'T3', 'T4', 'T7', 'T8', 'T9', 'T10', 'T11a', 'T12'],
+    ],
     // Дата позже воскресенья 07-19 — только срок T8 (08-14).
     ['orbis/when>this_week', ['T8']],
     // Раньше сегодня: вчерашние сроки T2, T8 и факт T4.
     ['orbis/when<next_7d', ['T2', 'T4', 'T8']],
     ['orbis/when<=overdue', ['T2', 'T4', 'T8']],
     // Не раньше сегодня.
-    ['orbis/when>overdue', ['E1', 'E2', 'T1', 'T3', 'T7', 'T8', 'T9', 'T10', 'T11a']],
-    ['orbis/when>=next_14d', ['E1', 'E2', 'T1', 'T3', 'T7', 'T8', 'T9', 'T10', 'T11a']],
+    ['orbis/when>overdue', ['E1', 'E2', 'T1', 'T3', 'T7', 'T8', 'T9', 'T10', 'T11a', 'T12']],
+    ['orbis/when>=next_14d', ['E1', 'E2', 'T1', 'T3', 'T7', 'T8', 'T9', 'T10', 'T11a', 'T12']],
     [
       'orbis/when=this_month',
-      ['E1', 'E2', 'T1', 'T2', 'T3', 'T4', 'T7', 'T8', 'T9', 'T10', 'T11a'],
+      ['E1', 'E2', 'T1', 'T2', 'T3', 'T4', 'T7', 'T8', 'T9', 'T10', 'T11a', 'T12'],
     ],
     ['orbis/when=last_month', []],
     // Адрес слота — сырые значения: `moment` у расписаний и аспекта владельца.
