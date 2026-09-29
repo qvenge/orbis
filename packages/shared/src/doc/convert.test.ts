@@ -1869,3 +1869,17 @@ describe('1в: язык контрактов в индексе адресов т
     expect(refs.every((r) => typeof r === 'string')).toBe(true);
   });
 });
+
+describe('1в §5.2: группировка в индексе адресов тела', () => {
+  test('group=day:<свойство> — свойство едет в индекс; group=day:<адрес> — нет', () => {
+    const md = [
+      '{{query:aspect=orbis/task, group=day:orbis/due_date, display=list}}',
+      '',
+      '{{query:orbis/when=today, group=day:orbis/when.deadline}}',
+    ].join('\n');
+    const doc = bindQueryBlocks(parseBody(md), REG);
+    const refs = queryRefsFromDoc(doc);
+    expect(refs).toContain('orbis/due_date');
+    expect(refs.some((r) => r.includes('orbis/when') || r === 'deadline')).toBe(false);
+  });
+});

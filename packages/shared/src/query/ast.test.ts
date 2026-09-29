@@ -459,3 +459,25 @@ test('1в §3.8, РП-5: `{param}` — базовая схема отверга�
     );
   }
 });
+
+test('1в §5.2, §3.8: group — ключ проекции только схемы страниц; JSON Schema тула его не знает', () => {
+  const validate = validator();
+  const tree = {
+    filter: { prop: { contract: 'orbis/when' }, op: 'eq', value: { token: 'next_7d' } },
+    group: { by: 'day', field: { contract: 'orbis/when' } },
+    display: 'list',
+  };
+  expect(pageQueryAstSchema.safeParse(tree).success).toBe(true);
+  const base = queryAstSchema.safeParse(tree);
+  expect(base.success).toBe(false);
+  if (!base.success) expect(base.error.issues.map((i) => i.message)).toContain(PAGE_ONLY_HINT);
+  expect(validate(tree)).toBe(false);
+  const { group: _group, ...withoutGroup } = tree;
+  expect(validate(withoutGroup)).toBe(true);
+  // Группа — у строк: `compact` и без display — законны, `table`/`tile` — нет.
+  expect(pageQueryAstSchema.safeParse({ ...tree, display: 'compact' }).success).toBe(true);
+  expect(pageQueryAstSchema.safeParse({ filter: tree.filter, group: tree.group }).success).toBe(
+    true,
+  );
+  expect(pageQueryAstSchema.safeParse({ ...tree, display: 'table' }).success).toBe(false);
+});

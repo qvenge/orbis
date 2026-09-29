@@ -5,13 +5,25 @@ import {
   BLOCK_ROWS_CAP,
   type BlockError,
   type BlockResult,
+  type DayGroupField,
+  type DayGroupInputRow,
   type EntityBlocksInput,
   type EntityBlocksResult,
+  layoutDayGroups,
+  type RowRegistry,
 } from '@orbis/shared';
 // Листовой сабпат, не баррель `@orbis/shared/doc`: нужна одна строка, а не редактор документа.
 import { type PageNode, paramDeclsOf, parsePageText } from '@orbis/shared/doc/page-grammar';
 import { EMPTY_QUERY_MESSAGE } from '@orbis/shared/doc/placement';
-import type { QueryAst } from '@orbis/shared/query';
+import {
+  fieldRefKey,
+  isContractAddress,
+  type QueryAst,
+  type QueryBound,
+  type QueryFieldRef,
+  type QueryFilterNode,
+  tokenEdges,
+} from '@orbis/shared/query';
 import { and, eq, inArray, type SQL } from 'drizzle-orm';
 import type { Db } from '../db/client';
 import { entities } from '../db/schema';
@@ -20,9 +32,9 @@ import { ExecError } from '../errors';
 import type { Identity } from '../identity';
 import {
   type CompileCtx,
+  compileBlockRowsAst,
   compileCountAst,
   compileLatestAst,
-  compileQueryAst,
   compileSumByCurrencyAst,
   sumsOf,
 } from '../query/compile-ast';
@@ -44,15 +56,22 @@ export const EXECUTION_FAILED_MESSAGE =
 
 type Window = { from: string; to: string };
 
-/**
- * `closedIds` строк (провод 1в, `BlockResult`): поле заведено с подъёмом версии клиента `0.5.0`, чтобы
- * провод менялся один раз; какие записи закрыты в Повестке, считает задача 6 — до неё список пуст.
- */
-const NO_CLOSED_IDS: string[] = [];
+type Period = { start: string; end: string };
 
 /** Скомпилированный блок: SQL готов ДО первого обращения к базе. */
 type Plan =
   | { kind: 'rows'; sql: SQL; countSql: SQL; limit: number }
+  | {
+      kind: 'groups';
+      sql: SQL;
+      countSql: SQL;
+      limit: number;
+      /** Раскладка по дням (§5.2): поле, период блока, пояс владельца и снимок для привязок «когда». */
+      field: DayGroupField;
+      period: Period | null;
+      timeZone: string;
+      reg: RowRegistry;
+    }
   | { kind: 'count'; sql: SQL }
   | { kind: 'sum'; sql: SQL; ownerCurrency: string }
   | { kind: 'latest'; sql: SQL };
@@ -223,11 +242,61 @@ async function prepareBadges(
   return out;
 }
 
+/** Дети верхнего `and` фильтра (или он сам) — положительные условия блока, как у ключа записи (§3.3). */
+function topLevelConds(ast: QueryAst): readonly QueryFilterNode[] {
+  if (ast.filter === null) return [];
+  return 'and' in ast.filter ? ast.filter.and : [ast.filter];
+}
+
+const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
+
 /**
- * Вид ответа — по проекции (§5.4): плитка → агрегат, иначе строки. Компилятор проекцию не
- * читает (задача 6), поэтому развилка стоит здесь.
+ * ПЕРИОД БЛОКА для пустых дней (§5.2) — интервал условия `=T` на ТОМ ЖЕ поле, что группировка, среди
+ * детей верхнего `and` (параметры уже подставлены): токен — его края (`tokenEdges`, §3.4), литерал дня —
+ * этот день, `range` — края обеих границ (токен `from` — его начало, `to` — конец). Края нет (`overdue`,
+ * `after_7d`), граница-момент или условия нет — `null`: рисуются только непустые дни.
+ */
+function groupPeriod(ast: QueryAst, field: QueryFieldRef, cctx: CompileCtx): Period | null {
+  const key = fieldRefKey(field);
+  const dayOf = (b: QueryBound | undefined, edge: 'start' | 'end'): string | null => {
+    if (typeof b === 'string') return DAY_RE.test(b) ? b : null;
+    if (typeof b === 'object' && b !== null && 'token' in b) {
+      return tokenEdges(b.token, cctx.today, cctx.weekStart)[edge];
+    }
+    return null;
+  };
+  for (const n of topLevelConds(ast)) {
+    if (!('prop' in n) || fieldRefKey(n.prop) !== key) continue;
+    if (isContractAddress(n.prop) !== isContractAddress(field)) continue;
+    const range =
+      n.op === 'eq'
+        ? { start: dayOf(n.value as QueryBound, 'start'), end: dayOf(n.value as QueryBound, 'end') }
+        : n.op === 'range'
+          ? {
+              start: dayOf((n.value as { from?: QueryBound }).from, 'start'),
+              end: dayOf((n.value as { to?: QueryBound }).to, 'end'),
+            }
+          : null;
+    if (range?.start && range.end && range.start <= range.end) {
+      return { start: range.start, end: range.end };
+    }
+  }
+  return null;
+}
+
+/** Поле группы для раскладки: значение контракта, адрес слота или свойство. */
+function dayGroupField(field: QueryFieldRef): DayGroupField {
+  if (!isContractAddress(field)) return { kind: 'property', propertyId: field };
+  return field.slot === undefined
+    ? { kind: 'value', contract: field.contract }
+    : { kind: 'slot', contract: field.contract, slot: field.slot };
+}
+
+/**
+ * Вид ответа — по проекции (§5.4): плитка → агрегат, `group=day:<поле>` → группы по дням (1в §5.2),
+ * иначе строки. Компилятор проекцию не читает, поэтому развилка стоит здесь.
  *
- * Строки: `limit` блока, иначе `limit` текста, иначе потолок; всё клампится до
+ * Строки и группы: `limit` блока, иначе `limit` текста, иначе потолок; всё клампится до
  * `BLOCK_ROWS_CAP` (схема канона `limit` сверху не ограничивает). Выборка — `limit + 1`: лишняя
  * строка и есть признак «ещё N», и счётчик идёт вторым запросом ТОЛЬКО у переполненного блока.
  */
@@ -247,12 +316,48 @@ function compileBlock(ast: QueryAst, cctx: CompileCtx, blockLimit: number | unde
     return { kind: 'latest', sql: compileLatestAst(ast, agg.field, cctx) };
   }
   const limit = Math.min(blockLimit ?? ast.limit ?? BLOCK_ROWS_CAP, BLOCK_ROWS_CAP);
+  const sql = compileBlockRowsAst({ ...ast, limit: limit + 1 }, cctx);
+  const countSql = compileCountAst(ast, cctx);
+  if (ast.group === undefined) return { kind: 'rows', sql, countSql, limit };
   return {
-    kind: 'rows',
-    sql: compileQueryAst({ ...ast, limit: limit + 1 }, cctx),
-    countSql: compileCountAst(ast, cctx),
+    kind: 'groups',
+    sql,
+    countSql,
     limit,
+    field: dayGroupField(ast.group.field),
+    period: groupPeriod(ast, ast.group.field, cctx),
+    timeZone: cctx.timeZone,
+    reg: cctx.reg,
   };
+}
+
+/**
+ * Строки блока и «ещё N»: выборка `limit + 1`, счётчик — только у переполненного блока. Не меньше
+ * одной: лишняя строка уже увидена, а счётчик — отдельный statement и под READ COMMITTED видит свой
+ * снимок; конкурентное удаление между ними не должно дать «ещё 0» при обрезанной выдаче.
+ */
+async function shownRows(
+  sp: Tx,
+  plan: { sql: SQL; countSql: SQL; limit: number },
+): Promise<{ rows: Record<string, unknown>[]; more: number }> {
+  const raw = [...(await sp.execute(plan.sql))] as Record<string, unknown>[];
+  if (raw.length <= plan.limit) return { rows: raw, more: 0 };
+  const counted = await sp.execute(plan.countSql);
+  return {
+    rows: raw.slice(0, plan.limit),
+    more: Math.max(1, Number(counted[0]?.count) - plan.limit),
+  };
+}
+
+/** `closedIds` (РП-12): показанные записи в наборе `closed` завершаемости — колонка `__closed`. */
+function closedIdsOf(rows: readonly Record<string, unknown>[]): string[] {
+  return rows.filter((r) => r.__closed === true).map((r) => String(r.id));
+}
+
+/** Момент колонки `timestamptz` ISO-строкой: драйвер отдаёт `Date` (или текст — у сырого SQL). */
+function isoOrNull(v: unknown): string | null {
+  if (v === null || v === undefined) return null;
+  return (v instanceof Date ? v : new Date(String(v))).toISOString();
 }
 
 /** Объединение окон 'YYYY-MM-DD' (строки такой формы сравниваются как даты). */
@@ -265,28 +370,31 @@ function unionWindow(a: Window | null, b: Window | null): Window | null {
 async function executePlan(sp: Tx, plan: Plan): Promise<BlockResult> {
   switch (plan.kind) {
     case 'rows': {
-      const raw = [...(await sp.execute(plan.sql))] as Record<string, unknown>[];
-      if (raw.length <= plan.limit) {
-        return {
-          ok: true,
-          kind: 'rows',
-          rows: raw.map(toWireEntityFromSql),
-          more: 0,
-          closedIds: NO_CLOSED_IDS,
-        };
-      }
-      const counted = await sp.execute(plan.countSql);
-      // Не меньше одной: лишняя строка уже увидена, а счётчик — отдельный statement и под
-      // READ COMMITTED видит свой снимок; конкурентное удаление между ними не должно дать
-      // «ещё 0» при обрезанной выдаче.
-      const more = Math.max(1, Number(counted[0]?.count) - plan.limit);
+      const { rows, more } = await shownRows(sp, plan);
       return {
         ok: true,
         kind: 'rows',
-        rows: raw.slice(0, plan.limit).map(toWireEntityFromSql),
+        rows: rows.map(toWireEntityFromSql),
         more,
-        closedIds: NO_CLOSED_IDS,
+        closedIds: closedIdsOf(rows),
       };
+    }
+    case 'groups': {
+      const { rows, more } = await shownRows(sp, plan);
+      const input: DayGroupInputRow[] = rows.map((r) => ({
+        entity: toWireEntityFromSql(r),
+        keyAt: isoOrNull(r.__key_at),
+        dates: (r.__when_dates as DayGroupInputRow['dates'] | null) ?? [],
+      }));
+      const { groups } = layoutDayGroups({
+        rows: input,
+        more,
+        timeZone: plan.timeZone,
+        period: plan.period,
+        reg: plan.reg,
+        field: plan.field,
+      });
+      return { ok: true, kind: 'groups', groups, more, closedIds: closedIdsOf(rows) };
     }
     case 'count': {
       const rows = await sp.execute(plan.sql);
@@ -317,7 +425,7 @@ async function executePlan(sp: Tx, plan: Plan): Promise<BlockResult> {
  * погубила бы каждый следующий блок пачки. `tx.transaction` на postgres-js — именно savepoint
  * на том же соединении; цена — два statement на блок.
  */
-async function executeAll(tx: Tx, prepared: Prepared[]): Promise<EntityBlocksResult> {
+async function executeAll(tx: Tx, prepared: Prepared[]): Promise<EntityBlocksResult['results']> {
   const entries: [string, BlockResult][] = [];
   for (const p of prepared) {
     if (p.kind === 'settled') {
@@ -345,7 +453,7 @@ async function executeAll(tx: Tx, prepared: Prepared[]): Promise<EntityBlocksRes
   }
   // fromEntries, а не присваивание в литерал: ключ клиента `__proto__` станет своим полем
   // ответа, а не прототипом объекта.
-  return { results: Object.fromEntries(entries) };
+  return Object.fromEntries(entries);
 }
 
 /**
@@ -362,17 +470,28 @@ async function executeAll(tx: Tx, prepared: Prepared[]): Promise<EntityBlocksRes
  * Материализация — МЕЖДУ транзакциями, как у `entity.query` (Э-4, `with-materialization.ts`):
  * исполнитель открывает собственные транзакции, и вложенность в живую держала бы второе
  * соединение пула. «Одна транзакция» спеки — одна транзакция ИСПОЛНЕНИЯ.
+ *
+ * `now` — часы пачки (по умолчанию настоящие): «сегодня» считается от них в поясе владельца. Вход —
+ * ради сверки групп по дням на фиксированном «сегодня» мира (`day-groups.dataset.test.ts`); роутер его
+ * не передаёт.
  */
 export async function runBlocks(
   db: Db,
   identity: Identity,
   blocks: EntityBlocksInput['blocks'],
+  now: Date = new Date(),
 ): Promise<EntityBlocksResult> {
   type Phase1 =
     | { kind: 'done'; result: EntityBlocksResult }
-    | { kind: 'materialize'; window: Window; prepared: Prepared[]; today: string };
+    | {
+        kind: 'materialize';
+        window: Window;
+        prepared: Prepared[];
+        today: string;
+        timeZone: string;
+      };
   const phase1 = await withIdentity(db, identity, async (tx): Promise<Phase1> => {
-    const base = await queryContext(tx, identity.graph, null);
+    const base = await queryContext(tx, identity.graph, null, now);
     // Триггеры и горизонт — из того же снимка, по которому блоки разобраны и исполнятся.
     const params = materializeRuleOf(base.reg).rule.params;
     const badges = await prepareBadges(
@@ -390,8 +509,13 @@ export async function runBlocks(
       (acc, p) => (p.kind === 'planned' ? unionWindow(acc, p.window) : acc),
       null,
     );
-    if (window === null) return { kind: 'done', result: await executeAll(tx, prepared) };
-    return { kind: 'materialize', window, prepared, today: base.today };
+    // Верх ответа (§5.2) — «сегодня» и пояс ТОГО ЖЕ контекста, по которому разрешены токены и
+    // разложены группы: клиент подписывает дни в поясе ответа, а не браузера.
+    const top = { today: base.today, timeZone: base.timeZone };
+    if (window === null) {
+      return { kind: 'done', result: { results: await executeAll(tx, prepared), ...top } };
+    }
+    return { kind: 'materialize', window, prepared, ...top };
   });
   if (phase1.kind === 'done') return phase1.result;
   await materializeInstances({
@@ -401,5 +525,6 @@ export async function runBlocks(
     to: phase1.window.to,
     today: phase1.today,
   });
-  return withIdentity(db, identity, (tx) => executeAll(tx, phase1.prepared));
+  const results = await withIdentity(db, identity, (tx) => executeAll(tx, phase1.prepared));
+  return { results, today: phase1.today, timeZone: phase1.timeZone };
 }

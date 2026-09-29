@@ -509,6 +509,31 @@ describe('entity.blocks — пачка данных блоков (§6.3)', () =>
   });
 });
 
+describe('entity.blocks — группировка по дням (спека 1в §5.2, задача 6)', () => {
+  test('верх ответа — today и пояс владельца пачки; блок с group — вид groups, отказ группы — отказ блока', async () => {
+    const user = await freshGraph();
+    const res = await callerFor(user).entity.blocks({
+      blocks: [
+        { key: 'feed', text: 'aspect=orbis/task, group=day:orbis/due_date, display=list' },
+        { key: 'bad', text: 'group=day:orbis/title' },
+        { key: 'table', text: 'group=day:orbis/due_date, display=table' },
+      ],
+    });
+    // Строки настроек нет — запасной пояс; «сегодня» — в нём (как у компиляции блоков).
+    expect(res.timeZone).toBe(DEFAULT_TIMEZONE);
+    expect(res.today).toBe(todayInTimeZone(DEFAULT_TIMEZONE));
+    expect(res.results.feed).toEqual({
+      ok: true,
+      kind: 'groups',
+      groups: [],
+      more: 0,
+      closedIds: [],
+    });
+    expect(res.results.bad).toMatchObject({ ok: false, error: { code: 'TYPE' } });
+    expect(res.results.table).toMatchObject({ ok: false, error: { code: 'SYNTAX' } });
+  });
+});
+
 describe('entity.blocks — бейдж раздела `badgeOf` (срез 1б §9.3, РП-8)', () => {
   /** Страница с телом дословно — бейдж читает тело сервером. */
   async function pageWithBody(user: GraphId, body: string): Promise<string> {

@@ -82,7 +82,14 @@ import { literalFormViolation } from '../registry/validate-props';
 // Адрес контракта (спека 1в §3.1–§3.3) — SQL по привязкам аспектов записи. Импорт взаимный, как
 // у `expr/compile.ts`: тот файл берёт отсюда общие шаги условия (`exprCond`, `negated`, `lit`),
 // и обе стороны читают импортированное только внутри функций.
-import { addressCond, addressNumericSql, addressSortKey } from './contract-sql';
+import {
+  addressCond,
+  addressNumericSql,
+  addressSortKey,
+  closedMembershipSql,
+  groupDatesSql,
+  groupKeySql,
+} from './contract-sql';
 
 /**
  * Контекст компиляции. Имена полей — из плана (на них ссылаются Задачи 9b, 10a/10b, 11, 13c).
@@ -1043,6 +1050,32 @@ function compileOrderBy(ast: QueryAst, ctx: CompileCtx): SQL {
 // ОБХОДЧИК-Q: compile
 export function compileQueryAst(ast: QueryAst, ctx: CompileCtx): SQL {
   return sql`SELECT ${sql.raw(ENTITY_SELECT_COLUMNS)} FROM entities e WHERE ${compileWhere(ast, ctx)} ORDER BY ${compileOrderBy(ast, ctx)} LIMIT ${ast.limit ?? DEFAULT_LIMIT}`;
+}
+
+/**
+ * СТРОКИ БЛОКА ДАННЫХ СТРАНИЦЫ (`entity.blocks`, спека 1в РП-11, РП-12) — тот же SELECT, что у
+ * `compileQueryAst`, плюс колонки для провода блока:
+ *  - `__closed` — запись в наборе `closed` «завершаемости» (Б-2 №78 п. 42): строка web набор,
+ *    заданный предикатом, не вычисляет, и зачёркивание расходилось бы с фильтром — признак считает
+ *    сервер тем же выражением, что правило значения «даты» (`closedMembershipSql`);
+ *  - при `group=day:<поле>` (§5.2) — `__key_at` (ключ записи, `groupKeySql`) и `__when_dates` (даты
+ *    «когда» для выбора даты в дне, `groupDatesSql`); порядок начинается ключом (`NULLS LAST` —
+ *    «Без даты» в конце), дальше `sortBy` блока и `e.id` (§3.5).
+ *
+ * Отдельная точка входа, а не колонка `compileQueryAst`: у `entity.query`, тулов и рутин провода блока
+ * нет, и лишняя колонка стоила бы им членства в наборе на каждой строке и эталона SQL (§3.5).
+ */
+export function compileBlockRowsAst(ast: QueryAst, ctx: CompileCtx): SQL {
+  const columns = sql`${sql.raw(ENTITY_SELECT_COLUMNS)}, COALESCE(${closedMembershipSql(ctx)}, false) AS __closed`;
+  const where = compileWhere(ast, ctx);
+  const order = compileOrderBy(ast, ctx);
+  const limit = ast.limit ?? DEFAULT_LIMIT;
+  if (ast.group === undefined) {
+    return sql`SELECT ${columns} FROM entities e WHERE ${where} ORDER BY ${order} LIMIT ${limit}`;
+  }
+  const key = groupKeySql(ast.group.field, topLevelConds(ast), ctx);
+  const dates = groupDatesSql(ast.group.field, ctx);
+  return sql`SELECT ${columns}, ${key} AS __key_at, ${dates} AS __when_dates FROM entities e WHERE ${where} ORDER BY __key_at ASC NULLS LAST, ${order} LIMIT ${limit}`;
 }
 
 /** COUNT(*) для бейджей (02 §3.2): те же условия, но без `limit`/`sortBy`/капа. */

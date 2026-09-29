@@ -372,6 +372,22 @@ describe('entity.query / entity.count (§6.3–6.4)', () => {
     expect(byText.message).toContain(PAGE_ONLY_HINT);
   });
 
+  test('group вне страницы — отказ с подсказкой и деревом, и текстом (1в §3.8, задача 6)', async () => {
+    const caller = callerFor(await freshGraph());
+    const byAst = await trpcError(
+      caller.entity.query({
+        ast: { filter: null, group: { by: 'day', field: { contract: 'orbis/when' } } } as never,
+      }),
+    );
+    expect(byAst.code).toBe('BAD_REQUEST');
+    expect(byAst.message).toContain(PAGE_ONLY_HINT);
+    const byText = await trpcError(
+      caller.entity.query({ query: 'aspect=orbis/task, group=day:orbis/due_date' }),
+    );
+    expect(byText.code).toBe('BAD_REQUEST');
+    expect(byText.message).toContain(PAGE_ONLY_HINT);
+  });
+
   test('РОВНО одно из двух: и текст, и дерево — отказ; ни одного — тоже', async () => {
     const caller = callerFor(await freshGraph());
     // Два непустых входа — это два РАЗНЫХ запроса в одном вызове, и молчаливый выбор

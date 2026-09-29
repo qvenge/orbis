@@ -35,7 +35,9 @@ import {
 import {
   fieldRefKey,
   isContractAddress,
+  isListPropertyType,
   type QueryContractAddress,
+  type QueryFieldRef,
   type QueryFilterNode,
   type QueryPropOp,
   type QueryScalar,
@@ -162,8 +164,25 @@ export function slotValuesSql(addr: Required<QueryContractAddress>, cctx: Compil
 }
 
 /**
- * ДАТЫ ЗНАЧЕНИЯ «ДАТЫ» (§3.2, §4.2): отношение `(slot, at, day)` по слотам с ролью, уже
- * отфильтрованное правилом:
+ * ЗАКРЫТОСТЬ ЗАПИСИ `e` (§3.2 п. 2, РП-12): членство в наборе `closed` контракта «завершаемость» —
+ * ядрового, найденного ключом (К-1: связь — часть закрытого правила, не данных). Контракта нет в
+ * реестре — `false`. Одно выражение на правило значения «даты» и на признак «закрыто» строк блока
+ * (`closedIds`, Б-2 №78 п. 42): второе вычисление разошлось бы с первым на первом же предикатном наборе.
+ * Результат может быть NULL (запись без завершаемости) — вызывающий оборачивает в `COALESCE`.
+ */
+export function closedMembershipSql(cctx: CompileCtx): SQL {
+  const closedContract = [...cctx.reg.contracts.values()].find(
+    (x) => x.key === COMPLETABLE_CLOSED.contract,
+  );
+  return closedContract === undefined
+    ? sql`false`
+    : compileClassMembership(closedContract.id, COMPLETABLE_CLOSED.set, cctx, sql.raw('e'));
+}
+
+/**
+ * ДАТЫ ЗНАЧЕНИЯ «ДАТЫ» (§3.2, §4.2): отношение `(slot, at, day, aspect)` по слотам с ролью, уже
+ * отфильтрованное правилом (`aspect` — чья привязка дала дату: подробности момента в группировке
+ * по дням читают `end`/`all_day` той же привязки, §5.2):
  *
  *   WHERE d.at IS NOT NULL
  *     AND ( d.role = 'fact'
@@ -187,20 +206,16 @@ export function whenDatesSql(contractId: string, cctx: CompileCtx): SQL | null {
       if (propertyId === undefined) continue;
       const v = propertyValueExprs(propertyId, cctx);
       const at = guarded(binding.aspectId, sql`(${v.at()})`);
-      rows.push(sql`(${lit(slot)}, ${lit(role)}, ${at}, ${guarded(binding.aspectId, v.day())})`);
+      rows.push(
+        sql`(${lit(slot)}, ${lit(role)}, ${at}, ${guarded(binding.aspectId, v.day())}, ${lit(binding.aspectId)})`,
+      );
       if (role === 'fact') facts.push(sql`${at} IS NOT NULL`);
     }
   }
   if (rows.length === 0) return null;
   const hasFact = facts.length === 0 ? sql`false` : sql`(${sql.join(facts, sql` OR `)})`;
-  const closedContract = [...cctx.reg.contracts.values()].find(
-    (x) => x.key === COMPLETABLE_CLOSED.contract,
-  );
-  const closed =
-    closedContract === undefined
-      ? sql`false`
-      : compileClassMembership(closedContract.id, COMPLETABLE_CLOSED.set, cctx, sql.raw('e'));
-  return sql`(SELECT d.slot, d.at, d.day FROM (VALUES ${sql.join(rows, sql`, `)}) AS d(slot, role, at, day) WHERE d.at IS NOT NULL AND (d.role = 'fact' OR (NOT ${hasFact} AND NOT COALESCE(${closed}, false))))`;
+  const closed = closedMembershipSql(cctx);
+  return sql`(SELECT d.slot, d.at, d.day, d.aspect FROM (VALUES ${sql.join(rows, sql`, `)}) AS d(slot, role, at, day, aspect) WHERE d.at IS NOT NULL AND (d.role = 'fact' OR (NOT ${hasFact} AND NOT COALESCE(${closed}, false))))`;
 }
 
 /**
@@ -416,7 +431,11 @@ export function addressCond(node: QueryPropNodeWithAddress, cctx: CompileCtx): S
  * и `NULLS LAST` вызывающего ставит запись в конец.
  *
  * `positive` — дети верхнего `and` блока (или сам фильтр): отсюда берутся узлы `{prop: адрес}`
- * того же адреса, кроме `ne` и `contains` (отрицание ключа не задаёт).
+ * того же адреса, кроме `ne` и `contains` (отрицание ключа не задаёт), и `or` из таких узлов — одно
+ * условие «хоть одно из» (текст `orbis/when=a|b` разбирается в `or` из `eq`; перенос M-2 ревью задачи
+ * 1: без этого запись с датами {07-14, 07-25} проходила по 07-25, а ключ брала 07-14).
+ *
+ * Тот же ключ — у группировки по дням (§5.2, `groupKeySql`): день записи — день её ключа.
  */
 export function addressSortKey(
   addr: QueryContractAddress,
@@ -426,14 +445,15 @@ export function addressSortKey(
   const kind = kindOrFail(addr, cctx);
   const name = addressName(addr, cctx);
   const key = fieldRefKey(addr);
-  const conds = positive.flatMap((n) =>
+  const own = (n: QueryFilterNode): n is QueryPropNodeWithAddress & QueryFilterNode =>
     'prop' in n &&
     isContractAddress(n.prop) &&
     fieldRefKey(n.prop) === key &&
     n.op !== 'ne' &&
-    n.op !== 'contains'
-      ? [n as QueryPropNodeWithAddress]
-      : [],
+    n.op !== 'contains';
+  // Условие ключа — дизъюнкция узлов: у простого узла — он один, у `or` — все его дети.
+  const conds = positive.flatMap((n): QueryPropNodeWithAddress[][] =>
+    own(n) ? [[n]] : 'or' in n && n.or.every(own) ? [n.or as QueryPropNodeWithAddress[]] : [],
   );
   if (kind.kind === 'slot' && !isDated(kind)) {
     const rows = slotBindings(addr as Required<QueryContractAddress>, cctx);
@@ -461,7 +481,10 @@ export function addressSortKey(
   // Условие ОДНОЙ даты — общий шаг `exprCond`: у `overdue` значения контракта это «эта дата внутри
   // окна `=overdue`» (К-2 — про запись целиком, а ключ выбирается среди её дат), прочие формы — как в
   // условии. Край — из таблицы краёв, своей копии здесь нет.
-  const each = conds.map((n) => exprCond(expr, n.op, n.value, cctx));
+  const each = conds.map((alts) => {
+    const parts = alts.map((n) => exprCond(expr, n.op, n.value, cctx));
+    return parts.length === 1 ? (parts[0] as SQL) : sql`(${sql.join(parts, sql` OR `)})`;
+  });
   const all = sql.join(each, sql` AND `);
   const any = sql.join(each, sql` OR `);
   return sql`COALESCE((SELECT min(${at}) FROM ${from} WHERE ${all}), (SELECT min(${at}) FROM ${from} WHERE ${any}))`;
@@ -498,4 +521,47 @@ export function addressNumericSql(
     guarded(binding.aspectId, propertyValueExprs(propertyId, cctx).value()),
   );
   return sql`(COALESCE(${sql.join(parts, sql`, `)}))::numeric`;
+}
+
+/**
+ * КЛЮЧ ГРУППИРОВКИ ПО ДНЯМ (§5.2, §3.3) — колонка `__key_at` строк блока с `group=day:<поле>`: момент,
+ * день которого в поясе владельца — день группы. У адреса — ключ записи `addressSortKey` (ранняя из
+ * дат, удовлетворяющих положительным условиям блока на том же адресе); у свойства — его значение
+ * (дата — местная полночь). Поле не-дата — отказ `TYPE`: дерево блока приезжает и атрибутом тела,
+ * мимо разбора, и вид поля проверяется здесь так же, как в разборе.
+ */
+export function groupKeySql(
+  field: QueryFieldRef,
+  positive: readonly QueryFilterNode[],
+  cctx: CompileCtx,
+): SQL {
+  if (isContractAddress(field)) {
+    const kind = kindOrFail(field, cctx);
+    if (!isDated(kind)) {
+      return fail('TYPE', `group=day: поле '${addressName(field, cctx)}' — не дата`, {
+        property: addressName(field, cctx),
+      });
+    }
+    return addressSortKey(field, positive, cctx);
+  }
+  const def = cctx.reg.properties.get(field);
+  if (def !== undefined && isListPropertyType(def.type)) {
+    return fail('TYPE', `group=day: '${def.key}' — список, у него нет одного дня`, {
+      property: field,
+    });
+  }
+  // `at()` сам отказывает не-дате (TYPE) и неизвестному свойству (UNKNOWN_FIELD).
+  return propertyValueExprs(field, cctx).at();
+}
+
+/**
+ * ДАТЫ «КОГДА» СТРОКИ — колонка `__when_dates` (jsonb-массив `{slot, at, day, aspect}`): только у
+ * группировки по значению контракта, где раскладка выбирает дату в дне по приоритету
+ * `done > moment > deadline` (`layoutDayGroups`). У свойства и адреса слота дата одна — `NULL`.
+ */
+export function groupDatesSql(field: QueryFieldRef, cctx: CompileCtx): SQL {
+  if (!isContractAddress(field) || field.slot !== undefined) return sql`NULL::jsonb`;
+  const dates = whenDatesSql(field.contract, cctx);
+  if (dates === null) return sql`NULL::jsonb`;
+  return sql`(SELECT jsonb_agg(jsonb_build_object('slot', w.slot, 'at', w.at, 'day', w.day, 'aspect', w.aspect)) FROM ${dates} w)`;
 }

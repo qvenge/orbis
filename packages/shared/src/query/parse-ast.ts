@@ -63,6 +63,7 @@ import type {
   QueryDateToken,
   QueryFieldRef,
   QueryFilterNode,
+  QueryGroup,
   QueryRelKind,
   QueryRelPredicate,
   QueryScalar,
@@ -158,15 +159,15 @@ export const QUERY_PARSE_CODES = [
   'NO_CONTRACT_VALUE',
   // Токены дат (спека 1в §3.4): сравнение с краем, которого у токена нет (`<overdue`, `>after_7d`).
   'TOKEN_EDGE',
-  // Параметр страницы (спека 1в §3.8, §5.1): `$<имя>` вне блока страницы или шаблона.
+  // Только для страниц (спека 1в §3.8): `$<имя>` и `group=` вне блока страницы или шаблона.
   'PAGE_ONLY',
 ] as const;
 export type QueryParseCode = (typeof QUERY_PARSE_CODES)[number];
 
 /**
  * Место текста запроса (спека 1в §3.8, РП-5): `page` — блок данных тела страницы или шаблона, где
- * законны ссылка на параметр `$<имя>` (и группировка — задача 6). Без места — все прочие входы
- * (`entity_query`, рутины, заметка, `ref.target`, область правил): там `$` — отказ `PAGE_ONLY`.
+ * законны ссылка на параметр `$<имя>` и группировка `group=`. Без места — все прочие входы
+ * (`entity_query`, рутины, заметка, `ref.target`, область правил): там оба — отказ `PAGE_ONLY`.
  * Умолчание — «не страница»: вход, забывший назвать место, отказывает, а не пропускает молча.
  */
 export interface ParseOptions {
@@ -381,6 +382,8 @@ const RESERVED_WORDS: ReadonlySet<string> = new Set([
   'aggregate',
   'columns',
   'hide_empty',
+  // Группировка по дням (1в §5.2): без слова голое `group=` уходило в поле и отвечало UNKNOWN_FIELD.
+  'group',
 ]);
 
 interface Ctx {
@@ -885,7 +888,7 @@ interface Acc {
    * идёт ПОСЛЕ разбора всех слов (`assertProjectionShape`): `aggregate=count, display=tile`
    * законен в любом порядке, и на месте ключа его пару ещё не видно.
    */
-  projectionAt: { display?: number; aggregate?: number; columns?: number };
+  projectionAt: { display?: number; aggregate?: number; columns?: number; group?: number };
 }
 
 /** Роли обязательны/запрещены по `kind` — норматив §А5-1, одно место на весь разбор. */
@@ -957,7 +960,15 @@ function requireOp(t: Token, op: Op): string {
 }
 
 function assignOnce<
-  K extends 'sortBy' | 'limit' | 'display' | 'title' | 'aggregate' | 'columns' | 'hideEmpty',
+  K extends
+    | 'sortBy'
+    | 'group'
+    | 'limit'
+    | 'display'
+    | 'title'
+    | 'aggregate'
+    | 'columns'
+    | 'hideEmpty',
 >(acc: Acc, key: K, t: Token, value: NonNullable<QueryAst[K]>): void {
   if (acc.ast[key] !== undefined) {
     // Имя — как написано в тексте (`hide_empty`), а не поле дерева (`hideEmpty`): отказ
@@ -1090,8 +1101,29 @@ function parseColumns(t: Token, ctx: Ctx): QueryColumn[] {
 }
 
 /**
+ * `group=day:<адрес даты>` (1в §5.2). Место — первым (§3.8: вне страницы группировка не значит
+ * ничего, какое бы поле ни стояло), затем форма `day:<поле>` — единица в 1в одна, — затем вид
+ * поля: дата (свойство `date`/`timestamp`, адрес слота с датой, значение «когда»), не список.
+ */
+function parseGroup(t: Token, ctx: Ctx): QueryGroup {
+  if (ctx.place !== 'page') fail('PAGE_ONLY', `group: ${PAGE_ONLY_HINT}`, t.keyOffset);
+  const value = requireOp(t, '=');
+  const colon = value.indexOf(':');
+  if (colon === -1 || value.slice(0, colon) !== 'day') {
+    fail('SYNTAX', `group: ожидается day:<поле с датой> (в 1в — только day)`, t.valueOffset);
+  }
+  const name = trimPart({ text: value.slice(colon + 1), offset: t.valueOffset + colon + 1 });
+  if (name.text === '') fail('SYNTAX', `group=day: пустое имя поля`, name.offset);
+  const field = resolveField(name.text, name.offset, ctx);
+  if (field.list || !field.tokens) {
+    fail('TYPE', `group=day: ${fieldWord(field)} — не дата (${field.kindText})`, name.offset);
+  }
+  return { by: 'day', field: field.ref };
+}
+
+/**
  * Согласованность проекции блока данных (§5.4): `aggregate` ⇔ `display=tile`, `columns` ⇒
- * `display=table`. Слова — общие со схемой канона (`PROJECTION_RULE_MESSAGES`): разбор
+ * `display=table`, `group` ⇒ строки (`list`/`compact`, 1в §5.2). Слова — общие со схемой канона (`PROJECTION_RULE_MESSAGES`): разбор
  * обязан отказывать там же, где отказала бы схема, иначе дерево сохранилось бы и перестало
  * читаться на первой же перевалидации.
  */
@@ -1105,6 +1137,9 @@ function assertProjectionShape(acc: Acc): void {
   }
   if (ast.columns !== undefined && ast.display !== 'table') {
     fail('SYNTAX', PROJECTION_RULE_MESSAGES.columnsNeedTable, at.columns ?? 0);
+  }
+  if (ast.group !== undefined && (ast.display === 'table' || ast.display === 'tile')) {
+    fail('SYNTAX', PROJECTION_RULE_MESSAGES.groupNeedsRows, at.group ?? 0);
   }
 }
 
@@ -1289,6 +1324,7 @@ const NOT_NEGATABLE: ReadonlySet<string> = new Set([
   'aggregate',
   'columns',
   'hide_empty',
+  'group',
   'excludeTags',
   'excludeBlocked',
 ]);
@@ -1432,6 +1468,10 @@ function dispatch(t: Token, ctx: Ctx, acc: Acc): void {
     }
     case 'sortBy':
       assignOnce(acc, 'sortBy', t, parseSortBy(t, ctx));
+      return;
+    case 'group':
+      assignOnce(acc, 'group', t, parseGroup(t, ctx));
+      acc.projectionAt.group = t.keyOffset;
       return;
     case 'limit': {
       const v = unquote(requireOp(t, '='), t.valueOffset);

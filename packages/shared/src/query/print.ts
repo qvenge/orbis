@@ -10,8 +10,8 @@
  * одним и тем же текстом. Порядок детей `and`/`or` печать НЕ переставляет — он часть
  * дерева: сортировка сделала бы `parse(print(a)) ≡ a` неверным для любого дерева, собранного
  * формой не в алфавитном порядке. Проекция печатается фиксированным хвостом
- * (`sortBy`, `limit`, `display`, `columns`, `aggregate`, `hide_empty`, `title` — порядок РП-4
- * среза страниц), потому что она — не предикаты и порядка не несёт.
+ * (`sortBy`, `group`, `limit`, `display`, `columns`, `aggregate`, `hide_empty`, `title` — порядок
+ * РП-4 среза страниц и 1в §5.2), потому что она — не предикаты и порядка не несёт.
  *
  * Печать ТОТАЛЬНА, а грамматика v1 — плоская (§А5-3д). Дерево, которое плоским текстом не
  * выражается (OR между разными свойствами, вложенные группы), печатается СКОБКАМИ, и такой
@@ -335,6 +335,9 @@ export function printQueryAst(ast: QueryAst, reg: ParseRegistry, form: QueryPrin
   if (ast.sortBy) {
     parts.push(`sortBy=${ast.sortBy.map((s) => `${n.field(s.field)}:${s.dir}`).join('|')}`);
   }
+  // Группировка (1в §5.2) — сразу за `sortBy`: обе говорят о порядке строк, и ключ группы — тот же
+  // ключ записи, что у сортировки по адресу (§3.3).
+  if (ast.group !== undefined) parts.push(`group=day:${n.field(ast.group.field)}`);
   if (ast.limit !== undefined) parts.push(`limit=${ast.limit}`);
   if (ast.display !== undefined) parts.push(`display=${ast.display}`);
   // Настройки показа блока данных (§5.4) — между `display` и `title`, порядок РП-4: сначала

@@ -572,3 +572,22 @@ test('1в: адрес с контрактом вне реестра печата
     ),
   ).toBe('user/gone.x=a');
 });
+
+test('1в §5.2: group печатается `group=day:<адрес>` сразу после sortBy; круг «печать → разбор (page)» — то же дерево', () => {
+  const page = { place: 'page' } as const;
+  for (const text of [
+    'orbis/when=next_7d, !class=orbis/recurrence:templates, sortBy=orbis/priority:desc, group=day:orbis/when, limit=20, display=list',
+    'group=day:orbis/when.deadline, display=compact',
+    'aspect=orbis/task, group=day:orbis/due_date',
+  ]) {
+    const r = parseQueryAst(text, REG, page);
+    if (!r.ok) throw new Error(`${text}: ${r.error.message}`);
+    const printed = printQueryAst(r.ast, REG, 'key');
+    expect(printed).toBe(text);
+    const back = parseQueryAst(printed, REG, page);
+    expect(back.ok && back.ast).toEqual(r.ast);
+  }
+  // Поле группы — id в дереве, key в key-печати (§А5-2): свойство владельца печатается ключом.
+  const tree = { filter: null, group: { by: 'day' as const, field: 'orbis/due_date' } };
+  expect(printQueryAst(tree, REG, 'key')).toBe('group=day:orbis/due_date');
+});

@@ -104,3 +104,9 @@ test('1в: адрес слота и значение контракта стат
     expect((e as ScopeNotStaticError).reason).toContain("'orbis/when'");
   }
 });
+
+test('1в §3.8: группировка — проекция страницы, у множества отказ (static держит group)', () => {
+  expect(reject({ filter: null, group: { by: 'day', field: { contract: 'orbis/when' } } })).toBe(
+    SCOPE_NOT_STATIC,
+  );
+});

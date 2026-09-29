@@ -182,3 +182,19 @@ test('1в: адрес с контрактом вне реестра — как �
   };
   expect(normalizeQueryAst(ast, REG)).toEqual(ast);
 });
+
+test('1в §5.2: поле группы — точка записи имени: key свойства → id, key контракта адреса → id', () => {
+  const byProp: QueryAst = { filter: null, group: { by: 'day', field: 'user/effort_points' } };
+  expect(normalizeQueryAst(byProp, REG).group).toEqual({
+    by: 'day',
+    field: FIXTURE_USER_PROPERTY_ID,
+  });
+  const byAddress: QueryAst = {
+    filter: null,
+    group: { by: 'day', field: { contract: 'user/reviewable', slot: 'state' } },
+  };
+  expect(normalizeQueryAst(byAddress, REG).group).toEqual({
+    by: 'day',
+    field: { contract: FIXTURE_USER_CONTRACT_ID, slot: 'state' },
+  });
+});

@@ -104,10 +104,16 @@ export function todayInTimeZone(timeZone: string, now: Date = new Date()): strin
  */
 export const WEEK_START: WeekStart = 'monday';
 
+/**
+ * `now` — часы вызывающего (по умолчанию — настоящие): «сегодня» считается от них в поясе владельца.
+ * Параметр — ради пачки блоков (`runBlocks`), чьи группы по дням сверяются тестом на фиксированном
+ * «сегодня» мира; так же часы передаёт сборщик канала LLM (`buildContext`, `clock`).
+ */
 export async function queryContext(
   tx: Tx,
   graph: GraphId,
   thisEntityId: string | null,
+  now: Date = new Date(),
 ): Promise<CompileCtx> {
   const reg = await effectiveRegistry(tx, graph);
   const settings = await ownerQuerySettings(tx, graph);
@@ -115,7 +121,7 @@ export async function queryContext(
     graphId: graph,
     reg,
     thisEntityId,
-    today: todayInTimeZone(settings.timeZone),
+    today: todayInTimeZone(settings.timeZone, now),
     timeZone: settings.timeZone,
     weekStart: WEEK_START,
     ownerCurrency: settings.currency,

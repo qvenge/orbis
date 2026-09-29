@@ -114,6 +114,8 @@ export function assertStaticQuery(ast: QueryAst): void {
   // ни «прятать пустое» ничего не добавляют, а молча принятые они выглядели бы как смысл.
   for (const key of [
     'sortBy',
+    // Группировка (1в §5.2) — проекция блока страницы: множеству дни ничего не добавляют.
+    'group',
     'limit',
     'display',
     'title',

@@ -8,7 +8,12 @@
  */
 import { expect, test } from 'bun:test';
 import { propertyDefinitionSchema } from '../registry/property-type';
-import { PAGE_ONLY_HINT, pageQueryAstSchema, queryAstSchema } from './ast';
+import {
+  PAGE_ONLY_HINT,
+  PROJECTION_RULE_MESSAGES,
+  pageQueryAstSchema,
+  queryAstSchema,
+} from './ast';
 import {
   AST_FIXTURES,
   FIXTURE_PARSE_REGISTRY,
@@ -1040,4 +1045,98 @@ test('1в §5.1: печать ссылки — `$имя`, обратный ра�
 
 test('1в §5.1: ссылка с неверным именем — не ссылка: `$пери-од` у даты — отказ TYPE литерала', () => {
   expect(err('orbis/due_date=$пери-од').code).toBe('TYPE');
+});
+
+// ─────────────────────────── Группировка по дням (1в §5.2, §3.8, задача 6) ───────────────────────────
+
+test('1в §5.2: group=day:<адрес даты> с местом page — {by:day, field}: значение «когда», свойство, адрес слота', () => {
+  const when = parseQueryAst('orbis/when=next_7d, group=day:orbis/when, display=list', REG, PAGE);
+  expect(when.ok && when.ast).toEqual({
+    filter: { prop: { contract: 'orbis/when' }, op: 'eq', value: { token: 'next_7d' } },
+    group: { by: 'day', field: { contract: 'orbis/when' } },
+    display: 'list',
+  });
+  const prop = parseQueryAst('group=day:orbis/due_date', REG, PAGE);
+  expect(prop.ok && prop.ast.group).toEqual({ by: 'day', field: 'orbis/due_date' });
+  const slot = parseQueryAst('group=day:orbis/when.deadline, display=compact', REG, PAGE);
+  expect(slot.ok && slot.ast.group).toEqual({
+    by: 'day',
+    field: { contract: 'orbis/when', slot: 'deadline' },
+  });
+  // Момент тоже дата дня: timestamp-свойство группируется по дню в поясе владельца.
+  const moment = parseQueryAst('group=day:orbis/start_at', REG, PAGE);
+  expect(moment.ok && moment.ast.group).toEqual({ by: 'day', field: 'orbis/start_at' });
+});
+
+test('1в §5.2: group по не-дате — TYPE с позицией поля; иная единица, чем day, — SYNTAX', () => {
+  const title = parseQueryAst('group=day:orbis/title', REG, PAGE);
+  expect(title.ok ? 'разобралось' : title.error.code).toBe('TYPE');
+  if (!title.ok) expect(title.error.position).toBe('group=day:'.length);
+  const week = parseQueryAst('group=week:orbis/when', REG, PAGE);
+  expect(week.ok ? 'разобралось' : week.error.code).toBe('SYNTAX');
+  if (!week.ok) expect(week.error.message).toContain('в 1в — только day');
+  for (const text of ['group=orbis/when', 'group=day:', 'group']) {
+    const r = parseQueryAst(text, REG, PAGE);
+    expect(r.ok ? 'разобралось' : r.error.code, text).toBe('SYNTAX');
+  }
+});
+
+test('1в §5.2: group с display=table или tile — отказ словами PROJECTION_RULE_MESSAGES.groupNeedsRows', () => {
+  for (const text of [
+    'group=day:orbis/when, display=table',
+    'display=tile, aggregate=count, group=day:orbis/when',
+  ]) {
+    const r = parseQueryAst(text, REG, PAGE);
+    expect(r.ok ? 'разобралось' : r.error.code, text).toBe('SYNTAX');
+    if (!r.ok) expect(r.error.message).toBe(PROJECTION_RULE_MESSAGES.groupNeedsRows);
+  }
+  // Схема канона держит то же правило — вход мимо разбора (атрибут блока тела).
+  const bad = pageQueryAstSchema.safeParse({
+    filter: null,
+    group: { by: 'day', field: { contract: 'orbis/when' } },
+    display: 'table',
+  });
+  expect(bad.success).toBe(false);
+  if (!bad.success) {
+    expect(bad.error.issues.map((i) => i.message)).toContain(
+      PROJECTION_RULE_MESSAGES.groupNeedsRows,
+    );
+  }
+});
+
+test('1в §3.8: group без места — PAGE_ONLY с подсказкой; `!group` — не отрицается; повтор — SYNTAX', () => {
+  const e = parseQueryAst('aspect=orbis/task, group=day:orbis/when', REG);
+  expect(e.ok ? 'разобралось' : e.error.code).toBe('PAGE_ONLY');
+  if (!e.ok) {
+    expect(e.error.message).toContain(PAGE_ONLY_HINT);
+    expect(e.error.position).toBe('aspect=orbis/task, '.length);
+  }
+  const neg = parseQueryAst('!group=day:orbis/when', REG, PAGE);
+  expect(neg.ok ? 'разобралось' : neg.error.message).toContain("'group' не отрицается");
+  const twice = parseQueryAst('group=day:orbis/when, group=day:orbis/due_date', REG, PAGE);
+  expect(twice.ok ? 'разобралось' : twice.error.message).toContain("повторный параметр 'group'");
+  // Голое имя — слово грамматики, а не поле (как sortBy, display).
+  expect(err('group=today').code).not.toBe('UNKNOWN_FIELD');
+});
+
+test('1в §3.8 (перенос Н-2 задачи 4): group у корня дерева — базовая схема отвергает С ПОДСКАЗКОЙ, схема страниц принимает', () => {
+  const tree = { filter: null, group: { by: 'day', field: { contract: 'orbis/when' } } };
+  const base = queryAstSchema.safeParse(tree);
+  expect(base.success).toBe(false);
+  if (!base.success) {
+    expect(base.error.issues.map((i) => i.message)).toContain(PAGE_ONLY_HINT);
+    expect(base.error.issues.map((i) => i.message).join(' ')).not.toContain('Unrecognized key');
+  }
+  expect(pageQueryAstSchema.safeParse(tree).success).toBe(true);
+  // Форма группы строгая: единица — только day, поле обязательно.
+  for (const group of [
+    { by: 'week', field: 'orbis/due_date' },
+    { by: 'day' },
+    { by: 'day', field: 'orbis/due_date', extra: 1 },
+  ]) {
+    expect(
+      pageQueryAstSchema.safeParse({ filter: null, group }).success,
+      JSON.stringify(group),
+    ).toBe(false);
+  }
 });

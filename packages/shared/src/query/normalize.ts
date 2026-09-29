@@ -111,10 +111,16 @@ export function normalizeQueryAst(ast: QueryAst, reg: ParseRegistry): QueryAst {
     ast.aggregate === undefined || ast.aggregate.fn === 'count'
       ? ast.aggregate
       : { ...ast.aggregate, field: normalizeField(ast.aggregate.field, reg) };
+  // Поле группировки (1в §5.2) — ещё одна точка записи имени: свойство или адрес контракта.
+  const group =
+    ast.group === undefined
+      ? undefined
+      : { ...ast.group, field: normalizeField(ast.group.field, reg) };
   return {
     ...ast,
     filter: ast.filter === null ? null : normalizeNode(ast.filter, reg),
     ...(sortBy === undefined ? {} : { sortBy }),
+    ...(group === undefined ? {} : { group }),
     ...(columns === undefined ? {} : { columns }),
     ...(aggregate === undefined ? {} : { aggregate }),
   };

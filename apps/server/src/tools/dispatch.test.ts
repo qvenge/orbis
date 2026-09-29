@@ -6819,6 +6819,22 @@ describe('entity_query и язык контрактов (спека 1в §3.8)',
     if (byAst.status === 'error') expect(JSON.stringify(byAst.error)).toContain(PAGE_ONLY_HINT);
   });
 
+  test('group в entity_query — отказ с подсказкой «только в блоках страниц» текстом и деревом (1в §3.8, задача 6)', async () => {
+    const byText = await dispatchTool(ctxFor(), 'entity_query', {
+      query: 'orbis/when=next_7d, group=day:orbis/when',
+    });
+    expectError(byText, 'VALIDATION');
+    if (byText.status === 'error') {
+      expect((byText.error.details as { reason?: string }).reason).toBe('PAGE_ONLY');
+      expect(byText.error.message).toContain(PAGE_ONLY_HINT);
+    }
+    const byAst = await dispatchTool(ctxFor(), 'entity_query', {
+      ast: { filter: null, group: { by: 'day', field: { contract: 'orbis/when' } } },
+    });
+    expectError(byAst, 'VALIDATION');
+    if (byAst.status === 'error') expect(JSON.stringify(byAst.error)).toContain(PAGE_ONLY_HINT);
+  });
+
   test('$-ссылка в orbis/progress_source — структурный отказ записи с подсказкой, цель не создана (1в §3.8)', async () => {
     const owner = await freshGraph();
     const r = await execute(db, {

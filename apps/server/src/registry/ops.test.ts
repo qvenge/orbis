@@ -6329,6 +6329,18 @@ describe('обходчики реестра и адрес контракта (с
     expect([...names]).toEqual(['orbis/due_date']);
   });
 
+  test('группа (1в §5.2): field строкой — имя свойства (переписывается, виден перечню), адрес — нет', () => {
+    const grouped = { filter: null, group: { by: 'day', field: 'orbis/due_date' } };
+    expect(rewriteAst(grouped, new Set(['orbis/due_date']), 'user/x')).toEqual({
+      filter: null,
+      group: { by: 'day', field: 'user/x' },
+    });
+    const names = new Set<string>();
+    propertyNamesInAst(grouped, names);
+    propertyNamesInAst({ filter: null, group: { by: 'day', field: addr } }, names);
+    expect([...names]).toEqual(['orbis/due_date']);
+  });
+
   test('rewriteQueryTextKeys: ключ перед точкой — контракт адреса, не свойство', () => {
     // `orbis/recurrence` — и ключ свойства, и ключ контракта: слияние свойства контракт не трогает.
     expect(

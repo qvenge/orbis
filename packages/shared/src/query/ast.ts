@@ -99,7 +99,7 @@ export interface QueryContractAddress {
 
 /**
  * Поле запроса: id свойства (как до 1в) или адрес контракта. `prop` у предиката, `field` у
- * `sortBy` и `aggregate` (и `group` — задача 6). `columns[].field` — только строка: заголовок
+ * `sortBy`, `aggregate` и `group`. `columns[].field` — только строка: заголовок
  * колонки — подпись свойства, у адреса её нет (§3.1).
  */
 export type QueryFieldRef = string | QueryContractAddress;
@@ -296,6 +296,22 @@ export type QueryFilterNode =
   | { archived: 'true' | 'any' }
   | { class: { contract: string; set: string } };
 
+/**
+ * ГРУППИРОВКА ПО ДНЯМ (спека 1в §5.2) — ключ проекции `group=day:<адрес даты>`: поле — свойство
+ * `date`/`timestamp`, адрес слота с датой или значение «когда». День записи — день её ключа (§3.3:
+ * ранняя из дат, удовлетворяющих положительным условиям блока на том же адресе) в поясе владельца;
+ * раскладку по дням считает сервер (`layoutDayGroups`, `pages/day-groups.ts`). Единица в 1в одна —
+ * `day`; поле `by` оставлено, чтобы «неделя» (§14) была новым значением, а не новым ключом корня.
+ *
+ * Только блоки страниц и шаблонов (§3.8): базовая схема `queryAstSchema` отвергает ключ с
+ * `PAGE_ONLY_HINT`, JSON Schema тула его не знает вовсе. Формы показа — `list`/`compact` (или без
+ * `display`): таблица и плитка групп не рисуют.
+ */
+export interface QueryGroup {
+  by: 'day';
+  field: QueryFieldRef;
+}
+
 export interface QuerySortField {
   /**
    * id свойства (§А5-7) — доменного или core-проекции §А1-3 (`orbis/updated_at`), — либо адрес
@@ -308,6 +324,8 @@ export interface QuerySortField {
 export interface QueryAst {
   filter: QueryFilterNode | null;
   sortBy?: QuerySortField[];
+  /** Группировка по дням (§5.2) — только в блоках страниц и шаблонов. */
+  group?: QueryGroup;
   limit?: number;
   display?: QueryDisplayMode;
   title?: string;
@@ -526,22 +544,26 @@ export const queryAggregateSchema = z.discriminatedUnion('fn', [
 
 export const queryColumnSchema = z.object({ field: idSchema }).strict();
 
+/** Группа — строгая: единица `day` (1в), поле — id свойства или адрес. Вид поля судит разбор/сервер. */
+export const queryGroupSchema = z.object({ by: z.literal('day'), field: fieldRefSchema }).strict();
+
 /**
  * Согласованность проекции блока данных (§5.4): `aggregate` ⇔ `display: 'tile'`,
- * `columns` ⇒ `display: 'table'`.
+ * `columns` ⇒ `display: 'table'`, `group` ⇒ `display` ∈ {нет, `list`, `compact`} (1в §5.2).
  *
  * Правило живёт в СХЕМЕ, а не только в разборе, по той же причине, что связь `rel` с
  * `kind` (докблок `QueryRelPredicate`): вход `ast:` тула, значение `orbis/progress_source`
  * и атрибут query-блока тела идут МИМО парсера, и плитка без агрегата сохранилась бы, а
  * читатель (рендер блока данных) получил бы форму, которую язык запрещает. Та же тройка
  * условий записана в JSON Schema (`ast-json-schema.ts`, `PROJECTION_RULES`), и совпадение
- * вердиктов пиннит `ast.test.ts`. Сообщения — те же слова, что у отказов разбора
+ * вердиктов пиннит `ast.test.ts`; четвёртого (`group`) там нет — тул группы не знает вовсе (§3.8). Сообщения — те же слова, что у отказов разбора
  * (`parse-ast.ts`, пост-проверка проекции), чтобы владелец и модель читали одно правило.
  */
 export const PROJECTION_RULE_MESSAGES = {
   aggregateNeedsTile: 'aggregate — только у display=tile',
   tileNeedsAggregate: 'display=tile требует aggregate=count | sum:<свойство> | latest:<свойство>',
   columnsNeedTable: 'columns — только у display=table',
+  groupNeedsRows: 'group — только у строк: display=list или compact',
 } as const;
 
 /**
@@ -557,6 +579,7 @@ const queryAstShapeSchema = z
     // запроса (весь корпус), и оно должно быть записано, а не выведено из отсутствия ключа.
     filter: queryFilterNodeSchema.nullable(),
     sortBy: z.array(querySortFieldSchema).min(1).optional(),
+    group: queryGroupSchema.optional(),
     limit: z.number().int().min(1).optional(),
     display: z.enum(QUERY_DISPLAY_MODES).optional(),
     title: z.string().min(1).optional(),
@@ -578,12 +601,15 @@ const queryAstShapeSchema = z
     if (ast.columns !== undefined && ast.display !== 'table') {
       issue('columns', PROJECTION_RULE_MESSAGES.columnsNeedTable);
     }
+    if (ast.group !== undefined && (ast.display === 'table' || ast.display === 'tile')) {
+      issue('group', PROJECTION_RULE_MESSAGES.groupNeedsRows);
+    }
   });
 
 /**
  * ДВЕ СХЕМЫ ИЗ ОДНОЙ ФОРМЫ (РП-5). `queryAstSchema` — все входы дерева, кроме тела страницы: вход
  * `ast:` тула и роутера, `orbis/progress_source`, `scope`, `ref.target`, `over` действия. `$`-ссылка
- * (и группировка — задача 6) там отказ с `PAGE_ONLY_HINT`: ни значения параметра, ни страницы, на
+ * и группировка (`group`) там отказ с `PAGE_ONLY_HINT`: ни значения параметра, ни страницы, на
  * которой он объявлен, у этих входов нет, и принятая ссылка стала бы тихим «ничего не выбрано» или
  * ошибкой компиляции на каждом чтении. `pageQueryAstSchema` — атрибут query-блока тела
  * (`doc/bind-query.ts`) и виджет web: там ссылку подставит сервер из входа пачки.
