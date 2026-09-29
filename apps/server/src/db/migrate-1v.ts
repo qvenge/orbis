@@ -15,6 +15,8 @@
 //    `system` (запись журнала скрыта из ленты, Undo есть), механизм `supply` (писатель свойств эталона),
 //    подпись В-4. Создаёт Повестку; в оболочке хоста Повестка встаёт на место Upcoming; «Год» — по статусу
 //    поставки; Upcoming, если не правлена, — в архив. Прочие записи, настройки и лента не трогаются;
+//  - `--undo <actionId> --i-understand` — отмена пачки перевода (запись скрыта из ленты, «отмени последнее»
+//    системные действия пропускает — другого пути к Undo §6.6 у владельца нет);
 //  - `--rehearsal` — к любому режиму: DSN из `ORBIS_REHEARSAL_DSN` вместо Ключницы, только локальная база
 //    (`localhost`/`127.0.0.1`) — репетиция на дампе прода (ранбук §4.3).
 //
@@ -23,6 +25,8 @@
 // (обратное созданию) и возвращает оболочку, «Год» и Upcoming к форме 1б; архивная Повестка остаётся
 // признаком, и дальше граф идёт «Обновлениями» (Повестку предложат добавить, оболочку — принять).
 import {
+  APP_ASPECT,
+  APP_HOME,
   APP_NAV,
   BUILTIN_PROPERTY_META,
   type GraphId,
@@ -53,6 +57,7 @@ import type { ISql, Sql } from 'postgres';
 import { ExecError, type ExecErrorCode } from '../errors';
 import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
+import { undoAction } from '../executor/undo';
 import type { Identity } from '../identity';
 import { effectiveRegistry } from '../registry/cache';
 import { bumpOwnerRegistryVersion } from '../registry/version';
@@ -64,6 +69,7 @@ import {
   supplyRecordId,
   supplyTextOf,
 } from '../supply/records';
+import { describeRoleAccess } from './backfill-body-doc';
 import type { Db } from './client';
 import { entities } from './schema';
 import { withIdentity } from './with-identity';
@@ -123,6 +129,11 @@ export type TokenBoundaryWhere =
 export interface TokenBoundaryRow {
   where: TokenBoundaryWhere;
   id: string;
+  /**
+   * Хранилище внутри закреплённой версии (`entity_versions`): документ и текст одной версии — две строки, как
+   * `body_doc`/`body` у записи, иначе формы одного блока задваивались бы в одной строке (гейт m-5).
+   */
+  store?: 'body_doc' | 'body';
   /** Только формы, чей смысл 1в меняет (`changed`) или делает отказом (`refused`); прежние не печатаются. */
   forms: TokenBoundaryForm[];
 }
@@ -138,11 +149,17 @@ export interface ReservedLiteralRow {
   literals: string[];
 }
 
+/**
+ * План `--apply`. У переведённого (`agenda: 'exists'`) и незаведённого (`'unseeded'`: оболочки хоста нет ни
+ * живой, ни архивной — мира нет, его заведёт вход владельца) графа пачки нет, и прочие поля — `keep`: план
+ * говорит, что будет записано, а не что записалось бы на непереведённом графе (гейт m-2, m-3).
+ */
 export interface Migrate1vPlan {
-  agenda: 'create' | 'exists';
+  agenda: 'create' | 'exists' | 'unseeded';
   shellNav: 'replace' | 'insert-after-daily' | 'append' | 'keep';
-  year: 'body+etalon' | 'etalon-only' | 'absent';
-  upcoming: 'archive' | 'keep' | 'absent';
+  year: 'body+etalon' | 'etalon-only' | 'absent' | 'keep';
+  /** `keep-referenced` — «как в поставке», но на неё ссылается навигация или домашняя приложения (`upcomingRefs`). */
+  upcoming: 'archive' | 'keep' | 'keep-referenced' | 'absent';
 }
 
 export interface Migrate1vReport {
@@ -157,7 +174,11 @@ export interface Migrate1vReport {
   reservedLiterals: ReservedLiteralRow[];
   /** Записи с `progress_source.aggregate = latest` и `sortBy` в запросе — смысл «последнего» меняется (§3.7). */
   goalsLatestSorted: string[];
-  /** Свои приложения (не оболочка хоста), где Upcoming — домашняя или раздел: архив даст там плашку (§6.6 п. 4). */
+  /**
+   * Приложения (свои и оболочка хоста), где Upcoming останется домашней или разделом ПОСЛЕ пачки (у оболочки
+   * хоста пачка раздел заменяет Повесткой — такая ссылка не в счёт). Ненулевой — Upcoming не архивируется:
+   * архив дал бы там плашку (§6.6 п. 4; Fable Minor-4).
+   */
   upcomingRefs: string[];
   plan: Migrate1vPlan;
 }
@@ -341,8 +362,15 @@ interface SupplyRow {
   updatedAt?: string;
 }
 
+/** Живое приложение графа (аспект «приложение»): его домашняя и навигация — ссылки места на Upcoming. */
+interface AppRow {
+  id: string;
+  props: Record<string, unknown>;
+}
+
 interface PlanDetail {
   plan: Migrate1vPlan;
+  upcomingRefs: string[];
   shell?: SupplyRow;
   /** Навигация оболочки после перевода (id), если меняется. */
   nav?: string[];
@@ -359,11 +387,36 @@ const isSupply = (r: SupplyRow): boolean => r.aspects.includes(SUPPLY_ASPECT);
  * План перевода графа — ЧИСТЫЙ, по записям с ключом поставки (с архивными). Один на отчёт и на `--apply`:
  * то, что владелец прочёл в `--report`, и есть то, что запишет пачка.
  */
-function planOf(graph: GraphId, rows: readonly SupplyRow[]): PlanDetail {
+function planOf(graph: GraphId, rows: readonly SupplyRow[], apps: readonly AppRow[]): PlanDetail {
   const all = (k: string) => rows.filter((r) => keyOf(r) === k);
   const live = (k: string) => all(k).find((r) => !r.archived);
   const agendaId = supplyRecordId(graph, 'agenda');
   const resolveAfter: ResolveSupplyKey = (k) => (k === 'agenda' ? agendaId : (live(k)?.id ?? null));
+  const upcomingIds = new Set(all('upcoming').map((r) => r.id));
+  const idsIn = (v: unknown): string[] =>
+    Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
+  /** Приложения, где Upcoming — домашняя или раздел; `navAfter` — навигация приложения после пачки. */
+  const refsTo = (navAfter: (a: AppRow) => string[]): string[] =>
+    apps
+      .filter(
+        (a) =>
+          upcomingIds.has(String(a.props[APP_HOME])) ||
+          navAfter(a).some((id) => upcomingIds.has(id)),
+      )
+      .map((a) => a.id)
+      .sort();
+  const untouched = (a: AppRow) => idsIn(a.props[APP_NAV]);
+
+  // Переведённый и незаведённый графы: пачки нет, и план говорит ровно это (гейт m-2, m-3).
+  const agenda: Migrate1vPlan['agenda'] =
+    all('agenda').length > 0 ? 'exists' : all('host-shell').length === 0 ? 'unseeded' : 'create';
+  if (agenda !== 'create') {
+    return {
+      plan: { agenda, shellNav: 'keep', year: 'keep', upcoming: 'keep' },
+      upcomingRefs: refsTo(untouched),
+      resolveAfter,
+    };
+  }
 
   // п. 2 — оболочка хоста: только живая запись поставки (снятый аспект — решение владельца «вывести из
   // поставки», R-17: механизм в неё не пишет).
@@ -371,10 +424,7 @@ function planOf(graph: GraphId, rows: readonly SupplyRow[]): PlanDetail {
   let shellNav: Migrate1vPlan['shellNav'] = 'keep';
   let nav: string[] | undefined;
   if (shell !== undefined && isSupply(shell)) {
-    const now = Array.isArray(shell.props[APP_NAV])
-      ? (shell.props[APP_NAV] as unknown[]).filter((x): x is string => typeof x === 'string')
-      : [];
-    const upcomingIds = new Set(all('upcoming').map((r) => r.id));
+    const now = idsIn(shell.props[APP_NAV]);
     const daily = live('daily-planning')?.id;
     const at = now.findIndex((id) => upcomingIds.has(id));
     if (at !== -1) {
@@ -401,14 +451,26 @@ function planOf(graph: GraphId, rows: readonly SupplyRow[]): PlanDetail {
           ? 'body+etalon'
           : 'etalon-only';
 
-  // п. 4 — Upcoming: не правлена (запись поставки «как в поставке») — в архив; иначе остаётся страницей
-  // владельца вне навигации хоста.
+  // п. 4 — Upcoming: не правлена (запись поставки «как в поставке») и ни одно приложение не держит её
+  // домашней или разделом после пачки — в архив; иначе остаётся страницей владельца. Ссылка оболочки хоста,
+  // которую пачка заменяет Повесткой, не в счёт; оставшаяся (оболочка вне поставки, полная навигация,
+  // домашняя) — в счёт (Fable Minor-4).
+  const upcomingRefs = refsTo((a) =>
+    shell !== undefined && a.id === shell.id && nav !== undefined ? nav : untouched(a),
+  );
   const u = live('upcoming');
   const upcoming: Migrate1vPlan['upcoming'] =
-    u === undefined ? 'absent' : isSupply(u) && supplyStatusOf(u) === 'etalon' ? 'archive' : 'keep';
+    u === undefined
+      ? 'absent'
+      : !(isSupply(u) && supplyStatusOf(u) === 'etalon')
+        ? 'keep'
+        : upcomingRefs.length > 0
+          ? 'keep-referenced'
+          : 'archive';
 
   return {
-    plan: { agenda: all('agenda').length > 0 ? 'exists' : 'create', shellNav, year, upcoming },
+    plan: { agenda, shellNav, year, upcoming },
+    upcomingRefs,
     ...(shell !== undefined && { shell }),
     ...(nav !== undefined && { nav }),
     ...(y !== undefined && { year: y }),
@@ -446,9 +508,14 @@ export async function reportMigrate1v(sql: SqlClient, graph: string): Promise<Mi
   const tokenBoundaries: TokenBoundaryRow[] = [];
   const reservedLiterals: ReservedLiteralRow[] = [];
   const goalsLatestSorted: string[] = [];
-  const push = (where: TokenBoundaryWhere, id: string, forms: TokenBoundaryForm[]): void => {
+  const push = (
+    where: TokenBoundaryWhere,
+    id: string,
+    forms: TokenBoundaryForm[],
+    store?: TokenBoundaryRow['store'],
+  ): void => {
     const m = meaningful(forms);
-    if (m.length > 0) tokenBoundaries.push({ where, id, forms: m });
+    if (m.length > 0) tokenBoundaries.push({ where, id, ...(store && { store }), forms: m });
   };
 
   // Тела и источники прогресса записей — порциями по id. Деревья блоков — из `body_doc` одним путём
@@ -500,8 +567,10 @@ export async function reportMigrate1v(sql: SqlClient, graph: string): Promise<Mi
        WHERE graph_id = ${g}::uuid AND id > ${after}::uuid
        ORDER BY id LIMIT ${BATCH}`;
     for (const r of rows) {
-      const body = typeof r.body === 'string' ? bodyFindings(r.body).forms : [];
-      push('entity_versions', String(r.id), [...tokenBoundaryForms(r.asts), ...body]);
+      push('entity_versions', String(r.id), tokenBoundaryForms(r.asts), 'body_doc');
+      if (typeof r.body === 'string') {
+        push('entity_versions', String(r.id), bodyFindings(r.body).forms, 'body');
+      }
     }
     if (rows.length < BATCH) break;
     after = String(rows[rows.length - 1]?.id);
@@ -525,18 +594,10 @@ export async function reportMigrate1v(sql: SqlClient, graph: string): Promise<Mi
   const supply = (await sql`
     SELECT id::text AS id, title, emoji, body, aspects, props, archived FROM entities
      WHERE graph_id = ${g}::uuid AND props ? ${SUPPLY_KEY}`) as unknown as SupplyRow[];
-  const upcomingIds = supply.filter((r) => keyOf(r) === 'upcoming').map((r) => r.id);
-  const upcomingRefs =
-    upcomingIds.length === 0
-      ? []
-      : await idsOf(sql`
-    SELECT id::text AS id FROM entities
-     WHERE graph_id = ${g}::uuid AND aspects @> ARRAY['orbis/app']::text[]
-       AND COALESCE(props ->> ${SUPPLY_KEY}, '') <> 'host-shell'
-       AND (props ->> 'orbis/app_home' = ANY(${upcomingIds}::text[])
-            OR (jsonb_typeof(props -> ${APP_NAV}) = 'array'
-                AND props -> ${APP_NAV} ?| ${upcomingIds}::text[]))
-     ORDER BY id`);
+  const apps = (await sql`
+    SELECT id::text AS id, props FROM entities
+     WHERE graph_id = ${g}::uuid AND aspects @> ARRAY[${APP_ASPECT}]::text[] AND NOT archived`) as unknown as AppRow[];
+  const detail = planOf(g, supply, apps);
 
   return {
     graph: g,
@@ -546,8 +607,8 @@ export async function reportMigrate1v(sql: SqlClient, graph: string): Promise<Mi
     tokenBoundaries,
     reservedLiterals,
     goalsLatestSorted,
-    upcomingRefs,
-    plan: planOf(g, supply).plan,
+    upcomingRefs: detail.upcomingRefs,
+    plan: detail.plan,
   };
 }
 
@@ -662,12 +723,14 @@ function applyOps(
 
 /**
  * Перевести граф: предусловия → план → ОДНА пачка исполнителя (`source: 'system'`, механизм `supply`,
- * `actorKind: 'owner'`, подпись В-4). Граф с записью Повестки (с архивной) — «уже переведён», ноль записей.
+ * `actorKind: 'owner'`, подпись В-4). Граф с записью Повестки (с архивной) — «уже переведён», граф без
+ * оболочки хоста — «не заведён» (одинокая Повестка без мира была бы мусором; мир заведёт вход владельца уже
+ * с Повесткой): оба — ноль записей.
  */
 export async function applyMigrate1v(
   db: Db,
   who: Identity,
-): Promise<{ actionId: string; plan: Migrate1vPlan } | { already: true }> {
+): Promise<{ actionId: string; plan: Migrate1vPlan } | { already: true } | { unseeded: true }> {
   const graph = who.graph;
   const read = await withIdentity(db, who, async (tx) => {
     // Предусловия — ДО загрузки реестра: и встроенная строка прежней формы, и подписка владельца с
@@ -702,8 +765,21 @@ export async function applyMigrate1v(
       })
       .from(entities)
       .where(and(eq(entities.graphId, graph), sql`${entities.props} ? ${SUPPLY_KEY}`));
+    const apps = await tx
+      .select({ id: entities.id, props: entities.props })
+      .from(entities)
+      .where(
+        and(
+          eq(entities.graphId, graph),
+          eq(entities.archived, false),
+          sql`${entities.aspects} @> ARRAY[${APP_ASPECT}]::text[]`,
+        ),
+      );
     const reg = await effectiveRegistry(tx, graph);
     return {
+      apps: apps.map(
+        (a): AppRow => ({ id: a.id, props: (a.props ?? {}) as Record<string, unknown> }),
+      ),
       rows: rows.map(
         (r): SupplyRow => ({
           ...r,
@@ -714,8 +790,9 @@ export async function applyMigrate1v(
       reg,
     };
   });
-  const detail = planOf(graph, read.rows);
+  const detail = planOf(graph, read.rows, read.apps);
   if (detail.plan.agenda === 'exists') return { already: true };
+  if (detail.plan.agenda === 'unseeded') return { unseeded: true };
   const r = await execute(
     db,
     {
@@ -733,27 +810,66 @@ export async function applyMigrate1v(
   return { actionId: r.actionId, plan: detail.plan };
 }
 
+/**
+ * Отменить пачку перевода (Fable I-1): запись журнала скрыта из ленты (`source: 'system'`), а «отмени
+ * последнее» системные действия пропускает (`executor/undo.ts`) — у владельца другого пути к Undo §6.6 нет.
+ * Механизм тот же, что у любого Undo (`undoAction`: обратные операции одной пачкой, отметка «отменено» в
+ * журнале); отменяется ТОЛЬКО пачка этой операции — запись журнала графа с источником `system` и подписью
+ * В-4. `{found: false}` — в журнале графа такого действия нет (операция обходит графы).
+ */
+export async function undoMigrate1v(
+  db: Db,
+  who: Identity,
+  actionId: string,
+): Promise<{ undone: true } | { found: false }> {
+  const probe = JSON.stringify({ actions: [{ id: actionId }] });
+  const meta = await withIdentity(db, who, async (tx) => {
+    const rows = await tx.execute(sql`
+      SELECT m.metadata FROM chat_messages m JOIN chat_threads t ON t.id = m.thread_id
+       WHERE t.graph_id = ${who.graph}::uuid AND m.metadata @> ${probe}::jsonb LIMIT 1`);
+    return rows[0]?.metadata as
+      | { actions?: Array<{ source?: string }>; cards?: Array<{ title?: string }> }
+      | undefined;
+  });
+  if (meta === undefined) return { found: false };
+  if (meta.actions?.[0]?.source !== 'system' || meta.cards?.[0]?.title !== MIGRATE_1V_LABEL) {
+    throw new ExecError(
+      'VALIDATION',
+      `действие ${actionId} — не пачка migrate-1v («${MIGRATE_1V_LABEL}»): эта операция отменяет только её`,
+      { actionId },
+    );
+  }
+  const r = await undoAction(db, { identity: who, actionId });
+  if (!r.ok) throw new ExecError(r.error.code as ExecErrorCode, r.error.message, r.error.details);
+  return { undone: true };
+}
+
 // ─────────────────────────────── печать ───────────────────────────────
 
 const PLAN_WORD = {
   agenda: {
     create: 'создать «Повестка»',
     exists: '«Повестка» уже есть — граф переведён, --apply ничего не запишет',
+    unseeded:
+      'граф не заведён (оболочки хоста нет) — --apply его пропустит; мир с Повесткой заведёт вход владельца',
   },
   shellNav: {
     replace: 'Повестка на месте Upcoming',
     'insert-after-daily': 'Upcoming в навигации нет — Повестка после Daily Planning',
     append: 'ни Upcoming, ни Daily Planning в навигации нет — Повестка в конец',
-    keep: 'не трогается (оболочки хоста нет, она выведена из поставки или навигация полна — новый эталон придёт «Обновлениями»)',
+    keep: 'не трогается (граф переведён или не заведён; оболочки нет, она выведена из поставки или навигация полна — новый эталон придёт «Обновлениями»)',
   },
   year: {
     'body+etalon': 'как в поставке — тело и эталон новые',
     'etalon-only': 'изменено вами или отказ от обновления — только эталон, тело не трогается (В-6)',
     absent: 'записи поставки нет — не трогается',
+    keep: 'не трогается (граф переведён или не заведён)',
   },
   upcoming: {
     archive: 'не правлена — в архив (обратимо)',
-    keep: 'правлена — остаётся вашей страницей вне навигации хоста',
+    keep: 'правлена (или граф переведён/не заведён) — не трогается',
+    'keep-referenced':
+      'не правлена, но приложения держат её домашней или разделом — не архивируется (иначе там была бы плашка)',
     absent: 'записи нет — не трогается',
   },
 } as const;
@@ -803,16 +919,22 @@ export function formatMigrate1vReport(r: Migrate1vReport): string[] {
     const forms = t.forms
       .map((f) => `${FORM_TEXT[f.form]}${f.token} — ${VERDICT_TEXT[f.verdict]}`)
       .join('; ');
-    out.push(`    ${WHERE_TEXT[t.where]} ${t.id}: ${forms}`);
+    const store =
+      t.store === undefined ? '' : ` (${t.store === 'body_doc' ? 'документ' : 'текст'})`;
+    out.push(`    ${WHERE_TEXT[t.where]}${store} ${t.id}: ${forms}`);
   }
   out.push(
     `  литералы, которые 1в читает иначе (новые токены, $имя без параметра): ${r.reservedLiterals.length}`,
   );
   for (const l of r.reservedLiterals) out.push(`    ${l.where} ${l.id}: ${l.literals.join(', ')}`);
   out.push(`  цели с «последним» и sortBy (§3.7): ${list(r.goalsLatestSorted)}`);
-  out.push(`  свои приложения, где Upcoming — домашняя или раздел: ${list(r.upcomingRefs)}`);
-  if (r.upcomingRefs.length > 0 && r.plan.upcoming === 'archive') {
-    out.push('    владельцу до --apply: Upcoming уйдёт в архив, в этих приложениях будет плашка');
+  out.push(
+    `  приложения, где Upcoming останется домашней или разделом после --apply: ${list(r.upcomingRefs)}`,
+  );
+  if (r.plan.upcoming === 'keep-referenced') {
+    out.push(
+      '    владельцу: Upcoming из-за них не архивируется — уберите ссылки сами, если она не нужна',
+    );
   }
   out.push('  план --apply (одна пачка, источник system):');
   out.push(`    Повестка: ${PLAN_WORD.agenda[r.plan.agenda]}`);
@@ -824,54 +946,72 @@ export function formatMigrate1vReport(r: Migrate1vReport): string[] {
 
 // ─────────────────────────────── обвязка ops.ts ───────────────────────────────
 
-export type Migrate1vMode = 'report' | 'apply' | 'drop';
+export type Migrate1vMode = 'report' | 'apply' | 'drop' | 'undo';
 
 export type Migrate1vGate =
-  | { proceed: true; mode: Migrate1vMode; rehearsal: boolean }
+  | { proceed: true; mode: Migrate1vMode; rehearsal: boolean; actionId?: string }
   | { proceed: false; code: number; lines: string[] };
 
 const USAGE = [
   '  bun scripts/ops.ts migrate-1v --report                           # только чтение, до миграции 0023',
   '  bun scripts/ops.ts migrate-1v --drop-agenda-rows --i-understand  # удалить подписки/дельты владельца на Повестку',
   '  bun scripts/ops.ts migrate-1v --apply --i-understand             # перевод: одна пачка на граф',
+  '  bun scripts/ops.ts migrate-1v --undo <actionId> --i-understand   # отменить пачку перевода',
   '  ORBIS_REHEARSAL_DSN=<DSN локальной базы> bun scripts/ops.ts migrate-1v --rehearsal <режим>',
 ];
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 /**
- * Подтверждение: ровно один режим; `--apply` и `--drop-agenda-rows` — только с `--i-understand`;
- * `--rehearsal` — к любому режиму. Незнакомый флаг — отказ, а не «пропустим» (как `resetWorldGate`):
- * опечатка иначе означала бы согласие, которого не давали. Отказ — кодом 2 ДО чтения DSN и базы.
+ * Подтверждение: ровно один режим; пишущие (`--apply`, `--drop-agenda-rows`, `--undo <actionId>`) — только с
+ * `--i-understand`; `--rehearsal` — к любому режиму. Незнакомый флаг — отказ, а не «пропустим» (как
+ * `resetWorldGate`): опечатка иначе означала бы согласие, которого не давали. Отказ — кодом 2 ДО чтения DSN
+ * и базы.
  */
 export function migrate1vGate(args: readonly string[]): Migrate1vGate {
-  const known = new Set([
-    '--report',
-    '--apply',
-    '--drop-agenda-rows',
-    '--i-understand',
-    '--rehearsal',
-  ]);
   const refuse = (line: string): Migrate1vGate => ({
     proceed: false,
     code: 2,
     lines: [line, ...USAGE],
   });
-  const unknown = args.find((a) => !known.has(a));
-  if (unknown !== undefined) return refuse(`migrate-1v: неизвестный аргумент «${unknown}».`);
-  const modes = (['--report', '--apply', '--drop-agenda-rows'] as const).filter((m) =>
-    args.includes(m),
+  const flags = new Set<string>();
+  let actionId: string | undefined;
+  for (let i = 0; i < args.length; i += 1) {
+    const a = args[i] as string;
+    if (a === '--undo') {
+      const v = args[i + 1];
+      if (v === undefined || !UUID_RE.test(v)) {
+        return refuse('migrate-1v: --undo ждёт id действия пачки (uuid из печати --apply).');
+      }
+      actionId = v;
+      flags.add(a);
+      i += 1;
+      continue;
+    }
+    if (
+      !['--report', '--apply', '--drop-agenda-rows', '--i-understand', '--rehearsal'].includes(a)
+    ) {
+      return refuse(`migrate-1v: неизвестный аргумент «${a}».`);
+    }
+    flags.add(a);
+  }
+  const modes = (['--report', '--apply', '--drop-agenda-rows', '--undo'] as const).filter((m) =>
+    flags.has(m),
   );
   if (modes.length === 0) return refuse('migrate-1v: укажите режим.');
   if (modes.length > 1) return refuse(`migrate-1v: режим один, а указано: ${modes.join(', ')}.`);
-  const understand = args.includes('--i-understand');
-  const rehearsal = args.includes('--rehearsal');
+  const understand = flags.has('--i-understand');
+  const rehearsal = flags.has('--rehearsal');
   if (modes[0] === '--report') {
-    if (understand)
+    if (understand) {
       return refuse('migrate-1v: --report ничего не пишет — --i-understand не нужен.');
+    }
     return { proceed: true, mode: 'report', rehearsal };
   }
   if (!understand) {
     return refuse(`migrate-1v: ${modes[0]} пишет в базу — нужно подтверждение --i-understand.`);
   }
+  if (modes[0] === '--undo') return { proceed: true, mode: 'undo', rehearsal, actionId };
   return { proceed: true, mode: modes[0] === '--apply' ? 'apply' : 'drop', rehearsal };
 }
 
@@ -913,16 +1053,17 @@ export interface Migrate1vIo {
   error(line: string): void;
 }
 
-/** Печать `--apply` до пачки: чем Undo является и чем — нет (шапка файла). */
+/** Печать `--apply` до пачки: как отменить и чем отмена является (шапка файла). */
 export const UNDO_NOTE =
-  'Undo пачки вернёт оболочку, «Год» и Upcoming к форме 1б и отправит Повестку в архив; повторный --apply ' +
-  'после Undo — «уже переведён», дальше — «Обновления». Полный откат — восстановление дампа (ранбук §4.3).';
+  'Отмена: bun scripts/ops.ts migrate-1v --undo <действие> --i-understand — оболочка, «Год» и Upcoming вернутся ' +
+  'к форме 1б, Повестка уйдёт в архив; повторный --apply после отмены — «уже переведён», дальше — «Обновления». ' +
+  'Полный откат — восстановление дампа (ранбук §4.3).';
 
 const message = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
 /**
  * Операция целиком: подтверждение → DSN (Ключница или репетиция) → режим по каждому графу → печать. Код 0 —
- * всё прошло; 1 — СТОП отчёта, сбой графа или предусловия; 2 — отказ подтверждения или DSN репетиции.
+ * всё прошло; 1 — СТОП отчёта, сбой графа, предусловия или роли; 2 — отказ подтверждения или DSN.
  */
 export async function runMigrate1v(args: readonly string[], io: Migrate1vIo): Promise<number> {
   const gate = migrate1vGate(args);
@@ -930,9 +1071,9 @@ export async function runMigrate1v(args: readonly string[], io: Migrate1vIo): Pr
     for (const line of gate.lines) io.error(line);
     return gate.code;
   }
+  const candidate = io.rehearsalDsn();
   let dsn: string;
   if (gate.rehearsal) {
-    const candidate = io.rehearsalDsn();
     const refusal = rehearsalDsnRefusal(candidate);
     if (refusal !== null) {
       io.error(refusal);
@@ -940,12 +1081,33 @@ export async function runMigrate1v(args: readonly string[], io: Migrate1vIo): Pr
     }
     dsn = candidate as string;
     io.log('репетиция: локальная база из ORBIS_REHEARSAL_DSN');
+  } else if (candidate !== undefined && candidate.trim() !== '') {
+    // Оператор, задавший DSN репетиции и забывший флаг, иначе ушёл бы в прод через Ключницу, думая, что
+    // репетирует (Fable Minor-2).
+    io.error(
+      'migrate-1v: переменная репетиции ORBIS_REHEARSAL_DSN задана без --rehearsal — ' +
+        'добавьте --rehearsal или уберите переменную (прод идёт только без неё).',
+    );
+    return 2;
   } else {
     dsn = io.readDsn();
   }
   const { sql: pool, db, close } = io.open(dsn);
   let failed = 0;
   try {
+    if (gate.mode === 'report' || gate.mode === 'drop') {
+      // Сырой пул мимо идентичности: под FORCE RLS роль без BYPASSRLS видит ноль строк молча — отчёт из
+      // нулей выглядел бы как «всё чисто», а удаление ничего бы не удалило (Fable Minor-1; образец —
+      // `censusV3Op`).
+      const who = await describeRoleAccess(db);
+      if (!who.bypassRls) {
+        io.error(
+          `migrate-1v: роль ${who.role} НЕ несёт BYPASSRLS — под FORCE RLS она видит ноль строк, ` +
+            'и счёты были бы ложными нулями. Нужен DSN роли с BYPASSRLS (на Supabase — postgres).',
+        );
+        return 1;
+      }
+    }
     if (gate.mode === 'apply') {
       try {
         await assertAgendaRowGone(pool);
@@ -963,6 +1125,7 @@ export async function runMigrate1v(args: readonly string[], io: Migrate1vIo): Pr
     const whos = await io.identities(db);
     if (whos.length === 0) io.log('графов со строкой настроек нет — делать нечего');
     if (gate.mode === 'apply' && whos.length > 0) io.log(UNDO_NOTE);
+    let undone = 0;
     for (const who of whos) {
       // Сбой одного графа печатается и считается в код 1; прочие графы идут дальше.
       try {
@@ -976,10 +1139,20 @@ export async function runMigrate1v(args: readonly string[], io: Migrate1vIo): Pr
             `граф ${who.graph}: удалено подписок ${r.subscriptions}, дельт ${r.deltas}` +
               (r.ids.length > 0 ? ` (${r.ids.join(', ')})` : ''),
           );
+        } else if (gate.mode === 'undo') {
+          const r = await undoMigrate1v(db, who, gate.actionId as string);
+          if ('undone' in r) {
+            undone += 1;
+            io.log(`граф ${who.graph}: пачка ${gate.actionId} отменена`);
+          }
         } else {
           const out = await applyMigrate1v(db, who);
           if ('already' in out) {
             io.log(`граф ${who.graph}: уже переведён (Повестка есть) — ничего не записано`);
+          } else if ('unseeded' in out) {
+            io.log(
+              `граф ${who.graph}: не заведён (оболочки хоста нет) — пропущен, ничего не записано`,
+            );
           } else {
             io.log(
               `граф ${who.graph}: переведён одной пачкой — действие ${out.actionId} («${MIGRATE_1V_LABEL}»); ` +
@@ -992,6 +1165,12 @@ export async function runMigrate1v(args: readonly string[], io: Migrate1vIo): Pr
         failed += 1;
         io.error(`граф ${who.graph}: ${message(e)}`);
       }
+    }
+    if (gate.mode === 'undo' && undone === 0 && failed === 0) {
+      io.error(
+        `migrate-1v: действия ${gate.actionId} нет в журнале ни одного графа — отменять нечего`,
+      );
+      failed += 1;
     }
     if (gate.mode === 'report') io.log('\nРежим --report: ничего не записано.');
   } finally {

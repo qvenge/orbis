@@ -122,14 +122,15 @@ export const LEGACY_KEYS_1B: readonly SupplyKeyValue[] = [
  *  - `edited` — `prod`, где Upcoming и «Год» правлены владельцем;
  *  - `declined` — `prod`, где владелец отказался («Оставить своё») от обновления «Года» до эталона 1б:
  *    `supply_declined` = отпечаток эталона 1б «Года» (единственный отказ, достижимый на проде);
- *  - `own-app` — `prod` плюс своё приложение владельца, где Upcoming — домашняя и раздел навигации.
+ *  - `own-app` — `prod` плюс два своих приложения владельца: в одном Upcoming — домашняя, в другом — раздел
+ *    навигации (каждая ветка признака ссылки видна отдельно, гейт m-1).
  */
 export type World1bVariant = 'prod' | 'etalon-1b' | 'edited' | 'declined' | 'own-app';
 
 export interface World1b {
   graph: GraphId;
-  /** id своего приложения (`own-app`), иначе `null`. */
-  ownAppId: string | null;
+  /** id своих приложений (`own-app`): [с домашней Upcoming, с разделом Upcoming]; иначе пусто. */
+  ownAppIds: string[];
 }
 
 /** Правка тела владельцем — добавленная им строка (отличается от любого эталона). */
@@ -173,7 +174,7 @@ export async function seedWorld1b(
   // Путь заведения — ТОТ ЖЕ, что у релиза 1б: заведение графа с эталонами 1б (записи поставки создаёт
   // механизм `supply`, оболочка — последней). Рутины хоста — как в проде (садовник, «Перенос остатков»).
   await setupGraph(db, who, { etalons: ETALONS_1B });
-  if (variant === 'etalon-1b') return { graph, ownAppId: null };
+  if (variant === 'etalon-1b') return { graph, ownAppIds: [] };
 
   // Перевод 1б положил в пять списков тела и печать ПРЕЖНИХ эталонов (R-39): отпечаток — прежнего
   // эталона (заголовок и эмодзи — эталона 1б), печать — с каноническим телом этого графа.
@@ -231,24 +232,33 @@ export async function seedWorld1b(
     ]);
   }
   if (variant === 'own-app') {
-    const ownAppId = newId();
+    const homeApp = newId();
+    const navApp = newId();
     const upcoming = supplyRecordId(graph, 'upcoming');
+    const daily = supplyRecordId(graph, 'daily-planning');
     await run(db, graph, 'user', [
       {
         tool: 'entity_create',
         input: {
-          id: ownAppId,
+          id: homeApp,
           title: 'Моя неделя',
           tags: [],
           aspects: [APP_ASPECT],
-          props: {
-            [APP_HOME]: upcoming,
-            [APP_NAV]: [upcoming, supplyRecordId(graph, 'daily-planning')],
-          },
+          props: { [APP_HOME]: upcoming, [APP_NAV]: [daily] },
+        },
+      },
+      {
+        tool: 'entity_create',
+        input: {
+          id: navApp,
+          title: 'Мои планы',
+          tags: [],
+          aspects: [APP_ASPECT],
+          props: { [APP_HOME]: daily, [APP_NAV]: [daily, upcoming] },
         },
       },
     ]);
-    return { graph, ownAppId };
+    return { graph, ownAppIds: [homeApp, navApp] };
   }
-  return { graph, ownAppId: null };
+  return { graph, ownAppIds: [] };
 }

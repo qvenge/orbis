@@ -12,6 +12,7 @@ import {
   APP_NAV,
   type GraphId,
   newId,
+  SUPPLY_ASPECT,
   SUPPLY_DECLINED,
   SUPPLY_HASH,
   SUPPLY_KEY,
@@ -34,7 +35,6 @@ import { excludeInfraSystemRows } from '../chat/messages';
 import { ExecError } from '../errors';
 import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
-import { undoAction } from '../executor/undo';
 import type { Identity } from '../identity';
 import { effectiveRegistry } from '../registry/cache';
 import { seedOwner } from '../seed/onboarding';
@@ -296,7 +296,7 @@ async function reportOf(graph: GraphId) {
 
 async function applied(graph: GraphId): Promise<{ actionId: string }> {
   const out = await applyMigrate1v(db, personal(graph));
-  if ('already' in out) throw new Error('ожидался перевод, а граф «уже переведён»');
+  if (!('actionId' in out)) throw new Error(`ожидался перевод, а получено ${JSON.stringify(out)}`);
   return out;
 }
 
@@ -479,6 +479,7 @@ describe('(б) перепись: формы с токеном-границей, 
     expect(r.tokenBoundaries).toContainEqual({
       where: 'entity_versions',
       id: versionId,
+      store: 'body',
       forms: [{ token: 'after_7d', form: 'gt', verdict: 'refused' }],
     });
     const prior = r.tokenBoundaries.filter((t) => t.where === 'journal_prior');
@@ -545,6 +546,21 @@ describe('(в) --apply на графе формы прода: одна пачк�
     const atBefore = await updatedAtAll(graph);
     const settingsBefore = await settingsOf(graph);
     const journalBefore = await journalOf(graph);
+    const content = (r: Row) => ({
+      title: r.title,
+      emoji: r.emoji,
+      body: r.body,
+      aspects: r.aspects,
+      props: r.props,
+      archived: r.archived,
+    });
+    const keys1b = ['host-shell', 'horizon-year', 'upcoming'] as const;
+    const rows1b = await Promise.all(keys1b.map(async (k) => content(await rowByKey(graph, k))));
+    const updatesOf = async () =>
+      (await listUpdates({ db, identity: personal(graph) }))
+        .map(({ key, kind, edited, declined }) => ({ key, kind, edited, declined }))
+        .sort((a, b) => a.key.localeCompare(b.key));
+    const updates1b = await updatesOf();
 
     const { actionId } = await applied(graph);
 
@@ -608,18 +624,54 @@ describe('(в) --apply на графе формы прода: одна пачк�
       [],
     );
 
-    // Undo есть: оболочка, «Год», Upcoming — к форме 1б, Повестка — в архив; повтор — «уже переведён».
-    const undone = await undoAction(db, { identity: personal(graph), actionId });
-    expect(undone.ok).toBe(true);
+    // Undo достижим владельцу — режимом операции (Fable I-1): оболочка, «Год», Upcoming — к форме 1б ЦЕЛИКОМ
+    // (содержимое, отпечатки и печати эталонов, заголовок и эмодзи), Повестка — в архив, «Обновления» — как
+    // до перевода (Fable Minor-3); повтор `--apply` — «уже переведён».
+    const t = testIo([personal(graph)]);
+    expect(await runMigrate1v(['--undo', actionId, '--i-understand'], t.io)).toBe(0);
+    expect([t.out, t.err]).toEqual([[`граф ${graph}: пачка ${actionId} отменена`], []]);
+    expect(await Promise.all(keys1b.map(async (k) => content(await rowByKey(graph, k))))).toEqual(
+      rows1b,
+    );
     expect(await navKeysOf(graph)).toEqual([...NAV_1B_KEYS]);
-    expect((await rowByKey(graph, 'upcoming')).archived).toBe(false);
-    expect((await rowByKey(graph, 'agenda')).archived).toBe(true);
     expect((await rowByKey(graph, 'horizon-year')).body).toBe(
       await canonical(graph, LEGACY_ETALON_TEXTS['horizon-year'] as string),
     );
+    expect((await rowByKey(graph, 'agenda')).archived).toBe(true);
+    expect(await updatesOf()).toEqual(updates1b);
+    expect(updates1b).toContainEqual({
+      key: 'agenda',
+      kind: 'new',
+      edited: false,
+      declined: false,
+    });
     expect(await applyMigrate1v(db, personal(graph))).toEqual({ already: true });
-    const afterUndo = await listUpdates({ db, identity: personal(graph) });
-    expect(afterUndo).toContainEqual(expect.objectContaining({ key: 'agenda', kind: 'new' }));
+    // Повторная отмена — отказ исполнителя «уже отменено», код 1.
+    const again = testIo([personal(graph)]);
+    expect(await runMigrate1v(['--undo', actionId, '--i-understand'], again.io)).toBe(1);
+    expect(again.err[0]).toContain('уже отменено');
+  });
+
+  test('--undo отменяет только пачку операции: чужое действие — отказ, неизвестное — «нечего», без подтверждения — 2', async () => {
+    const graph = await freshGraph();
+    await seedWorld1b(db, graph, 'prod');
+    const page = await ownerCreate(graph, { title: 'Своя' });
+    const own = await withIdentity(db, personal(graph), (tx) =>
+      tx.execute(sql`SELECT m.metadata -> 'actions' -> 0 ->> 'id' AS id FROM chat_messages m
+        WHERE m.metadata @> ${JSON.stringify({ actions: [{ operations: [{ payload: { id: page } }] }] })}::jsonb`),
+    );
+    const ownId = String(own[0]?.id);
+    const before = await worldSnapshot(graph);
+    const foreign = testIo([personal(graph)]);
+    expect(await runMigrate1v(['--undo', ownId, '--i-understand'], foreign.io)).toBe(1);
+    expect(foreign.err[0]).toContain('не пачка migrate-1v');
+    const missing = testIo([personal(graph)]);
+    expect(await runMigrate1v(['--undo', newId(), '--i-understand'], missing.io)).toBe(1);
+    expect(missing.err[0]).toContain('нет в журнале ни одного графа');
+    const bare = testIo([]);
+    expect(await runMigrate1v(['--undo', ownId], bare.io)).toBe(2);
+    expect(migrate1vGate(['--undo', '--i-understand']).proceed).toBe(false);
+    expect(await worldSnapshot(graph)).toEqual(before);
   });
 
   test('«Год» на эталоне 1б (граф 1б без прежних эталонов) — тоже тело и эталон', async () => {
@@ -704,15 +756,37 @@ describe('(е) навигация без Upcoming', () => {
   });
 });
 
-describe('(ж) свои приложения со ссылкой на Upcoming', () => {
-  test('`upcomingRefs` — id своего приложения; оболочка хоста не считается', async () => {
+describe('(ж) приложения со ссылкой на Upcoming', () => {
+  test('домашняя и раздел своих приложений — в upcomingRefs, Upcoming не архивируется; раздел хоста — не в счёт', async () => {
     const graph = await freshGraph();
-    const { ownAppId } = await seedWorld1b(db, graph, 'own-app');
+    const { ownAppIds } = await seedWorld1b(db, graph, 'own-app');
     const r = await reportOf(graph);
-    expect(r.upcomingRefs).toEqual([ownAppId as string]);
+    expect(r.upcomingRefs).toEqual([...ownAppIds].sort());
+    expect(r.plan).toEqual({
+      agenda: 'create',
+      shellNav: 'replace',
+      year: 'body+etalon',
+      upcoming: 'keep-referenced',
+    });
     expect(formatMigrate1vReport(r)).toContain(
-      '    владельцу до --apply: Upcoming уйдёт в архив, в этих приложениях будет плашка',
+      '    владельцу: Upcoming из-за них не архивируется — уберите ссылки сами, если она не нужна',
     );
+    await applied(graph);
+    expect((await rowByKey(graph, 'upcoming')).archived).toBe(false);
+    expect(await navKeysOf(graph)).toEqual(NAV_1V);
+  });
+
+  test('оболочка хоста вне поставки держит Upcoming разделом — навигация не трогается, Upcoming не в архиве', async () => {
+    const graph = await freshGraph();
+    await seedWorld1b(db, graph, 'prod');
+    const shell = await rowByKey(graph, 'host-shell');
+    await ownerEdit(graph, { id: shell.id, aspects: { detach: [SUPPLY_ASPECT] } });
+    const r = await reportOf(graph);
+    expect(r.upcomingRefs).toEqual([shell.id]);
+    expect([r.plan.shellNav, r.plan.upcoming]).toEqual(['keep', 'keep-referenced']);
+    await applied(graph);
+    expect((await rowByKey(graph, 'upcoming')).archived).toBe(false);
+    expect(await navKeysOf(graph)).toEqual([...NAV_1B_KEYS]);
   });
 });
 
@@ -875,7 +949,11 @@ describe('(л) --rehearsal — только локальная база', () => 
       rehearsalDsn: () => 'postgres://postgres:p@ss@127.0.0.1:54322/orbis_rehearsal',
       open: (dsn) => {
         opened.push(dsn);
-        return { sql: fake, db, close: async () => {} };
+        // drizzle-заглушка отвечает только на пробу роли (роль с BYPASSRLS), в базу не ходит.
+        const fakeDb = {
+          execute: async () => [{ role: 'postgres', bypass_rls: true }],
+        } as unknown as Db;
+        return { sql: fake, db: fakeDb, close: async () => {} };
       },
     });
     expect(await runMigrate1v(['--report', '--rehearsal'], local.io)).toBe(0);
@@ -898,5 +976,160 @@ describe('(л) --rehearsal — только локальная база', () => 
     ]) {
       expect([dsn, rehearsalDsnRefusal(dsn) === null]).toEqual([dsn, false]);
     }
+  });
+});
+
+// ─────────────────────────────── фикс-круг 1 ───────────────────────────────
+
+describe('фикс-круг 1: дельты, роль, переменная репетиции, план переведённого и незаведённого', () => {
+  test('гейт I-1: дельта владельца на orbis/agenda — в agendaDeltas, СТОП; --apply — отказ «сначала --drop-agenda-rows»', async () => {
+    const graph = await freshGraph();
+    await seedWorld1b(db, graph, 'prod');
+    const delta = newId();
+    const other = newId();
+    await admin(({ db: a }) =>
+      a.execute(sql`INSERT INTO registry_deltas (id, graph_id, target_kind, target_id, base_version, delta)
+        VALUES (${delta}::uuid, ${graph}::uuid, 'subscription', 'orbis/agenda', 1, '{}'::jsonb),
+               (${other}::uuid, ${graph}::uuid, 'subscription', 'orbis/budget-overview', 1, '{}'::jsonb)`),
+    );
+    try {
+      const r = await reportOf(graph);
+      expect(r.agendaDeltas).toEqual([delta]);
+      expect(r.agendaOwnerSubscriptions).toEqual([]);
+      expect(formatMigrate1vReport(r).some((l) => l.includes('СТОП'))).toBe(true);
+      const before = await worldSnapshot(graph);
+      const e = await execErrorOf(applyMigrate1v(db, personal(graph)));
+      expect(e.message).toBe(AGENDA_OWNER_ROWS);
+      expect(e.details).toEqual({ graph, ids: [delta] });
+      expect(await worldSnapshot(graph)).toEqual(before);
+    } finally {
+      await admin(({ db: a }) =>
+        a.execute(sql`DELETE FROM registry_deltas WHERE graph_id = ${graph}::uuid`),
+      );
+    }
+  });
+
+  test('Fable Minor-1: --report и --drop-agenda-rows ролью без BYPASSRLS — код 1, ни одного счёта', async () => {
+    const graph = await freshGraph();
+    await seedWorld1b(db, graph, 'prod');
+    for (const mode of [['--report'], ['--drop-agenda-rows', '--i-understand']]) {
+      const t = testIo([personal(graph)], {
+        // Роль приложения: FORCE RLS без идентичности — ноль строк.
+        open: () => {
+          const { db: d, client: c } = appDb();
+          return { sql: c, db: d, close: () => c.end() };
+        },
+      });
+      expect(await runMigrate1v(mode, t.io)).toBe(1);
+      expect(t.err[0]).toContain('НЕ несёт BYPASSRLS');
+      expect(t.out).toEqual([]);
+    }
+  });
+
+  test('Fable Minor-2: ORBIS_REHEARSAL_DSN без --rehearsal — код 2 до Ключницы и базы', async () => {
+    const t = testIo([], {
+      rehearsalDsn: () => 'postgres://u@127.0.0.1/orbis_rehearsal',
+      open: () => {
+        throw new Error('база открыта');
+      },
+    });
+    expect(await runMigrate1v(['--report'], t.io)).toBe(2);
+    expect(t.err[0]).toContain('задана без --rehearsal');
+    expect(t.dsnRead).toEqual([]);
+  });
+
+  test('гейт m-2: план переведённого графа — «уже», прочее keep', async () => {
+    const graph = await freshGraph();
+    await seedWorld1b(db, graph, 'prod');
+    await applied(graph);
+    expect((await reportOf(graph)).plan).toEqual({
+      agenda: 'exists',
+      shellNav: 'keep',
+      year: 'keep',
+      upcoming: 'keep',
+    });
+  });
+
+  test('гейт m-3: незаведённый граф — план unseeded, --apply пропускает без записи', async () => {
+    const graph = await freshGraph();
+    expect((await reportOf(graph)).plan).toEqual({
+      agenda: 'unseeded',
+      shellNav: 'keep',
+      year: 'keep',
+      upcoming: 'keep',
+    });
+    const before = await worldSnapshot(graph);
+    expect(await applyMigrate1v(db, personal(graph))).toEqual({ unseeded: true });
+    const t = testIo([personal(graph)]);
+    expect(await runMigrate1v(['--apply', '--i-understand'], t.io)).toBe(0);
+    expect(t.out).toContain(
+      `граф ${graph}: не заведён (оболочки хоста нет) — пропущен, ничего не записано`,
+    );
+    expect(await worldSnapshot(graph)).toEqual(before);
+  });
+
+  test('гейт m-4: обвязка --report на базе со строкой orbis/agenda прежней формы — отчёт собран, СТОП — код 1', async () => {
+    const graph = await freshGraph();
+    await seedWorld1b(db, graph, 'prod');
+    const before = await worldSnapshot(graph);
+    // Обвязка открывает свою транзакцию READ ONLY — откатываемой снаружи её не обернуть: строки прежней
+    // формы кладутся коммитом и снимаются в finally (DELETE-первым; встроенная строка, если была, — на место).
+    const kept = await admin(
+      ({ sql: s }) =>
+        s`SELECT surface, definition, module, rank FROM subscription_definitions
+           WHERE id = 'orbis/agenda' AND graph_id IS NULL`,
+    );
+    await admin(async ({ sql: s }) => {
+      await s`DELETE FROM subscription_definitions WHERE id = 'orbis/agenda' AND graph_id IS NULL`;
+      await s`INSERT INTO subscription_definitions (id, graph_id, surface, definition, module, rank)
+        VALUES ('orbis/agenda', NULL, 'core/agenda', ${JSON.stringify(AGENDA_DEF_1B)}::jsonb, NULL, 900),
+               ('user/my-agenda', ${graph}::uuid, 'core/agenda', ${JSON.stringify(AGENDA_DEF_1B)}::jsonb, NULL, 901)`;
+    });
+    try {
+      const t = testIo([personal(graph)]);
+      expect(await runMigrate1v(['--report'], t.io)).toBe(1);
+      expect(t.err).toEqual([]);
+      expect(t.out[0]).toContain('встроенная подписка orbis/agenda в базе');
+      expect(t.out).toContain('  подписки графа с движком agenda: 1: user/my-agenda');
+      expect(t.out).toContain(
+        '  СТОП (§6.5): до миграции 0023 — --drop-agenda-rows --i-understand по слову владельца',
+      );
+    } finally {
+      await admin(async ({ sql: s }) => {
+        await s`DELETE FROM subscription_definitions
+                 WHERE (id = 'orbis/agenda' AND graph_id IS NULL) OR graph_id = ${graph}::uuid`;
+        for (const k of kept) {
+          await s`INSERT INTO subscription_definitions (id, graph_id, surface, definition, module, rank)
+            VALUES ('orbis/agenda', NULL, ${String(k.surface)}, ${JSON.stringify(k.definition)}::jsonb,
+                    ${(k.module as string | null) ?? null}, ${Number(k.rank)})`;
+        }
+      });
+    }
+    expect(await worldSnapshot(graph)).toEqual(before);
+  });
+
+  test('гейт m-5: документ и текст одной закреплённой версии — две строки, без задвоения форм', async () => {
+    const graph = await freshGraph();
+    await seedWorld1b(db, graph, 'etalon-1b');
+    const page = await ownerCreate(graph, { title: 'Страница' });
+    const version = newId();
+    const ast = { filter: { prop: 'orbis/due_date', op: 'lt', value: { token: 'next_7d' } } };
+    const bodyDoc = {
+      v: 3,
+      doc: {
+        type: 'doc',
+        content: [{ type: 'queryBlock', attrs: { text: 'orbis/due_date<next_7d', ast } }],
+      },
+    };
+    await admin(({ db: a }) =>
+      a.execute(sql`INSERT INTO entity_versions (id, graph_id, entity_id, label, body, body_doc, actor_user_id, actor_kind)
+        VALUES (${version}::uuid, ${graph}::uuid, ${page}::uuid, 'старая', '{{query:orbis/due_date<next_7d}}',
+          ${JSON.stringify(bodyDoc)}::jsonb, ${graph}::uuid, 'owner')`),
+    );
+    const lt7: TokenBoundaryForm[] = [{ token: 'next_7d', form: 'lt', verdict: 'changed' }];
+    expect((await reportOf(graph)).tokenBoundaries.filter((t) => t.id === version)).toEqual([
+      { where: 'entity_versions', id: version, store: 'body_doc', forms: lt7 },
+      { where: 'entity_versions', id: version, store: 'body', forms: lt7 },
+    ]);
   });
 });

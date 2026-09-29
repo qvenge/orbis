@@ -23,6 +23,7 @@
 //   bun scripts/ops.ts migrate-1v --report                           # только чтение: отчёт среза 1в (ДО миграции 0023)
 //   bun scripts/ops.ts migrate-1v --drop-agenda-rows --i-understand  # подписки/дельты владельца на Повестку (§6.5)
 //   bun scripts/ops.ts migrate-1v --apply --i-understand             # перевод графа среза 1в: одна пачка (§6.6)
+//   bun scripts/ops.ts migrate-1v --undo <actionId> --i-understand   # отмена пачки перевода (Undo §6.6)
 //   ORBIS_REHEARSAL_DSN=<DSN> bun scripts/ops.ts migrate-1v --rehearsal <режим>  # репетиция: только localhost
 //   bun scripts/ops.ts ping           # связность и версия PostgreSQL
 //   bun scripts/ops.ts issue-pat <uuid аккаунта> [метка] [--scope worker]  # headless-токен (§9.3)
@@ -595,7 +596,8 @@ async function resetWorldOp(args: string[]): Promise<number> {
 /**
  * Прод-операция среза 1в (спека 1в §6.5, §6.6, §10; РП-14): `--report` ДО миграции `0023` (без загрузки
  * реестра), `--drop-agenda-rows` по слову владельца, `--apply` — одна пачка исполнителя на граф с источником
- * `system` (Повестка, навигация хоста, «Год», Upcoming), `--rehearsal` — DSN локальной базы репетиции.
+ * `system` (Повестка, навигация хоста, «Год», Upcoming), `--undo` — отмена этой пачки (запись журнала скрыта
+ * из ленты, и другого пути к Undo у владельца нет), `--rehearsal` — DSN локальной базы репетиции.
  *
  * Логика, гейт, сторож DSN репетиции и печать — в `db/migrate-1v.ts` под тестом на фикстуре прод-формы; здесь
  * обвязка, как у `reset-world`. Графы — пары «граф, владелец» планировщика (`identitiesForScheduler`);
@@ -794,7 +796,8 @@ const OPS: Record<string, { run: (args: string[]) => Promise<number>; help: stri
     run: migrate1vOp,
     help:
       'срез 1в: --report (только чтение, ДО миграции 0023) | --drop-agenda-rows --i-understand | ' +
-      '--apply --i-understand (одна пачка на граф, источник system); --rehearsal — DSN из ORBIS_REHEARSAL_DSN, только localhost',
+      '--apply --i-understand (одна пачка на граф, источник system) | --undo <actionId> --i-understand; ' +
+      '--rehearsal — DSN из ORBIS_REHEARSAL_DSN, только localhost',
   },
   ping: { run: ping, help: 'связность и версия PostgreSQL' },
   dump: {
