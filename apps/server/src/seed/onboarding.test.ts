@@ -1383,10 +1383,20 @@ describe('заведение графа (§8.6, РП-15, С1б-5)', () => {
     expect(((err as TRPCError).cause as { code?: string } | undefined)?.code).toBe(
       'GRAPH_NEEDS_MIGRATION',
     );
-    // `migrate-1b` снят срезом 1в (РП-13): граф старой формы переводит только пересев мира.
-    expect((err as TRPCError).message).toContain('docs/implementation/02-ops-runbook.md');
-    expect((err as TRPCError).message).toContain('reset-world');
-    expect((err as TRPCError).message).not.toContain('migrate-1b');
+    // `migrate-1b` снят срезом 1в (РП-13): перевода нет — пересев мира, и он сносит данные (гейт m-4).
+    const message = (err as TRPCError).message;
+    expect(message).toContain('перевода нет');
+    expect(message).toContain('reset-world');
+    expect(message).toContain('данные графа сносятся');
+    expect(message).not.toContain('migrate-1b');
+    // Ссылка — на раздел, который в ранбуке ЕСТЬ: заголовок в «…» дословно встречается в файле.
+    const section = /02-ops-runbook\.md, «([^»]+)»/.exec(message)?.[1];
+    expect(section).toBe('Что делает пересев и что он сносит');
+    const runbook = readFileSync(
+      join(import.meta.dir, '../../../../docs/implementation/02-ops-runbook.md'),
+      'utf8',
+    );
+    expect(runbook).toContain(`**${section}.**`);
     expect(await worldSnapshot(user)).toEqual(before);
   });
 

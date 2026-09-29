@@ -108,6 +108,14 @@ interface Snapshot {
 }
 
 /**
+ * Глубина обхода журнала записи в `archivedByUndoneCreation` (гейт m-5 задачи 9): обход кончается на первом
+ * неотменённом действии, так что читать журнал записи целиком незачем. Цепочка из стольких ОТМЕНЁННЫХ
+ * правок подряд — не сценарий владельца; не дошли до решения — признака нет (предложения нет), то есть
+ * ошибка в безопасную сторону: поставка промолчит, а не вернёт из архива то, что владелец убрал.
+ */
+const UNDONE_WALK_DEPTH = 50;
+
+/**
  * Архив записи — откат её «добавления», а не решение владельца (R-18)? Признак по журналу: ПОСЛЕДНЕЕ
  * НЕОТМЕНЁННОЕ действие, тронувшее запись (любая операция с её id), — «добавление», и оно отменено.
  * «Добавление» — это создание записи (`entity_create` с её id: сев, «добавить») или возврат её из архива
@@ -149,7 +157,7 @@ async function archivedByUndoneCreation(tx: Tx, ids: readonly string[]): Promise
                  (metadata -> 'actions' -> 0 @> ${created}::jsonb
                   OR metadata -> 'actions' -> 0 @> ${restored}::jsonb) AS added
           FROM chat_messages WHERE metadata @> ${touched}::jsonb
-          ORDER BY created_at DESC`,
+          ORDER BY created_at DESC LIMIT ${UNDONE_WALK_DEPTH}`,
     )) as unknown as Array<{ action_id?: string | null; added?: boolean }>;
     for (const row of history) {
       if (typeof row.action_id !== 'string') break;
@@ -229,13 +237,51 @@ function recordPrintOf(row: SupplyRow, key: SupplyKey): string {
     : printPageRecord({ title: row.title, emoji: row.emoji, body: row.body });
 }
 
+/** id записей в ссылках места печати приложения (домашняя, навигация, «поверх»). */
+function placeRefIds(print: ReturnType<typeof parseAppPrint>): Set<string> {
+  const out = new Set<string>();
+  for (const p of [APP_HOME, APP_NAV, APP_OPENS_OVER]) {
+    const v = print.props[p];
+    for (const x of Array.isArray(v) ? v : [v]) if (typeof x === 'string') out.add(x);
+  }
+  return out;
+}
+
+/**
+ * Эталон приложения тот же, но в графе появилась запись его ключа, которой не было, когда эталон пришёл
+ * (Fable I-1 задачи 9 среза 1в). Печать эталона В ГРАФЕ разрешает ключи в id живых записей
+ * (`appEtalonProps` пропускает ключ без записи): оболочка, принятая ДО «Добавить: Повестка», легла с
+ * навигацией без Повестки и отпечатком нового эталона — и без этой проверки после «Добавить» обновление
+ * больше не предлагалось бы, §6.2 («Повестка на месте Upcoming») не наступал бы никогда.
+ *
+ * Только ПРИБАВЛЕНИЕ ссылки, не любое расхождение: запись, которую владелец отправил в архив, из печати в
+ * графе выпадает (резолвер видит живые), и «обновление без неё» было бы предложением снять его раздел —
+ * это его решение (R-16), не поставки. «Новые записи — отдельное решение» (§9.1 п. 2) не нарушается:
+ * пункт появляется только ПОСЛЕ «Добавить».
+ */
+function gainedPlaceRef(s: Snapshot, row: SupplyRow, e: SupplyEtalon): boolean {
+  if (e.kind !== 'app') return false;
+  const stored = row.props[SUPPLY_TEXT];
+  if (typeof stored !== 'string') return false;
+  let had: Set<string>;
+  try {
+    had = placeRefIds(parseAppPrint(stored));
+  } catch {
+    // Битая печать в записи — не повод молча предлагать; её честно показывает «изменено вами».
+    return false;
+  }
+  const now = placeRefIds(parseAppPrint(supplyTextOf(e, s.reg, resolverOf(s))));
+  return [...now].some((id) => !had.has(id));
+}
+
 /** Пункт обновления по живой записи поставки или `null`, если предлагать нечего. */
 function updateOf(s: Snapshot, row: SupplyRow, e: SupplyEtalon): SupplyUpdate | null {
   if (!isSupply(row)) return null;
   const hash = etalonHash(e);
-  if (row.props[SUPPLY_HASH] === hash) return null;
+  if (row.props[SUPPLY_HASH] === hash && !gainedPlaceRef(s, row, e)) return null;
   const declined = row.props[SUPPLY_DECLINED];
   // Отказ помнится до СЛЕДУЮЩЕГО эталона (§9.1 п. 2): отклонённый отпечаток не предлагается, иной — да.
+  // «Оставить своё» у пункта «появилась запись эталона» пишет тот же отпечаток — и пункт уходит.
   if (declined === hash) return null;
   return {
     key: e.key,
@@ -400,7 +446,9 @@ export async function acceptUpdate(
   await seam.afterRead?.();
   const row = liveOrRefuse(s, key);
   const e = etalonIn(etalons, key);
-  if (row.props[SUPPLY_HASH] === etalonHash(e)) {
+  // «Обновления нет» — по тому же правилу, что список (`updateOf`): у приложения обновление бывает и при
+  // равном отпечатке — появилась запись его ключа (Fable I-1).
+  if (row.props[SUPPLY_HASH] === etalonHash(e) && !gainedPlaceRef(s, row, e)) {
     throw new ExecError('VALIDATION', 'обновления нет: запись уже с этим эталоном', { key });
   }
   return run(

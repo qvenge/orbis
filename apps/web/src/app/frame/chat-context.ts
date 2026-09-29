@@ -51,7 +51,7 @@ export function chatContextOf(model: NavModel, where: 'screen' | 'side'): ChatPl
 /**
  * Контекст «＋» (спека 1б §6.4, РП-9, В-6): на записи, не странице, — подзадача этой записи (как
  * сегодня внутри записи); на странице, домашней и экранах хоста — без контекста. Страница — место, а
- * не дело: подзадача «Upcoming» никому не нужна.
+ * не дело: подзадача «Повестки» никому не нужна.
  */
 export function captureContextOf(place: ChatPlace, isPage: boolean): CaptureContext {
   if (place?.kind === 'record' && !isPage) return { kind: 'entity', parentId: place.id };

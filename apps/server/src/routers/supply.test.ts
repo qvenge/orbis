@@ -20,6 +20,7 @@ import {
 import { printPageRecord } from '@orbis/shared/supply/print';
 import { TRPCError } from '@trpc/server';
 import { sql } from 'drizzle-orm';
+import { ZodError } from 'zod';
 import { appDb, freshGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
 import { withIdentity } from '../db/with-identity';
 import { execute } from '../executor/executor';
@@ -184,7 +185,12 @@ describe('supply.* — снятый с поставки ключ upcoming (1в �
       () => owner.supply.decline({ key: upcoming }),
       () => owner.supply.add({ key: upcoming }),
     ]) {
-      expect((await trpcError(call())).code).toBe('BAD_REQUEST');
+      const err = await trpcError(call());
+      expect(err.code).toBe('BAD_REQUEST');
+      // Отказ СХЕМЫ входа (гейт m-2), а не механизма: механизм на снятом ключе тоже ответил бы
+      // BAD_REQUEST («эталона нет»), и расширение `keyInput` до SUPPLY_KEY_VALUES тест бы не заметил.
+      expect(err.cause).toBeInstanceOf(ZodError);
+      expect((err.cause as ZodError).issues.map((i) => i.path)).toEqual([['key']]);
     }
   });
 });
@@ -212,7 +218,11 @@ describe('supply.* — каждая пишущая ручка — одна за�
 
     const added = await owner.supply.add({ key: 'all-tasks' });
     expect(await journalCount(graph, added.actionId)).toBe(1);
-    expect(await owner.supply.updates()).toEqual([]);
+    // Оболочка заводилась без «All Tasks» (записи не было) — после «Добавить» её раздел приходит
+    // предложением обновить оболочку (Fable I-1 задачи 9 среза 1в), а не молча.
+    expect((await owner.supply.updates()).map((u) => [u.key, u.kind])).toEqual([
+      ['host-shell', 'update'],
+    ]);
 
     // «Вернуть как было» после «принять»: правка владельца, затем возврат — одна запись.
     const id = supplyRecordId(graph, 'home');

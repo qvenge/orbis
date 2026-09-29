@@ -142,16 +142,17 @@ test('граф старой формы: seedOnboarding → CONFLICT при су�
       throw new Error(`unexpected ${path}`);
     },
   );
-  await waitFor(() =>
-    expect(
-      screen.getByText('Граф старой формы: его переводит только пересев мира —'),
-    ).toBeInTheDocument(),
+  const screenEl = await screen.findByTestId('migration-screen');
+  // Честно: перевода нет, пересев сносит данные (гейт m-4) — и ссылка на настоящий раздел ранбука.
+  expect(screenEl).toHaveTextContent(
+    'Граф старой формы: перевода на новую версию нет. Мир пересевается операцией reset-world — данные графа сносятся.',
   );
-  // `migrate-1b` снят срезом 1в (РП-13): экран отсылает к ранбуку, не к снятой команде.
-  expect(
-    screen.getByText('docs/implementation/02-ops-runbook.md, раздел reset-world'),
-  ).toBeInTheDocument();
-  expect(screen.queryByText(/migrate-1b/)).toBeNull();
+  expect(screenEl).toHaveTextContent(
+    'docs/implementation/02-ops-runbook.md — «Что делает пересев и что он сносит»',
+  );
+  // `migrate-1b` снят срезом 1в (РП-13): ни снятой команды, ни `ops.ts` на экране — по всему тексту
+  // страницы, а не по одному узлу.
+  expect(document.body.textContent).not.toMatch(/migrate-1b|scripts\/ops\.ts/);
   expect(screen.queryByTestId('app')).not.toBeInTheDocument();
 });
 
@@ -171,5 +172,6 @@ test('иной отказ seedOnboarding без настроек — прежн�
       screen.getByText('Не удалось загрузить настройки. Повторите позже.'),
     ).toBeInTheDocument(),
   );
-  expect(screen.queryByText('Граф нужно перевести на новую версию:')).not.toBeInTheDocument();
+  // Экран перевода — по его метке, а не по тексту: текст меняется, метка — нет (гейт m-1).
+  expect(screen.queryByTestId('migration-screen')).toBeNull();
 });

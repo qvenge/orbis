@@ -42,12 +42,19 @@ export function OnboardingGate({ children }: { children: ReactNode }) {
     return (
       <div
         role="alert"
+        data-testid="migration-screen"
         className="flex h-full flex-col items-center justify-center gap-3 px-4 text-center text-sm"
       >
-        {/* Перевод 1б `migrate-1b` исполнен в проде 28.09 и снят срезом 1в (РП-13): граф старой формы
-            переводит только пересев мира — ранбук, а не команда, которой больше нет. */}
-        <span>Граф старой формы: его переводит только пересев мира —</span>
-        <code className="font-mono">docs/implementation/02-ops-runbook.md, раздел reset-world</code>
+        {/* Перевод 1б `migrate-1b` исполнен в проде 28.09 и снят срезом 1в (РП-13): перевода графа
+            старой формы больше нет — только пересев мира `reset-world`, и он сносит данные графа, а не
+            переводит их (гейт m-4, Fable M-2 задачи 9). Ссылка — на настоящий раздел ранбука. */}
+        <span>
+          Граф старой формы: перевода на новую версию нет. Мир пересевается операцией reset-world —
+          данные графа сносятся.
+        </span>
+        <code className="font-mono">
+          docs/implementation/02-ops-runbook.md — «Что делает пересев и что он сносит»
+        </code>
       </div>
     );
   }

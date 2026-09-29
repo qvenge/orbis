@@ -515,6 +515,15 @@ describe('(е) «вернуть как было»', () => {
   });
 });
 
+/** Пункт «обновление оболочки»: в графе появилась запись ключа её навигации (Fable I-1 задачи 9 1в). */
+const SHELL_GAINED = (graph: GraphId) => ({
+  key: 'host-shell' as const,
+  kind: 'update' as const,
+  recordId: supplyRecordId(graph, 'host-shell'),
+  edited: false,
+  declined: false,
+});
+
 describe('(ж) новая запись поставки', () => {
   test('нет записи ключа → {kind:new}; «добавить» создаёт её «как в поставке»', async () => {
     const graph = await freshGraph();
@@ -530,7 +539,9 @@ describe('(ж) новая запись поставки', () => {
     expect(statusOf(row)).toBe('etalon');
     expect(row.props[SUPPLY_HASH]).toBe(etalonHash(etalonOf('records')));
     expect(await journalOf(graph, actionId)).toEqual([{ title: 'Добавить из поставки: «Записи»' }]);
-    expect(await updatesOf(ctxOf(graph))).toEqual([]);
+    // Оболочка заводилась без «Записей» — после «Добавить» её раздел приходит предложением обновить
+    // оболочку (Fable I-1 задачи 9 среза 1в: ключ навигации получил запись), а не молча и не никогда.
+    expect(await updatesOf(ctxOf(graph))).toEqual([SHELL_GAINED(graph)]);
   });
 
   test('архивная запись ключа → ничего не предлагается, и «добавить» — отказ', async () => {
@@ -654,7 +665,9 @@ describe('R-18: Undo «добавить» — как будто не добав�
       ),
     );
     expect(count[0]?.n).toBe(1);
-    expect(await updatesOf(ctxOf(graph))).toEqual([]);
+    // Оболочка заводилась без «Записей» — после «Добавить» её раздел приходит предложением обновить
+    // оболочку (Fable I-1 задачи 9 среза 1в: ключ навигации получил запись), а не молча и не никогда.
+    expect(await updatesOf(ctxOf(graph))).toEqual([SHELL_GAINED(graph)]);
   });
 
   test('два круга: добавить → Undo → добавить (из архива) → Undo → снова new, третий «добавить» — та же запись', async () => {
@@ -675,7 +688,9 @@ describe('R-18: Undo «добавить» — как будто не добав�
     }
     await addSupplyRecord(ctxOf(graph), 'records');
     expect((await rowOf(graph, id)).archived).toBe(false);
-    expect(await updatesOf(ctxOf(graph))).toEqual([]);
+    // Оболочка заводилась без «Записей» — после «Добавить» её раздел приходит предложением обновить
+    // оболочку (Fable I-1 задачи 9 среза 1в: ключ навигации получил запись), а не молча и не никогда.
+    expect(await updatesOf(ctxOf(graph))).toEqual([SHELL_GAINED(graph)]);
   });
 
   test('архив владельцем после «добавить» — ничего не предлагается, «добавить» — отказ', async () => {
@@ -1090,5 +1105,120 @@ describe('М-8 остатков 1б: признак отката «добави�
     await undo(graph, added.actionId);
     await ownerEdit(graph, { id, title: 'Моя повестка' });
     expect(await updatesOf(ctxOf(graph))).toEqual([]);
+  });
+});
+
+// ─────────── Fable I-1 задачи 9: граф 1б, «Принять все» до и после «Добавить: Повестка» ───────────
+
+/** Эталоны релиза 1б: Upcoming в навигации хоста и своей страницей, Повестки нет. */
+const ETALONS_1B: SupplyEtalon[] = [
+  ...SUPPLY_ETALONS.filter((e) => e.key !== 'agenda').map(
+    (e): SupplyEtalon =>
+      e.kind === 'app'
+        ? {
+            ...e,
+            nav: [
+              'records',
+              'daily-planning',
+              'upcoming',
+              'all-tasks',
+              'horizon-year',
+              'routines',
+            ] as unknown as SupplyKey[],
+          }
+        : e,
+  ),
+  {
+    key: 'upcoming' as unknown as SupplyKey,
+    kind: 'page',
+    title: 'Upcoming',
+    emoji: '🗓️',
+    text: UPCOMING_BODY,
+  },
+];
+
+const NAV_1V = ['records', 'daily-planning', 'agenda', 'all-tasks', 'horizon-year', 'routines'];
+
+async function navKeysOf(graph: GraphId): Promise<string[]> {
+  const shell = await rowOf(graph, supplyRecordId(graph, 'host-shell'));
+  const byId = new Map(
+    [...SUPPLY_KEYS, 'upcoming' as const].map((k) => [supplyRecordId(graph, k), k as string]),
+  );
+  return ((shell.props[APP_NAV] as string[] | undefined) ?? []).map((id) => byId.get(id) ?? id);
+}
+
+describe('Fable I-1: граф 1б — Повестка в навигации хоста при любом порядке нажатий', () => {
+  test('«Принять все» → «Добавить: Повестка» → «Обновления» снова предлагают оболочку → Повестка третьей', async () => {
+    const graph = await freshGraph();
+    await seedSupply(
+      graph,
+      ETALONS_1B.map((e) => e.key),
+      ETALONS_1B,
+    );
+    const first = await updatesOf(ctxOf(graph));
+    expect(first).toContainEqual(
+      expect.objectContaining({ key: 'host-shell', kind: 'update', edited: false }),
+    );
+    expect(first).toContainEqual(expect.objectContaining({ key: 'agenda', kind: 'new' }));
+
+    await acceptAll(ctxOf(graph));
+    // Повестки ещё нет — навигация эталона 1в без неё (и без Upcoming: её в эталоне больше нет).
+    expect(await navKeysOf(graph)).toEqual(NAV_1V.filter((k) => k !== 'agenda'));
+    expect(statusOf(await rowOf(graph, supplyRecordId(graph, 'host-shell')))).toBe('etalon');
+
+    await addSupplyRecord(ctxOf(graph), 'agenda');
+    // Отпечаток оболочки уже 1в, но в графе появилась запись её ключа — обновление снова есть.
+    expect(await updatesOf(ctxOf(graph))).toEqual([
+      {
+        key: 'host-shell',
+        kind: 'update',
+        recordId: supplyRecordId(graph, 'host-shell'),
+        edited: false,
+        declined: false,
+      },
+    ]);
+    await acceptAll(ctxOf(graph));
+    expect(await navKeysOf(graph)).toEqual(NAV_1V);
+    expect(statusOf(await rowOf(graph, supplyRecordId(graph, 'host-shell')))).toBe('etalon');
+    expect(await updatesOf(ctxOf(graph))).toEqual([]);
+  });
+
+  test('«Добавить: Повестка» → «Принять все» → Повестка третьей, больше ничего не предлагается', async () => {
+    const graph = await freshGraph();
+    await seedSupply(
+      graph,
+      ETALONS_1B.map((e) => e.key),
+      ETALONS_1B,
+    );
+    await addSupplyRecord(ctxOf(graph), 'agenda');
+    await acceptAll(ctxOf(graph));
+    expect(await navKeysOf(graph)).toEqual(NAV_1V);
+    expect(await updatesOf(ctxOf(graph))).toEqual([]);
+  });
+
+  test('раздел в архиве (решение владельца) обновления оболочки НЕ порождает; «принять» без пункта — отказ', async () => {
+    const graph = await freshGraph();
+    await seedSupply(graph);
+    await ownerEdit(graph, { id: supplyRecordId(graph, 'all-tasks'), archived: true });
+    expect(await updatesOf(ctxOf(graph))).toEqual([]);
+    const e = await execErrorOf(acceptUpdate(ctxOf(graph), 'host-shell'));
+    expect([e.code, e.message]).toEqual([
+      'VALIDATION',
+      'обновления нет: запись уже с этим эталоном',
+    ]);
+  });
+
+  test('«Оставить своё» у пункта «появилась запись» — пункт уходит до следующего эталона', async () => {
+    const graph = await freshGraph();
+    await seedSupply(
+      graph,
+      ETALONS_1B.map((e) => e.key),
+      ETALONS_1B,
+    );
+    await acceptAll(ctxOf(graph));
+    await addSupplyRecord(ctxOf(graph), 'agenda');
+    await declineUpdate(ctxOf(graph), 'host-shell');
+    expect(await updatesOf(ctxOf(graph))).toEqual([]);
+    expect(await navKeysOf(graph)).toEqual(NAV_1V.filter((k) => k !== 'agenda'));
   });
 });
