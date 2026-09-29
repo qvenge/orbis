@@ -215,7 +215,7 @@ export const QUERY_WALKERS: ReadonlyArray<QueryWalker> = [
     name: 'web-builder-model',
     file: 'apps/web/src/features/query-builder/model.ts',
     entry: 'fieldNodeView',
-    does: 'A: у адреса строки формы нет, узел сохраняется при печати; P: строка поля со ссылкой — только чтение, узел сохраняется',
+    does: 'A: у адреса строки формы нет, узел сохраняется при печати; P: узел со ссылкой получает строку поля со значением-ссылкой как есть; только-чтение строки целиком — FieldRows (web-field-rows)',
   },
   {
     name: 'web-builder-form',
@@ -245,7 +245,7 @@ export const QUERY_WALKERS: ReadonlyArray<QueryWalker> = [
     name: 'web-field-rows',
     file: 'apps/web/src/features/query-builder/FieldRows.tsx',
     entry: 'BoundInput',
-    does: 'P: граница-ссылка — подпись `$имя` только для чтения (не [object Object]), узел сохраняется',
+    does: 'P: строка со ссылкой — только для чтения целиком (значения `$имя`, оператор, кнопки); узел сохраняется',
   },
   {
     name: 'web-block-parse',

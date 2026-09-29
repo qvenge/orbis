@@ -1,9 +1,11 @@
 import { bindQueryBlockAttrs, QUERY_BLOCK_CLOSE, QueryBlock } from '@orbis/shared/doc';
 import { parsePageText } from '@orbis/shared/doc/page-grammar';
+import type { BodyKind } from '@orbis/shared/doc/placement';
 import { pageQueryAstSchema, type QueryAst } from '@orbis/shared/query';
 import type { Attributes, NodeViewProps } from '@tiptap/core';
 import { NodeViewWrapper, ReactNodeViewRenderer, useEditorState } from '@tiptap/react';
 import { useMemo, useState } from 'react';
+import { useBodyKind } from '../../../lib/query-blocks/body-kind';
 import { useFieldCatalog } from '../../../lib/query-blocks/useFieldCatalog';
 import { useToast } from '../../../ui/toast-store';
 import { DataBlock } from '../../page/blocks/DataBlock';
@@ -25,17 +27,36 @@ function astOf(raw: unknown): QueryAst | null {
   return parsed.success ? parsed.data : null;
 }
 
+/** Документ редактора — ровно то, что читает сбор маркеров (узел ProseMirror неизменяем). */
+type MarkerDoc = {
+  descendants(f: (n: { type: { name: string }; attrs: Record<string, unknown> }) => void): void;
+};
+
+/**
+ * Маркеры по документу: узел ProseMirror неизменяем, и каждая транзакция даёт новый корень, так что
+ * корень — ключ, а слабая карта сама отпускает старые версии. Селектор зовётся в КАЖДОМ блоке данных
+ * на КАЖДОЙ транзакции (фикс-круг 1 задачи 5, m-2): без общего кеша N блоков обходили бы документ N
+ * раз за нажатие клавиши, с ним — один.
+ */
+const MARKERS = new WeakMap<MarkerDoc, string>();
+
 /**
  * Маркеры параметров документа редактора одной строкой — в порядке документа (первое имя
  * выигрывает, как у `paramDeclsOf`). Строка, а не узлы: подписка `useEditorState` сравнивает
- * результат, и правка соседнего абзаца блок данных не перерисовывает.
+ * результат, и правка соседнего абзаца блок данных не перерисовывает. В заметке — пусто без обхода:
+ * провайдер значений там объявлений не отдаёт (`params.tsx`), и считать их незачем.
  */
-function paramMarkers(editor: NodeViewProps['editor'] | null): string {
+export function paramMarkers(doc: MarkerDoc | undefined, kind: BodyKind): string {
+  if (doc === undefined || kind === 'note') return '';
+  const hit = MARKERS.get(doc);
+  if (hit !== undefined) return hit;
   const out: string[] = [];
-  editor?.state.doc.descendants((n) => {
+  doc.descendants((n) => {
     if (n.type.name === 'paramBlock' && typeof n.attrs.text === 'string') out.push(n.attrs.text);
   });
-  return out.join('\n\n');
+  const text = out.join('\n\n');
+  MARKERS.set(doc, text);
+  return text;
 }
 
 function Widget({ node, updateAttributes, editor }: NodeViewProps) {
@@ -52,7 +73,9 @@ function Widget({ node, updateAttributes, editor }: NodeViewProps) {
   const [editing, setEditing] = useState(false);
   // Параметры страницы (1в §5.1): в настройке — умолчания объявлений ЖИВОГО документа редактора, а
   // не сохранённого тела: только что вставленный `{{param}}` сразу даёт блоку своё умолчание.
-  const markers = useEditorState({ editor, selector: ({ editor: e }) => paramMarkers(e) }) ?? '';
+  const kind = useBodyKind();
+  const markers =
+    useEditorState({ editor, selector: ({ editor: e }) => paramMarkers(e?.state.doc, kind) }) ?? '';
   const paramNodes = useMemo(() => parsePageText(markers), [markers]);
   const { show } = useToast();
   // Реестр нужен ровно ЗДЕСЬ и ровно на сохранение: форма отдаёт ТЕКСТ (её перевод на дерево —

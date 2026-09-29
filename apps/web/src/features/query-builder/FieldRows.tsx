@@ -64,6 +64,19 @@ function isParam(value: QueryBound): value is QueryParamValue {
   return typeof value === 'object' && value !== null && 'param' in value;
 }
 
+/** Есть ли в строке поля ссылка на параметр страницы — в значениях списка или в границах. */
+function holdsParam(view: FieldNodeView | null): boolean {
+  return (
+    view !== null && [...view.values, view.from, view.to].some((v) => v !== null && isParam(v))
+  );
+}
+
+/** Текст значения строки только для чтения: ссылка — `$имя`, токен — подпись словаря. */
+function boundText(value: QueryBound): string {
+  if (isParam(value)) return `$${value.param}`;
+  return isToken(value) ? QUERY_DATE_TOKEN_LABELS[value.token] : String(value);
+}
+
 /** Текст литерала для поля ввода; у токена литерала нет — там пусто. */
 function literalText(value: QueryBound): string {
   return isToken(value) ? '' : String(value);
@@ -91,6 +104,12 @@ export function FieldRow({
 }) {
   const id = useId();
   const operator: Operator = view?.op ?? '';
+  /**
+   * Строка со ссылкой `$<имя>` (1в §5.1) — только для чтения ЦЕЛИКОМ, оператор тоже: смена оператора
+   * пересобирает узел (`buildNode`) из литералов и молча теряла бы ссылку. Правится такая строка
+   * текстом блока («Редактировать как текст»), где ссылку видно и её можно сознательно заменить.
+   */
+  const locked = holdsParam(view);
 
   /**
    * Оператор списка, с которым строка жила последний раз. Узел исчезает от стирания
@@ -130,6 +149,8 @@ export function FieldRow({
   }
 
   function changeOperator(next: Operator): void {
+    // Погашенный селект до сюда не доходит в браузере; страж — на случай программного события.
+    if (locked) return;
     if (next === '') {
       // «Нет фильтра» — ЯВНЫЙ отказ от конструкции, а не побочный эффект стирания значения:
       // следующий фильтр по этому свойству строка заводит с чистого листа, иначе галочка
@@ -157,6 +178,7 @@ export function FieldRow({
         <select
           id={id}
           value={operator}
+          disabled={locked}
           className={`${FIELD_CLS} w-32 shrink-0`}
           onChange={(e) => changeOperator(e.target.value as Operator)}
         >
@@ -183,12 +205,14 @@ export function FieldRow({
           label={label}
           values={view === null ? [] : view.values}
           onValues={writeValues}
+          locked={locked}
         />
       )}
       {(operator === 'gt' || operator === 'lt') && view !== null && (
         <BoundInput
           field={field}
           form={operator}
+          locked={locked}
           label={`${label}: значение`}
           dateLabel={`${label}: дата`}
           value={view.from ?? ''}
@@ -200,6 +224,7 @@ export function FieldRow({
           <BoundInput
             field={field}
             form="gte"
+            locked={locked}
             label={`${label}: от`}
             dateLabel={`${label}: от, дата`}
             value={view.from ?? ''}
@@ -208,6 +233,7 @@ export function FieldRow({
           <BoundInput
             field={field}
             form="lte"
+            locked={locked}
             label={`${label}: до`}
             dateLabel={`${label}: до, дата`}
             value={view.to ?? ''}
@@ -246,7 +272,8 @@ function buildNode(
  *
  * Ссылка на параметр страницы (`$<имя>`, 1в §5.1) — подписью только для чтения: значение
  * подставит сервер по переключателю страницы, а у формы для ссылки ни выбора, ни ввода нет. Узел
- * при этом не трогается — печать формы отдаёт ту же ссылку.
+ * при этом не трогается — печать формы отдаёт ту же ссылку. Соседние значения строки со ссылкой
+ * (`locked`) — тоже только для чтения: строка правится текстом блока целиком.
  *
  * Токены даты — только те, у кого есть край, который читает форма условия (`form`, 1в §3.4): иначе
  * сохранение отказало бы `TOKEN_EDGE` за выбор, который форма сама предложила. Выбранный сейчас
@@ -257,6 +284,7 @@ function buildNode(
 function BoundInput({
   field,
   form,
+  locked,
   label,
   dateLabel,
   value,
@@ -265,6 +293,8 @@ function BoundInput({
   field: FieldRef;
   /** Форма условия (`=`, `<`, `>`, граница `from`/`to`) — по ней сужаются токены даты. */
   form: TokenForm;
+  /** Строка со ссылкой на параметр — только для чтения целиком (`FieldRow`). */
+  locked: boolean;
   /** Доступное имя единственного контрола (у дат — селекта «токен или точное значение»). */
   label: string;
   /** Доступное имя поля точного значения — оно появляется рядом с селектом токенов. */
@@ -272,12 +302,12 @@ function BoundInput({
   value: QueryBound;
   onValue: (v: QueryBound) => void;
 }) {
-  if (isParam(value)) {
+  if (locked || isParam(value)) {
     return (
       <input
         aria-label={label}
         readOnly
-        value={`$${value.param}`}
+        value={boundText(value)}
         className={`${FIELD_CLS} w-full font-mono text-text-muted`}
       />
     );
@@ -335,12 +365,15 @@ function ConditionValues({
   label,
   values,
   onValues,
+  locked,
 }: {
   field: FieldRef;
   /** Подпись строки (с номером, если узлов по свойству несколько) — основа имён всех значений. */
   label: string;
   values: QueryBound[];
   onValues: (values: QueryBound[]) => void;
+  /** Строка со ссылкой на параметр — без правки, удаления и добавления значений. */
+  locked: boolean;
 }) {
   const listed = listedValues(field);
   if (listed !== null) {
@@ -407,12 +440,13 @@ function ConditionValues({
           <BoundInput
             field={field}
             form="eq"
+            locked={locked}
             label={`${label}: значение ${i + 1}`}
             dateLabel={`${label}: дата ${i + 1}`}
             value={value}
             onValue={(next) => editValue(i, next)}
           />
-          {!empty && (
+          {!empty && !locked && (
             <button
               type="button"
               aria-label={`Удалить значение ${i + 1}: ${label}`}
@@ -426,7 +460,7 @@ function ConditionValues({
       ))}
       {/* У заготовки кнопки «добавить» нет: второе пустое значение рядом с первым пустым
           ничего не добавляет, а `key=""` в строке блока — уже добавляет. */}
-      {!empty && (
+      {!empty && !locked && (
         <button
           type="button"
           className={`${ROW_BUTTON_CLS} self-start`}

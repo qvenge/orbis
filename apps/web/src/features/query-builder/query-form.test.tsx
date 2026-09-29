@@ -811,3 +811,19 @@ test('токены строки даты сужены по оператору: �
   fireEvent.change(screen.getByLabelText('Срок'), { target: { value: 'anyOf' } });
   expect(tokensOf('Срок: значение 1')).toEqual(all);
 });
+
+// Фикс-круг 1 (m-1): смена оператора пересобирает узел из литералов и молча теряла бы ссылку, поэтому
+// строка со ссылкой — только для чтения целиком: оператор, значения, кнопки.
+test('страница: строка с $period — оператор и значения только для чтения, ссылка переживает печать', async () => {
+  const initial = 'aspect=orbis/task, orbis/due_date=$period, limit=30';
+  const { onSave } = await openFormIn('page', initial);
+  await screen.findByLabelText('Лимит выдачи');
+  expect(screen.getByLabelText('Срок')).toBeDisabled();
+  expect(screen.queryByRole('button', { name: /Добавить значение: Срок/ })).toBeNull();
+  expect(screen.queryByRole('button', { name: /Удалить значение 1: Срок/ })).toBeNull();
+  // Попытка сменить оператор (событие доходит и до погашенного селекта в jsdom) узел не пересобирает.
+  fireEvent.change(screen.getByLabelText('Срок'), { target: { value: 'lt' } });
+  fireEvent.change(screen.getByLabelText('Лимит выдачи'), { target: { value: '5' } });
+  save();
+  expect(saved(onSave)).toBe('aspect=orbis/task, orbis/due_date=$period, limit=5');
+});

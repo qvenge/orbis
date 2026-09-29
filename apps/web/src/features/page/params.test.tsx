@@ -35,6 +35,7 @@ import { DetailScreen } from '../entity-detail/DetailScreen';
 import { structureHandler } from '../entity-detail/structure-fixtures';
 import { BodyEditor } from '../entity-editor/BodyEditor';
 import { EditorShell } from '../entity-editor/EditorShell';
+import { paramMarkers } from '../entity-editor/nodes/QueryWidget';
 import { PARAM_VIEW_PREFIX } from './params';
 
 installCrashTrap();
@@ -251,6 +252,33 @@ describe('значения и пачка (§5.1, С1в-4)', () => {
   });
 });
 
+// Фикс-круг 1 (I-1): значения блока — только имён самого блока. Иначе ключ кеша зависел бы от чужих
+// параметров, и переключатель одного параметра перезапрашивал бы все блоки страницы.
+test('два параметра, три блока: смена horizon перезапрашивает ТОЛЬКО блок с $horizon; у блока без $ нет params', async () => {
+  const HORIZON = '{{param: horizon, type=period, default=today, options=today|this_week}}';
+  const QH = 'aspect=orbis/task, orbis/due_date=$horizon, limit=7';
+  const QN = 'aspect=orbis/task, limit=3';
+  const body = `${PARAM}\n\n${HORIZON}\n\n{{query: ${Q1}}}\n\n{{query: ${QH}}}\n\n{{query: ${QN}}}\n`;
+  const { calls } = openPage(page(body));
+  await waitFor(() => expect(items(calls)).toHaveLength(1));
+  expect(items(calls)[0]?.map((b) => [b.text, b.params])).toEqual([
+    [Q1, { period: 'next_7d' }],
+    [QH, { horizon: 'today' }],
+    [QN, undefined],
+  ]);
+  expect(items(calls)[0]?.[2]).not.toHaveProperty('params');
+  await screen.findByText('строка next_7d');
+
+  const group = await screen.findByRole('radiogroup', { name: 'horizon' });
+  fireEvent.click(within(group).getByRole('radio', { name: 'эта неделя' }));
+  await waitFor(() => expect(items(calls)).toHaveLength(2));
+  await new Promise((r) => setTimeout(r, 30));
+  expect(items(calls).map((batch) => batch.map((b) => [b.text, b.params]))).toEqual([
+    items(calls)[0]?.map((b) => [b.text, b.params]),
+    [[QH, { horizon: 'this_week' }]],
+  ]);
+});
+
 describe('плашки (§5.1)', () => {
   test('блок с $x без объявления — плашка «параметр «x» не объявлен на странице», запроса нет', async () => {
     const q = 'aspect=orbis/task, orbis/due_date=$x';
@@ -275,6 +303,27 @@ describe('плашки (§5.1)', () => {
       "Блок {{param}}: умолчание — один из вариантов, не 'today'.",
     );
   });
+});
+
+// Фикс-круг 1 (m-2): селектор маркеров зовётся в каждом блоке данных на каждой транзакции — обход
+// документа один на его версию, в заметке обхода нет вовсе.
+test('маркеры параметров редактора: один обход на версию документа; в заметке — без обхода', () => {
+  type Visit = (n: { type: { name: string }; attrs: Record<string, unknown> }) => void;
+  const walk = (f: Visit) => {
+    f({ type: { name: 'paragraph' }, attrs: {} });
+    f({ type: { name: 'paramBlock' }, attrs: { text: PARAM } });
+  };
+  const descendants = vi.fn(walk);
+  const doc = { descendants };
+  expect(paramMarkers(doc, 'page')).toBe(PARAM);
+  expect(paramMarkers(doc, 'template')).toBe(PARAM);
+  expect(descendants).toHaveBeenCalledTimes(1);
+  const next = { descendants: vi.fn(walk) };
+  expect(paramMarkers(next, 'page')).toBe(PARAM);
+  expect(next.descendants).toHaveBeenCalledTimes(1);
+  const note = { descendants: vi.fn(walk) };
+  expect(paramMarkers(note, 'note')).toBe('');
+  expect(note.descendants).not.toHaveBeenCalled();
 });
 
 describe('заметка, первый кадр и редактор', () => {
