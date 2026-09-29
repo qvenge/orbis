@@ -215,7 +215,7 @@ export const QUERY_WALKERS: ReadonlyArray<QueryWalker> = [
     name: 'web-builder-model',
     file: 'apps/web/src/features/query-builder/model.ts',
     entry: 'fieldNodeView',
-    does: 'A: у адреса строки формы нет, узел сохраняется при печати; P: узел со ссылкой получает строку поля со значением-ссылкой как есть; только-чтение строки целиком — FieldRows (web-field-rows)',
+    does: 'A: у адреса строки формы нет, узел сохраняется при печати; P: узел со ссылкой получает строку поля со значением-ссылкой как есть; только-чтение строки целиком — FieldRows (web-field-rows); G: withDisplay снимает group при table/tile, при list/compact сохраняет',
   },
   {
     name: 'web-builder-form',

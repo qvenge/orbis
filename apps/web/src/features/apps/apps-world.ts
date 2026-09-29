@@ -14,12 +14,20 @@ import {
   APP_NAV,
   APP_NAV_FORM,
   APP_OPENS_OVER,
+  type BlockResult,
+  type EntityBlocksResult,
   HOME_PROPERTY,
   PAGE_ASPECT,
   TEMPLATE_FOR_PROPERTY,
 } from '@orbis/shared';
 import { frameHandler, frameWorld, PAGES, SHELL_ROW } from '../../app/frame/frame-fixtures';
-import { type MockHandler, type WireEntityFixture, wireEntity } from '../../test/harness';
+import {
+  BLOCKS_TIME_ZONE,
+  BLOCKS_TODAY,
+  type MockHandler,
+  type WireEntityFixture,
+  wireEntity,
+} from '../../test/harness';
 import { PAGE_TEMPLATES_QUERY } from '../page/usePageTemplates';
 import { APPS_QUERY, HOMED_PAGES_QUERY } from './useApps';
 
@@ -160,18 +168,20 @@ export function appsHandler(w: AppsWorld): MockHandler {
       const { blocks } = input as { blocks: { key: string; text?: string }[] };
       return {
         results: Object.fromEntries(
-          blocks.map((b) => [
+          blocks.map((b): [string, BlockResult] => [
             b.key,
             {
               ok: true,
               kind: 'rows',
-              rows: (b.text !== undefined && w.blockRows?.[b.text.trim()]) || [],
+              rows: ((b.text !== undefined && w.blockRows?.[b.text.trim()]) || []) as never,
               more: 0,
               closedIds: [],
             },
           ]),
         ),
-      };
+        today: BLOCKS_TODAY,
+        timeZone: BLOCKS_TIME_ZONE,
+      } satisfies EntityBlocksResult;
     }
     if (path === 'entity.updateBatch') {
       const { operations } = input as {

@@ -12,6 +12,7 @@ import {
   APP_NAV,
   APP_NAV_FORM,
   type BlockResult,
+  type EntityBlocksResult,
   entityBlocksInput,
   HOME_PROPERTY,
   PAGE_ASPECT,
@@ -25,6 +26,8 @@ import { APPS_QUERY } from '../../features/apps/useApps';
 import { SUPPLY_RECORDS_QUERY } from '../../features/page/useSupplyRecords';
 import { resetNavForTests, useNav } from '../../state/navigation';
 import {
+  BLOCKS_TIME_ZONE,
+  BLOCKS_TODAY,
   type MockHandler,
   trpcError,
   type WireEntityFixture,
@@ -211,7 +214,9 @@ export function frameHandler(world: FrameWorld = frameWorld()): MockHandler {
               ];
             }),
           ),
-        };
+          today: BLOCKS_TODAY,
+          timeZone: BLOCKS_TIME_ZONE,
+        } satisfies EntityBlocksResult;
       }
       case 'chat.threadEntity':
         return { entityId: world.threads[(input as { threadId: string }).threadId] ?? null };

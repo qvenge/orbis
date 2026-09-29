@@ -1,13 +1,21 @@
 // packages/shared/src/pages/day-groups.test.ts
 // Раскладка строк группировки по дням (спека 1в §5.2, РП-11) — чистая функция без базы. Пояс
-// владельца `Asia/Novosibirsk` (+07:00) — не пояс машины и не запасной `Europe/Moscow`: день
-// группы обязан считаться в поясе ОТВЕТА. Даты — вокруг `2026-07-15` (среда).
+// владельца `Asia/Novosibirsk` (+07:00) — не запасной `Europe/Moscow` и не пояс ПРОЦЕССА: день группы
+// обязан считаться в поясе ОТВЕТА. Пояс процесса — UTC: `bun test` без `TZ` ведёт процесс в UTC
+// (пин ниже). Пояс машины здесь ни при чём — и он сам +07 (Asia/Barnaul): прогон с `TZ` машины
+// порчу «день в поясе процесса» не увидел бы, поэтому пин и держит «процесс не в +07».
+// Даты — вокруг `2026-07-15` (среда).
 import { describe, expect, test } from 'bun:test';
 import { BUILTIN_ASPECT_DEFS } from '../registry/builtin-aspects';
 import { BUILTIN_CONTRACT_DEFS } from '../registry/builtin-contracts';
 import type { AspectDefinition } from '../registry/property-type';
 import type { Entity } from '../schemas/entity';
-import { type DayGroupField, type DayGroupInputRow, layoutDayGroups } from './day-groups';
+import {
+  type DayGroupField,
+  type DayGroupInputRow,
+  layoutDayGroups,
+  rowAtUntimed,
+} from './day-groups';
 
 const TZ = 'Asia/Novosibirsk';
 const WHEN: DayGroupField = { kind: 'value', contract: 'orbis/when' };
@@ -281,7 +289,11 @@ describe('внутри дня (§5.2): сначала без времени, з�
   });
 });
 
-describe('день группы — в поясе ОТВЕТА, не машины и не UTC (Фокус ревью п. 1)', () => {
+describe('день группы — в поясе ОТВЕТА, не процесса (Фокус ревью п. 1)', () => {
+  test('пояс процесса — не +07 пояса ответа (иначе порча «пояс процесса» зелёная)', () => {
+    expect(new Date('2026-07-15T12:00:00Z').getTimezoneOffset()).not.toBe(-420);
+  });
+
   test('закрыто в 00:20 по Новосибирску (17:20Z накануне) — в своём дне, не во вчерашнем', () => {
     const row: DayGroupInputRow = {
       entity: entity('t', ['orbis/task'], { 'orbis/completed_at': '2026-07-15T00:20:00+07:00' }),
@@ -360,5 +372,25 @@ describe('группировка по свойству и по адресу сл
       end: null,
       allDay: false,
     });
+  });
+});
+
+describe('rowAtUntimed — одна правда «без времени» для порядка сервера и подписи web', () => {
+  const at = (slot: 'done' | 'moment' | 'deadline' | null, value: string, allDay = false) => ({
+    slot,
+    value,
+    end: null,
+    allDay,
+  });
+  test('весь день, срок, дата без часов (и у done, где allDay — false) — без времени', () => {
+    expect(rowAtUntimed(at('moment', '2026-07-15T02:00:00.000Z', true))).toBe(true);
+    expect(rowAtUntimed(at('deadline', '2026-07-15T02:00:00.000Z'))).toBe(true);
+    expect(rowAtUntimed(at('done', '2026-07-15'))).toBe(true);
+    expect(rowAtUntimed(at(null, '2026-07-15'))).toBe(true);
+  });
+  test('момент со временем — со временем (в т.ч. done: «сделано 16:05»)', () => {
+    expect(rowAtUntimed(at('moment', '2026-07-15T02:00:00.000Z'))).toBe(false);
+    expect(rowAtUntimed(at('done', '2026-07-15T09:05:00.000Z'))).toBe(false);
+    expect(rowAtUntimed(at(null, '2026-07-15T02:00:00.000Z'))).toBe(false);
   });
 });

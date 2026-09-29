@@ -43,8 +43,13 @@ function dayOf(value: string, fmt: Intl.DateTimeFormat): string {
   return DAY_RE.test(value) ? value : fmt.format(new Date(value));
 }
 
-/** «Без времени» внутри дня (§5.2): «весь день», срок, дата-факт — идут первыми. */
-function untimed(at: BlockRowAt): boolean {
+/**
+ * «Без времени» (§5.2): «весь день», срок, дата без часов (у `done`-даты `allDay` — `false`, её выдаёт
+ * вид значения). ОДНА ПРАВДА на порядок внутри дня (сервер: без времени — первыми) и на колонку
+ * времени web (`rowTimeLabel`: «весь день», «срок», «сделано» без часов) — вторая копия правила по
+ * регулярке в web разошлась бы с порядком и напечатала бы «сделано 00:00».
+ */
+export function rowAtUntimed(at: BlockRowAt): boolean {
   return at.allDay || at.slot === 'deadline' || DAY_RE.test(at.value);
 }
 
@@ -149,8 +154,8 @@ export function layoutDayGroups(input: {
     const list = byDay.get(day) ?? [];
     // Стабильная сортировка: без времени — первыми в порядке входа, затем по моменту.
     const rowsOfDay = [...list].sort((a, b) => {
-      const ua = untimed(a.at as BlockRowAt);
-      const ub = untimed(b.at as BlockRowAt);
+      const ua = rowAtUntimed(a.at as BlockRowAt);
+      const ub = rowAtUntimed(b.at as BlockRowAt);
       if (ua || ub) return ua === ub ? 0 : ua ? -1 : 1;
       return Date.parse((a.at as BlockRowAt).value) - Date.parse((b.at as BlockRowAt).value);
     });

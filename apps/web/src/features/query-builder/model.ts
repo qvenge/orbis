@@ -433,12 +433,16 @@ export function parseForForm(
  * их не правит (колонки пишутся текстом блока), и держать невидимую копию значило бы вернуть
  * человеку то, что он уже снял. Плитка без агрегата получает `count` — единственный, которому не
  * нужно свойство.
+ *
+ * Группировка по дням (`group`, 1в §5.2) живёт только у строк: при `table`/`tile` снимается (разбор
+ * отверг бы пару правилом `groupNeedsRows`), при `list`/`compact` и без `display` — сохраняется.
  */
 export function withDisplay(ast: QueryAst, display: QueryDisplayMode | undefined): QueryAst {
-  const { display: _d, aggregate, columns, ...rest } = ast;
+  const { display: _d, aggregate, columns, group, ...rest } = ast;
   const next: QueryAst = display === undefined ? rest : { ...rest, display };
   if (display === 'tile') next.aggregate = aggregate ?? { fn: 'count' };
   if (display === 'table' && columns !== undefined) next.columns = columns;
+  if (group !== undefined && display !== 'table' && display !== 'tile') next.group = group;
   return next;
 }
 

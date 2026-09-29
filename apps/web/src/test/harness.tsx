@@ -2,6 +2,7 @@ import type { AppRouter } from '@orbis/server/src/router';
 import {
   type BlockResult,
   type EntityBlocksInput,
+  type EntityBlocksResult,
   type EntityBlockTextItem,
   entityBlocksInput,
 } from '@orbis/shared';
@@ -242,6 +243,15 @@ export function isRecordScreenListCall(c: { path: string; input: unknown }): boo
   return isTemplatesListCall(c) || isSupplyRecordsCall(c) || isAppsListCall(c);
 }
 
+/**
+ * Верх ответа `entity.blocks` (1в §5.2): «сегодня» и пояс владельца, по которым сервер разложил группы
+ * по дням. Пояс — `Asia/Novosibirsk` (+07): не запасной `Europe/Moscow` и не UTC, в котором тесты ленты
+ * держат процесс (`process.env.TZ`), — подпись в поясе браузера вместо пояса ответа видна на тесте.
+ * «Сегодня» — 27.09.2026 (воскресенье): день примера подписи спеки §5.2.
+ */
+export const BLOCKS_TODAY = '2026-09-27';
+export const BLOCKS_TIME_ZONE = 'Asia/Novosibirsk';
+
 /** Ответ одному блоку пачки: строки (сокращение для `kind:'rows'` без остатка) или сам результат. */
 export type BlockReplyValue = readonly WireEntityFixture[] | BlockResult;
 type BlockItem = EntityBlockTextItem;
@@ -286,7 +296,9 @@ export function blocksReply(
           return [b.key, asResult(typeof entry === 'function' ? entry(b) : entry)];
         }),
       ),
-    };
+      today: BLOCKS_TODAY,
+      timeZone: BLOCKS_TIME_ZONE,
+    } satisfies EntityBlocksResult;
   };
 }
 

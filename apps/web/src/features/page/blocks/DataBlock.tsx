@@ -15,6 +15,7 @@ import { Card } from '../../../ui/Card';
 import { usePageParams } from '../params';
 import { BlockPlaque, ConfigureButton, REGISTRY_FAILED_MESSAGE } from './BlockPlaque';
 import { CompactForm } from './CompactForm';
+import { DayGroupsSlot } from './DayGroupsSlot';
 import { ListForm } from './ListForm';
 import { MoreRows } from './MoreRows';
 import { TableForm } from './TableForm';
@@ -158,10 +159,26 @@ function LoadedBlock({
           <RowsBody result={result} ast={ast} pending={data.isPlaceholderData} onMore={setLimit} />
         </BlockFrame>
       );
+    case 'groups': {
+      // Лента по дням (1в §5.2) — ленивым чанком (`DayGroupsSlot`); карточка та же, что у строк.
+      // Счётчик — строки всех групп и «ещё N» (пустые дни — не строки); «ещё N» — после последней
+      // группы, общим хвостом со строками.
+      const shown = result.groups.reduce((n, g) => n + g.rows.length, 0);
+      return (
+        <BlockFrame heading={heading} count={shown + result.more} {...configure}>
+          <DayGroupsSlot result={result} display={ast.display === 'list' ? 'list' : 'compact'} />
+          <MoreTail
+            shown={shown}
+            more={result.more}
+            pending={data.isPlaceholderData}
+            onMore={setLimit}
+          />
+        </BlockFrame>
+      );
+    }
     default:
       // Вид ответа, которого этот клиент не знает (сервер новее) — плашка, а не пустая карточка:
-      // §6.5, пустоты вместо ошибки не бывает. Сюда же пока идут группы по дням (`groups`, 1в §5.2):
-      // провод и сервер — задача 6, ленту по дням рисует задача 7 (ленивым чанком рядом с блоком).
+      // §6.5, пустоты вместо ошибки не бывает.
       return <BlockPlaque message={UNKNOWN_KIND_MESSAGE} {...configure} />;
   }
 }
@@ -185,9 +202,7 @@ function RowsBody({
   pending: boolean;
   onMore: (limit: number) => void;
 }) {
-  const total = result.rows.length + result.more;
   const display = ast.display ?? 'compact';
-  const atCap = result.rows.length >= BLOCK_ROWS_CAP;
   return (
     <>
       {display === 'list' ? (
@@ -197,19 +212,34 @@ function RowsBody({
       ) : (
         <CompactForm rows={result.rows} />
       )}
-      {result.more > 0 &&
-        (atCap ? (
-          <p data-testid="qb-cap" className="text-text-muted text-xs">
-            показаны первые {BLOCK_ROWS_CAP}
-          </p>
-        ) : (
-          <MoreRows
-            more={result.more}
-            pending={pending}
-            onMore={() => onMore(Math.min(total, BLOCK_ROWS_CAP))}
-          />
-        ))}
+      <MoreTail shown={result.rows.length} more={result.more} pending={pending} onMore={onMore} />
     </>
+  );
+}
+
+/** «ещё N» строк или ленты по дням — либо подпись потолка, когда раскрывать уже нечем. */
+function MoreTail({
+  shown,
+  more,
+  pending,
+  onMore,
+}: {
+  shown: number;
+  more: number;
+  pending: boolean;
+  onMore: (limit: number) => void;
+}) {
+  if (more === 0) return null;
+  return shown >= BLOCK_ROWS_CAP ? (
+    <p data-testid="qb-cap" className="text-text-muted text-xs">
+      показаны первые {BLOCK_ROWS_CAP}
+    </p>
+  ) : (
+    <MoreRows
+      more={more}
+      pending={pending}
+      onMore={() => onMore(Math.min(shown + more, BLOCK_ROWS_CAP))}
+    />
   );
 }
 

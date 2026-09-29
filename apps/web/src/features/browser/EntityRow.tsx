@@ -35,14 +35,26 @@ export function formatDay(value: string): string {
  * Род элементов — по КОНТРАКТАМ (M14, §Б5-6): строка не знает ни одного имени аспекта.
  * `showDate={false}` гасит ровно дату — для списков, где дату строки подписывает сам
  * список (§4.2); сумма не гасится никогда, её печатать больше некому.
+ *
+ * `closed` — признак «закрыто» от СЕРВЕРА (`closedIds` ответа блока, 1в §5.2, п. 42): набор
+ * `closed`, заданный предикатом, строка не вычисляет, и зачёркивание по проекции расходилось бы с
+ * фильтром. Задан — поверх проекции (и `true`, и `false`); не задан — по проекции.
  */
-export function EntityRow({ entity, showDate = true }: { entity: Entity; showDate?: boolean }) {
+export function EntityRow({
+  entity,
+  showDate = true,
+  closed: closedBy,
+}: {
+  entity: Entity;
+  showDate?: boolean;
+  closed?: boolean;
+}) {
   const props = entity.props;
   const registry = useRegistry();
   // Элементы строки — из привязок реестра, а не из веток по аспектам (§Б5-6). Пока снимок
   // едет, проекция пуста: строка печатает заголовок и дорисовывает элементы первым ответом.
   const row = useRowProjection(entity);
-  const closed = row.checkbox?.closed === true;
+  const closed = closedBy ?? row.checkbox?.closed === true;
 
   /**
    * ПРАВИЛО ПАМЯТИ ПОКАЗЫВАЕТСЯ ИЗ СВОЙСТВ (В7) — та же граница, что у слоя памяти промпта
