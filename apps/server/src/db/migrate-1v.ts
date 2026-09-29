@@ -828,11 +828,19 @@ export async function undoMigrate1v(
       SELECT m.metadata FROM chat_messages m JOIN chat_threads t ON t.id = m.thread_id
        WHERE t.graph_id = ${who.graph}::uuid AND m.metadata @> ${probe}::jsonb LIMIT 1`);
     return rows[0]?.metadata as
-      | { actions?: Array<{ source?: string }>; cards?: Array<{ title?: string }> }
+      | { actions?: Array<{ id?: string; source?: string }>; cards?: Array<{ title?: string }> }
       | undefined;
   });
   if (meta === undefined) return { found: false };
-  if (meta.actions?.[0]?.source !== 'system' || meta.cards?.[0]?.title !== MIGRATE_1V_LABEL) {
+  // Проверяется ТО действие записи, чей id назван (как `findActionMessage` отката — `find` по id), и его
+  // карточка — по тому же индексу: боевой синк пишет одно действие на запись, но проба containment совпала бы
+  // и с записью, где названное действие не первое, и проверка `actions[0]` судила бы о чужом (ре-ревью rm-2).
+  const at = meta.actions?.findIndex((a) => a.id === actionId) ?? -1;
+  if (
+    at === -1 ||
+    meta.actions?.[at]?.source !== 'system' ||
+    meta.cards?.[at]?.title !== MIGRATE_1V_LABEL
+  ) {
     throw new ExecError(
       'VALIDATION',
       `действие ${actionId} — не пачка migrate-1v («${MIGRATE_1V_LABEL}»): эта операция отменяет только её`,

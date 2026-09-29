@@ -45,6 +45,7 @@ import type { Db } from './client';
 import {
   AGENDA_OWNER_ROWS,
   AGENDA_ROW_PRESENT,
+  agendaRowPresent,
   applyMigrate1v,
   assertAgendaRowGone,
   bodyFindings,
@@ -753,7 +754,9 @@ describe('(е) навигация без Upcoming', () => {
       await applied(graph);
       expect(await navKeysOf(graph)).toEqual([...want]);
     }
-  });
+    // Два графа формы прода подряд: ≈1,4 с в покое, но под нагрузкой параллельного прогона упирались в
+    // умолчание 5 с (прогон мутации rm-2 фикс-круга 2).
+  }, 20_000);
 });
 
 describe('(ж) приложения со ссылкой на Upcoming', () => {
@@ -774,6 +777,12 @@ describe('(ж) приложения со ссылкой на Upcoming', () => {
     await applied(graph);
     expect((await rowByKey(graph, 'upcoming')).archived).toBe(false);
     expect(await navKeysOf(graph)).toEqual(NAV_1V);
+    // Upcoming, оставшаяся ради ссылок, — снятый ключ: «Обновления» её не предлагают, и ни оболочку, ни
+    // Повестку, ни «Год» после пачки тоже (ре-ревью rm-3).
+    const updates = await listUpdates({ db, identity: personal(graph) });
+    expect(
+      updates.filter((u) => ['host-shell', 'agenda', 'horizon-year', 'upcoming'].includes(u.key)),
+    ).toEqual([]);
   });
 
   test('оболочка хоста вне поставки держит Upcoming разделом — навигация не трогается, Upcoming не в архиве', async () => {
@@ -1072,40 +1081,37 @@ describe('фикс-круг 1: дельты, роль, переменная ре
     const graph = await freshGraph();
     await seedWorld1b(db, graph, 'prod');
     const before = await worldSnapshot(graph);
-    // Обвязка открывает свою транзакцию READ ONLY — откатываемой снаружи её не обернуть: строки прежней
-    // формы кладутся коммитом и снимаются в finally (DELETE-первым; встроенная строка, если была, — на место).
-    const kept = await admin(
-      ({ sql: s }) =>
-        s`SELECT surface, definition, module, rank FROM subscription_definitions
-           WHERE id = 'orbis/agenda' AND graph_id IS NULL`,
-    );
-    await admin(async ({ sql: s }) => {
-      await s`DELETE FROM subscription_definitions WHERE id = 'orbis/agenda' AND graph_id IS NULL`;
-      await s`INSERT INTO subscription_definitions (id, graph_id, surface, definition, module, rank)
-        VALUES ('orbis/agenda', NULL, 'core/agenda', ${JSON.stringify(AGENDA_DEF_1B)}::jsonb, NULL, 900),
-               ('user/my-agenda', ${graph}::uuid, 'core/agenda', ${JSON.stringify(AGENDA_DEF_1B)}::jsonb, NULL, 901)`;
-    });
-    try {
-      const t = testIo([personal(graph)]);
-      expect(await runMigrate1v(['--report'], t.io)).toBe(1);
-      expect(t.err).toEqual([]);
-      expect(t.out[0]).toContain('встроенная подписка orbis/agenda в базе');
-      expect(t.out).toContain('  подписки графа с движком agenda: 1: user/my-agenda');
-      expect(t.out).toContain(
-        '  СТОП (§6.5): до миграции 0023 — --drop-agenda-rows --i-understand по слову владельца',
-      );
-    } finally {
-      await admin(async ({ sql: s }) => {
-        await s`DELETE FROM subscription_definitions
-                 WHERE (id = 'orbis/agenda' AND graph_id IS NULL) OR graph_id = ${graph}::uuid`;
-        for (const k of kept) {
-          await s`INSERT INTO subscription_definitions (id, graph_id, surface, definition, module, rank)
-            VALUES ('orbis/agenda', NULL, ${String(k.surface)}, ${JSON.stringify(k.definition)}::jsonb,
-                    ${(k.module as string | null) ?? null}, ${Number(k.rank)})`;
-        }
+    // Строки прежней формы НИКОГДА не коммитятся (ре-ревью rm-1): обвязка получает пул-адаптер над откатываемой
+    // транзакцией — запрос идёт в неё, а свою транзакцию READ ONLY обвязка открывает точкой сохранения внутри.
+    // Прерывание теста или соседняя сессия на общей базе строку не увидят и не унаследуют.
+    let code: number | undefined;
+    let t: ReturnType<typeof testIo> | undefined;
+    await inRollback(async (tx) => {
+      await oldAgendaRows(tx, { graph, id: 'user/my-agenda' });
+      await tx`SET LOCAL transaction_read_only = on`;
+      const call = tx as unknown as (...a: unknown[]) => unknown;
+      const pool = Object.assign((...a: unknown[]) => call(...a), {
+        begin: (_mode: string, cb: (inner: TransactionSql) => unknown) => tx.savepoint(cb),
+      }) as unknown as Sql;
+      // drizzle-заглушка отвечает только на пробу роли (роль с BYPASSRLS), как в тесте (л).
+      const roleDb = {
+        execute: async () => [{ role: 'postgres', bypass_rls: true }],
+      } as unknown as Db;
+      t = testIo([personal(graph)], {
+        open: () => ({ sql: pool, db: roleDb, close: async () => {} }),
       });
-    }
+      code = await runMigrate1v(['--report'], t.io);
+    });
+    expect(code).toBe(1);
+    expect(t?.err).toEqual([]);
+    expect(t?.out[0]).toContain('встроенная подписка orbis/agenda в базе');
+    expect(t?.out).toContain('  подписки графа с движком agenda: 1: user/my-agenda');
+    expect(t?.out).toContain(
+      '  СТОП (§6.5): до миграции 0023 — --drop-agenda-rows --i-understand по слову владельца',
+    );
     expect(await worldSnapshot(graph)).toEqual(before);
+    // После отката встроенной строки прежней формы в базе нет.
+    expect(await admin(({ sql: s }) => agendaRowPresent(s))).toBe(false);
   });
 
   test('гейт m-5: документ и текст одной закреплённой версии — две строки, без задвоения форм', async () => {
@@ -1131,5 +1137,32 @@ describe('фикс-круг 1: дельты, роль, переменная ре
       { where: 'entity_versions', id: version, store: 'body_doc', forms: lt7 },
       { where: 'entity_versions', id: version, store: 'body', forms: lt7 },
     ]);
+  });
+});
+
+describe('фикс-круг 2', () => {
+  test('ре-ревью rm-2: --undo судит о действии с названным id, а не о первом действии записи', async () => {
+    const graph = await freshGraph();
+    await seedWorld1b(db, graph, 'prod');
+    const first = newId();
+    const named = newId();
+    // Запись журнала, где ПЕРВОЕ действие похоже на пачку операции (system, подпись В-4), а названное —
+    // обычная правка: проверка по `actions[0]` пропустила бы её к откату.
+    await admin(({ db: a }) =>
+      a.execute(sql`INSERT INTO chat_messages (id, thread_id, role, content, metadata)
+        SELECT ${newId()}::uuid, t.id, 'system', 'пачка', ${JSON.stringify({
+          actions: [
+            { id: first, source: 'system' },
+            { id: named, source: 'ui' },
+          ],
+          cards: [{ title: MIGRATE_1V_LABEL }, { title: 'Правка' }],
+        })}::jsonb
+          FROM chat_threads t WHERE t.graph_id = ${graph}::uuid LIMIT 1`),
+    );
+    const before = await worldSnapshot(graph);
+    const t = testIo([personal(graph)]);
+    expect(await runMigrate1v(['--undo', named, '--i-understand'], t.io)).toBe(1);
+    expect(t.err[0]).toContain('не пачка migrate-1v');
+    expect(await worldSnapshot(graph)).toEqual(before);
   });
 });
