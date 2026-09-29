@@ -2,7 +2,7 @@
 // с порогами подсветки, ост./~₽-день (§2.4, «—/день» при dailyPace=null в active),
 // фазы upcoming/active/closed (§2.9), carryover-бейдж (§2.6). Все суммы — готовые
 // decimal-строки сервера; пороги сравниваются ТОЧНО (BigInt), без IEEE-754.
-// Тап → push экрана категории (§3.2, сам экран — Task B3).
+// Тап открывает запись категории: экрана категории нет (докблок компонента ниже).
 import type { EnvelopeStatus } from '@orbis/shared';
 import { useOpenRecord } from '../../app/useOpenRecord';
 import { CURRENCY_SYMBOL, formatAmount } from '../../lib/format';

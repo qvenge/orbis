@@ -2152,7 +2152,7 @@ export async function setAspectDelta(
   );
   // ПОЛНОТА ОТНЕСЕНИЯ ВАРИАНТОВ (§Б2-2) — ДО записи, тем же доводом, что и проба применимости
   // ниже: `applyDeltas` вариант примет молча, и запись со свежим статусом выпала бы из всех
-  // наборов контракта — из чекбокса строки, из `class=`, из Agenda — без следа причины.
+  // наборов контракта — из чекбокса строки, из `class=`, из блоков Повестки — без следа причины.
   // `rows` — это `RegistryDictionaries` (properties/aspects/contracts), ровно тот словарь,
   // который ждёт проверка.
   const target = rows.aspects.get(aspectId) as AspectDefinition;
