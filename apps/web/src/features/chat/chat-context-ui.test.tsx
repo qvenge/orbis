@@ -14,6 +14,7 @@ import { act, fireEvent, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { App } from '../../App';
 import {
+  AGENDA,
   BREAD,
   frameHandler,
   frameWorld,
@@ -21,7 +22,6 @@ import {
   NOTE,
   resetFrame,
   stubViewport,
-  UPCOMING,
   unstubLaunchMode,
 } from '../../app/frame/frame-fixtures';
 import { useSideChat } from '../../app/frame/side-chat-store';
@@ -190,12 +190,12 @@ describe('(б) телефон: 💬 со ссылкой на текущую за
 
   test('на странице — заголовок страницы; на «Домой» — «Про: Домой»', async () => {
     stubViewport(false);
-    resetFrame(`/r/${UPCOMING}`);
+    resetFrame(`/r/${AGENDA}`);
     renderApp();
-    await heading('Upcoming');
+    await heading('Повестка');
     fireEvent.click(hostButton(/Чат/));
     await heading('Чат');
-    expect(await screen.findByText('Про: Upcoming')).toBeInTheDocument();
+    expect(await screen.findByText('Про: Повестка')).toBeInTheDocument();
 
     act(() => useNav.getState().goHome());
     await heading('Домой');
@@ -273,9 +273,9 @@ describe.each([
 
   test('на странице — без связи', async () => {
     stubViewport(desktop);
-    resetFrame(`/r/${UPCOMING}`);
+    resetFrame(`/r/${AGENDA}`);
     const { calls } = renderApp();
-    await heading('Upcoming');
+    await heading('Повестка');
     await frameReady(desktop);
     const input = await capture(calls, 'идея');
     expect(input.aspects).toBeUndefined();
@@ -313,13 +313,13 @@ test('(в) «＋» на странице, пока её запись не про
     release = r;
   });
   stubViewport(false);
-  resetFrame(`/r/${UPCOMING}`);
-  const { calls } = renderApp({ id: UPCOMING, until });
+  resetFrame(`/r/${AGENDA}`);
+  const { calls } = renderApp({ id: AGENDA, until });
   await screen.findByTestId('host-buttons');
   const early = await capture(calls, 'рано');
   expect(early.aspects).toBeUndefined();
   release();
-  await heading('Upcoming');
+  await heading('Повестка');
   // Форма «＋» ещё открыта (второе нажатие закрыло бы её): пишем в неё же.
   const form = screen.getByTestId('quick-capture-form');
   fireEvent.change(within(form).getByRole('textbox', { name: 'Быстрая запись' }), {

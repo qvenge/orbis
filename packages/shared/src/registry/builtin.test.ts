@@ -495,17 +495,20 @@ test('select-варианты: ASCII key, порядок rank — снимок, 
     // (`budget` зарезервирован до 1в и в варианты не входит, спека §3.4).
     'orbis/app_nav_form': ['header-list', 'home-hub'],
     'orbis/app_extensions': ['finance', 'goals', 'projects', 'dev'],
+    // Срез 1в (§6.3, РП-10): Повестка на месте Upcoming; снятый с поставки `upcoming` — последним
+    // вариантом (записи 1б с ним живут, эталона у него нет).
     'orbis/supply_key': [
       'host-template',
       'host-shell',
       'home',
       'records',
       'daily-planning',
-      'upcoming',
+      'agenda',
       'all-tasks',
       'horizon-year',
       'horizon-life',
       'routines',
+      'upcoming',
     ],
   };
 
@@ -1105,7 +1108,7 @@ const A8_TYPES: Record<string, string> = {
   'orbis/app_disabled': 'boolean|core',
   // «Дом» не указывает на оболочку хоста — фильтром цели (Д-20), а не правилом E.
   'orbis/home': `ref{target:${APP_NOT_HOST_SHELL}}|core`,
-  'orbis/supply_key': 'select{options:10}|core',
+  'orbis/supply_key': 'select{options:11}|core', // десять эталонов и снятый upcoming (1в §6.3)
   'orbis/supply_hash': 'text|core',
   'orbis/supply_text': 'text|core',
   'orbis/supply_declined': 'text|core',

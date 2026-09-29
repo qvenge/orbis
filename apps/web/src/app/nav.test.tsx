@@ -16,6 +16,7 @@ import { resetNavForTests, useNav } from '../state/navigation';
 import { installCrashTrap, renderWithProviders } from '../test/harness';
 import { BUILTIN_REGISTRY } from '../test/registry';
 import {
+  AGENDA,
   BREAD,
   chatMessage,
   frameHandler,
@@ -34,7 +35,6 @@ import {
   SHELL_ROW,
   shownPath,
   stubLaunchMode,
-  UPCOMING,
   unstubLaunchMode,
 } from './frame/frame-fixtures';
 
@@ -116,6 +116,25 @@ test('(а) /browser — страница «Записи» разделом хо�
   expect(screen.getByTestId('nav-switch')).toHaveTextContent('Записи');
 });
 
+// Срез 1в §6.2 (РП-16): `/agenda` — не плашка, а запись поставки «Повестка» разделом хоста; закладка
+// из старой вкладки ведёт туда же.
+test('(а) /agenda — запись поставки «Повестка» разделом хоста, адрес заменён на /r/<id>', async () => {
+  resetFrame('/agenda');
+  renderApp();
+  await heading('Повестка');
+  expect(shownPath()).toBe(`/r/${AGENDA}`);
+  expect(screen.getByTestId('nav-switch')).toHaveTextContent('Повестка');
+  expect(screen.queryByTestId('reserved-screen')).toBeNull();
+});
+
+test('(а) /agenda без записи «Повестка» (в архиве, выведена) — «Домой» хоста', async () => {
+  resetFrame('/agenda');
+  renderApp(frameWorld({ supply: [SHELL_ROW, ...PAGES.filter((p) => p.id !== AGENDA)] }));
+  await heading('Домой');
+  expect(shownPath()).toBe('/');
+  expect(screen.queryByTestId('reserved-screen')).toBeNull();
+});
+
 test('(а) /browser при «Записях» в архиве — «Домой» хоста, а не сохранённое место (финал C1 M-2)', async () => {
   resetFrame('/browser');
   // Сохранённое активное место — запись в «Моём доме»: фолбэк не должен её показать.
@@ -142,7 +161,6 @@ test('(а) /browser при «Записях» в архиве — «Домой»
 test.each([
   ['/budget/category/00000000-0000-4000-8000-000000009999', 'Бюджет придёт со следующим срезом'],
   ['/budget', 'Бюджет придёт со следующим срезом'],
-  ['/agenda', 'Повестка придёт со следующим срезом'],
 ])('(а) %s — плашка «придёт со следующим срезом» без кнопки «включить»', async (path, text) => {
   resetFrame(path);
   renderApp();
@@ -184,10 +202,10 @@ test('(в) сайт: переход — pushState, браузерный «наз
   await heading('Домой');
   const push = vi.spyOn(window.history, 'pushState');
   fireEvent.click(screen.getByTestId('nav-switch'));
-  fireEvent.click(await screen.findByTestId(`nav-section-${UPCOMING}`));
-  await heading('Upcoming');
+  fireEvent.click(await screen.findByTestId(`nav-section-${AGENDA}`));
+  await heading('Повестка');
   expect(push).toHaveBeenCalledTimes(1);
-  expect(shownPath()).toBe(`/r/${UPCOMING}`);
+  expect(shownPath()).toBe(`/r/${AGENDA}`);
   push.mockRestore();
 
   act(() => window.history.back());
@@ -203,8 +221,8 @@ test('(в) приложение: одна запись истории; сист�
   const push = vi.spyOn(window.history, 'pushState');
   const lengthBefore = window.history.length;
   fireEvent.click(screen.getByTestId('nav-switch'));
-  fireEvent.click(await screen.findByTestId(`nav-section-${UPCOMING}`));
-  await heading('Upcoming');
+  fireEvent.click(await screen.findByTestId(`nav-section-${AGENDA}`));
+  await heading('Повестка');
   act(() => useNav.getState().openRecord(BREAD));
   await heading('Купить хлеб');
   expect(window.history.length).toBe(lengthBefore);
@@ -218,8 +236,8 @@ test('(в) приложение: одна запись истории; сист�
   act(() => {
     window.dispatchEvent(new PopStateEvent('popstate', { state: null }));
   });
-  await heading('Upcoming');
-  expect(shownPath()).toBe(`/r/${UPCOMING}`);
+  await heading('Повестка');
+  expect(shownPath()).toBe(`/r/${AGENDA}`);
   expect(guard).toHaveBeenCalledTimes(1);
   guard.mockRestore();
 });
@@ -250,8 +268,8 @@ test('(г) перезапуск в режиме приложения: актив
   const first = renderApp();
   await heading('Домой');
   fireEvent.click(screen.getByTestId('nav-switch'));
-  fireEvent.click(await screen.findByTestId(`nav-section-${UPCOMING}`));
-  await heading('Upcoming');
+  fireEvent.click(await screen.findByTestId(`nav-section-${AGENDA}`));
+  await heading('Повестка');
   act(() => useNav.getState().openRecord(BREAD));
   await heading('Купить хлеб');
   first.unmount();
@@ -261,10 +279,10 @@ test('(г) перезапуск в режиме приложения: актив
   window.history.replaceState(null, '', '/');
   renderApp();
   await heading('Купить хлеб');
-  expect(screen.getByTestId('nav-switch')).toHaveTextContent('Upcoming');
+  expect(screen.getByTestId('nav-switch')).toHaveTextContent('Повестка');
   const host = navModel().apps.host;
-  expect(host?.activeSection).toBe(UPCOMING);
-  expect(host?.stacks[UPCOMING]).toHaveLength(1);
+  expect(host?.activeSection).toBe(AGENDA);
+  expect(host?.stacks[AGENDA]).toHaveLength(1);
 });
 
 test('(г) сайт: `/` — домашняя хоста, последние места разделов из orbis:nav:v2 — в модели (R-32)', async () => {
@@ -272,26 +290,24 @@ test('(г) сайт: `/` — домашняя хоста, последние м�
   const first = renderApp();
   await heading('Домой');
   fireEvent.click(screen.getByTestId('nav-switch'));
-  fireEvent.click(await screen.findByTestId(`nav-section-${UPCOMING}`));
-  await heading('Upcoming');
+  fireEvent.click(await screen.findByTestId(`nav-section-${AGENDA}`));
+  await heading('Повестка');
   act(() => useNav.getState().openRecord(BREAD));
   await heading('Купить хлеб');
   first.unmount();
 
-  // Новая вкладка на `/`: адрес главнее — «Домой», а «где остановились» Upcoming на месте.
+  // Новая вкладка на `/`: адрес главнее — «Домой», а «где остановились» Повестка на месте.
   act(() => resetNavForTests());
   window.history.replaceState(null, '', '/');
   renderApp();
   await heading('Домой');
   expect(shownPath()).toBe('/');
-  expect(navModel().apps.host?.stacks[UPCOMING]?.map((e) => e.address)).toEqual([
+  expect(navModel().apps.host?.stacks[AGENDA]?.map((e) => e.address)).toEqual([
     { kind: 'record', app: { kind: 'host' }, id: BREAD },
   ]);
   fireEvent.click(screen.getByTestId('nav-switch'));
   await waitFor(() =>
-    expect(screen.getByTestId(`nav-section-${UPCOMING}`)).toHaveTextContent(
-      'Upcoming · Купить хлеб',
-    ),
+    expect(screen.getByTestId(`nav-section-${AGENDA}`)).toHaveTextContent('Повестка · Купить хлеб'),
   );
 });
 
@@ -300,8 +316,8 @@ test('сайт: после перезагрузки на корне раздел
   const first = renderApp();
   await heading('Домой');
   fireEvent.click(screen.getByTestId('nav-switch'));
-  fireEvent.click(await screen.findByTestId(`nav-section-${UPCOMING}`));
-  await heading('Upcoming');
+  fireEvent.click(await screen.findByTestId(`nav-section-${AGENDA}`));
+  await heading('Повестка');
   first.unmount();
 
   // Перезагрузка: запись истории своя (idx 1), модель — из её снимка; корень раздела — по модели
@@ -386,14 +402,14 @@ test('(ж) повторное нажатие на активный раздел 
   renderApp();
   await heading('Домой');
   fireEvent.click(screen.getByTestId('nav-switch'));
-  fireEvent.click(await screen.findByTestId(`nav-section-${UPCOMING}`));
-  await heading('Upcoming');
+  fireEvent.click(await screen.findByTestId(`nav-section-${AGENDA}`));
+  await heading('Повестка');
   act(() => useNav.getState().openRecord(BREAD));
   await heading('Купить хлеб');
   fireEvent.click(screen.getByTestId('nav-switch'));
-  fireEvent.click(await screen.findByTestId(`nav-section-${UPCOMING}`));
-  await heading('Upcoming');
-  expect(navModel().apps.host?.stacks[UPCOMING]).toHaveLength(1);
+  fireEvent.click(await screen.findByTestId(`nav-section-${AGENDA}`));
+  await heading('Повестка');
+  expect(navModel().apps.host?.stacks[AGENDA]).toHaveLength(1);
 });
 
 test('⌂ телефона в приложении — его домашняя в его рамке (R-38, спека §4.2, приёмка №3)', async () => {

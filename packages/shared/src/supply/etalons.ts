@@ -22,20 +22,38 @@
 import { type NavForm, SUPPLY_KEY } from '../constants';
 import { SEED_SMART_LISTS } from './lists';
 
-/** Десять ключей эталонов (РП-6) — ровно варианты `orbis/supply_key` реестра (сверка — тестом). */
+/**
+ * Десять ключей ЭТАЛОНОВ КОДА (РП-6; срез 1в §6.2 — Повестка на месте Upcoming): что приносит этот
+ * релиз. У каждого — ровно один эталон (сверка — тестом).
+ */
 export const SUPPLY_KEYS = [
   'host-template',
   'host-shell',
   'home',
   'records',
   'daily-planning',
-  'upcoming',
+  'agenda',
   'all-tasks',
   'horizon-year',
   'horizon-life',
   'routines',
 ] as const;
 export type SupplyKey = (typeof SUPPLY_KEYS)[number];
+
+/**
+ * Ключи, СНЯТЫЕ С ПОСТАВКИ (срез 1в §6.3, РП-10): записи с ними живут у графов, заведённых прежним
+ * релизом, но эталона кода у ключа больше нет. Отдельным списком, а не в `SUPPLY_KEYS`: всё, что идёт
+ * по эталонам («Обновления», «Принять», «Добавить», сев графа), снятого ключа не видит вовсе, а
+ * «Вернуть как было» берёт род из самой записи и текст — из печати эталона в ней (`orbis/supply_text`).
+ */
+export const RETIRED_SUPPLY_KEYS = ['upcoming'] as const;
+
+/**
+ * Все допустимые значения ключа записи поставки — эталоны и снятые: ровно варианты `orbis/supply_key`
+ * реестра (сверка — тестом), вход «Вернуть как было» и признак записи поставки в web.
+ */
+export const SUPPLY_KEY_VALUES = [...SUPPLY_KEYS, ...RETIRED_SUPPLY_KEYS] as const;
+export type SupplyKeyValue = (typeof SUPPLY_KEY_VALUES)[number];
 
 /** Ключ эталона записи «Шаблон хоста» (§9.2). */
 export const HOST_TEMPLATE_KEY: SupplyKey = 'host-template';
@@ -102,9 +120,10 @@ export const HOST_TEMPLATE_ETALON_TEXT: string = [
 
 /**
  * Эталоны в порядке ключей. «Домой» — блок «Приложения» (§6.5), «Записи» — блок-экран `{{records}}`
- * (§3.5); списки — заголовки, эмодзи и тела `SEED_SMART_LISTS` (§9.4). Оболочка хоста (§6.5): домашняя —
- * «Домой», навигация — «Записи» и пять списков из прежних закреплённых («Жизни» нет — её открывают раз в
- * год), форма — «список из заголовка».
+ * (§3.5); списки — заголовки, эмодзи и тела `SEED_SMART_LISTS` (§9.4; Повестка — 1в §6.1). Оболочка
+ * хоста (§6.5; 1в §6.2): домашняя — «Домой», навигация — «Записи», Daily Planning, Повестка (на месте
+ * Upcoming), All Tasks, «Год», «Рутины» («Жизни» нет — её открывают раз в год), форма — «список из
+ * заголовка».
  */
 export const SUPPLY_ETALONS: readonly SupplyEtalon[] = [
   {
@@ -120,7 +139,7 @@ export const SUPPLY_ETALONS: readonly SupplyEtalon[] = [
     title: 'Orbis',
     emoji: '🪐',
     home: 'home',
-    nav: ['records', 'daily-planning', 'upcoming', 'all-tasks', 'horizon-year', 'routines'],
+    nav: ['records', 'daily-planning', 'agenda', 'all-tasks', 'horizon-year', 'routines'],
     navForm: 'header-list',
   },
   { key: 'home', kind: 'page', title: 'Домой', emoji: '🏠', text: '{{apps}}' },
@@ -145,14 +164,18 @@ export function etalonOf(key: SupplyKey): SupplyEtalon {
 }
 
 /**
- * Прежние эталоны (до 1б) — ТОЛЬКО для перевода данных задачи 13 (РП-35, В-9): тело прод-списка,
- * совпавшее с прежним эталоном, — «как в поставке» старой версии, и новый эталон приходит ему
- * предложением. Литералы — дословный перенос тел «Года» и «Жизни» до правки словарём 1б и тел Daily
- * Planning, Upcoming и All Tasks до §Б1-2 (R-39: прод их посеял до `93d34cac`, где закрытость ещё
- * перечислялась статусами `orbis/task_status=!done&!cancelled`, а не набором `class=orbis/completable:
- * open`; литералы — `git show 93d34cac^:apps/server/src/seed/smart-lists.ts`).
+ * Прежние эталоны (до 1б) — были входом перевода данных 1б (РП-35, В-9; `migrate-1b` исполнен в проде
+ * 28.09 и снят срезом 1в, РП-13): тело прод-списка, совпавшее с прежним эталоном, — «как в поставке»
+ * старой версии, и новый эталон приходит ему предложением. Сейчас их читает фикстура мира старой формы
+ * (`apps/server/test/legacy-world.ts`) — отказ `GRAPH_NEEDS_MIGRATION`. Ключ `upcoming` — снятый
+ * (`RETIRED_SUPPLY_KEYS`), поэтому тип — по `SupplyKeyValue`.
+ *
+ * Литералы — дословный перенос тел «Года» и «Жизни» до правки словарём 1б и тел Daily Planning,
+ * Upcoming и All Tasks до §Б1-2 (R-39: прод их посеял до `93d34cac`, где закрытость ещё перечислялась
+ * статусами `orbis/task_status=!done&!cancelled`, а не набором `class=orbis/completable:open`;
+ * литералы — `git show 93d34cac^:apps/server/src/seed/smart-lists.ts`).
  */
-export const LEGACY_ETALON_TEXTS: Readonly<Partial<Record<SupplyKey, string>>> = {
+export const LEGACY_ETALON_TEXTS: Readonly<Partial<Record<SupplyKeyValue, string>>> = {
   'daily-planning': `Утренний обзор: разобрать Inbox, пройтись по списку «Сегодня».
 
 {{query:aspect=orbis/task, orbis/task_status=inbox, sortBy=orbis/created_at:desc, display=list, title=Inbox}}

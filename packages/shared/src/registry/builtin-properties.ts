@@ -1299,9 +1299,11 @@ const ENTRIES: readonly PropertyEntry[] = [
       ru: 'Какой эталон поставки хоста принесла эта запись; по нему ищутся записи поставки и собираются обновления',
       en: 'Which host supply etalon this record came from; supply records and updates are found by it',
     },
-    // Десять ключей РП-6; `budget` зарезервирован (спека §3.4) и до 1в в варианты не входит. Две
-    // служебные записи (шаблон хоста, оболочка хоста «Orbis») подписаны по роли, а не заголовком:
-    // «Orbis» в карточке ключа не сказал бы, что это оболочка.
+    // Варианты — `SUPPLY_KEY_VALUES` (сверка — `supply/etalons.test.ts`): десять ключей эталонов РП-6
+    // (срез 1в §6.2: Повестка на месте Upcoming) и снятый с поставки `upcoming` последним (1в §6.3,
+    // РП-10: записи 1б с ним живут, эталона кода у него нет). `budget` зарезервирован (спека 1б §3.4) и в
+    // варианты не входит. Две служебные записи (шаблон хоста, оболочка хоста «Orbis») подписаны по роли,
+    // а не заголовком: «Orbis» в карточке ключа не сказал бы, что это оболочка.
     type: {
       kind: 'select',
       options: options(
@@ -1312,11 +1314,12 @@ const ENTRIES: readonly PropertyEntry[] = [
         // Подписи списков — ДОСЛОВНО заголовки их записей (спека §9.4, `SEED_SMART_LISTS`): ключ в карточке
         // «Поставки» и в фильтре не называет список третьим именем (M-1 гейта задачи 9).
         ['daily-planning', 'Daily Planning', 'Daily Planning'],
-        ['upcoming', 'Upcoming', 'Upcoming'],
+        ['agenda', 'Повестка', 'Agenda'],
         ['all-tasks', 'All Tasks', 'All Tasks'],
         ['horizon-year', 'Год', 'Year'],
         ['horizon-life', 'Жизнь', 'Life'],
         ['routines', 'Рутины', 'Routines'],
+        ['upcoming', 'Upcoming', 'Upcoming'],
       ),
     },
     module: null,

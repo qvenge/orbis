@@ -1,7 +1,7 @@
 import { SUPPLY_ASPECT, SUPPLY_KEY } from '@orbis/shared';
 // Листовой сабпат, не корень пакета: экран записи тянет этот модуль эагерно (сторожа
 // `check-lazy-chunks.ts` и `save.test.tsx`), а эталоны поставки — данные без тяжёлых импортов.
-import { HOST_SHELL_KEY, SUPPLY_KEYS, type SupplyKey } from '@orbis/shared/supply';
+import { HOST_SHELL_KEY, SUPPLY_KEY_VALUES, type SupplyKeyValue } from '@orbis/shared/supply';
 import { useMemo } from 'react';
 import { trpc } from '../../trpc';
 import type { WireEntity } from '../entity-detail/record-host';
@@ -26,7 +26,7 @@ export const SUPPLY_RECORDS_QUERY = 'aspect=orbis/supply';
  */
 export function isSupplyRecordOf(
   row: { aspects: readonly string[]; props: Readonly<Record<string, unknown>> },
-  key: SupplyKey,
+  key: SupplyKeyValue,
 ): boolean {
   return row.aspects.includes(SUPPLY_ASPECT) && row.props[SUPPLY_KEY] === key;
 }
@@ -35,12 +35,16 @@ export function isSupplyRecordOf(
 export const isHostShellRow = (row: Parameters<typeof isSupplyRecordOf>[0]): boolean =>
   isSupplyRecordOf(row, HOST_SHELL_KEY);
 
-const isSupplyKey = (v: unknown): v is SupplyKey =>
-  typeof v === 'string' && (SUPPLY_KEYS as readonly string[]).includes(v);
+/** Ключ записи поставки — любой допустимый: эталонов и снятых с поставки (1в §6.3, РП-10). */
+const isSupplyKey = (v: unknown): v is SupplyKeyValue =>
+  typeof v === 'string' && (SUPPLY_KEY_VALUES as readonly string[]).includes(v);
 
 export interface SupplyRecords {
-  /** Живые записи по ключу эталона; ключа нет — записи нет (не заведена, в архиве, выведена). */
-  byKey: ReadonlyMap<SupplyKey, WireEntity>;
+  /**
+   * Живые записи по ключу; ключа нет — записи нет (не заведена, в архиве, выведена). Снятые с поставки
+   * ключи (Upcoming 1б) — тоже здесь: запись живёт, и её узнают как запись поставки.
+   */
+  byKey: ReadonlyMap<SupplyKeyValue, WireEntity>;
   /**
    * `loading` — ответа ещё нет; `error` — не приехал. Уже приехавший ответ при отказе перечитывания
    * остаётся `ok`: последнее известное честнее эталона кода.
@@ -54,7 +58,7 @@ export function useSupplyRecords(): SupplyRecords {
   const q = trpc.entity.query.useQuery({ query: SUPPLY_RECORDS_QUERY });
   const rows = q.data ?? NO_ROWS;
   const byKey = useMemo(() => {
-    const out = new Map<SupplyKey, WireEntity>();
+    const out = new Map<SupplyKeyValue, WireEntity>();
     for (const row of rows) {
       if (row.archived) continue;
       const key = row.props[SUPPLY_KEY];

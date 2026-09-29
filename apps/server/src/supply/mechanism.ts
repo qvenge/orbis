@@ -16,6 +16,7 @@
 // «вывести из поставки», и такой записи механизм не предлагает ничего и ничего в ней не пишет, хотя её
 // свойства эталона остаются (снятие аспекта значений не трогает, Р9).
 import {
+  APP_ASPECT,
   APP_HOME,
   APP_NAV,
   APP_OPENS_OVER,
@@ -27,7 +28,13 @@ import {
   SUPPLY_KEY,
   SUPPLY_TEXT,
 } from '@orbis/shared';
-import { etalonOf, SUPPLY_ETALONS, type SupplyEtalon, type SupplyKey } from '@orbis/shared/supply';
+import {
+  etalonOf,
+  SUPPLY_ETALONS,
+  type SupplyEtalon,
+  type SupplyKey,
+  type SupplyKeyValue,
+} from '@orbis/shared/supply';
 import {
   APP_PRINT_PROPS,
   parseAppPrint,
@@ -102,19 +109,34 @@ interface Snapshot {
 
 /**
  * Архив записи — откат её «добавления», а не решение владельца (R-18)? Признак по журналу: ПОСЛЕДНЕЕ
- * действие, тронувшее запись (любая операция с её id), — «добавление», и оно отменено. «Добавление» — это
- * создание записи (`entity_create` с её id: сев, «добавить») или возврат её из архива механизмом `supply`
- * («добавить» по записи, чей архив — откат прежнего добавления). Круг «добавить → Undo → добавить → Undo»
- * поэтому держится на любой глубине: смотрится последнее действие, а не первое создание. Возврат из архива
- * владельцем (механизм `user`) — его правка; если потом запись в архиве — это его решение, предложения нет.
+ * НЕОТМЕНЁННОЕ действие, тронувшее запись (любая операция с её id), — «добавление», и оно отменено.
+ * «Добавление» — это создание записи (`entity_create` с её id: сев, «добавить») или возврат её из архива
+ * механизмом `supply` («добавить» по записи, чей архив — откат прежнего добавления). Круг «добавить → Undo
+ * → добавить → Undo» поэтому держится на любой глубине: смотрится последнее действие, а не первое
+ * создание. Возврат из архива владельцем (механизм `user`) — его правка; если потом запись в архиве — это
+ * его решение, предложения нет.
+ *
+ * ОТМЕНЁННЫЕ ДЕЙСТВИЯ, КРОМЕ «ДОБАВЛЕНИЯ», ПРОПУСКАЮТСЯ (М-8 остатков 1б): владелец поправил архивную
+ * запись и отменил правку — правки как будто не было, и последним остаётся всё то же отменённое
+ * «добавить». Без пропуска признак гас бы от чужого отменённого действия, и поставка молча перестала бы
+ * предлагать запись (новый ключ поставки 1в — Повестка — это делает достижимым). Отменённое ли
+ * действие — та же проба `{type:'undo', undoes}`, что и у «добавления». Неотменённое не-«добавление» —
+ * решение владельца: признака нет.
  *
  * Сама отмена нового действия журнала не порождает (сообщение `{type:'undo'}` без `actions`), поэтому
- * «последнее действие» после отмены — это и есть отменённое. Порядок — по `created_at` сообщений: время
- * начала транзакции записи журнала (`defaultNow`); действия владельца над одной записью идут
- * последовательно.
+ * отменённое действие остаётся в журнале последним, пока его не перекроет новое. Порядок — по `created_at`
+ * сообщений: время начала транзакции записи журнала (`defaultNow`); действия владельца над одной записью
+ * идут последовательно.
  */
 async function archivedByUndoneCreation(tx: Tx, ids: readonly string[]): Promise<Set<string>> {
   const out = new Set<string>();
+  const undone = async (actionId: string): Promise<boolean> => {
+    const undoProbe = JSON.stringify({ type: 'undo', undoes: actionId });
+    const undos = await tx.execute(
+      sql`SELECT 1 FROM chat_messages WHERE metadata @> ${undoProbe}::jsonb LIMIT 1`,
+    );
+    return undos.length > 0;
+  };
   for (const id of ids) {
     const touched = JSON.stringify({ actions: [{ operations: [{ payload: { id } }] }] });
     const created = JSON.stringify({ operations: [{ op: 'entity_create', payload: { id } }] });
@@ -122,20 +144,23 @@ async function archivedByUndoneCreation(tx: Tx, ids: readonly string[]): Promise
       mechanism: 'supply',
       operations: [{ op: 'entity_update', payload: { id, archived: false } }],
     });
-    const last = await tx.execute(
+    const history = (await tx.execute(
       sql`SELECT metadata -> 'actions' -> 0 ->> 'id' AS action_id,
                  (metadata -> 'actions' -> 0 @> ${created}::jsonb
                   OR metadata -> 'actions' -> 0 @> ${restored}::jsonb) AS added
           FROM chat_messages WHERE metadata @> ${touched}::jsonb
-          ORDER BY created_at DESC LIMIT 1`,
-    );
-    const row = last[0] as { action_id?: string; added?: boolean } | undefined;
-    if (row?.action_id === undefined || row.added !== true) continue;
-    const undoProbe = JSON.stringify({ type: 'undo', undoes: row.action_id });
-    const undos = await tx.execute(
-      sql`SELECT 1 FROM chat_messages WHERE metadata @> ${undoProbe}::jsonb LIMIT 1`,
-    );
-    if (undos.length > 0) out.add(id);
+          ORDER BY created_at DESC`,
+    )) as unknown as Array<{ action_id?: string | null; added?: boolean }>;
+    for (const row of history) {
+      if (typeof row.action_id !== 'string') break;
+      const wasUndone = await undone(row.action_id);
+      if (row.added === true) {
+        if (wasUndone) out.add(id);
+        break;
+      }
+      // Отменённая правка — как будто её не было: смотрим глубже. Неотменённая — решение владельца.
+      if (!wasUndone) break;
+    }
   }
   return out;
 }
@@ -178,7 +203,7 @@ const keyOf = (r: SupplyRow): unknown => r.props[SUPPLY_KEY];
 /** Запись поставки сейчас — несёт аспект «поставка» (R-17). */
 const isSupply = (r: SupplyRow): boolean => r.aspects.includes(SUPPLY_ASPECT);
 /** Живая запись ключа — с аспектом или без: по ней решается, есть ли у ключа запись вообще. */
-const liveOf = (s: Snapshot, key: SupplyKey): SupplyRow | undefined =>
+const liveOf = (s: Snapshot, key: SupplyKeyValue): SupplyRow | undefined =>
   s.rows.find((r) => keyOf(r) === key && !r.archived);
 /**
  * Ключ → id живой записи этого графа: ссылки оболочки ставятся только на живые записи. Снятый аспект
@@ -338,7 +363,7 @@ function acceptOps(
   ];
 }
 
-function liveOrRefuse(s: Snapshot, key: SupplyKey): SupplyRow {
+function liveOrRefuse(s: Snapshot, key: SupplyKeyValue): SupplyRow {
   const row = liveOf(s, key);
   if (row === undefined) {
     throw new ExecError('NOT_FOUND', `записи поставки «${key}» нет`, { key });
@@ -438,10 +463,13 @@ export async function declineUpdate(
  * эталона В ЗАПИСИ (`orbis/supply_text`), эталон записи не трогается. Прежнее тело страницы закрепляется
  * версией до замены; прежние свойства приложения хранит журнал для Undo. Диалог «какие разделы исчезнут»
  * у оболочки хоста — дело клиента (задача 22).
+ *
+ * Ключ — любой допустимый (`SupplyKeyValue`), в том числе снятый с поставки (срез 1в §6.3: Upcoming 1б):
+ * возврату эталон кода не нужен — текст лежит в записи, род берётся из неё же.
  */
 export async function revertToEtalon(
   ctx: SupplyCtx,
-  key: SupplyKey,
+  key: SupplyKeyValue,
   expectedUpdatedAt?: string,
   seam: RaceSeam = {},
 ): Promise<{ actionId: string }> {
@@ -469,8 +497,10 @@ export async function revertToEtalon(
     throw new ExecError('VALIDATION', 'запись и так как в поставке', { key });
   }
   const label = `Вернуть как было: «${row.title}»`;
-  // Род печати — по ключу эталона, как у `supplyStatusOf`.
-  if (etalonOf(key).kind === 'app') {
+  // Род печати — из САМОЙ записи (аспект «приложение»), не из эталона кода (1в §6.3, Д-13): у снятого
+  // ключа эталона нет, а текст, к которому возвращаемся, — печать того рода, что у записи. У ключей с
+  // эталоном это то же самое: приложение поставки — только оболочка, и она несёт аспект.
+  if (row.aspects.includes(APP_ASPECT)) {
     const print = await withoutArchivedTargets(ctx, parseAppPrint(text));
     if (
       printAppProps({ title: row.title, emoji: row.emoji, props: row.props }) ===

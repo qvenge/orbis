@@ -17,12 +17,12 @@ import { useNav } from '../state/navigation';
 import { installCrashTrap, renderWithProviders } from '../test/harness';
 import { BUILTIN_REGISTRY } from '../test/registry';
 import {
+  AGENDA,
   BREAD,
   frameHandler,
   resetFrame,
   shownPath,
   stubLaunchMode,
-  UPCOMING,
   unstubLaunchMode,
 } from './frame/frame-fixtures';
 
@@ -51,7 +51,7 @@ async function systemBack() {
   });
 }
 
-test('«назад» на «Домой» отпущен, но уйти некуда → Orbis жив; дальше «Upcoming» → запись → «назад» идёт по стопке', async () => {
+test('«назад» на «Домой» отпущен, но уйти некуда → Orbis жив; дальше «Повестка» → запись → «назад» идёт по стопке', async () => {
   stubLaunchMode('app');
   resetFrame('/');
   expect(window.history.length).toBe(1);
@@ -75,13 +75,13 @@ test('«назад» на «Домой» отпущен, но уйти неку�
 
   // Человек остался и пошёл дальше.
   fireEvent.click(screen.getByTestId('nav-switch'));
-  fireEvent.click(await screen.findByTestId(`nav-section-${UPCOMING}`));
-  await heading('Upcoming');
+  fireEvent.click(await screen.findByTestId(`nav-section-${AGENDA}`));
+  await heading('Повестка');
   act(() => useNav.getState().openRecord(BREAD));
   await heading('Купить хлеб');
 
   // Охранная запись вернулась: системный «назад» снова перехвачен и ведёт по стопке раздела.
   await systemBack();
-  await heading('Upcoming');
-  expect(shownPath()).toBe(`/r/${UPCOMING}`);
+  await heading('Повестка');
+  expect(shownPath()).toBe(`/r/${AGENDA}`);
 });

@@ -23,6 +23,7 @@ import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { App } from '../../App';
 import {
+  AGENDA,
   ALL_TASKS,
   BREAD,
   DAILY,
@@ -37,7 +38,6 @@ import {
   SHELL_ROW,
   shownPath,
   stubLaunchMode,
-  UPCOMING,
   unstubLaunchMode,
   YEAR,
 } from '../../app/frame/frame-fixtures';
@@ -234,20 +234,20 @@ const rowTitles = (editor: HTMLElement) =>
     .getAllByTestId('ref-title')
     .map((t) => t.textContent);
 
-const HOST_TITLES = ['Записи', 'Daily Planning', 'Upcoming', 'All Tasks', 'Год', 'Рутины'];
+const HOST_TITLES = ['Записи', 'Daily Planning', 'Повестка', 'All Tasks', 'Год', 'Рутины'];
 
 // ─── (б) «Настроить навигацию» ─────────────────────────────────────────────────────────────────
 
-test('(б) хост на «/»: «Upcoming» выше «Daily Planning» → одна пачка с новым порядком', async () => {
+test('(б) хост на «/»: «Повестка» выше «Daily Planning» → одна пачка с новым порядком', async () => {
   resetFrame('/');
   const { batches } = renderApp();
   await heading('Домой');
   const editor = await openNavEditor('Orbis');
   await waitFor(() => expect(rowTitles(editor)).toEqual(HOST_TITLES));
-  fireEvent.click(within(editor).getByRole('button', { name: 'Выше: Upcoming' }));
+  fireEvent.click(within(editor).getByRole('button', { name: 'Выше: Повестка' }));
   expect(rowTitles(editor)).toEqual([
     'Записи',
-    'Upcoming',
+    'Повестка',
     'Daily Planning',
     'All Tasks',
     'Год',
@@ -263,7 +263,7 @@ test('(б) хост на «/»: «Upcoming» выше «Daily Planning» → о�
         tool: 'entity_update',
         input: {
           id: SHELL,
-          props: { [APP_NAV]: [RECORDS, UPCOMING, DAILY, ALL_TASKS, YEAR, ROUTINES] },
+          props: { [APP_NAV]: [RECORDS, AGENDA, DAILY, ALL_TASKS, YEAR, ROUTINES] },
         },
       },
     ],
@@ -311,7 +311,7 @@ test('(б) добавить поиском, убрать, сменить дом�
           title: 'Мой Orbis',
           emoji: '🌍',
           props: {
-            [APP_NAV]: [RECORDS, DAILY, UPCOMING, ALL_TASKS, ROUTINES, BREAD],
+            [APP_NAV]: [RECORDS, DAILY, AGENDA, ALL_TASKS, ROUTINES, BREAD],
             [APP_NAV_FORM]: 'home-hub',
             [APP_HOME]: KITCHEN,
           },
@@ -590,7 +590,7 @@ test('M-3: отказ пачки — редактор не закрываетс�
   fireEvent.change(within(editor).getByRole('textbox', { name: 'Имя' }), {
     target: { value: 'Мой Orbis' },
   });
-  fireEvent.click(within(editor).getByRole('button', { name: 'Выше: Upcoming' }));
+  fireEvent.click(within(editor).getByRole('button', { name: 'Выше: Повестка' }));
   fireEvent.click(within(editor).getByRole('button', { name: 'Сохранить' }));
   await waitFor(() => expect(batches()).toHaveLength(1));
   expect(await within(editor).findByRole('alert')).toHaveTextContent('Не удалось сохранить');
@@ -598,7 +598,7 @@ test('M-3: отказ пачки — редактор не закрываетс�
   expect(within(editor).getByRole('textbox', { name: 'Имя' })).toHaveValue('Мой Orbis');
   expect(rowTitles(editor)).toEqual([
     'Записи',
-    'Upcoming',
+    'Повестка',
     'Daily Planning',
     'All Tasks',
     'Год',

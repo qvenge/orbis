@@ -143,9 +143,15 @@ test('граф старой формы: seedOnboarding → CONFLICT при су�
     },
   );
   await waitFor(() =>
-    expect(screen.getByText('Граф нужно перевести на новую версию:')).toBeInTheDocument(),
+    expect(
+      screen.getByText('Граф старой формы: его переводит только пересев мира —'),
+    ).toBeInTheDocument(),
   );
-  expect(screen.getByText('bun scripts/ops.ts migrate-1b')).toBeInTheDocument();
+  // `migrate-1b` снят срезом 1в (РП-13): экран отсылает к ранбуку, не к снятой команде.
+  expect(
+    screen.getByText('docs/implementation/02-ops-runbook.md, раздел reset-world'),
+  ).toBeInTheDocument();
+  expect(screen.queryByText(/migrate-1b/)).toBeNull();
   expect(screen.queryByTestId('app')).not.toBeInTheDocument();
 });
 

@@ -44,8 +44,10 @@ export function OnboardingGate({ children }: { children: ReactNode }) {
         role="alert"
         className="flex h-full flex-col items-center justify-center gap-3 px-4 text-center text-sm"
       >
-        <span>Граф нужно перевести на новую версию:</span>
-        <code className="font-mono">bun scripts/ops.ts migrate-1b</code>
+        {/* Перевод 1б `migrate-1b` исполнен в проде 28.09 и снят срезом 1в (РП-13): граф старой формы
+            переводит только пересев мира — ранбук, а не команда, которой больше нет. */}
+        <span>Граф старой формы: его переводит только пересев мира —</span>
+        <code className="font-mono">docs/implementation/02-ops-runbook.md, раздел reset-world</code>
       </div>
     );
   }

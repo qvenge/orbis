@@ -47,6 +47,7 @@ import { appRouter } from '../router';
 import { seedOwnerGraph, seedSmartListId } from '../seed/onboarding';
 import { SEED_SMART_LISTS } from '../seed/smart-lists';
 import { agendaListOf, agendaSubscriptionOf } from '../subscriptions/agenda';
+import { supplyRecordId } from '../supply/records';
 import { dispatchTool, type ToolDispatchResult } from '../tools/dispatch';
 import { buildToolRegistry } from '../tools/registry';
 import { createCallerFactory } from '../trpc';
@@ -3891,9 +3892,13 @@ describe('collectPropertyHolders: род `body` — по индексу query_re
     const bodies = new Map(
       holders.filter((h) => h.kind === 'body').map((h) => [h.id, h.properties]),
     );
+    // id — записи поставки (`supplyRecordId`): у прежних списков — id сева, у Повестки (1в) — свой.
+    // Повестка свойств не называет вовсе (срез 1в §6.1): её блоки спрашивают значение «когда» и наборы
+    // контрактов, а не свойства, — держателем свойства она не бывает, и слиянию переписывать в ней нечего.
     for (const list of SEED_SMART_LISTS) {
-      const id = seedSmartListId(seedUser, list.slug);
-      expect([list.slug, bodies.has(id)]).toEqual([list.slug, true]);
+      const id = supplyRecordId(seedUser, list.slug);
+      const holds = list.slug !== 'agenda';
+      expect([list.slug, bodies.has(id)]).toEqual([list.slug, holds]);
     }
     // …и это перечень АДРЕСОВ, а не «функция вернула массив»: у «Рутин» обязаны быть все
     // четыре свойства, которыми её блоки фильтруют и сортируют.

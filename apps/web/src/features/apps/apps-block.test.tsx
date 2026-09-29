@@ -8,11 +8,11 @@ import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { App } from '../../App';
 import {
+  AGENDA,
   HOME as HOST_HOME_PAGE,
   resetFrame,
   shownPath,
   stubLaunchMode,
-  UPCOMING,
   unstubLaunchMode,
 } from '../../app/frame/frame-fixtures';
 import { noteRegistryVersion, resetRegistryVersionForTests } from '../../lib/registry/useRegistry';
@@ -160,7 +160,7 @@ test('«список из заголовка» — раздел чужого д�
   resetFrame(`/a/${MY}`);
   const withShortcut = appRow(MY, 'Мой дом', '🏡', {
     'orbis/app_home': MY_HOME,
-    [APP_NAV]: [MY_SECTION, UPCOMING, HOST_HOME_PAGE, HOST_PAGE, PROJ_HOME],
+    [APP_NAV]: [MY_SECTION, AGENDA, HOST_HOME_PAGE, HOST_PAGE, PROJ_HOME],
   });
   const { calls } = renderApp(appsWorld({ apps: [withShortcut, PROJ_ROW] }));
   await heading('Дом приложения');
@@ -168,8 +168,8 @@ test('«список из заголовка» — раздел чужого д�
   fireEvent.click(frameIcon());
   const own = await screen.findByTestId(`nav-section-${MY_SECTION}`);
   // Раздел навигации и домашняя хоста без «Дома» — не бездомные (§4.3): ярлык хоста.
-  const upcoming = await screen.findByTestId(`nav-section-${UPCOMING}`);
-  await waitFor(() => expect(upcoming).toHaveTextContent('↗ Orbis'));
+  const agenda = await screen.findByTestId(`nav-section-${AGENDA}`);
+  await waitFor(() => expect(agenda).toHaveTextContent('↗ Orbis'));
   expect(screen.getByTestId(`nav-section-${HOST_HOME_PAGE}`)).toHaveTextContent('↗ Orbis');
   // Страница с «Домом» = другое приложение — ярлык его дома.
   await waitFor(() =>
@@ -184,9 +184,9 @@ test('«список из заголовка» — раздел чужого д�
     .map((c) => (c.input as { query?: string }).query);
   expect(queries).toContain(HOMED_PAGES_QUERY);
   expect(queries).not.toContain('aspect=orbis/page');
-  fireEvent.click(upcoming);
-  await heading('Upcoming');
-  await waitFor(() => expect(shownPath()).toBe(`/r/${UPCOMING}`));
+  fireEvent.click(agenda);
+  await heading('Повестка');
+  await waitFor(() => expect(shownPath()).toBe(`/r/${AGENDA}`));
   await waitFor(() => expect(frameIcon()).toHaveTextContent('🪐'));
 });
 

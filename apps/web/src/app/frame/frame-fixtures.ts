@@ -41,7 +41,7 @@ export const SHELL = id(1);
 export const HOME = id(2);
 export const RECORDS = id(3);
 export const DAILY = id(4);
-export const UPCOMING = id(5);
+export const AGENDA = id(5);
 export const ALL_TASKS = id(6);
 export const YEAR = id(7);
 export const ROUTINES = id(8);
@@ -66,7 +66,7 @@ const supplyPage = (rid: string, key: string, title: string, emoji: string, body
     props: { [SUPPLY_KEY]: key },
   });
 
-export const NAV_IDS = [RECORDS, DAILY, UPCOMING, ALL_TASKS, YEAR, ROUTINES] as const;
+export const NAV_IDS = [RECORDS, DAILY, AGENDA, ALL_TASKS, YEAR, ROUTINES] as const;
 
 export const SHELL_ROW = wireEntity({
   id: SHELL,
@@ -97,7 +97,7 @@ export const PAGES: readonly WireEntityFixture[] = [
   supplyPage(HOME, 'home', 'Домой', '🏠', bodyOf('home')),
   supplyPage(RECORDS, 'records', 'Записи', '🗂️', bodyOf('records')),
   supplyPage(DAILY, 'daily-planning', 'Daily Planning', '☀️', 'Утро.'),
-  supplyPage(UPCOMING, 'upcoming', 'Upcoming', '📅', 'Неделя.'),
+  supplyPage(AGENDA, 'agenda', 'Повестка', '📅', 'Неделя.'),
   supplyPage(ALL_TASKS, 'all-tasks', 'All Tasks', '✅', 'Все задачи.'),
   supplyPage(YEAR, 'horizon-year', 'Год', '🗓️', 'Год.'),
   supplyPage(ROUTINES, 'routines', 'Рутины', '🔁', 'Рутины.'),
@@ -151,7 +151,7 @@ export function frameWorld(over: Partial<FrameWorld> = {}): FrameWorld {
   return {
     supply,
     all: over.all ?? [...supply, ...RECORDS_WORLD],
-    badges: over.badges ?? { [UPCOMING]: 3, [ALL_TASKS]: 120 },
+    badges: over.badges ?? { [AGENDA]: 3, [ALL_TASKS]: 120 },
     threads: over.threads ?? { [NOTE_THREAD]: NOTE, [GLOBAL_THREAD]: null },
     recordsList: over.recordsList ?? [RECORDS_WORLD[0] as WireEntityFixture],
     chat: over.chat ?? [],

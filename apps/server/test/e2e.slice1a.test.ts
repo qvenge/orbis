@@ -12,6 +12,7 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import type { GraphId } from '@orbis/shared';
 import { addDays, entitySchema, globalThreadId, newId } from '@orbis/shared';
+import { paramDeclsOf, parsePageText } from '@orbis/shared/doc/page-grammar';
 import { TRPCError } from '@trpc/server';
 import type { ActionRecord } from '../src/executor/types';
 import { DEFAULT_TIMEZONE, todayInTimeZone } from '../src/query/context';
@@ -250,11 +251,29 @@ describe('e2e слайс 1a: день из 02 §5 (два пользовател
     // Шесть списков с 1б — страницы поставки (§9.4); прочие страницы поставки блоков запроса не несут.
     const lists = await a.entity.query({ query: 'aspect=orbis/page' });
     expect(lists.length).toBeGreaterThanOrEqual(6);
-    const blocks = lists.flatMap((e) =>
-      [...(e.body ?? '').matchAll(/\{\{query:([\s\S]*?)\}\}/g)].map((m) => (m[1] as string).trim()),
-    );
+    // Параметры страницы (срез 1в §5.1) — значения по умолчанию из объявлений того же тела: так блок
+    // исполняет экран, пока владелец не тронул переключатель.
+    const pageBlocks = lists.flatMap((e) => {
+      const params = Object.fromEntries(
+        [...paramDeclsOf(parsePageText(e.body ?? ''))].map(([name, d]) => [name, d.default]),
+      );
+      return [...(e.body ?? '').matchAll(/\{\{query:([\s\S]*?)\}\}/g)].map((m) => ({
+        text: (m[1] as string).trim(),
+        params,
+      }));
+    });
+    // `$`-ссылка и `group=` — только в блоках страниц (1в §3.8): такие блоки (Повестка) исполняет пачка
+    // страницы `entity.blocks`, а `entity.query` им честно отказывает.
+    const pageOnly = (text: string) => text.includes('$') || text.includes('group=');
+    const blocks = pageBlocks.filter((b) => !pageOnly(b.text)).map((b) => b.text);
     // Страховка от «регулярка перестала находить»: пустой список прошёл бы цикл молча.
     expect(blocks.length).toBeGreaterThanOrEqual(9);
+    const onPage = pageBlocks.filter((b) => pageOnly(b.text));
+    expect(onPage.length).toBeGreaterThanOrEqual(2);
+    for (const b of onPage) {
+      const { results } = await a.entity.blocks({ blocks: [{ key: 'b', ...b }] });
+      expect([b.text, results.b?.ok]).toEqual([b.text, true]);
+    }
     for (const block of blocks) {
       // Отказ обязан быть видимым в отчёте вместе с самим текстом блока: без него
       // «не прошло» приходится искать, перебирая тела руками.
@@ -278,13 +297,16 @@ describe('e2e слайс 1a: день из 02 §5 (два пользовател
     // И бейдж сайдбара считает то же самое: у count своя ветка компиляции.
     expect((await a.entity.count({ query: today })).count).toBe(1);
 
-    // Обратная сторона того же факта: задача со сроком через месяц стоит в «Позже» и
-    // отсутствует в «Сегодня». Без этой пары ассерт выше краснел бы только на «пусто», а
-    // на «отобрал всё подряд» оставался бы зелёным.
+    // Обратная сторона того же факта: задача со сроком через месяц стоит в «Дальше» Повестки (1в §6.1;
+    // до 1в — «Позже» Upcoming) и отсутствует в «Сегодня». Без этой пары ассерт выше краснел бы только
+    // на «пусто», а на «отобрал всё подряд» оставался бы зелёным.
     expect(todayRows.map((r) => r.id)).not.toContain(laterId);
-    const later7 = blocks.find((b) => b.includes('due_date=after_7d'));
-    if (later7 === undefined) throw new Error('в телах нет блока «Позже»');
-    expect((await a.entity.query({ query: later7 })).map((r) => r.id)).toEqual([laterId]);
+    const further = onPage.find((b) => b.text.includes('title=Дальше'));
+    if (further === undefined) throw new Error('в телах нет блока «Дальше»');
+    const { results } = await a.entity.blocks({ blocks: [{ key: 'b', ...further }] });
+    const got = results.b;
+    if (!got?.ok || got.kind !== 'rows') throw new Error(`«Дальше»: ${JSON.stringify(got)}`);
+    expect(got.rows.map((r) => r.id)).toEqual([laterId]);
   });
 
   // ── Шаг 5: update→done, undo, повторный undo → ошибка ──────────────────────

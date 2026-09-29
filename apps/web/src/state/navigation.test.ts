@@ -132,7 +132,7 @@ test('каждый переход сохраняет навигацию под o
 test('экран поверх модели (плашка, старая ссылка) — «‹» снимает его, место модели прежнее', () => {
   useNav.getState().openRecord(A);
   const model = useNav.getState().model;
-  useNav.setState({ overlay: { kind: 'reserved', key: 'agenda', path: '/agenda' } });
+  useNav.setState({ overlay: { kind: 'reserved', key: 'budget', path: '/budget' } });
   effects = [];
   useNav.getState().back();
   expect(useNav.getState().overlay).toBeNull();

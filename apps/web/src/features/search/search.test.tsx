@@ -21,6 +21,7 @@ import { act, fireEvent, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { App } from '../../App';
 import {
+  AGENDA,
   BREAD,
   frameHandler,
   frameWorld,
@@ -31,7 +32,6 @@ import {
   resetFrame,
   SHELL_ROW,
   shownPath,
-  UPCOMING,
   unstubLaunchMode,
 } from '../../app/frame/frame-fixtures';
 import { DESKTOP_QUERY } from '../../app/frame/useViewport';
@@ -183,10 +183,10 @@ const back = () =>
   );
 
 /**
- * Старт на «Домой» и переход в раздел «Upcoming» — как человек: на телефоне листом разделов
+ * Старт на «Домой» и переход в раздел «Повестка» — как человек: на телефоне листом разделов
  * («раздел ▾»), на десктопе — сайдбаром навигации (задача 25: «раздел ▾» там не рисуется).
  */
-async function startOnUpcoming() {
+async function startOnAgenda() {
   resetFrame('/');
   const r = renderApp();
   await heading('Домой');
@@ -196,8 +196,8 @@ async function startOnUpcoming() {
   }
   const sheet = screen.queryByTestId('nav-switch');
   if (sheet !== null) fireEvent.click(sheet);
-  fireEvent.click(await screen.findByTestId(`nav-section-${UPCOMING}`));
-  await heading('Upcoming');
+  fireEvent.click(await screen.findByTestId(`nav-section-${AGENDA}`));
+  await heading('Повестка');
   return r;
 }
 
@@ -223,14 +223,14 @@ const pause = (ms: number) => act(() => new Promise((r) => setTimeout(r, ms)));
 // ─── телефон ──────────────────────────────────────────────────────────────────────────────────
 
 test('1. телефон: 🔍 на разделе — экран «Поиск» поверх раздела, поле внизу в фокусе, рамка на месте', async () => {
-  await startOnUpcoming();
+  await startOnAgenda();
   const field = await openSearchScreen();
   expect(shownPath()).toBe('/search');
-  // Поверх раздела: экран хоста — в стопке «Upcoming», раздел под ним.
+  // Поверх раздела: экран хоста — в стопке «Повестка», раздел под ним.
   const host = navModel().apps.host;
-  expect(host?.activeSection).toBe(UPCOMING);
-  expect(host?.stacks[UPCOMING]?.map((e) => e.address)).toEqual([
-    { kind: 'record', app: { kind: 'host' }, id: UPCOMING },
+  expect(host?.activeSection).toBe(AGENDA);
+  expect(host?.stacks[AGENDA]?.map((e) => e.address)).toEqual([
+    { kind: 'record', app: { kind: 'host' }, id: AGENDA },
     { kind: 'host-screen', screen: 'search' },
   ]);
   await waitFor(() => expect(field).toHaveFocus());
@@ -243,7 +243,7 @@ test('1. телефон: 🔍 на разделе — экран «Поиск» 
 });
 
 test('2. ввод «переезд» — ОДНА пачка entity.blocks из трёх текстов, ни одного entity.query; группы по порядку', async () => {
-  const { calls } = await startOnUpcoming();
+  const { calls } = await startOnAgenda();
   const field = await openSearchScreen();
   const before = calls.length;
   fireEvent.change(field, { target: { value: 'переезд' } });
@@ -273,7 +273,7 @@ test('2. ввод «переезд» — ОДНА пачка entity.blocks из 
 });
 
 test('3. ввод заменяет адрес на /search?q=… (replaceState) — история не растёт', async () => {
-  await startOnUpcoming();
+  await startOnAgenda();
   const field = await openSearchScreen();
   const length = window.history.length;
   const push = vi.spyOn(window.history, 'pushState');
@@ -288,7 +288,7 @@ test('3. ввод заменяет адрес на /search?q=… (replaceState) 
 test('4. найденная запись — правилом открытия из хоста; «‹» — в раздел, а не в поиск (§7.3)', async () => {
   // Режим приложения: «‹» идёт по модели (на сайте «назад» браузера честно вернул бы в поиск, R-30).
   stubViewport(false, 'app');
-  await startOnUpcoming();
+  await startOnAgenda();
   const field = await openSearchScreen();
   fireEvent.change(field, { target: { value: 'переезд' } });
   fireEvent.click(
@@ -298,12 +298,12 @@ test('4. найденная запись — правилом открытия �
   expect(shownPath()).toBe(`/r/${MOVE_TASK}`);
   expect(navModel().activeApp).toBe('host');
   back();
-  await heading('Upcoming');
-  expect(shownPath()).toBe(`/r/${UPCOMING}`);
+  await heading('Повестка');
+  expect(shownPath()).toBe(`/r/${AGENDA}`);
 });
 
 test('5. найденное приложение — переключение (/a/<id>); выключенное — приглушено, по нажатию — плашка', async () => {
-  await startOnUpcoming();
+  await startOnAgenda();
   let field = await openSearchScreen();
   fireEvent.change(field, { target: { value: 'переезд' } });
   const apps = await within(screen.getByTestId('search-results')).findByRole('group', {
@@ -343,7 +343,7 @@ test('6. старт на /search?q=еда — экран «Поиск» с «е�
 });
 
 test('7. пустое поле (и одни пробелы) — ни одного entity.blocks', async () => {
-  const { calls } = await startOnUpcoming();
+  const { calls } = await startOnAgenda();
   const field = await openSearchScreen();
   const before = calls.length;
   await pause(300);
@@ -354,7 +354,7 @@ test('7. пустое поле (и одни пробелы) — ни одног�
 });
 
 test('«Ничего не найдено» — когда все три группы пусты', async () => {
-  await startOnUpcoming();
+  await startOnAgenda();
   const field = await openSearchScreen();
   fireEvent.change(field, { target: { value: 'кит' } });
   expect(
@@ -364,7 +364,7 @@ test('«Ничего не найдено» — когда все три груп
 
 test('↓ и Enter — выбор второго результата с клавиатуры', async () => {
   stubViewport(false, 'app');
-  await startOnUpcoming();
+  await startOnAgenda();
   const field = await openSearchScreen();
   fireEvent.change(field, { target: { value: 'переезд' } });
   await within(screen.getByTestId('search-results')).findByText('Переезд — план');
@@ -379,7 +379,7 @@ test('↓ и Enter — выбор второго результата с кла�
 test('8. десктоп: 🔍, ⌘K и Ctrl+K — окно вверху, не элемент истории; Enter — запись в основной области, «‹» — прежнее место', async () => {
   // Режим приложения: «‹» идёт по модели — видно, куда легла запись (источник — текущий раздел).
   stubViewport(true, 'app');
-  await startOnUpcoming();
+  await startOnAgenda();
   // Прежнее место — экран хоста поверх раздела: окно ⌘K не должно его снять (его в стопке нет).
   act(() => useNav.getState().openHostScreen('settings'));
   await heading('Настройки');
@@ -429,24 +429,24 @@ test('8. десктоп: 🔍, ⌘K и Ctrl+K — окно вверху, не э
 
 test('8. десктоп, сайт: 🔍 не пишет в историю вкладки', async () => {
   stubViewport(true, 'site');
-  await startOnUpcoming();
+  await startOnAgenda();
   const push = vi.spyOn(window.history, 'pushState');
   const replace = vi.spyOn(window.history, 'replaceState');
   const length = window.history.length;
   fireEvent.click(searchButton());
   expect(push).not.toHaveBeenCalled();
-  expect(shownPath()).toBe(`/r/${UPCOMING}`);
+  expect(shownPath()).toBe(`/r/${AGENDA}`);
   await screen.findByRole('dialog', { name: 'Поиск' }, { timeout: 5000 });
   fireEvent.change(screen.getByLabelText('Строка поиска'), { target: { value: 'переезд' } });
   await screen.findByText('Переезд — коробки');
   expect(push).not.toHaveBeenCalled();
   expect(replace).not.toHaveBeenCalled();
   expect(window.history.length).toBe(length);
-  expect(shownPath()).toBe(`/r/${UPCOMING}`);
+  expect(shownPath()).toBe(`/r/${AGENDA}`);
 });
 
 test('9. телефон: ⌘K открывает экран поиска — тот же путь, что 🔍', async () => {
-  await startOnUpcoming();
+  await startOnAgenda();
   fireEvent.keyDown(window, { key: 'k', metaKey: true });
   await heading('Поиск');
   expect(shownPath()).toBe('/search');
@@ -456,7 +456,7 @@ test('9. телефон: ⌘K открывает экран поиска — т�
 // ─── фикс гейта 24 ──────────────────────────────────────────────────────────────────────────────
 
 test('M-1: поле очищено — Enter не открывает прежний, уже невидимый результат', async () => {
-  await startOnUpcoming();
+  await startOnAgenda();
   const field = await openSearchScreen();
   fireEvent.change(field, { target: { value: 'переезд' } });
   await within(screen.getByTestId('search-results')).findByText('Переезд — коробки');
@@ -491,7 +491,7 @@ test('M-2: 🔍 на экране поиска (телефон, сайт) — м
 
 test('M-3: Ctrl+K в русской раскладке (key «л», code KeyK) — тот же поиск: окно на десктопе, экран на телефоне', async () => {
   stubViewport(true);
-  await startOnUpcoming();
+  await startOnAgenda();
   fireEvent.keyDown(window, { key: 'л', code: 'KeyK', ctrlKey: true });
   expect(useSearchDialog.getState().open).toBe(true);
   const dialog = await screen.findByRole('dialog', { name: 'Поиск' }, { timeout: 5000 });
@@ -510,7 +510,7 @@ test('M-3: Ctrl+K в русской раскладке (key «л», code KeyK) �
 
 test('M-6: Colemak/Dvorak — физическая K с латинской буквой (Ctrl+E, Ctrl+T) остаётся браузеру', async () => {
   stubViewport(true);
-  await startOnUpcoming();
+  await startOnAgenda();
   for (const key of ['e', 't']) {
     const ev = new KeyboardEvent('keydown', { key, code: 'KeyK', ctrlKey: true, cancelable: true });
     act(() => {

@@ -10,6 +10,7 @@ import {
   APP_NAV_FORM,
   type GraphId,
   newId,
+  PAGE_ASPECT,
   SUPPLY_ASPECT,
   SUPPLY_DECLINED,
   SUPPLY_HASH,
@@ -23,6 +24,7 @@ import {
   SUPPLY_KEYS,
   type SupplyEtalon,
   type SupplyKey,
+  UPCOMING_BODY,
 } from '@orbis/shared/supply';
 import {
   APP_PRINT_PROPS,
@@ -253,7 +255,7 @@ describe('(а) запись поставки после создания', () =>
       [APP_NAV]: [
         'records',
         'daily-planning',
-        'upcoming',
+        'agenda',
         'all-tasks',
         'horizon-year',
         'routines',
@@ -886,11 +888,11 @@ describe('Opus m-2: Undo каждого действия возвращает в
   test('«вернуть как было» страницы → Undo: заголовок и тело владельца, версия снята', async () => {
     const graph = await freshGraph();
     await seedSupply(graph);
-    const id = supplyRecordId(graph, 'upcoming');
+    const id = supplyRecordId(graph, 'agenda');
     await editBody(graph, id, 'Моё\n\n{{query:aspect=orbis/task, title=Все}}');
     await ownerEdit(graph, { id, title: 'Моя неделя' });
     const edited = await rowOf(graph, id);
-    const { actionId } = await revertToEtalon(ctxOf(graph), 'upcoming');
+    const { actionId } = await revertToEtalon(ctxOf(graph), 'agenda');
     await undo(graph, actionId);
     const back = await rowOf(graph, id);
     expect({ title: back.title, emoji: back.emoji, body: back.body }).toEqual({
@@ -910,5 +912,183 @@ describe('Opus m-2: Undo каждого действия возвращает в
     const { actionId } = await addSupplyRecord(ctxOf(graph), 'home');
     await undo(graph, actionId);
     expect((await rowOf(graph, supplyRecordId(graph, 'home'))).archived).toBe(true);
+  });
+});
+
+// ─────────────────────────── Срез 1в: снятый ключ поставки (§6.3, РП-10, Д-13) ───────────────────────────
+
+/**
+ * Запись Upcoming ТАКОЙ, какой её оставил сев 1б: страница с аспектом «поставка», ключ `upcoming`, эталон
+ * 1б (`UPCOMING_BODY`) печатью в записи, id прежнего сева. Эталона кода у ключа больше нет — записать
+ * её можно только механизмом `supply` напрямую, как это сделал сев 1б.
+ */
+async function seedRetiredUpcoming(graph: GraphId): Promise<string> {
+  const id = supplyRecordId(graph, 'upcoming');
+  const title = 'Upcoming';
+  const emoji = '🗓️';
+  const r = await execute(
+    db,
+    {
+      identity: personal(graph),
+      actorKind: 'owner',
+      source: 'ui',
+      mechanism: 'supply',
+      batchId: newId(),
+      operations: [
+        {
+          tool: 'entity_create',
+          input: {
+            id,
+            title,
+            emoji,
+            tags: [],
+            body: UPCOMING_BODY,
+            aspects: [PAGE_ASPECT, SUPPLY_ASPECT],
+            props: {
+              [SUPPLY_KEY]: 'upcoming',
+              [SUPPLY_HASH]: etalonHash({
+                key: 'upcoming' as unknown as SupplyKey,
+                kind: 'page',
+                title,
+                emoji,
+                text: UPCOMING_BODY,
+              }),
+              [SUPPLY_TEXT]: printPageRecord({
+                title,
+                emoji,
+                body: await canonical(graph, UPCOMING_BODY),
+              }),
+            },
+          },
+        },
+      ],
+    },
+    { sink },
+  );
+  if (!r.ok) throw new Error(`запись Upcoming 1б: ${JSON.stringify(r.error)}`);
+  return id;
+}
+
+describe('снятый с поставки ключ upcoming (1в §6.3)', () => {
+  test('«Обновления» его не предлагают — ни обновлением, ни новой записью', async () => {
+    const graph = await freshGraph();
+    await seedSupply(graph);
+    await seedRetiredUpcoming(graph);
+    expect(await updatesOf(ctxOf(graph))).toEqual([]);
+    // Правленая — тоже: эталона, от которого считать обновление, у снятого ключа нет.
+    await ownerEdit(graph, { id: supplyRecordId(graph, 'upcoming'), title: 'Моя неделя' });
+    expect(await updatesOf(ctxOf(graph))).toEqual([]);
+  });
+
+  test('«вернуть как было» у правленой: род — из записи, тело и заголовок — из supply_text', async () => {
+    const graph = await freshGraph();
+    await seedSupply(graph);
+    const id = await seedRetiredUpcoming(graph);
+    await editBody(graph, id, 'Моя неделя\n\n{{query:aspect=orbis/task, title=Все}}');
+    await ownerEdit(graph, { id, title: 'Неделя' });
+    const edited = await rowOf(graph, id);
+    expect(statusOf(edited)).toBe('edited');
+
+    const { actionId } = await revertToEtalon(ctxOf(graph), 'upcoming');
+    const after = await rowOf(graph, id);
+    expect({ title: after.title, emoji: after.emoji, body: after.body }).toEqual(
+      parsePagePrint(edited.props[SUPPLY_TEXT] as string),
+    );
+    expect(after.body).toBe(await canonical(graph, UPCOMING_BODY));
+    expect(statusOf(after)).toBe('etalon');
+    // Эталон записи (ключ, отпечаток, текст) возврат не трогает.
+    expect(after.props).toEqual(edited.props);
+    expect(await versionsOf(graph, id)).toEqual([{ label: 'Прежняя версия', body: edited.body }]);
+    expect(await journalOf(graph, actionId)).toEqual([{ title: 'Вернуть как было: «Неделя»' }]);
+  });
+
+  test('«вернуть как было» у неправленой — «и так как в поставке», не «эталона нет»', async () => {
+    const graph = await freshGraph();
+    await seedSupply(graph);
+    await seedRetiredUpcoming(graph);
+    const err = await execErrorOf(revertToEtalon(ctxOf(graph), 'upcoming'));
+    expect([err.code, err.message]).toEqual(['VALIDATION', 'запись и так как в поставке']);
+  });
+
+  test('«добавить», «принять», «оставить своё» снятого ключа — отказ', async () => {
+    const graph = await freshGraph();
+    await seedSupply(graph);
+    const id = await seedRetiredUpcoming(graph);
+    await ownerEdit(graph, { id, title: 'Неделя' });
+    const upcoming = 'upcoming' as unknown as SupplyKey;
+    for (const call of [
+      () => acceptUpdate(ctxOf(graph), upcoming),
+      () => declineUpdate(ctxOf(graph), upcoming),
+    ]) {
+      const e = await execErrorOf(call());
+      expect([e.code, e.message]).toEqual([
+        'VALIDATION',
+        'эталона поставки с ключом «upcoming» нет',
+      ]);
+    }
+    // «Добавить» живую запись не создаёт второй — отказ раньше, чем дело дойдёт до эталона.
+    expect((await execErrorOf(addSupplyRecord(ctxOf(graph), upcoming))).code).toBe('VALIDATION');
+  });
+});
+
+describe('М-8 остатков 1б: признак отката «добавить» не гаснет от чужого отменённого действия', () => {
+  test('«Добавить: Повестка» → Undo → правка владельца архивной записи → Undo правки → снова new; «добавить» возвращает ту же', async () => {
+    const graph = await freshGraph();
+    await seedSupply(
+      graph,
+      SUPPLY_KEYS.filter((k) => k !== 'agenda'),
+    );
+    const id = supplyRecordId(graph, 'agenda');
+    const added = await addSupplyRecord(ctxOf(graph), 'agenda');
+    expect(await journalOf(graph, added.actionId)).toEqual([
+      { title: 'Добавить из поставки: «Повестка»' },
+    ]);
+    await undo(graph, added.actionId);
+    expect((await rowOf(graph, id)).archived).toBe(true);
+
+    // Владелец правит архивную запись и отменяет правку: последнее НЕотменённое действие над ней —
+    // всё то же отменённое «добавить». Без пропуска отменённых признак гас бы, и поставка молча
+    // перестала бы предлагать Повестку.
+    const edit = await execute(
+      db,
+      {
+        identity: personal(graph),
+        actorKind: 'owner',
+        source: 'ui',
+        operations: [{ tool: 'entity_update', input: { id, title: 'Моя повестка' } }],
+      },
+      { sink },
+    );
+    if (!edit.ok) throw new Error(`правка владельца: ${JSON.stringify(edit.error)}`);
+    await undo(graph, edit.actionId);
+    expect((await rowOf(graph, id)).title).toBe('Повестка');
+
+    expect(await updatesOf(ctxOf(graph))).toEqual([
+      { key: 'agenda', kind: 'new', recordId: null, edited: false, declined: false },
+    ]);
+    const again = await addSupplyRecord(ctxOf(graph), 'agenda');
+    expect((await rowOf(graph, id)).archived).toBe(false);
+    expect(await journalOf(graph, again.actionId)).toEqual([
+      { title: 'Добавить из поставки: «Повестка»' },
+    ]);
+    const count = await withIdentity(db, personal(graph), (tx) =>
+      tx.execute(
+        sql`SELECT count(*)::int AS n FROM entities WHERE props @> ${JSON.stringify({ [SUPPLY_KEY]: 'agenda' })}::jsonb`,
+      ),
+    );
+    expect(count[0]?.n).toBe(1);
+  });
+
+  test('правка владельца архивной записи НЕ отменена — это его действие, предложения нет', async () => {
+    const graph = await freshGraph();
+    await seedSupply(
+      graph,
+      SUPPLY_KEYS.filter((k) => k !== 'agenda'),
+    );
+    const id = supplyRecordId(graph, 'agenda');
+    const added = await addSupplyRecord(ctxOf(graph), 'agenda');
+    await undo(graph, added.actionId);
+    await ownerEdit(graph, { id, title: 'Моя повестка' });
+    expect(await updatesOf(ctxOf(graph))).toEqual([]);
   });
 });

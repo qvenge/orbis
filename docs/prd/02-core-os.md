@@ -283,17 +283,21 @@
 
 Семантика секций: Inbox — неразобранное, свежее сверху; «Сегодня» — фокус-список: срок сегодня или просрочен, незакрытые и не ожидающие, **заблокированные исключены** (`excludeBlocked=true`); «Ожидание» — делегированное и ждущее, давно ждущие сверху. Пересечение секций намеренно: inbox-задача со сроком сегодня видна и в Inbox, и в «Сегодня» — это две линзы на одну сущность, а не дубль.
 
-**Upcoming** — title `Upcoming`, emoji `🗓️`, страница поставки (ключ `upcoming`; до 1б — тег `smart-list`). Body:
+**Повестка** — title `Повестка`, emoji `🗓️`, страница поставки (ключ `agenda`; срез 1в §6.1 — на месте Upcoming, которая снята с поставки: у графов 1б её запись живёт снятым ключом `upcoming`, новый граф её не получает). Body:
 
 ```markdown
-Горизонт планирования: неделя и дальше.
+Всё, что во времени: встречи, сроки и сделанное — по дням.
 
-{{query:aspect=orbis/task, orbis/due_date=next_7d, class=orbis/completable:open, sortBy=orbis/due_date:asc|orbis/priority:desc, display=list, title="Ближайшие 7 дней"}}
+{{param: period, type=period, default=next_7d, options=next_7d|next_14d, title=Горизонт}}
 
-{{query:aspect=orbis/task, orbis/due_date=after_7d, class=orbis/completable:open, sortBy=orbis/due_date:asc, limit=30, display=compact, title=Позже}}
+{{query:orbis/when=overdue, class=orbis/completable:open, !class=orbis/recurrence:templates, sortBy=orbis/when:asc, display=list, hide_empty, title=Просрочено}}
+
+{{query:orbis/when=$period, !class=orbis/recurrence:templates, group=day:orbis/when, display=list}}
+
+{{query:orbis/when>$period, orbis/when=!$period, !class=orbis/recurrence:templates, sortBy=orbis/when:asc, limit=30, display=compact, title=Дальше}}
 ```
 
-В обоих блоках **намеренно нет** `excludeBlocked=true`: Upcoming — горизонт планирования, заблокированные задачи здесь остаются видимыми с lock-иконкой (§3.6), чтобы не выпасть из поля зрения. Фокус-фильтрация — задача списка «Сегодня», а не горизонта (см. §6, случай 3).
+Три блока над значением «когда» делят открытые записи с датами без остатка и пересечений: «Просрочено» (все даты позади; первым — ради бейджа), лента по дням за горизонт «7 дней | 14 дней» (сделанное сегодня — зачёркнутым), «Дальше» (дата за горизонтом и ни одной в нём). Смысл и следствия — спека среза 1в §3.3, §6.1.
 
 **All Tasks** — title `All Tasks`, emoji `📋`, страница поставки (ключ `all-tasks`; до 1б — тег `smart-list`). Body:
 
@@ -320,7 +324,7 @@
 ```markdown
 Горизонт «год»: цели. Годовой срок задачи грамматика не выражает, поэтому длинный горизонт держится целями — записями с аспектом orbis/goal, прогресс которых считает сервер. Недавно тронутые сверху.
 
-Лестница горизонтов целиком: день — список «Daily Planning», неделя и месяц — список «Upcoming», год — этот список, жизнь — список «Жизнь». «Жизни» нет в навигации хоста: её находят поиском.
+Лестница горизонтов целиком: день — список «Daily Planning», неделя и две — «Повестка», год — этот список, жизнь — список «Жизнь». «Жизни» нет в навигации хоста: её находят поиском.
 
 {{query:aspect=orbis/goal, sortBy=orbis/updated_at:desc, display=list, title=Цели}}
 ```

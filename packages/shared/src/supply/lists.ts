@@ -1,6 +1,8 @@
 // packages/shared/src/supply/lists.ts
-// Тела шести преднастроенных списков — трёх исходных, двух верхних горизонтов планирования (E4) и
-// «Рутин» (V1.9). С 1б это эталоны записей поставки (спека §9.4, `./etalons.ts`).
+// Тела шести преднастроенных страниц — Daily Planning, Повестки (срез 1в §6.1; на месте Upcoming),
+// All Tasks, двух верхних горизонтов планирования (E4) и «Рутин» (V1.9). С 1б это эталоны записей
+// поставки (спека §9.4, `./etalons.ts`). Тело Upcoming — эталон 1б снятого с поставки ключа (1в §6.3):
+// экспорт остаётся, поставкой не несётся.
 //
 // ДОМ — SHARED (задача 11 среза 1б): тела нужны и серверу (сев, механизм поставки), и web (сравнение
 // «Обновлений», признак «как в поставке»). Файл листовой — без единого импорта: его тянет сабпат
@@ -41,18 +43,56 @@ export const DAILY_PLANNING_BODY = `Утренний обзор: разобра�
 
 {{query:aspect=orbis/task, orbis/task_status=waiting, sortBy=orbis/updated_at:asc, display=compact, title=Ожидание}}`;
 
+/**
+ * Эталон 1б СНЯТОГО ключа `upcoming` (срез 1в §6.3, `RETIRED_SUPPLY_KEYS`) — поставкой не несётся: новый
+ * граф Upcoming не получает, а в графах 1б этот текст лежит печатью эталона в записи
+ * (`orbis/supply_text`), и «Вернуть как было» возвращает именно его. Экспорт — для тестов канона и
+ * фикстуры записи 1б; второй копии тела нигде нет.
+ */
 export const UPCOMING_BODY = `Горизонт планирования: неделя и дальше.
 
 {{query:aspect=orbis/task, orbis/due_date=next_7d, class=orbis/completable:open, sortBy=orbis/due_date:asc|orbis/priority:desc, display=list, title="Ближайшие 7 дней"}}
 
 {{query:aspect=orbis/task, orbis/due_date=after_7d, class=orbis/completable:open, sortBy=orbis/due_date:asc, limit=30, display=compact, title=Позже}}`;
 
+// ─────────────────── Повестка (срез 1в §6.1, §6.2, §3.3) ───────────────────
+// Всё, что во времени, — одна страница из блоков над значением «когда» (`orbis/when`): параметр
+// горизонта и три блока. Настроить Повестку — значит править её тело; своей подписки и экрана у неё нет.
+//
+// ТРИ БЛОКА ДЕЛЯТ ОТКРЫТЫЕ ЗАПИСИ С ДАТАМИ БЕЗ ОСТАТКА И ПЕРЕСЕЧЕНИЙ (§3.3) — ровно потому, что горизонт
+// начинается сегодня:
+//  - «Просрочено» — `overdue` значения («все даты позади, хоть одна есть») И набор `open`: `overdue`
+//    истинно и для сделанного раньше сегодня (его дата — только время закрытия), без набора оно
+//    вернулось бы сюда (§3.3). Первым — ради бейджа раздела (он считает первый блок данных, 1б §9.3):
+//    цифра у Повестки — «столько просрочено», то, что требует внимания; пусто — блок скрыт;
+//  - лента — `=$period`, по дням; фильтра закрытых НЕТ: правило значения «когда» делает это само —
+//    сделанное сегодня стоит в сегодня (зачёркнуто), сделанное раньше и отменённое дат в горизонте не
+//    имеют (§4.2);
+//  - «Дальше» — дата за горизонтом (`>$period`) и НИ ОДНОЙ в нём (отрицание `=$period`): иначе запись
+//    «завтра и через месяц» стояла бы и в ленте, и здесь. Ключ сортировки — первая дата за горизонтом.
+// Варианты горизонта — только периоды, начинающиеся сегодня (`next_7d`, `next_14d`): у `this_week`
+// «Просрочено» и лента пересеклись бы (§3.3, §6.1). Шаблоны повторов исключены в каждом блоке явно
+// (§5.2): шаблон — не встреча, встречи — его экземпляры.
+//
+// ОТРИЦАНИЕ У «ДАЛЬШЕ» НАПИСАНО ТАК, КАК ЕГО ПЕЧАТАЕТ КАНОН: `orbis/when=!$period` — то же дерево, что
+// `!orbis/when=$period` замысла спеки §6.1 (правило файла выше: тело проходит канон без изменений).
+
+export const AGENDA_BODY = `Всё, что во времени: встречи, сроки и сделанное — по дням.
+
+{{param: period, type=period, default=next_7d, options=next_7d|next_14d, title=Горизонт}}
+
+{{query:orbis/when=overdue, class=orbis/completable:open, !class=orbis/recurrence:templates, sortBy=orbis/when:asc, display=list, hide_empty, title=Просрочено}}
+
+{{query:orbis/when=$period, !class=orbis/recurrence:templates, group=day:orbis/when, display=list}}
+
+{{query:orbis/when>$period, orbis/when=!$period, !class=orbis/recurrence:templates, sortBy=orbis/when:asc, limit=30, display=compact, title=Дальше}}`;
+
 export const ALL_TASKS_BODY = `{{query:aspect=orbis/task, class=orbis/completable:open, sortBy=orbis/updated_at:desc, display=list, title="Все незакрытые задачи"}}`;
 
 // ─────────────── Горизонты планирования (E4, слайс 3, 02 §3.3/§7.2) ───────────────
 // Лестница горизонтов «день → неделя → месяц → год → жизнь» доставляется тем, чего в ней
 // НЕ ХВАТАЕТ (решение владельца Р29), а не пятью новыми списками рядом с существующими:
-// день закрывает Daily Planning, неделю и месяц — Upcoming (его тело так и озаглавлено:
+// день закрывает Daily Planning, неделю и две — Повестка (срез 1в §6.4; до 1в — Upcoming,
 // «Горизонт планирования: неделя и дальше»). Сидируются только два недостающих верхних
 // горизонта — «Год» и «Жизнь». Отдельные списки «День»/«Неделя»/«Месяц» отличались бы от
 // существующих одним лишь параметром `title=` (у «Недели» — дословно им; `display=` виджет
@@ -76,7 +116,7 @@ export const ALL_TASKS_BODY = `{{query:aspect=orbis/task, class=orbis/completabl
 
 export const HORIZON_YEAR_BODY = `Горизонт «год»: цели. Годовой срок задачи грамматика не выражает, поэтому длинный горизонт держится целями — записями с аспектом orbis/goal, прогресс которых считает сервер. Недавно тронутые сверху.
 
-Лестница горизонтов целиком: день — список «Daily Planning», неделя и месяц — список «Upcoming», год — этот список, жизнь — список «Жизнь». «Жизни» нет в навигации хоста: её находят поиском.
+Лестница горизонтов целиком: день — список «Daily Planning», неделя и две — «Повестка», год — этот список, жизнь — список «Жизнь». «Жизни» нет в навигации хоста: её находят поиском.
 
 {{query:aspect=orbis/goal, sortBy=orbis/updated_at:desc, display=list, title=Цели}}`;
 
@@ -140,7 +180,7 @@ export const ROUTINES_LIST_BODY = `Рутины — то, что Orbis дела�
 {{query:${ROUTINES_BATCH_QUERY}}}`;
 
 export interface SeedSmartList {
-  slug: 'daily-planning' | 'upcoming' | 'all-tasks' | 'horizon-year' | 'horizon-life' | 'routines';
+  slug: 'daily-planning' | 'agenda' | 'all-tasks' | 'horizon-year' | 'horizon-life' | 'routines';
   title: string;
   emoji: string;
   body: string;
@@ -170,12 +210,29 @@ export const SEED_ROUTINES_LIST = {
   body: ROUTINES_LIST_BODY,
 } as const satisfies SeedSmartList;
 
-// Порядок = порядок вставки. В навигации хоста (оболочка, срез 1б §6.5, §9.4) — «Записи» и первые
-// три, «Год» и «Рутины»; «Жизни» в навигации нет — её находят поиском (страница, §9.6).
+// Порядок = порядок вставки. В навигации хоста (оболочка, срез 1б §6.5, §9.4; 1в §6.2) — «Записи» и
+// первые три (Повестка — на месте Upcoming), «Год» и «Рутины»; «Жизни» в навигации нет — её находят
+// поиском (страница, §9.6).
 export const SEED_SMART_LISTS = [
   { slug: 'daily-planning', title: 'Daily Planning', emoji: '☀️', body: DAILY_PLANNING_BODY },
-  { slug: 'upcoming', title: 'Upcoming', emoji: '🗓️', body: UPCOMING_BODY },
+  { slug: 'agenda', title: 'Повестка', emoji: '🗓️', body: AGENDA_BODY },
   { slug: 'all-tasks', title: 'All Tasks', emoji: '📋', body: ALL_TASKS_BODY },
   ...SEED_HORIZON_LISTS,
   SEED_ROUTINES_LIST,
 ] as const satisfies readonly SeedSmartList[];
+
+/**
+ * Слаги ПРЕЖНИХ шести списков сева (до среза 1в): у графа старой формы (до 1б) они лежат на своих id
+ * сева (`seedSmartListId`) без аспекта «поставка». По ним заведение графа узнаёт мир старой формы
+ * (отказ `GRAPH_NEEDS_MIGRATION`), и фикстура такого мира сеет именно их. Отдельно от
+ * `SEED_SMART_LISTS`: нынешний сев несёт Повестку вместо Upcoming (1в §6.3), а признак мира старой формы
+ * обязан смотреть на то, что сеял прежний онбординг.
+ */
+export const LEGACY_SEED_LIST_SLUGS = [
+  'daily-planning',
+  'upcoming',
+  'all-tasks',
+  'horizon-year',
+  'horizon-life',
+  'routines',
+] as const;

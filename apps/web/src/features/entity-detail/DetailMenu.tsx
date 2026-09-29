@@ -11,8 +11,8 @@ import {
 import {
   HOST_SHELL_KEY,
   isHostTemplateRecord,
-  SUPPLY_KEYS,
-  type SupplyKey,
+  SUPPLY_KEY_VALUES,
+  type SupplyKeyValue,
 } from '@orbis/shared/supply';
 import {
   AppWindow,
@@ -330,19 +330,22 @@ function RecordMenu({
    * изменена и печать эталона в ней лежит (`canRevert`); запись, выведенная из поставки (снят аспект,
    * R-17), — уже не запись поставки, пункта нет. Как и прочие переписывающие жесты, ждёт досыла тела:
    * возврат поверх неотправленного текста потерял бы его мимо версий.
+   *
+   * Ключ — любой допустимый, и снятый с поставки тоже (1в §6.3: правленая Upcoming 1б): возврат идёт к
+   * печати эталона В ЗАПИСИ, эталон кода ему не нужен.
    */
   function revertItems(): DropdownMenuItem[] {
     const key = entity.props[SUPPLY_KEY];
     // Оболочка хоста возвращается только через диалог исчезающих разделов (раздел «Приложение»).
     if (!canRevert(entity) || key === HOST_SHELL_KEY) return [];
-    if (!(SUPPLY_KEYS as readonly unknown[]).includes(key)) return [];
+    if (!(SUPPLY_KEY_VALUES as readonly unknown[]).includes(key)) return [];
     return [
       {
         label: REVERT,
         icon: <RotateCcw size={16} aria-hidden />,
         onSelect: () => {
           if (!bodySettled()) return;
-          void runSupply({ kind: 'revert', key: key as SupplyKey });
+          void runSupply({ kind: 'revert', key: key as SupplyKeyValue, title: entity.title });
         },
       },
     ];

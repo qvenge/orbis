@@ -3,13 +3,21 @@
 // Против живой БД через createCallerFactory, как в бою. Эталоны у ручек — эталоны кода; «прежний релиз»
 // фикстура кладёт в записи сама (подменённый эталон «Домой»), чтобы обновление было что принимать.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { type GraphId, newId } from '@orbis/shared';
+import {
+  type GraphId,
+  newId,
+  PAGE_ASPECT,
+  SUPPLY_ASPECT,
+  SUPPLY_KEY,
+  SUPPLY_TEXT,
+} from '@orbis/shared';
 import {
   SUPPLY_ETALONS,
   SUPPLY_KEYS,
   type SupplyEtalon,
   type SupplyKey,
 } from '@orbis/shared/supply';
+import { printPageRecord } from '@orbis/shared/supply/print';
 import { TRPCError } from '@trpc/server';
 import { sql } from 'drizzle-orm';
 import { appDb, freshGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
@@ -109,6 +117,75 @@ describe('supply.* — только владельцу', () => {
     expect(
       (await trpcError(owner.supply.accept({ key: 'budget' as unknown as SupplyKey }))).code,
     ).toBe('BAD_REQUEST');
+  });
+});
+
+describe('supply.* — снятый с поставки ключ upcoming (1в §6.3, РП-10)', () => {
+  test('revert({key: upcoming}) принят схемой и возвращает; accept/decline/add({key: upcoming}) — отказ схемы', async () => {
+    const graph = await freshGraph();
+    await seedOld(graph);
+    // Запись Upcoming 1б: страница поставки с ключом `upcoming` и печатью эталона 1б в записи.
+    const id = supplyRecordId(graph, 'upcoming');
+    const upcomingBody = 'Горизонт планирования: неделя и дальше.';
+    const r = await execute(
+      db,
+      {
+        identity: personal(graph),
+        actorKind: 'owner',
+        source: 'ui',
+        mechanism: 'supply',
+        batchId: newId(),
+        operations: [
+          {
+            tool: 'entity_create',
+            input: {
+              id,
+              title: 'Upcoming',
+              emoji: '🗓️',
+              tags: [],
+              body: upcomingBody,
+              aspects: [PAGE_ASPECT, SUPPLY_ASPECT],
+              props: {
+                [SUPPLY_KEY]: 'upcoming',
+                [SUPPLY_TEXT]: printPageRecord({
+                  title: 'Upcoming',
+                  emoji: '🗓️',
+                  body: upcomingBody,
+                }),
+              },
+            },
+          },
+        ],
+      },
+      { sink },
+    );
+    if (!r.ok) throw new Error(JSON.stringify(r.error));
+    await execute(
+      db,
+      {
+        identity: personal(graph),
+        actorKind: 'owner',
+        source: 'ui',
+        operations: [{ tool: 'entity_update', input: { id, title: 'Моя неделя' } }],
+      },
+      { sink },
+    );
+    const owner = callerFor(graph);
+    const reverted = await owner.supply.revert({ key: 'upcoming' });
+    expect(await journalCount(graph, reverted.actionId)).toBe(1);
+    const title = await withIdentity(db, personal(graph), (tx) =>
+      tx.execute(sql`SELECT title FROM entities WHERE id = ${id}::uuid`),
+    );
+    expect(title[0]?.title).toBe('Upcoming');
+
+    const upcoming = 'upcoming' as unknown as SupplyKey;
+    for (const call of [
+      () => owner.supply.accept({ key: upcoming }),
+      () => owner.supply.decline({ key: upcoming }),
+      () => owner.supply.add({ key: upcoming }),
+    ]) {
+      expect((await trpcError(call())).code).toBe('BAD_REQUEST');
+    }
   });
 });
 

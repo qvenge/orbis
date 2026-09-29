@@ -15,7 +15,12 @@ import {
   SUPPLY_KEY,
   SUPPLY_TEXT,
 } from '@orbis/shared';
-import { SUPPLY_ETALONS, type SupplyEtalon, type SupplyKey } from '@orbis/shared/supply';
+import {
+  SUPPLY_ETALONS,
+  type SupplyEtalon,
+  type SupplyKey,
+  type SupplyKeyValue,
+} from '@orbis/shared/supply';
 import { printAppProps, printPageRecord } from '@orbis/shared/supply/print';
 import { v5 as uuidv5 } from 'uuid';
 import { bodyFieldsFromMarkdown } from '../executor/body-fields';
@@ -24,8 +29,13 @@ import type { ExecOperation } from '../routines/propose';
 import { seedSmartListId } from '../seed/world';
 import { etalonHash } from './hash';
 
-/** Ключи шести списков: у их записей id — прежние id сева (`seedSmartListId`), ссылки владельца на них живут. */
-const LIST_KEYS: ReadonlySet<SupplyKey> = new Set([
+/**
+ * Ключи шести ПРЕЖНИХ списков сева: у их записей id — прежние id сева (`seedSmartListId`), ссылки
+ * владельца на них живут. `upcoming` остаётся (срез 1в §6.3): записи 1б со снятым ключом лежат на этом
+ * id, и «Вернуть как было» находит их по нему. Повестки (`agenda`, 1в РП-10) здесь нет: списком сева
+ * она не была, её id — общий для записей поставки `graph:supply:agenda`.
+ */
+const LIST_KEYS: ReadonlySet<SupplyKeyValue> = new Set<SupplyKeyValue>([
   'daily-planning',
   'upcoming',
   'all-tasks',
@@ -38,7 +48,7 @@ const LIST_KEYS: ReadonlySet<SupplyKey> = new Set([
  * Детерминированный id записи поставки: списки — `seedSmartListId(graph, key)` (ключ = прежний слаг сева,
  * перевод данных задачи 13 находит прод-списки по нему); прочие — uuidv5 от `graph:supply:key`.
  */
-export function supplyRecordId(graph: GraphId, key: SupplyKey): string {
+export function supplyRecordId(graph: GraphId, key: SupplyKeyValue): string {
   if (LIST_KEYS.has(key)) return seedSmartListId(graph, key);
   return uuidv5(`${graph.toLowerCase()}:supply:${key}`, ORBIS_NAMESPACE);
 }

@@ -1,4 +1,4 @@
-import { etalonOf, type SupplyKey } from '@orbis/shared/supply';
+import { etalonOf, type SupplyKey, type SupplyKeyValue } from '@orbis/shared/supply';
 import { useCallback } from 'react';
 import { invalidateGraph } from '../../lib/invalidate';
 import { type RouterOutputs, trpc } from '../../trpc';
@@ -81,7 +81,9 @@ export function acceptAllScope(updates: readonly SupplyUpdate[]): SupplyUpdate[]
 export type SupplyAct =
   | { kind: 'accept' | 'decline' | 'add'; key: SupplyKey }
   // Версия записи, по которой клиент показал, что изменится (финал 1б, B1 m-3): сервер сверяет её.
-  | { kind: 'revert'; key: SupplyKey; expectedUpdatedAt?: string }
+  // Ключ — любой допустимый, и снятый с поставки тоже (1в §6.3): эталона кода у него нет, поэтому
+  // подпись тоста — заголовок записи (`title`), как у записи журнала сервера «Вернуть как было: «…»».
+  | { kind: 'revert'; key: SupplyKeyValue; title: string; expectedUpdatedAt?: string }
   | { kind: 'accept-all' };
 
 export const SUPPLY_FAILED = 'Не удалось выполнить действие поставки';
@@ -89,14 +91,13 @@ export const NOTHING_TO_ACCEPT = 'Обновлений без ваших пра�
 
 function doneTitle(act: SupplyAct, accepted: number): string {
   if (act.kind === 'accept-all') return `Принято обновлений: ${accepted}`;
+  if (act.kind === 'revert') return `Возвращено как было: «${act.title}»`;
   const title = `«${etalonOf(act.key).title}»`;
   switch (act.kind) {
     case 'accept':
       return `Обновление принято: ${title}`;
     case 'decline':
       return `Оставлено своё: ${title}`;
-    case 'revert':
-      return `Возвращено как было: ${title}`;
     case 'add':
       return `Добавлено из поставки: ${title}`;
   }
@@ -122,6 +123,14 @@ export function useSupplyAction(): (act: SupplyAct) => Promise<boolean> {
           const r = await m.acceptAll.mutate();
           actionId = r.actionId;
           accepted = r.accepted.length;
+        } else if (act.kind === 'revert') {
+          const input = { key: act.key };
+          const r = await m.revert.mutate(
+            act.expectedUpdatedAt === undefined
+              ? input
+              : { ...input, expectedUpdatedAt: act.expectedUpdatedAt },
+          );
+          actionId = r.actionId;
         } else {
           const input = { key: act.key };
           const r =
@@ -129,13 +138,7 @@ export function useSupplyAction(): (act: SupplyAct) => Promise<boolean> {
               ? await m.accept.mutate(input)
               : act.kind === 'decline'
                 ? await m.decline.mutate(input)
-                : act.kind === 'revert'
-                  ? await m.revert.mutate(
-                      act.expectedUpdatedAt === undefined
-                        ? input
-                        : { ...input, expectedUpdatedAt: act.expectedUpdatedAt },
-                    )
-                  : await m.add.mutate(input);
+                : await m.add.mutate(input);
           actionId = r.actionId;
         }
       } catch {

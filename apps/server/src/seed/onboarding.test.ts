@@ -22,6 +22,7 @@ import {
   SUPPLY_ASPECT,
   SUPPLY_KEY,
 } from '@orbis/shared';
+import { paramDeclsOf, parsePageText } from '@orbis/shared/doc/page-grammar';
 import { OWNER_LOCALE, parseQueryAst, toParseRegistry } from '@orbis/shared/query';
 import { AGENDA_QUERY_TEXTS } from '@orbis/shared/query/fixtures';
 import { SUPPLY_ETALONS, SUPPLY_KEYS, type SupplyEtalon } from '@orbis/shared/supply';
@@ -47,6 +48,7 @@ import { ensurePersonalGraph } from '../seed/personal-graph';
 import { ROLLOVER_ROUTINE_SLUG } from '../seed/rollover-routine';
 import { setupGraph } from '../seed/setup-graph';
 import {
+  AGENDA_BODY,
   ALL_TASKS_BODY,
   DAILY_PLANNING_BODY,
   HORIZON_LIFE_BODY,
@@ -56,7 +58,6 @@ import {
   SEED_HORIZON_LISTS,
   SEED_SMART_LISTS,
   type SeedSmartList,
-  UPCOMING_BODY,
 } from '../seed/smart-lists';
 import { SEED_WORLD_SIZE, WORLD_SEED_MECHANISM } from '../seed/world';
 import { listUpdates } from '../supply/mechanism';
@@ -554,11 +555,12 @@ describe('smart lists §7.2 / §3.3', () => {
       return block;
     });
     // Первые шесть markdown-блоков документа — §3.3, ровно в порядке SEED_SMART_LISTS:
-    // три исходных списка, два верхних горизонта планирования (E4), «Рутины» (V1.9).
+    // Daily Planning, Повестка (срез 1в §6.1 — на месте Upcoming), All Tasks, два верхних горизонта
+    // планирования (E4), «Рутины» (V1.9).
     expect(blocks.slice(0, SEED_SMART_LISTS.length)).toEqual(SEED_SMART_LISTS.map((s) => s.body));
     // Поимённо — чтобы падение называло виновника, а не «массивы не равны»
     expect(blocks[0]).toBe(DAILY_PLANNING_BODY);
-    expect(blocks[1]).toBe(UPCOMING_BODY);
+    expect(blocks[1]).toBe(AGENDA_BODY);
     expect(blocks[2]).toBe(ALL_TASKS_BODY);
     expect(blocks[3]).toBe(HORIZON_YEAR_BODY);
     expect(blocks[4]).toBe(HORIZON_LIFE_BODY);
@@ -588,7 +590,7 @@ describe('smart lists §7.2 / §3.3', () => {
     // Ожидаемое число блоков в каждом теле — потеря блока при правке body не пройдёт молча
     const expectedBlocks: Record<SeedSmartList['slug'], number> = {
       'daily-planning': 3,
-      upcoming: 2,
+      agenda: 3,
       'all-tasks': 1,
       'horizon-year': 1,
       'horizon-life': 1,
@@ -599,7 +601,8 @@ describe('smart lists §7.2 / §3.3', () => {
       const blocks = queryBlocksOf(list.body);
       expect(blocks.length).toBe(expectedBlocks[list.slug]);
       for (const block of blocks) {
-        const parsed = parseQueryAst(block, reg);
+        // Блоки страниц — с местом `page`: `$period` и `group=` Повестки законны только там (§3.8).
+        const parsed = parseQueryAst(block, reg, { place: 'page' });
         expect([list.slug, block, parsed.ok]).toEqual([list.slug, block, true]);
       }
     }
@@ -615,15 +618,21 @@ describe('smart lists §7.2 / §3.3', () => {
   // Парсер — не компилятор: он проверяет форму, а SQL строит `query/compile-ast.ts` со своим
   // исчерпывающим разбором токенов и типов полей. Блок, который парсится, но не
   // компилируется, приехал бы пользователю красной плашкой в готовом списке.
-  test('каждый query-блок шести списков выполняется entity.query против живой БД', async () => {
+  // Исполняются пачкой страницы (`entity.blocks`) — так их и читает экран: `$period` Повестки
+  // подставляется значением по умолчанию параметра тела, `group=` — законная проекция блока.
+  test('каждый query-блок шести списков выполняется пачкой блоков против живой БД', async () => {
     const user = await freshGraph();
     const caller = callerFor(user);
     await caller.user.seedOnboarding();
 
     for (const list of SEED_SMART_LISTS) {
-      for (const block of queryBlocksOf(list.body)) {
-        const rows = await caller.entity.query({ query: block });
-        expect(Array.isArray(rows)).toBe(true);
+      const params = Object.fromEntries(
+        [...paramDeclsOf(parsePageText(list.body))].map(([name, d]) => [name, d.default]),
+      );
+      const blocks = queryBlocksOf(list.body).map((text, i) => ({ key: `b${i}`, text, params }));
+      const { results } = await caller.entity.blocks({ blocks });
+      for (const b of blocks) {
+        expect([list.slug, b.text, results[b.key]?.ok]).toEqual([list.slug, b.text, true]);
       }
     }
   });
@@ -638,15 +647,16 @@ describe('smart lists §7.2 / §3.3', () => {
     }
   });
 
-  // §9.4: шесть списков — записи поставки. Страница, эталон, ключ, прежний детерминированный id сева
-  // (ссылки владельца на них переживают 1б), тег `smart-list` ушёл — его никто не читает.
+  // §9.4: шесть списков — записи поставки. Страница, эталон, ключ, детерминированный id
+  // (`supplyRecordId`: у пяти прежних — id сева, ссылки владельца на них переживают 1б; у Повестки —
+  // свой, 1в РП-10), тег `smart-list` ушёл — его никто не читает.
   test('шесть списков — страницы поставки: аспекты, ключ, «как в поставке», прежние id, тега smart-list нет', async () => {
     const user = await freshGraph();
     await callerFor(user).user.seedOnboarding();
 
     const expected: Array<[SeedSmartList['slug'], string, string]> = [
       ['daily-planning', 'Daily Planning', '☀️'],
-      ['upcoming', 'Upcoming', '🗓️'],
+      ['agenda', 'Повестка', '🗓️'],
       ['all-tasks', 'All Tasks', '📋'],
       ['horizon-year', 'Год', '🎯'],
       ['horizon-life', 'Жизнь', '🧭'],
@@ -654,7 +664,7 @@ describe('smart lists §7.2 / §3.3', () => {
     ];
     expect(expected.map(([slug]) => slug)).toEqual(SEED_SMART_LISTS.map((l) => l.slug));
     for (const [slug, title, emoji] of expected) {
-      const row = await rowOf(user, seedSmartListId(user, slug));
+      const row = await rowOf(user, supplyRecordId(user, slug));
       expect([slug, row.title, row.emoji]).toEqual([slug, title, emoji]);
       expect(row.aspects).toEqual(expect.arrayContaining([PAGE_ASPECT, SUPPLY_ASPECT]));
       expect(row.props[SUPPLY_KEY]).toBe(slug);
@@ -664,6 +674,18 @@ describe('smart lists §7.2 / §3.3', () => {
     expect((await rowOf(user, seedSmartListId(user, 'daily-planning'))).body).toBe(
       DAILY_PLANNING_BODY,
     );
+    // Повестка (срез 1в §6.1, РП-10) — id `graph:supply:agenda`, а не список прежнего сева; тело —
+    // эталон байт в байт (он уже канон, `seed-canon.test.ts`).
+    const agenda = await rowOf(user, supplyRecordId(user, 'agenda'));
+    expect(supplyRecordId(user, 'agenda')).not.toBe(seedSmartListId(user, 'agenda'));
+    expect(agenda.body).toBe(AGENDA_BODY);
+    // Upcoming снята с поставки (§6.3): новый граф её не получает — ни на прежнем id, ни с её ключом.
+    const upcoming = await withIdentity(db, personal(user), (tx) =>
+      tx.execute(sql`SELECT 1 FROM entities
+        WHERE id = ${seedSmartListId(user, 'upcoming')}::uuid
+           OR props @> ${JSON.stringify({ [SUPPLY_KEY]: 'upcoming' })}::jsonb`),
+    );
+    expect(upcoming.length).toBe(0);
     // Тега `smart-list` нет ни на одной записи графа — поиск по нему пуст.
     expect(await callerFor(user).entity.query({ query: 'tags=smart-list' })).toEqual([]);
   });
@@ -819,7 +841,7 @@ describe('горизонты показывают обещанное (§3.3, E4)
   test('лестница в теле «Года» называет существующие списки их настоящими заголовками', () => {
     const ladder = HORIZON_YEAR_BODY.split('\n').find((l) => l.startsWith('Лестница горизонтов'));
     expect(ladder).toBeDefined();
-    for (const slug of ['daily-planning', 'upcoming'] as const) {
+    for (const slug of ['daily-planning', 'agenda'] as const) {
       const title = SEED_SMART_LISTS.find((l) => l.slug === slug)?.title;
       expect(title).toBeDefined();
       expect(ladder).toContain(`«${title as string}»`);
@@ -1001,15 +1023,16 @@ describe('заведение графа (§8.6, РП-15, С1б-5)', () => {
     expect((await rowOf(user, supplyRecordId(user, 'home'))).title).toBe('Домой');
     expect((await rowOf(user, supplyRecordId(user, 'records'))).title).toBe('Записи');
 
-    // Оболочка хоста (§6.5): домашняя — «Домой», навигация — «Записи» и пять списков, форма —
-    // «список из заголовка».
+    // Оболочка хоста (§6.5; 1в §6.2): домашняя — «Домой», навигация — «Записи» и пять страниц
+    // (Повестка — третьей, на месте Upcoming), форма — «список из заголовка».
     const shell = await rowOf(user, supplyRecordId(user, 'host-shell'));
     expect(shell.props[APP_HOME]).toBe(supplyRecordId(user, 'home'));
     expect(shell.props[APP_NAV]).toEqual(
-      ['records', 'daily-planning', 'upcoming', 'all-tasks', 'horizon-year', 'routines'].map((k) =>
+      ['records', 'daily-planning', 'agenda', 'all-tasks', 'horizon-year', 'routines'].map((k) =>
         supplyRecordId(user, k as (typeof SUPPLY_KEYS)[number]),
       ),
     );
+    expect((shell.props[APP_NAV] as string[])[2]).toBe(supplyRecordId(user, 'agenda'));
     expect(shell.props[APP_NAV_FORM]).toBe('header-list');
 
     // Рутины — только при заведении графа; «Перенос остатков» на паузе.
@@ -1309,7 +1332,7 @@ describe('заведение графа (§8.6, РП-15, С1б-5)', () => {
     expect((err as TRPCError).message).toContain('«records»');
     expect((err as TRPCError).message).toContain('занят чужой записью');
     // Ни одной записи поставки: пачка страниц не ушла.
-    for (const key of ['home', 'upcoming', 'host-shell'] as const) {
+    for (const key of ['home', 'agenda', 'host-shell'] as const) {
       const rows = await withIdentity(db, personal(user), (tx) =>
         tx.execute(sql`SELECT 1 FROM entities WHERE id = ${supplyRecordId(user, key)}::uuid`),
       );
@@ -1335,6 +1358,38 @@ describe('заведение графа (§8.6, РП-15, С1б-5)', () => {
     expect(await worldSnapshot(user)).toEqual(before);
   });
 
+  // Признак мира старой формы — по ПРЕЖНИМ шести id сева (`LEGACY_SEED_LIST_SLUGS`), а не по нынешнему
+  // составу поставки (срез 1в §6.3): Upcoming в поставке больше нет, но граф, где из старых списков
+  // осталась только она, — всё тот же мир старой формы.
+  test('(о′) мир старой формы, где остался один Upcoming, — GRAPH_NEEDS_MIGRATION; текст отказа — к ранбуку', async () => {
+    const user = await freshGraph();
+    await seedLegacyWorld(user);
+    for (const slug of [
+      'daily-planning',
+      'all-tasks',
+      'horizon-year',
+      'horizon-life',
+      'routines',
+    ]) {
+      await deleteRow(user, seedSmartListId(user, slug));
+    }
+    const before = await worldSnapshot(user);
+    const err = await callerFor(user)
+      .user.seedOnboarding()
+      .then(
+        () => null,
+        (e: unknown) => e,
+      );
+    expect(((err as TRPCError).cause as { code?: string } | undefined)?.code).toBe(
+      'GRAPH_NEEDS_MIGRATION',
+    );
+    // `migrate-1b` снят срезом 1в (РП-13): граф старой формы переводит только пересев мира.
+    expect((err as TRPCError).message).toContain('docs/implementation/02-ops-runbook.md');
+    expect((err as TRPCError).message).toContain('reset-world');
+    expect((err as TRPCError).message).not.toContain('migrate-1b');
+    expect(await worldSnapshot(user)).toEqual(before);
+  });
+
   test('(и) новый эталон и новая запись поставки на заведённом графе — только предложения, вход пишет ноль', async () => {
     const user = await freshGraph();
     await callerFor(user).user.seedOnboarding();
@@ -1342,9 +1397,9 @@ describe('заведение графа (§8.6, РП-15, С1б-5)', () => {
     // «никогда не было» и «удалил» вход не различает и не досевает ни то, ни другое.
     await deleteRow(user, supplyRecordId(user, 'records'));
     await deleteRow(user, seedCategoryId(user, 'food'));
-    // «Новый релиз»: эталон «Upcoming» другой (инъекция списка эталонов).
+    // «Новый релиз»: эталон «Повестки» другой (инъекция списка эталонов).
     const next: SupplyEtalon[] = SUPPLY_ETALONS.map((e) =>
-      e.kind !== 'app' && e.key === 'upcoming'
+      e.kind !== 'app' && e.key === 'agenda'
         ? { ...e, text: `${e.text}\n\nНовая строка релиза.` }
         : e,
     );
@@ -1358,7 +1413,7 @@ describe('заведение графа (§8.6, РП-15, С1б-5)', () => {
     expect(updates.map((u) => [u.key, u.kind])).toEqual(
       expect.arrayContaining([
         ['records', 'new'],
-        ['upcoming', 'update'],
+        ['agenda', 'update'],
       ]),
     );
   });

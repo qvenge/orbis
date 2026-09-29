@@ -215,7 +215,7 @@ function OverlayScreen({ overlay }: { overlay: NavOverlay }) {
     case 'legacy-thread':
       return <LegacyThread threadId={overlay.threadId} />;
     case 'legacy-supply':
-      return <LegacyRecords />;
+      return <LegacySupply supplyKey={overlay.key} />;
   }
 }
 
@@ -241,19 +241,20 @@ function LegacyThread({ threadId }: { threadId: string }) {
 }
 
 /**
- * Старая ссылка `/browser` (спека §7.1): страница поставки «Записи» разделом хоста. Записи в поставке
- * нет (в архиве, выведена) или записи не приехали — «Домой» хоста.
+ * Старые ссылки на страницы поставки разделом хоста: `/browser` → «Записи» (спека 1б §7.1), `/agenda` →
+ * «Повестка» (1в §6.2, РП-16; в 1б — плашка). Записи ключа в поставке нет (в архиве, выведена) или
+ * записи не приехали — «Домой» хоста.
  */
-function LegacyRecords() {
+function LegacySupply({ supplyKey }: { supplyKey: 'records' | 'agenda' }) {
   const supply = useSupplyRecords();
-  const recordsId = supply.byKey.get('records')?.id;
+  const recordId = supply.byKey.get(supplyKey)?.id;
   useEffect(() => {
     if (supply.status === 'loading') return;
     settleOverlay(
-      recordsId !== undefined
-        ? { kind: 'section', section: recordsId }
+      recordId !== undefined
+        ? { kind: 'section', section: recordId }
         : { kind: 'address', address: { kind: 'home', app: { kind: 'host' } } },
     );
-  }, [supply.status, recordsId]);
+  }, [supply.status, recordId]);
   return <ScreenFallback />;
 }

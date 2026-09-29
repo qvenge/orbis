@@ -20,6 +20,7 @@ import { installCrashTrap, renderWithProviders, wireEntity } from '../../test/ha
 import { BUILTIN_REGISTRY } from '../../test/registry';
 import { preloadDesktopFrame, resetDesktopFrameLoadForTests } from '../AppShell';
 import {
+  AGENDA,
   ALL_TASKS,
   BREAD,
   chatMessage,
@@ -37,7 +38,6 @@ import {
   SHELL_ROW,
   shownPath,
   stubViewport,
-  UPCOMING,
   unstubLaunchMode,
 } from './frame-fixtures';
 import { HOST_ELEMENTS } from './host-elements';
@@ -73,11 +73,11 @@ const byTestId = (id: string) => screen.findByTestId(id, {}, { timeout: 5000 });
 const hostRoles = (): string[] =>
   [...document.querySelectorAll<HTMLElement>('[data-host]')].map((e) => e.dataset.host ?? '');
 
-/** Запись «Купить хлеб», открытая вглубь из раздела «Upcoming» (глубина 1). */
-async function openBreadFromUpcoming() {
+/** Запись «Купить хлеб», открытая вглубь из раздела «Повестка» (глубина 1). */
+async function openBreadFromAgenda() {
   await heading('Домой');
-  act(() => useNav.getState().openSection(HOST_APP, UPCOMING));
-  await heading('Upcoming');
+  act(() => useNav.getState().openSection(HOST_APP, AGENDA));
+  await heading('Повестка');
   act(() => useNav.getState().openRecord(BREAD));
   await heading('Купить хлеб');
 }
@@ -95,7 +95,7 @@ describe.each([
     stubViewport(desktop);
     resetFrame('/');
     renderApp();
-    await openBreadFromUpcoming();
+    await openBreadFromAgenda();
     if (desktop) await byTestId('host-rail');
     const roles = hostRoles();
     // Без повторов: длина списка — длина множества.
@@ -249,13 +249,13 @@ describe('(в) десктоп: сайдбар навигации текущег�
     resetFrame('/');
     renderApp();
     const sidebar = await byTestId('app-sidebar');
-    await openBreadFromUpcoming();
+    await openBreadFromAgenda();
     expect(within(sidebar).getByText('Orbis')).toBeInTheDocument();
     const rows = within(sidebar).getAllByTestId(/^nav-section-/);
     expect(rows.map((r) => r.dataset.testid)).toEqual(NAV_IDS.map((id) => `nav-section-${id}`));
-    const upcoming = within(sidebar).getByTestId(`nav-section-${UPCOMING}`);
-    expect(upcoming).toHaveAttribute('aria-current', 'page');
-    await waitFor(() => expect(upcoming).toHaveTextContent('Upcoming · Купить хлеб'));
+    const agenda = within(sidebar).getByTestId(`nav-section-${AGENDA}`);
+    expect(agenda).toHaveAttribute('aria-current', 'page');
+    await waitFor(() => expect(agenda).toHaveTextContent('Повестка · Купить хлеб'));
 
     fireEvent.click(within(sidebar).getByTestId(`nav-section-${ALL_TASKS}`));
     await heading('All Tasks');
@@ -318,7 +318,7 @@ describe('(г) боковой чат — не элемент истории (§6
     resetFrame('/');
     renderApp();
     await byTestId('host-rail');
-    await openBreadFromUpcoming();
+    await openBreadFromAgenda();
     const path = shownPath();
     const length = window.history.length;
     const model = navModel();
@@ -356,15 +356,15 @@ describe('(г) боковой чат — не элемент истории (§6
     resetFrame('/');
     renderApp(frameWorld({ chat: [chatMessage('m1', `вот: [[entity:${NOTE}]]`)] }));
     await byTestId('host-rail');
-    await openBreadFromUpcoming();
+    await openBreadFromAgenda();
     fireEvent.click(chatButton());
     const side = await screen.findByRole('complementary', { name: 'Чат' }, { timeout: 5000 });
     fireEvent.click(await within(side).findByRole('link', { name: NOTE }));
     await heading('Заметка');
     expect(screen.getByRole('complementary', { name: 'Чат' })).toBeInTheDocument();
-    // Источник — текущий раздел основной области: запись легла в стопку «Upcoming» хоста.
+    // Источник — текущий раздел основной области: запись легла в стопку «Повестка» хоста.
     expect(navModel().activeApp).toBe(HOST_APP);
-    expect(navModel().apps[HOST_APP]?.activeSection).toBe(UPCOMING);
+    expect(navModel().apps[HOST_APP]?.activeSection).toBe(AGENDA);
     fireEvent.click(
       within(screen.getByTestId('host-presence')).getByRole('button', { name: 'Назад' }),
     );
@@ -377,7 +377,7 @@ describe('(г) боковой чат — не элемент истории (§6
     resetFrame('/');
     renderApp(frameWorld({ chat: [chatMessage('m1', `вот: [[entity:${NOTE}]]`)] }));
     await byTestId('host-rail');
-    await openBreadFromUpcoming();
+    await openBreadFromAgenda();
     fireEvent.click(
       within(screen.getByTestId('host-rail')).getByRole('button', { name: 'Настройки' }),
     );
@@ -400,7 +400,7 @@ describe('(г) боковой чат — не элемент истории (§6
     stubViewport(false);
     resetFrame('/');
     renderApp();
-    await openBreadFromUpcoming();
+    await openBreadFromAgenda();
     expect(chatButton()).not.toHaveAttribute('aria-pressed');
     fireEvent.click(chatButton());
     await heading('Чат');
@@ -420,7 +420,7 @@ describe.each([
     resetFrame('/');
     renderApp();
     await byTestId('host-rail');
-    await openBreadFromUpcoming();
+    await openBreadFromAgenda();
     expect(screen.getByTestId('app-sidebar')).toBeInTheDocument();
     fireEvent.click(chatButton());
     await screen.findByRole('complementary', { name: 'Чат' }, { timeout: 5000 });
@@ -472,7 +472,7 @@ describe('(а) десктоп, чанк рамки ещё не приехал и
     stubViewport(true);
     resetFrame('/');
     renderApp();
-    await openBreadFromUpcoming();
+    await openBreadFromAgenda();
     expect(screen.queryByTestId('host-rail')).toBeNull();
     expectHostSet();
     expect(
@@ -489,7 +489,7 @@ describe('(а) десктоп, чанк рамки ещё не приехал и
     stubViewport(true);
     resetFrame('/');
     renderApp();
-    await openBreadFromUpcoming();
+    await openBreadFromAgenda();
     await act(async () => {});
     expect(screen.queryByTestId('host-rail')).toBeNull();
     expectHostSet();
@@ -520,7 +520,7 @@ describe('(г) десктоп: ошибка рисования в части р�
       }),
     );
     await byTestId('host-rail');
-    await openBreadFromUpcoming();
+    await openBreadFromAgenda();
     fireEvent.click(chatButton());
     const side = await screen.findByRole('complementary', { name: 'Чат' }, { timeout: 5000 });
     expect(await within(side).findByRole('alert')).toHaveTextContent('Не удалось показать чат');
