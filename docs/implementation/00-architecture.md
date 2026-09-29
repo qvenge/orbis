@@ -68,8 +68,10 @@ apps/web        — PWA (React): экраны хоста (чат, поиск, н
                   page/blocks/day-format.ts, единственный импортёр — лента);
                   экраны Бюджета, Повестки и импорта (каталог legacy-1v),
                   features/agenda и модули без живого импортёра удалены
-                  срезом 1в — ручки budget.* и import.* до среза «Бюджет»
-                  без потребителя в web
+                  срезом 1в — до среза «Бюджет» ручки import.* без
+                  потребителя в web, из budget.* web зовёт две:
+                  confirmPurchase (PlannedToFactCard) и
+                  envelopeForCategory (EntityCard)
 
 apps/server     — Hono + @hono/trpc-server: tRPC-роутеры entity/relation/
                   aspect/user/ai/chat/agentRun/version/routine (PRD 01 §9.1),

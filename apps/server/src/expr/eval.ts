@@ -689,7 +689,7 @@ function dateTextOf(value: ExprValue, what: string): string {
  * известной зоне владельца (Р-33) — день его стеночных часов, тем же приёмом, что `AT TIME ZONE` у
  * SQL-бэкенда (`expr/compile.ts`, `localDateSql`).
  *
- * ЧЕТВЁРТАЯ копия приёма «момент → день владельца» в дереве (`localDay` ленты по дням в web, `wallClockIn`
+ * ЧЕТВЁРТАЯ копия приёма «момент → день владельца» в дереве (`dayInTimeZone` ленты по дням в web — `day-format.ts`, `wallClockIn`
  * материализации, `localDateSql` компилятора) — названный остаток, а не недосмотр: импорт
  * `recurring/materialize` в горячий интерпретатор притащил бы модуль материализации ради строки Intl.
  */

@@ -143,7 +143,7 @@ export function parseAddress(pathWithQuery: string): Address | LegacyAddress | n
       const isHome = n === 2;
       const isRecord = n === 4 && third === 'r' && isUuid(fourth);
       if (!isHome && !isRecord) return null;
-      // Зарезервированный ключ (`budget`, спека §3.4) — не приложение, а плашка до 1в: правилу
+      // Зарезервированный ключ (`budget`, спека §3.4) — не приложение, а плашка до среза «Бюджет»: правилу
       // открытия нечего открывать, поэтому резерв отдаётся отдельным видом уже на разборе.
       if (isReservedAppKey(ref)) return { kind: 'reserved', key: ref };
       const app: AppRef = { kind: 'app', ref };
