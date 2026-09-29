@@ -20,8 +20,6 @@ import {
   batchAuditMessageId,
   type CanonicalRow,
   csvMappingToolJsonSchema,
-  EXTENSION_IDS,
-  EXTENSION_MANIFESTS,
   extensionName,
   externalRowId,
   type FastPathCategory,
@@ -103,24 +101,27 @@ export function gateImportCsv(account: AccountId, resolve: EntitlementResolver):
 }
 
 /**
- * Импорт — путь расширения «Финансы» (его тул `import_csv_start` в манифесте). ГЕЙТ НА ВСЕХ ТРЁХ
- * шагах — analyze, review, confirm, — а не только на создании (спека 1б §8.3, Р-23 п. 4.3 «закрыть
- * обход маски»): `analyze` тратит токены модели на выписку, которую некуда положить, `review`
- * читает дубли для флоу, который всё равно упрётся в отказ. Прежде отказывал только исполнитель —
- * на создании финансового аспекта, то есть ПОСЛЕ LLM-вызова и ревью. Первым из гейтов шага: «это
- * выключено» — ответ раньше «лимит тарифа исчерпан». Расширение — из манифеста по имени тула, а не
- * литералом: тул переедет — переедет и гейт. Отказ `MODULE_DISABLED` → `FORBIDDEN` на проводе.
+ * Импорт — путь расширения «Финансы». ГЕЙТ НА ВСЕХ ТРЁХ шагах — analyze, review, confirm, — а не
+ * только на создании (спека 1б §8.3, Р-23 п. 4.3 «закрыть обход маски»): `analyze` тратит токены
+ * модели на выписку, которую некуда положить, `review` читает дубли для флоу, который всё равно
+ * упрётся в отказ. Прежде отказывал только исполнитель — на создании финансового аспекта, то есть
+ * ПОСЛЕ LLM-вызова и ревью. Первым из гейтов шага: «это выключено» — ответ раньше «лимит тарифа
+ * исчерпан». Отказ `MODULE_DISABLED` → `FORBIDDEN` на проводе.
+ *
+ * ПОЧЕМУ ЛИТЕРАЛ (спека 1в §7.4, §13): до среза Бюджет тула импорта нет — расширение названо
+ * явно. Прежде оно находилось в манифесте по имени тула `import_csv_start`; тул снят, и
+ * поиск по имени вернул бы «ничьё» — `isExtensionEnabled(undefined, …)` пропускает всё, и
+ * выключенные Финансы перестали бы закрывать импорт молча. Вернётся тул в манифест Финансов (срез
+ * Бюджет) — литерал остаётся верным: импорт выписок и тогда путь Финансов.
  */
 async function gateImportExtension(db: Db, who: Identity): Promise<void> {
-  const ext = EXTENSION_IDS.find((id) =>
-    EXTENSION_MANIFESTS[id].tools.includes('import_csv_start'),
-  );
+  const ext = 'finance' as const;
   const disabled = await withIdentity(db, who, (tx) => disabledExtensionsOf(tx, who.graph));
   if (isExtensionEnabled(ext, disabled)) return;
   throw new ExecError(
     'MODULE_DISABLED',
-    `импорт выписок принадлежит выключенному расширению «${extensionName(ext ?? '')}» (§Б8-3)`,
-    { module: ext ?? null, extension: ext ?? null, reason: 'create' },
+    `импорт выписок принадлежит выключенному расширению «${extensionName(ext)}» (§Б8-3)`,
+    { module: ext, extension: ext, reason: 'create' },
   );
 }
 

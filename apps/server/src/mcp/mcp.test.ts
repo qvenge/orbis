@@ -440,7 +440,7 @@ describe('/mcp tools/list (§9.2)', () => {
       const names = tools.map((t) => t.name);
 
       expect(names).not.toContain('user_query'); // internalOnly не публикуется (§9.2)
-      expect(names).not.toContain('import_csv_start'); // internalOnly (C4c): у агента нет экрана импорта
+      expect(names).not.toContain('import_csv_start'); // снят из реестра до среза Бюджета (1в §7.4)
       expect(names).not.toContain('undo_last'); // internalOnly (хвост V1, Д-1): «отмени последнее» — рычаг чата владельца
       for (const name of [
         'entity_query',
@@ -525,7 +525,8 @@ describe('/mcp tools/list (§9.2)', () => {
       // сочиняет и ничего не теряет, кроме отсечения internalOnly
       const defs = await withIdentity(db, personal(owner), (tx) => buildToolRegistry(tx, owner));
       const publicDefs = defs.filter((d) => d.internalOnly !== true && d.routineOnly !== true);
-      // builtin-набор: 51 − 3 internalOnly − 2 routineOnly = 46 (задача 7 Б-2: +run_action и
+      // builtin-набор: 50 − 2 internalOnly − 2 routineOnly = 46 (1в §7.4: −import_csv_start, он был
+      // internalOnly — публичное число прежнее; задача 7 Б-2: +run_action и
       // +action_core_postpone_overdue — оба публичны, скоуп им решают шаги, а не флаг; задача 10
       // Б-2: +action_set, +action_remove, +budget_rollover — публичны полному гранту; задача 16 Б-2:
       // +rule_set, +rule_remove — тем же правилом)

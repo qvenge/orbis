@@ -81,17 +81,18 @@ describe('манифест расширения (§4.1): состав вне р�
     ]);
   });
 
-  test('Финансы: четыре тула, одна поверхность, три промпт-фрагмента, читает два контракта', () => {
+  test('Финансы: три тула, одна поверхность, три промпт-фрагмента, читает два контракта', () => {
     const fin = EXTENSION_MANIFESTS.finance;
     // `budget_rollover` — инструмент РАСШИРЕНИЯ (задача 10 Б-2, §Б6-5 ревизии 4): выключены
     // Финансы — нет и переноса остатков. `subscription_set` — с 1в (§6.5, R-22): единственная
     // поверхность подписки — Бюджета, и без Финансов тул отвечает `MODULE_DISABLED`, а не «неизвестным».
-    expect([...fin.tools].sort()).toEqual([
-      'budget_rollover',
-      'budget_status',
-      'import_csv_start',
-      'subscription_set',
-    ]);
+    // `import_csv_start` снят до среза Бюджета (1в §7.4): интерфейса импорта нет — и в описании
+    // расширения импорта выписок тоже нет.
+    expect([...fin.tools].sort()).toEqual(['budget_rollover', 'budget_status', 'subscription_set']);
+    expect(fin.description).toEqual({
+      ru: 'Расходы и доходы, категории и конверты бюджета',
+      en: 'Expenses and income, categories and budget envelopes',
+    });
     expect(fin.surfaces).toEqual(['finance/budget-overview']);
     expect(fin.promptFragments.map((f) => f.id)).toEqual([
       'finance/amounts',

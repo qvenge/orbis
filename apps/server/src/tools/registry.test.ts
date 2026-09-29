@@ -54,6 +54,9 @@ import { withIdentity } from '../db/with-identity';
 import { REGISTRY_OPS } from '../executor/executor';
 import { reconfiguresOf } from '../policy/confirmation';
 import { sensitivityFactsOf } from '../policy/sensitivity';
+import { compileQueryAst } from '../query/compile-ast';
+import { queryContext } from '../query/context';
+import { parseQueryText } from '../query/parse-text';
 import { stepFactsOf } from '../registry/actions';
 import { effectiveRegistry } from '../registry/cache';
 import type { RegistrySnapshot } from '../registry/load';
@@ -63,7 +66,6 @@ import {
   ASK_TOOL,
   buildToolDefs,
   buildToolRegistry,
-  importCsvStartInput,
   type OrbisToolDef,
   type RoutineRef,
   routineToolDefs,
@@ -140,11 +142,18 @@ function defOf(defs: OrbisToolDef[], name: string): OrbisToolDef {
 /** Операторы грамматики §6.1 — любой из них отличает запрос от прозы (см. тест ниже). */
 const GRAMMAR_OPERATOR = /[=<>]/;
 
+/**
+ * Шаблон-заполнитель `<имя>` — не запрос: его угловые скобки ОБРАМЛЯЮТ слово, а не сравнивают.
+ * С 1в описание `entity_query` показывает форму адреса слота «<контракт>.<слот>» (§3.8), и без
+ * этого отсева она ушла бы в разбор как пример.
+ */
+const PLACEHOLDER = /<[^<>\s]+>/g;
+
 /** Образцы запросов из текста описания: фрагмент в ёлочках, внутри которого есть оператор. */
 function grammarExamples(description: string): string[] {
   return [...description.matchAll(/«([^»]+)»/g)]
     .map((m) => m[1] as string)
-    .filter((s) => GRAMMAR_OPERATOR.test(s));
+    .filter((s) => GRAMMAR_OPERATOR.test(s.replace(PLACEHOLDER, '')));
 }
 
 const CORE_NAMES = [
@@ -158,7 +167,6 @@ const CORE_NAMES = [
   'user_query',
   'budget_status', // A6: read-агрегаты Budget (03-budget §4), доступен и MCP
   'property_catalog', // §А9-3: путь модели к свойствам без attach_*-тула; fullScopeOnly
-  'import_csv_start', // C4c: вход в импорт из чата (03-budget §3.4), internalOnly
   'undo_last', // хвост V1 (Д-1): «отмени последнее» словами в чате (§7.8), internalOnly
   'run_action', // §Б6-6: один тул-каталог на все действия
   'budget_rollover', // §Б6-5 ревизии 4 (задача 10 Б-2): инструмент модуля Финансы; fullScopeOnly
@@ -176,7 +184,7 @@ const BUILTIN_ATTACH_NAMES = BUILTIN_ASPECT_DEFS.filter(
 ).map((a) => attachToolName(a.key));
 
 describe('buildToolRegistry: состав (§9.2 + §7.6)', () => {
-  test('builtin-реестр (userB без кастомных): 14 core + 1 run_action + 16 реестровых + 5 глаголов + orbis_propose + orbis_ask + 12 attach_* + 1 action_* = 51', async () => {
+  test('builtin-реестр (userB без кастомных): 13 core + 1 run_action + 16 реестровых + 5 глаголов + orbis_propose + orbis_ask + 12 attach_* + 1 action_* = 50', async () => {
     const defs = await registryFor(userB);
     const names = defs.map((d) => d.name);
     for (const name of CORE_NAMES) expect(names).toContain(name);
@@ -195,7 +203,8 @@ describe('buildToolRegistry: состав (§9.2 + §7.6)', () => {
     // Счётчик — ПРОИЗВОДНЫЙ от эталона реестра тулов (`test/golden/tool-registry.json`):
     // эталон снят при чистом сиде и он же сторожит состав. Второе число, написанное здесь
     // руками, разошлось бы с ним молча — и «сколько тулов у модели» перестало бы иметь один
-    // ответ. Что эталон вообще НЕ ПУСТ и что в нём именно 51 тул, пиннит `registry-golden`.
+    // ответ. Что эталон вообще НЕ ПУСТ и что в нём именно 50 тулов, пиннит `registry-golden`
+    // (с 1в — без `import_csv_start`, §7.4).
     for (const name of [
       'subscription_set',
       'subscription_remove',
@@ -318,7 +327,7 @@ describe('buildToolRegistry: состав (§9.2 + §7.6)', () => {
     }
   });
 
-  test('kind: чтения — entity_query/entity_get/user_query/budget_status/property_catalog/import_csv_start, остальные — mutate', async () => {
+  test('kind: чтения — entity_query/entity_get/user_query/budget_status/property_catalog, остальные — mutate', async () => {
     const defs = await registryFor(userB);
     for (const def of defs) {
       const expected = [
@@ -327,7 +336,6 @@ describe('buildToolRegistry: состав (§9.2 + §7.6)', () => {
         'user_query',
         'budget_status',
         'property_catalog',
-        'import_csv_start',
       ].includes(def.name)
         ? 'read'
         : 'mutate';
@@ -394,10 +402,10 @@ describe('buildToolRegistry: состав (§9.2 + §7.6)', () => {
     }
   });
 
-  test('internalOnly: true только у user_query, import_csv_start и undo_last (§9.2: MCP не отдаются)', async () => {
+  test('internalOnly: true только у user_query и undo_last (§9.2: MCP не отдаются)', async () => {
     const defs = await registryFor(userB);
     for (const def of defs) {
-      if (['user_query', 'import_csv_start', 'undo_last'].includes(def.name)) {
+      if (['user_query', 'undo_last'].includes(def.name)) {
         expect(def.internalOnly).toBe(true);
       } else {
         expect(def.internalOnly).not.toBe(true);
@@ -444,6 +452,84 @@ describe('buildToolRegistry: состав (§9.2 + §7.6)', () => {
     expect(def.description).toContain('aspect=orbis/note, tags=идеи');
   });
 
+  // Спека 1в §3.8: вопрос «что у меня на этой неделе» — ОДИН запрос по контракту «когда», а не
+  // три по датам разных расширений. Пример и три правила пиннятся ДОСЛОВНО: модель копирует
+  // именно текст описания, и ослабленное правило («интервал — лучше одним условием») учило бы её
+  // уже иначе. Правило об интервале — не вкус: два сравнения по контракту — два независимых
+  // квантора «хоть одна дата» (§3.3), и запись с датами «вчера» и «+20 дней» прошла бы оба
+  // сравнения `>=today, <=next_7d`, не имея ни одной даты внутри.
+  test('entity_query: пример «что у меня на этой неделе» и три правила языка «когда» (1в §3.8)', async () => {
+    const def = defOf(await registryFor(userB), 'entity_query');
+    for (const piece of [
+      '«Что у меня на этой неделе»: «orbis/when=this_week, !class=orbis/recurrence:templates» — orbis/when это даты «когда» записи из любого расширения (встречи, сроки, сделанное).',
+      'О планах спрашивай незакрытое (!class=orbis/completable:closed): сделанное тоже стоит во времени — временем закрытия.',
+      'Просроченное — «orbis/when=overdue, class=orbis/completable:open».',
+      'Интервал — одним условием (=T или a..b), не двумя сравнениями.',
+      'Адрес слота — «<контракт>.<слот>»: orbis/when.deadline, orbis/money-movement.amount.',
+    ]) {
+      expect(def.description).toContain(piece);
+    }
+    // Примеры ядра — на месте (дописано В КОНЕЦ строки, а не вместо)
+    expect(def.description).toContain('aspect=orbis/note, tags=идеи');
+    expect(def.description.endsWith('orbis/money-movement.amount.')).toBe(true);
+  });
+
+  // Пример и «просроченное» — то, что модель скопирует. Разбора мало: запрос обязан дойти до SQL
+  // тем же путём, что вызов тула (`parseQueryText` → `compileQueryAst`), под контекстом владельца,
+  // и исполниться — иначе описание учило бы запросу, на котором компилятор канона падает.
+  test('entity_query: пример и «просроченное» из описания разбираются, компилируются и исполняются', async () => {
+    const def = defOf(await registryFor(userB), 'entity_query');
+    const queries = grammarExamples(def.description).filter((q) => q.startsWith('orbis/when='));
+    expect(queries).toEqual([
+      'orbis/when=this_week, !class=orbis/recurrence:templates',
+      'orbis/when=overdue, class=orbis/completable:open',
+    ]);
+    const counts = await withIdentity(db, personal(userB), async (tx) => {
+      const ctx = await queryContext(tx, userB, null);
+      const out: number[] = [];
+      for (const q of queries) {
+        const rows = await tx.execute(compileQueryAst(parseQueryText(q, ctx), ctx));
+        out.push([...rows].length);
+      }
+      return out;
+    });
+    expect(counts).toEqual([0, 0]); // пустой граф: предмет — путь до SQL, а не выборка
+    // Отрицательная половина: адрес слота разбирается как адрес (а не как имя свойства)
+    const ownerCtx = await withIdentity(db, personal(userB), (tx) => queryContext(tx, userB, null));
+    expect(() => parseQueryText('orbis/when.deadline=today', ownerCtx)).not.toThrow();
+    expect(() => parseQueryText('orbis/when.nosuchslot=today', ownerCtx)).toThrow();
+  });
+
+  // Перенос в задачу 11 (ревью задач 1 и 3): модель должна знать ФОРМУ ответа `user_query` —
+  // суммы по валютам раздельно (§3.6) — и что `field` — свойство, а не адрес слота (`sumProperty`
+  // резолвит только свойство; адрес — VALIDATION, пин — `dispatch.test.ts`).
+  test('user_query: описание называет суммы по валютам и что field — свойство, не адрес слота', async () => {
+    const def = defOf(await registryFor(userB), 'user_query');
+    expect(def.description).toContain('Сумма приходит по валютам');
+    expect(def.description).toContain('{sums}');
+    const field = (def.inputJsonSchema.properties as Record<string, { description: string }>).field;
+    expect(field?.description).toContain('адрес слота');
+    expect(field?.description).toContain('не принимается');
+  });
+
+  // Спека 1в §7.4: тул импорта снят до среза Бюджета — интерфейса импорта нет, и агент не должен
+  // предлагать то, что нельзя довести. Снят ОТОВСЮДУ: снятие только из манифеста сделало бы его
+  // тулом ядра — видимым при выключенных Финансах.
+  test('import_csv_start снят: нет в реестре тулов и в манифесте Финансов (1в §7.4)', async () => {
+    const names = (await registryFor(userB)).map((d) => d.name);
+    expect(names).not.toContain('import_csv_start');
+    expect(EXTENSION_MANIFESTS.finance.tools).not.toContain('import_csv_start');
+    expect(TOOL_REGISTRY_GOLDEN.map((d) => d.name)).not.toContain('import_csv_start');
+  });
+
+  // Перенос из ре-ревью задачи 10: подписки Повестки больше нет (§6.5), единственная поверхность
+  // `subscription_set` — Бюджета; описание, обещающее Повестку, учило бы модель несуществующему.
+  test('subscription_set: описание называет только Бюджет — Повестки-подписки нет (1в §6.5)', async () => {
+    const def = defOf(await registryFor(userB), 'subscription_set');
+    expect(def.description).not.toContain('Повестк');
+    expect(def.description).toContain('чем наполняется Бюджет');
+  });
+
   test('entity_query: второй вход — дерево канона, и его схема уехала В тул целиком', async () => {
     // Провайдер (D29) не резолвит `$ref` за пределы документа тула: определение узла обязано
     // лежать в `$defs` САМОЙ схемы тула, иначе рекурсивная ветка приедет к нему битой.
@@ -471,9 +557,9 @@ describe('buildToolRegistry: состав (§9.2 + §7.6)', () => {
   // с грамматикой молча.
   //
   // Запрос от прозы отличает ОПЕРАТОР, а не место в строке: ёлочки в этом файле — штатная
-  // русская кавычка (у budget_status в описании стоит «что по бюджету?», у import_csv_start
-  // — «импортируй выписку»), и брать подряд всё в ёлочках значило бы уронить тест на первой
-  // же законной правке текста. Признак не зависит от того, где в описании стоит проза, —
+  // русская кавычка (у budget_status в описании стоит «что по бюджету?», у самого entity_query с
+  // 1в — «Что у меня на этой неделе» и «<контракт>.<слот>»), и брать подряд всё в ёлочках значило
+  // бы уронить тест на первой же законной правке текста. Признак не зависит от того, где в описании стоит проза, —
   // привязка к маркеру «Примеры:» такой устойчивости не даёт.
   //
   // Операторов три (`=`, `>`, `<`), а не один: запрос без `=` грамматика принимает —
@@ -486,7 +572,9 @@ describe('buildToolRegistry: состав (§9.2 + §7.6)', () => {
     // Отсев прозы проверяем синтетикой: в самом описании ёлочек-не-примеров сегодня нет,
     // и без этой строки правило «пример — это то, где есть оператор» осталось бы без теста.
     expect(
-      grammarExamples('Смотри «что по бюджету?»: «tags=work» и «amount>100» — вот это запросы.'),
+      grammarExamples(
+        'Смотри «что по бюджету?»: «tags=work» и «amount>100» — вот это запросы, а «<контракт>.<слот>» — форма.',
+      ),
     ).toEqual(['tags=work', 'amount>100']);
 
     const def = defOf(await registryFor(userB), 'entity_query');
@@ -714,7 +802,6 @@ describe('парность zod-envelope ↔ рукописная JSON Schema (§
     user_query: userQueryInput,
     budget_status: budgetStatusInput,
     thread_post: threadPostInput,
-    import_csv_start: importCsvStartInput,
     undo_last: undoLastInput,
     // Глаголы исполнителя (§9.3): рукописная JSON Schema реестра ↔ envelope
     // @orbis/shared/contracts/agent-loop — рассинхрон падает здесь, а не у агента

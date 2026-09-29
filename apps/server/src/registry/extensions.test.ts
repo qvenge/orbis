@@ -383,16 +383,16 @@ describe('§С8-22: маска на реестре тулов — один фи�
     const masked = (
       await withIdentity(db, personal(owner), (tx) => buildToolRegistry(tx, owner))
     ).map((d) => d.name);
-    // Консервативность §С1-3 п.9: разница — ровно шесть имён Финансов (с задачи 10 Б-2 —
-    // и инструмент переноса остатков `budget_rollover`) и `subscription_set`: с 1в поверхность
-    // Бюджета у него единственная (Повестки нет, §6.5), и без неё тул не предлагается вовсе.
+    // Консервативность §С1-3 п.9: разница — ровно пять имён Финансов (с задачи 10 Б-2 —
+    // и инструмент переноса остатков `budget_rollover`; `import_csv_start` снят до среза Бюджета,
+    // 1в §7.4) и `subscription_set`: с 1в поверхность Бюджета у него единственная (Повестки нет,
+    // §6.5), и без неё тул не предлагается вовсе.
     expect(all.filter((n) => !masked.includes(n)).sort()).toEqual([
       'attach_orbis_budget',
       'attach_orbis_category',
       'attach_orbis_financial',
       'budget_rollover',
       'budget_status',
-      'import_csv_start',
       'subscription_set',
     ]);
     expect(masked.filter((n) => !all.includes(n))).toEqual([]);

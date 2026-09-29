@@ -46,7 +46,7 @@ import {
   todaySection,
   toolResultMessage,
 } from './context';
-import { SYSTEM_PROMPT_V8 } from './prompts/v8';
+import { SYSTEM_PROMPT_V9 } from './prompts/v9';
 
 requireEnv();
 
@@ -104,7 +104,7 @@ function memoryLines(system: string): string[] {
 describe('buildContext — слой 1: тело промпта + индекс аспектов', () => {
   const user = mintGraph();
 
-  // Пин был `startsWith(SYSTEM_PROMPT_V6)` (теперь — v8). После §Б7-6-2 блок продолжений уехал в ХВОСТ
+  // Пин был `startsWith(SYSTEM_PROMPT_V6)` (теперь — v9). После §Б7-6-2 блок продолжений уехал в ХВОСТ
   // собранного канала, поэтому промпт лежит в канале двумя кусками и целиком в его начале
   // больше не стоит ПО ПОСТРОЕНИЮ. Начало канала пиннится телом промпта, целостность
   // текста — тем, что канал несёт оба куска и заканчивается вторым (тесты §Б7-6 ниже).
@@ -134,13 +134,13 @@ describe('buildContext — слой 1: тело промпта + индекс а
 });
 
 describe('buildContext — §Б7-6: дата владельца и блок продолжений последним', () => {
-  test('CONTINUATIONS_HEADING встречается в SYSTEM_PROMPT_V8 ровно один раз; PROMPT_BODY + CONTINUATIONS_BLOCK === SYSTEM_PROMPT_V8', () => {
+  test('CONTINUATIONS_HEADING встречается в SYSTEM_PROMPT_V9 ровно один раз; PROMPT_BODY + CONTINUATIONS_BLOCK === SYSTEM_PROMPT_V9', () => {
     // Ровно один: split даёт две части только при единственном вхождении — иначе
     // PROMPT_BODY отрезался бы по ПЕРВОМУ, и часть текста уехала бы в хвост канала
-    expect(SYSTEM_PROMPT_V8.split(CONTINUATIONS_HEADING)).toHaveLength(2);
+    expect(SYSTEM_PROMPT_V9.split(CONTINUATIONS_HEADING)).toHaveLength(2);
     // Части ВЫЧИСЛЯЮТСЯ из константы, а не копируются текстом (РП-18: v5.ts правится только
     // новой версией) — конкатенация обязана давать исходный промпт побайтно
-    expect(PROMPT_BODY + CONTINUATIONS_BLOCK).toBe(SYSTEM_PROMPT_V8);
+    expect(PROMPT_BODY + CONTINUATIONS_BLOCK).toBe(SYSTEM_PROMPT_V9);
     expect(CONTINUATIONS_BLOCK.startsWith(CONTINUATIONS_HEADING)).toBe(true);
     expect(PROMPT_BODY).not.toContain(CONTINUATIONS_HEADING);
   });

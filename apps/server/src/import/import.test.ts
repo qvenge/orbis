@@ -39,6 +39,7 @@ import { type EntitlementResolver, IMPORT_CSV_KEY } from '../entitlements';
 import { ExecError } from '../errors';
 import { ScriptedProvider } from '../llm/scripted';
 import type { LLMProvider, LLMResponse } from '../llm/types';
+import { setExtensionDisabled } from '../registry/extensions';
 import { appRouter } from '../router';
 import { seedCategoryId, seedOwnerGraph } from '../seed/onboarding';
 import { dispatchTool } from '../tools/dispatch';
@@ -1454,6 +1455,75 @@ describe('роутер import: ownerOnly (§9.3)', () => {
       const err = await trpcError(call());
       expect(err.code).toBe('FORBIDDEN');
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Гейт расширения: импорт — путь Финансов (1в §7.4, С1в-10, С1в-11). Тула `import_csv_start`,
+// по которому гейт прежде находил расширение, больше нет: расширение названо явно, и при
+// выключенных Финансах все три шага отказывают `MODULE_DISABLED` ДО модели и ДО записи.
+// ---------------------------------------------------------------------------
+
+describe('роутер import: гейт расширения «Финансы» (1в §7.4)', () => {
+  /** Маска пишется под админом, мимо исполнителя: предмет — гейт, а не операция `module_set`. */
+  async function setFinance(user: GraphId, enabled: boolean): Promise<void> {
+    const { db: admin, client: adminClient } = adminDb();
+    try {
+      await admin.transaction((tx) => setExtensionDisabled(tx, user, 'finance', !enabled));
+    } finally {
+      await adminClient.end();
+    }
+  }
+
+  test('Финансы выключены: analyze, review, confirm → MODULE_DISABLED (reason create), модель не звана', async () => {
+    const { user, foodId } = await freshOwner();
+    await setFinance(user, false);
+    // Скрипт пуст: гейт обязан ответить ДО обращения к модели (иначе «скрипт исчерпан»).
+    const provider = new ScriptedProvider([]);
+    const caller = ownerCaller(user, provider);
+    const row = makeRow({ occurredOn: '2026-05-03', amount: '340.00', counterparty: 'ОБЕД' });
+    const refusals = [
+      await trpcError(caller.import.analyze({ sampleRows: ['2026-05-03,ОБЕД,340.00'] })),
+      await trpcError(caller.import.review({ rows: [row], fileHash: FILE_A, namespace: NS })),
+      await trpcError(
+        caller.import.confirm({
+          batchId: newId(),
+          namespace: NS,
+          fileHash: FILE_A,
+          items: [{ row, action: 'create', categoryRef: foodId }],
+        }),
+      ),
+    ];
+    for (const err of refusals) {
+      expect(err.code).toBe('FORBIDDEN');
+      expect(causeOf(err)).toMatchObject({
+        code: 'MODULE_DISABLED',
+        details: { extension: 'finance', module: 'finance', reason: 'create' },
+      });
+    }
+    expect(provider.requests).toHaveLength(0);
+    expect(await rawFinancialCount(user)).toBe(0);
+    expect(await rawOrigins(user)).toEqual([]);
+  });
+
+  test('Финансы включены: те же три шага проходят гейт', async () => {
+    const { user, foodId } = await freshOwner(); // freshOwner включает Финансы явно (РП-36)
+    const provider = new ScriptedProvider([toolUse(MAPPING_SIGN)]);
+    const caller = ownerCaller(user, provider);
+    const row = makeRow({ occurredOn: '2026-05-03', amount: '340.00', counterparty: 'ОБЕД' });
+    expect(await caller.import.analyze({ sampleRows: ['03.05.2026;-340.00;ОБЕД'] })).toEqual(
+      MAPPING_SIGN,
+    );
+    const reviewed = await caller.import.review({ rows: [row], fileHash: FILE_A, namespace: NS });
+    expect(reviewed.rows).toHaveLength(1);
+    const confirmed = await caller.import.confirm({
+      batchId: newId(),
+      namespace: NS,
+      fileHash: FILE_A,
+      items: [{ row, action: 'create', categoryRef: foodId }],
+    });
+    expect(confirmed.created).toBe(1);
+    expect(await rawFinancialCount(user)).toBe(1);
   });
 });
 

@@ -975,69 +975,14 @@ describe('dispatchTool: чтения без политики (§7.10, ряд «r
   });
 });
 
-describe('dispatchTool: import_csv_start — вход в импорт из чата (Task C4c, 03-budget §3.4)', () => {
-  /** Число сущностей и строк entity_origins владельца — СЫРЫМ админ-соединением (мимо RLS). */
-  async function rawWriteCounts(user: GraphId): Promise<{ entities: number; origins: number }> {
-    const { db: admin, client: adminClient } = adminDb();
-    try {
-      const rows = (await admin.execute(sql`
-        SELECT
-          (SELECT count(*)::int FROM entities WHERE graph_id = ${user}) AS entities,
-          (SELECT count(*)::int FROM entity_origins WHERE graph_id = ${user}) AS origins
-      `)) as unknown as Array<{ entities: number; origins: number }>;
-      return { entities: rows[0]?.entities ?? 0, origins: rows[0]?.origins ?? 0 };
-    } finally {
-      await adminClient.end();
-    }
-  }
-
-  test('source=chat → status ok и карточка import_review (форма — дословно web-тип ImportReviewData)', async () => {
+// Спека 1в §7.4: тул импорта снят до среза Бюджета (интерфейса импорта нет). Вызов по старому имени
+// — отказ неизвестного тула тем же путём, что у любого незнакомого имени, а не карточка-вход в экран,
+// которого нет; и ничего не пишет.
+describe('dispatchTool: import_csv_start снят (1в §7.4)', () => {
+  test('вызов по имени — FORBIDDEN_LEVEL неизвестного тула, карточки нет', async () => {
     const r = await dispatchTool(ctxFor(), 'import_csv_start', {});
-    expect(r.status).toBe('ok');
-    if (r.status !== 'ok') return;
-    // Литеральная сверка формы целиком (toEqual): карточки сервера и web-типы
-    // НАМЕРЕННО не общие — расхождение имени поля с ImportReviewData
-    // (apps/web/src/features/chat/cards/types.ts) клиент молча не отрисует
-    expect(r.card).toEqual({ kind: 'import_review' });
-  });
-
-  test('гейт §8: отказ резолвера import.csv → LIMIT, карточки нет', async () => {
-    // Денайл-путь через инъецируемый шов ctx.entitlements (тот же приём, что у роутера
-    // импорта после ac44b05): боевой резолвер плана dev всё разрешает, и без шва эта
-    // ветка была бы непокрываемой.
-    const r = await dispatchTool(
-      ctxFor({
-        entitlements: (_user, key) =>
-          key === 'import.csv' ? { allowed: false, limit: 0 } : { allowed: true, limit: null },
-      }),
-      'import_csv_start',
-      {},
-    );
-    expectError(r, 'LIMIT');
+    expectError(r, 'FORBIDDEN_LEVEL');
     expect('card' in r).toBe(false);
-  });
-
-  test('internalOnly fail-closed: source=mcp → структурная ошибка, карточки нет', async () => {
-    const r = await dispatchTool(
-      ctxFor({ actorKind: 'agent', source: 'mcp' }),
-      'import_csv_start',
-      {},
-    );
-    expectError(r, 'VALIDATION');
-    expect('card' in r).toBe(false);
-  });
-
-  test('строгий пустой envelope: лишнее поле → VALIDATION', async () => {
-    const r = await dispatchTool(ctxFor(), 'import_csv_start', { file: 'statement.csv' });
-    expectError(r, 'VALIDATION');
-  });
-
-  test('тул ничего не пишет: число entities и строк entity_origins владельца не изменилось', async () => {
-    const before = await rawWriteCounts(userA);
-    const r = await dispatchTool(ctxFor(), 'import_csv_start', {});
-    expect(r.status).toBe('ok');
-    const after = await rawWriteCounts(userA);
-    expect(after).toEqual(before);
   });
 });
 
@@ -1244,6 +1189,18 @@ describe('dispatchTool: user_query — агрегация SQL-ем (решени
     const r = await dispatchTool(ctxFor({ actorKind: 'agent', source: 'mcp' }), 'user_query', {
       query: 'aspect=orbis/financial, tags=uqtest',
       aggregate: 'count',
+    });
+    expectError(r, 'VALIDATION');
+  });
+
+  // Перенос в задачу 11 (ревью задачи 1, M-3): `field` — СВОЙСТВО, адрес слота контракта не
+  // принимается. Описание тула говорит это модели (`registry.test.ts`), пин — здесь: разойдись
+  // поведение с описанием, модель получала бы отказ на том, что ей обещано.
+  test('sum по адресу слота (orbis/money-movement.amount) → VALIDATION: field — только свойство', async () => {
+    const r = await dispatchTool(ctxFor(), 'user_query', {
+      query: 'aspect=orbis/financial, tags=uqtest',
+      aggregate: 'sum',
+      field: 'orbis/money-movement.amount',
     });
     expectError(r, 'VALIDATION');
   });

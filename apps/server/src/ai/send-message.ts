@@ -517,8 +517,8 @@ async function runToolCall(
       threadId: input.threadId,
       explicitCommand: false, // §7.10: в 1b всегда false
       clock: run.clock,
-      // тот же резолвер §8, что у гейта цикла: гейты внутри тулов (import_csv_start)
-      // обязаны видеть инжектированный резолвер, а не только боевой
+      // тот же резолвер §8, что у гейта цикла: гейты внутри тулов (лимит рутин — `gateRoutinesMax`
+      // диспатча) обязаны видеть инжектированный резолвер, а не только боевой
       entitlements: run.resolve,
     },
     name,
