@@ -58,7 +58,7 @@ import { ExecError, type ExecErrorCode } from '../errors';
 import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
 import { undoAction } from '../executor/undo';
-import type { Identity } from '../identity';
+import { type Identity, parseGraphId } from '../identity';
 import { effectiveRegistry } from '../registry/cache';
 import { bumpOwnerRegistryVersion } from '../registry/version';
 import type { ExecOperation } from '../routines/propose';
@@ -490,7 +490,7 @@ async function idsOf(q: Promise<readonly RawRow[]>): Promise<string[]> {
  * Зовущий держит транзакцию READ ONLY (`runMigrate1v`).
  */
 export async function reportMigrate1v(sql: SqlClient, graph: string): Promise<Migrate1vReport> {
-  const g = graph.toLowerCase() as GraphId;
+  const g = parseGraphId(graph);
   const agendaOwnerSubscriptions = await idsOf(sql`
     SELECT id FROM subscription_definitions
      WHERE graph_id = ${g}::uuid AND definition ->> 'engine' = ${AGENDA_ENGINE} ORDER BY id`);
@@ -636,7 +636,7 @@ export async function dropAgendaRows(
   db: Db,
   graph: string,
 ): Promise<{ subscriptions: number; deltas: number; ids: string[] }> {
-  const g = graph.toLowerCase() as GraphId;
+  const g = parseGraphId(graph);
   return db.transaction(async (tx) => {
     const subs = (await tx.execute(sql`
       DELETE FROM subscription_definitions
