@@ -221,7 +221,40 @@ export function whenDatesSql(contractId: string, cctx: CompileCtx): SQL | null {
   if (rows.length === 0) return null;
   const hasFact = facts.length === 0 ? sql`false` : sql`(${sql.join(facts, sql` OR `)})`;
   const closed = closedMembershipSql(cctx);
-  return sql`(SELECT d.slot, d.at, d.day, d.aspect FROM (VALUES ${sql.join(rows, sql`, `)}) AS d(slot, role, at, day, aspect) WHERE d.at IS NOT NULL AND (d.role = 'fact' OR (NOT ${hasFact} AND NOT COALESCE(${closed}, false))))`;
+  const source = sql`(SELECT d.slot, d.at, d.day, d.aspect FROM (VALUES ${sql.join(rows, sql`, `)}) AS d(slot, role, at, day, aspect) WHERE d.at IS NOT NULL AND (d.role = 'fact' OR (NOT ${hasFact} AND NOT COALESCE(${closed}, false))))`;
+  const lateral = cctx.whenLateral;
+  if (lateral === undefined) return source;
+  let entry = lateral.get(contractId);
+  if (entry === undefined) {
+    entry = { alias: `__wd${lateral.size}`, source };
+    lateral.set(contractId, entry);
+  }
+  // Те же четыре колонки, что у `source`, — из массива строк, посчитанного один раз на запись
+  // (`whenLateralJoins`). Массив СТРОК, а не четыре параллельных массива: дата не может отстать от своего
+  // слота или аспекта перестановкой одного из агрегатов.
+  return sql`(SELECT u.slot, u.at, u.day, u.aspect FROM unnest(${sql.raw(entry.alias)}.wd) AS u(slot text, at timestamptz, day date, aspect text))`;
+}
+
+/**
+ * ДАТЫ «КОГДА» ОДИН РАЗ НА СТРОКУ (R-21 задачи 10 среза 1в). Коррелированный подзапрос дат
+ * (`whenDatesSql`) читают условие (`EXISTS`, у `overdue` — ещё и `NOT EXISTS`), ключ сортировки и
+ * группы (`addressSortKey`) и колонка `__when_dates`; каждый читатель пересчитывал бы `VALUES` с
+ * кастами, поясом и правилом «факт/план/закрыто» заново — на Повестке это 70–80 % времени SQL блока.
+ * Сборщик SELECT'а (`compile-ast.ts`, `whenLateralCtx`) даёт контексту пустую карту `whenLateral`;
+ * `whenDatesSql` кладёт туда источник и отдаёт чтение из массивов, а здесь источник встаёт в FROM
+ * одним `LEFT JOIN LATERAL` на контракт: агрегат без `GROUP BY` даёт ровно одну строку на запись
+ * (дат нет — массив `NULL`, `unnest` пуст), счёт и группировки выборки не меняются. Смысл — тот же
+ * `source`: правило значения не копируется, оно переезжает внутрь агрегата целиком. Карты нет
+ * (`compileWhere` снаружи сборщиков: `actions/resolve.ts`, `registry/ref.ts`) — прежняя
+ * самодостаточная форма. Предфильтр (`valuePrefilter`) ссылается только на `e` и уходит в скан
+ * раньше соединения — массивы считаются лишь у записей, прошедших его.
+ */
+export function whenLateralJoins(cctx: CompileCtx): SQL {
+  const joins = [...(cctx.whenLateral?.values() ?? [])].map(
+    ({ alias, source }) =>
+      sql` LEFT JOIN LATERAL (SELECT array_agg(ROW(d.slot, d.at, d.day, d.aspect)) AS wd FROM ${source} d) AS ${sql.raw(alias)} ON true`,
+  );
+  return joins.length === 0 ? sql`` : sql.join(joins, sql``);
 }
 
 /**

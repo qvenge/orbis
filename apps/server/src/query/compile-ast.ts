@@ -89,6 +89,7 @@ import {
   closedMembershipSql,
   groupDatesSql,
   groupKeySql,
+  whenLateralJoins,
 } from './contract-sql';
 
 /**
@@ -127,6 +128,26 @@ export interface CompileCtx {
   reg: RegistrySnapshot;
   /** Сущность-хозяин query-блока (для `of: 'this'`); null/отсутствие — контекста нет. */
   thisEntityId?: string | null;
+  /**
+   * Даты «когда» одним `LATERAL` на строку (R-21, `contract-sql.ts`, `whenLateralJoins`): карта
+   * «контракт → псевдоним и источник», её наполняет `whenDatesSql` при компиляции SELECT'а. Ставит только
+   * сборщик SELECT'а (`whenLateralCtx`) — тот, кто потом допишет соединения в FROM; без карты даты
+   * читаются самодостаточным подзапросом.
+   */
+  whenLateral?: Map<string, { alias: string; source: SQL }>;
+}
+
+/** Контекст сборщика SELECT'а по `entities e`: даты «когда» соберутся в `LATERAL` его FROM (R-21). */
+function whenLateralCtx(ctx: CompileCtx): CompileCtx {
+  return { ...ctx, whenLateral: new Map() };
+}
+
+/**
+ * FROM сборщика — ПОСЛЕ компиляции всех частей запроса: соединения дат знает только уже собранный
+ * WHERE/ORDER BY/колонки (порядок вычисления шаблона JS — слева направо, поэтому FROM — переменной).
+ */
+function entitiesFrom(c: CompileCtx): SQL {
+  return sql`entities e${whenLateralJoins(c)}`;
 }
 
 /** Дефолтный кап выдачи, когда `limit` не задан (§6.1, как у `compile.ts:60`). */
@@ -1040,7 +1061,10 @@ function compileOrderBy(ast: QueryAst, ctx: CompileCtx): SQL {
 /** Полный SELECT: WHERE + ORDER BY + LIMIT (кап 500 без `limit`). */
 // ОБХОДЧИК-Q: compile
 export function compileQueryAst(ast: QueryAst, ctx: CompileCtx): SQL {
-  return sql`SELECT ${sql.raw(ENTITY_SELECT_COLUMNS)} FROM entities e WHERE ${compileWhere(ast, ctx)} ORDER BY ${compileOrderBy(ast, ctx)} LIMIT ${ast.limit ?? DEFAULT_LIMIT}`;
+  const c = whenLateralCtx(ctx);
+  const where = compileWhere(ast, c);
+  const order = compileOrderBy(ast, c);
+  return sql`SELECT ${sql.raw(ENTITY_SELECT_COLUMNS)} FROM ${entitiesFrom(c)} WHERE ${where} ORDER BY ${order} LIMIT ${ast.limit ?? DEFAULT_LIMIT}`;
 }
 
 /**
@@ -1060,22 +1084,25 @@ export function compileQueryAst(ast: QueryAst, ctx: CompileCtx): SQL {
  * Отдельная точка входа, а не колонка `compileQueryAst`: у `entity.query`, тулов и рутин провода блока
  * нет, и лишняя колонка стоила бы им членства в наборе на каждой строке и эталона SQL (§3.5).
  */
-export function compileBlockRowsAst(ast: QueryAst, ctx: CompileCtx): SQL {
+export function compileBlockRowsAst(ast: QueryAst, outer: CompileCtx): SQL {
+  const ctx = whenLateralCtx(outer);
   const columns = sql`${sql.raw(ENTITY_SELECT_COLUMNS)}, COALESCE(${closedMembershipSql(ctx)}, false) AS __closed, count(*) OVER () AS __total`;
   const where = compileWhere(ast, ctx);
   const order = compileOrderBy(ast, ctx);
   const limit = ast.limit ?? DEFAULT_LIMIT;
   if (ast.group === undefined) {
-    return sql`SELECT ${columns} FROM entities e WHERE ${where} ORDER BY ${order} LIMIT ${limit}`;
+    return sql`SELECT ${columns} FROM ${entitiesFrom(ctx)} WHERE ${where} ORDER BY ${order} LIMIT ${limit}`;
   }
   const key = groupKeySql(ast.group.field, topLevelConds(ast), ctx);
   const dates = groupDatesSql(ast.group.field, ctx);
-  return sql`SELECT ${columns}, ${key} AS __key_at, ${dates} AS __when_dates FROM entities e WHERE ${where} ORDER BY __key_at ASC NULLS LAST, ${order} LIMIT ${limit}`;
+  return sql`SELECT ${columns}, ${key} AS __key_at, ${dates} AS __when_dates FROM ${entitiesFrom(ctx)} WHERE ${where} ORDER BY __key_at ASC NULLS LAST, ${order} LIMIT ${limit}`;
 }
 
 /** COUNT(*) для бейджей (02 §3.2): те же условия, но без `limit`/`sortBy`/капа. */
 export function compileCountAst(ast: QueryAst, ctx: CompileCtx): SQL {
-  return sql`SELECT count(*) FROM entities e WHERE ${compileWhere(ast, ctx)}`;
+  const c = whenLateralCtx(ctx);
+  const where = compileWhere(ast, c);
+  return sql`SELECT count(*) FROM ${entitiesFrom(c)} WHERE ${where}`;
 }
 
 /**
@@ -1116,8 +1143,10 @@ function numericRef(
  * — `compileSumByCurrencyAst`. SQL этой формы пиннит точная строка в `compile-ast.test.ts`.
  */
 export function compileSumAst(ast: QueryAst, field: QueryFieldRef, ctx: CompileCtx): SQL {
-  const ref = numericRef(field, ctx, 'sum');
-  return sql`SELECT count(*) AS count, sum(${ref.value})::text AS sum FROM entities e WHERE ${compileWhere(ast, ctx)}`;
+  const c = whenLateralCtx(ctx);
+  const ref = numericRef(field, c, 'sum');
+  const where = compileWhere(ast, c);
+  return sql`SELECT count(*) AS count, sum(${ref.value})::text AS sum FROM ${entitiesFrom(c)} WHERE ${where}`;
 }
 
 /** Контракт «движения денег»: его слот `amount` делает свойство денежным (спека 1в §3.6). */
@@ -1170,11 +1199,13 @@ export function moneyCurrencyExpr(field: QueryFieldRef, cctx: CompileCtx): SQL |
 export function compileSumByCurrencyAst(
   ast: QueryAst,
   field: QueryFieldRef,
-  cctx: CompileCtx,
+  outer: CompileCtx,
 ): SQL {
+  const cctx = whenLateralCtx(outer);
   const ref = numericRef(field, cctx, 'sum');
   const currency = moneyCurrencyExpr(field, cctx) ?? sql`NULL::text`;
-  return sql`SELECT ${currency} AS currency, sum(${ref.value})::text AS sum, count(${ref.present})::int AS count, count(*)::int AS total FROM entities e WHERE ${compileWhere(ast, cctx)} GROUP BY 1`;
+  const where = compileWhere(ast, cctx);
+  return sql`SELECT ${currency} AS currency, sum(${ref.value})::text AS sum, count(${ref.present})::int AS count, count(*)::int AS total FROM ${entitiesFrom(cctx)} WHERE ${where} GROUP BY 1`;
 }
 
 /**
@@ -1212,14 +1243,16 @@ export function sumsOf(
  * Компилятор ОДИН на плитку страницы и прогресс цели (`goals/progress.ts`): `sortBy` источника цели
  * читается тем же правилом (цели с `sortBy` — в перепись §3.4).
  */
-export function compileLatestAst(ast: QueryAst, field: QueryFieldRef, ctx: CompileCtx): SQL {
+export function compileLatestAst(ast: QueryAst, field: QueryFieldRef, outer: CompileCtx): SQL {
+  const ctx = whenLateralCtx(outer);
   const ref = numericRef(field, ctx, 'latest');
   const currency = moneyCurrencyExpr(field, ctx) ?? sql`NULL::text`;
   const order =
     ast.sortBy !== undefined && ast.sortBy.length > 0
       ? compileOrderBy(ast, ctx)
       : sql`updated_at DESC, id DESC`;
-  return sql`SELECT ${ref.value}::text AS value, ${currency} AS currency FROM entities e WHERE ${compileWhere(ast, ctx)} AND ${ref.present} IS NOT NULL ORDER BY ${order} LIMIT 1`;
+  const where = compileWhere(ast, ctx);
+  return sql`SELECT ${ref.value}::text AS value, ${currency} AS currency FROM ${entitiesFrom(ctx)} WHERE ${where} AND ${ref.present} IS NOT NULL ORDER BY ${order} LIMIT 1`;
 }
 
 /**
