@@ -490,7 +490,7 @@ function temporalKindOf(node: ExprNode, scope: ExprCompileScope): 'date' | 'time
 
 /**
  * Момент → календарный день ВЛАДЕЛЬЦА. Формула та же, что у `dateExpr` компилятора Q
- * (`compile-ast.ts`, `propertyLocalDateExpr`): второй способ читать день сущности означал бы,
+ * (`compile-ast.ts`): второй способ читать день сущности означал бы,
  * что запрос и предикат декларации расходятся на строках у полуночи.
  */
 function localDateSql(value: SQL, scope: ExprCompileScope): SQL {

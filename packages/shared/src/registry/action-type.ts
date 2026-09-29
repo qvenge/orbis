@@ -14,7 +14,7 @@ import { z } from 'zod';
 import { exprNodeSchema } from '../expr/ast';
 import { queryAstSchema } from '../query/ast';
 import { SENSITIVITY_FACTS } from './builtin-contracts';
-import { SURFACE_RE } from './extensions';
+import { SURFACE_RE, SURFACES } from './extensions';
 import { NAMESPACED_KEY_RE } from './property-type';
 import { localizedTextSchema, PROPERTY_KINDS } from './types';
 
@@ -56,7 +56,14 @@ export type ActionStep = z.infer<typeof actionStepSchema>;
 
 export const actionOfferSchema = z
   .object({
-    surface: z.string().regex(SURFACE_RE, 'имя поверхности <расширение>/<имя>').optional(),
+    // ЗАПИСЬ стережёт и ФОРМА имени (`SURFACE_RE`), и СЛОВАРЬ (`SURFACES`): законная по форме голова
+    // `core` не делает имя живой поверхностью — с 1в `core/agenda` снята (§6.5), и действие на ней не
+    // предлагалось бы нигде, хотя владелец получил бы успех. Чтение — свободный текст (схема ниже).
+    surface: z
+      .string()
+      .regex(SURFACE_RE, 'имя поверхности <расширение>/<имя>')
+      .refine((s) => (SURFACES as readonly string[]).includes(s), 'поверхности нет в словаре')
+      .optional(),
     when: exprNodeSchema.optional(),
     llm: z.boolean().optional(),
   })

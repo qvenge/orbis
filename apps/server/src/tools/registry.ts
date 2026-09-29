@@ -1442,8 +1442,13 @@ export function buildToolDefs(
       // ОПИСАНИИ тула и строится из снимка (Р-К-86).
       .map((d) => (d.name === 'run_action' ? withActionCatalog(d, reg, disabled) : d))
       // Поверхности выключенного расширения — вон из enum `subscription_set` (§Б8-3, M-5 гейта
-      // задачи 6): core-тул не должен оставлять модели адрес выключенного расширения.
-      .map((d) => (d.name === 'subscription_set' ? subscriptionSetDefFor(d, disabled) : d))
+      // задачи 6): core-тул не должен оставлять модели адрес выключенного расширения. Не осталось
+      // ни одной поверхности — нет и тула (1в §6.5: поверхность ядра Повестки снята).
+      .flatMap((d) => {
+        if (d.name !== 'subscription_set') return [d];
+        const narrowed = subscriptionSetDefFor(d, disabled);
+        return narrowed === null ? [] : [narrowed];
+      })
   );
 }
 

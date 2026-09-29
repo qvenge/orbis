@@ -2819,16 +2819,16 @@
         },
         "surface": {
           "type": "string",
-          "enum": ["core/agenda", "finance/budget-overview"],
-          "description": "поверхность-потребитель: core/agenda — Повестка, finance/budget-overview — Бюджет"
+          "enum": ["finance/budget-overview"],
+          "description": "поверхность-потребитель: finance/budget-overview — Бюджет"
         },
         "definition": {
           "type": "object",
-          "description": "декларация подписки: {\"engine\":\"agenda\", show:{…}, overdue:{…}, hide:{…}} либо {\"engine\":\"budget\", sources:{…}, phases:{…}, aggregates:{…}, alerts:{…}, …}. Ссылаться можно на контракты, их слоты и ИМЕНОВАННЫЕ НАБОРЫ, не на id аспектов и не на сырые значения свойств (исключения — prefer и предикат в hide/where). Выражения — только деревьями языка E: строка в позиции выражения отвергается.",
+          "description": "декларация подписки: {\"engine\":\"budget\", sources:{…}, phases:{…}, aggregates:{…}, alerts:{…}, …}. Ссылаться можно на контракты, их слоты и ИМЕНОВАННЫЕ НАБОРЫ, не на id аспектов и не на сырые значения свойств (исключения — prefer и предикат в where). Выражения — только деревьями языка E: строка в позиции выражения отвергается.",
           "properties": {
             "engine": {
               "type": "string",
-              "enum": ["agenda", "budget"]
+              "enum": ["budget"]
             }
           },
           "required": ["engine"]

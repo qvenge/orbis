@@ -697,17 +697,22 @@ export async function spentContributionOf(
  * выбора в декларации — `SLOT_AMBIGUOUS` (§С8-21): молчаливый выбор первого дал бы владельцу лимит
  * из аспекта, о котором он не думал.
  *
- * `prefer` — перечень секции подписки (`sources.movement.prefer` / `sources.envelope.prefer`), тот
- * же порядок-приоритет, что у `resolveSlotOnEntity` Повестки (`subscriptions/registry.ts`): первый
- * совпавший, а не «самый ранний по rank»; аспект из перечня, которого у записи нет, выбора не
- * делает. Экспорт — ради пина остатка 40 (Р-24): рубеж, который никто не проверил, — это рубеж,
+ * `prefer` — перечень секции подписки (`sources.movement.prefer` / `sources.envelope.prefer`), и его
+ * порядок — приоритет: первый совпавший, а не «самый ранний по rank»; аспект из перечня, которого у
+ * записи нет, выбора не делает. Экспорт — ради пина остатка 40 (Р-24): рубеж, который никто не проверил, — это рубеж,
  * которого нет.
+ *
+ * `entityId` — в `details` отказа (§1.1): владельцу, которому нужен `prefer`, отказ обязан назвать и
+ * ЗАПИСЬ, на которой встретились две привязки. С 1в это единственная дверь `SLOT_AMBIGUOUS` (движок
+ * подписки Повестки со своим `resolveSlotOnEntity` снят, §6.5), и её отказ — полной формы. Имени слота
+ * в нём нет по построению: привязка выбирается на КОНТРАКТ целиком, а не на слот.
  */
 export function bindingForEntity(
   cctx: CompileCtx,
   contract: string,
   aspects: readonly string[],
   prefer: readonly string[],
+  entityId?: string,
 ): ResolvedBinding | undefined {
   const found = bindingsOf(cctx.reg)
     .byContract(contract)
@@ -723,6 +728,7 @@ export function bindingForEntity(
       {
         subscription: BUDGET_SUBSCRIPTION_ID,
         contract,
+        ...(entityId !== undefined && { entityId }),
         aspects: found.map((b) => b.aspectId),
       },
     );
@@ -1093,7 +1099,7 @@ function wireEnvelope(e: RawEnvelope, cats: Map<string, CategoryInfo>): Envelope
 /** Величины строки списка — из СЛОТОВ контракта; `direction` переводится в слово провода классом. */
 function wireMovement(cctx: CompileCtx, def: BudgetSubscription, row: EntityRow) {
   const mv = def.sources.movement.contract;
-  const b = bindingForEntity(cctx, mv, row.aspects, def.sources.movement.prefer);
+  const b = bindingForEntity(cctx, mv, row.aspects, def.sources.movement.prefer, row.id);
   const props = row.props as Record<string, unknown>;
   const slot = (n: string, fallback = '') => String(slotValueOf(b, props, n) ?? fallback);
   const cls = classKeyOf(cctx, mv, 'direction', slot('direction') || null);
@@ -1112,7 +1118,7 @@ function wirePlanned(
   cats: Map<string, CategoryInfo>,
 ) {
   const mv = def.sources.movement.contract;
-  const b = bindingForEntity(cctx, mv, row.aspects, def.sources.movement.prefer);
+  const b = bindingForEntity(cctx, mv, row.aspects, def.sources.movement.prefer, row.id);
   const props = row.props as Record<string, unknown>;
   const ref = String(slotValueOf(b, props, 'category') ?? '');
   return {
@@ -1244,7 +1250,13 @@ async function runLedgers(
   // Ведомости конверта: сначала СВОИ (на них порог, `on_raw`), затем rollup дерева.
   const raws: RawEnvelope[] = rows.map((row) => {
     const props = propsForEval(row);
-    const binding = bindingForEntity(cctx, envContract, row.aspects, def.sources.envelope.prefer);
+    const binding = bindingForEntity(
+      cctx,
+      envContract,
+      row.aspects,
+      def.sources.envelope.prefer,
+      row.id,
+    );
     const seed: Record<string, ExprScalar> = {};
     for (const [name, agg] of Object.entries(def.aggregates)) {
       if (agg.kind === 'sum' && agg.scope === 'envelope') {
@@ -1370,7 +1382,7 @@ async function runList(
               : row.title
             : String(
                 slotValueOf(
-                  bindingForEntity(cctx, mv, row.aspects, def.sources.movement.prefer),
+                  bindingForEntity(cctx, mv, row.aspects, def.sources.movement.prefer, row.id),
                   row.props as Record<string, unknown>,
                   part.slot,
                 ) ?? '',
@@ -1449,6 +1461,7 @@ export async function budgetOverviewOf(
         def.sources.movement.contract,
         row.aspects,
         def.sources.movement.prefer,
+        row.id,
       ),
       row.props as Record<string, unknown>,
       'category',

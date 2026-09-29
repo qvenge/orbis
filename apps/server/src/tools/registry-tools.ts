@@ -506,19 +506,18 @@ export type SubscriptionRemoveInput = z.infer<typeof subscriptionRemoveInput>;
 /**
  * `definition` описана модели ПРОЗОЙ, а не развёрнутой JSON Schema союза — тот же приём и тот
  * же довод, что у `propertyTypeJsonSchema` выше: разложить `subscriptionDefinitionSchema`
- * механически нечем (два движка, у каждого десяток вложенных strict-объектов), а написать
+ * механически нечем (десяток вложенных strict-объектов движка Бюджета), а написать
  * руками значило бы завести ВТОРОЕ описание подписки рядом с реестром. Форму проверяет zod на
  * исполнении и отвечает модели точным `issues`-путём.
  */
 const subscriptionDefinitionJsonSchema = {
   type: 'object',
   description:
-    'декларация подписки: {"engine":"agenda", show:{…}, overdue:{…}, hide:{…}} либо ' +
-    '{"engine":"budget", sources:{…}, phases:{…}, aggregates:{…}, alerts:{…}, …}. ' +
+    'декларация подписки: {"engine":"budget", sources:{…}, phases:{…}, aggregates:{…}, alerts:{…}, …}. ' +
     'Ссылаться можно на контракты, их слоты и ИМЕНОВАННЫЕ НАБОРЫ, не на id аспектов и не на ' +
-    'сырые значения свойств (исключения — prefer и предикат в hide/where). Выражения — только ' +
+    'сырые значения свойств (исключения — prefer и предикат в where). Выражения — только ' +
     'деревьями языка E: строка в позиции выражения отвергается.',
-  properties: { engine: { type: 'string', enum: ['agenda', 'budget'] } },
+  properties: { engine: { type: 'string', enum: ['budget'] } },
   required: ['engine'],
 } as const;
 
@@ -527,7 +526,6 @@ const subscriptionDefinitionJsonSchema = {
  * новая поверхность без подписи не скомпилируется.
  */
 const SURFACE_LABEL = {
-  'core/agenda': 'Повестка',
   'finance/budget-overview': 'Бюджет',
 } as const satisfies Readonly<Record<SurfaceName, string>>;
 
@@ -546,13 +544,20 @@ function surfaceJsonSchema(surfaces: readonly SurfaceName[]) {
  * оставалось видимым модели через чужой тул. Пустая маска — деф побайтно тот же (эталон реестра
  * тулов сравнивается при пустой маске). Вторая линия — отказ исполнителя на записи
  * (`prepareSubscriptionSet`): enum — подсказка модели, доступ решает сервер.
+ *
+ * НЕ ОСТАЛОСЬ НИ ОДНОЙ ПОВЕРХНОСТИ — тула нет (`null`). С 1в поверхность ядра Повестки снята (§6.5),
+ * и при выключенных Финансах словарь пуст: тул с `enum: []` вызвать нельзя ничем, а пустой `enum`
+ * JSON Schema оставлен стандартом на усмотрение валидатора («SHOULD have at least one element») —
+ * провайдер вправе отвергнуть из-за него весь запрос с тулами. Настраивать нечего — нечего и
+ * предлагать.
  */
 export function subscriptionSetDefFor(
   def: OrbisToolDef,
   disabled: readonly string[],
-): OrbisToolDef {
+): OrbisToolDef | null {
   if (disabled.length === 0) return def;
   const surfaces = SURFACES.filter((x) => isExtensionEnabled(surfaceExtensionOf(x), disabled));
+  if (surfaces.length === 0) return null;
   return {
     ...def,
     inputJsonSchema: {

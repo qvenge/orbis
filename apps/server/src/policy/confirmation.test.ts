@@ -672,15 +672,15 @@ describe('§С2-1: перенастраивает поверхность или 
     // не адрес (Р9 рамки). Иначе садовник §Б5-2 упирался бы в запрет по объекту на законном пути.
     [
       'subscription_set',
-      { id: 'orbis/agenda', surface: 'core/agenda', definition: {} },
+      { id: 'orbis/budget-overview', surface: 'finance/budget-overview', definition: {} },
       'behavior-delta',
     ],
     [
       'subscription_set',
-      { id: 'user/my-agenda', surface: 'core/agenda', definition: {} },
+      { id: 'user/my-budget', surface: 'finance/budget-overview', definition: {} },
       'behavior-delta',
     ],
-    ['subscription_remove', { id: 'orbis/agenda' }, 'behavior-delta'],
+    ['subscription_remove', { id: 'orbis/budget-overview' }, 'behavior-delta'],
     [
       'contract_sets_delta_set',
       { contract: 'orbis/completable', setsDelta: { mine: ['active'] } },

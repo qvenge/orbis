@@ -17,7 +17,10 @@ import { effectiveLabel, type LocalizedText, type SelectOption } from './types';
 // `finance`), поэтому переезда данных нет. `finance` не переименовывается: его хранят маска и журнал.
 export const EXTENSION_IDS = ['finance', 'goals', 'projects', 'dev'] as const;
 export type ExtensionId = (typeof EXTENSION_IDS)[number];
-export const SURFACES = ['core/agenda', 'finance/budget-overview'] as const;
+// Повестки (`core/agenda`) здесь нет с 1в (§6.5): она — запись поставки из блоков, движка подписки у
+// неё нет. `SURFACE_RE` голову `core` по-прежнему принимает — форма имени законна (чтение — свободный
+// текст), а запись действия и подписки стережёт этот словарь (R-7 1б).
+export const SURFACES = ['finance/budget-overview'] as const;
 export type SurfaceName = (typeof SURFACES)[number];
 /** Форма имени: `core` — ядро (расширения нет), остальные головы — id расширения. */
 export const SURFACE_RE = /^(core|finance|goals|projects|dev)\/[a-z][a-z0-9-]*$/;
@@ -29,16 +32,15 @@ export function surfaceExtensionOf(surface: string): ExtensionId | null {
 
 /**
  * КАКОЙ ДВИЖОК ОБСЛУЖИВАЕТ ПОВЕРХНОСТЬ. Таблица нужна потому, что дискриминант декларации — `engine`,
- * а адрес показа — `surface`, и без сверки декларация Budget, объявленная на повестку, проходила бы
- * все проверки формы: движок повестки получил бы чужую форму уже на исполнении, то есть у владельца,
- * а не у автора декларации.
+ * а адрес показа — `surface`, и без сверки декларация чужого движка, объявленная на поверхность
+ * Бюджета, проходила бы все проверки формы: движок получил бы чужую форму уже на исполнении, то есть у
+ * владельца, а не у автора декларации.
  *
  * Имена движков написаны здесь литералами, а не импортом из `subscription-type.ts`: стрелка между
  * файлами односторонняя (форма подписки читает словарь поверхностей), и обратная замкнула бы цикл.
  * `satisfies` держит таблицу ПОЛНОЙ: новая поверхность без движка не скомпилируется.
  */
 export const SURFACE_ENGINE = {
-  'core/agenda': 'agenda',
   'finance/budget-overview': 'budget',
 } as const satisfies Readonly<Record<SurfaceName, string>>;
 

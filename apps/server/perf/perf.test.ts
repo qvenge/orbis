@@ -45,6 +45,7 @@ import {
   seedPerfFixture,
 } from '../src/test/perf';
 import { createCallerFactory } from '../src/trpc';
+import { agendaPageBlocks } from '../test/agenda-page';
 import {
   adminDb,
   appDb,
@@ -129,8 +130,13 @@ const BUDGETS_MS: Record<string, number> = {
   'goal.progress': 120, // ≤ 26 → 39.6 (×3.0)
   // Калибровка 2026-09-25 (MacBook, локальный Postgres, изолированный прогон после volume →
   // explain → graph ×3): медиана 90.4 мс на десяти блоках, из них два с окном материализации
-  // (три транзакции) и один переполненный (второй запрос счётчика). Порог — ×3 по правилу выше.
+  // (три транзакции) и один переполненный (второй запрос счётчика; с задачи 10 1в «ещё N» считает
+  // та же выборка — `count(*) OVER ()`). Порог — ×3 по правилу выше.
   'entity.blocks:10': 280, // ≤ 90.4 → 90.4 (×3.1)
+  // Повестка 1в — пачка трёх блоков тела записи (РП-20, С1в-14): порог — бюджет прежней Повестки
+  // `agenda:horizon`, а не ×3 своей калибровки (новая база Повестки сравнивается с её прежним
+  // бюджетом, В-7). Превышение — вопрос владельцу, не подъём порога.
+  'agenda:page': 120, // бюджет agenda:horizon; медиана 1в — 114,4…142,7 мс (×3, 29.09; В-7)
 };
 
 // Входы операций гейта — ОДИН экземпляр на сторожа и на гейт. Дублировать литералы нельзя:
@@ -152,8 +158,15 @@ const BADGE_QUERY = 'aspect=orbis/task, orbis/task_status=inbox';
 const AGENDA_WINDOW_TEXT_PRE_B1 =
   'aspect=orbis/schedule, orbis/start_at=today|next_7d, sortBy=orbis/start_at:asc, limit=200';
 
+// Повестка с 1в — запись поставки из блоков (§6.1, §6.5): три блока её тела («Просрочено», лента по
+// дням, «Дальше») одной пачкой `entity.blocks` с горизонтом `next_7d` — ровно то, что шлёт экран
+// записи. Тексты — разбором эталона `AGENDA_BODY` (`test/agenda-page.ts`), а не литералами: гейт
+// меряет то, что сеет поставка. `agenda:horizon` выше НЕ заменён ею (Д-8): он — база D21 на
+// замороженном тексте, а это новая операция со своим ключом и бюджетом прежней Повестки (РП-20).
+const AGENDA_PAGE_BLOCKS = agendaPageBlocks('next_7d');
+
 // Пачка блоков страницы (срез 1а, `entity.blocks`, §6.3): десять блоков РАЗНЫХ видов — строки
-// с переполнением («ещё N» — второй запрос счётчика), плитки count/sum/latest, два блока с окном
+// с переполнением («ещё N» — счёт всей выборки до `LIMIT`), плитки count/sum/latest, два блока с окном
 // материализации (одна материализация по объединению окон, затем фаза исполнения). Состав —
 // то, что стоит на живой странице-дашборде, а не десять копий одного дешёвого запроса: иначе
 // порог мерил бы накладную SAVEPOINT и не заметил бы регрессии в разборе, окнах или счётчике.
@@ -276,6 +289,18 @@ test('фикстура наполнена: гейт меряет данные, �
   const agenda = await caller.entity.query({ query: AGENDA_WINDOW_TEXT_PRE_B1 });
   expect(agenda.length).toBeGreaterThan(100);
 
+  // Повестка-страница: все три блока — ok и НЕ пусты, лента — группами по дням. Отказ блока или
+  // пустая лента — самый дешёвый путь пачки, и `agenda:page` зеленел бы, меряя разбор без выборки.
+  const { results: page } = await caller.entity.blocks({ blocks: AGENDA_PAGE_BLOCKS });
+  const sizes = AGENDA_PAGE_BLOCKS.map(({ key }) => {
+    const r = page[key];
+    if (r === undefined || !r.ok) throw new Error(`блок Повестки ${key}: ${JSON.stringify(r)}`);
+    if (r.kind === 'rows') return r.rows.length;
+    if (r.kind === 'groups') return r.groups.reduce((n, g) => n + g.rows.length, 0);
+    throw new Error(`блок Повестки ${key}: вид ${r.kind}`);
+  });
+  expect(sizes.every((n) => n > 0)).toBe(true);
+
   const detail = await caller.entity.get({ id: perfHubId(user), include: [...DETAIL_INCLUDE] });
   // Потолок секции «Связанное» — 100 (entity-read.ts): обратных ссылок засеяно больше,
   // значит меряется полная выдача с усечением, как на живом detail-экране.
@@ -329,7 +354,7 @@ test('фикстура наполнена: гейт меряет данные, �
               : false;
     expect(`${key}:${nonEmpty}`).toBe(`${key}:true`);
   }
-  // Переполнение — отдельно: без него второй запрос счётчика («ещё N») гейтом не мерится.
+  // Переполнение — отдельно: без него счёт всей выборки («ещё N») гейтом не мерится.
   const list50 = blocks.list50;
   expect(list50?.ok && list50.kind === 'rows' && list50.more > 0).toBe(true);
 }, 60_000);
@@ -377,6 +402,12 @@ test('перф-бюджеты серверных операций', async () => 
     [
       'entity.blocks:10',
       await measureMedian('entity.blocks:10', 7, () => caller.entity.blocks({ blocks: BLOCKS10 })),
+    ],
+    [
+      'agenda:page',
+      await measureMedian('agenda:page', 5, () =>
+        caller.entity.blocks({ blocks: AGENDA_PAGE_BLOCKS }),
+      ),
     ],
   ];
 

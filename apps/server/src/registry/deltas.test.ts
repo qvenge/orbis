@@ -4,7 +4,6 @@
 // не добавляет. Их наблюдаемость СКВОЗЬ реестр (attach_*-тул, форма) — в `cache.test.ts`.
 import { describe, expect, test } from 'bun:test';
 import {
-  AGENDA_DEF,
   BUDGET_DEF,
   BUILTIN_ACTION_DEFS,
   BUILTIN_ASPECT_DEFS,
@@ -675,23 +674,25 @@ describe('threeWayMerge: система поехала под живой дел�
   });
 
   test('системная декларация подписки изменилась под живой дельтой — subscription-rebased', () => {
+    // Образец — Бюджет (1в §6.5: подписки Повестки больше нет); смысл тот же: система сменила
+    // декларацию, у владельца живая дельта — конфликт назван, декларация владельца сохранена.
     const prev = systemOf(snapshotWith());
-    const sub = (limit: number): SubscriptionRow => ({
-      id: 'orbis/agenda',
+    const sub = (warnAt: string): SubscriptionRow => ({
+      id: 'orbis/budget-overview',
       graphId: null,
-      surface: 'core/agenda',
-      definition: { ...AGENDA_DEF, show: { ...AGENDA_DEF.show, limit } },
-      module: null,
+      surface: 'finance/budget-overview',
+      definition: { ...BUDGET_DEF, alerts: { ...BUDGET_DEF.alerts, warn_at: warnAt } },
+      module: 'finance',
       rank: 1,
     });
     const m = threeWayMerge(
-      { ...prev, subscriptions: new Map([['orbis/agenda', sub(200)]]) },
-      { ...prev, subscriptions: new Map([['orbis/agenda', sub(100)]]) },
-      row('subscription', 'orbis/agenda', { definition: sub(50).definition }),
+      { ...prev, subscriptions: new Map([['orbis/budget-overview', sub('0.85')]]) },
+      { ...prev, subscriptions: new Map([['orbis/budget-overview', sub('0.9')]]) },
+      row('subscription', 'orbis/budget-overview', { definition: sub('0.5').definition }),
     );
     expect(m.conflicts.map((x) => x.kind)).toEqual(['subscription-rebased']);
     const merged = (m.merged as SubscriptionDelta).definition;
-    expect(merged.engine === 'agenda' ? merged.show.limit : null).toBe(50);
+    expect(merged.alerts.warn_at).toBe('0.5');
   });
 
   test('`set-merge` единиц не заводит, `rule-conflict` — заводит', () => {
@@ -959,32 +960,37 @@ describe('дельта контракта setsDelta и подписки definiti
       ).reason,
     ).toBe('DELTA_SET_UNKNOWN_CLASS');
   });
-  test('дельта подписки заменяет декларацию целиком; чужой движок — DELTA_ENGINE_MISMATCH', () => {
+  test('дельта подписки заменяет декларацию целиком; чужой движок — отказ, а не замена', () => {
     const base = snapshotWith();
-    base.subscriptions.set('orbis/agenda', {
-      id: 'orbis/agenda',
+    base.subscriptions.set('orbis/budget-overview', {
+      id: 'orbis/budget-overview',
       graphId: null,
-      surface: 'core/agenda',
-      definition: AGENDA_DEF,
-      module: null,
+      surface: 'finance/budget-overview',
+      definition: BUDGET_DEF,
+      module: 'finance',
       rank: 1,
     });
-    const changed = { ...AGENDA_DEF, show: { ...AGENDA_DEF.show, limit: 50 } };
+    const changed = { ...BUDGET_DEF, alerts: { ...BUDGET_DEF.alerts, warn_at: '0.5' } };
     const after = applyDeltas(base, [
-      row('subscription', 'orbis/agenda', { definition: changed }),
-    ]).subscriptions.get('orbis/agenda')?.definition;
-    // Сужение по движку, а не каст: союз декларации разводится ровно тем полем, которым его
-    // разводит схема, и вопрос «а той ли ветки нам подсунули замену» здесь тоже проверяется.
-    expect(after?.engine === 'agenda' ? after.show.limit : null).toBe(50);
+      row('subscription', 'orbis/budget-overview', { definition: changed }),
+    ]).subscriptions.get('orbis/budget-overview')?.definition;
+    expect(after).toEqual(changed);
+    // Чужой движок: с 1в союз деклараций — одна ветка (движок Повестки снят, §6.5), и замена чужой
+    // формой отвергается уже разбором дельты — раньше сверки движков (`DELTA_ENGINE_MISMATCH` встаёт на
+    // пути следующего движка). Главное — декларация Бюджета не подменена молча.
     expect(
       refusal(() =>
-        applyDeltas(base, [row('subscription', 'orbis/agenda', { definition: BUDGET_DEF })]),
+        applyDeltas(base, [
+          row('subscription', 'orbis/budget-overview', {
+            definition: { ...BUDGET_DEF, engine: 'agenda' },
+          }),
+        ]),
       ).reason,
-    ).toBe('DELTA_ENGINE_MISMATCH');
+    ).toBe('DELTA_MALFORMED');
   });
   test('дельта на подписку, которой нет (модуль выключен), пропускается без отказа', () => {
     expect(
-      applyDeltas(snapshotWith(), [row('subscription', 'user/нет', { definition: AGENDA_DEF })])
+      applyDeltas(snapshotWith(), [row('subscription', 'user/нет', { definition: BUDGET_DEF })])
         .subscriptions.size,
     ).toBe(0);
   });

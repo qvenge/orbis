@@ -127,11 +127,11 @@ INSERT INTO contract_definitions (id, graph_id, key, label, description, kind, r
   VALUES ('pgtap/b', '00000000-0000-4000-8000-00000000000b', 'pgtap/b', '{"ru":"К"}'::jsonb,
           '{"ru":"К"}'::jsonb, 'slots', 900);
 INSERT INTO subscription_definitions (id, graph_id, surface, definition, rank)
-  VALUES ('pgtap/probe', NULL, 'agenda', '{}'::jsonb, 900);
+  VALUES ('pgtap/probe', NULL, 'budget', '{}'::jsonb, 900);
 INSERT INTO subscription_definitions (id, graph_id, surface, definition, rank)
-  VALUES ('pgtap/a', '00000000-0000-4000-8000-00000000000a', 'agenda', '{}'::jsonb, 900);
+  VALUES ('pgtap/a', '00000000-0000-4000-8000-00000000000a', 'budget', '{}'::jsonb, 900);
 INSERT INTO subscription_definitions (id, graph_id, surface, definition, rank)
-  VALUES ('pgtap/b', '00000000-0000-4000-8000-00000000000b', 'agenda', '{}'::jsonb, 900);
+  VALUES ('pgtap/b', '00000000-0000-4000-8000-00000000000b', 'budget', '{}'::jsonb, 900);
 INSERT INTO action_definitions (id, graph_id, key, label, description)
   VALUES ('pgtap/probe', NULL, 'pgtap/probe', '{"ru":"Д"}'::jsonb, '{"ru":"Д"}'::jsonb);
 INSERT INTO action_definitions (id, graph_id, key, label, description)
@@ -596,15 +596,15 @@ SELECT results_eq(
   'subscription_definitions: A видит встроенную и свою — и ровно их (строка B невидима)');
 SELECT lives_ok(
   $$INSERT INTO subscription_definitions (id, graph_id, surface, definition, rank)
-    VALUES ('pgtap/a2', '00000000-0000-4000-8000-00000000000a', 'agenda', '{}'::jsonb, 900)$$,
+    VALUES ('pgtap/a2', '00000000-0000-4000-8000-00000000000a', 'budget', '{}'::jsonb, 900)$$,
   'subscription_definitions: INSERT своей строки проходит (write_own + GRANT)');
 SELECT throws_ok(
   $$INSERT INTO subscription_definitions (id, graph_id, surface, definition, rank)
-    VALUES ('pgtap/c', '00000000-0000-4000-8000-00000000000b', 'agenda', '{}'::jsonb, 900)$$,
+    VALUES ('pgtap/c', '00000000-0000-4000-8000-00000000000b', 'budget', '{}'::jsonb, 900)$$,
   '42501', NULL, 'subscription_definitions: INSERT с чужим graph_id отклоняется WITH CHECK');
 SELECT throws_ok(
   $$INSERT INTO subscription_definitions (id, graph_id, surface, definition, rank)
-    VALUES ('pgtap/c', NULL, 'agenda', '{}'::jsonb, 900)$$,
+    VALUES ('pgtap/c', NULL, 'budget', '{}'::jsonb, 900)$$,
   '42501', NULL,
     'subscription_definitions: INSERT встроенной строки (graph_id NULL) отклоняется');
 -- RLS молча фильтрует строки, не прошедшие USING (0 строк, без ошибки), поэтому здесь

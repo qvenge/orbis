@@ -7,11 +7,11 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { GraphId } from '@orbis/shared';
 import {
-  type AgendaSubscription,
   BUILTIN_ASPECT_DEFS,
   BUILTIN_CONTRACT_DEFS,
   BUILTIN_PROPERTY_META,
   BUILTIN_SUBSCRIPTION_DEFS,
+  type BudgetSubscription,
   entityThreadId,
   newId,
   type PropertyDefinition,
@@ -5591,8 +5591,8 @@ describe('§С2-1: мутации реестра — уровень подтве
     ).toBeNull();
     expect(
       await forbidden('subscription_set', {
-        id: 'orbis/agenda',
-        surface: 'core/agenda',
+        id: 'orbis/budget-overview',
+        surface: 'finance/budget-overview',
         definition: {},
       }),
     ).toBeNull();
@@ -5656,18 +5656,19 @@ describe('§С2-1: мутации реестра — уровень подтве
   test('subscription_set от рутины → отложенная единица пачки, реестр не тронут (ряд 2 живьём)', async () => {
     const owner = await freshGraph();
     const { ctx, runId, routineId, threadId } = await gardener(owner, ['subscription_set']);
-    const def = BUILTIN_SUBSCRIPTION_DEFS.find((s) => s.id === 'orbis/agenda')?.definition;
+    // Образец — Бюджет: подписки Повестки с 1в нет (§6.5); Финансы у свежего графа включены.
+    const def = BUILTIN_SUBSCRIPTION_DEFS.find((s) => s.id === 'orbis/budget-overview')?.definition;
     const r = await dispatchTool(ctx, 'subscription_set', {
-      id: 'orbis/agenda',
-      surface: 'core/agenda',
+      id: 'orbis/budget-overview',
+      surface: 'finance/budget-overview',
       definition: def,
     });
     expect(r.status).toBe('pending_confirmation');
     if (r.status !== 'pending_confirmation' || r.card.kind !== 'deferred_action_card') {
       throw new Error('ожидалась отложенная единица');
     }
-    // «БЫЛО» У ПОДПИСКИ ЕСТЬ ВСЕГДА, и это не деталь фикстуры: `orbis/agenda` засеяна системно
-    // (задача 6), поэтому `snapshotRegistryUnit` возьмёт прежнюю декларацию из снимка даже у
+    // «БЫЛО» У ПОДПИСКИ ЕСТЬ ВСЕГДА, и это не деталь фикстуры: `orbis/budget-overview` засеяна
+    // системно, поэтому `snapshotRegistryUnit` возьмёт прежнюю декларацию из снимка даже у
     // владельца, который эту подписку ещё не трогал (своей дельты нет). Ждать строку без
     // `before` значило бы пинить ветку, которой на этом адресе не бывает.
     expect(r.card).toEqual({
@@ -5675,7 +5676,7 @@ describe('§С2-1: мутации реестра — уровень подтве
       pendingId: r.pendingId,
       runId,
       routineId,
-      summary: 'Настройка подписки «Повестка»',
+      summary: 'Настройка подписки «Бюджет»',
       rows: [{ field: 'definition', before: expect.any(String), after: expect.any(String) }],
     });
     expect(await pendingsOf(owner, threadId)).toHaveLength(1);
@@ -5685,25 +5686,33 @@ describe('§С2-1: мутации реестра — уровень подтве
   test('subscription_set с сырой ссылкой {prop} — строка raw_value в отложенной единице (§Б5-2, пометка диффа Ш1)', async () => {
     const owner = await freshGraph();
     const { ctx } = await gardener(owner, ['subscription_set']);
-    const def = BUILTIN_SUBSCRIPTION_DEFS.find((s) => s.id === 'orbis/agenda')
-      ?.definition as AgendaSubscription;
-    // Та же форма, что в тесте `rawValueRefs` задачи 5: `{prop}` вторым конъюнктом `overdue.where`.
+    const def = BUILTIN_SUBSCRIPTION_DEFS.find((s) => s.id === 'orbis/budget-overview')
+      ?.definition as BudgetSubscription;
+    const spent = def.aggregates.spent as Extract<
+      BudgetSubscription['aggregates'][string],
+      { kind: 'sum' }
+    >;
+    // Та же форма, что в тесте `rawValueRefs` (`subscriptions/registry.test.ts`): `{prop}` вторым
+    // конъюнктом `where` суммы `spent`.
     const raw = {
       ...def,
-      overdue: {
-        ...def.overdue,
-        where: {
-          op: 'and',
-          args: [
-            def.overdue.where,
-            { op: '!=', args: [{ prop: 'orbis/task_status' }, { const: 'waiting' }] },
-          ],
+      aggregates: {
+        ...def.aggregates,
+        spent: {
+          ...spent,
+          where: {
+            op: 'and',
+            args: [
+              spent.where,
+              { op: '!=', args: [{ prop: 'orbis/payment_method' }, { const: 'нал' }] },
+            ],
+          },
         },
       },
     };
     const r = await dispatchTool(ctx, 'subscription_set', {
-      id: 'orbis/agenda',
-      surface: 'core/agenda',
+      id: 'orbis/budget-overview',
+      surface: 'finance/budget-overview',
       definition: raw,
     });
     if (r.status !== 'pending_confirmation' || r.card.kind !== 'deferred_action_card') {
@@ -5711,7 +5720,10 @@ describe('§С2-1: мутации реестра — уровень подтве
     }
     // Владелец видит обход контрактов ДО «Принять» — отдельной строкой, а не внутри JSON декларации.
     expect(r.card.rows.map((row) => row.field)).toEqual(['definition', 'raw_value']);
-    expect(r.card.rows[1]).toEqual({ field: 'raw_value', after: 'overdue.where.args.1.args.0' });
+    expect(r.card.rows[1]).toEqual({
+      field: 'raw_value',
+      after: 'aggregates.spent.where.args.1.args.0',
+    });
   });
 
   test('contract_sets_delta_set поверх ВСТРОЕННОГО контракта от рутины — отложенная единица, НЕ запрет (Р9)', async () => {
@@ -6170,8 +6182,12 @@ describe('сводка мутации реестра: правила, а не с
       aspect_create: { key: 'user/sleep', label: { ru: 'Сон' }, properties: [] },
       aspect_implements_set: { aspect: 'user/sleep', implements: [{ contract: 'orbis/when' }] },
       aspect_implements_remove: { aspect: 'user/sleep', contract: 'orbis/when' },
-      subscription_set: { id: 'orbis/agenda', surface: 'core/agenda', definition: {} },
-      subscription_remove: { id: 'orbis/agenda' },
+      subscription_set: {
+        id: 'orbis/budget-overview',
+        surface: 'finance/budget-overview',
+        definition: {},
+      },
+      subscription_remove: { id: 'orbis/budget-overview' },
       contract_sets_delta_set: {
         contract: 'orbis/completable',
         setsDelta: { my_open: ['active'] },
@@ -6209,8 +6225,8 @@ describe('сводка мутации реестра: правила, а не с
       // мест её проверки два, и разойтись они не должны. Здесь список полный по построению
       // теста (он ведётся реестром), там — семь имён вехи II; пересечение из четырёх строк
       // поэтому неизбежно, и правило простое: правится сначала golden задачи 14.
-      subscription_set: 'Настройка подписки «Повестка»',
-      subscription_remove: 'Сброс подписки «Повестка»',
+      subscription_set: 'Настройка подписки «Бюджет»',
+      subscription_remove: 'Сброс подписки «Бюджет»',
       contract_sets_delta_set: 'Настройка наборов контракта «Завершаемость»',
       contract_sets_delta_remove: 'Сброс наборов контракта «Завершаемость»',
       action_set: 'Настройка действия «Закрыть месяц»',
@@ -6256,12 +6272,12 @@ describe('сводка мутации реестра: правила, а не с
         contract: 'orbis/when',
       }),
       subscription_set: registryOperationSummary(REG, 'subscription_set', {
-        id: 'orbis/agenda',
-        surface: 'core/agenda',
+        id: 'orbis/budget-overview',
+        surface: 'finance/budget-overview',
         definition: {},
       }),
       subscription_remove: registryOperationSummary(REG, 'subscription_remove', {
-        id: 'orbis/agenda',
+        id: 'orbis/budget-overview',
       }),
       contract_sets_delta_set: registryOperationSummary(REG, 'contract_sets_delta_set', {
         contract: 'orbis/completable',
@@ -6275,12 +6291,12 @@ describe('сводка мутации реестра: правила, а не с
       aspect_create: 'Заведение аспекта «Сон»',
       aspect_implements_set: 'Привязка аспекта «Задача» к контрактам: «Завершаемость», «Когда»',
       aspect_implements_remove: 'Снятие привязки аспекта «Задача» к контракту «Когда»',
-      // ПОДПИСКУ НАЗЫВАЕТ ПОВЕРХНОСТЬ, А НЕ ЕЁ ID. `orbis/agenda` — машинный адрес договора
+      // ПОДПИСКУ НАЗЫВАЕТ ПОВЕРХНОСТЬ, А НЕ ЕЁ ID. `orbis/budget-overview` — машинный адрес договора
       // между подпиской и движком (§Б5-1), и в карточке он ничего владельцу не сообщает.
       // Форма — общая с задачей 16 (`SURFACE_LABEL`/`surfaceName`): владелец формулировки
       // один, второго golden'а на ту же фразу не заводится.
-      subscription_set: 'Настройка подписки «Повестка»',
-      subscription_remove: 'Сброс подписки «Повестка»',
+      subscription_set: 'Настройка подписки «Бюджет»',
+      subscription_remove: 'Сброс подписки «Бюджет»',
       contract_sets_delta_set: 'Настройка наборов контракта «Завершаемость»',
       contract_sets_delta_remove: 'Сброс наборов контракта «Завершаемость»',
     });

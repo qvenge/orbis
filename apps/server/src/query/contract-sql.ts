@@ -62,7 +62,13 @@ export interface QueryPropNodeWithAddress {
   value: unknown;
 }
 
-const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
+/**
+ * Литерал дня `YYYY-MM-DD` — ОДНА правда запросного слоя сервера: её читают и условие над датой
+ * (`dayLiteral`, `datedExpr`), и период группы блока (`groupPeriod`, `routers/entity-blocks.ts`).
+ * Копия в роутере разошлась бы с условием на первой правке формы: ключ группы брал бы день, а
+ * период — нет, и «свободно» рисовалось бы у дней, которых ключ не даёт.
+ */
+export const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 const DECIMAL_RE = /^-?\d+(\.\d+)?$/;
 
 function fail(reason: string, message: string, extra?: Record<string, unknown>): never {

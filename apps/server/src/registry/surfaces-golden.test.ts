@@ -1,4 +1,5 @@
-// Снимки четырёх поверхностей (§С8-20, консервативность §С1-3 п.9). Жанр — как у
+// Снимки поверхностей (§С8-20, консервативность §С1-3 п.9; с 1в их три — поверхность Повестки снята вместе
+// с движком подписки, §6.5, а сама Повестка — блоки тела записи, её держит гейт §С8-18). Жанр — как у
 // `tools/registry-golden.test.ts`: эталон снимается ОДИН РАЗ на посчитанном руками мире и
 // дальше ЗАЩИЩАЕТ. «Записать что вышло» запрещено — расхождение разбирается, а намеренная
 // правка пересдаётся ОТДЕЛЬНЫМ движением с объяснением в коммите.
@@ -197,15 +198,6 @@ describe('снимки поверхностей: консервативност�
     ]);
     expect(ov.comingUp).toEqual([]);
   });
-  test('снимок Agenda — движок подписки §Б5-6: окно и просроченное на прибитом today', async () => {
-    const snap = await snapshotSurfaces(db, SURFACE_OWNER_ID, 'baseline', SURFACE_TODAY);
-    expect(snap.surfaces['core/agenda']).toEqual([
-      // `@tpl-weekly` (08:00) выборкой возвращён и снят фильтром шаблона.
-      { section: 'window', id: '@event-today', title: 'Событие сегодня', at: '2026-07-03' },
-      // Слияние двух выборок: min(due_date '2026-07-02', локальный день start_at '2026-07-01').
-      { section: 'overdue', id: '@task-open', title: 'Задача просроченная', at: '2026-07-01' },
-    ]);
-  });
   test('снимок строки — четыре элемента M14 §1.8, и excludeBlocked прячет ровно одну цель', async () => {
     const snap = await snapshotSurfaces(db, SURFACE_OWNER_ID, 'baseline', SURFACE_TODAY);
     const rows = snap.surfaces['core/row'];
@@ -314,7 +306,7 @@ describe('снимки поверхностей: консервативност�
     // «состояния в эталоне нет» в «состояния совпали», и тест зеленел бы на пустом эталоне.
     if (base === undefined || cust === undefined)
       throw new Error('в эталоне нет обоих состояний: baseline и custom-aspect');
-    // Три поверхности: убираем строки гейта — остаток обязан совпасть с baseline байт-в-байт.
+    // Две поверхности: убираем строки гейта — остаток обязан совпасть с baseline байт-в-байт.
     const rows = Object.fromEntries(
       Object.entries(cust['core/row'] as Record<string, unknown>).filter(([k]) => !isGate(k)),
     );
@@ -322,9 +314,6 @@ describe('снимки поверхностей: консервативност�
     expect(
       canonicalJson((cust['core/exclude-blocked'] as string[]).filter((s) => !isGate(s))),
     ).toBe(canonicalJson(base['core/exclude-blocked']));
-    expect(
-      canonicalJson((cust['core/agenda'] as { id: string }[]).filter((r) => !isGate(r.id))),
-    ).toBe(canonicalJson(base['core/agenda']));
     // Budget вычитанием не разделить: аспект гейта обязан ДВИГАТЬ числа конверта — в этом и есть
     // §С8-18. Поэтому утверждается СПИСОК мест, которые сдвинулись, и он закрытый. Порядковый
     // индекс `envelopes.0` — карточка `@env-food`: порядок карточек задан ключом
@@ -344,7 +333,7 @@ describe('снимки поверхностей: консервативност�
     ).toEqual(['@gate-spend', '@gate-todo']);
   });
 
-  test('эталон держит ровно объявленные состояния и все четыре поверхности', () => {
+  test('эталон держит ровно объявленные состояния и все поверхности снимка', () => {
     const states = Object.keys((GOLDEN as { states: Record<string, unknown> }).states);
     // Список ЛИТЕРАЛОМ, а сторож новой группы («ровно четыре состояния») сверяет ключи эталона с
     // `SURFACE_STATES`: вместе они пиннят и сам словарь состояний — состояние, вычеркнутое разом
@@ -393,14 +382,14 @@ describe('четыре состояния: отличие ровно в назн
     expect(off.alertCount).toBe(0);
   });
 
-  test('module-off: core/agenda, core/row, core/exclude-blocked — байт-в-байт как baseline', () => {
+  test('module-off: core/row, core/exclude-blocked — байт-в-байт как baseline', () => {
     const base = snap('baseline');
     const off = snap('module-off');
     // §Б8-3: маска включённости стоит на ПОВЕРХНОСТЯХ-потребителях (реестр тулов, промпт-фрагменты,
     // подписки, `entity_create`/`attach`), а не внутри эффективного реестра — определения остаются
     // резолвимыми на чтение. Поэтому строка списка продолжает показывать сумму уже записанной
     // транзакции: выключение модуля — не потеря данных на экране.
-    for (const surface of ['core/agenda', 'core/row', 'core/exclude-blocked'] as const) {
+    for (const surface of ['core/row', 'core/exclude-blocked'] as const) {
       expect(canonicalJson(off.surfaces[surface])).toBe(canonicalJson(base.surfaces[surface]));
     }
     // И то же утверждение целиком: расходится РОВНО одна поверхность, а не «ещё какая-то тоже».
@@ -419,7 +408,7 @@ describe('четыре состояния: отличие ровно в назн
     expect(canonicalJson(snap('relabeled').surfaces)).toBe(canonicalJson(GOLDEN_STATES.relabeled));
   });
 
-  test('relabeled: ни одна из четырёх поверхностей не сдвинулась', () => {
+  test('relabeled: ни одна из поверхностей снимка не сдвинулась', () => {
     // Подпись живёт в реестре и рисуется КЛИЕНТОМ (`classLabel`, `effectiveLabel`); ни отбор, ни
     // вычисление её не читают.
     expect(compareSnapshots(snap('baseline'), snap('relabeled'))).toEqual([]);

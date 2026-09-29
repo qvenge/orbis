@@ -222,3 +222,10 @@ test('равная/новая версия, отсутствие и мусорн
     expect(await caller.ping()).toEqual({ ok: true });
   }
 });
+
+test('ручки agenda.list нет (спека 1в §6.5): Повестка — запись поставки из блоков, не подписка', () => {
+  // Настроить Повестку значит править её тело; вторая дорога к тем же строкам — отдельная ручка —
+  // разошлась бы с телом на первой правке владельца.
+  expect(Object.keys(appRouter._def.record)).not.toContain('agenda');
+  expect(Object.keys(appRouter._def.procedures)).not.toContain('agenda.list');
+});

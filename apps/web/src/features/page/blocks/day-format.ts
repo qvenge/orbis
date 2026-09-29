@@ -7,8 +7,8 @@
  * Только ленивый чанк ленты (`DayGroups.tsx`, РП-22): экран записи эагерен в каждом открытии, и
  * форматтеры в `lib/dates.ts` легли бы в его первый кадр (сторож единственного импортёра —
  * `scripts/day-format-import.test.ts`). Форматтеры дня и времени перенесены из прежней Повестки
- * (`features/agenda/useAgenda.ts`, `localDay`/`localTime` — модуль удаляет задача 10 среза) с тем же
- * запасом на битую зону.
+ * (`features/agenda/useAgenda.ts`, `localDay`/`localTime`; модуль удалён срезом 1в вместе с ручкой
+ * `agenda.list`) с тем же запасом на битую зону.
  */
 import type { BlockRowAt } from '@orbis/shared';
 

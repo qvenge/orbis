@@ -465,19 +465,6 @@ function dateExpr(ref: PropRef, ctx: CompileCtx): SQL {
 }
 
 /**
- * Календарная дата значения свойства в таймзоне владельца — та же формула, по которой
- * сравниваются date-токены грамматики (`dateExpr` выше).
- *
- * Экспортируется ради ОДНОГО потребителя — движка подписки Agenda: ему нужен не предикат, а
- * сама дата, под `BETWEEN` окна, под `LEAST` двух слотов и под `ORDER BY` секции. Копия рядом
- * разошлась бы с запросами на первом же слоте `moment`, реализованном date-свойством
- * (§Б1-2 `any_of[timestamp, date]`).
- */
-export function propertyLocalDateExpr(propertyId: string, ctx: CompileCtx): SQL {
-  return dateExpr(propRef(propertyId, ctx), ctx);
-}
-
-/**
  * ДВА КРАЯ ТОКЕНА (спека 1в §3.4) — одно правило для всех восьми токенов: край, который читает
  * форма (`edgeOf`), — календарный день из `tokenEdges` по «сегодня» и началу недели контекста; он
  * едет ПАРАМЕТРОМ `$::date`. Края нет — отказ `TOKEN_EDGE` тем же текстом, что у разбора: дерево,
@@ -1026,8 +1013,12 @@ function sortItem(
 /**
  * Положительные условия блока — кандидаты в ключ сортировки по адресу (1в §3.3): дети верхнего
  * `and` (или сам фильтр). Что из них относится к адресу сортировки, решает `addressSortKey`.
+ *
+ * Экспорт — ради ПЕРИОДА группы блока (`groupPeriod`, `routers/entity-blocks.ts`): ключ группы
+ * (`groupKeySql` ниже) и период обязаны видеть один и тот же набор условий, и вторая копия в роутере
+ * разошлась бы с этой на первой правке (например, учёт вложенного `and` в ключе без учёта в периоде).
  */
-function topLevelConds(ast: QueryAst): readonly QueryFilterNode[] {
+export function topLevelConds(ast: QueryAst): readonly QueryFilterNode[] {
   if (ast.filter === null) return [];
   return 'and' in ast.filter ? ast.filter.and : [ast.filter];
 }
@@ -1060,13 +1051,17 @@ export function compileQueryAst(ast: QueryAst, ctx: CompileCtx): SQL {
  *    сервер тем же выражением, что правило значения «даты» (`closedMembershipSql`);
  *  - при `group=day:<поле>` (§5.2) — `__key_at` (ключ записи, `groupKeySql`) и `__when_dates` (даты
  *    «когда» для выбора даты в дне, `groupDatesSql`); порядок начинается ключом (`NULLS LAST` —
- *    «Без даты» в конце), дальше `sortBy` блока и `e.id` (§3.5).
+ *    «Без даты» в конце), дальше `sortBy` блока и `e.id` (§3.5);
+ *  - `__total` — число ВСЕХ строк блока до `LIMIT` (`count(*) OVER ()`): «ещё N» переполненного блока
+ *    считается тем же проходом и в том же снимке, что и сами строки. Отдельный `compileCountAst`
+ *    повторял бы весь отбор вторым statement — у Повестки (задача 10 1в, `agenda:page`) это треть
+ *    времени пачки: предикаты значения «когда» дороги на строке, и платить их дважды незачем.
  *
  * Отдельная точка входа, а не колонка `compileQueryAst`: у `entity.query`, тулов и рутин провода блока
  * нет, и лишняя колонка стоила бы им членства в наборе на каждой строке и эталона SQL (§3.5).
  */
 export function compileBlockRowsAst(ast: QueryAst, ctx: CompileCtx): SQL {
-  const columns = sql`${sql.raw(ENTITY_SELECT_COLUMNS)}, COALESCE(${closedMembershipSql(ctx)}, false) AS __closed`;
+  const columns = sql`${sql.raw(ENTITY_SELECT_COLUMNS)}, COALESCE(${closedMembershipSql(ctx)}, false) AS __closed, count(*) OVER () AS __total`;
   const where = compileWhere(ast, ctx);
   const order = compileOrderBy(ast, ctx);
   const limit = ast.limit ?? DEFAULT_LIMIT;

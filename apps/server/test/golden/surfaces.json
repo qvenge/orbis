@@ -1,20 +1,6 @@
 {
   "states": {
     "baseline": {
-      "core/agenda": [
-        {
-          "section": "window",
-          "id": "@event-today",
-          "title": "Событие сегодня",
-          "at": "2026-07-03"
-        },
-        {
-          "section": "overdue",
-          "id": "@task-open",
-          "title": "Задача просроченная",
-          "at": "2026-07-01"
-        }
-      ],
       "finance/budget-overview": {
         "period": {
           "start": "2026-07-01",
@@ -337,32 +323,6 @@
       ]
     },
     "custom-aspect": {
-      "core/agenda": [
-        {
-          "section": "window",
-          "id": "@event-today",
-          "title": "Событие сегодня",
-          "at": "2026-07-03"
-        },
-        {
-          "section": "window",
-          "id": "@gate-spend",
-          "title": "Трата гейта",
-          "at": "2026-07-04"
-        },
-        {
-          "section": "overdue",
-          "id": "@task-open",
-          "title": "Задача просроченная",
-          "at": "2026-07-01"
-        },
-        {
-          "section": "overdue",
-          "id": "@gate-todo",
-          "title": "Дело гейта",
-          "at": "2026-07-01"
-        }
-      ],
       "finance/budget-overview": {
         "period": {
           "start": "2026-07-01",
@@ -717,20 +677,6 @@
       ]
     },
     "module-off": {
-      "core/agenda": [
-        {
-          "section": "window",
-          "id": "@event-today",
-          "title": "Событие сегодня",
-          "at": "2026-07-03"
-        },
-        {
-          "section": "overdue",
-          "id": "@task-open",
-          "title": "Задача просроченная",
-          "at": "2026-07-01"
-        }
-      ],
       "finance/budget-overview": {
         "period": {
           "start": "2026-07-01",
@@ -948,20 +894,6 @@
       ]
     },
     "relabeled": {
-      "core/agenda": [
-        {
-          "section": "window",
-          "id": "@event-today",
-          "title": "Событие сегодня",
-          "at": "2026-07-03"
-        },
-        {
-          "section": "overdue",
-          "id": "@task-open",
-          "title": "Задача просроченная",
-          "at": "2026-07-01"
-        }
-      ],
       "finance/budget-overview": {
         "period": {
           "start": "2026-07-01",

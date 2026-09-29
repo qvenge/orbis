@@ -245,7 +245,7 @@ async function seedOneRowPerTable(tx: BackfillTx, idOf: Record<string, string>):
   await tx.execute(sql`INSERT INTO contract_definitions (id, graph_id, key, label, description, kind, rank)
     VALUES ('backfill/c', ${idOf.contract_definitions}::uuid, 'backfill/c', ${l}::jsonb, ${l}::jsonb, 'slots', 900)`);
   await tx.execute(sql`INSERT INTO subscription_definitions (id, graph_id, surface, definition, rank)
-    VALUES ('backfill/s', ${idOf.subscription_definitions}::uuid, 'agenda', '{}'::jsonb, 900)`);
+    VALUES ('backfill/s', ${idOf.subscription_definitions}::uuid, 'budget', '{}'::jsonb, 900)`);
   await tx.execute(sql`INSERT INTO action_definitions (id, graph_id, key, label, description)
     VALUES ('backfill/d', ${idOf.action_definitions}::uuid, 'backfill/d', ${l}::jsonb, ${l}::jsonb)`);
 }

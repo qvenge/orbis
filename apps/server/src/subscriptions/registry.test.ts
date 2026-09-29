@@ -1,12 +1,14 @@
 // apps/server/src/subscriptions/registry.test.ts
-// Валидатор декларации подписки (§Б5-1, §Б5-2) и разрешение слота у сущности (§С8-21).
-// Первые три describe — чистые: вход это готовый снимок реестра и литерал декларации, живая
-// база к ответу ничего не добавляет. Четвёртый — против БД: конфликт слота живёт у СУЩНОСТИ,
-// и собрать его можно только двумя настоящими привязками в реестре владельца.
-import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+// Валидатор декларации подписки (§Б5-1, §Б5-2) и чтение декларации из снимка.
+// Чистые describe: вход это готовый снимок реестра и литерал декларации, живая база к ответу
+// ничего не добавляет. Против БД — только строгость чтения строки и снимок.
+//
+// ОБРАЗЕЦ ДВИЖКА — БЮДЖЕТ (спека 1в §6.5): до 1в проверки этого файла держала декларация Повестки;
+// её движок снят, и каждая проверка перевыражена на `BUDGET_DEF` с тем же смыслом (позиции E, сырая
+// ссылка, отказы записи, поверхность). Разрешение слота у записи (`SLOT_AMBIGUOUS`, §С8-21) для
+// Бюджета пинит `bindingForEntity` (`budget.test.ts`, остаток 40).
+import { afterAll, describe, expect, test } from 'bun:test';
 import {
-  AGENDA_DEF,
-  type BindingIndex,
   BUDGET_DEF,
   BUILTIN_ASPECT_DEFS,
   BUILTIN_CONTRACT_DEFS,
@@ -14,32 +16,17 @@ import {
   BUILTIN_RELATION_ROLE_META,
   BUILTIN_SUBSCRIPTION_DEFS,
   type BudgetSubscription,
-  bindingIndexOf,
   SURFACE_ENGINE,
+  SURFACES,
+  subscriptionDefinitionSchema,
 } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
-import { GATE_PLAIN_ASPECT } from '../../test/fixtures/gate-aspects';
-import {
-  adminDb,
-  appDb,
-  mintGraph,
-  personal,
-  requireEnv,
-  seedCustomAspect,
-  truncateAll,
-} from '../../test/helpers';
+import { adminDb, appDb, mintGraph, personal, requireEnv } from '../../test/helpers';
 import { withIdentity } from '../db/with-identity';
 import { ExecError } from '../errors';
 import { effectiveRegistry } from '../registry/cache';
 import { loadRegistryRows, type RegistrySnapshot, type SubscriptionRow } from '../registry/load';
-import { agendaSubscriptionOf } from './agenda';
-import {
-  assertSubscription,
-  builtinSubscription,
-  exprSitesOf,
-  rawValueRefs,
-  resolveSlotOnEntity,
-} from './registry';
+import { assertSubscription, builtinSubscription, exprSitesOf, rawValueRefs } from './registry';
 
 requireEnv();
 
@@ -71,15 +58,26 @@ function snapshot(): RegistrySnapshot {
  */
 function row(definition: unknown, over: Partial<SubscriptionRow> = {}): SubscriptionRow {
   return {
-    id: 'orbis/agenda',
+    id: 'orbis/budget-overview',
     graphId: null,
-    surface: 'core/agenda',
+    surface: 'finance/budget-overview',
     definition,
-    module: null,
+    module: 'finance',
     rank: 1,
     ...over,
   } as SubscriptionRow;
 }
+
+/** Где в декларации Бюджета стоит `where` суммы `spent` — точка, в которую тесты подкладывают предикаты. */
+const SPENT = BUDGET_DEF.aggregates.spent as Extract<
+  BudgetSubscription['aggregates'][string],
+  { kind: 'sum' }
+>;
+/** Декларация Бюджета с другим `where` у `spent`; `unknown` — сюда нарочно кладут и кривое. */
+const withSpentWhere = (where: unknown): unknown => ({
+  ...BUDGET_DEF,
+  aggregates: { ...BUDGET_DEF.aggregates, spent: { ...SPENT, where } },
+});
 
 /** Отказ ЦЕЛИКОМ — когда проверяются не только код и причина, но и адресные поля деталей. */
 function failure(fn: () => unknown): ExecError {
@@ -104,46 +102,48 @@ function refusal(fn: () => unknown): { code: string; reason: string } {
 }
 
 describe('позиции языка E в декларации и сырые ссылки (§Б5-2)', () => {
-  test('agenda: четыре позиции E с путями', () => {
-    expect(exprSitesOf(AGENDA_DEF).map((s) => s.path)).toEqual([
-      'show.window.from',
-      'show.window.to',
-      'overdue.before',
-      'overdue.where',
+  test('budget: позиции E с путями — фазы, формулы, where сумм и списков, окна списков', () => {
+    expect(exprSitesOf(BUDGET_DEF).map((s) => s.path)).toEqual([
+      'phases.upcoming',
+      'phases.closed',
+      'phases.active',
+      'aggregates.spent.where',
+      'aggregates.effective_limit.expr',
+      'aggregates.remaining.expr',
+      'aggregates.daily_pace.expr',
+      'aggregates.unbudgeted.where',
+      'lists.coming_up.window.from',
+      'lists.coming_up.window.to',
+      'lists.planned.where',
     ]);
   });
   test('{prop} внутри where — сырая ссылка, её путь уезжает в пометку raw_value диффа Ш1', () => {
     const where = {
       op: 'and',
-      args: [
-        { op: 'in', args: [{ class: { contract: 'orbis/completable' } }, { const: ['active'] }] },
-        { op: '!=', args: [{ prop: 'orbis/task_status' }, { const: 'waiting' }] },
-      ],
+      args: [SPENT.where, { op: '!=', args: [{ prop: 'orbis/payment_method' }, { const: 'нал' }] }],
     };
-    expect(
-      rawValueRefs({ ...AGENDA_DEF, overdue: { ...AGENDA_DEF.overdue, where } } as never),
-    ).toEqual(['overdue.where.args.1.args.0']);
+    expect(rawValueRefs(withSpentWhere(where) as never)).toEqual([
+      'aggregates.spent.where.args.1.args.0',
+    ]);
   });
   test('deref по слоту сырой ссылкой НЕ считается: read — адрес свойства по построению', () => {
-    const before = { deref: { slot: 'moment', read: 'orbis/title' } };
+    const closed = {
+      op: '=',
+      args: [{ deref: { slot: 'category', read: 'orbis/title' } }, { const: 'Еда' }],
+    };
     expect(
-      rawValueRefs({ ...AGENDA_DEF, overdue: { ...AGENDA_DEF.overdue, before } } as never),
+      rawValueRefs({ ...BUDGET_DEF, phases: { ...BUDGET_DEF.phases, closed } } as never),
     ).toEqual([]);
   });
   test('{has} по id свойства — тоже сырая ссылка; {has} по имени слота — нет', () => {
     // Узел `has` один, а смысла у него два (`expr/check.ts`): в области с контрактом он принимает и id
     // свойства, и имя слота. Различает их форма имени — слот слаг, id свойства несёт `/`.
-    const byProp = { op: 'and', args: [AGENDA_DEF.overdue.where, { has: 'orbis/task_status' }] };
-    expect(
-      rawValueRefs({ ...AGENDA_DEF, overdue: { ...AGENDA_DEF.overdue, where: byProp } } as never),
-    ).toEqual(['overdue.where.args.1']);
-    const bySlot = { op: 'and', args: [AGENDA_DEF.overdue.where, { has: 'deadline' }] };
-    expect(
-      rawValueRefs({ ...AGENDA_DEF, overdue: { ...AGENDA_DEF.overdue, where: bySlot } } as never),
-    ).toEqual([]);
-  });
-  test('budget: позиции — фазы, формулы, where сумм и окна списков', () => {
-    expect(exprSitesOf(BUDGET_DEF).map((s) => s.path)).toContain('aggregates.daily_pace.expr');
+    const byProp = { op: 'and', args: [SPENT.where, { has: 'orbis/payment_method' }] };
+    expect(rawValueRefs(withSpentWhere(byProp) as never)).toEqual([
+      'aggregates.spent.where.args.1',
+    ]);
+    const bySlot = { op: 'and', args: [SPENT.where, { has: 'counterparty' }] };
+    expect(rawValueRefs(withSpentWhere(bySlot) as never)).toEqual([]);
   });
 });
 
@@ -151,44 +151,60 @@ describe('валидатор подписки: SURFACE_UNKNOWN / SUBSCRIPTION_RA
   const seed = { reg: snapshot(), systemSeed: true };
   test('поверхность вне словаря — SURFACE_UNKNOWN', () => {
     expect(
-      refusal(() => assertSubscription(row(AGENDA_DEF, { surface: 'core/row' }), seed)).code,
+      refusal(() => assertSubscription(row(BUDGET_DEF, { surface: 'core/row' }), seed)).code,
     ).toBe('SURFACE_UNKNOWN');
   });
   test('строка в E-позиции — SECOND_LANGUAGE с путём, а не «форма не разобралась»', () => {
     const def = {
-      ...AGENDA_DEF,
-      overdue: { ...AGENDA_DEF.overdue, where: 'class(completable) in open' },
+      ...BUDGET_DEF,
+      phases: { ...BUDGET_DEF.phases, closed: 'сегодня позже конца периода' },
     };
-    expect(refusal(() => assertSubscription(row(def), seed)).code).toBe('SECOND_LANGUAGE');
+    expect(failure(() => assertSubscription(row(def), seed))).toMatchObject({
+      code: 'SECOND_LANGUAGE',
+      details: { path: 'phases.closed' },
+    });
   });
   test('кривая форма — VALIDATION/SUBSCRIPTION_MALFORMED', () => {
-    const { hide, ...def } = AGENDA_DEF;
+    const { rollup: _rollup, ...def } = BUDGET_DEF;
     expect(refusal(() => assertSubscription(row(def), seed))).toEqual({
       code: 'VALIDATION',
       reason: 'SUBSCRIPTION_MALFORMED',
     });
   });
-  test('Повестка — поверхность ядра core/agenda (РП-2): известна, её движок — повестка; прежнее имя — SURFACE_UNKNOWN', () => {
-    expect(SURFACE_ENGINE['core/agenda']).toBe('agenda');
-    expect(assertSubscription(row(AGENDA_DEF, { surface: 'core/agenda' }), seed).engine).toBe(
-      'agenda',
-    );
-    // Имя до 1б словарём больше не знается: вторая «Повестка» под старой головой была бы вторым
-    // адресом одной поверхности.
+  test('Повестки нет (1в §6.5): core/agenda и прежнее имя — SURFACE_UNKNOWN, движка agenda нет', () => {
+    // Повестка — запись поставки из блоков: подписка на её прежнюю поверхность была бы настройкой,
+    // которую никто не читает. Голова `core` по-прежнему законна (`SURFACE_RE`), отказывает словарь.
+    expect(Object.keys(SURFACE_ENGINE)).toEqual(['finance/budget-overview']);
+    for (const surface of ['core/agenda', 'planner/agenda']) {
+      expect(refusal(() => assertSubscription(row(BUDGET_DEF, { surface }), seed)).code).toBe(
+        'SURFACE_UNKNOWN',
+      );
+    }
+    // Прежняя декларация Повестки у своей бывшей поверхности не доходит даже до формы.
     expect(
-      refusal(() => assertSubscription(row(AGENDA_DEF, { surface: 'planner/agenda' }), seed)).code,
+      refusal(() =>
+        assertSubscription(
+          row({ engine: 'agenda' }, { id: 'user/моя-повестка', surface: 'core/agenda' }),
+          seed,
+        ),
+      ).code,
     ).toBe('SURFACE_UNKNOWN');
   });
   test('законная системная декларация проходит и возвращает разобранную форму', () => {
-    expect(assertSubscription(row(AGENDA_DEF), seed).engine).toBe('agenda');
+    expect(assertSubscription(row(BUDGET_DEF), seed).engine).toBe('budget');
   });
-  test('движок, которого поверхность не обслуживает, — SUBSCRIPTION_ENGINE_SURFACE', () => {
-    // Форма разбирается, ссылки целы — и всё равно отказ: иначе движок повестки получил бы форму
-    // Budget уже на исполнении, у владельца, а не у автора декларации.
-    expect(refusal(() => assertSubscription(row(BUDGET_DEF), seed))).toEqual({
-      code: 'VALIDATION',
-      reason: 'SUBSCRIPTION_ENGINE_SURFACE',
-    });
+  test('движок против поверхности: таблица SURFACE_ENGINE называет только движки союза', () => {
+    // Отказ SUBSCRIPTION_ENGINE_SURFACE с одним движком не достижим: союз `engine` — одна ветка, и
+    // единственная поверхность обслуживается ею. Проверка в `assertSubscription` оставлена — она
+    // встаёт на пути следующего движка; здесь пинится её опора: каждый движок таблицы — ветка союза,
+    // иначе декларация «своей» поверхности отказывала бы формой, а не адресной причиной.
+    const engines = subscriptionDefinitionSchema.options.map((o) => o.shape.engine.value);
+    expect(engines).toEqual(['budget']);
+    for (const s of SURFACES) expect(engines).toContain(SURFACE_ENGINE[s]);
+    // Чужой движок на поверхности Бюджета — отказ формой (ветки нет), а не молчание.
+    expect(
+      refusal(() => assertSubscription(row({ ...BUDGET_DEF, engine: 'agenda' }), seed)),
+    ).toEqual({ code: 'VALIDATION', reason: 'SUBSCRIPTION_MALFORMED' });
   });
   test('counted_set вне наборов контракта — SUBSCRIPTION_UNKNOWN_SET', () => {
     const def = {
@@ -243,11 +259,19 @@ describe('валидатор подписки: SURFACE_UNKNOWN / SUBSCRIPTION_RA
     ).toBe('orbis/money-movement');
   });
 
-  test('prefer с аспектом, не реализующим слот секции, — SUBSCRIPTION_PREFER_UNBOUND', () => {
-    const def = { ...AGENDA_DEF, show: { ...AGENDA_DEF.show, prefer: ['orbis/note'] } };
-    expect(refusal(() => assertSubscription(row(def), seed)).reason).toBe(
-      'SUBSCRIPTION_PREFER_UNBOUND',
-    );
+  test('prefer с аспектом, не реализующим контракт секции, — SUBSCRIPTION_PREFER_UNBOUND', () => {
+    // Операция в перечне КОНВЕРТА: приоритет, который никогда не сработает.
+    const def = {
+      ...BUDGET_DEF,
+      sources: {
+        ...BUDGET_DEF.sources,
+        envelope: { ...BUDGET_DEF.sources.envelope, prefer: ['orbis/financial'] },
+      },
+    };
+    expect(failure(() => assertSubscription(row(def), seed)).details).toMatchObject({
+      reason: 'SUBSCRIPTION_PREFER_UNBOUND',
+      path: 'sources.envelope.prefer',
+    });
   });
   test('prefer Budget: аспекта нет — UNKNOWN_ASPECT, контракт секции не реализует — PREFER_UNBOUND', () => {
     const withPrefer = (movement: string[], envelope: string[]) => ({
@@ -274,42 +298,41 @@ describe('валидатор подписки: SURFACE_UNKNOWN / SUBSCRIPTION_RA
     ).toBe('budget');
   });
   test('prefer с реализующим аспектом законен — единственное место ссылки на аспект (§Б5-2)', () => {
-    const def = { ...AGENDA_DEF, show: { ...AGENDA_DEF.show, prefer: ['orbis/schedule'] } };
-    expect(assertSubscription(row(def), seed).engine).toBe('agenda');
+    const def = {
+      ...BUDGET_DEF,
+      sources: {
+        ...BUDGET_DEF.sources,
+        movement: { ...BUDGET_DEF.sources.movement, prefer: ['orbis/financial'] },
+      },
+    };
+    expect(assertSubscription(row(def), seed).engine).toBe('budget');
   });
   test('id аспекта ВНЕ prefer — SUBSCRIPTION_RAW_REF с путём и ссылкой', () => {
-    const where = { op: '=', args: [{ const: 'orbis/task' }, { const: 'orbis/task' }] };
-    expect(
-      refusal(() =>
-        assertSubscription(row({ ...AGENDA_DEF, overdue: { ...AGENDA_DEF.overdue, where } }), seed),
-      ).code,
-    ).toBe('SUBSCRIPTION_RAW_REF');
+    const where = { op: '=', args: [{ const: 'orbis/financial' }, { const: 'orbis/financial' }] };
+    expect(refusal(() => assertSubscription(row(withSpentWhere(where)), seed)).code).toBe(
+      'SUBSCRIPTION_RAW_REF',
+    );
   });
   test('{has} по id свойства системному сиду запрещён так же, как {prop}', () => {
-    const where = { op: 'and', args: [AGENDA_DEF.overdue.where, { has: 'orbis/task_status' }] };
-    const def = { ...AGENDA_DEF, overdue: { ...AGENDA_DEF.overdue, where } };
+    const def = withSpentWhere({ op: 'and', args: [SPENT.where, { has: 'orbis/payment_method' }] });
     expect(refusal(() => assertSubscription(row(def), seed)).code).toBe('SUBSCRIPTION_RAW_REF');
     const own = assertSubscription(row(def, { graphId: mintGraph() }), {
       reg: snapshot(),
       systemSeed: false,
     });
-    expect(rawValueRefs(own)).toEqual(['overdue.where.args.1']);
+    expect(rawValueRefs(own)).toEqual(['aggregates.spent.where.args.1']);
   });
   test('сырой предикат по свойству: системному сиду запрещён, владельцу — помечается', () => {
-    const where = {
+    const def = withSpentWhere({
       op: 'and',
-      args: [
-        { op: 'in', args: [{ class: { contract: 'orbis/completable' } }, { const: ['active'] }] },
-        { op: '!=', args: [{ prop: 'orbis/task_status' }, { const: 'waiting' }] },
-      ],
-    };
-    const def = { ...AGENDA_DEF, overdue: { ...AGENDA_DEF.overdue, where } };
+      args: [SPENT.where, { op: '!=', args: [{ prop: 'orbis/payment_method' }, { const: 'нал' }] }],
+    });
     expect(refusal(() => assertSubscription(row(def), seed)).code).toBe('SUBSCRIPTION_RAW_REF');
     const own = assertSubscription(row(def, { graphId: mintGraph() }), {
       reg: snapshot(),
       systemSeed: false,
     });
-    expect(rawValueRefs(own)).toEqual(['overdue.where.args.1.args.0']);
+    expect(rawValueRefs(own)).toEqual(['aggregates.spent.where.args.1.args.0']);
   });
 });
 
@@ -336,13 +359,15 @@ describe('встроенный сид проходит валидатор зап
 describe('типы позиций E и круги ведомостей (§С8-28, §Б5-3)', () => {
   const seed = { reg: snapshot(), systemSeed: true };
   test('окно, объявленное булевым выражением, — EXPR_TYPE', () => {
-    const show = {
-      ...AGENDA_DEF.show,
-      window: { ...AGENDA_DEF.show.window, to: { const: true } },
+    const comingUp = BUDGET_DEF.lists.coming_up;
+    if (comingUp?.window === undefined) throw new Error('в сиде Бюджета нет окна coming_up');
+    const lists = {
+      ...BUDGET_DEF.lists,
+      coming_up: { ...comingUp, window: { ...comingUp.window, to: { const: true } } },
     };
-    expect(refusal(() => assertSubscription(row({ ...AGENDA_DEF, show }), seed)).code).toBe(
-      'EXPR_TYPE',
-    );
+    expect(failure(() => assertSubscription(row({ ...BUDGET_DEF, lists }), seed))).toMatchObject({
+      code: 'EXPR_TYPE',
+    });
   });
   test('ведомости, ссылающиеся по кругу, — EXPR_RECURSION', () => {
     const aggregates = {
@@ -368,8 +393,8 @@ describe('типы позиций E и круги ведомостей (§С8-28
    * ОБЛАСТЬ `where` УЖЕ ОБЛАСТИ ГРАНИЦ (B3 I-1, вторая половина фикса). Предикат уезжает в
    * SQL-бэкенд, а тот не знает ни параметров вызова, ни разыменования: принять их на записи
    * значило бы адресовать отказ владельцу на чтении, а не автору декларации (Р-И-7).
-   * Слоты контракта в этот перечень НЕ входят — их бэкенд умеет с той же правкой (`budget.ts`,
-   * `agenda.ts` через `compileContractPredicate`), и пин их законности стоит в `budget.test.ts`.
+   * Слоты контракта в этот перечень НЕ входят — их бэкенд умеет с той же правкой (`budget.ts` через
+   * `compileContractPredicate`), и пин их законности стоит в `budget.test.ts`.
    */
   test('`where` без параметров и без разыменования — отказ на ЗАПИСИ', () => {
     const spent = BUDGET_DEF.aggregates.spent;
@@ -561,75 +586,11 @@ describe('однозначность порога и границы словар
   });
 });
 
-describe('SLOT_AMBIGUOUS на сущности: без prefer — отказ, с prefer — детерминированный выбор', () => {
+describe('строгое чтение строки подписки', () => {
   const owner = mintGraph();
-  let idx: BindingIndex;
-  let plain: string;
-  let sched: string;
-  beforeAll(async () => {
-    await truncateAll();
-    // Аспект владельца фикстуры реализует тот же слот `moment` контракта «когда», что и
-    // `orbis/schedule`: две законные по отдельности привязки на одной сущности — и есть §С8-21.
-    await seedCustomAspect(owner, GATE_PLAIN_ASPECT);
-    idx = bindingIndexOf(
-      await withIdentity(db, personal(owner), (tx) => effectiveRegistry(tx, owner)),
-    );
-    // Адрес свойства берётся ИЗ ПРИВЯЗКИ, а не литералом: иначе тест пинил бы форму фикстуры 0d.
-    const a = idx.slotOf(GATE_PLAIN_ASPECT.key, 'orbis/when', 'moment');
-    const b = idx.slotOf('orbis/schedule', 'orbis/when', 'moment');
-    if (a === undefined || b === undefined || !('prop' in a) || !('prop' in b)) {
-      throw new Error('фикстура: обе привязки — по свойству');
-    }
-    plain = a.prop;
-    sched = b.prop;
-  });
-  const host = () => ({
-    id: 'e1',
-    aspects: [GATE_PLAIN_ASPECT.key, 'orbis/schedule'],
-    props: { [plain]: '2026-09-01T09:00:00Z', [sched]: '2026-09-02T18:00:00Z' },
-  });
-  test('две привязки одного слота без prefer — SLOT_AMBIGUOUS с аспектами в details', () => {
-    let caught: ExecError | null = null;
-    try {
-      resolveSlotOnEntity(idx, host(), 'orbis/when', 'moment', []);
-    } catch (e) {
-      caught = e as ExecError;
-    }
-    expect(caught?.code).toBe('SLOT_AMBIGUOUS');
-    // Поле `subscription` (реестр §1.1) дописывает движок (задача 6, `rowOf`): чистая функция подписки не
-    // знает, и лишний параметр ради одной строки отказа протаскивался бы через каждый вызов.
-    expect(caught?.details).toEqual({
-      contract: 'orbis/when',
-      slot: 'moment',
-      entityId: 'e1',
-      aspects: [GATE_PLAIN_ASPECT.key, 'orbis/schedule'].sort(),
-    });
-  });
-  test('prefer выбирает детерминированно — по порядку перечисления', () => {
-    expect(
-      resolveSlotOnEntity(idx, host(), 'orbis/when', 'moment', ['orbis/schedule'])?.aspectId,
-    ).toBe('orbis/schedule');
-    expect(
-      resolveSlotOnEntity(idx, host(), 'orbis/when', 'moment', [GATE_PLAIN_ASPECT.key])?.value,
-    ).toBe('2026-09-01T09:00:00Z');
-  });
-  test('пустой слот второй привязки конфликта не даёт (§Б2-3 частичная привязка)', () => {
-    expect(
-      resolveSlotOnEntity(
-        idx,
-        { ...host(), props: { [plain]: '2026-09-01T09:00:00Z' } },
-        'orbis/when',
-        'moment',
-        [],
-      )?.aspectId,
-    ).toBe(GATE_PLAIN_ASPECT.key);
-  });
-  test('ни одной привязки — null, а не отказ: подписка просто не видит сущность', () => {
-    expect(
-      resolveSlotOnEntity(idx, { aspects: ['orbis/note'], props: {} }, 'orbis/when', 'moment', []),
-    ).toBeNull();
-  });
   test('кривая строка subscription_definitions роняет чтение реестра, а не проезжает молча', async () => {
+    // Движок `agenda` снят срезом 1в: строка владельца с ним — ровно такая «кривая» строка, и её счёт
+    // до миграции 0023 — дело `migrate-1v --report` (§6.5), а не молчаливого пропуска на чтении.
     const { db: admin, client: ac } = adminDb();
     await admin.execute(sql`INSERT INTO subscription_definitions (id, graph_id, surface, definition, module, rank)
       VALUES ('user/broken', ${owner}::uuid, 'core/agenda', '{"engine":"agenda"}'::jsonb, NULL, 1)`);
@@ -660,18 +621,6 @@ describe('builtinSubscription: эффективная декларация из 
       }
       expect(caught).toBeInstanceOf(ExecError);
       expect(caught?.code).toBe('NOT_FOUND');
-    });
-  });
-  test('agendaSubscriptionOf — обёртка над ним: тот же литерал, что в снимке (M12)', async () => {
-    // Узкая обёртка задачи 6 обязана остаться СИНОНИМОМ общего чтения, а не вторым путём:
-    // разойдись они — повестка и Budget читали бы разные реестры в одной транзакции.
-    await withIdentity(db, personal(userA), async (tx) => {
-      const reg = await effectiveRegistry(tx, userA);
-      // Сравнение по ССЫЛКЕ, а не по форме: общий читатель отдаёт союз деклараций, обёртка —
-      // сужение того же литерала, и `toBe` ловит появление второго чтения.
-      expect(agendaSubscriptionOf(reg) as unknown).toBe(
-        builtinSubscription(reg, 'orbis/agenda') as unknown,
-      );
     });
   });
 });

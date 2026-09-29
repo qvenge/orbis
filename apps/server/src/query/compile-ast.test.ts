@@ -31,7 +31,6 @@ import {
   compileSumByCurrencyAst,
   ENTITY_SELECT_COLUMNS,
   moneyCurrencyExpr,
-  propertyLocalDateExpr,
 } from './compile-ast';
 
 const dialect = new PgDialect();
@@ -810,11 +809,5 @@ describe('экспорты для движков подписок (§Б5-6)', ()
       'updated_at',
       'archived',
     ]);
-  });
-  test('propertyLocalDateExpr: date — как есть, timestamp — в таймзоне владельца', () => {
-    const ctx = ctxOf({ timeZone: 'Europe/Moscow' });
-    expect(rawSql(propertyLocalDateExpr('orbis/due_date', ctx))).not.toContain('AT TIME ZONE');
-    expect(rawSql(propertyLocalDateExpr('orbis/start_at', ctx))).toContain('AT TIME ZONE');
-    expect(() => propertyLocalDateExpr('orbis/task_status', ctx)).toThrow(/date\/timestamp/);
   });
 });

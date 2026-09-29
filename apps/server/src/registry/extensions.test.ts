@@ -8,6 +8,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:tes
 import type { GraphId } from '@orbis/shared';
 import { addDays, EXTENSION_IDS, recurringInstanceId } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
+import { agendaPage, agendaPageIds } from '../../test/agenda-page';
 import { enableFinanceForTest } from '../../test/finance-on';
 import {
   appDb,
@@ -30,11 +31,9 @@ import { DEFAULT_TIMEZONE, ownerTimeZone } from '../query/context';
 import { materializeInstances } from '../recurring/materialize';
 import { appRouter } from '../router';
 import { seedCategoryId, seedOwnerGraph } from '../seed/onboarding';
-import { agendaListOf, agendaSubscriptionOf } from '../subscriptions/agenda';
 import { dispatchTool, type ToolCallCtx } from '../tools/dispatch';
 import { buildToolRegistry } from '../tools/registry';
 import { createCallerFactory } from '../trpc';
-import { effectiveRegistry } from './cache';
 import { disabledExtensionsOf, setExtensionDisabled } from './extensions';
 
 requireEnv();
@@ -129,11 +128,9 @@ beforeAll(async () => {
     },
     aspects: ['orbis/budget'],
   });
-  // Строка окна Agenda: «чужая подписка не шелохнулась» (шаг 15) обязана проверяться на
-  // НЕПУСТОЙ выдаче — два пустых списка совпадут и при сломанном движке. Секция `window`
-  // идёт по слоту `moment` контракта «когда», а он привязан к `orbis/start_at`
-  // (`orbis/schedule`), НЕ к `orbis/due_date` — задачи без расписания в окне не видно, и
-  // фикстура брифа отдавала бы пустой список (адрес опровергнут деревом).
+  // Строка ленты Повестки: «чужая поверхность не шелохнулась» (шаг 15) обязана проверяться на
+  // НЕПУСТОЙ выдаче — две пустые пачки совпадут и при сломанных блоках. С 1в лента идёт по
+  // значению «когда» (§3.3), и задача со сроком и началом сегодня стоит в ней днём сегодня.
   await seedOne({
     title: 'Позвонить в банк',
     tags: [],
@@ -387,7 +384,8 @@ describe('§С8-22: маска на реестре тулов — один фи�
       await withIdentity(db, personal(owner), (tx) => buildToolRegistry(tx, owner))
     ).map((d) => d.name);
     // Консервативность §С1-3 п.9: разница — ровно шесть имён Финансов (с задачи 10 Б-2 —
-    // и инструмент переноса остатков `budget_rollover`)
+    // и инструмент переноса остатков `budget_rollover`) и `subscription_set`: с 1в поверхность
+    // Бюджета у него единственная (Повестки нет, §6.5), и без неё тул не предлагается вовсе.
     expect(all.filter((n) => !masked.includes(n)).sort()).toEqual([
       'attach_orbis_budget',
       'attach_orbis_category',
@@ -395,6 +393,7 @@ describe('§С8-22: маска на реестре тулов — один фи�
       'budget_rollover',
       'budget_status',
       'import_csv_start',
+      'subscription_set',
     ]);
     expect(masked.filter((n) => !all.includes(n))).toEqual([]);
   });
@@ -633,25 +632,19 @@ describe('§С8-22: подписки и сохранённые AST при вык
   beforeEach(blockEntry([])); // блок начинает со всех включённых
 
   /**
-   * Движок Agenda зовётся ТАК ЖЕ, как его зовёт ручка (`routers/agenda.ts`, задача 6):
-   * `agendaListOf(tx, graphId, def, args)`, где `def` — строка снимка, добытая
-   * `agendaSubscriptionOf`. Обёртки «на два аргумента» у него нет — и заводить её здесь
-   * значило бы проверять не тот путь, по которому ходит прод.
+   * Повестка с 1в — запись поставки из блоков (§6.5): «не шелохнулась» значит, что пачка трёх блоков
+   * её тела отдаёт то же самое — тем же путём, что ручка `entity.blocks` (`runBlocks`). Часы пачки —
+   * один момент на блок: сравнение «до/после» не разъедется на смене суток посреди теста.
    */
-  const agenda = () =>
-    withIdentity(db, personal(owner), async (tx) =>
-      agendaListOf(tx, owner, agendaSubscriptionOf(await effectiveRegistry(tx, owner)), {
-        today,
-        timeZone: TZ,
-        days: 8,
-      }),
-    );
+  const NOW = new Date();
+  const agenda = () => agendaPage(db, personal(owner), 'next_7d', NOW);
 
-  test('Budget-ведомость пуста, Agenda — байт-в-байт как до выключения', async () => {
+  test('Budget-ведомость пуста, Повестка — байт-в-байт как до выключения', async () => {
     const before = await budgetOverview(db, personal(owner), curMonth);
     expect(before.envelopes.length).toBeGreaterThan(0);
     const agendaBefore = await agenda();
-    expect(agendaBefore.rows.length).toBeGreaterThan(0); // сравнение не вырождено в «пусто = пусто»
+    // сравнение не вырождено в «пусто = пусто»
+    expect(agendaPageIds(agendaBefore).length).toBeGreaterThan(0);
     await execute(db, {
       identity: personal(owner),
       actorKind: 'owner',
@@ -695,13 +688,14 @@ describe('§С8-22: подписки и сохранённые AST при вык
 
   test('Повестка — ядро: все расширения выключены, Повестка байт-в-байт та же (спека 1б §8.1)', async () => {
     // Обратное направление врезки Agenda до 1б («Планировщик выключен — Повестка пуста») снято
-    // вместе с Планировщиком: поверхность `core/agenda` — ядро, и `surfaceExtensionOf` отвечает
-    // `null`. Пин держит обратное: ни одно расширение и ни устаревший `planner` в маске (колонка
+    // вместе с Планировщиком: Повестка — ядро (с 1в — запись поставки из блоков, §6.5). Пин держит
+    // обратное: ни одно расширение и ни устаревший `planner` в маске (колонка
     // text[] без CHECK) Повестку не гасят. С задачи 7 все четыре расширения выключаются ОПЕРАЦИЕЙ
     // владельца `module_set` (П0) — путь владельца, а не запись в колонку; устаревший `planner`
     // операцией не записать (его нет в словаре), поэтому он — по-прежнему напрямую.
     const agendaBefore = await agenda();
-    expect(agendaBefore.rows.length).toBeGreaterThan(0); // сравнение не вырождено в «пусто = пусто»
+    // сравнение не вырождено в «пусто = пусто»
+    expect(agendaPageIds(agendaBefore).length).toBeGreaterThan(0);
     // `finally` — не вежливость: провались утверждение внутри, и маска осталась бы выключенной,
     // а соседний тест канала покраснел бы каскадом на чужой причине.
     for (const m of EXTENSION_IDS) {
@@ -810,18 +804,12 @@ describe('§Б8-3 ревизия 7: материализация шаблона 
     expect(warns.filter((w) => w.includes('recurring/materialize'))).toEqual([]);
     expect(created).toBe(0);
 
-    const agendaNow = await withIdentity(db, personal(owner), async (tx) =>
-      agendaListOf(tx, owner, agendaSubscriptionOf(await effectiveRegistry(tx, owner)), {
-        today,
-        timeZone: TZ,
-        days: 3,
-      }),
-    );
+    const agendaNow = agendaPageIds(await agendaPage(db, personal(owner)));
     const instanceIds = [today, addDays(today, 1), addDays(today, 2)].map((d) =>
       recurringInstanceId(templateId, d),
     );
-    expect(agendaNow.rows.filter((r) => instanceIds.includes(r.entity.id))).toEqual([]);
-    expect(agendaNow.rows.length).toBeGreaterThan(0); // строки ядра на месте
+    expect(agendaNow.filter((id) => instanceIds.includes(id))).toEqual([]);
+    expect(agendaNow.length).toBeGreaterThan(0); // строки ядра на месте
 
     // Включение возвращает материализацию того же окна.
     await execute(db, {

@@ -73,7 +73,8 @@ describe('сид шести реестров', () => {
       expect(await ids(db, 'subscription_definitions')).toEqual(
         [...BUILTIN_SUBSCRIPTION_DEFS.map((s) => s.id)].sort(),
       );
-      expect(BUILTIN_SUBSCRIPTION_DEFS.length).toBe(2); // число отдельно от состава
+      // Число отдельно от состава; одна — Бюджет: встроенную Повестку снимает миграция 0023 (1в §6.5).
+      expect(BUILTIN_SUBSCRIPTION_DEFS.length).toBe(1);
     } finally {
       await client.end();
     }
@@ -966,7 +967,7 @@ describe('сид шести реестров', () => {
         roles: 11,
         aspects: 16,
         contracts: 7,
-        subscriptions: 2,
+        subscriptions: 1,
         actions: 2,
         version: before + 1,
         mergedDeltas: 0,

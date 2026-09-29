@@ -187,21 +187,16 @@ test('снимок несёт словарь контрактов: семь вс
   expect(reg.contracts.get('orbis/sensitivity')?.facts?.length).toBe(5);
 });
 
-test('словарь подписок несёт обе засеянные: строки разобраны схемой, поверхности на месте', async () => {
+test('словарь подписок несёт засеянную: строка разобрана схемой, поверхность на месте', async () => {
   const reg = await withIdentity(db, personal(owner), (tx) => effectiveRegistry(tx, owner));
-  // Состав — по СИДУ, а не литералом: задача, дописавшая третью подписку, не обязана искать этот
-  // тест. Порядок словаря — это `ORDER BY graph_id NULLS FIRST, id` (`load.ts`), а НЕ `rank`:
-  // совпадение с рангом сегодня держится на АЛФАВИТЕ (`orbis/agenda` < `orbis/budget-overview`),
-  // и третья встроенная подписка с меньшим рангом покрасила бы этот пин при исправном коде.
-  // Поэтому ожидание сортируется тем же ключом, каким сортирует читатель.
+  // Состав — по СИДУ, а не литералом: задача, дописавшая вторую подписку, не обязана искать этот
+  // тест. Порядок словаря — это `ORDER BY graph_id NULLS FIRST, id` (`load.ts`), а НЕ `rank`,
+  // поэтому ожидание сортируется тем же ключом, каким сортирует читатель.
   expect([...reg.subscriptions.keys()]).toEqual(BUILTIN_SUBSCRIPTION_DEFS.map((s) => s.id).sort());
-  expect([...reg.subscriptions.keys()]).toEqual(['orbis/agenda', 'orbis/budget-overview']);
-  const row = reg.subscriptions.get('orbis/agenda');
-  // `definition` доезжает РАЗОБРАННОЙ (а не «как лежит в jsonb»): движок читает поля, а не JSON.
-  expect(row?.definition.engine).toBe('agenda');
-  // Повестка — ядро с 1б (спека §8.1, РП-2): поверхность `core/`, расширения нет.
-  expect([row?.surface, row?.module, row?.graphId]).toEqual(['core/agenda', null, null]);
+  // Встроенной Повестки нет с 1в (§6.5): её строку снимает миграция 0023.
+  expect([...reg.subscriptions.keys()]).toEqual(['orbis/budget-overview']);
   const budget = reg.subscriptions.get('orbis/budget-overview');
+  // `definition` доезжает РАЗОБРАННОЙ (а не «как лежит в jsonb»): движок читает поля, а не JSON.
   expect(budget?.definition.engine).toBe('budget');
   expect([budget?.surface, budget?.module, budget?.graphId]).toEqual([
     'finance/budget-overview',
@@ -269,7 +264,7 @@ test('своё действие с поверхностью снятой гол�
     const reg = await withIdentity(db, personal(owner), (tx) => effectiveRegistry(tx, owner));
     // Снимок построен целиком: встроенные действия и подписки на месте.
     for (const a of BUILTIN_ACTION_DEFS) expect(reg.actions.has(a.id)).toBe(true);
-    expect([...reg.subscriptions.keys()]).toEqual(['orbis/agenda', 'orbis/budget-overview']);
+    expect([...reg.subscriptions.keys()]).toEqual(['orbis/budget-overview']);
     const old = reg.actions.get('user/old-offer');
     expect(old?.offered_by).toEqual([{ surface: 'planner/agenda' }]);
     // Ни на одной поверхности словаря действие не предложено: его поверхность словарю неизвестна.

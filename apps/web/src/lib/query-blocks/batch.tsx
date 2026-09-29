@@ -105,8 +105,8 @@ const LIVE_CLIENTS = new Map<QueryClient, number>();
 
 /**
  * Протушить данные ВСЕХ блоков (префикс `[QUERY_BLOCK_KEY]`). Зовёт `invalidateGraph`: данные
- * блоков — ещё один взгляд на граф рядом с `entity.query/get/count` и `agenda.list`, и протухают
- * они вместе с ними.
+ * блоков — ещё один взгляд на граф рядом с `entity.query/get/count`, и протухают они вместе с
+ * ними.
  *
  * Клиент кеша берётся у смонтированных провайдеров, а не синглтон `trpc.ts`: `invalidateGraph`
  * получает только `utils` tRPC, у которых клиента react-query наружу нет, а тестовая обвязка

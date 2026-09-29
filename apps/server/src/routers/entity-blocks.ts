@@ -21,7 +21,6 @@ import {
   type QueryAst,
   type QueryBound,
   type QueryFieldRef,
-  type QueryFilterNode,
   tokenEdges,
 } from '@orbis/shared/query';
 import { and, eq, inArray, type SQL } from 'drizzle-orm';
@@ -37,8 +36,10 @@ import {
   compileLatestAst,
   compileSumByCurrencyAst,
   sumsOf,
+  topLevelConds,
 } from '../query/compile-ast';
 import { queryContext } from '../query/context';
+import { DAY_RE } from '../query/contract-sql';
 import { substituteParams } from '../query/params';
 import { parseQueryText } from '../query/parse-text';
 import { materializationWindow, materializeInstances } from '../recurring/materialize';
@@ -60,11 +61,10 @@ type Period = { start: string; end: string };
 
 /** Скомпилированный блок: SQL готов ДО первого обращения к базе. */
 type Plan =
-  | { kind: 'rows'; sql: SQL; countSql: SQL; limit: number }
+  | { kind: 'rows'; sql: SQL; limit: number }
   | {
       kind: 'groups';
       sql: SQL;
-      countSql: SQL;
       limit: number;
       /** Раскладка по дням (§5.2): поле, период блока, пояс владельца и снимок для привязок «когда». */
       field: DayGroupField;
@@ -242,14 +242,6 @@ async function prepareBadges(
   return out;
 }
 
-/** Дети верхнего `and` фильтра (или он сам) — положительные условия блока, как у ключа записи (§3.3). */
-function topLevelConds(ast: QueryAst): readonly QueryFilterNode[] {
-  if (ast.filter === null) return [];
-  return 'and' in ast.filter ? ast.filter.and : [ast.filter];
-}
-
-const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
-
 /**
  * ПЕРИОД БЛОКА для пустых дней (§5.2) — интервал условия `=T` на ТОМ ЖЕ поле, что группировка, среди
  * детей верхнего `and` (параметры уже подставлены): токен — его края (`tokenEdges`, §3.4), литерал дня —
@@ -317,12 +309,10 @@ function compileBlock(ast: QueryAst, cctx: CompileCtx, blockLimit: number | unde
   }
   const limit = Math.min(blockLimit ?? ast.limit ?? BLOCK_ROWS_CAP, BLOCK_ROWS_CAP);
   const sql = compileBlockRowsAst({ ...ast, limit: limit + 1 }, cctx);
-  const countSql = compileCountAst(ast, cctx);
-  if (ast.group === undefined) return { kind: 'rows', sql, countSql, limit };
+  if (ast.group === undefined) return { kind: 'rows', sql, limit };
   return {
     kind: 'groups',
     sql,
-    countSql,
     limit,
     field: dayGroupField(ast.group.field),
     period: groupPeriod(ast, ast.group.field, cctx),
@@ -332,20 +322,20 @@ function compileBlock(ast: QueryAst, cctx: CompileCtx, blockLimit: number | unde
 }
 
 /**
- * Строки блока и «ещё N»: выборка `limit + 1`, счётчик — только у переполненного блока. Не меньше
- * одной: лишняя строка уже увидена, а счётчик — отдельный statement и под READ COMMITTED видит свой
- * снимок; конкурентное удаление между ними не должно дать «ещё 0» при обрезанной выдаче.
+ * Строки блока и «ещё N»: выборка `limit + 1`, «ещё N» — у переполненного блока из колонки `__total`
+ * той же выборки (`count(*) OVER ()`, `compileBlockRowsAst`): один проход, один снимок, и лишняя
+ * увиденная строка уже гарантирует `__total > limit`. Второго statement счётчика нет — у Повестки он
+ * стоил трети пачки (задача 10 1в, `agenda:page`). `Math.max(1, …)` — страховка формы, а не снимка.
  */
 async function shownRows(
   sp: Tx,
-  plan: { sql: SQL; countSql: SQL; limit: number },
+  plan: { sql: SQL; limit: number },
 ): Promise<{ rows: Record<string, unknown>[]; more: number }> {
   const raw = [...(await sp.execute(plan.sql))] as Record<string, unknown>[];
   if (raw.length <= plan.limit) return { rows: raw, more: 0 };
-  const counted = await sp.execute(plan.countSql);
   return {
     rows: raw.slice(0, plan.limit),
-    more: Math.max(1, Number(counted[0]?.count) - plan.limit),
+    more: Math.max(1, Number(raw[0]?.__total) - plan.limit),
   };
 }
 

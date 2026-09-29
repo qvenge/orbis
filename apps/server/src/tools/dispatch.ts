@@ -1516,7 +1516,6 @@ async function runMutation(
  * письменного списка поверхностей здесь нет.
  */
 const SURFACE_LABEL: Record<string, string> = {
-  'core/agenda': 'Повестка',
   'finance/budget-overview': 'Бюджет',
 } satisfies Record<SurfaceName, string>;
 
@@ -1666,7 +1665,7 @@ export function registryOperationSummary(
       return `Снятие привязки аспекта «${aspectName(payload.aspect)}» к контракту «${contractName(payload.contract)}»`;
     case 'subscription_set':
       // У подписки подписи нет вовсе (`subscription_definitions` — id, surface, definition), и
-      // называется она ПОВЕРХНОСТЬЮ: владелец узнаёт «Повестку», а не `orbis/agenda`. Ответ на
+      // называется она ПОВЕРХНОСТЬЮ: владелец узнаёт «Бюджет», а не `orbis/budget-overview`. Ответ на
       // «где я это увижу» и есть то, что ему нужно перед нажатием «Принять».
       return `Настройка подписки «${surfaceName(payload)}»`;
     case 'subscription_remove':

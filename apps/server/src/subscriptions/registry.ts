@@ -3,7 +3,6 @@
 // там означала бы владельца, запертого снаружи графа после пересева, изменившего контракт (Р-И-7).
 // На чтении разбирается только ФОРМА, смысл — здесь, у сида, тула и дельты.
 import {
-  type BindingIndex,
   type BudgetSubscription,
   bindingIndexOf,
   canonicalJson,
@@ -65,38 +64,7 @@ function paramTypes(params: unknown, fallback: readonly string[] = []): Record<s
 export function exprSitesOf(raw: unknown): readonly ExprSite[] {
   const d = rec(raw);
   if (d === undefined) return [];
-  if (d.engine === 'agenda') return agendaSites(d);
   return d.engine === 'budget' ? budgetSites(d) : [];
-}
-
-function agendaSites(d: Record<string, unknown>): ExprSite[] {
-  const scope = {
-    contract: 'orbis/when',
-    params: paramTypes(d.params, ['window_from', 'window_to']),
-    allowDeref: true,
-  } as const;
-  // ОБЛАСТЬ `where` УЖЕ ОБЛАСТИ ГРАНИЦ (B3 I-1, fail-closed): предикат уезжает в SQL-бэкенд, а тот
-  // не знает ни параметров вызова (их подставляет интерпретатор при расчёте границ), ни
-  // разыменования вовсе. Обещать в декларации то, чего исполнитель не умеет, — значит адресовать
-  // отказ не автору (Р-И-7); отказ называет чекер своим словарём (`EXPR_TYPE`), второго мнения тут
-  // не заводится. Контракт в области остаётся: `{slot}`/`{has:<слот>}`/`{class}` бэкенд умеет.
-  const whereScope = { contract: scope.contract, allowDeref: false } as const;
-  const out: ExprSite[] = [];
-  const w = rec(rec(d.show)?.window);
-  if (w !== undefined) {
-    out.push(
-      { path: 'show.window.from', value: w.from, scope, expect: DATE_KINDS },
-      { path: 'show.window.to', value: w.to, scope, expect: DATE_KINDS },
-    );
-  }
-  const o = rec(d.overdue);
-  if (o !== undefined) {
-    out.push(
-      { path: 'overdue.before', value: o.before, scope, expect: DATE_KINDS },
-      { path: 'overdue.where', value: o.where, scope: whereScope, expect: ['boolean'] },
-    );
-  }
-  return out;
 }
 
 function budgetSites(d: Record<string, unknown>): ExprSite[] {
@@ -139,7 +107,10 @@ function budgetSites(d: Record<string, unknown>): ExprSite[] {
         },
       });
     } else if (agg.where !== undefined) {
-      // Область `where` — см. `whereScope` у Agenda: без параметров и без разыменования.
+      // ОБЛАСТЬ `where` УЖЕ ОБЛАСТИ ГРАНИЦ (B3 I-1, fail-closed): предикат уезжает в SQL-бэкенд, а
+      // тот не знает ни параметров вызова (их подставляет интерпретатор при расчёте границ), ни
+      // разыменования вовсе. Обещать в декларации то, чего исполнитель не умеет, — значит адресовать
+      // отказ не автору (Р-И-7); отказ называет чекер своим словарём (`EXPR_TYPE`).
       out.push({
         path: `aggregates.${name}.where`,
         value: agg.where,
@@ -416,33 +387,6 @@ function assertReferences(id: string, def: SubscriptionDefinition, reg: Registry
       });
     }
   };
-  if (def.engine === 'agenda') {
-    known(
-      def.hide.set,
-      setNames(reg, 'orbis/recurrence', id),
-      'SUBSCRIPTION_UNKNOWN_SET',
-      'hide.set',
-      'orbis/recurrence',
-    );
-    const prefer = (list: readonly string[], slots: readonly string[], path: string): void => {
-      for (const a of list) {
-        if (!reg.aspects.has(a)) {
-          bad('SUBSCRIPTION_UNKNOWN_ASPECT', id, `аспекта ${a} нет`, { aspect: a, path });
-        }
-        // Аспект в prefer, не реализующий спорный слот, — мёртвая строка: приоритет, который никогда
-        // не сработает, а SLOT_AMBIGUOUS при этом продолжит падать.
-        if (!slots.some((s) => idx.slotOf(a, 'orbis/when', s) !== undefined)) {
-          bad('SUBSCRIPTION_PREFER_UNBOUND', id, `${a} не реализует слот секции ${path}`, {
-            aspect: a,
-            path,
-          });
-        }
-      }
-    };
-    prefer(def.show.prefer, [def.show.slot], 'show.prefer');
-    prefer(def.overdue.prefer, def.overdue.slots, 'overdue.prefer');
-    return;
-  }
   const mSets = setNames(reg, def.sources.movement.contract, id);
   const mSlots = slotNames(reg, def.sources.movement.contract, id);
   const eSlots = slotNames(reg, def.sources.envelope.contract, id);
@@ -457,8 +401,7 @@ function assertReferences(id: string, def: SubscriptionDefinition, reg: Registry
   );
   assertRole(reg, id, def.sources.envelope.binding_role);
   assertRole(reg, id, def.rollup.role);
-  // `prefer` секций источника (остаток 40, Р-24) — та же двойная проверка, что у Повестки выше:
-  // аспекта нет — отказ; аспект не реализует контракт секции — мёртвая строка, приоритет, который
+  // `prefer` секций источника (остаток 40, Р-24) — двойная проверка: аспекта нет — отказ; аспект не реализует контракт секции — мёртвая строка, приоритет, который
   // никогда не сработает, а SLOT_AMBIGUOUS у записи с двумя привязками продолжит падать.
   for (const [path, section] of [
     ['sources.movement.prefer', def.sources.movement],
@@ -752,64 +695,6 @@ function assertAggregatesAcyclic(id: string, def: BudgetSubscription): void {
     state.set(name, 'done');
   };
   for (const name of edges.keys()) walk(name, []);
-}
-
-export interface SlotHost {
-  id?: string;
-  aspects: readonly string[];
-  props: Record<string, unknown>;
-}
-
-/**
- * ЗНАЧЕНИЕ СЛОТА КОНТРАКТА У СУЩНОСТИ (§Б5-6, §С8-21). Конфликт SLOT_AMBIGUOUS живёт ЗДЕСЬ, а не в
- * валидаторе декларации: две привязки одного слота — свойство СУЩНОСТИ (свой аспект + orbis/schedule на
- * одной записи), в реестре обе законны по отдельности. Проверка на декларации была бы либо ложной
- * тревогой (аспекты никогда не встретятся вместе), либо молчанием (встретятся — а декларация принята).
- * ПУСТОЙ СЛОТ — НЕ РЕАЛИЗАЦИЯ (§Б2-3): иначе событие без начала спорило бы за слот, которого у него нет.
- *
- * `details` ЗДЕСЬ БЕЗ `subscription` — и это не потеря поля §1.1, а разделение того, кто что знает: функция
- * зовётся движком и подписки не видит (шестым параметром её пришлось бы протаскивать через каждый вызов ради
- * одной строки отказа). Имя дописывает ВЫЗЫВАЮЩИЙ: `rowOf` движка Agenda (задача 6) ловит `SLOT_AMBIGUOUS`,
- * дописывает `{ subscription: AGENDA_SUBSCRIPTION_ID }` в `details` и перебрасывает — у пользователя отказ
- * приходит полным (`{subscription, contract, slot, entityId, aspects}`), а у чистой функции остаётся один
- * источник правды о конфликте.
- */
-export function resolveSlotOnEntity(
-  idx: BindingIndex,
-  entity: SlotHost,
-  contract: string,
-  slot: string,
-  prefer: readonly string[],
-): { aspectId: string; value: unknown } | null {
-  const on = new Set(entity.aspects);
-  const live: { aspectId: string; value: unknown }[] = [];
-  for (const binding of idx.byContract(contract)) {
-    if (!on.has(binding.aspectId)) continue;
-    const bound = idx.slotOf(binding.aspectId, contract, slot);
-    if (bound === undefined) continue;
-    const value = 'fixed' in bound ? bound.fixed : entity.props[bound.prop];
-    if (value === undefined || value === null) continue;
-    live.push({ aspectId: binding.aspectId, value });
-  }
-  const only = live[0];
-  if (only === undefined) return null;
-  if (live.length === 1) return only;
-  // Порядок prefer И ЕСТЬ приоритет: первый совпавший, а не «самый ранний аспект по rank».
-  for (const aspectId of prefer) {
-    const hit = live.find((c) => c.aspectId === aspectId);
-    if (hit !== undefined) return hit;
-  }
-  // `subscription` в details дописывает движок (задача 6, `rowOf`) — см. докблок выше.
-  throw new ExecError(
-    'SLOT_AMBIGUOUS',
-    `слот ${contract}.${slot} реализуют ${live.length} аспекта записи — подписке нужен prefer`,
-    {
-      contract,
-      slot,
-      entityId: entity.id ?? null,
-      aspects: live.map((c) => c.aspectId).sort(),
-    },
-  );
 }
 
 /**
