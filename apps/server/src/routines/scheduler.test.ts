@@ -527,6 +527,22 @@ describe('routineTick: маска расширений (С1б-4 п. 15)', () => 
     expect(second.started).toContain(routineRunId(routineId, BUCKET, 1));
   });
 
+  test('рутина из одного `subscription_set` при выключенных Финансах — пропуск (1в §6.5, R-22)', async () => {
+    // С 1в у подписки одна поверхность — Бюджета, и тул принадлежит Финансам (манифест). Без этого
+    // рутина считалась бы вооружённой, работала бы и падала на вызове «неизвестным тулом».
+    const owner = await newOwner();
+    const routineId = await newRoutine(owner, { 'orbis/allowed_tools': ['subscription_set'] });
+    await disable(owner, 'finance');
+    const provider = new ScriptedProvider([endTurn('не должно случиться')]);
+    const tick = await routineTick(deps(provider));
+    expect(tick.skipped).toContainEqual({
+      routineId,
+      bucket: BUCKET,
+      reason: 'extension_disabled',
+    });
+    expect(provider.requests).toHaveLength(0);
+  });
+
   test('смешанный список (тул расширения + тул ядра) — не пропуск: доступное ядро рутина делает', async () => {
     const owner = await newOwner();
     const routineId = await newRoutine(owner, {

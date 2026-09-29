@@ -6,7 +6,7 @@
 // СТРОКА `user_settings.disabled_modules` и то, что по ней видят четыре поверхности сразу.
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
 import type { GraphId } from '@orbis/shared';
-import { addDays, EXTENSION_IDS, recurringInstanceId } from '@orbis/shared';
+import { addDays, BUDGET_DEF, EXTENSION_IDS, recurringInstanceId } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import { agendaPage, agendaPageIds } from '../../test/agenda-page';
 import { enableFinanceForTest } from '../../test/finance-on';
@@ -413,6 +413,40 @@ describe('§С8-22: маска на реестре тулов — один фи�
     if (out.status !== 'error') return; // сужение союза: у ветки 'ok' поля `error` нет вовсе
     expect(out.error.code).toBe('MODULE_DISABLED');
     expect(out.error.details).toMatchObject({ tool: 'budget_status', module: 'finance' });
+  });
+
+  test('`subscription_set` при выключенных Финансах — MODULE_DISABLED и одиночным вызовом, и в пачке (1в §6.5, R-22)', async () => {
+    // Скрытый маской тул обязан отвечать про расширение, а не «неизвестным тулом»: с 1в у подписки
+    // единственная поверхность — Бюджета, и тул принадлежит Финансам (манифест `finance.tools`).
+    const ctx: ToolCallCtx = {
+      db,
+      identity: personal(owner),
+      actorKind: 'owner',
+      source: 'chat',
+      explicitCommand: false,
+    };
+    const input = {
+      id: 'orbis/budget-overview',
+      surface: 'finance/budget-overview',
+      definition: BUDGET_DEF,
+    };
+    const single = await dispatchTool(ctx, 'subscription_set', input);
+    expect(single.status).toBe('error');
+    if (single.status !== 'error') return;
+    expect(single.error.code).toBe('MODULE_DISABLED');
+    expect(single.error.details).toMatchObject({ tool: 'subscription_set', module: 'finance' });
+    const batch = await dispatchTool(ctx, 'batch_execute', {
+      batch_id: crypto.randomUUID(),
+      operations: [{ tool: 'subscription_set', input }],
+    });
+    expect(batch.status).toBe('error');
+    if (batch.status !== 'error') return;
+    expect(batch.error.code).toBe('MODULE_DISABLED');
+    expect(batch.error.details).toMatchObject({
+      index: 0,
+      tool: 'subscription_set',
+      module: 'finance',
+    });
   });
 
   test('скрытый маской тул ВНУТРИ batch_execute — тот же MODULE_DISABLED (Ф-Б1-57в)', async () => {

@@ -31,9 +31,21 @@ import { setExtensionDisabled } from '../registry/extensions';
 import type { RegistrySnapshot } from '../registry/load';
 import { appRouter } from '../router';
 import { createCallerFactory } from '../trpc';
-import { type CompileCtx, compileQueryAst, compileSumAst } from './compile-ast';
+import {
+  type CompileCtx,
+  compileQueryAst,
+  compileSumAst,
+  compileWhere,
+  topLevelConds,
+} from './compile-ast';
 import { DEFAULT_TIMEZONE, todayInTimeZone } from './context';
-import { addressSortKey, slotValuesSql } from './contract-sql';
+import {
+  addressSortKey,
+  groupDatesSql,
+  groupKeySql,
+  slotValuesSql,
+  whenLateralJoins,
+} from './contract-sql';
 
 requireEnv();
 const { db, client } = appDb();
@@ -225,6 +237,42 @@ describe('С1в-1: значение «когда» и адреса слотов 
       await admin.transaction((tx) => setExtensionDisabled(tx, graph, 'finance', false));
       await adminClient.end();
     }
+  });
+});
+
+/**
+ * ПАРИТЕТ ДВУХ ФОРМ ДАТ «КОГДА» (R-21, Fable Minor-2 фикс-круга 1 задачи 10). Сборщики SELECT'а читают даты
+ * из одного `LATERAL` на запись (`whenLateralJoins`), а `compileWhere` вне сборщиков (`actions/resolve.ts`,
+ * `registry/ref.ts`) — прежним коррелированным подзапросом. Шов двух форм — список типов разворота
+ * массива и порядок строк в нём; расхождение дало бы разные множества у действия над выборкой и у той же
+ * выборки на экране. Поэтому по КАЖДОЙ фразе таблицы сверяются обе формы целиком: множество записей,
+ * ключ значения «когда» (`groupKeySql` — тот же, что у сортировки и группы) и даты строки (`__when_dates`).
+ */
+describe('R-21: LATERAL-форма дат «когда» равна коррелированной — на каждой фразе таблицы', () => {
+  const WHEN = { contract: 'orbis/when' } as const;
+  async function rowsOf(text: string, lateral: boolean): Promise<string[]> {
+    const base = await ctx();
+    const c: CompileCtx = lateral ? { ...base, whenLateral: new Map() } : base;
+    const ast = parse(text, c);
+    const where = compileWhere(ast, c);
+    const key = groupKeySql(WHEN, topLevelConds(ast), c);
+    const dates = groupDatesSql(WHEN, c);
+    const from = lateral ? sql`entities e${whenLateralJoins(c)}` : sql`entities e`;
+    const rows = await withIdentity(db, personal(graph), (tx) =>
+      tx.execute(
+        sql`SELECT e.id, (${key})::text AS k, (${dates})::text AS d FROM ${from} WHERE ${where} ORDER BY e.id`,
+      ),
+    );
+    return [...rows].map((r) => {
+      const x = r as { id: string; k: string | null; d: string | null };
+      return `${world.nameOf.get(x.id) ?? x.id}|${x.k}|${x.d}`;
+    });
+  }
+  test.each(SET_CASES.map(([text]) => [text]))('%s', async (text) => {
+    const lateral = await rowsOf(text, true);
+    // Не вырождено: у фраз таблицы есть записи, иначе «пусто = пусто» сравнивало бы ничто.
+    expect(lateral.length).toBeGreaterThan(0);
+    expect(lateral).toEqual(await rowsOf(text, false));
   });
 });
 

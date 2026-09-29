@@ -133,7 +133,12 @@ export const EXTENSION_MANIFESTS: Readonly<Record<ExtensionId, ExtensionManifest
       ru: 'Расходы и доходы, категории, конверты бюджета и импорт выписок',
       en: 'Expenses and income, categories, budget envelopes and statement import',
     },
-    tools: ['budget_status', 'budget_rollover', 'import_csv_start'],
+    // `subscription_set` — тул Финансов с 1в (§6.5, R-22): единственная поверхность подписки —
+    // `finance/budget-overview`, и без Финансов настраивать нечего. Маска реестра тулов, отказ
+    // `MODULE_DISABLED` скрытого тула (`hiddenToolExtension`) и обезоруженность рутины
+    // (`isDisarmedByMask`) читают расширение отсюда — одна правда на три пути. Появится поверхность
+    // ядра — тул вернётся в ядро этой же строкой.
+    tools: ['budget_status', 'budget_rollover', 'import_csv_start', 'subscription_set'],
     promptFragments: FINANCE_FRAGMENTS,
     surfaces: ['finance/budget-overview'],
     // Контракты языка (Р-7): Финансы их реализуют своими аспектами и читают в движке бюджета,

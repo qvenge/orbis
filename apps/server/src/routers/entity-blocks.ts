@@ -290,7 +290,8 @@ function dayGroupField(field: QueryFieldRef): DayGroupField {
  *
  * Строки и группы: `limit` блока, иначе `limit` текста, иначе потолок; всё клампится до
  * `BLOCK_ROWS_CAP` (схема канона `limit` сверху не ограничивает). Выборка — `limit + 1`: лишняя
- * строка и есть признак «ещё N», и счётчик идёт вторым запросом ТОЛЬКО у переполненного блока.
+ * строка и есть признак «ещё N», а само N — колонка `__total` той же выборки (`count(*) OVER ()`,
+ * `shownRows`); второго запроса счётчика нет.
  */
 function compileBlock(ast: QueryAst, cctx: CompileCtx, blockLimit: number | undefined): Plan {
   if (ast.display === 'tile' && ast.aggregate !== undefined) {

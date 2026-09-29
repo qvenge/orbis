@@ -545,19 +545,16 @@ function surfaceJsonSchema(surfaces: readonly SurfaceName[]) {
  * тулов сравнивается при пустой маске). Вторая линия — отказ исполнителя на записи
  * (`prepareSubscriptionSet`): enum — подсказка модели, доступ решает сервер.
  *
- * НЕ ОСТАЛОСЬ НИ ОДНОЙ ПОВЕРХНОСТИ — тула нет (`null`). С 1в поверхность ядра Повестки снята (§6.5),
- * и при выключенных Финансах словарь пуст: тул с `enum: []` вызвать нельзя ничем, а пустой `enum`
- * JSON Schema оставлен стандартом на усмотрение валидатора («SHOULD have at least one element») —
- * провайдер вправе отвергнуть из-за него весь запрос с тулами. Настраивать нечего — нечего и
- * предлагать.
+ * С 1в сам тул — тул Финансов (манифест `finance.tools`, §6.5, R-22): при выключенных Финансах его
+ * снимает общий фильтр реестра, и `enum: []` сюда не доезжает. Сужение остаётся для маски из других
+ * расширений.
  */
 export function subscriptionSetDefFor(
   def: OrbisToolDef,
   disabled: readonly string[],
-): OrbisToolDef | null {
+): OrbisToolDef {
   if (disabled.length === 0) return def;
   const surfaces = SURFACES.filter((x) => isExtensionEnabled(surfaceExtensionOf(x), disabled));
-  if (surfaces.length === 0) return null;
   return {
     ...def,
     inputJsonSchema: {
