@@ -213,7 +213,7 @@
 - **Контракт клиента поднимается один раз** — `0.4.0` → `0.5.0` (`MIN_COMPATIBLE_CLIENT_VERSION`
   `packages/shared/src/constants.ts:11`, `APP_VERSION` `apps/web/src/app/version.ts:4`) в задаче 3: он покрывает все новые формы
   ответа `entity.blocks` и новый узел документа (рулинг R-12 1б). `DOC_SCHEMA_VERSION` (3) **не** поднимается.
-- **Вес экрана записи.** Пороги: файл чанка `DetailScreen` — 34 889 Б gzip; эагерное замыкание — 329 400 Б gzip -9 (было 325 238 по R-36 1б; 327 800 — решение владельца 28.09, R-9; 329 400 — R-15, последний подъём среза: третье превышение — ленивый разбор канона);
+- **Вес экрана записи.** Пороги: файл чанка `DetailScreen` — 34 889 Б gzip; эагерное замыкание — 325 238 Б gzip -9 (R-36 1б; подъёмы 1в R-9 → 327 800 и R-15 → 329 400 сняты R-20 после выноса словаря встроенных свойств из первого кадра задачей 8: 322 418 Б);
   превышение — стоп и разбор, не подъём порога. Новое на экране записи (блок параметра, лента по дням) — ленивыми чанками рядом
   с блоком данных, эагерно только склейка; новые эагерные файлы — в список `save.test.tsx`. Сборка:
   `cd $W && bun run --filter @orbis/web build > $T/<имя>-build.log 2>&1` и `bun scripts/check-lazy-chunks.ts` с порогами CI.
@@ -1098,7 +1098,7 @@ export interface NavPersisted { /* …как было… */ views?: Readonly<Rec
   места. Стор истории — `persistOf`/`restoreFrom` по «Интерфейсам». Прогон шага 1 → PASS. Сборка и сторож веса:
 ```
 cd $W && bun run --filter @orbis/web build > $T/t5-build.log 2>&1; echo EXIT=$?
-cd $W && bun scripts/check-lazy-chunks.ts --max-gzip DetailScreen=34889 --max-closure-gzip DetailScreen=329400 > $T/t5-lazy.log 2>&1; echo EXIT=$?
+cd $W && bun scripts/check-lazy-chunks.ts --max-gzip DetailScreen=34889 --max-closure-gzip DetailScreen=325238 > $T/t5-lazy.log 2>&1; echo EXIT=$?
 ```
   Превышение — СТОП и разбор (не подъём порога).
 
@@ -1688,7 +1688,7 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>" -- apps/se
 
 - [ ] **Шаг 3: ни одного висящего импорта.** `cd $W && bun run typecheck > $T/t12-tsc.log 2>&1; echo EXIT=$?` → 0;
   `cd $W && bun run --filter @orbis/web build > $T/t12-build.log 2>&1; echo EXIT=$?` → 0; `bun scripts/check-lazy-chunks.ts
-  --max-gzip DetailScreen=34889 --max-closure-gzip DetailScreen=329400 > $T/t12-lazy.log 2>&1; echo EXIT=$?` → 0.
+  --max-gzip DetailScreen=34889 --max-closure-gzip DetailScreen=325238 > $T/t12-lazy.log 2>&1; echo EXIT=$?` → 0.
 
 - [ ] **Шаг 4: мутации.** (а) вернуть строку `"!apps/web/src/legacy-1v"` в `biome.json` → красный (б); (б) вернуть
   `apps/web/src/features/import/` в `EXTENSION_DIRS` → красный (а); (в) вернуть старый текст плашки в `ReservedScreen.tsx`
@@ -1922,7 +1922,7 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>" -- docs/pr
   записью в `facts-plan.md`.
 - [ ] **Шаг 6: фикс-волна** одним имплементером (`model: opus`) по `dispatch-final-fix.md`; гейт фикс-волны (`model: opus`);
   полный прогон, `lint`, `typecheck`, `test:rls`, перф в порядке Ф-Г-75, сборка + `check-lazy-chunks --max-gzip
-  DetailScreen=34889 --max-closure-gzip DetailScreen=329400`, `check-legacy-form --gate`, локальный `bun scripts/ops.ts check`
+  DetailScreen=34889 --max-closure-gzip DetailScreen=325238`, `check-legacy-form --gate`, локальный `bun scripts/ops.ts check`
   против пересеянной локальной базы (список дрейфа для задачи 16). Push ветки ради CI (`main` не трогается). **ЖЁСТКАЯ
   ОСТАНОВКА:** задача 16 — только отдельным словом владельца.
 
