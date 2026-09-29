@@ -80,7 +80,7 @@ export interface OpenInput {
 }
 export type OpenPlaque =
   | { kind: 'app-off'; appId: string; archived: boolean } // выключено — [включить], в архиве — [восстановить] (Э-20)
-  | { kind: 'reserved'; key: 'budget' } // /a/budget — «придёт со следующим срезом», без «включить»
+  | { kind: 'reserved'; key: 'budget' } // /a/budget — «придёт отдельным срезом», без «включить»
   | { kind: 'app-unknown'; ref: string } // приложение не найдено или не приложение: из адреса ИЛИ из «Дома» страницы
   | { kind: 'no-view'; appId: string; alternatives: readonly string[] } // шаг 3
   | { kind: 'place-dispute'; contenders: readonly string[] }; // шаг 4, ≥2 без выбора (РП-20)

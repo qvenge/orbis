@@ -19,7 +19,7 @@
 //   /entity/<id>                   → запись в хосте
 //   /thread/<id треда>             → `legacy-thread` (запись треда ищет web через chat.threadEntity, РП-17)
 //   /browser                       → `legacy-supply` «Записи»
-//   /budget, /budget/category/<id>, /a/budget, /a/budget/r/<id> → `reserved` budget (плашка «придёт со следующим срезом»)
+//   /budget, /budget/category/<id>, /a/budget, /a/budget/r/<id> → `reserved` budget (плашка «придёт отдельным срезом»)
 //   /agenda                        → `legacy-supply` «Повестка» (срез 1в §6.2, РП-16; в 1б — плашка)
 //
 // Модуль чистый TS: ни `window`/`location`, ни `URL` — строка разбирается руками, чтобы функция
@@ -46,7 +46,7 @@ export type Address =
 export type LegacyAddress =
   | { kind: 'legacy-thread'; threadId: string } // '/thread/<uuid>' — запись треда ищет chat.threadEntity (задача 10)
   | { kind: 'legacy-supply'; key: 'records' | 'agenda' } // '/browser', '/agenda' → страница поставки
-  | { kind: 'reserved'; key: 'budget' }; // '/budget…', '/a/budget…' — плашка «придёт со следующим срезом»
+  | { kind: 'reserved'; key: 'budget' }; // '/budget…', '/a/budget…' — плашка «придёт отдельным срезом»
 
 /**
  * UUID любой версии, регистронезависимо. Копия из `nav/links.ts` осознанно: `links.ts` уходит в

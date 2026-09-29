@@ -26,8 +26,6 @@ import { parseQueryAst } from '@orbis/shared/query';
 import { expect, test } from 'vitest';
 import { browserQuery, buildFilterQuery } from '../../features/browser/query';
 import { CATEGORIES_QUERY } from '../../features/budget/categories';
-import { RECENT_QUERY } from '../../features/budget/QuickAddBar';
-import { buildTxQuery } from '../../features/budget/txQuery';
 import { MEMORY_RULES_QUERY } from '../../features/chat/memoryRules';
 import { CATEGORY_QUERY } from '../../features/chat/useFastPath';
 import { ticketRunsQuery } from '../../features/entity-detail/useTicketRuns';
@@ -110,26 +108,8 @@ const PRODUCTION_TEXTS: ReadonlyArray<readonly [string, string]> = [
       }),
     }),
   ],
-  ['features/budget/QuickAddBar.tsx (RECENT_QUERY)', RECENT_QUERY],
-  [
-    'features/budget/txQuery.ts (buildTxQuery, все фильтры)',
-    buildTxQuery({
-      month: '2026-06',
-      categoryId: ID,
-      direction: 'expense',
-      planned: false,
-      amountFrom: '0.10',
-      amountTo: '99999.99',
-      search: 'кофе',
-      limit: 50,
-    }),
-  ],
-  [
-    'features/budget/txQuery.ts (поиск с пробелом)',
-    buildTxQuery({ month: '2026-06', search: 'кофе эклер', limit: 50 }),
-  ],
-  // Транзакции конверта (`CategoryScreen`) — экран в `legacy-1v` до 1в (срез 1б §8.6): в продукте
-  // этого запроса нет, сверять нечего.
+  // Быстрая запись расхода, лента транзакций и транзакции конверта — экраны Бюджета, удалены
+  // срезом 1в (§8.1) вместе со своими текстами запросов: сверять нечего.
   ['features/budget/categories.ts (CATEGORIES_QUERY)', CATEGORIES_QUERY],
   ['features/chat/memoryRules.ts (MEMORY_RULES_QUERY)', MEMORY_RULES_QUERY.query],
   ['features/chat/useFastPath.ts (CATEGORY_QUERY)', CATEGORY_QUERY.query],
@@ -154,11 +134,11 @@ test.each(PRODUCTION_TEXTS)('%s разбирается каноном §А5-3', 
 /**
  * ОДИН ДОМ У СТРОКИ КАТЕГОРИЙ — правило, а не разовая уборка.
  *
- * История: `EnvelopeCreateSheet` носил ИНЛАЙН-ДУБЛЬ `CATEGORIES_QUERY`, и перевод
- * `categories.ts` на namespaced key его не касался вовсе — дубль пережил правку молча
- * (опись, вердикт `RESERVED`). Задача 13c сняла у листа конверта саму надобность в списке
- * (выбор идёт общим `RefField` по цели свойства из реестра), но правило осталось прежним и
- * стало шире: текст множества категорий существует В ОДНОМ месте на весь web.
+ * История: лист создания конверта (удалён срезом 1в §8.1) носил ИНЛАЙН-ДУБЛЬ
+ * `CATEGORIES_QUERY`, и перевод `categories.ts` на namespaced key его не касался вовсе — дубль
+ * пережил правку молча (опись, вердикт `RESERVED`). Задача 13c сняла у листа саму надобность в
+ * списке (выбор идёт общим `RefField` по цели свойства из реестра), но правило осталось прежним
+ * и стало шире: текст множества категорий существует В ОДНОМ месте на весь web.
  *
  * Проверяется ИСХОДНИК, а не поведение: копия, набранная заново, зелена во всех экранных
  * тестах — она возвращает те же строки. Увидеть её можно только в тексте.
@@ -196,23 +176,25 @@ test('контрол ссылки — ровно одна реализация �
 });
 
 /**
- * Список ПОЛОН: четырнадцать адресов. До среза 1б их было двенадцать против шестнадцати в описи
- * Задачи 8 (владелец `10c`); 1б — минус один и плюс три (ниже). Разница с описью названа: `EnvelopeCreateSheet.tsx` носил ИНЛАЙН-ДУБЛЬ строки
- * категорий, дубля больше нет (тест выше), и отдельного текста у него не осталось.
+ * Список ПОЛОН: одиннадцать адресов. До среза 1б их было двенадцать против шестнадцати в описи
+ * Задачи 8 (владелец `10c`); 1б — минус один и плюс три, 1в — минус три (ниже). Разница с описью
+ * названа: лист создания конверта носил ИНЛАЙН-ДУБЛЬ строки категорий, дубля больше нет (тест
+ * выше), и отдельного текста у него не осталось.
  * `SmartListSave.tsx` собственного текста не имел (он оборачивал в `{{query:…}}` строку
  * Browser, покрытую записями `browser/query.ts`) и снят Задачей 21b как механизм без
  * единого вызывателя. Ещё минус три адреса
  * Повестки — вкладка перешла на подписку `agenda.list` (§А5-5), собственного текста запроса у
  * неё нет.
  *
- * Минус один — транзакции конверта: экран категории ушёл в `legacy-1v` (срез 1б §8.6, РП-31), и
- * в продукте этого текста нет. Плюс три — группы поиска хоста (срез 1б, задача 24): записи,
- * страницы, приложения.
+ * 1б: минус один — транзакции конверта (экран категории ушёл из интерфейса, срез 1б §8.6, РП-31);
+ * плюс три — группы поиска хоста (срез 1б, задача 24): записи, страницы, приложения. 1в: минус
+ * три — быстрая запись расхода и два текста ленты транзакций: их модули удалены как осиротевшие
+ * (спека 1в §8.1).
  *
  * Число пиннится, потому что молча УКОРОТИТЬ этот список — самый дешёвый способ сделать тест
  * зелёным, не переведя текст.
  */
-test('в списке боевых текстов ровно четырнадцать адресов', () => {
-  expect(PRODUCTION_TEXTS.length).toBe(14);
-  expect(new Set(PRODUCTION_TEXTS.map(([where]) => where)).size).toBe(14);
+test('в списке боевых текстов ровно одиннадцать адресов', () => {
+  expect(PRODUCTION_TEXTS.length).toBe(11);
+  expect(new Set(PRODUCTION_TEXTS.map(([where]) => where)).size).toBe(11);
 });

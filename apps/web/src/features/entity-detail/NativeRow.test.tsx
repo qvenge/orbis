@@ -677,10 +677,16 @@ test('«весь день» — бейдж у записи аспекта вла
 });
 
 test('«весь день»: orbis/all_day без аспекта расписания (снят, Р9) — бейджа нет', async () => {
+  // Ждать РЕЕСТРА, а не заголовка: заголовок есть с первого кадра, а при пустом снимке бейджа нет
+  // по построению — проверка «нет» была бы зелёной при любой реализации. Срок задачи — элемент
+  // строки из привязки реестра (`orbis/when`, слот `deadline`): он виден — снимок доехал.
   renderWithProviders(
-    <NativeRow entity={row({ 'orbis/all_day': true }, ['orbis/note'])} onToggleTask={() => {}} />,
+    <NativeRow
+      entity={row({ 'orbis/all_day': true, 'orbis/due_date': '2026-07-18' }, ['orbis/task'])}
+      onToggleTask={() => {}}
+    />,
     registryHandler,
   );
-  await screen.findByText('Обед');
+  expect(await screen.findByText('18 июл.')).toBeInTheDocument();
   expect(screen.queryByText('весь день')).toBeNull();
 });

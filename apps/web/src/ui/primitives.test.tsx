@@ -9,7 +9,6 @@ import { Chip } from './Chip';
 import { Dialog } from './Dialog';
 import { EmptyState } from './EmptyState';
 import { Input } from './Input';
-import { Sheet } from './Sheet';
 import { Skeleton } from './Skeleton';
 import { Spinner } from './Spinner';
 import { Tabs } from './Tabs';
@@ -72,18 +71,6 @@ test('Dialog: есть кнопка «Закрыть» с иконкой, overla
   const close = screen.getByRole('button', { name: 'Закрыть' });
   expect(close.querySelector('svg')).toBeInTheDocument();
   fireEvent.click(close);
-  expect(onOpenChange).toHaveBeenCalledWith(false);
-  expect(document.querySelector('.bg-black\\/50')).not.toBeInTheDocument();
-});
-
-test('Sheet: есть кнопка «Закрыть», overlay без bg-black', () => {
-  const onOpenChange = vi.fn();
-  render(
-    <Sheet open onOpenChange={onOpenChange} title="Меню">
-      <div>тело</div>
-    </Sheet>,
-  );
-  fireEvent.click(screen.getByRole('button', { name: 'Закрыть' }));
   expect(onOpenChange).toHaveBeenCalledWith(false);
   expect(document.querySelector('.bg-black\\/50')).not.toBeInTheDocument();
 });

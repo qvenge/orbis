@@ -16,7 +16,7 @@ import { useFieldCatalog } from '../../lib/query-blocks/useFieldCatalog';
 import { Button } from '../../ui/Button';
 import { Dialog } from '../../ui/Dialog';
 
-// Примитива Textarea в src/ui нет (как и Select — см. ReviewTable): своя строка на своём
+// Примитива Textarea в src/ui нет (как и Select): своя строка на своём
 // элементе, а не перекрытие классов чужого компонента.
 const FIELD_CLS =
   'w-full resize-y rounded-control border border-line bg-surface px-2 py-1.5 font-mono text-sm text-text transition focus-visible:outline-none focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent/40';

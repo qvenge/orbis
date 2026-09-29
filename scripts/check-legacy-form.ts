@@ -169,7 +169,7 @@ export const LEGACY_MARKERS: ReadonlyArray<LegacyMarker> = [
   },
   { id: 'due-alias', pattern: String.raw`\bdue=` },
   // Голое имя поля в тексте запроса — и в `{{query:}}`, и в строковых литералах web
-  // (useAgenda/txQuery/browser/query). Сам по себе `aspect=` маркером НЕ является:
+  // (browser/query и прочие строители текста запроса). Сам по себе `aspect=` маркером НЕ является:
   // `aspect=orbis/…` — законная конструкция канона (§А5-3в, §А5-7); ловится только
   // неквалифицированное имя поля ПОСЛЕ него.
   //

@@ -22,8 +22,9 @@
 //      `supply/` — тела страниц, не подписи).
 //  (3) исключения `MODULE_NAMES` не привязаны к файлу (имя из списка разрешено везде); строки с дефисом
 //      (`data-testid="module-off"`, класс `module-card`) именами не считаются.
-//  Вне охвата всех трёх: тесты, `legacy-1v/` (вне сборки, РП-31), `scripts/` (инструменты: `LAZY_*_MODULES` там —
-//  «модуль JS»), `apps/server/test/` (обвязка тестов сервера), SQL-миграции и журнал drizzle.
+//  Вне охвата всех трёх: тесты, `scripts/` (инструменты: `LAZY_*_MODULES` там — «модуль JS»),
+//  `apps/server/test/` (обвязка тестов сервера), SQL-миграции и журнал drizzle. Исключённых каталогов
+//  кода нет (последний, `legacy-1v/`, удалён срезом 1в §8.1) — держит тест «(а) в охвате нет исключений».
 //
 // РОЛЬ ТОКЕНА ОПРЕДЕЛЯЕТ AST TypeScript, а не построчная примета (отличие от `grammar-copies.test.ts`):
 // комментарий, хвостовой комментарий после кода и строка интерфейса на одной строке построчно
@@ -31,7 +32,7 @@
 // середине строки с комментарием он бы пропустил. `git grep -l` выбирает отслеживаемые файлы-кандидаты
 // (дёшево и видит ровно то, что в индексе), AST разбирает только их.
 //
-// Охват web — код `apps/web/src` без `*.test.*` и без `legacy-1v/`. Охват (3) — боевой код обоих
+// Охват web — код `apps/web/src` без `*.test.*`. Охват (3) — боевой код обоих
 // приложений и пакетов, `*.ts`/`*.tsx`: имя колонки в SQL-миграциях и журнале drizzle — данные, не код.
 //
 // Оборотная сторона `git grep` (Ф-Б2-11): виден только ЗАРЕГИСТРИРОВАННЫЙ файл. Новый файл, ещё не
@@ -43,12 +44,7 @@ import ts from 'typescript';
 
 const ROOT = join(import.meta.dir, '..');
 
-const EXTENSION_DIRS = [
-  'apps/web/src/extensions/',
-  'apps/web/src/features/budget/',
-  'apps/web/src/features/import/',
-] as const;
-const OUT_OF_SCOPE = ['apps/web/src/legacy-1v/'] as const;
+const EXTENSION_DIRS = ['apps/web/src/extensions/', 'apps/web/src/features/budget/'] as const;
 interface Allowed {
   readonly count: number;
   readonly reason: string;
@@ -167,7 +163,6 @@ const WEB_PATHSPEC = [
   ':(glob)apps/web/src/**/*.ts',
   ':(glob)apps/web/src/**/*.tsx',
   ':(exclude,glob)apps/web/src/**/*.test.*',
-  ...OUT_OF_SCOPE.map((d) => `:(exclude)${d}`),
 ];
 /** Боевой код обоих приложений и пакетов — охват (3). */
 const ALL_PATHSPEC = [
@@ -177,7 +172,6 @@ const ALL_PATHSPEC = [
   ':(glob)packages/*/src/**/*.tsx',
   ':(exclude,glob)apps/*/src/**/*.test.*',
   ':(exclude,glob)packages/*/src/**/*.test.*',
-  ':(exclude)apps/web/src/legacy-1v/',
 ];
 
 /** Кандидаты: отслеживаемые файлы охвата, где встречается хоть одна строка-примета. */
@@ -532,7 +526,6 @@ describe('сторожа границ кода и словаря (срез 1б �
     expect(files).toContain('apps/web/src/app/extension-registry.tsx');
     expect(files).toContain('apps/web/src/features/entity-detail/NativeRow.tsx');
     expect(files.some((f) => /\.test\./.test(f))).toBe(false);
-    expect(files.some((f) => OUT_OF_SCOPE.some((d) => f.startsWith(d)))).toBe(false);
     // Охваты (2) сервера и shared не выродились.
     const server = git(['ls-files', '--', ...SERVER_PATHSPEC], [0]);
     expect(server).toContain('apps/server/src/executor/executor.ts');
@@ -545,20 +538,33 @@ describe('сторожа границ кода и словаря (срез 1б �
     expect(all).toContain('packages/shared/src/registry/extensions.ts');
   });
 
+  test('(а) в охвате нет исключений каталогов: только тесты вне охвата (срез 1в §8.1)', () => {
+    // Исключённый каталог выпадает из всех трёх стражей молча; 1в снял последний (`legacy-1v`).
+    // `:(exclude,glob)…*.test.*` — исключение тестов, не каталога, и сюда не попадает.
+    const dirExcludes = [...WEB_PATHSPEC, ...ALL_PATHSPEC].filter((s) => s.includes(':(exclude)'));
+    expect(dirExcludes).toEqual([]);
+  });
+
+  test('(а) каждый каталог расширения есть в дереве', () => {
+    // Каталог, которого нет, страж (1) «охраняет» вхолостую — и прячет, что список устарел.
+    const missing = EXTENSION_DIRS.filter((d) => git(['ls-files', '--', d], [0]).length === 0);
+    expect(missing).toEqual([]);
+  });
+
   test('(б) резолвер и приметы на образцах', () => {
     const from = 'apps/web/src/features/chat/cards/EntityCard.tsx';
     const targets = (src: string) => importTargets(from, src).map((t) => t.target);
     expect(targets("import { useCategoryTitle } from '../../budget/categories';")).toEqual([
       'apps/web/src/features/budget/categories',
     ]);
-    expect(targets("import type { X } from '../../budget/useBudget';")).toEqual([
-      'apps/web/src/features/budget/useBudget',
+    expect(targets("import type { X } from '../../budget/PlannedToFactCard';")).toEqual([
+      'apps/web/src/features/budget/PlannedToFactCard',
     ]);
     expect(targets("const m = () => import('../../budget/usePlanToFactPrompt');")).toEqual([
       'apps/web/src/features/budget/usePlanToFactPrompt',
     ]);
-    expect(targets("export { x } from '../../import/namespace';")).toEqual([
-      'apps/web/src/features/import/namespace',
+    expect(targets("export { x } from '../../budget/EnvelopeCard';")).toEqual([
+      'apps/web/src/features/budget/EnvelopeCard',
     ]);
     expect(targets("type T = import('../../../extensions/goals/GoalCard').G;")).toEqual([
       'apps/web/src/extensions/goals/GoalCard',
@@ -597,8 +603,8 @@ describe('сторожа границ кода и словаря (срез 1б �
       'apps/web/src/features/budget/*.tsx',
     ]);
     expect(
-      targets("const m = import.meta.glob(['../../import/*.ts', '!../../import/x.ts']);"),
-    ).toEqual(['apps/web/src/features/import/*.ts', 'apps/web/src/features/import/x.ts']);
+      targets("const m = import.meta.glob(['../../budget/*.ts', '!../../budget/x.ts']);"),
+    ).toEqual(['apps/web/src/features/budget/*.ts', 'apps/web/src/features/budget/x.ts']);
     expect(targets("const u = new URL('../../budget/icon.svg', import.meta.url);")).toEqual([
       'apps/web/src/features/budget/icon.svg',
     ]);

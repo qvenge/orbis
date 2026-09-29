@@ -75,8 +75,8 @@ export function isHostTemplateRecord(r: { props: Readonly<Record<string, unknown
 }
 
 /**
- * Зарезервированные ключи приложений (спека §3.4): `/a/budget…` до 1в — хост и плашка «Бюджет придёт
- * со следующим срезом». В варианты `orbis/supply_key` не входят — эталона у них пока нет.
+ * Зарезервированные ключи приложений (спека 1б §3.4): `/a/budget…` — хост и плашка «Бюджет придёт
+ * отдельным срезом» (спека 1в §7.4). В варианты `orbis/supply_key` не входят — эталона у них пока нет.
  */
 export const RESERVED_APP_KEYS = ['budget'] as const;
 

@@ -5,6 +5,5 @@
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "types": ["vitest/globals"]
   },
-  "include": ["src", "tests"],
-  "exclude": ["src/legacy-1v"]
+  "include": ["src", "tests"]
 }

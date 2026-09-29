@@ -1,17 +1,15 @@
 // Task B2: карточка конверта (03-budget §3.1 пороги, §2.4 «—/день», §2.9 фазы,
-// §2.6 carryover-бейдж) + EnvelopeCreateSheet (создание конверта → entity.create
-// с аспектом orbis/budget, инвалидация budget, тост ошибки уникальности §2.1).
+// §2.6 carryover-бейдж). Лист создания конверта и его тесты удалены срезом 1в (§8.1: модуль без
+// живого импортёра); с ними ушёл пин устаревшего текста отказа «§2.1» (Б-2 №73).
 
-import type { BudgetOverview, EnvelopeStatus } from '@orbis/shared';
+import type { EnvelopeStatus } from '@orbis/shared';
 import { currentEntry } from '@orbis/shared/nav';
-import { fireEvent, screen, waitFor } from '@testing-library/react';
-import { beforeEach, expect, test, vi } from 'vitest';
+import { fireEvent, screen } from '@testing-library/react';
+import { beforeEach, expect, test } from 'vitest';
 import { resetNavForTests, useNav } from '../../state/navigation';
-import { type MockHandler, renderWithProviders, wireEntity } from '../../test/harness';
-import { registryReply } from '../../test/registry';
+import { renderWithProviders, wireEntity } from '../../test/harness';
 import { useToastStore } from '../../ui/toast-store';
 import { EnvelopeCard, envelopeLevel, envelopePercent } from './EnvelopeCard';
-import { EnvelopeCreateSheet } from './EnvelopeCreateSheet';
 
 // --- фикстуры -------------------------------------------------------------------------
 
@@ -247,146 +245,4 @@ test('тап по карточке открывает запись катего�
     app: { kind: 'host' },
     id: 'cat-1',
   });
-});
-
-// --- EnvelopeCreateSheet ------------------------------------------------------------------
-
-const categories = [
-  wireEntity({
-    id: 'c1',
-    title: 'Еда',
-    props: { 'orbis/icon': '🍔' },
-    aspects: ['orbis/category'],
-  }),
-  wireEntity({ id: 'c2', title: 'Транспорт', aspects: ['orbis/category'] }),
-];
-
-const emptyOverview: BudgetOverview = {
-  period: { start: '2026-07-01', end: '2026-07-31' },
-  balance: { income: '0', expense: '0', balance: '0' },
-  envelopes: [],
-  comingUp: [],
-  planned: [],
-  unbudgeted: [{ category: { id: 'c1', title: 'Еда', icon: '🍔' }, total: '3200.00' }],
-  alertCount: 0,
-};
-
-const settings = {
-  timezone: 'Europe/Moscow',
-  defaultCurrency: 'RUB',
-  weekStartDay: 1,
-  installedViews: ['orbis-budget'],
-  pinnedEntities: [],
-};
-
-const sheetHandler =
-  (createImpl?: (input: unknown) => unknown): MockHandler =>
-  (path, input) => {
-    if (path === 'user.getSettings') return settings;
-    if (path === 'entity.query') return categories;
-    if (path === 'entity.create') {
-      if (createImpl) return createImpl(input);
-      return wireEntity({ id: 'env-new', title: 'Конверт' });
-    }
-    if (path === 'budget.overview') return emptyOverview;
-    if (path === 'budget.postDue') return { posted: 0 };
-    // Реестр НАСТОЯЩИЙ: множество пикера — ЦЕЛЬ свойства `orbis/finance_category` (§А6-1),
-    // и без снимка спрашивать нечего — список остался бы пустым при любой реализации.
-    return registryReply(path) ?? {};
-  };
-
-test('сабмит шлёт валидный orbis/budget-аспект: явная currency, период = месяц по умолчанию', async () => {
-  const onOpenChange = vi.fn();
-  const { calls } = renderWithProviders(
-    <EnvelopeCreateSheet open onOpenChange={onOpenChange} month="2026-07" />,
-    sheetHandler(),
-  );
-  await waitFor(() => expect(screen.getByRole('option', { name: /Еда/ })).toBeInTheDocument());
-
-  fireEvent.change(screen.getByLabelText('Категория'), { target: { value: 'c1' } });
-  fireEvent.change(screen.getByLabelText('Лимит'), { target: { value: '5000' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Создать' }));
-
-  await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
-  const create = calls.find((c) => c.path === 'entity.create');
-  expect(create).toBeDefined();
-  const payload = create?.input as {
-    source: string;
-    input: { title: string; props: Record<string, unknown>; aspects: string[] };
-  };
-  expect(payload.source).toBe('ui');
-  // НОВАЯ форма (§А1-1): значения плоско по id свойства.
-  expect(payload.input.props).toEqual({
-    'orbis/finance_category': 'c1',
-    'orbis/limit': '5000',
-    'orbis/currency': 'RUB', // явная defaultCurrency — корректность держит сервер (A7)
-    'orbis/period_start': '2026-07-01',
-    'orbis/period_end': '2026-07-31',
-  });
-  // Аспект — ЯВНЫМ навешиванием: старая карта вешала его самим фактом ключа, новая форма
-  // требует списка, и без него конверт родился бы записью без единого аспекта.
-  expect(payload.input.aspects).toEqual(['orbis/budget']);
-  expect(payload.input.title).toContain('Еда');
-});
-
-test('произвольный период: два date-инпута уходят в period_start/period_end', async () => {
-  const { calls } = renderWithProviders(
-    <EnvelopeCreateSheet open onOpenChange={() => {}} month="2026-08" />,
-    sheetHandler(),
-  );
-  await waitFor(() => expect(screen.getByRole('option', { name: /Еда/ })).toBeInTheDocument());
-
-  fireEvent.change(screen.getByLabelText('Категория'), { target: { value: 'c2' } });
-  fireEvent.change(screen.getByLabelText('Лимит'), { target: { value: '15000.50' } });
-  fireEvent.change(screen.getByLabelText('Начало периода'), {
-    target: { value: '2026-08-10' },
-  });
-  fireEvent.change(screen.getByLabelText('Конец периода'), { target: { value: '2026-08-24' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Создать' }));
-
-  await waitFor(() => expect(calls.some((c) => c.path === 'entity.create')).toBe(true));
-  const payload = calls.find((c) => c.path === 'entity.create')?.input as {
-    input: { props: Record<string, unknown>; aspects: string[] };
-  };
-  expect(payload.input.props).toMatchObject({
-    'orbis/finance_category': 'c2',
-    'orbis/limit': '15000.50',
-    'orbis/period_start': '2026-08-10',
-    'orbis/period_end': '2026-08-24',
-  });
-  expect(payload.input.aspects).toEqual(['orbis/budget']);
-});
-
-test('невалидный лимит (не decimal-строка) блокирует сабмит', async () => {
-  const { calls } = renderWithProviders(
-    <EnvelopeCreateSheet open onOpenChange={() => {}} month="2026-07" />,
-    sheetHandler(),
-  );
-  await waitFor(() => expect(screen.getByRole('option', { name: /Еда/ })).toBeInTheDocument());
-  fireEvent.change(screen.getByLabelText('Категория'), { target: { value: 'c1' } });
-  fireEvent.change(screen.getByLabelText('Лимит'), { target: { value: '12,5abc' } });
-  expect(screen.getByRole('button', { name: 'Создать' })).toBeDisabled();
-  expect(calls.some((c) => c.path === 'entity.create')).toBe(false);
-});
-
-test('ошибка уникальности §2.1 → тост с текстом сервера, sheet не закрывается', async () => {
-  const serverMessage =
-    'конверт на эту точную комбинацию (категория, валюта, период) уже существует (03-budget §2.1); правьте существующий или архивируйте его';
-  const onOpenChange = vi.fn();
-  renderWithProviders(
-    <EnvelopeCreateSheet open onOpenChange={onOpenChange} month="2026-07" />,
-    sheetHandler(() => {
-      throw new Error(serverMessage);
-    }),
-  );
-  await waitFor(() => expect(screen.getByRole('option', { name: /Еда/ })).toBeInTheDocument());
-  fireEvent.change(screen.getByLabelText('Категория'), { target: { value: 'c1' } });
-  fireEvent.change(screen.getByLabelText('Лимит'), { target: { value: '5000' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Создать' }));
-
-  await waitFor(() =>
-    expect(useToastStore.getState().toasts.some((t) => t.title.includes('§2.1'))).toBe(true),
-  );
-  expect(useToastStore.getState().toasts[0]?.tone).toBe('danger');
-  expect(onOpenChange).not.toHaveBeenCalledWith(false);
 });

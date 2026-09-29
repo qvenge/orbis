@@ -29,7 +29,7 @@ import { ScreenHeader } from './ScreenHeader';
 // динамическим молча схлопывает чанк обратно во входной (сторож — scripts/check-lazy-chunks.ts).
 // Меню «⋯» записи (`DetailMenu`), редактор тела и блок «Записи» ленивы ещё раз, своими чанками
 // внутри экрана (`DetailMenuSlot.tsx`, `EditorShell.tsx`, `RecordsBlockSlot.tsx`).
-// Экраны Бюджета, импорта и Повестки ушли из интерфейса (спека 1б §8.6, РП-31) — `legacy-1v/`.
+// Экранов Бюджета, импорта и Повестки нет: 1б увёл их из интерфейса (§8.6, РП-31), 1в удалил код (§8.1).
 const lazyDetailScreen = () =>
   lazy(() =>
     import('../features/entity-detail/DetailScreen').then((m) => ({ default: m.DetailScreen })),

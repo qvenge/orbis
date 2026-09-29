@@ -256,7 +256,7 @@ export function Blockers({ entityId, relations }: { entityId: string; relations:
           />
           {/* Порядок веток: сначала «ещё не искали», потом ошибка/загрузка, и только затем
               пустой результат — иначе «ничего не найдено» мигало бы на каждом нажатии.
-              Прецедент разводки состояний — TransactionsScreen §3.3. */}
+              Прецедент разводки состояний — лента транзакций Бюджета, 03-budget §3.3. */}
           {q.length < SEARCH_MIN ? (
             <p className={PICKER_NOTE}>Поиск от 2 символов</p>
           ) : search.isError ? (

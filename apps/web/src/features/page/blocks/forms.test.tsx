@@ -247,6 +247,30 @@ for (const display of ['list', 'compact', 'table'] as const) {
   });
 }
 
+// Таблица с `columns` рисует заголовок двумя путями — постоянной «Название» (колонки заголовка в
+// `columns` нет) и колонкой `orbis/title` из `columns`; `closedIds` обязан дойти до обоих. Тесты
+// выше гоняют таблицу без `columns` (`FactsTable`), и связь этих двух мест с набором не держали.
+for (const columns of ['orbis/due_date', 'orbis/title|orbis/due_date'] as const) {
+  test(`table с columns=${columns}: строка из closedIds зачёркнута, хотя проекция «открыто»`, async () => {
+    const text = `aspect=orbis/task, display=table, columns=${columns}`;
+    renderWithProviders(
+      <DataBlock text={text} />,
+      closedHandler(
+        text,
+        [
+          task('Закрыта', { 'orbis/task_status': 'done', 'orbis/due_date': '2026-07-18' }),
+          task('Открыта', { 'orbis/due_date': '2026-07-19' }),
+        ],
+        ['Закрыта'],
+        true,
+      ),
+    );
+    await screen.findByText('18 июл.');
+    expect(screen.getByRole('button', { name: 'Закрыта' })).toHaveClass('line-through');
+    expect(screen.getByRole('button', { name: 'Открыта' })).not.toHaveClass('line-through');
+  });
+}
+
 test('tile count — число и подпись title', async () => {
   const text = 'aspect=orbis/task, display=tile, aggregate=count, title=Задач';
   renderWithProviders(

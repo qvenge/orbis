@@ -8,7 +8,7 @@ import { trpc } from '../../../trpc';
 import { Button } from '../../../ui/Button';
 import { Card } from '../../../ui/Card';
 import { useCategoryTitle } from '../../budget/categories';
-// Валютный символ — общий envelopeView (B4-прецедент QuickAddBar), маппинг не дублируем
+// Валютный символ — общий envelopeView (одно отображение валюты для всех мест показа денег), маппинг не дублируем
 import { envelopeView } from '../../budget/EnvelopeCard';
 import { useExtensionEnabled } from '../../settings/extension-mask';
 import type { EntityCardData } from './types';

@@ -4,8 +4,8 @@
 // Общий для всех точек, где чекбокс задачи переключает статус; сейчас единственный
 // мутационный путь toggle — `toggleTask` из `useRecordEdits` в примитиве заголовка
 // (`entity-detail/record-blocks.tsx`, `TitleBlock`); состояние хука держит хост записи
-// (DetailScreen), чтобы карточку показала часть в другом месте дерева. Чекбокс NativeRow на
-// CategoryScreen — no-op, EntityRow Browser — индикатор, не контрол.
+// (DetailScreen), чтобы карточку показала часть в другом месте дерева. EntityRow Browser —
+// индикатор, не контрол.
 import { useState } from 'react';
 
 export type PlanToFactPrompt = {

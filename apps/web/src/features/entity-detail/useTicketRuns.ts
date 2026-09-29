@@ -77,7 +77,7 @@ export function useTicketRuns(
       },
     },
   );
-  // Array.isArray — та же защита, что в TransactionsScreen и CategoryField: секция живёт на
+  // Array.isArray — защита от неожиданной формы ответа: секция живёт на
   // общем detail-экране, и неожиданная форма ответа не должна ронять всю страницу.
   const runs = Array.isArray(q.data) ? q.data : [];
   // sortBy=orbis/created_at:desc — последний прогон стоит ПЕРВЫМ.

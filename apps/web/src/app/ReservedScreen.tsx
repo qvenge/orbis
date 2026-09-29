@@ -3,7 +3,7 @@ import { EmptyState } from '../ui/EmptyState';
 import { ScreenHeader } from './ScreenHeader';
 
 const TEXT = {
-  budget: { title: 'Бюджет', message: 'Бюджет придёт со следующим срезом' },
+  budget: { title: 'Бюджет', message: 'Бюджет придёт отдельным срезом' },
 } as const;
 
 /**
