@@ -4016,7 +4016,7 @@ describe('collectPropertyHolders: род `bind` — привязки аспек�
       ['user/call', ['user/at', 'user/due']],
     ]);
     await withIdentity(db, personal(owner), (tx) =>
-      mergeProperty(tx, owner, { source: 'user/at', into: 'user/at2' }),
+      mergeProperty(tx, owner, { source: 'user/at', into: 'user/at2' }, null),
     );
     const reg = await withIdentity(db, personal(owner), (tx) => effectiveRegistry(tx, owner));
     expect(reg.aspects.get('user/call')?.implements[0]?.bind).toEqual({
@@ -5474,7 +5474,7 @@ describe('шестой род держателя: property_merge перепис�
     );
     const holders = await withIdentity(db, personal(g), (tx) => collectPropertyHolders(tx, g));
     expect(holders.find((h) => h.kind === 'rule')?.properties).toEqual([source]);
-    await withIdentity(db, personal(g), (tx) => mergeProperty(tx, g, { source, into }));
+    await withIdentity(db, personal(g), (tx) => mergeProperty(tx, g, { source, into }, null));
     expect((await regOf(g)).aspects.get(OWN)?.rules[0]?.when).toEqual({
       op: 'in',
       args: [{ const: into }, { ctx: '$touched' }],

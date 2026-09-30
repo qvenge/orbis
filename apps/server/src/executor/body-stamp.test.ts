@@ -59,6 +59,23 @@ async function createNote(
   return { entityId: id, actionId: r.actionId, entity: r.results[0] as WireEntity };
 }
 
+/** Своё числовое свойство владельца — предмет слияния; возвращает его id. */
+async function numberProperty(g: GraphId, key: string): Promise<string> {
+  const r = ok(
+    await run(g, 'property_create', {
+      key,
+      label: { ru: key },
+      description: { ru: 'поле слияния' },
+      type: { kind: 'number' },
+      status: 'active',
+    }),
+  );
+  return (r.results[0] as { property: string }).property;
+}
+
+/** Тело держателя свойства `user/effort`: смарт-лист с query-блоком по нему. */
+const HOLDER_BODY = 'Список\n\n{{query: aspect=orbis/task, user/effort=5}}';
+
 interface BodyColumns {
   body_revision: number;
   body_action_id: string | null;
@@ -306,25 +323,9 @@ describe('колонки тела (задача 7, §8.1)', () => {
 
   test('слияние свойства: у держателей колонка = действие слияния, «до» — в bodies[] и в body_before', async () => {
     const g = await freshGraph();
-    const property = async (key: string) =>
-      (
-        ok(
-          await run(g, 'property_create', {
-            key,
-            label: { ru: key },
-            description: { ru: 'поле слияния' },
-            type: { kind: 'number' },
-            status: 'active',
-          }),
-        ).results[0] as { property: string }
-      ).property;
-    const sourceId = await property('user/effort');
-    const intoId = await property('user/energy');
-    const holder = await createNote(
-      g,
-      'Смарт-лист',
-      'Список\n\n{{query: aspect=orbis/task, user/effort=5}}',
-    );
+    const sourceId = await numberProperty(g, 'user/effort');
+    const intoId = await numberProperty(g, 'user/energy');
+    const holder = await createNote(g, 'Смарт-лист', HOLDER_BODY);
     const plain = await createNote(g, 'Без блока', 'просто текст');
 
     const merged = ok(await run(g, 'property_merge', { source: sourceId, into: intoId }));
@@ -348,6 +349,78 @@ describe('колонки тела (задача 7, §8.1)', () => {
     const back = await rawEntity(holder.entityId);
     expect([back.body_revision, back.body_action_id]).toEqual([3, undo?.id ?? '']);
     expect(undo?.bodyBefore).toEqual({ [holder.entityId]: merged.actionId });
+  });
+
+  test('пачка [создание держателя, слияние]: «до» держателя — пусто, а не сама пачка (M-2 гейта)', async () => {
+    const g = await freshGraph();
+    const sourceId = await numberProperty(g, 'user/effort');
+    const intoId = await numberProperty(g, 'user/energy');
+    const id = newId();
+    const batchId = newId();
+    ok(
+      await execute(
+        db,
+        req(
+          g,
+          [
+            {
+              tool: 'entity_create',
+              input: { id, title: 'Смарт-лист', tags: [], body: HOLDER_BODY },
+            },
+            { tool: 'property_merge', input: { source: sourceId, into: intoId } },
+          ],
+          { batchId },
+        ),
+        { sink },
+      ),
+    );
+    // Создание и слияние в одной транзакции: колонка держателя — пачка, ревизия — 2 (слияние переписало блок)
+    const row = await rawEntity(id);
+    expect([row.body_revision, row.body_action_id]).toEqual([2, batchId]);
+    // «До» — значение колонки ДО транзакции: записи не было. Сырая колонка под замком слияния уже несёт саму пачку —
+    // её в «до» класть нельзя ни в запись журнала, ни в данные отмены держателя
+    const entry = await journalOf(g, batchId);
+    expect(entry?.bodyBefore).toEqual({ [id]: null });
+    const mergeUndo = entry?.inverse.find((op) => op.op === 'property_merge_undo')?.payload as {
+      bodies: Array<{ entityId: string; bodyActionBefore: string | null }>;
+    };
+    expect(mergeUndo.bodies.map((b) => [b.entityId, b.bodyActionBefore])).toEqual([[id, null]]);
+  });
+
+  test('отмена ПАЧКИ: запись отмены хранит «до» по каждой записи, чьё тело откат сменил (M-3 гейта)', async () => {
+    const g = await freshGraph();
+    const a = await createNote(g, 'а', 'текст а');
+    const b = await createNote(g, 'б', 'текст б');
+    const batchId = newId();
+    ok(
+      await execute(
+        db,
+        req(
+          g,
+          [
+            {
+              tool: 'entity_update',
+              input: { id: a.entityId, body: 'текст а2', expectedUpdatedAt: a.entity.updatedAt },
+            },
+            {
+              tool: 'entity_update',
+              input: { id: b.entityId, body: 'текст б2', expectedUpdatedAt: b.entity.updatedAt },
+            },
+          ],
+          { batchId },
+        ),
+        { sink },
+      ),
+    );
+    // Inverse из двух операций — отмена идёт путём пачки (`executeBatch` во внутреннем режиме), не одиночным
+    ok(await undoAction(db, { identity: personal(g), actionId: batchId }));
+    const undo = await undoRecordOf(g, batchId);
+    expect(undo).toBeDefined();
+    expect(undo?.bodyBefore).toEqual({ [a.entityId]: batchId, [b.entityId]: batchId });
+    for (const id of [a.entityId, b.entityId]) {
+      const row = await rawEntity(id);
+      expect([row.body_revision, row.body_action_id]).toEqual([3, undo?.id ?? '']);
+    }
   });
 
   test('сев без журнала (NOOP) оставляет колонку пустой (К-34)', async () => {

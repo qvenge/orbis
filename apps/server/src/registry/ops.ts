@@ -89,6 +89,7 @@ import { ExecError } from '../errors';
 // Цикла нет: `executor/props` читает из `registry/{cache,load}` и в `registry/ops` не заходит.
 // Резолвер адреса свойства — ОДИН на исполнитель и на реестр: второй экземпляр правила «своя
 // строка перекрывает встроенную» разъехался бы с первым ровно там, где владелец завёл свою.
+import { bodyActionBefore } from '../executor/body-stamp';
 import { resolvePropertyRef } from '../executor/props';
 // Цикла нет: `rules/carriers` берёт из реестра только `rules.ts` и тип снимка.
 import { assertEngineCarriersKept } from '../rules/carriers';
@@ -1590,6 +1591,11 @@ export async function mergeProperty(
   tx: Tx,
   graphId: GraphId,
   input: { source: string; into: string },
+  /**
+   * Действие, объявленное транзакцией (`ExecCtx.bodyAction`, спека скорости §8.1): «действие тела до» держателя, чьё
+   * тело эта же транзакция уже меняла, — не ссылка на само действие (`bodyActionBefore`). Вне executor'а — `null`.
+   */
+  bodyAction: string | null,
 ): Promise<MergeResult> {
   const reg = await currentRegistry(tx, graphId);
   const { source, into } = resolveMergePair(reg, input);
@@ -1790,7 +1796,12 @@ export async function mergeProperty(
     const row = rows[0];
     if (row === undefined) continue;
     const body = String(row.body ?? '');
-    const actionBefore = (row.body_action_id ?? null) as string | null;
+    // «До» — значение колонки ДО транзакции (М-2 гейта): держатель, созданный или поправленный раньше в той же пачке,
+    // несёт в колонке само объявленное действие, и ссылка на него замкнула бы раскрутку цепочки на себя.
+    const actionBefore = bodyActionBefore(
+      (row.body_action_id ?? null) as string | null,
+      bodyAction,
+    );
     bodies.push({
       entityId: holder.id,
       body,
@@ -1979,6 +1990,8 @@ export async function undoMerge(
   tx: Tx,
   graphId: GraphId,
   iv: MergeInverse,
+  /** Действие записи отмены, объявленное транзакцией — то же правило «до», что у слияния (`mergeProperty`). */
+  bodyAction: string | null,
 ): Promise<{ bodyBefore: Record<string, string | null> }> {
   // «Действие тела до» для ЗАПИСИ ОТМЕНЫ (§8.6 «Цепочка»): отмена тоже меняет тела держателей, и раскрутка цепочки
   // через неё читает колонку ДО неё. Колонку пишет триггер из действия записи отмены — здесь только снимается «до».
@@ -2051,7 +2064,10 @@ export async function undoMerge(
       after !== undefined &&
       Number(after.body_revision) > Number(was.body_revision)
     ) {
-      bodyBefore[after.id as string] = (was.body_action_id ?? null) as string | null;
+      bodyBefore[after.id as string] = bodyActionBefore(
+        (was.body_action_id ?? null) as string | null,
+        bodyAction,
+      );
     }
   }
   for (const d of deltaRows) {

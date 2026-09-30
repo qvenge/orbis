@@ -2709,7 +2709,7 @@ async function prepareEntityUpdate(
   // «До» считается от строки, прочитанной под замком (в пачке — виртуальной); ляжет в журнал, только если тело
   // действительно сменится (`noteBodyBefore` в apply).
   const writesBody = patch.body !== undefined || patch.bodyDoc !== undefined;
-  const bodyBefore = bodyActionBefore(current, ctx.bodyAction);
+  const bodyBefore = bodyActionBefore(current.bodyActionId, ctx.bodyAction);
 
   const journal: JournalPlan = {
     type: 'entity_updated',
@@ -2878,7 +2878,7 @@ async function prepareAttach(
   // Засев — тоже смена тела: виртуальная строка повторяет приращение триггера (РП-17), «до» — как у правки тела.
   const afterRow = stampVirtualBody(current, patch, ctx.bodyAction, now);
   batch?.entities.set(input.entity_id, afterRow);
-  const bodyBefore = bodyActionBefore(current, ctx.bodyAction);
+  const bodyBefore = bodyActionBefore(current.bodyActionId, ctx.bodyAction);
 
   const journal: JournalPlan = {
     type: 'entity_updated',
@@ -3877,7 +3877,12 @@ async function preparePropertyMerge(_ctx: ExecCtx, rawInput: unknown): Promise<P
       registryGate(applyCtx, 'property_merge', { properties: [input.source, input.into] });
       // Гейт R-13: слияние в свойство с `writer` (или из него) записало бы его значения SQL-ом.
       writerGate(applyCtx, 'property_merge', [input.source, input.into]);
-      const merged = await mergeProperty(applyCtx.tx, applyCtx.req.identity.graph, input);
+      const merged = await mergeProperty(
+        applyCtx.tx,
+        applyCtx.req.identity.graph,
+        input,
+        applyCtx.bodyAction,
+      );
       // §Б5-5: слияние переписало props носителей — состав spent мог измениться у любого
       // конверта. Половина владельца в `registry_version` тоже сдвинулась (`registry/ops.ts`)
       // и строки перестали бы отвечать сами; снос — чтобы они не пережили пересчёт мусором.
@@ -4748,6 +4753,7 @@ async function preparePropertyMergeUndo(_ctx: ExecCtx, rawInput: unknown): Promi
         applyCtx.tx,
         applyCtx.req.identity.graph,
         input as unknown as MergeInverse,
+        applyCtx.bodyAction,
       );
       // Запись отмены хранит «действие тела до» держателей, чьё тело откат сменил (§8.6) — тем же сбором, что у действий
       if (Object.keys(undone.bodyBefore).length > 0) journal.bodyBefore = undone.bodyBefore;

@@ -3,7 +3,7 @@
 -- Всё в одной транзакции с ROLLBACK: БД не мутируется.
 BEGIN;
 CREATE EXTENSION IF NOT EXISTS pgtap;
-SELECT plan(184);
+SELECT plan(185);
 
 -- Графы фикстур (0020): с FK на graphs владельца «из воздуха» не бывает. Весь файл — одна транзакция
 -- с ROLLBACK, отложенные триггеры И-1 до проверки не доходят — гранты заведены ради политик.
@@ -1164,6 +1164,13 @@ SELECT is((SELECT tgtype::int || ' ' || tgfoid::regproc::text || ' ' || tgenable
   WHERE tgrelid = 'public.entities'::regclass AND tgname = 'entities_body_stamp' AND NOT tgisinternal),
   '23 entities_body_stamp O',
   'триггер entities_body_stamp на entities — BEFORE INSERT OR UPDATE FOR EACH ROW, включён');
+-- …и UPDATE-половина — СТОЛБЦОВАЯ (рулинг R-16): функция вызывается, только когда тело в SET. Без этого пина откат к
+-- `OR UPDATE` без `OF` прошёл бы молча, и каждый UPDATE записи (пересчёт предков — тысячи строк на правку владельца)
+-- снова платил бы вызовом функции и сравнением тел.
+SELECT is((SELECT string_agg(a.attname::text, ',' ORDER BY a.attname) FROM pg_trigger t
+    JOIN pg_attribute a ON a.attrelid = t.tgrelid AND a.attnum = ANY(t.tgattr)
+  WHERE t.tgrelid = 'public.entities'::regclass AND t.tgname = 'entities_body_stamp' AND NOT t.tgisinternal),
+  'body,body_doc', 'UPDATE-половина триггера entities_body_stamp — только по body и body_doc (R-16)');
 -- NULLIF (§8.1): после транзакции с set_config на переиспользованном соединении настройка остаётся ОПРЕДЕЛЁННОЙ с
 -- пустым значением — пустая строка не значение, и запись тела вне executor'а не падает на приведении '' к uuid.
 -- Настройка локальна этой (единственной) транзакции файла — поэтому пин последний.
