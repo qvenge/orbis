@@ -1970,6 +1970,9 @@ const STATUS_BY_REJECT_REASON: Record<RejectReason, ProposalStatus> = {
   superseded: 'superseded',
   stale: 'stale',
   edited: 'superseded',
+  // Недостижимо: так закрывается только карточка отката (`undo_of`), у предложения рутины её нет. Ближайшее честное —
+  // «отклонено»: предложение не исполнено, и не новым прогоном
+  undo_refused: 'rejected',
 };
 
 /**

@@ -15,6 +15,7 @@ import {
   entityThreadId,
   newId,
   type PropertyDefinition,
+  type UndoTextChangedDetails,
 } from '@orbis/shared';
 import { PAGE_ONLY_HINT } from '@orbis/shared/query';
 import { eq, inArray, sql } from 'drizzle-orm';
@@ -32,7 +33,7 @@ import {
   seedCustomAspect,
   truncateAll,
 } from '../../test/helpers';
-import { actionsOf, journalOf, threadJournal } from '../../test/journal-helpers';
+import { actionsOf, journalOf, threadJournal, undoRecordOf } from '../../test/journal-helpers';
 import { ensureEntityThread, ensureGlobalThread } from '../chat/threads';
 import { chatMessages, entities, propertyDefinitions } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
@@ -1113,6 +1114,205 @@ describe('dispatchTool: undo_last — «отмени последнее» сло
 
   test('строгий пустой envelope: лишнее поле → VALIDATION', async () => {
     expectError(await dispatchTool(chat(), 'undo_last', { id: newId() }), 'VALIDATION');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// undo_last: отказ правила отмены текста несёт место продолжения (§8.6 «Где есть продолжение», Р-17, К-46; план А,
+// задача 11). Своего продолжения у «отмени последнее» словами нет: модель называет человеку место, где он отменит
+// действие с продолжением сам, — карточку в треде, вкладку, меню записи или «карточки нет».
+//
+// Текст после действия в этих тестах меняет писатель, которого «отмени последнее» не видит, — без журнала (ops-скрипт:
+// колонка «действие тела» пустеет, К-34): набор владельца сам стал бы последним отменяемым действием, и «отмени
+// последнее» сняло бы его, а не действие под ним (правило при этом проходит — колонка указывает на набор).
+// ---------------------------------------------------------------------------
+
+describe('undo_last: отказ правила отмены текста — место продолжения (§8.6, Р-17, К-46)', () => {
+  const admin = adminDb();
+  const sink = makeJournalSink();
+  afterAll(async () => {
+    await admin.client.end();
+  });
+  const caller = (owner: GraphId) =>
+    createCallerFactory(appRouter)({
+      identity: personal(owner),
+      actorKind: 'owner',
+      db,
+      clientVersion: null,
+    });
+  const chat = (owner: GraphId, over: Partial<ToolCallCtx> = {}) =>
+    ctxFor({ identity: personal(owner), ...over });
+
+  /** Колонки тела — сырым чтением под админом: их пишет триггер, код чтения здесь не судья. */
+  async function bodyRow(id: string): Promise<{ body: string; rev: number }> {
+    const rows = (await admin.db.execute(
+      sql`SELECT body, body_revision FROM entities WHERE id = ${id}::uuid`,
+    )) as unknown as Array<{ body: string; body_revision: number }>;
+    const row = rows[0];
+    if (row === undefined) throw new Error(`записи ${id} нет`);
+    return { body: row.body, rev: row.body_revision };
+  }
+
+  /** Писатель без журнала (ops-скрипт): текст меняется, колонка «действие тела» пустеет, журнал не растёт. */
+  async function outsideWrite(id: string, body: string): Promise<void> {
+    await admin.db.execute(sql`UPDATE entities SET body = ${body} WHERE id = ${id}::uuid`);
+  }
+
+  /** Правка тела одним действием через исполнитель с синком (агент, прогон агента). */
+  async function bodyEdit(
+    owner: GraphId,
+    id: string,
+    body: string,
+    over: { actorKind: 'agent'; source: 'mcp'; runId?: string },
+  ): Promise<string> {
+    const r = await execute(
+      db,
+      {
+        identity: personal(owner),
+        actorKind: over.actorKind,
+        source: over.source,
+        ...(over.runId !== undefined && { runId: over.runId }),
+        operations: [
+          {
+            tool: 'entity_update',
+            input: { id, body, expectedBodyRevision: (await bodyRow(id)).rev },
+          },
+        ],
+      },
+      { sink },
+    );
+    if (!r.ok) throw new Error(`правка тела: ${r.error.code} ${r.error.message}`);
+    return r.actionId;
+  }
+
+  /** «Отмени последнее» словами → отказ правила; текст и журнал не тронуты. */
+  async function refused(
+    owner: GraphId,
+    noteId: string,
+    actionId: string,
+  ): Promise<{ message: string; details: UndoTextChangedDetails }> {
+    const before = (await bodyRow(noteId)).body;
+    const r = await dispatchTool(chat(owner), 'undo_last', {});
+    if (r.status !== 'error') throw new Error(`ожидался отказ, получено: ${JSON.stringify(r)}`);
+    expect(r.error.code).toBe('UNDO_TEXT_CHANGED');
+    const details = r.error.details as UndoTextChangedDetails;
+    expect(details.action.id).toBe(actionId);
+    expect(details.entries.map((e) => e.entityId)).toEqual([noteId]);
+    // Продолжения «здесь» у пути нет (Р-17): место всегда ДРУГОЕ — там, где кнопку нажмёт человек
+    expect(details.continuation.kind).not.toBe('here');
+    // Ничего не применено: текст писателя цел, записи отмены нет
+    expect((await bodyRow(noteId)).body).toBe(before);
+    expect(await undoRecordOf(owner, actionId)).toBeUndefined();
+    return { message: r.error.message, details };
+  }
+
+  test('правка тела агентом (MCP, карточка в глобальном треде) → место `card` с тредом и id действия; модели — «только по кнопке человека»', async () => {
+    const owner = await freshGraph();
+    const note = await seedEntity(owner, { title: 'Заметка', tags: [], body: 'исходный' });
+    const a = await bodyEdit(owner, note.id, 'агент', { actorKind: 'agent', source: 'mcp' });
+    await outsideWrite(note.id, 'агент + вне приложения');
+
+    const { message, details } = await refused(owner, note.id, a);
+    const global = await withIdentity(db, personal(owner), (tx) => ensureGlobalThread(tx, owner));
+    expect(details.continuation).toEqual({ kind: 'card', threadId: global, actionId: a });
+    expect(message).toBe(
+      'текст записи изменён после этого действия; вернуть его можно только по кнопке человека: ' +
+        'с карточки этого действия в треде',
+    );
+    expect(details.entries[0]?.actorLabel).toBe('вне приложения');
+  });
+
+  test('правка владельца в интерфейсе (`ui`, пачка) → место `tab`; сеанс правки текста → `menu` («Вернуть текст как на …»)', async () => {
+    const owner = await freshGraph();
+    const n1 = await seedEntity(owner, { title: 'Заметка 1', tags: [], body: 'исходный 1' });
+    const o = await caller(owner).entity.updateBatch({
+      label: 'Правка владельца',
+      operations: [
+        {
+          tool: 'entity_update',
+          input: { id: n1.id, body: 'владелец', expectedBodyRevision: (await bodyRow(n1.id)).rev },
+        },
+      ],
+    });
+    await outsideWrite(n1.id, 'владелец + вне приложения');
+    const tab = await refused(owner, n1.id, o.actionId);
+    expect(tab.details.continuation).toEqual({ kind: 'tab' });
+    expect(tab.message).toContain('клавишами Ctrl/Cmd+Z во вкладке, где сделана правка');
+
+    const g2 = await freshGraph();
+    const n2 = await seedEntity(g2, { title: 'Заметка 2', tags: [], body: 'исходный 2' });
+    await caller(g2).entity.update({
+      id: n2.id,
+      body: 'сеанс',
+      expectedBodyRevision: (await bodyRow(n2.id)).rev,
+      autosave: true,
+    });
+    const session = (await actionsOf(g2)).find((e) => e.textSession);
+    if (session === undefined) throw new Error('сеанса правки текста нет');
+    await outsideWrite(n2.id, 'сеанс + вне приложения');
+    const menu = await refused(g2, n2.id, session.id);
+    expect(menu.details.continuation).toEqual({ kind: 'menu' });
+    expect(menu.message).toContain('пунктом «Вернуть текст как на …» в меню записи');
+  });
+
+  test('правка чата с карточкой в ответе (`card_in_reply`) → `card` с тредом РАЗГОВОРА; глагол прогона агента (`mcp` с `run_id`) → `none` («карточки нет»)', async () => {
+    const owner = await freshGraph();
+    const note = await seedEntity(owner, { title: 'Заметка', tags: [], body: 'исходный' });
+    const threadId = await withIdentity(db, personal(owner), (tx) =>
+      ensureEntityThread(tx, owner, note.id),
+    );
+    const edited = await dispatchTool(chat(owner, { threadId }), 'entity_update', {
+      id: note.id,
+      body: 'чат',
+      expectedBodyRevision: (await bodyRow(note.id)).rev,
+    });
+    if (edited.status !== 'ok' || edited.actionId === undefined) {
+      throw new Error(`правка чата: ${JSON.stringify(edited)}`);
+    }
+    // Предпосылка: карточку действия несёт ответ ассистента в треде разговора
+    expect((await journalOf(owner, edited.actionId))?.cardInReply).toBe(true);
+    await outsideWrite(note.id, 'чат + вне приложения');
+    const inReply = await refused(owner, note.id, edited.actionId);
+    expect(inReply.details.continuation).toEqual({
+      kind: 'card',
+      threadId,
+      actionId: edited.actionId,
+    });
+
+    const g2 = await freshGraph();
+    const n2 = await seedEntity(g2, { title: 'Заметка прогона', tags: [], body: 'исходный' });
+    const verb = await bodyEdit(g2, n2.id, 'прогон', {
+      actorKind: 'agent',
+      source: 'mcp',
+      runId: newId(),
+    });
+    await outsideWrite(n2.id, 'прогон + вне приложения');
+    const none = await refused(g2, n2.id, verb);
+    expect(none.details.continuation).toEqual({ kind: 'none' });
+    expect(none.message).toBe(
+      'текст записи изменён после этого действия; вернуть его можно только по кнопке человека: ' +
+        'из версий записи (карточки у этого действия нет)',
+    );
+  });
+
+  test('флага «всё равно» у тула нет: схема тула без полей, `force` — VALIDATION; закрепления версий нет', async () => {
+    const owner = await freshGraph();
+    const defs = await withIdentity(db, personal(owner), (tx) => buildToolRegistry(tx, owner));
+    const tool = defs.find((d) => d.name === 'undo_last');
+    expect(tool?.inputJsonSchema).toEqual({
+      type: 'object',
+      properties: {},
+      additionalProperties: false,
+    });
+    const note = await seedEntity(owner, { title: 'Заметка', tags: [], body: 'исходный' });
+    const a = await bodyEdit(owner, note.id, 'агент', { actorKind: 'agent', source: 'mcp' });
+    await outsideWrite(note.id, 'агент + вне приложения');
+    expectError(await dispatchTool(chat(owner), 'undo_last', { force: true }), 'VALIDATION');
+    await refused(owner, note.id, a);
+    const versions = (await admin.db.execute(
+      sql`SELECT id FROM entity_versions WHERE entity_id = ${note.id}::uuid`,
+    )) as unknown as unknown[];
+    expect(versions).toEqual([]);
   });
 });
 

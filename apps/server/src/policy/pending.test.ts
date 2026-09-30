@@ -5,7 +5,7 @@
 // без обращения к LLM; идемпотентность approve — по PK детерминированного
 // audit-сообщения (batch-механика §7.8, batch_id = pendingId).
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import type { GraphId } from '@orbis/shared';
+import type { GraphId, UndoTextChangedDetails } from '@orbis/shared';
 import {
   answerMessageId,
   globalThreadId,
@@ -24,15 +24,17 @@ import {
   requireEnv,
   truncateAll,
 } from '../../test/helpers';
-import { journalOf } from '../../test/journal-helpers';
+import { journalOf, undoRecordOf } from '../../test/journal-helpers';
 import { appendMessageIdempotent } from '../chat/messages';
 import { ensureEntityThread } from '../chat/threads';
 import { chatMessages, entities } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { ExecError } from '../errors';
 import { execute } from '../executor/executor';
+import { makeJournalSink } from '../executor/journal';
 import type { ExecuteResult, WireEntity } from '../executor/types';
 import { proposalBodyRows } from '../routines/proposal-diff';
+import { agentLoopHelpers } from '../test/agent-loop-helpers';
 import { dispatchTool, type ToolCallCtx } from '../tools/dispatch';
 import {
   acquirePendingLock,
@@ -1955,6 +1957,162 @@ describe('closeStaleBodyProposals: хранимые предложения ст�
     expect(
       await withIdentity(db, personal(owner), (tx) => closeStaleBodyProposals(tx, personal(owner))),
     ).toEqual([]);
+    expect(
+      await withIdentity(db, personal(owner), (tx) => rejectedReason(tx, pendingId)),
+    ).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Карточка подтверждения отката (`undo_of`) при отказе правила отмены текста закрывается с причиной и местом
+// продолжения (§8.6 «Где есть продолжение», К-43, Д-8; план А, задача 11): путь рождён моделью (Р-17), и открытая
+// карточка осталась бы с кнопкой, которая откажет снова.
+// ---------------------------------------------------------------------------
+
+describe('карточка отката `undo_of`: отказ правила отмены текста закрывает её (§8.6, К-43)', () => {
+  const sink = makeJournalSink();
+
+  async function bodyOf(owner: GraphId, id: string): Promise<{ body: string; rev: number }> {
+    const rows = await withIdentity(db, personal(owner), (tx) =>
+      tx
+        .select({ body: entities.body, rev: entities.bodyRevision })
+        .from(entities)
+        .where(eq(entities.id, id)),
+    );
+    const row = rows[0];
+    if (row === undefined) throw new Error(`записи ${id} нет`);
+    return row;
+  }
+
+  /**
+   * Мир: инструкцию act-рутины (её тело) правит чат-ассистент — карточкой, владелец её принимает; «отмени последнее»
+   * словами уходит в подтверждение отката (`undo_of`: откат правки инструкции act-рутины — второе «да», В-8).
+   */
+  async function undoCardWorld(owner: GraphId) {
+    const routineId = await agentLoopHelpers(db).seedRoutine(owner, {
+      title: 'Утренняя рутина',
+      body: 'исходная инструкция',
+      routine: { 'orbis/routine_mode': 'act', 'orbis/allowed_tools': ['entity_update'] },
+    });
+    const chat = ctxFor({ identity: personal(owner) });
+    const asked = await dispatchTool(chat, 'entity_update', {
+      id: routineId,
+      body: 'инструкция ассистента',
+      expectedBodyRevision: (await bodyOf(owner, routineId)).rev,
+    });
+    if (asked.status !== 'pending_confirmation') {
+      throw new Error(`правка инструкции не спросила: ${JSON.stringify(asked)}`);
+    }
+    const edited = await approvePending(db, {
+      identity: personal(owner),
+      pendingId: asked.pendingId,
+    });
+    if (!edited.ok) throw new Error(edited.error.message);
+    const undo = await dispatchTool(chat, 'undo_last', {});
+    if (undo.status !== 'pending_confirmation') {
+      throw new Error(`откат не ушёл в подтверждение: ${JSON.stringify(undo)}`);
+    }
+    return { routineId, editId: edited.actionId, pendingId: undo.pendingId };
+  }
+
+  test('владелец дописал текст после правки → «Принять» отказывает UNDO_TEXT_CHANGED, карточка закрыта `undo_refused` с местом продолжения; повторное «Принять» — «уже закрыто», а не повторный отказ', async () => {
+    const owner = await freshGraph();
+    const { routineId, editId, pendingId } = await undoCardWorld(owner);
+    const edit = await journalOf(owner, editId);
+    if (edit === undefined) throw new Error('правки инструкции нет в журнале');
+    const editThread = edit.threadId;
+    if (editThread === null) throw new Error('у правки чата нет треда');
+    // Владелец дописывает инструкцию в интерфейсе
+    const typed = await execute(
+      db,
+      {
+        identity: personal(owner),
+        actorKind: 'owner',
+        source: 'ui',
+        operations: [
+          {
+            tool: 'entity_update',
+            input: {
+              id: routineId,
+              body: 'инструкция ассистента + владелец',
+              expectedBodyRevision: (await bodyOf(owner, routineId)).rev,
+            },
+          },
+        ],
+      },
+      { sink },
+    );
+    if (!typed.ok) throw new Error(typed.error.message);
+
+    const r = await approvePending(db, { identity: personal(owner), pendingId });
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.error.code).toBe('UNDO_TEXT_CHANGED');
+    const details = r.error.details as UndoTextChangedDetails;
+    // Место продолжения — карточка правки в её треде (`chat`, исполнена «Принять» — строка треда с «Отменить»), не
+    // «здесь»: у карточки отката продолжения нет (К-43)
+    expect(details.continuation.kind).not.toBe('here');
+    expect(details.continuation).toEqual({
+      kind: 'card',
+      threadId: editThread,
+      actionId: editId,
+    });
+    expect(details.entries.map((e) => e.entityId)).toEqual([routineId]);
+    const closing =
+      'Откат не применён: текст изменён после действия — вернуть его можно с карточки этого действия в треде';
+    expect(r.error.message).toBe(closing);
+    // Ничего не применено: текст владельца цел, записи отмены нет
+    expect((await bodyOf(owner, routineId)).body).toBe('инструкция ассистента + владелец');
+    expect(await undoRecordOf(owner, editId)).toBeUndefined();
+
+    // Карточка закрыта: причина читается обратно (zod-перечень знает её — иначе откат к `owner`), в ленте — текст с
+    // местом, в метаданных — место данными
+    expect(await withIdentity(db, personal(owner), (tx) => rejectedReason(tx, pendingId))).toBe(
+      'undo_refused',
+    );
+    const rows = await withIdentity(db, personal(owner), (tx) =>
+      tx
+        .select({ content: chatMessages.content, metadata: chatMessages.metadata })
+        .from(chatMessages)
+        .where(eq(chatMessages.id, rejectMessageId(owner, pendingId))),
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.content).toBe(closing);
+    expect(rows[0]?.metadata).toEqual({
+      type: 'confirmation_rejected',
+      rejects: pendingId,
+      reason: 'undo_refused',
+      continuation: { kind: 'card', threadId: editThread, actionId: editId },
+    });
+
+    // Повторное «Принять» — карточка уже закрыта: «уже закрыто», не второй отказ правила и не второе закрытие
+    const again = await approvePending(db, { identity: personal(owner), pendingId });
+    expect(again.ok).toBe(false);
+    if (again.ok) return;
+    expect(again.error.code).toBe('VALIDATION');
+    expect(again.error.message).toContain('уже закрыто');
+    expect(again.error.details).toMatchObject({ reason: 'undo_refused' });
+    const closings = await withIdentity(db, personal(owner), (tx) =>
+      tx
+        .select({ id: chatMessages.id })
+        .from(chatMessages)
+        .where(
+          sql`${chatMessages.metadata} @> ${JSON.stringify({ type: 'confirmation_rejected', rejects: pendingId })}::jsonb`,
+        ),
+    );
+    expect(closings).toHaveLength(1);
+    // «Отклонить» закрытую — идемпотентно, с ИСХОДНОЙ причиной
+    const rejected = await rejectPending(db, { identity: personal(owner), pendingId });
+    expect(rejected.ok && rejected.alreadyRejected && rejected.reason).toBe('undo_refused');
+  });
+
+  test('текст не менялся → «Принять» откатывает правку: запись отмены — путь `chat` (карточку поставил разговор)', async () => {
+    const owner = await freshGraph();
+    const { routineId, editId, pendingId } = await undoCardWorld(owner);
+    const r = await approvePending(db, { identity: personal(owner), pendingId });
+    expect(r.ok).toBe(true);
+    expect((await bodyOf(owner, routineId)).body).toBe('исходная инструкция');
+    expect((await undoRecordOf(owner, editId))?.source).toBe('chat');
     expect(
       await withIdentity(db, personal(owner), (tx) => rejectedReason(tx, pendingId)),
     ).toBeUndefined();

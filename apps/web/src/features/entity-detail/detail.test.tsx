@@ -3941,6 +3941,59 @@ describe('ADE: прогон', () => {
     expect(result).toHaveTextContent('запись изменена');
   });
 
+  test('правило отмены текста (§8.6): конфликт цепочки тела без действия — «вне приложения»; остановка серии правкой текста — текст сервера о прогоне', async () => {
+    const outside = renderWithProviders(
+      <DetailScreen entityId="r1" />,
+      runHandler({
+        rollback: {
+          ok: false,
+          reason: 'conflict',
+          conflicts: [
+            { entityId: 't1', actionId: null, at: '2026-08-17T11:00:00.000Z', source: 'outside' },
+          ],
+        },
+      }),
+    );
+    let feed = await screen.findByTestId('run-feed');
+    await userEvent.click(within(feed).getByRole('button', { name: 'Откатить прогон в Orbis' }));
+    await userEvent.click(
+      within(await screen.findByRole('dialog')).getByRole('button', { name: 'Откатить' }),
+    );
+    let result = await screen.findByTestId('rollback-result');
+    // Текст сменил писатель без журнала (ops-скрипт): действия нет, источник — словами, а не кодом `outside`
+    expect(result).toHaveTextContent('Ничего не откачено');
+    expect(result).toHaveTextContent('вне приложения');
+    expect(result).not.toHaveTextContent('outside');
+    outside.unmount();
+
+    const message =
+      'Текст изменён после прогона: «Починить парсер» — откат остановлен, текст не тронут';
+    renderWithProviders(
+      <DetailScreen entityId="r1" />,
+      runHandler({
+        rollback: {
+          ok: false,
+          reason: 'partial',
+          undone: ['a2'],
+          failed: {
+            actionId: 'a1',
+            error: { code: 'UNDO_TEXT_CHANGED', message },
+            reason: 'text_changed',
+            entries: [],
+          },
+        },
+      }),
+    );
+    feed = await screen.findByTestId('run-feed');
+    await userEvent.click(within(feed).getByRole('button', { name: 'Откатить прогон в Orbis' }));
+    await userEvent.click(
+      within(await screen.findByRole('dialog')).getByRole('button', { name: 'Откатить' }),
+    );
+    result = await screen.findByTestId('rollback-result');
+    expect(result).toHaveTextContent('Откачено действий: 1');
+    expect(result).toHaveTextContent(message);
+  });
+
   test('идущий прогон: откат недоступен', async () => {
     const {
       'orbis/run_finished_at': _finished,

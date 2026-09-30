@@ -10,9 +10,16 @@ import { journalOf, undoRecordOf } from '../../test/journal-helpers';
 import { withIdentity } from '../db/with-identity';
 import { appRouter } from '../router';
 import { createCallerFactory } from '../trpc';
-import { bodyEntitiesOf, effectiveBodyAction, versionLabel } from './body-chain';
+import {
+  bodyEntitiesOf,
+  continuationOf,
+  continuationPlace,
+  effectiveBodyAction,
+  versionLabel,
+} from './body-chain';
 import { execute } from './executor';
 import { makeJournalSink } from './journal';
+import type { JournalEntry } from './journal-read';
 import type { ExecuteResult } from './types';
 import { undoAction } from './undo';
 
@@ -249,4 +256,74 @@ test('подпись версии — в потолке 200, срез по ко�
   expect(long.length).toBeLessThanOrEqual(200);
   expect(long.endsWith('…')).toBe(true);
   expect(/[\uD800-\uDBFF]…$/.test(long)).toBe(false);
+});
+
+describe('continuationOf (§8.6 «Где есть продолжение», Р-17, К-43, К-46; Э-А-16): место продолжения по записи журнала', () => {
+  /** Запись журнала — только поля, от которых зависит место (тред, источник, прогон, сеанс). */
+  const entry = (over: Partial<JournalEntry>): JournalEntry =>
+    ({
+      id: 'act-1',
+      threadId: null,
+      source: 'ui',
+      textSession: false,
+      cardInReply: false,
+      ...over,
+    }) as JournalEntry;
+  const T = 'thread-1';
+
+  test.each([
+    [
+      'быстрый ввод в треде',
+      { source: 'fast_path', threadId: T },
+      { kind: 'card', threadId: T, actionId: 'act-1' },
+    ],
+    [
+      'работа рутины (с прогоном) — карточка ленты',
+      { source: 'routine', threadId: T, runId: 'run-1' },
+      { kind: 'card', threadId: T, actionId: 'act-1' },
+    ],
+    [
+      'чат: карточка в ответе ассистента',
+      { source: 'chat', threadId: T, cardInReply: true },
+      { kind: 'card', threadId: T, actionId: 'act-1' },
+    ],
+    [
+      'чат: строка пачки в треде',
+      { source: 'chat', threadId: T },
+      { kind: 'card', threadId: T, actionId: 'act-1' },
+    ],
+    [
+      'агент по MCP вне прогона (Р-16)',
+      { source: 'mcp', threadId: T },
+      { kind: 'card', threadId: T, actionId: 'act-1' },
+    ],
+    [
+      'глагол прогона агента (К-42) — строка без «Отменить»',
+      { source: 'mcp', threadId: T, runId: 'run-1' },
+      { kind: 'none' },
+    ],
+    [
+      'сеанс правки текста — пункт меню записи',
+      { source: 'ui', textSession: true },
+      { kind: 'menu' },
+    ],
+    ['правка владельца в интерфейсе', { source: 'ui' }, { kind: 'tab' }],
+    ['быстрый захват', { source: 'quick_capture' }, { kind: 'tab' }],
+    ['системное действие', { source: 'system' }, { kind: 'none' }],
+  ] as const)('%s', (_name, over, want) => {
+    expect(continuationOf(entry(over as Partial<JournalEntry>))).toEqual(want);
+  });
+
+  test('фраза места читается и в заметке модели, и в закрытии карточки — у каждого вида своя', () => {
+    const kinds = [
+      { kind: 'here' },
+      { kind: 'card', threadId: T, actionId: 'act-1' },
+      { kind: 'menu' },
+      { kind: 'tab' },
+      { kind: 'none' },
+    ] as const;
+    const phrases = kinds.map((c) => continuationPlace(c));
+    expect(new Set(phrases).size).toBe(kinds.length);
+    expect(continuationPlace({ kind: 'none' })).toContain('из версий записи');
+  });
 });

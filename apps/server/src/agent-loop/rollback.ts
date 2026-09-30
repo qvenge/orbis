@@ -4,15 +4,17 @@
 // (executor/undo.ts) по действиям прогона в обратном порядке; собственных INSERT/UPDATE
 // в графе этот файл не выполняет, только SELECT по журналу.
 //
-// Зачем поверх Undo нужна ПРЕДПРОВЕРКА. Undo — осознанный LWW-откат: он восстанавливает
+// Зачем поверх Undo нужна ПРЕДПРОВЕРКА. Undo свойств — осознанный LWW-откат: он восстанавливает
 // зафиксированное в журнале прежнее состояние ПОВЕРХ текущего, не спрашивая, менялось ли
-// оно с тех пор (обоснование — докблок `InternalUndoMode` в executor/types.ts: body-патчи
-// идут без замка текста, свойства восстанавливаются мимо гейта прав). Для ОДНОГО «отмени
-// последнее» это правильно — человек отменяет то, что только что видел. Для отката целого
-// прогона — нет: между концом прогона и нажатием кнопки владелец мог ответить на чекпойнт
-// или переставить статус руками, и серия LWW-отмен стёрла бы его решение молча. Ровно это
-// запрещает инвариант 7 («откат не затирает чужие изменения — при расхождении показывает
-// конфликт»), поэтому расхождение ищется ДО первой отмены и отдаётся списком.
+// оно с тех пор (обоснование — докблок `InternalUndoMode` в executor/types.ts: свойства
+// восстанавливаются мимо гейта прав). Для ОДНОГО «отмени последнее» это правильно — человек
+// отменяет то, что только что видел. Для отката целого прогона — нет: между концом прогона и
+// нажатием кнопки владелец мог ответить на чекпойнт или переставить статус руками, и серия
+// LWW-отмен стёрла бы его решение молча. Ровно это запрещает инвариант 7 («откат не затирает
+// чужие изменения — при расхождении показывает конфликт»), поэтому расхождение ищется ДО
+// первой отмены и отдаётся списком. Текст записей сверяет ещё и правило отмены текста (§8.6,
+// `executor/body-chain.ts`) — в каждой отмене серии; предпроверка проходит ту же цепочку тела
+// заранее (`seriesChainBreaks`), чтобы серия не начиналась там, где правило её остановит.
 //
 // Почему серия НЕ атомарна. Undo одного действия — одна транзакция (undoAction открывает
 // свою), и склеить их в одну нечем: internal-режим executor'а принимает `Db`, а не `Tx`.
@@ -32,10 +34,11 @@
 // полчаса после отката. Поэтому для рутинного прогона откат инвертирует ТОЛЬКО работу,
 // конфликты ищет только по её сущностям, а прогон помечает архивом ЯВНОЙ операцией: тот же
 // признак, по которому экран прогона (RunFeed) читает откаченный прогон ADE.
-import type { GraphId } from '@orbis/shared';
+import type { GraphId, UndoTextChangedDetails } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import type { Db } from '../db/client';
 import { type Tx, withIdentity } from '../db/with-identity';
+import { seriesChainBreaks } from '../executor/body-chain';
 import { execute } from '../executor/executor';
 import { makeJournalSink } from '../executor/journal';
 import {
@@ -45,6 +48,7 @@ import {
   type JournalEntry,
   runActions,
 } from '../executor/journal-read';
+import type { ExecutorDeps } from '../executor/types';
 import { undoAction } from '../executor/undo';
 import type { Identity } from '../identity';
 import { closeOpenOfRun } from '../routines/lifecycle';
@@ -295,6 +299,54 @@ async function foreignChangesAfter(
   return conflicts;
 }
 
+/** Источник конфликта без действия в журнале (`RollbackConflict.actionId: null`): текст сменили вне приложения. */
+const OUTSIDE_SOURCE = 'outside';
+
+/**
+ * Цепочка тела серии (шаг 3б, §8.6 «Откат прогона», К-43): для каждой записи, чьё тело меняли живые действия прогона,
+ * последнее из них обязано быть действующим действием текущего тела, а каждое более раннее — действующим после отмены
+ * следующего, с раскруткой через ЛЮБЫЕ записи отмены (в том числе отмены владельцем отдельных действий прогона). Сама
+ * проверка — `seriesChainBreaks` (`executor/body-chain.ts`, рядом с правилом, которое применит каждая отмена серии);
+ * здесь — только форма конфликта: той же гранулярности {запись, действие}, что у `foreignChangesAfter`.
+ *
+ * Сверх окна чужих действий она видит то, чего в журнале нет или что политика конфликтом не считает: текст, сменённый
+ * писателем без журнала (ops-скрипт, сев — колонка «действие тела» пуста), и текст от действия «о прогоне» (ответ
+ * владельца на чекпойнт, бухгалтерия рутины). Правка владельца в окне даёт ту же пару, что и окно, — одна строка.
+ */
+async function bodyChainConflicts(
+  tx: Tx,
+  graph: GraphId,
+  live: readonly RunEntry[],
+): Promise<RollbackConflict[]> {
+  return (await seriesChainBreaks(tx, graph, live)).map((b) => ({
+    entityId: b.entityId,
+    actionId: b.holder?.id ?? null,
+    at: b.at.toISOString(),
+    source: b.holder?.source ?? OUTSIDE_SOURCE,
+  }));
+}
+
+/** Конфликты без повторов пары {запись, действие}: окно и цепочка тела называют правку владельца одинаково. */
+function distinctConflicts(conflicts: readonly RollbackConflict[]): RollbackConflict[] {
+  const seen = new Set<string>();
+  return conflicts.filter((c) => {
+    const key = `${c.entityId}\u0000${c.actionId ?? ''}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+/**
+ * Сообщение остановки серии отказом правила отмены текста (§8.6): откат прогона — кнопка владельца без продолжения
+ * «Всё равно отменить» (К-31), поэтому текст отказа исполнителя (он зовёт к продолжению) сюда не годится. Записи —
+ * заголовками: по ним владелец найдёт, где текст изменён после прогона.
+ */
+function textChangedMessage(details: UndoTextChangedDetails): string {
+  const titles = details.entries.map((e) => `«${e.title}»`).join(', ');
+  return `Текст изменён после прогона: ${titles} — откат остановлен, текст не тронут`;
+}
+
 /**
  * Откат прогона. Шаги 1–3 (чтение журнала и предпроверка) идут ОДНОЙ транзакцией под
  * `withIdentity`: граф журнала задаёт API явным `graph_id` идентичности (`executor/journal-read.ts`), а RLS
@@ -302,20 +354,27 @@ async function foreignChangesAfter(
  * принимает `Db` и открывает собственную транзакцию, а вложенности здесь быть не должно.
  *
  * Отсюда честное TOCTOU-окно: между коммитом предпроверки и первым undo проходит время,
- * и чужая правка, легшая ИМЕННО в этот зазор, конфликтом не станет — её затрёт LWW-откат
- * (undo не сверяет состояние, см. шапку файла). Это свойство ДИЗАЙНА, а не недосмотр:
- * закрыть окно можно было бы только замком на все затронутые сущности через обе фазы, а
- * механика Undo, на которой стоит откат (решение плана — «механику самого Undo не
- * трогаем»), транзакцию наружу не отдаёт. Цена промаха — одна потерянная правка, сделанная
- * в те доли секунды, пока человек уже нажал «Откатить»; цена закрытия — переписанный Undo.
+ * и чужая правка СВОЙСТВ, легшая ИМЕННО в этот зазор, конфликтом не станет — её затрёт
+ * LWW-откат (см. шапку файла). Это свойство ДИЗАЙНА, а не недосмотр: закрыть окно можно
+ * было бы только замком на все затронутые сущности через обе фазы, а механика Undo, на
+ * которой стоит откат, транзакцию наружу не отдаёт. Цена промаха — одна потерянная правка,
+ * сделанная в те доли секунды, пока человек уже нажал «Откатить»; цена закрытия —
+ * переписанный Undo. ТЕКСТ в этом окне не теряется: правило отмены текста (§8.6) стоит в
+ * каждой транзакции серии, и правка текста в зазоре останавливает серию отказом — исход
+ * `partial` с причиной `text_changed` и списком уже откаченного (лучше молчаливого затирания).
  *
  * Прогон, которого нет (или чужой — под RLS это неразличимо), даёт `ok` с пустым undone,
  * а не NOT_FOUND: «откатывать нечего» — это исход, а не отказ, и повторное нажатие кнопки
  * после успешного отката обязано вести себя так же.
+ *
+ * `deps.beforeStages` — шов транзакций отмены серии (тот же, что у `undoAction`; executor зовёт его в начале каждой
+ * из них). Боевой вызывающий (`agentRun.rollback`) его не передаёт; через него видна гонка «правка между предпроверкой и
+ * серией» — ровно то окно, которое закрывает правило §8.6 в транзакции отмены.
  */
 export async function rollbackRun(
   db: Db,
   args: { identity: Identity; runId: string },
+  deps: Pick<ExecutorDeps, 'beforeStages'> = {},
 ): Promise<WireRollbackResult> {
   const { identity, runId } = args;
 
@@ -344,13 +403,16 @@ export async function rollbackRun(
     if (first === undefined) {
       return { live, conflicts: [] as RollbackConflict[], archive, closeOpen, note: policy.note };
     }
-    const conflicts = await foreignChangesAfter(tx, {
+    const foreign = await foreignChangesAfter(tx, {
       graph: identity.graph,
       runId,
       after: first,
       touched: touchedKeys(live),
       policy,
     });
+    // Цепочка тела — до первой отмены (§8.6, D37 п. 6): расхождение — список, серия не начинается
+    const chain = await bodyChainConflicts(tx, identity.graph, live);
+    const conflicts = distinctConflicts([...foreign, ...chain]);
     return { live, conflicts, archive, closeOpen, note: policy.note };
   });
 
@@ -364,9 +426,29 @@ export async function rollbackRun(
   // здесь — прочитанный план, а не рабочий буфер.
   const undone: string[] = [];
   for (const entry of [...plan.live].reverse()) {
-    // Путь — `ui`: откат прогона — кнопка владельца на экране прогона (К-45), отмены пишутся от его имени
-    const result = await undoAction(db, { identity, actionId: entry.id, path: 'ui' });
+    // Путь — `ui`: откат прогона — кнопка владельца на экране прогона (К-45), отмены пишутся от его имени. Продолжения
+    // «Всё равно отменить» у серии нет (К-31) — место `none`
+    const result = await undoAction(
+      db,
+      { identity, actionId: entry.id, path: 'ui', continuation: { kind: 'none' } },
+      deps,
+    );
     if (!result.ok) {
+      if (result.error.code === 'UNDO_TEXT_CHANGED') {
+        // Правка текста легла между предпроверкой и этой отменой — правило §8.6 остановило серию: `partial` с причиной
+        const details = result.error.details as UndoTextChangedDetails;
+        return {
+          ok: false,
+          reason: 'partial',
+          undone,
+          failed: {
+            actionId: entry.id,
+            error: { code: result.error.code, message: textChangedMessage(details) },
+            reason: 'text_changed',
+            entries: details.entries,
+          },
+        };
+      }
       return {
         ok: false,
         reason: 'partial',

@@ -48,11 +48,16 @@ export async function peekLastUndoable(
   db: Db,
   who: Identity,
   now: Date = new Date(),
-): Promise<{ action: ActionRecord; title: string } | undefined> {
+): Promise<{ action: ActionRecord; entry: JournalEntry; title: string } | undefined> {
   return withIdentity(db, who, async (tx) => {
     const found = await findLastUndoable(tx, who.graph);
     if (found === undefined) return undefined;
-    return { action: actionRecordOf(found), title: await undoableTitle(tx, who.graph, found, now) };
+    return {
+      action: actionRecordOf(found),
+      // Запись журнала целиком — место продолжения отказа §8.6 (`continuationOf`: тред, сеанс, источник, прогон)
+      entry: found,
+      title: await undoableTitle(tx, who.graph, found, now),
+    };
   });
 }
 
@@ -347,8 +352,11 @@ export type UndoLastResult =
 /**
  * «Отмени последнее» (§7.8): inverse первого неотменённого действия с конца журнала. Путь — `ui` (умолчание):
  * единственный вызывающий — `ai.undoLast` кнопки владельца; «отмени последнее» словами в чате идёт политикой
- * (`tools/dispatch.ts`: `peekLastUndoable` + `undoAction` с путём `chat`). Продолжения правила §8.6 у «отмени
- * последнее» нет (`force` не принимается); `continuation` — место, которое назовёт отказ.
+ * (`tools/dispatch.ts`: `peekLastUndoable` + `undoAction` с путём `chat` и местом `continuationOf` — Р-17, К-46).
+ * Своего продолжения правила §8.6 у «отмени последнее» нет (`force` не принимается); `continuation` — место, которое
+ * назовёт отказ. У кнопки владельца это `here`: продолжение — `ai.undo({actionId: details.action.id, force: true})` с
+ * того же экрана (отказ называет отменявшееся действие, и точечная отмена с продолжением доступна там же; Fable M-2
+ * задачи 10).
  */
 export async function undoLast(
   db: Db,

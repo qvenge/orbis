@@ -330,6 +330,70 @@ describe('confirmation explicit actions (детерминированное вр
     expect(card).not.toHaveTextContent('orbis/task_status');
   });
 
+  test('карточка отката: отказ правила отмены текста (UNDO_TEXT_CHANGED) закрывает её — текст места продолжения вместо кнопок (§8.6, К-43)', async () => {
+    const closing =
+      'Откат не применён: текст изменён после действия — вернуть его можно с карточки этого действия в треде';
+    const card = () =>
+      renderCards(
+        msg([
+          {
+            kind: 'confirmation_card',
+            mode: 'explicit',
+            pendingId: 'p-undo',
+            summary: 'Откат: «Инструкция»',
+          },
+        ]),
+      );
+    const refused = renderWithProviders(<div>{card()}</div>, (path) => {
+      if (path === 'ai.approve') {
+        throw trpcError('CONFLICT', closing, {
+          code: 'UNDO_TEXT_CHANGED',
+          details: { continuation: { kind: 'card', threadId: 't1', actionId: 'a1' }, entries: [] },
+        });
+      }
+      return {};
+    });
+    fireEvent.click(screen.getByRole('button', { name: /подтвердить/i }));
+    const shown = await screen.findByTestId('confirmation-card');
+    expect(await within(shown).findByRole('alert')).toHaveTextContent(closing);
+    // Кнопок нет: карточка закрыта, «Подтвердить» отказало бы снова
+    expect(within(shown).queryByRole('button')).not.toBeInTheDocument();
+    refused.unmount();
+
+    // После перезагрузки карточка не знает судьбы; «Подтвердить» закрытой — «уже закрыто» с причиной кодом: тоже гаснет
+    renderWithProviders(<div>{card()}</div>, (path) => {
+      if (path === 'ai.approve') {
+        throw trpcError('BAD_REQUEST', 'подтверждение p-undo уже закрыто', {
+          code: 'VALIDATION',
+          details: { reason: 'undo_refused' },
+        });
+      }
+      return {};
+    });
+    fireEvent.click(screen.getByRole('button', { name: /подтвердить/i }));
+    const again = await screen.findByTestId('confirmation-card');
+    expect(await within(again).findByRole('alert')).toHaveTextContent('уже закрыто');
+    expect(within(again).queryByRole('button')).not.toBeInTheDocument();
+  });
+
+  test('confirmation: прочий отказ «Подтвердить» (не правило отмены) карточку не закрывает — кнопки остаются', async () => {
+    renderWithProviders(
+      <div>
+        {renderCards(
+          msg([{ kind: 'confirmation_card', mode: 'explicit', pendingId: 'p4', summary: 's' }]),
+        )}
+      </div>,
+      (path) => {
+        if (path === 'ai.approve') throw trpcError('INTERNAL_SERVER_ERROR', 'база недоступна');
+        return {};
+      },
+    );
+    fireEvent.click(screen.getByRole('button', { name: /подтвердить/i }));
+    const shown = await screen.findByTestId('confirmation-card');
+    expect(await within(shown).findByRole('alert')).toHaveTextContent('база недоступна');
+    expect(within(shown).getByRole('button', { name: /подтвердить/i })).toBeInTheDocument();
+  });
+
   test('confirmation explicit: Отменить → ai.reject(pendingId)', async () => {
     const { calls } = renderWithProviders(
       <div>

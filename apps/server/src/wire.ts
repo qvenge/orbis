@@ -5,7 +5,7 @@
 // БД хранит микросекунды, но драйвер парсит timestamptz в Date (мс), поэтому сравнение штампа,
 // который клиент видел в wire-форме (предусловие `orbis/updated_at`), с row.updatedAt.toISOString()
 // симметрично.
-import type { GrantScope, PropertyDefinition } from '@orbis/shared';
+import type { GrantScope, PropertyDefinition, UndoConflictEntry } from '@orbis/shared';
 import type { ChatRole, WireChatMessage } from './chat/messages';
 import type { chatMessages, chatThreads, entities, relations, userSettings } from './db/schema';
 import type { WireEntity, WireEntityWithRevision, WireRelation } from './executor/types';
@@ -329,10 +329,17 @@ export function toWireAgentGrant(row: GrantSummary): WireAgentGrant {
  */
 export interface RollbackConflict {
   entityId: string;
-  actionId: string;
-  /** Когда действие легло в журнал (ISO, как все таймстампы wire-форм). */
+  /**
+   * Действие, давшее помешавшее изменение. `null` — текст записи сменил писатель без журнала (ops-скрипт, сев) или
+   * цепочку тела оборвал перенос: его видит только проверка цепочки тела (§8.6), действия в журнале у него нет.
+   */
+  actionId: string | null;
+  /** Когда действие легло в журнал (у текста — когда он сменился; ISO, как все таймстампы wire-форм). */
   at: string;
-  /** Источник действия (§7.8): по нему экран отличает правку человека от чужого агента. */
+  /**
+   * Источник действия (§7.8): по нему экран отличает правку человека от чужого агента. `outside` — изменение вне
+   * приложения (`actionId: null`).
+   */
   source: string;
 }
 
@@ -354,5 +361,15 @@ export type WireRollbackResult =
       ok: false;
       reason: 'partial';
       undone: string[];
-      failed: { actionId: string; error: { code: string; message: string } };
+      /**
+       * На чём встала серия. `reason: 'text_changed'` — отказ правила отмены текста (§8.6): правка, легшая между
+       * предпроверкой и серией, остановила её; `entries` — записи, чей текст изменён (заголовок, актор, время).
+       * Дискриминант исхода (`reason: 'partial'`) занят, поэтому причина остановки — поле отказавшего действия.
+       */
+      failed: {
+        actionId: string;
+        error: { code: string; message: string };
+        reason?: 'text_changed';
+        entries?: UndoConflictEntry[];
+      };
     };

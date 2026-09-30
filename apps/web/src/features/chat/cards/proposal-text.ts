@@ -39,6 +39,8 @@ export const REPLACED_NOTES: Record<ReplacedReason, string> = {
   superseded: 'Заменено новым прогоном',
   stale: 'Устарело — состояние изменилось',
   owner: 'Отклонено',
+  // Недостижимо у предложения: так сервер закрывает только карточку отката (`undo_of`, §8.6 К-43)
+  undo_refused: 'Не применено',
 };
 
 /**

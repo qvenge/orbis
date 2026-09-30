@@ -9,10 +9,13 @@
 // целиком (`assertUndoTextRule`) — его executor зовёт ОДНИМ вызовом в начале каждой транзакции отмены (одиночный путь и
 // пачка), после `beforeStages` и advisory-замков. У `applyUndo` (`undo.ts`) — закрепления версий первыми операциями
 // записи отмены (страховка сеанса и продолжение). Действующее действие для экрана записи — `bodyActionOf` (§8.2, К-37).
+// Пути без своего продолжения (задача 11): место продолжения по записи журнала (`continuationOf`, `continuationPlace`)
+// и цепочка тела серии отмен для предпроверки отката прогона (`seriesChainBreaks`).
 import type {
   BodyActionInfo,
   GraphId,
   UndoConflictEntry,
+  UndoContinuation,
   UndoTextChangedDetails,
 } from '@orbis/shared';
 import { and, eq } from 'drizzle-orm';
@@ -51,8 +54,35 @@ export async function effectiveBodyAction(
   entityId: string,
   raw: string | null,
 ): Promise<string | null> {
-  let cur = raw;
-  for (let hops = 0; cur !== null && hops < MAX_HOPS; hops++) {
+  return unwind(tx, graph, entityId, raw, 0);
+}
+
+/**
+ * Действующее действие тела записи ПОСЛЕ отмены `undone` — то, что увидит правило §8.6 в транзакции следующей отмены
+ * серии, когда колонка укажет на запись отмены `undone` (или останется на нём, если отмена текст не сменила): раскрутка
+ * от «действия тела до» у `undone`, шагом за записью отмены (`hops = 1`, как в `effectiveBodyAction` после первого
+ * прыжка). Перенесённая запись (`bodyBefore === null`) или запись без этого ключа цепочки не несут — `null`.
+ */
+export async function effectiveAfterUndo(
+  tx: Tx,
+  graph: GraphId,
+  entityId: string,
+  undone: JournalEntry,
+): Promise<string | null> {
+  if (!undone.bodyBefore || !(entityId in undone.bodyBefore)) return null;
+  return unwind(tx, graph, entityId, undone.bodyBefore[entityId] ?? null, 1);
+}
+
+/** Раскрутка цепочки от `start`; `startHops` — сколько прыжков уже сделано (ветка сырой колонки — только при нуле). */
+async function unwind(
+  tx: Tx,
+  graph: GraphId,
+  entityId: string,
+  start: string | null,
+  startHops: number,
+): Promise<string | null> {
+  let cur = start;
+  for (let hops = startHops; cur !== null && hops < MAX_HOPS; hops++) {
     const undo = await undoRecordById(tx, graph, cur); // journal-read: строка type='undo' по её id
     if (!undo) {
       // Действие, отменённое записью, которая текст не сменила (inverse дал тот же текст), колонку не двигает (триггер
@@ -159,26 +189,22 @@ async function conflictEntry(
   row: Pick<EntityRow, 'title' | 'bodyActionId' | 'bodyChangedAt'>,
   effective: string | null,
 ): Promise<UndoConflictEntry> {
-  const by = effective === null ? undefined : await findAction(tx, graph, effective);
-  const beyond = by === undefined || by.createdAt.getTime() < undoing.createdAt.getTime();
-  if (beyond && row.bodyActionId !== null && row.bodyActionId !== effective) {
-    const undo = await undoRecordById(tx, graph, row.bodyActionId);
-    if (undo !== undefined) {
-      return {
-        entityId,
-        title: row.title,
-        actorKind: undo.actorKind,
-        actorLabel: null,
-        at: row.bodyChangedAt.toISOString(),
-      };
-    }
-  }
+  const by = await textHolderOf(tx, graph, undoing, row.bodyActionId, effective);
   if (by === undefined) {
     return {
       entityId,
       title: row.title,
       actorKind: 'owner',
       actorLabel: OUTSIDE_APP_LABEL,
+      at: row.bodyChangedAt.toISOString(),
+    };
+  }
+  if (by.type === 'undo') {
+    return {
+      entityId,
+      title: row.title,
+      actorKind: by.actorKind,
+      actorLabel: null,
       at: row.bodyChangedAt.toISOString(),
     };
   }
@@ -189,6 +215,152 @@ async function conflictEntry(
     actorLabel: await actorLabelOf(tx, graph, by),
     at: (row.bodyActionId === by.id ? row.bodyChangedAt : by.createdAt).toISOString(),
   };
+}
+
+/**
+ * Чья запись журнала дала текст, остановивший проверку отмены `undoing` (строка перечня отказа и конфликт отката
+ * прогона — один выбор). `head` — откуда шла раскрутка (колонка записи; у звена серии — «действие тела до» следующего
+ * действия), `effective` — её итог.
+ *
+ * Итог раскрутки с записью журнала — он; раскрутка, ушедшая ЗА отменяемое действие (к тексту, который был до него, или
+ * к писателю без журнала), при записи отмены в `head` значит: текст после отменяемого действия сменила эта отмена
+ * (продолжение по более раннему действию, К-30) — называется она (гейт задачи 10, M-3). `undefined` — писатель без
+ * журнала (ops-скрипт, сев) или цепочка оборвана переносом: «вне приложения».
+ */
+async function textHolderOf(
+  tx: Tx,
+  graph: GraphId,
+  undoing: JournalEntry,
+  head: string | null,
+  effective: string | null,
+): Promise<JournalEntry | undefined> {
+  const by = effective === null ? undefined : await findAction(tx, graph, effective);
+  const beyond = by === undefined || by.createdAt.getTime() < undoing.createdAt.getTime();
+  if (beyond && head !== null && head !== effective) {
+    const undo = await undoRecordById(tx, graph, head);
+    if (undo !== undefined) return undo;
+  }
+  return by;
+}
+
+/**
+ * Звено цепочки тела серии отмен, на котором правило §8.6 откажет: запись, чей текст дал `holder` (запись журнала — или
+ * `undefined`, писатель без журнала), и время этого текста.
+ */
+export interface SeriesChainBreak {
+  entityId: string;
+  holder: JournalEntry | undefined;
+  at: Date;
+}
+
+/**
+ * Предпроверка серии отмен по цепочке тела (§8.6 «Откат прогона», К-43; откат прогона — `agent-loop/rollback.ts`):
+ * `actions` — живые (неотменённые) действия серии в порядке журнала; отменяться они будут с конца. Для каждой записи,
+ * чьё тело эти действия писали (`bodyEntitiesOf`), правилу подлежит последнее из них — действующее действие текущего
+ * тела обязано быть им (как проверит правило в транзакции его отмены); каждое более раннее — действующим действием
+ * после отмены следующего (`effectiveAfterUndo`: раскрутка от его «действия тела до» через ЛЮБЫЕ записи отмены, в том
+ * числе отмены владельцем отдельных действий серии). Так серия, дважды правившая одну заметку, откатывается целиком, а
+ * чужой текст — в том числе писателя без журнала, которого не видит окно чужих действий, — виден до первой отмены.
+ *
+ * Перенесённое действие (`bodyBefore === null`) проверяется, как у правила, по сырой колонке: последнее — совпадением,
+ * более раннее не проходит никогда (к его отмене колонка укажет на запись отмены следующего). Читает без замков строк:
+ * это предпроверка, её вывод перепроверяет правило в каждой транзакции серии (гонка — отказ §8.6 посреди серии).
+ * Возвращает ВСЕ провалившие звенья (владелец видит весь список сразу), каждое — один раз на запись и держателя.
+ */
+export async function seriesChainBreaks(
+  tx: Tx,
+  graph: GraphId,
+  actions: readonly JournalEntry[],
+): Promise<SeriesChainBreak[]> {
+  const chains = new Map<string, JournalEntry[]>();
+  for (const action of actions) {
+    for (const entityId of bodyEntitiesOf(action)) {
+      const chain = chains.get(entityId) ?? [];
+      chain.push(action);
+      chains.set(entityId, chain);
+    }
+  }
+  const breaks: SeriesChainBreak[] = [];
+  for (const [entityId, chain] of [...chains].sort(([a], [b]) => a.localeCompare(b))) {
+    const rows = await tx
+      .select({ bodyActionId: entities.bodyActionId, bodyChangedAt: entities.bodyChangedAt })
+      .from(entities)
+      .where(and(eq(entities.graphId, graph), eq(entities.id, entityId)));
+    const row = rows[0];
+    // Записи не видно — проверять нечего, обратная операция откажет сама (как у `bodyRuleFailures`)
+    if (row === undefined) continue;
+    const seen = new Set<string>();
+    const add = (holder: JournalEntry | undefined, at: Date): void => {
+      const key = holder?.id ?? '';
+      if (seen.has(key)) return;
+      seen.add(key);
+      breaks.push({ entityId, holder, at });
+    };
+    const last = chain[chain.length - 1] as JournalEntry;
+    const raw = row.bodyActionId;
+    const effective = await effectiveBodyAction(tx, graph, entityId, raw);
+    if (last.bodyBefore === null ? raw !== last.id : effective !== last.id) {
+      const holder = await textHolderOf(tx, graph, last, raw, effective);
+      add(holder, holder !== undefined && holder.id !== raw ? holder.createdAt : row.bodyChangedAt);
+    }
+    for (let i = chain.length - 2; i >= 0; i--) {
+      const cur = chain[i] as JournalEntry;
+      const next = chain[i + 1] as JournalEntry;
+      const after = await effectiveAfterUndo(tx, graph, entityId, next);
+      if (cur.bodyBefore !== null && after === cur.id) continue;
+      const head = next.bodyBefore?.[entityId] ?? null;
+      const holder = await textHolderOf(tx, graph, cur, head, after);
+      // Текст между звеньями без записи журнала — сменён до следующего действия серии: его время и называется
+      add(holder, holder?.createdAt ?? next.createdAt);
+    }
+  }
+  return breaks;
+}
+
+/**
+ * Место продолжения отмены действия, у пути которой своего продолжения нет (§8.6 «Где есть продолжение», Р-17, К-43,
+ * К-46): «отмени последнее» словами в чате и карточка подтверждения отката (`undo_of`) называют, где человек может
+ * отменить это действие «Всё равно отменить».
+ * - `menu` — запись сеанса правки текста: пункт «Вернуть текст как на …» меню записи (Э-А-16; в стек Ctrl/Cmd+Z сеанс
+ *   не входит, §7.5 п. 2);
+ * - `card` — у действия есть карточка или строка с «Отменить» в треде (`thread-page.ts`, §11.3): быстрый ввод, рутина,
+ *   разговор (карточка в ответе или строка пачки) и агент по MCP вне прогона (Р-16);
+ * - `tab` — прочие правки владельца в интерфейсе и быстрый захват: треда у них нет (Р-12), продолжение — Ctrl/Cmd+Z или
+ *   плашка во вкладке, где сделано;
+ * - `none` — карточки нет: глаголы прогона агента (`mcp` с `run_id` — откатывается прогон целиком, К-42) и `system`.
+ */
+export function continuationOf(entry: JournalEntry): UndoContinuation {
+  if (entry.textSession) return { kind: 'menu' };
+  const threadCard =
+    entry.source === 'fast_path' ||
+    entry.source === 'routine' ||
+    entry.source === 'chat' ||
+    (entry.source === 'mcp' && entry.runId === undefined);
+  if (entry.threadId !== null && threadCard) {
+    return { kind: 'card', threadId: entry.threadId, actionId: entry.id };
+  }
+  if (entry.source === 'ui' || entry.source === 'quick_capture') return { kind: 'tab' };
+  return { kind: 'none' };
+}
+
+/**
+ * Место продолжения словами — одна фраза для всех, кто называет его человеку или модели: заметка модели у отказа
+ * «отмени последнее» («…вернуть его можно только по кнопке человека: <место>») и закрытие карточки отката («…вернуть
+ * его можно <место>»). Фраза читается в обеих рамках.
+ */
+export function continuationPlace(c: UndoContinuation): string {
+  switch (c.kind) {
+    case 'here':
+      return 'здесь же, кнопкой «Всё равно отменить»';
+    case 'card':
+      return 'с карточки этого действия в треде';
+    case 'menu':
+      return 'пунктом «Вернуть текст как на …» в меню записи';
+    case 'tab':
+      return 'клавишами Ctrl/Cmd+Z во вкладке, где сделана правка';
+    case 'none':
+      return 'из версий записи (карточки у этого действия нет)';
+  }
 }
 
 /** Подпись агента без названного гранта (грант снят или запись до атрибуции грантом). */

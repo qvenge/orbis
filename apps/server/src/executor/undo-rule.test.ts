@@ -1346,3 +1346,32 @@ describe('отмена: повтор и карточка отката', () => {
     expect(await undoRecordOf(g, x)).toBeUndefined();
   }, 30_000);
 });
+
+describe('кнопка «отмени последнее» (`ai.undoLast`): место продолжения `here` (Fable M-2 задачи 10, задача 11)', () => {
+  test('отказ правила называет место `here` и отменявшееся действие; продолжение — точечная `ai.undo` с `force` по `details.action.id` с того же экрана', async () => {
+    const g = await freshGraph();
+    const note = await seedNote(g, 'Заметка', 'исходный');
+    const x = await agentEdit(g, [{ id: note, body: 'агент' }]);
+    // Текст после агента меняет писатель без журнала: «отмени последнее» его не видит и берёт действие агента
+    await admin.db.execute(
+      sql`UPDATE entities SET body = 'вне приложения' WHERE id = ${note}::uuid`,
+    );
+    const res = await postMutation(g, 'ai.undoLast', {});
+    expect(res.status).toBe(409);
+    const orbis = res.body.error?.data?.orbis as
+      | { code: string; details: { action: { id: string }; continuation: unknown } }
+      | undefined;
+    expect(orbis?.code).toBe('UNDO_TEXT_CHANGED');
+    expect(orbis?.details.continuation).toEqual({ kind: 'here' });
+    expect(orbis?.details.action.id).toBe(x);
+
+    const forced = await callerFor(g).ai.undo({
+      actionId: orbis?.details.action.id as string,
+      force: true,
+    });
+    expect(forced.undone.id).toBe(x);
+    expect(forced.pinnedVersions).toHaveLength(1);
+    expect((await rowOf(note)).body).toBe('исходный');
+    expect((await versionsOf(note)).map((v) => v.body)).toEqual(['вне приложения']);
+  });
+});

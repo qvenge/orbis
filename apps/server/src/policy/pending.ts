@@ -46,6 +46,8 @@ import {
   questionStaleMessageId,
   rejectMessageId,
   rolloverInput,
+  type UndoContinuation,
+  type UndoTextChangedDetails,
 } from '@orbis/shared';
 import {
   type BodyDoc,
@@ -69,9 +71,16 @@ import type { Db } from '../db/client';
 import { chatMessages } from '../db/schema';
 import { type Tx, withIdentity } from '../db/with-identity';
 import { ExecError, type StructuredError } from '../errors';
+import { continuationOf, continuationPlace } from '../executor/body-chain';
 import { execute } from '../executor/executor';
 import { makeJournalSink } from '../executor/journal';
-import { executedIds, findBatch, isUndone } from '../executor/journal-read';
+import {
+  executedIds,
+  findAction,
+  findBatch,
+  isUndone,
+  type JournalEntry,
+} from '../executor/journal-read';
 import type { ActorKind, ExecuteResult } from '../executor/types';
 import { undoAction } from '../executor/undo';
 import type { Identity } from '../identity';
@@ -714,14 +723,19 @@ function assertNotQuestion(pending: PendingRecord): void {
  * переписало бы судьбу предложения, которого уже нет. Отдельного статуса предложения
  * причина не заводит: судьба исходного живёт здесь, в ленте, а признак на живом — поле
  * `edited_from` (Ш1.8).
+ *
+ * 'undo_refused' — карточка подтверждения отката (`undo_of`) закрыта отказом правила отмены текста (§8.6, К-43, Д-8):
+ * текст записи изменили после отменяемого действия, а продолжения «Всё равно отменить» у пути, рождённого моделью, нет
+ * (Р-17). Открытой с кнопкой, которая откажет снова, карточка не остаётся; место продолжения — в `metadata.continuation`
+ * отказа. Только у карточек отката: у единиц пачки прогона и предложений рутины её не бывает.
  */
-export type RejectReason = 'owner' | 'superseded' | 'stale' | 'edited';
+export type RejectReason = 'owner' | 'superseded' | 'stale' | 'edited' | 'undo_refused';
 
 // ВНИМАНИЕ: единственное из четырёх мест причины, где расширение НЕ ловит компилятор
 // (тип, REJECT_CONTENT и STATUS_BY_REJECT_REASON — Record'ы, они падают сборкой). Строка,
 // забытая здесь, откатывается fallback'ом rejectedReason к 'owner' — то есть правка
 // владельца молча превращается в его же отказ.
-const rejectReason = z.enum(['owner', 'superseded', 'stale', 'edited']);
+const rejectReason = z.enum(['owner', 'superseded', 'stale', 'edited', 'undo_refused']);
 
 /** Текст reject-сообщения по причине — владелец читает ленту, а не значение поля. */
 const REJECT_CONTENT: Record<RejectReason, string> = {
@@ -729,6 +743,7 @@ const REJECT_CONTENT: Record<RejectReason, string> = {
   superseded: 'Предложение заменено новым прогоном',
   stale: 'Предложение устарело: состояние изменилось',
   edited: 'Предложение заменено правкой владельца',
+  undo_refused: 'Откат не применён: текст изменён после действия',
 };
 
 /** Текст §Б6-7 — СВОЙ, а не `REJECT_CONTENT.stale` («состояние изменилось»): изменилась ДЕКЛАРАЦИЯ,
@@ -821,6 +836,27 @@ export async function rejectedReason(tx: Tx, pendingId: string): Promise<RejectR
 /** Pending отклонён ⇔ существует сообщение {type:'confirmation_rejected', rejects}. */
 async function isRejected(tx: Tx, pendingId: string): Promise<boolean> {
   return (await rejectedReason(tx, pendingId)) !== undefined;
+}
+
+/**
+ * Отказ «Принять» у закрытой карточки. Закрытая отказом правила отмены (`undo_refused`, К-43) — «уже закрыто»: владелец
+ * жмёт кнопку карточки, которую сервер закрыл сам, и «отклонено» читалось бы как его собственное решение; повторного
+ * отказа правила с тем же перечнем тоже нет — карточка закрыта, место продолжения названо её закрытием. Причина уходит
+ * кодом (`data.orbis.details.reason`), чтобы клиент погасил кнопки, не разбирая текст.
+ */
+function closedCardError(pendingId: string, reason: RejectReason): ExecError {
+  if (reason === 'undo_refused') {
+    return new ExecError(
+      'VALIDATION',
+      `подтверждение ${pendingId} уже закрыто: текст изменён после действия — откат не применён (§8.6)`,
+      { pendingId, reason },
+    );
+  }
+  return new ExecError(
+    'VALIDATION',
+    `подтверждение ${pendingId} отклонено — исполнение невозможно (§7.10)`,
+    { pendingId },
+  );
 }
 
 /**
@@ -1024,7 +1060,13 @@ export async function approvePending(
           reason: 'stale',
           text: DELTA_STALE_TEXT,
         });
-        return { msg, stale: deltaStale, staleOf: 'delta' as const, live: undefined };
+        return {
+          msg,
+          stale: deltaStale,
+          staleOf: 'delta' as const,
+          live: undefined,
+          undoing: undefined,
+        };
       }
       if (act !== null && 'stale' in act) {
         // ГАШЕНИЕ ПИШЕТСЯ ЭТОЙ ЖЕ ТРАНЗАКЦИЕЙ, А ОТКАЗ БРОСАЕТСЯ ПОСЛЕ ЕЁ КОММИТА. Бросок ВНУТРИ
@@ -1038,16 +1080,23 @@ export async function approvePending(
           reason: 'stale',
           text: ACTION_STALE_TEXT,
         });
-        return { msg, stale: act.stale, staleOf: 'action' as const, live: undefined };
+        return {
+          msg,
+          stale: act.stale,
+          staleOf: 'action' as const,
+          live: undefined,
+          undoing: undefined,
+        };
       }
-      if (await isRejected(tx, args.pendingId)) {
-        throw new ExecError(
-          'VALIDATION',
-          `подтверждение ${args.pendingId} отклонено — исполнение невозможно (§7.10)`,
-          { pendingId: args.pendingId },
-        );
-      }
-      return { msg, stale: null, staleOf: null, live: act ?? undefined };
+      const rejected = await rejectedReason(tx, args.pendingId);
+      if (rejected !== undefined) throw closedCardError(args.pendingId, rejected);
+      // Отменяемое действие карточки отката — ради места продолжения её отказа (`continuationOf`, К-43): журнал
+      // append-only, запись действия неизменяема, и читать её в этой транзакции безопасно
+      const undoing =
+        msg.pending.undo_of === undefined
+          ? undefined
+          : await findAction(tx, graphId, msg.pending.undo_of);
+      return { msg, stale: null, staleOf: null, live: act ?? undefined, undoing };
     });
     if (found.stale !== null && found.staleOf === 'delta') {
       throw new ExecError('VALIDATION', `единица устарела — снята: ${found.stale}`, {
@@ -1074,7 +1123,7 @@ export async function approvePending(
     // (`undoAction` → `applyUndo`) вместо action пишет запись отмены (строку журнала `type:'undo'`) тем же tx и снимает
     // пометки `needs-review` — ровно то, что сделал бы прямой `undo_last` на уровне `execute`.
     const undoOf = pending.undo_of;
-    if (undoOf !== undefined) return await approveUndoUnit(db, args, undoOf);
+    if (undoOf !== undefined) return await approveUndoUnit(db, args, undoOf, found.undoing);
     // ПЕРЕНОС ИСПОЛНЯЕТСЯ СВОИМ КОДОМ, а не пачкой операций (задача 10 Б-2, Р-К-39): `toOperations`
     // собирает ExecuteRequest, а `rolloverCreate` строит его САМ — по одной `entity_create` на строку,
     // с `mechanism: 'rule'` и пречеком преемников. Без этой ветки единица упёрлась бы в «неизвестный
@@ -1275,29 +1324,40 @@ async function approveRolloverUnit(
  * `idempotentReplay`, как повтор пачки по audit. Проверка — ПОСЛЕ неудачи и отдельной транзакцией:
  * проигравшая гонка узнаёт о чужом коммите только так, а отказ «отклонено» с записью отмены не
  * совпадает никогда (под замком одно исключает другое).
+ *
+ * ОТКАЗ ПРАВИЛА ОТМЕНЫ ТЕКСТА (§8.6, К-43, Д-8) ЗАКРЫВАЕТ КАРТОЧКУ. Путь рождён моделью, и продолжения «Всё равно
+ * отменить» у него нет (Р-17): открытая карточка осталась бы с кнопкой, которая откажет снова. Закрытие — отказ
+ * `undo_refused` с местом продолжения (`continuationOf` отменяемого действия: где человек может отменить его сам) в
+ * метаданных и в тексте ленты; ответ «Принять» — тот же отказ `UNDO_TEXT_CHANGED` с деталями и текстом закрытия, его
+ * карточка показывает на месте кнопок. Закрытие — ОТДЕЛЬНОЙ транзакцией: транзакция отмены откатилась вместе с замком
+ * единицы из `beforeStages`, и `rejectPendingTx` берёт его заново сам.
  */
 async function approveUndoUnit(
   db: Db,
   args: { identity: Identity; pendingId: string },
   undoOf: string,
+  undoing: JournalEntry | undefined,
 ): Promise<ExecuteResult> {
   // Отказ «отклонено» под замком — не повод для replay, даже если действие успели отменить другим
   // путём: судьба карточки уже записана, и она — «отклонено».
   let rejected = false;
   const r = await undoAction(
     db,
-    // Путь — `chat`: карточку отката (`undo_of`) поставил разговор, владелец её принимает (РП-11)
-    { identity: args.identity, actionId: undoOf, path: 'chat' },
+    // Путь — `chat`: карточку отката (`undo_of`) поставил разговор, владелец её принимает (РП-11). Своего продолжения
+    // у пути нет (К-43) — отказ правила назовёт место, где отменяемое действие отменяют с продолжением
+    {
+      identity: args.identity,
+      actionId: undoOf,
+      path: 'chat',
+      continuation: undoing === undefined ? { kind: 'none' } : continuationOf(undoing),
+    },
     {
       beforeStages: async (tx) => {
         await acquirePendingLock(tx, args.pendingId);
-        if (await isRejected(tx, args.pendingId)) {
+        const reason = await rejectedReason(tx, args.pendingId);
+        if (reason !== undefined) {
           rejected = true;
-          throw new ExecError(
-            'VALIDATION',
-            `подтверждение ${args.pendingId} отклонено — исполнение невозможно (§7.10)`,
-            { pendingId: args.pendingId },
-          );
+          throw closedCardError(args.pendingId, reason);
         }
       },
     },
@@ -1306,10 +1366,51 @@ async function approveUndoUnit(
   // отмены карточке не нужен — её судьбу читают по отменённому действию (`isUndone`)
   if (r.ok) return { ok: true, actionId: r.undone.id, results: r.results, idempotentReplay: false };
   if (rejected) return r;
+  if (r.error.code === 'UNDO_TEXT_CHANGED') {
+    const closed = await closeRefusedUndoUnit(db, args, r.error.details as UndoTextChangedDetails);
+    if (closed !== undefined) return closed;
+  }
   const undone = await withIdentity(db, args.identity, (tx) =>
     isUndone(tx, args.identity.graph, undoOf),
   );
   return undone ? { ok: true, actionId: undoOf, results: [], idempotentReplay: true } : r;
+}
+
+/**
+ * Закрытие карточки отката отказом правила §8.6 (`undo_refused`, К-43) — ответ «Принять» для такого отказа; `undefined` —
+ * закрыть не вышло, потому что отменяемое действие успели отменить другим путём (`rejectPendingTx` отказывает
+ * `VALIDATION` «уже исполнено»): тогда ответ — replay, как у любого повтора (решает вызывающий по `isUndone`).
+ *
+ * Карточку уже закрыли иначе, пока отказ шёл (владелец нажал «Отклонить»), — её судьба та, что записана: ответ — отказ
+ * «закрыто» с той причиной, а не второе закрытие. Повторный отказ правила той же карточки (две «Принять» наперегонки)
+ * ответит тем же отказом `UNDO_TEXT_CHANGED`: запись закрытия одна (детерминированный PK отказа).
+ */
+async function closeRefusedUndoUnit(
+  db: Db,
+  args: { identity: Identity; pendingId: string },
+  details: UndoTextChangedDetails,
+): Promise<ExecuteResult | undefined> {
+  const text = `${REJECT_CONTENT.undo_refused} — вернуть его можно ${continuationPlace(details.continuation)}`;
+  let closed: RejectPendingTxResult;
+  try {
+    closed = await withIdentity(db, args.identity, (tx) =>
+      rejectPendingTx(tx, {
+        identity: args.identity,
+        pendingId: args.pendingId,
+        reason: 'undo_refused',
+        continuation: details.continuation,
+        text,
+      }),
+    );
+  } catch (e) {
+    if (e instanceof ExecError && e.code === 'VALIDATION') return undefined;
+    throw e;
+  }
+  if (closed.alreadyRejected && closed.reason !== 'undo_refused') {
+    const err = closedCardError(args.pendingId, closed.reason);
+    return { ok: false, error: { code: err.code, message: err.message, details: err.details } };
+  }
+  return { ok: false, error: { code: 'UNDO_TEXT_CHANGED', message: text, details } };
 }
 
 /**
@@ -1327,6 +1428,12 @@ export interface RejectPendingArgs {
   pendingId: string;
   reason?: RejectReason;
   text?: string;
+  /**
+   * Место продолжения отказа `undo_refused` (карточка отката закрыта правилом §8.6, К-43): где человек может отменить
+   * действие с продолжением. Данные судьбы, как причина: пишется в `metadata.continuation` отказа (текст ленты его
+   * называет словами, но текст — только представление).
+   */
+  continuation?: UndoContinuation;
 }
 
 /**
@@ -1428,7 +1535,12 @@ export async function rejectPendingTx(
     threadId: msg.threadId,
     role: 'system',
     content: args.text ?? REJECT_CONTENT[reason],
-    metadata: { type: 'confirmation_rejected', rejects: args.pendingId, reason },
+    metadata: {
+      type: 'confirmation_rejected',
+      rejects: args.pendingId,
+      reason,
+      ...(args.continuation !== undefined && { continuation: args.continuation }),
+    },
   });
   return {
     pendingId: args.pendingId,
