@@ -353,18 +353,35 @@ export async function undoRecordById(
 }
 
 /**
- * Колонки тела записи и ЖИВОЕ действие, на которое указывает её колонка «действие тела», — одним запросом (ответ
- * «действующее действие текущего тела», §8.2, К-37). Живое — действие (не запись отмены) и не отменённое: ровно тогда
- * раскрутка цепочки (`executor/body-chain.ts`, `effectiveBodyAction`) вернула бы саму колонку, и чтение записи его и
- * берёт, не платя за раскрутку тремя запросами. Иначе `live` нет — раскрутку делает вызывающий. Записи не видно —
- * `undefined`.
+ * ЖИВОЕ действие по id — действие (не запись отмены) и не отменённое — одним запросом; иначе `undefined`. Ровно у такого
+ * действия в колонке «действие тела» раскрутка цепочки (`executor/body-chain.ts`, `effectiveBodyAction`) вернула бы
+ * саму колонку, и ответ «действующее действие текущего тела» (§8.2, К-37) обходится без неё.
+ */
+export async function liveActionOf(
+  tx: Tx,
+  graph: GraphId,
+  actionId: string,
+): Promise<JournalEntry | undefined> {
+  if (!isUuid(actionId)) return undefined;
+  return firstEntry(
+    tx,
+    sql`${SELECT_ROW} WHERE ${inGraph(graph)} AND j.id = ${actionId}::uuid AND ${IS_ACTION}
+          AND NOT EXISTS (SELECT 1 FROM action_journal u WHERE u.graph_id = j.graph_id AND u.undoes = j.id)`,
+  );
+}
+
+/**
+ * Колонки тела записи и ЖИВОЕ действие её колонки «действие тела» (`liveActionOf`) — одним запросом: чтение записи
+ * (горячий путь экрана) не платит за раскрутку. `live: null` — живого нет (колонка пуста, запись отмены, отменённое,
+ * перенесённое): раскрутку делает вызывающий. Записи не видно — `undefined`.
  */
 export async function bodyColumnProbe(
   tx: Tx,
   graph: GraphId,
   entityId: string,
 ): Promise<
-  { id: string; bodyActionId: string | null; bodyChangedAt: Date; live?: JournalEntry } | undefined
+  | { id: string; bodyActionId: string | null; bodyChangedAt: Date; live: JournalEntry | null }
+  | undefined
 > {
   if (!isUuid(entityId)) return undefined;
   const rows = (await tx.execute(sql`
@@ -392,7 +409,7 @@ export async function bodyColumnProbe(
     id: row.e_id,
     bodyActionId: row.e_body_action_id,
     bodyChangedAt: toDate(row.e_body_changed_at),
-    ...(id !== null && { live: entryFromRow({ ...rest, id }) }),
+    live: id === null ? null : entryFromRow({ ...rest, id }),
   };
 }
 

@@ -103,7 +103,8 @@ async function dbNow(tx: Tx): Promise<Date> {
 }
 
 /**
- * id сеанса, который продолжает это автосохранение, или `null` — открыть новый. `current` — строка под FOR UPDATE.
+ * Запись сеанса, который продолжает это автосохранение, или `null` — открыть новый. `current` — строка под FOR UPDATE.
+ * Запись целиком, а не id: ответ правки называет начало продолжаемого сеанса (§8.2), и перечитывать её незачем.
  *
  * Пауза — от времени изменения тела, а не от начала сеанса: сеанс длится, пока человек печатает. Внутри одной
  * транзакции время записи журнала (`now()`) не позже времени изменения тела (`clock_timestamp()`), так что от начала
@@ -113,7 +114,7 @@ async function dbNow(tx: Tx): Promise<Date> {
 export async function sessionToContinue(
   ctx: SessionProbe,
   current: EntityRow,
-): Promise<string | null> {
+): Promise<JournalEntry | null> {
   if (!ctx.req.textSession || ctx.req.actorKind !== 'owner' || current.bodyActionId === null)
     return null;
   if (pauseEnded(current.bodyChangedAt, await dbNow(ctx.tx))) return null;
@@ -123,7 +124,7 @@ export async function sessionToContinue(
   // Отменённый сеанс, чья отмена текст не сменила (набрал и стёр до исходного), колонку не двигает (триггер
   // IS DISTINCT FROM) — продолжать его нельзя: продолжение легло бы в уже отменённое действие.
   if (await isUndone(ctx.tx, ctx.req.identity.graph, s.id)) return null;
-  return s.id;
+  return s;
 }
 
 /**

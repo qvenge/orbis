@@ -5,7 +5,9 @@
 // inverse идёт через executor во внутреннем режиме (InternalUndoMode, см. types.ts) — стадии, инварианты и
 // RLS общие, конвейер не дублируется; режим недостижим через tRPC/тулы.
 import { newId, type UndoContinuation, type UndoResult } from '@orbis/shared';
+import { and, eq, inArray } from 'drizzle-orm';
 import type { Db } from '../db/client';
+import { entities } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import type { Identity } from '../identity';
 import { clockTime, ownerTimeZone } from '../query/context';
@@ -97,23 +99,34 @@ const SESSION_PIN_PREFIX = 'перед возвратом к ';
 const FORCE_PIN_PREFIX = 'перед отменой: ';
 
 /**
- * Какие записи отмена закрепит версией ПЕРВЫМИ операциями своей записи отмены — по одному закреплению на запись:
+ * Подготовка отмены до её транзакции: подпись отменяемого и закрепления.
+ *
+ * Подпись — ОДНА на все пути (`undoableTitle`: у сеанса правки текста — с отрезком «14:02–14:18», у прочих — заголовок
+ * записи журнала): её несут ответ отмены (`undone.title`), подпись «отмени последнее» и метка закрепления продолжения,
+ * и подтверждение «отменено …; ваш текст — в версии …» читается одинаково с любого входа. Считается до применения —
+ * конец сеанса известен, пока колонка тела указывает на него. `title` передаёт вызывающий, уже посчитавший её
+ * (`undoLast` — при выборе последнего).
+ *
+ * Закрепления — ПЕРВЫМИ операциями записи отмены, по одному на запись:
  * - запись сеанса правки текста — ВСЕГДА, любым путём (К-20): у записи сеанса нет «после», и текст, который возврат
  *   сотрёт, сохраняется версией «перед возвратом к ЧЧ:ММ»; отдельным действием нельзя — «отмени последнее» нашло бы его
  *   и удалило страховку;
  * - при продолжении (`force`, Р-15) — каждая запись, провалившая предпроверку правила §8.6 и ещё не закреплённая
- *   (К-30): записи, прошедшие проверку, версий не получают. Предпроверка — отдельной читающей транзакцией; запись,
- *   провалившая проверку только к транзакции отмены, остановит её правилом (гонка — отказ с новым перечнем).
+ *   (К-30): записи, прошедшие проверку, версий не получают. Предпроверка — отдельной читающей транзакцией и БЕЗ
+ *   замков строк (её вывод перепроверяет правило под замком); запись, провалившая проверку только к транзакции отмены,
+ *   остановит её правилом (гонка — отказ с новым перечнем).
  */
-async function plannedPins(
+async function prepareUndo(
   db: Db,
   who: Identity,
   action: JournalEntry,
   force: boolean,
-): Promise<UndoPin[]> {
+  title: string | undefined,
+): Promise<{ title: string; pins: UndoPin[] }> {
   const session = action.textSession && action.entityId !== null;
-  if (!session && !force) return [];
+  if (!session && !force) return { title: title ?? action.title, pins: [] };
   return withIdentity(db, who, async (tx) => {
+    const label = title ?? (await undoableTitle(tx, who.graph, action, new Date()));
     const pins: UndoPin[] = [];
     if (session && action.entityId !== null) {
       const start = clockTime(action.createdAt, await ownerTimeZone(tx, who.graph));
@@ -124,16 +137,19 @@ async function plannedPins(
       });
     }
     if (force) {
-      for (const f of await bodyRuleFailures(tx, who.graph, action, bodyEntitiesOf(action))) {
+      const failures = await bodyRuleFailures(tx, who.graph, action, bodyEntitiesOf(action), {
+        lock: false,
+      });
+      for (const f of failures) {
         if (pins.some((p) => p.entityId === f.entityId)) continue;
         pins.push({
           entityId: f.entityId,
           versionId: newId(),
-          label: versionLabel(`${FORCE_PIN_PREFIX}${action.title}`),
+          label: versionLabel(`${FORCE_PIN_PREFIX}${label}`),
         });
       }
     }
-    return pins;
+    return { title: label, pins };
   });
 }
 
@@ -156,6 +172,8 @@ async function applyUndo(
     force: boolean;
     continuation: UndoContinuation;
     beforeStages?: ExecutorDeps['beforeStages'];
+    /** Подпись отменяемого, уже посчитанная вызывающим (`undoLast`) — см. `prepareUndo`. */
+    title?: string;
   },
 ): Promise<UndoOutcomeServer> {
   if (action.inverse.length === 0) {
@@ -167,7 +185,9 @@ async function applyUndo(
   }
   // id записи отмены — ДО применения (РП-11): на нём стоят ответ и продолжения отмены
   const undoRecordId = newId();
-  const pins = await plannedPins(db, who, action, opts.force);
+  const { title, pins } = await prepareUndo(db, who, action, opts.force, opts.title);
+  // Ревизии тел, которые отмена писала, — снимаются в её транзакции (`onApplied`), чтобы ответ отдал их клиенту
+  let bodyRevisions: UndoResult['bodyRevisions'] = [];
   // Закрепления — первыми операциями той же транзакции и той же записи отмены (К-20, К-30): снимок берёт текст ДО
   // обратных операций, а отказ правила или любой операции не оставляет ни одной версии
   const operations = [
@@ -214,6 +234,18 @@ async function applyUndo(
         // inverse — цель к этому моменту уже разархивирована, и условие «не осталось ссылок
         // на архивную цель» внутри `unmarkRefSources` считается по восстановленному графу.
         await unmarkRefSources(tx, who.graph, markedRefSources(action));
+        // Ревизия тела каждой записи, чей текст отмена писала (данные отмены — ровно записи `bodyEntitiesOf`, R-21): в
+        // этой же транзакции — прочитанная позже могла бы оказаться ревизией чужой правки, и редактор, продолжив с неё,
+        // затёр бы ту правку без конфликта
+        const written = bodyEntitiesOf(action);
+        if (written.length > 0) {
+          bodyRevisions = (
+            await tx
+              .select({ entityId: entities.id, bodyRevision: entities.bodyRevision })
+              .from(entities)
+              .where(and(eq(entities.graphId, who.graph), inArray(entities.id, written)))
+          ).sort((a, b) => a.entityId.localeCompare(b.entityId));
+        }
       },
     },
   });
@@ -221,8 +253,9 @@ async function applyUndo(
   return {
     ok: true,
     actionId: undoRecordId,
-    undone: { id: action.id, title: action.title },
+    undone: { id: action.id, title },
     pinnedVersions: pins,
+    bodyRevisions,
     results: result.results.slice(pins.length),
     idempotentReplay: false,
   };
@@ -342,6 +375,7 @@ export async function undoLast(
       path: args.path ?? 'ui',
       force: false,
       continuation: args.continuation ?? { kind: 'none' },
+      title: peeked.title,
     });
     if (!result.ok) return result;
     // `findLastUndoable` записей отмены не отдаёт (К-22) — запись журнала здесь всегда действие

@@ -1292,7 +1292,8 @@ export interface MergeInverse {
   /** Записи с переписанным `orbis/progress_source`: прежнее значение. */
   progress: Array<{ entityId: string; value: unknown }>;
   /**
-   * Записи с переписанным телом: прежние `body`, `body_doc` и ОБА индекса имён целиком.
+   * Записи с переписанным телом: прежние `body`, `body_doc` и ОБА индекса имён целиком. Только держатели, чью ревизию
+   * тела слияние сдвинуло (рулинг R-21): откат не пишет тело, которого слияние не меняло.
    *
    * Индексы лежат в inverse СНИМКОМ, а не пересчитываются на откате из восстановленного
    * документа. Пересчёт дал бы «правильное» значение вместо ПРЕЖНЕГО, а это разные вещи:
@@ -1802,14 +1803,6 @@ export async function mergeProperty(
       (row.body_action_id ?? null) as string | null,
       bodyAction,
     );
-    bodies.push({
-      entityId: holder.id,
-      body,
-      bodyDoc: row.body_doc ?? null,
-      bodyRefs: (row.body_refs ?? []) as string[],
-      queryRefs: (row.query_refs ?? []) as string[],
-      bodyActionBefore: actionBefore,
-    });
     // ПРАВДА ТЕЛА — ДОКУМЕНТ (§А11-1), и переписывается он первым; `body` пересобирается из
     // него печатью, а не вторым регэкспом по markdown. Два независимых переписывания одной
     // вещи разъезжаются молча — ровно это и случилось: атрибут блока сменил имя, регэксп по
@@ -1849,8 +1842,19 @@ export async function mergeProperty(
        WHERE id = ${holder.id}::uuid
       RETURNING id::text AS id, body_revision`)) as unknown as RawRow[];
     const after = written[0];
+    // Данные отмены держателя — ТОЛЬКО если слияние сменило его тело (рулинг R-21): откат, пишущий тело, которого
+    // слияние не меняло, стёр бы текст, набранный в держателе после слияния, мимо правила отмены текста (§8.6 касается
+    // записей с ключом «действия тела до» — ровно этих). Держатель без смены в откате не участвует вовсе.
     if (after !== undefined && Number(after.body_revision) > Number(row.body_revision)) {
       bodyBefore[after.id as string] = actionBefore;
+      bodies.push({
+        entityId: holder.id,
+        body,
+        bodyDoc: row.body_doc ?? null,
+        bodyRefs: (row.body_refs ?? []) as string[],
+        queryRefs: (row.query_refs ?? []) as string[],
+        bodyActionBefore: actionBefore,
+      });
     }
   }
 

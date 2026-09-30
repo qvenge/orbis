@@ -16,11 +16,17 @@ import type {
   UndoTextChangedDetails,
 } from '@orbis/shared';
 import { and, eq } from 'drizzle-orm';
-import { entities } from '../db/schema';
+import { agentGrants, entities } from '../db/schema';
 import type { Tx } from '../db/with-identity';
 import type { Identity } from '../identity';
 import { ExecError } from './errors';
-import { findAction, isUndone, type JournalEntry, undoRecordById } from './journal-read';
+import {
+  findAction,
+  isUndone,
+  type JournalEntry,
+  liveActionOf,
+  undoRecordById,
+} from './journal-read';
 import { sessionSpan } from './text-session';
 import type { InternalUndoMode } from './types';
 
@@ -98,34 +104,40 @@ export function bodyEntitiesOf(action: JournalEntry): string[] {
 
 /**
  * Записи из `entityIds`, у которых проверка §8.6 для отмены `undoing` НЕ проходит, — с актором и временем правки,
- * остановившей проверку. Строки берутся `FOR UPDATE` — проверка и применение отмены видят один и тот же текст; порядок
- * захвата — по id (две отмены, задевшие одни записи, берут замки одним порядком). Перенесённая запись журнала
- * (`bodyBefore === null`) проходит, только если сырая колонка равна ей самой (§8.6 «Записи до плана А»).
+ * остановившей проверку. Перенесённая запись журнала (`bodyBefore === null`) проходит, только если сырая колонка равна
+ * ей самой (§8.6 «Записи до плана А»).
+ *
+ * `lock` (умолчание) — строки `FOR UPDATE`: так проверяет правило в транзакции отмены — проверка и применение видят один
+ * и тот же текст, порядок захвата — по id (две отмены, задевшие одни записи, берут замки одним порядком), и захват идёт
+ * после advisory-замков исполнителя. Предпроверка продолжения (`applyUndo`) читает БЕЗ замка: её вывод перепроверяет
+ * правило под замком, а строковый замок в отдельной транзакции вне порядка «advisory → строки» только заводил бы класс
+ * взаимных блокировок с правками пачкой.
  */
 export async function bodyRuleFailures(
   tx: Tx,
   graph: GraphId,
   undoing: JournalEntry,
   entityIds: string[],
+  opts: { lock: boolean } = { lock: true },
 ): Promise<UndoConflictEntry[]> {
   const failures: UndoConflictEntry[] = [];
   for (const entityId of [...new Set(entityIds.map((id) => id.toLowerCase()))].sort()) {
-    const rows = await tx
+    const query = tx
       .select({
         title: entities.title,
         bodyActionId: entities.bodyActionId,
         bodyChangedAt: entities.bodyChangedAt,
       })
       .from(entities)
-      .where(and(eq(entities.graphId, graph), eq(entities.id, entityId)))
-      .for('update');
+      .where(and(eq(entities.graphId, graph), eq(entities.id, entityId)));
+    const rows = opts.lock ? await query.for('update') : await query;
     const row = rows[0];
     // Записи не видно (RLS, чужой граф) — проверять нечего: обратная операция по ней откажет сама (NOT_FOUND)
     if (row === undefined) continue;
     const raw = row.bodyActionId;
     const effective = await effectiveBodyAction(tx, graph, entityId, raw);
     const passes = undoing.bodyBefore === null ? raw === undoing.id : effective === undoing.id;
-    if (!passes) failures.push(await conflictEntry(tx, graph, entityId, row, effective));
+    if (!passes) failures.push(await conflictEntry(tx, graph, undoing, entityId, row, effective));
   }
   return failures;
 }
@@ -134,15 +146,33 @@ export async function bodyRuleFailures(
  * Строка перечня отказа: кто и когда дал текущий текст. Действующее действие с записью журнала — её актор; время — время
  * изменения тела, пока колонка указывает на него (сеанс правки текста длится после своей записи), иначе время записи.
  * Без записи журнала (пустая колонка, цепочка оборвана переносом) — «вне приложения» и время изменения тела.
+ *
+ * Раскрутка, ушедшая ЗА отменяемое действие (к тексту, который был до него, или к писателю без журнала), при записи
+ * отмены в колонке значит: текст после отменяемого действия сменила эта отмена (продолжение по более раннему действию,
+ * К-30). Называется она — владелец и время изменения тела, а не автор старого текста (гейт задачи 10, M-3).
  */
 async function conflictEntry(
   tx: Tx,
   graph: GraphId,
+  undoing: JournalEntry,
   entityId: string,
   row: Pick<EntityRow, 'title' | 'bodyActionId' | 'bodyChangedAt'>,
   effective: string | null,
 ): Promise<UndoConflictEntry> {
   const by = effective === null ? undefined : await findAction(tx, graph, effective);
+  const beyond = by === undefined || by.createdAt.getTime() < undoing.createdAt.getTime();
+  if (beyond && row.bodyActionId !== null && row.bodyActionId !== effective) {
+    const undo = await undoRecordById(tx, graph, row.bodyActionId);
+    if (undo !== undefined) {
+      return {
+        entityId,
+        title: row.title,
+        actorKind: undo.actorKind,
+        actorLabel: null,
+        at: row.bodyChangedAt.toISOString(),
+      };
+    }
+  }
   if (by === undefined) {
     return {
       entityId,
@@ -156,9 +186,26 @@ async function conflictEntry(
     entityId,
     title: row.title,
     actorKind: by.actorKind,
-    actorLabel: null,
+    actorLabel: await actorLabelOf(tx, graph, by),
     at: (row.bodyActionId === by.id ? row.bodyChangedAt : by.createdAt).toISOString(),
   };
+}
+
+/** Подпись агента без названного гранта (грант снят или запись до атрибуции грантом). */
+export const AGENT_LABEL = 'агент';
+
+/**
+ * Подпись актора строки перечня: у агента — подпись его гранта (какой именно агент дал текст — §8.6 «с актором», строка
+ * агента `mcp`, Р-16), без гранта — «агент». Владельцу и ассистенту подпись не нужна: клиент называет их по `actorKind`.
+ */
+async function actorLabelOf(tx: Tx, graph: GraphId, by: JournalEntry): Promise<string | null> {
+  if (by.actorKind !== 'agent') return null;
+  if (by.actorGrantId === undefined) return AGENT_LABEL;
+  const rows = await tx
+    .select({ label: agentGrants.label })
+    .from(agentGrants)
+    .where(and(eq(agentGrants.graphId, graph), eq(agentGrants.id, by.actorGrantId)));
+  return rows[0]?.label ?? AGENT_LABEL;
 }
 
 /**
@@ -198,6 +245,14 @@ export async function assertUndoTextRule(
 ): Promise<void> {
   const failures = await bodyRuleFailures(tx, graph, undo.undoing, bodyEntitiesOf(undo.undoing));
   if (failures.length > 0 && (!undo.force || failures.some((f) => !undo.pinned.has(f.entityId)))) {
+    // Конкурентная отмена ТОГО ЖЕ действия, закоммиченная, пока эта ждала замков строк, сама сдвинула колонки: отказ
+    // здесь — «уже отменено», а не «текст изменён» с кнопкой, которая отменила бы отменённое ещё раз (гейт M-2)
+    if (await isUndone(tx, graph, undo.undoing.id)) {
+      throw new ExecError('VALIDATION', `действие ${undo.undoing.id} уже отменено`, {
+        actionId: undo.undoing.id,
+        reason: 'already_undone',
+      });
+    }
     throw new UndoTextChangedError({
       action: { id: undo.undoing.id, title: undo.undoing.title },
       entries: failures,
@@ -212,23 +267,39 @@ export async function assertUndoTextRule(
  * (конец — только пока колонка указывает на само действие, `sessionSpan`). Нет действующего действия или его записи —
  * `null`: текст дал писатель без журнала или цепочка оборвана переносом.
  *
- * `live` — живое действие колонки, если вызывающий уже прочитал его вместе с колонками (`bodyColumnProbe`): колонка,
- * указывающая на действие, которое не запись отмены и не отменено, раскрутки не требует — `effectiveBodyAction` вернул
- * бы её же. Так чтение записи — горячий путь экрана — платит одним запросом, а не четырьмя.
+ * `live` — ЖИВОЕ действие колонки (не запись отмены и не отменённое): у него раскрутка не нужна — `effectiveBodyAction`
+ * вернул бы саму колонку. Прочитано вызывающим вместе с колонками (`bodyColumnProbe`) — берётся как есть; `null` —
+ * вызывающий уже знает, что живого нет (сразу раскрутка); не передано — одним запросом (`liveActionOf`). Так чтение
+ * записи и ответ правки платят одним запросом, раскрутка — только у записи отмены в колонке.
  */
 export async function bodyActionOf(
   tx: Tx,
   who: Identity,
   row: Pick<EntityRow, 'id' | 'bodyActionId' | 'bodyChangedAt'>,
-  live?: JournalEntry,
+  live?: JournalEntry | null,
 ): Promise<BodyActionInfo | null> {
-  let entry = live !== undefined && live.id === row.bodyActionId ? live : undefined;
+  if (row.bodyActionId === null) return null;
+  let entry =
+    live === undefined
+      ? await liveActionOf(tx, who.graph, row.bodyActionId)
+      : live !== null && live.id === row.bodyActionId
+        ? live
+        : undefined;
   if (entry === undefined) {
     const actionId = await effectiveBodyAction(tx, who.graph, row.id, row.bodyActionId);
     if (actionId === null) return null;
     entry = await findAction(tx, who.graph, actionId);
     if (entry === undefined) return null;
   }
+  return bodyActionInfo(entry, who, row);
+}
+
+/** Ответ о действии тела по его записи журнала и колонкам записи графа — одна форма для всех путей (§8.2). */
+export function bodyActionInfo(
+  entry: JournalEntry,
+  who: Identity,
+  row: Pick<EntityRow, 'bodyActionId' | 'bodyChangedAt'>,
+): BodyActionInfo {
   const span = sessionSpan(entry, row);
   return {
     actionId: entry.id,

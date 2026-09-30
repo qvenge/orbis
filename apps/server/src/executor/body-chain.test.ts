@@ -191,6 +191,26 @@ describe('effectiveBodyAction (§8.6, К-18): раскрутка цепочки 
   });
 });
 
+test('цикл в повреждённых данных журнала: раскрутка останавливается пределом и называет пусто (правило тогда отказывает)', async () => {
+  const g = await freshGraph();
+  const id = await seedNote(g, 'исходный');
+  const x1 = await edit(g, id, 'один', 'owner');
+  await undo(g, x1);
+  const x2 = await edit(g, id, 'два', 'owner');
+  const u2 = await undo(g, x2);
+  const u1 = (await undoRecordOf(g, x1))?.id as string;
+  // Порча: «действие тела до» X1 указывает на отмену X2, а X2 — на отмену X1 — цепочка замкнута
+  const setBefore = (action: string, value: string) =>
+    admin.db.execute(
+      sql`UPDATE action_journal SET body_before = jsonb_build_object(${id}::text, ${value}::text)
+           WHERE graph_id = ${g}::uuid AND id = ${action}::uuid`,
+    );
+  await setBefore(x1, u2);
+  await setBefore(x2, u1);
+  expect((await columns(id)).raw).toBe(u2);
+  expect(await effective(g, id)).toBeNull();
+});
+
 describe('bodyEntitiesOf (§8.6 «Кого касается»)', () => {
   test('ключи «действия тела до»; у перенесённой записи — записи с телом из данных отмены', async () => {
     const g = await freshGraph();

@@ -1,6 +1,6 @@
 // apps/server/src/executor/types.ts
 // Точные сигнатуры executor'а (контракт Task 9; на них встают Task 10–15 и весь 1b).
-import type { AccountId, GraphId, UndoContinuation } from '@orbis/shared';
+import type { AccountId, BodyActionInfo, GraphId, UndoContinuation } from '@orbis/shared';
 import type { Tx } from '../db/with-identity';
 import type { Identity } from '../identity';
 import { ExecError } from './errors';
@@ -130,6 +130,11 @@ export interface ExecuteOk {
   actionId: string;
   results: unknown[]; // по одному на операцию (wire-формы сущностей/relations)
   idempotentReplay: boolean; // true: повтор — ничего не применялось
+  /**
+   * Действующее действие текущего тела записи после одиночной правки (§8.2 «ответы с записью») — только по просьбе
+   * `ExecutorDeps.reportBodyAction`; посчитано в транзакции правки (рулинг R-22).
+   */
+  bodyAction?: BodyActionInfo | null;
 }
 
 export interface ExecuteErr {
@@ -388,8 +393,10 @@ export interface ActionRecord {
    * изменило (§8.6: `{<id записи>: <id действия> | null}`). Колонки журнала (`text_session`, `body_before`, 0025).
    * `body_before` заполняет executor (задача 7): ключ — запись, чью ревизию тела действие РЕАЛЬНО сдвинуло (триггер
    * `entities_body_stamp`), значение — её `body_action_id` ДО действия; у слияния свойства — по каждому держателю.
-   * Ни одной такой записи — ключа нет (синк пишет NULL). `text_session` — запись сеанса правки текста (задача 9,
-   * `text-session.ts`): только у автосохранения редактора владельца, у прочих ключа нет (синк пишет `false`).
+   * Ни одной такой записи — ПУСТОЙ объект (рулинг R-21): ключа нет только у записей, перенесённых до плана А (синк
+   * пишет NULL), и правило отмены текста по этому их и узнаёт. Данные отмены пишут тело ровно этих записей.
+   * `text_session` — запись сеанса правки текста (задача 9, `text-session.ts`): только у автосохранения редактора
+   * владельца, у прочих ключа нет (синк пишет `false`).
    */
   text_session?: boolean;
   body_before?: Record<string, string | null>;
@@ -430,8 +437,8 @@ export interface UndoWrite {
   actorUserId: AccountId;
   operations: ActionOperation[];
   pinnedVersionIds: string[];
-  /** «Действие тела до» по записям, чьё тело отмена сменила (§8.6) — тем же сбором, что у действий; нет — NULL. */
-  bodyBefore: Record<string, string | null> | null;
+  /** «Действие тела до» по записям, чьё тело отмена сменила (§8.6) — тем же сбором, что у действий; нет — `{}`. */
+  bodyBefore: Record<string, string | null>;
 }
 
 /** Путь отмены — поле записи отмены (РП-11); исполнение отмены при этом всегда `source:'system'` (инварианты). */
@@ -581,4 +588,12 @@ export interface ExecutorDeps {
    * координатором как минимальное расширение; других потребителей не заводить без нужды.
    */
   beforeStages?: (tx: Tx) => Promise<void>;
+  /**
+   * Ответ одиночной правки записи (`entity_update`) несёт действующее действие текущего тела (`ExecuteOk.bodyAction`,
+   * спека скорости §8.2, рулинг R-22): исполнитель считает его в СВОЕЙ транзакции по строке `RETURNING` — у правки,
+   * сменившей тело, без запроса, у прочих — одним запросом (раскрутка — только когда колонка указывает на запись
+   * отмены). Ставит роутер `entity.update`: отдельная читающая транзакция после коммита стоила бы каждому
+   * автосохранению лишних обходов.
+   */
+  reportBodyAction?: boolean;
 }

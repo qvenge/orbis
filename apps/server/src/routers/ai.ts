@@ -68,7 +68,12 @@ export const aiRouter = router({
         continuation: { kind: 'here' },
       });
       if (!r.ok) throw execErrorToTRPC(r.error);
-      return { actionId: r.actionId, undone: r.undone, pinnedVersions: r.pinnedVersions };
+      return {
+        actionId: r.actionId,
+        undone: r.undone,
+        pinnedVersions: r.pinnedVersions,
+        bodyRevisions: r.bodyRevisions,
+      };
     }),
 
   /**

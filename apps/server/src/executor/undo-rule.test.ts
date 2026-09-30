@@ -11,11 +11,15 @@
 // записи журнала ставит база, часов запроса она не знает (то же, что в `text-session.test.ts`).
 import { afterAll, describe, expect, test } from 'bun:test';
 import { type GraphId, newId } from '@orbis/shared';
+import { DOC_SCHEMA_VERSION } from '@orbis/shared/doc';
 import { TRPCError } from '@trpc/server';
 import { fetchRequestHandler } from '@trpc/server/adapters/fetch';
 import { sql } from 'drizzle-orm';
+import { drizzle } from 'drizzle-orm/postgres-js';
+import postgres from 'postgres';
 import { adminDb, appDb, freshGraph, personal, requireEnv } from '../../test/helpers';
 import { actionsOf, journalOf, undoRecordOf } from '../../test/journal-helpers';
+import * as schema from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { approvePending, createPending, rejectPending, rejectPendingTx } from '../policy/pending';
 import { appRouter } from '../router';
@@ -25,7 +29,7 @@ import { execute } from './executor';
 import { makeJournalSink } from './journal';
 import type { JournalEntry } from './journal-read';
 import type { ExecuteResult } from './types';
-import { undoAction } from './undo';
+import { peekLastUndoable, undoAction } from './undo';
 
 requireEnv();
 
@@ -122,6 +126,7 @@ async function agentEdit(
   g: GraphId,
   edits: Array<{ id: string; body?: string; title?: string }>,
   label = 'Правка агента',
+  grant = GRANT,
 ): Promise<string> {
   const operations = [];
   for (const e of edits) {
@@ -144,7 +149,7 @@ async function agentEdit(
         identity: personal(g),
         actorKind: 'agent',
         source: 'mcp',
-        actorGrantId: GRANT,
+        actorGrantId: grant,
         operations,
         ...(operations.length > 1 && { batchId: newId(), batchLabel: label }),
       },
@@ -348,6 +353,8 @@ describe('правило отмены текста (§8.6): отказ всег�
       actionId: rec.id,
       undone: { id: a, title: 'Правка агента' },
       pinnedVersions: [{ entityId: note, versionId: v, label: 'перед отменой: Правка агента' }],
+      // Ревизия тела, с которой открытый редактор продолжит набор без перечитывания записи
+      bodyRevisions: [{ entityId: note, bodyRevision: (await rowOf(note)).rev }],
     });
     // Соседняя запись проверку прошла бы и без продолжения — версии у неё нет
     expect(await versionsOf(other)).toEqual([]);
@@ -372,7 +379,8 @@ describe('правило отмены текста (§8.6): отказ всег�
     expect(e.code).toBe('CONFLICT');
     expect(causeOf(e).code).toBe('UNDO_TEXT_CHANGED');
     expect(causeOf(e).details?.entries).toEqual([
-      expect.objectContaining({ entityId: note, actorKind: 'agent', actorLabel: null }),
+      // Грант агента в тесте — только атрибуция (строки гранта нет): подпись — «агент», не пусто (Fable M-4)
+      expect.objectContaining({ entityId: note, actorKind: 'agent', actorLabel: 'агент' }),
     ]);
     expect((await rowOf(note)).body).toBe('агент');
     expect(await versionsOf(note)).toEqual([]);
@@ -399,7 +407,13 @@ describe('правило отмены текста (§8.6): отказ всег�
     const g = await freshGraph();
     const note = await seedNote(g, 'Заметка', 'исходный');
     const b1 = await ownerEdit(g, note, 'один', 'Жест 1');
-    await agentEdit(g, [{ id: note, body: 'агент' }]);
+    // Агент с настоящим грантом: перечень называет его подписью гранта (§8.6 «с актором», Р-16)
+    const grant = newId();
+    await admin.db.execute(
+      sql`INSERT INTO agent_grants (id, graph_id, kind, label, scope, issued_by)
+          VALUES (${grant}::uuid, ${g}::uuid, 'pat', 'Claude Code (ноутбук)', 'full', ${g}::uuid)`,
+    );
+    await agentEdit(g, [{ id: note, body: 'агент' }], 'Правка агента', grant);
     const b2 = await ownerEdit(g, note, 'два', 'Жест 2');
     const caller = callerFor(g);
 
@@ -408,7 +422,11 @@ describe('правило отмены текста (§8.6): отказ всег�
     const e = await trpcError(caller.ai.undo({ actionId: b1 }));
     expect(causeOf(e).code).toBe('UNDO_TEXT_CHANGED');
     expect(causeOf(e).details?.entries).toEqual([
-      expect.objectContaining({ entityId: note, actorKind: 'agent' }),
+      expect.objectContaining({
+        entityId: note,
+        actorKind: 'agent',
+        actorLabel: 'Claude Code (ноутбук)',
+      }),
     ]);
     expect((await rowOf(note)).body).toBe('агент');
     expect(await undoRecordOf(g, b1)).toBeUndefined();
@@ -767,6 +785,17 @@ describe('правило отмены текста (§8.6): цепочка по�
 
     const e = await trpcError(caller.ai.undo({ actionId: y }));
     expect(causeOf(e).code).toBe('UNDO_TEXT_CHANGED');
+    // Текст после Y сменила отмена X владельцем (продолжение): её и называет строка перечня — владелец, время смены
+    // тела, — а не автор старого текста до X (сев, «вне приложения»; гейт M-3)
+    expect(causeOf(e).details?.entries).toEqual([
+      {
+        entityId: note,
+        title: 'Заметка',
+        actorKind: 'owner',
+        actorLabel: null,
+        at: (await rowOf(note)).changedAt.toISOString(),
+      },
+    ]);
 
     await caller.ai.undo({ actionId: y, force: true });
     expect((await rowOf(note)).body).toBe('агент'); // текст до Y — текст агента
@@ -820,6 +849,335 @@ describe('правило отмены текста (§8.6): цепочка по�
   });
 });
 
+describe('данные отмены пишут тело только при реальной смене текста (рулинг R-21)', () => {
+  test('пачка агента: n1 — новый текст, n2 — тот же текст и новый заголовок; владелец набирает в n2 → отмена проходит и текст владельца в n2 цел', async () => {
+    const g = await freshGraph();
+    const n1 = await seedNote(g, 'Заметка 1', 'исходный 1');
+    const n2 = await seedNote(g, 'Заметка 2', 'исходный 2');
+    const a = await agentEdit(g, [
+      { id: n1, body: 'агент 1' },
+      { id: n2, body: 'исходный 2', title: 'Заметка 2 (агент)' },
+    ]);
+    const action = await mustJournal(g, a);
+    expect(action.bodyBefore).toEqual({ [n1]: null });
+    // Данные отмены n2 тела не несут — только заголовок: тело n2 действие не меняло
+    const n2Inverse = action.inverse.find((op) => op.payload.id === n2)?.payload;
+    expect(n2Inverse).toEqual({ id: n2, title: 'Заметка 2' });
+    await autosave(g, n2, 'владелец 2 — набранный текст');
+
+    const r = await callerFor(g).ai.undo({ actionId: a });
+    expect((await rowOf(n1)).body).toBe('исходный 1');
+    expect(await rowOf(n2)).toMatchObject({
+      title: 'Заметка 2',
+      body: 'владелец 2 — набранный текст',
+    });
+    expect(r.pinnedVersions).toEqual([]);
+    expect(await versionsOf(n2)).toEqual([]);
+  });
+
+  test('агент сменил заголовок и прислал то же тело; одиночная правка тем же телом — отмены проходят без ложного отказа (Fable I-1); новые записи без смены тела — `body_before = {}`', async () => {
+    const g = await freshGraph();
+    const n = await seedNote(g, 'Заметка', 'текст');
+    const t = await agentEdit(g, [{ id: n, title: 'Заметка (агент)', body: 'текст' }]);
+    const same = await agentEdit(g, [{ id: n, body: 'текст' }]);
+    // Пусто, а не NULL: NULL значит только «перенесена до плана А» (её правило сверяет по сырой колонке)
+    expect((await mustJournal(g, t)).bodyBefore).toEqual({});
+    expect((await mustJournal(g, same)).bodyBefore).toEqual({});
+    expect((await mustJournal(g, same)).inverse).toEqual([
+      { op: 'entity_update', payload: { id: n } },
+    ]);
+    await autosave(g, n, 'владелец дописал');
+
+    const caller = callerFor(g);
+    await caller.ai.undo({ actionId: same });
+    await caller.ai.undo({ actionId: t });
+    expect(await rowOf(n)).toMatchObject({ title: 'Заметка', body: 'владелец дописал' });
+    expect(await versionsOf(n)).toEqual([]);
+    // Пусто, а не NULL, у каждого писателя журнала: пачка без смены тела и запись отмены, тела не сменившая
+    const other = await seedNote(g, 'Соседняя', 'сосед');
+    const batch = await agentEdit(g, [
+      { id: n, title: 'Заметка (пачка)' },
+      { id: other, title: 'Соседняя (пачка)' },
+    ]);
+    expect((await mustJournal(g, batch)).bodyBefore).toEqual({});
+    expect((await mustUndoRecord(g, same)).bodyBefore).toEqual({});
+  });
+
+  test('слияние свойства: держатель, чей документ переписывание не сменило, в данных отмены не участвует — набор владельца в нём отмена не трогает', async () => {
+    const g = await freshGraph();
+    const { holders, merge, source } = await mergeWorldWithStale(g);
+    const [h1, stale] = holders as [string, string];
+    const merged = await mustJournal(g, merge);
+    expect(Object.keys(merged.bodyBefore ?? {})).toEqual([h1]);
+    const iv = merged.inverse.find((op) => op.op === 'property_merge_undo')?.payload as {
+      bodies: Array<{ entityId: string }>;
+    };
+    expect(iv.bodies.map((b) => b.entityId)).toEqual([h1]);
+    expect(source).toBeString();
+
+    await autosave(g, stale, 'владелец набрал в держателе');
+    await callerFor(g).ai.undo({ actionId: merge });
+    expect((await rowOf(h1)).body).toContain('user/effort=5');
+    expect((await rowOf(stale)).body).toBe('владелец набрал в держателе');
+  });
+});
+
+/**
+ * Слияние `user/effort → user/energy` с двумя держателями: h1 — запрос по источнику в теле (переписывание меняет его
+ * документ), второй — держатель по устаревшему индексу `query_refs` (тело источника не называет, переписывание оставляет
+ * документ прежним — ревизия тела не растёт).
+ */
+async function mergeWorldWithStale(g: GraphId) {
+  const property = async (key: string): Promise<string> =>
+    (
+      ok(
+        await execute(
+          db,
+          {
+            identity: personal(g),
+            actorKind: 'owner',
+            source: 'ui',
+            operations: [
+              {
+                tool: 'property_create',
+                input: {
+                  key,
+                  label: { ru: key },
+                  description: { ru: 'поле слияния' },
+                  type: { kind: 'number' },
+                  status: 'active',
+                },
+              },
+            ],
+          },
+          { sink },
+        ),
+      ).results[0] as { property: string }
+    ).property;
+  const source = await property('user/effort');
+  const into = await property('user/energy');
+  const h1 = await seedNote(
+    g,
+    'Смарт-лист',
+    'Список\n\n{{query: aspect=orbis/task, user/effort=5}}',
+  );
+  const stale = await seedNote(g, 'Устаревший индекс', 'обычный текст');
+  await admin.db.execute(
+    sql`UPDATE entities SET query_refs = ARRAY[${source}]::text[] WHERE id = ${stale}::uuid`,
+  );
+  const revBefore = (await rowOf(stale)).rev;
+  const merged = ok(
+    await execute(
+      db,
+      {
+        identity: personal(g),
+        actorKind: 'owner',
+        source: 'ui',
+        operations: [{ tool: 'property_merge', input: { source, into } }],
+      },
+      { sink },
+    ),
+  );
+  // Предпосылка: документ устаревшего держателя переписывание не сменило — ревизия тела прежняя
+  expect((await rowOf(stale)).rev).toBe(revBefore);
+  return { holders: [h1, stale], merge: merged.actionId, source };
+}
+
+describe('ответ правки: действующее действие тела в транзакции правки (рулинг R-22)', () => {
+  test('entity.update не открывает второй транзакции: правка тела — без лишних запросов, прочая правка — один запрос', async () => {
+    const g = await freshGraph();
+    const a = await seedNote(g, 'Через роутер', 'до');
+    const b = await seedNote(g, 'Без ответа о действии', 'до');
+    // Отдельный клиент на ОДНО соединение со счётчиком запросов драйвера (приём `goals/progress.test.ts`)
+    const seen: string[] = [];
+    const counted = postgres(process.env.DATABASE_URL as string, {
+      max: 1,
+      prepare: process.env.PG_PREPARE !== 'false',
+      onnotice: () => {},
+      debug: (_c: unknown, q: string) => {
+        seen.push(q);
+      },
+    });
+    const cdb = drizzle(counted, { schema });
+    const caller = createCaller({
+      identity: personal(g),
+      actorKind: 'owner',
+      db: cdb,
+      clientVersion: null,
+    });
+    const count = async (fn: () => Promise<unknown>): Promise<number> => {
+      seen.length = 0;
+      await fn();
+      return seen.length;
+    };
+    // Тот же запрос исполнителю БЕЗ ответа о действии тела — базовая цена правки (как до задачи 10)
+    const bare = async (id: string, input: Record<string, unknown>, autosaveFlag: boolean) =>
+      ok(
+        await execute(
+          cdb,
+          {
+            identity: personal(g),
+            actorKind: 'owner',
+            source: 'ui',
+            ...(autosaveFlag && { textSession: true }),
+            operations: [{ tool: 'entity_update', input: { id, ...input } }],
+          },
+          { sink },
+        ),
+      );
+    try {
+      // Прогрев: соединение читает каталог типов, кеш реестра снимается
+      await caller.entity.get({ id: a });
+      await bare(b, { title: 'Без ответа о действии' }, false);
+
+      // Новый сеанс — колонку ставит это же действие: ответ без запроса
+      const viaRouter = await count(() =>
+        caller.entity.update({ id: a, body: 'раз', expectedBodyRevision: 1, autosave: true }),
+      );
+      const baseline = await count(() => bare(b, { body: 'раз', expectedBodyRevision: 1 }, true));
+      expect(viaRouter).toBe(baseline);
+      // Продолжение сеанса — запись сеанса уже прочитана пробой: без запроса
+      const cont = await count(() =>
+        caller.entity.update({ id: a, body: 'два', expectedBodyRevision: 2, autosave: true }),
+      );
+      const contBase = await count(() => bare(b, { body: 'два', expectedBodyRevision: 2 }, true));
+      expect(cont).toBe(contBase);
+      // Правка заголовка колонку не трогает — один запрос за живым действием колонки, без раскрутки
+      const title = await count(() => caller.entity.update({ id: a, title: 'Новое имя' }));
+      const titleBase = await count(() => bare(b, { title: 'Новое имя Б' }, false));
+      expect(title).toBe(titleBase + 1);
+    } finally {
+      await counted.end();
+    }
+  });
+
+  test('начало нового сеанса в ответе правки — то же, что называет чтение записи (время записи журнала)', async () => {
+    const g = await freshGraph();
+    const caller = callerFor(g);
+    const note = await seedNote(g, 'Заметка', 'до');
+    const saved = await caller.entity.update({
+      id: note,
+      body: 'набор',
+      expectedBodyRevision: 1,
+      autosave: true,
+    });
+    const read = await caller.entity.get({ id: note });
+    expect(saved.bodyAction).toEqual(read.bodyAction);
+    // Колонка — запись отмены: ответ правки заголовка раскручивает её (редкий путь)
+    const s = (await sessionsOf(g))[0] as JournalEntry;
+    await caller.ai.undo({ actionId: s.id });
+    const renamed = await caller.entity.update({ id: note, title: 'Новое имя' });
+    expect(renamed.bodyAction).toBeNull(); // до сеанса текст дал сев без журнала
+    expect(renamed.bodyAction).toEqual((await caller.entity.get({ id: note })).bodyAction);
+  });
+});
+
+describe('гейт задачи 10: канал отказа, двойная отмена, подписи, ревизии', () => {
+  test('VALIDATION несёт в data.orbis только причину-КОД: текст документа из сообщения ProseMirror не уходит (M-1, РП-5)', async () => {
+    const g = await freshGraph();
+    const note = await seedNote(g, 'Заметка', 'текст');
+    const secret = 'СЕКРЕТНЫЙ-ТЕКСТ-ЗАПИСИ';
+    const doc = {
+      type: 'doc',
+      content: [
+        {
+          type: 'bulletList',
+          content: [{ type: 'paragraph', content: [{ type: 'text', text: secret }] }],
+        },
+      ],
+    };
+    // Предпосылка: причина отказа проверки — свободный текст с куском документа
+    const direct = await execute(db, {
+      identity: personal(g),
+      actorKind: 'owner',
+      source: 'ui',
+      operations: [
+        {
+          tool: 'entity_update',
+          input: { id: note, bodyDoc: { v: DOC_SCHEMA_VERSION, doc }, expectedBodyRevision: 1 },
+        },
+      ],
+    });
+    expect(direct.ok).toBe(false);
+    if (direct.ok) return;
+    expect(JSON.stringify(direct.error.details)).toContain(secret);
+
+    const res = await postMutation(g, 'entity.update', {
+      id: note,
+      bodyDoc: { v: DOC_SCHEMA_VERSION, doc },
+      expectedBodyRevision: 1,
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.error?.data?.orbis).toEqual({ code: 'VALIDATION', details: {} });
+    expect(JSON.stringify(res.body)).not.toContain(secret);
+  });
+
+  test('две отмены одного действия с телом наперегонки: вторая — «уже отменено», а не «текст изменён» (M-2)', async () => {
+    const g = await freshGraph();
+    const note = await seedNote(g, 'Заметка', 'исходный');
+    const x = await agentEdit(g, [{ id: note, body: 'агент' }]);
+    // Вторая прошла предварительное чтение («не отменено») и ждёт в своей транзакции, пока первая коммитится
+    let entered: () => void = () => {};
+    const inside = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    let open: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      open = resolve;
+    });
+    const second = undoAction(
+      db,
+      { identity: personal(g), actionId: x },
+      {
+        beforeStages: async () => {
+          entered();
+          await gate;
+        },
+      },
+    );
+    await inside;
+    // Первая обязана пройти, пока вторая ждёт у шва; с пределом — чтобы поломка порядка (вторая держит строку до шва)
+    // не запирала тест навсегда: ворота открываются в любом случае, и обе транзакции завершаются
+    const firstRun = undoAction(db, { identity: personal(g), actionId: x });
+    const firstInTime = await Promise.race([
+      firstRun.then(() => true),
+      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 5_000)),
+    ]);
+    open();
+    const first = await firstRun;
+    expect(firstInTime).toBe(true);
+    expect(first.ok).toBe(true);
+    const r = await second;
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.error.code).toBe('VALIDATION');
+    expect(r.error.details).toMatchObject({ reason: 'already_undone' });
+  });
+
+  test('подпись отменённого — одна на все пути: у сеанса `ai.undo` называет отрезок, как «отмени последнее»; ревизия ответа — основа следующего автосохранения', async () => {
+    const g = await freshGraph();
+    const caller = callerFor(g);
+    const note = await seedNote(g, 'Заметка', 'до сеанса');
+    await autosave(g, note, 'сеанс');
+    const s = (await sessionsOf(g))[0] as JournalEntry;
+    const expected = (await peekLastUndoable(db, personal(g)))?.title ?? 'нет последнего';
+    expect(expected).toMatch(/^правка текста «Заметка» /);
+
+    const r = await caller.ai.undo({ actionId: s.id });
+    expect(r.undone).toEqual({ id: s.id, title: expected });
+    const rev = (await rowOf(note)).rev;
+    expect(r.bodyRevisions).toEqual([{ entityId: note, bodyRevision: rev }]);
+    // Редактор продолжает набор с ревизии из ответа отмены — без перечитывания и без ложного STALE_VERSION
+    const next = await caller.entity.update({
+      id: note,
+      body: 'после возврата',
+      expectedBodyRevision: r.bodyRevisions[0]?.bodyRevision as number,
+      autosave: true,
+    });
+    expect(next.body).toBe('после возврата');
+  });
+});
+
 describe('продолжение (Р-15): гонка между предпроверкой и транзакцией отмены', () => {
   test('запись, провалившая проверку только к транзакции (её нет среди закреплённых), останавливает продолжение отказом с новым перечнем', async () => {
     const g = await freshGraph();
@@ -857,6 +1215,52 @@ describe('продолжение (Р-15): гонка между предпров
     expect((await rowOf(n1)).body).toBe('владелец 1');
     expect(await undoRecordOf(g, a)).toBeUndefined();
   });
+});
+
+describe('предпроверка продолжения — без замков строк (гейт M-4)', () => {
+  test('строка записи занята чужой транзакцией: предпроверка её не ждёт — ждёт только правило в транзакции отмены', async () => {
+    const g = await freshGraph();
+    const note = await seedNote(g, 'Заметка', 'исходный');
+    const x = await agentEdit(g, [{ id: note, body: 'агент' }]);
+    await autosave(g, note, 'владелец');
+
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let locked: () => void = () => {};
+    const holding = new Promise<void>((resolve) => {
+      locked = resolve;
+    });
+    // Чужая транзакция держит строку записи (как правка пачкой, взявшая её раньше)
+    const holder = admin.db.transaction(async (tx) => {
+      await tx.execute(sql`SELECT 1 FROM entities WHERE id = ${note}::uuid FOR UPDATE`);
+      locked();
+      await gate;
+    });
+    await holding;
+    let reachedUndoTx = false;
+    const undo = undoAction(
+      db,
+      { identity: personal(g), actionId: x, force: true, continuation: { kind: 'here' } },
+      {
+        beforeStages: async () => {
+          reachedUndoTx = true;
+        },
+      },
+    );
+    // Предпроверка (отдельная транзакция до отмены) строку не запирает — транзакция отмены начинается, пока строка
+    // занята; ждать чужой замок будет только правило, в общем порядке «advisory → строки»
+    const deadline = Date.now() + 5_000;
+    while (!reachedUndoTx && Date.now() < deadline) await new Promise((r) => setTimeout(r, 20));
+    const reachedWhileLocked = reachedUndoTx;
+    release();
+    await holder;
+    const r = await undo;
+    expect(reachedWhileLocked).toBe(true);
+    expect(r.ok).toBe(true);
+    expect((await rowOf(note)).body).toBe('исходный');
+  }, 30_000);
 });
 
 describe('отмена: повтор и карточка отката', () => {
@@ -897,25 +1301,43 @@ describe('отмена: повтор и карточка отката', () => {
     const gate = new Promise<void>((resolve) => {
       release = resolve;
     });
+    let locked: () => void = () => {};
+    const holding = new Promise<void>((resolve) => {
+      locked = resolve;
+    });
     const holder = withIdentity(db, personal(g), async (tx) => {
       await rejectPendingTx(tx, { identity: personal(g), pendingId: late });
+      locked(); // замок единицы взят и отказ записан (не закоммичен)
       await gate;
     });
+    await holding;
     let settled = false;
     const approving = approvePending(db, { identity: personal(g), pendingId: late }).finally(() => {
       settled = true;
     });
+    // Ждём ИМЕННО ожидание замка этой единицы (`acquirePendingLock`: ключ `hashtextextended(pendingId, 0)`): база одна
+    // на все деревья, и чужой ожидающий advisory-замок не должен отпускать держателя раньше времени
     const deadline = Date.now() + 10_000;
+    let waited = false;
     while (!settled && Date.now() < deadline) {
       const waiting = (await admin.db.execute(
-        sql`SELECT count(*)::int AS n FROM pg_locks WHERE locktype = 'advisory' AND NOT granted`,
+        sql`SELECT count(*)::int AS n FROM pg_locks
+             WHERE locktype = 'advisory' AND NOT granted AND objsubid = 1
+               AND classid::bigint = ((hashtextextended(${late}, 0) >> 32) & 4294967295)
+               AND objid::bigint = (hashtextextended(${late}, 0) & 4294967295)`,
       )) as unknown as Array<{ n: number }>;
-      if ((waiting[0]?.n ?? 0) > 0) break;
+      if ((waiting[0]?.n ?? 0) > 0) {
+        waited = true;
+        break;
+      }
       await new Promise((r) => setTimeout(r, 20));
     }
     release();
     await holder;
     const r = await approving;
+    // «Принять» дошло до шва транзакции отмены и ждало замок единицы — порядок проверен именно там, а не отказом
+    // предварительного чтения
+    expect(waited).toBe(true);
     expect(r.ok).toBe(false);
     if (r.ok) return;
     expect(r.error.code).toBe('VALIDATION');

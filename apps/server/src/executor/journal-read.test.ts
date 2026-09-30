@@ -310,9 +310,10 @@ describe('API чтения журнала (задача 4, РП-9)', () => {
     expect(undo.cardTool).toBe('undo');
     expect(undo.inverse).toEqual([]);
     const created = must(all[0], 'первое действие');
-    // Поля среза, которые заполнят задачи 7 и 9, — умолчания колонок
+    // Поля среза, которые заполнят задачи 7 и 9, — умолчания колонок; «действие тела до» у новой записи — пустой
+    // объект (NULL — только у перенесённых до плана А, рулинг R-21)
     expect(created.textSession).toBe(false);
-    expect(created.bodyBefore).toBeNull();
+    expect(created.bodyBefore).toEqual({});
     expect(created.pinnedVersionIds).toEqual([]);
     expect(created.cardInReply).toBe(false);
     expect(created.undoes).toBeNull();

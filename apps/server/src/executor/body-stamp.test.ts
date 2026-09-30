@@ -149,10 +149,12 @@ describe('колонки тела (задача 7, §8.1)', () => {
       }),
     );
     expect(await rawEntity(n.entityId)).toEqual(created);
-    // Запись журнала правки есть, но тело она не сменила — «действия тела до» у неё нет вовсе (К-34)
+    // Запись журнала правки есть, но тело она не сменила — «действие тела до» пусто (К-34), и пустым ОБЪЕКТОМ, а не
+    // NULL: NULL значит «перенесена до плана А» (рулинг R-21); данные отмены тела не несут
     const entry = await journalOf(g, u.actionId);
     expect(entry).toBeDefined();
-    expect(entry?.bodyBefore ?? null).toBeNull();
+    expect(entry?.bodyBefore).toEqual({});
+    expect(entry?.inverse).toEqual([{ op: 'entity_update', payload: { id: n.entityId } }]);
   });
 
   test('пачка: одно действие на транзакцию — колонка у всех записей пачки = batchId', async () => {
@@ -312,9 +314,9 @@ describe('колонки тела (задача 7, §8.1)', () => {
       ),
     );
     expect((await journalOf(g, batchId))?.bodyBefore).toEqual({ [a.entityId]: a.actionId });
-    // Одиночная правка без тела — поля нет вовсе, а не пустой объект
+    // Одиночная правка без тела — пустой объект: NULL остаётся только у перенесённых записей (рулинг R-21)
     const t = ok(await run(g, 'entity_update', { id: b.entityId, title: 'Б2' }));
-    expect((await journalOf(g, t.actionId))?.bodyBefore ?? null).toBeNull();
+    expect((await journalOf(g, t.actionId))?.bodyBefore).toEqual({});
   });
 
   test('засев тела проекта в attach: колонка — действие attach, «до» — действие создания', async () => {

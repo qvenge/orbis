@@ -204,14 +204,15 @@ describe('боевой синк: строка action_journal (§7.8, §11.2)', (
     expect([row.title, row.cardTool]).toEqual(['Кофе', 'entity_create']);
     // Тред без явного — глобальный (РП-10: до задачи 6 как сегодня)
     expect(row.threadId).toBe(globalThreadId(user));
-    // Поля среза — умолчания, пока их не заполнят задачи 7 и 9
+    // Поля среза — умолчания; «действие тела до» у новой записи без смены тела — пустой объект (создание ключа не
+    // заводит), NULL — только у перенесённых до плана А (рулинг R-21)
     expect([
       row.textSession,
       row.bodyBefore,
       row.undoes,
       row.pinnedVersionIds,
       row.cardInReply,
-    ]).toEqual([false, null, null, [], false]);
+    ]).toEqual([false, {}, null, [], false]);
     expect(row.entityIds).toEqual([e.id]);
     // Боковая таблица — по строке на каждую затронутую запись, той же транзакцией (РП-8)
     expect(await journalEntitiesOf(user, r.actionId)).toEqual([e.id]);

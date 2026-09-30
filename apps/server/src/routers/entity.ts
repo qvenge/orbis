@@ -326,7 +326,8 @@ export const entityRouter = router({
             ...(autosave === true && { textSession: true }),
             operations: [{ tool: 'entity_update', input: fields }],
           },
-          { sink },
+          // Действующее действие тела ответа считает исполнитель в транзакции правки (R-22), см. ниже
+          { sink, reportBodyAction: true },
         );
         if (!r.ok) throw execErrorToTRPC(r.error);
         // Эскалация повторных исправлений категории (§7.8, решение K7): пост-коммит
@@ -339,13 +340,10 @@ export const entityRouter = router({
         });
         // Ответ правки — полная строка `RETURNING` с ревизией тела (`toWireEntityWithRevision`): с неё клиент начинает
         // следующую правку текста (§8.1). И действующее действие тела (§8.2 «ответы с записью»): экран после своей
-        // правки запись не перечитывает, а пункт «Вернуть текст как на …» стоит на нём. Отдельной читающей транзакцией
-        // после коммита: исполнитель общий у всех путей записи, и расширять его ответ ради одного роутера незачем.
-        const entity = r.results[0] as WireEntityWithRevision;
-        const bodyAction = await withIdentity(ctx.db, ctx.identity, (tx) =>
-          currentBodyAction(tx, ctx.identity, entity.id),
-        );
-        return { ...entity, bodyAction };
+        // правки запись не перечитывает, а пункт «Вернуть текст как на …» стоит на нём. Считает его исполнитель в
+        // транзакции правки (`reportBodyAction`, R-22) — отдельная читающая транзакция стоила бы каждому
+        // автосохранению лишних обходов.
+        return { ...(r.results[0] as WireEntityWithRevision), bodyAction: r.bodyAction ?? null };
       },
     ),
 
