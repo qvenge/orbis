@@ -2391,7 +2391,7 @@ BEGIN
   END IF;
   RETURN NEW;
 END $$;--> statement-breakpoint
-CREATE TRIGGER "entities_body_stamp" BEFORE INSERT OR UPDATE ON "entities"
+CREATE TRIGGER "entities_body_stamp" BEFORE INSERT OR UPDATE OF "body", "body_doc" ON "entities"
   FOR EACH ROW EXECUTE FUNCTION "public"."entities_body_stamp"();
 ```
   `db/schema.ts`: `bodyRevision: integer('body_revision').notNull().default(1)`, `bodyActionId: uuid('body_action_id')`,
