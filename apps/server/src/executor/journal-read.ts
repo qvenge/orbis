@@ -45,6 +45,12 @@ export interface JournalEntry {
   title: string;
   cardTool: string;
   entityIds: string[];
+  /**
+   * Затронутые КЛЮЧИ обоих видов (рулинг R-11): uuid записей и ключи реестра (`user/*`, подписки, встроенные
+   * `orbis/*`) — любые строковые значения `id`/`source_id`/`target_id`/`entity_id` в операциях и inverse, в порядке
+   * операций. Это прежняя ширина окна конфликтов отката прогона; `entityIds` — только записи графа (uuid).
+   */
+  touchedKeys: string[];
   operations: ActionOperation[];
   inverse: ActionOperation[];
   results?: unknown[];
@@ -62,7 +68,6 @@ export interface JournalCursor {
 }
 
 const TOUCHED_KEYS = ['id', 'source_id', 'target_id', 'entity_id'] as const;
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * Записи, затронутые действием: `entity_id` и uuid-значения ключей `TOUCHED_KEYS` в операциях И в inverse.
@@ -85,6 +90,23 @@ export function touchedEntityIds(
 }
 
 /**
+ * Затронутые ключи обоих видов (R-11) — ровно прежний отбор отката прогона (`rollback.ts` `operationIds` до задачи 4):
+ * любая строка под `TOUCHED_KEYS` в операциях, затем в inverse, без повторов. Не только uuid: подписка, аспект или
+ * переопределение встроенного свойства адресуются ключом реестра, и правка владельца по нему — такой же конфликт
+ * отката, как правка записи.
+ */
+export function touchedKeysOf(action: Pick<ActionRecord, 'operations' | 'inverse'>): string[] {
+  const out = new Set<string>();
+  for (const op of [...action.operations, ...action.inverse]) {
+    for (const k of TOUCHED_KEYS) {
+      const v = op.payload[k];
+      if (typeof v === 'string') out.add(v);
+    }
+  }
+  return [...out];
+}
+
+/**
  * Осознанный потолок выборки скана перекатегоризаций (K18 / урок C6; потребитель — эскалация `ai/escalation.ts`).
  * Скан отвечает на вопрос «есть ли ЕЩЁ хоть одно такое же исправление», а не считает их все, поэтому усечение
  * сверху может только НЕ предложить правило и никогда не предложит лишнего; наружу счётчик не уходит. 200
@@ -94,7 +116,7 @@ export const JOURNAL_SCAN_LIMIT = 200;
 
 // ─────────────────────────── прежнее хранилище: строка и её разбор ───────────────────────────
 
-/** Строка журнала прежнего хранилища: сообщение, граф его треда и владелец графа. */
+/** Строка журнала прежнего хранилища: сообщение и граф его треда. */
 interface Row {
   id: string;
   thread_id: string;
@@ -102,26 +124,23 @@ interface Row {
   created_at: unknown;
   metadata: unknown;
   graph_id: string;
-  graph_owner: string | null;
 }
 
-/** Форма `metadata` audit-сообщения и сообщения отмены (`journal.ts`, `undo.ts`); разбирается защитно. */
+/**
+ * Форма `metadata` audit-сообщения и сообщения отмены (`journal.ts`, `undo.ts`). Запись действия — `ActionRecord`
+ * синка, и ей доверяется её форма, как прежним читателям: поле, которого в записи нет, остаётся отсутствующим (не
+ * подменяется), — иначе проверки атрибуции и «ключа нет вовсе» перестали бы что-либо держать.
+ */
 interface LegacyMetadata {
-  actions?: Array<Partial<ActionRecord> | undefined>;
+  actions?: Array<ActionRecord | undefined>;
   cards?: Array<{ tool?: unknown; title?: unknown } | undefined>;
   results?: unknown;
   type?: unknown;
   undoes?: unknown;
 }
 
-/**
- * Владелец графа — актор записи, у которой своего актора нет (запись отмены прежнего хранилища, Д-5). Личный граф
- * (в v1 других нет: INSERT-политика `person_creates_own_graph`) — `owner_ref` = id аккаунта владельца. Под RLS
- * строку графа видит любой его участник (`member_reads_graph`), под BYPASSRLS — все.
- */
 const SELECT_ROW = sql`SELECT m.id::text AS id, m.thread_id::text AS thread_id, m.content, m.created_at,
-         m.metadata, t.graph_id::text AS graph_id,
-         (SELECT g.owner_ref::text FROM graphs g WHERE g.id = t.graph_id) AS graph_owner
+         m.metadata, t.graph_id::text AS graph_id
     FROM chat_messages m JOIN chat_threads t ON t.id = m.thread_id`;
 
 /** Запись отмены прежнего хранилища — сообщение `{type:'undo', undoes}` (`undo.ts`). */
@@ -153,25 +172,41 @@ function toDate(value: unknown): Date {
   return value instanceof Date ? value : new Date(String(value));
 }
 
-function ownerOf(row: Row): AccountId {
-  if (row.graph_owner === null) {
+/**
+ * Владелец графа — актор записи отмены прежнего хранилища (своего актора у неё нет, Д-5; так же — у переноса задачи 5).
+ * Личный граф (в v1 других нет: INSERT-политика `person_creates_own_graph`) — `owner_ref` = id аккаунта владельца. Под
+ * RLS строку графа видит любой его участник (`member_reads_graph`), под BYPASSRLS — все. Читается ОДИН раз на вызов
+ * API и только если в выборке есть запись отмены.
+ */
+const OWNER_OF_GRAPH = (graph: GraphId): SQL =>
+  sql`SELECT owner_ref::text AS owner FROM graphs WHERE id = ${graph}::uuid`;
+
+function ownerFrom(value: unknown, graph: GraphId): AccountId {
+  if (typeof value !== 'string') {
     throw new Error(
-      `журнал: у графа ${row.graph_id} нет владельца-аккаунта (owner_ref) — v1 знает только личные графы`,
+      `журнал: у графа ${graph} нет владельца-аккаунта (owner_ref) — v1 знает только личные графы`,
     );
   }
-  return parseAccountId(row.graph_owner);
+  return parseAccountId(value);
 }
+
+const isUndoRow = (row: Row): boolean => (row.metadata as LegacyMetadata | null)?.type === 'undo';
 
 const str = (v: unknown): v is string => typeof v === 'string';
 
 /**
  * Сообщение → запись журнала; `undefined` — сообщение записью журнала не является. `actionId` выбирает действие
  * по id (как прежний `findActionMessage`), иначе — `actions[0]` (инвариант синка «одно действие на сообщение»);
- * карточка берётся по тому же индексу. Поля, которых в сообщении нет, — значения по умолчанию (бриф задачи 4):
- * `textSession: false`, `bodyBefore: null`, `pinnedVersionIds: []`, `cardInReply: false`; `mechanism` у записей до
- * появления поля — `'user'`; актор, которого нет, — владелец графа.
+ * карточка берётся по тому же индексу. Полей, которых в формате сообщения нет вовсе, — значения по умолчанию (бриф
+ * задачи 4): `textSession: false`, `bodyBefore: null`, `pinnedVersionIds: []`, `cardInReply: false`; `mechanism` у
+ * записей до появления поля — `'user'`. Поля самой записи действия (актор, источник, необязательные ключи) —
+ * как лежат: отсутствующее остаётся отсутствующим. `owner` — владелец графа, нужен только записи отмены.
  */
-function entryFromRow(row: Row, actionId?: string): JournalEntry | undefined {
+function entryFromRow(
+  row: Row,
+  owner: AccountId | undefined,
+  actionId?: string,
+): JournalEntry | undefined {
   const md = (row.metadata ?? {}) as LegacyMetadata;
   const graphId = parseGraphId(row.graph_id);
   const createdAt = toDate(row.created_at);
@@ -192,18 +227,20 @@ function entryFromRow(row: Row, actionId?: string): JournalEntry | undefined {
     // никто, но так выглядит строка отмены таблицы, и правило К-22 обязано держаться и на ней.
     const applied = Array.isArray(md.actions) ? md.actions[0] : undefined;
     const operations = Array.isArray(applied?.operations) ? applied.operations : [];
+    if (owner === undefined) throw new Error('журнал: запись отмены без владельца графа'); // недостижимо
     return {
       ...common,
       id: row.id,
       type: 'undo',
       entityId: null,
-      actorUserId: ownerOf(row),
+      actorUserId: owner,
       actorKind: 'owner',
       source: 'ui',
       mechanism: 'user',
       title: row.content,
       cardTool: 'undo',
       entityIds: touchedEntityIds({ entity_id: null, operations, inverse: [] }),
+      touchedKeys: touchedKeysOf({ operations, inverse: [] }),
       operations,
       inverse: [],
       undoes: md.undoes,
@@ -214,33 +251,33 @@ function entryFromRow(row: Row, actionId?: string): JournalEntry | undefined {
   const a = at < 0 ? undefined : actions[at];
   if (a === undefined || !str(a.id)) return undefined;
   const card = Array.isArray(md.cards) ? md.cards[at] : undefined;
+  // Защитно только массивы: без них упал бы любой обход операций, а не одна проверка
   const operations = Array.isArray(a.operations) ? a.operations : [];
   const inverse = Array.isArray(a.inverse) ? a.inverse : [];
-  const entityId = str(a.entity_id) ? a.entity_id : null;
-  const type = a.type as ActionRecord['type'];
+  const entityId = a.entity_id ?? null;
+  const has = (k: keyof ActionRecord): boolean => Object.hasOwn(a, k);
   return {
     ...common,
     id: a.id,
-    type,
+    type: a.type,
     entityId,
-    actorUserId:
-      str(a.actor_user_id) && UUID_RE.test(a.actor_user_id)
-        ? parseAccountId(a.actor_user_id)
-        : ownerOf(row),
-    actorKind: a.actor_kind as ActorKind,
-    source: a.source as MutationSource,
-    mechanism: (a.mechanism ?? 'user') as MutationMechanism,
-    ...(str(a.actor_grant_id) && { actorGrantId: a.actor_grant_id }),
-    ...(str(a.run_id) && { runId: a.run_id }),
-    ...(str(a.action_id) && { actionId: a.action_id }),
-    ...(str(a.module) && { module: a.module }),
-    ...(str(a.edited_from) && { editedFrom: a.edited_from }),
+    actorUserId: a.actor_user_id,
+    actorKind: a.actor_kind,
+    source: a.source,
+    mechanism: a.mechanism ?? 'user',
+    // Необязательные ключи — по НАЛИЧИЮ ключа, а не по значению: запись `module: null` должна быть видна
+    ...(has('actor_grant_id') && { actorGrantId: a.actor_grant_id }),
+    ...(has('run_id') && { runId: a.run_id }),
+    ...(has('action_id') && { actionId: a.action_id }),
+    ...(has('module') && { module: a.module }),
+    ...(has('edited_from') && { editedFrom: a.edited_from }),
     title: str(card?.title) ? card.title : row.content,
-    cardTool: str(card?.tool) ? card.tool : (TOOL_OF_TYPE[type] ?? String(type)),
+    cardTool: str(card?.tool) ? card.tool : (TOOL_OF_TYPE[a.type] ?? String(a.type)),
     entityIds: touchedEntityIds({ entity_id: entityId, operations, inverse }),
+    touchedKeys: touchedKeysOf({ operations, inverse }),
     operations,
     inverse,
-    ...(Array.isArray(md.results) && { results: md.results as unknown[] }),
+    ...(Object.hasOwn(md, 'results') && { results: md.results as unknown[] }),
     undoes: null,
   };
 }
@@ -249,25 +286,49 @@ async function rowsOf(tx: Tx, query: SQL): Promise<Row[]> {
   return (await tx.execute(query)) as unknown as Row[];
 }
 
-async function entriesOf(tx: Tx, query: SQL): Promise<JournalEntry[]> {
-  const out: JournalEntry[] = [];
-  for (const row of await rowsOf(tx, query)) {
-    const e = entryFromRow(row);
-    if (e !== undefined) out.push(e);
+type Cursored = JournalEntry & { cursor: JournalCursor };
+
+/** Строки → записи с курсором; владелец графа читается одним запросом и только при записи отмены в выборке. */
+async function mapRows(
+  rows: readonly Row[],
+  readOwner: () => Promise<unknown>,
+  graph: GraphId,
+  actionId?: string,
+): Promise<Cursored[]> {
+  const owner = rows.some(isUndoRow) ? ownerFrom(await readOwner(), graph) : undefined;
+  const out: Cursored[] = [];
+  for (const row of rows) {
+    const e = entryFromRow(row, owner, actionId);
+    if (e !== undefined) out.push({ ...e, cursor: { at: e.createdAt, key: row.id } });
   }
   return out;
 }
 
 async function withCursors(
   tx: Tx,
+  graph: GraphId,
   query: SQL,
-): Promise<Array<JournalEntry & { cursor: JournalCursor }>> {
-  const out: Array<JournalEntry & { cursor: JournalCursor }> = [];
-  for (const row of await rowsOf(tx, query)) {
-    const e = entryFromRow(row);
-    if (e !== undefined) out.push({ ...e, cursor: { at: e.createdAt, key: row.id } });
-  }
-  return out;
+  actionId?: string,
+): Promise<Cursored[]> {
+  const readOwner = async () => (await tx.execute(OWNER_OF_GRAPH(graph)))[0]?.owner;
+  return mapRows(await rowsOf(tx, query), readOwner, graph, actionId);
+}
+
+/** Записи без курсора — курсор задан прежним хранилищем и наружу из «записи» не отдаётся. */
+async function entriesOf(tx: Tx, graph: GraphId, query: SQL): Promise<JournalEntry[]> {
+  return (await withCursors(tx, graph, query)).map(({ cursor: _cursor, ...e }) => e);
+}
+
+async function firstEntry(
+  tx: Tx,
+  graph: GraphId,
+  query: SQL,
+  actionId?: string,
+): Promise<JournalEntry | undefined> {
+  const found = (await withCursors(tx, graph, query, actionId))[0];
+  if (found === undefined) return undefined;
+  const { cursor: _cursor, ...e } = found;
+  return e;
 }
 
 const inGraph = (graph: GraphId): SQL => sql`t.graph_id = ${graph}::uuid`;
@@ -281,11 +342,12 @@ export async function findAction(
   actionId: string,
 ): Promise<JournalEntry | undefined> {
   const probe = JSON.stringify({ actions: [{ id: actionId }] });
-  const rows = await rowsOf(
+  return firstEntry(
     tx,
+    graph,
     sql`${SELECT_ROW} WHERE ${inGraph(graph)} AND ${IS_ACTION} AND m.metadata @> ${probe}::jsonb LIMIT 1`,
+    actionId,
   );
-  return rows[0] === undefined ? undefined : entryFromRow(rows[0], actionId);
 }
 
 /**
@@ -299,12 +361,12 @@ export async function findBatch(
   graph: GraphId,
   batchId: string,
 ): Promise<JournalEntry | undefined> {
-  const rows = await rowsOf(
+  const e = await firstEntry(
     tx,
+    graph,
     sql`${SELECT_ROW} WHERE ${inGraph(graph)} AND ${IS_ACTION}
           AND m.id = ${batchAuditMessageId(graph, batchId)}::uuid`,
   );
-  const e = rows[0] === undefined ? undefined : entryFromRow(rows[0]);
   return e !== undefined && BATCH_TYPES.has(e.type) ? e : undefined;
 }
 
@@ -325,12 +387,12 @@ export async function undoRecordOf(
   actionId: string,
 ): Promise<JournalEntry | undefined> {
   const probe = JSON.stringify({ type: 'undo', undoes: actionId });
-  const rows = await rowsOf(
+  return firstEntry(
     tx,
+    graph,
     sql`${SELECT_ROW} WHERE ${inGraph(graph)} AND m.metadata @> ${probe}::jsonb
         ORDER BY m.created_at, m.id LIMIT 1`,
   );
-  return rows[0] === undefined ? undefined : entryFromRow(rows[0]);
 }
 
 /**
@@ -342,8 +404,9 @@ export async function undoRecordOf(
  * (тай-брейк: precision 3).
  */
 export async function findLastUndoable(tx: Tx, graph: GraphId): Promise<JournalEntry | undefined> {
-  const rows = await rowsOf(
+  return firstEntry(
     tx,
+    graph,
     sql`${SELECT_ROW} WHERE ${inGraph(graph)} AND ${IS_ACTION}
           AND m.metadata -> 'actions' -> 0 ->> 'source' IS DISTINCT FROM 'system'
           AND NOT EXISTS (
@@ -353,7 +416,6 @@ export async function findLastUndoable(tx: Tx, graph: GraphId): Promise<JournalE
         ORDER BY m.created_at DESC, m.id DESC
         LIMIT 1`,
   );
-  return rows[0] === undefined ? undefined : entryFromRow(rows[0]);
 }
 
 /**
@@ -368,31 +430,37 @@ export async function runActions(
   const probe = JSON.stringify({ actions: [{ run_id: runId }] });
   return withCursors(
     tx,
+    graph,
     sql`${SELECT_ROW} WHERE ${inGraph(graph)} AND ${IS_ACTION} AND m.metadata @> ${probe}::jsonb
         ORDER BY m.created_at ASC, m.id ASC`,
   );
 }
 
 /**
- * Действия после курсора (строго: составной ключ `(created_at, id)`, как порядок `runActions`), тронувшие хоть одну
- * из записей (`entityIds`); записи отмены — не действия (К-22). Отменённые действия НЕ отсеиваются: решает
- * вызывающий (откат прогона спрашивает `isUndone` только у настоящих кандидатов).
+ * Действия после курсора (строго: составной ключ `(created_at, id)`, как порядок `runActions`), тронувшие хоть один
+ * из КЛЮЧЕЙ `keys` — uuid записей или ключ реестра (`touchedKeys`, рулинг R-11: прежняя ширина окна конфликтов отката);
+ * записи отмены — не действия (К-22). Отменённые действия НЕ отсеиваются: решает вызывающий (откат прогона спрашивает
+ * `isUndone` только у настоящих кандидатов).
+ *
+ * Форма для таблицы (задача 5): uuid-ключи — через боковую таблицу записей действий, ключи реестра — просмотром
+ * записей графа в окне по времени (окно начинается первым действием прогона — короткое) с тем же `touchedKeysOf`.
  */
 export async function actionsTouchingAfter(
   tx: Tx,
   graph: GraphId,
   after: JournalCursor,
-  entityIds: string[],
+  keys: string[],
 ): Promise<Array<JournalEntry & { cursor: JournalCursor }>> {
-  if (entityIds.length === 0) return [];
-  const wanted = new Set(entityIds);
+  if (keys.length === 0) return [];
+  const wanted = new Set(keys);
   const all = await withCursors(
     tx,
+    graph,
     sql`${SELECT_ROW} WHERE ${inGraph(graph)} AND ${IS_ACTION}
           AND (m.created_at, m.id) > (${after.at.toISOString()}::timestamptz, ${after.key}::uuid)
         ORDER BY m.created_at ASC, m.id ASC`,
   );
-  return all.filter((e) => e.entityIds.some((id) => wanted.has(id)));
+  return all.filter((e) => e.touchedKeys.some((key) => wanted.has(key)));
 }
 
 /**
@@ -410,6 +478,7 @@ export async function actionsOnEntity(
   const probe = JSON.stringify({ actions: [{ operations: [{ payload: { id: entityId } }] }] });
   return entriesOf(
     tx,
+    graph,
     sql`${SELECT_ROW} WHERE ${inGraph(graph)} AND ${IS_ACTION} AND m.metadata @> ${probe}::jsonb
         ORDER BY m.created_at DESC, m.id DESC
         LIMIT ${limit}`,
@@ -466,6 +535,7 @@ export async function financialUpdatesSince(
   );
   return entriesOf(
     tx,
+    graph,
     sql`${SELECT_ROW} WHERE ${inGraph(graph)} AND ${IS_ACTION}
           AND m.created_at > ${since.toISOString()}::timestamptz
           AND (${matches})
@@ -490,13 +560,13 @@ export async function executedIds(tx: Tx, graph: GraphId, ids: string[]): Promis
     [...byKey.keys()].map((k) => sql`${k}::uuid`),
     sql`, `,
   );
-  for (const row of await rowsOf(
+  for (const e of await withCursors(
     tx,
+    graph,
     sql`${SELECT_ROW} WHERE ${inGraph(graph)} AND ${IS_ACTION} AND m.id IN (${keys})`,
   )) {
-    const requested = byKey.get(row.id);
-    const e = entryFromRow(row);
-    if (requested !== undefined && e !== undefined && BATCH_TYPES.has(e.type)) out.add(requested);
+    const requested = byKey.get(e.cursor.key);
+    if (requested !== undefined && BATCH_TYPES.has(e.type)) out.add(requested);
   }
   return out;
 }
@@ -529,12 +599,12 @@ export async function ownerExtensionWord(
   const probe = JSON.stringify({
     actions: [{ operations: [{ op: 'module_set', payload: { module } }] }],
   });
-  const rows = await rowsOf(
+  const said = await firstEntry(
     tx,
+    graph,
     sql`${SELECT_ROW} WHERE ${inGraph(graph)} AND ${IS_ACTION} AND m.metadata @> ${probe}::jsonb
         ORDER BY m.created_at DESC, m.id DESC LIMIT 1`,
   );
-  const said = rows[0] === undefined ? undefined : entryFromRow(rows[0]);
   if (said === undefined) return undefined;
   const enabled = lastExtensionSwitch(said.operations, module) ?? false;
   const undo = await undoRecordOf(tx, graph, said.id);
@@ -558,6 +628,7 @@ export async function threadActions(
       : sql`AND (m.created_at, m.id) < (${page.before.at.toISOString()}::timestamptz, ${page.before.key}::uuid)`;
   return withCursors(
     tx,
+    graph,
     sql`${SELECT_ROW} WHERE ${inGraph(graph)} AND m.thread_id = ${threadId}::uuid
           AND (${IS_ACTION} OR ${IS_UNDO}) ${before}
         ORDER BY m.created_at DESC, m.id DESC
@@ -577,6 +648,7 @@ export async function recentOwnerEdits(
 ): Promise<JournalEntry[]> {
   return entriesOf(
     tx,
+    graph,
     sql`${SELECT_ROW} WHERE ${inGraph(graph)} AND ${IS_ACTION}
           AND m.metadata -> 'actions' -> 0 ->> 'source' IN ('ui', 'quick_capture')
           AND m.created_at >= ${since.toISOString()}::timestamptz
@@ -585,30 +657,42 @@ export async function recentOwnerEdits(
   );
 }
 
-/** Все записи журнала графа по времени (`created_at, id`), включая записи отмены. */
-function exportQuery(graph: GraphId): SQL {
-  return sql`${SELECT_ROW} WHERE ${inGraph(graph)} AND (${IS_ACTION} OR ${IS_UNDO})
-    ORDER BY m.created_at ASC, m.id ASC`;
+/** Записи журнала графа по времени (`created_at, id`), включая записи отмены; страница — строго после курсора. */
+function exportQuery(graph: GraphId, page?: { after?: JournalCursor; limit: number }): SQL {
+  const after =
+    page?.after === undefined
+      ? sql``
+      : sql`AND (m.created_at, m.id) > (${page.after.at.toISOString()}::timestamptz, ${page.after.key}::uuid)`;
+  const limit = page === undefined ? sql`` : sql`LIMIT ${page.limit}`;
+  return sql`${SELECT_ROW} WHERE ${inGraph(graph)} AND (${IS_ACTION} OR ${IS_UNDO}) ${after}
+    ORDER BY m.created_at ASC, m.id ASC ${limit}`;
 }
 
 export async function exportJournal(tx: Tx, graph: GraphId): Promise<JournalEntry[]> {
-  return entriesOf(tx, exportQuery(graph));
+  return entriesOf(tx, graph, exportQuery(graph));
 }
 
 /**
- * `exportJournal` сырым клиентом postgres.js — для прод-операций (`db/migrate-1v.ts` `--report`), которые читают
- * базу ролью с BYPASSRLS в транзакции READ ONLY мимо drizzle. Запрос — ТОТ ЖЕ (`exportQuery`, отрисованный
- * диалектом drizzle), разбор — тот же: смена хранилища проходит здесь одним местом и для них.
+ * `exportJournal` сырым клиентом postgres.js ПОРЦИЯМИ — для прод-операций (`db/migrate-1v.ts` `--report`), которые
+ * читают базу ролью с BYPASSRLS в транзакции READ ONLY мимо drizzle и не тянут журнал графа в память целиком. Запрос —
+ * ТОТ ЖЕ (`exportQuery`, отрисованный диалектом drizzle), разбор — тот же: смена хранилища проходит здесь одним
+ * местом и для них. Курсор (`cursor.key` — ключ хранилища: у прежнего — id сообщения) — адрес строки для отчёта.
  */
-export async function exportJournalRaw(client: ISql, graph: GraphId): Promise<JournalEntry[]> {
-  const q = new PgDialect().sqlToQuery(exportQuery(graph));
-  const rows = (await client.unsafe(q.sql, q.params as never[])) as unknown as Row[];
-  const out: JournalEntry[] = [];
-  for (const row of rows) {
-    const e = entryFromRow(row);
-    if (e !== undefined) out.push(e);
-  }
-  return out;
+export async function exportJournalRaw(
+  client: ISql,
+  graph: GraphId,
+  page: { after?: JournalCursor; limit: number },
+): Promise<Cursored[]> {
+  const dialect = new PgDialect();
+  const run = async (query: SQL): Promise<Record<string, unknown>[]> => {
+    const q = dialect.sqlToQuery(query);
+    return (await client.unsafe(q.sql, q.params as never[])) as unknown as Record<
+      string,
+      unknown
+    >[];
+  };
+  const rows = (await run(exportQuery(graph, page))) as unknown as Row[];
+  return mapRows(rows, async () => (await run(OWNER_OF_GRAPH(graph)))[0]?.owner, graph);
 }
 
 /**

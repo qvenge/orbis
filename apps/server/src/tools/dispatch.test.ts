@@ -200,7 +200,9 @@ describe('dispatchTool: мутации через executor (§9.2; уровни 
       undoActionId: expect.any(String),
     });
 
-    // запись журнала легла в переданный тред; актор — внутренний AI
+    // запись журнала легла в переданный тред; актор — внутренний AI. Тред кроме неё пуст: вызов тула
+    // не пишет в разговор ничего своего (счёт сообщений — прежняя проверка, счёт журнала — новая)
+    expect((await messagesIn(userA, threadId)).length).toBe(1);
     const journal = await threadJournal(userA, threadId);
     expect(journal.length).toBe(1);
     const action = journal[0];
@@ -227,6 +229,7 @@ describe('dispatchTool: мутации через executor (§9.2; уровни 
     });
     expect(r.status).toBe('ok');
 
+    expect((await messagesIn(userA, threadId)).length).toBe(1);
     const journal = await threadJournal(userA, threadId);
     expect(journal.length).toBe(1);
     expect(journal[0]?.runId).toBe(runId);
@@ -238,6 +241,7 @@ describe('dispatchTool: мутации через executor (§9.2; уровни 
       ensureGlobalThread(tx, userA),
     );
     const before = (await threadJournal(userA, globalThread)).length;
+    const messagesBefore = (await messagesIn(userA, globalThread)).length;
 
     const r = await dispatchTool(ctxFor(), 'attach_orbis_task', {
       entity_id: target.id,
@@ -262,6 +266,7 @@ describe('dispatchTool: мутации через executor (§9.2; уровни 
 
     const after = await threadJournal(userA, globalThread);
     expect(after.length).toBe(before + 1);
+    expect((await messagesIn(userA, globalThread)).length).toBe(messagesBefore + 1);
     // Журнал треда — новые первыми
     expect(after[0]?.actorKind).toBe('ai');
   });
@@ -325,6 +330,7 @@ describe('dispatchTool: мутации через executor (§9.2; уровни 
     expect(r.status).toBe('ok');
     if (r.status !== 'ok') return;
     expect((r.result as unknown[]).length).toBe(2);
+    expect((await messagesIn(userA, threadId)).length).toBe(1);
     const journal = await threadJournal(userA, threadId);
     expect(journal.length).toBe(1);
     expect(journal[0]?.type).toBe('batch');

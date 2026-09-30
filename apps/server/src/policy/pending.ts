@@ -1210,11 +1210,11 @@ export async function approvePending(
  * пачки, другим исполнением: `rolloverCreate` вместо `execute` сохранённых операций.
  *
  * `batchId` ПЕРЕНОСА = pendingId, а не id исходного вызова, и это не косметика. Судьба единицы
- * («Принята») читается по audit-сообщению с PK `batchAuditMessageId(graph, pendingId)` (`isExecuted`,
- * `listRunUnits`) — ровно так, как у пачки, которой `approvePending` передаёт `batchId: pendingId`.
- * С id вызова перенос исполнялся бы, а единица навсегда оставалась бы «открытой»: «Принять все»
+ * («Принята») читается по записи пачки в журнале с `batch_id` = pendingId (`isExecuted` — `findBatch`,
+ * `listRunUnits` — `executedIds`, API журнала) — ровно так, как у пачки, которой `approvePending` передаёт
+ * `batchId: pendingId`. С id вызова перенос исполнялся бы, а единица навсегда оставалась бы «открытой»: «Принять все»
  * жевало бы её снова, сверка `undecided` не снимала бы флажок. Идемпотентность повтора держится тем же
- * ключом: `rolloverCreate` отвечает replay'ем по audit-сообщению этого batchId.
+ * ключом: `rolloverCreate` отвечает replay'ем по записи пачки этого batchId (`findBatch`).
  *
  * Замок и «не отклонена» — в audit-транзакции (`beforeStages`), тем же швом, что у пачки. Атрибуция —
  * исходный актор (§7.8): рутина остаётся рутиной, чат — чатом; системная единица исполняется от

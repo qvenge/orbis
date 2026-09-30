@@ -235,23 +235,30 @@ async function etalonTextIn(graph: GraphId, e: SupplyEtalon): Promise<string> {
 }
 
 /**
- * Журнал графа (API журнала, помощник `wholeJournalOf`) и сообщения, видимые лентой (тот же фильтр,
- * что `chat.listMessages`): запись перевода обязана лечь в журнал и НЕ появиться в ленте.
+ * Журнал графа (API журнала, помощник `wholeJournalOf`), все сообщения графа и видимые лентой (тот же фильтр, что
+ * `chat.listMessages`): запись перевода обязана лечь в журнал, прибавить в разговорах графа ровно одну строку (её
+ * носитель — прежнее хранилище) и НЕ появиться в ленте.
  */
-async function journalOf(graph: GraphId): Promise<{ all: JournalEntry[]; visible: string[] }> {
+async function journalOf(
+  graph: GraphId,
+): Promise<{ all: JournalEntry[]; messages: string[]; visible: string[] }> {
   const all = await wholeJournalOf(graph);
-  const visible = await withIdentity(db, personal(graph), async (tx) => {
+  const { messages, visible } = await withIdentity(db, personal(graph), async (tx) => {
     const threads = tx
       .select({ id: chatThreads.id })
       .from(chatThreads)
       .where(eq(chatThreads.graphId, graph));
-    const rows = await tx
+    const everything = await tx
+      .select({ id: chatMessages.id })
+      .from(chatMessages)
+      .where(sql`${chatMessages.threadId} IN ${threads}`);
+    const shown = await tx
       .select({ id: chatMessages.id })
       .from(chatMessages)
       .where(and(sql`${chatMessages.threadId} IN ${threads}`, ...excludeInfraSystemRows()));
-    return rows.map((r) => r.id).sort();
+    return { messages: everything.map((r) => r.id).sort(), visible: shown.map((r) => r.id).sort() };
   });
-  return { all, visible };
+  return { all, messages, visible };
 }
 
 async function updatedAtAll(graph: GraphId): Promise<Map<string, string>> {
@@ -613,6 +620,8 @@ describe('(в) --apply на графе формы прода: одна пачк�
     const after = await journalOf(graph);
     const added = after.all.filter((e) => !journalBefore.all.some((b) => b.id === e.id));
     expect(added).toHaveLength(1);
+    // Ровно одна новая строка во всём графе — прежняя проверка: ничего сверх записи журнала не написано
+    expect(after.messages.filter((id) => !journalBefore.messages.includes(id))).toHaveLength(1);
     expect(after.visible).toEqual(journalBefore.visible);
     expect(added[0]?.id).toBe(actionId);
     expect(added[0]?.source).toBe('system');

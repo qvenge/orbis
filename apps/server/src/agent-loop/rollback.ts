@@ -206,15 +206,16 @@ async function ownRunActions(
 }
 
 /**
- * Сущности, затронутые действиями (шаг 2) — `entityIds` записей журнала: id из ОБЕИХ половин записи,
- * операций и inverse (у entity_create операция несёт id новой сущности, а inverse — её же под архивацию, у
- * relation-операций id связи в payload'е нет вовсе, зато есть концы `source_id`/`target_id`). Отсюда широкий
- * набор ключей: конфликт по связи — тоже конфликт, и лучше показать лишнюю строку, чем молча затереть правку
- * соседа.
+ * Что затронули действия (шаг 2) — `touchedKeys` записей журнала: ключи из ОБЕИХ половин записи, операций и
+ * inverse (у entity_create операция несёт id новой сущности, а inverse — её же под архивацию, у relation-операций
+ * id связи в payload'е нет вовсе, зато есть концы `source_id`/`target_id`). Ключи обоих видов — uuid записей и ключи
+ * реестра (подписка, аспект, встроенное свойство — рулинг R-11): рутина в `act` вправе править реестр, и правка
+ * владельца той же подписки после неё — такой же конфликт, как правка записи. Отсюда широкий набор ключей: лучше
+ * показать лишнюю строку, чем молча затереть правку соседа.
  */
-function touchedEntities(entries: readonly RunEntry[]): Set<string> {
+function touchedKeys(entries: readonly RunEntry[]): Set<string> {
   const touched = new Set<string>();
-  for (const entry of entries) for (const id of entry.entityIds) touched.add(id);
+  for (const entry of entries) for (const key of entry.touchedKeys) touched.add(key);
   return touched;
 }
 
@@ -276,11 +277,12 @@ async function foreignChangesAfter(
     // проба «отменено?» — отдельный запрос НА КАЖДОЕ действие, а в окне долгого прогона
     // у активного владельца лежат сотни чужих записей, к откату отношения не имеющих.
     // Дешёвый фильтр (API отдаёт только тронувших `touched`) сначала — и запрос уходит только
-    // за настоящими кандидатами. `entityIds` записи уже без повторов: id встречается и в
-    // операции, и в inverse одного действия, а конфликт {действие, сущность} — один.
-    const hits = action.entityIds.filter((entityId) => args.touched.has(entityId));
+    // за настоящими кандидатами. `touchedKeys` записи уже без повторов: ключ встречается и в
+    // операции, и в inverse одного действия, а конфликт {действие, ключ} — один.
+    const hits = action.touchedKeys.filter((key) => args.touched.has(key));
     if (hits.length === 0) continue;
     if (await isUndone(tx, args.graph, action.id)) continue;
+    // Поле провода называется `entityId`, но несёт ключ любого вида (как до перевода на API журнала)
     for (const entityId of hits) {
       conflicts.push({
         entityId,
@@ -295,8 +297,8 @@ async function foreignChangesAfter(
 
 /**
  * Откат прогона. Шаги 1–3 (чтение журнала и предпроверка) идут ОДНОЙ транзакцией под
- * `withIdentity`: RLS на chat_messages скоупит журнал владельцем (§4.10), и без identity
- * выборка вернула бы пусто. Транзакция закрывается ДО серии отмен намеренно — undoAction
+ * `withIdentity`: граф журнала задаёт API явным `graph_id` идентичности (`executor/journal-read.ts`), а RLS
+ * страхует его (§4.10). Транзакция закрывается ДО серии отмен намеренно — undoAction
  * принимает `Db` и открывает собственную транзакцию, а вложенности здесь быть не должно.
  *
  * Отсюда честное TOCTOU-окно: между коммитом предпроверки и первым undo проходит время,
@@ -346,7 +348,7 @@ export async function rollbackRun(
       graph: identity.graph,
       runId,
       after: first,
-      touched: touchedEntities(live),
+      touched: touchedKeys(live),
       policy,
     });
     return { live, conflicts, archive, closeOpen, note: policy.note };

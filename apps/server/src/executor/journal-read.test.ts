@@ -406,19 +406,107 @@ describe('API чтения журнала (задача 4, РП-9)', () => {
       expect(undos.map((e) => [e.undoes, e.entityIds])).toEqual([[first.actionId, [target]]]);
     });
   });
+  // M-1/M-2 фикс-круга 1: поля записи действия — как лежат. Подставленный актор или отброшенный `null` сделали бы
+  // проверки атрибуции и «ключа нет вовсе» во всех тестах, читающих журнал, пустыми.
+  test('поля записи — как лежат: актора нет — его нет, ключ со значением null — есть', async () => {
+    const g = await freshGraph();
+    const bare = crypto.randomUUID();
+    const partial = {
+      id: bare,
+      type: 'batch',
+      entity_id: null,
+      actor_kind: 'owner',
+      source: 'ui',
+      mechanism: 'user',
+      module: null,
+      operations: [],
+      inverse: [],
+    } as unknown as ActionRecord; // запись без `actor_user_id` и с `module: null` — сломанный писатель
+    await withIdentity(db, personal(g), (tx) =>
+      sink.write(tx, {
+        id: batchAuditMessageId(g, bare),
+        graphId: g,
+        action: partial,
+        card: { tool: 'batch_execute', entity_id: null, title: 'без актора' },
+      }),
+    );
+    const e = must(
+      await withIdentity(db, personal(g), (tx) => J.findAction(tx, g, bare)),
+      'запись без актора',
+    );
+    expect(e.actorUserId).toBeUndefined();
+    expect(Object.hasOwn(e, 'module')).toBe(true);
+    expect(e.module).toBeNull();
+    expect(Object.hasOwn(e, 'runId')).toBe(false);
+  });
 });
 
 // ─────────────────────────── сторож: журнал читает только этот модуль ───────────────────────────
 
 /**
- * КОД-формы чтения журнала прежнего хранилища: SQL-проба по metadata (`@>`, `->`, `->>`, `?`) на ключ `actions` или
- * `type`, доступ к полю `.metadata.actions` и приведение `metadata as {… actions …}`. `[[:space:]]`, а не `\s`: ERE
- * Apple Git `\s` не понимает (форма `metadata -> 'actions'` иначе локально не видна).
+ * КОД-формы чтения журнала прежнего хранилища (фикс-круг 1, M-7: регэксп брифа видел только SQL-пробы по metadata):
+ *  - SQL-проба по metadata (`@>`, `->`, `->>`, `?`) на ключ `actions`/`type`, доступ `.metadata.actions`, приведение
+ *    `metadata as {… actions …}` — регэксп брифа;
+ *  - проба ПЕРЕМЕННОЙ (`metadata @> ${probe}`) — через саму пробу: объект журнальной формы `{ actions: [` (в строку или
+ *    построчно — `actions: [` в конце строки) и `type: 'undo'`;
+ *  - PK-проба пачки и чтение синком: `batchAuditMessageId(` и `findByAuditId(`.
+ * `[[:space:]]`, а не `\s`: ERE Apple Git `\s` не понимает. Прогон по BASE задачи 4 (`0fda57a0`) находит всех прежних
+ * читателей — undo, rollback, mechanism, escalation, pending (три), setup-graph, aggregates, plan-to-fact, review,
+ * migrate-1v (два) — отчёт фикс-круга 1.
  */
-const JOURNAL_READ_PATTERN =
-  'metadata[[:space:]]*(@>|->>?|\\?)[[:space:]]*\'?\\{?"?(actions|type)|\\.metadata\\.actions|metadata as \\{[^}]*actions';
+const JOURNAL_READ_PATTERN = [
+  'metadata[[:space:]]*(@>|->>?|\\?)[[:space:]]*\'?\\{?"?(actions|type)',
+  '\\.metadata\\.actions',
+  'metadata as \\{[^}]*actions',
+  '\\{[[:space:]]*actions:[[:space:]]*\\[',
+  '^[[:space:]]*actions:[[:space:]]*\\[$',
+  "type:[[:space:]]*'undo'",
+  'batchAuditMessageId\\(',
+  'findByAuditId\\(',
+].join('|');
+
+/**
+ * Не читатели — поимённо, построчно (файл + фрагмент строки) и с причиной. Пишет журнал исполнитель и `undo.ts`
+ * (глобальное ограничение плана); повтор пачки исполнитель берёт у СВОЕГО синка — это путь записи, задача 5 переименует
+ * его в `findBatchWrite`.
+ */
+const NOT_READERS: ReadonlyArray<{ file: string; text: string; why: string }> = [
+  {
+    file: 'apps/server/src/executor/executor.ts',
+    text: 'const auditId = batchAuditMessageId(req.identity.graph, batchId);',
+    why: 'ключ записи пачки при записи',
+  },
+  {
+    file: 'apps/server/src/executor/executor.ts',
+    text: 'sink.findByAuditId(tx, auditId)',
+    why: 'повтор пачки — у синка писателя (задача 5: findBatchWrite)',
+  },
+  {
+    file: 'apps/server/src/executor/types.ts',
+    text: 'findByAuditId(',
+    why: 'интерфейс синка и синк в памяти',
+  },
+  {
+    file: 'apps/server/src/executor/undo.ts',
+    text: "metadata: { type: 'undo', undoes: action.id },",
+    why: 'ЗАПИСЬ отмены — писатель журнала',
+  },
+  {
+    file: 'apps/server/src/tools/dispatch.ts',
+    text: 'findByAuditId: (tx, id) => inner.findByAuditId(tx, id),',
+    why: 'синк захвата делегирует повтор пачки внутреннему синку исполнителя',
+  },
+  {
+    file: 'apps/server/src/policy/pending.ts',
+    text: 'const auditId = batchAuditMessageId(args.identity.graph, args.pendingId);',
+    why: 'адрес исполненной пачки в деталях отказа «уже исполнено» — не чтение',
+  },
+];
 
 const REPO_ROOT = `${import.meta.dir}/../../../..`;
+
+/** Строка `git grep -n` — комментарий (`//`, `*`, `/**`)? Докблоки читателями не являются. */
+const isComment = (line: string): boolean => /^[^:]+:\d+:\s*(\/\/|\/?\*)/.test(line);
 
 describe('сторож РП-9: журнал читает только journal-read.ts', () => {
   test('регэксп сторожа ловит все формы чтения (положительный контроль тем же движком git grep)', () => {
@@ -430,6 +518,12 @@ describe('сторож РП-9: журнал читает только journal-re
       '        WHERE u.metadata @> \'{"type":"undo"}\'::jsonb',
       "     WHERE m.role = 'system' AND m.metadata ? 'actions'",
       '  const a = msg.metadata.actions[0];',
+      // формы BASE задачи 4, которых регэксп брифа не видел (M-7)
+      '  const probe = JSON.stringify({ actions: [{ id: actionId }] });',
+      "  const probe = JSON.stringify({ type: 'undo', undoes: actionId });",
+      '    actions: [',
+      '    .where(eq(chatMessages.id, batchAuditMessageId(graphId, pendingId)));',
+      '    const replay = (await rolloverSink.findByAuditId(tx, auditId)) !== undefined;',
     ];
     const dir = mkdtempSync(join(tmpdir(), 'journal-guard-'));
     try {
@@ -444,14 +538,22 @@ describe('сторож РП-9: журнал читает только journal-re
         .split('\n')
         .filter((l) => l !== '');
       expect(hits.length).toBe(samples.length);
+      // Отрицательный контроль: сводка ответа ассистента — не проба журнала
+      writeFileSync(
+        join(dir, 'samples.ts'),
+        '    return { assistantMessage: pre.existingAnswer, actions: [], pending: [], replayed: true };\n',
+      );
+      const miss = Bun.spawnSync(
+        ['git', 'grep', '--no-index', '-n', '-E', JOURNAL_READ_PATTERN, '--', 'samples.ts'],
+        { cwd: dir },
+      );
+      expect(miss.stdout.toString().trim()).toBe('');
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
 
   test('вне journal-read.ts журнал в chat_messages никто не читает (РП-9)', () => {
-    // Только КОД-формы чтения журнала (SQL-проба по metadata и доступ к полю), не комментарии: докблоки вида
-    // «сообщение не несёт metadata.actions» (policy/pending.ts, executor/types.ts) читателями не являются.
     const out = Bun.spawnSync(
       [
         'git',
@@ -480,7 +582,8 @@ describe('сторож РП-9: журнал читает только journal-re
       .toString()
       .trim()
       .split('\n')
-      .filter((l) => l !== '' && !/:\s*(\/\/|\*)/.test(l));
+      .filter((l) => l !== '' && !isComment(l))
+      .filter((l) => !NOT_READERS.some((n) => l.startsWith(`${n.file}:`) && l.includes(n.text)));
     expect(lines).toEqual([]);
   });
 });

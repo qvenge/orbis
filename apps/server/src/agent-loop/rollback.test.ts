@@ -5,13 +5,17 @@
 // а не в моках. Прямые вызовы rollbackRun (роутер — трансляция, его тесты рядом).
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import type { ClaimTaskResult, FinishResult, GraphId, RunStepResult } from '@orbis/shared';
+import { BUILTIN_SUBSCRIPTION_DEFS, type BudgetSubscription } from '@orbis/shared';
 import { eq } from 'drizzle-orm';
 import { appDb, freshGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
 import { actionsOf, wholeJournalOf } from '../../test/journal-helpers';
 import { entities } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
+import { execute } from '../executor/executor';
+import { makeChatJournalSink } from '../executor/journal';
 import type { JournalEntry } from '../executor/journal-read';
 import { undoAction } from '../executor/undo';
+import { effectiveRegistry } from '../registry/cache';
 import { appRouter } from '../router';
 import { agentLoopHelpers, T0 } from '../test/agent-loop-helpers';
 import { dispatchTool } from '../tools/dispatch';
@@ -22,7 +26,7 @@ import { sweepStaleRuns } from './sweep';
 requireEnv();
 
 const { db, client } = appDb();
-const { link, seedEntity, worker, workerGrant } = agentLoopHelpers(db);
+const { link, seedEntity, seedRoutine, seedRoutineRun, worker, workerGrant } = agentLoopHelpers(db);
 const createCaller = createCallerFactory(appRouter);
 
 const MINUTE = 60_000;
@@ -302,5 +306,82 @@ describe('rollbackRun (С12, инвариант 7)', () => {
     const out = await rollbackRun(db, { identity: personal(owner), runId: crypto.randomUUID() });
     expect(out).toEqual({ ok: true, undone: [], note: ROLLBACK_NOTE });
     expect(await undoMessages(owner)).toBe(before);
+  });
+});
+
+/**
+ * Ключи РЕЕСТРА в окне конфликтов (рулинг R-11, гейт задачи 4 I-1). Рутина в `act` вправе править реестр
+ * (`routineToolAllowed` закрывает только `batch_execute` и `undo_last`), и её обратная операция — тоже правка реестра.
+ * Правка владельца той же подписки после прогона обязана стать конфликтом отката, а не молча снестись серией отмен
+ * (инвариант 7): ключ подписки — не uuid записи, и окно, смотрящее только на записи графа, её не увидело бы.
+ */
+describe('откат прогона видит ключи реестра (R-11)', () => {
+  const sink = makeChatJournalSink();
+  const SUBSCRIPTION = 'orbis/budget-overview';
+  const SURFACE = 'finance/budget-overview';
+  const BUDGET_SUB = BUILTIN_SUBSCRIPTION_DEFS.find((d) => d.id === SUBSCRIPTION)
+    ?.definition as BudgetSubscription;
+  const withWarnAt = (warn_at: string): BudgetSubscription => ({
+    ...BUDGET_SUB,
+    alerts: { ...BUDGET_SUB.alerts, warn_at },
+  });
+  const warnAtOf = async (owner: GraphId) =>
+    (
+      (
+        await withIdentity(db, personal(owner), (tx) => effectiveRegistry(tx, owner))
+      ).subscriptions.get(SUBSCRIPTION)?.definition as BudgetSubscription
+    ).alerts.warn_at;
+
+  test('рутина в act правит подписку, владелец — её же; «Откатить прогон» → конфликт, правка владельца цела', async () => {
+    const owner = await freshGraph();
+    const routineId = await seedRoutine(owner, {
+      routine: { 'orbis/routine_mode': 'act', 'orbis/allowed_tools': ['subscription_set'] },
+    });
+    const { runId } = await seedRoutineRun(owner, { routineId });
+    // Модельная мутация режима `act` — тем же исполнением, что делает диспатч рутины (source routine + run_id)
+    const byRoutine = await execute(
+      db,
+      {
+        identity: personal(owner),
+        actorKind: 'ai',
+        source: 'routine',
+        runId,
+        operations: [
+          {
+            tool: 'subscription_set',
+            input: { id: SUBSCRIPTION, surface: SURFACE, definition: withWarnAt('0.5') },
+          },
+        ],
+      },
+      { sink },
+    );
+    if (!byRoutine.ok) throw new Error(JSON.stringify(byRoutine.error));
+    const byOwner = await execute(
+      db,
+      {
+        identity: personal(owner),
+        actorKind: 'owner',
+        source: 'ui',
+        operations: [
+          {
+            tool: 'subscription_set',
+            input: { id: SUBSCRIPTION, surface: SURFACE, definition: withWarnAt('0.7') },
+          },
+        ],
+      },
+      { sink },
+    );
+    if (!byOwner.ok) throw new Error(JSON.stringify(byOwner.error));
+
+    const out = await rollbackRun(db, { identity: personal(owner), runId });
+    expect(out.ok).toBe(false);
+    if (out.ok || out.reason !== 'conflict')
+      throw new Error(`ожидался конфликт: ${JSON.stringify(out)}`);
+    expect(out.conflicts.map((c) => [c.entityId, c.actionId, c.source])).toEqual([
+      [SUBSCRIPTION, byOwner.actionId, 'ui'],
+    ]);
+    // Предпроверка ничего не отменила: правка владельца на месте, отмен нет
+    expect(await warnAtOf(owner)).toBe('0.7');
+    expect((await wholeJournalOf(owner)).filter((e) => e.type === 'undo')).toEqual([]);
   });
 });

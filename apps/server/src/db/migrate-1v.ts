@@ -58,7 +58,7 @@ import type { ISql, Sql } from 'postgres';
 import { ExecError, type ExecErrorCode } from '../errors';
 import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
-import { exportJournalRaw, findAction } from '../executor/journal-read';
+import { exportJournalRaw, findAction, type JournalCursor } from '../executor/journal-read';
 import { undoAction } from '../executor/undo';
 import { type Identity, identitiesForScheduler, parseGraphId } from '../identity';
 import { effectiveRegistry } from '../registry/cache';
@@ -582,13 +582,21 @@ export async function reportMigrate1v(sql: SqlClient, graph: string): Promise<Mi
     if (rows.length < BATCH) break;
     after = String(rows[rows.length - 1]?.id);
   }
-  // Журнал отката — через API журнала (`journal-read`, РП-9): тот же запрос экспорта, сырым клиентом этой
-  // транзакции. Адрес строки — id действия: он и есть аргумент `--undo`, а ключ хранилища журнала меняется.
-  for (const entry of await exportJournalRaw(sql, g)) {
-    const forms = entry.inverse.flatMap((iv) =>
-      typeof iv.payload.body === 'string' ? bodyFindings(iv.payload.body).forms : [],
-    );
-    push('journal_prior', entry.id, forms);
+  // Журнал отката — через API журнала (`journal-read`, РП-9) сырым клиентом этой транзакции, порциями по BATCH, как
+  // прежде. Адрес строки — ключ хранилища журнала (`cursor.key`): у прежнего хранилища — id сообщения, как был.
+  for (let after: JournalCursor | undefined; ; ) {
+    const page = await exportJournalRaw(sql, g, {
+      ...(after !== undefined && { after }),
+      limit: BATCH,
+    });
+    for (const entry of page) {
+      const forms = entry.inverse.flatMap((iv) =>
+        typeof iv.payload.body === 'string' ? bodyFindings(iv.payload.body).forms : [],
+      );
+      push('journal_prior', entry.cursor.key, forms);
+    }
+    if (page.length < BATCH) break;
+    after = page[page.length - 1]?.cursor;
   }
 
   const supply = (await sql`
