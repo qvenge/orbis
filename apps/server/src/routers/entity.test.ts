@@ -132,7 +132,7 @@ describe('entity.create / entity.get (§9.2)', () => {
 
     // Undo по actionId откатывает создание (инверсия — архивация, §7.8)
     const r = await caller.ai.undo({ actionId: created.actionId as string });
-    expect(r.ok).toBe(true);
+    expect(r.undone.id).toBe(created.actionId as string);
     const got = await caller.entity.get({ id });
     expect(got.entity.archived).toBe(true);
   });
@@ -349,10 +349,18 @@ describe('entity.update: замок текста по ревизии тела (�
     });
     expect(JSON.stringify(res.body)).not.toContain(secret);
 
-    // Отказ вне закрытого списка кодов поля orbis не несёт: канал — только для перечисленных отказов
+    // VALIDATION в закрытом списке с задачи 10 (повторная отмена) — но несёт ТОЛЬКО причину: id записи не уходит
     const bad = await postMutation(user, 'entity.update', { id: created.id, body: 'x' });
     expect(bad.status).toBe(400);
-    expect(bad.body.error?.data?.orbis).toBeUndefined();
+    expect(bad.body.error?.data?.orbis).toEqual({ code: 'VALIDATION', details: {} });
+
+    // Отказ вне закрытого списка кодов поля orbis не несёт: канал — только для перечисленных отказов
+    const missing = await postMutation(user, 'entity.update', {
+      id: crypto.randomUUID(),
+      title: 'нет такой',
+    });
+    expect(missing.status).toBe(404);
+    expect(missing.body.error?.data?.orbis).toBeUndefined();
   });
 
   test('audit-сообщение update атрибутировано source=ui (прямое действие владельца в UI, не fast_path)', async () => {

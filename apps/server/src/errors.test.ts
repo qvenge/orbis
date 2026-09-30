@@ -56,6 +56,8 @@ const EXPECTED: Record<ExecErrorCode, TRPCError['code']> = {
   [DEREF_IN_CONSTRAINT]: 'BAD_REQUEST',
   // Срез 1б (задача 12): граф старой формы — снимается переводом данных, а не другим вводом.
   GRAPH_NEEDS_MIGRATION: 'CONFLICT',
+  // Спека скорости §8.6 (план А, задача 10): отмена остановлена правилом текста — 409, решает человек.
+  UNDO_TEXT_CHANGED: 'CONFLICT',
 };
 
 test('каждый код ExecError переводится в обещанный код tRPC', () => {
@@ -100,8 +102,8 @@ test('коды реформы свойств заведены все двадц�
   ];
   expect(reform.length).toBe(26);
   for (const code of reform) expect(Object.keys(EXPECTED)).toContain(code);
-  // 34 до среза 1б + GRAPH_NEEDS_MIGRATION (задача 12).
-  expect(Object.keys(EXPECTED).length).toBe(35);
+  // 34 до среза 1б + GRAPH_NEEDS_MIGRATION (задача 12) + UNDO_TEXT_CHANGED (план А скорости, задача 10).
+  expect(Object.keys(EXPECTED).length).toBe(36);
 });
 
 // Р-И-10: имя `DEREF_IN_CONSTRAINT` приходит из shared, как четыре кода E и PATTERN_NOT_REGULAR, —

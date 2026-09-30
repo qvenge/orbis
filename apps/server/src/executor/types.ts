@@ -1,6 +1,6 @@
 // apps/server/src/executor/types.ts
 // Точные сигнатуры executor'а (контракт Task 9; на них встают Task 10–15 и весь 1b).
-import type { AccountId, GraphId } from '@orbis/shared';
+import type { AccountId, GraphId, UndoContinuation } from '@orbis/shared';
 import type { Tx } from '../db/with-identity';
 import type { Identity } from '../identity';
 import { ExecError } from './errors';
@@ -544,6 +544,20 @@ export interface InternalUndoMode {
   undoing: JournalEntry;
   /** Путь отмены — поле `source` записи отмены (РП-11). */
   path: UndoPath;
+  /**
+   * Продолжение «Всё равно отменить» (§8.6, Р-15): отмена проходит правило текста, только если КАЖДАЯ провалившая
+   * проверку запись закреплена версией первой операцией этой же записи отмены (`pinned`). Без продолжения любой провал
+   * останавливает всё действие — закрепление страховки сеанса продолжением не является.
+   */
+  force: boolean;
+  /**
+   * Записи, чей текущий текст закрепляется версией ПЕРВЫМИ операциями этой записи отмены (`applyUndo`): страховка
+   * сеанса правки текста (К-20, всегда) и записи, провалившие предпроверку продолжения (К-30). Порядок операций
+   * запроса — закрепления, затем inverse; по одному закреплению на запись.
+   */
+  pinned: ReadonlySet<string>;
+  /** Место продолжения, которое отказ правила называет клиенту (`UndoTextChangedDetails.continuation`). */
+  continuation: UndoContinuation;
   /**
    * Вызывается ПОСЛЕ применения inverse В ТОМ ЖЕ tx, до записи отмены: перепроверка «уже отменено» под замками строк
    * и снятие пометок ссылок (`unmarkRefSources`) — всё, что `undo.ts` делает по восстановленному графу.

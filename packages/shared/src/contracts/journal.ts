@@ -31,3 +31,30 @@ export interface JournalCardMeta {
   undoable: boolean;
   undone: boolean;
 }
+
+/**
+ * Ответ отмены (`ai.undo`, спека скорости §8.6, К-30): `actionId` — id ЗАПИСИ ОТМЕНЫ (заведён до применения, РП-11),
+ * `undone` — что отменено, `pinnedVersions` — версии, которыми отмена закрепила текущий текст первыми операциями той
+ * же записи отмены (страховка сеанса правки текста «перед возвратом к ЧЧ:ММ», продолжение «перед отменой: …»);
+ * подтверждение называет их владельцу («ваш текст — в версии …»).
+ */
+export interface UndoResult {
+  actionId: string;
+  undone: { id: string; title: string };
+  pinnedVersions: Array<{ entityId: string; versionId: string; label: string }>;
+}
+
+/**
+ * Действующее действие текущего тела записи (§8.2, §8.6, К-37): колонка «действие тела» с раскруткой через записи
+ * отмены. `textSession` — сеанс правки текста; `mine` — действие этого же человека-владельца (пункт «Вернуть текст как
+ * на …» показывается по своему сеансу); отрезок — начало (время записи журнала) и конец (время изменения тела, пока
+ * колонка указывает на это действие; иначе конца не знает никто — `null`).
+ */
+export interface BodyActionInfo {
+  actionId: string;
+  textSession: boolean;
+  mine: boolean;
+  actorKind: 'owner' | 'ai' | 'agent';
+  startedAt: string;
+  endedAt: string | null;
+}

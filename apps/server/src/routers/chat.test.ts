@@ -443,7 +443,7 @@ describe('ai.undo / ai.undoLast (§7.8)', () => {
     expect(await caller.chat.listMessages({ threadId })).toEqual([]);
 
     const undone = await caller.ai.undo({ actionId });
-    expect(undone.ok).toBe(true);
+    expect(undone.undone.id).toBe(actionId);
     expect((await caller.entity.get({ id: created.id })).entity.archived).toBe(true);
 
     const again = await trpcError(caller.ai.undo({ actionId }));

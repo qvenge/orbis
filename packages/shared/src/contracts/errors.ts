@@ -13,3 +13,37 @@ export interface OrbisErrorData {
   code: string;
   details?: Record<string, unknown>;
 }
+
+/**
+ * Где владелец может продолжить отказанную отмену «Всё равно отменить» (спека скорости §8.6, Р-15, Р-17): `here` — тем
+ * же входом, откуда отменял (плашка, Ctrl/Cmd+Z, карточка, «Вернуть текст»); `card` — с карточки действия в треде
+ * (отказ «отмени последнее» словами называет её); `menu` — пункт «Вернуть текст как на …» меню записи (сеанс правки
+ * текста, Э-А-16); `tab` — Ctrl/Cmd+Z во вкладке, где действие сделано; `none` — продолжения нет (карточки у действия
+ * нет — текст вернуть можно из версий).
+ */
+export type UndoContinuation =
+  | { kind: 'here' }
+  | { kind: 'card'; threadId: string; actionId: string }
+  | { kind: 'menu' }
+  | { kind: 'tab' }
+  | { kind: 'none' };
+
+/**
+ * Запись, у которой проверка §8.6 не прошла: текст её изменён после отменяемой правки. Актор и время — действующего
+ * действия текущего тела (правки, остановившей проверку); у текста без записи журнала (ops-скрипт, сев) —
+ * `owner` с подписью «вне приложения» и время изменения тела. Текста записи здесь нет — только заголовок.
+ */
+export interface UndoConflictEntry {
+  entityId: string;
+  title: string;
+  actorKind: 'owner' | 'ai' | 'agent';
+  actorLabel: string | null;
+  at: string;
+}
+
+/** Детали отказа `UNDO_TEXT_CHANGED` (`data.orbis.details`): что отменялось, перечень записей, место продолжения. */
+export interface UndoTextChangedDetails {
+  action: { id: string; title: string };
+  entries: UndoConflictEntry[];
+  continuation: UndoContinuation;
+}

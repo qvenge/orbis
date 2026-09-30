@@ -3,7 +3,8 @@
 // Почему модуль, а не запросы на местах: читателей журнала ≈15, и пока каждый ходил в хранилище своим SQL, смена
 // хранилища (задача 5: сообщения чата → таблица `action_journal`) была бы пятнадцатью правками с пятнадцатью шансами
 // разойтись; здесь она — одна. Записи отмены — НЕ действия (спека §11.2, К-22): функции поиска «действия» их не
-// отдают никогда; запись отмены достаётся только `undoRecordOf`, журналом треда и экспортом.
+// отдают никогда; запись отмены достаётся только `undoRecordOf`, `undoRecordById` (раскрутка цепочки тела §8.6),
+// журналом треда и экспортом.
 //
 // Хранилище — таблица `action_journal` (миграция 0025): строка — действие целиком или запись отмены (`type = 'undo'`,
 // `undoes`), ключ `(graph_id, id)`. Пробы «по затронутой записи» — боковая `action_journal_entities` (РП-8: под RLS
@@ -332,6 +333,67 @@ export async function undoRecordOf(
     tx,
     sql`${SELECT_ROW} WHERE ${inGraph(graph)} AND j.undoes = ${actionId}::uuid LIMIT 1`,
   );
+}
+
+/**
+ * Запись отмены ПО ЕЁ СОБСТВЕННОМУ id (не по отменённому действию, как `undoRecordOf`): раскрутка цепочки «действие
+ * тела до» (§8.6, `executor/body-chain.ts`) встречает id записи отмены в колонке действия тела записи графа и должна
+ * узнать, что это отмена и что она отменила. Не запись отмены (действие, чужой граф, нет строки) — `undefined`.
+ */
+export async function undoRecordById(
+  tx: Tx,
+  graph: GraphId,
+  undoRecordId: string,
+): Promise<JournalEntry | undefined> {
+  if (!isUuid(undoRecordId)) return undefined;
+  return firstEntry(
+    tx,
+    sql`${SELECT_ROW} WHERE ${inGraph(graph)} AND j.id = ${undoRecordId}::uuid AND j.type = 'undo'`,
+  );
+}
+
+/**
+ * Колонки тела записи и ЖИВОЕ действие, на которое указывает её колонка «действие тела», — одним запросом (ответ
+ * «действующее действие текущего тела», §8.2, К-37). Живое — действие (не запись отмены) и не отменённое: ровно тогда
+ * раскрутка цепочки (`executor/body-chain.ts`, `effectiveBodyAction`) вернула бы саму колонку, и чтение записи его и
+ * берёт, не платя за раскрутку тремя запросами. Иначе `live` нет — раскрутку делает вызывающий. Записи не видно —
+ * `undefined`.
+ */
+export async function bodyColumnProbe(
+  tx: Tx,
+  graph: GraphId,
+  entityId: string,
+): Promise<
+  { id: string; bodyActionId: string | null; bodyChangedAt: Date; live?: JournalEntry } | undefined
+> {
+  if (!isUuid(entityId)) return undefined;
+  const rows = (await tx.execute(sql`
+    SELECT e.id::text AS e_id, e.body_action_id::text AS e_body_action_id, e.body_changed_at AS e_body_changed_at,
+           ${COLUMNS}
+      FROM entities e
+      LEFT JOIN LATERAL (
+        SELECT * FROM action_journal a
+         WHERE a.graph_id = e.graph_id AND a.id = e.body_action_id AND a.type <> 'undo'
+           AND NOT EXISTS (SELECT 1 FROM action_journal u WHERE u.graph_id = a.graph_id AND u.undoes = a.id)
+      ) j ON true
+     WHERE e.graph_id = ${graph}::uuid AND e.id = ${entityId}::uuid`)) as unknown as Array<
+    // Колонки журнала пусты, когда живого действия нет (LEFT JOIN)
+    Omit<Row, 'id'> & {
+      id: string | null;
+      e_id: string;
+      e_body_action_id: string | null;
+      e_body_changed_at: unknown;
+    }
+  >;
+  const row = rows[0];
+  if (row === undefined) return undefined;
+  const { id, ...rest } = row;
+  return {
+    id: row.e_id,
+    bodyActionId: row.e_body_action_id,
+    bodyChangedAt: toDate(row.e_body_changed_at),
+    ...(id !== null && { live: entryFromRow({ ...rest, id }) }),
+  };
 }
 
 /**

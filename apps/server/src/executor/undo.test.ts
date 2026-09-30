@@ -127,7 +127,8 @@ describe('undoAction: создание → архивация (§7.8)', () => {
     const actionsBefore = await actionMessageCount(user);
 
     const u = ok(await undoAction(db, { identity: personal(user), actionId }));
-    expect(u.actionId).toBe(actionId); // вернулся id отменённого действия
+    // Ответ отмены — `UndoResult` (задача 10 плана А): id ЗАПИСИ ОТМЕНЫ, отменённое — в `undone`
+    expect(u.actionId).toBe((await undoRecordOf(user, actionId))?.id as string);
 
     const row = await entityRow(entityId);
     expect(row.archived).toBe(true); // создание → архивация (жёсткого удаления нет)
@@ -257,7 +258,7 @@ describe('undoAction: entity_update — LWW-откат по СВОЙСТВУ (§
     );
 
     const u = ok(await undoAction(db, { identity: personal(user), actionId: undoTarget }));
-    expect(u.actionId).toBe(undoTarget);
+    expect(u.actionId).toBe((await undoRecordOf(user, undoTarget))?.id as string);
 
     const row = await entityRow(e.id);
     expect(row.title).toBe('Старый');
@@ -501,7 +502,7 @@ describe('undoAction: связи и batch (§7.8)', () => {
     expect(r.actionId).toBe(batchId);
 
     const u = ok(await undoAction(db, { identity: personal(user), actionId: batchId }));
-    expect(u.actionId).toBe(batchId);
+    expect(u.actionId).toBe((await undoRecordOf(user, batchId))?.id as string);
     expect(await relCount(sId, tId, 'mention')).toBe(0);
     expect((await entityRow(sId)).archived).toBe(true);
     expect((await entityRow(tId)).archived).toBe(true);
@@ -689,6 +690,9 @@ describe('запись отмены — строка журнала type undo (�
             undoRecordId,
             undoing,
             path: 'ui',
+            force: false,
+            pinned: new Set(),
+            continuation: { kind: 'none' },
             async onApplied() {
               applied = true;
             },
@@ -720,7 +724,15 @@ describe('запись отмены — строка журнала type undo (�
         {
           sink,
           // Перепроверки нет намеренно: так выглядит гонка, в которой обе транзакции прошли её до чужого коммита
-          internalUndo: { undoRecordId: newId(), undoing, path: 'ui', onApplied: async () => {} },
+          internalUndo: {
+            undoRecordId: newId(),
+            undoing,
+            path: 'ui',
+            force: false,
+            pinned: new Set(),
+            continuation: { kind: 'none' },
+            onApplied: async () => {},
+          },
         },
       );
     ok(await run());

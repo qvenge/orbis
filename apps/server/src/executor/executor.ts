@@ -159,6 +159,7 @@ import {
 import { toWireEntity as toWire, toWireEntityWithRevision, toWireRelation } from '../wire';
 import { recomputeProjectAncestors } from './ancestors';
 import { assertEntityProps } from './aspects-validate';
+import { assertUndoTextRule, VERSION_LABEL_MAX } from './body-chain';
 import { bodyFieldsFromMarkdown } from './body-fields';
 import { bodyActionBefore, createdBodyStamp, stampVirtualBody } from './body-stamp';
 import { ExecError } from './errors';
@@ -562,7 +563,7 @@ const entityVersionPinInput = z
     // trim ДО min(1): подпись из одних пробелов рисуется пустотой в списке и в карточке
     // журнала («Закреплена версия «   »») — то есть снимок без подписи, а её тут нет
     // только у строк «до бэкфилла».
-    label: z.string().trim().min(1).max(200),
+    label: z.string().trim().min(1).max(VERSION_LABEL_MAX),
   })
   .strict();
 
@@ -633,6 +634,10 @@ export async function execute(
       // за ним замки правил уникальности (см. lockUniqueAmongRules): порядок «контур → правила»
       await lockBudgetContour(tx, registry, req.identity.graph, [single]);
       await lockUniqueAmongRules(tx, registry, req.identity.graph, [single]);
+      // Единое правило отмены текста (§8.6) — ОДНО место для всех путей отмены (`body-chain.ts`): после `beforeStages`
+      // (отказ «отклонено» карточки отката — раньше правила) и advisory-замков (правило берёт строки FOR UPDATE, а
+      // порядок «advisory → строки» глобален — см. lockBudgetContour), до стадий. Отказ — всего действия (К-21).
+      if (deps.internalUndo) await assertUndoTextRule(tx, req.identity.graph, deps.internalUndo);
       const ctx: ExecCtx = {
         tx,
         registry,
@@ -788,6 +793,9 @@ async function executeBatch(
       // за ним замки правил уникальности — тем же порядком, что на одиночном пути
       await lockBudgetContour(tx, registry, req.identity.graph, ops);
       await lockUniqueAmongRules(tx, registry, req.identity.graph, ops);
+      // Единое правило отмены текста (§8.6) — тем же местом, что на одиночном пути: до стадий всех операций пачки
+      // (закрепления версий идут первыми операциями, и отказ правила не оставляет ни одной из них)
+      if (internalUndo) await assertUndoTextRule(tx, req.identity.graph, internalUndo);
       const ctx: ExecCtx = {
         tx,
         registry,
@@ -1409,8 +1417,10 @@ async function writeJournal(ctx: ExecCtx, p: JournalPlan): Promise<void> {
  * прогнал как тулы.
  *
  * «Действие тела до» (§8.6 «Цепочка») — из планов применённого inverse, тем же сбором, что у действий: отмена тоже
- * меняет тело (её id становится действием текущего тела), и раскрутка цепочки (задача 10) через запись отмены читает
- * колонку ДО неё. Закреплённые версии у отмены — задача 10; до неё пусты.
+ * меняет тело (её id становится действием текущего тела), и раскрутка цепочки через запись отмены читает колонку ДО
+ * неё. Закрепления версий (страховка сеанса правки текста, продолжение «Всё равно отменить» — К-20, К-30) — ПЕРВЫЕ
+ * операции запроса отмены (`applyUndo`), по одной на запись из `undo.pinned`: они ложатся первыми операциями записи
+ * отмены, их id — в `pinned_version_ids`.
  */
 async function writeUndoRecord(
   ctx: ExecCtx,
@@ -1418,16 +1428,32 @@ async function writeUndoRecord(
   plans: readonly PreparedOp[],
 ): Promise<void> {
   await undo.onApplied(ctx.tx);
+  const pins = plans.slice(0, undo.pinned.size);
   await ctx.sink.writeUndo(ctx.tx, {
     graphId: ctx.req.identity.graph,
     undoRecordId: undo.undoRecordId,
     undoing: undo.undoing,
     path: undo.path,
     actorUserId: ctx.req.identity.actor,
-    operations: undo.undoing.inverse,
-    pinnedVersionIds: [],
+    operations: [...pins.flatMap((p) => p.journal.operations), ...undo.undoing.inverse],
+    pinnedVersionIds: pins.map(pinnedVersionIdOf),
     bodyBefore: collectBodyBefore(plans) ?? null,
   });
+}
+
+/**
+ * id версии, которую закрепила операция записи отмены. Не закрепление на месте закрепления — поломка сборки запроса
+ * отмены (`applyUndo` кладёт закрепления первыми), а не отказ: исключение откатывает транзакцию, и запись отмены с
+ * чужой операцией под видом страховки не ложится.
+ */
+function pinnedVersionIdOf(plan: PreparedOp): string {
+  const id = plan.journal.operations[0]?.payload.id;
+  if (plan.journal.type !== 'version_pinned' || typeof id !== 'string') {
+    throw new Error(
+      `инвариант записи отмены (§8.6): на месте закрепления версии — ${plan.journal.type}`,
+    );
+  }
+  return id;
 }
 
 /** Inverse планов в порядке отката: обратный порядок исполнения, внутри плана — тоже (§7.8). */

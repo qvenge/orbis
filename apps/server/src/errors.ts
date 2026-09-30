@@ -121,7 +121,12 @@ export type ExecErrorCode =
    *  вход его не заводит и ничего не пишет; перевода нет — мир пересевается `reset-world` (ранбук), данные
    *  графа сносятся (перевод 1б `migrate-1b` исполнен в проде 28.09 и снят срезом 1в, РП-13).
    *  Бросает `setupGraph` (задача 12). */
-  | 'GRAPH_NEEDS_MIGRATION';
+  | 'GRAPH_NEEDS_MIGRATION'
+  // --- Спека скорости (план А) ---
+  /** §8.6, Р-15: отмена, пишущая тело, остановлена — текст записи изменён после отменяемой правки (действующее
+   *  действие текущего тела — не она). Отказ ВСЕГО действия (К-21). `details: UndoTextChangedDetails` — перечень
+   *  записей и место продолжения «Всё равно отменить». Бросает `assertUndoTextRule` (`executor/body-chain.ts`). */
+  | 'UNDO_TEXT_CHANGED';
 
 export class ExecError extends Error {
   readonly code: ExecErrorCode;
@@ -209,6 +214,10 @@ const TRPC_CODE_BY_EXEC: Record<ExecErrorCode, TRPCError['code']> = {
   // «клиент устарел» — web-линк на любой такой ответ показывает экран обновления, а `cause` по HTTP не
   // сериализуется (R-19). У `seedOnboarding` другого CONFLICT нет — по нему web и ветвится.
   GRAPH_NEEDS_MIGRATION: 'CONFLICT',
+  // --- Спека скорости ---
+  // 409 — как у STALE_VERSION: состояние текста разошлось с тем, на которое рассчитана отмена, и решает человек
+  // (продолжение «Всё равно отменить» — тем же запросом с признаком `force`), а не другой ввод.
+  UNDO_TEXT_CHANGED: 'CONFLICT',
 };
 
 export function execErrorToTRPC(error: StructuredError): TRPCError {
@@ -229,6 +238,11 @@ const ORBIS_ERROR_FIELDS: Partial<
   Record<ExecErrorCode, (d: Record<string, unknown>) => Record<string, unknown>>
 > = {
   STALE_VERSION: (d) => pick(d, ['id', 'expected', 'current']),
+  // Отказ правила отмены текста (§8.6): что отменялось (id и заголовок действия), перечень записей (id, заголовок записи,
+  // актор, время) и место продолжения — клиент рисует по ним кнопку «Всё равно отменить».
+  UNDO_TEXT_CHANGED: (d) => pick(d, ['action', 'entries', 'continuation']),
+  // Отказ проверки — только причина (`already_undone` у повторной отмены): клиенту нужен признак, а не id и тексты.
+  VALIDATION: (d) => pick(d, ['reason']),
 };
 
 /**

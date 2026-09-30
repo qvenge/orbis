@@ -10,6 +10,7 @@ import { z } from 'zod';
 import { entityVersions } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { execErrorToTRPC } from '../errors';
+import { VERSION_LABEL_MAX, versionLabel } from '../executor/body-chain';
 import { execute } from '../executor/executor';
 import { makeJournalSink } from '../executor/journal';
 import type { ActorKind, WireEntityVersion, WireEntityWithRevision } from '../executor/types';
@@ -21,8 +22,7 @@ const sink = makeJournalSink();
 
 // Подпись версии — одна строка списка, потолок тот же, что в схеме операции executor'а;
 // trim ДО min(1) — там же и по той же причине (пробельная подпись = снимок без подписи)
-const LABEL_MAX = 200;
-const labelInput = z.string().trim().min(1).max(LABEL_MAX);
+const labelInput = z.string().trim().min(1).max(VERSION_LABEL_MAX);
 
 /**
  * Документ снимка, пригодный к записи, — или undefined, если восстанавливать надо строкой.
@@ -49,19 +49,11 @@ const INSURANCE_PREFIX = 'перед восстановлением: ';
 
 /**
  * Подпись страховки — в потолке подписи версии (200, `labelInput`): приставка плюс подпись восстанавливаемой версии
- * заняли бы до 223 символов, и закрепление отказало бы разбором — а с ним и само восстановление. Потолок меряется
- * UTF-16 единицами (`z.string().max`), а режется подпись по КОДОВЫМ ТОЧКАМ: срез посреди суррогатной пары (эмодзи на
- * границе) оставил бы в подписи одиночный суррогат.
+ * заняли бы до 223 символов, и закрепление отказало бы разбором — а с ним и само восстановление. Срез — общий у всех
+ * страховок (`versionLabel`: по кодовым точкам, без одиночного суррогата; им же подписывают закрепления отмены, §8.6).
  */
 function insuranceLabel(label: string): string {
-  const full = `${INSURANCE_PREFIX}${label}`;
-  if (full.length <= LABEL_MAX) return full;
-  let cut = '';
-  for (const ch of full) {
-    if (cut.length + ch.length > LABEL_MAX - 1) break;
-    cut += ch;
-  }
-  return `${cut}…`;
+  return versionLabel(`${INSURANCE_PREFIX}${label}`);
 }
 
 export const versionRouter = router({

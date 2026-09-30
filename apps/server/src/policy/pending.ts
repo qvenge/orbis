@@ -1302,7 +1302,10 @@ async function approveUndoUnit(
       },
     },
   );
-  if (r.ok || rejected) return r;
+  // Ответ «Принять» — id ОТМЕНЁННОГО действия (форма исполнения единицы): записи пачки у отката нет, и id записи
+  // отмены карточке не нужен — её судьбу читают по отменённому действию (`isUndone`)
+  if (r.ok) return { ok: true, actionId: r.undone.id, results: r.results, idempotentReplay: false };
+  if (rejected) return r;
   const undone = await withIdentity(db, args.identity, (tx) =>
     isUndone(tx, args.identity.graph, undoOf),
   );

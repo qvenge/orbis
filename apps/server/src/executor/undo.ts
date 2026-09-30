@@ -4,11 +4,13 @@
 // и применяет inverse В ОДНОМ tx с ней. Нового action undo не порождает (undo неотменяем). Применение
 // inverse идёт через executor во внутреннем режиме (InternalUndoMode, см. types.ts) — стадии, инварианты и
 // RLS общие, конвейер не дублируется; режим недостижим через tRPC/тулы.
-import { newId } from '@orbis/shared';
+import { newId, type UndoContinuation, type UndoResult } from '@orbis/shared';
 import type { Db } from '../db/client';
 import { withIdentity } from '../db/with-identity';
 import type { Identity } from '../identity';
+import { clockTime, ownerTimeZone } from '../query/context';
 import { unmarkRefSources } from '../registry/ref';
+import { bodyEntitiesOf, bodyRuleFailures, versionLabel } from './body-chain';
 import { ExecError } from './errors';
 import { execute } from './executor';
 import { makeJournalSink } from './journal';
@@ -25,7 +27,6 @@ import type {
   ExecuteErr,
   ExecuteOk,
   ExecuteRequest,
-  ExecuteResult,
   ExecutorDeps,
   UndoPath,
 } from './types';
@@ -87,13 +88,76 @@ function markedRefSources(action: Pick<ActionRecord, 'operations'>): string[] {
   return out;
 }
 
+/** Закрепление текущего текста записи версией внутри записи отмены (§7.5 п. 3, §8.6): id версии заведён заранее. */
+type UndoPin = UndoResult['pinnedVersions'][number];
+
+/** Подпись страховки сеанса правки текста (В-4): «перед возвратом к ЧЧ:ММ» начала сеанса во времени владельца. */
+const SESSION_PIN_PREFIX = 'перед возвратом к ';
+/** Подпись закрепления продолжения «Всё равно отменить» (В-4): «перед отменой: <заголовок действия>». */
+const FORCE_PIN_PREFIX = 'перед отменой: ';
+
+/**
+ * Какие записи отмена закрепит версией ПЕРВЫМИ операциями своей записи отмены — по одному закреплению на запись:
+ * - запись сеанса правки текста — ВСЕГДА, любым путём (К-20): у записи сеанса нет «после», и текст, который возврат
+ *   сотрёт, сохраняется версией «перед возвратом к ЧЧ:ММ»; отдельным действием нельзя — «отмени последнее» нашло бы его
+ *   и удалило страховку;
+ * - при продолжении (`force`, Р-15) — каждая запись, провалившая предпроверку правила §8.6 и ещё не закреплённая
+ *   (К-30): записи, прошедшие проверку, версий не получают. Предпроверка — отдельной читающей транзакцией; запись,
+ *   провалившая проверку только к транзакции отмены, остановит её правилом (гонка — отказ с новым перечнем).
+ */
+async function plannedPins(
+  db: Db,
+  who: Identity,
+  action: JournalEntry,
+  force: boolean,
+): Promise<UndoPin[]> {
+  const session = action.textSession && action.entityId !== null;
+  if (!session && !force) return [];
+  return withIdentity(db, who, async (tx) => {
+    const pins: UndoPin[] = [];
+    if (session && action.entityId !== null) {
+      const start = clockTime(action.createdAt, await ownerTimeZone(tx, who.graph));
+      pins.push({
+        entityId: action.entityId,
+        versionId: newId(),
+        label: versionLabel(`${SESSION_PIN_PREFIX}${start}`),
+      });
+    }
+    if (force) {
+      for (const f of await bodyRuleFailures(tx, who.graph, action, bodyEntitiesOf(action))) {
+        if (pins.some((p) => p.entityId === f.entityId)) continue;
+        pins.push({
+          entityId: f.entityId,
+          versionId: newId(),
+          label: versionLabel(`${FORCE_PIN_PREFIX}${action.title}`),
+        });
+      }
+    }
+    return pins;
+  });
+}
+
+/**
+ * Исход отмены на сервере: ответ отмены (`UndoResult` — провод `ai.undo`: id записи отмены, что отменено, закреплённые
+ * версии) плюс результаты обратных операций для серверных вызывающих (форма `ExecuteOk`: откат прогона, карточка
+ * отката, тесты читают восстановленные записи). Результаты закреплений в `results` не входят — по одному на обратную
+ * операцию, как до закреплений. Провод `ai.undo` несёт только `UndoResult`.
+ */
+export type UndoOutcomeServer =
+  | ({ ok: true } & UndoResult & { results: unknown[]; idempotentReplay: false })
+  | ExecuteErr;
+
 async function applyUndo(
   db: Db,
   who: Identity,
   action: JournalEntry,
-  path: UndoPath,
-  beforeStages?: ExecutorDeps['beforeStages'],
-): Promise<ExecuteResult> {
+  opts: {
+    path: UndoPath;
+    force: boolean;
+    continuation: UndoContinuation;
+    beforeStages?: ExecutorDeps['beforeStages'];
+  },
+): Promise<UndoOutcomeServer> {
   if (action.inverse.length === 0) {
     // Недостижимо для действий executor'а (inverse всегда непуст); страховка формата
     return {
@@ -101,25 +165,38 @@ async function applyUndo(
       error: { code: 'VALIDATION', message: `у действия ${action.id} нет inverse-операций` },
     };
   }
-  // id записи отмены — ДО применения (РП-11): на нём стоят ответ и продолжения отмены (задача 10)
+  // id записи отмены — ДО применения (РП-11): на нём стоят ответ и продолжения отмены
   const undoRecordId = newId();
+  const pins = await plannedPins(db, who, action, opts.force);
+  // Закрепления — первыми операциями той же транзакции и той же записи отмены (К-20, К-30): снимок берёт текст ДО
+  // обратных операций, а отказ правила или любой операции не оставляет ни одной версии
+  const operations = [
+    ...pins.map((p) => ({
+      tool: 'entity_version_pin',
+      input: { id: p.versionId, entity_id: p.entityId, label: p.label },
+    })),
+    ...action.inverse.map((iv) => ({ tool: iv.op, input: iv.payload })),
+  ];
   const req: ExecuteRequest = {
     identity: who,
     actorKind: 'owner', // MVP: undo инициирует владелец графа
     // Исполнение — всегда `system` (инварианты читают `req.source`), путь отмены — поле записи отмены (РП-11)
     source: 'system',
-    operations: action.inverse.map((iv) => ({ tool: iv.op, input: iv.payload })),
-    batchId: action.inverse.length > 1 ? newId() : undefined,
+    operations,
+    batchId: operations.length > 1 ? newId() : undefined,
   };
   const result = await execute(db, req, {
     sink,
     // Шов сериализации карточки отката (`approvePending`, ключ `undo_of`): замок единицы и
     // перепроверка «не отклонена» — в ТОЙ ЖЕ транзакции, что запись отмены (см. `undoAction`).
-    ...(beforeStages !== undefined && { beforeStages }),
+    ...(opts.beforeStages !== undefined && { beforeStages: opts.beforeStages }),
     internalUndo: {
       undoRecordId,
       undoing: action,
-      path,
+      path: opts.path,
+      force: opts.force,
+      pinned: new Set(pins.map((p) => p.entityId)),
+      continuation: opts.continuation,
       // Вызывается ПОСЛЕ применения inverse В ТОМ ЖЕ tx, до записи отмены — атомарность undo (§7.8)
       async onApplied(tx) {
         // Перепроверка под замками строк: конкурентный undo того же action мог
@@ -140,9 +217,15 @@ async function applyUndo(
       },
     },
   });
-  // Вызывающему полезен id ОТМЕНЁННОГО действия, а не технический id внутреннего
-  // прогона (тот не соответствует никакой записи журнала)
-  return result.ok ? { ...result, actionId: action.id } : result;
+  if (!result.ok) return result;
+  return {
+    ok: true,
+    actionId: undoRecordId,
+    undone: { id: action.id, title: action.title },
+    pinnedVersions: pins,
+    results: result.results.slice(pins.length),
+    idempotentReplay: false,
+  };
 }
 
 /**
@@ -152,6 +235,10 @@ async function applyUndo(
  * с экрана прогона (К-45); `chat` — «отмени последнее» моделью и карточка отката `undo_of`; `system` — прод-операции
  * (`migrate-1v --undo`).
  *
+ * `force` — продолжение «Всё равно отменить» (§8.6, Р-15): текущий текст каждой записи, провалившей правило, закрепляется
+ * версией первой операцией той же записи отмены. `continuation` — место продолжения, которое отказ правила называет
+ * клиенту (`UNDO_TEXT_CHANGED`); умолчание — `none`: у вызывающего продолжения нет.
+ *
  * `beforeStages` — ровно тот же шов, что у `approvePending` для пачки (`ExecutorDeps`): карточка
  * отката (`undo_of`, В-8) исполняется здесь, а не `execute` payload'а, и без шва её «Принять» и
  * «Отклонить» не делили бы замок единицы — владелец мог получить в ленте «отменено» и «отклонено»
@@ -159,9 +246,15 @@ async function applyUndo(
  */
 export async function undoAction(
   db: Db,
-  args: { identity: Identity; actionId: string; path?: UndoPath },
+  args: {
+    identity: Identity;
+    actionId: string;
+    path?: UndoPath;
+    force?: boolean;
+    continuation?: UndoContinuation;
+  },
   deps: { beforeStages?: ExecutorDeps['beforeStages'] } = {},
-): Promise<ExecuteResult> {
+): Promise<UndoOutcomeServer> {
   try {
     const found = await withIdentity(db, args.identity, async (tx) => {
       // Чтение action отдельным tx от применения безопасно: журнал append-only,
@@ -181,7 +274,12 @@ export async function undoAction(
       }
       return found;
     });
-    return await applyUndo(db, args.identity, found, args.path ?? 'ui', deps.beforeStages);
+    return await applyUndo(db, args.identity, found, {
+      path: args.path ?? 'ui',
+      force: args.force ?? false,
+      continuation: args.continuation ?? { kind: 'none' },
+      ...(deps.beforeStages !== undefined && { beforeStages: deps.beforeStages }),
+    });
   } catch (e) {
     if (e instanceof ExecError) {
       return { ok: false, error: { code: e.code, message: e.message, details: e.details } };
@@ -204,21 +302,24 @@ export interface UndoneAction {
 }
 
 /**
- * Исход «отмени последнее»: тот же ExecuteResult, что у точечного undo, плюс `undone` при
- * успехе. Отказ «отменять нечего» — NOT_FOUND с `details.reason: 'nothing_to_undo'`: чату он
- * нужен как ШТАТНЫЙ ответ («нечего отменять»), а не как ошибка, и отличать его по тексту
+ * Исход «отмени последнее»: форма `ExecuteOk` с id ОТМЕНЁННОГО действия, плюс `undone` при успехе и закреплённые
+ * версии (страховка сеанса правки текста, §7.5 п. 3). Отказ «отменять нечего» — NOT_FOUND с `details.reason:
+ * 'nothing_to_undo'`: чату он нужен как ШТАТНЫЙ ответ («нечего отменять»), а не как ошибка, и отличать его по тексту
  * сообщения было бы хрупко.
  */
-export type UndoLastResult = (ExecuteOk & { undone: UndoneAction }) | ExecuteErr;
+export type UndoLastResult =
+  | (ExecuteOk & { undone: UndoneAction; pinnedVersions: UndoResult['pinnedVersions'] })
+  | ExecuteErr;
 
 /**
  * «Отмени последнее» (§7.8): inverse первого неотменённого действия с конца журнала. Путь — `ui` (умолчание):
  * единственный вызывающий — `ai.undoLast` кнопки владельца; «отмени последнее» словами в чате идёт политикой
- * (`tools/dispatch.ts`: `peekLastUndoable` + `undoAction` с путём `chat`).
+ * (`tools/dispatch.ts`: `peekLastUndoable` + `undoAction` с путём `chat`). Продолжения правила §8.6 у «отмени
+ * последнее» нет (`force` не принимается); `continuation` — место, которое назовёт отказ.
  */
 export async function undoLast(
   db: Db,
-  args: { identity: Identity; path?: UndoPath },
+  args: { identity: Identity; path?: UndoPath; continuation?: UndoContinuation },
 ): Promise<UndoLastResult> {
   try {
     // Подпись — до отмены: конец сеанса правки текста известен, пока колонка тела указывает на сеанс (§8.5)
@@ -237,12 +338,21 @@ export async function undoLast(
         },
       };
     }
-    const result = await applyUndo(db, args.identity, peeked.entry, args.path ?? 'ui');
+    const result = await applyUndo(db, args.identity, peeked.entry, {
+      path: args.path ?? 'ui',
+      force: false,
+      continuation: args.continuation ?? { kind: 'none' },
+    });
     if (!result.ok) return result;
     // `findLastUndoable` записей отмены не отдаёт (К-22) — запись журнала здесь всегда действие
     const record = actionRecordOf(peeked.entry);
     return {
-      ...result,
+      ok: true,
+      // Вызывающему «отмени последнее» полезен id ОТМЕНЁННОГО действия: он его не выбирал
+      actionId: record.id,
+      results: result.results,
+      idempotentReplay: false,
+      pinnedVersions: result.pinnedVersions,
       undone: {
         actionId: record.id,
         type: record.type,

@@ -1458,6 +1458,9 @@ describe('замок текста (§8.1) покрывает ОБА поля т�
       undoRecordId: newId(),
       undoing: undoingOf(owner, entity.id),
       path: 'ui',
+      force: false,
+      pinned: new Set(),
+      continuation: { kind: 'none' },
       onApplied: async () => {},
     };
 
