@@ -14,6 +14,7 @@ import type { AccountId, GraphId } from '@orbis/shared';
 import { type SQL, sql } from 'drizzle-orm';
 import { PgDialect } from 'drizzle-orm/pg-core';
 import type { ISql } from 'postgres';
+import { PROCESSING_TTL_MS } from '../chat/messages';
 import type { Tx } from '../db/with-identity';
 import { parseAccountId, parseGraphId } from '../identity';
 import type {
@@ -22,6 +23,7 @@ import type {
   ActorKind,
   MutationMechanism,
   MutationSource,
+  UndoPath,
 } from './types';
 
 export interface JournalEntry {
@@ -566,11 +568,31 @@ function beforeItemCursor(before: { at: Date; key?: string } | undefined): SQL {
   return sql`AND j.created_at <= ${at} AND (j.created_at < ${at} OR ${THREAD_ITEM_ID} < ${before.key}::uuid)`;
 }
 
+/** Срок маркера «думает» интервалом SQL (рулинг R-13): граница «ход ещё идёт» для действий разговора. */
+const PROCESSING_TTL = sql`(${PROCESSING_TTL_MS}::int * interval '1 millisecond')`;
+
+/**
+ * Действие разговора с карточкой в ответе (`card_in_reply`), чей ход ОБОРВАЛСЯ (рулинг R-13): старше срока маркера
+ * «думает», и ни один ответ ассистента этого треда в пределах того же срока не несёт его карточку (`undoActionId`).
+ * Смерть процесса между действием и ответом (перезапуск при деплое, OOM) не проходит через путь сбоя (К-44), и без
+ * этого у действия не было бы карточки нигде (§11.3: на действие — ровно одна). Моложе срока — ход, возможно, ещё
+ * идёт: строка появилась бы и пропала с ответом (мигание). Ответ ищется только в окне `[время действия, + срок)` по
+ * индексу `(thread_id, created_at)` — не сканом всех ответов треда; ответ позже срока (ход дольше, чем живёт маркер,
+ * — его к тому моменту сочли мёртвым) оставит обе карточки — принятая цена рулинга.
+ */
+const ORPHAN_REPLY_CARD = sql`(j.created_at < now() - ${PROCESSING_TTL}
+  AND NOT EXISTS (
+    SELECT 1 FROM chat_messages r
+     WHERE r.thread_id = j.thread_id AND r.role = 'assistant'
+       AND r.created_at >= j.created_at AND r.created_at < j.created_at + ${PROCESSING_TTL}
+       AND r.metadata -> 'cards' @> jsonb_build_array(jsonb_build_object('undoActionId', j.id::text))))`;
+
 /**
  * Карточки журнала в выдаче треда (`journal/thread-page.ts`, спека §11.3): действия треда, которые тред показывает, —
  * без записей отмены (своей строки у отмены нет, К-45: «отменено» — признак строки отменённого, `undone`), без
  * `system` (материализация и прод-операции; новых таких строк в тредах нет — синк треда им не даёт, фильтр держит
- * прежние) и без действий, чью карточку несёт ответ ассистента (`card_in_reply`, К-36: на действие — одна карточка).
+ * прежние) и без действий, чью карточку несёт ответ ассистента (`card_in_reply`, К-36: на действие — одна карточка),
+ * кроме оборванных (`ORPHAN_REPLY_CARD`, R-13): у них карточки в ответе нет, и строка — единственный носитель.
  * Каждая запись — со своим id элемента треда (`itemId`, см. `THREAD_ITEM_ID`); порядок и курсор — `(created_at DESC,
  * itemId DESC)` по uuid-выражению, как у сообщений треда по их PK (uuid). Курсор без id (легаси-форма клиента
  * `<iso>`) — строго раньше по времени.
@@ -586,11 +608,34 @@ export async function threadFeed(
                EXISTS (SELECT 1 FROM action_journal u WHERE u.graph_id = j.graph_id AND u.undoes = j.id) AS undone
           FROM action_journal j
          WHERE ${inGraph(graph)} AND j.thread_id = ${threadId}::uuid
-           AND ${IS_ACTION} AND j.source <> 'system' AND NOT j.card_in_reply ${beforeItemCursor(page.before)}
+           AND ${IS_ACTION} AND j.source <> 'system' AND (NOT j.card_in_reply OR ${ORPHAN_REPLY_CARD})
+           ${beforeItemCursor(page.before)}
          ORDER BY j.created_at DESC, ${THREAD_ITEM_ID} DESC
          LIMIT ${page.limit}`,
   )) as unknown as Array<Row & { item_id: string; undone: boolean }>;
   return rows.map((row) => ({ ...entryFromRow(row), itemId: row.item_id, undone: row.undone }));
+}
+
+/**
+ * Отметки отмены для действий `actionIds`: id действия → когда и каким путём отменено (запись отмены, К-45). Одна
+ * выборка по уникальному индексу `(graph_id, undoes)`. Читатели — карточки ответов ассистента в выдаче треда (у них
+ * нет своей строки журнала, R-14) и блок «Недавние правки владельца» контекста модели (у отмены правки владельца нет
+ * треда). id не uuid (форма из будущего или мусор в сохранённой карточке) — не действие, пропускается.
+ */
+export async function undoMarks(
+  tx: Tx,
+  graph: GraphId,
+  actionIds: readonly string[],
+): Promise<Map<string, { at: Date; path: UndoPath }>> {
+  const ids = [...new Set(actionIds.filter(isUuid))];
+  if (ids.length === 0) return new Map();
+  const rows = (await tx.execute(
+    sql`SELECT j.undoes::text AS undoes, j.created_at, j.source FROM action_journal j
+         WHERE ${inGraph(graph)} AND j.undoes = ANY(${uuidArray(ids)})`,
+  )) as unknown as Array<{ undoes: string; created_at: unknown; source: string }>;
+  return new Map(
+    rows.map((r) => [r.undoes, { at: toDate(r.created_at), path: r.source as UndoPath }]),
+  );
 }
 
 /**

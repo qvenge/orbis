@@ -37,7 +37,9 @@ import {
   type JournalEntry,
   recentOwnerEdits,
   threadActions,
+  undoMarks,
 } from '../executor/journal-read';
+import type { UndoPath } from '../executor/types';
 import { newerFirst, threadMessages } from '../journal/thread-page';
 import {
   formatRuleLabel,
@@ -432,24 +434,36 @@ function actionLine(e: Pick<JournalEntry, 'type' | 'entityId' | 'source'>): stri
 }
 
 /**
+ * КТО отменил — по пути записи отмены (РП-11): модели важно отличать «владелец сам отменил мою правку» (передумал —
+ * не повторять) от «я отменил по его просьбе» (выполнено). Путь `system` — прод-операции, не люди.
+ */
+const UNDONE_BY: Record<UndoPath, string> = {
+  ui: 'владельцем в интерфейсе',
+  chat: 'по просьбе в чате',
+  system: 'системой',
+};
+
+/**
  * Запись журнала треда → строка истории. Роли — РЕШЕНИЕ Task 8:
  * - СВОЁ действие (actor_kind === 'ai') → role 'assistant': действие исполняла модель, она должна видеть его как
  *   своё («[действие: <type> <entity_id> (<source>)]»), — в том числе действие с карточкой в ответе: тред его
  *   строкой не рисует (К-36), а модели оно нужно;
  * - действия агента/владельца → role 'user' с префиксом «[система]»: для модели это наблюдаемые события среды;
- * - запись отмены → «[система] [отменено действие: …]» в момент отмены (спека §11.2: агент видит, что правку
+ * - запись отмены → «[система] [отменено действие: … · <кем>]» в момент отмены (спека §11.2: агент видит, что правку
  *   отменили; своей карточки в треде у отмены нет, К-45 — строка контекста ею не является). Отменённое ищется среди
  *   прочитанных записей треда, иначе — `findAction`; не нашлось — заголовок самой записи отмены («Отменено: …»):
  *   ссылку `undoes` на действие держит синк, а не внешний ключ, и молчать об отмене из-за неё нельзя.
  */
 function compressJournalRow(e: JournalEntry, undone: JournalEntry | undefined): LLMMessage {
   if (e.type === 'undo') {
+    // Источник записи отмены — путь отмены (`UndoPath`, РП-11)
+    const by = UNDONE_BY[e.source as UndoPath] ?? e.source;
     return {
       role: 'user',
       content:
         undone === undefined
-          ? `[система] [${e.title}]`
-          : `[система] [отменено действие: ${actionLine(undone)}]`,
+          ? `[система] [${e.title} · ${by}]`
+          : `[система] [отменено действие: ${actionLine(undone)} · ${by}]`,
     };
   }
   const line = `[действие: ${actionLine(e)}]`;
@@ -580,7 +594,7 @@ function clockTime(at: Date, timeZone: string): string {
 /**
  * Блок «Недавние правки владельца» перед окном истории (РП-22): до OWNER_EDITS_LIMIT правок в интерфейсе и быстрых
  * записей (`ui`, `quick_capture`) за OWNER_EDITS_WINDOW_MS, старые первыми, строками «[правка владельца: <заголовок> ·
- * <ЧЧ:ММ>]» во времени владельца. Треда у этих правок нет (Р-12) — без блока модель не знала бы, что владелец только
+ * <ЧЧ:ММ>]» во времени владельца (отменённая — с хвостом «· отменена в <ЧЧ:ММ> <кем>»). Треда у этих правок нет (Р-12) — без блока модель не знала бы, что владелец только
  * что поправил руками, и спорила бы с этим. Сообщением `user`, а не секцией системного канала: это данные разговора,
  * а канал — стабильный префикс, который меняется раз в сутки. Правок нет — блока нет.
  */
@@ -593,9 +607,21 @@ async function ownerEditsBlock(
   const since = new Date(now.getTime() - OWNER_EDITS_WINDOW_MS);
   const edits = await recentOwnerEdits(tx, graphId, since, OWNER_EDITS_LIMIT);
   if (edits.length === 0) return undefined;
-  const lines = [...edits]
-    .reverse()
-    .map((e) => `[правка владельца: ${e.title} · ${clockTime(e.createdAt, timeZone)}]`);
+  // Отменённая правка остаётся в блоке с отметкой (рулинг R-14): у её отмены нет треда, и иначе модель считала бы
+  // правку живой; снять строку целиком хуже — модель должна знать, что владелец передумал
+  const undone = await undoMarks(
+    tx,
+    graphId,
+    edits.map((e) => e.id),
+  );
+  const lines = [...edits].reverse().map((e) => {
+    const mark = undone.get(e.id);
+    const tail =
+      mark === undefined
+        ? ''
+        : ` · отменена в ${clockTime(mark.at, timeZone)} ${UNDONE_BY[mark.path] ?? mark.path}`;
+    return `[правка владельца: ${e.title} · ${clockTime(e.createdAt, timeZone)}${tail}]`;
+  });
   return { role: 'user', content: [OWNER_EDITS_HEADING, ...lines].join('\n') };
 }
 

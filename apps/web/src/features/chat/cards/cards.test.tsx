@@ -1977,3 +1977,40 @@ test('строка журнала без карточки: заголовок н
   // другой текст — абзац остаётся
   expect(contentDuplicatesCard({ ...m, content: 'иное' } as ChatMessage)).toBe(false);
 });
+
+// Спека скорости §11.2, рулинг R-14: карточка действия разговора живёт в ответе ассистента, и признак «отменено» ей
+// ставит выдача треда (`undone` у карточки) — после перечитывания отменённое не предлагает «Отменить» снова.
+test('карточка ответа ассистента с undone из выдачи треда — «Отменено», без «Отменить»', () => {
+  renderWithProviders(
+    <div>
+      {renderCards(
+        msg([
+          {
+            kind: 'entity_card',
+            entityId: 'e-r',
+            title: 'Из разговора',
+            aspects: [],
+            keyFields: {},
+            undoActionId: 'act-r',
+            undone: true,
+          },
+        ]),
+      )}
+    </div>,
+  );
+  expect(screen.getByTestId('entity-card')).toHaveAttribute('data-undone', 'true');
+  expect(screen.queryByRole('button', { name: 'Отменить' })).toBeNull();
+});
+
+test('строка журнала одиночной одобренной единицы: «batch: операций — 1» сглажен, как у карточки подтверждения', () => {
+  renderWithProviders(
+    <div>
+      {renderCards(
+        journalMsg(journalMeta({ source: 'chat', actorKind: 'ai', title: 'batch: операций — 1' })),
+      )}
+    </div>,
+  );
+  const row = screen.getByTestId('journal-card');
+  expect(row).toHaveTextContent('Операция выполнена');
+  expect(row).not.toHaveTextContent('batch');
+});

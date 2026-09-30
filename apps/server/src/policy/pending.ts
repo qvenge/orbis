@@ -1092,10 +1092,10 @@ export async function approvePending(
         // СИСТЕМНАЯ единица исполняется ОТ ВЛАДЕЛЬЦА, и это развилка, а не приведение
         // типов. `system` в записи отвечает на вопрос «кто поставил» — конфликт слияния
         // поставить некому. Запись же делает рука владельца, нажавшая «Принять», и журнал
-        // §7.8 обязан показывать именно её: с `source: 'system'` действие ушло бы из ленты
-        // (`chat/messages.ts` прячет системный audit) и мимо «отмени последнее»
-        // (`findLastUndoable` пропускает `source='system'`) — то есть владелец не смог бы
-        // отменить то, что сам и подтвердил.
+        // §7.8 обязан показывать именно её: с `source: 'system'` действие ушло бы мимо
+        // «отмени последнее» (`findLastUndoable` пропускает `source='system'`) и плашки
+        // интерфейса — то есть владелец не смог бы отменить то, что сам и подтвердил. Как
+        // правка владельца в интерфейсе оно и треда не получает (К-29, Р-12).
         actorKind: pending.actor_kind === 'system' ? 'owner' : pending.actor_kind,
         source,
         // Грант исходного вызова доживает до исполнения (С2): подтвердил владелец, но в
@@ -1229,14 +1229,16 @@ async function approveRolloverUnit(
 ): Promise<ExecuteResult> {
   const pending = msg.pending;
   const input = rolloverInput.parse(pending.input);
+  const source = pending.source === 'system' ? 'ui' : pending.source;
   const r = await rolloverCreate(
     db,
     args.identity,
     { ...input, batchId: args.pendingId },
     {
       actorKind: pending.actor_kind === 'system' ? 'owner' : pending.actor_kind,
-      source: pending.source === 'system' ? 'ui' : pending.source,
-      threadId: msg.threadId,
+      source,
+      // То же правило треда, что у пачки (`approvePending`): правке владельца в интерфейсе тред не передаётся (К-29)
+      ...(source !== 'ui' && { threadId: msg.threadId }),
       ...(pending.run_id !== undefined && { runId: pending.run_id }),
       ...(pending.actor_grant_id !== undefined && { actorGrantId: pending.actor_grant_id }),
     },

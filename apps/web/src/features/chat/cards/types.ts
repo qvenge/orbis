@@ -23,6 +23,11 @@ export type EntityCardData = {
   aspects: string[];
   keyFields: Record<string, unknown>;
   undoActionId?: string;
+  /**
+   * Действие карточки уже отменено — признак выдачи треда (спека скорости §11.2, рулинг R-14), не хранится: сервер
+   * ставит его на чтении карточкам в ответах ассистента, у которых своей строки журнала нет. Ключа нет — не отменено.
+   */
+  undone?: boolean;
 };
 export type QueryResultData = {
   kind: 'query_result';

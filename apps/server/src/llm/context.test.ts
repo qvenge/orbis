@@ -27,6 +27,7 @@ import {
   requireEnv,
   truncateAll,
 } from '../../test/helpers';
+import { actionsOf } from '../../test/journal-helpers';
 import { appendMessage } from '../chat/messages';
 import { ensureEntityThread, ensureGlobalThread } from '../chat/threads';
 import { aspectDefinitions, chatMessages, entities, userSettings } from '../db/schema';
@@ -884,7 +885,7 @@ describe('buildContext — слой 4: сжатие audit/системных с�
       { role: 'user', content: `[система] [действие: entity_created ${entityId} (mcp)]` },
       {
         role: 'user',
-        content: `[система] [отменено действие: entity_created ${entityId} (mcp)]`,
+        content: `[система] [отменено действие: entity_created ${entityId} (mcp) · владельцем в интерфейсе]`,
       },
       {
         role: 'user',
@@ -916,8 +917,10 @@ describe('buildContext — слой 4: сжатие audit/системных с�
     );
     if (!done.ok) throw new Error(done.error.message);
     const entityId = (done.results[0] as { id: string }).id;
+    // «Отмени последнее» в разговоре — путь `chat`: модель отличает его от отмены владельцем кнопкой
     expect(
-      (await undoAction(db, { identity: personal(user), actionId: done.actionId, path: 'ui' })).ok,
+      (await undoAction(db, { identity: personal(user), actionId: done.actionId, path: 'chat' }))
+        .ok,
     ).toBe(true);
     const ctx = await withIdentity(db, personal(user), (tx) =>
       buildContext(tx, { graphId: user, threadId }),
@@ -927,7 +930,7 @@ describe('buildContext — слой 4: сжатие audit/системных с�
       { role: 'assistant', content: `[действие: entity_created ${entityId} (chat)]` },
       {
         role: 'user',
-        content: `[система] [отменено действие: entity_created ${entityId} (chat)]`,
+        content: `[система] [отменено действие: entity_created ${entityId} (chat) · по просьбе в чате]`,
       },
     ]);
   });
@@ -1115,6 +1118,51 @@ describe('buildContext — слой 4: окно из сообщений и де�
     expect(ctx.messages).toEqual([
       { role: 'user', content: [OWNER_EDITS_HEADING, ...lines].join('\n') },
       { role: 'user', content: 'что я поменял?' },
+    ]);
+  });
+
+  // Рулинг R-14 (Fable I-2): у отмены правки владельца треда нет, и модель узнаёт о ней только из блока — отменённая
+  // правка остаётся строкой с отметкой, когда и кем отменена (плашкой в интерфейсе или «отмени последнее» в чате).
+  test('отменённые правки владельца в блоке помечены: когда и кем отменены', async () => {
+    const user = await freshGraph();
+    const T0 = new Date('2026-07-04T12:00:00.000Z'); // 15:00 в Europe/Moscow
+    await ownerEditsAt(user, [
+      { title: 'отменил кнопкой', at: new Date(T0.getTime() - 30 * 60_000), source: 'ui' },
+      { title: 'отменил в чате', at: new Date(T0.getTime() - 20 * 60_000), source: 'ui' },
+      { title: 'живая', at: new Date(T0.getTime() - 10 * 60_000), source: 'quick_capture' },
+    ]);
+    const edits = (await actionsOf(user)).filter((e) => e.title !== 'живая');
+    const byTitle = (t: string) => edits.find((e) => e.title === t)?.id as string;
+    const { db: admin, client: adminClient } = adminDb();
+    try {
+      for (const [title, path, minutesAgo] of [
+        ['отменил кнопкой', 'ui', 25],
+        ['отменил в чате', 'chat', 5],
+      ] as const) {
+        const actionId = byTitle(title);
+        expect((await undoAction(db, { identity: personal(user), actionId, path })).ok).toBe(true);
+        await admin.execute(
+          sql`UPDATE action_journal SET created_at = ${new Date(T0.getTime() - minutesAgo * 60_000).toISOString()}::timestamptz
+               WHERE graph_id = ${user}::uuid AND undoes = ${actionId}::uuid`,
+        );
+      }
+    } finally {
+      await adminClient.end();
+    }
+    const threadId = await withIdentity(db, personal(user), (tx) => ensureGlobalThread(tx, user));
+    const ctx = await withIdentity(db, personal(user), (tx) =>
+      buildContext(tx, { graphId: user, threadId, clock: () => T0 }),
+    );
+    expect(ctx.messages).toEqual([
+      {
+        role: 'user',
+        content: [
+          OWNER_EDITS_HEADING,
+          '[правка владельца: отменил кнопкой · 14:30 · отменена в 14:35 владельцем в интерфейсе]',
+          '[правка владельца: отменил в чате · 14:40 · отменена в 14:55 по просьбе в чате]',
+          '[правка владельца: живая · 14:50]',
+        ].join('\n'),
+      },
     ]);
   });
 

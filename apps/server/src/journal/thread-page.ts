@@ -9,12 +9,13 @@
 // (id строки — производный id элемента треда, рулинг R-12; id действия — `journal.actionId`) БЕЗ тел действия (§9
 // приватность): ни операций, ни данных отмены, ни результатов пачки, ни аккаунта актора. Какие действия тред
 // показывает и с «Отменить» ли — таблица источников §11.3 (см. `journalCardMeta` и `journal-read.threadFeed`).
+// Карточки в сообщениях (ответ ассистента) получают на чтении признак `undone` (R-14, `markUndoneReplyCards`).
 import type { GraphId, JournalCardMeta, MutationSourceWire } from '@orbis/shared';
 import { and, desc, eq, lt, or, type SQL } from 'drizzle-orm';
 import { excludeInfraSystemRows, type WireChatMessage } from '../chat/messages';
 import { chatMessages } from '../db/schema';
 import type { Tx } from '../db/with-identity';
-import { type JournalEntry, threadFeed } from '../executor/journal-read';
+import { type JournalEntry, threadFeed, undoMarks } from '../executor/journal-read';
 import type { MutationSource } from '../executor/types';
 import type { Card } from '../tools/registry';
 import { toWireChatMessage } from '../wire';
@@ -72,12 +73,16 @@ function feedCard(e: JournalEntry): FeedEntityCard | undefined {
 /**
  * Сводка действия для ленты (§11.3). «Отменить» (`undoable`) — у всего, что тред показывает, кроме глаголов прогона
  * агента: правка агента по MCP вне прогона отменяется, как быстрый ввод и рутина (Р-16), а строки прогона (`mcp` с
- * `run_id`) — его протокол, откатывается прогон целиком, не строкой (К-42). Действие с карточкой в ответе — не
- * строка треда вовсе; условие повторено здесь, чтобы сводка не зависела от того, кто её собрал.
+ * `run_id`) — его протокол, откатывается прогон целиком, не строкой (К-42). Действие с карточкой в ответе строкой
+ * треда становится, только если ход оборвался (`orphan`, R-13): тогда строка — его единственная карточка, и
+ * «Отменить» у неё есть; условие повторено здесь, чтобы сводка не зависела от того, кто её собрал.
  */
-export function journalCardMeta(e: JournalEntry, undone: boolean): JournalCardMeta {
+export function journalCardMeta(
+  e: JournalEntry,
+  marks: { undone: boolean; orphan: boolean },
+): JournalCardMeta {
   const undoable =
-    !e.cardInReply &&
+    (!e.cardInReply || marks.orphan) &&
     (e.source === 'fast_path' ||
       e.source === 'routine' ||
       e.source === 'chat' ||
@@ -92,7 +97,7 @@ export function journalCardMeta(e: JournalEntry, undone: boolean): JournalCardMe
     tool: e.cardTool,
     entityId: e.entityId,
     undoable,
-    undone,
+    undone: marks.undone,
   };
 }
 
@@ -112,7 +117,8 @@ function journalItem(
     role: 'system',
     content: e.title,
     metadata: {
-      journal: journalCardMeta(e, e.undone),
+      // Строка действия с карточкой в ответе в выдаче — только оборванный ход (`journal-read.threadFeed`, R-13)
+      journal: journalCardMeta(e, { undone: e.undone, orphan: e.cardInReply }),
       ...(card !== undefined && { cards: [card] }),
     },
     createdAt: e.createdAt.toISOString(),
@@ -185,9 +191,51 @@ export async function threadPage(
 ): Promise<WireChatMessage[]> {
   const before = parseBefore(page.before);
   const cursor = { ...(before !== undefined && { before }), limit: page.limit };
-  const messages = await threadMessages(tx, threadId, cursor);
+  const messages = await markUndoneReplyCards(
+    tx,
+    graph,
+    await threadMessages(tx, threadId, cursor),
+  );
   const journal = (await threadFeed(tx, graph, threadId, cursor)).map((e) =>
     journalItem(e, threadId),
   );
   return [...messages, ...journal].sort(newerFirst).slice(0, page.limit);
+}
+
+/** `undoActionId` карточек записи сообщения — те, что несут «Отменить» (ответ ассистента, ответ-ошибка). */
+function undoActionIdsOf(m: WireChatMessage): string[] {
+  const cards = m.metadata.cards;
+  if (!Array.isArray(cards)) return [];
+  return cards.flatMap((c) => {
+    const card = c as { kind?: unknown; undoActionId?: unknown };
+    return card.kind === 'entity_card' && typeof card.undoActionId === 'string'
+      ? [card.undoActionId]
+      : [];
+  });
+}
+
+/**
+ * Признак «отменено» у карточек В СООБЩЕНИЯХ (рулинг R-14): карточка действия разговора живёт в ответе ассистента
+ * (К-36), своей строки журнала у неё нет, и `journal.undone` ей никто не отдаст — после перечитывания треда она снова
+ * предлагала бы «Отменить» уже отменённое (§11.2: отменённое показывает «отменено»). Признак считается на чтении одной
+ * выборкой по странице (`undoMarks`) и в сообщение не пишется: `chat_messages` неизменяемы (§4.6), а отмена случается
+ * позже ответа. Ставится только `undone: true` — у неотменённой карточки ключа нет, как и раньше.
+ */
+async function markUndoneReplyCards(
+  tx: Tx,
+  graph: GraphId,
+  messages: WireChatMessage[],
+): Promise<WireChatMessage[]> {
+  const ids = messages.flatMap(undoActionIdsOf);
+  if (ids.length === 0) return messages;
+  const marks = await undoMarks(tx, graph, ids);
+  if (marks.size === 0) return messages;
+  const isUndone = (id: unknown) => typeof id === 'string' && marks.has(id.toLowerCase());
+  return messages.map((m) => {
+    if (!undoActionIdsOf(m).some(isUndone)) return m;
+    const cards = (m.metadata.cards as Array<Record<string, unknown>>).map((c) =>
+      c.kind === 'entity_card' && isUndone(c.undoActionId) ? { ...c, undone: true } : c,
+    );
+    return { ...m, metadata: { ...m.metadata, cards } };
+  });
 }

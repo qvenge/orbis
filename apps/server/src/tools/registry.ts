@@ -232,6 +232,11 @@ export type Card =
       aspects: string[];
       keyFields: Record<string, unknown>;
       undoActionId?: string;
+      /**
+       * Действие уже отменено — ставит только выдача треда на чтении (`journal/thread-page.ts`, рулинг R-14): в
+       * сохранённой карточке его нет (сообщения неизменяемы, отмена позже ответа). Пара web `EntityCardData.undone`.
+       */
+      undone?: true;
     }
   | {
       kind: 'query_result';

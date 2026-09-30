@@ -29,7 +29,12 @@
 //      карточками (спека скорости §13.1, К-44), и повтор отдаёт его, а не гонит цикл.
 import { MAX_AGENT_STEPS, newId, processingMessageId } from '@orbis/shared';
 import { and, eq, sql } from 'drizzle-orm';
-import { appendMessage, appendMessageIdempotent, type WireChatMessage } from '../chat/messages';
+import {
+  appendMessage,
+  appendMessageIdempotent,
+  PROCESSING_TTL_MS,
+  type WireChatMessage,
+} from '../chat/messages';
 import type { Db } from '../db/client';
 import { aiUsage, chatMessages, chatThreads } from '../db/schema';
 import { type Tx, withIdentity } from '../db/with-identity';
@@ -164,14 +169,6 @@ export interface SendMessageProcessing {
 }
 
 export type SendMessageResult = SendMessageAnswer | SendMessageProcessing;
-
-/**
- * TTL маркера processing: моложе — первый прогон считается живым (ретраю отвечаем
- * { status: 'processing' }), старше — прогон умер без снятия маркера (краш процесса),
- * цикл перезапускается. Штатные исходы снимают маркер сами: успех — той же tx, что
- * пишет ответ; сбой — в catch (немедленный ретрай после ошибки легитимен, §7.9).
- */
-export const PROCESSING_TTL_MS = 10 * 60_000;
 
 /**
  * Поверхность тулов чата (слой 5): реестр тулов графа → то, что чат отдаёт провайдеру.
@@ -333,8 +330,11 @@ interface Collected {
   pending: PendingSummary[];
 }
 
-/** Текст ответа-ошибки: что случилось с ответом и что с уже сделанным — владелец не гадает, применилось ли. */
-export const FAILED_AFTER_ACTIONS_NOTE = 'Не удалось закончить ответ — действия выше уже выполнены';
+/**
+ * Текст ответа-ошибки: что случилось с ответом и что с уже сделанным — владелец не гадает, применилось ли. Без «выше»:
+ * карточки сделанного лежат в этом же ответе и рисуются ПОД текстом.
+ */
+export const FAILED_AFTER_ACTIONS_NOTE = 'Не удалось закончить ответ — сделанное до сбоя сохранено';
 
 /**
  * Ответ-ошибка при сбое цикла ПОСЛЕ исполненных действий (спека скорости §13.1 «Журнал», К-44). Действие разговора с

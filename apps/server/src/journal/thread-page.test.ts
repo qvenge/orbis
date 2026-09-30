@@ -472,3 +472,101 @@ test('несколько записей журнала с одним време�
   expect(new Set(all.map((m) => m.createdAt)).size).toBe(1);
   expect((await allPages(g, thread, 1)).map((m) => m.id)).toEqual(all.map((m) => m.id));
 });
+
+/**
+ * Рулинг R-13: ход разговора оборвался между действием с карточкой в ответе (`card_in_reply`) и ответом (смерть
+ * процесса — путь сбоя К-44 не исполнился). Строка журнала становится его карточкой, когда действие старше срока
+ * маркера «думает» и ни один ответ ассистента в этом окне не несёт его карточку; моложе срока — не показывается
+ * (ход, возможно, идёт — строка мигнула бы), ответ с карточкой есть — не показывается (одна карточка на действие).
+ */
+describe('оборванный ход разговора: карточка действия без ответа (R-13)', () => {
+  const TTL_MS = 10 * 60_000;
+
+  async function chatActionAt(g: GraphId, thread: string, ageMs: number) {
+    const r = await create(g, 'Действие хода', 'chat', {
+      actorKind: 'ai',
+      threadId: thread,
+      cardInReply: true,
+    });
+    if (ageMs > 0) {
+      const { db: admin, client: adminClient } = adminDb();
+      try {
+        await admin.execute(
+          sql`UPDATE action_journal SET created_at = now() - ${ageMs}::int * interval '1 millisecond'
+               WHERE graph_id = ${g}::uuid AND id = ${r.actionId}::uuid`,
+        );
+      } finally {
+        await adminClient.end();
+      }
+    }
+    const at = (await journalOf(g, r.actionId))?.createdAt;
+    if (at === undefined) throw new Error('записи нет');
+    return { actionId: r.actionId, entityId: (r.results[0] as WireEntity).id, at };
+  }
+
+  const journalRows = (items: readonly WireChatMessage[]) =>
+    items.filter((m) => journalMeta(m) !== undefined);
+
+  test('обрыв: действие старше срока без ответа — строка журнала с «Отменить», ровно одна карточка', async () => {
+    const g = await freshGraph();
+    const thread = await withIdentity(db, personal(g), (tx) => ensureGlobalThread(tx, g));
+    const a = await chatActionAt(g, thread, TTL_MS + 60_000);
+    const items = await page(g, thread, { limit: 50 });
+    expect(journalRows(items).map(keyOf)).toEqual([a.actionId]);
+    expect(journalMeta(items[0] as WireChatMessage)).toMatchObject({
+      source: 'chat',
+      actorKind: 'ai',
+      undoable: true,
+      undone: false,
+    });
+    expect(items).toHaveLength(1);
+  });
+
+  test('во время «думает»: действие моложе срока без ответа — строки нет (не мигает)', async () => {
+    const g = await freshGraph();
+    const thread = await withIdentity(db, personal(g), (tx) => ensureGlobalThread(tx, g));
+    await chatActionAt(g, thread, TTL_MS - 60_000);
+    expect(journalRows(await page(g, thread, { limit: 50 }))).toEqual([]);
+  });
+
+  test('ответ с карточкой действия есть — строки нет, даже когда действие старше срока', async () => {
+    const g = await freshGraph();
+    const thread = await withIdentity(db, personal(g), (tx) => ensureGlobalThread(tx, g));
+    const a = await chatActionAt(g, thread, TTL_MS + 60_000);
+    // Чужой ответ (карточка другого действия) строку не гасит — гасит ответ с ЭТОЙ карточкой
+    const reply = (undoActionId: string, offsetMs: number) =>
+      withIdentity(db, personal(g), (tx) =>
+        tx.insert(chatMessages).values({
+          id: newId(),
+          threadId: thread,
+          role: 'assistant',
+          content: 'готово',
+          metadata: {
+            cards: [
+              {
+                kind: 'entity_card',
+                entityId: a.entityId,
+                title: 'Действие хода',
+                aspects: [],
+                keyFields: {},
+                undoActionId,
+              },
+            ],
+          },
+          createdAt: new Date(a.at.getTime() + offsetMs),
+        }),
+      );
+    await reply(newId(), 1_000);
+    expect(journalRows(await page(g, thread, { limit: 50 })).map(keyOf)).toEqual([a.actionId]);
+    await reply(a.actionId, 2_000);
+    const items = await page(g, thread, { limit: 50 });
+    expect(journalRows(items)).toEqual([]);
+    // Карточка действия — ровно одна: в ответе
+    const carriers = items.filter((m) =>
+      ((m.metadata.cards as Array<{ undoActionId?: string }> | undefined) ?? []).some(
+        (c) => c.undoActionId === a.actionId,
+      ),
+    );
+    expect(carriers).toHaveLength(1);
+  });
+});

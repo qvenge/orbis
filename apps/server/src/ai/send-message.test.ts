@@ -542,6 +542,44 @@ describe('ai.sendMessage (г): сбой провайдера — деграда�
   });
 });
 
+// Спека скорости §11.2, рулинг R-14: карточка действия разговора — в ответе ассистента (К-36), своей строки журнала у
+// неё нет. После отмены и перечитывания треда она обязана показать «отменено», а не снова предлагать «Отменить».
+describe('ai.sendMessage: отмена действия из ответа видна после перечитывания треда (R-14)', () => {
+  test('чат-действие → отмена → выдача треда: карточка ответа несёт undone; другая карточка того же ответа — нет', async () => {
+    const user = await freshGraph();
+    const threadId = await globalThread(user);
+    const scripted = new ScriptedProvider([
+      toolUse([
+        { name: 'entity_create', input: { title: 'Отменю', tags: [] } },
+        { name: 'entity_create', input: { title: 'Оставлю', tags: [] } },
+      ]),
+      endTurn('Создал две'),
+    ]);
+    const caller = callerWith(user, scripted);
+    const r = answered(
+      await caller.ai.sendMessage({ id: newId(), threadId, content: 'создай две задачи' }),
+    );
+    const [first, second] = cardsOf(r.assistantMessage);
+    if (first?.kind !== 'entity_card' || second?.kind !== 'entity_card') {
+      throw new Error('ожидались две entity_card');
+    }
+    const read = async () =>
+      (
+        await withIdentity(db, personal(user), (tx) =>
+          threadPage(tx, user, threadId, { limit: 50 }),
+        )
+      ).find((m) => m.id === r.assistantMessage.id);
+    // До отмены признака нет вовсе — провод прежний
+    expect(cardsOf((await read()) as { metadata: Record<string, unknown> })).toEqual([
+      first,
+      second,
+    ]);
+    await caller.ai.undo({ actionId: first.undoActionId as string });
+    const after = cardsOf((await read()) as { metadata: Record<string, unknown> });
+    expect(after).toEqual([{ ...first, undone: true }, second]);
+  });
+});
+
 // Спека скорости §13.1 «Журнал», К-44: цикл упал ПОСЛЕ исполненного действия — карточка с «Отменить» у владельца
 // есть. Строка журнала действия разговора помечена «карточка в ответе» и в треде не рисуется, поэтому ответ-ошибка
 // несёт собранные карточки сам; повтор того же сообщения отдаёт его, а не гонит цикл второй раз.

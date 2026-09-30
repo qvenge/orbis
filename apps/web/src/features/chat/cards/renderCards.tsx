@@ -144,8 +144,9 @@ function renderCard(card: Card, i: number, ctx: CardCtx): ReactNode {
           card={card}
           confirmed={confirmed}
           readOnly={readOnly}
-          // Карточка из журнала знает, отменено ли действие (К-45); у карточки ответа сводки нет
-          undone={meta.journal?.undone === true}
+          // Отменено ли действие (§11.2): карточке ответа признак ставит выдача треда (R-14), карточке строки
+          // журнала — её сводка (К-45)
+          undone={card.undone === true || meta.journal?.undone === true}
         />
       );
     case 'query_result':

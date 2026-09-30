@@ -108,6 +108,11 @@ export function useSendMessage(threadId: string) {
       void utils.budget.invalidate();
     },
     onError: (err, variables) => {
+      // Ход мог упасть ПОСЛЕ исполненных действий (К-44): граф и бюджет уже другие, и списки обязаны
+      // это узнать. Тред НЕ перечитываем — перечитывание смыло бы локальную error_card с «Повторить»
+      // ниже; ответ-ошибку сервера с карточками приносит «Повторить» (replay) или следующее чтение.
+      invalidateGraph(utils);
+      void utils.budget.invalidate();
       // §3 (флаг ревью Task 9): текст НЕ теряем молча. Оптимистичное user-сообщение остаётся,
       // а рядом вставляем error_card с retryId (id упавшего сообщения) + retryText — «Повторить»
       // переотправит ту же строку тем же id (дедуп по id, без второго пузыря; renderCards).

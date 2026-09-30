@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { invalidateGraph } from '../../../lib/invalidate';
 import { trpc } from '../../../trpc';
+import { smoothAuditText } from '../format-audit';
 import type { JournalCardMeta } from './types';
 
 /**
@@ -34,7 +35,9 @@ export function JournalCard({ meta, readOnly }: { meta: JournalCardMeta; readOnl
   // Цвет — токен дизайн-системы `text-text-muted` (tokens.css): тихая служебная строка, как подписи карточек
   return (
     <div data-testid="journal-card" className="flex items-center gap-2 text-sm text-text-muted">
-      <span className="min-w-0 truncate">{meta.title}</span>
+      {/* Одобренная одиночная единица называется «batch: операций — 1» — та же сглаживающая подпись, что у карточки
+          подтверждения */}
+      <span className="min-w-0 truncate">{smoothAuditText(meta.title)}</span>
       <span>· {authorWord(meta)}</span>
       {undone ? (
         <span>· отменено</span>

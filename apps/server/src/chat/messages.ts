@@ -12,6 +12,18 @@ import { toWireChatMessage } from '../wire';
 
 export type ChatRole = 'user' | 'assistant' | 'system';
 
+/**
+ * TTL маркера processing: моложе — первый прогон считается живым (ретраю отвечаем
+ * { status: 'processing' }), старше — прогон умер без снятия маркера (краш процесса),
+ * цикл перезапускается. Штатные исходы снимают маркер сами: успех — той же tx, что
+ * пишет ответ; сбой — в catch (немедленный ретрай после ошибки легитимен, §7.9).
+ *
+ * Здесь, у разговора, а не в `ai/send-message.ts`: срок читает и выдача треда
+ * (`journal-read.threadFeed`, рулинг R-13) — действие разговора без ответа старше срока
+ * значит оборванный ход, и его карточка обязана появиться строкой журнала.
+ */
+export const PROCESSING_TTL_MS = 10 * 60_000;
+
 /** Wire-форма сообщения: createdAt — всегда Date.toISOString() (решение 12 плана). */
 export interface WireChatMessage {
   id: string;
