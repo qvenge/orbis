@@ -21,19 +21,15 @@ import {
   requireEnv,
   truncateAll,
 } from '../../test/helpers';
+import { journalOf } from '../../test/journal-helpers';
 import { withIdentity } from '../db/with-identity';
 import { resolveEntitlement } from '../entitlements';
 import { readEntity } from '../entity-read';
 import { issuePatGrant, revokeGrant, verifyBearer } from '../oauth/grants';
 import { projectBodyTemplate } from '../seed/project-body';
 import { makeChatJournalSink } from './journal';
-import type {
-  ActionRecord,
-  ExecuteOk,
-  ExecuteRequest,
-  WireEntity,
-  WireEntityVersion,
-} from './types';
+import type { JournalEntry } from './journal-read';
+import type { ExecuteOk, ExecuteRequest, WireEntity, WireEntityVersion } from './types';
 import { InMemoryJournalSink } from './types';
 import { undoAction } from './undo';
 
@@ -1079,18 +1075,11 @@ describe('ADE-срез 1: закреплённые версии тела (С11)'
     });
   }
 
-  /** Action по id из журнала (§4.6): containment по GIN-индексу, как в undo.ts. */
-  async function actionOf(actionId: string): Promise<ActionRecord> {
-    const probe = JSON.stringify({ actions: [{ id: actionId }] });
-    return withIdentity(db, personal(userA), async (tx) => {
-      const rows = await tx.execute(
-        sql`SELECT metadata FROM chat_messages WHERE metadata @> ${probe}::jsonb LIMIT 1`,
-      );
-      const meta = rows[0]?.metadata as { actions?: ActionRecord[] } | undefined;
-      const action = meta?.actions?.find((a) => a.id === actionId);
-      if (!action) throw new Error(`action ${actionId} не найден в журнале`);
-      return action;
-    });
+  /** Action по id из журнала (§4.6) — через API журнала (помощник `journalOf`). */
+  async function actionOf(actionId: string): Promise<JournalEntry> {
+    const action = await journalOf(userA, actionId);
+    if (!action) throw new Error(`action ${actionId} не найден в журнале`);
+    return action;
   }
 
   test('28. entity_version_pin: снимок тела в журнале, undo удаляет строку физически', async () => {
@@ -1121,7 +1110,7 @@ describe('ADE-срез 1: закреплённые версии тела (С11)'
     const actionId = (pinned as ExecuteOk).actionId;
     const action = await actionOf(actionId);
     expect(action.type).toBe('version_pinned');
-    expect(action.entity_id).toBe(e.id);
+    expect(action.entityId).toBe(e.id);
     expect(action.inverse).toEqual([{ op: 'entity_version_delete', payload: { id: v.id } }]);
 
     const undone = await undoAction(db, { identity: personal(userA), actionId });

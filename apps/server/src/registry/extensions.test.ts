@@ -7,7 +7,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
 import type { GraphId } from '@orbis/shared';
 import { addDays, BUDGET_DEF, EXTENSION_IDS, recurringInstanceId } from '@orbis/shared';
-import { sql } from 'drizzle-orm';
 import { agendaPage, agendaPageIds } from '../../test/agenda-page';
 import { enableFinanceForTest } from '../../test/finance-on';
 import {
@@ -19,12 +18,14 @@ import {
   requireEnv,
   truncateAll,
 } from '../../test/helpers';
+import { journalOf } from '../../test/journal-helpers';
 import { budgetOverview } from '../budget/aggregates';
 import { defaultCurrencyOf } from '../budget/binding';
 import { ensureGlobalThread } from '../chat/threads';
 import { userSettings } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { makeChatJournalSink } from '../executor/journal';
+import type { JournalEntry } from '../executor/journal-read';
 import { undoLast } from '../executor/undo';
 import { buildContext } from '../llm/context';
 import { DEFAULT_TIMEZONE, ownerTimeZone } from '../query/context';
@@ -228,27 +229,14 @@ describe('маска модулей: чтение и запись (§Б8-1)', ()
 });
 
 /**
- * Строка журнала §7.8 по её id. Журнал живёт в `metadata` audit-сообщения
- * (`executor/journal.ts`), отдельной таблицы `actions` в базе НЕТ — адрес брифа опровергнут
- * деревом. Ищем по `actionId`, а не по «последнему по времени»: `created_at` точности 3
- * на двух записях одной миллисекунды дал бы неустойчивый порядок.
+ * Строка журнала §7.8 по её id — через API журнала (помощник `journalOf`). Ищем по `actionId`, а не по
+ * «последнему по времени»: `created_at` точности 3 на двух записях одной миллисекунды дал бы
+ * неустойчивый порядок.
  */
-type JournalAction = {
-  type: string;
-  entity_id: string | null;
-  inverse: { op: string; payload: unknown }[];
-};
-async function actionOf(actionId: string): Promise<JournalAction | undefined> {
-  const rows = (await withIdentity(db, personal(owner), (tx) =>
-    tx.execute(sql`
-      SELECT m.metadata->'actions'->0 AS action
-      FROM chat_messages m JOIN chat_threads t ON t.id = m.thread_id
-      WHERE t.graph_id = ${owner}::uuid
-        AND m.metadata->'actions'->0->>'id' = ${actionId}`),
-  )) as unknown as { action: JournalAction }[];
-  return rows[0]?.action;
+async function actionOf(actionId: string): Promise<JournalEntry | undefined> {
+  return journalOf(owner, actionId);
 }
-async function inverseOf(actionId: string): Promise<JournalAction['inverse'] | undefined> {
+async function inverseOf(actionId: string): Promise<JournalEntry['inverse'] | undefined> {
   return (await actionOf(actionId))?.inverse;
 }
 
@@ -296,7 +284,7 @@ describe('module_set: переключение — действие исполн
     if (!r.ok) return;
     const action = await actionOf(r.actionId);
     expect(action?.type).toBe('module_set');
-    expect(action?.entity_id).toBeNull(); // меняется устройство системы, а не запись графа
+    expect(action?.entityId).toBeNull(); // меняется устройство системы, а не запись графа
     expect(action?.inverse).toEqual([
       { op: 'module_set', payload: { module: 'finance', enabled: true } },
     ]);

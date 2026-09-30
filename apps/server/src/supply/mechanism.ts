@@ -50,6 +50,7 @@ import { type Tx, withIdentity } from '../db/with-identity';
 import { ExecError, type ExecErrorCode } from '../errors';
 import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
+import { actionsOnEntity, isUndone, type JournalEntry } from '../executor/journal-read';
 import type { MutationMechanism } from '../executor/types';
 import type { Identity } from '../identity';
 import { effectiveRegistry } from '../registry/cache';
@@ -131,38 +132,22 @@ const UNDONE_WALK_DEPTH = 50;
  * действие — та же проба `{type:'undo', undoes}`, что и у «добавления». Неотменённое не-«добавление» —
  * решение владельца: признака нет.
  *
- * Сама отмена нового действия журнала не порождает (сообщение `{type:'undo'}` без `actions`), поэтому
- * отменённое действие остаётся в журнале последним, пока его не перекроет новое. Порядок — по `created_at`
- * сообщений: время начала транзакции записи журнала (`defaultNow`); действия владельца над одной записью
- * идут последовательно.
+ * Сама отмена нового действия журнала не порождает — запись отмены «действием» не является (К-22, API журнала
+ * её не отдаёт), поэтому отменённое действие остаётся в журнале последним, пока его не перекроет новое. Порядок —
+ * время записи журнала (время начала транзакции, `defaultNow`); действия владельца над одной записью идут
+ * последовательно. Журнал читается API (`executor/journal-read.ts`, РП-9): «тронувшее запись» — действие, чьи
+ * ОПЕРАЦИИ правили саму запись (`payload.id`), а не связь с ней.
  */
-async function archivedByUndoneCreation(tx: Tx, ids: readonly string[]): Promise<Set<string>> {
+async function archivedByUndoneCreation(
+  tx: Tx,
+  graph: GraphId,
+  ids: readonly string[],
+): Promise<Set<string>> {
   const out = new Set<string>();
-  const undone = async (actionId: string): Promise<boolean> => {
-    const undoProbe = JSON.stringify({ type: 'undo', undoes: actionId });
-    const undos = await tx.execute(
-      sql`SELECT 1 FROM chat_messages WHERE metadata @> ${undoProbe}::jsonb LIMIT 1`,
-    );
-    return undos.length > 0;
-  };
   for (const id of ids) {
-    const touched = JSON.stringify({ actions: [{ operations: [{ payload: { id } }] }] });
-    const created = JSON.stringify({ operations: [{ op: 'entity_create', payload: { id } }] });
-    const restored = JSON.stringify({
-      mechanism: 'supply',
-      operations: [{ op: 'entity_update', payload: { id, archived: false } }],
-    });
-    const history = (await tx.execute(
-      sql`SELECT metadata -> 'actions' -> 0 ->> 'id' AS action_id,
-                 (metadata -> 'actions' -> 0 @> ${created}::jsonb
-                  OR metadata -> 'actions' -> 0 @> ${restored}::jsonb) AS added
-          FROM chat_messages WHERE metadata @> ${touched}::jsonb
-          ORDER BY created_at DESC LIMIT ${UNDONE_WALK_DEPTH}`,
-    )) as unknown as Array<{ action_id?: string | null; added?: boolean }>;
-    for (const row of history) {
-      if (typeof row.action_id !== 'string') break;
-      const wasUndone = await undone(row.action_id);
-      if (row.added === true) {
+    for (const action of await actionsOnEntity(tx, graph, id, UNDONE_WALK_DEPTH)) {
+      const wasUndone = await isUndone(tx, graph, action.id);
+      if (isAddition(action, id)) {
         if (wasUndone) out.add(id);
         break;
       }
@@ -171,6 +156,23 @@ async function archivedByUndoneCreation(tx: Tx, ids: readonly string[]): Promise
     }
   }
   return out;
+}
+
+/**
+ * «Добавление» записи (R-18): создание с её id (`entity_create`: сев, «добавить») или возврат из архива
+ * механизмом `supply` (`entity_update {id, archived:false}` — «добавить» по записи, чей архив — откат прежнего
+ * добавления). Возврат владельцем (механизм `user`) — его правка, не добавление.
+ */
+function isAddition(action: JournalEntry, id: string): boolean {
+  if (action.operations.some((op) => op.op === 'entity_create' && op.payload.id === id)) {
+    return true;
+  }
+  return (
+    action.mechanism === 'supply' &&
+    action.operations.some(
+      (op) => op.op === 'entity_update' && op.payload.id === id && op.payload.archived === false,
+    )
+  );
 }
 
 /** Записи с ключом эталона (с архивными и без аспекта) и реестр — одной транзакцией чтения. */
@@ -193,6 +195,7 @@ async function snapshot(ctx: SupplyCtx): Promise<Snapshot> {
     const reg = await effectiveRegistry(tx, graph);
     const undoneCreation = await archivedByUndoneCreation(
       tx,
+      graph,
       rows.filter((r) => r.archived).map((r) => r.id),
     );
     return {

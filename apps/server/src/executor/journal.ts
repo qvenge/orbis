@@ -82,8 +82,8 @@ function feedCard(action: ActionRecord, card: ActionCard): ActionCard | FeedEnti
 export function makeChatJournalSink(): JournalSink {
   return {
     async write(tx: Tx, entry: JournalWrite): Promise<void> {
-      // Инвариант §7.8 «один action на audit-сообщение»: undo.ts (findLastUndoable/
-      // findActionMessage) читает metadata.actions[0]. Несколько action в одном
+      // Инвариант §7.8 «один action на audit-сообщение»: API журнала (journal-read.ts)
+      // читает metadata.actions[0]. Несколько action в одном
       // сообщении молча потеряли бы всё, кроме первого, при отмене — поэтому нормализуем
       // и проверяем ровно один ДО любой записи (guard страхует будущий формат/баг
       // вызывающего; отказ — VALIDATION, как прочие ошибки конвейера §9.2).

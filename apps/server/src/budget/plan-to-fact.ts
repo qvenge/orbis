@@ -12,7 +12,6 @@
 // точностью до четырёх расхождений §Б6-4. Здесь осталась РУЧКА: вход §2.7, идемпотентность по
 // batchId клиента (audit-PK §7.8) и код отказа, который читает экран (`asLegacyRefusal`).
 import {
-  batchAuditMessageId,
   type ConfirmPurchaseInput,
   type ConfirmPurchaseResult,
   effectiveLabel,
@@ -27,6 +26,7 @@ import { withIdentity } from '../db/with-identity';
 import { ExecError, type ExecErrorCode } from '../errors';
 import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
+import { findBatch } from '../executor/journal-read';
 import type { Identity } from '../identity';
 import { effectiveRegistry } from '../registry/cache';
 import { disabledExtensionsOf } from '../registry/extensions';
@@ -56,12 +56,11 @@ export async function confirmPurchase(
   input: ConfirmPurchaseInput,
 ): Promise<ConfirmPurchaseResult> {
   const graphId = who.graph;
-  const auditId = batchAuditMessageId(graphId, input.batchId);
-  const replay = await withIdentity(db, who, (tx) => sink.findByAuditId(tx, auditId));
+  const replay = await withIdentity(db, who, (tx) => findBatch(tx, graphId, input.batchId));
   if (replay !== undefined) {
     // Сохранённый результат — из журнала: `execute` вернул бы его же batch-веткой, но для
     // этого ему нужны операции, а резолвить их у повтора нечем (см. докблок выше).
-    return { actionId: replay.action.id, idempotentReplay: true };
+    return { actionId: replay.id, idempotentReplay: true };
   }
   try {
     // «Сегодня» и зона — той же функцией, что у `runAction` и «Принять» (`actionDateArgs`):

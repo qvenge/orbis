@@ -28,13 +28,11 @@ import { createHash, randomBytes } from 'node:crypto';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { globalThreadId, OAUTH_AUTHORIZE_PATH } from '@orbis/shared';
-import { eq } from 'drizzle-orm';
 import { appDb, mintGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
+import { threadJournal } from '../../test/journal-helpers';
 import type { AiDeps } from '../ai/send-message';
 import { createApp } from '../app';
-import { chatMessages } from '../db/schema';
-import { withIdentity } from '../db/with-identity';
-import type { ActionRecord, WireEntity } from '../executor/types';
+import type { WireEntity } from '../executor/types';
 import { appRouter } from '../router';
 import { createCallerFactory } from '../trpc';
 
@@ -414,30 +412,21 @@ test('созданное агентом действие попало в жур�
   // владельца с actor_kind=agent и source=mcp (§7.8, D11) — иначе владелец не увидит,
   // что натворил агент, и отменять будет нечего.
   //
-  // Ключи — snake_case, как в ActionRecord (executor/types.ts): actor_kind, source,
-  // entity_id, actor_user_id; поля `tool` у записи журнала нет вовсе (оно у ActionCard),
-  // вид операции несёт `type`.
+  // Ключи — как в записи API журнала (`JournalEntry`, executor/journal-read.ts): actorKind, source,
+  // entityId, actorUserId; вид операции несёт `type`, тул карточки — `cardTool`.
   expect(createdByAgentId, 'первый тест не дошёл до создания сущности').toBeDefined();
 
-  const rows = await withIdentity(db, personal(owner), (tx) =>
-    tx
-      .select()
-      .from(chatMessages)
-      .where(eq(chatMessages.threadId, globalThreadId(owner)))
-      .orderBy(chatMessages.createdAt, chatMessages.id),
+  const actions = (await threadJournal(owner, globalThreadId(owner))).filter(
+    (e) => e.type !== 'undo',
   );
-  const actions = rows
-    .filter((r) => r.role === 'system')
-    .map((r) => (r.metadata as { actions?: ActionRecord[] }).actions?.[0])
-    .filter((a): a is ActionRecord => a !== undefined);
 
-  const created = actions.find((a) => a.entity_id === createdByAgentId);
+  const created = actions.find((a) => a.entityId === createdByAgentId);
   expect(created).toBeDefined();
   expect(created).toMatchObject({
     type: 'entity_created',
-    actor_kind: 'agent',
+    actorKind: 'agent',
     source: 'mcp',
-    actor_user_id: owner,
+    actorUserId: owner,
   });
   // Обратная операция записана — значит Undo владельцу есть над чем делать (§7.8)
   expect(created?.inverse.length).toBeGreaterThan(0);

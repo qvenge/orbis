@@ -32,6 +32,7 @@ import {
   seedCustomRole,
   truncateAll,
 } from '../../test/helpers';
+import { journalOf } from '../../test/journal-helpers';
 import { budgetOverview } from '../budget/aggregates';
 import { entities } from '../db/schema';
 import type { Tx } from '../db/with-identity';
@@ -1567,12 +1568,10 @@ describe('реестр действий владельца (§Б6-1, §С3)', ()
       );
     ok(await runAs('action_set', DECL));
     const removed = ok(await runAs('action_remove', { action: 'user/close-month' }));
-    const rows = (await withIdentity(db, personal(owner), (tx) =>
-      tx.execute(sql`SELECT metadata FROM chat_messages
-                      WHERE metadata @> ${JSON.stringify({ actions: [{ id: removed.actionId }] })}::jsonb`),
-    )) as unknown as Array<{ metadata: { cards?: Array<{ title?: string }> } }>;
     // «Отмени последнее» показывает владельцу то, что он узнаёт, — подпись, а не адрес.
-    expect(rows[0]?.metadata.cards?.[0]?.title).toBe('Действие «Закрыть месяц» снято');
+    expect((await journalOf(owner, removed.actionId))?.title).toBe(
+      'Действие «Закрыть месяц» снято',
+    );
   });
 
   test('перезаведение СНЯТОГО действия и откат: строка возвращается снятой и с прежними шагами', async () => {

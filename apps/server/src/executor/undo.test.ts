@@ -17,16 +17,11 @@ import {
   requireEnv,
   truncateAll,
 } from '../../test/helpers';
+import { actionsOf, journalOf, wholeJournalOf } from '../../test/journal-helpers';
 import { materializeInstances } from '../recurring/materialize';
 import { makeChatJournalSink } from './journal';
-import type {
-  ActionRecord,
-  ExecuteErr,
-  ExecuteOk,
-  ExecuteRequest,
-  ExecuteResult,
-  WireEntity,
-} from './types';
+import type { JournalEntry } from './journal-read';
+import type { ExecuteErr, ExecuteOk, ExecuteRequest, ExecuteResult, WireEntity } from './types';
 import { undoAction, undoLast } from './undo';
 
 requireEnv();
@@ -91,42 +86,20 @@ async function propsOf(id: string): Promise<Record<string, unknown>> {
 }
 
 /** Запись журнала по id действия — по ней читается ФОРМА operations/inverse (§А7-4). */
-async function actionById(user: GraphId, actionId: string): Promise<ActionRecord> {
-  const probe = JSON.stringify({ actions: [{ id: actionId }] });
-  const rows = await adminRows(
-    sql`SELECT m.metadata FROM chat_messages m
-        JOIN chat_threads t ON t.id = m.thread_id
-        WHERE t.graph_id = ${user} AND m.metadata @> ${probe}::jsonb
-        LIMIT 1`,
-  );
-  const action = (rows[0]?.metadata as { actions?: ActionRecord[] } | undefined)?.actions?.find(
-    (a) => a.id === actionId,
-  );
+async function actionById(user: GraphId, actionId: string): Promise<JournalEntry> {
+  const action = await journalOf(user, actionId);
   if (!action) throw new Error(`действие ${actionId} не найдено в журнале`);
   return action;
 }
 
-/** Число undo-сообщений с данным action_id у владельца (по containment §7.8). */
+/** Число записей отмены действия у владельца — повторная отмена второй записи не пишет (§7.8). */
 async function undoMessageCount(user: GraphId, actionId: string): Promise<number> {
-  const probe = JSON.stringify({ type: 'undo', undoes: actionId });
-  const rows = await adminRows(
-    sql`SELECT count(*)::int AS n FROM chat_messages m
-        JOIN chat_threads t ON t.id = m.thread_id
-        WHERE t.graph_id = ${user} AND m.metadata @> ${probe}::jsonb`,
-  );
-  return rows[0]?.n as number;
+  return (await wholeJournalOf(user)).filter((e) => e.undoes === actionId).length;
 }
 
-/** Число сообщений владельца, содержащих action (журнал действий). */
+/** Число действий в журнале владельца (записи отмены — не действия). */
 async function actionMessageCount(user: GraphId): Promise<number> {
-  const rows = await adminRows(
-    sql`SELECT count(*)::int AS n FROM chat_messages m
-        JOIN chat_threads t ON t.id = m.thread_id
-        WHERE t.graph_id = ${user}
-          AND m.metadata @> '{"actions": []}'::jsonb
-          AND jsonb_array_length(m.metadata->'actions') > 0`,
-  );
-  return rows[0]?.n as number;
+  return (await actionsOf(user)).length;
 }
 
 async function relCount(sourceId: string, targetId: string, role: string): Promise<number> {

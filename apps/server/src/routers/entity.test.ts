@@ -9,7 +9,7 @@ import { PAGE_ONLY_HINT, QUERY_TREE_DEPTH_CAP } from '@orbis/shared/query';
 import { TRPCError } from '@trpc/server';
 import { sql } from 'drizzle-orm';
 import { adminDb, appDb, freshGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
-import type { ActionRecord } from '../executor/types';
+import { threadJournal } from '../../test/journal-helpers';
 import { appRouter } from '../router';
 import { createCallerFactory } from '../trpc';
 
@@ -234,23 +234,11 @@ describe('entity.update: optimistic-check §5.2 (перенесённый кон
     await caller.entity.update({ id: created.id, title: 'Атрибуция 2' });
 
     // audit обоих действий — в глобальном треде владельца (роутер не шлёт threadId, §7.8)
-    const { db: admin, client: adminClient } = adminDb();
-    try {
-      const rows = await admin.execute(
-        sql`SELECT metadata FROM chat_messages
-            WHERE thread_id = ${globalThreadId(user)} ORDER BY created_at, id`,
-      );
-      const actionOf = (r: (typeof rows)[number]) =>
-        (r.metadata as { actions?: ActionRecord[] }).actions?.[0];
-      const updateMsg = [...rows].find((r) => actionOf(r)?.type === 'entity_updated');
-      const action = updateMsg ? actionOf(updateMsg) : undefined;
-      expect(action?.source).toBe('ui');
-      // create по-прежнему несёт клиентский source (fast_path), не 'ui'
-      const createMsg = [...rows].find((r) => actionOf(r)?.type === 'entity_created');
-      expect((createMsg ? actionOf(createMsg) : undefined)?.source).toBe('fast_path');
-    } finally {
-      await adminClient.end();
-    }
+    const journal = await threadJournal(user, globalThreadId(user));
+    const action = journal.find((e) => e.type === 'entity_updated');
+    expect(action?.source).toBe('ui');
+    // create по-прежнему несёт клиентский source (fast_path), не 'ui'
+    expect(journal.find((e) => e.type === 'entity_created')?.source).toBe('fast_path');
   });
 });
 

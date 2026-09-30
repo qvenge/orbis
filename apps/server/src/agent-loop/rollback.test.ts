@@ -5,11 +5,12 @@
 // а не в моках. Прямые вызовы rollbackRun (роутер — трансляция, его тесты рядом).
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import type { ClaimTaskResult, FinishResult, GraphId, RunStepResult } from '@orbis/shared';
-import { eq, sql } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import { appDb, freshGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
+import { actionsOf, wholeJournalOf } from '../../test/journal-helpers';
 import { entities } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
-import type { ActionRecord } from '../executor/types';
+import type { JournalEntry } from '../executor/journal-read';
 import { undoAction } from '../executor/undo';
 import { appRouter } from '../router';
 import { agentLoopHelpers, T0 } from '../test/agent-loop-helpers';
@@ -21,7 +22,7 @@ import { sweepStaleRuns } from './sweep';
 requireEnv();
 
 const { db, client } = appDb();
-const { actionsOf, link, seedEntity, worker, workerGrant } = agentLoopHelpers(db);
+const { link, seedEntity, worker, workerGrant } = agentLoopHelpers(db);
 const createCaller = createCallerFactory(appRouter);
 
 const MINUTE = 60_000;
@@ -51,17 +52,14 @@ async function isArchived(owner: GraphId, id: string): Promise<boolean> {
   return row.archived;
 }
 
-/** Сколько undo-сообщений §7.8 в журнале владельца — «откачено ли хоть что-то». */
+/** Сколько записей отмены §7.8 в журнале владельца — «откачено ли хоть что-то». */
 async function undoMessages(owner: GraphId): Promise<number> {
-  const rows = await withIdentity(db, personal(owner), (tx) =>
-    tx.execute(sql`SELECT id FROM chat_messages WHERE metadata @> '{"type":"undo"}'::jsonb`),
-  );
-  return [...rows].length;
+  return (await wholeJournalOf(owner)).filter((e) => e.type === 'undo').length;
 }
 
 /** Действие журнала, записанное против прогона, — по системному источнику (подметание). */
-async function actionOfRun(owner: GraphId, runId: string, source: string): Promise<ActionRecord> {
-  const found = (await actionsOf(owner)).filter((a) => a.run_id === runId && a.source === source);
+async function actionOfRun(owner: GraphId, runId: string, source: string): Promise<JournalEntry> {
+  const found = (await actionsOf(owner)).filter((a) => a.runId === runId && a.source === source);
   const first = found[0];
   if (first === undefined) throw new Error(`действия прогона ${runId} с source=${source} нет`);
   return first;
@@ -239,7 +237,7 @@ describe('rollbackRun (С12, инвариант 7)', () => {
       id: ticketId,
       props: { 'orbis/priority': 'high' },
     });
-    const edit = (await actionsOf(owner)).find((x) => x.source === 'ui' && x.run_id === undefined);
+    const edit = (await actionsOf(owner)).find((x) => x.source === 'ui' && x.runId === undefined);
     if (edit === undefined) throw new Error('правка владельца не попала в журнал');
 
     await dispatchTool(ctx, 'orbis_finish', { run_id: runId, report: 'Готово' });

@@ -8,7 +8,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { createHash, randomBytes } from 'node:crypto';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import { batchAuditMessageId, entityThreadId, globalThreadId, newId } from '@orbis/shared';
+import { entityThreadId, globalThreadId, newId } from '@orbis/shared';
 import { eq, inArray, sql } from 'drizzle-orm';
 import { Hono } from 'hono';
 import {
@@ -20,11 +20,13 @@ import {
   requireEnv,
   truncateAll,
 } from '../../test/helpers';
+import { journalOf, threadJournal } from '../../test/journal-helpers';
 import type { WireChatMessage } from '../chat/messages';
 import { chatMessages, entities, oauthClients } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { execute } from '../executor/executor';
-import type { ActionRecord, WireEntity } from '../executor/types';
+import type { JournalEntry } from '../executor/journal-read';
+import type { WireEntity } from '../executor/types';
 import {
   createAuthorizationCode,
   exchangeAuthorizationCode,
@@ -146,19 +148,9 @@ async function seedEntity(input: Record<string, unknown>): Promise<WireEntity> {
   return r.results[0] as WireEntity;
 }
 
-/** actions[0] всех audit-сообщений глобального треда владельца (§7.8). */
-async function globalAuditActions(): Promise<ActionRecord[]> {
-  const rows = await withIdentity(db, personal(owner), (tx) =>
-    tx
-      .select()
-      .from(chatMessages)
-      .where(eq(chatMessages.threadId, globalThreadId(owner)))
-      .orderBy(chatMessages.createdAt, chatMessages.id),
-  );
-  return rows
-    .filter((r) => r.role === 'system')
-    .map((r) => (r.metadata as { actions?: ActionRecord[] }).actions?.[0])
-    .filter((a): a is ActionRecord => a !== undefined);
+/** Действия журнала в глобальном треде владельца (§7.8), без записей отмены. */
+async function globalAuditActions(): Promise<JournalEntry[]> {
+  return (await threadJournal(owner, globalThreadId(owner))).filter((e) => e.type !== 'undo');
 }
 
 // ---------------------------------------------------------------------------
@@ -585,17 +577,17 @@ describe('/mcp tools/call → dispatchTool (§9.3)', () => {
 
     // Audit — системное сообщение в глобальном треде владельца (threadId не передавался):
     // действия агентов видимы владельцу (02 §2.3), атрибуция честная (§7.8, D11)
-    const action = (await globalAuditActions()).find((a) => a.entity_id === created.id);
+    const action = (await globalAuditActions()).find((a) => a.entityId === created.id);
     expect(action).toBeDefined();
-    expect(action?.actor_kind).toBe('agent');
+    expect(action?.actorKind).toBe('agent');
     expect(action?.source).toBe('mcp');
-    expect(action?.actor_user_id).toBe(accountOf(owner));
+    expect(action?.actorUserId).toBe(accountOf(owner));
     // С2: «агент вообще» → конкретный грант. Владелец по записи журнала видит, КАКОЙ
     // из подключённых агентов это сделал, и может отозвать именно его. id гранта тест
     // берёт тем же путём, что и транспорт (/mcp → verifyBearer), а не отдельным знанием.
     const grant = await verifyBearer(db, TOKEN);
     if (grant === null) throw new Error('тестовый PAT не прошёл verifyBearer');
-    expect(action?.actor_grant_id).toBe(grant.grantId);
+    expect(action?.actorGrantId).toBe(grant.grantId);
   });
 
   test('batch_execute из 11 архиваций → pending_confirmation (§7.10), isError: false, граф чист', async () => {
@@ -754,7 +746,7 @@ describe('/mcp: паттерн «что нового» (§9.3, сценарий 
 
     // Audit агентского entity_update — в глобальном треде владельца, actor 'agent'/'mcp'
     const agentUpdate = (await globalAuditActions()).find(
-      (a) => a.actor_kind === 'agent' && a.type === 'entity_updated' && a.entity_id === task.id,
+      (a) => a.actorKind === 'agent' && a.type === 'entity_updated' && a.entityId === task.id,
     );
     expect(agentUpdate).toBeDefined();
     expect(agentUpdate?.source).toBe('mcp');
@@ -1074,12 +1066,12 @@ describe('/mcp: скоуп worker (С7, §4.14)', () => {
     expect(run?.['orbis/run_report']).toBe('Готово: парсер починен, тесты зелёные.');
 
     // Журнал §7.8: действия круга атрибутированы гранту исполнителя и его прогону (С2)
-    const runActions = (await globalAuditActions()).filter((a) => a.run_id === runId);
+    const runActions = (await globalAuditActions()).filter((a) => a.runId === runId);
     expect(runActions.length).toBeGreaterThan(0);
     for (const a of runActions) {
-      expect(a.actor_kind).toBe('agent');
+      expect(a.actorKind).toBe('agent');
       expect(a.source).toBe('mcp');
-      expect(a.actor_grant_id).toBe(grant.grantId);
+      expect(a.actorGrantId).toBe(grant.grantId);
     }
   });
 });
@@ -1114,17 +1106,11 @@ describe('/mcp: pending-подтверждение несёт грант исх�
     // доступ попросил подтверждение, даже если исполнил план он сам кнопкой
     const grant = await verifyBearer(db, TOKEN);
     if (grant === null) throw new Error('тестовый PAT не прошёл verifyBearer');
-    const auditRows = await withIdentity(db, personal(owner), (tx) =>
-      tx
-        .select()
-        .from(chatMessages)
-        .where(eq(chatMessages.id, batchAuditMessageId(owner, pendingId))),
-    );
-    const action = (auditRows[0]?.metadata as { actions?: ActionRecord[] }).actions?.[0];
+    const action = await journalOf(owner, pendingId);
     expect(action).toBeDefined();
-    expect(action?.actor_kind).toBe('agent');
+    expect(action?.actorKind).toBe('agent');
     expect(action?.source).toBe('mcp');
-    expect(action?.actor_grant_id).toBe(grant.grantId);
+    expect(action?.actorGrantId).toBe(grant.grantId);
   });
 });
 

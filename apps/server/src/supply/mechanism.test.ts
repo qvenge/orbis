@@ -35,6 +35,7 @@ import {
 } from '@orbis/shared/supply/print';
 import { sql } from 'drizzle-orm';
 import { appDb, freshGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
+import { actionsOf } from '../../test/journal-helpers';
 import { withIdentity } from '../db/with-identity';
 import { ExecError } from '../errors';
 import { execute } from '../executor/executor';
@@ -182,15 +183,9 @@ async function versionsOf(graph: GraphId, id: string): Promise<{ label: string; 
   return rows.map((r) => ({ label: r.label as string, body: r.body as string }));
 }
 
-/** Записи журнала с этим action: по одной на действие, заголовок карточки — подпись. */
+/** Записи журнала с этим action: по одной на действие, заголовок записи — подпись (API журнала). */
 async function journalOf(graph: GraphId, actionId: string): Promise<{ title: string }[]> {
-  const probe = JSON.stringify({ actions: [{ id: actionId }] });
-  const rows = await withIdentity(db, personal(graph), (tx) =>
-    tx.execute(
-      sql`SELECT metadata -> 'cards' -> 0 ->> 'title' AS title FROM chat_messages WHERE metadata @> ${probe}::jsonb`,
-    ),
-  );
-  return rows.map((r) => ({ title: r.title as string }));
+  return (await actionsOf(graph)).filter((a) => a.id === actionId).map((a) => ({ title: a.title }));
 }
 
 async function execErrorOf(p: Promise<unknown>): Promise<ExecError> {

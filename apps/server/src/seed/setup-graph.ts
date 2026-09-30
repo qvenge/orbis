@@ -60,6 +60,7 @@ import { userSettings } from '../db/schema';
 import { type Tx, withIdentity } from '../db/with-identity';
 import { ExecError } from '../errors';
 import { execute } from '../executor/executor';
+import { ownerExtensionWord } from '../executor/journal-read';
 import type { Identity } from '../identity';
 import { effectiveRegistry } from '../registry/cache';
 import { disabledExtensionsOf, setExtensionDisabled } from '../registry/extensions';
@@ -155,20 +156,11 @@ async function worldSeeded(tx: Tx, graph: GraphId): Promise<boolean> {
  * есть операция `module_set` по `finance` (с Undo — тоже слово). Проба — по ОПЕРАЦИИ, а не по типу
  * действия (финал 1б, остатки М-9, М-10): `module_set` приходит и одиночным действием, и внутри пачки
  * `app.setDisabled` (тип `batch`), — а слово о другом расширении Финансы не касается, и заведение
- * доводит их до выключения, как задумано.
+ * доводит их до выключения, как задумано. Журнал читает его API (`journal-read.ownerExtensionWord`, РП-9): любое
+ * слово — включил, выключил или отменил — значит «маска владельца».
  */
 async function ownerSetMask(tx: Tx, graph: GraphId): Promise<boolean> {
-  const probe = {
-    actions: [
-      { operations: [{ op: 'module_set', payload: { module: SETUP_DISABLED_EXTENSION } }] },
-    ],
-  };
-  const rows = await tx.execute(sql`
-    SELECT 1 FROM chat_messages m JOIN chat_threads t ON t.id = m.thread_id
-     WHERE t.graph_id = ${graph}::uuid
-       AND m.metadata @> ${JSON.stringify(probe)}::jsonb
-     LIMIT 1`);
-  return rows.length > 0;
+  return (await ownerExtensionWord(tx, graph, SETUP_DISABLED_EXTENSION)) !== undefined;
 }
 
 /**

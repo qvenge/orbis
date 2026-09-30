@@ -22,6 +22,7 @@ import { TRPCError } from '@trpc/server';
 import { sql } from 'drizzle-orm';
 import { ZodError } from 'zod';
 import { appDb, freshGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
+import { actionsOf } from '../../test/journal-helpers';
 import { withIdentity } from '../db/with-identity';
 import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
@@ -88,11 +89,7 @@ async function seedOld(graph: GraphId, keys: readonly SupplyKey[] = SUPPLY_KEYS)
 }
 
 async function journalCount(graph: GraphId, actionId: string): Promise<number> {
-  const probe = JSON.stringify({ actions: [{ id: actionId }] });
-  const rows = await withIdentity(db, personal(graph), (tx) =>
-    tx.execute(sql`SELECT 1 FROM chat_messages WHERE metadata @> ${probe}::jsonb`),
-  );
-  return rows.length;
+  return (await actionsOf(graph)).filter((a) => a.id === actionId).length;
 }
 
 describe('supply.* — только владельцу', () => {

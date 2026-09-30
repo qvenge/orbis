@@ -25,7 +25,6 @@ import {
   type BudgetOverview,
   type BudgetStatusResult,
   type BudgetSubscription,
-  batchAuditMessageId,
   type CategoryTrendPoint,
   type EnvelopeStatus,
   type GraphId,
@@ -40,6 +39,7 @@ import { type Tx, withIdentity } from '../db/with-identity';
 import { ExecError, type ExecErrorCode } from '../errors';
 import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
+import { findBatch } from '../executor/journal-read';
 import type {
   ActorKind,
   ExecuteRequest,
@@ -577,12 +577,11 @@ export async function rolloverCreate(
   }
 
   const { start, end } = monthRange(input.month);
-  const auditId = batchAuditMessageId(who.graph, input.batchId);
   const categoryIds = input.rows.map((r) => r.categoryId);
 
   // Фаза чтения: replay-детект, defaultCurrency, титулы, пречек преемников
   const { defCur, catMap } = await withIdentity(db, who, async (tx) => {
-    const replay = (await rolloverSink.findByAuditId(tx, auditId)) !== undefined;
+    const replay = (await findBatch(tx, who.graph, input.batchId)) !== undefined;
     const currency = await defaultCurrencyOf(tx, who.graph);
     // Р-13: параметры перехода — СТРОКА каталога на аспекте `orbis/budget`, а не поле подписки.
     // Снимок читается тут же, в фазе чтения той же tx: второй источник декларации разошёлся бы с тем

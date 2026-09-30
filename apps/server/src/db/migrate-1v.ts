@@ -58,6 +58,7 @@ import type { ISql, Sql } from 'postgres';
 import { ExecError, type ExecErrorCode } from '../errors';
 import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
+import { exportJournalRaw, findAction } from '../executor/journal-read';
 import { undoAction } from '../executor/undo';
 import { type Identity, identitiesForScheduler, parseGraphId } from '../identity';
 import { effectiveRegistry } from '../registry/cache';
@@ -581,20 +582,13 @@ export async function reportMigrate1v(sql: SqlClient, graph: string): Promise<Mi
     if (rows.length < BATCH) break;
     after = String(rows[rows.length - 1]?.id);
   }
-  for (let after = ID_START; ; ) {
-    const rows = await sql`
-      SELECT m.id::text AS id,
-             jsonb_path_query_array(m.metadata, 'lax $.actions[*].inverse[*].payload.body') AS bodies
-        FROM chat_messages m JOIN chat_threads t ON t.id = m.thread_id
-       WHERE t.graph_id = ${g}::uuid AND m.metadata ? 'actions' AND m.id > ${after}::uuid
-       ORDER BY m.id LIMIT ${BATCH}`;
-    for (const r of rows) {
-      const bodies = Array.isArray(r.bodies) ? r.bodies : [];
-      const forms = bodies.flatMap((b) => (typeof b === 'string' ? bodyFindings(b).forms : []));
-      push('journal_prior', String(r.id), forms);
-    }
-    if (rows.length < BATCH) break;
-    after = String(rows[rows.length - 1]?.id);
+  // Журнал отката — через API журнала (`journal-read`, РП-9): тот же запрос экспорта, сырым клиентом этой
+  // транзакции. Адрес строки — id действия: он и есть аргумент `--undo`, а ключ хранилища журнала меняется.
+  for (const entry of await exportJournalRaw(sql, g)) {
+    const forms = entry.inverse.flatMap((iv) =>
+      typeof iv.payload.body === 'string' ? bodyFindings(iv.payload.body).forms : [],
+    );
+    push('journal_prior', entry.id, forms);
   }
 
   const supply = (await sql`
@@ -828,25 +822,11 @@ export async function undoMigrate1v(
   who: Identity,
   actionId: string,
 ): Promise<{ undone: true } | { found: false }> {
-  const probe = JSON.stringify({ actions: [{ id: actionId }] });
-  const meta = await withIdentity(db, who, async (tx) => {
-    const rows = await tx.execute(sql`
-      SELECT m.metadata FROM chat_messages m JOIN chat_threads t ON t.id = m.thread_id
-       WHERE t.graph_id = ${who.graph}::uuid AND m.metadata @> ${probe}::jsonb LIMIT 1`);
-    return rows[0]?.metadata as
-      | { actions?: Array<{ id?: string; source?: string }>; cards?: Array<{ title?: string }> }
-      | undefined;
-  });
-  if (meta === undefined) return { found: false };
-  // Проверяется ТО действие записи, чей id назван (как `findActionMessage` отката — `find` по id), и его
-  // карточка — по тому же индексу: боевой синк пишет одно действие на запись, но проба containment совпала бы
-  // и с записью, где названное действие не первое, и проверка `actions[0]` судила бы о чужом (ре-ревью rm-2).
-  const at = meta.actions?.findIndex((a) => a.id === actionId) ?? -1;
-  if (
-    at === -1 ||
-    meta.actions?.[at]?.source !== 'system' ||
-    meta.cards?.[at]?.title !== MIGRATE_1V_LABEL
-  ) {
+  const entry = await withIdentity(db, who, (tx) => findAction(tx, who.graph, actionId));
+  if (entry === undefined) return { found: false };
+  // Проверяется ТО действие записи, чей id назван, и его заголовок (подпись В-4): API журнала выбирает действие
+  // по id, а не первое в записи, — проверка «первого» судила бы о чужом (ре-ревью rm-2).
+  if (entry.source !== 'system' || entry.title !== MIGRATE_1V_LABEL) {
     throw new ExecError(
       'VALIDATION',
       `действие ${actionId} — не пачка migrate-1v («${MIGRATE_1V_LABEL}»): эта операция отменяет только её`,

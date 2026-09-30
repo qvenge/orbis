@@ -12,6 +12,7 @@ import { FIXTURE_PARSE_REGISTRY } from '@orbis/shared/query/fixtures';
 import { TRPCError } from '@trpc/server';
 import { eq, sql } from 'drizzle-orm';
 import { appDb, mintGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
+import { actionsOf } from '../../test/journal-helpers';
 import { routineById, runsOfParent } from '../agent-loop/queries';
 import { ROUTINE_ROLLBACK_NOTE, rollbackRun } from '../agent-loop/rollback';
 import { ensureEntityThread } from '../chat/threads';
@@ -42,8 +43,7 @@ requireEnv();
 
 const { db, client } = appDb();
 const owner = mintGraph();
-const { actionsOf, propsOf, routineCtx, seedEntity, seedRoutine, seedRoutineRun } =
-  agentLoopHelpers(db);
+const { propsOf, routineCtx, seedEntity, seedRoutine, seedRoutineRun } = agentLoopHelpers(db);
 const createCaller = createCallerFactory(appRouter);
 
 const MODEL = 'scripted-model';
@@ -695,7 +695,7 @@ describe('routine.answerCheckpoint', () => {
     expect(aspect['orbis/run_reply']?.text).toBe('Да, перенеси на 10:00');
 
     const answerActions = (await actionsOf(owner)).filter(
-      (a) => a.run_id === runId && a.source === 'ui',
+      (a) => a.runId === runId && a.source === 'ui',
     );
     expect(answerActions).toHaveLength(1);
 
@@ -1087,8 +1087,8 @@ describe('routine.proposal / decideProposal', () => {
     // В-1: журнал §7.8 знает и чья это работа, и что она — правка владельца
     const action = (await actionsOf(owner)).find((a) => a.id === editedId);
     expect(action?.source).toBe('routine');
-    expect(action?.run_id).toBe(runId);
-    expect(action?.edited_from).toBe(pendingId);
+    expect(action?.runId).toBe(runId);
+    expect(action?.editedFrom).toBe(pendingId);
   });
 
   test('строка предложения о связи подписана РОЛЬЮ ИЗ РЕЕСТРА, а не её id (Ч10-С3)', async () => {
@@ -2305,7 +2305,7 @@ async function unitMessages(pendingId: string): Promise<Array<Record<string, unk
 async function flagPatches(runId: string) {
   return (await actionsOf(owner)).filter(
     (a) =>
-      a.run_id === runId &&
+      a.runId === runId &&
       a.operations.some(
         (op) =>
           (op.payload.props as Record<string, unknown> | undefined)?.['orbis/undecided'] === false,
@@ -2330,12 +2330,10 @@ describe('routine.decideDeferred: отложенное действие (D42 §6
 
     // Атрибуция — работа ПРОГОНА (§9.5): по паре source+run_id её находят журнал, Undo и
     // откат прогона, и без неё «Принять» осталось бы работой ниоткуда
-    const own = (await actionsOf(owner)).filter(
-      (a) => a.run_id === runId && a.source === 'routine',
-    );
+    const own = (await actionsOf(owner)).filter((a) => a.runId === runId && a.source === 'routine');
     expect(own.length).toBe(1);
     expect(own[0]?.id).toBe(applied.actionId);
-    expect(own[0]?.actor_kind).toBe('ai');
+    expect(own[0]?.actorKind).toBe('ai');
 
     const rolled = await rollbackRun(db, { identity: personal(owner), runId });
     expect(rolled.ok).toBe(true);
@@ -2375,7 +2373,7 @@ describe('routine.decideDeferred: отложенное действие (D42 §6
     expect(second).toEqual(first);
     expect(await isArchived(targetId)).toBe(true);
     expect(
-      (await actionsOf(owner)).filter((a) => a.run_id === runId && a.source === 'routine'),
+      (await actionsOf(owner)).filter((a) => a.runId === runId && a.source === 'routine'),
     ).toHaveLength(1);
   });
 
@@ -2650,7 +2648,7 @@ describe('бухгалтерия флажка пачки (§9.6, приёмка 
     const flag = await flagPatches(runId);
     expect(flag.length).toBe(1);
     expect(flag[0]?.source).toBe('system');
-    expect(flag[0]?.actor_kind).toBe('ai');
+    expect(flag[0]?.actorKind).toBe('ai');
 
     const undone = await undoLast(db, { identity: personal(owner) });
     expect(undone.ok).toBe(true);
@@ -2795,7 +2793,7 @@ describe('routine.decideAll', () => {
     // Повтор кнопки: открытых действий не осталось — сводка пуста, журнал не вырос
     expect(await callerLater().routine.decideAll({ runId })).toEqual([]);
     expect(
-      (await actionsOf(owner)).filter((a) => a.run_id === runId && a.source === 'routine'),
+      (await actionsOf(owner)).filter((a) => a.runId === runId && a.source === 'routine'),
     ).toHaveLength(2);
   }, 20_000);
 
@@ -2866,7 +2864,7 @@ describe('routine.decideAll', () => {
     expect(await isArchived(a.targetId)).toBe(true);
     expect(await isArchived(b.targetId)).toBe(true);
     expect(
-      (await actionsOf(owner)).filter((x) => x.run_id === runId && x.source === 'routine'),
+      (await actionsOf(owner)).filter((x) => x.runId === runId && x.source === 'routine'),
     ).toHaveLength(2);
   }, 20_000);
 });

@@ -17,7 +17,6 @@ import {
   type AccountId,
   addDays,
   applyMemoryRules,
-  batchAuditMessageId,
   type CanonicalRow,
   csvMappingToolJsonSchema,
   extensionName,
@@ -56,6 +55,7 @@ import { type EntitlementResolver, IMPORT_CSV_KEY, resolveEntitlement } from '..
 import { ExecError, type ExecErrorCode } from '../errors';
 import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
+import { findBatch } from '../executor/journal-read';
 import type { ExecuteRequest, WireEntity } from '../executor/types';
 import type { Identity } from '../identity';
 import type { LLMRequest, LLMResponse } from '../llm/types';
@@ -620,7 +620,7 @@ async function assertAdoptTargets(db: Db, who: Identity, input: ImportConfirmInp
   if (targets.size === 0) return;
 
   await withIdentity(db, who, async (tx) => {
-    const replay = await sink.findByAuditId(tx, batchAuditMessageId(who.graph, input.batchId));
+    const replay = await findBatch(tx, who.graph, input.batchId);
     if (replay !== undefined) return; // повтор batchId: executor вернёт результат первого прогона
 
     const ids = sql.join(

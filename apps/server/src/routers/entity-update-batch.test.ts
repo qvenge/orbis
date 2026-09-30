@@ -17,6 +17,7 @@ import { canonicalizeBody, parseBody } from '@orbis/shared/doc';
 import { TRPCError } from '@trpc/server';
 import { eq, sql } from 'drizzle-orm';
 import { adminDb, appDb, freshGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
+import { journalOf } from '../../test/journal-helpers';
 import { entityVersions } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { appRouter } from '../router';
@@ -111,18 +112,10 @@ async function cardsOf(user: GraphId, kind: string): Promise<Card[]> {
   }
 }
 
-/** Заголовок записи журнала этой пачки — текст audit-сообщения в глобальном треде владельца. */
+/** Заголовок записи журнала этой пачки в глобальном треде владельца (API журнала). */
 async function auditTitle(user: GraphId, actionId: string): Promise<string | undefined> {
-  const { db: admin, client: adminClient } = adminDb();
-  try {
-    const rows = await admin.execute(
-      sql`SELECT content FROM chat_messages WHERE thread_id = ${globalThreadId(user)}
-          AND metadata->'actions'->0->>'id' = ${actionId}`,
-    );
-    return [...rows].map((r) => r.content as string)[0];
-  } finally {
-    await adminClient.end();
-  }
+  const entry = await journalOf(user, actionId);
+  return entry?.threadId === globalThreadId(user) ? entry.title : undefined;
 }
 
 describe('entity.updateBatch — пачка правок, один Undo (§4.3, §8.4)', () => {

@@ -30,7 +30,6 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import {
   BUILTIN_ACTION_DEFS,
-  batchAuditMessageId,
   canonicalJson,
   type GraphId,
   newId,
@@ -49,9 +48,11 @@ import {
   requireEnv,
   truncateAll,
 } from '../../test/helpers';
+import { journalOf as journalEntryOf, wholeJournalOf } from '../../test/journal-helpers';
 import { confirmPurchase } from '../budget/plan-to-fact';
 import { withIdentity } from '../db/with-identity';
 import { makeChatJournalSink } from '../executor/journal';
+import { actionRecordOf } from '../executor/journal-read';
 import { stateDelta } from '../executor/props';
 import type { ActionCard, ActionRecord, WireEntity } from '../executor/types';
 import { undoAction } from '../executor/undo';
@@ -157,16 +158,21 @@ async function snapshotWorld(owner: GraphId, slugs: readonly string[]): Promise<
   });
 }
 
-/** Строка журнала по детерминированному PK audit-сообщения (§7.8). */
+/**
+ * Строка журнала пачки по её batch_id (§7.8) — через API журнала (помощник `journalOf`), в форме
+ * эталона: запись действия (`ActionRecord`) и карточка. Эталон хранит прежнюю форму строки; сменит её
+ * вместе с хранилищем задача 5 (эталоны пересдаются руками).
+ */
 async function journalOf(
   owner: GraphId,
   batchId: string,
 ): Promise<{ action: ActionRecord; card: ActionCard }> {
-  const found = await withIdentity(db, personal(owner), (tx) =>
-    sink.findByAuditId(tx, batchAuditMessageId(owner, batchId)),
-  );
-  if (found === undefined) throw new Error(`audit-сообщение ${batchId} не найдено`);
-  return { action: found.action, card: found.card as ActionCard };
+  const found = await journalEntryOf(owner, batchId);
+  if (found === undefined) throw new Error(`запись журнала ${batchId} не найдена`);
+  return {
+    action: actionRecordOf(found),
+    card: { tool: found.cardTool, entity_id: found.entityId, title: found.title },
+  };
 }
 
 const caseOf = (name: string) => {
@@ -467,12 +473,11 @@ async function stateOf(
  * порождает (undo неотменяем), поэтому «строка журнала» случая отката — именно оно.
  */
 async function undoRecordOf(owner: GraphId, actionId: string): Promise<unknown> {
-  const probe = JSON.stringify({ type: 'undo', undoes: actionId });
-  const rows = await withIdentity(db, personal(owner), (tx) =>
-    tx.execute(sql`SELECT metadata FROM chat_messages WHERE metadata @> ${probe}::jsonb`),
-  );
-  if (rows.length !== 1) throw new Error(`undo-сообщений ${actionId}: ${rows.length}, ждали одно`);
-  return rows[0]?.metadata;
+  const undos = (await wholeJournalOf(owner)).filter((e) => e.undoes === actionId);
+  if (undos.length !== 1)
+    throw new Error(`записей отмены ${actionId}: ${undos.length}, ждали одну`);
+  // Форма эталона — прежняя запись отмены `{type, undoes}`; эталон пересдаёт задача 5
+  return { type: 'undo', undoes: undos[0]?.undoes };
 }
 
 beforeAll(async () => {

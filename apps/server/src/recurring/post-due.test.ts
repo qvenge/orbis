@@ -17,17 +17,12 @@ import {
   requireEnv,
   truncateAll,
 } from '../../test/helpers';
+import { actionsOf, journalOf } from '../../test/journal-helpers';
 import { envelopeForCategory } from '../budget/aggregates';
 import { entities, relations } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { makeChatJournalSink } from '../executor/journal';
-import type {
-  ActionRecord,
-  ExecuteOk,
-  ExecuteRequest,
-  ExecuteResult,
-  WireEntity,
-} from '../executor/types';
+import type { ExecuteOk, ExecuteRequest, ExecuteResult, WireEntity } from '../executor/types';
 import { undoAction } from '../executor/undo';
 import { appRouter } from '../router';
 import { createCallerFactory } from '../trpc';
@@ -159,23 +154,14 @@ async function spentOf(envelopeId: string): Promise<string> {
   return rows[0]?.spent as string;
 }
 
-/** Action из журнала по id (metadata.actions audit-сообщения); undefined — не записан. */
-async function actionById(actionId: string): Promise<ActionRecord | undefined> {
-  const probe = JSON.stringify({ actions: [{ id: actionId }] });
-  const rows = await adminRows(
-    sql`SELECT metadata FROM chat_messages WHERE metadata @> ${probe}::jsonb LIMIT 2`,
-  );
-  const md = rows[0]?.metadata as { actions?: ActionRecord[] } | undefined;
-  return md?.actions?.find((a) => a.id === actionId);
+/** Действие из журнала графа по id; undefined — не записано. */
+async function actionById(user: GraphId, actionId: string) {
+  return journalOf(user, actionId);
 }
 
-/** Число audit-сообщений, несущих action с этим id (гонка: обязано быть ≤ 1). */
-async function actionMessageCount(actionId: string): Promise<number> {
-  const probe = JSON.stringify({ actions: [{ id: actionId }] });
-  const rows = await adminRows(
-    sql`SELECT count(*)::int AS n FROM chat_messages WHERE metadata @> ${probe}::jsonb`,
-  );
-  return rows[0]?.n as number;
+/** Число записей журнала с этим id действия (гонка: обязано быть ≤ 1). */
+async function actionMessageCount(user: GraphId, actionId: string): Promise<number> {
+  return (await actionsOf(user)).filter((a) => a.id === actionId).length;
 }
 
 /** Материализация одного дня startDate (окно в один день). */
@@ -227,7 +213,7 @@ describe('postDueInstances (03-budget §2.8): переход planned→fact', ()
     // batch в журнале: action_id = uuidv5(NS, "post-financial:<instance_id>") (01 §3.3),
     // source='system' (скрыт из чата, но точечный undoAction доступен)
     const batchId = postFinancialBatchId(instanceId);
-    const action = await actionById(batchId);
+    const action = await actionById(user, batchId);
     expect(action).toBeDefined();
     expect(action?.source).toBe('system');
   });
@@ -284,7 +270,7 @@ describe('postDueInstances (03-budget §2.8): переход planned→fact', ()
     ).toBe('1000.00');
     // ручная покупка не тронута, batch для неё не заводился
     expect((await propsOf(manual.id))['orbis/planned']).toBe(true);
-    expect(await actionById(postFinancialBatchId(manual.id))).toBeUndefined();
+    expect(await actionById(user, postFinancialBatchId(manual.id))).toBeUndefined();
     // шаблон не тронут: financial шаблона без occurred_on/planned
     const templFin = await propsOf(templateId);
     expect(templFin['orbis/planned']).toBeUndefined();
@@ -321,7 +307,7 @@ describe('postDueInstances (03-budget §2.8): переход planned→fact', ()
     const third = await postDueInstances({ db, identity: personal(user), today: '2026-07-01' });
     expect(third.posted).toBe(0);
     expect((await propsOf(instanceId))['orbis/planned']).toBe(true);
-    expect(await actionMessageCount(postFinancialBatchId(instanceId))).toBe(1);
+    expect(await actionMessageCount(user, postFinancialBatchId(instanceId))).toBe(1);
   });
 
   test('архивированный заранее инстанс не постится (приёмка 03-budget §7.2)', async () => {
@@ -337,7 +323,7 @@ describe('postDueInstances (03-budget §2.8): переход planned→fact', ()
     const r = await postDueInstances({ db, identity: personal(user), today: '2026-07-01' });
     expect(r.posted).toBe(0);
     expect((await propsOf(instanceId))['orbis/planned']).toBe(true);
-    expect(await actionById(postFinancialBatchId(instanceId))).toBeUndefined();
+    expect(await actionById(user, postFinancialBatchId(instanceId))).toBeUndefined();
   });
 
   test('Undo перехода: восстанавливает planned=true И прежнюю привязку одним undoAction; повтор postDue после Undo не пере-постит', async () => {
@@ -374,7 +360,7 @@ describe('postDueInstances (03-budget §2.8): переход planned→fact', ()
     expect((await propsOf(instanceId))['orbis/planned']).toBe(false);
     expect(await budgetParents(instanceId)).toEqual([envelopeId]);
     const batchId = postFinancialBatchId(instanceId);
-    const action = await actionById(batchId);
+    const action = await actionById(user, batchId);
     expect(action?.operations.some((op) => op.op === 'relation_create')).toBe(true);
 
     // §2.8: «уже выполненный transition можно отменить обычным Undo» — точечный
@@ -411,7 +397,7 @@ describe('postDueInstances (03-budget §2.8): переход planned→fact', ()
       expect(a.posted + b.posted).toBe(1);
       expect((await propsOf(instanceId))['orbis/planned']).toBe(false);
       expect(await budgetParents(instanceId)).toEqual([envelopeId]);
-      expect(await actionMessageCount(postFinancialBatchId(instanceId))).toBe(1);
+      expect(await actionMessageCount(user, postFinancialBatchId(instanceId))).toBe(1);
     }
   }, 20_000);
 

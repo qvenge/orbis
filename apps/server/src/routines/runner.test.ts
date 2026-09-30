@@ -14,6 +14,7 @@ import {
   requireEnv,
   truncateAll,
 } from '../../test/helpers';
+import { actionsOf } from '../../test/journal-helpers';
 import { type RoutineRow, routineById } from '../agent-loop/queries';
 import { rollbackRun } from '../agent-loop/rollback';
 import { closeRoutineRun } from '../agent-loop/verbs';
@@ -21,7 +22,7 @@ import { MAX_TOKENS_NOTE, STEP_LIMIT_NOTE } from '../ai/send-message';
 import { aiUsage } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { makeChatJournalSink } from '../executor/journal';
-import type { ActionRecord, JournalSink } from '../executor/types';
+import type { JournalSink } from '../executor/types';
 import { ScriptedProvider } from '../llm/scripted';
 import type { LLMProvider, LLMResponse } from '../llm/types';
 import { agentLoopHelpers, T0 } from '../test/agent-loop-helpers';
@@ -33,7 +34,7 @@ requireEnv();
 
 const { db, client } = appDb();
 const owner = mintGraph();
-const { actionsOf, propsOf, seedEntity, seedRoutine, seedRoutineRun } = agentLoopHelpers(db);
+const { propsOf, seedEntity, seedRoutine, seedRoutineRun } = agentLoopHelpers(db);
 
 const MODEL = 'scripted-model';
 const EXPLANATION = 'Задача висит в инбоксе третий день — предлагаю взять её сегодня.';
@@ -373,11 +374,11 @@ describe('runRoutineRun: режим act (V1.10)', () => {
     // Правка в графе с атрибуцией рутины (Р-7): модельная мутация — source routine + run_id
     expect((await propsOf(owner, taskId))['orbis/task_status']).toBe('planned');
     const mutation = (await actionsOf(owner)).find(
-      (a: ActionRecord) => a.source === 'routine' && a.entity_id === taskId,
+      (a) => a.source === 'routine' && a.entityId === taskId,
     );
     expect(mutation).toBeDefined();
-    expect(mutation?.run_id).toBe(runId);
-    expect(mutation?.actor_kind).toBe('ai');
+    expect(mutation?.runId).toBe(runId);
+    expect(mutation?.actorKind).toBe('ai');
 
     const rolled = await rollbackRun(db, { identity: personal(owner), runId });
     expect(rolled.ok).toBe(true);

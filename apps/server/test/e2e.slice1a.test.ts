@@ -14,7 +14,6 @@ import type { GraphId } from '@orbis/shared';
 import { addDays, entitySchema, globalThreadId, newId } from '@orbis/shared';
 import { paramDeclsOf, parsePageText } from '@orbis/shared/doc/page-grammar';
 import { TRPCError } from '@trpc/server';
-import type { ActionRecord } from '../src/executor/types';
 import { DEFAULT_TIMEZONE, todayInTimeZone } from '../src/query/context';
 import { appRouter } from '../src/router';
 import { SEED_CATEGORIES } from '../src/seed/categories';
@@ -23,6 +22,7 @@ import { supplyRecordId } from '../src/supply/records';
 import { createCallerFactory } from '../src/trpc';
 import { enableFinanceForTest } from './finance-on';
 import { appDb, mintGraph, personal, requireEnv, truncateAll } from './helpers';
+import { actionsOf, undoRecordOf, wholeJournalOf } from './journal-helpers';
 
 /**
  * «Сегодня» глазами СЕРВЕРА: та же функция и та же зона по умолчанию, которыми date-токены
@@ -62,7 +62,6 @@ const shellId = (graph: GraphId): string => supplyRecordId(graph, 'host-shell');
 const SHELL_EDGES = 1 + 6;
 
 /** Метаданные audit-/undo-сообщения журнала (§4.6/§7.8). */
-type JournalMeta = { actions?: ActionRecord[]; type?: string; undoes?: string };
 
 describe('e2e слайс 1a: день из 02 §5 (два пользователя)', () => {
   // Общий state сценария — заполняется по шагам, читается последующими.
@@ -153,11 +152,10 @@ describe('e2e слайс 1a: день из 02 §5 (два пользовател
     // decimal хранится строкой без искажений IEEE-754 (§13.6)
     expect(obed.props['orbis/amount']).toBe('340.00');
 
-    // В глобальном треде появилось audit-сообщение с action создания и его inverse (§7.8)
-    const msgs = await a.chat.listMessages({ threadId: globalA });
-    const audit = msgs.find((m) => (m.metadata as JournalMeta).actions?.[0]?.entity_id === obedId);
-    if (!audit) throw new Error('ожидалось audit-сообщение создания «Обед»');
-    const action = (audit.metadata as JournalMeta).actions?.[0];
+    // В журнале появилось действие создания с его inverse (§7.8), в глобальном треде
+    const action = (await actionsOf(userA)).find((e) => e.entityId === obedId);
+    if (!action) throw new Error('ожидалась запись журнала о создании «Обед»');
+    expect(action.threadId).toBe(globalA);
     expect(action?.type).toBe('entity_created');
     expect(action?.operations[0]?.op).toBe('entity_create');
     // inverse создания — архивация (§7.8: жёсткого удаления нет)
@@ -167,6 +165,7 @@ describe('e2e слайс 1a: день из 02 §5 (два пользовател
     });
 
     // Пользовательская реплика «обед 340» тоже в треде (не audit)
+    const msgs = await a.chat.listMessages({ threadId: globalA });
     expect(msgs.some((m) => m.role === 'user' && m.content === 'обед 340')).toBe(true);
   });
 
@@ -319,13 +318,11 @@ describe('e2e слайс 1a: день из 02 §5 (два пользовател
     expect(done.props['orbis/task_status']).toBe('done');
     expect(typeof done.props['orbis/completed_at']).toBe('string');
 
-    // actionId действия-обновления — из audit-сообщения глобального треда (§7.8)
-    const before = await a.chat.listMessages({ threadId: globalA });
-    const updateMsg = before.find((m) => {
-      const act = (m.metadata as JournalMeta).actions?.[0];
-      return act?.type === 'entity_updated' && act.entity_id === sneakersId;
-    });
-    updateActionId = (updateMsg?.metadata as JournalMeta).actions?.[0]?.id ?? '';
+    // actionId действия-обновления — из журнала (§7.8)
+    const updateAction = (await actionsOf(userA)).find(
+      (e) => e.type === 'entity_updated' && e.entityId === sneakersId,
+    );
+    updateActionId = updateAction?.id ?? '';
     expect(updateActionId).not.toBe('');
 
     // undoLast гасит именно это (последнее) действие
@@ -338,15 +335,8 @@ describe('e2e слайс 1a: день из 02 §5 (два пользовател
     expect(reverted.entity.props['orbis/task_status']).toBe('inbox');
     expect(reverted.entity.props['orbis/completed_at']).toBeUndefined();
 
-    // Undo добавил в тред undo-сообщение {type:'undo', undoes}
-    const after = await a.chat.listMessages({ threadId: globalA });
-    expect(
-      after.some(
-        (m) =>
-          (m.metadata as JournalMeta).type === 'undo' &&
-          (m.metadata as JournalMeta).undoes === updateActionId,
-      ),
-    ).toBe(true);
+    // Undo добавил запись отмены в тред отменённого действия (§7.8)
+    expect((await undoRecordOf(userA, updateActionId))?.threadId).toBe(globalA);
 
     // Повторный undo того же action → BAD_REQUEST «уже отменено» (§7.8)
     const again = await trpcError(a.ai.undo({ actionId: updateActionId }));
@@ -442,16 +432,21 @@ describe('e2e слайс 1a: день из 02 §5 (два пользовател
     expect(exp.chatMessages.length).toBe(8);
     // Пользовательская реплика присутствует
     expect(exp.chatMessages.some((m) => m.role === 'user' && m.content === 'обед 340')).toBe(true);
-    // audit-сообщений с непустым action — 6 (create×4, update×1, relation×1)
+    // audit-сообщений с непустым action — 6 (create×4, update×1, relation×1), ровно одно
+    // undo-сообщение. Это проверка ФОРМАТА экспорта (журнал сегодня выгружается сообщениями треда),
+    // а не чтение журнала: формат экспорта с журналом отдельным ключом меняет задача 5.
+    type ExportedJournalMeta = { actions?: unknown[]; type?: string };
     const auditCount = exp.chatMessages.filter(
-      (m) => ((m.metadata as JournalMeta).actions ?? []).length > 0,
+      (m) => ((m.metadata as ExportedJournalMeta).actions ?? []).length > 0,
     ).length;
     expect(auditCount).toBe(6);
-    // ровно одно undo-сообщение
     const undoCount = exp.chatMessages.filter(
-      (m) => (m.metadata as JournalMeta).type === 'undo',
+      (m) => (m.metadata as ExportedJournalMeta).type === 'undo',
     ).length;
     expect(undoCount).toBe(1);
+    // Журнал графа — то же самое (помощники API журнала)
+    expect((await actionsOf(userA)).length).toBe(6);
+    expect((await wholeJournalOf(userA)).filter((e) => e.type === 'undo').length).toBe(1);
 
     // Настройки в дампе; кастомных аспектов нет (встроенные §9.4 не экспортируются)
     expect(exp.userSettings?.timezone).toBe('Europe/Moscow');

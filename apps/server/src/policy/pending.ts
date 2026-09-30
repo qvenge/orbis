@@ -58,7 +58,7 @@ import {
 } from '@orbis/shared/doc';
 import type { ExprScalar } from '@orbis/shared/expr';
 import { OWNER_LOCALE } from '@orbis/shared/query';
-import { eq, inArray, sql } from 'drizzle-orm';
+import { inArray, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { actionDateArgs, recheckPrecondition } from '../actions/precondition';
 import type { DeferredRow } from '../actions/resolve';
@@ -73,8 +73,9 @@ import { type Tx, withIdentity } from '../db/with-identity';
 import { ExecError, type StructuredError } from '../errors';
 import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
+import { executedIds, findBatch, isUndone } from '../executor/journal-read';
 import type { ActorKind, ExecuteResult } from '../executor/types';
-import { isUndone, undoAction } from '../executor/undo';
+import { undoAction } from '../executor/undo';
 import type { Identity } from '../identity';
 import { actionHash } from '../registry/actions';
 import { effectiveRegistry } from '../registry/cache';
@@ -788,17 +789,13 @@ async function expectedDeltaStaleOf(
 }
 
 /**
- * Исполнена ли единица — audit-сообщение по детерминированному PK (§7.8). Спрашивается ДО проверок
- * свежести действия: исполненную единицу «Принять» повторяет replay'ем сохранённого результата, и ни
- * снятая после исполнения декларация, ни ставшее ложным предусловие (его сделало ложным само
+ * Исполнена ли единица — запись пачки в журнале по её `batch_id` = pendingId (§7.8; `journal-read.findBatch`).
+ * Спрашивается ДО проверок свежести действия: исполненную единицу «Принять» повторяет replay'ем сохранённого
+ * результата, и ни снятая после исполнения декларация, ни ставшее ложным предусловие (его сделало ложным само
  * исполнение) не вправе подменить replay отказом.
  */
 async function isExecuted(tx: Tx, graphId: GraphId, pendingId: string): Promise<boolean> {
-  const rows = await tx
-    .select({ id: chatMessages.id })
-    .from(chatMessages)
-    .where(eq(chatMessages.id, batchAuditMessageId(graphId, pendingId)));
-  return rows.length > 0;
+  return (await findBatch(tx, graphId, pendingId)) !== undefined;
 }
 
 /**
@@ -1301,7 +1298,9 @@ async function approveUndoUnit(
     },
   );
   if (r.ok || rejected) return r;
-  const undone = await withIdentity(db, args.identity, (tx) => isUndone(tx, undoOf));
+  const undone = await withIdentity(db, args.identity, (tx) =>
+    isUndone(tx, args.identity.graph, undoOf),
+  );
   return undone ? { ok: true, actionId: undoOf, results: [], idempotentReplay: true } : r;
 }
 
@@ -1388,11 +1387,7 @@ export async function rejectPendingTx(
   // транзакций (лестница правки Ш1, гашение пачки)
   assertNotQuestion(msg.pending);
   const auditId = batchAuditMessageId(args.identity.graph, args.pendingId);
-  const executed = await tx
-    .select({ id: chatMessages.id })
-    .from(chatMessages)
-    .where(eq(chatMessages.id, auditId));
-  if (executed.length > 0) {
+  if ((await findBatch(tx, args.identity.graph, args.pendingId)) !== undefined) {
     throw new ExecError(
       'VALIDATION',
       `подтверждение ${args.pendingId} уже исполнено — отклонить нельзя`,
@@ -1404,7 +1399,7 @@ export async function rejectPendingTx(
   // «Принять» писало бы «отклонено» рядом с «отменено» (фикс-раунд 1 задачи 8, I-3). Читается
   // под тем же замком: «Принять» отката держит его в транзакции undo-сообщения (`approveUndoUnit`).
   const undoOf = msg.pending.undo_of;
-  if (undoOf !== undefined && (await isUndone(tx, undoOf))) {
+  if (undoOf !== undefined && (await isUndone(tx, args.identity.graph, undoOf))) {
     throw new ExecError(
       'VALIDATION',
       `подтверждение ${args.pendingId} уже исполнено — отклонить нельзя`,
@@ -1691,8 +1686,9 @@ export interface RunUnit {
  *     `routines/lifecycle.ts`, докблок `liveProposalRuns`), поэтому выигрыш в том, что
  *     таблица проходится ОДИН раз вместо двух, а дедуп и порядок получаются построением;
  *  2) судьбы — SELECT по IN-списку детерминированных PK (`uuid_eq` leakproof, индекс под
- *     RLS берётся): approve → `batchAuditMessageId`, reject → `rejectMessageId`, ответ →
- *     `answerMessageId`, гашение → `questionStaleMessageId`. Ни одной пробы по ленте.
+ *     RLS берётся): reject → `rejectMessageId`, ответ → `answerMessageId`, гашение →
+ *     `questionStaleMessageId`; approve — исполненная пачка в журнале по `batch_id` = pendingId
+ *     (`journal-read.executedIds`, РП-9: журнал читает только его API). Ни одной пробы по ленте.
  *
  * Порядок — `created_at, id`: тай-брейк по id обязателен, иначе обход пачки («принять
  * все») в разных вызовах шёл бы по единицам вразнобой — сводка разъезжалась бы со списком
@@ -1723,8 +1719,10 @@ export async function listRunUnits(tx: Tx, graphId: GraphId, runId: string): Pro
   );
 
   const units: RunUnit[] = [];
-  /** PK судьбы → чья она и что означает; из ключей складывается второй запрос. */
+  /** PK судьбы в ленте → чья она и что означает; из ключей складывается второй запрос. */
   const fateKeys = new Map<string, { pendingId: string; fate: RunUnit['fate'] }>();
+  /** Отложенные действия пачки: их «принято» — исполненная пачка в журнале (`executedIds`). */
+  const actionIds: string[] = [];
   for (const raw of rows as unknown as Array<Record<string, unknown>>) {
     const record = parsePendingRecord(
       raw.id as string,
@@ -1757,21 +1755,21 @@ export async function listRunUnits(tx: Tx, graphId: GraphId, runId: string): Pro
         fate: 'stale',
       });
     } else {
-      fateKeys.set(batchAuditMessageId(graphId, record.id), {
-        pendingId: record.id,
-        fate: 'approved',
-      });
+      actionIds.push(record.id);
       fateKeys.set(rejectMessageId(graphId, record.id), { pendingId: record.id, fate: 'rejected' });
     }
   }
   if (fateKeys.size === 0) return units;
 
+  /** Что НАШЛОСЬ по каждой единице; выбор судьбы — ниже, отдельно от порядка выборки. */
+  const found = new Map<string, WrittenFates>();
+  for (const pendingId of await executedIds(tx, graphId, actionIds)) {
+    found.set(pendingId, { ...found.get(pendingId), approved: true });
+  }
   const fates = await tx
     .select({ id: chatMessages.id, metadata: chatMessages.metadata })
     .from(chatMessages)
     .where(inArray(chatMessages.id, [...fateKeys.keys()]));
-  /** Что НАШЛОСЬ по каждой единице; выбор судьбы — ниже, отдельно от порядка выборки. */
-  const found = new Map<string, WrittenFates>();
   for (const row of fates) {
     const key = fateKeys.get(row.id);
     if (key === undefined) continue; // недостижимо: список PK и составил этот запрос
@@ -1781,8 +1779,6 @@ export async function listRunUnits(tx: Tx, graphId: GraphId, runId: string): Pro
       seen.answer = typeof metadata.answer === 'string' ? metadata.answer : null;
     } else if (key.fate === 'stale') {
       seen.stale = true;
-    } else if (key.fate === 'approved') {
-      seen.approved = true;
     } else {
       // Та же терпимость к истории, что у rejectedReason: сообщение без причины —
       // отказ владельца (до V1.8 отклонить мог только он)

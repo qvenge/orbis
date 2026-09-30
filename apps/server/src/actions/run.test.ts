@@ -16,9 +16,11 @@ import {
   requireEnv,
   truncateAll,
 } from '../../test/helpers';
+import { journalOf } from '../../test/journal-helpers';
 import { withIdentity } from '../db/with-identity';
 import { ExecError } from '../errors';
-import type { ActionRecord, WireEntity } from '../executor/types';
+import type { JournalEntry } from '../executor/journal-read';
+import type { WireEntity } from '../executor/types';
 import { classifyToolCall } from '../policy/confirmation';
 import { approvePending } from '../policy/pending';
 import { effectiveRegistry } from '../registry/cache';
@@ -124,13 +126,9 @@ const PLAN_TO_FACT = (self: string) => ({
   params: { occurred_on: TODAY },
 });
 
-/** Строка журнала §7.8 по её id — журнал живёт в `metadata` audit-сообщения. */
-async function actionOf(actionId: string): Promise<ActionRecord> {
-  const rows = await withIdentity(db, personal(owner), (tx) =>
-    tx.execute(sql`SELECT m.metadata->'actions'->0 AS action FROM chat_messages m
-      WHERE m.metadata->'actions'->0->>'id' = ${actionId}`),
-  );
-  const action = rows[0]?.action as ActionRecord | undefined;
+/** Строка журнала §7.8 по её id — через API журнала (помощник `journalOf`). */
+async function actionOf(actionId: string): Promise<JournalEntry> {
+  const action = await journalOf(owner, actionId);
   if (action === undefined) throw new Error(`строки журнала ${actionId} нет`);
   return action;
 }
@@ -168,7 +166,7 @@ test('уровень одиночного действия — по свёртк
   expect(out.status).toBe('ok');
   if (out.status !== 'ok' || out.actionId === undefined) throw new Error('ожидался actionId');
   const action = await actionOf(out.actionId);
-  expect([action.type, action.action_id, action.module]).toEqual([
+  expect([action.type, action.actionId, action.module]).toEqual([
     'action',
     'finance/plan-to-fact',
     'finance',

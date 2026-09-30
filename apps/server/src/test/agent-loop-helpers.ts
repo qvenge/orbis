@@ -16,10 +16,10 @@ import { newId, type RelationRoleId, routineRunBatchId, routineRunId } from '@or
 import { and, eq } from 'drizzle-orm';
 import { personal } from '../../test/helpers';
 import type { Db } from '../db/client';
-import { chatMessages, chatThreads, entities, relations } from '../db/schema';
+import { entities, relations } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { execute } from '../executor/executor';
-import type { ActionRecord, WireEntity } from '../executor/types';
+import type { WireEntity } from '../executor/types';
 import { issuePatGrant, verifyBearer } from '../oauth/grants';
 import type { ToolCallCtx } from '../tools/dispatch';
 import type { RoutineRef } from '../tools/registry';
@@ -39,7 +39,6 @@ export interface AgentLoopHelpers {
   /** Свойства строки по id (§А1-1) — то, чем аспекты сущности являются в новой форме. */
   propsOf: (owner: GraphId, id: string) => Promise<AnyRecord>;
   childrenOf: (owner: GraphId, parentId: string) => Promise<string[]>;
-  actionsOf: (owner: GraphId) => Promise<ActionRecord[]>;
   workerGrant: (owner: GraphId, label: string) => Promise<string>;
   worker: (owner: GraphId, grantId: string, over?: Partial<ToolCallCtx>) => ToolCallCtx;
   routineCtx: (
@@ -164,18 +163,6 @@ export function agentLoopHelpers(db: Db): AgentLoopHelpers {
         .where(and(eq(relations.sourceId, parentId), eq(relations.role, 'run'))),
     );
     return rows.map((r) => r.id);
-  }
-
-  /** Все action'ы журнала §7.8 владельца — по всем его тредам. */
-  async function actionsOf(owner: GraphId): Promise<ActionRecord[]> {
-    const rows = await withIdentity(db, personal(owner), (tx) =>
-      tx
-        .select({ metadata: chatMessages.metadata })
-        .from(chatMessages)
-        .innerJoin(chatThreads, eq(chatThreads.id, chatMessages.threadId))
-        .where(eq(chatThreads.graphId, owner)),
-    );
-    return rows.flatMap((r) => (r.metadata as { actions?: ActionRecord[] }).actions ?? []);
   }
 
   /**
@@ -318,7 +305,6 @@ export function agentLoopHelpers(db: Db): AgentLoopHelpers {
     link,
     propsOf,
     childrenOf,
-    actionsOf,
     workerGrant,
     worker,
     routineCtx,

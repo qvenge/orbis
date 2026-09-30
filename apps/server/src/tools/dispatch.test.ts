@@ -32,11 +32,12 @@ import {
   seedCustomAspect,
   truncateAll,
 } from '../../test/helpers';
+import { actionsOf, journalOf, threadJournal } from '../../test/journal-helpers';
 import { ensureEntityThread, ensureGlobalThread } from '../chat/threads';
 import { chatMessages, entities, propertyDefinitions } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { makeChatJournalSink } from '../executor/journal';
-import type { ActionRecord, WireEntity } from '../executor/types';
+import type { WireEntity } from '../executor/types';
 import { issuePatGrant, verifyBearer } from '../oauth/grants';
 import { reconfiguresOf } from '../policy/confirmation';
 import { approvePending, rejectPending } from '../policy/pending';
@@ -199,14 +200,13 @@ describe('dispatchTool: мутации через executor (§9.2; уровни 
       undoActionId: expect.any(String),
     });
 
-    // audit-сообщение легло в переданный тред; актор — внутренний AI
-    const msgs = await messagesIn(userA, threadId);
-    expect(msgs.length).toBe(1);
-    const md = msgs[0]?.metadata as { actions?: ActionRecord[] };
-    const action = md.actions?.[0];
-    expect(action?.actor_kind).toBe('ai');
+    // запись журнала легла в переданный тред; актор — внутренний AI
+    const journal = await threadJournal(userA, threadId);
+    expect(journal.length).toBe(1);
+    const action = journal[0];
+    expect(action?.actorKind).toBe('ai');
     expect(action?.source).toBe('chat');
-    expect(action?.actor_user_id).toBe(accountOf(userA));
+    expect(action?.actorUserId).toBe(accountOf(userA));
     if (r.card?.kind === 'entity_card') expect(action?.id).toBe(r.card.undoActionId as string);
   });
 
@@ -227,10 +227,9 @@ describe('dispatchTool: мутации через executor (§9.2; уровни 
     });
     expect(r.status).toBe('ok');
 
-    const msgs = await messagesIn(userA, threadId);
-    expect(msgs.length).toBe(1);
-    const action = (msgs[0]?.metadata as { actions?: ActionRecord[] }).actions?.[0];
-    expect(action?.run_id).toBe(runId);
+    const journal = await threadJournal(userA, threadId);
+    expect(journal.length).toBe(1);
+    expect(journal[0]?.runId).toBe(runId);
   });
 
   test('attach_orbis_task: аспект установлен; без threadId audit — в глобальный тред', async () => {
@@ -238,7 +237,7 @@ describe('dispatchTool: мутации через executor (§9.2; уровни 
     const globalThread = await withIdentity(db, personal(userA), (tx) =>
       ensureGlobalThread(tx, userA),
     );
-    const before = (await messagesIn(userA, globalThread)).length;
+    const before = (await threadJournal(userA, globalThread)).length;
 
     const r = await dispatchTool(ctxFor(), 'attach_orbis_task', {
       entity_id: target.id,
@@ -261,10 +260,10 @@ describe('dispatchTool: мутации через executor (§9.2; уровни 
       expect(r.card.undoActionId).toBeDefined();
     }
 
-    const after = await messagesIn(userA, globalThread);
+    const after = await threadJournal(userA, globalThread);
     expect(after.length).toBe(before + 1);
-    const md = after[after.length - 1]?.metadata as { actions?: ActionRecord[] };
-    expect(md.actions?.[0]?.actor_kind).toBe('ai');
+    // Журнал треда — новые первыми
+    expect(after[0]?.actorKind).toBe('ai');
   });
 
   test('entity_update: card entity_card с undoActionId; ошибка executor пробрасывается структурированно', async () => {
@@ -326,10 +325,9 @@ describe('dispatchTool: мутации через executor (§9.2; уровни 
     expect(r.status).toBe('ok');
     if (r.status !== 'ok') return;
     expect((r.result as unknown[]).length).toBe(2);
-    const msgs = await messagesIn(userA, threadId);
-    expect(msgs.length).toBe(1);
-    const md = msgs[0]?.metadata as { actions?: ActionRecord[] };
-    expect(md.actions?.[0]?.type).toBe('batch');
+    const journal = await threadJournal(userA, threadId);
+    expect(journal.length).toBe(1);
+    expect(journal[0]?.type).toBe('batch');
   });
 
   test('batch_execute: вложенный attach по ПУБЛИЧНОМУ имени реестра (дефисный кастомный аспект) → успех', async () => {
@@ -1743,20 +1741,18 @@ describe('dispatchTool: глаголы исполнителя никогда н�
   test('карточки подтверждения глагол не порождает: во всех тредах владельца ни одной pending-записи', async () => {
     // Сверка по состоянию, а не по возвращённому статусу: pending — это ЗАПИСЬ в тред
     // (policy/pending), и «status не pending» ещё не значит «карточка не легла».
-    // RLS скоупит chat_messages владельцем — счёт точен по всему его журналу.
+    // RLS скоупит chat_messages владельцем — счёт точен по всем его тредам.
     const rows = await withIdentity(db, personal(owner), (tx) =>
       tx.execute(
-        sql`SELECT
-              count(*) FILTER (WHERE metadata @> '{"pending": {}}'::jsonb)::int AS pendings,
-              count(*) FILTER (WHERE metadata @> '{"actions": []}'::jsonb)::int AS audits
+        sql`SELECT count(*) FILTER (WHERE metadata @> '{"pending": {}}'::jsonb)::int AS pendings
             FROM chat_messages`,
       ),
     );
-    const { pendings, audits } = rows[0] as { pendings: number; audits: number };
+    const { pendings } = rows[0] as { pendings: number };
     expect(pendings).toBe(0);
     // Не вырожденно: круги выше действительно писали в журнал этого владельца —
     // «ноль карточек» здесь означает «глаголы исполнились», а не «ничего не было»
-    expect(audits).toBeGreaterThan(0);
+    expect((await actionsOf(owner)).length).toBeGreaterThan(0);
   });
 
   test('глагол без гранта (чат/UI-контекст) → VALIDATION: прогон адресуется конкретному доступу (agentOnly)', async () => {
@@ -4058,8 +4054,9 @@ describe('отложка небезопасного действия рутин�
     // §7.8: отложка следа в журнале не оставляет — ни action'а, ни правки в графе
     expect((msg?.metadata as { actions?: unknown }).actions).toBeUndefined();
     expect(await archivedOf(owner, target.id)).toBe(false);
-    // …и в треде вызова не осталось вообще ничего
+    // …и в треде вызова не осталось вообще ничего — ни сообщений, ни записей журнала
     expect(await messagesIn(owner, hostThread)).toEqual([]);
+    expect(await threadJournal(owner, hostThread)).toEqual([]);
   });
 
   test('ретрай того же вызова (в т.ч. с переставленными ключами JSON) → тот же pendingId, второй карточки нет (приёмка 15)', async () => {
@@ -4696,11 +4693,9 @@ describe('отложенная единица ДЕЙСТВИЯ и «Устаре
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     // Автор-приложение — как у исполненного сразу: `type:'action'`, `action_id`; `module` — только у расширения
-    const action = (await messagesIn(owner, threadId))
-      .flatMap((m) => (m.metadata as { actions?: ActionRecord[] }).actions ?? [])
-      .find((a) => a.id === r.actionId);
+    const action = (await threadJournal(owner, threadId)).find((a) => a.id === r.actionId);
     // `action_id` — прежний id (РП-2, Д-10); у действия ядра ключа `module` нет вовсе.
-    expect([action?.type, action?.action_id, action !== undefined && 'module' in action]).toEqual([
+    expect([action?.type, action?.actionId, action !== undefined && 'module' in action]).toEqual([
       'action',
       'planner/postpone_overdue',
       false,
@@ -6516,14 +6511,6 @@ describe('budget_rollover (§Б6-5 ревизии 4, В-4): инструмент
     return Number(rows[0]?.n ?? 0);
   }
 
-  async function journalOf(owner: GraphId, actionId: string): Promise<ActionRecord | undefined> {
-    const rows = (await withIdentity(db, personal(owner), (tx) =>
-      tx.execute(sql`SELECT metadata FROM chat_messages
-                      WHERE metadata @> ${JSON.stringify({ actions: [{ id: actionId }] })}::jsonb`),
-    )) as unknown as Array<{ metadata: { actions: ActionRecord[] } }>;
-    return rows[0]?.metadata.actions[0];
-  }
-
   test('вызов владельца создаёт конверты тем же кодом, что кнопка, и несёт факт touches_money', async () => {
     const owner = await freshGraph();
     const threadId = await withIdentity(db, personal(owner), (tx) => ensureGlobalThread(tx, owner));
@@ -6552,14 +6539,12 @@ describe('budget_rollover (§Б6-5 ревизии 4, В-4): инструмент
     // Верхний `actionId` — по нему ответ чата кладёт действие в сводку с откатом (фикс-раунд 1, I-3).
     expect(out.actionId).toBe(result.actionId);
     const action = await journalOf(owner, result.actionId);
-    expect([action?.source, action?.actor_kind, action?.mechanism]).toEqual([
+    expect([action?.source, action?.actorKind, action?.mechanism]).toEqual([
       'chat',
       'owner',
       'rule',
     ]);
-    const inThread = (await messagesIn(owner, threadId)).some((m) =>
-      JSON.stringify(m.metadata).includes(result.actionId),
-    );
+    const inThread = (await threadJournal(owner, threadId)).some((e) => e.id === result.actionId);
     expect(inThread).toBe(true);
   });
 
@@ -6650,7 +6635,7 @@ describe('budget_rollover (§Б6-5 ревизии 4, В-4): инструмент
     // Исполнение — от ИСХОДНОГО актора (§7.8): модель попросила, владелец подтвердил.
     if (!approved.ok) return;
     const action = await journalOf(owner, approved.actionId);
-    expect([action?.source, action?.actor_kind]).toEqual(['chat', 'ai']);
+    expect([action?.source, action?.actorKind]).toEqual(['chat', 'ai']);
   });
 
   test('рутина в режиме act с budget_rollover в белом списке — ОТЛОЖЕННАЯ единица даже на малом переносе (Р-К-39)', async () => {

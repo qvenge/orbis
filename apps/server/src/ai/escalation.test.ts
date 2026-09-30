@@ -16,18 +16,14 @@ import {
   requireEnv,
   truncateAll,
 } from '../../test/helpers';
+import { journalOf } from '../../test/journal-helpers';
 import { appendMessage } from '../chat/messages';
 import { ensureGlobalThread } from '../chat/threads';
 import { chatMessages } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { makeChatJournalSink } from '../executor/journal';
-import type {
-  ActionRecord,
-  ExecuteOk,
-  ExecuteRequest,
-  ExecuteResult,
-  WireEntity,
-} from '../executor/types';
+import type { JournalEntry } from '../executor/journal-read';
+import type { ExecuteOk, ExecuteRequest, ExecuteResult, WireEntity } from '../executor/types';
 import { appRouter } from '../router';
 import { dispatchTool, type ToolCallCtx } from '../tools/dispatch';
 import type { Card } from '../tools/registry';
@@ -175,14 +171,9 @@ async function cardsOf(user: GraphId, kind: string): Promise<Card[]> {
     .filter((c) => c.kind === kind);
 }
 
-/** Action из журнала по id (metadata.actions[0] audit-сообщения). */
-async function actionById(actionId: string): Promise<ActionRecord> {
-  const probe = JSON.stringify({ actions: [{ id: actionId }] });
-  const rows = await adminRows(
-    sql`SELECT metadata FROM chat_messages WHERE metadata @> ${probe}::jsonb LIMIT 1`,
-  );
-  const md = rows[0]?.metadata as { actions?: ActionRecord[] } | undefined;
-  const action = md?.actions?.find((a) => a.id === actionId);
+/** Действие из журнала графа по id (API журнала, помощник `journalOf`). */
+async function actionById(user: GraphId, actionId: string): Promise<JournalEntry> {
+  const action = await journalOf(user, actionId);
   if (!action) throw new Error(`action ${actionId} не найден в журнале`);
   return action;
 }
@@ -202,8 +193,8 @@ async function categoryRefOf(txnId: string): Promise<string | undefined> {
  * ключ существования у containment'а нет, а ключ `props` без значения затянул бы под
  * пробу любую правку любого свойства. `to` — те категории, в которые переносили.
  */
-async function scanActions(user: GraphId, to: readonly string[]): Promise<ActionRecord[]> {
-  return withIdentity(db, personal(user), (tx) => scanFinancialUpdates(tx, to));
+async function scanActions(user: GraphId, to: readonly string[]): Promise<JournalEntry[]> {
+  return withIdentity(db, personal(user), (tx) => scanFinancialUpdates(tx, user, to));
 }
 
 /** Владелец с двумя категориями: «Еда» (from) и «Развлечения» (to). */
@@ -438,7 +429,7 @@ describe('эскалация повторных исправлений кате�
     const action = ok(
       await recategorizeAs(viaAction, { id: 'finance/recategorize', module: 'finance' }),
     );
-    expect((await actionById(action.actionId)).type).toBe('action');
+    expect((await actionById(user, action.actionId)).type).toBe('action');
     // Та же операция под двумя типами — то же число совпадений: скан видит обе строки.
     expect((await scanActions(user, [fun])).map((a) => a.id).sort()).toEqual(
       [batch.actionId, action.actionId].sort(),
@@ -500,7 +491,7 @@ describe('эскалация повторных исправлений кате�
       await maybeSuggestRule({
         db,
         identity: personal(user),
-        action: await actionById(r.actionId),
+        action: await actionById(user, r.actionId),
       }),
     ).toEqual({ suggested: false, reason: 'not_recategorization' });
   });
@@ -510,7 +501,11 @@ describe('эскалация повторных исправлений кате�
     await recategorize(user, await createTxn(user, 'SBOL 1234', food), fun);
     const actionId = await recategorizeRaw(user, await createTxn(user, 'SBOL 5678', food), fun);
     expect(
-      await maybeSuggestRule({ db, identity: personal(user), action: await actionById(actionId) }),
+      await maybeSuggestRule({
+        db,
+        identity: personal(user),
+        action: await actionById(user, actionId),
+      }),
     ).toEqual({ suggested: false, reason: 'empty_pattern' });
     expect(await cardsOf(user, 'memory_rule_suggestion')).toEqual([]);
   });
@@ -609,7 +604,7 @@ describe('эскалация повторных исправлений кате�
       await maybeSuggestRule({
         db,
         identity: personal(user),
-        action: await actionById(amount.actionId),
+        action: await actionById(user, amount.actionId),
       }),
     ).toEqual({ suggested: false, reason: 'not_recategorization' });
   });
@@ -676,7 +671,11 @@ describe('эскалация повторных исправлений кате�
     // Исправление ОДНО: если бы подавление проверялось после скана, ответом было бы
     // not_repeated — то есть журнал читался бы там, где ответ уже известен
     expect(
-      await maybeSuggestRule({ db, identity: personal(user), action: await actionById(actionId) }),
+      await maybeSuggestRule({
+        db,
+        identity: personal(user),
+        action: await actionById(user, actionId),
+      }),
     ).toEqual({ suggested: false, reason: 'already_suggested' });
   });
 
@@ -896,7 +895,11 @@ describe('эскалация повторных исправлений кате�
     await recategorizeRaw(user, await createTxn(user, 'ПЯТЕРОЧКА 999', food), fun);
     const actionId = await recategorizeRaw(user, await createTxn(user, 'ПЯТЕРОЧКА 843', food), fun);
     expect(
-      await maybeSuggestRule({ db, identity: personal(user), action: await actionById(actionId) }),
+      await maybeSuggestRule({
+        db,
+        identity: personal(user),
+        action: await actionById(user, actionId),
+      }),
     ).toEqual({ suggested: false, reason: 'already_suggested' });
     // новой карточки не появилось: по «пятерочка» осталась ровно одна — засеянная
     const offers = await cardsOf(user, 'memory_rule_suggestion');
@@ -1028,7 +1031,7 @@ describe('эскалация: уборочная фаза', () => {
       await maybeSuggestRule({
         db,
         identity: personal(user),
-        action: await actionById(r.actionId),
+        action: await actionById(user, r.actionId),
       });
       expect(spy.mock.calls.length).toBe(1);
     } finally {

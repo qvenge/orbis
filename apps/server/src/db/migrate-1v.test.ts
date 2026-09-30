@@ -30,6 +30,7 @@ import { supplyStatusOf } from '@orbis/shared/supply/print';
 import { and, eq, sql } from 'drizzle-orm';
 import type { Sql, TransactionSql } from 'postgres';
 import { adminDb, appDb, freshGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
+import { actionsOf, wholeJournalOf } from '../../test/journal-helpers';
 import {
   ETALON_HASHES_1B,
   ETALONS_1B,
@@ -41,6 +42,7 @@ import { excludeInfraSystemRows } from '../chat/messages';
 import { ExecError } from '../errors';
 import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
+import type { JournalEntry } from '../executor/journal-read';
 import type { Identity } from '../identity';
 import { effectiveRegistry } from '../registry/cache';
 import { seedOwner } from '../seed/onboarding';
@@ -232,23 +234,24 @@ async function etalonTextIn(graph: GraphId, e: SupplyEtalon): Promise<string> {
   return supplyTextOf(e, reg, (k) => live.get(k) ?? null);
 }
 
-/** Сообщения журнала графа: все и видимые лентой (тот же фильтр, что `chat.listMessages`). */
-async function journalOf(graph: GraphId): Promise<{ all: string[]; visible: string[] }> {
-  return withIdentity(db, personal(graph), async (tx) => {
+/**
+ * Журнал графа (API журнала, помощник `wholeJournalOf`) и сообщения, видимые лентой (тот же фильтр,
+ * что `chat.listMessages`): запись перевода обязана лечь в журнал и НЕ появиться в ленте.
+ */
+async function journalOf(graph: GraphId): Promise<{ all: JournalEntry[]; visible: string[] }> {
+  const all = await wholeJournalOf(graph);
+  const visible = await withIdentity(db, personal(graph), async (tx) => {
     const threads = tx
       .select({ id: chatThreads.id })
       .from(chatThreads)
       .where(eq(chatThreads.graphId, graph));
-    const all = await tx
-      .select({ id: chatMessages.id })
-      .from(chatMessages)
-      .where(sql`${chatMessages.threadId} IN ${threads}`);
-    const visible = await tx
+    const rows = await tx
       .select({ id: chatMessages.id })
       .from(chatMessages)
       .where(and(sql`${chatMessages.threadId} IN ${threads}`, ...excludeInfraSystemRows()));
-    return { all: all.map((r) => r.id).sort(), visible: visible.map((r) => r.id).sort() };
+    return rows.map((r) => r.id).sort();
   });
+  return { all, visible };
 }
 
 async function updatedAtAll(graph: GraphId): Promise<Map<string, string>> {
@@ -608,23 +611,12 @@ describe('(в) --apply на графе формы прода: одна пачк�
 
     // Журнал: ровно одна новая запись — наша пачка, источник system, подпись В-4; лента её не видит.
     const after = await journalOf(graph);
-    const added = after.all.filter((id) => !journalBefore.all.includes(id));
+    const added = after.all.filter((e) => !journalBefore.all.some((b) => b.id === e.id));
     expect(added).toHaveLength(1);
     expect(after.visible).toEqual(journalBefore.visible);
-    const meta = (
-      await withIdentity(db, personal(graph), (tx) =>
-        tx
-          .select({ metadata: chatMessages.metadata })
-          .from(chatMessages)
-          .where(eq(chatMessages.id, added[0] as string)),
-      )
-    )[0]?.metadata as {
-      actions: Array<{ id: string; source: string }>;
-      cards: Array<{ title: string }>;
-    };
-    expect(meta.actions[0]?.id).toBe(actionId);
-    expect(meta.actions[0]?.source).toBe('system');
-    expect(meta.cards[0]?.title).toBe(MIGRATE_1V_LABEL);
+    expect(added[0]?.id).toBe(actionId);
+    expect(added[0]?.source).toBe('system');
+    expect(added[0]?.title).toBe(MIGRATE_1V_LABEL);
 
     // Прочие записи и настройки не тронуты.
     const touched = new Set(
@@ -677,11 +669,10 @@ describe('(в) --apply на графе формы прода: одна пачк�
     const graph = await freshGraph();
     await seedWorld1b(db, graph, 'prod');
     const page = await ownerCreate(graph, { title: 'Своя' });
-    const own = await withIdentity(db, personal(graph), (tx) =>
-      tx.execute(sql`SELECT m.metadata -> 'actions' -> 0 ->> 'id' AS id FROM chat_messages m
-        WHERE m.metadata @> ${JSON.stringify({ actions: [{ operations: [{ payload: { id: page } }] }] })}::jsonb`),
+    const own = (await actionsOf(graph)).find((e) =>
+      e.operations.some((op) => op.payload.id === page),
     );
-    const ownId = String(own[0]?.id);
+    const ownId = String(own?.id);
     const before = await worldSnapshot(graph);
     const foreign = testIo([personal(graph)]);
     expect(await runMigrate1v(['--undo', ownId, '--i-understand'], foreign.io)).toBe(1);

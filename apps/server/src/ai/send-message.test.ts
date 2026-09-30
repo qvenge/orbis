@@ -18,10 +18,11 @@ import {
   requireEnv,
   truncateAll,
 } from '../../test/helpers';
+import { journalOf } from '../../test/journal-helpers';
 import { ensureGlobalThread } from '../chat/threads';
 import { aiUsage, chatMessages, entities } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
-import type { ActionRecord, WireEntity } from '../executor/types';
+import type { WireEntity } from '../executor/types';
 import { CONTINUATIONS_BLOCK, PROMPT_BODY } from '../llm/context';
 import { SYSTEM_PROMPT_V9, TOOL_RESULT_MARKER } from '../llm/prompts/v9';
 import { ScriptedProvider } from '../llm/scripted';
@@ -216,8 +217,10 @@ describe('ai.sendMessage (а): «создай задачу» — цикл из t
     const msgs = await threadMessages(user, threadId);
     expect(msgs.map((m) => m.role)).toEqual(['user', 'system', 'assistant']);
     expect(msgs[0]?.id).toBe(msgId);
-    const action = (msgs[1]?.metadata as { actions?: ActionRecord[] }).actions?.[0];
-    expect(action?.actor_kind).toBe('ai');
+    // Запись журнала действия — в этом треде, актор ai, источник chat (API журнала)
+    const action = await journalOf(user, card.undoActionId as string);
+    expect(action?.threadId).toBe(threadId);
+    expect(action?.actorKind).toBe('ai');
     expect(action?.source).toBe('chat');
     expect(action?.id).toBe(card.undoActionId as string);
     expect(msgs[2]?.id).toBe(r.assistantMessage.id);

@@ -9,6 +9,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { entityThreadId, newId, type ProposeResult, pendingMessageId } from '@orbis/shared';
 import { eq, sql } from 'drizzle-orm';
 import { appDb, mintGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
+import { actionsOf } from '../../test/journal-helpers';
 import { rollbackRun } from '../agent-loop/rollback';
 import { closeRoutineRun, runAgentVerb } from '../agent-loop/verbs';
 import { chatMessages } from '../db/schema';
@@ -26,16 +27,8 @@ requireEnv();
 
 const { db, client } = appDb();
 const owner = mintGraph();
-const {
-  actionsOf,
-  propsOf,
-  routineCtx,
-  seedEntity,
-  seedRoutine,
-  seedRoutineRun,
-  worker,
-  workerGrant,
-} = agentLoopHelpers(db);
+const { propsOf, routineCtx, seedEntity, seedRoutine, seedRoutineRun, worker, workerGrant } =
+  agentLoopHelpers(db);
 
 beforeAll(async () => {
   await truncateAll();
@@ -272,8 +265,8 @@ describe('orbis_propose: предложение и предусловия (V1.6,
     const actions = (await actionsOf(owner)).filter((a) => a.source === 'routine');
     expect(actions).toHaveLength(1);
     expect(actions[0]?.type).toBe('batch');
-    expect(actions[0]?.run_id).toBe(runId);
-    expect(actions[0]?.actor_kind).toBe('ai');
+    expect(actions[0]?.runId).toBe(runId);
+    expect(actions[0]?.actorKind).toBe('ai');
 
     // Инвариант 9: у принятого предложения тот же откат, что у любого прогона
     const rolled = await rollbackRun(db, { identity: personal(owner), runId });

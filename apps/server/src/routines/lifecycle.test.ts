@@ -13,6 +13,7 @@ import {
 } from '@orbis/shared';
 import { eq, sql } from 'drizzle-orm';
 import { appDb, mintGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
+import { actionsOf } from '../../test/journal-helpers';
 import { type RunProps, runsOfParent } from '../agent-loop/queries';
 import { rollbackRun } from '../agent-loop/rollback';
 import { closeRoutineRun, type VerbCtx } from '../agent-loop/verbs';
@@ -21,7 +22,7 @@ import { withIdentity } from '../db/with-identity';
 import { ROUTINE_RUNS_PER_DAY_KEY } from '../entitlements';
 import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
-import type { ActionRecord } from '../executor/types';
+import type { JournalEntry } from '../executor/journal-read';
 import { ScriptedProvider } from '../llm/scripted';
 import {
   answerPendingQuestion,
@@ -59,8 +60,7 @@ requireEnv();
 
 const { db, client } = appDb();
 const owner = mintGraph();
-const { actionsOf, propsOf, routineCtx, seedEntity, seedRoutine, seedRoutineRun } =
-  agentLoopHelpers(db);
+const { propsOf, routineCtx, seedEntity, seedRoutine, seedRoutineRun } = agentLoopHelpers(db);
 
 beforeAll(async () => {
   await truncateAll();
@@ -459,10 +459,10 @@ describe('closeOpenOfRun: гашение пачки списком (D42 ОЧ.8)'
    * внутри аспект-ключа не нашёл бы больше ничего (а ассерт «ровно ноль» рядом позеленел бы
    * ни о чём).
    */
-  async function clearingActions(runId: string): Promise<ActionRecord[]> {
+  async function clearingActions(runId: string): Promise<JournalEntry[]> {
     return (await actionsOf(owner)).filter(
       (a) =>
-        a.run_id === runId &&
+        a.runId === runId &&
         a.operations.some(
           (op) =>
             (op.payload.props as Record<string, unknown> | undefined)?.['orbis/undecided'] ===
@@ -612,7 +612,7 @@ describe('closeOpenOfRun: гашение пачки списком (D42 ОЧ.8)'
     expect(clearing).toHaveLength(1);
     // §9.6: все писатели флажка — system, иначе «отмени последнее» после «Принять» снимало
     // бы флажок вместо действия владельца (undoLast пропускает только system)
-    expect(clearing[0]?.actor_kind).toBe('ai');
+    expect(clearing[0]?.actorKind).toBe('ai');
     expect(clearing[0]?.source).toBe('system');
 
     // Повтор: гасить нечего и снимать нечего — второго бухгалтерского патча не появляется
@@ -1286,10 +1286,10 @@ describe("startBucketRun: прогон бакета одним batch'ем (V1.3,
     // Бухгалтерия прогона (Р-7): актор ai, источник system, run_id — и action именно
     // с детерминированным batch_id, по которому конкурент получит replay
     const action = (await actionsOf(owner)).find(
-      (a: ActionRecord) => a.id === routineRunBatchId(routineId, bucket, 1),
+      (a) => a.id === routineRunBatchId(routineId, bucket, 1),
     );
     expect(action).toBeDefined();
-    expect(action).toMatchObject({ actor_kind: 'ai', source: 'system', run_id: first.runId });
+    expect(action).toMatchObject({ actorKind: 'ai', source: 'system', runId: first.runId });
 
     // Тот же бакет, пока прогон идёт — «уже идёт», второй сущности нет
     expect(
@@ -1580,7 +1580,7 @@ describe('startManualRun: ручной прогон — свой ключ, не 
     expect(isManualBucket(run['orbis/run_bucket'] as string)).toBe(true);
     // Свой batch_id: action создания НЕ под routineRunBatchId (это не плановый слот)
     const planned = (await actionsOf(owner)).find(
-      (a: ActionRecord) => a.id === routineRunBatchId(routineId, bucket, 1),
+      (a) => a.id === routineRunBatchId(routineId, bucket, 1),
     );
     expect(planned).toBeUndefined();
 

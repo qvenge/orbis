@@ -224,7 +224,7 @@ export async function sweepStaleRuns(db: Db, args: SweepArgs): Promise<{ swept: 
         identity: args.identity,
         actorKind: args.actorKind,
         // Обслуживание инварианта 6, а не решение актора: «отмени последнее» такие
-        // записи пропускает (undo.ts findLastUndoable), иначе первое же «отмени»
+        // записи пропускает (journal-read findLastUndoable), иначе первое же «отмени»
         // после чтения очереди отменяло бы подметание вместо действия человека.
         // Точечный откат по-прежнему возможен — по run_id (Задача 13).
         source: 'system',

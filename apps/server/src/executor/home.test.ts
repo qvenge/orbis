@@ -17,13 +17,15 @@ import {
 } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import { appDb, freshGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
+import { actionsOf } from '../../test/journal-helpers';
 import { withIdentity } from '../db/with-identity';
 import { appRouter } from '../router';
 import { dispatchTool } from '../tools/dispatch';
 import { createCallerFactory } from '../trpc';
 import { execute } from './executor';
 import { makeChatJournalSink } from './journal';
-import type { ActionRecord, ExecuteRequest, ExecuteResult, WireEntity } from './types';
+import type { JournalEntry } from './journal-read';
+import type { ExecuteRequest, ExecuteResult, WireEntity } from './types';
 
 requireEnv();
 
@@ -105,15 +107,9 @@ async function propOf(graph: GraphId, id: string, prop: string): Promise<unknown
   return rows[0]?.v ?? undefined;
 }
 
-/** Записанный action по id — containment по GIN, как `findAction` эскалации. */
-async function actionOf(graph: GraphId, actionId: string): Promise<ActionRecord[]> {
-  const probe = JSON.stringify({ actions: [{ id: actionId }] });
-  const rows = await withIdentity(db, personal(graph), (tx) =>
-    tx.execute(sql`SELECT metadata FROM chat_messages WHERE metadata @> ${probe}::jsonb`),
-  );
-  return rows.flatMap((r) =>
-    ((r.metadata as { actions?: ActionRecord[] }).actions ?? []).filter((a) => a.id === actionId),
-  );
+/** Записи журнала с этим id действия (API журнала) — «одна запись» значит ровно одна. */
+async function actionOf(graph: GraphId, actionId: string): Promise<JournalEntry[]> {
+  return (await actionsOf(graph)).filter((a) => a.id === actionId);
 }
 
 test('раздел навигации A → бездомная страница получает «Дом» = A в том же action; Undo снимает и раздел, и дом', async () => {
@@ -129,7 +125,7 @@ test('раздел навигации A → бездомная страница 
   // Одна запись журнала: операции несут и раздел, и дом; inverse — снятие дома.
   const actions = await actionOf(graph, actionId);
   expect(actions).toHaveLength(1);
-  const action = actions[0] as ActionRecord;
+  const action = actions[0] as JournalEntry;
   const touched = action.operations
     .filter((o) => o.op === 'entity_update')
     .map((o) => (o.payload as { id: string }).id);

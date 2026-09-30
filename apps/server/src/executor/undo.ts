@@ -6,14 +6,21 @@
 // (InternalUndoMode, см. types.ts) — стадии, инварианты и RLS общие, конвейер не
 // дублируется; режим недостижим через tRPC/тулы.
 import { newId } from '@orbis/shared';
-import { sql } from 'drizzle-orm';
 import { appendMessage } from '../chat/messages';
+import { ensureGlobalThread } from '../chat/threads';
 import type { Db } from '../db/client';
-import { type Tx, withIdentity } from '../db/with-identity';
+import { withIdentity } from '../db/with-identity';
 import type { Identity } from '../identity';
 import { unmarkRefSources } from '../registry/ref';
 import { ExecError } from './errors';
 import { execute } from './executor';
+import {
+  actionRecordOf,
+  findAction,
+  findLastUndoable,
+  isUndone,
+  type JournalEntry,
+} from './journal-read';
 import type {
   ActionRecord,
   ExecuteErr,
@@ -23,92 +30,19 @@ import type {
   ExecutorDeps,
 } from './types';
 
-interface FoundAction {
-  threadId: string;
-  action: ActionRecord;
-  /**
-   * Заголовок audit-сообщения (`card.title` синка, journal.ts) — единственная
-   * человекочитаемая строка о действии в журнале. Нужен только «отмени последнее»
-   * (см. UndoneAction); точечный undo по id знает, что отменяет, и без него.
-   */
-  title: string;
-}
-
-/** Сообщение с action по id — containment по GIN-индексу chat_messages_metadata_gin. */
-async function findActionMessage(tx: Tx, actionId: string): Promise<FoundAction | undefined> {
-  const probe = JSON.stringify({ actions: [{ id: actionId }] });
-  const rows = await tx.execute(
-    sql`SELECT thread_id, content, metadata FROM chat_messages
-        WHERE metadata @> ${probe}::jsonb
-        LIMIT 1`,
-  );
-  const row = rows[0];
-  if (!row) return undefined;
-  const metadata = row.metadata as { actions?: ActionRecord[] };
-  const action = metadata.actions?.find((a) => a.id === actionId);
-  if (!action) return undefined; // недостижимо: containment гарантирует наличие
-  return { threadId: row.thread_id as string, action, title: String(row.content) };
-}
-
-/**
- * Действие отменено ⇔ существует undo-сообщение с его id (§7.8). Экспортируется ради
- * отката прогона (agent-loop/rollback.ts): он отбирает по журналу неотменённые действия
- * ещё до первой отмены, и своя копия этой пробы разошлась бы с undo при первой же правке.
- */
-export async function isUndone(tx: Tx, actionId: string): Promise<boolean> {
-  const probe = JSON.stringify({ type: 'undo', undoes: actionId });
-  const rows = await tx.execute(
-    sql`SELECT 1 AS hit FROM chat_messages WHERE metadata @> ${probe}::jsonb LIMIT 1`,
-  );
-  return rows.length > 0;
-}
-
-/**
- * Скан журнала владельца с конца (§7.8): сообщения по created_at DESC (RLS скоупит
- * владельцем); undo-записи и сообщения без actions отсекаются containment-фильтром,
- * уже отменённые — NOT EXISTS по их undo-сообщению; берётся первое неотменённое.
- * Системные действия (source='system' — материализация recurring-инстансов §5.4,
- * скрытая из чата) пропускаются: «отмени последнее» = последнее ВИДИМОЕ пользователю
- * действие, иначе undo молча архивировал бы инстансы вместо «обед 340» (fix round A3).
- * IS DISTINCT FROM — NULL-безопасно (урок A1: у строки без source обычное <> дало бы
- * NULL и потеряло её). Точечный undoAction по id системного действия остаётся возможным
- * (§2.8 «выполненный transition можно отменить обычным Undo», путь A5).
- */
-async function findLastUndoable(tx: Tx): Promise<FoundAction | undefined> {
-  const rows = await tx.execute(
-    sql`SELECT m.thread_id, m.content, m.metadata
-        FROM chat_messages m
-        WHERE m.metadata @> '{"actions": []}'::jsonb
-          AND jsonb_array_length(m.metadata->'actions') > 0
-          AND m.metadata->'actions'->0->>'source' IS DISTINCT FROM 'system'
-          AND NOT EXISTS (
-            SELECT 1 FROM chat_messages u
-            WHERE u.metadata @> jsonb_build_object(
-              'type', 'undo', 'undoes', m.metadata->'actions'->0->>'id')
-          )
-        ORDER BY m.created_at DESC, m.id DESC
-        LIMIT 1`,
-  );
-  const row = rows[0];
-  if (!row) return undefined;
-  const metadata = row.metadata as { actions?: ActionRecord[] };
-  const action = metadata.actions?.[0];
-  if (!action) return undefined; // недостижимо: фильтр требует непустой actions
-  return { threadId: row.thread_id as string, action, title: String(row.content) };
-}
-
 /**
  * То же «последнее неотменённое», но БЕЗ применения (В-8): политике §7.10 нужно посмотреть на обратные
- * операции, чтобы назначить уровень, а применять их до решения владельца она не вправе. Обёртка, а не
- * экспорт `findLastUndoable`, — чтобы у сканирующего запроса остался ОДИН дом: правило «последнее
- * ВИДИМОЕ действие владельца» не должно иметь второй копии в диспатче.
+ * операции, чтобы назначить уровень, а применять их до решения владельца она не вправе. Скан — у API
+ * журнала (`journal-read.findLastUndoable`), чтобы у правила «последнее ВИДИМОЕ действие владельца» был ОДИН
+ * дом и не было второй копии в диспатче. `title` — заголовок записи журнала (`card.title` синка) — единственная
+ * человекочитаемая строка о действии.
  */
 export async function peekLastUndoable(
   db: Db,
   who: Identity,
 ): Promise<{ action: ActionRecord; title: string } | undefined> {
-  const found = await withIdentity(db, who, (tx) => findLastUndoable(tx));
-  return found === undefined ? undefined : { action: found.action, title: found.title };
+  const found = await withIdentity(db, who, (tx) => findLastUndoable(tx, who.graph));
+  return found === undefined ? undefined : { action: actionRecordOf(found), title: found.title };
 }
 
 /**
@@ -134,7 +68,7 @@ export async function peekLastUndoable(
  * `marked` (счётчик). Ни то ни другое не должно ронять откат: неизвестная форма означает
  * «снимать нечего», а не исключение.
  */
-function markedRefSources(action: ActionRecord): string[] {
+function markedRefSources(action: Pick<ActionRecord, 'operations'>): string[] {
   const out: string[] = [];
   for (const op of action.operations) {
     if (op.op !== 'ref_sources_marked') continue;
@@ -148,10 +82,9 @@ function markedRefSources(action: ActionRecord): string[] {
 async function applyUndo(
   db: Db,
   who: Identity,
-  found: FoundAction,
+  action: JournalEntry,
   beforeStages?: ExecutorDeps['beforeStages'],
 ): Promise<ExecuteResult> {
-  const { action, threadId } = found;
   if (action.inverse.length === 0) {
     // Недостижимо для действий executor'а (inverse всегда непуст); страховка формата
     return {
@@ -176,7 +109,7 @@ async function applyUndo(
         // Перепроверка под замками строк: конкурентный undo того же action мог
         // закоммититься, пока этот tx ждал FOR UPDATE (READ COMMITTED увидит его);
         // отказ откатывает и применённый inverse — двойного отката не бывает
-        if (await isUndone(tx, action.id)) {
+        if (await isUndone(tx, who.graph, action.id)) {
           throw new ExecError('VALIDATION', `действие ${action.id} уже отменено`, {
             actionId: action.id,
           });
@@ -189,7 +122,9 @@ async function applyUndo(
         await unmarkRefSources(tx, who.graph, markedRefSources(action));
         await appendMessage(tx, {
           id: newId(),
-          threadId, // тот же тред, где записано отменяемое действие
+          // Тот же тред, где записано отменяемое действие. У прежнего хранилища тред есть у каждой записи;
+          // запись без треда (таблица журнала, задача 5) отменой не будит разговор — глобальный тред владельца.
+          threadId: action.threadId ?? (await ensureGlobalThread(tx, who.graph)),
           role: 'system',
           content: `Отменено действие ${action.id}`,
           metadata: { type: 'undo', undoes: action.id },
@@ -219,19 +154,19 @@ export async function undoAction(
     const found = await withIdentity(db, args.identity, async (tx) => {
       // Чтение action отдельным tx от применения безопасно: журнал append-only,
       // metadata неизменяема (§4.6); статус «отменено» перепроверяется в tx применения
-      const msg = await findActionMessage(tx, args.actionId);
-      if (!msg) {
+      const found = await findAction(tx, args.identity.graph, args.actionId);
+      if (!found) {
         // RLS скоупит журнал владельцем: чужое и несуществующее неразличимы
         throw new ExecError('NOT_FOUND', `действие ${args.actionId} не найдено в журнале`, {
           actionId: args.actionId,
         });
       }
-      if (await isUndone(tx, args.actionId)) {
+      if (await isUndone(tx, args.identity.graph, args.actionId)) {
         throw new ExecError('VALIDATION', `действие ${args.actionId} уже отменено`, {
           actionId: args.actionId,
         });
       }
-      return msg;
+      return found;
     });
     return await applyUndo(db, args.identity, found, deps.beforeStages);
   } catch (e) {
@@ -266,7 +201,9 @@ export type UndoLastResult = (ExecuteOk & { undone: UndoneAction }) | ExecuteErr
 /** «Отмени последнее» (§7.8): inverse первого неотменённого действия с конца журнала. */
 export async function undoLast(db: Db, args: { identity: Identity }): Promise<UndoLastResult> {
   try {
-    const found = await withIdentity(db, args.identity, (tx) => findLastUndoable(tx));
+    const found = await withIdentity(db, args.identity, (tx) =>
+      findLastUndoable(tx, args.identity.graph),
+    );
     if (!found) {
       return {
         ok: false,
@@ -279,12 +216,14 @@ export async function undoLast(db: Db, args: { identity: Identity }): Promise<Un
     }
     const result = await applyUndo(db, args.identity, found);
     if (!result.ok) return result;
+    // `findLastUndoable` записей отмены не отдаёт (К-22) — запись журнала здесь всегда действие
+    const record = actionRecordOf(found);
     return {
       ...result,
       undone: {
-        actionId: found.action.id,
-        type: found.action.type,
-        entityId: found.action.entity_id,
+        actionId: record.id,
+        type: record.type,
+        entityId: record.entity_id,
         title: found.title,
       },
     };

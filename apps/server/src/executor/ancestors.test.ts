@@ -21,15 +21,16 @@ import {
   truncateAll,
   withRule,
 } from '../../test/helpers';
+import { journalOf } from '../../test/journal-helpers';
 import { entities } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { effectiveRegistry } from '../registry/cache';
 import { nearestAncestorRuleOf } from '../rules/carriers';
 import { recomputeProjectAncestors } from './ancestors';
 import { makeChatJournalSink } from './journal';
+import type { JournalEntry } from './journal-read';
 import type {
   ActionOperation,
-  ActionRecord,
   ExecuteOk,
   ExecuteRequest,
   ExecuteResult,
@@ -121,17 +122,9 @@ async function ancestorsOf(
   });
 }
 
-/** Запись действия из БОЕВОГО журнала — там же её видит undo. */
-async function actionFromJournal(owner: GraphId, actionId: string): Promise<ActionRecord> {
-  const rows = await withIdentity(db, personal(owner), (tx) =>
-    tx.execute(
-      sql`SELECT metadata FROM chat_messages
-           WHERE metadata @> ${JSON.stringify({ actions: [{ id: actionId }] })}::jsonb
-           LIMIT 1`,
-    ),
-  );
-  const meta = (rows as unknown as Array<{ metadata: { actions: ActionRecord[] } }>)[0]?.metadata;
-  const action = meta?.actions.find((a) => a.id === actionId);
+/** Запись действия из БОЕВОГО журнала — там же её видит undo (API журнала, помощник `journalOf`). */
+async function actionFromJournal(owner: GraphId, actionId: string): Promise<JournalEntry> {
+  const action = await journalOf(owner, actionId);
   if (action === undefined) throw new Error(`действие ${actionId} не найдено в журнале`);
   return action;
 }

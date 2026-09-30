@@ -19,6 +19,7 @@ import {
   truncateAll,
   withRule,
 } from '../../test/helpers';
+import { actionsOf } from '../../test/journal-helpers';
 import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
 import type { ExecuteRequest, WireEntity } from '../executor/types';
@@ -177,13 +178,9 @@ async function budgetParents(txnId: string): Promise<string[]> {
   return rows.map((r) => r.source_id as string);
 }
 
-/** Число audit-сообщений, несущих action с этим id (атомарность: ровно один на batch). */
-async function actionMessageCount(actionId: string): Promise<number> {
-  const probe = JSON.stringify({ actions: [{ id: actionId }] });
-  const rows = await adminRows(
-    sql`SELECT count(*)::int AS n FROM chat_messages WHERE metadata @> ${probe}::jsonb`,
-  );
-  return rows[0]?.n as number;
+/** Число записей журнала с этим id действия (атомарность: ровно один на batch). */
+async function actionMessageCount(user: GraphId, actionId: string): Promise<number> {
+  return (await actionsOf(user)).filter((a) => a.id === actionId).length;
 }
 
 describe('budget.rolloverPreview (03-budget §2.6, §3.5)', () => {
@@ -460,7 +457,7 @@ describe('budget.rollover (03-budget §3.5): атомарное создание
     expect(foodEnv?.props['orbis/carryover']).toBe('1200.00');
 
     // Один action на весь batch (атомарность журнала) и авто-перехват A4-хуком
-    expect(await actionMessageCount(batchId)).toBe(1);
+    expect(await actionMessageCount(user, batchId)).toBe(1);
     expect(await budgetParents(txnId)).toEqual([foodEnv?.id as string]);
 
     // Преемники созданы → кандидатов больше нет; история есть → needsSetup=false
@@ -490,7 +487,7 @@ describe('budget.rollover (03-budget §3.5): атомарное создание
 
     const envs = await envelopesOf(user);
     expect(envs.filter((e) => e.props['orbis/period_start'] === targetStart)).toHaveLength(1);
-    expect(await actionMessageCount(batchId)).toBe(1);
+    expect(await actionMessageCount(user, batchId)).toBe(1);
   });
 
   test('дубль категории во входе → INVARIANT, ни один конверт не создан (атомарность)', async () => {

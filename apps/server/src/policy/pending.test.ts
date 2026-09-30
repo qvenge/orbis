@@ -8,7 +8,6 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import type { GraphId } from '@orbis/shared';
 import {
   answerMessageId,
-  batchAuditMessageId,
   globalThreadId,
   newId,
   questionStaleMessageId,
@@ -17,13 +16,14 @@ import {
 import { FIXTURE_PARSE_REGISTRY } from '@orbis/shared/query/fixtures';
 import { eq, inArray, sql } from 'drizzle-orm';
 import { adminDb, appDb, mintGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
+import { journalOf } from '../../test/journal-helpers';
 import { appendMessageIdempotent } from '../chat/messages';
 import { ensureEntityThread } from '../chat/threads';
 import { chatMessages, entities } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { ExecError } from '../errors';
 import { execute } from '../executor/executor';
-import type { ActionRecord, ExecuteResult, WireEntity } from '../executor/types';
+import type { ExecuteResult, WireEntity } from '../executor/types';
 import { proposalBodyRows } from '../routines/proposal-diff';
 import { dispatchTool, type ToolCallCtx } from '../tools/dispatch';
 import {
@@ -197,16 +197,14 @@ describe('approvePending: исполнение сохранённого payload 
     expect((r.results[0] as WireEntity).archived).toBe(true);
     expect(await archivedOf(userA, target.id)).toBe(true);
 
-    // audit-сообщение §7.8: детерминированный PK (batch-механика, batch_id = pendingId),
-    // тот же тред, что у карточки-запроса; атрибуция — исходный актор (ai/chat)
-    const audit = await messageById(userA, batchAuditMessageId(userA, pendingId));
-    expect(audit).toBeDefined();
-    expect(audit?.threadId).toBe(threadId);
-    const md = audit?.metadata as { actions?: ActionRecord[] };
-    const action = md.actions?.[0];
+    // Запись журнала §7.8 — пачка с batch_id = pendingId (batch-механика), тот же тред, что у
+    // карточки-запроса; атрибуция — исходный актор (ai/chat)
+    const action = await journalOf(userA, pendingId);
+    expect(action).toBeDefined();
+    expect(action?.threadId).toBe(threadId);
     expect(action?.id).toBe(pendingId);
     expect(action?.type).toBe('batch');
-    expect(action?.actor_kind).toBe('ai');
+    expect(action?.actorKind).toBe('ai');
     expect(action?.source).toBe('chat');
   });
 
@@ -243,8 +241,8 @@ describe('approvePending: исполнение сохранённого payload 
     expectExecError(r, 'VALIDATION');
     if (!r.ok) expect(r.error.message).toContain('отклонено');
     expect(await archivedOf(userA, target.id)).toBe(false);
-    // audit-сообщения нет — исполнение не начиналось
-    expect(await messageById(userA, batchAuditMessageId(userA, pendingId))).toBeUndefined();
+    // записи журнала нет — исполнение не начиналось
+    expect(await journalOf(userA, pendingId)).toBeUndefined();
   });
 
   test('чужой pendingId (userB) → NOT_FOUND: RLS скоупит журнал владельцем', async () => {
@@ -272,7 +270,7 @@ describe('approvePending: исполнение сохранённого payload 
 
     const r = await approvePending(db, { identity: personal(userA), pendingId, clock });
     expectExecError(r, 'NOT_FOUND'); // стадия 3 конвейера: load state не нашёл сущность
-    expect(await messageById(userA, batchAuditMessageId(userA, pendingId))).toBeUndefined();
+    expect(await journalOf(userA, pendingId)).toBeUndefined();
   });
 
   test('batch-payload: собственная структура с batch_id = pendingId; approve исполняет все операции, повтор — replay', async () => {
@@ -304,8 +302,8 @@ describe('approvePending: исполнение сохранённого payload 
     expect(rows.length).toBe(11);
 
     // Идемпотентность ключуется pendingId, НЕ исходным batch_id модели (перезапись §7.8)
-    expect(await messageById(userA, batchAuditMessageId(userA, r.pendingId))).toBeDefined();
-    expect(await messageById(userA, batchAuditMessageId(userA, originalBatchId))).toBeUndefined();
+    expect(await journalOf(userA, r.pendingId)).toBeDefined();
+    expect(await journalOf(userA, originalBatchId)).toBeUndefined();
 
     const again = await approvePending(db, {
       identity: personal(userA),
@@ -366,10 +364,9 @@ describe('approvePending: исполнение сохранённого payload 
     const { pendingId } = await pendingArchive(undefined, { actorKind: 'agent', source: 'mcp' });
     const r = await approvePending(db, { identity: personal(userA), pendingId, clock });
     expect(r.ok).toBe(true);
-    const audit = await messageById(userA, batchAuditMessageId(userA, pendingId));
-    const md = audit?.metadata as { actions?: ActionRecord[] };
-    expect(md.actions?.[0]?.actor_kind).toBe('agent');
-    expect(md.actions?.[0]?.source).toBe('mcp');
+    const action = await journalOf(userA, pendingId);
+    expect(action?.actorKind).toBe('agent');
+    expect(action?.source).toBe('mcp');
   });
 });
 
@@ -733,11 +730,10 @@ describe('атрибуция рутины: source routine, run_id и причи�
 
     // Атрибуция доживает до журнала: подтвердил владелец, но правку сделала рутина
     // в конкретном прогоне — по run_id откат прогона (rollback.ts) найдёт это действие
-    const audit = await messageById(userA, batchAuditMessageId(userA, pendingId));
-    const action = (audit?.metadata as { actions?: ActionRecord[] }).actions?.[0];
-    expect(action?.actor_kind).toBe('ai');
+    const action = await journalOf(userA, pendingId);
+    expect(action?.actorKind).toBe('ai');
     expect(action?.source).toBe('routine');
-    expect(action?.run_id).toBe(runId);
+    expect(action?.runId).toBe(runId);
   });
 
   test('rejectPending с reason superseded → текст «заменено» и metadata.reason; повтор → alreadyRejected с ИСХОДНОЙ причиной', async () => {
@@ -879,11 +875,10 @@ describe('причина отказа edited: правка владельца (�
 
     const r = await approvePending(db, { identity: personal(userA), pendingId, clock });
     expect(r.ok).toBe(true);
-    const audit = await messageById(userA, batchAuditMessageId(userA, pendingId));
-    const action = (audit?.metadata as { actions?: ActionRecord[] }).actions?.[0];
-    expect(action?.run_id).toBe(runId);
+    const action = await journalOf(userA, pendingId);
+    expect(action?.runId).toBe(runId);
     // §7.8: журнал знает, что применено не то, что предложила рутина, а правка владельца
-    expect(action?.edited_from).toBe(parentId);
+    expect(action?.editedFrom).toBe(parentId);
   });
 
   test('без правки ключа edited_from нет вовсе — ни в pending-записи, ни в action (условная запись, как run_id)', async () => {
@@ -895,9 +890,9 @@ describe('причина отказа edited: правка владельца (�
 
     const r = await approvePending(db, { identity: personal(userA), pendingId, clock });
     expect(r.ok).toBe(true);
-    const audit = await messageById(userA, batchAuditMessageId(userA, pendingId));
-    const action = (audit?.metadata as { actions?: ActionRecord[] }).actions?.[0];
-    expect(action !== undefined && Object.hasOwn(action, 'edited_from')).toBe(false);
+    const action = await journalOf(userA, pendingId);
+    expect(action).toBeDefined();
+    expect(action !== undefined && Object.hasOwn(action, 'editedFrom')).toBe(false);
   });
 });
 
@@ -1175,8 +1170,8 @@ describe('гейты kind: вопрос не принимают и не откл
       expect(approved.error.code).toBe('VALIDATION');
       expect(approved.error.message).toContain('вопрос');
     }
-    // Ни исполнения, ни записи: audit-сообщения по детерминированному PK нет
-    expect(await messageById(userA, batchAuditMessageId(userA, pendingId))).toBeUndefined();
+    // Ни исполнения, ни записи: пачки с batch_id = pendingId в журнале нет
+    expect(await journalOf(userA, pendingId)).toBeUndefined();
 
     const rejected = await rejectPending(db, { identity: personal(userA), pendingId });
     expect(rejected.ok).toBe(false);
@@ -1785,14 +1780,8 @@ describe('createSystemPending: запись без актора', () => {
     // ИСПОЛНЕНИЕ атрибутируется ВЛАДЕЛЬЦУ: `source: 'system'` спрятал бы действие из ленты
     // (`chat/messages.ts`) и из «отмени последнее» (`findLastUndoable` пропускает системные),
     // то есть владелец не смог бы отменить то, что сам и подтвердил.
-    const audit = await withIdentity(db, personal(owner), (tx) =>
-      tx
-        .select()
-        .from(chatMessages)
-        .where(eq(chatMessages.id, batchAuditMessageId(owner, id))),
-    );
-    const action = (audit[0]?.metadata as { actions: ActionRecord[] }).actions[0];
-    expect(action?.actor_kind).toBe('owner');
+    const action = await journalOf(owner, id);
+    expect(action?.actorKind).toBe('owner');
     expect(action?.source).toBe('ui');
   });
 

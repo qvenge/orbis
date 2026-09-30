@@ -32,13 +32,20 @@
 // полчаса после отката. Поэтому для рутинного прогона откат инвертирует ТОЛЬКО работу,
 // конфликты ищет только по её сущностям, а прогон помечает архивом ЯВНОЙ операцией: тот же
 // признак, по которому экран прогона (RunFeed) читает откаченный прогон ADE.
+import type { GraphId } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import type { Db } from '../db/client';
 import { type Tx, withIdentity } from '../db/with-identity';
 import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
-import type { ActionOperation, ActionRecord } from '../executor/types';
-import { isUndone, undoAction } from '../executor/undo';
+import {
+  actionsTouchingAfter,
+  isUndone,
+  type JournalCursor,
+  type JournalEntry,
+  runActions,
+} from '../executor/journal-read';
+import { undoAction } from '../executor/undo';
 import type { Identity } from '../identity';
 import { closeOpenOfRun } from '../routines/lifecycle';
 import type { RollbackConflict, WireRollbackResult } from '../wire';
@@ -65,31 +72,8 @@ export const ROUTINE_ROLLBACK_NOTE =
   'Откачены изменения прогона рутины в Orbis (правки и принятое предложение); ' +
   'сам прогон убран в архив.';
 
-/** Запись журнала: сам action + отметка времени и id сообщения (ключ порядка). */
-interface JournalEntry {
-  messageId: string;
-  at: Date;
-  action: ActionRecord;
-}
-
-/**
- * timestamptz из raw-SQL: drizzle отключает date-парсеры postgres.js, поэтому tx.execute
- * отдаёт строку PG (то же приведение, что в wire.ts).
- */
-function toDate(value: unknown): Date {
-  return value instanceof Date ? value : new Date(String(value));
-}
-
-/**
- * Строка журнала → запись. Инвариант §7.8 «один action на audit-сообщение» (journal.ts
- * проверяет его на записи) — читаем `actions[0]`, как undo.ts.
- */
-function toEntry(row: Record<string, unknown>): JournalEntry | undefined {
-  const metadata = row.metadata as { actions?: ActionRecord[] };
-  const action = metadata.actions?.[0];
-  if (action === undefined) return undefined; // недостижимо: отбор требует непустой actions
-  return { messageId: String(row.id), at: toDate(row.created_at), action };
-}
+/** Действие прогона из журнала с курсором — ключом порядка журнала (`journal-read`). */
+type RunEntry = JournalEntry & { cursor: JournalCursor };
 
 /**
  * Что считается действием ПРОГОНА — и что нарочно не считается.
@@ -102,11 +86,11 @@ function toEntry(row: Record<string, unknown>): JournalEntry | undefined {
  *
  * Работа исполнителя — `source: 'mcp'`, обслуживание круга (подметание С6) — `'system'`.
  * Последнее откатывается вместе с прогоном намеренно: «отмени последнее» подметание
- * пропускает (undo.ts findLastUndoable), и без него брошенный прогон не откатился бы
+ * пропускает (journal-read findLastUndoable), и без него брошенный прогон не откатился бы
  * целиком — тикет остался бы с чужим `waiting_for` о разборе остатков.
  */
-function isRunAction(action: ActionRecord, runId: string): boolean {
-  return action.run_id === runId && action.source !== 'ui';
+function isRunAction(action: JournalEntry, runId: string): boolean {
+  return action.runId === runId && action.source !== 'ui';
 }
 
 /**
@@ -136,8 +120,8 @@ function isRunAction(action: ActionRecord, runId: string): boolean {
  * возвращает инверсия бухгалтерии.
  */
 interface RollbackPolicy {
-  own(action: ActionRecord, runId: string): boolean;
-  about(action: ActionRecord, runId: string): boolean;
+  own(action: JournalEntry, runId: string): boolean;
+  about(action: JournalEntry, runId: string): boolean;
   archive: boolean;
   closeOpen: boolean;
   note: string;
@@ -157,8 +141,8 @@ const GRANT_POLICY: RollbackPolicy = {
  * pending с сохранённым `source: 'routine'`). Всё остальное с этим `run_id` — о прогоне.
  */
 const ROUTINE_POLICY: RollbackPolicy = {
-  own: (action, runId) => action.run_id === runId && action.source === 'routine',
-  about: (action, runId) => action.run_id === runId,
+  own: (action, runId) => action.runId === runId && action.source === 'routine',
+  about: (action, runId) => action.runId === runId,
   archive: true,
   closeOpen: true,
   note: ROUTINE_ROLLBACK_NOTE,
@@ -203,60 +187,35 @@ async function runFacts(tx: Tx, runId: string): Promise<RunFacts | null> {
 }
 
 /**
- * Действия прогона в порядке журнала (шаг 1). Обратная ссылка `run_id` — containment-проба
- * `metadata @> {"actions":[{"run_id": …}]}`: единственная форма, которую берёт GIN
- * `jsonb_path_ops` (0001_rls_and_indexes.sql:123, проверено EXPLAIN — Bitmap Index Scan по
- * chat_messages_metadata_gin). `metadata ? 'actions'` этим индексом НЕ покрыт.
+ * Действия прогона в порядке журнала (шаг 1): `journal-read.runActions` (обратная ссылка `run_id`, порядок
+ * `created_at, id`), из них — своё по политике.
  *
- * Тай-брейк по `id` обязателен: колонка created_at — precision 3, и два действия одной
- * миллисекунды без второго ключа встали бы в порядке, который выбрал план. Идиома та же,
- * что в undo.ts (`ORDER BY created_at DESC, id DESC`). Полной строгости это не даёт — id
- * batch-действия детерминирован (uuidv5 от batch_id), а не возрастает во времени, — но два
- * глагола ОДНОГО прогона в одну миллисекунду означали бы, что агент выпустил их
- * параллельно, а этого не допускает CAS-счётчик шагов (verbs.ts runStep).
+ * Тай-брейк по ключу хранилища обязателен: колонка created_at — precision 3, и два действия одной
+ * миллисекунды без второго ключа встали бы в порядке, который выбрал план. Полной строгости это не даёт —
+ * id batch-действия детерминирован (uuidv5 от batch_id), а не возрастает во времени, — но два глагола ОДНОГО
+ * прогона в одну миллисекунду означали бы, что агент выпустил их параллельно, а этого не допускает
+ * CAS-счётчик шагов (verbs.ts runStep).
  */
-async function runActions(tx: Tx, runId: string, policy: RollbackPolicy): Promise<JournalEntry[]> {
-  const probe = JSON.stringify({ actions: [{ run_id: runId }] });
-  const rows = await tx.execute(
-    sql`SELECT id, created_at, metadata FROM chat_messages
-        WHERE metadata @> ${probe}::jsonb
-        ORDER BY created_at ASC, id ASC`,
-  );
-  const entries: JournalEntry[] = [];
-  for (const row of rows as unknown as Array<Record<string, unknown>>) {
-    const entry = toEntry(row);
-    if (entry !== undefined && policy.own(entry.action, runId)) entries.push(entry);
-  }
-  return entries;
+async function ownRunActions(
+  tx: Tx,
+  graph: GraphId,
+  runId: string,
+  policy: RollbackPolicy,
+): Promise<RunEntry[]> {
+  return (await runActions(tx, graph, runId)).filter((entry) => policy.own(entry, runId));
 }
-
-/** uuid-подобные значения payload'а операции: что именно тронуло действие. */
-const TOUCHED_KEYS = ['id', 'source_id', 'target_id', 'entity_id'] as const;
 
 /**
- * Сущности, затронутые действиями (шаг 2). Берём id из ОБЕИХ половин записи — операций и
- * inverse: у entity_create операция несёт id новой сущности, а inverse — её же под
- * архивацию, но у relation-операций id связи в payload'е нет вовсе, зато есть концы
- * (`source_id`/`target_id`). Отсюда широкий набор ключей: конфликт по связи — тоже
- * конфликт, и лучше показать лишнюю строку, чем молча затереть правку соседа.
+ * Сущности, затронутые действиями (шаг 2) — `entityIds` записей журнала: id из ОБЕИХ половин записи,
+ * операций и inverse (у entity_create операция несёт id новой сущности, а inverse — её же под архивацию, у
+ * relation-операций id связи в payload'е нет вовсе, зато есть концы `source_id`/`target_id`). Отсюда широкий
+ * набор ключей: конфликт по связи — тоже конфликт, и лучше показать лишнюю строку, чем молча затереть правку
+ * соседа.
  */
-function touchedEntities(entries: readonly JournalEntry[]): Set<string> {
+function touchedEntities(entries: readonly RunEntry[]): Set<string> {
   const touched = new Set<string>();
-  for (const entry of entries) {
-    for (const op of [...entry.action.operations, ...entry.action.inverse]) {
-      for (const id of operationIds(op)) touched.add(id);
-    }
-  }
+  for (const entry of entries) for (const id of entry.entityIds) touched.add(id);
   return touched;
-}
-
-function operationIds(op: ActionOperation): string[] {
-  const ids: string[] = [];
-  for (const key of TOUCHED_KEYS) {
-    const value = op.payload[key];
-    if (typeof value === 'string') ids.push(value);
-  }
-  return ids;
 }
 
 /**
@@ -277,9 +236,9 @@ function operationIds(op: ActionOperation): string[] {
  * конфликтом. Лишняя строка на экране дешевле пропущенной: считать по свойствам значило бы
  * повторить здесь всю логику дельты и разойтись с ней при первой же правке.
  *
- * Отбор — по составному курсору `(created_at, id) > (…)`, тем же ключом, что и порядок
- * шага 1: `created_at > t0` пропустил бы действие той же миллисекунды, а при precision 3
- * это не гипотетический случай. Само первое действие прогона в окно не входит (строгое
+ * Отбор — по составному курсору журнала (`JournalCursor`) строго после первого действия, тем
+ * же ключом, что и порядок шага 1: `created_at > t0` пропустил бы действие той же миллисекунды,
+ * а при precision 3 это не гипотетический случай. Само первое действие прогона в окно не входит (строгое
  * `>`), а остальные его действия отсеиваются ТЕМ ЖЕ предикатом, что отбирал их на шаге 1
  * (`policy.own`), — они и есть то, что мы собрались отменять. Предикат, а не голое
  * сравнение run_id: у гранта ответ владельца на чекпойнт тоже несёт run_id, и по голому
@@ -289,11 +248,8 @@ function operationIds(op: ActionOperation): string[] {
  * бухгалтерия и ответ владельца сами по себе не правят того, что откатывается.
  * Уже отменённые чужие — не конфликт: их эффекта в графе больше нет.
  *
- * Containment `{"actions": []}` + непустая длина — тот же приём, что в undo.ts
- * findLastUndoable: он отсекает undo-сообщения и обычную переписку (у них нет `actions`).
- * Индексом он, в отличие от пробы шага 1, НЕ берётся (пустой контейнер не даёт ключей
- * jsonb_path_ops) — сужает здесь курсор по created_at (EXPLAIN: Index Scan по
- * chat_messages_thread_created), а containment остаётся фильтром.
+ * Записи отмены — не действия (К-22): `actionsTouchingAfter` их не отдаёт, иначе отмена владельцем
+ * действия прогона всплыла бы здесь «чужой правкой».
  *
  * Пара {сущность, действие} дедуплицируется: id обычно встречается и в операции, и в
  * inverse одного action'а, и без дедупликации экран показывал бы один конфликт дважды.
@@ -301,46 +257,35 @@ function operationIds(op: ActionOperation): string[] {
 async function foreignChangesAfter(
   tx: Tx,
   args: {
+    graph: GraphId;
     runId: string;
-    after: JournalEntry;
+    after: RunEntry;
     touched: ReadonlySet<string>;
     policy: RollbackPolicy;
   },
 ): Promise<RollbackConflict[]> {
-  const rows = await tx.execute(
-    sql`SELECT id, created_at, metadata FROM chat_messages
-        WHERE metadata @> '{"actions": []}'::jsonb
-          AND jsonb_array_length(metadata->'actions') > 0
-          AND (created_at, id) > (${args.after.at.toISOString()}::timestamptz, ${args.after.messageId}::uuid)
-        ORDER BY created_at ASC, id ASC`,
-  );
+  const candidates = await actionsTouchingAfter(tx, args.graph, args.after.cursor, [
+    ...args.touched,
+  ]);
   const conflicts: RollbackConflict[] = [];
-  for (const row of rows as unknown as Array<Record<string, unknown>>) {
-    const entry = toEntry(row);
-    if (entry === undefined) continue;
-    const action = entry.action;
+  for (const action of candidates) {
     // Своё — то, что откатываем; «о прогоне» (у рутины — бухгалтерия и решения владельца)
     // — не конфликт по политике: см. RollbackPolicy
     if (args.policy.own(action, args.runId) || args.policy.about(action, args.runId)) continue;
     // Пересечение с `touched` считается ДО `isUndone`, и порядок здесь принципиален:
     // проба «отменено?» — отдельный запрос НА КАЖДОЕ действие, а в окне долгого прогона
     // у активного владельца лежат сотни чужих записей, к откату отношения не имеющих.
-    // Дешёвый фильтр в памяти сначала — и запрос уходит только за настоящими кандидатами.
-    // Set заодно даёт дедупликацию {действие, сущность}: id встречается и в операции, и
-    // в inverse одного action'а.
-    const hits = new Set<string>();
-    for (const op of [...action.operations, ...action.inverse]) {
-      for (const entityId of operationIds(op)) {
-        if (args.touched.has(entityId)) hits.add(entityId);
-      }
-    }
-    if (hits.size === 0) continue;
-    if (await isUndone(tx, action.id)) continue;
+    // Дешёвый фильтр (API отдаёт только тронувших `touched`) сначала — и запрос уходит только
+    // за настоящими кандидатами. `entityIds` записи уже без повторов: id встречается и в
+    // операции, и в inverse одного действия, а конфликт {действие, сущность} — один.
+    const hits = action.entityIds.filter((entityId) => args.touched.has(entityId));
+    if (hits.length === 0) continue;
+    if (await isUndone(tx, args.graph, action.id)) continue;
     for (const entityId of hits) {
       conflicts.push({
         entityId,
         actionId: action.id,
-        at: entry.at.toISOString(),
+        at: action.createdAt.toISOString(),
         source: action.source,
       });
     }
@@ -377,12 +322,12 @@ export async function rollbackRun(
     // грантовая политика по журналу даст пусто, как и раньше
     const facts = await runFacts(tx, runId);
     const policy = facts?.routineId !== undefined ? ROUTINE_POLICY : GRANT_POLICY;
-    const all = await runActions(tx, runId, policy);
+    const all = await ownRunActions(tx, identity.graph, runId, policy);
     // Уже отменённые (вручную «отмени последнее» или прошлым откатом) выбывают: повторная
     // отмена вернула бы VALIDATION и уронила бы весь откат в partial на ровном месте
-    const live: JournalEntry[] = [];
+    const live: RunEntry[] = [];
     for (const entry of all) {
-      if (!(await isUndone(tx, entry.action.id))) live.push(entry);
+      if (!(await isUndone(tx, identity.graph, entry.id))) live.push(entry);
     }
     // Архивировать — только рутинный прогон, который есть и ещё не в архиве: повторный
     // откат обязан вести себя как первый успешный, а не писать второй маркер
@@ -398,6 +343,7 @@ export async function rollbackRun(
       return { live, conflicts: [] as RollbackConflict[], archive, closeOpen, note: policy.note };
     }
     const conflicts = await foreignChangesAfter(tx, {
+      graph: identity.graph,
       runId,
       after: first,
       touched: touchedEntities(live),
@@ -416,19 +362,19 @@ export async function rollbackRun(
   // здесь — прочитанный план, а не рабочий буфер.
   const undone: string[] = [];
   for (const entry of [...plan.live].reverse()) {
-    const result = await undoAction(db, { identity, actionId: entry.action.id });
+    const result = await undoAction(db, { identity, actionId: entry.id });
     if (!result.ok) {
       return {
         ok: false,
         reason: 'partial',
         undone,
         failed: {
-          actionId: entry.action.id,
+          actionId: entry.id,
           error: { code: result.error.code, message: result.error.message },
         },
       };
     }
-    undone.push(entry.action.id);
+    undone.push(entry.id);
   }
   // Шаг 5 (только рутина): гашение открытого и след отката. Оба идут ПОСЛЕ серии отмен и
   // только при её полном успехе: partial оставляет прогон живым, чтобы повторное нажатие

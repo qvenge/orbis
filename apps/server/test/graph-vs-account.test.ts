@@ -5,6 +5,7 @@ import { execute } from '../src/executor/executor';
 import { makeChatJournalSink } from '../src/executor/journal';
 import { identityOfGrant } from '../src/identity';
 import { accountOf, addMember, adminDb, appDb, freshGraph, personal, truncateAll } from './helpers';
+import { actionsOf } from './journal-helpers';
 
 const { db, client } = appDb();
 /**
@@ -96,12 +97,12 @@ beforeAll(async () => {
     (code) => code,
   );
   const admin = adminDb();
-  const journal = await admin.db.execute(sql`
-    SELECT m.metadata -> 'actions' -> 0 ->> 'actor_user_id' AS actor, t.graph_id::text AS graph
-    FROM chat_messages m JOIN chat_threads t ON t.id = m.thread_id
-    WHERE m.metadata -> 'actions' -> 0 ->> 'actor_user_id' = ${accountOf(B)}`);
-  seen.journalActor = String(journal[0]?.actor ?? '');
-  seen.journalGraph = String(journal[0]?.graph ?? '');
+  // Журнал обоих графов (API журнала, помощники): запись Б обязана лечь в граф А, а не в свой
+  const journal = [...(await actionsOf(A)), ...(await actionsOf(B))].filter(
+    (e) => e.actorUserId === accountOf(B),
+  );
+  seen.journalActor = String(journal[0]?.actorUserId ?? '');
+  seen.journalGraph = String(journal[0]?.graphId ?? '');
   // (2) Б в СВОЁМ графе строк А не видит
   seen.bInOwnGraphSeesA = await capture(
     async () =>
