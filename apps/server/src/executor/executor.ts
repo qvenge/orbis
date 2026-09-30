@@ -778,6 +778,7 @@ async function executeBatch(
               : (req.batchLabel ?? `batch: операций — ${ops.length}`),
         },
         results,
+        ...(req.cardInReply !== undefined && { cardInReply: req.cardInReply }),
       });
       return { ok: true as const, actionId: batchId, results, idempotentReplay: false };
     });
@@ -1276,6 +1277,7 @@ async function writeJournal(ctx: ExecCtx, p: JournalPlan): Promise<void> {
     threadId: ctx.req.threadId,
     action,
     card: { tool: p.tool, entity_id: p.entityId, title: p.title },
+    ...(ctx.req.cardInReply !== undefined && { cardInReply: ctx.req.cardInReply }),
   });
 }
 

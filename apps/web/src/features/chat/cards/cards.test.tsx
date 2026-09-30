@@ -15,7 +15,7 @@ import { type ChatMessage, useChatThread } from '../useChatThread';
 import { ProposalCard } from './ProposalCard';
 import { QuestionCard } from './QuestionCard';
 import { contentDuplicatesCard, renderCards } from './renderCards';
-import type { QuestionCardData } from './types';
+import type { JournalCardMeta, QuestionCardData } from './types';
 import { ALREADY_STALE_NOTE } from './unit-text';
 
 const msg = (cards: unknown[], extra: Partial<ChatMessage> = {}): ChatMessage =>
@@ -391,20 +391,16 @@ test('SystemMessage: author_kind=agent → префикс 🤖 агент', () =
   expect(screen.getByText(/агент/i)).toBeInTheDocument();
 });
 
-test('SystemMessage: журнальное действие с actor_kind=agent → та же метка «агент» (приёмка 14)', () => {
-  // Действия внешнего исполнителя приезжают в ленту audit-сообщением, которое пишет СЕРВЕР
-  // от системы: `author_kind` у него не агентский, а кто именно двигал граф — сказано в
-  // `metadata.actions[0].actor_kind` (§7.8). Без этой ветки работа агента была бы в журнале
-  // неотличима от работы владельца.
+test('SystemMessage: журнальное действие агента с карточкой → та же метка «агент» (приёмка 14)', () => {
+  // Действия внешнего исполнителя приезжают в ленту строкой журнала, которую собирает СЕРВЕР: `author_kind` у неё
+  // нет, а кто именно двигал граф — сказано в `metadata.journal.actorKind` (спека скорости §11.3). Без этой ветки
+  // работа агента была бы в журнале неотличима от работы владельца.
   const card = { kind: 'entity_card', entityId: 'e', title: 'T', aspects: [], keyFields: {} };
   renderWithProviders(
     <div>
       {renderCards(
         msg([card], {
-          metadata: {
-            cards: [card],
-            actions: [{ actor_kind: 'agent', actor_grant_id: 'g1' }],
-          },
+          metadata: { cards: [card], journal: journalMeta({ source: 'mcp', actorKind: 'agent' }) },
         }),
       )}
     </div>,
@@ -413,15 +409,13 @@ test('SystemMessage: журнальное действие с actor_kind=agent �
   expect(screen.getByText(/агент/i)).toBeInTheDocument();
 });
 
-test('SystemMessage: действие владельца (actor_kind=owner) метки агента НЕ получает', () => {
-  // Премиса предыдущего теста: метку ставит именно агентский actor_kind, а не сам факт
+test('SystemMessage: действие владельца (быстрый ввод) метки агента НЕ получает', () => {
+  // Премиса предыдущего теста: метку ставит именно агентский actorKind, а не сам факт
   // журнальной записи — иначе «агент» стоял бы над каждой правкой владельца.
   const card = { kind: 'entity_card', entityId: 'e', title: 'T', aspects: [], keyFields: {} };
   renderWithProviders(
     <div>
-      {renderCards(
-        msg([card], { metadata: { cards: [card], actions: [{ actor_kind: 'owner' }] } }),
-      )}
+      {renderCards(msg([card], { metadata: { cards: [card], journal: journalMeta({}) } }))}
     </div>,
   );
   expect(screen.queryByTestId('system-message')).toBeNull();
@@ -1091,15 +1085,18 @@ test('proposal_card: прогон в архиве (runArchived) — у stale б�
 });
 
 test('маркер ленты: действие с source=routine помечено «рутина», а не «агент» (Р-16)', () => {
-  // Правку рутины приносит то же audit-сообщение, что и работу внешнего исполнителя, но
-  // actor_kind у неё 'ai' — по нему рутина неотличима от чат-агента. Различает их ИСТОЧНИК:
+  // Правку рутины приносит та же строка журнала, что и работу внешнего исполнителя, но
+  // actorKind у неё 'ai' — по нему рутина неотличима от чат-агента. Различает их ИСТОЧНИК:
   // владелец должен видеть, что это сделала его рутина ночью, а не он сам в разговоре.
   const card = { kind: 'entity_card', entityId: 'e', title: 'T', aspects: [], keyFields: {} };
   renderWithProviders(
     <div>
       {renderCards(
         msg([card], {
-          metadata: { cards: [card], actions: [{ actor_kind: 'ai', source: 'routine' }] },
+          metadata: {
+            cards: [card],
+            journal: journalMeta({ source: 'routine', actorKind: 'ai', runId: 'run1' }),
+          },
         }),
       )}
     </div>,
@@ -1841,4 +1838,142 @@ test('единица пропала из пачки: карточка показ
   expect(card).toHaveTextContent('Архивация: «Старый проект»');
   expect(await within(card).findByText(/не найдена/)).toBeInTheDocument();
   expect(within(card).queryByRole('button', { name: 'Принять' })).toBeNull();
+});
+
+// --- Строка журнала в треде (спека скорости §11.3, Р-16, К-42, К-45) --------------------------------
+
+/** Сводка действия журнала `metadata.journal` (форма провода задачи 6); по умолчанию — быстрый ввод владельца. */
+function journalMeta(over: Partial<JournalCardMeta>): JournalCardMeta {
+  return {
+    actionId: 'act-j',
+    source: 'fast_path',
+    actorKind: 'owner',
+    title: 'Заголовок',
+    tool: 'entity_update',
+    entityId: 'e-j',
+    undoable: true,
+    undone: false,
+    ...over,
+  };
+}
+
+const journalMsg = (journal: JournalCardMeta, cards?: unknown[]): ChatMessage =>
+  ({
+    id: 'item-j',
+    threadId: 't1',
+    role: 'system',
+    content: journal.title,
+    metadata: { journal, ...(cards !== undefined && { cards }) },
+    createdAt: '2026-07-05T12:00:00.000Z',
+  }) as ChatMessage;
+
+test('строка журнала агента (mcp): «<заголовок> · агент» и «Отменить» → ai.undo(actionId) → «отменено»', async () => {
+  const { calls } = renderWithProviders(
+    <div>
+      {renderCards(
+        journalMsg(
+          journalMeta({
+            source: 'mcp',
+            actorKind: 'agent',
+            title: 'Правка агента',
+            actionId: 'a1',
+          }),
+        ),
+      )}
+    </div>,
+    (path) =>
+      path === 'ai.undo' ? { ok: true, actionId: 'a1', results: [], idempotentReplay: false } : {},
+  );
+  const row = screen.getByTestId('journal-card');
+  expect(row).toHaveTextContent('Правка агента');
+  expect(row).toHaveTextContent('· агент');
+  fireEvent.click(within(row).getByRole('button', { name: 'Отменить' }));
+  await waitFor(() =>
+    expect(calls.find((c) => c.path === 'ai.undo')?.input).toEqual({ actionId: 'a1' }),
+  );
+  await waitFor(() => expect(row).toHaveTextContent('отменено'));
+  expect(within(row).queryByRole('button', { name: 'Отменить' })).toBeNull();
+});
+
+test('строка журнала: уже отменено (undone) — кнопки нет, подпись «отменено»', () => {
+  renderWithProviders(
+    <div>
+      {renderCards(journalMsg(journalMeta({ source: 'mcp', actorKind: 'agent', undone: true })))}
+    </div>,
+  );
+  const row = screen.getByTestId('journal-card');
+  expect(row).toHaveTextContent('отменено');
+  expect(within(row).queryByRole('button', { name: 'Отменить' })).toBeNull();
+});
+
+test('строка журнала: глагол прогона агента (runId, undoable false) — без «Отменить» (К-42)', () => {
+  renderWithProviders(
+    <div>
+      {renderCards(
+        journalMsg(
+          journalMeta({ source: 'mcp', actorKind: 'agent', runId: 'r1', undoable: false }),
+        ),
+      )}
+    </div>,
+  );
+  const row = screen.getByTestId('journal-card');
+  expect(row).toHaveTextContent('· агент');
+  expect(within(row).queryByRole('button', { name: 'Отменить' })).toBeNull();
+});
+
+test('строка журнала: отказ отмены показан словами', async () => {
+  renderWithProviders(
+    <div>{renderCards(journalMsg(journalMeta({ source: 'mcp', actorKind: 'agent' })))}</div>,
+    (path) => {
+      if (path === 'ai.undo') throw trpcError('CONFLICT', 'запись уже изменена');
+      return {};
+    },
+  );
+  fireEvent.click(screen.getByRole('button', { name: 'Отменить' }));
+  expect(await screen.findByRole('alert')).toHaveTextContent(
+    'не удалось отменить: запись уже изменена',
+  );
+});
+
+test('строка журнала в ленте только для чтения — без «Отменить»', () => {
+  renderWithProviders(
+    <div>
+      {renderCards(journalMsg(journalMeta({ source: 'mcp', actorKind: 'agent' })), {
+        readOnly: true,
+      })}
+    </div>,
+  );
+  expect(screen.queryByRole('button', { name: 'Отменить' })).toBeNull();
+});
+
+test('быстрый ввод из журнала: EntityCard с «Отменить», метки автора нет; undone из журнала гасит карточку', () => {
+  const card = {
+    kind: 'entity_card',
+    entityId: 'e-j',
+    title: 'Обед',
+    aspects: [],
+    keyFields: {},
+    undoActionId: 'act-j',
+  };
+  const live = renderWithProviders(
+    <div>{renderCards(journalMsg(journalMeta({ title: 'Обед' }), [card]))}</div>,
+  );
+  expect(screen.getByTestId('entity-card')).toHaveAttribute('data-undone', 'false');
+  expect(screen.getByRole('button', { name: 'Отменить' })).toBeInTheDocument();
+  expect(screen.queryByTestId('system-message')).toBeNull();
+  expect(screen.queryByTestId('journal-card')).toBeNull();
+  live.unmount();
+
+  renderWithProviders(
+    <div>{renderCards(journalMsg(journalMeta({ title: 'Обед', undone: true }), [card]))}</div>,
+  );
+  expect(screen.getByTestId('entity-card')).toHaveAttribute('data-undone', 'true');
+  expect(screen.queryByRole('button', { name: 'Отменить' })).toBeNull();
+});
+
+test('строка журнала без карточки: заголовок несёт сама строка — абзац текста не дублирует её', () => {
+  const m = journalMsg(journalMeta({ source: 'mcp', actorKind: 'agent', title: 'Правка агента' }));
+  expect(contentDuplicatesCard(m)).toBe(true);
+  // другой текст — абзац остаётся
+  expect(contentDuplicatesCard({ ...m, content: 'иное' } as ChatMessage)).toBe(false);
 });

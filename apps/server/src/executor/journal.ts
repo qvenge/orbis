@@ -1,90 +1,38 @@
 // apps/server/src/executor/journal.ts
 // Боевой JournalSink (§7.8, спека скорости §11.2): строка таблицы `action_journal` ТЕМ ЖЕ tx, что и стадия 5, и её
 // строки боковой `action_journal_entities` (РП-8) — одной инструкцией. Строка — действие целиком (весь `ActionRecord`,
-// РП-7), заголовок и тул карточки, результаты пачки (ответ идемпотентного повтора, §7.8); запись отмены — отдельная
-// строка `type:'undo'` (`writeUndo`). Целевой тред — entry.threadId, иначе глобальный тред графа (создаётся в том же
-// tx; РП-10 — как до таблицы, новое поведение тредов — задача 6). Журнал только дописывается: у ролей приложения нет
-// ни UPDATE, ни DELETE (0025). Retention журнала (RET-02) здесь НЕ реализуется — отложен (К-15).
+// РП-7), заголовок и тул карточки, результаты пачки (ответ идемпотентного повтора, §7.8), признак «карточка в ответе»;
+// запись отмены — отдельная строка `type:'undo'` (`writeUndo`). Тред строки выбирает `journalThreadOf` по источнику
+// (§11.3). Журнал только дописывается: у ролей приложения нет ни UPDATE, ни DELETE (0025). Retention журнала (RET-02)
+// здесь НЕ реализуется — отложен (К-15).
 //
-// Форма карточки ленты больше не хранится: она собирается на чтении (`feedCard`, `journal/thread-page.ts`) из
-// заголовка, тула и записи — хранить её значило бы держать вторую копию того, что уже лежит в строке.
+// Форма карточки ленты не хранится: она собирается на чтении (`journal/thread-page.ts`) из заголовка, тула и записи —
+// хранить её значило бы держать вторую копию того, что уже лежит в строке.
 import type { GraphId } from '@orbis/shared';
 import { type SQL, sql } from 'drizzle-orm';
 import { ensureGlobalThread } from '../chat/threads';
 import type { Tx } from '../db/with-identity';
 import { ExecError } from '../errors';
-import type { Card } from '../tools/registry';
 import { pgErrorInfo } from './executor';
 import { actionRecordOf, findBatch, touchedEntityIds } from './journal-read';
-import type {
-  ActionCard,
-  ActionRecord,
-  JournalSink,
-  JournalWrite,
-  MutationSource,
-  UndoWrite,
-} from './types';
+import type { ActionRecord, JournalSink, JournalWrite, MutationSource, UndoWrite } from './types';
 import { AuditIdConflictError } from './types';
 
 /**
- * Источники, чья строка журнала — ЕДИНСТВЕННЫЙ носитель карточки в ленте: только для
- * них в metadata.cards отдаётся форма клиентского union'а (02-core-os §2.3, с kind).
- * Без kind renderCards уходит в default (apps/web/.../cards/renderCards.tsx) и после
- * перезагрузки от карточки остаётся голая строка content.
+ * Где показать карточку действия (§11.3): правки владельца в интерфейсе (`ui`, `quick_capture`) и системные записи
+ * (`system`) — без треда (Р-12, §11.4): у них отмена в интерфейсе, а тред молчит. Агент (`mcp`) треда не передаёт —
+ * глобальный тред владельца, как сегодня. Остальные — тред, который передал вызывающий (разговор, ввод, прогон).
  *
- * Почему белый список, а не «все, кроме chat»:
- * - 'chat' — у него СВОЙ, более богатый носитель: ответ ассистента персистит карточку
- *   с aspects/keyFields из реестра и ТЕМ ЖЕ undoActionId (ai/send-message.ts). Вторая
- *   карточка дала бы в ленте дубль с двумя кнопками «Отменить», причём беднее первой;
- * - 'fast_path' — единственная реальная деградация: клиентская карточка живёт лишь в
- *   кэше react-query (features/chat/useFastPath.ts), а из БД приезжает голая строка;
- * - 'mcp' | 'ui' | 'quick_capture' — карточки в ленте не было НИКОГДА, ни живьём, ни
- *   после перезагрузки: карточка тут была бы новой функцией, а не починкой;
- * - 'system' — скрыт выдачей треда (`journal-read.threadFeed`), рисовать нечего;
- * - 'routine' (V1.5) — как fast_path, только хуже: у правки прогона НЕТ другого носителя
- *   вовсе. Ответа ассистента за ней не стоит (диалога не было), клиентского кэша тоже
- *   (владельца в этот момент не было в приложении) — строка журнала единственное, что
- *   он увидит, и без клиентской формы от неё осталась бы голая строка без «Отменить».
+ * Решает синк, а не вызывающие: мест с источником `ui` в сервере два десятка (роутеры, одобрение единиц, откат
+ * прогона), и правило, размазанное по ним, разошлось бы с первой новой кнопкой. Переданный тред у `ui` игнорируется
+ * молча — он значит «где нажали», а не «где показать».
  */
-const FEED_CARD_SOURCES: ReadonlySet<MutationSource> = new Set<MutationSource>([
-  'fast_path',
-  'routine',
-]);
-
-/**
- * Карточка ленты — ВЕТКА серверного union'а Card (tools/registry.ts), а не копия его
- * полей: копий формы и так две (registry + web types.ts), третья молча отстала бы при
- * добавлении поля. Импорт type-only, цикла нет (registry тянет только shared/drizzle/zod/db).
- * Локальное ужесточение: у журнальной карточки undoActionId есть ВСЕГДА (в union он
- * опционален — у карточек LLM-ответа Undo может не быть).
- */
-type FeedEntityCard = Extract<Card, { kind: 'entity_card' }> & { undoActionId: string };
-
-/**
- * Что ляжет в metadata.cards[0] строки журнала в треде. Вне белого списка — ActionCard дословно
- * (`{tool, entity_id, title}` — прежняя форма провода, РП-10).
- *
- * При entity_id === null (batch, одиночные relation-мутации) форма остаётся прежней —
- * entityId клиентской карточки обязан быть строкой, null там был бы враньём.
- *
- * aspects/keyFields пустые СОЗНАТЕЛЬНО, а не по недосмотру: у журнала нет ни WireEntity,
- * ни viewConfig.keyFields (они собираются в tools/dispatch.ts из реестра аспектов) —
- * обогащать нечем. Карточка беднее живой, зато переживает перезагрузку и несёт «Отменить».
- */
-export function feedCard(
-  action: Pick<ActionRecord, 'id' | 'source'>,
-  card: ActionCard,
-): ActionCard | FeedEntityCard {
-  if (!FEED_CARD_SOURCES.has(action.source) || card.entity_id === null) return card;
-  return {
-    kind: 'entity_card',
-    entityId: card.entity_id,
-    title: card.title,
-    aspects: [],
-    keyFields: {},
-    // тот же id, что уходит в ai.undo({actionId}) у живых карточек (§7.8)
-    undoActionId: action.id,
-  };
+export function journalThreadOf(
+  source: MutationSource,
+  requested: string | undefined,
+): 'none' | 'global' | string {
+  if (source === 'ui' || source === 'quick_capture' || source === 'system') return 'none';
+  return requested ?? 'global';
 }
 
 /** `ARRAY[$1,…]::uuid[]`; пустой список — пустой массив того же типа (шаблон drizzle развернул бы JS-массив в кортеж). */
@@ -177,7 +125,14 @@ export function makeJournalSink(): JournalSink {
           },
         );
       }
-      const threadId = entry.threadId ?? (await ensureGlobalThread(tx, entry.graphId));
+      const target = journalThreadOf(action.source, entry.threadId);
+      // Глобальный тред заводится ТОЛЬКО когда строке он положен: правка владельца в интерфейсе треда не создаёт
+      const threadId =
+        target === 'none'
+          ? null
+          : target === 'global'
+            ? await ensureGlobalThread(tx, entry.graphId)
+            : target;
       try {
         await insertRow(tx, {
           graphId: entry.graphId,

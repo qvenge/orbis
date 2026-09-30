@@ -9,7 +9,7 @@ import { PAGE_ONLY_HINT, QUERY_TREE_DEPTH_CAP } from '@orbis/shared/query';
 import { TRPCError } from '@trpc/server';
 import { sql } from 'drizzle-orm';
 import { adminDb, appDb, freshGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
-import { threadJournal } from '../../test/journal-helpers';
+import { actionsOf, journalOf } from '../../test/journal-helpers';
 import { execute } from '../executor/executor';
 import { makeJournalSink } from '../executor/journal';
 import { appRouter } from '../router';
@@ -288,12 +288,52 @@ describe('entity.update: optimistic-check §5.2 (перенесённый кон
     });
     await caller.entity.update({ id: created.id, title: 'Атрибуция 2' });
 
-    // audit обоих действий — в глобальном треде владельца (роутер не шлёт threadId, §7.8)
-    const journal = await threadJournal(user, globalThreadId(user));
+    const journal = await actionsOf(user);
     const action = journal.find((e) => e.type === 'entity_updated');
     expect(action?.source).toBe('ui');
+    // Правка владельца в интерфейсе — без треда (Р-12); быстрый ввод без threadId — глобальный тред
+    expect(action?.threadId).toBeNull();
     // create по-прежнему несёт клиентский source (fast_path), не 'ui'
-    expect(journal.find((e) => e.type === 'entity_created')?.source).toBe('fast_path');
+    const create = journal.find((e) => e.type === 'entity_created');
+    expect(create?.source).toBe('fast_path');
+    expect(create?.threadId).toBe(globalThreadId(user));
+  });
+
+  // РП-13: быстрый ввод ложится в тред ввода — карточка, которую клиент положил в этот тред оптимистично, после
+  // перечитывания треда приходит с сервера туда же. Тред — только у быстрого ввода: правке в интерфейсе треда не
+  // положено (Р-12), и принимать его молча значило бы делать вид, что он что-то значит.
+  test('threadId во входе create: fast_path → запись журнала в этом треде; ui с threadId → VALIDATION; чужой тред → NOT_FOUND', async () => {
+    const user = await freshGraph();
+    const caller = callerFor(user);
+    const host = await caller.entity.create({ input: { title: 'Хост', tags: [] }, source: 'ui' });
+    const { threadId } = await caller.chat.ensureThread({ entityId: host.id });
+    const fast = await caller.entity.create({
+      input: { title: 'В тред ввода', tags: [] },
+      source: 'fast_path',
+      threadId,
+    });
+    if (fast.actionId === undefined) throw new Error('нет actionId');
+    expect((await journalOf(user, fast.actionId))?.threadId).toBe(threadId);
+
+    const wrongSource = await trpcError(
+      caller.entity.create({ input: { title: 'Не туда', tags: [] }, source: 'ui', threadId }),
+    );
+    expect(wrongSource.code).toBe('BAD_REQUEST');
+    expect((wrongSource.cause as unknown as { code: string }).code).toBe('VALIDATION');
+
+    // Чужой тред под RLS не виден — тот же отказ, что у несуществующего; записи нет
+    const other = await freshGraph();
+    const foreign = await callerFor(other).chat.ensureThread({});
+    const before = (await actionsOf(user)).length;
+    const hidden = await trpcError(
+      caller.entity.create({
+        input: { title: 'В чужой тред', tags: [] },
+        source: 'fast_path',
+        threadId: foreign.threadId,
+      }),
+    );
+    expect(hidden.code).toBe('NOT_FOUND');
+    expect((await actionsOf(user)).length).toBe(before);
   });
 });
 

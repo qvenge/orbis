@@ -293,7 +293,9 @@ export function useFastPath(threadId: string) {
       status: 'confirmed',
     });
     try {
-      await create.mutateAsync({ input: toCreate, source: 'fast_path' });
+      // Тред ввода — с запросом (спека скорости §11.3, РП-13): строка журнала ляжет туда же, где стоит карточка
+      // «⚡ без AI», и при перечитывании треда заменит её, а не встанет второй карточкой в другом треде
+      await create.mutateAsync({ input: toCreate, source: 'fast_path', threadId });
       // §5.1: созданная сущность обязана появиться в списках Browser и счётчиках.
       // invalidateGraph, а не query-only: открытая цель считает прогресс на чтении
       // entity.get, и без него полоса осталась бы вчерашней (Р17).
@@ -316,6 +318,7 @@ export function useFastPath(threadId: string) {
           await create.mutateAsync({
             input: { ...toCreate, id: retryId },
             source: 'fast_path',
+            threadId,
           });
           // Карточка была вставлена ДО запроса с отвергнутым id: без переписи её «Разобрать
           // с AI» архивировал бы ЧУЖУЮ строку (NOT_FOUND), а тап открывал бы пустоту.

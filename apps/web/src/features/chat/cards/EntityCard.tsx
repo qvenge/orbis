@@ -18,14 +18,21 @@ export function EntityCard({
   card,
   confirmed = true,
   readOnly = false,
+  undone: undoneOnServer = false,
 }: {
   card: EntityCardData;
   /** false — fast-path «⏳ ждёт отправки»: запись ещё не на сервере (02 §2.5). */
   confirmed?: boolean;
   /** Лента только для чтения (предпросмотр шаблона): без «Отменить» — переход к записи остаётся. */
   readOnly?: boolean;
+  /**
+   * Действие уже отменено — знает строка журнала (`journal.undone`, спека скорости §11.3): после перечитывания
+   * треда карточка отменённого не предлагает «Отменить» снова. Своя отмена кладётся поверх локальным состоянием.
+   */
+  undone?: boolean;
 }) {
-  const [undone, setUndone] = useState(false);
+  const [undoneHere, setUndone] = useState(false);
+  const undone = undoneOnServer || undoneHere;
   const openRecord = useOpenRecord();
   const utils = trpc.useUtils();
   // Подписи полей — из реестра (§А9-2): ключи `keyFields` это id СВОЙСТВ, и словарь имён

@@ -3,14 +3,13 @@
 // через createCallerFactory против живой БД. Мутации entity идут боевым синком — карточки журнала видны в
 // тредах объединением на чтении (§7.8, спека скорости §11.3).
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import type { GraphId } from '@orbis/shared';
+import type { GraphId, JournalCardMeta } from '@orbis/shared';
 import { entityThreadId, globalThreadId, newId, processingMessageId } from '@orbis/shared';
 import { TRPCError } from '@trpc/server';
 import { appDb, freshGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
 import { actionsOf } from '../../test/journal-helpers';
 import { chatMessages } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
-import type { ActionRecord } from '../executor/types';
 import { appRouter } from '../router';
 import { createCallerFactory } from '../trpc';
 
@@ -297,7 +296,7 @@ describe('chat.listMessages: audit системной материализаци
     await caller.entity.query({ query: 'orbis/start_at=next_7d' });
 
     const sourceOf = (m: { metadata: Record<string, unknown> }): unknown =>
-      (m.metadata.actions as Array<{ source?: unknown }> | undefined)?.[0]?.source;
+      (m.metadata.journal as { source?: unknown } | undefined)?.source;
 
     const list = await caller.chat.listMessages({ threadId });
     // fast_path-audit создания шаблона виден как раньше
@@ -331,16 +330,12 @@ describe('chat.listMessages: сообщения и карточки журнал
     expect([all[0]?.id, all[2]?.id]).toEqual([m2, m1]);
     const card = all[1];
     if (card === undefined) throw new Error('карточки нет');
-    const actions = card.metadata.actions as Array<{
-      id: string;
-      entity_id: string;
-      source: string;
-    }>;
-    expect(actions[0]?.entity_id).toBe(e.id);
-    expect(actions[0]?.source).toBe('fast_path');
+    const journal = card.metadata.journal as JournalCardMeta;
+    expect(journal.entityId).toBe(e.id);
+    expect(journal.source).toBe('fast_path');
     // id строки треда — производный id элемента (R-12), id действия — в сводке
-    expect(actions[0]?.id).toBeDefined();
-    expect(card.id).not.toBe(actions[0]?.id);
+    expect(journal.actionId).toBe(e.actionId as string);
+    expect(card.id).not.toBe(journal.actionId);
     expect(JSON.stringify(card.metadata)).not.toContain('"inverse"');
     // Постранично по одному — тот же список
     const p1 = await caller.chat.listMessages({ threadId, limit: 1 });
@@ -415,15 +410,15 @@ describe('ai.undo / ai.undoLast (§7.8)', () => {
       source: 'fast_path',
     });
 
-    // action попал в глобальный тред боевым синком (§7.8)
+    // строка журнала быстрого ввода — в глобальном треде боевым синком (§7.8), id действия — в сводке
     const audit = await caller.chat.listMessages({ threadId: globalThreadId(user) });
-    const actions = (audit[0]?.metadata as { actions?: ActionRecord[] }).actions ?? [];
-    const action = actions[0];
+    const action = (audit[0]?.metadata as { journal?: JournalCardMeta }).journal;
     if (!action) throw new Error('ожидался action в журнале');
+    expect(action.actionId).toBe(created.actionId as string);
 
     const undone = await caller.ai.undoLast();
     expect(undone.ok).toBe(true);
-    expect(undone.actionId).toBe(action.id);
+    expect(undone.actionId).toBe(action.actionId);
 
     // inverse create — архивация (§7.8)
     const got = await caller.entity.get({ id: created.id });
@@ -441,15 +436,17 @@ describe('ai.undo / ai.undoLast (§7.8)', () => {
       input: { title: 'Точечная отмена', tags: [] },
       source: 'quick_capture',
     });
-    const audit = await caller.chat.listMessages({ threadId: globalThreadId(user) });
-    const action = ((audit[0]?.metadata as { actions?: ActionRecord[] }).actions ?? [])[0];
-    if (!action) throw new Error('ожидался action в журнале');
+    // Быстрая запись — правка владельца без треда (Р-12): id действия отдаёт сам ответ создания
+    const actionId = created.actionId;
+    if (actionId === undefined) throw new Error('ожидался actionId создания');
+    const { threadId } = await caller.chat.ensureThread({});
+    expect(await caller.chat.listMessages({ threadId })).toEqual([]);
 
-    const undone = await caller.ai.undo({ actionId: action.id });
+    const undone = await caller.ai.undo({ actionId });
     expect(undone.ok).toBe(true);
     expect((await caller.entity.get({ id: created.id })).entity.archived).toBe(true);
 
-    const again = await trpcError(caller.ai.undo({ actionId: action.id }));
+    const again = await trpcError(caller.ai.undo({ actionId }));
     expect(again.code).toBe('BAD_REQUEST');
 
     // несуществующий actionId → NOT_FOUND

@@ -3,15 +3,16 @@
 //   слой 1 (промпт v9 + дата владельца §Б7-6-1 + индекс аспектов реестра — срез 1а §10),
 //   слой 2 (память §7.4: активные orbis/memory, кап MEMORY_CAP, приоритет rule/scope),
 //   слой 3 (якорная сущность треда — 02 §2.2, только если тред сущности),
-//   слой 4 (rolling-история треда) — слои 1–3 склеиваются в ПОЛЕ system,
+//   слой 4 (rolling-история треда: сообщения и журнал треда, перед ней — правки владельца без
+//   треда, РП-22) — слои 1–3 склеиваются в ПОЛЕ system,
 //   слой 5 (определения тулов) сюда не входит — его передаёт Task 9 из реестра §9.2.
 //
 // Контракт Task 7: system-роль в messages ЗАПРЕЩЕНА (AnthropicProvider бросает) —
-// системный канал ровно один: поле system. Все system-строки chat_messages
-// (audit §7.8, undo, pending, reject) в историю попадают СЖАТО под user/assistant.
+// системный канал ровно один: поле system. Действия и отмены журнала треда и служебные
+// system-строки (pending, reject) в историю попадают СЖАТО под user/assistant.
 //
 // Решение 6 плана 1b: summary НЕ реализуется — rolling-окно последних
-// CONTEXT_HISTORY_LIMIT сообщений треда (в выдаче — хронологический порядок);
+// CONTEXT_HISTORY_LIMIT строк треда (в выдаче — хронологический порядок);
 // summary отложен до реального переполнения (кандидат — слайс 2, фиксируется в §12).
 //
 // Токен-бюджеты §7.1 — ориентиры, не жёсткие константы: капы ниже (50 памятей,
@@ -27,11 +28,17 @@
 // блок продолжений обязан быть последним для модели, а не последним в тексте константы.
 import { extensionPromptFragments, type GraphId } from '@orbis/shared';
 import { inArray } from 'drizzle-orm';
+import type { WireChatMessage } from '../chat/messages';
 import { entities } from '../db/schema';
 import type { Tx } from '../db/with-identity';
 import { readEntity } from '../entity-read';
-import type { ActionRecord } from '../executor/types';
-import { threadPage } from '../journal/thread-page';
+import {
+  findAction,
+  type JournalEntry,
+  recentOwnerEdits,
+  threadActions,
+} from '../executor/journal-read';
+import { newerFirst, threadMessages } from '../journal/thread-page';
 import {
   formatRuleLabel,
   MEMORY_KIND,
@@ -53,8 +60,14 @@ const SECTION_SEPARATOR = '\n\n';
 
 /** Кап памяти §7.4: до ~50 активных memory-сущностей в слое 2. */
 export const MEMORY_CAP = 50;
-/** Rolling-окно истории треда (решение 6 плана 1b: без summary). */
+/** Rolling-окно истории треда (решение 6 плана 1b: без summary) — сообщения и действия треда вместе (РП-22). */
 export const CONTEXT_HISTORY_LIMIT = 30;
+/** Потолок блока «Недавние правки владельца» (РП-22): правки без треда, которые модель иначе не видит. */
+export const OWNER_EDITS_LIMIT = 10;
+/** Глубина блока правок владельца: старше суток правка — уже не «только что», а состояние графа. */
+export const OWNER_EDITS_WINDOW_MS = 24 * 60 * 60 * 1000;
+/** Заголовок блока правок владельца — первая строка его сообщения в истории. */
+export const OWNER_EDITS_HEADING = '[система] Недавние правки владельца (за 24 ч):';
 /** Превью body memory-сущности в строке слоя 2. */
 export const MEMORY_BODY_PREVIEW = 200;
 /** Превью body якорной сущности в слое 3 (§7.1: «превью body»). */
@@ -409,27 +422,47 @@ export async function anchorBlock(
 // ---------------------------------------------------------------------------
 
 /**
- * Сжатие system-строк треда в LLM-историю. Роли — РЕШЕНИЕ Task 8:
- * - карточка журнала СВОЕГО действия (metadata.actions[0].actor_kind === 'ai') → role
- *   'assistant': действие исполняла модель, она должна видеть его как своё
- *   («[действие: <type> <entity_id> (<source>)]»);
- * - карточки действий агента/владельца, pending, reject → role 'user'
- *   с префиксом «[система]»: для модели это наблюдаемые события среды.
- * Сводка действия в строке треда — прежние поля `actions[0]` без тел (`journal/thread-page.ts`).
- * Протокол Anthropic чередования не требует (маппер Task 7 транслирует как есть).
- * Сырой metadata-JSON (operations/inverse/payload) в контекст НЕ попадает.
+ * Сжатая строка действия — ОДНА форма для действия и для его отмены: модель сопоставляет их по тексту
+ * («[действие: X]» и «[отменено действие: X]»), id действия ей ни к чему. Сводка — поля записи журнала без тел:
+ * сырой JSON операций и inverse в контекст НЕ попадает.
  */
-function compressSystemRow(content: string, metadata: Record<string, unknown>): LLMMessage {
-  const actions = metadata.actions;
-  const action = Array.isArray(actions) ? (actions[0] as ActionRecord | undefined) : undefined;
-  if (action) {
-    const entityRef = action.entity_id ? ` ${action.entity_id}` : '';
-    const line = `[действие: ${action.type}${entityRef} (${action.source})]`;
-    if (action.actor_kind === 'ai') return { role: 'assistant', content: line };
-    return { role: 'user', content: `[система] ${line}` };
+function actionLine(e: Pick<JournalEntry, 'type' | 'entityId' | 'source'>): string {
+  const entityRef = e.entityId ? ` ${e.entityId}` : '';
+  return `${e.type}${entityRef} (${e.source})`;
+}
+
+/**
+ * Запись журнала треда → строка истории. Роли — РЕШЕНИЕ Task 8:
+ * - СВОЁ действие (actor_kind === 'ai') → role 'assistant': действие исполняла модель, она должна видеть его как
+ *   своё («[действие: <type> <entity_id> (<source>)]»), — в том числе действие с карточкой в ответе: тред его
+ *   строкой не рисует (К-36), а модели оно нужно;
+ * - действия агента/владельца → role 'user' с префиксом «[система]»: для модели это наблюдаемые события среды;
+ * - запись отмены → «[система] [отменено действие: …]» в момент отмены (спека §11.2: агент видит, что правку
+ *   отменили; своей карточки в треде у отмены нет, К-45 — строка контекста ею не является). Отменённое ищется среди
+ *   прочитанных записей треда, иначе — `findAction`; не нашлось — заголовок самой записи отмены («Отменено: …»):
+ *   ссылку `undoes` на действие держит синк, а не внешний ключ, и молчать об отмене из-за неё нельзя.
+ */
+function compressJournalRow(e: JournalEntry, undone: JournalEntry | undefined): LLMMessage {
+  if (e.type === 'undo') {
+    return {
+      role: 'user',
+      content:
+        undone === undefined
+          ? `[система] [${e.title}]`
+          : `[система] [отменено действие: ${actionLine(undone)}]`,
+    };
   }
-  // pending/reject и будущие служебные записи: content — короткий
-  // человекочитаемый текст (pending.ts), metadata не тащим
+  const line = `[действие: ${actionLine(e)}]`;
+  if (e.actorKind === 'ai') return { role: 'assistant', content: line };
+  return { role: 'user', content: `[система] ${line}` };
+}
+
+/**
+ * Служебные system-сообщения треда (pending, reject, заметки) → role 'user' «[система] <content>»: content —
+ * короткий человекочитаемый текст (pending.ts), metadata не тащим. Протокол Anthropic чередования не требует
+ * (маппер Task 7 транслирует как есть).
+ */
+function compressSystemMessage(content: string): LLMMessage {
   return { role: 'user', content: `[система] ${content}` };
 }
 
@@ -453,37 +486,117 @@ function authorPrefix(metadata: Record<string, unknown>): string {
   return '';
 }
 
+/** Строка окна: сообщение треда или запись журнала треда, с ключом общего порядка `(время, id)`. */
+type WindowRow =
+  | { kind: 'message'; createdAt: string; id: string; message: WireChatMessage }
+  | { kind: 'journal'; createdAt: string; id: string; entry: JournalEntry };
+
 /**
- * Последние CONTEXT_HISTORY_LIMIT строк треда — В ХРОНОЛОГИЧЕСКОМ ПОРЯДКЕ. Читатель — та же выдача треда, что у
- * клиента (`journal/thread-page.ts`, спека скорости §11.3): сообщения треда и карточки журнала этого треда одной
- * страницей (окно 30 делят оба вида строк — П-9; как делить иначе — задача 6). Инфраструктурные строки
- * (processing-маркеры §7.9, действия `system` §5.4, записи отмены) невидимы модели, как и клиенту; фильтр — в SQL
- * каждой выборки, до limit (финальное ревью фазы A): JS-фильтр после .limit(30) съедал бы окно плотным системным
- * шумом — 30+ записей материализации новее живого диалога вытесняли бы его из истории целиком.
+ * Последние CONTEXT_HISTORY_LIMIT строк треда — В ХРОНОЛОГИЧЕСКОМ ПОРЯДКЕ (РП-22). Окно — слияние по времени двух
+ * источников: сообщений треда (`threadMessages`, без инфраструктурных строк — фильтр в SQL до limit, иначе плотный
+ * служебный шум вытеснял бы живой диалог) и журнала этого треда (`threadActions`: действия и записи отмены). Журнал
+ * читается не выдачей треда клиенту, а целиком: тред клиенту не рисует действий с карточкой в ответе (К-36) и
+ * отмен (К-45), а модели они нужны — своё действие и то, что его отменили. Каждый источник берёт до лимита своих
+ * строк; слияние отдаёт последние лимит общего порядка.
+ *
+ * `system`-записей в журнале треда нет: синк не даёт им треда (`journalThreadOf`, Р-12), как и правкам владельца в
+ * интерфейсе — те модель видит отдельным блоком (`ownerEditsBlock`).
  */
 async function historyMessages(tx: Tx, graphId: GraphId, threadId: string): Promise<LLMMessage[]> {
-  const rows = await threadPage(tx, graphId, threadId, { limit: CONTEXT_HISTORY_LIMIT });
-  rows.reverse(); // выборка «последние N» шла с конца — возвращаем хронологию
-  const msgs = rows.map((r) => {
-    const metadata = r.metadata as Record<string, unknown>;
-    if (r.role === 'user') {
-      return {
-        role: 'user',
-        content: `${authorPrefix(metadata)}${r.content}`,
-      } satisfies LLMMessage;
+  const page = { limit: CONTEXT_HISTORY_LIMIT };
+  const messages = await threadMessages(tx, threadId, page);
+  const entries = await threadActions(tx, graphId, threadId, page);
+  const rows: WindowRow[] = [
+    ...messages.map((m) => ({
+      kind: 'message' as const,
+      createdAt: m.createdAt,
+      id: m.id,
+      message: m,
+    })),
+    ...entries.map((e) => ({
+      kind: 'journal' as const,
+      createdAt: e.createdAt.toISOString(),
+      id: e.id,
+      entry: e,
+    })),
+  ];
+  const window = rows.sort(newerFirst).slice(0, CONTEXT_HISTORY_LIMIT).reverse();
+  const undoneOf = await undoneActions(tx, graphId, entries);
+  const msgs = window.map((r): LLMMessage => {
+    if (r.kind === 'journal') {
+      return compressJournalRow(
+        r.entry,
+        r.entry.undoes === null ? undefined : undoneOf.get(r.entry.undoes),
+      );
     }
-    if (r.role === 'assistant')
-      return { role: 'assistant', content: r.content } satisfies LLMMessage;
-    return compressSystemRow(r.content, metadata);
+    const m = r.message;
+    const metadata = m.metadata as Record<string, unknown>;
+    if (m.role === 'user')
+      return { role: 'user', content: `${authorPrefix(metadata)}${m.content}` };
+    if (m.role === 'assistant') return { role: 'assistant', content: m.content };
+    return compressSystemMessage(m.content);
   });
   // Инвариант «messages начинается с user» — требование Anthropic Messages API
   // (fix round Task 8): граница окна на assistant-сообщении или ведущем сжатом
-  // ai-audit давала бы 400 на КАЖДЫЙ вызов — ни провайдер, ни SDK не санитизируют.
+  // ai-действии давала бы 400 на КАЖДЫЙ вызов — ни провайдер, ни SDK не санитизируют.
   // Ведущие assistant отбрасываем; окно может стать короче лимита — приемлемо.
   // В реальном потоке Task 9 результат пустым не бывает: последним в окне всегда
   // стоит только что персистированное user-сообщение.
   const firstUser = msgs.findIndex((m) => m.role === 'user');
   return firstUser === -1 ? [] : msgs.slice(firstUser);
+}
+
+/**
+ * Отменённые действия записей отмены окна: сначала среди действий, уже прочитанных из журнала треда, остальные —
+ * `findAction` по одному (отмена обычно рядом с действием, и за пределом окна их единицы).
+ */
+async function undoneActions(
+  tx: Tx,
+  graphId: GraphId,
+  entries: readonly JournalEntry[],
+): Promise<Map<string, JournalEntry>> {
+  const out = new Map<string, JournalEntry>();
+  for (const e of entries) if (e.type !== 'undo') out.set(e.id, e);
+  for (const e of entries) {
+    if (e.undoes === null || out.has(e.undoes)) continue;
+    const found = await findAction(tx, graphId, e.undoes);
+    if (found !== undefined) out.set(found.id, found);
+  }
+  return out;
+}
+
+/** ЧЧ:ММ момента в зоне владельца — части `formatToParts`, а не строка локали (она зависит от сборки ICU). */
+function clockTime(at: Date, timeZone: string): string {
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone,
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(at);
+  const part = (type: 'hour' | 'minute') => parts.find((p) => p.type === type)?.value ?? '00';
+  return `${part('hour')}:${part('minute')}`;
+}
+
+/**
+ * Блок «Недавние правки владельца» перед окном истории (РП-22): до OWNER_EDITS_LIMIT правок в интерфейсе и быстрых
+ * записей (`ui`, `quick_capture`) за OWNER_EDITS_WINDOW_MS, старые первыми, строками «[правка владельца: <заголовок> ·
+ * <ЧЧ:ММ>]» во времени владельца. Треда у этих правок нет (Р-12) — без блока модель не знала бы, что владелец только
+ * что поправил руками, и спорила бы с этим. Сообщением `user`, а не секцией системного канала: это данные разговора,
+ * а канал — стабильный префикс, который меняется раз в сутки. Правок нет — блока нет.
+ */
+async function ownerEditsBlock(
+  tx: Tx,
+  graphId: GraphId,
+  now: Date,
+  timeZone: string,
+): Promise<LLMMessage | undefined> {
+  const since = new Date(now.getTime() - OWNER_EDITS_WINDOW_MS);
+  const edits = await recentOwnerEdits(tx, graphId, since, OWNER_EDITS_LIMIT);
+  if (edits.length === 0) return undefined;
+  const lines = [...edits]
+    .reverse()
+    .map((e) => `[правка владельца: ${e.title} · ${clockTime(e.createdAt, timeZone)}]`);
+  return { role: 'user', content: [OWNER_EDITS_HEADING, ...lines].join('\n') };
 }
 
 // ---------------------------------------------------------------------------
@@ -496,10 +609,11 @@ async function historyMessages(tx: Tx, graphId: GraphId, threadId: string): Prom
  * сущности (02 §2.2) — глобальный тред слоя 3 не имеет.
  */
 export async function buildContext(tx: Tx, input: BuildContextInput): Promise<BuiltContext> {
+  const now = (input.clock ?? (() => new Date()))();
+  // Зона владельца — одно чтение на сборку: её спрашивают дата канала и время правок владельца
+  const timeZone = await ownerTimeZone(tx, input.graphId);
   // Всё, что дописывается между телом промпта и блоком продолжений (§Б7-6-2)
-  const dynamic: string[] = [
-    await todaySectionFor(tx, input.graphId, (input.clock ?? (() => new Date()))()),
-  ];
+  const dynamic: string[] = [todaySection({ today: todayInTimeZone(timeZone, now), timeZone })];
 
   // Маска расширений — ОДНО чтение на сборку канала: её спрашивают обе секции ниже, и второй
   // SELECT по PK ради того же ответа был бы лишним.
@@ -525,8 +639,10 @@ export async function buildContext(tx: Tx, input: BuildContextInput): Promise<Bu
     dynamic.push(await anchorBlock(tx, input.graphId, input.anchorEntityId));
   }
 
-  // Слой 4: rolling-история текущего треда (§7.3: скоупится разговор)
-  const messages = await historyMessages(tx, input.graphId, input.threadId);
+  // Слой 4: rolling-история текущего треда (§7.3: скоупится разговор) и перед ней — правки владельца без треда
+  const ownerEdits = await ownerEditsBlock(tx, input.graphId, now, timeZone);
+  const history = await historyMessages(tx, input.graphId, input.threadId);
+  const messages = ownerEdits === undefined ? history : [ownerEdits, ...history];
 
   // PROMPT_BODY уже кончается разделителем абзаца (он отрезан по месту заголовка блока
   // продолжений) — первая динамическая секция приклеивается к нему напрямую, иначе между

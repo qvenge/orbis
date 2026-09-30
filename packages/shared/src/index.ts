@@ -5,6 +5,8 @@ export * from './contracts/apps';
 export * from './contracts/blocks';
 export * from './contracts/budget';
 export * from './contracts/import';
+// Сводка действия журнала в треде (спека скорости §11.3) — только типы.
+export * from './contracts/journal';
 // Полевые замеры ступени 0 (спека скорости §3.2): схема пачки `perf.report` — её разбирает сервер, её собирает web.
 export * from './contracts/perf';
 export * from './contracts/tools';

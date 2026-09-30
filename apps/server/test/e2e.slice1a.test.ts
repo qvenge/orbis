@@ -335,8 +335,11 @@ describe('e2e слайс 1a: день из 02 §5 (два пользовател
     expect(reverted.entity.props['orbis/task_status']).toBe('inbox');
     expect(reverted.entity.props['orbis/completed_at']).toBeUndefined();
 
-    // Undo добавил запись отмены в тред отменённого действия (§7.8)
-    expect((await undoRecordOf(userA, updateActionId))?.threadId).toBe(globalA);
+    // Undo добавил запись отмены (§7.8); тред у неё — тред отменённого, а у правки владельца в интерфейсе треда нет
+    // (Р-12, спека скорости §11.3): запись есть, в тредах она не показывается
+    const undoRecord = await undoRecordOf(userA, updateActionId);
+    expect(undoRecord?.undoes).toBe(updateActionId);
+    expect(undoRecord?.threadId).toBeNull();
 
     // Повторный undo того же action → BAD_REQUEST «уже отменено» (§7.8)
     const again = await trpcError(a.ai.undo({ actionId: updateActionId }));

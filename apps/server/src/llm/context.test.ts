@@ -13,10 +13,11 @@ import {
   EXTENSION_MANIFESTS,
   newId,
 } from '@orbis/shared';
-import { and, eq, isNull } from 'drizzle-orm';
+import { and, eq, isNull, sql } from 'drizzle-orm';
 import { extensionIdsIn } from '../../test/extension-ids';
 import {
   accountOf,
+  adminDb,
   appDb,
   entityColumns,
   executeWithFixtureCategories as execute,
@@ -46,6 +47,7 @@ import {
   CONTINUATIONS_HEADING,
   MEMORY_BODY_PREVIEW,
   MEMORY_CAP,
+  OWNER_EDITS_HEADING,
   PROMPT_BODY,
   todaySection,
   toolResultMessage,
@@ -833,7 +835,7 @@ describe('buildContext — слой 4: сжатие audit/системных с�
     ]);
   });
 
-  test('служебные system-сообщения (pending/reject) → user «[система] <content>» без metadata; запись отмены своей строки не имеет', async () => {
+  test('служебные system-сообщения (pending/reject) → user «[система] <content>» без metadata; отмена действия треда — своей строкой контекста', async () => {
     const user = await freshGraph();
     const pendingId = newId();
     // Отдельные транзакции: created_at = transaction_timestamp(), в одном tx
@@ -843,17 +845,16 @@ describe('buildContext — слой 4: сжатие audit/системных с�
       db,
       {
         identity: personal(user),
-        actorKind: 'owner',
-        source: 'ui',
-        threadId,
+        actorKind: 'agent',
+        source: 'mcp',
         operations: [{ tool: 'entity_create', input: { title: 'Отменю', tags: [] } }],
       },
       { sink: makeJournalSink() },
     );
     if (!created.ok) throw new Error(created.error.message);
     const entityId = (created.results[0] as { id: string }).id;
-    // Запись отмены — строка журнала без своей строки в треде (К-45: «отменено» — признак строки отменённого,
-    // задача 6), поэтому и в истории модели её нет; отменённое действие своей строкой остаётся
+    // Запись отмены своей карточки в треде не имеет (К-45), но модель обязана знать, что правку отменили (§11.2):
+    // отмена — отдельной сжатой строкой контекста в момент отмены
     expect(
       (await undoAction(db, { identity: personal(user), actionId: created.actionId })).ok,
     ).toBe(true);
@@ -880,7 +881,11 @@ describe('buildContext — слой 4: сжатие audit/системных с�
       buildContext(tx, { graphId: user, threadId }),
     );
     expect(ctx.messages).toEqual([
-      { role: 'user', content: `[система] [действие: entity_created ${entityId} (ui)]` },
+      { role: 'user', content: `[система] [действие: entity_created ${entityId} (mcp)]` },
+      {
+        role: 'user',
+        content: `[система] [отменено действие: entity_created ${entityId} (mcp)]`,
+      },
       {
         role: 'user',
         content: '[система] Требует подтверждения: массовое изменение (11 операций)',
@@ -888,6 +893,43 @@ describe('buildContext — слой 4: сжатие audit/системных с�
     ]);
     // metadata (payload pending) не попадает в контекст
     expect(ctx.messages.map((m) => m.content).join('\n')).not.toContain('batch_execute');
+  });
+
+  test('действие модели в треде → отмена → следующий ход называет отмену (§11.2, К-45); карточка в ответе модель не прячет', async () => {
+    const user = await freshGraph();
+    const threadId = await withIdentity(db, personal(user), (tx) => ensureGlobalThread(tx, user));
+    await withIdentity(db, personal(user), (tx) =>
+      appendMessage(tx, { id: newId(), threadId, role: 'user', content: 'создай задачу' }),
+    );
+    // Действие разговора с карточкой в ответе: треду его строка не нужна, модели — нужна
+    const done = await execute(
+      db,
+      {
+        identity: personal(user),
+        actorKind: 'ai',
+        source: 'chat',
+        threadId,
+        cardInReply: true,
+        operations: [{ tool: 'entity_create', input: { title: 'Задача', tags: [] } }],
+      },
+      { sink: makeJournalSink() },
+    );
+    if (!done.ok) throw new Error(done.error.message);
+    const entityId = (done.results[0] as { id: string }).id;
+    expect(
+      (await undoAction(db, { identity: personal(user), actionId: done.actionId, path: 'ui' })).ok,
+    ).toBe(true);
+    const ctx = await withIdentity(db, personal(user), (tx) =>
+      buildContext(tx, { graphId: user, threadId }),
+    );
+    expect(ctx.messages).toEqual([
+      { role: 'user', content: 'создай задачу' },
+      { role: 'assistant', content: `[действие: entity_created ${entityId} (chat)]` },
+      {
+        role: 'user',
+        content: `[система] [отменено действие: entity_created ${entityId} (chat)]`,
+      },
+    ]);
   });
 
   test(`скрытые system-строки не съедают rolling-окно: ${CONTEXT_HISTORY_LIMIT}+ инфраструктурных строк новее живого диалога, диалог всё ещё в истории (фильтр в SQL до limit)`, async () => {
@@ -939,7 +981,7 @@ describe('buildContext — слой 4: сжатие audit/системных с�
     ]);
   });
 
-  test('audit системной материализации (source=system) не попадает в историю модели; ui-audit остаётся (fix round A3)', async () => {
+  test('audit системной материализации (source=system) не попадает в историю модели; правка владельца в интерфейсе — блоком правок, не строкой окна (fix round A3, Р-12)', async () => {
     const user = await freshGraph();
     const entityId = newId();
     // Отдельные транзакции — детерминированный created_at-порядок
@@ -958,7 +1000,7 @@ describe('buildContext — слой 4: сжатие audit/системных с�
         source: 'system',
       }),
     );
-    // Обычное действие владельца в UI — наблюдаемое событие среды, остаётся
+    // Правка владельца в интерфейсе: треда у неё нет (Р-12) — модель видит её блоком «Недавние правки владельца»
     await withIdentity(db, personal(user), (tx) =>
       appendAudit(tx, threadId, {
         type: 'entity_updated',
@@ -971,9 +1013,133 @@ describe('buildContext — слой 4: сжатие audit/системных с�
     const ctx = await withIdentity(db, personal(user), (tx) =>
       buildContext(tx, { graphId: user, threadId }),
     );
+    expect(ctx.messages).toHaveLength(2);
+    expect(ctx.messages[0]?.role).toBe('user');
+    expect(ctx.messages[0]?.content).toStartWith(OWNER_EDITS_HEADING);
+    expect(ctx.messages[0]?.content).toContain('[правка владельца: Создана сущность · ');
+    expect(ctx.messages[1]).toEqual({ role: 'user', content: 'что на неделе?' });
+    expect(ctx.messages.map((m) => m.content).join('\n')).not.toContain('batch');
+  });
+});
+
+describe('buildContext — слой 4: окно из сообщений и действий треда, правки владельца блоком (РП-22)', () => {
+  test(`сообщения треда и действия треда — вперемешку по времени, не больше ${CONTEXT_HISTORY_LIMIT}`, async () => {
+    const user = await freshGraph();
+    const threadId = await withIdentity(db, personal(user), (tx) => ensureGlobalThread(tx, user));
+    const expected: string[] = [];
+    // Отдельные транзакции по очереди: время строк растёт в порядке вставки
+    for (let i = 1; i <= 20; i++) {
+      const tag = String(i).padStart(2, '0');
+      await withIdentity(db, personal(user), (tx) =>
+        appendMessage(tx, { id: newId(), threadId, role: 'user', content: `m-${tag}` }),
+      );
+      const r = await execute(
+        db,
+        {
+          identity: personal(user),
+          actorKind: 'agent',
+          source: 'mcp',
+          operations: [{ tool: 'entity_create', input: { title: `a-${tag}`, tags: [] } }],
+        },
+        { sink: makeJournalSink() },
+      );
+      if (!r.ok) throw new Error(r.error.message);
+      const id = (r.results[0] as { id: string }).id;
+      expected.push(`m-${tag}`, `[система] [действие: entity_created ${id} (mcp)]`);
+    }
+    const ctx = await withIdentity(db, personal(user), (tx) =>
+      buildContext(tx, { graphId: user, threadId }),
+    );
+    // 40 строк треда — окно берёт последние 30 общего порядка, а не по 30 каждого вида
+    expect(ctx.messages.map((m) => m.content)).toEqual(expected.slice(-CONTEXT_HISTORY_LIMIT));
+  });
+
+  /** Правки владельца без треда со временем `at` — время записи журнала подделано админ-DSN (оно — время БД). */
+  async function ownerEditsAt(
+    user: GraphId,
+    edits: Array<{ title: string; at: Date; source: 'ui' | 'quick_capture' }>,
+  ): Promise<void> {
+    const { db: admin, client: adminClient } = adminDb();
+    try {
+      for (const e of edits) {
+        const r = await execute(
+          db,
+          {
+            identity: personal(user),
+            actorKind: 'owner',
+            source: e.source,
+            operations: [{ tool: 'entity_create', input: { title: e.title, tags: [] } }],
+          },
+          { sink: makeJournalSink() },
+        );
+        if (!r.ok) throw new Error(r.error.message);
+        await admin.execute(
+          sql`UPDATE action_journal SET created_at = ${e.at.toISOString()}::timestamptz
+               WHERE graph_id = ${user}::uuid AND id = ${r.actionId}::uuid`,
+        );
+      }
+    } finally {
+      await adminClient.end();
+    }
+  }
+
+  test('блок «Недавние правки владельца» перед окном: до 10 правок ui/quick_capture за 24 ч, по времени, ЧЧ:ММ в зоне владельца', async () => {
+    const user = await freshGraph();
+    const T0 = new Date('2026-07-04T12:00:00.000Z'); // 15:00 в Europe/Moscow (зона по умолчанию)
+    const minutes = (k: number) => new Date(T0.getTime() - k * 60_000);
+    // 11 правок за последние два часа: 10 в интерфейсе и одна быстрая запись; окно блока — 10 новейших
+    await ownerEditsAt(
+      user,
+      Array.from({ length: 11 }, (_, i) => ({
+        title: `правка-${i + 1}`,
+        at: minutes((i + 1) * 10),
+        source: i === 2 ? ('quick_capture' as const) : ('ui' as const),
+      })),
+    );
+    const threadId = await withIdentity(db, personal(user), (tx) => ensureGlobalThread(tx, user));
+    await withIdentity(db, personal(user), (tx) =>
+      appendMessage(tx, { id: newId(), threadId, role: 'user', content: 'что я поменял?' }),
+    );
+    const ctx = await withIdentity(db, personal(user), (tx) =>
+      buildContext(tx, { graphId: user, threadId, clock: () => T0 }),
+    );
+    // Старейшая из 11 (правка-11, 13:10) — за пределом десяти; остальные — по времени, старые первыми
+    const lines = Array.from({ length: 10 }, (_, i) => {
+      const k = 10 - i;
+      const at = minutes(k * 10);
+      const hh = String((at.getUTCHours() + 3) % 24).padStart(2, '0');
+      const mm = String(at.getUTCMinutes()).padStart(2, '0');
+      return `[правка владельца: правка-${k} · ${hh}:${mm}]`;
+    });
+    expect(lines[0]).toBe('[правка владельца: правка-10 · 13:20]');
     expect(ctx.messages).toEqual([
-      { role: 'user', content: 'что на неделе?' },
-      { role: 'user', content: `[система] [действие: entity_updated ${entityId} (ui)]` },
+      { role: 'user', content: [OWNER_EDITS_HEADING, ...lines].join('\n') },
+      { role: 'user', content: 'что я поменял?' },
+    ]);
+  });
+
+  test('правка старше 24 ч в блок не попадает; нет свежих правок — блока нет', async () => {
+    const user = await freshGraph();
+    const T0 = new Date('2026-07-04T12:00:00.000Z');
+    await ownerEditsAt(user, [
+      { title: 'давняя', at: new Date(T0.getTime() - 24 * 3_600_000 - 60_000), source: 'ui' },
+      { title: 'свежая', at: new Date(T0.getTime() - 60_000), source: 'ui' },
+    ]);
+    const threadId = await withIdentity(db, personal(user), (tx) => ensureGlobalThread(tx, user));
+    await withIdentity(db, personal(user), (tx) =>
+      appendMessage(tx, { id: newId(), threadId, role: 'user', content: 'привет' }),
+    );
+    const at = (clock: Date) =>
+      withIdentity(db, personal(user), (tx) =>
+        buildContext(tx, { graphId: user, threadId, clock: () => clock }),
+      );
+    expect((await at(T0)).messages).toEqual([
+      { role: 'user', content: `${OWNER_EDITS_HEADING}\n[правка владельца: свежая · 14:59]` },
+      { role: 'user', content: 'привет' },
+    ]);
+    // Сутки спустя обе правки старше окна — блока нет вовсе
+    expect((await at(new Date(T0.getTime() + 24 * 3_600_000))).messages).toEqual([
+      { role: 'user', content: 'привет' },
     ]);
   });
 });

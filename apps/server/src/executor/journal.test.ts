@@ -532,3 +532,89 @@ describe('боевой синк: строка action_journal (§7.8, §11.2)', (
     expect(action.runId).toBe(runId);
   });
 });
+
+/** Тредов графа (любых) — синк сам тред не заводит, если строке треда не положено (Р-12). */
+function threadsOfGraph(user: GraphId): Promise<number> {
+  return adminCount(
+    sql`SELECT count(*)::int AS n FROM chat_threads WHERE graph_id = ${user}::uuid`,
+  );
+}
+
+// Спека скорости §11.3–§11.4, Р-12: правки владельца в интерфейсе (`ui`, `quick_capture`) и системные записи
+// (`system`) треда не получают — даже если вызывающий его передал; агент (`mcp`) треда не передаёт — глобальный
+// тред владельца; быстрый ввод — тред ввода (РП-13).
+describe('правило треда строки журнала (§11.3, Р-12)', () => {
+  test('ui, quick_capture и system → тред NULL, глобальный тред не заводится', async () => {
+    const user = await freshGraph();
+    const ids: string[] = [];
+    for (const source of ['ui', 'quick_capture', 'system'] as const) {
+      const r = ok(
+        await execute(
+          db,
+          req(user, 'entity_create', { title: `Без треда ${source}`, tags: [] }, { source }),
+          { sink },
+        ),
+      );
+      ids.push(r.actionId);
+    }
+    for (const id of ids) expect((await mustJournal(user, id)).threadId).toBeNull();
+    // ensureGlobalThread не звался: ни одного треда у графа
+    expect(await threadsOfGraph(user)).toBe(0);
+  });
+
+  test('ui с явным threadId — всё равно без треда: у правки владельца отмена в интерфейсе, тред молчит', async () => {
+    const user = await freshGraph();
+    const host = ok(
+      await execute(db, req(user, 'entity_create', { title: 'Хост', tags: [] }, { source: 'ui' }), {
+        sink,
+      }),
+    );
+    const hostId = (host.results[0] as WireEntity).id;
+    const tid = await withIdentity(db, personal(user), (tx) =>
+      ensureEntityThread(tx, user, hostId),
+    );
+    const upd = ok(
+      await execute(
+        db,
+        req(
+          user,
+          'entity_update',
+          { id: hostId, title: 'Правка' },
+          { source: 'ui', threadId: tid },
+        ),
+        { sink },
+      ),
+    );
+    expect((await mustJournal(user, upd.actionId)).threadId).toBeNull();
+    expect(await threadJournal(user, tid)).toEqual([]);
+  });
+
+  test('mcp без треда → глобальный тред владельца; fast_path с threadId → этот тред', async () => {
+    const user = await freshGraph();
+    const agent = ok(
+      await execute(
+        db,
+        req(
+          user,
+          'entity_create',
+          { title: 'Агент', tags: [] },
+          { source: 'mcp', actorKind: 'agent' },
+        ),
+        { sink },
+      ),
+    );
+    expect((await mustJournal(user, agent.actionId)).threadId).toBe(globalThreadId(user));
+    const entityId = (agent.results[0] as WireEntity).id;
+    const tid = await withIdentity(db, personal(user), (tx) =>
+      ensureEntityThread(tx, user, entityId),
+    );
+    const fast = ok(
+      await execute(
+        db,
+        req(user, 'entity_create', { title: 'Быстрый', tags: [] }, { threadId: tid }),
+        { sink },
+      ),
+    );
+    expect((await mustJournal(user, fast.actionId)).threadId).toBe(tid);
+  });
+});

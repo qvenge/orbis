@@ -1,10 +1,10 @@
 // apps/server/src/journal/thread-page.test.ts
 // Тред — объединение НА ЧТЕНИИ (спека скорости §11.3): сообщения треда и карточки журнала этого треда одной
-// процедурой с общим курсором `(время, id)`. Поведение для клиента прежнее (РП-10): карточки — прежней формы провода,
-// но без тел действия (§9 приватность), system-действия и маркеры «думает» скрыты, записи отмены своей строки не
-// имеют (К-45: «отменено» — признак строки отменённого, задача 6).
+// процедурой с общим курсором `(время, id)`. Элемент журнала — `metadata.journal` (сводка без тел, §9) и карточка
+// ленты у быстрого ввода и рутины; какие действия в треде видны и с «Отменить» ли — таблица источников §11.3
+// (Р-12, Р-16, К-29, К-36, К-42); запись отмены своей строки не имеет (К-45: «отменено» — признак отменённого).
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import type { GraphId } from '@orbis/shared';
+import type { GraphId, JournalCardMeta } from '@orbis/shared';
 import { globalThreadId, newId, processingMessageId } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import {
@@ -25,7 +25,8 @@ import { execute } from '../executor/executor';
 import { makeJournalSink } from '../executor/journal';
 import type { ExecuteOk, ExecuteRequest, MutationSource, WireEntity } from '../executor/types';
 import { undoAction } from '../executor/undo';
-import { approvePending, createSystemPending } from '../policy/pending';
+import { approvePending } from '../policy/pending';
+import { dispatchTool } from '../tools/dispatch';
 import { threadPage } from './thread-page';
 
 requireEnv();
@@ -71,9 +72,11 @@ function page(g: GraphId, thread: string, p: { before?: string; limit: number })
 
 const cursorOf = (m: WireChatMessage): string => `${m.createdAt}|${m.id}`;
 
-/** id действия строки журнала — из сводки (`metadata.actions[0].id`); у сообщения — его id. */
-const keyOf = (m: WireChatMessage): string =>
-  (m.metadata.actions as Array<{ id: string }> | undefined)?.[0]?.id ?? m.id;
+const journalMeta = (m: WireChatMessage): JournalCardMeta | undefined =>
+  m.metadata.journal as JournalCardMeta | undefined;
+
+/** id действия строки журнала — из сводки (`metadata.journal.actionId`); у сообщения — его id. */
+const keyOf = (m: WireChatMessage): string => journalMeta(m)?.actionId ?? m.id;
 
 /** (createdAt DESC, id DESC) — порядок выдачи треда. */
 function isDescending(items: readonly WireChatMessage[]): boolean {
@@ -86,8 +89,18 @@ function isDescending(items: readonly WireChatMessage[]): boolean {
   return true;
 }
 
+/** Тел действия в проводе нет (§9): ни операций, ни inverse, ни результатов пачки, ни аккаунта актора. */
+function expectNoBodies(items: readonly WireChatMessage[]): void {
+  for (const m of items) {
+    const text = JSON.stringify(m.metadata);
+    for (const k of ['operations', 'inverse', 'results', 'actor_user_id', 'actorUserId']) {
+      expect([k, text.includes(`"${k}"`)]).toEqual([k, false]);
+    }
+  }
+}
+
 describe('threadPage: сообщения и карточки журнала одной выдачей (§11.3)', () => {
-  test('два сообщения и три действия: порядок по (время, id), курсор без пропусков и повторов на стыке таблиц, без тел; system, маркер и запись отмены скрыты', async () => {
+  test('два сообщения и два действия: порядок по (время, id), курсор без пропусков и повторов на стыке таблиц, без тел; маркер, правка владельца, system и запись отмены скрыты', async () => {
     const g = await freshGraph();
     const thread = await withIdentity(db, personal(g), (tx) => ensureGlobalThread(tx, g));
     const say = (content: string, at?: Date) =>
@@ -110,11 +123,19 @@ describe('threadPage: сообщения и карточки журнала од
     const fastAt = (await journalOf(g, fast.actionId))?.createdAt;
     if (fastAt === undefined) throw new Error('записи fast_path нет');
     const twin = await say('близнец по времени', fastAt);
+    const agent = await run(g, {
+      tool: 'entity_update',
+      input: { id: fastEntity, title: 'Правка агента' },
+      source: 'mcp',
+      actorKind: 'agent',
+    });
+    // Правка владельца в интерфейсе и системная запись — даже с явным тредом в треде не видны (Р-12)
     const ui = await run(g, {
       tool: 'entity_update',
       input: { id: fastEntity, title: 'Правка в интерфейсе' },
+      threadId: thread,
     });
-    await create(g, 'Системное', 'system', { mechanism: 'materialize' });
+    await create(g, 'Системное', 'system', { mechanism: 'materialize', threadId: thread });
     // Маркер «думает» ai.sendMessage — инфраструктура, не контент треда
     const userMsg = await say('запрос');
     await withIdentity(db, personal(g), (tx) =>
@@ -126,14 +147,15 @@ describe('threadPage: сообщения и карточки журнала од
         metadata: { type: 'processing', replyTo: userMsg },
       }),
     );
-    // Отмена правки: запись отмены своей строки в треде не имеет (своей карточки у неё нет — К-45)
-    const undone = await undoAction(db, { identity: personal(g), actionId: ui.actionId });
+    // Отмена правки агента: запись отмены своей строки в треде не имеет (К-45) — отменённое помечено
+    const undone = await undoAction(db, { identity: personal(g), actionId: agent.actionId });
     expect(undone.ok).toBe(true);
 
     const all = await page(g, thread, { limit: 50 });
     expect(new Set(all.map(keyOf))).toEqual(
-      new Set([first, twin, fast.actionId, ui.actionId, userMsg]),
+      new Set([first, twin, fast.actionId, agent.actionId, userMsg]),
     );
+    expect(all.some((m) => keyOf(m) === ui.actionId)).toBe(false);
     expect(isDescending(all)).toBe(true);
     // Постранично по одному — тот же список: ни пропуска, ни повтора, в том числе на стыке равного времени
     const paged: WireChatMessage[] = [];
@@ -147,24 +169,26 @@ describe('threadPage: сообщения и карточки журнала од
     expect(paged.map((m) => m.id)).toEqual(all.map((m) => m.id));
 
     const fastItem = all.find((m) => keyOf(m) === fast.actionId);
-    const uiItem = all.find((m) => keyOf(m) === ui.actionId);
-    if (fastItem === undefined || uiItem === undefined) throw new Error('карточек журнала нет');
-    // Прежняя форма провода: system-строка с заголовком, сводка действия и карточка
+    const agentItem = all.find((m) => keyOf(m) === agent.actionId);
+    if (fastItem === undefined || agentItem === undefined) throw new Error('карточек журнала нет');
     expect([fastItem.role, fastItem.content, fastItem.threadId]).toEqual([
       'system',
       'Быстрая',
       thread,
     ]);
+    // id строки треда — производный (R-12), id действия — в сводке
+    expect(fastItem.id).not.toBe(fast.actionId);
     expect(fastItem.metadata).toEqual({
-      actions: [
-        {
-          id: fast.actionId,
-          type: 'entity_created',
-          entity_id: fastEntity,
-          actor_kind: 'owner',
-          source: 'fast_path',
-        },
-      ],
+      journal: {
+        actionId: fast.actionId,
+        source: 'fast_path',
+        actorKind: 'owner',
+        title: 'Быстрая',
+        tool: 'entity_create',
+        entityId: fastEntity,
+        undoable: true,
+        undone: false,
+      },
       // fast_path — единственный носитель карточки (клиентская форма с «Отменить»)
       cards: [
         {
@@ -177,39 +201,69 @@ describe('threadPage: сообщения и карточки журнала од
         },
       ],
     });
-    // ui — строка без клиентской карточки (прежняя ActionCard без kind), как сегодня
-    expect(uiItem.metadata.cards).toEqual([
-      { tool: 'entity_update', entity_id: fastEntity, title: 'Правка в интерфейсе' },
-    ]);
-    // Тел действия в проводе нет (§9): ни операций, ни inverse, ни результатов пачки
-    for (const m of [fastItem, uiItem]) {
-      const text = JSON.stringify(m.metadata);
-      for (const k of ['operations', 'inverse', 'results', 'actor_user_id']) {
-        expect([k, text.includes(`"${k}"`)]).toEqual([k, false]);
-      }
-    }
+    // Агент вне прогона — строка-сводка с «Отменить» (Р-16); после отмены — признак на ней же
+    expect(agentItem.metadata).toEqual({
+      journal: {
+        actionId: agent.actionId,
+        source: 'mcp',
+        actorKind: 'agent',
+        title: 'Правка агента',
+        tool: 'entity_update',
+        entityId: fastEntity,
+        undoable: true,
+        undone: true,
+      },
+    });
+    expectNoBodies(all);
     // Маркера «думает», system-действия и записи отмены в выдаче нет
     expect(all.some((m) => m.metadata.type === 'processing')).toBe(false);
     expect(all.some((m) => m.content === 'Системное')).toBe(false);
     expect(all.some((m) => m.content.startsWith('Отменено'))).toBe(false);
   });
 
-  test('карточки по источнику — прежние: routine — клиентская карточка, chat и пачка — ActionCard без kind', async () => {
+  test('легаси-курсор `<iso>` без id — строго раньше по времени в обеих таблицах', async () => {
+    const g = await freshGraph();
+    const thread = await withIdentity(db, personal(g), (tx) => ensureGlobalThread(tx, g));
+    const old = await create(g, 'Раньше', 'fast_path');
+    const oldAt = (await journalOf(g, old.actionId))?.createdAt;
+    if (oldAt === undefined) throw new Error('записи нет');
+    await new Promise((r) => setTimeout(r, 5));
+    await create(g, 'Позже', 'fast_path');
+    const p = await page(g, thread, {
+      limit: 10,
+      before: new Date(oldAt.getTime() + 1).toISOString(),
+    });
+    expect(p.map(keyOf)).toEqual([old.actionId]);
+  });
+});
+
+/**
+ * Таблица источников §11.3 построчно: что каждое действие даёт в треде. «Ровно одна карточка на действие» (§13.1):
+ * действие разговора с карточкой в ответе (`card_in_reply`, К-36) своей строки не имеет — карточку несёт ответ
+ * ассистента; пачка разговора — строка журнала (К-29); быстрый ввод и рутина — клиентская карточка; агент вне прогона
+ * — строка с «Отменить» (Р-16); глагол прогона агента — без «Отменить» (К-42); правки владельца в интерфейсе и
+ * системные записи — без треда (Р-12).
+ */
+describe('таблица источников §11.3: что действие даёт в треде', () => {
+  test('каждый источник — своя строка таблицы', async () => {
     const g = await freshGraph();
     const thread = globalThreadId(g);
-    const routine = await create(g, 'Создано рутиной', 'routine', {
+    await withIdentity(db, personal(g), (tx) => ensureGlobalThread(tx, g));
+
+    const chatInReply = await create(g, 'Карточка в ответе', 'chat', {
       actorKind: 'ai',
-      runId: newId(),
+      threadId: thread,
+      cardInReply: true,
     });
-    const chat = await create(g, 'Из чата', 'chat', { actorKind: 'ai' });
-    const batchId = newId();
-    const batch = await execute(
+    const chatBatchId = newId();
+    const chatBatch = await execute(
       db,
       {
         identity: personal(g),
-        actorKind: 'owner',
-        source: 'fast_path',
-        batchId,
+        actorKind: 'ai',
+        source: 'chat',
+        threadId: thread,
+        batchId: chatBatchId,
         operations: [
           { tool: 'entity_create', input: { title: 'п1', tags: [] } },
           { tool: 'entity_create', input: { title: 'п2', tags: [] } },
@@ -217,51 +271,92 @@ describe('threadPage: сообщения и карточки журнала од
       },
       { sink },
     );
-    expect(batch.ok).toBe(true);
+    expect(chatBatch.ok).toBe(true);
+    const fast = await create(g, 'Быстрый ввод', 'fast_path', { threadId: thread });
+    const runId = newId();
+    const routine = await create(g, 'Создано рутиной', 'routine', {
+      actorKind: 'ai',
+      runId,
+      threadId: thread,
+    });
+    const agent = await create(g, 'Агент вне прогона', 'mcp', { actorKind: 'agent' });
+    const agentRunId = newId();
+    const agentInRun = await create(g, 'Глагол прогона', 'mcp', {
+      actorKind: 'agent',
+      runId: agentRunId,
+    });
+    const owner = await create(g, 'Владелец в интерфейсе', 'ui', { threadId: thread });
+    const capture = await create(g, 'Быстрая запись', 'quick_capture', { threadId: thread });
+    const system = await create(g, 'Системная', 'system', {
+      mechanism: 'materialize',
+      threadId: thread,
+    });
+
     const items = await page(g, thread, { limit: 50 });
-    const cardOf = (id: string) => items.find((m) => keyOf(m) === id)?.metadata.cards;
-    const routineEntity = (routine.results[0] as WireEntity).id;
-    expect(cardOf(routine.actionId)).toEqual([
-      {
-        kind: 'entity_card',
-        entityId: routineEntity,
-        title: 'Создано рутиной',
-        aspects: [],
-        keyFields: {},
-        undoActionId: routine.actionId,
-      },
-    ]);
-    // Сводка действия рутины несёт прогон — по нему лента подписывает «рутина»
+    const byAction = new Map(items.map((m) => [keyOf(m), m]));
+    const meta = (id: string) => journalMeta(byAction.get(id) as WireChatMessage);
+    const cards = (id: string) => byAction.get(id)?.metadata.cards;
+
+    // chat с карточкой в ответе — строки журнала нет (одна карточка — в ответе ассистента)
+    expect(byAction.has(chatInReply.actionId)).toBe(false);
+    // пачка разговора — строка журнала с «Отменить», без клиентской карточки
+    expect(meta(chatBatchId)).toMatchObject({ source: 'chat', actorKind: 'ai', undoable: true });
+    expect(cards(chatBatchId)).toBeUndefined();
+    // быстрый ввод и рутина — клиентская карточка с «Отменить»
+    for (const [r, title] of [
+      [fast, 'Быстрый ввод'],
+      [routine, 'Создано рутиной'],
+    ] as const) {
+      expect(meta(r.actionId)?.undoable).toBe(true);
+      expect(cards(r.actionId)).toEqual([
+        {
+          kind: 'entity_card',
+          entityId: (r.results[0] as WireEntity).id,
+          title,
+          aspects: [],
+          keyFields: {},
+          undoActionId: r.actionId,
+        },
+      ]);
+    }
+    // прогон рутины назван в сводке — по нему лента подписывает «рутина»
+    expect(meta(routine.actionId)).toMatchObject({ source: 'routine', runId });
+    // агент вне прогона — строка-сводка с «Отменить» (Р-16), без карточки
+    expect(meta(agent.actionId)).toMatchObject({
+      source: 'mcp',
+      actorKind: 'agent',
+      undoable: true,
+      undone: false,
+    });
+    expect(cards(agent.actionId)).toBeUndefined();
+    // глагол прогона агента — строка без «Отменить» (К-42)
+    expect(meta(agentInRun.actionId)).toMatchObject({ runId: agentRunId, undoable: false });
+    // правки владельца в интерфейсе и системные — в треде их нет (Р-12)
+    for (const r of [owner, capture, system]) expect(byAction.has(r.actionId)).toBe(false);
+    // ровно одна строка на действие, которое тред показывает
     expect(
-      (
-        items.find((m) => keyOf(m) === routine.actionId)?.metadata.actions as Array<{
-          run_id?: string;
-        }>
-      )[0]?.run_id,
-    ).toBeDefined();
-    // chat: карточку с «Отменить» несёт ответ ассистента — из журнала только прежняя ActionCard (без дубля)
-    expect(cardOf(chat.actionId)).toEqual([
-      { tool: 'entity_create', entity_id: (chat.results[0] as WireEntity).id, title: 'Из чата' },
-    ]);
-    // Пачка без записи-адреса — прежняя ActionCard (entityId клиентской карточки не может быть null)
-    expect(cardOf(batchId)).toEqual([
-      { tool: 'batch_execute', entity_id: null, title: 'batch: операций — 2' },
-    ]);
+      items
+        .filter((m) => journalMeta(m) !== undefined)
+        .map(keyOf)
+        .sort(),
+    ).toEqual(
+      [chatBatchId, fast.actionId, routine.actionId, agent.actionId, agentInRun.actionId].sort(),
+    );
+    expectNoBodies(items);
   });
 
-  test('легаси-курсор `<iso>` без id — строго раньше по времени в обеих таблицах', async () => {
+  test('после отмены: undone на строке отменённого, записи отмены отдельным элементом нет (К-45)', async () => {
     const g = await freshGraph();
     const thread = await withIdentity(db, personal(g), (tx) => ensureGlobalThread(tx, g));
-    const old = await create(g, 'Раньше', 'ui');
-    const oldAt = (await journalOf(g, old.actionId))?.createdAt;
-    if (oldAt === undefined) throw new Error('записи нет');
-    await new Promise((r) => setTimeout(r, 5));
-    await create(g, 'Позже', 'ui');
-    const p = await page(g, thread, {
-      limit: 10,
-      before: new Date(oldAt.getTime() + 1).toISOString(),
-    });
-    expect(p.map(keyOf)).toEqual([old.actionId]);
+    const fast = await create(g, 'Отменю', 'fast_path');
+    const before = await page(g, thread, { limit: 50 });
+    expect(journalMeta(before[0] as WireChatMessage)?.undone).toBe(false);
+    expect((await undoAction(db, { identity: personal(g), actionId: fast.actionId })).ok).toBe(
+      true,
+    );
+    const after = await page(g, thread, { limit: 50 });
+    expect(after.map(keyOf)).toEqual([fast.actionId]);
+    expect(journalMeta(after[0] as WireChatMessage)?.undone).toBe(true);
   });
 });
 
@@ -281,25 +376,32 @@ async function allPages(g: GraphId, thread: string, limit: number): Promise<Wire
 /**
  * Рулинг R-12: одобренная единица исполняется пачкой с `batchId = pendingId`, ключ записи журнала — сам `batch_id`, а
  * карточка-запрос — сообщение треда с PK `pendingId`. Выдача треда — один поток: id его элементов уникальны, а курсор
- * однозначен и на стыке «запрос/одобрение» с равным временем.
+ * однозначен и на стыке «запрос/одобрение» с равным временем. Единица — из разговора (архивация инициативой AI,
+ * §7.10): одобрение системной единицы — правка владельца без треда (К-29), и стыка у неё нет.
  */
 describe('threadPage: одобренная единица и её карточка-запрос — разные id на проводе (R-12)', () => {
   async function approvedUnit(g: GraphId): Promise<{ pendingId: string; thread: string }> {
     const who = personal(g);
-    const created = await withIdentity(db, who, async (tx) => {
-      const thread = await ensureGlobalThread(tx, g);
-      const p = await createSystemPending(tx, {
-        graphId: g,
-        tool: 'entity_create',
-        input: { id: newId(), title: 'Проба одобрения', tags: [] },
-        summary: 'проба',
-      });
-      return { pendingId: p.id, thread };
-    });
-    const r = await approvePending(db, { identity: who, pendingId: created.pendingId });
-    if (!r.ok) throw new Error(JSON.stringify(r.error));
-    expect(r.actionId).toBe(created.pendingId); // ключ записи пачки — сам pendingId (хранимые ключи не тронуты)
-    return created;
+    const thread = await withIdentity(db, who, (tx) => ensureGlobalThread(tx, g));
+    const target = await create(g, 'Кандидат на архив', 'fast_path');
+    const r = await dispatchTool(
+      {
+        db,
+        identity: who,
+        actorKind: 'ai',
+        source: 'chat',
+        threadId: thread,
+        explicitCommand: false,
+      },
+      'entity_update',
+      { id: (target.results[0] as WireEntity).id, archived: true },
+    );
+    if (r.status !== 'pending_confirmation')
+      throw new Error(`ожидался запрос, получено ${r.status}`);
+    const approved = await approvePending(db, { identity: who, pendingId: r.pendingId });
+    if (!approved.ok) throw new Error(JSON.stringify(approved.error));
+    expect(approved.actionId).toBe(r.pendingId); // ключ записи пачки — сам pendingId (хранимые ключи не тронуты)
+    return { pendingId: r.pendingId, thread };
   }
 
   test('запрос → «Принять» → выдача треда: оба элемента на месте, id не повторяются, id действия — в сводке', async () => {
@@ -309,10 +411,12 @@ describe('threadPage: одобренная единица и её карточк
     const ids = items.map((m) => m.id);
     expect(new Set(ids).size).toBe(ids.length);
     const request = items.find((m) => m.id === pendingId);
-    const executed = items.find((m) => m.metadata.actions !== undefined && keyOf(m) === pendingId);
+    const executed = items.find((m) => journalMeta(m)?.actionId === pendingId);
     expect(request?.metadata.pending).toBeDefined();
     expect(executed?.role).toBe('system');
     expect(executed?.id).not.toBe(pendingId);
+    // Одобренная единица разговора — строка журнала с «Отменить» (К-29: карточкой ответа она не названа)
+    expect(journalMeta(executed as WireChatMessage)?.undoable).toBe(true);
     // Производный id детерминирован: перечитывание треда даёт те же id (дедуп и ключи клиента стабильны)
     expect((await page(g, thread, { limit: 50 })).map((m) => m.id)).toEqual(ids);
   });

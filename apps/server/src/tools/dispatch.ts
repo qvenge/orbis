@@ -1353,6 +1353,16 @@ async function runMutation(
   // execute | preview — действие исполняется (§7.10: предпросмотр информационный, не
   // блокирующий); для preview перехватываем JournalWrite — diff строится из inverse (§7.8)
   const capture = level === 'preview' ? captureSink(sink) : undefined;
+  // entity_card (02 §2.3) — для create/update/attach; relation-мутации и пачка карточку этого
+  // типа не несут (их карточки — confirmation/error)
+  const isEntityMutation =
+    def.name === 'entity_create' || def.name === 'entity_update' || def.aspectId !== undefined;
+  // «Карточка в ответе» (спека скорости §11.3, К-36): на уровне execute в разговоре ниже рождается
+  // entity_card с undoActionId, и её несёт ответ ассистента — строка журнала второй карточкой в
+  // треде не рисуется (на действие ровно одна, §13.1). Предпросмотр и пачка карточкой действия не
+  // являются: там носитель — строка журнала. Сбой цикла после действия — ответ-ошибка с теми же
+  // карточками (`ai/send-message.ts`, К-44), иначе действие осталось бы без «Отменить».
+  const cardInReply = level === 'execute' && ctx.source === 'chat' && isEntityMutation;
   const r = await execute(
     ctx.db,
     {
@@ -1360,6 +1370,7 @@ async function runMutation(
       actorKind: ctx.actorKind,
       source: ctx.source,
       threadId: ctx.threadId,
+      cardInReply,
       // undefined у чатовых и UI-путей — executor такой ключ в action не пишет
       actorGrantId: ctx.grant?.id,
       // То же и для прогона (V1.5): по run_id действия прогона находит откат (rollback.ts)
@@ -1457,11 +1468,7 @@ async function runMutation(
     };
   }
 
-  // уровень execute — немедленное исполнение, карточка и журнал постфактум (§7.10):
-  // entity_card (02 §2.3) — для create/update/attach; relation-мутации карточку
-  // этого типа не несут (их карточки появятся вместе с confirmation/error, Task 6/9)
-  const isEntityMutation =
-    def.name === 'entity_create' || def.name === 'entity_update' || def.aspectId !== undefined;
+  // уровень execute — немедленное исполнение, карточка и журнал постфактум (§7.10)
   const card = isEntityMutation
     ? entityCard(
         result as WireEntity,

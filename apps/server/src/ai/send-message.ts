@@ -24,7 +24,9 @@
 //   6) recordUsage — суммарно по всем шагам, отдельным коротким tx; сбой метеринга
 //      логируется, но НЕ ломает ответ пользователю (решение Task 9);
 //   7) throw из provider.chat → структурная ошибка LLM_UNAVAILABLE (503): явная
-//      ошибка с возможностью повторить, user-сообщение сохранено, очереди нет (§7.9).
+//      ошибка с возможностью повторить, user-сообщение сохранено, очереди нет (§7.9);
+//      если до сбоя цикл УЖЕ исполнил действия — в тред ложится ответ-ошибка с их
+//      карточками (спека скорости §13.1, К-44), и повтор отдаёт его, а не гонит цикл.
 import { MAX_AGENT_STEPS, newId, processingMessageId } from '@orbis/shared';
 import { and, eq, sql } from 'drizzle-orm';
 import { appendMessage, appendMessageIdempotent, type WireChatMessage } from '../chat/messages';
@@ -296,22 +298,68 @@ export async function sendMessage(
     return { assistantMessage: pre.existingAnswer, actions: [], pending: [], replayed: true };
   }
   const anchorEntityId = pre.anchorEntityId;
+  // Собранное циклом живёт СНАРУЖИ него: пути сбоя нужны карточки уже исполненных действий
+  const collected: Collected = { cards: [], actions: [], pending: [] };
 
   try {
-    return await runAgentLoop(db, deps, input, { clock, resolve, anchorEntityId, markerId });
+    return await runAgentLoop(db, deps, input, {
+      clock,
+      resolve,
+      anchorEntityId,
+      markerId,
+      collected,
+    });
   } catch (e) {
     // Прогон умер до ответа (гейт §8, сбой провайдера, ошибка цикла): маркер снимается —
-    // немедленный ретрай легитимен (§7.9), «processing» не блокирует его до TTL.
-    // Сбой уборки не маскирует исходную ошибку.
+    // немедленный ретрай легитимен (§7.9), «processing» не блокирует его до TTL. Если цикл
+    // успел исполнить действия — той же транзакцией ложится ответ-ошибка с их карточками
+    // (К-44), и ретрай отдаёт его. Сбой уборки не маскирует исходную ошибку.
     try {
-      await withIdentity(db, input.identity, (tx) =>
-        tx.delete(chatMessages).where(eq(chatMessages.id, markerId)),
-      );
+      await withIdentity(db, input.identity, async (tx) => {
+        if (collected.actions.length > 0) await appendFailureReply(tx, input, collected, e);
+        await tx.delete(chatMessages).where(eq(chatMessages.id, markerId));
+      });
     } catch (cleanupError) {
-      console.error('[ai.sendMessage] маркер processing не снят:', cleanupError);
+      console.error('[ai.sendMessage] ответ-ошибка и снятие маркера не записаны:', cleanupError);
     }
     throw e;
   }
+}
+
+/** Карточки, резюме действий и ожидания, собранные tool-циклом, — общие для ответа и ответа-ошибки. */
+interface Collected {
+  cards: Card[];
+  actions: ActionSummary[];
+  pending: PendingSummary[];
+}
+
+/** Текст ответа-ошибки: что случилось с ответом и что с уже сделанным — владелец не гадает, применилось ли. */
+export const FAILED_AFTER_ACTIONS_NOTE = 'Не удалось закончить ответ — действия выше уже выполнены';
+
+/**
+ * Ответ-ошибка при сбое цикла ПОСЛЕ исполненных действий (спека скорости §13.1 «Журнал», К-44). Действие разговора с
+ * карточкой в ответе (`card_in_reply`, К-36) своей строки в треде не имеет — без этого ответа у владельца не было бы
+ * ни карточки, ни «Отменить». `replyTo` делает его ответом на это сообщение: повтор с тем же client-id отдаёт его
+ * replay-веткой (`findAnswerByReplyTo`) и не исполняет действия второй раз. Пишется той же транзакцией, что снятие
+ * маркера: «ответ есть» и «прогон идёт» не сосуществуют.
+ */
+async function appendFailureReply(
+  tx: Tx,
+  input: SendMessageInput,
+  collected: Collected,
+  error: unknown,
+): Promise<void> {
+  await appendMessage(tx, {
+    id: newId(),
+    threadId: input.threadId,
+    role: 'assistant',
+    content: FAILED_AFTER_ACTIONS_NOTE,
+    metadata: {
+      cards: collected.cards,
+      replyTo: input.id,
+      error: error instanceof ExecError ? error.code : 'INTERNAL',
+    },
+  });
 }
 
 /** Шаги 2–6: гейт §8 → контекст §7.1 → tool-цикл → персист ответа (+снятие маркера) → метеринг. */
@@ -324,9 +372,10 @@ async function runAgentLoop(
     resolve: EntitlementResolver;
     anchorEntityId: string | null;
     markerId: string;
+    collected: Collected;
   },
 ): Promise<SendMessageAnswer> {
-  const { clock, resolve, anchorEntityId, markerId } = run;
+  const { clock, resolve, anchorEntityId, markerId, collected } = run;
 
   // 2. Entitlements-гейт §8 — ДО первого вызова провайдера
   await gateAiEntitlements(db, input.identity, resolve, clock);
@@ -347,10 +396,8 @@ async function runAgentLoop(
     return { system: ctx.system, history: ctx.messages, tools: llmTools };
   });
 
-  // 4. Tool-цикл: копим карточки/резюме и usage по шагам
-  const cards: Card[] = [];
-  const actions: ActionSummary[] = [];
-  const pending: PendingSummary[] = [];
+  // 4. Tool-цикл: копим карточки/резюме (в `collected` — их читает и путь сбоя) и usage по шагам
+  const { cards, actions, pending } = collected;
   const usage: UsageTotals = { inputTokens: 0, outputTokens: 0, requestCount: 0 };
   const convo: LLMMessage[] = [...history];
   let finalText = '';
@@ -420,11 +467,14 @@ async function runAgentLoop(
       // тулов user-сообщениями КАНОНИЧЕСКИМ сериализатором toolResultMessage (Task 8)
       if (response.content) convo.push({ role: 'assistant', content: response.content });
       for (const call of response.toolCalls) {
-        const result = await runToolCall(db, input, { clock, resolve }, call.name, call.input, {
-          cards,
-          actions,
-          pending,
-        });
+        const result = await runToolCall(
+          db,
+          input,
+          { clock, resolve },
+          call.name,
+          call.input,
+          collected,
+        );
         convo.push(toolResultMessage(call.name, result));
       }
     }
@@ -506,7 +556,7 @@ async function runToolCall(
   run: { clock: () => Date; resolve: EntitlementResolver },
   name: string,
   callInput: Record<string, unknown>,
-  collect: { cards: Card[]; actions: ActionSummary[]; pending: PendingSummary[] },
+  collect: Collected,
 ): Promise<unknown> {
   const r = await dispatchTool(
     {

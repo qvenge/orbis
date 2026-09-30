@@ -23,11 +23,11 @@ import {
   queryTreeExceedsDepth,
 } from '@orbis/shared/query';
 import { TRPCError } from '@trpc/server';
-import { inArray, sql } from 'drizzle-orm';
+import { eq, inArray, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { escalateAfterMutation } from '../ai/escalation';
 import type { Db } from '../db/client';
-import { entities } from '../db/schema';
+import { chatThreads, entities } from '../db/schema';
 import { type Tx, withIdentity } from '../db/with-identity';
 import { type EntityReadResult, readEntity } from '../entity-read';
 import { ExecError, execErrorToTRPC } from '../errors';
@@ -225,27 +225,58 @@ function escapeLike(value: string): string {
   return value.toLowerCase().replace(/[\\%_]/g, '\\$&');
 }
 
+/**
+ * Тред быстрого ввода виден владельцу (РП-13): проверка под RLS первой инструкцией транзакции исполнителя. Внешний
+ * ключ строки журнала на тред её не заменяет — проверка ключа идёт мимо RLS и приняла бы тред чужого графа, и
+ * запись легла бы в свой граф со ссылкой на чужой тред. Чужой и несуществующий неразличимы — один NOT_FOUND.
+ */
+function threadVisible(threadId: string): (tx: Tx) => Promise<void> {
+  return async (tx) => {
+    const rows = await tx
+      .select({ id: chatThreads.id })
+      .from(chatThreads)
+      .where(eq(chatThreads.id, threadId));
+    if (rows.length === 0) throw new ExecError('NOT_FOUND', 'тред не найден', { threadId });
+  };
+}
+
 export const entityRouter = router({
   // Источник клиентского create ограничен fast_path/quick_capture/ui (§7.5, 02 §5;
   // 'ui' — прямое действие владельца в форме, например создание конверта 03 §3.1);
   // 'chat'/'mcp'/'system' недостижимы через этот роутер по построению.
+  //
+  // `threadId` — тред ввода быстрого пути (спека скорости §11.3, РП-13): карточка, которую клиент положил в тред
+  // оптимистично, приходит с сервера туда же. У правки в интерфейсе и быстрой записи треда нет (Р-12) — переданный
+  // им тред был бы молча проигнорирован синком, поэтому он отказ, а не шум.
   create: ownerOnlyProcedure
     .input(
       z.object({
         input: entityCreateUiInput,
         source: z.enum(['fast_path', 'quick_capture', 'ui']),
+        threadId: z.string().uuid().optional(),
       }),
     )
     .mutation(async ({ ctx, input }): Promise<WireEntity & { actionId?: string }> => {
+      if (input.threadId !== undefined && input.source !== 'fast_path') {
+        throw execErrorToTRPC(
+          new ExecError('VALIDATION', 'тред передаётся только быстрым вводом (source: fast_path)', {
+            source: input.source,
+          }),
+        );
+      }
       const r = await execute(
         ctx.db,
         {
           identity: ctx.identity,
           actorKind: 'owner',
           source: input.source,
+          ...(input.threadId !== undefined && { threadId: input.threadId }),
           operations: [{ tool: 'entity_create', input: input.input }],
         },
-        { sink },
+        {
+          sink,
+          ...(input.threadId !== undefined && { beforeStages: threadVisible(input.threadId) }),
+        },
       );
       if (!r.ok) throw execErrorToTRPC(r.error);
       // actionId — для Undo прямо из UI-формы (03-budget §3.6, quick-add): аддитивное

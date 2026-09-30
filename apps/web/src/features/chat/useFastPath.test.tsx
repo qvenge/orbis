@@ -10,7 +10,7 @@ import { useRetryBuffer } from '../../state/retry';
 import { mockLink, trpcError, wireEntity } from '../../test/harness';
 import { BUILTIN_REGISTRY } from '../../test/registry';
 import { trpc } from '../../trpc';
-import { type ChatMessage, chatThreadKey } from './useChatThread';
+import { type ChatMessage, chatThreadKey, useChatThread } from './useChatThread';
 import { useFastPath } from './useFastPath';
 
 const CATEGORY_QUERY = { query: 'aspect=orbis/category' };
@@ -143,7 +143,8 @@ test('уверенный паттерн онлайн → entity.create(source:fa
   });
   await waitFor(() => {
     const c = calls.find((x) => x.path === 'entity.create');
-    expect(c?.input).toMatchObject({ source: 'fast_path' });
+    // Тред ввода едет с запросом (РП-13): карточка журнала ляжет туда же, куда клиент положил свою
+    expect(c?.input).toMatchObject({ source: 'fast_path', threadId: 't1' });
   });
 
   /**
@@ -159,6 +160,78 @@ test('уверенный паттерн онлайн → entity.create(source:fa
    */
   const card = (threadMsgs(qc)[0]?.metadata as { cards?: { aspects?: string[] }[] })?.cards?.[0];
   expect(card?.aspects).toEqual(['orbis/financial']);
+});
+
+// Спека скорости §11.3, РП-13: на действие — ровно одна карточка. Клиент кладёт синтетическую карточку «⚡ без AI»
+// сразу, а сервер пишет строку журнала в ТОТ ЖЕ тред ввода; перечитывание треда заменяет синтетику карточкой журнала,
+// а не добавляет вторую.
+test('после перечитывания треда карточка быстрого ввода ровно одна — карточка журнала вместо синтетической', async () => {
+  let created: { id: string; actionId: string } | undefined;
+  const { Wrap, qc } = wrapper((path, input) => {
+    if (path === 'entity.create') {
+      const id = (input as { input: { id: string } }).input.id;
+      created = { id, actionId: 'act-fast' };
+      return { id, title: 'обед', actionId: 'act-fast' };
+    }
+    if (path === 'chat.listMessages') {
+      if (created === undefined) return [];
+      const journal = {
+        actionId: created.actionId,
+        source: 'fast_path',
+        actorKind: 'owner',
+        title: 'обед',
+        tool: 'entity_create',
+        entityId: created.id,
+        undoable: true,
+        undone: false,
+      };
+      return [
+        {
+          id: 'journal-item',
+          threadId: 't1',
+          role: 'system',
+          content: 'обед',
+          metadata: {
+            journal,
+            cards: [
+              {
+                kind: 'entity_card',
+                entityId: created.id,
+                title: 'обед',
+                aspects: [],
+                keyFields: {},
+                undoActionId: created.actionId,
+              },
+            ],
+          },
+          createdAt: '2026-07-05T12:00:00.000Z',
+        },
+      ];
+    }
+    return handlerBase(path, input);
+  });
+  const { result } = renderHook(() => ({ fast: useFastPath('t1'), thread: useChatThread('t1') }), {
+    wrapper: Wrap,
+  });
+  await waitFor(() => expect(result.current.thread.isLoading).toBe(false));
+  await act(async () => {
+    await result.current.fast.submit('обед 340');
+  });
+  const entityCardsOf = (msgs: ChatMessage[]) =>
+    msgs.flatMap((m) =>
+      ((m.metadata as { cards?: Array<{ kind: string; entityId?: string }> }).cards ?? []).filter(
+        (c) => c.kind === 'entity_card' && c.entityId === created?.id,
+      ),
+    );
+  // До перечитывания — синтетическая карточка клиента
+  expect(entityCardsOf(threadMsgs(qc))).toHaveLength(1);
+  await act(async () => {
+    await qc.refetchQueries({ queryKey: chatThreadKey('t1') });
+  });
+  const after = threadMsgs(qc);
+  expect(entityCardsOf(after)).toHaveLength(1);
+  // и это карточка журнала: у синтетической нет сводки, у журнала — есть
+  expect(after.map((m) => m.id)).toEqual(['journal-item']);
 });
 
 // Запрос правил обязан разбираться НОВОЙ грамматикой §А5-3 (имена свойств — namespaced key

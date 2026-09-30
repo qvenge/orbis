@@ -260,14 +260,19 @@ describe('API чтения журнала (задача 4, РП-9)', () => {
 
   test('threadActions и recentOwnerEdits — по времени, новые первыми; курсор листает без пропусков', async () => {
     const g = await freshGraph();
-    const a = await create(g, 'первое');
-    const b = await create(g, 'второе');
+    // В треде — быстрый ввод и агент; правки владельца в интерфейсе треда не получают (Р-12)
+    const a = await create(g, 'первое', 'fast_path');
+    const b = await create(g, 'второе', 'fast_path');
     const c = await create(g, 'третье', 'mcp');
+    const ownA = await create(g, 'правка раз');
+    const ownB = await create(g, 'правка два', 'quick_capture');
     await undoAction(db, { identity: personal(g), actionId: a.actionId });
+    await undoAction(db, { identity: personal(g), actionId: ownA.actionId });
     const thread = globalThreadId(g);
     await withIdentity(db, personal(g), async (tx) => {
       const all = await J.threadActions(tx, g, thread, { limit: 10 });
-      // Запись отмены — элемент журнала треда (тот же тред, что у отменённого действия)
+      // Запись отмены — элемент журнала треда (тот же тред, что у отменённого действия); отмена правки владельца —
+      // без треда, как сама правка
       expect(all.map((e) => (e.type === 'undo' ? `undo:${e.undoes}` : e.id))).toEqual([
         `undo:${a.actionId}`,
         c.actionId,
@@ -281,8 +286,8 @@ describe('API чтения журнала (задача 4, РП-9)', () => {
       });
       expect([...page1, ...page2].map((e) => e.cursor.key)).toEqual(all.map((e) => e.cursor.key));
       const recent = await J.recentOwnerEdits(tx, g, new Date(Date.now() - 3600_000), 10);
-      // Правки владельца в интерфейсе: `mcp` — не его правка, запись отмены — не правка
-      expect(recent.map((e) => e.id)).toEqual([b.actionId, a.actionId]);
+      // Правки владельца в интерфейсе и быстрые записи: `mcp` и быстрый ввод — не они, запись отмены — не правка
+      expect(recent.map((e) => e.id)).toEqual([ownB.actionId, ownA.actionId]);
       expect((await J.recentOwnerEdits(tx, g, new Date(Date.now() - 3600_000), 1)).length).toBe(1);
     });
   });
@@ -446,6 +451,7 @@ describe('API чтения журнала (задача 4, РП-9)', () => {
     for (const k of ['module', 'runId', 'actorGrantId', 'editedFrom', 'results']) {
       expect([k, Object.hasOwn(e, k)]).toEqual([k, false]);
     }
-    expect(e.threadId).toBe(globalThreadId(g));
+    // Правка владельца в интерфейсе — без треда (Р-12): NULL колонки читается как null, а не как отсутствие ключа
+    expect(e.threadId).toBeNull();
   });
 });

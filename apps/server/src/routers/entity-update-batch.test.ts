@@ -112,10 +112,13 @@ async function cardsOf(user: GraphId, kind: string): Promise<Card[]> {
   }
 }
 
-/** Заголовок записи журнала этой пачки в глобальном треде владельца (API журнала). */
+/**
+ * Заголовок записи журнала этой пачки (API журнала). Жест интерфейса — правка владельца: треда у записи нет (Р-12,
+ * спека скорости §11.3), и это проверяется здесь же, чтобы заголовок не прочитался у чужой записи.
+ */
 async function auditTitle(user: GraphId, actionId: string): Promise<string | undefined> {
   const entry = await journalOf(user, actionId);
-  return entry?.threadId === globalThreadId(user) ? entry.title : undefined;
+  return entry?.threadId === null ? entry.title : undefined;
 }
 
 describe('entity.updateBatch — пачка правок, один Undo (§4.3, §8.4)', () => {

@@ -38,22 +38,21 @@ export interface AppendMessageInput {
 /**
  * SQL-предикаты «инфраструктурная system-строка невидима» — фрагмент выборки сообщений
  * выдачи треда (`journal/thread-page.ts`: chat.listMessages, тред entity.get, историю
- * LLM-контекста §7.1) — в SQL до limit rolling-окна (иначе плотный системный шум вытеснял
- * бы живой диалог из окна модели). Скрывается:
- * - processing-маркер ai.sendMessage (§7.9): живой давал бы пустой system-пузырь в окне
- *   рефетча, маркер краша висел бы навсегда; IS NOT DISTINCT FROM — NULL-безопасно
- *   (у audit/undo-строк ключа type нет, обычное `=` выкинуло бы их вместе с маркерами);
- * - audit СИСТЕМНЫХ действий прежнего хранилища журнала (source='system' — материализация
- *   recurring-инстансов §5.4) — сообщения, ещё не снесённые прод-операцией переноса (задача 21):
- *   «batch: операций — N» на каждый пересчёт агенды — шум. @>-containment по массиву actions;
- *   COALESCE — NULL-безопасно (урок A1): у user/pending-строк ключа actions нет → NULL @> … =
- *   NULL, без COALESCE они терялись бы. Системные записи ТАБЛИЦЫ журнала скрывает её выборка
- *   (`journal-read.threadFeed`).
+ * LLM-контекста §7.1) — в SQL до limit rolling-окна (иначе плотный служебный шум вытеснял
+ * бы живой диалог из окна модели). Скрывается processing-маркер ai.sendMessage (§7.9): живой
+ * давал бы пустой system-пузырь в окне рефетча, маркер краша висел бы навсегда;
+ * IS NOT DISTINCT FROM — NULL-безопасно (у прочих system-строк ключа type нет, обычное `=`
+ * выкинуло бы их вместе с маркерами).
+ *
+ * Условия по прежнему журналу в сообщениях (`metadata.actions` системной материализации) здесь
+ * больше нет: журнал пишется своей таблицей (спека скорости §11), и системные записи скрывает её
+ * выборка (`journal-read.threadFeed`), а прежние сообщения журнала переносит в таблицу и сносит
+ * прод-операция плана А (задача 21) — держать фильтр по форме, которой в сообщениях не будет,
+ * значило бы платить за него на каждой выдаче треда.
  */
 export function excludeInfraSystemRows(): SQL[] {
   return [
     sql`NOT (${chatMessages.role} = 'system' AND ${chatMessages.metadata} ->> 'type' IS NOT DISTINCT FROM 'processing')`,
-    sql`NOT (${chatMessages.role} = 'system' AND COALESCE(${chatMessages.metadata} -> 'actions' @> '[{"source": "system"}]'::jsonb, false))`,
   ];
 }
 

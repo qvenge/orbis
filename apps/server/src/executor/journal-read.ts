@@ -549,7 +549,7 @@ export async function threadActions(
  * `pendingId` — это и PK сообщения-карточки запроса в том же треде: с id записи оба элемента пришли бы с одним id
  * (React-ключ, дедуп клиента по id, склейка у агента), а курсор `(время, id)` на их стыке при равном времени терял бы
  * один из них. Хранимые ключи и идемпотентность пачки (РП-12) при этом не меняются — меняется только провод; id
- * действия элемент несёт в сводке (`metadata.actions[0].id`), а карточки ленты — в `undoActionId`.
+ * действия элемент несёт в сводке (`metadata.journal.actionId`), а карточки ленты — в `undoActionId`.
  *
  * Почему в SQL, а не в TS: порядок выдачи и курсор страницы обязаны идти по ТОМУ ЖЕ ключу, что id на проводе (клиент
  * строит курсор из `createdAt|id` последнего элемента), — значит, выборка журнала сортирует и режет по нему, и
@@ -568,25 +568,29 @@ function beforeItemCursor(before: { at: Date; key?: string } | undefined): SQL {
 
 /**
  * Карточки журнала в выдаче треда (`journal/thread-page.ts`, спека §11.3): действия треда, которые тред показывает, —
- * без записей отмены (своей строки у отмены нет, К-45: «отменено» — признак строки отменённого) и без `system`
- * (материализация и прод-процедуры скрыты, как было фильтром ленты). Каждая запись — со своим id элемента треда
- * (`itemId`, см. `THREAD_ITEM_ID`); порядок и курсор — `(created_at DESC, itemId DESC)`, как у сообщений треда по их
- * PK. Курсор без id (легаси-форма клиента `<iso>`) — строго раньше по времени.
+ * без записей отмены (своей строки у отмены нет, К-45: «отменено» — признак строки отменённого, `undone`), без
+ * `system` (материализация и прод-операции; новых таких строк в тредах нет — синк треда им не даёт, фильтр держит
+ * прежние) и без действий, чью карточку несёт ответ ассистента (`card_in_reply`, К-36: на действие — одна карточка).
+ * Каждая запись — со своим id элемента треда (`itemId`, см. `THREAD_ITEM_ID`); порядок и курсор — `(created_at DESC,
+ * itemId DESC)` по uuid-выражению, как у сообщений треда по их PK (uuid). Курсор без id (легаси-форма клиента
+ * `<iso>`) — строго раньше по времени.
  */
 export async function threadFeed(
   tx: Tx,
   graph: GraphId,
   threadId: string,
   page: { before?: { at: Date; key?: string }; limit: number },
-): Promise<Array<JournalEntry & { itemId: string }>> {
+): Promise<Array<JournalEntry & { itemId: string; undone: boolean }>> {
   const rows = (await tx.execute(
-    sql`SELECT ${COLUMNS}, ${THREAD_ITEM_ID}::text AS item_id FROM action_journal j
+    sql`SELECT ${COLUMNS}, ${THREAD_ITEM_ID}::text AS item_id,
+               EXISTS (SELECT 1 FROM action_journal u WHERE u.graph_id = j.graph_id AND u.undoes = j.id) AS undone
+          FROM action_journal j
          WHERE ${inGraph(graph)} AND j.thread_id = ${threadId}::uuid
-           AND ${IS_ACTION} AND j.source <> 'system' ${beforeItemCursor(page.before)}
-         ORDER BY j.created_at DESC, item_id DESC
+           AND ${IS_ACTION} AND j.source <> 'system' AND NOT j.card_in_reply ${beforeItemCursor(page.before)}
+         ORDER BY j.created_at DESC, ${THREAD_ITEM_ID} DESC
          LIMIT ${page.limit}`,
-  )) as unknown as Array<Row & { item_id: string }>;
-  return rows.map((row) => ({ ...entryFromRow(row), itemId: row.item_id }));
+  )) as unknown as Array<Row & { item_id: string; undone: boolean }>;
+  return rows.map((row) => ({ ...entryFromRow(row), itemId: row.item_id, undone: row.undone }));
 }
 
 /**

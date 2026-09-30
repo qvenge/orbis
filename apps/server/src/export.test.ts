@@ -184,13 +184,9 @@ describe('user.exportData (§9.4)', () => {
     const audit = await caller.chat.listMessages({ threadId: globalThreadId(user) });
     // id действия — из сводки строки журнала (id строки на проводе — производный, рулинг R-12)
     const actionOf = (entityId: string) =>
-      (
-        audit.find(
-          (m) =>
-            (m.metadata.actions as Array<{ entity_id?: string }> | undefined)?.[0]?.entity_id ===
-            entityId,
-        )?.metadata.actions as Array<{ id: string }> | undefined
-      )?.[0]?.id;
+      audit
+        .map((m) => m.metadata.journal as { actionId: string; entityId: string | null } | undefined)
+        .find((j) => j?.entityId === entityId)?.actionId;
     const first = actionOf(a.id);
     if (first === undefined) throw new Error('действия создания нет в треде');
     await caller.ai.undo({ actionId: first });

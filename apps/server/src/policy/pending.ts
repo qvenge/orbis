@@ -1084,6 +1084,7 @@ export async function approvePending(
     // Чтение pending отдельным tx безопасно: journal append-only, metadata неизменяема
     // (§4.6). audit — в тред карточки-запроса; атрибуция — исходный актор (§7.8)
     const operations = toOperations(pending);
+    const source = pending.source === 'system' ? 'ui' : pending.source;
     const r = await execute(
       db,
       {
@@ -1096,7 +1097,7 @@ export async function approvePending(
         // (`findLastUndoable` пропускает `source='system'`) — то есть владелец не смог бы
         // отменить то, что сам и подтвердил.
         actorKind: pending.actor_kind === 'system' ? 'owner' : pending.actor_kind,
-        source: pending.source === 'system' ? 'ui' : pending.source,
+        source,
         // Грант исходного вызова доживает до исполнения (С2): подтвердил владелец, но в
         // журнале §7.8 видно, КАКОЙ доступ этот план попросил
         actorGrantId: pending.actor_grant_id,
@@ -1106,7 +1107,10 @@ export async function approvePending(
         // И правка владельца (Ш1.5, В-1): применено не то, что предложила рутина, а
         // правленое — журнал §7.8 обязан хранить, ЧТО именно эта правка заменила
         editedFrom: pending.edited_from,
-        threadId: found.msg.threadId,
+        // Тред карточки-запроса — где лечь записи разговора, агента или рутины. Одобренная системная единица —
+        // правка владельца в интерфейсе (К-29): треда у её записи нет (Р-12), как у любой кнопки; синк снял бы его
+        // и сам (`journalThreadOf`), здесь это сказано явно — чтобы тред не выглядел значимым там, где его нет
+        ...(source !== 'ui' && { threadId: found.msg.threadId }),
         operations,
         batchId: args.pendingId,
         // Автор-приложение §Б6-4: одобренное действие ложится строкой `type:'action'` с `action_id` и

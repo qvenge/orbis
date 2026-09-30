@@ -15,7 +15,15 @@ import {
 } from '@orbis/shared';
 import { FIXTURE_PARSE_REGISTRY } from '@orbis/shared/query/fixtures';
 import { eq, inArray, sql } from 'drizzle-orm';
-import { adminDb, appDb, mintGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
+import {
+  adminDb,
+  appDb,
+  freshGraph,
+  mintGraph,
+  personal,
+  requireEnv,
+  truncateAll,
+} from '../../test/helpers';
 import { journalOf } from '../../test/journal-helpers';
 import { appendMessageIdempotent } from '../chat/messages';
 import { ensureEntityThread } from '../chat/threads';
@@ -206,6 +214,27 @@ describe('approvePending: исполнение сохранённого payload 
     expect(action?.type).toBe('batch');
     expect(action?.actorKind).toBe('ai');
     expect(action?.source).toBe('chat');
+  });
+
+  // К-29, Р-12: системная единица исполняется ОТ ВЛАДЕЛЬЦА (`source: 'ui'`) — это правка владельца в интерфейсе, и
+  // строка её журнала треда не получает, даже тред карточки-запроса: «Отменить» у неё в интерфейсе, а тред молчит.
+  test('одобрение системной единицы → строка журнала source ui без треда (К-29)', async () => {
+    const owner = await freshGraph();
+    const pendingId = await withIdentity(db, personal(owner), async (tx) => {
+      const p = await createSystemPending(tx, {
+        graphId: owner,
+        tool: 'entity_create',
+        input: { id: newId(), title: 'Системная единица', tags: [] },
+        summary: 'проба',
+      });
+      return p.id;
+    });
+    const r = await approvePending(db, { identity: personal(owner), pendingId, clock });
+    expect(r.ok).toBe(true);
+    const action = await journalOf(owner, pendingId);
+    expect(action?.source).toBe('ui');
+    expect(action?.actorKind).toBe('owner');
+    expect(action?.threadId).toBeNull();
   });
 
   test('повторный approve → идемпотентный replay из сохранённого audit, НЕ второй эффект', async () => {

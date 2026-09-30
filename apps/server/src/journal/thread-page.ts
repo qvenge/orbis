@@ -1,23 +1,22 @@
 // apps/server/src/journal/thread-page.ts
 // Выдача треда (спека скорости §11.3): сообщения треда и карточки журнала этого треда, объединённые НА ЧТЕНИИ одной
-// процедурой с общим составным курсором `(время, id)`. Сообщения журнал не копируют — журнал живёт своей таблицей
-// (§11.2), и тред складывается из двух выборок. Читатели — `chat.listMessages`, тред в `entity.get` и окно истории
-// контекста модели: одна процедура на три места, иначе они разошлись бы фильтрами (так уже было до задачи 5 —
-// `entity.get` отдавал тред без фильтра маркеров и целиком).
+// процедурой с общим курсором `(время, id)`. Сообщения журнал не копируют — журнал живёт своей таблицей
+// (§11.2), и тред складывается из двух выборок. Читатели — `chat.listMessages` и тред в `entity.get`: одна процедура
+// на оба места, иначе они разошлись бы фильтрами (так уже было до задачи 5 — `entity.get` отдавал тред без фильтра
+// маркеров и целиком). Контекст модели читает половину сообщений (`threadMessages`) и журнал треда сам (РП-22).
 //
-// Провод прежний (РП-10, новое поведение тредов — задача 6): карточка журнала — system-строка с заголовком и
-// `metadata {actions: [сводка], cards: [карточка ленты]}` (id строки — производный id элемента треда, рулинг R-12;
-// id действия — в сводке), но БЕЗ тел действия (§9 приватность): ни операций, ни
-// данных отмены, ни результатов пачки, ни актора-аккаунта. Сводка несёт ровно то, что читают лента
-// (`authorLabel`: actor_kind, actor_grant_id, source) и сжатие строк контекста (`compressSystemRow`: type,
-// entity_id, source, actor_kind).
-import type { GraphId } from '@orbis/shared';
+// Элемент журнала — system-строка с заголовком и `metadata {journal: JournalCardMeta, cards?: [карточка ленты]}`
+// (id строки — производный id элемента треда, рулинг R-12; id действия — `journal.actionId`) БЕЗ тел действия (§9
+// приватность): ни операций, ни данных отмены, ни результатов пачки, ни аккаунта актора. Какие действия тред
+// показывает и с «Отменить» ли — таблица источников §11.3 (см. `journalCardMeta` и `journal-read.threadFeed`).
+import type { GraphId, JournalCardMeta, MutationSourceWire } from '@orbis/shared';
 import { and, desc, eq, lt, or, type SQL } from 'drizzle-orm';
 import { excludeInfraSystemRows, type WireChatMessage } from '../chat/messages';
 import { chatMessages } from '../db/schema';
 import type { Tx } from '../db/with-identity';
-import { feedCard } from '../executor/journal';
 import { type JournalEntry, threadFeed } from '../executor/journal-read';
+import type { MutationSource } from '../executor/types';
+import type { Card } from '../tools/registry';
 import { toWireChatMessage } from '../wire';
 
 /** Курсор выдачи: `<iso>` (легаси-клиент 1c-1 — строго раньше по времени) или `<iso>|<id>` (составной). */
@@ -28,34 +27,93 @@ function parseBefore(before: string | undefined): { at: Date; key?: string } | u
   return { at: new Date(before.slice(0, sep)), key: before.slice(sep + 1) };
 }
 
-/** Сводка действия в проводе — прежние поля `metadata.actions[0]` без тел (§9). */
-function actionSummary(e: JournalEntry): Record<string, unknown> {
+/**
+ * Источники, чья строка журнала несёт КЛИЕНТСКУЮ карточку записи (02-core-os §2.3, с `kind` и «Отменить»): у их
+ * действия другого носителя карточки нет.
+ * - 'fast_path' — клиентская карточка живёт лишь в кэше react-query (`features/chat/useFastPath.ts`) и при
+ *   перечитывании треда заменяется этой;
+ * - 'routine' — у правки прогона нет ни ответа ассистента, ни клиентского кэша (владельца в этот момент не было в
+ *   приложении): строка журнала — единственное, что он увидит.
+ * Остальные: 'chat' — карточку несёт ответ ассистента (`card_in_reply`, такая строка в треде не рисуется) либо это
+ * пачка — строка-сводка; 'mcp' — строка-сводка с «Отменить» (Р-16); 'ui' | 'quick_capture' | 'system' — в треде их
+ * нет вовсе (Р-12).
+ */
+const FEED_CARD_SOURCES: ReadonlySet<MutationSource> = new Set<MutationSource>([
+  'fast_path',
+  'routine',
+]);
+
+/**
+ * Карточка ленты — ВЕТКА серверного union'а Card (tools/registry.ts), а не копия его полей: копий формы и так две
+ * (registry + web types.ts), третья молча отстала бы при добавлении поля. У журнальной карточки `undoActionId` есть
+ * ВСЕГДА (в union он опционален — у карточек ответа Undo может не быть).
+ */
+type FeedEntityCard = Extract<Card, { kind: 'entity_card' }> & { undoActionId: string };
+
+/**
+ * Клиентская карточка записи строки журнала — только у источников `FEED_CARD_SOURCES` и только при записи-адресе
+ * (у пачки и relation-мутаций `entityId` клиентской карточки был бы враньём). `aspects`/`keyFields` пустые
+ * СОЗНАТЕЛЬНО: у журнала нет ни WireEntity, ни viewConfig.keyFields (их собирает `tools/dispatch.ts` из реестра) —
+ * обогащать нечем. Карточка беднее живой, зато переживает перезагрузку и несёт «Отменить».
+ */
+function feedCard(e: JournalEntry): FeedEntityCard | undefined {
+  if (!FEED_CARD_SOURCES.has(e.source) || e.entityId === null) return undefined;
   return {
-    id: e.id,
-    type: e.type,
-    entity_id: e.entityId,
-    actor_kind: e.actorKind,
-    source: e.source,
-    ...(e.actorGrantId !== undefined && { actor_grant_id: e.actorGrantId }),
-    ...(e.runId !== undefined && { run_id: e.runId }),
+    kind: 'entity_card',
+    entityId: e.entityId,
+    title: e.title,
+    aspects: [],
+    keyFields: {},
+    // тот же id, что уходит в ai.undo({actionId}) у живых карточек (§7.8)
+    undoActionId: e.id,
   };
 }
 
 /**
- * Запись журнала → строка треда прежней формы провода. id строки — производный id элемента треда (`itemId`, рулинг
- * R-12: у одобренной единицы id записи совпал бы с PK её карточки-запроса в том же треде); id ДЕЙСТВИЯ — в сводке
- * `actions[0].id` и в `undoActionId` карточки ленты — по нему отмена.
+ * Сводка действия для ленты (§11.3). «Отменить» (`undoable`) — у всего, что тред показывает, кроме глаголов прогона
+ * агента: правка агента по MCP вне прогона отменяется, как быстрый ввод и рутина (Р-16), а строки прогона (`mcp` с
+ * `run_id`) — его протокол, откатывается прогон целиком, не строкой (К-42). Действие с карточкой в ответе — не
+ * строка треда вовсе; условие повторено здесь, чтобы сводка не зависела от того, кто её собрал.
  */
-function journalItem(e: JournalEntry & { itemId: string }, threadId: string): WireChatMessage {
-  const card = { tool: e.cardTool, entity_id: e.entityId, title: e.title };
+export function journalCardMeta(e: JournalEntry, undone: boolean): JournalCardMeta {
+  const undoable =
+    !e.cardInReply &&
+    (e.source === 'fast_path' ||
+      e.source === 'routine' ||
+      e.source === 'chat' ||
+      (e.source === 'mcp' && e.runId === undefined));
+  return {
+    actionId: e.id,
+    // Перечни источников сервера и провода — один: новый источник без места на проводе — ошибка typecheck здесь
+    source: e.source satisfies MutationSourceWire,
+    actorKind: e.actorKind,
+    ...(e.runId !== undefined && { runId: e.runId }),
+    title: e.title,
+    tool: e.cardTool,
+    entityId: e.entityId,
+    undoable,
+    undone,
+  };
+}
+
+/**
+ * Запись журнала → строка треда. id строки — производный id элемента треда (`itemId`, рулинг R-12: у одобренной
+ * единицы id записи совпал бы с PK её карточки-запроса в том же треде); id ДЕЙСТВИЯ — в `journal.actionId` и в
+ * `undoActionId` карточки ленты — по нему отмена.
+ */
+function journalItem(
+  e: JournalEntry & { itemId: string; undone: boolean },
+  threadId: string,
+): WireChatMessage {
+  const card = feedCard(e);
   return {
     id: e.itemId,
     threadId,
     role: 'system',
     content: e.title,
     metadata: {
-      actions: [actionSummary(e)],
-      cards: [feedCard({ id: e.id, source: e.source }, card)],
+      journal: journalCardMeta(e, e.undone),
+      ...(card !== undefined && { cards: [card] }),
     },
     createdAt: e.createdAt.toISOString(),
   };
@@ -63,30 +121,31 @@ function journalItem(e: JournalEntry & { itemId: string }, threadId: string): Wi
 
 /**
  * Порядок выдачи `(created_at DESC, id DESC)` по id НА ПРОВОДЕ — тот же, что у каждой выборки в SQL (сообщения — по PK,
- * журнал — по производному id элемента). Время — ISO с миллисекундами (обе колонки `timestamptz(3)`), id — каноничный
- * uuid в нижнем регистре (текст PG): лексикографика строк совпадает с порядком PG (`uuid` сравнивается побайтно),
- * поэтому слияние в TS не расходится с курсором SQL, а id элементов потока уникальны — курсор однозначен.
+ * журнал — по производному id элемента, оба — uuid). Время — ISO с миллисекундами (обе колонки `timestamptz(3)`),
+ * id — каноничный uuid в нижнем регистре (текст PG): лексикографика строк совпадает с порядком PG (`uuid`
+ * сравнивается побайтно), поэтому слияние в TS не расходится с курсором SQL, а id элементов потока уникальны —
+ * курсор однозначен.
  */
-function newerFirst(a: WireChatMessage, b: WireChatMessage): number {
+export function newerFirst(
+  a: { createdAt: string; id: string },
+  b: { createdAt: string; id: string },
+): number {
   if (a.createdAt !== b.createdAt) return a.createdAt < b.createdAt ? 1 : -1;
   if (a.id === b.id) return 0;
   return a.id < b.id ? 1 : -1;
 }
 
 /**
- * Страница треда: до `limit` строк новее курсора `before` — сообщений (без инфраструктурных строк
- * `excludeInfraSystemRows`) и карточек журнала треда (`journal-read.threadFeed`: без записей отмены и `system`).
- * Каждая выборка берёт до `limit` своих строк тем же курсором, слияние — первые `limit` общего порядка: страница
- * не пропускает и не повторяет строк на стыке двух таблиц, потому что следующая страница стартует с курсора
- * последней отданной строки, а он строг в обеих выборках.
+ * Сообщения треда (без инфраструктурных строк `excludeInfraSystemRows`) новее курсора, до `limit`, новые первыми —
+ * половина выдачи треда. Отдельно её читает контекст модели: его окно сливает сообщения не с карточками треда, а с
+ * журналом треда целиком (РП-22).
  */
-export async function threadPage(
+export async function threadMessages(
   tx: Tx,
-  graph: GraphId,
   threadId: string,
-  page: { before?: string; limit: number },
+  page: { before?: { at: Date; key?: string }; limit: number },
 ): Promise<WireChatMessage[]> {
-  const before = parseBefore(page.before);
+  const before = page.before;
   const conds: (SQL | undefined)[] = [
     eq(chatMessages.threadId, threadId),
     ...excludeInfraSystemRows(),
@@ -101,7 +160,7 @@ export async function threadPage(
           ),
     );
   }
-  const messages = (
+  return (
     await tx
       .select()
       .from(chatMessages)
@@ -109,11 +168,26 @@ export async function threadPage(
       .orderBy(desc(chatMessages.createdAt), desc(chatMessages.id))
       .limit(page.limit)
   ).map(toWireChatMessage);
-  const journal = (
-    await threadFeed(tx, graph, threadId, {
-      ...(before !== undefined && { before }),
-      limit: page.limit,
-    })
-  ).map((e) => journalItem(e, threadId));
+}
+
+/**
+ * Страница треда: до `limit` строк новее курсора `before` — сообщений (`threadMessages`) и карточек журнала треда
+ * (`journal-read.threadFeed`: без записей отмены, `system` и действий с карточкой в ответе). Каждая выборка берёт до
+ * `limit` своих строк тем же курсором, слияние — первые `limit` общего порядка: страница не пропускает и не повторяет
+ * строк на стыке двух таблиц, потому что следующая страница стартует с курсора последней отданной строки, а он строг
+ * в обеих выборках.
+ */
+export async function threadPage(
+  tx: Tx,
+  graph: GraphId,
+  threadId: string,
+  page: { before?: string; limit: number },
+): Promise<WireChatMessage[]> {
+  const before = parseBefore(page.before);
+  const cursor = { ...(before !== undefined && { before }), limit: page.limit };
+  const messages = await threadMessages(tx, threadId, cursor);
+  const journal = (await threadFeed(tx, graph, threadId, cursor)).map((e) =>
+    journalItem(e, threadId),
+  );
   return [...messages, ...journal].sort(newerFirst).slice(0, page.limit);
 }

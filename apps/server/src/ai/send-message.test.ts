@@ -18,7 +18,7 @@ import {
   requireEnv,
   truncateAll,
 } from '../../test/helpers';
-import { journalOf } from '../../test/journal-helpers';
+import { actionsOf, journalOf } from '../../test/journal-helpers';
 import { ensureGlobalThread } from '../chat/threads';
 import { aiUsage, chatMessages, entities } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
@@ -215,28 +215,25 @@ describe('ai.sendMessage (а): «создай задачу» — цикл из t
     expect(r.pending).toEqual([]);
 
     // Хронология треда, как её видит клиент (выдача треда — сообщения и карточки журнала, спека скорости §11.3):
-    // user → строка журнала executor'а (актор ai, source chat) → assistant. Сообщений при этом два — журнал
-    // в разговор больше не пишется
+    // user → assistant. Карточку действия несёт ответ (признак «карточка в ответе», К-36) — второй строкой журнала
+    // тред её не рисует: на действие ровно одна карточка (§13.1)
     const msgs = (
       await withIdentity(db, personal(user), (tx) => threadPage(tx, user, threadId, { limit: 50 }))
     ).reverse();
-    expect(msgs.map((m) => m.role)).toEqual(['user', 'system', 'assistant']);
+    expect(msgs.map((m) => m.role)).toEqual(['user', 'assistant']);
     expect((await threadMessages(user, threadId)).map((m) => m.role)).toEqual([
       'user',
       'assistant',
     ]);
     expect(msgs[0]?.id).toBe(msgId);
-    // Строка журнала: id действия — в сводке (id строки на проводе — производный, рулинг R-12)
-    expect((msgs[1]?.metadata.actions as Array<{ id: string }> | undefined)?.[0]?.id).toBe(
-      card.undoActionId as string,
-    );
-    // Запись журнала действия — в этом треде, актор ai, источник chat (API журнала)
+    // Запись журнала действия — в этом треде, актор ai, источник chat, помечена «карточка в ответе» (API журнала)
     const action = await journalOf(user, card.undoActionId as string);
     expect(action?.threadId).toBe(threadId);
     expect(action?.actorKind).toBe('ai');
     expect(action?.source).toBe('chat');
+    expect(action?.cardInReply).toBe(true);
     expect(action?.id).toBe(card.undoActionId as string);
-    expect(msgs[2]?.id).toBe(r.assistantMessage.id);
+    expect(msgs[1]?.id).toBe(r.assistantMessage.id);
 
     // Метеринг §4.7: одна строка (owner, день UTC, model), суммы обоих шагов
     const usage = await usageRows(user);
@@ -542,6 +539,72 @@ describe('ai.sendMessage (г): сбой провайдера — деграда�
     const msgs = await threadMessages(user, threadId);
     expect(msgs.map((m) => m.id)).toEqual([msgId]);
     expect(msgs[0]?.content).toBe('привет');
+  });
+});
+
+// Спека скорости §13.1 «Журнал», К-44: цикл упал ПОСЛЕ исполненного действия — карточка с «Отменить» у владельца
+// есть. Строка журнала действия разговора помечена «карточка в ответе» и в треде не рисуется, поэтому ответ-ошибка
+// несёт собранные карточки сам; повтор того же сообщения отдаёт его, а не гонит цикл второй раз.
+describe('ai.sendMessage: сбой цикла после исполненного действия — ответ-ошибка с карточками (К-44)', () => {
+  test('провайдер падает после entity_create → в треде ответ с карточкой, replyTo и кодом; повтор — replayed без новой строки журнала', async () => {
+    const user = await freshGraph();
+    const threadId = await globalThread(user);
+    // Первый шаг — вызов тула, второй — бросок (скрипт исчерпан → LLM_UNAVAILABLE)
+    const scripted = new ScriptedProvider([
+      toolUse([{ name: 'entity_create', input: { title: 'До сбоя', tags: [] } }]),
+    ]);
+    const msgId = newId();
+    const err = await trpcError(
+      callerWith(user, scripted).ai.sendMessage({ id: msgId, threadId, content: 'создай и упади' }),
+    );
+    expect((err.cause as { code?: string }).code).toBe('LLM_UNAVAILABLE');
+
+    const shown = await withIdentity(db, personal(user), (tx) =>
+      threadPage(tx, user, threadId, { limit: 50 }),
+    );
+    const reply = shown.find((m) => m.role === 'assistant');
+    if (reply === undefined) throw new Error('ответа-ошибки в треде нет');
+    expect(reply.metadata.replyTo).toBe(msgId);
+    expect(reply.metadata.error).toBe('LLM_UNAVAILABLE');
+    const card = cardsOf(reply)[0];
+    if (card?.kind !== 'entity_card') throw new Error('в ответе-ошибке нет карточки записи');
+    expect(card.title).toBe('До сбоя');
+    const actionId = card.undoActionId;
+    if (actionId === undefined) throw new Error('у карточки нет «Отменить»');
+    expect((await journalOf(user, actionId))?.cardInReply).toBe(true);
+    // На действие — ровно одна карточка в треде: в ответе-ошибке, строки журнала нет
+    expect(shown.filter((m) => m.role === 'system')).toEqual([]);
+    // Маркер «думает» снят той же транзакцией
+    expect(shown.some((m) => m.metadata.type === 'processing')).toBe(false);
+
+    // Повтор того же сообщения — ответ уже есть: replay без провайдера, действие не повторяется
+    const before = (await actionsOf(user)).length;
+    const retry = new ScriptedProvider([]);
+    const again = answered(
+      await callerWith(user, retry).ai.sendMessage({
+        id: msgId,
+        threadId,
+        content: 'создай и упади',
+      }),
+    );
+    expect(again.replayed).toBe(true);
+    expect(again.assistantMessage.id).toBe(reply.id);
+    expect(retry.requests).toHaveLength(0);
+    expect((await actionsOf(user)).length).toBe(before);
+  });
+
+  test('сбой без исполненных действий — ответа-ошибки нет: повтор гонит цикл заново (§7.9)', async () => {
+    const user = await freshGraph();
+    const threadId = await globalThread(user);
+    const msgId = newId();
+    await trpcError(
+      callerWith(user, new ScriptedProvider([])).ai.sendMessage({
+        id: msgId,
+        threadId,
+        content: 'просто упади',
+      }),
+    );
+    expect((await threadMessages(user, threadId)).map((m) => m.role)).toEqual(['user']);
   });
 });
 

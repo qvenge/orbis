@@ -6831,3 +6831,71 @@ describe('entity_query и язык контрактов (спека 1в §3.8)',
     }
   });
 });
+
+// Признак «карточка в ответе» (спека скорости §11.3, К-36): действие модели в разговоре на уровне `execute`, для
+// которого рождается `entity_card` с `undoActionId`, несёт карточку в ответе ассистента — строка журнала помечена,
+// и выдача треда вторую карточку не рисует. Пачка и предпросмотр карточкой действия не являются — строка журнала
+// остаётся носителем.
+describe('card_in_reply: карточку действия модели несёт ответ (К-36)', () => {
+  test('мутация записи моделью на уровне execute → строка журнала card_in_reply, ответ — entity_card с undoActionId = id строки', async () => {
+    const owner = await freshGraph();
+    const threadId = await withIdentity(db, personal(owner), (tx) => ensureGlobalThread(tx, owner));
+    const r = await dispatchTool(ctxFor({ identity: personal(owner), threadId }), 'entity_create', {
+      title: 'Карточка в ответе',
+      tags: [],
+    });
+    expect(r.status).toBe('ok');
+    if (r.status !== 'ok' || r.card?.kind !== 'entity_card')
+      throw new Error('ожидалась entity_card');
+    const actionId = r.card.undoActionId;
+    if (actionId === undefined) throw new Error('у карточки нет undoActionId');
+    expect((await journalOf(owner, actionId))?.cardInReply).toBe(true);
+  });
+
+  test('пачка моделью → card_in_reply = false: в ответе предпросмотр масштаба, а не карточка действия', async () => {
+    const owner = await freshGraph();
+    const batchId = newId();
+    const r = await dispatchTool(ctxFor({ identity: personal(owner) }), 'batch_execute', {
+      batch_id: batchId,
+      operations: [
+        { tool: 'entity_create', input: { title: 'п1', tags: [] } },
+        { tool: 'entity_create', input: { title: 'п2', tags: [] } },
+      ],
+    });
+    expect(r.status).toBe('ok');
+    if (r.status !== 'ok') return;
+    expect(r.card).toMatchObject({ kind: 'confirmation_card', mode: 'preview' });
+    const actionId = r.actionId;
+    if (actionId === undefined) throw new Error('нет actionId пачки');
+    expect((await journalOf(owner, actionId))?.cardInReply).toBe(false);
+  });
+
+  test('одиночный preview (своя строка реестра от модели) → card_in_reply = false: предпросмотр — не карточка действия', async () => {
+    const owner = await freshGraph();
+    const threadId = await withIdentity(db, personal(owner), (tx) => ensureGlobalThread(tx, owner));
+    const r = await dispatchTool(ctxFor({ identity: personal(owner), threadId }), 'aspect_create', {
+      key: 'user/in-reply-probe',
+      label: { ru: 'Проба' },
+      description: { ru: 'x' },
+      properties: [{ propertyId: 'orbis/priority', required: false }],
+    });
+    expect(r.status).toBe('ok');
+    if (r.status !== 'ok') return;
+    expect(r.card).toMatchObject({ kind: 'confirmation_card', mode: 'preview' });
+    const actionId = r.actionId;
+    if (actionId === undefined) throw new Error('нет actionId предпросмотра');
+    expect((await journalOf(owner, actionId))?.cardInReply).toBe(false);
+  });
+
+  test('мутация записи не из разговора (агент по MCP) → card_in_reply = false', async () => {
+    const owner = await freshGraph();
+    const r = await dispatchTool(
+      ctxFor({ identity: personal(owner), source: 'mcp', actorKind: 'agent' }),
+      'entity_create',
+      { title: 'Агент', tags: [] },
+    );
+    expect(r.status).toBe('ok');
+    if (r.status !== 'ok' || r.actionId === undefined) throw new Error('ожидалось действие');
+    expect((await journalOf(owner, r.actionId))?.cardInReply).toBe(false);
+  });
+});

@@ -7,12 +7,13 @@ import { DeferredActionCard } from './DeferredActionCard';
 import { EntityCard } from './EntityCard';
 import { ErrorCard } from './ErrorCard';
 import { ImportReviewCard } from './ImportReviewCard';
+import { JournalCard } from './JournalCard';
 import { MemoryRuleCard } from './MemoryRuleCard';
 import { ProposalCard } from './ProposalCard';
 import { QueryResultCard } from './QueryResultCard';
 import { QuestionCard } from './QuestionCard';
 import { SystemMessage } from './SystemMessage';
-import type { Card } from './types';
+import type { Card, JournalCardMeta } from './types';
 
 // Метка синтетической карточки fast-path (useFastPath): entityId+исходная строка.
 type FastPathMeta = { entityId?: string; text: string; status: 'confirmed' | 'pending' };
@@ -53,15 +54,11 @@ type CardsMeta = {
   run_id?: string;
   routine_id?: string;
   /**
-   * Журнальная запись действия (§7.8): КТО двигал граф. Здесь только та часть формы
-   * `ActionRecord`, которую читает лента, — остальное ей не нужно, а полный тип живёт на
-   * сервере. Инвариант «один action на audit-сообщение» тот же, что у undo и отката: читаем
-   * `actions[0]`.
-   *
-   * `source` — ОТКУДА пришла правка (`MutationSource`). Ленте он нужен ровно за одним:
-   * рутина пишет граф от «ai», как и чат-агент, и по `actor_kind` они неотличимы (V1.9).
+   * Строка журнала действия в треде (спека скорости §11.3): что сделано, КТО двигал граф, можно ли отменить и
+   * отменено ли. Тел действия в ней нет (§9). `source` ленте нужен ровно за одним: рутина пишет граф от «ai», как и
+   * чат-агент, и по `actorKind` они неотличимы (V1.9).
    */
-  actions?: Array<{ actor_kind?: string; actor_grant_id?: string; source?: string }>;
+  journal?: JournalCardMeta;
   retryId?: string;
   retryText?: string;
   fastPath?: FastPathMeta;
@@ -112,6 +109,8 @@ export function contentDuplicatesCard(msg: ChatMessage, handlers: CardHandlers =
   const text = msg.content.trim();
   if (text === '') return false;
   const { meta, cards, confirmed } = readMeta(msg);
+  // Строка журнала без карточки рисуется `JournalCard`, и заголовок действия несёт она сама
+  if (meta.journal !== undefined && cards.length === 0) return meta.journal.title.trim() === text;
   return cards.some((card, i) => {
     const echo = cardEchoText(card);
     return (
@@ -139,7 +138,16 @@ function renderCard(card: Card, i: number, ctx: CardCtx): ReactNode {
   const readOnly = handlers.readOnly === true;
   switch (card.kind) {
     case 'entity_card':
-      return <EntityCard key={i} card={card} confirmed={confirmed} readOnly={readOnly} />;
+      return (
+        <EntityCard
+          key={i}
+          card={card}
+          confirmed={confirmed}
+          readOnly={readOnly}
+          // Карточка из журнала знает, отменено ли действие (К-45); у карточки ответа сводки нет
+          undone={meta.journal?.undone === true}
+        />
+      );
     case 'query_result':
       return <QueryResultCard key={i} card={card} />;
     case 'confirmation_card':
@@ -222,12 +230,12 @@ function renderCard(card: Card, i: number, ctx: CardCtx): ReactNode {
  * вместо другого (приёмка 14, V1.9, Р-16); `undefined` — сообщение или действие владельца.
  *
  * `author_kind` помечает сообщение, которое написали САМИ агент или AI (thread_post, 02 §2.3).
- * Но работу внешнего исполнителя владелец видит иначе: её приносит audit-запись действия, а её
- * пишет сервер от системы — `author_kind` там не агентский, зато `actions[0].actor_kind ===
- * 'agent'`. Считать только второе значило бы потерять первое; заменить одно другим — тоже.
+ * Но работу внешнего исполнителя владелец видит иначе: её приносит строка журнала действия,
+ * которую собирает сервер, — `author_kind` там нет, зато `journal.actorKind === 'agent'`.
+ * Считать только второе значило бы потерять первое; заменить одно другим — тоже.
  *
- * Рутина — САМЫЙ точный носитель из всех: её правки приходят audit-записью от «ai» (по
- * `actor_kind` неотличимо от чат-агента), а её пост в тред — `author_kind: 'ai'` плюс
+ * Рутина — САМЫЙ точный носитель из всех: её правки приходят строкой журнала от «ai» (по
+ * `actorKind` неотличимо от чат-агента), а её пост в тред — `author_kind: 'ai'` плюс
  * `routine_id`/`run_id`. Владельцу разница видна сразу: агент отвечает ему в разговоре,
  * рутина правит граф и пишет в треды ночью, пока его нет. Поэтому источник проверяется
  * ПЕРВЫМ: «агент» поверх ночной правки был бы не полуправдой, а указанием не на того.
@@ -236,12 +244,12 @@ function renderCard(card: Card, i: number, ctx: CardCtx): ReactNode {
  */
 export function authorLabel(msg: ChatMessage): string | undefined {
   const meta = (msg.metadata ?? {}) as CardsMeta;
-  const action = meta.actions?.[0];
-  if (action?.source === 'routine') return 'рутина';
+  const journal = meta.journal;
+  if (journal?.source === 'routine') return 'рутина';
   if (meta.author_kind === 'ai' && (meta.routine_id !== undefined || meta.run_id !== undefined)) {
     return 'рутина';
   }
-  if (meta.author_kind === 'agent' || action?.actor_kind === 'agent') return 'агент';
+  if (meta.author_kind === 'agent' || journal?.actorKind === 'agent') return 'агент';
   if (meta.author_kind === 'ai') return 'AI';
   return undefined;
 }
@@ -253,6 +261,12 @@ export function authorLabel(msg: ChatMessage): string | undefined {
  */
 export function renderCardBodies(msg: ChatMessage, handlers: CardHandlers = {}): ReactNode[] {
   const { meta, cards, confirmed } = readMeta(msg);
+  // Строка журнала без карточки записи (агент, пачка разговора) — строка-сводка с «Отменить» (§11.3, Р-16)
+  if (meta.journal !== undefined && cards.length === 0) {
+    return [
+      <JournalCard key="journal" meta={meta.journal} readOnly={handlers.readOnly === true} />,
+    ];
+  }
   const body = cards.map((card, i) => renderCard(card, i, { msg, meta, handlers, confirmed }));
   // «Разобрать с AI» — только у подтверждённой fast-карточки (офлайн «⏳» недоступна до confirm).
   const fp = meta.fastPath;
@@ -273,10 +287,13 @@ export function renderCardBodies(msg: ChatMessage, handlers: CardHandlers = {}):
 }
 
 // Диспетчер по metadata.cards[]: серверный Card-union рендерится клиентом (Task 10).
-// Сообщение агента (author_kind) и действие агента (actions[0].actor_kind) оборачиваются в
-// SystemMessage (🤖 агент, 02 §2.3) — см. authorLabel.
+// Сообщение агента (author_kind) и действие агента или рутины с карточкой (journal) оборачиваются
+// в SystemMessage (🤖 агент, 02 §2.3) — см. authorLabel. Строка-сводка журнала без карточки
+// автора называет сама (`JournalCard`) — вторая метка над ней повторила бы её.
 export function renderCards(msg: ChatMessage, handlers: CardHandlers = {}): ReactNode {
   const body = renderCardBodies(msg, handlers);
+  const { meta, cards } = readMeta(msg);
+  if (meta.journal !== undefined && cards.length === 0) return <>{body}</>;
   const label = authorLabel(msg);
   if (label !== undefined) return <SystemMessage label={label}>{body}</SystemMessage>;
   return <>{body}</>;
