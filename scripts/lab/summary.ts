@@ -14,6 +14,8 @@ export interface Stat {
   p50: number;
   p75: number;
   p95: number;
+  /** Сколько замеров группы отброшено как нечисловые или отрицательные (M-1); поля нет — ни одного. */
+  dropped?: number;
 }
 /** Ключ — «метрика|вид|кеш»: цели §0.3 различают повторный переход и переход из сети. */
 export type LabSummary = Record<string, Stat>;
@@ -30,17 +32,30 @@ export function percentile(sorted: readonly number[], p: number): number {
 export const keyOf = (s: Pick<LabSample, 'metric' | 'kind' | 'cached'>): string =>
   `${s.metric}|${s.kind ?? '-'}|${s.cached === undefined ? '-' : s.cached ? 'кеш' : 'сеть'}`;
 
+/**
+ * Годный замер — конечное неотрицательное число. Остальное — следы сбоя замера, а не длительности: «не дождались
+ * записи Resource Timing» (NaN, в JSON — `null`) или чужая, более ранняя запись (отрицательное). Сортировка
+ * посчитала бы `null` нулём, и p50/p75 врали бы молча — поэтому такие отбрасываются и называются числом.
+ */
+const usable = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && v >= 0;
+
 export function summarize(samples: readonly LabSample[]): LabSummary {
-  const groups = new Map<string, number[]>();
-  for (const s of samples) groups.set(keyOf(s), [...(groups.get(keyOf(s)) ?? []), s.durMs]);
+  const groups = new Map<string, { values: number[]; dropped: number }>();
+  for (const s of samples) {
+    const g = groups.get(keyOf(s)) ?? { values: [], dropped: 0 };
+    if (usable(s.durMs)) g.values.push(s.durMs);
+    else g.dropped += 1;
+    groups.set(keyOf(s), g);
+  }
   const out: LabSummary = {};
-  for (const [k, v] of groups) {
-    const sorted = [...v].sort((a, b) => a - b);
+  for (const [k, { values, dropped }] of groups) {
+    const sorted = [...values].sort((a, b) => a - b);
     out[k] = {
       n: sorted.length,
       p50: percentile(sorted, 0.5),
       p75: percentile(sorted, 0.75),
       p95: percentile(sorted, 0.95),
+      ...(dropped > 0 ? { dropped } : {}),
     };
   }
   return out;
@@ -52,6 +67,7 @@ export const GOALS: ReadonlyArray<{ goal: string; key: string | null; target: nu
   { goal: 'Отклик действия (видимо)', key: 'action_visible|checkbox|-', target: 50 },
   { goal: 'Отклик действия (видимо)', key: 'action_visible|status|-', target: 50 },
   { goal: 'Отклик действия (видимо)', key: 'action_visible|create|-', target: 50 },
+  { goal: 'Отклик действия (видимо)', key: 'action_visible|subtask|-', target: 50 },
   { goal: 'Правка агента видна на открытом экране (< 2 с)', key: null, target: 2000 },
   { goal: 'Перезапуск: последние данные на экране', key: 'cold_start|warm|-', target: 1000 },
   { goal: 'Перезапуск без сети', key: 'cold_start|offline|-', target: 1000 },
@@ -60,6 +76,8 @@ export const GOALS: ReadonlyArray<{ goal: string; key: string | null; target: nu
 
 const fmt = (v: number | undefined) =>
   v === undefined || Number.isNaN(v) ? 'нет данных' : String(Math.round(v));
+/** Ячейка markdown: `|` внутри (ключи «метрика|вид|кеш») без экрана рвал бы строку таблицы на лишние столбцы. */
+const cell = (v: string) => v.replaceAll('|', '\\|');
 
 export function formatTable(base: LabSummary, other: LabSummary | null): string {
   const now = other ?? base;
@@ -69,15 +87,16 @@ export function formatTable(base: LabSummary, other: LabSummary | null): string 
   ];
   for (const g of GOALS) {
     if (g.key === null) {
-      lines.push(`| ${g.goal} | — | < ${g.target} мс | — | — | живая приёмка плана Б |`);
+      lines.push(`| ${cell(g.goal)} | — | < ${g.target} мс | — | — | живая приёмка плана Б |`);
       continue;
     }
     const b = base[g.key]?.p75;
     const n = now[g.key]?.p75;
     const limit = g.target === 'base' ? b : g.target;
     const target = g.target === 'base' ? '≤ базы' : `< ${g.target} мс`;
+    // Группа, где все замеры отброшены, даёт p75 = NaN: это «нет данных», а не «не достигнута».
     const ok =
-      n === undefined || limit === undefined
+      n === undefined || limit === undefined || Number.isNaN(n) || Number.isNaN(limit)
         ? '—'
         : g.target === 'base'
           ? n <= limit
@@ -86,14 +105,16 @@ export function formatTable(base: LabSummary, other: LabSummary | null): string 
           : n < limit
             ? 'да'
             : 'нет';
-    lines.push(
-      `| ${g.goal} | ${g.key} | ${target} | ${fmt(b)} | ${n === undefined ? 'нет данных' : fmt(n)} | ${ok} |`,
-    );
+    lines.push(`| ${cell(g.goal)} | ${cell(g.key)} | ${target} | ${fmt(b)} | ${fmt(n)} | ${ok} |`);
   }
-  lines.push('', '| Метрика | n | p50 | p75 | p95 | база p75 |', '|---|---|---|---|---|---|');
+  lines.push(
+    '',
+    '| Метрика | n | p50 | p75 | p95 | база p75 | отброшено |',
+    '|---|---|---|---|---|---|---|',
+  );
   for (const [k, st] of Object.entries(now).sort(([a], [b]) => a.localeCompare(b))) {
     lines.push(
-      `| ${k} | ${st.n} | ${fmt(st.p50)} | ${fmt(st.p75)} | ${fmt(st.p95)} | ${fmt(base[k]?.p75)} |`,
+      `| ${cell(k)} | ${st.n} | ${fmt(st.p50)} | ${fmt(st.p75)} | ${fmt(st.p95)} | ${fmt(base[k]?.p75)} | ${st.dropped ?? 0} |`,
     );
   }
   return lines.join('\n');

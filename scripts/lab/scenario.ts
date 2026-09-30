@@ -3,6 +3,9 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { BrowserContext, Page } from 'playwright-core';
+// Текст запросов поиска хоста — тот же модуль, что строит их окну поиска: проверка «поиск найдёт запись»
+// обязана спрашивать ровно то, что спросит окно (группы, потолки, квотирование строки), а не свою копию.
+import { SEARCH_GROUPS, searchBlockTexts } from '../../apps/web/src/features/search/search-query';
 import type { LabSample } from './summary';
 
 export const LAB_DIR = join(homedir(), '.orbis-lab');
@@ -14,26 +17,78 @@ export const LAB_URL = (process.env.ORBIS_LAB_URL ?? 'https://orbis-64q4.onrende
 );
 /** Потолок ожидания блоков после прихода записи (§3.1). */
 export const BLOCKS_CEILING_MS = 3000;
+/** Потолок ожидания текста, набранного перед закрытием вкладки, на её новом открытии (I-4). */
+export const SURVIVE_CEILING_MS = 10_000;
+/** Длина строки поиска по заголовку, знаков (кодовых точек) — если первое слово длиннее, берётся оно целиком. */
+export const SEARCH_TEXT_MAX = 40;
+/**
+ * Набор (§3.4 п. 4, R-5): очередями с паузой ДЛИННЕЕ паузы сохранения тела (`SAVE_DEBOUNCE_MS` = 2 с,
+ * `useBodySave.ts`; таймер перезаводится на каждую правку) — каждая очередь даёт одно сохранение, и запросы
+ * считаются по каждому (цель §0.3 п. 8: сохранение при открытом чате не перечитывает ни чат, ни экран). Сплошной
+ * набор не дал бы ни одного сохранения за все 30 с. Латиница — клавиши US-раскладки: кириллицу Playwright
+ * вставляет `insertText` без keydown/keyup, и у таких событий нет `interactionId` — INP мерил бы одни пробелы.
+ */
+export const TYPING = {
+  bursts: 8,
+  burstText: 'quick brown fox jumps on ',
+  charDelayMs: 70,
+  pauseMs: 2500,
+} as const;
 export const RECORD_KINDS = ['task', 'note', 'page-with-blocks', 'project', 'no-blocks'] as const;
 export type RecordKind = (typeof RECORD_KINDS)[number];
+export interface TypingResult {
+  /** Запросы tRPC по процедурам за весь набор. */
+  requests: Record<string, number>;
+  /** Запросы по окнам «очередь + пауза»: в каждом окне — одно сохранение и то, что оно потянуло. */
+  perSave: Array<Record<string, number>>;
+  /** Маркер, набранный перед закрытием вкладки без паузы, виден на новом открытии в пределах потолка. */
+  textSurvived: boolean;
+  /** Когда маркер появился в области записи — мс от начала загрузки новой вкладки; не появился — `null`. */
+  survivedAtMs: number | null;
+  /** Показывалась ли плашка черновика (`draft-banner`) на новом открытии. */
+  draftBanner: boolean;
+}
 export interface LabRun {
   label: string;
   url: string;
+  /** Начало прогона (а не момент записи файла). */
   startedAt: string;
   repeat: number;
   records: Partial<Record<RecordKind, string>>;
   samples: LabSample[];
   notes: string[];
   trpcEncoding: Record<string, string | null>;
-  typing: { requests: Record<string, number>; textSurvived: boolean } | null;
+  typing: TypingResult | null;
+  /** Созданные прогоном лаб-записи (В-5) — их id на случай ручной уборки. */
+  labRecords: string[];
+  /** Причина обрыва прогона; `null` — прогон прошёл целиком. При обрыве файл частичный. */
+  failed: string | null;
 }
 
 /** Наблюдатели LCP и событий ввода — до первого скрипта страницы. INP лаборатории — максимум длительности
- *  взаимодействия (Event Timing) за шаг: один сценарий на одной машине, p98 по десяткам событий не нужен. */
+ *  взаимодействия (Event Timing) за шаг: один сценарий на одной машине, p98 по десяткам событий не нужен.
+ *  Буфер Resource Timing (по умолчанию 250 записей) расширен: «подтверждено» читается из него (M-1). */
 const OBSERVERS = `(() => { const lab = { lcp: null, maxEvent: 0 }; window.__lab = lab; try {
+  performance.setResourceTimingBufferSize(5000);
   new PerformanceObserver((l) => { for (const e of l.getEntries()) lab.lcp = e.startTime; }).observe({ type: 'largest-contentful-paint', buffered: true });
   new PerformanceObserver((l) => { for (const e of l.getEntries()) if (e.interactionId) lab.maxEvent = Math.max(lab.maxEvent, e.duration); }).observe({ type: 'event', buffered: true, durationThreshold: 16 });
 } catch {} })();`;
+
+/**
+ * Строка поиска по заголовку (I-2): поиск хоста — полнотекст по ЦЕЛЫМ словам (`search-query.ts`: «Куп» не найдёт
+ * «Купить»), поэтому заголовок режется только по границе слова — не посреди слова и не посреди суррогатной пары.
+ * Длина — в кодовых точках; первое слово берётся целиком, даже если оно длиннее потолка.
+ */
+export function searchTextOf(title: string, max: number = SEARCH_TEXT_MAX): string {
+  let out = '';
+  for (const word of title.trim().split(/\s+/)) {
+    if (word === '') continue;
+    const next = out === '' ? word : `${out} ${word}`;
+    if (out !== '' && [...next].length > max) break;
+    out = next;
+  }
+  return out;
+}
 
 /** Экран записи готов (`recon-a-web.md` §11): место по адресу, область записи без скелетов и ожидания шаблона. */
 function recordReady(id: string | null): number | false {
@@ -82,6 +137,31 @@ async function waitReady(
   }
 }
 
+/**
+ * Открыть приложение и убедиться, что профиль вошёл (M-10): экран входа вместо приложения — быстрый отказ с
+ * подсказкой, а не 90 с ожидания экрана записи.
+ */
+async function openApp(page: Page): Promise<void> {
+  await page.goto(LAB_URL);
+  const state = await (
+    await page.waitForFunction(
+      () =>
+        document.querySelector('main[data-testid="screen-content"]')
+          ? 'app'
+          : document.querySelector('[data-testid="login-screen"]')
+            ? 'login'
+            : false,
+      undefined,
+      { timeout: 90_000 },
+    )
+  ).jsonValue();
+  if (state === 'login') {
+    throw new Error(
+      'сессия лаб-профиля протухла или её нет — войдите заново: bun scripts/lab/login.ts',
+    );
+  }
+}
+
 /** Клик изнутри страницы: момент нажатия — `performance.now()` страницы, без круга до Node. */
 function clickAt(page: Page, selector: string): Promise<number> {
   return page.evaluate((sel) => {
@@ -93,29 +173,57 @@ function clickAt(page: Page, selector: string): Promise<number> {
   }, selector);
 }
 
-/** Конец ответа процедуры — по Resource Timing страницы (точнее события `response` в Node). */
-function responseEnd(page: Page, procedure: string): Promise<number> {
-  return page.evaluate((p) => {
-    const e = performance
-      .getEntriesByType('resource')
-      .filter((x) => x.name.includes(`/trpc/`) && x.name.includes(p))
-      .at(-1) as PerformanceResourceTiming | undefined;
-    return e?.responseEnd ?? Number.NaN;
-  }, procedure);
+/**
+ * Конец ответа процедуры, вызванной действием в момент `t0` (M-1): первая запись Resource Timing этой процедуры,
+ * начатая не раньше `t0`. Запись попадает в буфер по концу ответа — позже заголовков, по которым резолвится
+ * `waitForResponse`, — поэтому её ждём в странице. Не дождались — NaN: сводка отбросит замер и назовёт число.
+ */
+async function responseEnd(page: Page, procedure: string, t0: number): Promise<number> {
+  try {
+    const h = await page.waitForFunction(
+      ({ p, t0 }) => {
+        const e = (performance.getEntriesByType('resource') as PerformanceResourceTiming[])
+          .filter((x) => x.name.includes('/trpc/') && x.name.includes(p) && x.startTime >= t0)
+          .sort((a, b) => a.startTime - b.startTime)[0];
+        return e !== undefined && e.responseEnd > 0 ? e.responseEnd : false;
+      },
+      { p: procedure, t0 },
+      { timeout: 10_000 },
+    );
+    return (await h.jsonValue()) as number;
+  } catch {
+    return Number.NaN;
+  }
 }
 
-/** Чтение tRPC из контекста страницы токеном сессии профиля (GET без пачки, вход — `?input=`). */
-async function trpcQuery<T>(page: Page, path: string, input: unknown): Promise<T> {
+/**
+ * Вызов tRPC из контекста страницы токеном сессии профиля (без пачки): запрос — GET со входом в `?input=`,
+ * мутация — POST со входом телом. Токен — из хранилища сессии auth-js (`auth/config.ts`, `sb-<ref>-auth-token`).
+ */
+async function trpcCall<T>(
+  page: Page,
+  path: string,
+  input: unknown,
+  kind: 'query' | 'mutation' = 'query',
+): Promise<T> {
   return (await page.evaluate(
-    async ({ path, input }) => {
+    async ({ path, input, kind }) => {
       const key = Object.keys(localStorage).find((k) => /^sb-.+-auth-token$/.test(k));
       const token = key
         ? (JSON.parse(localStorage.getItem(key) ?? '{}') as { access_token?: string }).access_token
         : undefined;
       if (!token) throw new Error('в профиле нет сессии — сначала bun scripts/lab/login.ts');
-      const res = await fetch(`/trpc/${path}?input=${encodeURIComponent(JSON.stringify(input))}`, {
-        headers: { authorization: `Bearer ${token}` },
-      });
+      const headers = { authorization: `Bearer ${token}`, 'content-type': 'application/json' };
+      const res =
+        kind === 'query'
+          ? await fetch(`/trpc/${path}?input=${encodeURIComponent(JSON.stringify(input))}`, {
+              headers,
+            })
+          : await fetch(`/trpc/${path}`, {
+              method: 'POST',
+              headers,
+              body: JSON.stringify(input),
+            });
       const body = (await res.json()) as {
         result?: { data: unknown };
         error?: { message?: string };
@@ -124,49 +232,102 @@ async function trpcQuery<T>(page: Page, path: string, input: unknown): Promise<T
         throw new Error(`${path}: ${body.error?.message ?? res.status}`);
       return body.result.data;
     },
-    { path, input },
+    { path, input, kind },
   )) as T;
 }
 
 type Row = { id: string; title: string };
-/** Пять записей разных видов — один раз, дальше из `records.json` (сравнимость прогонов). */
-async function pickRecords(
-  page: Page,
-  notes: string[],
-): Promise<Partial<Record<RecordKind, string>>> {
-  if (existsSync(RECORDS_FILE)) return JSON.parse(readFileSync(RECORDS_FILE, 'utf8'));
-  const out: Partial<Record<RecordKind, string>> = {};
-  const first = async (kind: RecordKind, query: string) => {
-    const rows = await trpcQuery<Row[]>(page, 'entity.query', { query });
-    if (rows[0]) out[kind] = rows[0].id;
-    else notes.push(`нет записи вида ${kind}`);
-  };
-  await first('task', 'aspect=orbis/task, limit=1');
-  await first('note', 'aspect=orbis/note, limit=1');
-  await first('project', 'aspect=orbis/project, limit=1');
-  const bodyOf = async (id: string) =>
-    (await trpcQuery<{ entity: { body?: string } }>(page, 'entity.get', { id, include: ['body'] }))
-      .entity.body ?? '';
-  for (const p of await trpcQuery<Row[]>(page, 'entity.query', {
+type EntityRead = { entity: { id: string; title: string; archived: boolean; body?: string } };
+
+/**
+ * Найдёт ли поиск хоста запись этим текстом в пределах потолка своей группы (I-2): тот же текст запросов, что у окна
+ * поиска (`searchBlockTexts`), и та же пачка `entity.blocks`. Группа «Записи» — `limit=20` без ранжирования, и у
+ * частого короткого заголовка цель может уйти под «и ещё N» — тогда переход через поиск ждал бы 30 с и падал.
+ */
+async function searchFinds(page: Page, id: string, text: string): Promise<boolean> {
+  const texts = searchBlockTexts(text);
+  if (texts === null) return false;
+  const res = await trpcCall<{
+    results: Record<string, { ok: boolean; rows?: Array<{ id: string }> }>;
+  }>(
+    page,
+    'entity.blocks',
+    { blocks: SEARCH_GROUPS.map((g) => ({ key: g, text: texts[g] })) },
+    'mutation',
+  );
+  return SEARCH_GROUPS.some((g) => res.results[g]?.rows?.some((r) => r.id === id) ?? false);
+}
+
+/** Что делает запись пригодной для вида: страница с блоками данных, запись без блоков; прочим — аспект запроса. */
+const KIND_SOURCES: Record<RecordKind, { query: string; fits?: (body: string) => boolean }> = {
+  task: { query: 'aspect=orbis/task, limit=15' },
+  note: { query: 'aspect=orbis/note, limit=15' },
+  'page-with-blocks': {
     query: 'aspect=orbis/page, limit=30',
-  })) {
-    if ((await bodyOf(p.id)).includes('{{query:')) {
-      out['page-with-blocks'] = p.id;
+    fits: (body) => body.includes('{{query:'),
+  },
+  project: { query: 'aspect=orbis/project, limit=15' },
+  'no-blocks': { query: 'aspect=orbis/note, limit=15', fits: (body) => !body.includes('{{') },
+};
+
+/**
+ * Пять записей разных видов — один раз, дальше из `records.json` (сравнимость прогонов). Каждая — и выбранная, и
+ * сохранённая — проверяется: жива, не в архиве, поиск её находит (I-2, M-10). Непригодная сохранённая
+ * перевыбирается с заметкой: прогон по этому виду уже несравним с прежними.
+ */
+async function pickRecords(page: Page, notes: string[]): Promise<Partial<Record<RecordKind, Row>>> {
+  const stored: Partial<Record<RecordKind, string>> = existsSync(RECORDS_FILE)
+    ? JSON.parse(readFileSync(RECORDS_FILE, 'utf8'))
+    : {};
+  const read = (id: string) =>
+    trpcCall<EntityRead>(page, 'entity.get', { id, include: ['body'] }).catch(() => null);
+  const out: Partial<Record<RecordKind, Row>> = {};
+  const taken = new Set<string>();
+  let changed = false;
+  for (const kind of RECORD_KINDS) {
+    const kept = stored[kind];
+    if (kept !== undefined) {
+      const e = (await read(kept))?.entity;
+      const why =
+        e === undefined
+          ? 'не читается'
+          : e.archived
+            ? 'в архиве'
+            : !(await searchFinds(page, e.id, searchTextOf(e.title)))
+              ? 'не находится поиском'
+              : null;
+      if (why === null && e !== undefined) {
+        out[kind] = { id: e.id, title: e.title };
+        taken.add(e.id);
+        continue;
+      }
+      notes.push(
+        `records.json: запись вида ${kind} (${kept}) ${why} — перевыбрана, вид несравним с прежними прогонами`,
+      );
+    }
+    changed = true;
+    const { query, fits } = KIND_SOURCES[kind];
+    let skipped = 0;
+    for (const r of await trpcCall<Row[]>(page, 'entity.query', { query })) {
+      if (taken.has(r.id)) continue;
+      if (fits !== undefined && !fits((await read(r.id))?.entity.body ?? '')) continue;
+      if (!(await searchFinds(page, r.id, searchTextOf(r.title)))) {
+        skipped += 1;
+        continue;
+      }
+      out[kind] = { id: r.id, title: r.title };
+      taken.add(r.id);
       break;
     }
+    if (skipped > 0)
+      notes.push(`вид ${kind}: поиском по заголовку не находятся ${skipped} — взята следующая`);
+    if (out[kind] === undefined) notes.push(`нет записи вида ${kind}`);
   }
-  if (!out['page-with-blocks']) notes.push('нет записи вида page-with-blocks');
-  const taken = new Set(Object.values(out));
-  for (const r of await trpcQuery<Row[]>(page, 'entity.query', {
-    query: 'aspect=orbis/note, limit=15',
-  })) {
-    if (!taken.has(r.id) && !(await bodyOf(r.id)).includes('{{')) {
-      out['no-blocks'] = r.id;
-      break;
-    }
+  if (changed) {
+    const ids: Partial<Record<RecordKind, string>> = {};
+    for (const kind of RECORD_KINDS) if (out[kind]) ids[kind] = out[kind]?.id;
+    writeFileSync(RECORDS_FILE, JSON.stringify(ids, null, 2));
   }
-  if (!out['no-blocks']) notes.push('нет записи вида no-blocks');
-  writeFileSync(RECORDS_FILE, JSON.stringify(out, null, 2));
   return out;
 }
 
@@ -213,19 +374,13 @@ async function coldStarts(
 /** Переход (§3.4 п. 2): ⌘K → строка поиска → попадание по id → экран записи; повтор — «из памяти»; назад — ‹. */
 async function openViaSearch(page: Page, id: string, title: string): Promise<number> {
   await page.keyboard.press(HOTKEY);
-  await page.fill('input[aria-label="Строка поиска"]', title.slice(0, 40));
+  await page.fill('input[aria-label="Строка поиска"]', searchTextOf(title));
   await page.waitForSelector(`[data-testid="search-hit-${id}"]`, { timeout: 30_000 });
   return clickAt(page, `[data-testid="search-hit-${id}"]`);
 }
 /** Первая запись — опорная: с неё открывается каждая следующая, «‹» возвращает на неё (поиск снимается переходом,
  *  стопка — «опорная → следующая»). Повтор — вторая запись, уже открывавшаяся в этой вкладке (цель 1 §0.3). */
-async function transitions(
-  page: Page,
-  recs: Array<{ id: string; title: string }>,
-  r: number,
-  out: LabSample[],
-  notes: string[],
-) {
+async function transitions(page: Page, recs: Row[], r: number, out: LabSample[], notes: string[]) {
   await page.goto(LAB_URL);
   await waitReady(page, null, notes, 'домашняя');
   const [anchor, ...rest] = recs;
@@ -269,26 +424,39 @@ async function transitions(
   }
 }
 
-/** «＋» (§3.4 п. 3): запись или подзадача; подтверждение — конец ответа последней мутации, видимо — поле очистилось. */
+/** Id записи из тела пачки `entity.create` (`{"0": {input: {id, …}, source}}`) — клиент задаёт его сам (QuickCapture). */
+function createdIdOf(post: unknown): string | null {
+  const first = (post as Record<string, { input?: { id?: unknown } }> | null)?.['0'];
+  return typeof first?.input?.id === 'string' ? first.input.id : null;
+}
+
+/**
+ * «＋» (§3.4 п. 3): запись (на домашней — без контекста) или подзадача (на записи — `entity.create`, затем
+ * `relation.create`, `QuickCapture.tsx`); у подзадачи свой вид действия — два запроса подряд, не «создание» (M-7).
+ * Подтверждение — конец ответа последней мутации, видимо — поле очистилось. Id регистрируется для уборки ДО
+ * ожидания ответа — из тела запроса: запись есть на сервере, даже если ответ потеряется (I-3).
+ */
 async function capture(
   page: Page,
   title: string,
   r: number,
   out: LabSample[],
   kind: 'create' | 'subtask',
+  register: (id: string) => void,
 ): Promise<string> {
   await page.click('[data-testid="host-new"]');
   await page.fill(
     'form[data-testid="quick-capture-form"] input[aria-label="Быстрая запись"]',
     title,
   );
-  const created = page.waitForResponse((res) => res.url().includes('/trpc/entity.create'));
+  const sent = page.waitForRequest((req) => req.url().includes('/trpc/entity.create'));
   const t0 = await clickAt(
     page,
     'form[data-testid="quick-capture-form"] button[aria-label="Добавить"]',
   );
-  const body = (await (await created).json()) as unknown;
-  const data = (Array.isArray(body) ? body[0] : body) as { result: { data: { id: string } } };
+  const id = createdIdOf((await sent).postDataJSON());
+  if (id === null) throw new Error('в запросе entity.create нет id записи');
+  register(id);
   const cleared = (await (
     await page.waitForFunction(
       () => {
@@ -301,22 +469,14 @@ async function capture(
       { timeout: 30_000 },
     )
   ).jsonValue()) as number;
-  const last =
-    kind === 'subtask'
-      ? Math.max(
-          await responseEnd(page, 'entity.create'),
-          (await responseEnd(page, 'relation.create')) || 0,
-        )
-      : await responseEnd(page, 'entity.create');
-  mark(out, {
-    metric: 'action_confirmed',
-    kind: 'create',
-    durMs: last - t0,
-    repeat: r,
-    ...(kind === 'subtask' ? { note: 'подзадача' } : {}),
-  });
-  mark(out, { metric: 'action_visible', kind: 'create', durMs: cleared - t0, repeat: r });
-  return data.result.data.id;
+  const last = await responseEnd(
+    page,
+    kind === 'subtask' ? 'relation.create' : 'entity.create',
+    t0,
+  );
+  mark(out, { metric: 'action_confirmed', kind, durMs: last - t0, repeat: r });
+  mark(out, { metric: 'action_visible', kind, durMs: cleared - t0, repeat: r });
+  return id;
 }
 
 /** Галочка и статус туда-обратно (§3.4 п. 3) на лаб-подзадаче; видимо — состояние контрола, подтверждено — ответ `entity.update`. */
@@ -343,7 +503,7 @@ async function toggles(page: Page, taskId: string, r: number, out: LabSample[], 
       mark(out, {
         metric: 'action_confirmed',
         kind: 'checkbox',
-        durMs: (await responseEnd(page, 'entity.update')) - t0,
+        durMs: (await responseEnd(page, 'entity.update', t0)) - t0,
         repeat: r,
       });
     }
@@ -370,52 +530,119 @@ async function toggles(page: Page, taskId: string, r: number, out: LabSample[], 
       mark(out, {
         metric: 'action_confirmed',
         kind: 'status',
-        durMs: (await responseEnd(page, 'entity.update')) - t0,
+        durMs: (await responseEnd(page, 'entity.update', t0)) - t0,
         repeat: r,
       });
     }
   } else notes.push('поля статуса на экране лаб-задачи нет');
 }
 
-/** Набор 30 с при открытом чате (§3.4 п. 4): запросы по процедурам, INP; затем закрытие вкладки и проверка текста. */
-async function typing(ctx: BrowserContext, noteId: string, out: LabSample[], notes: string[]) {
+/**
+ * Редактор тела (M-8): встаёт по касанию превью ИЛИ сам по простою (`EditorShell.tsx`, requestIdleCallback), и
+ * превью может исчезнуть между проверкой и кликом. Поэтому сперва — есть ли уже редактор; клик по превью — с
+ * коротким потолком и без падения; затем ждём редактор.
+ */
+async function focusEditor(page: Page): Promise<void> {
+  const editor = '[data-testid="body-editor"] .ProseMirror';
+  if (!(await page.$(editor))) {
+    await page
+      .locator('[data-testid="editor-preview"]')
+      .click({ timeout: 3_000 })
+      .catch(() => {});
+  }
+  await page.waitForSelector(editor, { timeout: 30_000 });
+  await page.click(editor);
+}
+
+/**
+ * Набор ≈30 с при открытом чате (§3.4 п. 4, R-5): очереди `TYPING` с паузой длиннее паузы сохранения — запросы по
+ * каждому сохранению и INP. Затем маркер без паузы и закрытие вкладки: текст живёт только в досыле на `pagehide`
+ * и в черновике. Новая вкладка — после события закрытия старой (I-4); маркер ждём в области записи (превью или
+ * редактор) до потолка: до ответа сервера просмотр показывает прежний текст, черновик досылается при подъёме.
+ */
+async function typing(
+  ctx: BrowserContext,
+  noteId: string,
+  out: LabSample[],
+  notes: string[],
+): Promise<TypingResult> {
   const page = await ctx.newPage();
+  // Приложение пишет черновик на pagehide, а не beforeunload; но диалог ухода, появись он, Playwright по
+  // умолчанию ОТКЛОНИЛ бы — вкладка осталась бы открытой, и замер «пережил закрытие» мерил бы не то.
+  page.on('dialog', (d) => void d.accept());
   await page.goto(`${LAB_URL}/r/${noteId}`);
   await waitReady(page, noteId, notes, 'лаб-запись');
   await page.click('[data-testid="host-chat"]');
-  if (await page.$('[data-testid="editor-preview"]'))
-    await page.click('[data-testid="editor-preview"]');
-  await page.click('[data-testid="body-editor"] .ProseMirror');
+  await focusEditor(page);
   const requests: Record<string, number> = {};
-  const count = (url: string) => {
-    const procs = proceduresOf(url);
-    for (const p of procs ?? []) requests[p] = (requests[p] ?? 0) + 1;
-  };
-  page.on('request', (req) => count(req.url()));
+  const perSave: Array<Record<string, number>> = [];
+  let slot: Record<string, number> = {};
+  page.on('request', (req) => {
+    for (const p of proceduresOf(req.url()) ?? []) {
+      requests[p] = (requests[p] ?? 0) + 1;
+      slot[p] = (slot[p] ?? 0) + 1;
+    }
+  });
   await page.evaluate(() => {
-    (window as unknown as { __lab: { maxEvent: number } }).__lab.maxEvent = 0;
+    (globalThis as unknown as { __lab: { maxEvent: number } }).__lab.maxEvent = 0;
   });
-  const marker = `лаб-${Date.now()}`;
-  await page.keyboard.type(`${marker} ${'набор текста для замера '.repeat(8)}`.slice(0, 200), {
-    delay: 150,
-  });
+  for (let i = 0; i < TYPING.bursts; i++) {
+    slot = {};
+    perSave.push(slot);
+    await page.keyboard.type(TYPING.burstText, { delay: TYPING.charDelayMs });
+    await page.waitForTimeout(TYPING.pauseMs);
+    if ((slot['entity.update'] ?? 0) === 0) notes.push(`набор: очередь ${i + 1} без сохранения`);
+  }
+  // Маркер — одним латинским словом: так он цел и в тексте превью, и в редакторе.
+  const marker = `labmark${Date.now()}`;
+  // Хвост с маркером — не окно сохранения: вкладка закрывается раньше паузы, его запросы в `perSave` не идут.
+  slot = {};
+  await page.keyboard.type(marker, { delay: TYPING.charDelayMs });
   mark(out, {
     metric: 'inp',
     kind: 'typing',
     durMs: await page.evaluate(
-      () => (window as unknown as { __lab: { maxEvent: number } }).__lab.maxEvent,
+      () => (globalThis as unknown as { __lab: { maxEvent: number } }).__lab.maxEvent,
     ),
     repeat: 1,
   });
+  const closed = page.waitForEvent('close', { timeout: 30_000 });
   await page.close({ runBeforeUnload: true });
+  await closed;
   const again = await ctx.newPage();
-  await again.goto(`${LAB_URL}/r/${noteId}`);
-  await waitReady(again, noteId, notes, 'после закрытия');
-  const textSurvived = ((await again.textContent('[data-testid="record-area"]')) ?? '').includes(
-    marker,
-  );
-  await again.close();
-  return { requests, textSurvived };
+  try {
+    await again.goto(`${LAB_URL}/r/${noteId}`);
+    await waitReady(again, noteId, notes, 'после закрытия');
+    const at = await again
+      .waitForFunction(
+        (m) => {
+          const w = globalThis as unknown as { __labBanner?: boolean };
+          if (document.querySelector('[data-testid="draft-banner"]')) w.__labBanner = true;
+          const area = document.querySelector('[data-testid="record-area"]');
+          return area?.textContent?.includes(m) ? performance.now() : false;
+        },
+        marker,
+        { timeout: SURVIVE_CEILING_MS, polling: 100 },
+      )
+      .then(async (h) => (await h.jsonValue()) as number)
+      .catch(() => null);
+    const draftBanner = await again.evaluate(
+      () =>
+        (globalThis as unknown as { __labBanner?: boolean }).__labBanner === true ||
+        document.querySelector('[data-testid="draft-banner"]') !== null,
+    );
+    if (at === null) notes.push(`набор: маркер не появился за ${SURVIVE_CEILING_MS / 1000} с`);
+    else mark(out, { metric: 'text_survived', kind: 'reopen', durMs: at, repeat: 1 });
+    return {
+      requests,
+      perSave,
+      textSurvived: at !== null,
+      survivedAtMs: at === null ? null : Math.round(at),
+      draftBanner,
+    };
+  } finally {
+    await again.close();
+  }
 }
 
 /** Холодный старт без сети (§3.4 п. 5): содержимое экрана за 10 с или заметка. */
@@ -452,57 +679,106 @@ async function archive(page: Page, id: string, notes: string[]) {
   await done;
 }
 
+/**
+ * Уборка при обрыве (I-3, В-5): лаб-записи, не ушедшие в архив путём интерфейса, архивируются запасным путём —
+ * `entity.update {id, archived: true}` из контекста страницы тем же токеном. Не вышло — id в заметках и в логе:
+ * уборка руками.
+ */
+async function archiveLeftovers(
+  ctx: BrowserContext,
+  page: Page,
+  ids: string[],
+  notes: string[],
+  log: (l: string) => void,
+): Promise<void> {
+  log(`уборка: лаб-записи не в архиве — архивирую запасным путём: ${ids.join(', ')}`);
+  try {
+    await ctx.setOffline(false);
+    const p = page.isClosed() ? await ctx.newPage() : page;
+    if (!p.url().startsWith(LAB_URL)) await p.goto(LAB_URL, { timeout: 60_000 });
+    for (const id of ids) {
+      try {
+        await trpcCall(p, 'entity.update', { id, archived: true }, 'mutation');
+        notes.push(`уборка: ${id} в архиве запасным путём`);
+      } catch (e) {
+        const why = e instanceof Error ? e.message : String(e);
+        notes.push(`уборка: ${id} НЕ в архиве (${why}) — архивировать руками`);
+        log(`уборка: ${id} НЕ в архиве (${why}) — архивировать руками`);
+      }
+    }
+  } catch (e) {
+    const why = e instanceof Error ? e.message : String(e);
+    notes.push(`уборка не удалась (${why}) — архивировать руками: ${ids.join(', ')}`);
+    log(`уборка не удалась (${why}) — архивировать руками: ${ids.join(', ')}`);
+  }
+}
+
 export async function runScenario(
   ctx: BrowserContext,
   o: { label: string; repeat: number; log: (l: string) => void },
 ): Promise<LabRun> {
-  await ctx.addInitScript(OBSERVERS);
-  const page = ctx.pages()[0] ?? (await ctx.newPage());
-  const samples: LabSample[] = [];
-  const notes: string[] = [];
-  const trpcEncoding: Record<string, string | null> = {};
-  // Сжатие на краю сети (§9, §3.4): заголовок ответа по каждой пачке процедур.
-  ctx.on('response', (res) => {
-    const procs = proceduresOf(res.url());
-    if (procs !== null) trpcEncoding[procs.join(',')] = res.headers()['content-encoding'] ?? null;
-  });
-  await page.goto(LAB_URL);
-  await waitReady(page, null, notes, 'первый вход');
-  const records = await pickRecords(page, notes);
-  const titled: Row[] = [];
-  for (const kind of RECORD_KINDS) {
-    const id = records[kind];
-    if (id)
-      titled.push({
-        id,
-        title: (await trpcQuery<{ entity: { title: string } }>(page, 'entity.get', { id })).entity
-          .title,
-      });
-  }
-  const stamp = new Date().toISOString().slice(0, 16);
-  const labNote = await capture(page, `Лаб-запись ${stamp}`, 1, samples, 'create'); // В-5: две лаб-записи за прогон
-  await page.goto(`${LAB_URL}/r/${labNote}`);
-  await waitReady(page, labNote, notes, 'лаб-запись');
-  const labTask = await capture(page, `Лаб-подзадача ${stamp}`, 1, samples, 'subtask');
-  for (let r = 1; r <= o.repeat; r++) {
-    o.log(`повтор ${r}/${o.repeat}`);
-    await coldStarts(ctx, page, r, samples, notes);
-    await transitions(page, titled, r, samples, notes);
-    await toggles(page, labTask, r, samples, notes);
-  }
-  const typed = await typing(ctx, labNote, samples, notes);
-  await offlineStart(ctx, samples, notes);
-  await archive(page, labTask, notes);
-  await archive(page, labNote, notes);
-  return {
+  const run: LabRun = {
     label: o.label,
     url: LAB_URL,
     startedAt: new Date().toISOString(),
     repeat: o.repeat,
-    records,
-    samples,
-    notes,
-    trpcEncoding,
-    typing: typed,
+    records: {},
+    samples: [],
+    notes: [],
+    trpcEncoding: {},
+    typing: null,
+    labRecords: [],
+    failed: null,
   };
+  const { samples, notes } = run;
+  const archived = new Set<string>();
+  const register = (id: string) => {
+    run.labRecords.push(id);
+    o.log(`создана лаб-запись ${id}`);
+  };
+  await ctx.addInitScript(OBSERVERS);
+  const page = ctx.pages()[0] ?? (await ctx.newPage());
+  // Сжатие на краю сети (§9, §3.4): заголовок ответа по каждой пачке процедур.
+  ctx.on('response', (res) => {
+    const procs = proceduresOf(res.url());
+    if (procs !== null)
+      run.trpcEncoding[procs.join(',')] = res.headers()['content-encoding'] ?? null;
+  });
+  try {
+    await openApp(page);
+    await waitReady(page, null, notes, 'первый вход');
+    const picked = await pickRecords(page, notes);
+    const titled: Row[] = [];
+    for (const kind of RECORD_KINDS) {
+      const rec = picked[kind];
+      if (rec === undefined) continue;
+      run.records[kind] = rec.id;
+      titled.push(rec);
+    }
+    const stamp = new Date().toISOString().slice(0, 16);
+    // В-5: две лаб-записи за прогон
+    const labNote = await capture(page, `Лаб-запись ${stamp}`, 1, samples, 'create', register);
+    await page.goto(`${LAB_URL}/r/${labNote}`);
+    await waitReady(page, labNote, notes, 'лаб-запись');
+    const labTask = await capture(page, `Лаб-подзадача ${stamp}`, 1, samples, 'subtask', register);
+    for (let r = 1; r <= o.repeat; r++) {
+      o.log(`повтор ${r}/${o.repeat}`);
+      await coldStarts(ctx, page, r, samples, notes);
+      await transitions(page, titled, r, samples, notes);
+      await toggles(page, labTask, r, samples, notes);
+    }
+    run.typing = await typing(ctx, labNote, samples, notes);
+    await offlineStart(ctx, samples, notes);
+    for (const id of [labTask, labNote]) {
+      await archive(page, id, notes);
+      archived.add(id);
+    }
+  } catch (e) {
+    run.failed = e instanceof Error ? e.message : String(e);
+    notes.push(`сбой: ${run.failed}`);
+  } finally {
+    const left = run.labRecords.filter((id) => !archived.has(id));
+    if (left.length > 0) await archiveLeftovers(ctx, page, left, notes, o.log);
+  }
+  return run;
 }

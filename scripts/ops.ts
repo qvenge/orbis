@@ -617,7 +617,7 @@ async function migrate1vOp(args: string[]): Promise<number> {
   );
 }
 
-/** Только чтение (спека скорости §3.3): объём журнала по графам и дням; с задачи 3 — перцентили замеров. */
+/** Только чтение (спека скорости §3.3): объём журнала по графам, дням (UTC) и источникам действия (§3.1); с задачи 3 — перцентили замеров. */
 async function perfOp(args: string[]): Promise<number> {
   return withDb((sql) =>
     runPerfReport(args, { sql, log: (l) => console.log(l), error: (l) => console.error(l) }),
@@ -806,7 +806,7 @@ const OPS: Record<string, { run: (args: string[]) => Promise<number>; help: stri
   },
   perf: {
     run: perfOp,
-    help: 'только чтение: объём журнала по графам и дням [--since 7d] [--metric <m>] (спека скорости §3.3)',
+    help: 'только чтение: объём журнала по графам, дням (UTC) и источникам действия [--since 7d] [--metric <m>] (спека скорости §3.3)',
   },
   ping: { run: ping, help: 'связность и версия PostgreSQL' },
   dump: {

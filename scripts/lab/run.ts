@@ -28,6 +28,9 @@ const ctx = await chromium.launchPersistentContext(PROFILE_DIR, {
   headless: false,
   viewport: { width: 1280, height: 860 },
 });
+// Обрыв прогона — не потеря замеров (I-3): сценарий возвращает частичный прогон с причиной в `failed` и в
+// заметках, файл пишется и тогда, а код выхода — ненулевой.
+let code = 0;
 try {
   const run = await runScenario(ctx, { label, repeat, log: (l) => console.log(l) });
   mkdirSync(dirname(out), { recursive: true });
@@ -36,6 +39,15 @@ try {
     `записано: ${out} (замеров ${run.samples.length}; заметки: ${run.notes.join('; ') || 'нет'})`,
   );
   console.log(`сжатие /trpc: ${JSON.stringify(run.trpcEncoding)}`);
+  console.log(`лаб-записи прогона: ${run.labRecords.join(', ') || 'нет'}`);
+  if (run.failed !== null) {
+    console.error(`прогон оборвался: ${run.failed} — файл частичный`);
+    code = 1;
+  }
+} catch (e) {
+  console.error(`прогон не состоялся: ${e instanceof Error ? e.message : String(e)}`);
+  code = 1;
 } finally {
   await ctx.close();
 }
+process.exit(code);
