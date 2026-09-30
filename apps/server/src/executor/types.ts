@@ -165,6 +165,14 @@ export interface WireEntity {
   createdAt: string;
   updatedAt: string;
   archived: boolean;
+  /**
+   * Ревизия тела и время его изменения (спека скорости §8.1, колонки 0026 — их ставит триггер). Есть у чтения одной
+   * записи и в ответах мутаций (`toWireEntityWithRevision`, полная строка `RETURNING`); строки списков их не несут —
+   * отсюда опциональность ключа: `undefined` = «не выбирали», а не «ревизии нет». Действие текущего тела наружу не
+   * едет: это id записи журнала, и отвечать о нём будет чтение журнала (`entity.get.bodyAction`, задача 10).
+   */
+  bodyRevision?: number;
+  bodyChangedAt?: string;
 }
 
 /**
@@ -361,8 +369,10 @@ export interface ActionRecord {
   inverse: ActionOperation[]; // в обратном порядке исполнения (§7.8)
   /**
    * Признак сеанса правки текста (спека скорости §8.5) и «действие тела до» каждой записи, чьё тело действие
-   * изменило (§8.6: `{<id записи>: <id действия> | null}`). Колонки журнала (`text_session`, `body_before`, 0025);
-   * заполняют задачи 7 и 9, до них — отсутствуют (синк пишет умолчания колонок: `false` и NULL).
+   * изменило (§8.6: `{<id записи>: <id действия> | null}`). Колонки журнала (`text_session`, `body_before`, 0025).
+   * `body_before` заполняет executor (задача 7): ключ — запись, чью ревизию тела действие РЕАЛЬНО сдвинуло (триггер
+   * `entities_body_stamp`), значение — её `body_action_id` ДО действия; у слияния свойства — по каждому держателю.
+   * Ни одной такой записи — ключа нет (синк пишет NULL). `text_session` — задача 9; до неё отсутствует (`false`).
    */
   text_session?: boolean;
   body_before?: Record<string, string | null>;
@@ -403,6 +413,7 @@ export interface UndoWrite {
   actorUserId: AccountId;
   operations: ActionOperation[];
   pinnedVersionIds: string[];
+  /** «Действие тела до» по записям, чьё тело отмена сменила (§8.6) — тем же сбором, что у действий; нет — NULL. */
   bodyBefore: Record<string, string | null> | null;
 }
 

@@ -40,6 +40,24 @@ export function toWireEntity(row: EntityRow, includeBodyDoc = false): WireEntity
 }
 
 /**
+ * ОДНА запись — чтение записи (`entity.get`, `readEntity`) и ответ мутации (полная строка `RETURNING`): wire-форма
+ * плюс ревизия тела и время его изменения (спека скорости §8.1, колонки 0026). По ним клиент начинает правку текста и
+ * узнаёт, что тело сменилось (замок текста — задача 8).
+ *
+ * Отдельной функцией, а не всегда в `toWireEntity`, потому что полные строки drizzle ходят и в СПИСКИ: ведомости и
+ * списки карточки Бюджета, снимки поверхностей, дамп владельца. Списку ревизия не нужна (правку текста начинают с
+ * чтения записи), а время изменения тела — машинная отметка, которой в снимках поверхностей быть не должно
+ * (консервативность §С1-3 п. 9). Строки списков компилятора (`toWireEntityFromSql`) этих колонок не выбирают вовсе.
+ */
+export function toWireEntityWithRevision(row: EntityRow, includeBodyDoc = false): WireEntity {
+  return {
+    ...toWireEntity(row, includeBodyDoc),
+    bodyRevision: row.bodyRevision,
+    bodyChangedAt: row.bodyChangedAt.toISOString(),
+  };
+}
+
+/**
  * Сущность в форме, которую видит МОДЕЛЬ (§А9-2, Р12 «key для машин»).
  *
  * Чем она отличается от `toWireEntity` и почему проекции ДВЕ, а не одна:

@@ -153,11 +153,14 @@ import {
   subscriptionRemoveInput,
   subscriptionSetInput,
 } from '../tools/registry-tools';
-// Date→ISO живёт ТОЛЬКО в wire.ts (Task 12); executor использует те же функции
-import { toWireEntity as toWire, toWireRelation } from '../wire';
+// Date→ISO живёт ТОЛЬКО в wire.ts (Task 12); executor использует те же функции. Ответ мутации записи — строка
+// `RETURNING` с ревизией тела и временем его изменения (`toWireEntityWithRevision`, спека скорости §8.1); строки для
+// хуков (бюджет, «дом») — без них, им колонки тела не нужны.
+import { toWireEntity as toWire, toWireEntityWithRevision, toWireRelation } from '../wire';
 import { recomputeProjectAncestors } from './ancestors';
 import { assertEntityProps } from './aspects-validate';
 import { bodyFieldsFromMarkdown } from './body-fields';
+import { bodyActionBefore, createdBodyStamp, stampVirtualBody } from './body-stamp';
 import { ExecError } from './errors';
 import { applyHomeFollowUps, type HomeHook, homeHookOf } from './home';
 import {
@@ -230,6 +233,12 @@ interface ExecCtx {
   sink: JournalSink;
   /** Внутренний режим undo (§7.8) — см. InternalUndoMode; только из undo.ts. */
   internalUndo?: InternalUndoMode;
+  /**
+   * Действие текущего тела, объявленное транзакцией (`orbis.body_action`, спека скорости §8.1, РП-16): id записи
+   * журнала этой транзакции (у пачки — batch_id), у отмены — id её записи отмены; `null` — транзакция без журнала
+   * (`NOOP_SINK`: сев, мир, садовник). Колонки базы ставит триггер; здесь значение нужно виртуальным строкам пачки.
+   */
+  bodyAction: string | null;
   /**
    * Контекст компиляции запросов (§А5-7) — ЛЕНИВЫЙ и на транзакцию: его спрашивает
    * единственный потребитель, проверка ссылочных свойств (§А6-1), и только когда операция
@@ -331,6 +340,13 @@ interface JournalPlan {
   title: string;
   operations: ActionOperation[];
   inverse: ActionOperation[];
+  /**
+   * «Действие тела до» (§8.6 «Цепочка»): записи, чьё тело операция РЕАЛЬНО сменила (ревизия строки `RETURNING` выросла),
+   * → значение колонки `body_action_id` до операции. Заполняется в `apply` — «сменила» знает только база (триггер
+   * сравнивает `IS DISTINCT FROM`, правка тем же текстом ключа не даёт). Запись журнала собирает планы
+   * `collectBodyBefore`.
+   */
+  bodyBefore?: Record<string, string | null>;
 }
 
 /**
@@ -421,6 +437,63 @@ const NOOP_SINK: JournalSink = {
   writeUndo: async () => {},
   findBatchWrite: async () => undefined,
 };
+
+/**
+ * Какое действие объявляет транзакция executor'а (спека скорости §8.1, РП-16). Транзакция executor'а и есть ОДНО действие
+ * журнала (одиночное — `actionId`, пачка — `batch_id`) или одна запись отмены (id заведён до применения, РП-11).
+ * Без журнала (`NOOP_SINK`: сев, мир, садовник, рутина переноса) — не объявляет: колонка остаётся пустой (К-34), иначе
+ * она указывала бы на запись журнала, которой нет.
+ */
+function bodyActionOf(
+  sink: JournalSink,
+  internalUndo: InternalUndoMode | undefined,
+  actionId: string,
+): string | null {
+  if (internalUndo !== undefined) return internalUndo.undoRecordId;
+  return sink === NOOP_SINK ? null : actionId;
+}
+
+/**
+ * Объявление действия ОДИН раз на транзакцию — первой инструкцией после идентичности: триггер `entities_body_stamp`
+ * проставит его каждой записи, чьё тело сменится, включая сырой SQL слияния свойства и его отката. `is_local = true` —
+ * настройка умирает с транзакцией; на переиспользованном соединении она остаётся определённой ПУСТОЙ, и триггер читает
+ * её через NULLIF (0026).
+ */
+async function declareBodyAction(tx: Tx, bodyAction: string | null): Promise<void> {
+  if (bodyAction === null) return;
+  await tx.execute(sql`SELECT set_config('orbis.body_action', ${bodyAction}, true)`);
+}
+
+/**
+ * «Действие тела до» записи журнала из планов всех её операций (§8.6): объединение, ПЕРВЫЙ ключ побеждает — в пачке
+ * значение до первой правки этой записи, а не промежуточное. Нет ключей — `undefined`: поля в записи не будет.
+ */
+function collectBodyBefore(
+  plans: readonly PreparedOp[],
+): Record<string, string | null> | undefined {
+  const out: Record<string, string | null> = {};
+  for (const plan of plans) {
+    for (const [entityId, before] of Object.entries(plan.journal.bodyBefore ?? {})) {
+      if (!Object.hasOwn(out, entityId)) out[entityId] = before;
+    }
+  }
+  return Object.keys(out).length === 0 ? undefined : out;
+}
+
+/**
+ * Записать «до» записи, если операция РЕАЛЬНО сменила её тело: ревизия строки `RETURNING` больше ревизии, от которой
+ * операция считалась (строка под замком или виртуальная строка пачки). Правка тем же текстом ревизию не двигает —
+ * ключа нет (К-34: «изменила тело» = «триггер сменил тело»). Ключ — id строки из базы (канонический регистр uuid).
+ */
+function noteBodyBefore(
+  journal: JournalPlan,
+  row: EntityRow,
+  current: EntityRow,
+  before: string | null,
+): void {
+  if (row.bodyRevision <= current.bodyRevision) return;
+  journal.bodyBefore = { ...journal.bodyBefore, [row.id]: before };
+}
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -521,7 +594,12 @@ export async function execute(
     }
 
     const actionId = newId();
+    const bodyAction = bodyActionOf(sink, deps.internalUndo, actionId);
     return await withIdentity(db, req.identity, async (tx) => {
+      // Действие текущего тела (§8.1): транзакция executor'а и есть ОДНО действие журнала (или одна запись отмены) —
+      // объявляем его один раз, и триггер entities_body_stamp проставит его каждой записи, чьё тело сменится, включая
+      // сырой SQL слияния свойства. Без журнала (сев, мир, садовник: NOOP_SINK) — не объявляем (К-34).
+      await declareBodyAction(tx, bodyAction);
       // Шов сериализации §7.10 — до первого чтения состояния (см. ExecutorDeps.beforeStages)
       if (deps.beforeStages) await deps.beforeStages(tx);
       // Снимок реестра — ДО замка контура, и это безопасно: три SELECT'а по таблицам
@@ -548,6 +626,7 @@ export async function execute(
         clock,
         sink,
         internalUndo: deps.internalUndo,
+        bodyAction,
       };
       const plan = await prepareOp(ctx, single.tool, single.input); // стадии 1–4
       const out = await plan.apply(ctx); // стадия 5
@@ -576,7 +655,7 @@ export async function execute(
         // целиком — это один ленивый пересчёт против неполной модели того, что откат сделал.
         // Отмена — редкая явная операция, цена честная.
         await invalidateSpentCacheOfOwner(tx, req.identity.graph);
-        await writeUndoRecord(ctx, ctx.internalUndo);
+        await writeUndoRecord(ctx, ctx.internalUndo, [plan]);
       } else if (out.replay !== true) {
         const allPlans = [plan, ...followUps];
         // Пересчёт — ПОСЛЕ бюджет-хука: снятие устаревшей привязки удаляет ребро, а роль
@@ -594,6 +673,7 @@ export async function execute(
             ...refOps,
           ],
           inverse: aggregateInverse(allPlans),
+          bodyBefore: collectBodyBefore(allPlans),
         });
       }
       return {
@@ -658,8 +738,11 @@ async function executeBatch(
   }
 
   // Идемпотентность §7.8: ключ записи пачки в журнале — сам batch_id (`(graph_id, id)`, спека скорости §11.2)
+  const bodyAction = bodyActionOf(sink, internalUndo, batchId);
   try {
     return await withIdentity(db, req.identity, async (tx) => {
+      // Действие текущего тела — ОДНО на всю пачку (§8.1, см. одиночный путь): её строка журнала одна, id = batch_id
+      await declareBodyAction(tx, bodyAction);
       // Шов сериализации §7.10 — до первого чтения состояния, ДО replay-проверки и стадий
       // (см. ExecutorDeps.beforeStages): конкурентный reject либо закоммичен (проверка
       // beforeStages его увидит), либо ждёт этот tx и увидит запись журнала
@@ -684,6 +767,7 @@ async function executeBatch(
         clock,
         sink,
         internalUndo,
+        bodyAction,
       };
 
       // Повтор batch_id: вернуть сохранённый результат, ничего не применяя (§7.8, §13.4).
@@ -726,7 +810,7 @@ async function executeBatch(
         // Кэш spent — см. одиночный путь: откат идёт мимо хука, задетые сущности планами не
         // выражены, снос владельца дешевле неполной модели.
         await invalidateSpentCacheOfOwner(tx, req.identity.graph);
-        await writeUndoRecord(ctx, internalUndo);
+        await writeUndoRecord(ctx, internalUndo, plans);
         return { ok: true as const, actionId: batchId, results, idempotentReplay: false };
       }
       // Бюджет-хук A4 (§2.3): после применения ВСЕХ операций batch — привязка/ребиндинг
@@ -745,6 +829,7 @@ async function executeBatch(
       const refOps = await applyRefEffects(ctx, allPlans);
       // Обычный batch: ОДИН action на весь batch, id = batch_id; inverse — в обратном
       // порядке исполнения (§7.8). Ключ строки журнала — `(graph_id, batch_id)`.
+      const bodyBefore = collectBodyBefore(allPlans);
       const action: ActionRecord = {
         id: batchId,
         // §Б6-4: строка действия отличима от голой пачки ТИПОМ, а не догадкой по metadata.
@@ -762,6 +847,7 @@ async function executeBatch(
         ...(req.action?.module != null && { module: req.action.module }),
         operations: [...allPlans.flatMap((p) => p.journal.operations), ...recomputeOps, ...refOps],
         inverse: aggregateInverse(allPlans),
+        ...(bodyBefore !== undefined && { body_before: bodyBefore }),
       };
       await sink.write(tx, {
         graphId: req.identity.graph,
@@ -1271,6 +1357,8 @@ async function writeJournal(ctx: ExecCtx, p: JournalPlan): Promise<void> {
     ...(ctx.req.editedFrom !== undefined && { edited_from: ctx.req.editedFrom }),
     operations: p.operations,
     inverse: p.inverse,
+    // Только если тело сменилось хоть у одной записи (§8.6): пустых ключей в журнале не заводим (см. ActionRecord)
+    ...(p.bodyBefore !== undefined && { body_before: p.bodyBefore }),
   };
   await ctx.sink.write(ctx.tx, {
     graphId: ctx.req.identity.graph,
@@ -1285,9 +1373,17 @@ async function writeJournal(ctx: ExecCtx, p: JournalPlan): Promise<void> {
  * Запись отмены (внутренний режим, §7.8, РП-11) — ПОСЛЕ применения inverse ТЕМ ЖЕ tx: сначала перепроверка «уже
  * отменено» и снятие пометок ссылок (`onApplied`, `undo.ts`), затем строка `type:'undo'` с id, заведённым до
  * применения. Операции записи — применённый inverse отменённого действия (аудит, К-45): ровно его исполнитель
- * прогнал как тулы. Закреплённые версии и «действие тела до» у отмены — задача 10; до неё пусты.
+ * прогнал как тулы.
+ *
+ * «Действие тела до» (§8.6 «Цепочка») — из планов применённого inverse, тем же сбором, что у действий: отмена тоже
+ * меняет тело (её id становится действием текущего тела), и раскрутка цепочки (задача 10) через запись отмены читает
+ * колонку ДО неё. Закреплённые версии у отмены — задача 10; до неё пусты.
  */
-async function writeUndoRecord(ctx: ExecCtx, undo: InternalUndoMode): Promise<void> {
+async function writeUndoRecord(
+  ctx: ExecCtx,
+  undo: InternalUndoMode,
+  plans: readonly PreparedOp[],
+): Promise<void> {
   await undo.onApplied(ctx.tx);
   await ctx.sink.writeUndo(ctx.tx, {
     graphId: ctx.req.identity.graph,
@@ -1297,7 +1393,7 @@ async function writeUndoRecord(ctx: ExecCtx, undo: InternalUndoMode): Promise<vo
     actorUserId: ctx.req.identity.actor,
     operations: undo.undoing.inverse,
     pinnedVersionIds: [],
-    bodyBefore: null,
+    bodyBefore: collectBodyBefore(plans) ?? null,
   });
 }
 
@@ -2132,8 +2228,11 @@ async function prepareEntityCreate(
     updatedAt: now,
     archived: false,
   };
+  // Виртуальная строка — с колонками тела, которые поставит INSERT-ветка триггера (РП-17): правка тела той же записи
+  // дальше в пачке сверяется с ревизией 1, а не с пустотой. В `values` (вставку) их нет — колонки пишет только триггер.
+  const created = { ...values, ...createdBodyStamp(ctx.bodyAction, now) } as EntityRow;
   // Эффект batch: созданная строка видна стадиям 3–4 следующих операций
-  batch?.entities.set(id, values as EntityRow);
+  batch?.entities.set(id, created);
 
   const journal: JournalPlan = {
     type: 'entity_created',
@@ -2167,8 +2266,8 @@ async function prepareEntityCreate(
   const inBatch = batch !== undefined;
   return {
     journal,
-    budgetHook: { before: null, after: values as EntityRow },
-    ...homeHookOf(null, values as EntityRow),
+    budgetHook: { before: null, after: created },
+    ...homeHookOf(null, created),
     ...refWrite,
     // Стадия 5: идемпотентная вставка по client-UUID (§5.3, §9.1)
     async apply(applyCtx: ExecCtx): Promise<OpOutcome> {
@@ -2199,9 +2298,9 @@ async function prepareEntityCreate(
             reason: 'id_conflict',
           });
         }
-        return { result: toWire(own), replay: true };
+        return { result: toWireEntityWithRevision(own), replay: true };
       }
-      return { result: toWire(row) };
+      return { result: toWireEntityWithRevision(row) };
     },
   };
 }
@@ -2603,9 +2702,14 @@ async function prepareEntityUpdate(
   Object.assign(prior, stateDelta(state, before));
   gateEntitlements(ctx, 'entity_update');
 
-  // Эффект batch: строка после патча видна следующим операциям
-  const afterRow = { ...current, ...patch } as EntityRow;
+  // Эффект batch: строка после патча видна следующим операциям — с приращением ревизии тела, которое сделает триггер
+  // (РП-17): иначе вторая правка тела той же записи в пачке сверялась бы с устаревшей ревизией (Д-13).
+  const afterRow = stampVirtualBody(current, patch, ctx.bodyAction, now);
   batch?.entities.set(input.id, afterRow);
+  // «До» считается от строки, прочитанной под замком (в пачке — виртуальной); ляжет в журнал, только если тело
+  // действительно сменится (`noteBodyBefore` в apply).
+  const writesBody = patch.body !== undefined || patch.bodyDoc !== undefined;
+  const bodyBefore = bodyActionBefore(current, ctx.bodyAction);
 
   const journal: JournalPlan = {
     type: 'entity_updated',
@@ -2635,7 +2739,8 @@ async function prepareEntityUpdate(
         .returning();
       const row = updated[0];
       if (!row) throw new ExecError('NOT_FOUND', 'запись не найдена', { id: input.id });
-      return { result: toWire(row) };
+      if (writesBody) noteBodyBefore(journal, row, current, bodyBefore);
+      return { result: toWireEntityWithRevision(row) };
     },
   };
 }
@@ -2770,8 +2875,10 @@ async function prepareAttach(
     patch.bodyRefs = seed.bodyRefs;
     patch.queryRefs = seed.queryRefs;
   }
-  const afterRow = { ...current, ...patch } as EntityRow;
+  // Засев — тоже смена тела: виртуальная строка повторяет приращение триггера (РП-17), «до» — как у правки тела.
+  const afterRow = stampVirtualBody(current, patch, ctx.bodyAction, now);
   batch?.entities.set(input.entity_id, afterRow);
+  const bodyBefore = bodyActionBefore(current, ctx.bodyAction);
 
   const journal: JournalPlan = {
     type: 'entity_updated',
@@ -2818,7 +2925,8 @@ async function prepareAttach(
         .returning();
       const row = updated[0];
       if (!row) throw new ExecError('NOT_FOUND', 'запись не найдена', { id: input.entity_id });
-      return { result: toWire(row) };
+      if (seed !== undefined) noteBodyBefore(journal, row, current, bodyBefore);
+      return { result: toWireEntityWithRevision(row) };
     },
   };
 }
@@ -3570,6 +3678,9 @@ const propertyMergeUndoInput = z
           // восстановленного документа.
           bodyRefs: z.array(z.string()).optional(),
           queryRefs: z.array(z.string()).optional(),
+          // «Действие тела до» держателя (§8.6) — ОПЦИОНАЛЬНО тем же доводом: слияния, записанные до колонок тела
+          // (0026), ключа не несут. Откат его не пишет (колонку ставит триггер), но строгая схема обязана его принять.
+          bodyActionBefore: z.string().uuid().nullable().optional(),
         })
         .strict(),
     ),
@@ -3788,6 +3899,9 @@ async function preparePropertyMerge(_ctx: ExecCtx, rawInput: unknown): Promise<P
         op: 'property_merge_undo',
         payload: merged.inverse as unknown as Record<string, unknown>,
       });
+      // «Действие тела до» держателей, чьё тело слияние сменило (§8.6): сырой SQL тел писал под объявленным действием
+      // транзакции, и цепочке отмены нужно значение колонки до него.
+      if (Object.keys(merged.bodyBefore).length > 0) journal.bodyBefore = merged.bodyBefore;
       return {
         result: {
           source,
@@ -4630,7 +4744,13 @@ async function preparePropertyMergeUndo(_ctx: ExecCtx, rawInput: unknown): Promi
   return {
     journal,
     async apply(applyCtx: ExecCtx): Promise<OpOutcome> {
-      await undoMerge(applyCtx.tx, applyCtx.req.identity.graph, input as unknown as MergeInverse);
+      const undone = await undoMerge(
+        applyCtx.tx,
+        applyCtx.req.identity.graph,
+        input as unknown as MergeInverse,
+      );
+      // Запись отмены хранит «действие тела до» держателей, чьё тело откат сменил (§8.6) — тем же сбором, что у действий
+      if (Object.keys(undone.bodyBefore).length > 0) journal.bodyBefore = undone.bodyBefore;
       return {
         result: {
           source: input.source,

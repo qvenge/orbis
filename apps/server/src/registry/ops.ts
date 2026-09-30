@@ -1305,6 +1305,13 @@ export interface MergeInverse {
     bodyDoc: unknown;
     bodyRefs?: string[];
     queryRefs?: string[];
+    /**
+     * «Действие тела до» держателя (спека скорости §8.6 «Цепочка»: у слияния — для каждого держателя, рядом с его
+     * прежним телом): `body_action_id` ДО слияния, снятый тем же `SELECT … FOR UPDATE`, что и тело. Откат его не
+     * пишет — колонку ставит триггер из действия записи отмены. НЕОБЯЗАТЕЛЬНОЕ по доводу `mirrors`: журнал
+     * append-only, и слияния, записанные до колонок тела (0026), ключа не несут.
+     */
+    bodyActionBefore?: string | null;
   }>;
   /** Строки `registry_deltas` с переписанными адресами: прежняя дельта целиком. */
   deltas: Array<{ id: string; delta: unknown }>;
@@ -1338,6 +1345,12 @@ export interface MergeResult {
   rewrittenQueries: number;
   /** Полезная нагрузка ОДНОГО inverse на всю операцию (§А10-2) — её кладёт в журнал executor. */
   inverse: MergeInverse;
+  /**
+   * «Действие тела до» для записи журнала (§8.6): держатели, чьё тело слияние РЕАЛЬНО сменило (ревизия `RETURNING`
+   * выросла), → `body_action_id` до слияния. Держатель, чей документ переписывание оставило прежним, сюда не входит:
+   * «изменила тело» = «триггер сменил тело».
+   */
+  bodyBefore: Record<string, string | null>;
 }
 
 /** Конфликт значений: у записи заполнены оба свойства, и значения разные. */
@@ -1677,6 +1690,7 @@ export async function mergeProperty(
   const registry: MergeInverse['registry'] = [];
   const progress: MergeInverse['progress'] = [];
   const bodies: MergeInverse['bodies'] = [];
+  const bodyBefore: Record<string, string | null> = {};
   const deltas: MergeInverse['deltas'] = [];
   const binds: NonNullable<MergeInverse['binds']> = [];
   const ruleRows: NonNullable<MergeInverse['rules']> = [];
@@ -1766,19 +1780,24 @@ export async function mergeProperty(
          WHERE graph_id = ${graphId}::uuid AND id = ${holder.id}`);
       continue;
     }
+    // Колонки тела (0026) — ТЕМ ЖЕ чтением под замком, что и тело: «действие тела до» держателя обязано быть значением
+    // именно того тела, которое слияние переписывает (§8.6), а не снятым отдельным запросом.
     const rows = (await tx.execute(sql`
-      SELECT body, body_doc, body_refs, query_refs FROM entities
+      SELECT body, body_doc, body_refs, query_refs, body_action_id::text AS body_action_id, body_revision
+        FROM entities
        WHERE id = ${holder.id}::uuid FOR UPDATE
     `)) as unknown as RawRow[];
     const row = rows[0];
     if (row === undefined) continue;
     const body = String(row.body ?? '');
+    const actionBefore = (row.body_action_id ?? null) as string | null;
     bodies.push({
       entityId: holder.id,
       body,
       bodyDoc: row.body_doc ?? null,
       bodyRefs: (row.body_refs ?? []) as string[],
       queryRefs: (row.query_refs ?? []) as string[],
+      bodyActionBefore: actionBefore,
     });
     // ПРАВДА ТЕЛА — ДОКУМЕНТ (§А11-1), и переписывается он первым; `body` пересобирается из
     // него печатью, а не вторым регэкспом по markdown. Два независимых переписывания одной
@@ -1807,14 +1826,21 @@ export async function mergeProperty(
       ),
       parseReg,
     );
-    await tx.execute(sql`
+    // Колонки тела ставит триггер из действия, объявленного транзакцией executor'а (§8.1): сырой SQL здесь их не пишет.
+    // «Сменила» — ревизия после записи выросла: переписывание, оставившее документ прежним, «до» не заводит.
+    const written = (await tx.execute(sql`
       UPDATE entities
          SET body = ${serializeBody(nextDoc)},
              body_doc = ${JSON.stringify(nextDoc)}::jsonb,
              body_refs = ${textArray(bodyRefsFromDoc(nextDoc))},
              query_refs = ${textArray(queryRefsFromDoc(nextDoc))},
              updated_at = now()
-       WHERE id = ${holder.id}::uuid`);
+       WHERE id = ${holder.id}::uuid
+      RETURNING id::text AS id, body_revision`)) as unknown as RawRow[];
+    const after = written[0];
+    if (after !== undefined && Number(after.body_revision) > Number(row.body_revision)) {
+      bodyBefore[after.id as string] = actionBefore;
+    }
   }
 
   // Компактация цепочки (§А10-2): указатели на поглощённое переводятся на новую цель тем же
@@ -1879,6 +1905,7 @@ export async function mergeProperty(
       binds,
       rules: ruleRows,
     },
+    bodyBefore,
   };
 }
 
@@ -1948,7 +1975,14 @@ function rewriteBodyDoc(
  * отмену там, где она как раз и нужна. Цена — потерянная поздняя правка; она предпочтена
  * неотменяемому слиянию тысячи записей.
  */
-export async function undoMerge(tx: Tx, graphId: GraphId, iv: MergeInverse): Promise<void> {
+export async function undoMerge(
+  tx: Tx,
+  graphId: GraphId,
+  iv: MergeInverse,
+): Promise<{ bodyBefore: Record<string, string | null> }> {
+  // «Действие тела до» для ЗАПИСИ ОТМЕНЫ (§8.6 «Цепочка»): отмена тоже меняет тела держателей, и раскрутка цепочки
+  // через неё читает колонку ДО неё. Колонку пишет триггер из действия записи отмены — здесь только снимается «до».
+  const bodyBefore: Record<string, string | null> = {};
   // `iv.deltas` разбирается ЗАЩИТНО по той же причине, что `ref_sources_marked` в
   // `executor/undo.ts`: журнал append-only, и в нём лежат записи, сделанные до появления
   // четвёртого рода держателей. Отсутствие ключа означает «дельт не переписывали», а не
@@ -1998,14 +2032,27 @@ export async function undoMerge(tx: Tx, graphId: GraphId, iv: MergeInverse): Pro
     const fallbackDoc = restored ?? parseBody(b.body);
     const bodyRefs = Array.isArray(b.bodyRefs) ? b.bodyRefs : bodyRefsFromDoc(fallbackDoc);
     const queryRefs = Array.isArray(b.queryRefs) ? b.queryRefs : queryRefsFromDoc(fallbackDoc);
-    await tx.execute(sql`
+    const prior = (await tx.execute(sql`
+      SELECT body_action_id::text AS body_action_id, body_revision FROM entities
+       WHERE id = ${b.entityId}::uuid FOR UPDATE`)) as unknown as RawRow[];
+    const written = (await tx.execute(sql`
       UPDATE entities
          SET body = ${b.body},
              body_doc = ${restored === null ? null : JSON.stringify(restored)}::jsonb,
              body_refs = ${textArray(bodyRefs)},
              query_refs = ${textArray(queryRefs)},
              updated_at = now()
-       WHERE id = ${b.entityId}::uuid`);
+       WHERE id = ${b.entityId}::uuid
+      RETURNING id::text AS id, body_revision`)) as unknown as RawRow[];
+    const was = prior[0];
+    const after = written[0];
+    if (
+      was !== undefined &&
+      after !== undefined &&
+      Number(after.body_revision) > Number(was.body_revision)
+    ) {
+      bodyBefore[after.id as string] = (was.body_action_id ?? null) as string | null;
+    }
   }
   for (const d of deltaRows) {
     await tx.execute(sql`
@@ -2048,6 +2095,7 @@ export async function undoMerge(tx: Tx, graphId: GraphId, iv: MergeInverse): Pro
        SET merged_into = ${iv.sourceRow.mergedInto}, status = ${iv.sourceRow.status}
      WHERE graph_id = ${graphId}::uuid AND id = ${iv.source}`);
   await bumpOwnerRegistryVersion(tx, graphId);
+  return { bodyBefore };
 }
 
 // ---------------------------------------------------------------------------

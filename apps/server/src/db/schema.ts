@@ -104,6 +104,22 @@ export const entities = pgTable('entities', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   archived: boolean('archived').notNull().default(false),
+  /**
+   * Ревизия тела, «действие текущего тела» и время изменения тела (спека скорости §8.1, 0026). Пишет их ТОЛЬКО
+   * триггер `entities_body_stamp` — при создании и при каждой смене `body`/`body_doc` (`IS DISTINCT FROM`), у любого
+   * писателя, включая сырой SQL слияния свойства: писателей тела не меньше шести, и забытый писатель молча ломал бы
+   * замок текста и цепочку отмены. Код колонки не пишет (кроме засева прод-операцией переноса журнала, РП-2).
+   *
+   * `body_action_id` — id записи журнала, чьё действие поставило текущее тело (или записи отмены); берётся из настройки
+   * транзакции `orbis.body_action`, которую executor объявляет один раз на свою транзакцию. Пусто — писатель вне
+   * executor'а (ops-скрипт) или транзакция без журнала (сев). Внешнего ключа на журнал нет (К-34): строка журнала
+   * пишется ПОСЛЕ правки той же транзакцией.
+   */
+  bodyRevision: integer('body_revision').notNull().default(1),
+  bodyActionId: uuid('body_action_id'),
+  bodyChangedAt: timestamp('body_changed_at', { withTimezone: true, precision: 3 })
+    .notNull()
+    .defaultNow(),
 });
 
 // §4.2 relations

@@ -22,7 +22,7 @@ import type { WireEntity, WireRelation } from './executor/types';
 import { threadPage } from './journal/thread-page';
 import { effectiveRegistry, parseRegistryOfSnapshot } from './registry/cache';
 import type { RegistrySnapshot } from './registry/load';
-import { toWireEntity, toWireEntityFromSql, toWireRelation } from './wire';
+import { toWireEntityFromSql, toWireEntityWithRevision, toWireRelation } from './wire';
 
 /**
  * Источник обратной ссылки (02-core-os §3.5.8): явная связь роли `mention`, упоминание из
@@ -163,7 +163,8 @@ export async function readEntity(
     row.bodyDoc = readBodyDoc(row.bodyDoc, row.body, parseRegistryOfSnapshot(await registry()));
   }
 
-  const out: EntityReadResult = { entity: toWireEntity(row, wantsDoc) };
+  // Одна запись — с ревизией тела и временем его изменения (§8.1): с них клиент начинает правку текста.
+  const out: EntityReadResult = { entity: toWireEntityWithRevision(row, wantsDoc) };
 
   if (include.has('relations')) {
     const rels = await tx

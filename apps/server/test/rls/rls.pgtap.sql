@@ -3,7 +3,7 @@
 -- Всё в одной транзакции с ROLLBACK: БД не мутируется.
 BEGIN;
 CREATE EXTENSION IF NOT EXISTS pgtap;
-SELECT plan(180);
+SELECT plan(184);
 
 -- Графы фикстур (0020): с FK на graphs владельца «из воздуха» не бывает. Весь файл — одна транзакция
 -- с ROLLBACK, отложенные триггеры И-1 до проверки не доходят — гранты заведены ради политик.
@@ -1151,6 +1151,29 @@ SELECT is((SELECT string_agg(tablename::text || '.' || policyname::text || ' ' |
   || 'registry_system.read_all SELECT {public}, '
   || 'user_settings.scheduler_reads_owner_list SELECT {orbis_app}',
   'политики НЕ-`authenticated` ролей — ровно эти пять и никаких больше (поверхность без идентичности)');
+-- КОЛОНКИ ТЕЛА (0026, спека скорости §8.1, план А задача 7). Функция триггера — SECURITY INVOKER с пустым
+-- search_path (РП-1): она меняет только NEW и других таблиц не читает, привилегий сверх вызывающего ей не нужно, а
+-- правило проекта — «bypass RLS не вводится» (0013:7). Пин — по каталогу, как у четырёх функций политик выше.
+SELECT is((SELECT count(*)::int FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+  WHERE n.nspname = 'public' AND p.proname = 'entities_body_stamp'
+    AND NOT p.prosecdef AND p.proconfig @> ARRAY['search_path=""']),
+  1, 'функция entities_body_stamp — SECURITY INVOKER с пустым search_path (РП-1)');
+-- Триггер один на все пути записи тела (писателей не меньше шести, §8.1): BEFORE, на строку, INSERT OR UPDATE.
+-- tgtype — битовая маска pg_trigger: ROW 1 | BEFORE 2 | INSERT 4 | UPDATE 16 = 23; `O` — включён.
+SELECT is((SELECT tgtype::int || ' ' || tgfoid::regproc::text || ' ' || tgenabled::text FROM pg_trigger
+  WHERE tgrelid = 'public.entities'::regclass AND tgname = 'entities_body_stamp' AND NOT tgisinternal),
+  '23 entities_body_stamp O',
+  'триггер entities_body_stamp на entities — BEFORE INSERT OR UPDATE FOR EACH ROW, включён');
+-- NULLIF (§8.1): после транзакции с set_config на переиспользованном соединении настройка остаётся ОПРЕДЕЛЁННОЙ с
+-- пустым значением — пустая строка не значение, и запись тела вне executor'а не падает на приведении '' к uuid.
+-- Настройка локальна этой (единственной) транзакции файла — поэтому пин последний.
+SELECT set_config('orbis.body_action', '', true);
+SELECT lives_ok($$INSERT INTO entities (id, graph_id, title) VALUES
+    ('00000000-0000-7000-8000-0000000000d7', '00000000-0000-4000-8000-00000000000a', 'Пустое действие тела')$$,
+  'пустая настройка действия тела не роняет запись');
+SELECT is((SELECT count(*)::int FROM entities WHERE id = '00000000-0000-7000-8000-0000000000d7'
+    AND body_action_id IS NULL AND body_revision = 1),
+  1, 'пустая настройка действия тела — колонка действия пуста, ревизия 1');
 
 SELECT finish();
 ROLLBACK;
