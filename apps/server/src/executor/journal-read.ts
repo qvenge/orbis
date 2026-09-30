@@ -656,9 +656,24 @@ export async function undoMarks(
 }
 
 /**
+ * Запас окна `recentOwnerEdits` назад по времени ЗАПИСИ — ради сеансов правки текста, начатых до окна и продолженных в
+ * нём. Сеанс живёт, только пока паузы набора короче 10 минут (§8.5); сеанс, начатый раньше границы окна больше чем на
+ * 6 часов и всё ещё продолжаемый в окне, — это шесть часов набора без единой 10-минутной паузы. Такой в блок не
+ * попадёт — граница названа, а не спрятана: блок правок — подсказка модели, не журнал. Больший запас стоил бы
+ * соразмерно большего диапазона на каждом ходе чата, а точное «продолжен в окне» без запаса требует индекса по времени
+ * изменения тела, которого нет (миграция).
+ */
+export const OWNER_EDITS_SESSION_MARGIN_MS = 6 * 60 * 60 * 1000;
+
+/**
  * Недавние правки владельца в интерфейсе (`ui`, `quick_capture`), изменённые последний раз не раньше `since`, новые
  * первыми, не больше `limit`; записи отмены — не правки (К-22). «Изменённые последний раз» — `LAST_CHANGE`: сеанс
  * правки текста, начатый до окна, но продолженный в нём, — свежая правка (§8.5).
+ *
+ * Горячий путь — каждый ход чата (`llm/context.ts`). Поэтому окно — ДИАПАЗОН по времени записи (`j.created_at`, индекс
+ * `action_journal_graph_time`) с запасом `OWNER_EDITS_SESSION_MARGIN_MS`, а время последнего изменения (выражение над
+ * присоединённой записью, индексом не берётся) — фильтр и порядок уже внутри диапазона: журнал графа целиком не
+ * просматривается. Раз `LAST_CHANGE ≥ created_at`, запас ничего лишнего в ответ не пускает — только даёт увидеть сеанс.
  */
 export async function recentOwnerEdits(
   tx: Tx,
@@ -666,11 +681,13 @@ export async function recentOwnerEdits(
   since: Date,
   limit: number,
 ): Promise<JournalEntry[]> {
+  const from = new Date(since.getTime() - OWNER_EDITS_SESSION_MARGIN_MS);
   return entriesOf(
     tx,
     sql`${SELECT_ROW} ${SESSION_ENTITY}
         WHERE ${inGraph(graph)} AND ${IS_ACTION}
           AND j.source IN ('ui', 'quick_capture')
+          AND j.created_at >= ${from.toISOString()}::timestamptz
           AND ${LAST_CHANGE} >= ${since.toISOString()}::timestamptz
         ORDER BY ${LAST_CHANGE} DESC, j.id DESC
         LIMIT ${limit}`,

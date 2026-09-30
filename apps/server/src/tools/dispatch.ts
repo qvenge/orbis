@@ -788,7 +788,8 @@ async function runUndoLast(
   // ОТКАТ — ТОТ ЖЕ «РЕЗОЛВЛЕННЫЙ НАБОР ШАГОВ», ЧТО И ДЕЙСТВИЕ (В-8, Р-31): обратные операции известны
   // ДО исполнения (`action.inverse` журнала), значит их можно свернуть в факты той же функцией, что и
   // шаги действия, и спросить уровень у таблицы §7.10. Прежде ветка шла мимо политики целиком.
-  const peeked = await peekLastUndoable(ctx.db, ctx.identity);
+  // «Сейчас» вызова — для даты в подписи несегодняшнего сеанса правки текста (§8.5)
+  const peeked = await peekLastUndoable(ctx.db, ctx.identity, (ctx.clock ?? (() => new Date()))());
   if (peeked === undefined) {
     return {
       status: 'ok',

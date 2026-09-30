@@ -44,11 +44,12 @@ const sink = makeJournalSink();
 export async function peekLastUndoable(
   db: Db,
   who: Identity,
+  now: Date = new Date(),
 ): Promise<{ action: ActionRecord; title: string } | undefined> {
   return withIdentity(db, who, async (tx) => {
     const found = await findLastUndoable(tx, who.graph);
     if (found === undefined) return undefined;
-    return { action: actionRecordOf(found), title: await undoableTitle(tx, who.graph, found) };
+    return { action: actionRecordOf(found), title: await undoableTitle(tx, who.graph, found, now) };
   });
 }
 
@@ -224,7 +225,7 @@ export async function undoLast(
     const peeked = await withIdentity(db, args.identity, async (tx) => {
       const entry = await findLastUndoable(tx, args.identity.graph);
       if (entry === undefined) return undefined;
-      return { entry, title: await undoableTitle(tx, args.identity.graph, entry) };
+      return { entry, title: await undoableTitle(tx, args.identity.graph, entry, new Date()) };
     });
     if (!peeked) {
       return {

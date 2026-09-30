@@ -44,9 +44,15 @@ import { createCallerFactory } from '../trpc';
 import { execute } from './executor';
 import { makeJournalSink } from './journal';
 import * as J from './journal-read';
-import { assertNothingAppended, SESSION_PAUSE_MS, sessionSpan } from './text-session';
+import {
+  assertNothingAppended,
+  pauseEnded,
+  SESSION_PAUSE_MS,
+  sessionLabel,
+  sessionSpan,
+} from './text-session';
 import type { ExecuteResult } from './types';
-import { undoAction } from './undo';
+import { peekLastUndoable, undoAction } from './undo';
 
 requireEnv();
 
@@ -290,7 +296,8 @@ describe('сеанс правки текста (§8.5): продолжение',
     await ed.save('второе');
     const s1 = await onlySession(g);
 
-    await elapse(g, SESSION_PAUSE_MS / 60_000); // ровно 10 минут — уже не пауза набора
+    // 10 минут (и миллисекунды настоящего времени до пробы) — уже не пауза набора; точная граница — юнит `pauseEnded`
+    await elapse(g, SESSION_PAUSE_MS / 60_000);
     await ed.save('третье');
     const sessions = await sessionsOf(g);
     expect(sessions.map((e) => e.id)[0]).toBe(s1.id);
@@ -773,6 +780,47 @@ describe('сеанс правки текста (§8.5): форма записи 
     expect(sessionSpan(entry, { bodyActionId: null, bodyChangedAt: changed }).end).toBeNull();
   });
 
+  test('граница паузы точная: ровно 10 минут — новый сеанс, на миллисекунду меньше — продолжение', () => {
+    const changed = new Date('2026-07-04T11:02:00.000Z');
+    const at = (ms: number) => new Date(changed.getTime() + ms);
+    expect(pauseEnded(changed, at(SESSION_PAUSE_MS))).toBe(true);
+    expect(pauseEnded(changed, at(SESSION_PAUSE_MS - 1))).toBe(false);
+    expect(pauseEnded(changed, at(0))).toBe(false);
+  });
+
+  test('подпись отрезка: одно время в одну минуту; дата — у несегодняшнего и у конца в другой день', () => {
+    const tz = 'Europe/Moscow';
+    const e = { title: 'Заметка' };
+    const t = (iso: string) => new Date(iso);
+    const span = (start: string, end: string | null) => ({
+      start: t(start),
+      end: end === null ? null : t(end),
+    });
+    // Сегодня (4 июля по Москве) — без даты
+    expect(
+      sessionLabel(e, span('2026-07-04T11:02:00Z', '2026-07-04T11:18:00Z'), tz, '2026-07-04'),
+    ).toBe('правка текста «Заметка» 14:02–14:18');
+    // Начало и конец в одну минуту — одно время
+    expect(
+      sessionLabel(e, span('2026-07-04T11:02:05Z', '2026-07-04T11:02:50Z'), tz, '2026-07-04'),
+    ).toBe('правка текста «Заметка» 14:02');
+    // Позавчерашний сеанс в «отмени последнее» — с датой
+    expect(
+      sessionLabel(e, span('2026-07-02T11:02:00Z', '2026-07-02T11:18:00Z'), tz, '2026-07-04'),
+    ).toBe('правка текста «Заметка» 2026-07-02 14:02–14:18');
+    // Через полночь — у конца своя дата
+    expect(
+      sessionLabel(e, span('2026-07-02T20:55:00Z', '2026-07-02T21:10:00Z'), tz, '2026-07-04'),
+    ).toBe('правка текста «Заметка» 2026-07-02 23:55–2026-07-03 00:10');
+    // Без «сегодня» (блок правок модели за сутки) — дат нет; конца нет — только начало
+    expect(sessionLabel(e, span('2026-07-02T20:55:00Z', '2026-07-02T21:10:00Z'), tz)).toBe(
+      'правка текста «Заметка» 23:55–00:10',
+    );
+    expect(sessionLabel(e, span('2026-07-04T11:02:00Z', null), tz, '2026-07-04')).toBe(
+      'правка текста «Заметка» 14:02',
+    );
+  });
+
   test('инвариант записи сеанса: дописанная операция — исключение (транзакция откатывается), без дописанных — молча', () => {
     expect(() => assertNothingAppended('S', [])).not.toThrow();
     expect(() =>
@@ -872,7 +920,14 @@ describe('сеанс правки текста (§8.5): «последнее» �
   test('(л) «отмени последнее» после сеанса и более ранней галочки отменяет сеанс, а не галочку, и называет отрезок', async () => {
     const g = await freshGraph();
     const { note, task, session, checkbox } = await sessionAroundCheckbox(g);
-    const r = await dispatchTool(chatCtx(g), 'undo_last', {});
+    // Сеанс не сегодняшний относительно «сейчас» вызова — подпись несёт дату (журнал сутками не ограничен)
+    expect((await peekLastUndoable(db, personal(g), AT('12:00')))?.title).toBe(
+      'правка текста «Заметка» 14:02–14:18',
+    );
+    expect(
+      (await peekLastUndoable(db, personal(g), new Date('2026-07-06T09:00:00.000Z')))?.title,
+    ).toBe('правка текста «Заметка» 2026-07-04 14:02–14:18');
+    const r = await dispatchTool({ ...chatCtx(g), clock: () => AT('12:00') }, 'undo_last', {});
     if (r.status !== 'ok') throw new Error(`undo_last: ${JSON.stringify(r)}`);
     expect(r.result).toMatchObject({
       undone: true,
@@ -883,5 +938,41 @@ describe('сеанс правки текста (§8.5): «последнее» �
     expect(await undoRecordOf(g, checkbox.id)).toBeUndefined();
     const got = await callerFor(g).entity.get({ id: task });
     expect(got.entity.props['orbis/task_status']).toBe('done');
+  });
+
+  test('(р) окно правок владельца — диапазон по времени записи с запасом для сеансов; внутри — по последнему изменению', async () => {
+    const g = await freshGraph();
+    const caller = callerFor(g);
+    const SINCE = AT('10:00');
+    const minutes = (k: number) => new Date(SINCE.getTime() + k * 60_000);
+    // Сеанс начат за час до окна, продолжен внутри — в окне (запас назад по времени записи)
+    const early = await seedNote(g, 'Ранний сеанс', 'до');
+    const edEarly = await Editor.open(caller, early);
+    await edEarly.save('ранний');
+    const s1 = await onlySession(g);
+    // Сеанс начат раньше запаса (за 6 ч 1 мин до окна) и продолжен внутри — названная граница: в блок не попадает
+    const marathon = await seedNote(g, 'Марафон', 'до');
+    const edMarathon = await Editor.open(caller, marathon);
+    await edMarathon.save('марафон');
+    const s2 = (await sessionsOf(g)).find((e) => e.entityId === marathon) as J.JournalEntry;
+    // Правки заголовка: миллисекунда до окна — вне, ровно граница — в окне
+    const note = await seedNote(g, 'Заметка', 'текст');
+    await caller.entity.update({ id: note, title: 'до окна' });
+    await caller.entity.update({ id: note, title: 'на границе' });
+    const [before, onEdge] = (await actionsOf(g)).filter((e) => !e.textSession).map((e) => e.id);
+    if (before === undefined || onEdge === undefined) throw new Error('правок заголовка нет');
+    await placeAt(g, {
+      journal: {
+        [s1.id]: minutes(-60),
+        [s2.id]: minutes(-(6 * 60 + 1)),
+        [before]: new Date(SINCE.getTime() - 1),
+        [onEdge]: SINCE,
+      },
+      bodyChangedAt: { [early]: minutes(30), [marathon]: minutes(40) },
+    });
+    const recent = await withIdentity(db, personal(g), (tx) =>
+      J.recentOwnerEdits(tx, g, SINCE, 10),
+    );
+    expect(recent.map((e) => e.id)).toEqual([s1.id, onEdge]);
   });
 });
