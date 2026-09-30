@@ -34,7 +34,7 @@ import {
   supplyStatusOf,
 } from '@orbis/shared/supply/print';
 import { sql } from 'drizzle-orm';
-import { appDb, freshGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
+import { adminDb, appDb, freshGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
 import { actionsOf } from '../../test/journal-helpers';
 import { withIdentity } from '../db/with-identity';
 import { ExecError } from '../errors';
@@ -121,12 +121,13 @@ interface Row {
   props: Record<string, unknown>;
   archived: boolean;
   updatedAt: string;
+  bodyRevision: number;
 }
 
 async function rowOf(graph: GraphId, id: string): Promise<Row> {
   const rows = await withIdentity(db, personal(graph), (tx) =>
     tx.execute(
-      sql`SELECT title, emoji, body, aspects, props, archived, updated_at FROM entities WHERE id = ${id}::uuid`,
+      sql`SELECT title, emoji, body, aspects, props, archived, updated_at, body_revision FROM entities WHERE id = ${id}::uuid`,
     ),
   );
   const r = rows[0] as
@@ -138,6 +139,7 @@ async function rowOf(graph: GraphId, id: string): Promise<Row> {
         props: Record<string, unknown>;
         archived: boolean;
         updated_at: Date | string;
+        body_revision: number;
       }
     | undefined;
   if (r === undefined) throw new Error(`запись ${id} не найдена`);
@@ -149,6 +151,7 @@ async function rowOf(graph: GraphId, id: string): Promise<Row> {
     props: r.props,
     archived: r.archived,
     updatedAt: new Date(r.updated_at).toISOString(),
+    bodyRevision: r.body_revision,
   };
 }
 
@@ -171,7 +174,7 @@ async function ownerEdit(graph: GraphId, input: Record<string, unknown>): Promis
 
 async function editBody(graph: GraphId, id: string, body: string): Promise<void> {
   const row = await rowOf(graph, id);
-  await ownerEdit(graph, { id, body, expectedUpdatedAt: row.updatedAt });
+  await ownerEdit(graph, { id, body, expectedBodyRevision: row.bodyRevision });
 }
 
 async function versionsOf(graph: GraphId, id: string): Promise<{ label: string; body: string }[]> {
@@ -751,6 +754,85 @@ describe('Fable M-1: «принять» оболочки не перекрыва
     );
     expect(err.code).toBe('CONFLICT');
     expect((await rowOf(graph, shell)).props[APP_NAV]).toEqual(later);
+  });
+});
+
+/**
+ * Тело страницы сменилось, а штамп записи — нет: сырой SQL под админом (триггер 0026 двигает ревизию тела, `updated_at`
+ * остаётся). Боевые писатели тела двигают оба замка сразу; так каждый из двух замков поставки проверяется отдельно.
+ */
+async function bodyOnlyChange(id: string, body: string): Promise<void> {
+  const admin = adminDb();
+  try {
+    await admin.db.execute(sql`UPDATE entities SET body = ${body} WHERE id = ${id}::uuid`);
+  } finally {
+    await admin.client.end();
+  }
+}
+
+describe('К-9: у правки страницы поставкой — оба замка, ревизия тела и штамп записи (спека скорости §8.2)', () => {
+  test('«принять» страницы: правка свойства между показом и принятием → CONFLICT precondition_failed; ничего не записано', async () => {
+    const graph = await freshGraph();
+    await seedSupply(graph);
+    const id = supplyRecordId(graph, 'home');
+    const next = withEtalon(SUPPLY_ETALONS, 'home', { text: HOME_V2 });
+    const err = await execErrorOf(
+      acceptUpdate(ctxOf(graph), 'home', next, {
+        afterRead: () => ownerEdit(graph, { id, tags: ['моё'] }),
+      }),
+    );
+    expect(err.code).toBe('CONFLICT');
+    expect((err.details as { reason?: string }).reason).toBe('precondition_failed');
+    const row = await rowOf(graph, id);
+    expect(row.props[SUPPLY_HASH]).toBe(etalonHash(etalonOf('home')));
+    expect(await versionsOf(graph, id)).toEqual([]);
+  });
+
+  test('«принять» страницы: тело сменилось между показом и принятием → STALE_VERSION; тело цело', async () => {
+    const graph = await freshGraph();
+    await seedSupply(graph);
+    const id = supplyRecordId(graph, 'home');
+    const next = withEtalon(SUPPLY_ETALONS, 'home', { text: HOME_V2 });
+    const err = await execErrorOf(
+      acceptUpdate(ctxOf(graph), 'home', next, {
+        afterRead: () => bodyOnlyChange(id, 'Моё приветствие'),
+      }),
+    );
+    expect(err.code).toBe('STALE_VERSION');
+    expect((await rowOf(graph, id)).body).toBe('Моё приветствие');
+    expect(await versionsOf(graph, id)).toEqual([]);
+  });
+
+  test('«вернуть как было» без смены тела: предусловие orbis/updated_at всё равно есть — правка свойства → CONFLICT', async () => {
+    const graph = await freshGraph();
+    await seedSupply(graph);
+    const id = supplyRecordId(graph, 'agenda');
+    // Правлен только заголовок: тело равно печати эталона, пачка тело не трогает — замка текста в ней нет
+    await ownerEdit(graph, { id, title: 'Моя неделя' });
+    expect(statusOf(await rowOf(graph, id))).toBe('edited');
+    const err = await execErrorOf(
+      revertToEtalon(ctxOf(graph), 'agenda', undefined, {
+        afterRead: () => ownerEdit(graph, { id, tags: ['моё'] }),
+      }),
+    );
+    expect(err.code).toBe('CONFLICT');
+    expect((err.details as { reason?: string }).reason).toBe('precondition_failed');
+    expect((await rowOf(graph, id)).title).toBe('Моя неделя');
+  });
+
+  test('«вернуть как было» со сменой тела: тело сменилось между показом и возвратом → STALE_VERSION', async () => {
+    const graph = await freshGraph();
+    await seedSupply(graph);
+    const id = supplyRecordId(graph, 'agenda');
+    await editBody(graph, id, 'Моё\n\n{{query:aspect=orbis/task, title=Все}}');
+    const err = await execErrorOf(
+      revertToEtalon(ctxOf(graph), 'agenda', undefined, {
+        afterRead: () => bodyOnlyChange(id, 'ещё моё'),
+      }),
+    );
+    expect(err.code).toBe('STALE_VERSION');
+    expect((await rowOf(graph, id)).body).toBe('ещё моё');
+    expect(await versionsOf(graph, id)).toEqual([]);
   });
 });
 

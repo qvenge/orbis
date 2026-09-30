@@ -3,6 +3,7 @@ import type { JSONContent } from '@tiptap/core';
 import { TRPCClientError } from '@trpc/client';
 import { useRef, useState } from 'react';
 import { invalidateGraph } from '../../lib/invalidate';
+import { isBodyStale } from '../../lib/orbis-error';
 import { useNoteRegistryVersion } from '../../lib/registry/useRegistry';
 import { startAction } from '../../perf/marks';
 import { type RouterInputs, type RouterOutputs, trpc } from '../../trpc';
@@ -156,8 +157,9 @@ function settleBodyDraft(vars: UpdateInput, err?: unknown): void {
 }
 
 /**
- * Общая optimistic-concurrency обвязка entity.update (§5.2): optimistic-патч + откат при
- * любой ошибке; CONFLICT (409, из STALE_VERSION) → флаг conflict для сообщения «обновите».
+ * Общая optimistic-concurrency обвязка entity.update: optimistic-патч + откат при любой ошибке;
+ * отказ замка текста (`STALE_VERSION` в `data.orbis`, спека скорости §8.1) → флаг conflict для
+ * сообщения «обновите».
  *
  * `onSettled` — довесок вызывающего к УРОВНЮ МУТАЦИИ, а не поштучный колбэк `mutate`.
  * Разница ровно та, что уже описана у `settleBodyDraft` выше: поштучные колбэки (второй
@@ -206,8 +208,8 @@ export function useEntityUpdate(
   }
 
   /**
-   * Последняя мутация ПО КАЖДОЙ записи: её номер, метка версии и признак «сверял ли её сервер
-   * по версии» (см. `checksVersion` — это НЕ то же, что «послана ли метка»).
+   * Последняя мутация ПО КАЖДОЙ записи: её номер, ревизия тела и признак «сверял ли её сервер
+   * по ревизии» (см. `checksVersion` — это НЕ то же, что «послана ли ревизия»).
    *
    * Живых мутаций по одной записи бывает две, и источников этому ДВА. Первый: автосохранение
    * тела бросает зависший запрос по выдержке и досылает поверх него (useBodySave,
@@ -223,15 +225,14 @@ export function useEntityUpdate(
    */
   const seqRef = useRef(0);
   const latestRef = useRef<
-    Record<string, { seq: number; expectedUpdatedAt?: string; checksVersion: boolean }>
+    Record<string, { seq: number; expectedBodyRevision?: number; checksVersion: boolean }>
   >({});
 
   /**
-   * Сверяет ли СЕРВЕР версию у этой правки. Не «послан ли `expectedUpdatedAt`»: гейт §5.2 стоит
-   * под условием `body !== undefined || bodyDoc !== undefined` (executor.ts), и правка без тела
-   * проходит по LWW — метку сервер у неё просто игнорирует. Значит `saveTitle` шлёт
-   * `expectedUpdatedAt`, но 409 не получит НИКОГДА, а `toggleTask`/`setArchived` не шлют его
-   * вовсе (ревью Задачи 14, Н-3).
+   * Сверяет ли СЕРВЕР ревизию тела у этой правки. Не «послана ли `expectedBodyRevision`»: замок
+   * текста (§8.1) стоит под условием `body !== undefined || bodyDoc !== undefined` (executor.ts),
+   * и правка без тела проходит по LWW — ревизию сервер у неё просто игнорирует (ревью Задачи 14,
+   * Н-3).
    */
   const checksVersion = (vars: UpdateInput) =>
     vars.body !== undefined || vars.bodyDoc !== undefined;
@@ -255,16 +256,17 @@ export function useEntityUpdate(
   /**
    * Принесёт ли преемник ТОТ ЖЕ конфликт — единственное основание промолчать о 409.
    *
-   * Условий два, и оба необходимы. Преемник должен сам проверяться сервером по версии (иначе
-   * он 409 не получит ни при каких обстоятельствах) И уйти с той же меткой (иначе конфликт у
-   * него будет свой). Одной совпавшей метки НЕ ДОСТАТОЧНО, и это не теория: правка тела и
-   * следом переименование уходят с одной и той же меткой — кэшный `updatedAt` за время полёта
-   * не двигается, `applyPatch` его не трогает, а перечитывание идёт только в `onSettled`.
-   * Промолчи мы по одной метке — 409 правки тела не показал бы никто (ревью Задачи 14, Н-3).
+   * Условий два, и оба необходимы. Преемник должен сам проверяться сервером по ревизии (иначе
+   * он 409 не получит ни при каких обстоятельствах) И уйти с той же ревизией (иначе конфликт у
+   * него будет свой). Одной совпавшей ревизии НЕ ДОСТАТОЧНО: правка без тела ревизии не несёт
+   * вовсе, и у неё «та же ревизия» — это два `undefined`. Промолчи мы по одному совпадению — 409
+   * правки тела не показал бы никто (ревью Задачи 14, Н-3).
    */
-  const bringsSameConflict = (id: string, ctx?: { expectedUpdatedAt?: string }) => {
+  const bringsSameConflict = (id: string, ctx?: { expectedBodyRevision?: number }) => {
     const latest = latestRef.current[id];
-    return latest?.checksVersion === true && latest.expectedUpdatedAt === ctx?.expectedUpdatedAt;
+    return (
+      latest?.checksVersion === true && latest.expectedBodyRevision === ctx?.expectedBodyRevision
+    );
   };
 
   const mutation = trpc.entity.update.useMutation({
@@ -294,7 +296,7 @@ export function useEntityUpdate(
       seqRef.current += 1;
       latestRef.current[vars.id] = {
         seq: seqRef.current,
-        expectedUpdatedAt: vars.expectedUpdatedAt,
+        expectedBodyRevision: vars.expectedBodyRevision,
         checksVersion: checksVersion(vars),
       };
       // Ключ едет в контекст ВМЕСТЕ со снимком. Откат обязан лечь туда же, откуда снимок
@@ -304,7 +306,7 @@ export function useEntityUpdate(
         prev,
         input,
         seq: seqRef.current,
-        expectedUpdatedAt: vars.expectedUpdatedAt,
+        expectedBodyRevision: vars.expectedBodyRevision,
         action,
       };
     },
@@ -332,7 +334,8 @@ export function useEntityUpdate(
       if (vars.id !== entityId) return;
       // Молчим только о конфликте, который преемник принесёт и сам (см. bringsSameConflict).
       if (old && bringsSameConflict(vars.id, ctx)) return;
-      if (err instanceof TRPCClientError && err.data?.code === 'CONFLICT') setConflict(true);
+      // Конфликт — отказ замка текста по структурному коду (`data.orbis`, РП-5), а не любой 409.
+      if (isBodyStale(err)) setConflict(true);
     },
     onSuccess: (_data, vars, ctx) => {
       // Тоже первым делом: сохранённый черновик обязан уйти с диска, даже если экран этой
@@ -433,12 +436,13 @@ export function useRecordEdits(entityId: string, entity: Entity | undefined) {
   // нём держались два теста — то есть зелёными они были на пути, которого в проде нет
   // (ревью раунда 3). Сюжеты переписаны на достижимый путь, метод удалён.
 
-  // Правка заголовка (DF п.3) — тот же контракт §5.2, что у body: у memory-правила
-  // title и есть вся его машиночитаемая часть (K19.4), и правка «формулировки»,
-  // обещанная экраном «Память AI», — это именно правка title.
+  // Правка заголовка (DF п.3): у memory-правила title и есть вся его машиночитаемая часть
+  // (K19.4), и правка «формулировки», обещанная экраном «Память AI», — это именно правка title.
+  // Замка у неё пока нет — LWW (замок заголовка `expectedTitle` — задача 12 плана А); прежняя
+  // метка `updatedAt` уходила сюда «для единообразия» и сервером не сверялась никогда.
   function saveTitle(title: string) {
     if (!entity) return;
-    mutation.mutate({ id: entityId, title, expectedUpdatedAt: entity.updatedAt });
+    mutation.mutate({ id: entityId, title });
   }
 
   function setArchived(archived: boolean) {

@@ -369,7 +369,8 @@ describe('выбор шаблона (§4.2)', () => {
         tool: 'entity_update',
         input: {
           id: f.entity.id,
-          expectedUpdatedAt: f.entity.updatedAt,
+          // Ревизия тела записи экрана (§8.1): у фикстуры её нет — экран шлёт 0, и настоящий сервер отказал бы разбором.
+          expectedBodyRevision: f.entity.bodyRevision ?? 0,
           body: plan.body,
           aspects: { attach: [PAGE_ASPECT] },
         },

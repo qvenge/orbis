@@ -411,9 +411,10 @@ export type ThreadPostInput = z.infer<typeof threadPostInput>;
 
 // ---------------------------------------------------------------------------
 // Рукописные JSON Schema core-тулов — дословно табличная нотация §9.2
-// (`*` — обязательное поле, `?` — опциональное). expectedUpdatedAt в entity_update —
-// решение 4 плана 1a: таблица §9.2 поле не показывает, но §5.2 требует его при
-// правке body; в envelope оно есть, поэтому парность с zod требует его и здесь.
+// (`*` — обязательное поле, `?` — опциональное). expectedBodyRevision в entity_update — замок
+// текста (спека скорости §8.1–§8.2): таблица §9.2 поле не показывает, но правка body без него
+// отказывает; в envelope оно есть, поэтому парность с zod требует его и здесь, а описание поля
+// и тула объясняет модели, откуда ревизию брать и что делать с отказом.
 // ---------------------------------------------------------------------------
 
 const uuid = { type: 'string', format: 'uuid' } as const;
@@ -527,10 +528,12 @@ const entityUpdateJsonSchema = {
   type: 'object',
   properties: {
     id: uuid,
-    expectedUpdatedAt: {
-      type: 'string',
-      format: 'date-time',
-      description: 'updated_at сущности, которую видел клиент; обязателен при правке body (§5.2)',
+    expectedBodyRevision: {
+      type: 'integer',
+      minimum: 1,
+      description:
+        'ревизия тела записи, которую вы видели (entity_get → bodyRevision); обязательна при правке body: ' +
+        'если текст успели изменить, правка отказывает STALE_VERSION — перечитайте запись и повторите',
     },
     title: { type: 'string', minLength: 1 },
     emoji: { type: ['string', 'null'] },
@@ -1155,7 +1158,10 @@ const CORE_TOOLS: OrbisToolDef[] = [
     name: 'entity_update',
     description:
       'Частичное обновление сущности: передаются только изменяемые поля. props ставит ' +
-      'значения, unset снимает их, aspects.attach/detach меняет интерпретацию.',
+      'значения, unset снимает их, aspects.attach/detach меняет интерпретацию. Правка body ' +
+      'требует expectedBodyRevision — ревизию тела из entity_get: если текст изменили после ' +
+      'чтения, правка отказывает STALE_VERSION, и её повторяют по перечитанной записи. Правка ' +
+      'без body ревизии не требует.',
     inputJsonSchema: entityUpdateJsonSchema,
     kind: 'mutate',
   },

@@ -491,51 +491,120 @@ describe('executor: entity_update — merge аспектов §9.2', () => {
   });
 });
 
-describe('executor: optimistic-check body (§5.2, §13.1)', () => {
+describe('executor: замок текста по ревизии тела (спека скорости §8.1, §13.1)', () => {
   async function createNote(): Promise<WireEntity> {
     const r = await execute(db, req('entity_create', { title: 'Заметка', tags: [], body: 'v1' }));
     return firstEntity(r);
   }
 
-  test('6a. body без expectedUpdatedAt → VALIDATION', async () => {
+  /** Ревизия тела из ответа мутации: её несёт каждый ответ правки и создания (задача 7). */
+  function revisionOf(e: WireEntity): number {
+    if (e.bodyRevision === undefined) throw new Error('в ответе нет bodyRevision');
+    return e.bodyRevision;
+  }
+
+  test('6a. body без expectedBodyRevision → VALIDATION', async () => {
     const e = await createNote();
     const r = await execute(db, req('entity_update', { id: e.id, body: 'v2' }));
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.error.code).toBe('VALIDATION');
+    if (!r.ok) {
+      expect(r.error.code).toBe('VALIDATION');
+      expect(r.error.message).toBe('правка body требует expectedBodyRevision (§8.1)');
+    }
   });
 
-  test('6b. stale expectedUpdatedAt → STALE_VERSION; после перечитывания — успех; body_refs пересчитаны', async () => {
+  test('6b. ревизия = текущей → ок; ≠ текущей → STALE_VERSION {id, expected, current}; body_refs пересчитаны', async () => {
     const e = await createNote();
-    const stale = await execute(
-      db,
-      req('entity_update', {
-        id: e.id,
-        body: 'v2',
-        expectedUpdatedAt: '2020-01-01T00:00:00.000Z',
-      }),
-    );
-    expect(stale.ok).toBe(false);
-    if (!stale.ok) expect(stale.error.code).toBe('STALE_VERSION');
-
-    // «перечитали» — актуальный updatedAt из wire-формы
+    expect(revisionOf(e)).toBe(1);
     const refId = '019e4466-2000-7e07-b5d4-64be9721da52';
     const fresh = await execute(
       db,
       req('entity_update', {
         id: e.id,
         body: `v2 со ссылкой [[entity:${refId}]]`,
-        expectedUpdatedAt: e.updatedAt,
+        expectedBodyRevision: 1,
       }),
     );
     const e1 = firstEntity(fresh);
     expect(e1.body).toContain('v2');
     expect(e1.bodyRefs).toEqual([refId]); // body_refs пересчитан при update body
+    expect(revisionOf(e1)).toBe(2);
+
+    // Та же ревизия ещё раз — текст уже сменили: отказ с текущей ревизией, запись не тронута
+    const stale = await execute(
+      db,
+      req('entity_update', { id: e.id, body: 'v3', expectedBodyRevision: 1 }),
+    );
+    expect(stale.ok).toBe(false);
+    if (!stale.ok) {
+      expect(stale.error.code).toBe('STALE_VERSION');
+      expect(stale.error.details).toEqual({ id: e.id, expected: 1, current: 2 });
+    }
+    const docStale = await execute(
+      db,
+      req('entity_update', {
+        id: e.id,
+        bodyDoc: { v: DOC_SCHEMA_VERSION, doc: { type: 'doc', content: [{ type: 'paragraph' }] } },
+        expectedBodyRevision: 1,
+      }),
+    );
+    expect(docStale.ok ? 'ok' : docStale.error.code).toBe('STALE_VERSION');
+
+    // Перечитали — ревизия из ответа: правка проходит
+    const v3 = firstEntity(
+      await execute(db, req('entity_update', { id: e.id, body: 'v3', expectedBodyRevision: 2 })),
+    );
+    expect(v3.body).toBe('v3');
+    expect(revisionOf(v3)).toBe(3);
+  });
+
+  test('6f. правка свойства, статуса, тега и заголовка между чтением и сохранением тела — сохранение ПРОХОДИТ (D3 уточнён)', async () => {
+    // Прежний замок сравнивал updated_at записи, и любая правка записи краснила сохранение текста. Ревизию тела двигает
+    // только смена тела: правка без тела замка не касается.
+    const e = await createNote();
+    const read = revisionOf(e);
+    expect(
+      firstEntity(
+        await execute(
+          db,
+          req('entity_update', {
+            id: e.id,
+            props: { 'orbis/task_status': 'planned' },
+            aspects: { attach: ['orbis/task'] },
+          }),
+        ),
+      ).bodyRevision,
+    ).toBe(read);
+    firstEntity(
+      await execute(db, req('entity_update', { id: e.id, props: { 'orbis/task_status': 'done' } })),
+    );
+    firstEntity(await execute(db, req('entity_update', { id: e.id, tags: ['срочно'] })));
+    const renamed = firstEntity(
+      await execute(db, req('entity_update', { id: e.id, title: 'Заметка 2' })),
+    );
+    expect(renamed.updatedAt).not.toBe(e.updatedAt);
+    expect(renamed.bodyRevision).toBe(read);
+
+    const saved = firstEntity(
+      await execute(
+        db,
+        req('entity_update', {
+          id: e.id,
+          body: 'текст поверх чужих правок',
+          expectedBodyRevision: read,
+        }),
+      ),
+    );
+    expect(saved.body).toBe('текст поверх чужих правок');
+    expect(saved.title).toBe('Заметка 2'); // правки без тела целы
+    expect(saved.tags).toEqual(['срочно']);
+    expect(revisionOf(saved)).toBe(read + 1);
   });
 
   test('6d. монотонный updated_at: два апдейта в один тик clock → updated_at строго растёт (§5.2)', async () => {
     // updatedAt = clock() не монотонен: два апдейта в одну миллисекунду оставляли
-    // updated_at прежним, и stale-правка body проходила optimistic-check. Теперь
-    // updatedAt = max(clock(), prev + 1ms).
+    // updated_at прежним. Теперь updatedAt = max(clock(), prev + 1ms). Замок текста штамп записи больше не сверяет
+    // (ревизия тела, §8.1), но штамп — предусловие `orbis/updated_at` поставки и порядок выдач.
     const e = await createNote(); // createdAt/updatedAt = T0
     const u1 = firstEntity(
       await execute(db, req('entity_update', { id: e.id, title: 'v1' })), // clock = T0
@@ -545,15 +614,6 @@ describe('executor: optimistic-check body (§5.2, §13.1)', () => {
     ).updatedAt;
     expect(new Date(u1).getTime()).toBeGreaterThan(T0.getTime());
     expect(new Date(u2).getTime()).toBeGreaterThan(new Date(u1).getTime());
-
-    // Поведенческое следствие: правка body по версии u1 после апдейта u2 — STALE_VERSION,
-    // а не тихая победа (раньше u1 === u2 и stale-правка проходила)
-    const stale = await execute(
-      db,
-      req('entity_update', { id: e.id, body: 'stale', expectedUpdatedAt: u1 }),
-    );
-    expect(stale.ok).toBe(false);
-    if (!stale.ok) expect(stale.error.code).toBe('STALE_VERSION');
   });
 
   test('6e. монотонный updated_at и для attach_<aspect> в один тик clock', async () => {
@@ -574,18 +634,79 @@ describe('executor: optimistic-check body (§5.2, §13.1)', () => {
     expect(new Date(a2).getTime()).toBeGreaterThan(new Date(a1).getTime());
   });
 
-  test('6c. патч без body (tags) со stale-версией — проходит (LWW)', async () => {
+  test('6c. патч без body (tags) со стухшей ревизией — проходит (LWW)', async () => {
     const e = await createNote();
     const r = await execute(
       db,
-      req('entity_update', {
-        id: e.id,
-        tags: ['LWW', 'lww'],
-        expectedUpdatedAt: '2020-01-01T00:00:00.000Z',
-      }),
+      req('entity_update', { id: e.id, tags: ['LWW', 'lww'], expectedBodyRevision: 99 }),
     );
     const e1 = firstEntity(r);
     expect(e1.tags).toEqual(['lww']); // и нормализация тегов на update
+  });
+
+  /** Пачка операций одним вызовом executor'а (без синка: журнал здесь не предмет). */
+  function batch(operations: Array<{ tool: string; input: unknown }>) {
+    return execute(db, { ...req('noop', {}), operations, batchId: newId() });
+  }
+
+  test('6g. пачка «тело + тело» одной записи с одной ревизией → вторая — STALE_VERSION, ничего не записано (РП-17)', async () => {
+    const e = await createNote();
+    const r = await batch([
+      { tool: 'entity_update', input: { id: e.id, body: 'раз', expectedBodyRevision: 1 } },
+      { tool: 'entity_update', input: { id: e.id, body: 'два', expectedBodyRevision: 1 } },
+    ]);
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.error.code).toBe('STALE_VERSION');
+      expect(r.error.details).toEqual({ id: e.id, expected: 1, current: 2 });
+    }
+    const got = await withIdentity(db, personal(userA), (tx) =>
+      readEntity(tx, userA, { id: e.id }),
+    );
+    expect([got.entity.body, got.entity.bodyRevision]).toEqual(['v1', 1]);
+
+    // Вторая правка, назвавшая ревизию ПОСЛЕ первой, — законна: пачка видит приращение в виртуальной строке
+    const ok = await batch([
+      { tool: 'entity_update', input: { id: e.id, body: 'раз', expectedBodyRevision: 1 } },
+      { tool: 'entity_update', input: { id: e.id, body: 'два', expectedBodyRevision: 2 } },
+    ]);
+    expect(ok.ok).toBe(true);
+    expect((ok as ExecuteOk).results.map((x) => (x as WireEntity).bodyRevision)).toEqual([2, 3]);
+  });
+
+  test('6h. пачка «создание с телом + правка тела» той же записи: ревизия создания — 1, без ложного STALE_VERSION (M-1)', async () => {
+    const id = newId();
+    const r = await batch([
+      { tool: 'entity_create', input: { id, title: 'Новая', tags: [], body: 'черновик' } },
+      { tool: 'entity_update', input: { id, body: 'чистовик', expectedBodyRevision: 1 } },
+    ]);
+    expect(r.ok).toBe(true);
+    const updated = (r as ExecuteOk).results[1] as WireEntity;
+    expect([updated.body, updated.bodyRevision]).toEqual(['чистовик', 2]);
+  });
+
+  test('6i. пачка «засев тела в attach + правка тела»: правка видит ревизию засева, без ложного STALE_VERSION (M-1)', async () => {
+    const e = firstEntity(
+      await execute(db, req('entity_create', { title: 'Будет проектом', tags: [] })),
+    );
+    expect(revisionOf(e)).toBe(1);
+    const attach = {
+      tool: 'attach_orbis_project',
+      input: { entity_id: e.id, data: { 'orbis/project_stage': 'active' } },
+    };
+    // Засев сдвинул ревизию в виртуальной строке: правка по ревизии ДО засева — отказ, иначе заготовка затёрлась бы молча
+    const stale = await batch([
+      attach,
+      { tool: 'entity_update', input: { id: e.id, body: 'своё', expectedBodyRevision: 1 } },
+    ]);
+    expect(stale.ok ? 'ok' : stale.error.code).toBe('STALE_VERSION');
+    const r = await batch([
+      attach,
+      { tool: 'entity_update', input: { id: e.id, body: 'своё', expectedBodyRevision: 2 } },
+    ]);
+    expect(r.ok).toBe(true);
+    const updated = (r as ExecuteOk).results[1] as WireEntity;
+    expect([updated.body, updated.bodyRevision]).toEqual(['своё', 3]);
   });
 });
 
@@ -976,7 +1097,7 @@ describe('ADE-срез 1: инварианты назначения и засе�
       req('entity_update', {
         id: e.id,
         body: '',
-        expectedUpdatedAt: e.updatedAt,
+        expectedBodyRevision: e.bodyRevision,
         props: { 'orbis/project_stage': 'active' },
         aspects: { attach: ['orbis/project'] },
       }),
@@ -996,7 +1117,7 @@ describe('ADE-срез 1: инварианты назначения и засе�
       req('entity_update', {
         id: e.id,
         bodyDoc: { v: DOC_SCHEMA_VERSION, doc: { type: 'doc', content: [{ type: 'paragraph' }] } },
-        expectedUpdatedAt: e.updatedAt,
+        expectedBodyRevision: e.bodyRevision,
         props: { 'orbis/project_stage': 'active' },
         aspects: { attach: ['orbis/project'] },
       }),
@@ -1029,7 +1150,7 @@ describe('ADE-срез 1: инварианты назначения и засе�
     expect(await bodyOf(e.id)).toBe(''); // и заготовка вместе с ним
   });
 
-  test('24. entity_update, добавляющий orbis/project пустой заметке, засевает заготовку без expectedUpdatedAt', async () => {
+  test('24. entity_update, добавляющий orbis/project пустой заметке, засевает заготовку без expectedBodyRevision', async () => {
     const e = firstEntity(
       await execute(db, req('entity_create', { title: 'Станет проектом', tags: [] })),
     );
@@ -1053,7 +1174,7 @@ describe('ADE-срез 1: инварианты назначения и засе�
       req('entity_update', {
         id: e2.id,
         body: 'Своё.',
-        expectedUpdatedAt: e2.updatedAt,
+        expectedBodyRevision: e2.bodyRevision,
         props: { 'orbis/project_stage': 'active' },
         aspects: { attach: ['orbis/project'] },
       }),

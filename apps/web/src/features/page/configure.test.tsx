@@ -21,6 +21,7 @@ import {
   installCrashTrap,
   type MockHandler,
   renderWithProviders,
+  staleBodyError,
   trpcError,
   type WireEntityFixture,
   wireEntity,
@@ -703,7 +704,7 @@ describe('уход с настройки без связи (рулинг R-5)', 
 
   test('409, затем правка поверх — «Готово» НЕ уходит «без связи»: отказ сервера, а не связь (N-1)', async () => {
     const { view, updates, done } = await configureWith(
-      scriptedServer((i) => (i === 0 ? trpcError('CONFLICT', 'STALE_VERSION') : 'hold')),
+      scriptedServer((i) => (i === 0 ? staleBodyError({ id: PAGE }) : 'hold')),
     );
     await editUnsentOffline(view, ' ХВОСТ');
     done();

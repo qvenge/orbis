@@ -7,6 +7,7 @@
 // закрыть тестом путь, которым модель не ходит.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { entityThreadId, newId, type ProposeResult, pendingMessageId } from '@orbis/shared';
+import { FIXTURE_PARSE_REGISTRY } from '@orbis/shared/query/fixtures';
 import { eq, sql } from 'drizzle-orm';
 import { appDb, mintGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
 import { actionsOf } from '../../test/journal-helpers';
@@ -22,6 +23,7 @@ import { agentLoopHelpers, T0 } from '../test/agent-loop-helpers';
 import { dispatchTool, type ToolCallCtx } from '../tools/dispatch';
 import { AGENT_VERB_NAMES, buildToolRegistry, WORKER_SCOPE_TOOLS } from '../tools/registry';
 import { proposalView } from './lifecycle';
+import { proposalBodyRows } from './proposal-diff';
 
 requireEnv();
 
@@ -968,7 +970,7 @@ describe('orbis_propose: форма и запрет по объекту (V1.6, �
     expect(await pendingsInRoutineThread(routineId)).toBe(1);
   });
 
-  test('правка тела + любая другая правка той же сущности (в любом порядке) → VALIDATION proposal_conflicting_operations; тело одно — ok с expectedUpdatedAt (B2-2)', async () => {
+  test('правка тела + любая другая правка той же сущности (в любом порядке) → VALIDATION proposal_conflicting_operations; тело одно — ok с expectedBodyRevision (B2-2)', async () => {
     const taskId = await seedTask('Цель правки тела');
     const explanation = { explanation: EXPLANATION };
     const bodyOp = { tool: 'entity_update', input: { id: taskId, body: 'Новый текст задачи' } };
@@ -1017,7 +1019,62 @@ describe('orbis_propose: форма и запрет по объекту (V1.6, �
       }
     ).pending.input;
     expect(payload.operations[0]?.input.body).toBe('Новый текст задачи');
-    expect(typeof payload.operations[0]?.input.expectedUpdatedAt).toBe('string');
+    // Замок текста предложения — ревизия тела цели на момент составления (§8.2), а не штамп записи
+    expect(payload.operations[0]?.input.expectedBodyRevision).toBe(1);
+    expect(payload.operations[0]?.input.expectedUpdatedAt).toBeUndefined();
     expect(payload.operations[0]?.input.precondition).toBeUndefined();
+  });
+
+  test('ревизию тела снимает сервер: модельная отбрасывается; дифф «тело изменилось» — по ревизии (правка свойства цели дифф не гасит, правка тела — гасит)', async () => {
+    const taskId = await seedTask('Цель диффа по ревизии');
+    const run = await liveRoutine();
+    const ok = await dispatchTool(run.ctx, 'orbis_propose', {
+      run_id: run.runId,
+      explanation: EXPLANATION,
+      operations: [
+        {
+          tool: 'entity_update',
+          input: { id: taskId, body: 'Предложенный текст', expectedBodyRevision: 42 },
+        },
+      ],
+    });
+    expect(ok.status).toBe('ok');
+    if (ok.status !== 'ok') return;
+    const msg = await messageById((ok.result as ProposeResult).pending_id);
+    const operations = (
+      msg?.metadata as {
+        pending: { input: { operations: Array<{ tool: string; input: Record<string, unknown> }> } };
+      }
+    ).pending.input.operations;
+    expect(operations[0]?.input.expectedBodyRevision).toBe(1);
+
+    const bodyRow = () =>
+      withIdentity(db, personal(owner), async (tx) =>
+        (await proposalBodyRows(tx, operations, { withDiff: true }, FIXTURE_PARSE_REGISTRY)).get(0),
+      );
+    // Владелец сменил статус цели: штамп записи сдвинут, ревизия тела — нет; дифф рисуется
+    const status = await execute(db, {
+      identity: personal(owner),
+      actorKind: 'owner',
+      source: 'ui',
+      operations: [
+        { tool: 'entity_update', input: { id: taskId, props: { 'orbis/task_status': 'planned' } } },
+      ],
+    });
+    expect(status.ok).toBe(true);
+    const drawn = (await bodyRow())?.bodyDiff;
+    expect(drawn !== undefined && 'units' in drawn).toBe(true);
+
+    // Владелец сменил тело — «тело изменилось», диффа нет
+    const body = await execute(db, {
+      identity: personal(owner),
+      actorKind: 'owner',
+      source: 'ui',
+      operations: [
+        { tool: 'entity_update', input: { id: taskId, body: 'Своё', expectedBodyRevision: 1 } },
+      ],
+    });
+    expect(body.ok).toBe(true);
+    expect((await bodyRow())?.bodyDiff).toEqual({ skipped: 'body_changed' });
   });
 });

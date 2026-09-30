@@ -158,15 +158,15 @@ describe('ops.ts perf: объём журнала', () => {
       );
     const created = await run({ id, title: 'Замер', tags: [] }, 'entity_create');
     if (!created.ok) throw new Error(created.error.message);
-    const at = (created.results[0] as { updatedAt: string }).updatedAt;
-    const bodyOnly = await run({ id, body: 'только текст', expectedUpdatedAt: at });
+    const rev = (created.results[0] as { bodyRevision: number }).bodyRevision;
+    const bodyOnly = await run({ id, body: 'только текст', expectedBodyRevision: rev });
     if (!bodyOnly.ok) throw new Error(bodyOnly.error.message);
-    const at2 = (bodyOnly.results[0] as { updatedAt: string }).updatedAt;
+    const rev2 = (bodyOnly.results[0] as { bodyRevision: number }).bodyRevision;
     const mixed = await run({
       id,
       title: 'Замер 2',
       body: 'текст и заголовок',
-      expectedUpdatedAt: at2,
+      expectedBodyRevision: rev2,
     });
     if (!mixed.ok) throw new Error(mixed.error.message);
     const captured = await run(

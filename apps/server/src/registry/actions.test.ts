@@ -458,6 +458,35 @@ test('archived из boolean-параметра — законно; из date-п�
   );
 });
 
+// РП-24 плана А: поле конверта `expectedBodyRevision` — позиция типа number (ревизия тела), прежнего `expectedUpdatedAt`
+// в конверте нет (замок текста сменился без переходного слоя, спека скорости §8.2).
+test('expectedBodyRevision из number-параметра — законно; из date-параметра — ACTION_VALUE_TYPE; expectedUpdatedAt — ACTION_STEP_INPUT (РП-24)', () => {
+  const revisionFrom = (v: unknown) => [
+    { tool: 'entity_update', input: { id: SELF, expectedBodyRevision: v } },
+  ];
+  expect(
+    verdict({
+      ...builtin(1),
+      params: [{ name: 'rev', type: { kind: 'number' } }],
+      steps: revisionFrom({ $expr: { param: 'rev' } }),
+    }),
+  ).toBe('ok');
+  expect(verdict({ ...builtin(1), steps: revisionFrom({ $expr: { param: 'to' } }) })).toEqual(
+    VALUE_TYPE,
+  );
+  expect(
+    verdict({
+      ...builtin(1),
+      steps: [
+        {
+          tool: 'entity_update',
+          input: { id: SELF, expectedUpdatedAt: { $expr: { param: 'to' } } },
+        },
+      ],
+    }),
+  ).toEqual({ code: 'VALIDATION', reason: 'ACTION_STEP_INPUT' });
+});
+
 // I-3: тип `{param}` — тем же `exprTypeOfKind`, что у `{prop}` (Produces-интерфейс задачи 7).
 test('тип параметра — родом свойства: select сравним с select-свойством; json-параметр — отказ формы', () => {
   const p = builtin(1);

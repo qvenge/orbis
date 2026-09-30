@@ -4,8 +4,8 @@
 //
 // Считает сервер, а не клиент. Клиенту дифф нужен второй раз — в режиме правки, когда тело
 // меняется под руками (Ш1.11), — и там он свой; здесь же показ обязан совпадать с тем, что
-// произойдёт на «Принять», а это знание серверное: снятое CAS по `updated_at`, тело записи
-// под RLS, канон предложенного markdown.
+// произойдёт на «Принять», а это знание серверное: снятая ревизия тела (замок текста, спека
+// скорости §8.1), тело записи под RLS, канон предложенного markdown.
 //
 // Почему отдельный модуль, а не ещё один кусок lifecycle.ts (1993 строки и несколько
 // несвязных тем): тема здесь ровно одна — как из payload'а предложения и тела записи
@@ -119,8 +119,8 @@ export async function proposalBodyRows(
 interface BodyTarget {
   index: number;
   id: string;
-  /** CAS, снятый при составлении (propose.ts ставит его только при правке тела). */
-  expectedUpdatedAt?: string;
+  /** Ревизия тела, снятая при составлении (propose.ts ставит её только при правке тела). */
+  expectedBodyRevision?: number;
   /** markdown «станет»; `undefined` — тело в payload'е нечитаемо (см. `editedDoc`). */
   after?: string;
   /** Документ «станет» у ПРАВЛЕНОГО предложения — он же уедет в запись, канонизировать нечего. */
@@ -130,8 +130,8 @@ interface BodyTarget {
 function bodyTarget(index: number, input: Record<string, unknown>): BodyTarget {
   const id = String(input.id);
   const expected =
-    typeof input.expectedUpdatedAt === 'string' ? input.expectedUpdatedAt : undefined;
-  const base = { index, id, ...(expected !== undefined && { expectedUpdatedAt: expected }) };
+    typeof input.expectedBodyRevision === 'number' ? input.expectedBodyRevision : undefined;
+  const base = { index, id, ...(expected !== undefined && { expectedBodyRevision: expected }) };
   // Исходное предложение несёт тело markdown-строкой, правленое — документом (Ш1.11); ключ
   // строки предложения у обеих форм общий (`body`), поэтому и строка показа одна
   if (typeof input.body === 'string') return { ...base, after: input.body };
@@ -172,8 +172,9 @@ function textRow(target: BodyTarget): ProposalBodyRow {
  * Строка живого предложения. Порядок проверок — не вкусовой:
  *
  *  1. тело записи тронуто после составления → `body_changed` и НИКАКОГО диффа. Дифф против
- *     нового тела нарисовал бы согласие там, где «Принять» ответит отказом (CAS по
- *     `updated_at` проверяет executor, и он же вернёт STALE_VERSION);
+ *     нового тела нарисовал бы согласие там, где «Принять» ответит отказом (ревизию тела
+ *     проверяет executor, и он же вернёт STALE_VERSION). Сравнивается РЕВИЗИЯ, а не штамп
+ *     записи: правка свойства цели тела не трогает, и «Принять» по ней не откажет;
  *  2. до-разборные потолки на ОБЕ стороны → `too_large`. Именно до разбора: сторож стоит
  *     0.22 мс на худшем РАЗРЕШЁННОМ теле (64 КБ, 300 строк — замерено на этой реализации),
  *     а `canonicalizeBody` того же тела — 190–225 мс, и до полутора секунд на 236 КБ;
@@ -194,12 +195,12 @@ function diffRow(
   const row = textRow(target);
   if (target.after === undefined) return row;
 
-  // Записи не видно (удалена или не наша) и CAS без значения — тот же исход: доказать, что
+  // Записи не видно (удалена или не наша) и ревизии нет — тот же исход: доказать, что
   // тело то самое, нечем, а показывать различие с недоказанным «было» нельзя
   if (
     current === undefined ||
-    target.expectedUpdatedAt === undefined ||
-    current.updatedAt.toISOString() !== target.expectedUpdatedAt
+    target.expectedBodyRevision === undefined ||
+    current.bodyRevision !== target.expectedBodyRevision
   ) {
     return { ...row, bodyDiff: { skipped: 'body_changed' } };
   }
@@ -253,11 +254,11 @@ function overSourceLimit(markdown: string): boolean {
   return filled && lines + 1 > PROPOSAL_DIFF_MAX_SOURCE_LINES;
 }
 
-/** Тело записи «сейчас» — сторона «было» плюс отметка времени для CAS. */
+/** Тело записи «сейчас» — сторона «было» плюс ревизия тела для замка текста. */
 interface CurrentBody {
   body: string;
   bodyDoc: unknown;
-  updatedAt: Date;
+  bodyRevision: number;
 }
 
 /**
@@ -280,12 +281,12 @@ async function currentBodies(tx: Tx, ids: readonly string[]): Promise<Map<string
       id: entities.id,
       body: entities.body,
       bodyDoc: entities.bodyDoc,
-      updatedAt: entities.updatedAt,
+      bodyRevision: entities.bodyRevision,
     })
     .from(entities)
     .where(inArray(entities.id, unique));
   for (const row of rows) {
-    out.set(row.id, { body: row.body, bodyDoc: row.bodyDoc, updatedAt: row.updatedAt });
+    out.set(row.id, { body: row.body, bodyDoc: row.bodyDoc, bodyRevision: row.bodyRevision });
   }
   return out;
 }

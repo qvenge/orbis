@@ -5,7 +5,13 @@ import { getSchema } from '@tiptap/core';
 import { Node as PMNode } from '@tiptap/pm/model';
 import { useState } from 'react';
 import { beforeEach, expect, test, vi } from 'vitest';
-import { installCrashTrap, renderWithProviders, trpcError, wireEntity } from '../../test/harness';
+import {
+  installCrashTrap,
+  renderWithProviders,
+  staleBodyError,
+  trpcError,
+  wireEntity,
+} from '../../test/harness';
 import { trpc } from '../../trpc';
 import { detailGetInput } from '../entity-detail/useEntityDetail';
 import { SaveIndicator, SLOW_SAVE_MS } from './SaveIndicator';
@@ -27,17 +33,19 @@ const THREE_MD = 'совсем другое тело';
 const THREE = parseBody(THREE_MD);
 
 /**
- * `updatedAt` фиксирован и НАМЕРЕННО далёк от системного времени прогона (2030 год ниже):
- * подстановка «сейчас» вместо строки из кэша — самый вероятный способ сломать §5.2, и
- * тест обязан отличать одно от другого, а не сверять «какую-то строку».
+ * Ревизия тела — замок текста (спека скорости §8.1). Число НЕ 1: «первая ревизия» совпала бы с
+ * любым умолчанием и подстановкой, и тест не отличил бы ревизию из кэша от выдуманной.
+ * `updatedAt` фиксирован и далёк от системного времени прогона: замок его больше не сверяет, но
+ * он же — основа черновиков старой формы (К-26, draft.test.tsx).
  */
 const ENTITY: BodySaveEntity = {
+  bodyRevision: 3,
   updatedAt: '2026-08-14T10:00:00.000Z',
   bodyDoc: BASE,
 };
 
-/** Ответ сервера на entity.update: сущность с НОВЫМ updatedAt (сервер его всегда двигает). */
-const SAVED = { id: 'e1', updatedAt: '2026-08-14T11:00:00.000Z' };
+/** Ответ сервера на entity.update: сущность с НОВОЙ ревизией тела (правка тела её двигает). */
+const SAVED = { id: 'e1', updatedAt: '2026-08-14T11:00:00.000Z', bodyRevision: 4 };
 
 type Respond = (input: unknown) => unknown;
 const ok: Respond = () => SAVED;
@@ -247,7 +255,7 @@ test('размонтирование досылает отложенное — �
   expect(s.updates()[0]?.input).toEqual({
     id: 'e1',
     bodyDoc: ONE,
-    expectedUpdatedAt: ENTITY.updatedAt,
+    expectedBodyRevision: ENTITY.bodyRevision,
   });
   // И ровно один: снятый таймер паузы не будит вторую отправку уже после ухода.
   await tick(SAVE_PAUSE * 3);
@@ -269,7 +277,7 @@ test('размонтирование без набранного в сеть н�
 test('пока идёт запрос, второй не уходит — ни по паузе, ни по flush(); досылается по оседанию', async () => {
   // Параллельный второй запрос не просто ловил бы 409 от собственного предшественника: у
   // ПЕРВОГО пропали бы все поштучные колбэки разом (query-core снимает наблюдателя с прежней
-  // мутации), и вместе с ними — подтверждённый updatedAt, очистка отложенного, признак полёта
+  // мутации), и вместе с ними — подтверждённая ревизия, очистка отложенного, признак полёта
   // и терминальная остановка. Поэтому отложенное ждёт оседания и уходит одним досылом.
   const server = gatedServer();
   const s = setup({ respond: server.respond });
@@ -286,13 +294,13 @@ test('пока идёт запрос, второй не уходит — ни п
   });
   expect(s.updates()).toHaveLength(1);
 
-  // Первый осел — досыл уходит сам, с последним документом и с подтверждённым updatedAt.
+  // Первый осел — досыл уходит сам, с последним документом и с подтверждённой ревизией.
   await server.answer(0, SAVED);
   expect(s.updates()).toHaveLength(2);
   expect(s.updates()[1]?.input).toEqual({
     id: 'e1',
     bodyDoc: TWO,
-    expectedUpdatedAt: SAVED.updatedAt,
+    expectedBodyRevision: SAVED.bodyRevision,
   });
 
   // И ровно ОДИН досыл: оседание второго само по себе третьего не заводит.
@@ -395,7 +403,7 @@ test('документ, отличающийся лишь порядком кл�
   // Страж вакуумности: строки РАЗНЫЕ (иначе тест сверяет документ сам с собой).
   expect(JSON.stringify(fromEditor)).not.toBe(JSON.stringify(fromParse));
 
-  const s = setup({ entity: { updatedAt: ENTITY.updatedAt, bodyDoc: fromParse } });
+  const s = setup({ entity: { ...ENTITY, bodyDoc: fromParse } });
   s.api().onDocChange(fromEditor);
   await tick(SAVE_PAUSE);
   expect(s.updates()).toHaveLength(0);
@@ -432,7 +440,7 @@ test('документ, отличающийся лишь УМОЛЧАНИЯМИ
   expect(JSON.stringify(fromEditor)).not.toBe(JSON.stringify(fromParse));
   expect(JSON.stringify(fromEditor)).toContain('"rel":"noopener noreferrer nofollow"');
 
-  const s = setup({ entity: { updatedAt: ENTITY.updatedAt, bodyDoc: fromParse } });
+  const s = setup({ entity: { ...ENTITY, bodyDoc: fromParse } });
   s.api().onDocChange(fromEditor);
   await tick(SAVE_PAUSE);
   expect(s.updates()).toHaveLength(0);
@@ -454,7 +462,7 @@ test('документ, отличающийся лишь УМОЛЧАНИЯМИ
 
 // --- что именно уезжает -----------------------------------------------------------------------
 
-test('мутация уходит с bodyDoc и точным expectedUpdatedAt из кэша', async () => {
+test('мутация уходит с {id, bodyDoc, expectedBodyRevision: <ревизия кэша>}', async () => {
   const s = setup();
   s.api().onDocChange(ONE);
   await tick(SAVE_PAUSE);
@@ -462,16 +470,15 @@ test('мутация уходит с bodyDoc и точным expectedUpdatedAt �
   const input = s.updates()[0]?.input as Record<string, unknown>;
   // Полное равенство, а не выборка полей: оно же и стережёт отсутствие `body` — markdown-
   // проекцию делает сервер, и клиентский сериализатор затащил бы всю схему документа в
-  // чанк detail, то есть мимо двухфазного монтирования.
-  expect(input).toEqual({ id: 'e1', bodyDoc: ONE, expectedUpdatedAt: ENTITY.updatedAt });
+  // чанк detail, то есть мимо двухфазного монтирования, — и отсутствие прежнего поля замка
+  // (`expectedUpdatedAt`): контракт сменился без переходного слоя (§8.2).
+  expect(input).toEqual({ id: 'e1', bodyDoc: ONE, expectedBodyRevision: ENTITY.bodyRevision });
   expect(input).not.toHaveProperty('body');
-  // §5.2: expectedUpdatedAt — ТОЧНАЯ строка из кэша, а не «сейчас».
-  expect(input.expectedUpdatedAt).not.toBe(new Date().toISOString());
 });
 
-test('второе сохранение подряд берёт updatedAt из ответа сервера, а не протухший из кэша', async () => {
+test('второе сохранение подряд берёт ревизию из ответа сервера, а не протухшую из кэша', async () => {
   // Инвалидация после мутации перечитывает detail, но ответ на это чтение может и опоздать:
-  // пауза 2 с, а круг «мутация + перечитывание» на плохой связи длиннее. С протухшей строкой
+  // пауза 2 с, а круг «мутация + перечитывание» на плохой связи длиннее. С протухшей ревизией
   // ВТОРОЕ сохранение подряд гарантированно ловило бы 409 — на ровном месте, без чужой правки.
   // Пропс здесь намеренно не обновляется: это и есть «перечитывание не доехало».
   const s = setup();
@@ -481,14 +488,12 @@ test('второе сохранение подряд берёт updatedAt из �
   await tick(SAVE_PAUSE);
 
   expect(s.updates()).toHaveLength(2);
-  expect((s.updates()[0]?.input as { expectedUpdatedAt: string }).expectedUpdatedAt).toBe(
-    ENTITY.updatedAt,
-  );
-  expect((s.updates()[1]?.input as { expectedUpdatedAt: string }).expectedUpdatedAt).toBe(
-    SAVED.updatedAt,
-  );
-  // Страж вакуумности: две строки ДОЛЖНЫ различаться, иначе проверка выше ни о чём.
-  expect(SAVED.updatedAt).not.toBe(ENTITY.updatedAt);
+  const revision = (i: number) =>
+    (s.updates()[i]?.input as { expectedBodyRevision: number }).expectedBodyRevision;
+  expect(revision(0)).toBe(ENTITY.bodyRevision);
+  expect(revision(1)).toBe(SAVED.bodyRevision);
+  // Страж вакуумности: две ревизии ДОЛЖНЫ различаться, иначе проверка выше ни о чём.
+  expect(SAVED.bodyRevision).not.toBe(ENTITY.bodyRevision);
 });
 
 /** Стенд с управляемыми из теста пропсами хука: и сущность, и её id меняет сам тест. */
@@ -547,7 +552,10 @@ test('приехавшая из кэша сущность становится �
   await tick(SAVE_PAUSE);
   expect(s.updates()).toHaveLength(1);
 
-  await s.set({ id: 'e1', entity: { updatedAt: SAVED.updatedAt, bodyDoc: ONE } });
+  await s.set({
+    id: 'e1',
+    entity: { bodyRevision: SAVED.bodyRevision, updatedAt: SAVED.updatedAt, bodyDoc: ONE },
+  });
   s.api().onDocChange(ONE);
   await tick(SAVE_PAUSE);
   expect(s.updates()).toHaveLength(1); // это уже сохранено — второй раз не шлём
@@ -559,26 +567,27 @@ test('приехавшая из кэша сущность становится �
 });
 
 /**
- * Чужая правка, приехавшая с сервера: и документ другой, и метка ПОЗЖЕ всех известных клиенту
- * (позже и `ENTITY.updatedAt`, и `SAVED.updatedAt` — иначе «поздняя из двух» выбрала бы верную
- * строку по совпадению, и подмену было бы не отличить от порядка).
+ * Чужая правка, приехавшая с сервера: и документ другой, и ревизия БОЛЬШЕ всех известных клиенту
+ * (больше и `ENTITY.bodyRevision`, и `SAVED.bodyRevision` — иначе «большая из двух» выбрала бы
+ * верную ревизию по совпадению, и подмену было бы не отличить от порядка).
  */
 const FOREIGN: BodySaveEntity = {
+  bodyRevision: 7,
   updatedAt: '2026-08-14T20:00:00.000Z',
   bodyDoc: THREE,
 };
 
-test('досыл при уходе несёт метку, на которой правка НАБИРАЛАСЬ, а не свежую из кэша', async () => {
-  // Сюжет целиком, все действия штатные: правка с телефона двинула запись; здесь человек
+test('досыл при уходе несёт ревизию, на которой правка НАБИРАЛАСЬ, а не свежую из кэша', async () => {
+  // Сюжет целиком, все действия штатные: правка с телефона двинула текст записи; здесь человек
   // печатает, ловит 409, жмёт «Обновить» — перечитывание приносит ЧУЖОЙ документ, и редактор
   // (фокус ушёл на кнопку) сажает его вместо набранного. Хук об этой подмене не узнаёт никогда.
-  // Возьми досыл метку из свежего кэша — он ушёл бы как «я видел чужую правку и кладу поверх»,
+  // Возьми досыл ревизию из свежего кэша — он ушёл бы как «я видел чужую правку и кладу поверх»,
   // и сервер молча затёр бы её текстом, который человек уже видел исчезнувшим с экрана.
   //
-  // §5.2 требует ТУ строку, которую клиент видел, КОГДА ДЕЛАЛ ЭТУ ПРАВКУ. Метка поэтому
-  // замирает вместе с отложенным документом, а не берётся в момент отправки.
+  // Замок текста (§8.1) требует ТУ ревизию, которую клиент видел, КОГДА ДЕЛАЛ ЭТУ ПРАВКУ: правка
+  // набирается поверх ревизии на НАЧАЛО набора, а не берёт её в момент отправки.
   const s = mountWithProps({ id: 'e1', entity: ENTITY }, () => {
-    throw trpcError('CONFLICT');
+    throw staleBodyError();
   });
   s.api().onDocChange(ONE);
   await tick(SAVE_PAUSE);
@@ -593,15 +602,15 @@ test('досыл при уходе несёт метку, на которой п
   expect(s.updates()[1]?.input).toEqual({
     id: 'e1',
     bodyDoc: ONE,
-    expectedUpdatedAt: ENTITY.updatedAt,
+    expectedBodyRevision: ENTITY.bodyRevision,
   });
-  // Страж вакуумности: метки ДОЛЖНЫ различаться, иначе проверка выше ни о чём.
-  expect(FOREIGN.updatedAt).not.toBe(ENTITY.updatedAt);
+  // Страж вакуумности: ревизии ДОЛЖНЫ различаться, иначе проверка выше ни о чём.
+  expect(FOREIGN.bodyRevision).not.toBe(ENTITY.bodyRevision);
 });
 
-test('правка, набранная ПОСЛЕ прихода чужого документа, уезжает с ЕГО меткой', async () => {
-  // Обратная сторона: метка замирает вместе с ОТЛОЖЕННЫМ документом, а не навсегда. Человек,
-  // напечатавший поверх приехавшего текста, видел именно его метку — и уходить правка обязана
+test('правка, набранная ПОСЛЕ прихода чужого документа, уезжает с ЕГО ревизией', async () => {
+  // Обратная сторона: ревизия берётся на начало ОТЛОЖЕННОГО документа, а не навсегда. Человек,
+  // напечатавший поверх приехавшего текста, видел именно его ревизию — и уходить правка обязана
   // с ней, иначе каждое сохранение после чужой правки ловило бы 409 до самой перезагрузки.
   const s = mountWithProps({ id: 'e1', entity: ENTITY });
   s.api().onDocChange(ONE);
@@ -613,34 +622,33 @@ test('правка, набранная ПОСЛЕ прихода чужого д
   await tick(SAVE_PAUSE);
 
   expect(s.updates()).toHaveLength(2);
-  expect((s.updates()[1]?.input as { expectedUpdatedAt: string }).expectedUpdatedAt).toBe(
-    FOREIGN.updatedAt,
+  expect((s.updates()[1]?.input as { expectedBodyRevision: number }).expectedBodyRevision).toBe(
+    FOREIGN.bodyRevision,
   );
 });
 
 /**
- * Та же запись после СВОЕЙ ЖЕ правки заголовка: тело не тронуто, метка выросла.
+ * Та же запись после СВОЕЙ ЖЕ правки заголовка: тело не тронуто — ревизия тела та же, а штамп
+ * записи вырос.
  *
  * Такие правки (заголовок, чекбокс, архивация, аспекты) идут через ДРУГОЙ экземпляр обвязки
  * обновления, и `confirmedRef` про них не знает ничего: он ведёт счёт только мутациям тела.
  */
 const AFTER_TITLE: BodySaveEntity = {
+  bodyRevision: 3,
   updatedAt: '2026-08-14T15:00:00.000Z',
   // ДРУГОЙ объект того же смысла, а не `BASE`: из кэша тело всегда приезжает новым объектом,
   // и с общей ссылкой тест остался бы зелёным даже при сравнении по `===` (ре-ревью раунда 2).
   bodyDoc: parseBody('тело'),
 };
 
-test('своя же правка заголовка не превращает сохранение тела в 409', async () => {
-  // Замораживая метку, легко заморозить её и там, где защищать нечего. Сюжет целиком, все
-  // действия свои: человек печатает в теле (метка замерла), не дожидаясь паузы правит заголовок
-  // той же записи, сервер двигает метку, перечитывание приносит её в кэш — и пауза истекает.
-  // С метки, замороженной наглухо, тело уезжало бы со старой строкой и получало 409 «Изменено в
-  // другом месте» на записи, которой не касался НИКТО, кроме самого человека.
-  //
-  // Правило узкое: метка двигается, только если ТЕЛО не менялось. В сюжете находки 1 тело как
-  // раз меняется (там приезжает чужой документ), и там метка остаётся замороженной — это
-  // проверяет тест «досыл при уходе несёт метку, на которой правка НАБИРАЛАСЬ».
+test('своя же правка заголовка или свойства не превращает сохранение тела в 409 — без машинерии', async () => {
+  // Сюжет целиком, все действия свои: человек печатает в теле, не дожидаясь паузы правит
+  // заголовок той же записи, сервер двигает штамп записи, перечитывание приносит его в кэш — и
+  // пауза истекает. Замок текста — ревизия тела (§8.1), а её правка заголовка или свойства не
+  // двигает: тело уходит с ревизией, которую сервер и держит, и 409 не бывает. Прежде это
+  // требовало «разморозки» метки по сверке тел — её больше нет, и сохранение уходит с ТОЙ ЖЕ
+  // ревизией, что взята на начало набора.
   const s = mountWithProps({ id: 'e1', entity: ENTITY });
   s.api().onDocChange(ONE);
 
@@ -651,19 +659,18 @@ test('своя же правка заголовка не превращает с
   expect(s.updates()[0]?.input).toEqual({
     id: 'e1',
     bodyDoc: ONE,
-    expectedUpdatedAt: AFTER_TITLE.updatedAt,
+    expectedBodyRevision: ENTITY.bodyRevision,
   });
-  // Стражи вакуумности: тело ДЕЙСТВИТЕЛЬНО то же, а метка ДЕЙСТВИТЕЛЬНО другая.
+  // Стражи вакуумности: тело и ревизия ДЕЙСТВИТЕЛЬНО те же, а штамп записи ДЕЙСТВИТЕЛЬНО другой.
   expect(AFTER_TITLE.bodyDoc).toEqual(ENTITY.bodyDoc);
+  expect(AFTER_TITLE.bodyRevision).toBe(ENTITY.bodyRevision);
   expect(AFTER_TITLE.updatedAt).not.toBe(ENTITY.updatedAt);
 });
 
 test('своя же правка заголовка поверх ОТКАЗАВШЕЙ правки тела: досыл при уходе не ловит 409', async () => {
   // Окно шире паузы, и потому хуже: отказ сети оставляет отложенный документ на руках до самого
-  // успеха. Человек правит заголовок, уходит с записи — и досыл уезжает со старой меткой,
-  // получает 409 и не доезжает до сервера ВОВСЕ. Правка остаётся черновиком и предлагается на
-  // следующем открытии, где «Отбросить» её уничтожает. До этого раунда обе последовательности
-  // сохранялись молча.
+  // успеха. Человек правит заголовок, уходит с записи — и досыл уезжает с ревизией, которую
+  // правка заголовка не двигала, то есть с верной: 409 здесь неоткуда взяться.
   const s = mountWithProps({ id: 'e1', entity: ENTITY }, () => {
     throw trpcError('INTERNAL_SERVER_ERROR');
   });
@@ -679,29 +686,28 @@ test('своя же правка заголовка поверх ОТКАЗАВ�
   expect(s.updates()[1]?.input).toEqual({
     id: 'e1',
     bodyDoc: ONE,
-    expectedUpdatedAt: AFTER_TITLE.updatedAt,
+    expectedBodyRevision: ENTITY.bodyRevision,
   });
 });
 
-test('чужая правка замораживает базу НАВСЕГДА — своя правка заголовка её не размораживает', async () => {
-  // Сравнение приехавшего тела с ПРЕДЫДУЩИМ снимком кэша задачи не решает: чужая правка, один
-  // раз впитавшись в снимок, для проверки перестаёт существовать — и следующая же СВОЯ правка
-  // метки размораживает базу. Сравнивать надо с телом на момент ЗАМОРОЗКИ.
-  //
+test('чужая правка текста держит ревизию набора — своя правка заголовка поверх её не сдвигает', async () => {
   // Сюжет целиком, и на последнем шаге — ни одного нажатия клавиши:
-  //  1. печатаю в теле — база заморожена на метке T1, снимок тела запомнен;
-  //  2. с телефона правят ту же запись — приезжает ЧУЖОЕ тело с меткой T2;
-  //  3. правлю ЗАГОЛОВОК этой же записи — сервер двигает метку до T3, тело остаётся чужим
-  //     (правки без тела гейт по версии не сверяет, они проходят всегда);
-  //  4. ухожу с записи → досыл со свежей меткой → гейт пропускает → ЧУЖОЙ ТЕКСТ ЗАТЁРТ МОЛЧА.
+  //  1. печатаю в теле — правка набирается поверх ревизии R1;
+  //  2. с телефона правят текст той же записи — приезжает ЧУЖОЕ тело с ревизией R2;
+  //  3. правлю ЗАГОЛОВОК этой же записи — штамп записи уходит дальше, ревизия тела — та же R2;
+  //  4. ухожу с записи → досыл обязан уйти с R1 и получить 409, а не затереть чужой текст молча.
   const s = mountWithProps({ id: 'e1', entity: ENTITY });
   s.api().onDocChange(ONE);
 
-  await s.set({ id: 'e1', entity: FOREIGN }); // шаг 2: чужое тело, метка 20:00
+  await s.set({ id: 'e1', entity: FOREIGN }); // шаг 2: чужое тело, ревизия 7
   await s.set({
     id: 'e1',
-    // Шаг 3: метка ушла ещё дальше, а тело — ТО ЖЕ чужое (другим объектом, как из кэша).
-    entity: { updatedAt: '2026-08-14T21:00:00.000Z', bodyDoc: parseBody(THREE_MD) },
+    // Шаг 3: штамп ушёл ещё дальше, а тело и ревизия — ТЕ ЖЕ чужие (другим объектом, как из кэша).
+    entity: {
+      bodyRevision: FOREIGN.bodyRevision,
+      updatedAt: '2026-08-14T21:00:00.000Z',
+      bodyDoc: parseBody(THREE_MD),
+    },
   });
   await s.unmount();
 
@@ -709,13 +715,13 @@ test('чужая правка замораживает базу НАВСЕГДА
   expect(s.updates()[0]?.input).toEqual({
     id: 'e1',
     bodyDoc: ONE,
-    expectedUpdatedAt: ENTITY.updatedAt,
+    expectedBodyRevision: ENTITY.bodyRevision,
   });
 });
 
-test('собственный успех двигает метку отложенного: досыл не ловит 409 от предшественника', async () => {
-  // Замри метка НАВСЕГДА в момент набора — досыл, ушедший после успеха первого запроса, нёс бы
-  // строку, которую этот же успех и сдвинул: гарантированный 409 на ровном месте, без единой
+test('собственный успех двигает ревизию отложенного: досыл не ловит 409 от предшественника', async () => {
+  // Замри ревизия НАВСЕГДА в момент набора — досыл, ушедший после успеха первого запроса, нёс бы
+  // ревизию, которую этот же успех и сдвинул: гарантированный 409 на ровном месте, без единой
   // чужой правки. Правка №2 — потомок только что сохранённой правки №1, и её база — ответ
   // сервера.
   const server = gatedServer();
@@ -724,7 +730,7 @@ test('собственный успех двигает метку отложен
   await tick(SAVE_PAUSE);
   expect(s.updates()).toHaveLength(1);
 
-  // Вторая правка набрана, ПОКА первая в полёте: её метка на этот момент — ещё ENTITY.updatedAt.
+  // Вторая правка набрана, ПОКА первая в полёте: её ревизия на этот момент — ещё ENTITY.bodyRevision.
   s.api().onDocChange(TWO);
   await tick(SAVE_PAUSE);
   expect(s.updates(), 'премиса: второй запрос ждёт оседания первого').toHaveLength(1);
@@ -734,26 +740,27 @@ test('собственный успех двигает метку отложен
   expect(s.updates()[1]?.input).toEqual({
     id: 'e1',
     bodyDoc: TWO,
-    expectedUpdatedAt: SAVED.updatedAt,
+    expectedBodyRevision: SAVED.bodyRevision,
   });
 });
 
-test('смена сущности не уносит в чужую запись ни отложенное тело, ни чужой updatedAt', async () => {
+test('смена сущности не уносит в чужую запись ни отложенное тело, ни чужую ревизию', async () => {
   // Самая дорогая из возможных ошибок: `{ id: 'вторая запись', bodyDoc: <тело первой> }` —
   // молча и необратимо. Экран сегодня пересоздаёт секцию тела по key={entity.id}, но верность
   // хука не должна держаться на чужом ключе.
   const s = mountWithProps({ id: 'e1', entity: ENTITY });
   s.api().onDocChange(ONE);
   await tick(SAVE_PAUSE);
-  expect(s.updates()).toHaveLength(1); // сервер подтвердил updatedAt=11:00 ПЕРВОЙ записи
+  expect(s.updates()).toHaveLength(1); // сервер подтвердил ревизию 4 ПЕРВОЙ записи
 
   // Вторая правка набрана, но пауза ещё не вышла — она так и остаётся отложенной.
   s.api().onDocChange(TWO);
   await tick(SAVE_PAUSE - 500);
 
-  // У второй записи updatedAt РАНЬШЕ подтверждённого первой — иначе «взять позднюю из двух»
-  // выбрало бы верную строку по совпадению, и утечку было бы не отличить от порядка.
+  // У второй записи ревизия МЕНЬШЕ подтверждённой первой — иначе «взять большую из двух»
+  // выбрало бы верную ревизию по совпадению, и утечку было бы не отличить от порядка.
   const second: BodySaveEntity = {
+    bodyRevision: 2,
     updatedAt: '2026-08-14T10:30:00.000Z',
     bodyDoc: THREE,
   };
@@ -765,19 +772,20 @@ test('смена сущности не уносит в чужую запись �
   await tick(SAVE_PAUSE * 2);
   expect(s.updates()).toHaveLength(1);
 
-  // Положительный контроль: правка ВТОРОЙ записи уезжает — с её собственными id и updatedAt.
+  // Положительный контроль: правка ВТОРОЙ записи уезжает — с её собственными id и ревизией.
   s.api().onDocChange(TWO);
   await tick(SAVE_PAUSE);
   expect(s.updates()).toHaveLength(2);
   expect(s.updates()[1]?.input).toEqual({
     id: 'e2',
     bodyDoc: TWO,
-    expectedUpdatedAt: second.updatedAt,
+    expectedBodyRevision: second.bodyRevision,
   });
 });
 
-/** Вторая запись: её updatedAt РАНЬШЕ всего, что вернёт сервер по первой (см. тесты ниже). */
+/** Вторая запись: её ревизия МЕНЬШЕ всего, что вернёт сервер по первой (см. тесты ниже). */
 const SECOND: BodySaveEntity = {
+  bodyRevision: 2,
   updatedAt: '2026-08-14T10:30:00.000Z',
   bodyDoc: THREE,
 };
@@ -808,13 +816,13 @@ test('таймер прежней записи не уносит в неё те�
   expect(s.updates()[0]?.input).toEqual({
     id: 'e2',
     bodyDoc: TWO,
-    expectedUpdatedAt: SECOND.updatedAt,
+    expectedBodyRevision: SECOND.bodyRevision,
   });
 });
 
 test('ответ на запрос прежней записи не ложится в счёт соседней', async () => {
   // Запрос, ушедший ДО смены записи, обязан доехать — он про прежнюю запись. Но его ответ
-  // здесь больше не касается ничего: ляг подтверждённый updatedAt ПЕРВОЙ записи в счёт
+  // здесь больше не касается ничего: ляг подтверждённая ревизия ПЕРВОЙ записи в счёт
   // второй, её первое же сохранение получило бы 409 с плашкой «изменено в другом месте» —
   // на записи, которой никто не касался.
   const server = gatedServer();
@@ -824,9 +832,9 @@ test('ответ на запрос прежней записи не ложитс
   expect(s.updates()).toHaveLength(1);
 
   await s.set({ id: 'e2', entity: SECOND });
-  // Ответ ПЕРВОЙ записи — с меткой заведомо более поздней, чем у второй: возьми её «поздняя
-  // из двух», подмена была бы видна в expectedUpdatedAt ниже.
-  await server.answer(0, { id: 'e1', updatedAt: '2026-08-14T23:00:00.000Z' });
+  // Ответ ПЕРВОЙ записи — с ревизией заведомо большей, чем у второй: возьми её «большая из
+  // двух», подмена была бы видна в expectedBodyRevision ниже.
+  await server.answer(0, { id: 'e1', updatedAt: '2026-08-14T23:00:00.000Z', bodyRevision: 9 });
 
   s.api().onDocChange(TWO);
   await tick(SAVE_PAUSE);
@@ -834,7 +842,7 @@ test('ответ на запрос прежней записи не ложитс
   expect(s.updates()[1]?.input).toEqual({
     id: 'e2',
     bodyDoc: TWO,
-    expectedUpdatedAt: SECOND.updatedAt,
+    expectedBodyRevision: SECOND.bodyRevision,
   });
 });
 
@@ -891,7 +899,7 @@ test('409 по прежней записи не поднимает conflict на
   expect(s.updates()).toHaveLength(1);
 
   await s.set({ id: 'e2', entity: SECOND });
-  await server.answer(0, trpcError('CONFLICT'), 'fail');
+  await server.answer(0, staleBodyError(), 'fail');
   expect(s.api().conflict).toBe(false);
   expect(s.container).toBeEmptyDOMElement(); // и «Не сохранено» не зажглось (И-5)
 
@@ -900,7 +908,7 @@ test('409 по прежней записи не поднимает conflict на
   s.api().onDocChange(TWO);
   await tick(SAVE_PAUSE);
   expect(s.updates()).toHaveLength(2);
-  await server.answer(1, trpcError('CONFLICT'), 'fail');
+  await server.answer(1, staleBodyError(), 'fail');
   expect(s.api().conflict).toBe(true);
 });
 
@@ -920,7 +928,7 @@ test('успех по прежней записи не гасит conflict со�
   expect(s.updates()).toHaveLength(2);
 
   // Своя, ВТОРАЯ запись поймала 409 — плашка «Изменено в другом месте» заслужена.
-  await server.answer(1, trpcError('CONFLICT'), 'fail');
+  await server.answer(1, staleBodyError(), 'fail');
   expect(s.api().conflict).toBe(true);
 
   // А теперь доезжает успех по ПЕРВОЙ записи. Он не про этот конфликт и гасить его не вправе:
@@ -931,7 +939,7 @@ test('успех по прежней записи не гасит conflict со�
 
 test('conflict гаснет при смене записи, а не переезжает на соседнюю', async () => {
   const s = mountWithProps({ id: 'e1', entity: ENTITY }, () => {
-    throw trpcError('CONFLICT');
+    throw staleBodyError();
   });
   s.api().onDocChange(ONE);
   await tick(SAVE_PAUSE);
@@ -1026,7 +1034,7 @@ test('терминальная остановка не переносится н
   s.serve(ok);
   await s.set({
     id: 'e2',
-    entity: { updatedAt: '2026-08-14T10:30:00.000Z', bodyDoc: THREE },
+    entity: { bodyRevision: 2, updatedAt: '2026-08-14T10:30:00.000Z', bodyDoc: THREE },
   });
   s.api().onDocChange(TWO);
   await tick(SAVE_PAUSE);
@@ -1156,7 +1164,7 @@ test('«Не сохранено» гаснет, когда правку верн
 test('409 поднимает conflict и НЕ подменяет документ', async () => {
   const s = setup({
     respond: () => {
-      throw trpcError('CONFLICT');
+      throw staleBodyError();
     },
   });
   s.api().onDocChange(ONE);
@@ -1185,6 +1193,23 @@ test('409 поднимает conflict и НЕ подменяет докумен�
   expect(s.updates()).toHaveLength(3);
   expect(s.api().conflict).toBe(false);
   expect(s.container).toBeEmptyDOMElement();
+});
+
+test('409 без структурного отказа замка текста (data.orbis) плашку тела не поднимает', async () => {
+  // Конфликт тела узнаётся по коду отказа исполнителя в `data.orbis` (РП-5), а не по транспортному
+  // CONFLICT: 409 бывает и у других отказов (занятый id, будущий замок заголовка), и «Изменено в
+  // другом месте — обновите» над телом было бы про чужое. Положительная сторона — тест выше.
+  const s = setup({
+    respond: () => {
+      throw trpcError('CONFLICT');
+    },
+  });
+  s.api().onDocChange(ONE);
+  await tick(SAVE_PAUSE);
+  expect(s.updates()).toHaveLength(1);
+  expect(s.api().conflict).toBe(false);
+  expect(s.api().blocked()).toBe(false);
+  expect(screen.getByText('Не сохранено')).toBeInTheDocument();
 });
 
 test('VALIDATION терминален: после него ни одна правка не уходит в сеть', async () => {

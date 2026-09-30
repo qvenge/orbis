@@ -7,6 +7,7 @@ import type { GraphId } from '@orbis/shared';
 import { entitySchema, entityThreadId, globalThreadId } from '@orbis/shared';
 import { PAGE_ONLY_HINT, QUERY_TREE_DEPTH_CAP } from '@orbis/shared/query';
 import { TRPCError } from '@trpc/server';
+import { fetchRequestHandler } from '@trpc/server/adapters/fetch';
 import { sql } from 'drizzle-orm';
 import { adminDb, appDb, freshGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
 import { actionsOf, journalOf } from '../../test/journal-helpers';
@@ -237,46 +238,121 @@ describe('entity.create / entity.get (§9.2)', () => {
   });
 });
 
-describe('entity.update: optimistic-check §5.2 (перенесённый контракт optimistic-check)', () => {
-  test('stale expectedUpdatedAt → CONFLICT; повтор со свежим — успех; tags — LWW без проверки', async () => {
+/**
+ * Процедура через HTTP-обработчик, как в бою: `data.orbis` кладёт `errorFormatter`, а caller (`createCallerFactory`)
+ * отдаёт ошибку ДО форматирования формы — проверять провод им нельзя (та же причина, что в `trpc.test.ts`).
+ */
+async function postMutation(
+  user: GraphId,
+  path: string,
+  input: unknown,
+): Promise<{ status: number; body: { error?: { data?: Record<string, unknown> } } }> {
+  const res = await fetchRequestHandler({
+    endpoint: '/trpc',
+    req: new Request(`http://localhost/trpc/${path}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(input),
+    }),
+    router: appRouter,
+    createContext: () => ({
+      identity: personal(user),
+      actorKind: 'owner' as const,
+      db,
+      clientVersion: null,
+    }),
+  });
+  return {
+    status: res.status,
+    body: (await res.json()) as { error?: { data?: Record<string, unknown> } },
+  };
+}
+
+describe('entity.update: замок текста по ревизии тела (спека скорости §8.1–§8.2)', () => {
+  test('стухшая ревизия → CONFLICT; повтор с ревизией из ответа — успех; tags — LWW без проверки', async () => {
     const user = await freshGraph();
     const caller = callerFor(user);
     const created = await caller.entity.create({
       input: { title: 'Документ', tags: [], body: 'v1' },
       source: 'fast_path',
     });
+    expect(created.bodyRevision).toBe(1);
 
-    // Конкурентная правка body сдвигает updated_at
+    // Конкурентная правка тела сдвигает ревизию
     const fresh = await caller.entity.update({
       id: created.id,
       body: 'v2',
-      expectedUpdatedAt: created.updatedAt,
+      expectedBodyRevision: created.bodyRevision,
     });
-    expect(fresh.body).toBe('v2');
+    expect([fresh.body, fresh.bodyRevision]).toEqual(['v2', 2]);
 
-    // Правка с устаревшей версией — 409 CONFLICT, исходная ошибка в cause
+    // Правка со стухшей ревизией — 409 CONFLICT, исходная ошибка в cause
     const e = await trpcError(
-      caller.entity.update({ id: created.id, body: 'v3', expectedUpdatedAt: created.updatedAt }),
+      caller.entity.update({
+        id: created.id,
+        body: 'v3',
+        expectedBodyRevision: created.bodyRevision,
+      }),
     );
     expect(e.code).toBe('CONFLICT');
     expect((e.cause as unknown as { code: string }).code).toBe('STALE_VERSION');
 
-    // Повтор со свежим updated_at — успех
+    // Повтор с ревизией из ответа — успех
     const v3 = await caller.entity.update({
       id: created.id,
       body: 'v3',
-      expectedUpdatedAt: fresh.updatedAt,
+      expectedBodyRevision: fresh.bodyRevision,
     });
     expect(v3.body).toBe('v3');
 
-    // tags — LWW: без expectedUpdatedAt применяется поверх любых версий
+    // tags — LWW: без ревизии применяется поверх любых версий
     const tagged = await caller.entity.update({ id: created.id, tags: ['Приоритет'] });
     expect(tagged.tags).toEqual(['приоритет']);
     expect(tagged.body).toBe('v3'); // body не тронут
 
-    // body без expectedUpdatedAt — VALIDATION → BAD_REQUEST (§5.2)
+    // body без ревизии — VALIDATION → BAD_REQUEST (§8.1)
     const noCheck = await trpcError(caller.entity.update({ id: created.id, body: 'v4' }));
     expect(noCheck.code).toBe('BAD_REQUEST');
+
+    // Прежнее поле провода — отказ разбора: переходного слоя нет (§8.2)
+    const legacy = await trpcError(
+      caller.entity.update({
+        id: created.id,
+        body: 'v4',
+        expectedUpdatedAt: tagged.updatedAt,
+      } as unknown as Parameters<typeof caller.entity.update>[0]),
+    );
+    expect(legacy.code).toBe('BAD_REQUEST');
+  });
+
+  test('провод: 409 несёт data.orbis = {code: STALE_VERSION, details: {id, expected, current}} — и ни слова тела (РП-5)', async () => {
+    const user = await freshGraph();
+    const caller = callerFor(user);
+    const secret = 'ТЕКСТ-ЗАПИСИ-НЕ-ДЛЯ-ПРОВОДА';
+    const created = await caller.entity.create({
+      input: { title: 'Провод', tags: [], body: secret },
+      source: 'ui',
+    });
+    await caller.entity.update({ id: created.id, body: `${secret} 2`, expectedBodyRevision: 1 });
+
+    const res = await postMutation(user, 'entity.update', {
+      id: created.id,
+      body: `${secret} 3`,
+      expectedBodyRevision: 1,
+    });
+    expect(res.status).toBe(409);
+    const data = res.body.error?.data ?? {};
+    expect(data.code).toBe('CONFLICT');
+    expect(data.orbis).toEqual({
+      code: 'STALE_VERSION',
+      details: { id: created.id, expected: 1, current: 2 },
+    });
+    expect(JSON.stringify(res.body)).not.toContain(secret);
+
+    // Отказ вне закрытого списка кодов поля orbis не несёт: канал — только для перечисленных отказов
+    const bad = await postMutation(user, 'entity.update', { id: created.id, body: 'x' });
+    expect(bad.status).toBe(400);
+    expect(bad.body.error?.data?.orbis).toBeUndefined();
   });
 
   test('audit-сообщение update атрибутировано source=ui (прямое действие владельца в UI, не fast_path)', async () => {

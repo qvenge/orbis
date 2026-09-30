@@ -2,12 +2,13 @@
 // ЕДИНСТВЕННОЕ место преобразования Drizzle-строк в wire-формы (бриф Task 12):
 // core-таймстампы наружу — всегда Date.toISOString() → UTC с суффиксом 'Z', не '+00:00'
 // (решение 12 плана; zod .datetime() в shared-схемах офсет не принимает).
-// БД хранит микросекунды, но драйвер парсит timestamptz в Date (мс), поэтому сравнение
-// expectedUpdatedAt (клиент видел wire-форму) с row.updatedAt.toISOString() симметрично.
+// БД хранит микросекунды, но драйвер парсит timestamptz в Date (мс), поэтому сравнение штампа,
+// который клиент видел в wire-форме (предусловие `orbis/updated_at`), с row.updatedAt.toISOString()
+// симметрично.
 import type { GrantScope, PropertyDefinition } from '@orbis/shared';
 import type { ChatRole, WireChatMessage } from './chat/messages';
 import type { chatMessages, chatThreads, entities, relations, userSettings } from './db/schema';
-import type { WireEntity, WireRelation } from './executor/types';
+import type { WireEntity, WireEntityWithRevision, WireRelation } from './executor/types';
 import type { GrantSummary } from './oauth/grants';
 
 type EntityRow = typeof entities.$inferSelect;
@@ -49,7 +50,10 @@ export function toWireEntity(row: EntityRow, includeBodyDoc = false): WireEntity
  * чтения записи), а время изменения тела — машинная отметка, которой в снимках поверхностей быть не должно
  * (консервативность §С1-3 п. 9). Строки списков компилятора (`toWireEntityFromSql`) этих колонок не выбирают вовсе.
  */
-export function toWireEntityWithRevision(row: EntityRow, includeBodyDoc = false): WireEntity {
+export function toWireEntityWithRevision(
+  row: EntityRow,
+  includeBodyDoc = false,
+): WireEntityWithRevision {
   return {
     ...toWireEntity(row, includeBodyDoc),
     bodyRevision: row.bodyRevision,
@@ -88,6 +92,12 @@ export interface LlmEntity {
   createdAt: string;
   updatedAt: string;
   archived: boolean;
+  /**
+   * Ревизия тела (спека скорости §8.1) — замок правки текста: модель передаёт её в `entity_update` как
+   * `expectedBodyRevision`. Есть у чтения одной записи и в ответах мутаций; у строк списков её нет — правку текста
+   * начинают с `entity_get` (`toWireEntityWithRevision`).
+   */
+  bodyRevision?: number;
 }
 
 export function toLlmEntity(
@@ -110,6 +120,7 @@ export function toLlmEntity(
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
     archived: row.archived,
+    ...(row.bodyRevision !== undefined && { bodyRevision: row.bodyRevision }),
   };
 }
 

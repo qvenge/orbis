@@ -39,6 +39,7 @@ import {
   answerPendingQuestion,
   approvePending,
   askDedupeKey,
+  closeStaleBodyProposals,
   createPending,
   createSystemPending,
   deferDedupeKey,
@@ -461,7 +462,7 @@ describe('сохранённый bodyDoc прошлой версии схемы 
           operations: [
             {
               tool: 'entity_update',
-              input: { id: target.id, expectedUpdatedAt: target.updatedAt, bodyDoc },
+              input: { id: target.id, expectedBodyRevision: target.bodyRevision, bodyDoc },
             },
           ],
         },
@@ -529,7 +530,11 @@ describe('сохранённый bodyDoc прошлой версии схемы 
         [
           {
             tool: 'entity_update',
-            input: { id: target.id, expectedUpdatedAt: target.updatedAt, bodyDoc: { v: 2, doc } },
+            input: {
+              id: target.id,
+              expectedBodyRevision: target.bodyRevision,
+              bodyDoc: { v: 2, doc },
+            },
           },
         ],
         { withDiff: true },
@@ -1844,5 +1849,114 @@ describe('createSystemPending: запись без актора', () => {
     expect(
       (rows[0]?.metadata as { pending: { input: { title: string } } }).pending.input.title,
     ).toBe('x');
+  });
+});
+
+describe('closeStaleBodyProposals: хранимые предложения старого контракта снимаются (спека скорости §8.2, РП-14)', () => {
+  /** Предложение с сохранённым входом как есть — вход старого контракта пишется мимо разбора, как лежит в базе. */
+  async function storedPending(owner: GraphId, tool: string, input: unknown): Promise<string> {
+    const { pendingId } = await withIdentity(db, personal(owner), (tx) =>
+      createPending(tx, {
+        actor: { graphId: owner, kind: 'ai', source: 'routine', runId: newId() },
+        tool,
+        input,
+        level: 'explicit-confirmation',
+        clock,
+      }),
+    );
+    return pendingId;
+  }
+
+  test('одиночный и в пачке — отказ stale; без поля — не трогает; повтор — пусто; чужой граф не виден', async () => {
+    const owner = await freshGraph();
+    const target = await seedEntity(owner, { title: 'Цель', tags: [], body: 'текст' });
+    const OLD = '2026-07-04T12:00:00.000Z';
+    const single = await storedPending(owner, 'entity_update', {
+      id: target.id,
+      body: 'новый',
+      expectedUpdatedAt: OLD,
+    });
+    const inBatch = await storedPending(owner, 'batch_execute', {
+      batch_id: newId(),
+      operations: [
+        { tool: 'entity_update', input: { id: target.id, title: 'Заголовок' } },
+        { tool: 'entity_update', input: { id: target.id, body: 'новый', expectedUpdatedAt: OLD } },
+      ],
+    });
+    const fresh = await storedPending(owner, 'batch_execute', {
+      batch_id: newId(),
+      operations: [
+        {
+          tool: 'entity_update',
+          input: { id: target.id, body: 'новый', expectedBodyRevision: target.bodyRevision },
+        },
+      ],
+    });
+    const archive = await storedPending(owner, 'entity_update', { id: target.id, archived: true });
+    // Чужой граф: его предложение старого контракта этой парой не видно и не трогается
+    const stranger = await freshGraph();
+    const foreignTarget = await seedEntity(stranger, { title: 'Чужая', tags: [], body: 'т' });
+    const foreign = await storedPending(stranger, 'entity_update', {
+      id: foreignTarget.id,
+      body: 'x',
+      expectedUpdatedAt: OLD,
+    });
+
+    const closed = await withIdentity(db, personal(owner), (tx) =>
+      closeStaleBodyProposals(tx, personal(owner)),
+    );
+    expect([...closed].sort()).toEqual([single, inBatch].sort());
+    const reasons = await withIdentity(db, personal(owner), async (tx) => ({
+      single: await rejectedReason(tx, single),
+      inBatch: await rejectedReason(tx, inBatch),
+      fresh: await rejectedReason(tx, fresh),
+      archive: await rejectedReason(tx, archive),
+    }));
+    expect(reasons).toEqual({
+      single: 'stale',
+      inBatch: 'stale',
+      fresh: undefined,
+      archive: undefined,
+    });
+    expect(
+      await withIdentity(db, personal(stranger), (tx) => rejectedReason(tx, foreign)),
+    ).toBeUndefined();
+
+    // Повтор ничего не снимает: снятые уже отклонены, остальные — нового контракта
+    expect(
+      await withIdentity(db, personal(owner), (tx) => closeStaleBodyProposals(tx, personal(owner))),
+    ).toEqual([]);
+    // Предложение нового контракта исполняется как обычно
+    const r = await approvePending(db, { identity: personal(owner), pendingId: fresh, clock });
+    expect(r.ok).toBe(true);
+  });
+
+  test('исполненное предложение старого контракта не трогается: отклонять уже нечего', async () => {
+    const owner = await freshGraph();
+    const target = await seedEntity(owner, { title: 'Цель', tags: [], body: 'текст' });
+    // Исполненная единица: запись пачки с ключом pendingId уже есть в журнале (одобрили до смены контракта)
+    const pendingId = await storedPending(owner, 'entity_update', {
+      id: target.id,
+      title: 'Переименовано',
+    });
+    expect((await approvePending(db, { identity: personal(owner), pendingId, clock })).ok).toBe(
+      true,
+    );
+    const admin = adminDb();
+    try {
+      // Старую форму входа исполненного предложения кладём задним числом: одобрить её новым контрактом нельзя
+      await admin.db.execute(sql`
+        UPDATE chat_messages
+           SET metadata = jsonb_set(metadata, '{pending,input,expectedUpdatedAt}', '"2026-07-04T12:00:00.000Z"')
+         WHERE id = ${pendingId}::uuid`);
+    } finally {
+      await admin.client.end();
+    }
+    expect(
+      await withIdentity(db, personal(owner), (tx) => closeStaleBodyProposals(tx, personal(owner))),
+    ).toEqual([]);
+    expect(
+      await withIdentity(db, personal(owner), (tx) => rejectedReason(tx, pendingId)),
+    ).toBeUndefined();
   });
 });

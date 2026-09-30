@@ -58,7 +58,7 @@ import { type UpdateBatchOperation, useUpdateBatch } from '../page/useUpdateBatc
 import { REVERT, useSupplyAction } from '../supply/useSupply';
 import { settleBody } from './body-gate';
 import type { BodyGateRef } from './EntityBody';
-import type { WireEntity } from './record-host';
+import { shownBodyRevision, type WireEntity } from './record-host';
 
 /**
  * Вид экрана для пунктов страниц 1а (спека §8.4): у записи — чем она показана и какие шаблоны ей
@@ -195,18 +195,18 @@ const TEMPLATE_FOR = 'Сделать шаблоном для…';
 /**
  * Открытый диалог меню: вопрос случая 3 «Изменить вид» или «Сделать шаблоном для…».
  *
- * Диалог ПОМНИТ, про какую запись и какую её версию его открыли: `entityId`, `updatedAt` и план,
- * построенный из тела этой версии, — снимок на момент жеста, а не живой проп. Меню монтируется без
- * key (`DetailMenuSlot`) и переживает переход на соседнюю запись: читай диалог проп `entity` при
- * нажатии кнопки, он записал бы план одной записи в другую. И сверка `expectedUpdatedAt` обязана
- * идти по той версии, из тела которой построен план: версия, прочитанная позже (рефетч при
- * открытом диалоге), пропустила бы правку мимо экрана, и шаблон затёр бы её молча.
+ * Диалог ПОМНИТ, про какую запись и какую ревизию её тела его открыли: `entityId`, `bodyRevision` и
+ * план, построенный из тела этой ревизии, — снимок на момент жеста, а не живой проп. Меню монтируется
+ * без key (`DetailMenuSlot`) и переживает переход на соседнюю запись: читай диалог проп `entity` при
+ * нажатии кнопки, он записал бы план одной записи в другую. И замок текста обязан сверять ту
+ * ревизию, из тела которой построен план: ревизия, прочитанная позже (рефетч при открытом диалоге),
+ * пропустила бы правку мимо экрана, и шаблон затёр бы её молча.
  */
 type MenuDialog =
   | {
       kind: 'change-view';
       entityId: string;
-      updatedAt: string;
+      bodyRevision: number;
       plan: Extract<ChangeViewPlan, { case: 3 }>;
     }
   | { kind: 'template-for'; entityId: string; value: unknown; homeFor: string | null }
@@ -249,10 +249,10 @@ function RecordMenu({
    * при «Сохранить версией» ей предшествует закрепление тела. Порядок значим: версия снимает текст
    * до замены.
    *
-   * `expectedUpdatedAt` — версия записи, ИЗ ТЕЛА КОТОРОЙ построен `body` (§5.2): в случаях 1–2 это
-   * версия на момент нажатия пункта, в случае 3 — снимок в состоянии диалога, а не проп на момент
-   * кнопки. Правка тела мимо экрана после этого чтения даёт серверу другую версию, и пачка
-   * отвергается целиком (`STALE_VERSION`) — шаблон не затирает её молча.
+   * `expectedBodyRevision` — ревизия тела, ИЗ КОТОРОГО построен `body` (замок текста, спека скорости
+   * §8.1): в случаях 1–2 это ревизия на момент нажатия пункта, в случае 3 — снимок в состоянии
+   * диалога, а не проп на момент кнопки. Правка тела мимо экрана после этого чтения даёт серверу
+   * другую ревизию, и пачка отвергается целиком (`STALE_VERSION`) — шаблон не затирает её молча.
    */
   /**
    * Можно ли переписать запись пачкой прямо сейчас (С1а-8 «текст не теряется»; финальное ревью,
@@ -265,9 +265,9 @@ function RecordMenu({
    */
   const bodySettled = (): boolean => settleBody(bodyGate.current, show);
 
-  const becomePage = (id: string, updatedAt: string, body: string): UpdateBatchOperation => ({
+  const becomePage = (id: string, bodyRevision: number, body: string): UpdateBatchOperation => ({
     tool: 'entity_update',
-    input: { id, expectedUpdatedAt: updatedAt, body, aspects: { attach: [PAGE_ASPECT] } },
+    input: { id, expectedBodyRevision: bodyRevision, body, aspects: { attach: [PAGE_ASPECT] } },
   });
 
   const copyLinkItem: DropdownMenuItem = {
@@ -530,10 +530,15 @@ function RecordMenu({
     const plan = changeViewPlan(templateText, entity.body);
     // Случай 3 — вопрос владельцу: молча ни убрать текст, ни дописать его нельзя (С1а-8).
     if (plan.case === 3) {
-      setDialog({ kind: 'change-view', entityId: entity.id, updatedAt: entity.updatedAt, plan });
+      setDialog({
+        kind: 'change-view',
+        entityId: entity.id,
+        bodyRevision: shownBodyRevision(entity),
+        plan,
+      });
     } else {
       void runBatch(
-        [becomePage(entity.id, entity.updatedAt, plan.body)],
+        [becomePage(entity.id, shownBodyRevision(entity), plan.body)],
         'Вид записи теперь свой',
         {
           action: CHANGE_VIEW,
@@ -646,7 +651,7 @@ function RecordMenu({
                   tool: 'entity_version_pin',
                   input: { entity_id: dialog.entityId, label: TEXT_BEFORE_VIEW_CHANGE },
                 },
-                becomePage(dialog.entityId, dialog.updatedAt, dialog.plan.hideAsVersion),
+                becomePage(dialog.entityId, dialog.bodyRevision, dialog.plan.hideAsVersion),
               ],
               'Вид записи теперь свой, текст — в версии',
               { action: CHANGE_VIEW },
@@ -656,7 +661,7 @@ function RecordMenu({
             setDialog(null);
             if (!bodySettled()) return;
             void runBatch(
-              [becomePage(dialog.entityId, dialog.updatedAt, dialog.plan.showBelow)],
+              [becomePage(dialog.entityId, dialog.bodyRevision, dialog.plan.showBelow)],
               'Вид записи теперь свой',
               { action: CHANGE_VIEW },
             );

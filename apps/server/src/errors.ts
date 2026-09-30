@@ -31,6 +31,7 @@ import {
   EXPR_NOT_TOTAL,
   EXPR_RECURSION,
   EXPR_TYPE,
+  type OrbisErrorData,
   PATTERN_NOT_REGULAR,
   SECOND_LANGUAGE,
 } from '@orbis/shared';
@@ -212,4 +213,36 @@ const TRPC_CODE_BY_EXEC: Record<ExecErrorCode, TRPCError['code']> = {
 export function execErrorToTRPC(error: StructuredError): TRPCError {
   const code = TRPC_CODE_BY_EXEC[error.code as ExecErrorCode] ?? 'INTERNAL_SERVER_ERROR';
   return new TRPCError({ code, message: error.message, cause: error });
+}
+
+/** Только перечисленные поля — и только те, что в отказе есть: отсутствующее поле не превращается в `undefined`. */
+function pick(d: Record<string, unknown>, keys: readonly string[]): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const key of keys) if (Object.hasOwn(d, key)) out[key] = d[key];
+  return out;
+}
+
+// Какие поля отказа уходят клиенту (data.orbis, РП-5 плана А). Закрытый список: код → выбор полей. Тексты записей не
+// уходят никогда — только id, ревизии, актор, время, место продолжения, расхождения предусловия.
+const ORBIS_ERROR_FIELDS: Partial<
+  Record<ExecErrorCode, (d: Record<string, unknown>) => Record<string, unknown>>
+> = {
+  STALE_VERSION: (d) => pick(d, ['id', 'expected', 'current']),
+};
+
+/**
+ * Структурные поля отказа для провода (`data.orbis`, спека скорости §8.2): код и безопасный выбор деталей — для кодов
+ * из `ORBIS_ERROR_FIELDS`, иначе `undefined` (поля на проводе нет). `cause` — то, что tRPC держит в `TRPCError.cause`:
+ * `ExecError` или наш `StructuredError`, который tRPC оборачивает в Error со скопированными полями
+ * (`getCauseFromUnknown`), — поэтому читается форма `{code, details}`, а не класс. Сторонняя ошибка со строковым `code`
+ * (ECONNREFUSED и т. п.) закрытого списка не проходит.
+ */
+export function orbisErrorData(cause: unknown): OrbisErrorData | undefined {
+  if (typeof cause !== 'object' || cause === null) return undefined;
+  const { code, details } = cause as { code?: unknown; details?: unknown };
+  if (typeof code !== 'string' || !Object.hasOwn(ORBIS_ERROR_FIELDS, code)) return undefined;
+  const select = ORBIS_ERROR_FIELDS[code as ExecErrorCode];
+  if (select === undefined) return undefined;
+  if (typeof details !== 'object' || details === null || Array.isArray(details)) return { code };
+  return { code, details: select(details as Record<string, unknown>) };
 }

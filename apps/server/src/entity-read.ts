@@ -113,6 +113,10 @@ function propertyLabels(reg: RegistrySnapshot, ids: readonly string[]): Map<stri
 }
 
 export interface EntityReadResult {
+  /**
+   * Запись с ревизией тела (`toWireEntityWithRevision`) — но типом общей формы записи: клиент кладёт ответ чтения туда
+   * же, куда строки списков (хост шаблона, оболочки, записи поставки), и сужение типа здесь разошлось бы по всем им.
+   */
   entity: WireEntity;
   relations?: WireRelation[];
   backlinks?: Backlink[];

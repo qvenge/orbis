@@ -205,6 +205,28 @@ async function ownerSets(taskId: string, status: string): Promise<void> {
 }
 
 /**
+ * Владелец переписал ТЕКСТ цели своей рукой — по ревизии тела, прочитанной тут же. Замок текста предложения — ревизия
+ * тела (спека скорости §8.1): его двигает только смена тела, правка статуса (`ownerSets`) его не трогает.
+ */
+async function ownerRewrites(taskId: string, body: string): Promise<void> {
+  const rows = await withIdentity(db, personal(owner), (tx) =>
+    tx.execute(sql`SELECT body_revision FROM entities WHERE id = ${taskId}::uuid`),
+  );
+  const r = await execute(db, {
+    identity: personal(owner),
+    actorKind: 'owner',
+    source: 'ui',
+    operations: [
+      {
+        tool: 'entity_update',
+        input: { id: taskId, body, expectedBodyRevision: Number(rows[0]?.body_revision) },
+      },
+    ],
+  });
+  if (!r.ok) throw new Error(`ownerRewrites: ${r.error.code} ${r.error.message}`);
+}
+
+/**
  * Перевести указатель прогона на ДРУГОЕ предложение. Пока лестницы правки нет, это
  * единственный способ получить состояние «адресованное предложение прогону больше не
  * принадлежит» — то самое, которое лестница будет создавать штатно.
@@ -830,8 +852,8 @@ describe('routine.proposal / decideProposal', () => {
     const pendingId = closed['orbis/run_proposal']?.pending_id;
     if (pendingId === undefined) throw new Error('прогон закрыт без предложения');
 
-    // Владелец тронул НЕ тело, а статус — updated_at бампит любая правка сущности
-    await ownerSets(taskId, 'planned');
+    // Владелец переписал тело сам — ревизия тела сдвинулась, замок текста предложения не держится
+    await ownerRewrites(taskId, 'Своё описание');
 
     const decided = await callerLater().routine.decideProposal({
       runId,
@@ -1475,8 +1497,11 @@ describe('routine.proposal: дифф тела предложения', () => {
       'Старый текст',
       'Новый текст',
     );
-    // Владелец тронул запись сам — updated_at бампит любая её правка
+    // Правка статуса цели тела не трогает (замок текста — ревизия тела, спека скорости §8.1): дифф рисуется
     await ownerSets(taskId, 'planned');
+    expect((await bodyRowOf(runId)).bodyDiff).toMatchObject({ units: expect.any(Array) });
+    // Владелец переписал тело сам — ревизия сдвинулась
+    await ownerRewrites(taskId, 'Свой текст');
 
     const row = await bodyRowOf(runId);
     expect(row.bodyDiff).toEqual({ skipped: 'body_changed' });
@@ -1520,7 +1545,7 @@ describe('routine.proposal: дифф тела предложения', () => {
 
     // ПОРЯДОК проверок: устаревание сильнее потолка. Тело и сверх потолка, и тронуто —
     // владельцу говорят про устаревание, потому что «Принять» откажет именно по нему
-    await ownerSets(heavy.taskId, 'planned');
+    await ownerRewrites(heavy.taskId, `${heavyBody()}\n\nещё строка`);
     expect((await bodyRowOf(heavy.runId)).bodyDiff).toEqual({ skipped: 'body_changed' });
   });
 

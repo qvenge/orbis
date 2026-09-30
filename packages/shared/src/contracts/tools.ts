@@ -1,8 +1,7 @@
 // packages/shared/src/contracts/tools.ts
 // Envelope-схемы тулов — wire-контракт §9.2 (нотация `*`/`?`), общий для tRPC/AI/MCP.
-// expectedUpdatedAt в entity_update — решение 4 плана 1a: §9.2 поле не показывает,
-// но §5.2 требует optimistic-check по updated_at при правке body; поле опционально
-// в envelope, обязательность при body enforce'ит executor.
+// expectedBodyRevision в entity_update — замок ТЕКСТА (спека скорости §8.1–§8.2): ревизия тела, от которой
+// начата правка. Поле опционально в envelope, обязательность при body/bodyDoc держит executor.
 import { z } from 'zod';
 // Канон Q-AST — прямым путём к модулю, а не через баррель: конфликт имени `QueryAst` со
 // старой грамматикой снят вместе с ней (21b), и корневой баррель канон отдаёт, — но импорт
@@ -73,7 +72,9 @@ export const entityCreateInput = z
 export const entityUpdateInput = z
   .object({
     id: z.string().uuid(),
-    expectedUpdatedAt: z.string().datetime().optional(), // §5.2; обязателен при body — executor
+    // Замок ТЕКСТА (§8.1, D3 уточнён): ревизия тела, от которой клиент начал правку; обязательна при body/bodyDoc —
+    // проверяет executor под FOR UPDATE. Правка статуса, свойства, тега ревизию не двигает и замок не краснит.
+    expectedBodyRevision: z.number().int().positive().optional(),
     title: z.string().min(1).optional(),
     emoji: z.string().nullable().optional(),
     body: z.string().optional(),
@@ -204,8 +205,8 @@ export interface PreconditionMismatch {
  * видит на кнопке «Принять» вместо применения.
  *
  * Тело стоит здесь ФЛАГОМ, а не пунктом списка (РП-10). У тела нет предусловия по значению:
- * его CAS — `expectedUpdatedAt` строки, и executor отвечает на расхождение `STALE_VERSION`,
- * а не `CONFLICT/precondition_failed`. Прежде это подделывалось пунктом с пустым именем
+ * его замок — ревизия тела (`expectedBodyRevision`, спека скорости §8.1), и executor отвечает на
+ * расхождение `STALE_VERSION`, а не `CONFLICT/precondition_failed`. Прежде это подделывалось пунктом с пустым именем
  * аспекта (`{aspect:'', field:'body'}`) — вторым, несовместимым с первым способом сказать
  * «тут не свойство»: у пункта не было ни ожидаемого значения (ехали отметки `updated_at`,
  * которые владельцу ничего не говорят), ни адреса в пространстве свойств. Флаг называет то

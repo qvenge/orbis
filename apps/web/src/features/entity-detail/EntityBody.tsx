@@ -28,6 +28,7 @@ import { EditorShell } from '../entity-editor/EditorShell';
 import { SaveIndicator } from '../entity-editor/SaveIndicator';
 import { sameDoc } from '../entity-editor/strip-ids';
 import { type BodyDoc, type BodySave, useBodySave } from '../entity-editor/useBodySave';
+import { shownBodyRevision } from './record-host';
 
 type Entity = RouterOutputs['entity']['get']['entity'];
 
@@ -161,7 +162,7 @@ export function EntityBody({
   onRefresh: () => void;
   bodyGate: BodyGateRef;
 }) {
-  const save = useBodySave(entity.id, entity);
+  const save = useBodySave(entity.id, { ...entity, bodyRevision: shownBodyRevision(entity) });
   const { hasUnsent, flush, blocked, offline, keptOffline } = save;
   // Регистрация — эффектом: снимается при размонтировании ТОЛЬКО своя запись, иначе уходящее
   // тело стёрло бы уже вставшее на его место (смена записи — новый экземпляр по key).

@@ -672,8 +672,13 @@ const LIST_TEXT: ExprType = { kind: 'list', of: TEXT };
 /**
  * ТИП ПОЛЯ КОНВЕРТА шагов v1 — то, чем обязан стать `{$expr}` в этой позиции. Мешки свойств
  * (`props`, `data`) сюда не входят: их тип даёт реестр по ключу. Поля-id — `text` (uuid — строка,
- * и `$self` чекер типизирует так же); `expectedUpdatedAt` — момент; списки адресов (`tags`, `unset`,
- * `aspects` создания и `attach`/`detach` правки) — `list<text>`, их элемент — `text`.
+ * и `$self` чекер типизирует так же); `expectedBodyRevision` — число (ревизия тела, замок текста
+ * спеки скорости §8.1); списки адресов (`tags`, `unset`, `aspects` создания и `attach`/`detach`
+ * правки) — `list<text>`, их элемент — `text`.
+ *
+ * `expectedBodyRevision` — слот ТИПА позиции, а не замок (РП-24 плана А): проекции ревизии тела в E
+ * нет, и шаг с телом без литерала ревизии получит прежний отказ исполнителя VALIDATION. Проекция
+ * `orbis/body_revision` заводится, когда у неё появится потребитель.
  */
 const ENVELOPE_FIELD_TYPES: Readonly<Record<string, ExprType>> = {
   id: TEXT,
@@ -685,7 +690,7 @@ const ENVELOPE_FIELD_TYPES: Readonly<Record<string, ExprType>> = {
   emoji: TEXT,
   body: TEXT,
   archived: { kind: 'boolean' },
-  expectedUpdatedAt: { kind: 'timestamp' },
+  expectedBodyRevision: { kind: 'number' },
   tags: LIST_TEXT,
   unset: LIST_TEXT,
   aspects: LIST_TEXT,
@@ -732,9 +737,10 @@ function envelopeTypeAt(segs: readonly string[]): ExprType | undefined {
 
 /**
  * Заглушка под тип позиции — значение, которое конверт заведомо примет там, где стоял маркер:
- * uuid для полей-id и текста, `true` для `archived`, момент для `expectedUpdatedAt`, `[]` для
- * списков. Одна заглушка на всё (uuid) давала ложный `ACTION_STEP_INPUT` у `archived` из параметра
- * (m-1 гейта). Значения свойств в конверте — `z.unknown()`, им подходит любая.
+ * uuid для полей-id и текста, `true` для `archived`, `1` для числа (`expectedBodyRevision` —
+ * целое ≥ 1: ноль конверт отверг бы), `[]` для списков. Одна заглушка на всё (uuid) давала ложный
+ * `ACTION_STEP_INPUT` у `archived` из параметра (m-1 гейта). Значения свойств в конверте —
+ * `z.unknown()`, им подходит любая.
  */
 const MARKER_UUID = '00000000-0000-4000-8000-000000000000';
 function stubOf(type: ExprType | undefined): unknown {
@@ -746,7 +752,7 @@ function stubOf(type: ExprType | undefined): unknown {
     case 'date':
       return '2000-01-01';
     case 'number':
-      return 0;
+      return 1;
     case 'decimal':
       return '0';
     case 'list':

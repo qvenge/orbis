@@ -113,10 +113,9 @@ export function AssignmentCard({ entity }: { entity: Entity }) {
     const agent = draft.executor === 'agent';
     mutation.mutate({
       id: entity.id,
-      // Метку версии шлём для единообразия с прочими правками экрана; 409 она здесь не даёт
-      // никогда — гейт §5.2 стоит под условием `body || bodyDoc` (см. checksVersion), и правку
-      // одних свойств сервер проводит по LWW. Обещать защиту от гонки в UI нечем.
-      expectedUpdatedAt: entity.updatedAt,
+      // Замка у правки свойств нет: замок текста (ревизия тела, §8.1) стоит только у правки тела
+      // (см. checksVersion), и правку одних свойств сервер проводит по LWW. Обещать защиту от гонки
+      // в UI нечем.
       props: agent
         ? { [EXECUTOR]: 'agent', [GRANT]: draft.grantId, [MAY_CLOSE]: draft.mayClose }
         : { [EXECUTOR]: 'human' },
@@ -245,7 +244,6 @@ export function AssignmentCard({ entity }: { entity: Entity }) {
                 onClick={() =>
                   mutation.mutate({
                     id: entity.id,
-                    expectedUpdatedAt: entity.updatedAt,
                     // `detach` снимает АСПЕКТ (§А1-1) — задача остаётся задачей, но ничьей.
                     // Значений снятие не трогает (Р9): исполнитель, которого сняли, остаётся
                     // фактом владельца и виден в секции «Свойства».

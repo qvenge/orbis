@@ -118,7 +118,7 @@ describe('колонки тела (задача 7, §8.1)', () => {
       await run(g, 'entity_update', {
         id: n.entityId,
         body: 'новый текст',
-        expectedUpdatedAt: n.entity.updatedAt,
+        expectedBodyRevision: n.entity.bodyRevision,
       }),
     );
     const edited = await rawEntity(n.entityId);
@@ -145,7 +145,7 @@ describe('колонки тела (задача 7, §8.1)', () => {
       await run(g, 'entity_update', {
         id: n.entityId,
         body: 'тот же текст',
-        expectedUpdatedAt: n.entity.updatedAt,
+        expectedBodyRevision: n.entity.bodyRevision,
       }),
     );
     expect(await rawEntity(n.entityId)).toEqual(created);
@@ -169,7 +169,11 @@ describe('колонки тела (задача 7, §8.1)', () => {
             { tool: 'entity_create', input: { id: b, title: 'б', tags: [], body: 'текст б' } },
             {
               tool: 'entity_update',
-              input: { id: a.entityId, body: 'текст а2', expectedUpdatedAt: a.entity.updatedAt },
+              input: {
+                id: a.entityId,
+                body: 'текст а2',
+                expectedBodyRevision: a.entity.bodyRevision,
+              },
             },
           ],
           { batchId },
@@ -214,9 +218,8 @@ describe('колонки тела (задача 7, §8.1)', () => {
       ),
     ).toBe(false);
 
-    // И вживую: пачка из двух правок тела одной записи. Гейт тела до задачи 8 — по updated_at, поэтому вторая операция
-    // называет штамп, который поставит первая (часы пачки: monotonicUpdatedAt(T, прежний) = T при T > прежнего).
-    const T = new Date(Date.parse(n.entity.updatedAt) + 60_000);
+    // И вживую: пачка из двух правок тела одной записи. Гейт тела — по ревизии (задача 8): вторая операция называет
+    // ревизию, которую поставит первая, — виртуальная строка пачки её видит.
     const batchId = newId();
     const r = ok(
       await execute(
@@ -226,14 +229,14 @@ describe('колонки тела (задача 7, §8.1)', () => {
           [
             {
               tool: 'entity_update',
-              input: { id: n.entityId, body: 'а', expectedUpdatedAt: n.entity.updatedAt },
+              input: { id: n.entityId, body: 'а', expectedBodyRevision: 1 },
             },
             {
               tool: 'entity_update',
-              input: { id: n.entityId, body: 'б', expectedUpdatedAt: T.toISOString() },
+              input: { id: n.entityId, body: 'б', expectedBodyRevision: 2 },
             },
           ],
-          { batchId, clock: () => T },
+          { batchId },
         ),
         { sink },
       ),
@@ -249,7 +252,6 @@ describe('колонки тела (задача 7, §8.1)', () => {
   test('пачка «создать и поправить тело»: «до» у созданной записи — пусто, а не само действие', async () => {
     const g = await freshGraph();
     const id = newId();
-    const T = new Date('2031-01-01T00:00:00.000Z');
     const batchId = newId();
     ok(
       await execute(
@@ -260,10 +262,10 @@ describe('колонки тела (задача 7, §8.1)', () => {
             { tool: 'entity_create', input: { id, title: 'новая', tags: [], body: 'черновик' } },
             {
               tool: 'entity_update',
-              input: { id, body: 'чистовик', expectedUpdatedAt: T.toISOString() },
+              input: { id, body: 'чистовик', expectedBodyRevision: 1 },
             },
           ],
-          { batchId, clock: () => T },
+          { batchId },
         ),
         { sink },
       ),
@@ -288,12 +290,20 @@ describe('колонки тела (задача 7, §8.1)', () => {
           [
             {
               tool: 'entity_update',
-              input: { id: a.entityId, body: 'текст а2', expectedUpdatedAt: a.entity.updatedAt },
+              input: {
+                id: a.entityId,
+                body: 'текст а2',
+                expectedBodyRevision: a.entity.bodyRevision,
+              },
             },
             { tool: 'entity_update', input: { id: b.entityId, title: 'Б' } },
             {
               tool: 'entity_update',
-              input: { id: c.entityId, body: 'текст в', expectedUpdatedAt: c.entity.updatedAt },
+              input: {
+                id: c.entityId,
+                body: 'текст в',
+                expectedBodyRevision: c.entity.bodyRevision,
+              },
             },
           ],
           { batchId },
@@ -387,6 +397,41 @@ describe('колонки тела (задача 7, §8.1)', () => {
     expect(mergeUndo.bodies.map((b) => [b.entityId, b.bodyActionBefore])).toEqual([[id, null]]);
   });
 
+  test('id пачки в ВЕРХНЕМ регистре (модель через MCP): «до» держателя — пусто, колонка — id пачки (M-5 гейта)', async () => {
+    // uuid в базе — в нижнем регистре: колонка, прочитанная под замком слияния, несёт пачку в каноне, и сравнение с
+    // объявленным действием без приведения регистра не узнало бы в ней само действие — «до» сослалось бы на пачку.
+    const g = await freshGraph();
+    const sourceId = await numberProperty(g, 'user/effort');
+    const intoId = await numberProperty(g, 'user/energy');
+    const id = newId();
+    const batchId = newId().toUpperCase();
+    ok(
+      await execute(
+        db,
+        req(
+          g,
+          [
+            {
+              tool: 'entity_create',
+              input: { id, title: 'Смарт-лист', tags: [], body: HOLDER_BODY },
+            },
+            { tool: 'property_merge', input: { source: sourceId, into: intoId } },
+          ],
+          { batchId },
+        ),
+        { sink },
+      ),
+    );
+    const row = await rawEntity(id);
+    expect([row.body_revision, row.body_action_id]).toEqual([2, batchId.toLowerCase()]);
+    const entry = await journalOf(g, batchId.toLowerCase());
+    expect(entry?.bodyBefore).toEqual({ [id]: null });
+    const mergeUndo = entry?.inverse.find((op) => op.op === 'property_merge_undo')?.payload as {
+      bodies: Array<{ entityId: string; bodyActionBefore: string | null }>;
+    };
+    expect(mergeUndo.bodies.map((b) => [b.entityId, b.bodyActionBefore])).toEqual([[id, null]]);
+  });
+
   test('отмена ПАЧКИ: запись отмены хранит «до» по каждой записи, чьё тело откат сменил (M-3 гейта)', async () => {
     const g = await freshGraph();
     const a = await createNote(g, 'а', 'текст а');
@@ -400,11 +445,19 @@ describe('колонки тела (задача 7, §8.1)', () => {
           [
             {
               tool: 'entity_update',
-              input: { id: a.entityId, body: 'текст а2', expectedUpdatedAt: a.entity.updatedAt },
+              input: {
+                id: a.entityId,
+                body: 'текст а2',
+                expectedBodyRevision: a.entity.bodyRevision,
+              },
             },
             {
               tool: 'entity_update',
-              input: { id: b.entityId, body: 'текст б2', expectedUpdatedAt: b.entity.updatedAt },
+              input: {
+                id: b.entityId,
+                body: 'текст б2',
+                expectedBodyRevision: b.entity.bodyRevision,
+              },
             },
           ],
           { batchId },
@@ -469,7 +522,7 @@ describe('колонки тела (задача 7, §8.1)', () => {
       await run(g, 'entity_update', {
         id: n.entityId,
         body: 'правка',
-        expectedUpdatedAt: n.entity.updatedAt,
+        expectedBodyRevision: n.entity.bodyRevision,
       }),
     );
     ok(await undoAction(db, { identity: personal(g), actionId: u.actionId }));
@@ -492,7 +545,7 @@ describe('колонки тела (задача 7, §8.1)', () => {
       await run(g, 'entity_update', {
         id: n.entityId,
         body: 'правка',
-        expectedUpdatedAt: n.entity.updatedAt,
+        expectedBodyRevision: n.entity.bodyRevision,
       }),
     );
     const e = u.results[0] as WireEntity;
@@ -516,7 +569,7 @@ describe('колонки тела (задача 7, §8.1)', () => {
       await run(g, 'entity_update', {
         id: n.entityId,
         bodyDoc: parseBody('текст из редактора'),
-        expectedUpdatedAt: n.entity.updatedAt,
+        expectedBodyRevision: n.entity.bodyRevision,
       }),
     );
     const row = await rawEntity(n.entityId);

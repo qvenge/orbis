@@ -126,6 +126,8 @@ interface RecordRow {
   props: Record<string, unknown>;
   archived: boolean;
   updatedAt: string;
+  /** Ревизия тела — замок правки текста (спека скорости §8.1). */
+  bodyRevision: number;
 }
 
 /** Строка записи владельца (админ-DSN) — в той форме, по которой `supplyStatusOf` судит «как в поставке». */
@@ -133,12 +135,13 @@ async function rowOf(user: GraphId, id: string): Promise<RecordRow> {
   const { db: admin, client: adminClient } = adminDb();
   try {
     const rows = (await admin.execute(
-      sql`SELECT title, emoji, body, tags, aspects, props, archived, updated_at
+      sql`SELECT title, emoji, body, tags, aspects, props, archived, updated_at, body_revision
             FROM entities WHERE graph_id = ${user}::uuid AND id = ${id}::uuid`,
     )) as unknown as Array<
-      Omit<RecordRow, 'updatedAt' | 'body'> & {
+      Omit<RecordRow, 'updatedAt' | 'body' | 'bodyRevision'> & {
         body: string | null;
         updated_at: string | Date;
+        body_revision: number;
       }
     >;
     const r = rows[0];
@@ -152,6 +155,7 @@ async function rowOf(user: GraphId, id: string): Promise<RecordRow> {
       props: r.props,
       archived: r.archived,
       updatedAt: new Date(r.updated_at).toISOString(),
+      bodyRevision: r.body_revision,
     };
   } finally {
     await adminClient.end();
@@ -1071,7 +1075,7 @@ describe('заведение графа (§8.6, РП-15, С1б-5)', () => {
     await ownerEdit(user, {
       id: routinesId,
       body: withoutBatch,
-      expectedUpdatedAt: (await rowOf(user, routinesId)).updatedAt,
+      expectedBodyRevision: (await rowOf(user, routinesId)).bodyRevision,
     });
     await ownerEdit(user, { id: supplyRecordId(user, 'home'), archived: true });
     await ownerEdit(user, {

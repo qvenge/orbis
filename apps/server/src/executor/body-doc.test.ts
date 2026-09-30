@@ -75,6 +75,15 @@ async function rowOf(id: string): Promise<StoredRow> {
   return row as unknown as StoredRow;
 }
 
+/**
+ * Ревизия тела в базе. Нужна после правок строки под админом: сырой UPDATE тела или документа двигает ревизию триггером
+ * (0026), и ревизия из ответа создания к этому моменту уже устарела.
+ */
+async function revisionOf(id: string): Promise<number> {
+  const rows = await admin.execute(sql`SELECT body_revision FROM entities WHERE id = ${id}`);
+  return Number(rows[0]?.body_revision);
+}
+
 function okFirst(r: Awaited<ReturnType<typeof execute>>): WireEntity {
   if (!r.ok) throw new Error(`ожидался успех, получено ${r.error.code}: ${r.error.message}`);
   return (r as ExecuteOk).results[0] as WireEntity;
@@ -90,7 +99,7 @@ function err(r: Awaited<ReturnType<typeof execute>>): { code: string; message: s
   return { code: r.error.code, message: r.error.message };
 }
 
-/** Свежий владелец + пустая сущность: гейт §5.2 проверяется на update, а не на create. */
+/** Свежий владелец + пустая сущность: замок текста (§8.1) проверяется на update, а не на create. */
 async function createOne(body?: string): Promise<{ entity: WireEntity; owner: GraphId }> {
   const owner = await freshGraph();
   const input: Record<string, unknown> = { title: 'проба', tags: [] };
@@ -140,7 +149,7 @@ describe('контракт UI: bodyDoc живёт в *UiInput, а не в тул
     const r = entityUpdateUiInput.safeParse({
       id: UUID,
       bodyDoc: { v: DOC_SCHEMA_VERSION, doc: { type: 'doc', content: [] } },
-      expectedUpdatedAt: '2026-08-13T10:00:00.000Z',
+      expectedBodyRevision: 1,
     });
     expect(r.success).toBe(true);
   });
@@ -151,7 +160,7 @@ describe('контракт UI: bodyDoc живёт в *UiInput, а не в тул
       id: UUID,
       body: 'текст',
       bodyDoc: { v: DOC_SCHEMA_VERSION, doc: { type: 'doc', content: [] } },
-      expectedUpdatedAt: '2026-08-13T10:00:00.000Z',
+      expectedBodyRevision: 1,
     });
     expect(r.success).toBe(false);
     // Сверяем причину, а не только факт: голого `success === false` мало — после любого
@@ -219,7 +228,7 @@ describe('канон: body в БД — производная документа
       db,
       req(
         'entity_update',
-        { id: entity.id, body: '* раз\n* два', expectedUpdatedAt: entity.updatedAt },
+        { id: entity.id, body: '* раз\n* два', expectedBodyRevision: entity.bodyRevision },
         personal(owner),
       ),
     );
@@ -265,7 +274,7 @@ describe('канон: body в БД — производная документа
       db,
       req(
         'entity_update',
-        { id: entity.id, bodyDoc: doc, expectedUpdatedAt: entity.updatedAt },
+        { id: entity.id, bodyDoc: doc, expectedBodyRevision: entity.bodyRevision },
         personal(owner),
       ),
     );
@@ -298,7 +307,7 @@ describe('структурная целость документа — вопр�
         {
           id: entity.id,
           bodyDoc: { v: DOC_SCHEMA_VERSION, doc },
-          expectedUpdatedAt: entity.updatedAt,
+          expectedBodyRevision: entity.bodyRevision,
         },
         personal(owner),
       ),
@@ -388,7 +397,7 @@ describe('структурная целость документа — вопр�
           {
             id: entity.id,
             bodyDoc: { v: DOC_SCHEMA_VERSION, doc },
-            expectedUpdatedAt: entity.updatedAt,
+            expectedBodyRevision: entity.bodyRevision,
           },
           personal(owner),
         ),
@@ -412,7 +421,7 @@ describe('body из bodyDoc — КАНОНИЧЕН (итоговое ревью,
           {
             id: entity.id,
             bodyDoc: { v: DOC_SCHEMA_VERSION, doc },
-            expectedUpdatedAt: entity.updatedAt,
+            expectedBodyRevision: entity.bodyRevision,
           },
           personal(owner),
         ),
@@ -594,7 +603,7 @@ describe('страховка обратимости заполняется ВС�
         db,
         req(
           'entity_update',
-          { id: entity.id, body: 'новый текст', expectedUpdatedAt: entity.updatedAt },
+          { id: entity.id, body: 'новый текст', expectedBodyRevision: await revisionOf(entity.id) },
           personal(owner),
         ),
       ),
@@ -614,7 +623,7 @@ describe('страховка обратимости заполняется ВС�
         db,
         req(
           'entity_update',
-          { id: entity.id, body: 'правка раз', expectedUpdatedAt: entity.updatedAt },
+          { id: entity.id, body: 'правка раз', expectedBodyRevision: await revisionOf(entity.id) },
           personal(owner),
         ),
       ),
@@ -624,7 +633,7 @@ describe('страховка обратимости заполняется ВС�
         db,
         req(
           'entity_update',
-          { id: entity.id, body: 'правка два', expectedUpdatedAt: after1.updatedAt },
+          { id: entity.id, body: 'правка два', expectedBodyRevision: after1.bodyRevision },
           personal(owner),
         ),
       ),
@@ -651,7 +660,7 @@ describe('страховка обратимости заполняется ВС�
                 content: [{ type: 'paragraph', content: [{ type: 'text', text: 'стало' }] }],
               },
             },
-            expectedUpdatedAt: entity.updatedAt,
+            expectedBodyRevision: await revisionOf(entity.id),
           },
           personal(owner),
         ),
@@ -691,7 +700,7 @@ describe('все законные формы пустоты сохраняютс
           {
             id: entity.id,
             bodyDoc: { v: DOC_SCHEMA_VERSION, doc: { type: 'doc', content } },
-            expectedUpdatedAt: entity.updatedAt,
+            expectedBodyRevision: entity.bodyRevision,
           },
           personal(owner),
         ),
@@ -716,7 +725,7 @@ describe('все законные формы пустоты сохраняютс
         {
           id: entity.id,
           bodyDoc: { v: DOC_SCHEMA_VERSION, doc },
-          expectedUpdatedAt: entity.updatedAt,
+          expectedBodyRevision: entity.bodyRevision,
         },
         personal(owner),
       ),
@@ -729,7 +738,7 @@ describe('все законные формы пустоты сохраняютс
         {
           id: entity.id,
           bodyDoc: { v: DOC_SCHEMA_VERSION, doc },
-          expectedUpdatedAt: afterFirst.updatedAt,
+          expectedBodyRevision: afterFirst.bodyRevision,
         },
         personal(owner),
       ),
@@ -766,7 +775,7 @@ describe('версия документа сверяется НА ЗАПИСИ (
               ],
             },
           },
-          expectedUpdatedAt: entity.updatedAt,
+          expectedBodyRevision: entity.bodyRevision,
         },
         personal(owner),
       ),
@@ -811,7 +820,7 @@ describe('версия документа сверяется НА ЗАПИСИ (
               content: [{ type: 'paragraph', content: [{ type: 'text', text: 'ок' }] }],
             },
           },
-          expectedUpdatedAt: entity.updatedAt,
+          expectedBodyRevision: entity.bodyRevision,
         },
         personal(owner),
       ),
@@ -833,7 +842,7 @@ describe('версия документа сверяется НА ЗАПИСИ (
               content: [{ type: 'paragraph', content: [{ type: 'text', text: 'старое' }] }],
             },
           },
-          expectedUpdatedAt: after.updatedAt,
+          expectedBodyRevision: after.bodyRevision,
         },
         personal(owner),
       ),
@@ -938,7 +947,7 @@ describe('формат тела v3: гейт версии, контейнеры,
         {
           id: entity.id,
           bodyDoc: { v: 2, doc: { type: 'doc', content: [para('набрано в старой вкладке')] } },
-          expectedUpdatedAt: entity.updatedAt,
+          expectedBodyRevision: entity.bodyRevision,
         },
         personal(owner),
       ),
@@ -956,7 +965,11 @@ describe('формат тела v3: гейт версии, контейнеры,
         db,
         req(
           'entity_update',
-          { id: entity.id, bodyDoc: { v: 3, doc: V3_DOC }, expectedUpdatedAt: entity.updatedAt },
+          {
+            id: entity.id,
+            bodyDoc: { v: 3, doc: V3_DOC },
+            expectedBodyRevision: entity.bodyRevision,
+          },
           personal(owner),
         ),
       ),
@@ -975,7 +988,7 @@ describe('формат тела v3: гейт версии, контейнеры,
         db,
         req(
           'entity_update',
-          { id: entity.id, body: V3_CANON, expectedUpdatedAt: entity.updatedAt },
+          { id: entity.id, body: V3_CANON, expectedBodyRevision: entity.bodyRevision },
           personal(owner),
         ),
       ),
@@ -992,12 +1005,12 @@ describe('формат тела v3: гейт версии, контейнеры,
 
   test('схема шире грамматики (F1): одна колонка и узел не на месте — отказ схемы; глубина 3 и чужое имя блока — rawBlock, текст цел', async () => {
     const { entity, owner } = await createOne('исходное тело');
-    const update = (doc: unknown, expectedUpdatedAt: string) =>
+    const update = (doc: unknown, expectedBodyRevision: number | undefined) =>
       execute(
         db,
         req(
           'entity_update',
-          { id: entity.id, bodyDoc: { v: 3, doc }, expectedUpdatedAt },
+          { id: entity.id, bodyDoc: { v: 3, doc }, expectedBodyRevision },
           personal(owner),
         ),
       );
@@ -1007,7 +1020,7 @@ describe('формат тела v3: гейт версии, контейнеры,
         type: 'doc',
         content: [{ type: 'columns', content: [{ type: 'column', content: [para('а')] }] }],
       },
-      entity.updatedAt,
+      entity.bodyRevision,
     );
     expect(err(single).code).toBe('VALIDATION');
     expect((await rowOf(entity.id)).body).toBe('исходное тело');
@@ -1052,7 +1065,7 @@ describe('формат тела v3: гейт версии, контейнеры,
         { type: 'recordBlock', attrs: { name: 'нет-такого' } },
       ],
     };
-    const saved = okFirst(await update(deep, entity.updatedAt));
+    const saved = okFirst(await update(deep, entity.bodyRevision));
     const row = await rowOf(entity.id);
     expect(row.body).toBe(saved.body);
     expect(row.body_doc).toEqual({
@@ -1069,7 +1082,7 @@ describe('формат тела v3: гейт версии, контейнеры,
         db,
         req(
           'entity_update',
-          { id: entity.id, bodyDoc: { v: 3, doc }, expectedUpdatedAt: entity.updatedAt },
+          { id: entity.id, bodyDoc: { v: 3, doc }, expectedBodyRevision: entity.bodyRevision },
           personal(owner),
         ),
       );
@@ -1211,7 +1224,7 @@ describe('query_refs — во ВСЕХ пяти точках записи тел
                 content: [{ type: 'queryBlock', attrs: { ast: null, text: ' aspect=orbis/goal' } }],
               },
             },
-            expectedUpdatedAt: entity.updatedAt,
+            expectedBodyRevision: entity.bodyRevision,
           },
           personal(owner),
         ),
@@ -1230,7 +1243,7 @@ describe('query_refs — во ВСЕХ пяти точках записи тел
           {
             id: entity.id,
             body: '',
-            expectedUpdatedAt: entity.updatedAt,
+            expectedBodyRevision: entity.bodyRevision,
             props: { 'orbis/project_stage': 'active' },
             aspects: { attach: ['orbis/project'] },
           },
@@ -1270,7 +1283,7 @@ describe('query_refs — во ВСЕХ пяти точках записи тел
           {
             id: entity.id,
             body: '{{query: aspect=orbis/goal}}',
-            expectedUpdatedAt: entity.updatedAt,
+            expectedBodyRevision: entity.bodyRevision,
           },
           personal(owner),
         ),
@@ -1283,7 +1296,7 @@ describe('query_refs — во ВСЕХ пяти точках записи тел
         db,
         req(
           'entity_update',
-          { id: entity.id, body: 'блок убрали', expectedUpdatedAt: withBlock.updatedAt },
+          { id: entity.id, body: 'блок убрали', expectedBodyRevision: withBlock.bodyRevision },
           personal(owner),
         ),
       ),
@@ -1308,7 +1321,7 @@ describe('body_refs — из дерева ∪ raw в обеих ветках', (
         db,
         req(
           'entity_update',
-          { id: entity.id, body, expectedUpdatedAt: entity.updatedAt },
+          { id: entity.id, body, expectedBodyRevision: entity.bodyRevision },
           personal(owner),
         ),
       ),
@@ -1341,7 +1354,7 @@ describe('body_refs — из дерева ∪ raw в обеих ветках', (
         db,
         req(
           'entity_update',
-          { id: entity.id, bodyDoc: doc, expectedUpdatedAt: entity.updatedAt },
+          { id: entity.id, bodyDoc: doc, expectedBodyRevision: entity.bodyRevision },
           personal(owner),
         ),
       ),
@@ -1369,7 +1382,7 @@ describe('body_refs — из дерева ∪ raw в обеих ветках', (
         db,
         req(
           'entity_update',
-          { id: entity.id, body, expectedUpdatedAt: entity.updatedAt },
+          { id: entity.id, body, expectedBodyRevision: entity.bodyRevision },
           personal(owner),
         ),
       ),
@@ -1380,8 +1393,8 @@ describe('body_refs — из дерева ∪ raw в обеих ветках', (
   });
 });
 
-describe('гейт §5.2 покрывает ОБА поля тела', () => {
-  test('bodyDoc без expectedUpdatedAt — отказ VALIDATION', async () => {
+describe('замок текста (§8.1) покрывает ОБА поля тела', () => {
+  test('bodyDoc без expectedBodyRevision — отказ VALIDATION', async () => {
     // Сохранения редактора едут ТОЛЬКО bodyDoc: пока гейт смотрел на input.body, они
     // проходили мимо него и 409 не наступал никогда (ревью Б3).
     const { entity, owner } = await createOne();
@@ -1395,11 +1408,11 @@ describe('гейт §5.2 покрывает ОБА поля тела', () => {
     );
     expect(err(r)).toEqual({
       code: 'VALIDATION',
-      message: 'правка body требует expectedUpdatedAt (§5.2)',
+      message: 'правка body требует expectedBodyRevision (§8.1)',
     });
   });
 
-  test('устаревший expectedUpdatedAt при bodyDoc — STALE_VERSION', async () => {
+  test('устаревшая ревизия тела при bodyDoc — STALE_VERSION', async () => {
     const { entity, owner } = await createOne();
     const r = await execute(
       db,
@@ -1408,7 +1421,7 @@ describe('гейт §5.2 покрывает ОБА поля тела', () => {
         {
           id: entity.id,
           bodyDoc: { v: DOC_SCHEMA_VERSION, doc: { type: 'doc', content: [] } },
-          expectedUpdatedAt: '2020-01-01T00:00:00.000Z',
+          expectedBodyRevision: 99,
         },
         personal(owner),
       ),
@@ -1416,7 +1429,7 @@ describe('гейт §5.2 покрывает ОБА поля тела', () => {
     expect(err(r).code).toBe('STALE_VERSION');
   });
 
-  test('строковый body без expectedUpdatedAt — по-прежнему VALIDATION', async () => {
+  test('строковый body без expectedBodyRevision — по-прежнему VALIDATION', async () => {
     const { entity, owner } = await createOne();
     const r = await execute(
       db,
@@ -1424,7 +1437,7 @@ describe('гейт §5.2 покрывает ОБА поля тела', () => {
     );
     expect(err(r)).toEqual({
       code: 'VALIDATION',
-      message: 'правка body требует expectedUpdatedAt (§5.2)',
+      message: 'правка body требует expectedBodyRevision (§8.1)',
     });
   });
 
@@ -1438,7 +1451,7 @@ describe('гейт §5.2 покрывает ОБА поля тела', () => {
   });
 
   test('внутренний undo гейт ПРОПУСКАЕТ — и для body, и для bodyDoc', async () => {
-    // Иначе сломался бы откат: inverse-операция журнала expectedUpdatedAt не несёт (§7.8).
+    // Иначе сломался бы откат: inverse-операция журнала ревизии тела не несёт (§7.8).
     const { entity, owner } = await createOne();
     // Внутренний режим без синка (NOOP): записи отмены нет, проверяется только гейт стадии применения
     const internalUndo: InternalUndoMode = {
@@ -1502,7 +1515,7 @@ describe('откат сохранения редактора', () => {
               content: [{ type: 'paragraph', content: [{ type: 'text', text: 'новое тело' }] }],
             },
           },
-          expectedUpdatedAt: entity.updatedAt,
+          expectedBodyRevision: entity.bodyRevision,
         },
         personal(owner),
       ),
@@ -1543,7 +1556,7 @@ describe('bodyDoc не протекает в путь модели (dispatch/MCP
     const r = await dispatchTool(modelCtx(owner), 'entity_update', {
       id: entity.id,
       bodyDoc: { v: DOC_SCHEMA_VERSION, doc: { type: 'doc', content: [] } },
-      expectedUpdatedAt: entity.updatedAt,
+      expectedBodyRevision: entity.bodyRevision,
     });
     expect(r.status).toBe('error');
     if (r.status === 'error') expect(r.error.code).toBe('VALIDATION');
@@ -1561,7 +1574,7 @@ describe('bodyDoc не протекает в путь модели (dispatch/MCP
           input: {
             id: entity.id,
             bodyDoc: { v: DOC_SCHEMA_VERSION, doc: { type: 'doc', content: [] } },
-            expectedUpdatedAt: entity.updatedAt,
+            expectedBodyRevision: entity.bodyRevision,
           },
         },
       ],

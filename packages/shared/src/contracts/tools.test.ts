@@ -122,14 +122,17 @@ describe('entityUpdateInput', () => {
     expect(entityUpdateExecInput.safeParse(withPre).success).toBe(true);
   });
 
-  test('expectedUpdatedAt — ISO datetime; мусор отклоняется', () => {
-    expect(entityUpdateInput.safeParse({ id: UUID, expectedUpdatedAt: 'вчера' }).success).toBe(
-      false,
-    );
+  test('expectedBodyRevision — целое ≥ 1; штамп прежнего контракта отклоняется (без переходного слоя, §8.2)', () => {
+    expect(entityUpdateInput.safeParse({ id: UUID, expectedBodyRevision: 3 }).success).toBe(true);
+    for (const bad of [0, -1, 1.5, '3']) {
+      expect(entityUpdateInput.safeParse({ id: UUID, expectedBodyRevision: bad }).success).toBe(
+        false,
+      );
+    }
     expect(
       entityUpdateInput.safeParse({ id: UUID, expectedUpdatedAt: '2026-07-04T10:00:00.000Z' })
         .success,
-    ).toBe(true);
+    ).toBe(false);
   });
 
   test('id обязателен и должен быть uuid', () => {

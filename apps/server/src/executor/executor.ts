@@ -450,7 +450,10 @@ function bodyActionOf(
   actionId: string,
 ): string | null {
   if (internalUndo !== undefined) return internalUndo.undoRecordId;
-  return sink === NOOP_SINK ? null : actionId;
+  // Нижний регистр — канон uuid в базе: колонку тела, прочитанную под замком, сравнивают с объявленным действием
+  // (`bodyActionBefore`), и id пачки в верхнем регистре (модель через MCP) не узнал бы в ней само действие — «до»
+  // сослалось бы на него же (M-5 гейта задачи 7).
+  return sink === NOOP_SINK ? null : actionId.toLowerCase();
 }
 
 /**
@@ -2341,26 +2344,27 @@ async function prepareEntityUpdate(
   // предусловий не встречает — inverse их не несёт, поэтому отдельной ветки здесь нет.
   if (input.precondition) assertPrecondition(ctx.registry, input.precondition, before, current);
 
-  // §5.2: правка body требует optimistic-check по updated_at; патчи без body — LWW.
-  // Внутренний режим undo (§7.8) требование ПРОПУСКАЕТ: Undo восстанавливает
-  // зафиксированное в журнале прежнее состояние поверх текущего — это осознанный
-  // LWW-откат, а не пользовательская правка (inverse не несёт expectedUpdatedAt).
+  // Замок ТЕКСТА (спека скорости §8.1, D3 уточнён): правка тела сверяет РЕВИЗИЮ ТЕЛА строки под FOR UPDATE (в пачке —
+  // виртуальной строки, где триггер повторён в памяти, РП-17), а не `updated_at` записи. Ревизию двигает только смена
+  // тела, поэтому правка статуса, свойства, тега или заголовка между чтением и сохранением текста замка не краснит;
+  // патчи без тела — LWW, как и прежде. Внутренний режим undo (§7.8) требование ПРОПУСКАЕТ: Undo восстанавливает
+  // зафиксированное в журнале прежнее состояние поверх текущего — это осознанный LWW-откат, а не пользовательская
+  // правка (inverse ревизии не несёт).
   //
   // ОБА поля тела под одним гейтом: сохранения редактора едут ТОЛЬКО bodyDoc, и пока условие
   // смотрело на один input.body, они проходили мимо — 409 не наступал никогда, а конкурентная
   // правка затиралась молча (ревью Б3).
   if ((input.body !== undefined || input.bodyDoc !== undefined) && ctx.internalUndo === undefined) {
-    if (input.expectedUpdatedAt === undefined) {
-      throw new ExecError('VALIDATION', 'правка body требует expectedUpdatedAt (§5.2)', {
+    if (input.expectedBodyRevision === undefined) {
+      throw new ExecError('VALIDATION', 'правка body требует expectedBodyRevision (§8.1)', {
         id: input.id,
       });
     }
-    const currentIso = current.updatedAt.toISOString();
-    if (currentIso !== input.expectedUpdatedAt) {
+    if (current.bodyRevision !== input.expectedBodyRevision) {
       throw new ExecError(
         'STALE_VERSION',
-        'body изменён конкурентно: перечитайте запись и повторите правку (§5.2)',
-        { id: input.id, expected: input.expectedUpdatedAt, current: currentIso },
+        'текст изменён конкурентно: перечитайте запись и повторите правку (§8.1)',
+        { id: input.id, expected: input.expectedBodyRevision, current: current.bodyRevision },
       );
     }
   }
@@ -2648,7 +2652,7 @@ async function prepareEntityUpdate(
     // Заготовка тела проекта (С10). Ветка стоит ПЕРЕД строковой намеренно: `body: ''` — это
     // «тела не прислали» (hasBodyInInput), и строковая ветка записала бы пустоту, отменив
     // засев. Документ во входе разобран веткой выше — он телом считается всегда, даже пустой.
-    // Гейт expectedUpdatedAt (§5.2) не срабатывает и срабатывать не должен: он смотрит на
+    // Замок текста (§8.1) не срабатывает и срабатывать не должен: он смотрит на
     // ВХОД, а не на патч, и терять тут нечего — тело пусто.
     const seeded = bodyFieldsFromMarkdown(projectBodyTemplate(input.id), ctx.registry);
     patch.body = seeded.body;

@@ -33,7 +33,7 @@ import { type EntityReadResult, readEntity } from '../entity-read';
 import { ExecError, execErrorToTRPC } from '../errors';
 import { execute } from '../executor/executor';
 import { makeJournalSink } from '../executor/journal';
-import type { WireEntity } from '../executor/types';
+import type { WireEntityWithRevision } from '../executor/types';
 import { type GoalProgress, goalProgressFor } from '../goals/progress';
 import type { Identity } from '../identity';
 import { type CompileCtx, compileCountAst, compileQueryAst } from '../query/compile-ast';
@@ -256,7 +256,7 @@ export const entityRouter = router({
         threadId: z.string().uuid().optional(),
       }),
     )
-    .mutation(async ({ ctx, input }): Promise<WireEntity & { actionId?: string }> => {
+    .mutation(async ({ ctx, input }): Promise<WireEntityWithRevision & { actionId?: string }> => {
       if (input.threadId !== undefined && input.source !== 'fast_path') {
         throw execErrorToTRPC(
           new ExecError('VALIDATION', 'тред передаётся только быстрым вводом (source: fast_path)', {
@@ -282,7 +282,7 @@ export const entityRouter = router({
       // actionId — для Undo прямо из UI-формы (03-budget §3.6, quick-add): аддитивное
       // поле поверх wire-сущности, потребители `.id` не задеты. При идемпотентном
       // replay (§5.3) журнал не писался — actionId под этим id не существует, не отдаём.
-      const entity = r.results[0] as WireEntity;
+      const entity = r.results[0] as WireEntityWithRevision;
       return r.idempotentReplay ? entity : { ...entity, actionId: r.actionId };
     }),
 
@@ -290,7 +290,7 @@ export const entityRouter = router({
   // нет. Тело процедуры от этого не меняется: путь записи один — executor.
   update: ownerOnlyProcedure
     .input(entityUpdateUiInput)
-    .mutation(async ({ ctx, input }): Promise<WireEntity> => {
+    .mutation(async ({ ctx, input }): Promise<WireEntityWithRevision> => {
       const r = await execute(
         ctx.db,
         {
@@ -310,7 +310,9 @@ export const entityRouter = router({
         actionId: r.actionId,
         operations: [{ tool: 'entity_update', input }],
       });
-      return r.results[0] as WireEntity;
+      // Ответ правки — полная строка `RETURNING` с ревизией тела (`toWireEntityWithRevision`): с неё клиент начинает
+      // следующую правку текста (§8.1).
+      return r.results[0] as WireEntityWithRevision;
     }),
 
   /**

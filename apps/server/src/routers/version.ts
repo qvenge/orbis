@@ -3,6 +3,7 @@
 // как отдать запись агенту, и откат к сохранённому. ТОЛЬКО трансляция: pin и restore идут
 // через executor (единственный путь мутаций, 00-arch §4), list читает под withIdentity
 // (RLS §4.10). Своих INSERT/DELETE здесь нет.
+import { newId } from '@orbis/shared';
 import { type BodyDoc, upgradeBodyDoc } from '@orbis/shared/doc';
 import { desc, eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
@@ -11,7 +12,7 @@ import { withIdentity } from '../db/with-identity';
 import { execErrorToTRPC } from '../errors';
 import { execute } from '../executor/executor';
 import { makeJournalSink } from '../executor/journal';
-import type { ActorKind, WireEntity, WireEntityVersion } from '../executor/types';
+import type { ActorKind, WireEntityVersion, WireEntityWithRevision } from '../executor/types';
 import { ownerOnlyProcedure, router } from '../trpc';
 
 // Боевой синк — один инстанс на модуль (без состояния, пишет тем же tx, §7.8). Без него
@@ -20,7 +21,8 @@ const sink = makeJournalSink();
 
 // Подпись версии — одна строка списка, потолок тот же, что в схеме операции executor'а;
 // trim ДО min(1) — там же и по той же причине (пробельная подпись = снимок без подписи)
-const labelInput = z.string().trim().min(1).max(200);
+const LABEL_MAX = 200;
+const labelInput = z.string().trim().min(1).max(LABEL_MAX);
 
 /**
  * Документ снимка, пригодный к записи, — или undefined, если восстанавливать надо строкой.
@@ -40,6 +42,18 @@ const labelInput = z.string().trim().min(1).max(200);
 function pinnedDoc(stored: unknown): BodyDoc | undefined {
   if (typeof stored !== 'object' || stored === null) return undefined;
   return upgradeBodyDoc(stored as BodyDoc) ?? undefined;
+}
+
+/** Приставка подписи страховочной версии восстановления (В-4 спеки скорости). */
+const INSURANCE_PREFIX = 'перед восстановлением: ';
+
+/**
+ * Подпись страховки — в потолке подписи версии (200, `labelInput`): приставка плюс подпись восстанавливаемой версии
+ * заняли бы до 223 символов, и закрепление отказало бы разбором — а с ним и само восстановление.
+ */
+function insuranceLabel(label: string): string {
+  const full = `${INSURANCE_PREFIX}${label}`;
+  return full.length <= LABEL_MAX ? full : `${full.slice(0, LABEL_MAX - 1)}…`;
 }
 
 export const versionRouter = router({
@@ -108,14 +122,26 @@ export const versionRouter = router({
    * Откат тела к снимку. Восстанавливается ТОЛЬКО тело: аспекты, связи и заголовок в
    * снимок не входят, поэтому и остаются текущими (инвариант 8 среза). Идёт обычным
    * entity_update — тем же конвейером и тем же конвертером, что запись редактора (С11),
-   * поэтому и optimistic-check §5.2 здесь настоящий: пока экран смотрел на версии, тело
-   * мог править кто-то ещё, и молча затирать его нельзя (стухший штамп → 409).
+   * поэтому и замок текста здесь настоящий (ревизия тела, спека скорости §8.1): пока экран
+   * смотрел на версии, тело мог править кто-то ещё, и молча затирать его нельзя (стухшая
+   * ревизия → 409).
+   *
+   * ОДНО действие из двух операций (§8.2, В-4): первой закрепляется ТЕКУЩИЙ текст версией
+   * «перед восстановлением: <подпись>», второй — правка тела. Восстановление переписывает
+   * текст целиком, и страховка того, что им затёрто, обязана лечь той же транзакцией: иначе
+   * отказ правки оставил бы висеть лишнюю версию, а отмена восстановления — нет. Отмена
+   * пачки возвращает текст и удаляет страховку (inverse закрепления — удаление версии).
    */
   restore: ownerOnlyProcedure
     .input(
-      z.object({ versionId: z.string().uuid(), expectedUpdatedAt: z.string().datetime() }).strict(),
+      z
+        .object({
+          versionId: z.string().uuid(),
+          expectedBodyRevision: z.number().int().positive(),
+        })
+        .strict(),
     )
-    .mutation(async ({ ctx, input }): Promise<WireEntity> => {
+    .mutation(async ({ ctx, input }): Promise<WireEntityWithRevision> => {
       // Снимок читается под RLS: чужая и несуществующая версия неразличимы — NOT_FOUND
       const version = await withIdentity(ctx.db, ctx.identity, async (tx) => {
         const rows = await tx
@@ -139,12 +165,18 @@ export const versionRouter = router({
           identity: ctx.identity,
           actorKind: 'owner',
           source: 'ui',
+          batchId: newId(),
+          batchLabel: `Восстановлена версия «${version.label}»`,
           operations: [
+            {
+              tool: 'entity_version_pin',
+              input: { entity_id: version.entityId, label: insuranceLabel(version.label) },
+            },
             {
               tool: 'entity_update',
               input: {
                 id: version.entityId,
-                expectedUpdatedAt: input.expectedUpdatedAt,
+                expectedBodyRevision: input.expectedBodyRevision,
                 // Одна из двух форм, не обе: схема входа запрещает их вместе, а executor
                 // сам достроит недостающую (body_doc — правда, body — её проекция)
                 ...(doc === undefined ? { body: version.body } : { bodyDoc: doc }),
@@ -155,6 +187,6 @@ export const versionRouter = router({
         { sink },
       );
       if (!r.ok) throw execErrorToTRPC(r.error);
-      return r.results[0] as WireEntity;
+      return r.results[1] as WireEntityWithRevision;
     }),
 });

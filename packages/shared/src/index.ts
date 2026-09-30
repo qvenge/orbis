@@ -4,6 +4,8 @@ export * from './contracts/agent-loop';
 export * from './contracts/apps';
 export * from './contracts/blocks';
 export * from './contracts/budget';
+// Структурный отказ на проводе (`data.orbis`, спека скорости §8.2) — только типы.
+export * from './contracts/errors';
 export * from './contracts/import';
 // Сводка действия журнала в треде (спека скорости §11.3) — только типы.
 export * from './contracts/journal';

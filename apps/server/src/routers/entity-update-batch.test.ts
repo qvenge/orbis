@@ -143,7 +143,7 @@ describe('entity.updateBatch — пачка правок, один Undo (§4.3, 
     expect(await auditTitle(user, plain.actionId)).toBe('batch: операций — 1');
   });
 
-  test('устаревший expectedUpdatedAt во ВТОРОЙ операции — CONFLICT, закрепление версии первой не легло (B-M3)', async () => {
+  test('устаревшая ревизия тела во ВТОРОЙ операции — CONFLICT, закрепление версии первой не легло (B-M3)', async () => {
     const user = await freshGraph();
     const caller = callerFor(user);
     const x = await caller.entity.create({
@@ -151,8 +151,13 @@ describe('entity.updateBatch — пачка правок, один Undo (§4.3, 
       source: 'ui',
     });
     const seen = await caller.entity.get({ id: x.id, include: ['body'] });
-    // Правка мимо экрана после чтения: версия, из которой строился план, устарела.
-    await caller.entity.update({ id: x.id, title: 'Правлено с телефона' });
+    // Правка ТЕКСТА мимо экрана после чтения: ревизия, из тела которой строился план, устарела. Правка заголовка
+    // замка текста не двигает (спека скорости §8.1) — план по ней остался бы верен.
+    const mid = await caller.entity.update({
+      id: x.id,
+      body: 'Правлено с телефона',
+      expectedBodyRevision: seen.entity.bodyRevision,
+    });
 
     const err = await trpcError(
       caller.entity.updateBatch({
@@ -165,7 +170,7 @@ describe('entity.updateBatch — пачка правок, один Undo (§4.3, 
             tool: 'entity_update',
             input: {
               id: x.id,
-              expectedUpdatedAt: seen.entity.updatedAt,
+              expectedBodyRevision: seen.entity.bodyRevision,
               bodyDoc: pageDoc('Новое тело'),
               aspects: { attach: [PAGE_ASPECT] },
             },
@@ -174,9 +179,10 @@ describe('entity.updateBatch — пачка правок, один Undo (§4.3, 
       }),
     );
     expect(err.code).toBe('CONFLICT');
+    expect((err.cause as unknown as { code: string }).code).toBe('STALE_VERSION');
     expect(await caller.version.list({ entityId: x.id })).toEqual([]);
     const after = await caller.entity.get({ id: x.id, include: ['body'] });
-    expect(after.entity.body).toBe(seen.entity.body);
+    expect(after.entity.body).toBe(mid.body);
     expect(after.entity.aspects).not.toContain(PAGE_ASPECT);
   });
 
@@ -229,7 +235,7 @@ describe('entity.updateBatch — пачка правок, один Undo (§4.3, 
           tool: 'entity_update',
           input: {
             id: x.id,
-            expectedUpdatedAt: before.entity.updatedAt,
+            expectedBodyRevision: before.entity.bodyRevision,
             bodyDoc: pageDoc('# Страница\n\nНовое тело'),
             aspects: { attach: [PAGE_ASPECT] },
           },

@@ -71,7 +71,7 @@ test('клиент 0.3.x (до страниц 1б) получает CLIENT_OUTDA
   }
 });
 
-test('клиент 0.4.x (до среза 1в) получает CLIENT_OUTDATED на entity.blocks и entity.get, 0.5.0 проходит гейт', async () => {
+test('клиент 0.4.x (до среза 1в) получает CLIENT_OUTDATED на entity.blocks и entity.get, текущий минимум проходит гейт', async () => {
   // Срез 1в меняет провод `entity.blocks` (сумма по валютам, «последнее» с валютой, `closedIds` у
   // строк) и заводит узел `{{param}}` тела при той же версии схемы документа (R-12 1б, спека §5.1
   // «Формат»). Вкладка 1б читала бы `sum.sums` как отсутствующее поле и рисовала пустую плитку —
@@ -89,8 +89,8 @@ test('клиент 0.4.x (до среза 1в) получает CLIENT_OUTDATED 
       expect(((err as TRPCError).cause as { code?: string }).code).toBe('CLIENT_OUTDATED');
     }
   }
-  // 0.5.0 гейт версии проходит: дальше его останавливает авторизация (identity нет), а не версия.
-  const fresh = appRouter.createCaller({ ...ctx, clientVersion: '0.5.0' });
+  // Текущий минимум гейт версии проходит: дальше его останавливает авторизация (identity нет), а не версия.
+  const fresh = appRouter.createCaller({ ...ctx, clientVersion: MIN_COMPATIBLE_CLIENT_VERSION });
   expect(await fresh.ping()).toEqual({ ok: true });
   for (const call of [() => fresh.entity.blocks(blocks), () => fresh.entity.get({ id })]) {
     const err = await call().then(
@@ -99,6 +99,34 @@ test('клиент 0.4.x (до среза 1в) получает CLIENT_OUTDATED 
     );
     expect((err as TRPCError).code).toBe('UNAUTHORIZED');
   }
+});
+
+test('клиент 0.5.x (до плана А скорости) получает CLIENT_OUTDATED на entity.update и entity.get, 0.6.0 проходит гейт', async () => {
+  // План А меняет вход правки тела без переходного слоя (спека скорости §8.2, РП-28): `expectedBodyRevision`
+  // вместо `expectedUpdatedAt`. Вкладка 0.5.x слала бы прежнее поле, и каждое её сохранение текста отказывало бы
+  // разбором — её останавливает гейт версии клиента, на чтении так же, как на записи.
+  const id = '00000000-0000-7000-8000-0000000000f2';
+  for (const v of ['0.5.0', '0.5.9']) {
+    const caller = appRouter.createCaller({ ...ctx, clientVersion: v });
+    for (const call of [
+      () => caller.entity.update({ id, title: 'x' }),
+      () => caller.entity.get({ id }),
+    ]) {
+      const err = await call().then(
+        () => null,
+        (e: unknown) => e,
+      );
+      expect((err as TRPCError).code).toBe('PRECONDITION_FAILED');
+      expect(((err as TRPCError).cause as { code?: string }).code).toBe('CLIENT_OUTDATED');
+    }
+  }
+  expect(MIN_COMPATIBLE_CLIENT_VERSION).toBe('0.6.0');
+  const fresh = appRouter.createCaller({ ...ctx, clientVersion: '0.6.0' });
+  const err = await fresh.entity.get({ id }).then(
+    () => null,
+    (e: unknown) => e,
+  );
+  expect((err as TRPCError).code).toBe('UNAUTHORIZED');
 });
 
 test('устаревший клиент получает отказ версии раньше auth-проверки', async () => {
@@ -208,8 +236,8 @@ test('равная/новая версия, отсутствие и мусорн
   // эквивалентно отсутствию заголовка: пред-проверка формата не блокирует запрос
   const passing = [
     MIN_COMPATIBLE_CLIENT_VERSION,
-    '0.5.1',
-    '0.5.0',
+    '0.6.1',
+    '0.6.0',
     '1.0.0',
     null,
     '',

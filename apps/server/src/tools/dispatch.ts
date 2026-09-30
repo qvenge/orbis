@@ -1829,14 +1829,19 @@ async function deferRoutineUnit(
 }
 
 /**
- * Намерение операции — она сама БЕЗ CAS-снимка (`precondition`, `expectedUpdatedAt`): личность
- * единицы действия (Р-К-68). Снимок описывает, ЧТО БЫЛО у цели в момент постановки, а не что
- * единица сделает; включи его в ключ — и ретрай по цели, которую владелец успел тронуть, родил бы
- * вторую карточку того же намерения рядом с первой, заведомо устаревшей.
+ * Намерение операции — она сама БЕЗ снимка замков (`precondition`, ревизия тела `expectedBodyRevision`,
+ * заголовок `expectedTitle`): личность единицы действия (Р-К-68). Снимок описывает, ЧТО БЫЛО у цели в
+ * момент постановки, а не что единица сделает; включи его в ключ — и ретрай по цели, которую владелец
+ * успел тронуть, родил бы вторую карточку того же намерения рядом с первой, заведомо устаревшей.
  */
 function intentOf(operations: readonly ExecOperation[]): ExecOperation[] {
   return operations.map(({ tool, input }) => {
-    const { precondition: _precondition, expectedUpdatedAt: _expected, ...rest } = input;
+    const {
+      precondition: _precondition,
+      expectedBodyRevision: _revision,
+      expectedTitle: _title,
+      ...rest
+    } = input;
     return { tool, input: rest };
   });
 }
@@ -1848,7 +1853,7 @@ function intentOf(operations: readonly ExecOperation[]): ExecOperation[] {
  * Механика — ТА ЖЕ, что у предложения рутины, и теми же двумя функциями: `loadTargets`
  * читает цели под RLS (отсутствующая — NOT_FOUND здесь, а не на кнопке владельца),
  * `buildUpdate` собирает `entity_update` со снятыми предусловиями (`in:[текущее]` /
- * `absent:true`; для тела — `expectedUpdatedAt` НАСТОЯЩЕГО снимка, модельный отбрасывается).
+ * `absent:true`; для тела — ревизия тела НАСТОЯЩЕГО снимка, модельная отбрасывается).
  * Второй реализации той же пары в сервере нет намеренно: разъехавшись, она дала бы
  * предложению и отложке РАЗНЫЕ предусловия на одном и том же патче.
  *

@@ -24,6 +24,17 @@ export type Backlink = NonNullable<EntityGetReply['backlinks']>[number];
 export type GoalProgress = NonNullable<EntityGetReply['goalProgress']>;
 export type WireThread = NonNullable<EntityGetReply['thread']>;
 
+/**
+ * Ревизия тела показанной записи — замок текста (спека скорости §8.1). Ответ `entity.get` несёт её всегда
+ * (`toWireEntityWithRevision`); тип необязателен лишь потому, что форма записи на клиенте общая со строками списков, у
+ * которых ревизии нет. Запись без ревизии сюда попасть не должна, а если попала — правка тела уходит с ревизией 0,
+ * которую сервер отвергает разбором (`expectedBodyRevision` — целое ≥ 1): отказ, а не текст, записанный вслепую; а
+ * черновик такой правки ложится с основой 0 и не теряется (`parseDraft` принимает ноль).
+ */
+export function shownBodyRevision(entity: { bodyRevision?: number }): number {
+  return entity.bodyRevision ?? 0;
+}
+
 export interface RecordHostValue {
   entity: WireEntity;
   relations: WireRelation[];

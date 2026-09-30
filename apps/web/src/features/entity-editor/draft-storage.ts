@@ -7,10 +7,11 @@ import type { BodyDoc } from '@orbis/shared/doc';
  * Неотправленный черновик тела — на диск браузера.
  *
  * Retry-буфер проекта (state/retry.ts) здесь не помощник: он принимает только `entity.create`
- * от fast-path, а у `update` есть `expectedUpdatedAt`, который протухает — правка, пролежавшая
- * час, приедет с 409, то есть отложенная отправка обещала бы то, чего не может выполнить.
- * Поэтому черновик не «очередь на отправку», а сохранённый текст с меткой той версии записи,
- * поверх которой он набран; решение о судьбе принимается при возврате (useBodySave).
+ * от fast-path, а у правки тела есть замок — ревизия тела (`expectedBodyRevision`, спека скорости
+ * §8.1), который протухает: правка, пролежавшая час, приедет с 409, то есть отложенная отправка
+ * обещала бы то, чего не может выполнить. Поэтому черновик не «очередь на отправку», а сохранённый
+ * текст с ревизией тела, поверх которой он набран; решение о судьбе принимается при возврате
+ * (useBodySave).
  *
  * Это персистенция содержимого сущности на диск, и она принята владельцем ЯВНО как исключение:
  * случай отличается от истории чата (её в localStorage не держим) — здесь не архив, а
@@ -20,8 +21,15 @@ import type { BodyDoc } from '@orbis/shared/doc';
  */
 export type Draft = {
   doc: BodyDoc;
-  /** `updatedAt` записи, ПОВЕРХ которого набрана правка (та же строка, что уехала в мутацию). */
-  baseUpdatedAt: string;
+  /** Ревизия тела, ПОВЕРХ которой набрана правка (та же, что уехала в мутацию `expectedBodyRevision`). */
+  baseRevision?: number;
+  /**
+   * Черновик СТАРОЙ формы (клиент до плана А скорости) несёт вместо ревизии штамп `updatedAt` записи. Новый клиент
+   * такие черновики только читает — пишет он всегда ревизию — и решает их судьбу правилом К-26 (useBodySave): совпал
+   * штамп с записью — основа черновика = текущая ревизия; не совпал — конфликт, выбор человеку. Ровно одно из двух
+   * полей есть у каждого черновика: без основы сверять не с чем (см. `parseDraft`).
+   */
+  baseUpdatedAt?: string;
   savedAt: string;
   /**
    * Сервер отверг ЭТОТ документ терминально (VALIDATION → BAD_REQUEST). Такой черновик не
@@ -35,7 +43,7 @@ export type Draft = {
 /**
  * Код отказа, при котором черновик получает приговор (`rejected`).
  *
- * VALIDATION серверного гейта (§5.2, Задача 5) приезжает клиенту как BAD_REQUEST: документ
+ * VALIDATION серверного гейта (Задача 5) приезжает клиенту как BAD_REQUEST: документ
  * структурно битый или чужой версии схемы — тот же документ будет отвергнут снова, и повторять
  * бессмысленно. Прочие коды приговором НЕ считаются, хотя кандидат есть: NOT_FOUND (запись
  * удалили из другого места) тоже не вылечится повтором. Он не добавлен потому, что не проверен
@@ -156,23 +164,32 @@ function writeKey(k: string, value: string): void {
 function parseDraft(raw: string): Draft | null {
   const value: unknown = JSON.parse(raw);
   if (typeof value !== 'object' || value === null) return null;
-  const { doc, baseUpdatedAt, savedAt, rejected } = value as Record<string, unknown>;
-  if (typeof baseUpdatedAt !== 'string' || typeof savedAt !== 'string') return null;
+  const { doc, baseRevision, baseUpdatedAt, savedAt, rejected } = value as Record<string, unknown>;
+  if (typeof savedAt !== 'string') return null;
+  // Основа — ревизия (новая форма) или штамп записи (старая форма, К-26); без основы черновик сверять не с чем, и он
+  // ушёл бы в предложение про запись, которой никто не менял. Ноль — законная основа: так пишется черновик записи, чья
+  // ревизия экрану неизвестна (`shownBodyRevision`), и выбросить его значило бы потерять набранный текст.
+  const revision =
+    typeof baseRevision === 'number' && Number.isInteger(baseRevision) && baseRevision >= 0
+      ? baseRevision
+      : undefined;
+  const stamp = typeof baseUpdatedAt === 'string' ? baseUpdatedAt : undefined;
+  if (revision === undefined && stamp === undefined) return null;
   if (typeof doc !== 'object' || doc === null) return null;
   const { v, doc: inner } = doc as Record<string, unknown>;
   if (typeof v !== 'number' || typeof inner !== 'object' || inner === null) return null;
   // `rejected` приводится, а не проверяется: записи, сложенные до появления поля, читаются
   // как «не отвергнут» — это верно по смыслу и не повод выбрасывать текст.
-  return { doc: doc as BodyDoc, baseUpdatedAt, savedAt, rejected: rejected === true };
+  return {
+    doc: doc as BodyDoc,
+    ...(revision !== undefined ? { baseRevision: revision } : { baseUpdatedAt: stamp }),
+    savedAt,
+    rejected: rejected === true,
+  };
 }
 
-export function saveDraft(
-  entityId: string,
-  doc: BodyDoc,
-  baseUpdatedAt: string,
-  now: string,
-): void {
-  const draft: Draft = { doc, baseUpdatedAt, savedAt: now, rejected: false };
+export function saveDraft(entityId: string, doc: BodyDoc, baseRevision: number, now: string): void {
+  const draft: Draft = { doc, baseRevision, savedAt: now, rejected: false };
   // Переполненное или отключённое хранилище (приватный режим, квота) не повод ронять набор
   // текста: черновик — страховка, а не главный путь. Одну попытку прибраться `writeKey` делает,
   // дальше молча остаёмся без страховки.

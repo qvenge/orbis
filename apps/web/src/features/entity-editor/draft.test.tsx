@@ -2,7 +2,12 @@ import { type BodyDoc, DOC_SCHEMA_VERSION, parseBody } from '@orbis/shared/doc';
 import { act, screen } from '@testing-library/react';
 import { useEffect, useState } from 'react';
 import { beforeEach, expect, test, vi } from 'vitest';
-import { installCrashTrap, renderWithProviders, trpcError } from '../../test/harness';
+import {
+  installCrashTrap,
+  renderWithProviders,
+  staleBodyError,
+  trpcError,
+} from '../../test/harness';
 import { trpc } from '../../trpc';
 import { detailGetInput } from '../entity-detail/useEntityDetail';
 import { setDraftScope } from './draft-storage';
@@ -31,23 +36,30 @@ const ONE = parseBody('тело и правка');
 const TWO = parseBody('тело, правка и ещё одна');
 const THREE = parseBody('совсем другое тело');
 
-/** Сущность на момент открытия: `updatedAt` намеренно далёк от системного времени прогона. */
+/**
+ * Сущность на момент открытия. Ревизия тела (замок текста, спека скорости §8.1) — НЕ 1, чтобы
+ * отличаться от любого умолчания; `updatedAt` намеренно далёк от системного времени прогона — по
+ * нему сверяются черновики СТАРОЙ формы (К-26).
+ */
 const ENTITY: BodySaveEntity = {
+  bodyRevision: 3,
   updatedAt: '2026-08-14T10:00:00.000Z',
   bodyDoc: BASE,
 };
-/** Соседняя запись: её `updatedAt` РАНЬШЕ всего, что вернёт сервер по первой. */
+/** Соседняя запись: её ревизия МЕНЬШЕ всего, что вернёт сервер по первой. */
 const SECOND: BodySaveEntity = {
+  bodyRevision: 2,
   updatedAt: '2026-08-14T10:30:00.000Z',
   bodyDoc: BASE,
 };
-/** Та же запись, но сервер её с тех пор двигали: метка ПОЗЖЕ той, на которой набран черновик. */
+/** Та же запись, но её текст с тех пор правили: ревизия БОЛЬШЕ той, на которой набран черновик. */
 const MOVED: BodySaveEntity = {
+  bodyRevision: 5,
   updatedAt: '2026-08-14T12:00:00.000Z',
   bodyDoc: THREE,
 };
 /** Ответ сервера на entity.update. */
-const SAVED = { id: 'e1', updatedAt: '2026-08-14T11:00:00.000Z' };
+const SAVED = { id: 'e1', updatedAt: '2026-08-14T11:00:00.000Z', bodyRevision: 4 };
 
 type Respond = (input: unknown) => unknown;
 const ok: Respond = () => SAVED;
@@ -224,7 +236,7 @@ test('неотправленная правка попадает в хранил
   expect(s.updates()).toHaveLength(1);
   expect(stored()).toEqual({
     doc: ONE,
-    baseUpdatedAt: ENTITY.updatedAt,
+    baseRevision: ENTITY.bodyRevision,
     savedAt: '2030-01-01T00:00:02.000Z',
     rejected: false,
   });
@@ -243,22 +255,26 @@ test('успешное сохранение стирает черновик', as
   expect(s.updates()).toHaveLength(1);
 });
 
-test('черновик пишется с той же меткой, что уехала в expectedUpdatedAt', async () => {
+test('черновик пишется с baseRevision — той же ревизией, что уехала в expectedBodyRevision', async () => {
   // Иначе черновик второго сохранения подряд лёг бы с ПРОТУХШЕЙ базой, и при возврате хук
   // предложил бы выбор («сервер изменился») там, где изменил его сам же — то есть спрашивал
   // бы человека о собственной записи.
   const s = mount();
   s.api().onDocChange(ONE);
-  await tick(SAVE_PAUSE); // успех: подтверждённый updatedAt — SAVED.updatedAt
+  await tick(SAVE_PAUSE); // успех: подтверждённая ревизия — SAVED.bodyRevision
   expect(raw()).toBeNull();
 
   s.serve(fail500);
   s.api().onDocChange(TWO);
   await tick(SAVE_PAUSE);
-  expect(stored().baseUpdatedAt).toBe(SAVED.updatedAt);
-  expect((s.input(1) as { expectedUpdatedAt: string }).expectedUpdatedAt).toBe(SAVED.updatedAt);
-  // Страж вакуумности: две метки ДОЛЖНЫ различаться, иначе проверка выше ни о чём.
-  expect(SAVED.updatedAt).not.toBe(ENTITY.updatedAt);
+  expect(stored().baseRevision).toBe(SAVED.bodyRevision);
+  // Черновик НОВОЙ формы: штампа записи в нём нет (его несут только черновики старых клиентов, К-26)
+  expect(stored()).not.toHaveProperty('baseUpdatedAt');
+  expect((s.input(1) as { expectedBodyRevision: number }).expectedBodyRevision).toBe(
+    SAVED.bodyRevision,
+  );
+  // Страж вакуумности: две ревизии ДОЛЖНЫ различаться, иначе проверка выше ни о чём.
+  expect(SAVED.bodyRevision).not.toBe(ENTITY.bodyRevision);
 });
 
 test('правку вернули к сохранённому — черновик снимается', async () => {
@@ -293,7 +309,7 @@ test('успех по прежней записи стирает ЕЁ черно
   );
   await s.set({
     id: 'e2',
-    entity: { updatedAt: '2026-08-14T10:30:00.000Z', bodyDoc: THREE },
+    entity: { bodyRevision: 2, updatedAt: '2026-08-14T10:30:00.000Z', bodyDoc: THREE },
   });
   await server.answer(0, SAVED);
 
@@ -359,14 +375,14 @@ test('черновик читается после перемонтирован�
   });
 });
 
-test('при неизменившемся updatedAt черновик уходит сам', async () => {
+test('при неизменившейся ревизии тела черновик уходит сам', async () => {
   await leaveDraft();
 
-  // Сервер с тех пор не менялся — спрашивать не о чем.
+  // Текст на сервере с тех пор не менялся — спрашивать не о чем.
   const s = mount({ entity: ENTITY });
   await tick();
   expect(s.updates()).toHaveLength(1);
-  expect(s.input(0)).toEqual({ id: 'e1', bodyDoc: ONE, expectedUpdatedAt: ENTITY.updatedAt });
+  expect(s.input(0)).toEqual({ id: 'e1', bodyDoc: ONE, expectedBodyRevision: ENTITY.bodyRevision });
   // И человека при этом ни о чём не спросили.
   expect(s.api().pendingDraft).toBeNull();
   // Успех досыла черновик снимает: второй раз он не уедет.
@@ -379,23 +395,23 @@ test('черновик, уже совпавший с телом записи, н
   // ловит это раньше сети.
   await leaveDraft();
 
-  const s = mount({ entity: { updatedAt: ENTITY.updatedAt, bodyDoc: ONE } });
+  const s = mount({ entity: { ...ENTITY, bodyDoc: ONE } });
   await tick(SAVE_PAUSE * 2);
   expect(s.updates()).toEqual([]);
   expect(raw()).toBeNull(); // и с диска снят: держать его больше незачем
 });
 
-test('при изменившемся updatedAt автодосыла НЕТ — предлагается выбор', async () => {
+test('при изменившейся ревизии тела автодосыла НЕТ — предлагается выбор', async () => {
   await leaveDraft();
 
   const s = mount({ entity: MOVED });
   await tick(SAVE_PAUSE * 3);
-  // Правило нарочно грубое и честное: сравнили метку, спросили человека. Сюда потом встанет
+  // Правило нарочно грубое и честное: сравнили ревизию, спросили человека. Сюда потом встанет
   // слияние, не переделывая ничего вокруг.
   expect(s.updates()).toEqual([]);
   expect(s.api().pendingDraft?.doc).toEqual(ONE);
-  // Страж вакуумности: метки ДОЛЖНЫ различаться, иначе тест проверяет ветку автодосыла.
-  expect(MOVED.updatedAt).not.toBe(ENTITY.updatedAt);
+  // Страж вакуумности: ревизии ДОЛЖНЫ различаться, иначе тест проверяет ветку автодосыла.
+  expect(MOVED.bodyRevision).not.toBe(ENTITY.bodyRevision);
 
   // Положительный контроль: молчание выше — про выбор, а не про мёртвый хук.
   s.api().onDocChange(TWO);
@@ -474,23 +490,77 @@ test('запись без поля rejected читается как не отв�
   // придерживать текст, который спокойно доехал бы сам.
   localStorage.setItem(
     KEY,
-    JSON.stringify({ doc: ONE, baseUpdatedAt: ENTITY.updatedAt, savedAt: 'x' }),
+    JSON.stringify({ doc: ONE, baseRevision: ENTITY.bodyRevision, savedAt: 'x' }),
   );
 
   const s = mount({ entity: ENTITY });
   await tick();
   expect(s.updates()).toHaveLength(1);
-  expect(s.input(0)).toEqual({ id: 'e1', bodyDoc: ONE, expectedUpdatedAt: ENTITY.updatedAt });
+  expect(s.input(0)).toEqual({ id: 'e1', bodyDoc: ONE, expectedBodyRevision: ENTITY.bodyRevision });
+});
+
+// --- черновики СТАРОЙ формы (до плана А скорости; спека §8.3, К-26) ---------------------------
+
+/** Черновик клиента 0.5.x: основа — штамп записи `baseUpdatedAt`, ревизии тела нет. */
+function seedOldForm(doc: BodyDoc, baseUpdatedAt: string, rejected = false): void {
+  localStorage.setItem(
+    KEY,
+    JSON.stringify({ doc, baseUpdatedAt, savedAt: '2030-01-01T00:00:02.000Z', rejected }),
+  );
+}
+
+test('К-26: черновик старой формы, штамп совпал с записью — автодосыл с ТЕКУЩЕЙ ревизией тела', async () => {
+  // Текст набирали поверх того, что на сервере сейчас: запись с тех пор не двигалась вовсе (штамп
+  // тот же), значит и тело то же — основа черновика и есть текущая ревизия.
+  seedOldForm(ONE, ENTITY.updatedAt);
+  const s = mount({ entity: ENTITY });
+  await tick();
+  expect(s.api().pendingDraft).toBeNull();
+  expect(s.updates()).toHaveLength(1);
+  expect(s.input(0)).toEqual({ id: 'e1', bodyDoc: ONE, expectedBodyRevision: ENTITY.bodyRevision });
+  expect(raw(), 'успех снимает черновик с диска').toBeNull();
+});
+
+test('К-26: черновик старой формы, штамп НЕ совпал — баннер конфликта, черновик на диске цел, в сеть не ходим', async () => {
+  // Запись двигали после того, как старый клиент набрал текст, — чем именно, по штампу не понять.
+  // Досылать молча значило бы затереть возможную чужую правку текста, выбросить — потерять свой.
+  seedOldForm(ONE, '2026-08-14T09:00:00.000Z');
+  const before = raw();
+  const s = mount({ entity: ENTITY });
+  await tick(SAVE_PAUSE * 3);
+  expect(s.updates()).toEqual([]);
+  expect(s.api().pendingDraft).toEqual({
+    doc: ONE,
+    savedAt: '2030-01-01T00:00:02.000Z',
+    rejected: false,
+    foreignSchema: false,
+  });
+  expect(raw(), 'черновик старой формы на диске не тронут').toBe(before);
+
+  // «Оставить моё» кладёт его поверх текущей ревизии — сознательный выбор человека
+  await s.apply();
+  await tick();
+  expect(s.input(0)).toEqual({ id: 'e1', bodyDoc: ONE, expectedBodyRevision: ENTITY.bodyRevision });
+});
+
+test('К-26: «отбросить» стирает показанный черновик старой формы', async () => {
+  seedOldForm(ONE, '2026-08-14T09:00:00.000Z');
+  const s = mount({ entity: ENTITY });
+  await tick();
+  expect(s.api().pendingDraft?.doc).toEqual(ONE); // премиса
+  await s.discard();
+  expect(raw()).toBeNull();
+  expect(s.updates()).toEqual([]);
 });
 
 test('черновик чужой сущности не подставляется', async () => {
   await leaveDraft();
 
-  // У соседней записи метка ТА ЖЕ, что у первой: спутай хранилище записи, черновик уехал бы
+  // У соседней записи ревизия ТА ЖЕ, что у первой: спутай хранилище записи, черновик уехал бы
   // автодосылом — молча и в чужое тело.
   const other = mount({
     id: 'e2',
-    entity: { updatedAt: ENTITY.updatedAt, bodyDoc: THREE },
+    entity: { ...ENTITY, bodyDoc: THREE },
   });
   await tick(SAVE_PAUSE * 2);
   expect(other.updates()).toEqual([]);
@@ -512,7 +582,7 @@ test('смена записи гасит предложенный чернови
 
   await s.set({
     id: 'e2',
-    entity: { updatedAt: '2026-08-14T10:30:00.000Z', bodyDoc: THREE },
+    entity: { bodyRevision: 2, updatedAt: '2026-08-14T10:30:00.000Z', bodyDoc: THREE },
   });
   await tick();
   expect(s.api().pendingDraft).toBeNull();
@@ -527,7 +597,7 @@ test('смена записи гасит предложенный чернови
 
 // --- выбор человека -----------------------------------------------------------------------------
 
-test('applyPendingDraft шлёт черновик с ТЕКУЩИМ updatedAt', async () => {
+test('applyPendingDraft шлёт черновик с ТЕКУЩЕЙ ревизией тела', async () => {
   await leaveDraft();
 
   const s = mount({ entity: MOVED });
@@ -537,10 +607,10 @@ test('applyPendingDraft шлёт черновик с ТЕКУЩИМ updatedAt', 
   await s.apply();
   await tick();
   expect(s.updates()).toHaveLength(1);
-  // ТЕКУЩИЙ updatedAt, а не тот, на котором черновик набирался: правка сознательно кладётся
-  // поверх чужой. Уйди она со старой меткой, сервер ответил бы 409 — то есть кнопка «оставить
+  // ТЕКУЩАЯ ревизия, а не та, на которой черновик набирался: правка сознательно кладётся
+  // поверх чужой. Уйди она со старой ревизией, сервер ответил бы 409 — то есть кнопка «оставить
   // моё» не делала бы ничего.
-  expect(s.input(0)).toEqual({ id: 'e1', bodyDoc: ONE, expectedUpdatedAt: MOVED.updatedAt });
+  expect(s.input(0)).toEqual({ id: 'e1', bodyDoc: ONE, expectedBodyRevision: MOVED.bodyRevision });
   expect(s.api().pendingDraft).toBeNull(); // выбор сделан — предлагать больше нечего
 });
 
@@ -766,11 +836,15 @@ test('битая запись в хранилище игнорируется, а
     '{"doc":{"v":"1","doc":{"type":"doc"}},"baseUpdatedAt":"a","savedAt":"b"}',
     '{"doc":{"v":1,"doc":null},"baseUpdatedAt":"a","savedAt":"b"}',
     '{"doc":{"v":1},"baseUpdatedAt":"a","savedAt":"b"}',
-    // А эти две — с ЦЕЛЫМ документом и битой оболочкой: без них проверка меток не исполняется
-    // ни разу. Черновик без `baseUpdatedAt` сравнивать не с чем, и он ушёл бы в предложение —
-    // то есть человека спросили бы про текст неизвестно какой давности.
+    // А эти — с ЦЕЛЫМ документом и битой оболочкой: без них проверка основы не исполняется
+    // ни разу. Черновик без основы (ни ревизии, ни штампа старой формы) сравнивать не с чем, и
+    // он ушёл бы в предложение — то есть человека спросили бы про текст неизвестно какой давности.
     '{"doc":{"v":1,"doc":{"type":"doc"}},"savedAt":"b"}',
     '{"doc":{"v":1,"doc":{"type":"doc"}},"baseUpdatedAt":123,"savedAt":"b"}',
+    '{"doc":{"v":1,"doc":{"type":"doc"}},"baseRevision":-1,"savedAt":"b"}',
+    '{"doc":{"v":1,"doc":{"type":"doc"}},"baseRevision":"3","savedAt":"b"}',
+    '{"doc":{"v":1,"doc":{"type":"doc"}},"baseRevision":1.5,"savedAt":"b"}',
+    '{"doc":{"v":1,"doc":{"type":"doc"}},"baseRevision":3}',
   ]) {
     localStorage.setItem(KEY, broken);
     const s = mount({ entity: ENTITY });
@@ -786,7 +860,7 @@ test('битая запись в хранилище игнорируется, а
   // молчание выше от битости, а не от того, что читатель всегда возвращает null.
   localStorage.setItem(
     KEY,
-    JSON.stringify({ doc: ONE, baseUpdatedAt: ENTITY.updatedAt, savedAt: 'x', rejected: false }),
+    JSON.stringify({ doc: ONE, baseRevision: ENTITY.bodyRevision, savedAt: 'x', rejected: false }),
   );
   const good = mount({ entity: ENTITY });
   await tick();
@@ -804,7 +878,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 function agedDraft(days: number, doc: BodyDoc = ONE): string {
   return JSON.stringify({
     doc,
-    baseUpdatedAt: ENTITY.updatedAt,
+    baseRevision: ENTITY.bodyRevision,
     savedAt: new Date(Date.now() - days * DAY_MS).toISOString(),
     rejected: false,
   });
@@ -921,7 +995,7 @@ test('отключённое хранилище не роняет набор т�
   s.api().onDocChange(ONE);
   await tick(SAVE_PAUSE);
   expect(s.updates()).toHaveLength(1);
-  expect(s.input(0)).toEqual({ id: 'e1', bodyDoc: ONE, expectedUpdatedAt: ENTITY.updatedAt });
+  expect(s.input(0)).toEqual({ id: 'e1', bodyDoc: ONE, expectedBodyRevision: ENTITY.bodyRevision });
 
   // Успех тоже не спотыкается о стирание.
   await tick();
@@ -966,7 +1040,7 @@ test('зависший запрос не запирает запись навс�
   s.api().onDocChange(TWO);
   await tick(SAVE_PAUSE);
   expect(s.updates()).toHaveLength(2);
-  expect(s.input(1)).toEqual({ id: 'e1', bodyDoc: TWO, expectedUpdatedAt: ENTITY.updatedAt });
+  expect(s.input(1)).toEqual({ id: 'e1', bodyDoc: TWO, expectedBodyRevision: ENTITY.bodyRevision });
 });
 
 test('оседание запроса прежней записи не освобождает полёт соседней', async () => {
@@ -1101,7 +1175,7 @@ test('эхо редактора на монтировании не отменя�
   await tick(SAVE_PAUSE * 2);
 
   expect(s.updates()).toHaveLength(1);
-  expect(s.input(0)).toEqual({ id: 'e1', bodyDoc: ONE, expectedUpdatedAt: ENTITY.updatedAt });
+  expect(s.input(0)).toEqual({ id: 'e1', bodyDoc: ONE, expectedBodyRevision: ENTITY.bodyRevision });
   expect(raw(), 'успех досыла снял черновик — но снял его успех, а не эхо').toBeNull();
 });
 
@@ -1167,44 +1241,44 @@ test('эхо редактора не стирает ПРЕДЛОЖЕННЫЙ ч�
 
 test('досыл черновика не переезжает на соседнюю запись', async () => {
   // Ушли с записи внутри того же тика, в котором открыли её: досыл заведён, но ещё не
-  // сработал. Доживи он — ушёл бы под id ПЕРВОЙ записи, но с меткой ВТОРОЙ (рефы к этому
+  // сработал. Доживи он — ушёл бы под id ПЕРВОЙ записи, но с ревизией ВТОРОЙ (рефы к этому
   // моменту уже её), то есть с гарантированным 409, и заодно переписал бы черновик первой
-  // чужой меткой — а на следующем открытии тот предложился бы как «разошедшийся».
+  // чужой ревизией — а на следующем открытии тот предложился бы как «разошедшийся».
   await leaveDraft();
 
   const s = mount({ entity: ENTITY });
   await s.set({ id: 'e2', entity: SECOND });
   await tick(SAVE_PAUSE * 2);
   expect(s.updates()).toEqual([]);
-  expect(JSON.parse(raw() as string).baseUpdatedAt).toBe(ENTITY.updatedAt);
+  expect(JSON.parse(raw() as string).baseRevision).toBe(ENTITY.bodyRevision);
 
   // Положительный контроль: черновик никуда не делся и своей записью подхватывается.
   await s.set({ id: 'e1', entity: ENTITY });
   await tick();
   expect(s.updates()).toHaveLength(1);
-  expect(s.input(0)).toEqual({ id: 'e1', bodyDoc: ONE, expectedUpdatedAt: ENTITY.updatedAt });
+  expect(s.input(0)).toEqual({ id: 'e1', bodyDoc: ONE, expectedBodyRevision: ENTITY.bodyRevision });
 });
 
-test('черновик, уже лежащий в теле записи, не предлагается и при разошедшихся метках (И-3)', async () => {
+test('черновик, уже лежащий в теле записи, не предлагается и при разошедшихся ревизиях (И-3)', async () => {
   // Самый частый сюжет восстановления: успех ДОШЁЛ до сервера, ответ потерялся, вкладку
-  // закрыли. Метка на сервере двинулась, тело — ровно черновик. Ветка предложения обязана
+  // закрыли. Ревизия на сервере двинулась, тело — ровно черновик. Ветка предложения обязана
   // сверять текст так же, как это делает ветка досыла, иначе человека спросят про текст,
   // который уже в базе.
   await leaveDraft();
 
-  const s = mount({ entity: { updatedAt: MOVED.updatedAt, bodyDoc: ONE } });
+  const s = mount({ entity: { ...MOVED, bodyDoc: ONE } });
   await tick(SAVE_PAUSE * 2);
   expect(s.api().pendingDraft).toBeNull();
   expect(s.updates()).toEqual([]);
   expect(raw(), 'и с диска снят: держать его больше незачем').toBeNull();
 
-  // Страж вакуумности: метки ДЕЙСТВИТЕЛЬНО разошлись — это ветка предложения, а не досыла.
-  expect(MOVED.updatedAt).not.toBe(ENTITY.updatedAt);
+  // Страж вакуумности: ревизии ДЕЙСТВИТЕЛЬНО разошлись — это ветка предложения, а не досыла.
+  expect(MOVED.bodyRevision).not.toBe(ENTITY.bodyRevision);
 
-  // Положительный контроль: черновик, ОТЛИЧНЫЙ от тела, при тех же метках предлагается.
+  // Положительный контроль: черновик, ОТЛИЧНЫЙ от тела, при тех же ревизиях предлагается.
   await s.unmount();
   await leaveDraft(TWO);
-  const other = mount({ entity: { updatedAt: MOVED.updatedAt, bodyDoc: ONE } });
+  const other = mount({ entity: { ...MOVED, bodyDoc: ONE } });
   await tick();
   expect(other.api().pendingDraft?.doc).toEqual(TWO);
 });
@@ -1252,7 +1326,7 @@ test('«отбросить» стирает ПОКАЗАННЫЙ чернови�
     KEY,
     JSON.stringify({
       doc: TWO,
-      baseUpdatedAt: MOVED.updatedAt,
+      baseRevision: MOVED.bodyRevision,
       savedAt: '2030-01-01T00:05:00.000Z',
       rejected: false,
     }),
@@ -1317,7 +1391,7 @@ test('брошенный по выдержке запрос, осевший по
   expect(s.api().conflict).toBe(false);
 
   // А теперь оседает БРОШЕННЫЙ запрос — с 409 от собственного же преемника.
-  await server.answer(0, trpcError('CONFLICT'), 'fail');
+  await server.answer(0, staleBodyError(), 'fail');
   expect(s.api().conflict).toBe(false);
 
   // Положительный контроль: 409 по ЖИВОМУ запросу флаг поднимает — сверка не выключила
@@ -1325,7 +1399,7 @@ test('брошенный по выдержке запрос, осевший по
   s.api().onDocChange(THREE);
   await tick(SAVE_PAUSE);
   expect(s.updates()).toHaveLength(3);
-  await server.answer(2, trpcError('CONFLICT'), 'fail');
+  await server.answer(2, staleBodyError(), 'fail');
   expect(s.api().conflict).toBe(true);
 });
 
@@ -1353,7 +1427,15 @@ test('брошенный по выдержке запрос, отказав, н�
     if (path === 'entity.get') {
       reads += 1;
       if (reads > 1) return new Promise(() => {});
-      return { entity: { id: 'e1', body: 'тело', bodyDoc: BASE, updatedAt: ENTITY.updatedAt } };
+      return {
+        entity: {
+          id: 'e1',
+          body: 'тело',
+          bodyDoc: BASE,
+          updatedAt: ENTITY.updatedAt,
+          bodyRevision: ENTITY.bodyRevision,
+        },
+      };
     }
     if (path === 'entity.update') return server.respond(null);
     throw new Error(`сохранение тела не ходит на ${path}`);
@@ -1429,7 +1511,7 @@ test('терминальный отказ брошенного запроса н
   await s.unmount();
 
   // И на следующем открытии он уезжает автодосылом, как всякий непомеченный.
-  const back = mount({ entity: { updatedAt: ENTITY.updatedAt, bodyDoc: BASE } });
+  const back = mount({ entity: { ...ENTITY, bodyDoc: BASE } });
   await tick();
   expect(back.updates()).toHaveLength(1);
   expect((back.input(0) as { bodyDoc: BodyDoc }).bodyDoc).toEqual(TWO);
@@ -1449,7 +1531,7 @@ test('поздний УСПЕХ брошенного запроса не гас�
   expect(s.updates()).toHaveLength(2);
 
   // Досыл поймал 409 — плашка заслужена.
-  await server.answer(1, trpcError('CONFLICT'), 'fail');
+  await server.answer(1, staleBodyError(), 'fail');
   expect(s.api().conflict).toBe(true);
 
   // А брошенный запрос доехал успехом. Он про прошлое и гасить этот конфликт не вправе.
@@ -1483,12 +1565,15 @@ const OLD_UNKNOWN: BodyDoc = {
 };
 
 /** Черновик на диск РУКАМИ: версию схемы стенд подделывает документом (см. выше). */
-function seed(doc: BodyDoc, baseUpdatedAt = ENTITY.updatedAt, rejected = false): void {
+function seed(doc: BodyDoc, baseRevision = ENTITY.bodyRevision, rejected = false): void {
   localStorage.setItem(
     KEY,
-    JSON.stringify({ doc, baseUpdatedAt, savedAt: '2030-01-01T00:00:02.000Z', rejected }),
+    JSON.stringify({ doc, baseRevision, savedAt: '2030-01-01T00:00:02.000Z', rejected }),
   );
 }
+
+/** Ревизия заведомо старше ревизии записи — черновик набран до чужой правки текста. */
+const STALE_REVISION = 1;
 
 test('черновик прошлой версии с известными нодами перештампован и уходит штатным досылом', async () => {
   seed(OLD);
@@ -1600,12 +1685,12 @@ test('старая вкладка (документ v2) получает отк�
 
 test('перештамповка идёт ДО сверки с телом: текст, уже лежащий в базе, не предлагают заново', async () => {
   // Самый частый сюжет восстановления: успех дошёл до сервера, ответ потерялся, вкладку
-  // закрыли. Метка на сервере ДВИНУЛАСЬ, то есть без сверки сработала бы ветка предложения.
+  // закрыли. Ревизия на сервере ДВИНУЛАСЬ, то есть без сверки сработала бы ветка предложения.
   // Сама сверка сравнивает и версии (`base.bodyDoc.v === draft.doc.v`) — стой развилка версии
   // ПОСЛЕ неё, она не срабатывала бы никогда, и человека спрашивали бы про текст из базы.
-  seed(OLD, 'СТАРАЯ-МЕТКА');
+  seed(OLD, STALE_REVISION);
 
-  const s = mount({ entity: { updatedAt: MOVED.updatedAt, bodyDoc: ONE } });
+  const s = mount({ entity: { ...MOVED, bodyDoc: ONE } });
   await tick(SAVE_PAUSE * 2);
 
   expect(s.api().pendingDraft).toBeNull();

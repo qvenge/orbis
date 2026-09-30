@@ -367,6 +367,8 @@ interface SupplyRow {
   archived: boolean;
   /** ISO-штамп — предусловие правок пачки; у отчёта не нужен. */
   updatedAt?: string;
+  /** Ревизия тела — замок текста правки тела «Года» (спека скорости §8.1); у отчёта не нужна. */
+  bodyRevision?: number;
 }
 
 /** Живое приложение графа (аспект «приложение»): его домашняя и навигация — ссылки места на Upcoming. */
@@ -706,10 +708,12 @@ function applyOps(
       input:
         d.plan.year === 'body+etalon'
           ? // Как «принять» механизма поставки, но без закрепления версии: тело владельцем не правлено,
-            // сберегать нечего (его прежний текст хранит журнал для Undo).
+            // сберегать нечего (его прежний текст хранит журнал для Undo). Замки — те же два, что у
+            // «принять» (спека скорости §8.2, К-9): ревизия тела и штамп записи.
             {
               id: d.year.id,
-              expectedUpdatedAt: d.year.updatedAt,
+              expectedBodyRevision: d.year.bodyRevision,
+              precondition: since(d.year),
               title: e.title,
               emoji: e.emoji,
               body: e.text,
@@ -770,6 +774,7 @@ export async function applyMigrate1v(
         props: entities.props,
         archived: entities.archived,
         updatedAt: entities.updatedAt,
+        bodyRevision: entities.bodyRevision,
       })
       .from(entities)
       .where(and(eq(entities.graphId, graph), sql`${entities.props} ? ${SUPPLY_KEY}`));

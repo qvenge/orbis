@@ -198,7 +198,7 @@ describe('undoAction: entity_update — LWW-откат по СВОЙСТВУ (§
             id: e.id,
             title: 'Новый',
             body: 'v2',
-            expectedUpdatedAt: e.updatedAt,
+            expectedBodyRevision: e.bodyRevision,
             props: { 'orbis/task_status': 'done', 'orbis/priority': 'high' },
             aspects: { attach: ['orbis/task'] },
           },

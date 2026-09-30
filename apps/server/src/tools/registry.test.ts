@@ -784,6 +784,23 @@ describe('роли рёбер в реестре тулов (§А4-3/§А4-4)', (
   });
 });
 
+describe('entity_update: замок текста по ревизии тела (спека скорости §8.2)', () => {
+  test('поле expectedBodyRevision — целое ≥ 1 с описанием замка; прежнего поля нет; описание тула объясняет замок', async () => {
+    const def = defOf(await registryFor(userB), 'entity_update');
+    const props = def.inputJsonSchema.properties as Record<string, Record<string, unknown>>;
+    expect(props.expectedUpdatedAt).toBeUndefined();
+    expect(props.expectedBodyRevision).toEqual({
+      type: 'integer',
+      minimum: 1,
+      description:
+        'ревизия тела записи, которую вы видели (entity_get → bodyRevision); обязательна при правке body: ' +
+        'если текст успели изменить, правка отказывает STALE_VERSION — перечитайте запись и повторите',
+    });
+    expect(def.description).toContain('expectedBodyRevision');
+    expect(def.description).toContain('STALE_VERSION');
+  });
+});
+
 describe('парность zod-envelope ↔ рукописная JSON Schema (§9.2)', () => {
   /**
    * Объект внутри envelope: у `entity_query` схема обёрнута `.refine` («ровно одно из

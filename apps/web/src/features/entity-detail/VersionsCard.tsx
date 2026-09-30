@@ -11,13 +11,14 @@
 import { useId, useRef, useState } from 'react';
 import { formatDate } from '../../lib/format';
 import { invalidateGraph } from '../../lib/invalidate';
+import { isBodyStale } from '../../lib/orbis-error';
 import { type RouterOutputs, trpc } from '../../trpc';
 import { Badge } from '../../ui/Badge';
 import { Button } from '../../ui/Button';
 import { Dialog } from '../../ui/Dialog';
 import { Input } from '../../ui/Input';
 import { useToast } from '../../ui/toast-store';
-import { useHostReadOnly } from './record-host';
+import { shownBodyRevision, useHostReadOnly } from './record-host';
 
 type Entity = RouterOutputs['entity']['get']['entity'];
 type Version = RouterOutputs['version']['list'][number];
@@ -150,11 +151,12 @@ export function VersionsCard({ entity, active }: { entity: Entity; active: boole
   });
 
   /**
-   * 409 — НЕ плашка тела экрана (`screenConflict`), и это не небрежность: та питается только
-   * `entity.update` через useEntityDetail, а восстановление идёт своим роутером и до неё не
-   * доезжает никогда. Секция обязана сказать о своём отказе сама.
+   * Отказ замка текста (`STALE_VERSION` в `data.orbis`, спека скорости §8.1) — НЕ плашка тела
+   * экрана (`screenConflict`), и это не небрежность: та питается только `entity.update` через
+   * useEntityDetail, а восстановление идёт своим роутером и до неё не доезжает никогда. Секция
+   * обязана сказать о своём отказе сама.
    */
-  const conflict = restore.error?.data?.code === 'CONFLICT';
+  const conflict = isBodyStale(restore.error);
 
   const versions = list.data;
 
@@ -261,9 +263,10 @@ export function VersionsCard({ entity, active }: { entity: Entity; active: boole
                 onClick={() =>
                   restore.mutate({
                     versionId: target.id,
-                    // Метка ОТКРЫТОЙ записи: сервер сверит её и откажет 409, если тело правили,
-                    // пока экран смотрел на список (§5.2) — молча затирать чужое нельзя.
-                    expectedUpdatedAt: entity.updatedAt,
+                    // Ревизия тела ОТКРЫТОЙ записи: сервер сверит её и откажет 409, если текст
+                    // правили, пока экран смотрел на список (§8.1) — молча затирать чужое нельзя.
+                    // Нынешний текст сервер закрепит версией первой операцией того же действия.
+                    expectedBodyRevision: shownBodyRevision(entity),
                   })
                 }
               >

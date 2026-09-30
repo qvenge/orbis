@@ -2576,15 +2576,16 @@ function preconditionMismatches(error: StructuredError): PreconditionMismatch[] 
  * Видов ровно два, и они взаимоисключающие, потому что отказ у операции один:
  *  - предусловия по СВОЙСТВАМ не выполнены — `CONFLICT/precondition_failed`, список
  *    `mismatches`;
- *  - разошлось ТЕЛО — `STALE_VERSION`. У тела нет предусловия по значению: его CAS это
- *    `expectedUpdatedAt` строки, снятый при составлении (propose.ts buildUpdate). Прежде это
+ *  - разошлось ТЕЛО — `STALE_VERSION`. У тела нет предусловия по значению: его замок это
+ *    ревизия тела строки (`expectedBodyRevision`, спека скорости §8.1), снятая при составлении
+ *    (propose.ts buildUpdate). Прежде это
  *    подделывалось пунктом `{aspect:'', field:'body'}` — вторым способом сказать «здесь не
  *    свойство», у которого не было ни адреса в пространстве свойств, ни осмысленного
  *    `expected` (ехали отметки `updated_at`, владельцу они не говорят ничего). Теперь это
  *    ФЛАГ, а `mismatches` остаётся списком расхождений по свойствам.
  *
  * Для владельца оба вида — одно и то же «устарело»: запись менялась после того, как рутина
- * её видела (тело — или что угодно ещё: `updated_at` бампит любая правка).
+ * её видела (тело — по ревизии тела, свойства — по своим предусловиям).
  */
 function divergenceOf(error: StructuredError): ProposalDivergence | null {
   const mismatches = preconditionMismatches(error);

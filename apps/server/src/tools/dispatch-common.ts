@@ -108,7 +108,7 @@ export function errorResult(code: string, message: string, details?: unknown): T
  * envelope-валидации input'а (validateMutationEnvelope / validateBatchOperations в
  * runMutation) — pending создаётся из envelope-валидированного payload'а. Полная
  * провалидированность (стадии 2–4 конвейера §9.2: aspects-схемы реестра,
- * expectedUpdatedAt/§5.2, доменные инварианты над текущим состоянием) — обязанность
+ * замок текста expectedBodyRevision/§8.1, доменные инварианты над текущим состоянием) — обязанность
  * РЕВАЛИДАЦИИ APPROVE (полный конвейер executor'а, см. policy/pending.ts): dry-run
  * при создании не спасал бы от изменения состояния за время ожидания — ревалидация
  * на approve обязательна в любом случае, двойная валидация избыточна.

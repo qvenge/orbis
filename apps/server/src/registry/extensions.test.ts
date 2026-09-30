@@ -555,8 +555,8 @@ describe('§С8-22, §Б8-3 ревизия 7: запись при выключе
     // (сумма, валюта, направление, дата — `module: null` с задачи 5) правятся как обычно.
     //
     // txId создан ДО выключения модуля (общий `beforeAll` файла, шаг 3). Поля `version` у
-    // `entity_update` НЕТ: CAS-предусловие §5.2 называется `expectedUpdatedAt`, оно
-    // необязательно, и здесь не нужно — конкурента у теста нет.
+    // `entity_update` НЕТ: замок текста называется `expectedBodyRevision` (спека скорости §8.1),
+    // он нужен только правке тела, и здесь не нужен — тело не правится.
     const readOnly = { extension: 'finance', reason: 'read_only' };
     const edit = await execute(db, {
       identity: personal(owner),

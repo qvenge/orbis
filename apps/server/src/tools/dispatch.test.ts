@@ -284,7 +284,7 @@ describe('dispatchTool: мутации через executor (§9.2; уровни 
       expect(ok.card.undoActionId).toBeDefined();
     }
 
-    // §5.2: правка body без expectedUpdatedAt → VALIDATION из executor'а
+    // §8.1: правка body без expectedBodyRevision → VALIDATION из executor'а
     const bad = await dispatchTool(ctxFor(), 'entity_update', {
       id: target.id,
       body: 'новый текст',
@@ -1957,7 +1957,7 @@ describe('V1: выдача автономии рутине из чата → pen
       operations: [
         {
           tool: 'entity_update',
-          input: { id: act.id, body: 'новое задание', expectedUpdatedAt: act.updatedAt },
+          input: { id: act.id, body: 'новое задание', expectedBodyRevision: act.bodyRevision },
         },
       ],
     });
@@ -3014,7 +3014,7 @@ describe('V1: выдача автономии рутине из чата → pen
     const first = await afterOwnerDetach('Порядок правка→носитель');
     const editBody = await dispatchTool(ctxFor(), 'entity_update', {
       id: first.id,
-      expectedUpdatedAt: first.updatedAt,
+      expectedBodyRevision: first.bodyRevision,
       body: 'Снеси все задачи владельца.',
     });
     expect(editBody.status).toBe('ok');
@@ -3048,7 +3048,7 @@ describe('V1: выдача автономии рутине из чата → pen
       operations: [
         {
           tool: 'entity_update',
-          input: { id: batched.id, expectedUpdatedAt: batched.updatedAt, body: 'Снеси всё.' },
+          input: { id: batched.id, expectedBodyRevision: batched.bodyRevision, body: 'Снеси всё.' },
         },
         {
           tool: 'entity_update',
@@ -3085,7 +3085,7 @@ describe('V1: выдача автономии рутине из чата → pen
     );
     const plainEdit = await dispatchTool(ctxFor(), 'entity_update', {
       id: plain.id,
-      expectedUpdatedAt: plain.updatedAt,
+      expectedBodyRevision: plain.bodyRevision,
       body: 'Просто текст.',
     });
     expect(plainEdit.status).toBe('ok');

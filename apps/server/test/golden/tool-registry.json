@@ -722,7 +722,7 @@
   },
   {
     "name": "entity_update",
-    "description": "Частичное обновление сущности: передаются только изменяемые поля. props ставит значения, unset снимает их, aspects.attach/detach меняет интерпретацию.",
+    "description": "Частичное обновление сущности: передаются только изменяемые поля. props ставит значения, unset снимает их, aspects.attach/detach меняет интерпретацию. Правка body требует expectedBodyRevision — ревизию тела из entity_get: если текст изменили после чтения, правка отказывает STALE_VERSION, и её повторяют по перечитанной записи. Правка без body ревизии не требует.",
     "inputJsonSchema": {
       "type": "object",
       "properties": {
@@ -730,10 +730,10 @@
           "type": "string",
           "format": "uuid"
         },
-        "expectedUpdatedAt": {
-          "type": "string",
-          "format": "date-time",
-          "description": "updated_at сущности, которую видел клиент; обязателен при правке body (§5.2)"
+        "expectedBodyRevision": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "ревизия тела записи, которую вы видели (entity_get → bodyRevision); обязательна при правке body: если текст успели изменить, правка отказывает STALE_VERSION — перечитайте запись и повторите"
         },
         "title": {
           "type": "string",

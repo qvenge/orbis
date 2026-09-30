@@ -12,11 +12,12 @@ import { TRPCClientError, type TRPCLink } from '@trpc/client';
 import { observable } from '@trpc/server/observable';
 import { type ReactNode, StrictMode, Suspense } from 'react';
 import { afterAll, afterEach, beforeAll, expect } from 'vitest';
+import { emitClientOutdated, emitUnauthorized } from '../auth/events';
 import { APPS_QUERY } from '../features/apps/useApps';
 import { PAGE_TEMPLATES_QUERY } from '../features/page/usePageTemplates';
 import { SUPPLY_RECORDS_QUERY } from '../features/page/useSupplyRecords';
 import { QueryBatchProvider } from '../lib/query-blocks/batch';
-import { trpc } from '../trpc';
+import { authErrorLink, trpc } from '../trpc';
 
 /**
  * Ловушка для КРАХОВ В ОБРАБОТЧИКАХ. Зовётся на верхнем уровне файла тестов.
@@ -97,11 +98,33 @@ export type MockHandler = (
 // TRPCClientError с data.code — клиент ключуется на КОД (не cause). Второй аргумент —
 // текст сообщения: cause по HTTP не сериализуется, поэтому детали инвариантов (путь цикла
 // blocks, K17) доезжают до UI только в message, и тесты должны уметь его подделать.
-export function trpcError(code: string, message = code): TRPCClientError<AppRouter> {
-  return new TRPCClientError(message, {
-    // biome-ignore lint/suspicious/noExplicitAny: конструирование сырого tRPC-error shape для тестов
-    result: { error: { message, code: -32600, data: { code, httpStatus: 400 } } } as any,
-  });
+export function trpcError(
+  code: string,
+  message = code,
+  orbis?: { code: string; details?: Record<string, unknown> },
+): TRPCClientError<AppRouter> {
+  const data = { code, httpStatus: 400, ...(orbis && { orbis }) };
+  // biome-ignore lint/suspicious/noExplicitAny: конструирование сырого tRPC-error shape для тестов
+  const result = { error: { message, code: -32600, data } } as any;
+  return new TRPCClientError(message, { result });
+}
+
+/**
+ * Отказ замка текста так, как его отдаёт сервер (спека скорости §8.2, РП-5): транспортный `CONFLICT` и структурное
+ * поле `data.orbis` с кодом `STALE_VERSION` и ревизиями. Экран узнаёт конфликт тела по `data.orbis`, а не по
+ * транспортному коду, — голый `trpcError('CONFLICT')` плашку тела не зажигает.
+ */
+export function staleBodyError(
+  details: { id?: string; expected?: number; current?: number } = {},
+): TRPCClientError<AppRouter> {
+  return trpcError(
+    'CONFLICT',
+    'текст изменён конкурентно: перечитайте запись и повторите правку (§8.1)',
+    {
+      code: 'STALE_VERSION',
+      details: { id: 'e1', expected: 1, current: 2, ...details },
+    },
+  );
 }
 
 export function mockLink(handler: MockHandler): TRPCLink<AppRouter> {
@@ -170,11 +193,15 @@ const unrouted = (value: unknown): boolean =>
  * каждый компонент, подписавшийся на уже приехавший ключ позже соседа, перезапрашивает его —
  * в `calls` появляются повторы, которых продукт (`staleTime` 30 с, trpc.ts) не делает, и их
  * число зависит от порядка монтирования, а не от экрана.
+ *
+ * `authErrors: true` — поставить перед мок-линком тот же перехватчик 412/401, что в бою (`orbisLinks`, trpc.ts):
+ * отказ `PRECONDITION_FAILED` поднимает экран «Обновить», `UNAUTHORIZED` — выход (AuthProvider). Без флага сьюты
+ * получают эти отказы как обычные ошибки запроса — так они и писались.
  */
 export function renderWithProviders(
   ui: ReactNode,
   handler: MockHandler = () => ({}),
-  opts: { strict?: boolean; queries?: DefaultOptions['queries'] } = {},
+  opts: { strict?: boolean; queries?: DefaultOptions['queries']; authErrors?: boolean } = {},
 ): RenderResult & { calls: { path: string; input: unknown }[] } {
   const calls: { path: string; input: unknown }[] = [];
   const qc = new QueryClient({
@@ -182,6 +209,9 @@ export function renderWithProviders(
   });
   const client = trpc.createClient({
     links: [
+      ...(opts.authErrors
+        ? [authErrorLink({ onOutdated: emitClientOutdated, onUnauthorized: emitUnauthorized })]
+        : []),
       mockLink(async (path, input, type) => {
         calls.push({ path, input });
         const answer = await handler(path, input, type);
@@ -340,6 +370,11 @@ export interface WireEntityFixture {
    * обещала бы форму, которой `entity.query` не отдаёт никогда.
    */
   bodyDoc?: { v: number; doc: Record<string, unknown> } | null;
+  /**
+   * Ревизия тела (спека скорости §8.1) — ОПЦИОНАЛЬНО и без умолчания, как `bodyDoc`: её несут чтение одной записи и
+   * ответы мутаций, а строки списков — нет. Стенды, где сохраняют тело, называют её явно.
+   */
+  bodyRevision?: number;
   bodyRefs: string[];
   tags: string[];
   /** Новая правда §А1-1: значения плоско по id свойства. */

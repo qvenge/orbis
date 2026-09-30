@@ -99,6 +99,8 @@ interface SupplyRow {
   props: Record<string, unknown>;
   archived: boolean;
   updatedAt: string;
+  /** Ревизия тела (спека скорости §8.1) — замок текста правки страницы; штамп `updatedAt` — замок записи целиком. */
+  bodyRevision: number;
 }
 
 interface Snapshot {
@@ -189,6 +191,7 @@ async function snapshot(ctx: SupplyCtx): Promise<Snapshot> {
         props: entities.props,
         archived: entities.archived,
         updatedAt: entities.updatedAt,
+        bodyRevision: entities.bodyRevision,
       })
       .from(entities)
       .where(and(eq(entities.graphId, graph), sql`${entities.props} ? ${SUPPLY_KEY}`));
@@ -364,6 +367,11 @@ async function run(
  * Операции «принять» для одной записи: содержимое = эталон кода, отпечаток и текст — новые, отказ снят.
  * У страницы тело сначала закрепляется версией «Прежняя версия» — порядок значим: закрепление снимает тело
  * ДО замены (§9.1 п. 2 «прежняя версия сохранится»). У приложения прежние свойства хранит журнал для Undo.
+ *
+ * ОБА ЗАМКА у правки страницы (спека скорости §8.2, К-9): «принять» переписывает и текст, и свойства записи, а
+ * владелец видел запись целиком. Ревизия тела ловит правку текста между показом и принятием, предусловие на штамп
+ * записи — правку свойства, заголовка, тега. Один замок текста пропустил бы второе молча: ревизию двигает только
+ * смена тела.
  */
 function acceptOps(
   row: SupplyRow,
@@ -384,8 +392,8 @@ function acceptOps(
         tool: 'entity_update',
         input: {
           id: row.id,
-          // Правка места с другой вкладки между чтением и «принять» не перекрывается молча: у тела это
-          // держит `expectedUpdatedAt`, у свойств — предусловие на штамп записи (отказ `CONFLICT`).
+          // Правка места с другой вкладки между чтением и «принять» не перекрывается молча: предусловие на
+          // штамп записи (отказ `CONFLICT`); тела у оболочки нет — замка текста в её правке нет.
           precondition: [{ property: 'orbis/updated_at', in: [row.updatedAt] }],
           title: e.title,
           emoji: e.emoji,
@@ -401,7 +409,8 @@ function acceptOps(
       tool: 'entity_update',
       input: {
         id: row.id,
-        expectedUpdatedAt: row.updatedAt,
+        expectedBodyRevision: row.bodyRevision,
+        precondition: [{ property: 'orbis/updated_at', in: [row.updatedAt] }],
         title: e.title,
         emoji: e.emoji,
         body: e.text,
@@ -598,9 +607,12 @@ export async function revertToEtalon(
       tool: 'entity_update',
       input: {
         id: row.id,
+        // Замок записи целиком — всегда (К-9): возврат переписывает заголовок и эмодзи и без смены тела, и правка
+        // записи после показа не перекрывается молча. Замок текста — только когда тело и правда меняется.
+        precondition: [{ property: 'orbis/updated_at', in: [version] }],
         title: print.title,
         emoji: print.emoji,
-        ...(bodyChanged && { body: print.body, expectedUpdatedAt: version }),
+        ...(bodyChanged && { body: print.body, expectedBodyRevision: row.bodyRevision }),
       },
     },
   ]);

@@ -178,13 +178,13 @@ async function run(
   if (!r.ok) throw new Error(`мир 1б: ${JSON.stringify(r.error)}`);
 }
 
-async function updatedAtOf(db: Db, graph: GraphId, id: string): Promise<string> {
+async function bodyRevisionOf(db: Db, graph: GraphId, id: string): Promise<number> {
   const rows = (await withIdentity(db, personal(graph), (tx) =>
-    tx.execute(sql`SELECT updated_at FROM entities WHERE id = ${id}::uuid`),
-  )) as unknown as Array<{ updated_at: Date | string }>;
+    tx.execute(sql`SELECT body_revision FROM entities WHERE id = ${id}::uuid`),
+  )) as unknown as Array<{ body_revision: number }>;
   const r = rows[0];
   if (r === undefined) throw new Error(`мир 1б: записи ${id} нет`);
-  return new Date(r.updated_at).toISOString();
+  return r.body_revision;
 }
 
 /** Завести граф `graph` в форме прода после 1б (вариант — выше). */
@@ -212,7 +212,7 @@ export async function seedWorld1b(
       tool: 'entity_update',
       input: {
         id,
-        expectedUpdatedAt: await updatedAtOf(db, graph, id),
+        expectedBodyRevision: await bodyRevisionOf(db, graph, id),
         body: legacyText,
         props: {
           [SUPPLY_HASH]: etalonHash({ ...e, text: legacyText }),
@@ -236,7 +236,7 @@ export async function seedWorld1b(
           tool: 'entity_update',
           input: {
             id,
-            expectedUpdatedAt: await updatedAtOf(db, graph, id),
+            expectedBodyRevision: await bodyRevisionOf(db, graph, id),
             body: `${LEGACY_ETALON_TEXTS[key]}\n\n${OWNER_LINE}`,
           },
         },

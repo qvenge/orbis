@@ -120,14 +120,13 @@ function useAspectEdits(entity: Entity) {
    * пусто»: `null` — законное значение json-свойства, и подмена одного другим навсегда
    * запретила бы его записывать (докблок `entityPropsPatch`).
    *
-   * Метка версии шлётся для единообразия с прочими правками экрана; 409 она здесь не даёт
-   * никогда — гейт §5.2 стоит под условием `body || bodyDoc` (см. `checksVersion`), и правку
-   * свойств сервер проводит по LWW.
+   * Замка у правки свойства нет: замок текста (ревизия тела, спека скорости §8.1) стоит только у
+   * правки тела (см. `checksVersion`), и правку свойств сервер проводит по LWW. Прежняя метка
+   * `updatedAt` уходила сюда «для единообразия» и не сверялась никогда — её больше нет.
    */
   function writeProp(propertyId: string, value: unknown | undefined) {
     mutation.mutate({
       id: entity.id,
-      expectedUpdatedAt: entity.updatedAt,
       ...(value === undefined ? { unset: [propertyId] } : { props: { [propertyId]: value } }),
     });
   }

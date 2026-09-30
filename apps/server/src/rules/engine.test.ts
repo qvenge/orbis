@@ -797,7 +797,7 @@ describe('правка без свойств — только C-правила, 
     const body = await w.run('entity_update', {
       id: row.id,
       body: 'Заметка к трате',
-      expectedUpdatedAt: row.updatedAt,
+      expectedBodyRevision: row.bodyRevision,
     });
     expect(refusalOf(body)).toBe('ok');
     expect(refusalOf(await w.run('entity_update', { id: row.id, emoji: '💸' }))).toBe('ok');

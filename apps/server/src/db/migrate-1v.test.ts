@@ -206,6 +206,14 @@ async function rowOf(graph: GraphId, id: string): Promise<Row> {
   return { ...r, updatedAt: new Date(r.updated_at).toISOString() };
 }
 
+/** Ревизия тела записи — замок правки текста (спека скорости §8.1). */
+async function bodyRevisionOf(graph: GraphId, id: string): Promise<number> {
+  const rows = await withIdentity(db, personal(graph), (tx) =>
+    tx.execute(sql`SELECT body_revision FROM entities WHERE id = ${id}::uuid`),
+  );
+  return Number(rows[0]?.body_revision);
+}
+
 const rowByKey = (graph: GraphId, key: string) =>
   rowOf(graph, supplyRecordId(graph, key as Parameters<typeof supplyRecordId>[1]));
 
@@ -435,7 +443,7 @@ describe('(б) перепись: формы с токеном-границей, 
     await ownerEdit(graph, {
       id: edited,
       body: 'Теперь без запроса.',
-      expectedUpdatedAt: (await rowOf(graph, edited)).updatedAt,
+      expectedBodyRevision: await bodyRevisionOf(graph, edited),
     });
     const goal = await ownerCreate(graph, { title: 'Цель' });
     const textGoal = await ownerCreate(graph, { title: 'Цель текстом' });

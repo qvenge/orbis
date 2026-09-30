@@ -7,7 +7,7 @@
 // обращения к LLM; reject — системное сообщение-отказ (журнал append-only, §4.6).
 //
 // РЕШЕНИЕ ПО КОНТРАКТУ levelGate (dispatch): полная провалидированность payload'а
-// (стадии 2–4 конвейера §9.2 — aspects-схемы, инварианты, expectedUpdatedAt/§5.2) —
+// (стадии 2–4 конвейера §9.2 — aspects-схемы, инварианты, замок текста expectedBodyRevision/§8.1) —
 // обязанность РЕВАЛИДАЦИИ APPROVE, а не dry-run'а при создании pending: dry-run не
 // спасает от изменения состояния за время ожидания (ревалидация на approve обязательна
 // в любом случае), а двойная валидация избыточна. Цена: структурная ошибка возможна
@@ -1458,6 +1458,44 @@ export async function rejectPending(db: Db, args: RejectPendingArgs): Promise<Re
     }
     throw e;
   }
+}
+
+/**
+ * Вход `entity_update` старого контракта внутри сохранённого payload'а: одиночный тул или операция пачки. jsonpath —
+ * тот же запрос для обеих форм, и проба живёт в SQL, а не разбором каждой карточки: предложений у графа сотни, а
+ * снимаемых — единицы.
+ */
+const OLD_BODY_CONTRACT_PATHS = [
+  '$.pending ? (@.tool == "entity_update" && exists(@.input.expectedUpdatedAt))',
+  '$.pending ? (@.tool == "batch_execute").input.operations[*] ? (@.tool == "entity_update" && exists(@.input.expectedUpdatedAt))',
+] as const;
+
+// Хранимые предложения старого контракта (§8.2, РП-14): вход entity_update с expectedUpdatedAt после смены контракта
+// упал бы при одобрении VALIDATION (схема .strict()). Переписать поле в expectedBodyRevision = текущая значило бы
+// обнулить проверку предложения, поэтому такие предложения снимаются отказом stale тем же путём, что rejectPendingTx.
+// tx — транзакция withIdentity той же пары: rejectPendingTx пишет отказ под RLS владельца и берёт замок предложения сам.
+//
+// Возвращает id снятых предложений (зовёт прод-операция перевода, задача 21 плана А). Открытое — не исполненное и не
+// отклонённое: исполненное отклонить нельзя (запись пачки уже в журнале — отказ rejectPendingTx), отклонённое уже снято —
+// повтор возвращает пустой список. Исполненность спрашивается ПОД замком предложения (acquirePendingLock, контракт
+// rejectPendingTx: состояние единицы читается только после захвата).
+export async function closeStaleBodyProposals(tx: Tx, who: Identity): Promise<string[]> {
+  const rows = (await tx.execute(sql`
+    SELECT metadata->'pending'->>'id' AS id
+      FROM chat_messages
+     WHERE metadata ? 'pending'
+       AND (jsonb_path_exists(metadata, ${OLD_BODY_CONTRACT_PATHS[0]}::jsonpath)
+         OR jsonb_path_exists(metadata, ${OLD_BODY_CONTRACT_PATHS[1]}::jsonpath))
+     ORDER BY created_at, id`)) as unknown as Array<{ id: string | null }>;
+  const closed: string[] = [];
+  for (const { id } of rows) {
+    if (id === null) continue;
+    await acquirePendingLock(tx, id);
+    if (await isExecuted(tx, who.graph, id)) continue;
+    const r = await rejectPendingTx(tx, { identity: who, pendingId: id, reason: 'stale' });
+    if (!r.alreadyRejected) closed.push(id);
+  }
+  return closed;
 }
 
 /**

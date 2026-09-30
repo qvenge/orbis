@@ -139,7 +139,6 @@ export function TicketWaitingBlock({
                 onClick={() =>
                   update.mutate({
                     id: entity.id,
-                    expectedUpdatedAt: entity.updatedAt,
                     // Вопрос снимает правило каталога `waiting_for` при уходе из ожидания (Б-2 №70).
                     props: { 'orbis/task_status': 'done' },
                   })
