@@ -49,11 +49,19 @@ const INSURANCE_PREFIX = 'перед восстановлением: ';
 
 /**
  * Подпись страховки — в потолке подписи версии (200, `labelInput`): приставка плюс подпись восстанавливаемой версии
- * заняли бы до 223 символов, и закрепление отказало бы разбором — а с ним и само восстановление.
+ * заняли бы до 223 символов, и закрепление отказало бы разбором — а с ним и само восстановление. Потолок меряется
+ * UTF-16 единицами (`z.string().max`), а режется подпись по КОДОВЫМ ТОЧКАМ: срез посреди суррогатной пары (эмодзи на
+ * границе) оставил бы в подписи одиночный суррогат.
  */
 function insuranceLabel(label: string): string {
   const full = `${INSURANCE_PREFIX}${label}`;
-  return full.length <= LABEL_MAX ? full : `${full.slice(0, LABEL_MAX - 1)}…`;
+  if (full.length <= LABEL_MAX) return full;
+  let cut = '';
+  for (const ch of full) {
+    if (cut.length + ch.length > LABEL_MAX - 1) break;
+    cut += ch;
+  }
+  return `${cut}…`;
 }
 
 export const versionRouter = router({

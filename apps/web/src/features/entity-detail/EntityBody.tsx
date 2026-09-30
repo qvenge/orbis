@@ -462,6 +462,9 @@ export function EntityBody({
             onChange={onEditorChange}
             onAccept={(accepted) => {
               shownDocRef.current = accepted;
+              // Редактор показывает документ КЭША — основа следующей правки теперь его ревизия (рулинг R-17). Местная
+              // копия (черновик, тумблер) ревизию кэша не несёт: её основу ставит сам жест.
+              if (localDoc === null) save.onShown(shownBodyRevision(entity));
             }}
           />
         </BodyKindProvider>

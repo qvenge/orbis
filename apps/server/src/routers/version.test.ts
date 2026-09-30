@@ -204,6 +204,36 @@ describe('version.pin / version.list / version.restore (С11)', () => {
     expect((await c.version.list({ entityId: id })).map((x) => x.id)).toEqual([v.id]);
   });
 
+  test('подпись страховки в потолке 200 и без одиночного суррогата: эмодзи на границе среза не режется пополам (M-4 гейта)', async () => {
+    const g = await freshGraph();
+    const c = callerFor(g);
+    const id = newId();
+    await c.entity.create({
+      input: { id, title: 'Длинная подпись', tags: [], body: 'текст' },
+      source: 'quick_capture',
+    });
+    // Приставка «перед восстановлением: » — 23 единицы UTF-16; эмодзи встаёт на 198–199, и наивный срез до 199 оставил
+    // бы его первую половину
+    const label = `${'а'.repeat(175)}😀${'б'.repeat(10)}`;
+    const v = await c.version.pin({ entityId: id, label });
+    const e1 = await c.entity.get({ id });
+    await c.entity.update({ id, expectedBodyRevision: rev(e1.entity), body: 'другой текст' });
+    const e2 = await c.entity.get({ id });
+    await c.version.restore({ versionId: v.id, expectedBodyRevision: rev(e2.entity) });
+
+    const insurance = (await c.version.list({ entityId: id })).find((x) =>
+      x.label.startsWith('перед восстановлением: '),
+    );
+    if (insurance === undefined) throw new Error('страховки нет');
+    expect(insurance.label.length).toBeLessThanOrEqual(200);
+    expect(insurance.label.endsWith('а…')).toBe(true);
+    expect(
+      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(
+        insurance.label,
+      ),
+    ).toBe(false);
+  });
+
   test('снимок сущности без body_doc (легаси-строка) хранит только body; restore идёт строкой', async () => {
     const id = newId();
     // Не канон: список сразу за заголовком без пустой строки — так писали тела до конверсии

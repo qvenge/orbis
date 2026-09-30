@@ -89,6 +89,7 @@ const PROJECT_A: StructureFixture = (() => {
       ...f.entity,
       body: 'Смета кухни',
       bodyDoc: parseBody('Смета кухни'),
+      bodyRevision: 3,
       updatedAt: '2026-09-24T10:00:00.000Z',
     },
   };
@@ -103,6 +104,7 @@ const projectsTemplate = (): WireEntityFixture =>
     title: 'Проекты',
     body: TEMPLATE_BODY,
     bodyDoc: parseBody(TEMPLATE_BODY),
+    bodyRevision: 3,
     aspects: [PAGE_ASPECT],
     createdAt: '2026-09-01T00:00:00.000Z',
     props: { [TEMPLATE_FOR_PROPERTY]: ['orbis/project'] },
@@ -114,6 +116,7 @@ const secondProject = (): WireEntityFixture =>
     title: 'Дача',
     body: 'Тело дачи',
     bodyDoc: parseBody('Тело дачи'),
+    bodyRevision: 3,
     aspects: ['orbis/project'],
     updatedAt: '2026-09-10T10:00:00.000Z',
   });
@@ -121,13 +124,17 @@ const secondProject = (): WireEntityFixture =>
 const PAGE_BODY =
   '{{columns}}\n{{column}}\nлевая часть\n{{/column}}\n{{column}}\nправая часть\n{{/column}}\n{{/columns}}';
 
-/** Страница-дашборд без «Шаблон для» — черновик шаблона. */
+/**
+ * Страница-дашборд без «Шаблон для» — черновик шаблона. Ревизия тела — как у любого ответа `entity.get` (спека
+ * скорости §8.1): без неё сохранение тела не уходит вовсе (основа 0 — `useBodySave`).
+ */
 const dashboard = (): WireEntityFixture =>
   wireEntity({
     id: PAGE,
     title: 'Дашборд',
     body: PAGE_BODY,
     bodyDoc: parseBody(PAGE_BODY),
+    bodyRevision: 3,
     aspects: [PAGE_ASPECT],
   });
 

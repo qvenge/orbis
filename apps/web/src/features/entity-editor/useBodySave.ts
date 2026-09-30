@@ -108,6 +108,13 @@ export type BodySaveEntity = {
 
 export interface BodySave {
   onDocChange: (doc: BodyDoc) => void;
+  /**
+   * Редактор ПОКАЗЫВАЕТ текст этой ревизии тела — он принял документ из кэша (`BodyEditor.onAccept`). Основа следующей
+   * правки — ревизия показанного текста (спека скорости §8.3, рулинг R-17), а не кэша: чужая правка, приехавшая в кэш,
+   * пока человек печатает в фокусе (редактор её не сажает), основу не двигает, и набранное поверх уходит с прежней
+   * ревизией в `STALE_VERSION`, а не затирает её молча.
+   */
+  onShown: (revision: number) => void;
   flush: () => void;
   /**
    * Есть ли набранное, чего сервер ещё не подтвердил: отложенный документ, ОТЛИЧНЫЙ по смыслу от
@@ -317,17 +324,25 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
    * что экран ему и обещал.
    *
    * Ревизия пишется в ПЯТИ местах, и основание у всех одно: «клиент это видел».
-   *  - НОВЫЙ набор (`onDocChange`): человек печатает поверх того, что показано сейчас;
+   *  - НОВЫЙ набор (`onDocChange`): человек печатает поверх того, что ПОКАЗАНО, — ревизия
+   *    показанного текста (`shownRevisionRef`), а не кэша (рулинг R-17);
    *  - ПРИМЕНЕНИЕ черновика и ДОСЫЛ черновика: документ кладётся поверх текущего сознательно;
    *  - СОБСТВЕННЫЙ успех: отложенное — потомок только что сохранённого, и его база — ответ
    *    сервера. Без этого досыл, ушедший после успеха предшественника, ловил бы 409 от него же;
    *  - СМЕНА ЗАПИСИ: ревизия берётся у новой записи.
    *
-   * Чего этот приём НЕ умеет: отличить подмену в редакторе от её отсутствия. Набери человек
-   * поверх C ещё букву — ревизия станет R₂, и правка ляжет поверх D по LWW. Это сегодняшний
-   * дизайн (слияние — Р13), и здесь закрыт другой класс: потеря БЕЗ единого действия человека.
+   * Набери человек букву поверх ПОКАЗАННОГО D (редактор его посадил) — правка уйдёт с R₂, и это
+   * законно: он видел D. Слияния текстов нет (Р13): закрыт класс «потеря без единого действия
+   * человека» и «чужой текст, которого на экране нет, затёрт следующей буквой».
    */
   const pendingBaseRef = useRef(entity.bodyRevision);
+  /**
+   * Ревизия текста, который ПОКАЗЫВАЕТ редактор (`onShown`). Кэш для основы не годится: редактор в фокусе после набора
+   * чужой документ не сажает (`BodyEditor`), а перечитывание после своего сохранения, из чата или опроса прогона
+   * приносит в кэш ревизию агента — взятая оттуда, она подставила бы замку текста чужую ревизию, и следующая буква
+   * затёрла бы текст агента молча (рулинг R-17, спека §8.3).
+   */
+  const shownRevisionRef = useRef(entity.bodyRevision);
   const timerRef = useRef<number | null>(null);
   const inFlightRef = useRef(false);
   const stoppedRef = useRef(false);
@@ -473,6 +488,7 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
     // Ревизия отложенного — про ПРЕЖНЮЮ запись, и уехать под id соседней она не должна ни при
     // каких обстоятельствах (гарантированный 409 в лучшем случае, чужая правка — в худшем).
     pendingBaseRef.current = entity.bodyRevision;
+    shownRevisionRef.current = entity.bodyRevision;
     // Отвергнутый документ — про ПРЕЖНЮЮ запись: под новой этот объект не встретится никогда,
     // но держать ссылку на чужое тело здесь незачем ровно так же, как и отложенное.
     rejectedDocRef.current = null;
@@ -492,16 +508,16 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
 
   /**
    * Ревизия тела, которую клиент видит ПРЯМО СЕЙЧАС: большая из подтверждённой сервером и
-   * кэшной (`Math.max(confirmed, entity.bodyRevision)`) — ревизия только растёт.
+   * базы — по умолчанию кэшной (`Math.max(confirmed, entity.bodyRevision)`), у набора —
+   * ревизии показанного текста (`onDocChange`, рулинг R-17); ревизия только растёт.
    *
    * Кэшной одной мало: он узнаёт новое значение только с перечитывания (его заводит
    * invalidateGraph в onSettled), а оно может и опоздать — пауза 2 с, а круг «мутация +
    * перечитывание» на плохой связи длиннее. С ревизией из кэша второе сохранение подряд ловило
    * бы 409 без всякой чужой правки.
    */
-  const currentExpected = useCallback((): number => {
+  const currentExpected = useCallback((base: number = entityRef.current.bodyRevision): number => {
     const confirmed = confirmedRef.current;
-    const base = entityRef.current.bodyRevision;
     return confirmed !== null && confirmed > base ? confirmed : base;
   }, []);
 
@@ -587,6 +603,12 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
     }
 
     if (stoppedRef.current) return;
+    // Ревизия неизвестна (0 — `shownBodyRevision`): замок взять не с чего, а отказ разбора хук принял бы за приговор
+    // документу — пометил бы черновик «сервер отверг» и выключил сохранение. Не шлём: текст лежит черновиком.
+    if (expectedBodyRevision === 0) {
+      setFailure('network');
+      return;
+    }
     /**
      * Пока прошлое сохранение в полёте, второй запрос НЕ уходит — ни по паузе, ни по flush().
      * Дело не только в том, что он ушёл бы с той же ревизией и получил бы 409 от
@@ -724,14 +746,19 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
   const onDocChange = useCallback(
     (doc: BodyDoc) => {
       pendingRef.current = doc;
-      // Ревизия ЭТОГО момента: человек печатает поверх того, что показано ему сейчас.
-      pendingBaseRef.current = currentExpected();
+      // Ревизия ПОКАЗАННОГО текста (или своего подтверждённого сохранения, если оно новее): человек печатает поверх
+      // того, что видит, а не поверх того, что успело приехать в кэш (рулинг R-17).
+      pendingBaseRef.current = currentExpected(shownRevisionRef.current);
       pendingFromEditorRef.current = true;
       clearTimer();
       timerRef.current = window.setTimeout(save, SAVE_DEBOUNCE_MS);
     },
     [save, clearTimer, currentExpected],
   );
+
+  const onShown = useCallback((revision: number) => {
+    shownRevisionRef.current = revision;
+  }, []);
 
   const flush = save;
 
@@ -863,9 +890,9 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
     draftTimerRef.current = window.setTimeout(() => {
       draftTimerRef.current = null;
       pendingRef.current = draft.doc;
-      // Ветка сюда доходит только при СОВПАВШИХ ревизиях (иначе выше — предложение), так что
-      // текущая ревизия и есть та, поверх которой черновик набирали.
-      pendingBaseRef.current = currentExpected();
+      // Основа черновика, сверенная выше с ревизией записи, — а не кэш на момент таймера: чужая правка, приехавшая
+      // между сверкой и досылом, иначе была бы затёрта черновиком молча.
+      pendingBaseRef.current = draftBase;
       pendingFromEditorRef.current = false; // документ с диска, а не из-под рук
       save();
     }, 0);
@@ -873,7 +900,7 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
     // гасит досыл первого, сносимого прохода — уборки всех эффектов React прогоняет между
     // двумя проходами.
     return clearDraftTimer;
-  }, [entityId, save, setPendingDraft, clearDraftTimer, currentExpected]);
+  }, [entityId, save, setPendingDraft, clearDraftTimer]);
 
   const applyPendingDraft = useCallback(() => {
     const draft = pendingDraftRef.current;
@@ -882,8 +909,10 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
     pendingRef.current = draft.doc;
     // ТЕКУЩАЯ ревизия, а не та, на которой черновик набирали: правка сознательно кладётся поверх
     // чужой — этого и просит единственная кнопка, которую человек нажал. Уйди она со старой
-    // ревизией, сервер ответил бы 409, то есть «оставить моё» не делало бы ничего.
+    // ревизией, сервер ответил бы 409, то есть «оставить моё» не делало бы ничего. Она же — основа того, что
+    // теперь показано (экран сажает черновик местной копией, и `onShown` о ней молчит).
     pendingBaseRef.current = currentExpected();
+    shownRevisionRef.current = pendingBaseRef.current;
     pendingFromEditorRef.current = false; // документ с диска: человек выбрал его, а не набрал
     // Терминальная остановка снимается: она про НАБОР (иначе каждое нажатие уходило бы в сеть
     // обречённым запросом), а здесь человек явным жестом распоряжается своим текстом — и
@@ -996,6 +1025,7 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
 
   return {
     onDocChange,
+    onShown,
     flush,
     hasUnsent,
     blocked,

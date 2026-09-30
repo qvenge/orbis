@@ -37,6 +37,7 @@ import { useChatThread } from '../chat/useChatThread';
 import { resetEnsuredThreads } from '../chat/useEnsuredThread';
 import { readDraft, setDraftScope } from '../entity-editor/draft-storage';
 import { AspectSections } from './AspectSection';
+import { BODY_SAVING } from './body-gate';
 import { resetDetailMenuModuleForTests } from './DetailMenuSlot';
 import { DetailScreen } from './DetailScreen';
 import { RoutineStatusBlock } from './RoutineStatusBlock';
@@ -345,6 +346,53 @@ test('нетронутый редактор подхватывает правк�
     EDITOR_READY,
   );
 });
+
+test('редактор посадил чужую правку тела — набор поверх неё уходит с ЕЁ ревизией, без ложного конфликта (R-17)', async () => {
+  // Основа правки — ревизия ПОКАЗАННОГО текста: редактор принял чужой документ (`onAccept`) — значит человек печатает
+  // поверх него, и сохранение обязано уйти с его ревизией. Иначе после каждой подхваченной чужой правки сохранение
+  // ловило бы 409 на ровном месте.
+  let getCalls = 0;
+  const outside = {
+    ...entity,
+    body: 'извне',
+    bodyDoc: parseBody('извне'),
+    bodyRevision: 5,
+    updatedAt: 'B',
+  };
+  const updates: Array<{ bodyDoc?: unknown; expectedBodyRevision?: number }> = [];
+  renderWithProviders(<DetailScreen entityId="e1" />, (path, input) => {
+    if (path === 'entity.get') {
+      getCalls += 1;
+      return {
+        entity: getCalls === 1 ? entity : outside,
+        relations: [],
+        thread: { threadId: 'th1', messages: [] },
+      };
+    }
+    if (path === 'entity.update') {
+      updates.push(input as { bodyDoc?: unknown; expectedBodyRevision?: number });
+      return outside;
+    }
+    return registryReply(path) ?? {};
+  });
+  await openEditor();
+  await expectEditorText('тело');
+  // Чекбокс → перечитывание приносит чужое тело; в редакторе не печатали — он его сажает
+  fireEvent.click(screen.getByRole('checkbox', { name: /готово/i }));
+  await waitFor(
+    () => expect(screen.getByTestId('body-editor')).toHaveTextContent('извне'),
+    EDITOR_READY,
+  );
+
+  const field = screen.getByTestId('body-editor').querySelector('[contenteditable]') as HTMLElement;
+  await userEvent.click(field);
+  await userEvent.type(field, ' и моё');
+  await waitFor(
+    () => expect(updates.filter((u) => u.bodyDoc !== undefined)).toHaveLength(1),
+    EDITOR_READY,
+  );
+  expect(updates.find((u) => u.bodyDoc !== undefined)?.expectedBodyRevision).toBe(5);
+}, 30_000);
 
 test('набранное в редакторе переживает чужую правку, приехавшую под курсором', async () => {
   // Другая сторона той же границы: подмена содержимого идёт ТОЛЬКО когда редактор не в фокусе,
@@ -4150,6 +4198,67 @@ describe('ADE: версии', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
   });
 
+  test('«Восстановить» при неотправленном наборе: сначала досыл текста — восстановления нет, тост; повтор после сохранения — восстановление с новой ревизией (Fable M-1)', async () => {
+    // Иначе страховка «перед восстановлением …» закрепила бы текст БЕЗ набранного, а сам набор уехал бы после
+    // восстановления со старой ревизией в 409 «с самим собой».
+    const server = { revision: 3, title: entity.title };
+    const updates: unknown[] = [];
+    const versions = versionsHandler();
+    const { calls } = renderWithProviders(
+      <>
+        <DetailScreen entityId="e1" />
+        <Toaster />
+      </>,
+      (path, input) => {
+        if (path === 'entity.get')
+          return {
+            entity: { ...entity, title: server.title, bodyRevision: server.revision },
+            relations: [],
+            thread: null,
+          };
+        if (path === 'entity.update') {
+          updates.push(input);
+          server.revision += 1;
+          // Метка для причинного барьера ниже: перечитывание после сохранения видно по заголовку
+          server.title = 'Задача, текст сохранён';
+          return { ...entity, title: server.title, bodyRevision: server.revision };
+        }
+        return versions(path, input);
+      },
+    );
+    const field = await editorField();
+    await userEvent.click(field);
+    await userEvent.type(field, ' и хвост');
+    await expectEditorHas('и хвост');
+
+    await openDetails();
+    const card = await screen.findByTestId('versions-card');
+    await waitFor(() => expect(within(card).getAllByRole('listitem')).toHaveLength(2));
+    const row = within(card).getAllByRole('listitem')[0] as HTMLElement;
+    await userEvent.click(within(row).getByRole('button', { name: 'Восстановить' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Восстановить' }));
+
+    // Жест отложен: набранное досылается сейчас, человеку сказано, восстановления нет
+    expect(await screen.findByText(BODY_SAVING)).toBeInTheDocument();
+    await waitFor(() => expect(updates).toHaveLength(1));
+    expect(JSON.stringify((updates[0] as { bodyDoc?: unknown }).bodyDoc)).toContain('и хвост');
+    expect(calls.filter((c) => c.path === 'version.restore')).toEqual([]);
+
+    // Текст сохранён и запись перечитана (барьер — заголовок из перечитывания) — повтор проходит, с ревизией после
+    // сохранения
+    await screen.findAllByText('Задача, текст сохранён', undefined, EDITOR_READY);
+    fireEvent.click(
+      within(screen.getByRole('dialog')).getByRole('button', { name: 'Восстановить' }),
+    );
+    await waitFor(() =>
+      expect(calls.find((c) => c.path === 'version.restore')?.input).toEqual({
+        versionId: 'v1',
+        expectedBodyRevision: 4,
+      }),
+    );
+  }, 30_000);
+
   test('409 при восстановлении: инлайн «Документ изменился в другом месте» и «Обновить»', async () => {
     const { calls } = renderWithProviders(
       <DetailScreen entityId="e1" />,
@@ -6325,3 +6434,66 @@ test('ответ STALE_VERSION читается из data.orbis: 409 без не
   });
   expect(await screen.findByText(/Изменено в другом месте — обновите/)).toBeInTheDocument();
 });
+
+test('агент правит текст, пока владелец печатает: следующее сохранение идёт с прежней основой → STALE_VERSION, плашка, черновик цел (R-17)', async () => {
+  // Спека §8.3: основа правки — ревизия тела на начало набора, собственные правки её не двигают. Перечитывание после
+  // своего сохранения приносит в кэш текст и ревизию агента, а редактор в фокусе после набора их не сажает — на экране
+  // по-прежнему набранное. Основа, взятая из кэша, подставила бы замку ревизию агента, и следующая буква затёрла бы
+  // его текст молча.
+  const server = {
+    revision: entity.bodyRevision as number,
+    title: entity.title,
+    doc: entity.bodyDoc,
+    body: entity.body,
+  };
+  let agent = true;
+  const updates: Array<{ expectedBodyRevision?: number; bodyDoc?: unknown }> = [];
+  const shown = () => ({
+    ...entity,
+    title: server.title,
+    body: server.body,
+    bodyDoc: server.doc,
+    bodyRevision: server.revision,
+  });
+  renderWithProviders(<DetailScreen entityId="e1" />, (path, input) => {
+    if (path === 'entity.get')
+      return { entity: shown(), relations: [], thread: { threadId: 'th1', messages: [] } };
+    if (path === 'entity.update') {
+      const inp = input as { expectedBodyRevision?: number; bodyDoc?: typeof entity.bodyDoc };
+      updates.push(inp);
+      if (inp.bodyDoc === undefined) return shown();
+      if (inp.expectedBodyRevision !== server.revision)
+        throw staleBodyError({ expected: inp.expectedBodyRevision, current: server.revision });
+      server.revision += 1;
+      server.doc = inp.bodyDoc;
+      const saved = shown();
+      // Агент правит текст сразу за сохранением владельца — перечитывание после него принесёт уже его текст
+      if (agent) {
+        agent = false;
+        server.revision += 1;
+        server.title = 'Правлено агентом';
+        server.body = 'текст агента';
+        server.doc = parseBody('текст агента');
+      }
+      return saved;
+    }
+    return registryReply(path) ?? {};
+  });
+  const field = await editorField();
+  await userEvent.click(field);
+  await userEvent.type(field, ' и хвост');
+  await waitFor(() => expect(updates).toHaveLength(1), EDITOR_READY);
+  // Причинный барьер: заголовок агента на экране — значит перечитывание с его ревизией уже в кэше
+  await screen.findByRole('heading', { name: 'Правлено агентом' }, EDITOR_READY);
+  expect(screen.getByTestId('body-editor')).toHaveTextContent('и хвост'); // редактор текст агента не посадил
+
+  await userEvent.type(field, ' ещё');
+  expect(
+    await screen.findByText(/Изменено в другом месте — обновите/, undefined, EDITOR_READY),
+  ).toBeInTheDocument();
+  // Основа — ревизия своего сохранения, а не агента из кэша: текст агента цел, набранное — на экране и на диске
+  expect(updates[1]?.expectedBodyRevision).toBe((entity.bodyRevision as number) + 1);
+  expect(server.body).toBe('текст агента');
+  expect(screen.getByTestId('body-editor')).toHaveTextContent('ещё');
+  expect(JSON.stringify(readDraft('e1')?.doc)).toContain('ещё');
+}, 30_000);

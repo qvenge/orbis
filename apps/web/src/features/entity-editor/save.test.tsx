@@ -14,6 +14,7 @@ import {
 } from '../../test/harness';
 import { trpc } from '../../trpc';
 import { detailGetInput } from '../entity-detail/useEntityDetail';
+import { readDraft } from './draft-storage';
 import { SaveIndicator, SLOW_SAVE_MS } from './SaveIndicator';
 import { UNIQUE_ID_TYPES } from './strip-ids';
 import { type BodySave, type BodySaveEntity, type BodySaveState, useBodySave } from './useBodySave';
@@ -608,16 +609,17 @@ test('досыл при уходе несёт ревизию, на которо�
   expect(FOREIGN.bodyRevision).not.toBe(ENTITY.bodyRevision);
 });
 
-test('правка, набранная ПОСЛЕ прихода чужого документа, уезжает с ЕГО ревизией', async () => {
-  // Обратная сторона: ревизия берётся на начало ОТЛОЖЕННОГО документа, а не навсегда. Человек,
-  // напечатавший поверх приехавшего текста, видел именно его ревизию — и уходить правка обязана
-  // с ней, иначе каждое сохранение после чужой правки ловило бы 409 до самой перезагрузки.
+test('правка, набранная ПОСЛЕ того, как редактор ПОКАЗАЛ чужой документ, уезжает с ЕГО ревизией', async () => {
+  // Обратная сторона: основа — ревизия ПОКАЗАННОГО текста. Человек, напечатавший поверх текста, который редактор
+  // посадил (`onShown`), видел именно его — и уходить правка обязана с его ревизией, иначе каждое сохранение после
+  // чужой правки ловило бы 409 до самой перезагрузки.
   const s = mountWithProps({ id: 'e1', entity: ENTITY });
   s.api().onDocChange(ONE);
   await tick(SAVE_PAUSE);
   expect(s.updates()).toHaveLength(1);
 
   await s.set({ id: 'e1', entity: FOREIGN });
+  act(() => s.api().onShown(FOREIGN.bodyRevision));
   s.api().onDocChange(TWO);
   await tick(SAVE_PAUSE);
 
@@ -625,6 +627,41 @@ test('правка, набранная ПОСЛЕ прихода чужого д
   expect((s.updates()[1]?.input as { expectedBodyRevision: number }).expectedBodyRevision).toBe(
     FOREIGN.bodyRevision,
   );
+});
+
+test('чужой документ в кэше, которого редактор НЕ показал, основу не двигает: правка уходит с ревизией своего сохранения (R-17)', async () => {
+  // Человек печатает в фокусе — редактор приехавший чужой текст не сажает, а перечитывание после своего сохранения
+  // (из чата, опросом прогона) уже положило в кэш ревизию агента. Возьми основу из кэша — следующая буква ушла бы с
+  // ревизией агента и затёрла бы его текст молча. Основа — ревизия показанного текста или своего сохранения, и
+  // сервер отвечает `STALE_VERSION`.
+  const s = mountWithProps({ id: 'e1', entity: ENTITY });
+  s.api().onDocChange(ONE);
+  await tick(SAVE_PAUSE);
+  expect(s.updates()).toHaveLength(1); // своё сохранение: ревизия 4
+
+  await s.set({ id: 'e1', entity: FOREIGN }); // в кэше — текст и ревизия агента, редактор их не показал
+  s.api().onDocChange(TWO);
+  await tick(SAVE_PAUSE);
+
+  expect(s.updates()).toHaveLength(2);
+  expect(s.updates()[1]?.input).toEqual({
+    id: 'e1',
+    bodyDoc: TWO,
+    expectedBodyRevision: SAVED.bodyRevision,
+  });
+  // Страж вакуумности: ревизия в кэше ДЕЙСТВИТЕЛЬНО другая
+  expect(FOREIGN.bodyRevision).not.toBe(SAVED.bodyRevision);
+});
+
+test('ревизия тела неизвестна (0): сохранение не уходит, черновик на диске не помечен отвергнутым (M-2 гейта)', async () => {
+  // Отказ разбора (`expectedBodyRevision` — целое ≥ 1) хук принял бы за приговор документу: пометил бы черновик
+  // «сервер отверг» и выключил бы сохранение до перезагрузки. Отказа по существу нет — отправки нет вовсе.
+  const s = setup({ entity: { ...ENTITY, bodyRevision: 0 } });
+  s.api().onDocChange(ONE);
+  await tick(SAVE_PAUSE);
+  expect(s.updates()).toEqual([]);
+  expect(screen.getByText('Не сохранено')).toBeInTheDocument();
+  expect(readDraft('e1')).toMatchObject({ doc: ONE, baseRevision: 0, rejected: false });
 });
 
 /**

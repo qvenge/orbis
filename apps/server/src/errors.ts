@@ -2,7 +2,7 @@
 // Структурированные ошибки конвейера (§9.2: код + сообщение + details) — поднято из
 // executor/errors.ts (минорный долг Task 11): ExecError используют и не-executor-модули
 // (chat/threads.ts), которым зависимость от executor/ не положена.
-// Коды: VALIDATION (стадии 1–2), NOT_FOUND, STALE_VERSION (§5.2), INVARIANT (§4.2/§3.3,
+// Коды: VALIDATION (стадии 1–2), NOT_FOUND, STALE_VERSION (замок текста, спека скорости §8.1), INVARIANT (§4.2/§3.3,
 // для цикла blocks в details — path, Task 10), FORBIDDEN_LEVEL (§7.10 «forbidden»: гейт
 // скоупа гранта и периметр записи worker'а — tools/dispatch.ts, а также незнакомый тул),
 // LIMIT (entitlements §8), CONFLICT (details.reason различает ДВА пути, потребитель не
@@ -144,7 +144,8 @@ export interface StructuredError {
 
 /**
  * Маппинг кодов executor → TRPCError (бриф Task 12): STALE_VERSION → CONFLICT —
- * это 409 из §5.2 (диаграмма 00-арх §4.4). Исходная структурированная ошибка — в cause.
+ * это 409 замка текста (спека скорости §8.1; прежде — §5.2, диаграмма 00-арх §4.4). Исходная структурированная
+ * ошибка — в cause, её безопасные поля — в `data.orbis` (`orbisErrorData` ниже).
  */
 const TRPC_CODE_BY_EXEC: Record<ExecErrorCode, TRPCError['code']> = {
   VALIDATION: 'BAD_REQUEST',

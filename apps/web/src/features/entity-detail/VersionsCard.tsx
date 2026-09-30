@@ -18,6 +18,8 @@ import { Button } from '../../ui/Button';
 import { Dialog } from '../../ui/Dialog';
 import { Input } from '../../ui/Input';
 import { useToast } from '../../ui/toast-store';
+import { settleBody } from './body-gate';
+import { useBodyGate } from './EntityBody';
 import { shownBodyRevision, useHostReadOnly } from './record-host';
 
 type Entity = RouterOutputs['entity']['get']['entity'];
@@ -122,6 +124,7 @@ export function VersionsCard({ entity, active }: { entity: Entity; active: boole
   const readOnly = useHostReadOnly();
   const utils = trpc.useUtils();
   const { show } = useToast();
+  const gate = useBodyGate();
   // Часовой пояс — по УЖЕ живому ключу кэша (его читает сам экран): своей сети секция не
   // добавляет.
   const tz = trpc.user.getSettings.useQuery().data?.timezone;
@@ -260,15 +263,19 @@ export function VersionsCard({ entity, active }: { entity: Entity; active: boole
               <Button
                 size="sm"
                 disabled={restore.isPending}
-                onClick={() =>
+                onClick={() => {
+                  // Неотправленный набор — сначала на сервер (правило жестов меню, `settleBody`): иначе страховка
+                  // «перед восстановлением …» закрепила бы текст БЕЗ него, а сам он уехал бы после восстановления в 409
+                  // «с самим собой». Досыл идёт сейчас, человек повторяет нажатие, когда текст сохранён.
+                  if (!settleBody(gate?.current ?? null, show)) return;
                   restore.mutate({
                     versionId: target.id,
                     // Ревизия тела ОТКРЫТОЙ записи: сервер сверит её и откажет 409, если текст
                     // правили, пока экран смотрел на список (§8.1) — молча затирать чужое нельзя.
                     // Нынешний текст сервер закрепит версией первой операцией того же действия.
                     expectedBodyRevision: shownBodyRevision(entity),
-                  })
-                }
+                  });
+                }}
               >
                 Восстановить
               </Button>

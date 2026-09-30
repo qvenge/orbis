@@ -4522,6 +4522,48 @@ describe('отложенная единица ДЕЙСТВИЯ и «Устаре
     expect(ops).toEqual([{ property: 'orbis/due_date', in: ['2026-06-03'] }]);
   });
 
+  test('ретрай ПОСЛЕ правки ТЕЛА цели → тот же pendingId: ревизия тела (замок текста) в личность не входит (Р-К-68, §8.2)', async () => {
+    // Шаг действия правит тело — `buildUpdate` снимает ему ревизию цели. Владелец поправил текст цели между вызовами:
+    // ревизия сдвинулась, намерение — то же. Войди ревизия в личность единицы, ретрай родил бы вторую карточку рядом с
+    // первой, которую «Принять» и так честно погасит устареванием текста.
+    const owner = await freshGraph();
+    const { ctx, threadId } = await actionCtx(owner);
+    const ids = await seedOverdue(owner, 11);
+    await patchAction(
+      owner,
+      sql`UPDATE action_definitions
+      SET steps = jsonb_set(steps, '{0,input,body}', '"Перенесено действием"'::jsonb)
+      WHERE key = 'core/postpone_overdue' AND graph_id IS NULL`,
+    );
+    const first = await postpone(ctx);
+    if (first.status !== 'pending_confirmation')
+      throw new Error(`единица не поставлена: ${first.status}`);
+    const stored = (await unitsIn(owner, threadId))[0]?.metadata as {
+      pending: {
+        input: { operations: Array<{ input: { id: string; expectedBodyRevision?: number } }> };
+      };
+    };
+    const target = ids[2] as string;
+    const op = stored.pending.input.operations.find((o) => o.input.id === target);
+    // Премиса: ревизия в снимке ЕСТЬ — иначе тест проверял бы пустоту
+    expect(op?.input.expectedBodyRevision).toBe(1);
+
+    const own = await execute(db, {
+      identity: personal(owner),
+      actorKind: 'owner',
+      source: 'ui',
+      operations: [
+        { tool: 'entity_update', input: { id: target, body: 'моё', expectedBodyRevision: 1 } },
+      ],
+    });
+    expect(own.ok).toBe(true);
+    const again = await postpone(ctx);
+    if (again.status !== 'pending_confirmation')
+      throw new Error(`ретрай не поставлен: ${again.status}`);
+    expect(again.pendingId).toBe(first.pendingId);
+    expect(await unitsIn(owner, threadId)).toHaveLength(1);
+  });
+
   test('«Принять» поверх снятой декларации → ACTION_STALE, карточка погашена reason stale, граф не тронут', async () => {
     const owner = await freshGraph();
     const { ctx, threadId } = await actionCtx(owner);
