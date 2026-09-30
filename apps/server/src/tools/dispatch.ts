@@ -869,6 +869,7 @@ async function runUndoLast(
         actionId: peeked.action.id,
         type: peeked.action.type,
         ...(peeked.action.entity_id !== null && { entityId: peeked.action.entity_id }),
+        // У сеанса правки текста — «правка текста «…» 14:02–14:18» (§8.5, `peekLastUndoable`): модель называет отрезок
         title: peeked.title,
         note: 'действие отменено; сообщи пользователю, что именно откачено',
       },

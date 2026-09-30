@@ -114,10 +114,19 @@ export interface ExecuteRequest {
    * журнала не меняет: это пачка, а не действие реестра.
    */
   batchLabel?: string;
+  /**
+   * Автосохранение редактора владельца (спека скорости §8.5, РП-18): правка текста идёт СЕАНСОМ — продолжает запись
+   * журнала прошлого автосохранения или открывает новую (`text-session.ts`). Ставит только роутер `entity.update` по
+   * признаку `autosave` входа. Отдельное поле, а не значение `mechanism`: механизм — ось гейтов прав (`props.ts`,
+   * `relations.ts`, `invariants.ts`), и новое его значение пришлось бы вписывать в каждое их множество. Допустимо
+   * только у одиночной правки одного тела владельцем — иначе `VALIDATION` (`assertTextSessionRequest`).
+   */
+  textSession?: boolean;
 }
 
 export interface ExecuteOk {
   ok: true;
+  /** id записи журнала действия; у продолжения сеанса правки текста — id записи сеанса (§8.2, §8.5). */
   actionId: string;
   results: unknown[]; // по одному на операцию (wire-формы сущностей/relations)
   idempotentReplay: boolean; // true: повтор — ничего не применялось
@@ -379,7 +388,8 @@ export interface ActionRecord {
    * изменило (§8.6: `{<id записи>: <id действия> | null}`). Колонки журнала (`text_session`, `body_before`, 0025).
    * `body_before` заполняет executor (задача 7): ключ — запись, чью ревизию тела действие РЕАЛЬНО сдвинуло (триггер
    * `entities_body_stamp`), значение — её `body_action_id` ДО действия; у слияния свойства — по каждому держателю.
-   * Ни одной такой записи — ключа нет (синк пишет NULL). `text_session` — задача 9; до неё отсутствует (`false`).
+   * Ни одной такой записи — ключа нет (синк пишет NULL). `text_session` — запись сеанса правки текста (задача 9,
+   * `text-session.ts`): только у автосохранения редактора владельца, у прочих ключа нет (синк пишет `false`).
    */
   text_session?: boolean;
   body_before?: Record<string, string | null>;

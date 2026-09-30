@@ -90,6 +90,22 @@ export function todayInTimeZone(timeZone: string, now: Date = new Date()): strin
 }
 
 /**
+ * ЧЧ:ММ момента в зоне владельца — части `formatToParts`, а не строка локали (она зависит от сборки ICU). Одна функция
+ * на все подписи времени для модели и владельца: строки «Недавние правки владельца» (`llm/context.ts`) и подпись
+ * сеанса правки текста «14:02–14:18» (`executor/text-session.ts`) — одинаковое время обязано печататься одинаково.
+ */
+export function clockTime(at: Date, timeZone: string): string {
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone,
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(at);
+  const part = (type: 'hour' | 'minute') => parts.find((p) => p.type === type)?.value ?? '00';
+  return `${part('hour')}:${part('minute')}`;
+}
+
+/**
  * Начало недели для токена `this_week` — КОНСТАНТА «понедельник» по букве спеки 1в §3.4 («начало
  * недели — понедельник, константа 1в»). Настройка владельца `weekStartDay` (`monday|sunday`, «Общие»)
  * уже существует (Д-18), и читать ли её здесь — вопрос владельцу В-1. До ответа владелец с

@@ -198,6 +198,12 @@ import {
   type VirtualGraphEffects,
   type VirtualRelationCreate,
 } from './relations';
+import {
+  assertNothingAppended,
+  assertTextSessionRequest,
+  sessionOperations,
+  sessionToContinue,
+} from './text-session';
 import type {
   ActionOperation,
   ActionRecord,
@@ -237,8 +243,14 @@ interface ExecCtx {
    * Действие текущего тела, объявленное транзакцией (`orbis.body_action`, спека скорости §8.1, РП-16): id записи
    * журнала этой транзакции (у пачки — batch_id), у отмены — id её записи отмены; `null` — транзакция без журнала
    * (`NOOP_SINK`: сев, мир, садовник). Колонки базы ставит триггер; здесь значение нужно виртуальным строкам пачки.
+   * Продолжение сеанса правки текста объявляет действие заново — id сеанса (РП-16), и поле следует за объявлением.
    */
   bodyAction: string | null;
+  /**
+   * Сеанс правки текста, который продолжает эта транзакция (§8.5, `text-session.ts`): записи журнала у неё нет, ответ —
+   * id сеанса. Ставит `prepareEntityUpdate` одиночного пути; нет — обычное действие.
+   */
+  continuedSession?: string;
   /**
    * Контекст компиляции запросов (§А5-7) — ЛЕНИВЫЙ и на транзакцию: его спрашивает
    * единственный потребитель, проверка ссылочных свойств (§А6-1), и только когда операция
@@ -347,6 +359,8 @@ interface JournalPlan {
    * `collectBodyBefore`.
    */
   bodyBefore?: Record<string, string | null>;
+  /** Запись сеанса правки текста (§8.5): признак `text_session`, операции без «после» (`sessionOperations`). */
+  textSession?: true;
 }
 
 /**
@@ -589,6 +603,8 @@ export async function execute(
   const clock = req.clock ?? (() => new Date());
   const sink = deps.sink ?? NOOP_SINK;
   try {
+    // Сеанс правки текста (§8.5) — только одиночное автосохранение тела владельцем: до транзакции, для обоих путей
+    assertTextSessionRequest(req);
     const single = req.operations.length === 1 ? req.operations[0] : undefined;
 
     // Ветка batch (§7.8, §9.2): явный batchId, несколько операций или тул batch_execute
@@ -668,20 +684,33 @@ export async function execute(
         // менять его ради этого не за что.)
         const recomputeOps = await applyAncestorRecompute(ctx, allPlans);
         const refOps = await applyRefEffects(ctx, allPlans);
-        await writeJournal(ctx, {
-          ...plan.journal,
-          operations: [
-            ...allPlans.flatMap((p) => p.journal.operations),
+        if (plan.journal.textSession === true) {
+          // Сеанс правки текста (§8.5): вход — только тело, дописанных операций у записи сеанса быть не может — ни у
+          // новой (её операции — без «после»), ни у продолженной (своей записи нет, их данные отмены терялись бы молча).
+          assertNothingAppended(ctx.continuedSession ?? actionId, [
+            ...followUps.flatMap((p) => p.journal.operations),
             ...recomputeOps,
             ...refOps,
-          ],
-          inverse: aggregateInverse(allPlans),
-          bodyBefore: collectBodyBefore(allPlans),
-        });
+          ]);
+        }
+        // Продолженный сеанс: правка легла в запись сеанса, своей записи журнала у неё нет
+        if (ctx.continuedSession === undefined) {
+          await writeJournal(ctx, {
+            ...plan.journal,
+            operations: [
+              ...allPlans.flatMap((p) => p.journal.operations),
+              ...recomputeOps,
+              ...refOps,
+            ],
+            inverse: aggregateInverse(allPlans),
+            bodyBefore: collectBodyBefore(allPlans),
+          });
+        }
       }
       return {
         ok: true as const,
-        actionId,
+        // У продолжения сеанса — id записи сеанса (§8.2): её отменяют и её называет ответ
+        actionId: ctx.continuedSession ?? actionId,
         results: [out.result],
         idempotentReplay: out.replay === true,
       };
@@ -1362,6 +1391,7 @@ async function writeJournal(ctx: ExecCtx, p: JournalPlan): Promise<void> {
     inverse: p.inverse,
     // Только если тело сменилось хоть у одной записи (§8.6): пустых ключей в журнале не заводим (см. ActionRecord)
     ...(p.bodyBefore !== undefined && { body_before: p.bodyBefore }),
+    ...(p.textSession === true && { text_session: true }),
   };
   await ctx.sink.write(ctx.tx, {
     graphId: ctx.req.identity.graph,
@@ -2369,6 +2399,17 @@ async function prepareEntityUpdate(
     }
   }
 
+  // Сеанс правки текста (§8.5, `text-session.ts`) — после замка текста, по строке под FOR UPDATE: она же сериализует
+  // гонку двух автосохранений. Только одиночный путь: у пачки сеанса нет (`assertTextSessionRequest`). Продолжение
+  // объявляет действие заново — id сеанса S (РП-16): триггер поставит колонке S, записи этой транзакции не будет.
+  const textSession = ctx.req.textSession === true && batch === undefined;
+  const continued = textSession ? await sessionToContinue(ctx, current) : null;
+  if (continued !== null) {
+    await declareBodyAction(ctx.tx, continued);
+    ctx.bodyAction = continued;
+    ctx.continuedSession = continued;
+  }
+
   const now = ctx.clock();
   // Штамп записи — ДО T-правил (Р-И-3): правило видит тот же `updatedAt`, что ляжет в колонку.
   const updatedAt = monotonicUpdatedAt(now, current.updatedAt);
@@ -2720,8 +2761,12 @@ async function prepareEntityUpdate(
     entityId: input.id,
     tool: 'entity_update',
     title: input.title ?? current.title,
-    operations: [{ op: 'entity_update', payload: { id: input.id, ...changed } }],
+    // Запись сеанса правки текста — без «после» (§8.5): после — текущий текст самой записи
+    operations: textSession
+      ? sessionOperations(input.id)
+      : [{ op: 'entity_update', payload: { id: input.id, ...changed } }],
     inverse: [{ op: 'entity_update', payload: { id: input.id, ...prior } }],
+    ...(textSession && { textSession: true as const }),
   };
 
   return {

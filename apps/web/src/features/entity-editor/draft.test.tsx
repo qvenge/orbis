@@ -382,7 +382,12 @@ test('при неизменившейся ревизии тела чернови
   const s = mount({ entity: ENTITY });
   await tick();
   expect(s.updates()).toHaveLength(1);
-  expect(s.input(0)).toEqual({ id: 'e1', bodyDoc: ONE, expectedBodyRevision: ENTITY.bodyRevision });
+  expect(s.input(0)).toEqual({
+    id: 'e1',
+    bodyDoc: ONE,
+    expectedBodyRevision: ENTITY.bodyRevision,
+    autosave: true,
+  });
   // И человека при этом ни о чём не спросили.
   expect(s.api().pendingDraft).toBeNull();
   // Успех досыла черновик снимает: второй раз он не уедет.
@@ -496,7 +501,12 @@ test('запись без поля rejected читается как не отв�
   const s = mount({ entity: ENTITY });
   await tick();
   expect(s.updates()).toHaveLength(1);
-  expect(s.input(0)).toEqual({ id: 'e1', bodyDoc: ONE, expectedBodyRevision: ENTITY.bodyRevision });
+  expect(s.input(0)).toEqual({
+    id: 'e1',
+    bodyDoc: ONE,
+    expectedBodyRevision: ENTITY.bodyRevision,
+    autosave: true,
+  });
 });
 
 // --- черновики СТАРОЙ формы (до плана А скорости; спека §8.3, К-26) ---------------------------
@@ -517,7 +527,12 @@ test('К-26: черновик старой формы, штамп совпал �
   await tick();
   expect(s.api().pendingDraft).toBeNull();
   expect(s.updates()).toHaveLength(1);
-  expect(s.input(0)).toEqual({ id: 'e1', bodyDoc: ONE, expectedBodyRevision: ENTITY.bodyRevision });
+  expect(s.input(0)).toEqual({
+    id: 'e1',
+    bodyDoc: ONE,
+    expectedBodyRevision: ENTITY.bodyRevision,
+    autosave: true,
+  });
   expect(raw(), 'успех снимает черновик с диска').toBeNull();
 });
 
@@ -540,7 +555,12 @@ test('К-26: черновик старой формы, штамп НЕ совп�
   // «Оставить моё» кладёт его поверх текущей ревизии — сознательный выбор человека
   await s.apply();
   await tick();
-  expect(s.input(0)).toEqual({ id: 'e1', bodyDoc: ONE, expectedBodyRevision: ENTITY.bodyRevision });
+  expect(s.input(0)).toEqual({
+    id: 'e1',
+    bodyDoc: ONE,
+    expectedBodyRevision: ENTITY.bodyRevision,
+    autosave: true,
+  });
 });
 
 test('К-26: «отбросить» стирает показанный черновик старой формы', async () => {
@@ -610,7 +630,12 @@ test('applyPendingDraft шлёт черновик с ТЕКУЩЕЙ ревизи
   // ТЕКУЩАЯ ревизия, а не та, на которой черновик набирался: правка сознательно кладётся
   // поверх чужой. Уйди она со старой ревизией, сервер ответил бы 409 — то есть кнопка «оставить
   // моё» не делала бы ничего.
-  expect(s.input(0)).toEqual({ id: 'e1', bodyDoc: ONE, expectedBodyRevision: MOVED.bodyRevision });
+  expect(s.input(0)).toEqual({
+    id: 'e1',
+    bodyDoc: ONE,
+    expectedBodyRevision: MOVED.bodyRevision,
+    autosave: true,
+  });
   expect(s.api().pendingDraft).toBeNull(); // выбор сделан — предлагать больше нечего
 });
 
@@ -995,7 +1020,12 @@ test('отключённое хранилище не роняет набор т�
   s.api().onDocChange(ONE);
   await tick(SAVE_PAUSE);
   expect(s.updates()).toHaveLength(1);
-  expect(s.input(0)).toEqual({ id: 'e1', bodyDoc: ONE, expectedBodyRevision: ENTITY.bodyRevision });
+  expect(s.input(0)).toEqual({
+    id: 'e1',
+    bodyDoc: ONE,
+    expectedBodyRevision: ENTITY.bodyRevision,
+    autosave: true,
+  });
 
   // Успех тоже не спотыкается о стирание.
   await tick();
@@ -1040,7 +1070,12 @@ test('зависший запрос не запирает запись навс�
   s.api().onDocChange(TWO);
   await tick(SAVE_PAUSE);
   expect(s.updates()).toHaveLength(2);
-  expect(s.input(1)).toEqual({ id: 'e1', bodyDoc: TWO, expectedBodyRevision: ENTITY.bodyRevision });
+  expect(s.input(1)).toEqual({
+    id: 'e1',
+    bodyDoc: TWO,
+    expectedBodyRevision: ENTITY.bodyRevision,
+    autosave: true,
+  });
 });
 
 test('оседание запроса прежней записи не освобождает полёт соседней', async () => {
@@ -1175,7 +1210,12 @@ test('эхо редактора на монтировании не отменя�
   await tick(SAVE_PAUSE * 2);
 
   expect(s.updates()).toHaveLength(1);
-  expect(s.input(0)).toEqual({ id: 'e1', bodyDoc: ONE, expectedBodyRevision: ENTITY.bodyRevision });
+  expect(s.input(0)).toEqual({
+    id: 'e1',
+    bodyDoc: ONE,
+    expectedBodyRevision: ENTITY.bodyRevision,
+    autosave: true,
+  });
   expect(raw(), 'успех досыла снял черновик — но снял его успех, а не эхо').toBeNull();
 });
 
@@ -1256,7 +1296,12 @@ test('досыл черновика не переезжает на соседн�
   await s.set({ id: 'e1', entity: ENTITY });
   await tick();
   expect(s.updates()).toHaveLength(1);
-  expect(s.input(0)).toEqual({ id: 'e1', bodyDoc: ONE, expectedBodyRevision: ENTITY.bodyRevision });
+  expect(s.input(0)).toEqual({
+    id: 'e1',
+    bodyDoc: ONE,
+    expectedBodyRevision: ENTITY.bodyRevision,
+    autosave: true,
+  });
 });
 
 test('черновик, уже лежащий в теле записи, не предлагается и при разошедшихся ревизиях (И-3)', async () => {

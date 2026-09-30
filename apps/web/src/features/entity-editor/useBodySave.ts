@@ -671,7 +671,9 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
       // вход мутации сужен до узла `doc` с массивом блоков — на уровне типов эти две правды
       // не сводятся. Проверять форму здесь незачем: ровно это и спрашивает серверный гейт
       // (Задача 5), а его отказ терминален и виден.
-      { id: entityId, bodyDoc: doc as UpdateBodyDoc, expectedBodyRevision },
+      // `autosave` — сеанс правки текста (§8.5): КАЖДОЕ сохранение отсюда — текст редактора владельца, включая досыл
+      // черновика и «оставить моё»; сервер складывает их в одну запись журнала, пока паузы короче 10 минут.
+      { id: entityId, bodyDoc: doc as UpdateBodyDoc, expectedBodyRevision, autosave: true },
       {
         onSuccess: (saved) => {
           // Черновика с диска здесь НЕ снимаем: это делает обвязка уровня мутации

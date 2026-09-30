@@ -128,11 +128,27 @@ const BODY_XOR_BODY_DOC_ISSUE = {
  * оставленный union принимал бы форму, которой никто не шлёт. Наблюдаемое следствие
  * названо прямо: карта в теле запроса теперь получает структурный отказ разбора
  * (`BAD_REQUEST`), а не молча раскладывается по свойствам.
+ *
+ * `autosave: true` — признак автосохранения редактора (спека скорости §8.5, РП-18): правки текста владельца
+ * складываются в сеанс — одну запись журнала, пока паузы набора короче 10 минут. Признак, а не значение механизма:
+ * механизм — ось гейтов прав. Форму входа с признаком (только тело) проверяет исполнитель (`text-session.ts`) —
+ * отказ `VALIDATION`, как у прочих структурных правил правки. В контракте тула его нет: сеанс — только у редактора.
  */
-export const entityUpdateUiInput = entityUpdateInput
-  .extend({ bodyDoc: bodyDocSchema.optional() })
+const entityUpdateUiFields = entityUpdateInput.extend({ bodyDoc: bodyDocSchema.optional() });
+export const entityUpdateUiInput = entityUpdateUiFields
+  .extend({ autosave: z.literal(true).optional() })
   .refine(bodyXorBodyDoc, BODY_XOR_BODY_DOC_ISSUE);
 export type EntityUpdateUiInput = z.infer<typeof entityUpdateUiInput>;
+
+/**
+ * Элемент `entity_update` пачки `entity.updateBatch` — та же UI-форма БЕЗ признака автосохранения: пачка — жест, а
+ * жесты журналируются каждый своей записью и сеанс закрывают (§8.5, К-14). Принять признак здесь значило бы обещать
+ * клиенту сеанс, которого у пачки не бывает.
+ */
+export const entityUpdateBatchItemInput = entityUpdateUiFields.refine(
+  bodyXorBodyDoc,
+  BODY_XOR_BODY_DOC_ISSUE,
+);
 
 /**
  * Пункт CAS-предусловия правки (§А7-3): условие на одно СВОЙСТВО, при котором правка

@@ -288,16 +288,21 @@ export const entityRouter = router({
 
   // UI-вариант схемы: у владельца из редактора есть структурная форма тела, у тула модели —
   // нет. Тело процедуры от этого не меняется: путь записи один — executor.
+  //
+  // `autosave` — признак автосохранения редактора (§8.5, РП-18): уходит в запрос как `textSession`, а не во вход
+  // операции (вход исполнителя его не знает). Форму автосохранения (только тело) сверяет исполнитель — `VALIDATION`.
   update: ownerOnlyProcedure
     .input(entityUpdateUiInput)
     .mutation(async ({ ctx, input }): Promise<WireEntityWithRevision> => {
+      const { autosave, ...fields } = input;
       const r = await execute(
         ctx.db,
         {
           identity: ctx.identity,
           actorKind: 'owner',
           source: 'ui', // прямое действие владельца в UI (не chat/mcp/system)
-          operations: [{ tool: 'entity_update', input }],
+          ...(autosave === true && { textSession: true }),
+          operations: [{ tool: 'entity_update', input: fields }],
         },
         { sink },
       );
@@ -308,7 +313,7 @@ export const entityRouter = router({
       await escalateAfterMutation(ctx.db, {
         identity: ctx.identity,
         actionId: r.actionId,
-        operations: [{ tool: 'entity_update', input }],
+        operations: [{ tool: 'entity_update', input: fields }],
       });
       // Ответ правки — полная строка `RETURNING` с ревизией тела (`toWireEntityWithRevision`): с неё клиент начинает
       // следующую правку текста (§8.1).

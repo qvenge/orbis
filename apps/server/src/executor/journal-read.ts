@@ -251,6 +251,22 @@ const inGraph = (graph: GraphId): SQL => sql`j.graph_id = ${graph}::uuid`;
 /** Действие — не запись отмены (К-22). Явно в каждой пробе «действия». */
 const IS_ACTION = sql`j.type <> 'undo'`;
 
+/**
+ * Время ПОСЛЕДНЕГО ИЗМЕНЕНИЯ записи журнала (§8.5): у сеанса правки текста, пока колонка действия тела его записи
+ * указывает на него, — время изменения тела (сеанс продолжается без новых строк журнала); у остальных — время записи.
+ * «Отмени последнее» и контекст модели упорядочивают по нему: «последнее, что я сделал» — это сеанс, в котором человек
+ * только что печатал, а не галочка, поставленная посреди набора. Сеанс, чью колонку сменила следующая запись, — по
+ * времени начала (конец неизвестен, цена §16). Нужна связка `SESSION_ENTITY`.
+ *
+ * Цена: порядок по выражению не берётся индексом `(graph_id, created_at)` — выборка «последнего» просматривает
+ * действия графа целиком (записи сеансов сжимают журнал правок текста в разы, и ради порядка индекс не заводится —
+ * миграций сверх трёх в плане нет).
+ */
+const LAST_CHANGE = sql`CASE WHEN j.text_session AND e.body_action_id = j.id THEN e.body_changed_at ELSE j.created_at END`;
+
+/** Запись графа строки журнала — источник времени последнего изменения сеанса (`LAST_CHANGE`). */
+const SESSION_ENTITY = sql`LEFT JOIN entities e ON e.graph_id = j.graph_id AND e.id = j.entity_id`;
+
 /** Строго после курсора в порядке журнала `(created_at, id)`. */
 const afterCursor = (c: JournalCursor): SQL =>
   sql`(j.created_at, j.id) > (${c.at.toISOString()}::timestamptz, ${c.key}::uuid)`;
@@ -322,15 +338,16 @@ export async function undoRecordOf(
  * «Последнее отменяемое» (§7.8): последнее по времени действие, не `system` и не отменённое; записи отмены — не
  * действия (К-22). Системные действия (материализация повторов §5.4, скрытая из ленты) пропускаются: «отмени
  * последнее» — последнее ВИДИМОЕ владельцу, иначе отмена молча архивировала бы инстансы вместо «обед 340» (fix round
- * A3). Точечная отмена системного действия по id остаётся возможной (§2.8, путь A5). Порядок — `created_at DESC,
- * id DESC` (индекс `action_journal_graph_time`; тай-брейк: precision 3).
+ * A3). Точечная отмена системного действия по id остаётся возможной (§2.8, путь A5). Порядок — по времени последнего
+ * изменения (`LAST_CHANGE`, сеанс правки текста §8.5), затем `id DESC` (тай-брейк: precision 3).
  */
 export async function findLastUndoable(tx: Tx, graph: GraphId): Promise<JournalEntry | undefined> {
   return firstEntry(
     tx,
-    sql`${SELECT_ROW} WHERE ${inGraph(graph)} AND ${IS_ACTION} AND j.source <> 'system'
+    sql`${SELECT_ROW} ${SESSION_ENTITY}
+        WHERE ${inGraph(graph)} AND ${IS_ACTION} AND j.source <> 'system'
           AND NOT EXISTS (SELECT 1 FROM action_journal u WHERE u.graph_id = j.graph_id AND u.undoes = j.id)
-        ORDER BY j.created_at DESC, j.id DESC
+        ORDER BY ${LAST_CHANGE} DESC, j.id DESC
         LIMIT 1`,
   );
 }
@@ -639,8 +656,9 @@ export async function undoMarks(
 }
 
 /**
- * Недавние правки владельца в интерфейсе (`ui`, `quick_capture`) с момента `since`, новые первыми, не больше
- * `limit`; записи отмены — не правки (К-22).
+ * Недавние правки владельца в интерфейсе (`ui`, `quick_capture`), изменённые последний раз не раньше `since`, новые
+ * первыми, не больше `limit`; записи отмены — не правки (К-22). «Изменённые последний раз» — `LAST_CHANGE`: сеанс
+ * правки текста, начатый до окна, но продолженный в нём, — свежая правка (§8.5).
  */
 export async function recentOwnerEdits(
   tx: Tx,
@@ -650,10 +668,11 @@ export async function recentOwnerEdits(
 ): Promise<JournalEntry[]> {
   return entriesOf(
     tx,
-    sql`${SELECT_ROW} WHERE ${inGraph(graph)} AND ${IS_ACTION}
+    sql`${SELECT_ROW} ${SESSION_ENTITY}
+        WHERE ${inGraph(graph)} AND ${IS_ACTION}
           AND j.source IN ('ui', 'quick_capture')
-          AND j.created_at >= ${since.toISOString()}::timestamptz
-        ORDER BY j.created_at DESC, j.id DESC
+          AND ${LAST_CHANGE} >= ${since.toISOString()}::timestamptz
+        ORDER BY ${LAST_CHANGE} DESC, j.id DESC
         LIMIT ${limit}`,
   );
 }

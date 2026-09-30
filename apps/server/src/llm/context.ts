@@ -39,6 +39,7 @@ import {
   threadActions,
   undoMarks,
 } from '../executor/journal-read';
+import { sessionLabels } from '../executor/text-session';
 import type { UndoPath } from '../executor/types';
 import { newerFirst, threadMessages } from '../journal/thread-page';
 import {
@@ -49,7 +50,7 @@ import {
   RULE_TARGET,
 } from '../memory/rules';
 import { memoryEntitiesWhere } from '../memory/select';
-import { ownerTimeZone, todayInTimeZone } from '../query/context';
+import { clockTime, ownerTimeZone, todayInTimeZone } from '../query/context';
 import { effectiveRegistry } from '../registry/cache';
 import { disabledExtensionsOf } from '../registry/extensions';
 import { toLlmEntity } from '../wire';
@@ -579,23 +580,13 @@ async function undoneActions(
   return out;
 }
 
-/** ЧЧ:ММ момента в зоне владельца — части `formatToParts`, а не строка локали (она зависит от сборки ICU). */
-function clockTime(at: Date, timeZone: string): string {
-  const parts = new Intl.DateTimeFormat('en-GB', {
-    timeZone,
-    hour: '2-digit',
-    minute: '2-digit',
-    hourCycle: 'h23',
-  }).formatToParts(at);
-  const part = (type: 'hour' | 'minute') => parts.find((p) => p.type === type)?.value ?? '00';
-  return `${part('hour')}:${part('minute')}`;
-}
-
 /**
  * Блок «Недавние правки владельца» перед окном истории (РП-22): до OWNER_EDITS_LIMIT правок в интерфейсе и быстрых
  * записей (`ui`, `quick_capture`) за OWNER_EDITS_WINDOW_MS, старые первыми, строками «[правка владельца: <заголовок> ·
- * <ЧЧ:ММ>]» во времени владельца (отменённая — с хвостом «· отменена в <ЧЧ:ММ> <кем>»). Треда у этих правок нет (Р-12) — без блока модель не знала бы, что владелец только
- * что поправил руками, и спорила бы с этим. Сообщением `user`, а не секцией системного канала: это данные разговора,
+ * <ЧЧ:ММ>]» во времени владельца (отменённая — с хвостом «· отменена в <ЧЧ:ММ> <кем>»). Сеанс правки текста (§8.5) —
+ * строкой «[правка владельца: правка текста «<заголовок>» ЧЧ:ММ–ЧЧ:ММ]» и на месте своего последнего изменения:
+ * время одной записи сеанса модели бы соврало, когда владелец печатал. Треда у этих правок нет (Р-12) — без блока
+ * модель не знала бы, что владелец только что поправил руками, и спорила бы с этим. Сообщением `user`, а не секцией системного канала: это данные разговора,
  * а канал — стабильный префикс, который меняется раз в сутки. Правок нет — блока нет.
  */
 async function ownerEditsBlock(
@@ -614,13 +605,15 @@ async function ownerEditsBlock(
     graphId,
     edits.map((e) => e.id),
   );
+  const sessions = await sessionLabels(tx, graphId, edits, timeZone);
   const lines = [...edits].reverse().map((e) => {
     const mark = undone.get(e.id);
     const tail =
       mark === undefined
         ? ''
         : ` · отменена в ${clockTime(mark.at, timeZone)} ${UNDONE_BY[mark.path] ?? mark.path}`;
-    return `[правка владельца: ${e.title} · ${clockTime(e.createdAt, timeZone)}${tail}]`;
+    const what = sessions.get(e.id) ?? `${e.title} · ${clockTime(e.createdAt, timeZone)}`;
+    return `[правка владельца: ${what}${tail}]`;
   });
   return { role: 'user', content: [OWNER_EDITS_HEADING, ...lines].join('\n') };
 }

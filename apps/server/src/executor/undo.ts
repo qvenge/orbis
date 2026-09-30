@@ -19,6 +19,7 @@ import {
   isUndone,
   type JournalEntry,
 } from './journal-read';
+import { undoableTitle } from './text-session';
 import type {
   ActionRecord,
   ExecuteErr,
@@ -37,14 +38,18 @@ const sink = makeJournalSink();
  * операции, чтобы назначить уровень, а применять их до решения владельца она не вправе. Скан — у API
  * журнала (`journal-read.findLastUndoable`), чтобы у правила «последнее ВИДИМОЕ действие владельца» был ОДИН
  * дом и не было второй копии в диспатче. `title` — заголовок записи журнала (`card.title` синка) — единственная
- * человекочитаемая строка о действии.
+ * человекочитаемая строка о действии; у сеанса правки текста — подпись с отрезком («правка текста «…» 14:02–14:18»,
+ * §8.5), иначе владелец не узнал бы, какой именно набор снят.
  */
 export async function peekLastUndoable(
   db: Db,
   who: Identity,
 ): Promise<{ action: ActionRecord; title: string } | undefined> {
-  const found = await withIdentity(db, who, (tx) => findLastUndoable(tx, who.graph));
-  return found === undefined ? undefined : { action: actionRecordOf(found), title: found.title };
+  return withIdentity(db, who, async (tx) => {
+    const found = await findLastUndoable(tx, who.graph);
+    if (found === undefined) return undefined;
+    return { action: actionRecordOf(found), title: await undoableTitle(tx, who.graph, found) };
+  });
 }
 
 /**
@@ -188,7 +193,7 @@ export async function undoAction(
  * Что именно отменило «отмени последнее» — для того, кто НЕ выбирал действие сам: чат-модели
  * (тул `undo_last`, tools/dispatch.ts) нужно назвать владельцу откаченное, а `actionId` без
  * подписи ей ничего не говорит. `title` — заголовок записи журнала («Создана сущность
- * «…»»), `type`/`entityId` — из самой записи журнала.
+ * «…»»; у сеанса правки текста — подпись с отрезком, §8.5), `type`/`entityId` — из самой записи журнала.
  */
 export interface UndoneAction {
   actionId: string;
@@ -215,10 +220,13 @@ export async function undoLast(
   args: { identity: Identity; path?: UndoPath },
 ): Promise<UndoLastResult> {
   try {
-    const found = await withIdentity(db, args.identity, (tx) =>
-      findLastUndoable(tx, args.identity.graph),
-    );
-    if (!found) {
+    // Подпись — до отмены: конец сеанса правки текста известен, пока колонка тела указывает на сеанс (§8.5)
+    const peeked = await withIdentity(db, args.identity, async (tx) => {
+      const entry = await findLastUndoable(tx, args.identity.graph);
+      if (entry === undefined) return undefined;
+      return { entry, title: await undoableTitle(tx, args.identity.graph, entry) };
+    });
+    if (!peeked) {
       return {
         ok: false,
         error: {
@@ -228,17 +236,17 @@ export async function undoLast(
         },
       };
     }
-    const result = await applyUndo(db, args.identity, found, args.path ?? 'ui');
+    const result = await applyUndo(db, args.identity, peeked.entry, args.path ?? 'ui');
     if (!result.ok) return result;
     // `findLastUndoable` записей отмены не отдаёт (К-22) — запись журнала здесь всегда действие
-    const record = actionRecordOf(found);
+    const record = actionRecordOf(peeked.entry);
     return {
       ...result,
       undone: {
         actionId: record.id,
         type: record.type,
         entityId: record.entity_id,
-        title: found.title,
+        title: peeked.title,
       },
     };
   } catch (e) {

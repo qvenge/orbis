@@ -1,6 +1,7 @@
 // Юнит-тесты envelope-схем тулов §9.2: позитив + негативы (strict-лишний ключ, невалидный uuid).
 import { describe, expect, test } from 'bun:test';
 import { RELATION_ROLE_IDS } from '../constants';
+import { entityUpdateBatchInput } from './blocks';
 import {
   attachAspectInput,
   batchExecuteInput,
@@ -108,6 +109,21 @@ describe('entityUpdateInput', () => {
     expect(entityUpdateInput.safeParse(modern).success).toBe(true);
     expect(entityUpdateUiInput.safeParse(modern).success).toBe(true);
     expect(entityUpdateExecInput.safeParse(modern).success).toBe(true);
+  });
+
+  test('признак автосохранения (§8.5): только у роутера владельца, только `true`; у тула, исполнителя и элемента пачки его нет', () => {
+    const autosave = { id: UUID, body: 'текст', expectedBodyRevision: 3, autosave: true };
+    expect(entityUpdateUiInput.safeParse(autosave).success).toBe(true);
+    expect(entityUpdateUiInput.safeParse({ ...autosave, autosave: false }).success).toBe(false);
+    // Модель сеанса не открывает: поля нет в контракте тула — строгий разбор отказывает
+    expect(entityUpdateInput.safeParse(autosave).success).toBe(false);
+    // Вход исполнителя признака не знает: роутер переносит его в запрос (`textSession`), а не во вход операции
+    expect(entityUpdateExecInput.safeParse(autosave).success).toBe(false);
+    // Пачка — жест, а не набор: у её элемента признака нет
+    const batch = (input: Record<string, unknown>) =>
+      entityUpdateBatchInput.safeParse({ operations: [{ tool: 'entity_update', input }] }).success;
+    expect(batch({ id: UUID, body: 'текст', expectedBodyRevision: 3 })).toBe(true);
+    expect(batch(autosave)).toBe(false);
   });
 
   test('precondition контракту ТУЛА неизвестен — модель не подставляет CAS сама (§А7-3)', () => {

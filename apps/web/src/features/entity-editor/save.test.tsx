@@ -257,6 +257,7 @@ test('размонтирование досылает отложенное — �
     id: 'e1',
     bodyDoc: ONE,
     expectedBodyRevision: ENTITY.bodyRevision,
+    autosave: true,
   });
   // И ровно один: снятый таймер паузы не будит вторую отправку уже после ухода.
   await tick(SAVE_PAUSE * 3);
@@ -302,6 +303,7 @@ test('пока идёт запрос, второй не уходит — ни п
     id: 'e1',
     bodyDoc: TWO,
     expectedBodyRevision: SAVED.bodyRevision,
+    autosave: true,
   });
 
   // И ровно ОДИН досыл: оседание второго само по себе третьего не заводит.
@@ -463,7 +465,7 @@ test('документ, отличающийся лишь УМОЛЧАНИЯМИ
 
 // --- что именно уезжает -----------------------------------------------------------------------
 
-test('мутация уходит с {id, bodyDoc, expectedBodyRevision: <ревизия кэша>}', async () => {
+test('мутация уходит с {id, bodyDoc, expectedBodyRevision: <ревизия кэша>, autosave: true}', async () => {
   const s = setup();
   s.api().onDocChange(ONE);
   await tick(SAVE_PAUSE);
@@ -472,8 +474,14 @@ test('мутация уходит с {id, bodyDoc, expectedBodyRevision: <рев
   // Полное равенство, а не выборка полей: оно же и стережёт отсутствие `body` — markdown-
   // проекцию делает сервер, и клиентский сериализатор затащил бы всю схему документа в
   // чанк detail, то есть мимо двухфазного монтирования, — и отсутствие прежнего поля замка
-  // (`expectedUpdatedAt`): контракт сменился без переходного слоя (§8.2).
-  expect(input).toEqual({ id: 'e1', bodyDoc: ONE, expectedBodyRevision: ENTITY.bodyRevision });
+  // (`expectedUpdatedAt`): контракт сменился без переходного слоя (§8.2). `autosave` — признак автосохранения
+  // редактора: без него сервер писал бы запись журнала на каждое сохранение, а не одну на сеанс набора (§8.5).
+  expect(input).toEqual({
+    id: 'e1',
+    bodyDoc: ONE,
+    expectedBodyRevision: ENTITY.bodyRevision,
+    autosave: true,
+  });
   expect(input).not.toHaveProperty('body');
 });
 
@@ -604,6 +612,7 @@ test('досыл при уходе несёт ревизию, на которо�
     id: 'e1',
     bodyDoc: ONE,
     expectedBodyRevision: ENTITY.bodyRevision,
+    autosave: true,
   });
   // Страж вакуумности: ревизии ДОЛЖНЫ различаться, иначе проверка выше ни о чём.
   expect(FOREIGN.bodyRevision).not.toBe(ENTITY.bodyRevision);
@@ -648,6 +657,7 @@ test('чужой документ в кэше, которого редактор
     id: 'e1',
     bodyDoc: TWO,
     expectedBodyRevision: SAVED.bodyRevision,
+    autosave: true,
   });
   // Страж вакуумности: ревизия в кэше ДЕЙСТВИТЕЛЬНО другая
   expect(FOREIGN.bodyRevision).not.toBe(SAVED.bodyRevision);
@@ -697,6 +707,7 @@ test('своя же правка заголовка или свойства не
     id: 'e1',
     bodyDoc: ONE,
     expectedBodyRevision: ENTITY.bodyRevision,
+    autosave: true,
   });
   // Стражи вакуумности: тело и ревизия ДЕЙСТВИТЕЛЬНО те же, а штамп записи ДЕЙСТВИТЕЛЬНО другой.
   expect(AFTER_TITLE.bodyDoc).toEqual(ENTITY.bodyDoc);
@@ -724,6 +735,7 @@ test('своя же правка заголовка поверх ОТКАЗАВ�
     id: 'e1',
     bodyDoc: ONE,
     expectedBodyRevision: ENTITY.bodyRevision,
+    autosave: true,
   });
 });
 
@@ -753,6 +765,7 @@ test('чужая правка текста держит ревизию набо�
     id: 'e1',
     bodyDoc: ONE,
     expectedBodyRevision: ENTITY.bodyRevision,
+    autosave: true,
   });
 });
 
@@ -778,6 +791,7 @@ test('собственный успех двигает ревизию отлож
     id: 'e1',
     bodyDoc: TWO,
     expectedBodyRevision: SAVED.bodyRevision,
+    autosave: true,
   });
 });
 
@@ -817,6 +831,7 @@ test('смена сущности не уносит в чужую запись �
     id: 'e2',
     bodyDoc: TWO,
     expectedBodyRevision: second.bodyRevision,
+    autosave: true,
   });
 });
 
@@ -854,6 +869,7 @@ test('таймер прежней записи не уносит в неё те�
     id: 'e2',
     bodyDoc: TWO,
     expectedBodyRevision: SECOND.bodyRevision,
+    autosave: true,
   });
 });
 
@@ -880,6 +896,7 @@ test('ответ на запрос прежней записи не ложитс
     id: 'e2',
     bodyDoc: TWO,
     expectedBodyRevision: SECOND.bodyRevision,
+    autosave: true,
   });
 });
 

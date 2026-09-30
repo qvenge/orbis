@@ -8,7 +8,7 @@
 import { z } from 'zod';
 import type { Entity } from '../schemas/entity';
 import { BLOCK_ITEM_MESSAGES, BLOCK_TEXT_MAX } from './block-messages';
-import { entityCreateUiInput, entityUpdateUiInput } from './tools';
+import { entityCreateUiInput, entityUpdateBatchItemInput } from './tools';
 
 export * from './block-messages';
 
@@ -233,7 +233,7 @@ export const entityUpdateBatchInput = z
       .array(
         z.discriminatedUnion('tool', [
           z.object({ tool: z.literal('entity_create'), input: entityCreateUiInput }),
-          z.object({ tool: z.literal('entity_update'), input: entityUpdateUiInput }),
+          z.object({ tool: z.literal('entity_update'), input: entityUpdateBatchItemInput }),
           z.object({
             tool: z.literal('entity_version_pin'),
             input: z
