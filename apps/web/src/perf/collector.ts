@@ -1,20 +1,14 @@
-// Полевые замеры (спека скорости §3.2): буфер в памяти, пачка раз в 30 с и при уходе страницы в фон. Транспорт —
-// отдельный ванильный клиент tRPC с `fetch keepalive`: `sendBeacon` не умеет заголовка авторизации, запрос с keepalive
-// переживает выгрузку. «Общий компьютер» замеры не отключает — содержимого в них нет (§3.2).
-import type { AppRouter } from '@orbis/server/src/router';
+// Полевые замеры (спека скорости §3.2): буфер в памяти. Он — во входном чанке, потому что его пишут метки экрана записи;
+// транспорт пачек и наблюдатели Web Vitals грузятся ленивым чанком `perf/boot` (гейт задачи 3, I-1: в эагерном
+// замыкании экрана записи — только склейка). Замеры, сделанные до загрузки чанка, ждут здесь и уходят первой пачкой.
+// «Общий компьютер» замеры не отключает — содержимого в них нет (§3.2).
 import type { PerfSample } from '@orbis/shared';
-import { createTRPCClient, httpLink } from '@trpc/client';
 import { APP_VERSION } from '../app/version';
-import { getCurrentToken } from '../auth/AuthProvider';
-import { TRPC_URL, trpcHeaders } from '../trpc';
 
-export const PERF_FLUSH_MS = 30_000;
 export const PERF_BATCH_MAX = 100; // потолок схемы `perfReportInput`
 const BUFFER_MAX = 5 * PERF_BATCH_MAX; // сверх — отбрасывается старое: замер не данные владельца
 const NETS = new Set(['slow-2g', '2g', '3g', '4g']);
 let buffer: PerfSample[] = [];
-let timer: ReturnType<typeof setInterval> | null = null;
-let client: ReturnType<typeof createTRPCClient<AppRouter>> | null = null;
 
 /** Общие поля замера: устройство, сеть (где браузер её называет), версия приложения. */
 export function perfBase(): Pick<PerfSample, 'device' | 'net' | 'appVersion'> {
@@ -33,41 +27,31 @@ export function recordSample(s: PerfSample): void {
   if (buffer.length > BUFFER_MAX) buffer = buffer.slice(buffer.length - BUFFER_MAX);
 }
 
-function flush(): void {
-  if (buffer.length === 0 || client === null || getCurrentToken() === null) return;
-  const samples = buffer.slice(0, PERF_BATCH_MAX);
+/** Транспорту (`perf/transport.ts`, через `perfBuffer`): следующая пачка — до `PERF_BATCH_MAX` старейших замеров, вынутых из буфера. */
+export function takeBatch(): PerfSample[] {
+  const batch = buffer.slice(0, PERF_BATCH_MAX);
   buffer = buffer.slice(PERF_BATCH_MAX);
-  // Отказ сети или сервера замер не повторяет — повтор копил бы их; ответ `{accepted, dropped}` не читается.
-  void client.perf.report.mutate({ samples }).catch(() => {});
-}
-function onHidden(): void {
-  if (document.visibilityState === 'hidden') flush();
+  return batch;
 }
 
-export function startCollector(): void {
-  if (timer !== null) return;
-  client = createTRPCClient<AppRouter>({
-    links: [
-      httpLink({
-        url: TRPC_URL,
-        headers: () => trpcHeaders(getCurrentToken),
-        fetch: (url, init) => fetch(url, { ...(init as RequestInit), keepalive: true }),
-      }),
-    ],
-  });
-  timer = setInterval(flush, PERF_FLUSH_MS);
-  // На window, не на document: событие всплывает с document, и слушатель окна идёт ПОСЛЕ слушателей document —
-  // INP web-vitals, отданный на том же `visibilitychange`, успевает попасть в эту пачку.
-  window.addEventListener('visibilitychange', onHidden);
-  window.addEventListener('pagehide', flush);
+export function hasSamples(): boolean {
+  return buffer.length > 0;
 }
 
-/** Тестам: снять таймер и слушателей, опустошить буфер. */
-export function resetCollectorForTests(): void {
-  if (timer !== null) clearInterval(timer);
-  timer = null;
-  client = null;
+/**
+ * Буфер для ленивого чанка `perf/boot` — ПЕРЕДАЁТСЯ ему из `main.tsx`, а не импортируется им: статическое ребро из
+ * ленивого чанка к этому модулю вынесло бы буфер в отдельный общий чанк замыкания экрана записи (замерено сборкой:
+ * +133 Б gzip замыкания; гейт задачи 3, I-1). Транспорт и `vitals.ts` берут отсюда только тип.
+ */
+export interface PerfBuffer {
+  recordSample(s: PerfSample): void;
+  perfBase(): Pick<PerfSample, 'device' | 'net' | 'appVersion'>;
+  takeBatch(): PerfSample[];
+  hasSamples(): boolean;
+}
+export const perfBuffer: PerfBuffer = { recordSample, perfBase, takeBatch, hasSamples };
+
+/** Тестам: опустошить буфер. */
+export function resetBufferForTests(): void {
   buffer = [];
-  window.removeEventListener('visibilitychange', onHidden);
-  window.removeEventListener('pagehide', flush);
 }

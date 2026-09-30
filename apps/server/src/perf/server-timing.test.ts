@@ -33,6 +33,25 @@ test('db — сумма транзакций withIdentity; app ≥ db; desc ASCI
   expect(Number(m?.[1])).toBeGreaterThanOrEqual(Number(m?.[2]));
 });
 
+test('два одновременных запроса — у каждого свой счётчик (AsyncLocalStorage, M-4)', async () => {
+  // Общий счётчик на процесс сложил бы базу соседа: длинный запрос получил бы и 150 мс короткого.
+  const g = await freshGraph();
+  const app = new Hono();
+  app.use('*', serverTiming());
+  app.get('/sleep/:s', async (c) => {
+    const s = Number(c.req.param('s'));
+    await withIdentity(db, personal(g), (tx) => tx.execute(sql`SELECT pg_sleep(${s})`));
+    return c.text('ok');
+  });
+  const dbOf = (r: Response) =>
+    Number(/db;dur=([\d.]+)/.exec(r.headers.get('server-timing') ?? '')?.[1]);
+  const [short, long] = await Promise.all([app.request('/sleep/0.15'), app.request('/sleep/0.3')]);
+  expect(dbOf(short)).toBeGreaterThanOrEqual(150);
+  expect(dbOf(short)).toBeLessThan(300);
+  expect(dbOf(long)).toBeGreaterThanOrEqual(300);
+  expect(dbOf(long)).toBeLessThan(420);
+});
+
 test('вне запроса счётчика нет', () => {
   addDbTime(5);
   expect(serverTimingHeader()).toBeNull();

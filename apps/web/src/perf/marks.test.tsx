@@ -1,15 +1,17 @@
 // Метки ступени 0 (спека скорости §3.1): холодный старт, переход, отклик действия, готовность экрана записи.
 import type { PerfSample } from '@orbis/shared';
 import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query';
-import { act, renderHook } from '@testing-library/react';
+import { act, render, renderHook } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { QUERY_BLOCK_KEY } from '../lib/query-blocks/batch';
 import {
   markNavigationStart,
   markScreenReady,
+  NAV_MARK_TTL_MS,
   resetMarksForTests,
   SCREEN_READY_CEILING_MS,
+  ScreenReadyMark,
   startAction,
   useScreenReadyMark,
 } from './marks';
@@ -22,6 +24,7 @@ vi.mock('./collector', () => ({
 }));
 
 const metrics = () => recorded.map((s) => s.metric);
+const rec = (id: string) => ({ kind: 'record' as const, id });
 
 beforeEach(() => {
   recorded.length = 0;
@@ -38,7 +41,7 @@ describe('perf/marks: метки', () => {
   test('дальше — переход: от нажатия до готовности той же записи, с признаком кеша', () => {
     markScreenReady('warm', { cached: false });
     recorded.length = 0;
-    markNavigationStart('a');
+    markNavigationStart(rec('a'));
     markScreenReady('a', { cached: true, screen: 'page' });
     expect(recorded).toEqual([
       expect.objectContaining({ metric: 'transition', screen: 'page', cached: true }),
@@ -51,9 +54,42 @@ describe('perf/marks: метки', () => {
   test('готовность другой записи замера не даёт', () => {
     markScreenReady('warm', { cached: false });
     recorded.length = 0;
-    markNavigationStart('a');
+    markNavigationStart(rec('a'));
     markScreenReady('b', { cached: false });
     expect(recorded).toEqual([]);
+  });
+
+  test('переход на домашнюю: запись домашней заранее не известна — метку закрывает готовность экрана home', () => {
+    markScreenReady('warm', { cached: false });
+    recorded.length = 0;
+    markNavigationStart({ kind: 'home' });
+    markScreenReady('some-record', { cached: false });
+    expect(recorded).toEqual([]);
+    markScreenReady('home-record', { cached: true, screen: 'home' });
+    expect(recorded).toEqual([
+      expect.objectContaining({ metric: 'transition', screen: 'home', cached: true }),
+    ]);
+  });
+
+  test('переход не на экран записи (null) снимает прежнюю метку', () => {
+    markScreenReady('warm', { cached: false });
+    recorded.length = 0;
+    markNavigationStart(rec('a'));
+    markNavigationStart(null);
+    markScreenReady('a', { cached: false });
+    expect(recorded).toEqual([]);
+  });
+
+  test('скрытая до первой готовности страница холодного старта не пишет (M-6), переходы потом — пишутся', () => {
+    const spy = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden');
+    document.dispatchEvent(new Event('visibilitychange'));
+    spy.mockReturnValue('visible');
+    markScreenReady('a', { cached: false });
+    expect(recorded).toEqual([]);
+    markNavigationStart(rec('b'));
+    markScreenReady('b', { cached: false });
+    expect(metrics()).toEqual(['transition']);
+    spy.mockRestore();
   });
 
   test('действие: «видно» и «подтверждено» — по одному разу даже при двойном вызове', () => {
@@ -66,6 +102,33 @@ describe('perf/marks: метки', () => {
       ['action_visible', 'checkbox'],
       ['action_confirmed', 'checkbox'],
     ]);
+  });
+});
+
+describe('perf/marks: срок метки перехода (M-1)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['performance'] });
+    markScreenReady('warm', { cached: false });
+    recorded.length = 0;
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  test('готовность в пределах срока — переход', () => {
+    markNavigationStart(rec('a'));
+    vi.advanceTimersByTime(NAV_MARK_TTL_MS);
+    markScreenReady('a', { cached: false });
+    expect(recorded).toEqual([
+      expect.objectContaining({ metric: 'transition', durMs: NAV_MARK_TTL_MS }),
+    ]);
+  });
+
+  test('метка старше срока снимается: поздняя готовность той же записи перехода не даёт', () => {
+    markNavigationStart(rec('a'));
+    vi.advanceTimersByTime(NAV_MARK_TTL_MS + 1);
+    markScreenReady('a', { cached: false });
+    expect(recorded).toEqual([]);
   });
 });
 
@@ -85,15 +148,16 @@ describe('perf/marks: готовность экрана записи', () => {
     vi.useRealTimers();
   });
 
-  function mount(queryFn: () => Promise<number>) {
+  function mount(queryFn: () => Promise<number>, cachedValue?: number) {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    if (cachedValue !== undefined) qc.setQueryData([QUERY_BLOCK_KEY, 'q'], cachedValue);
     const wrapper = ({ children }: { children: ReactNode }) => (
       <QueryClientProvider client={qc}>{children}</QueryClientProvider>
     );
     return renderHook(
       () => {
         useQuery({ queryKey: [QUERY_BLOCK_KEY, 'q'], queryFn });
-        useScreenReadyMark('a', true, 'record');
+        useScreenReadyMark('a', 'record', false);
       },
       { wrapper },
     );
@@ -128,5 +192,28 @@ describe('perf/marks: готовность экрана записи', () => {
     advance(1);
     expect(metrics()).toEqual(['cold_start_content', 'cold_start_verified']);
     expect(recorded[0]?.durMs).toBe(SCREEN_READY_CEILING_MS);
+  });
+
+  test('данные блока в кеше, идёт фоновая перепроверка — готовность через два кадра, без ожидания сети (I-3)', () => {
+    mount(() => new Promise<number>(() => {}), 1);
+    advance(0);
+    advance(32);
+    expect(metrics()).toEqual(['cold_start_content', 'cold_start_verified']);
+    expect(recorded[0]?.durMs).toBe(0);
+  });
+
+  test('лист `ScreenReadyMark` ничего не рисует и отмечает готовность (M-3)', () => {
+    const qc = new QueryClient();
+    const { container } = render(
+      <QueryClientProvider client={qc}>
+        <ScreenReadyMark entityId="a" screen="home" cached />
+      </QueryClientProvider>,
+    );
+    expect(container.innerHTML).toBe('');
+    advance(32);
+    expect(recorded).toEqual([
+      expect.objectContaining({ metric: 'cold_start_content', screen: 'home' }),
+      expect.objectContaining({ metric: 'cold_start_verified', screen: 'home' }),
+    ]);
   });
 });

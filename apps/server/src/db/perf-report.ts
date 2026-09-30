@@ -205,10 +205,15 @@ export async function perfPercentiles(
      ORDER BY metric, app_version, screen NULLS FIRST, kind NULLS FIRST, procedure NULLS FIRST, cached NULLS FIRST`),
   ];
 }
-/** Последний прогон чистки — в точке сохранения: нет доступа к схеме cron — строка, а не сбой отчёта. */
+/**
+ * Последний прогон чистки — в точке сохранения: нет доступа к схеме cron — строка, а не сбой отчёта. Расширения нет
+ * вовсе (прод до миграции 0024) — тоже строка, и названа прямо, а не текстом ошибки.
+ */
 export async function cronCleanupStatus(sql: SqlTx): Promise<string> {
   try {
     return await sql.savepoint(async (sp) => {
+      const [has] = await sp<{ t: string | null }[]>`SELECT to_regclass('cron.job')::text AS t`;
+      if (!has?.t) return `задача pg_cron ${PERF_CLEANUP_JOB}: расширение pg_cron не установлено`;
       const [r] = await sp<{ status: string | null; at: string | null }[]>`
         SELECT d.status, d.start_time::text AS at FROM cron.job j
           LEFT JOIN LATERAL (SELECT status, start_time FROM cron.job_run_details x WHERE x.jobid = j.jobid
@@ -225,6 +230,31 @@ export async function cronCleanupStatus(sql: SqlTx): Promise<string> {
 }
 
 /**
+ * Есть ли таблица замеров (гейт задачи 3, I-2): отчёт снимают и ДО миграции 0024 — прод-задача плана А пишет базу
+ * «до» раньше, чем накатывает схему. Решает каталог, как у источника журнала (`journalSourceOf`), а не версия кода.
+ */
+export async function perfSamplesTableExists(sql: SqlTx): Promise<boolean> {
+  const [r] = await sql<
+    { t: string | null }[]
+  >`SELECT to_regclass('public.perf_samples')::text AS t`;
+  return Boolean(r?.t);
+}
+export const NO_PERF_TABLE = 'таблицы замеров нет (миграция 0024 не применена)';
+
+const perfHead = (sinceDays: number, metric: string | null) =>
+  `Замеры за ${sinceDays} дн.${metric === null ? '' : ` (метрика ${metric})`}`;
+
+/** Раздел замеров отчёта: перцентили, а без таблицы — шапка и строка о ненакатанной миграции. */
+export async function perfSection(
+  sql: SqlTx,
+  sinceDays: number,
+  metric: string | null,
+): Promise<string[]> {
+  if (!(await perfSamplesTableExists(sql))) return [perfHead(sinceDays, metric), NO_PERF_TABLE];
+  return formatPerfPercentiles(await perfPercentiles(sql, sinceDays, metric), sinceDays, metric);
+}
+
+/**
  * Печать перцентилей: строка на группу разрезов. Пустые разрезы — «—»; кеш — «кеш» (экран из кеша) или «сеть»
  * (данные ждали сети); время сервера и базы — в скобках, где замер его несёт (метрика `request`).
  */
@@ -233,7 +263,7 @@ export function formatPerfPercentiles(
   sinceDays: number,
   metric: string | null,
 ): string[] {
-  const head = `Замеры за ${sinceDays} дн.${metric === null ? '' : ` (метрика ${metric})`}`;
+  const head = perfHead(sinceDays, metric);
   if (rows.length === 0) return [head, 'замеров нет'];
   const num = (v: number) => String(Math.round(v * 10) / 10);
   const cell = (v: string | null) => v ?? '—';
@@ -269,12 +299,7 @@ export async function runPerfReport(args: readonly string[], io: PerfReportIo): 
       parsed.sinceDays,
     ))
       io.log(line);
-    for (const line of formatPerfPercentiles(
-      await perfPercentiles(tx, parsed.sinceDays, parsed.metric),
-      parsed.sinceDays,
-      parsed.metric,
-    ))
-      io.log(line);
+    for (const line of await perfSection(tx, parsed.sinceDays, parsed.metric)) io.log(line);
     io.log(await cronCleanupStatus(tx));
   });
   return 0;

@@ -14,10 +14,12 @@ import {
   type JournalVolumeRow,
   journalSourceOf,
   journalVolume,
+  NO_PERF_TABLE,
   PERF_CLEANUP_JOB,
   type PerfStatRow,
   parsePerfArgs,
   perfPercentiles,
+  perfSection,
   runPerfReport,
 } from './perf-report';
 
@@ -101,6 +103,39 @@ describe('ops.ts perf: перцентили замеров и чистка pg_cr
     expect(only.every((r) => r.metric === 'inp')).toBe(true);
     const all = await admin.client.begin('read only', (tx) => perfPercentiles(tx, 7, null));
     expect(all.map((r) => r.metric)).toContain('lcp');
+  });
+
+  test('база без таблицы замеров (прод до 0024): раздел — строка о миграции, отчёт не падает и печатает журнал (I-2)', async () => {
+    // Прод-задача плана А снимает `ops.ts perf` ДО `migrate`: таблицы там ещё нет. Таблица прячется переименованием в
+    // транзакции, которая откатывается, — как её отсутствие видит каталог (`to_regclass`).
+    const ROLLBACK = new Error('откат: таблица замеров на месте');
+    let section: string[] = [];
+    const out: string[] = [];
+    const err: string[] = [];
+    let code = -1;
+    await admin.client
+      .begin(async (tx) => {
+        await tx.unsafe('ALTER TABLE public.perf_samples RENAME TO perf_samples_hidden_t3');
+        section = await perfSection(tx, 7, 'inp');
+        const sql = {
+          begin: (_mode: string, fn: (t: postgres.TransactionSql) => Promise<unknown>) =>
+            tx.savepoint(fn),
+        } as unknown as postgres.Sql;
+        code = await runPerfReport(['--since', '7d'], {
+          sql,
+          log: (l) => out.push(l),
+          error: (l) => err.push(l),
+        });
+        throw ROLLBACK;
+      })
+      .catch((e: unknown) => {
+        if (e !== ROLLBACK) throw e;
+      });
+    expect(section).toEqual(['Замеры за 7 дн. (метрика inp)', NO_PERF_TABLE]);
+    expect([code, err]).toEqual([0, []]);
+    expect(out[0]).toStartWith('Объём журнала за 7 дн.');
+    expect(out).toContain(NO_PERF_TABLE);
+    expect(out.at(-1)).toStartWith(`задача pg_cron ${PERF_CLEANUP_JOB}: `);
   });
 
   test('cronCleanupStatus — строка о задаче чистки, а не «не найдена» и не «нет доступа»', async () => {

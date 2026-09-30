@@ -6,7 +6,7 @@ import { NotFoundScreen } from '../../app/NotFoundScreen';
 import { ScreenHeader } from '../../app/ScreenHeader';
 import { useOpenRecord } from '../../app/useOpenRecord';
 import { invalidateGraph } from '../../lib/invalidate';
-import { useScreenReadyMark } from '../../perf/marks';
+import { ScreenReadyMark, useCachedAtOpen } from '../../perf/marks';
 import { mayLeave } from '../../state/leave-guard';
 import { placeKeyOf, useNav } from '../../state/navigation';
 import { trpc } from '../../trpc';
@@ -53,12 +53,9 @@ export function DetailScreen({
   home?: boolean;
 }) {
   const { get, setArchived, conflict, dismissConflict } = useEntityDetail(entityId);
-  // Готовность экрана — холодный старт и переход (спека скорости §3.1). Хук — до ранних возвратов ниже: хуки безусловны.
-  useScreenReadyMark(
-    entityId,
-    get.data !== undefined,
-    home ? 'home' : get.data?.entity.aspects.includes(PAGE_ASPECT) ? 'page' : 'record',
-  );
+  // Разрез «из кеша» для замера готовности (спека скорости §3.1) — по кешу В МОМЕНТ ОТКРЫТИЯ записи, поэтому до ранних
+  // возвратов ниже: хуки безусловны. Сама готовность — листом `ScreenReadyMark` в разметке записи (гейт задачи 3, M-3).
+  const cachedAtOpen = useCachedAtOpen(entityId, get.data !== undefined);
   const utils = trpc.useUtils();
   const openRecord = useOpenRecord();
   /**
@@ -546,6 +543,13 @@ export function DetailScreen({
           </div>
         </BodyScreenProvider>
       </TabMemoryProvider>
+      {/* Готовность экрана — холодный старт и переход (спека скорости §3.1). Последним ребёнком: лист ничего не
+          рисует, а его подписка на счётчик запросов перерисовывает только его самого (гейт задачи 3, M-3). */}
+      <ScreenReadyMark
+        entityId={entityId}
+        screen={home ? 'home' : isPage ? 'page' : 'record'}
+        cached={cachedAtOpen}
+      />
     </ScreenMenuProvider>
   );
 }

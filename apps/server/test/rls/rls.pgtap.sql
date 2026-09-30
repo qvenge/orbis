@@ -3,7 +3,7 @@
 -- Всё в одной транзакции с ROLLBACK: БД не мутируется.
 BEGIN;
 CREATE EXTENSION IF NOT EXISTS pgtap;
-SELECT plan(166);
+SELECT plan(167);
 
 -- Графы фикстур (0020): с FK на graphs владельца «из воздуха» не бывает. Весь файл — одна транзакция
 -- с ROLLBACK, отложенные триггеры И-1 до проверки не доходят — гранты заведены ради политик.
@@ -359,10 +359,15 @@ SELECT throws_ok($$UPDATE perf_samples SET dur_ms = 0$$, '42501', NULL, 'пра�
 RESET ROLE;
 SELECT is((SELECT string_agg(policyname::text || ' ' || cmd::text || ' ' || roles::text COLLATE "C", ', '
       ORDER BY policyname::text COLLATE "C")
-  FROM pg_policies WHERE schemaname = 'public' AND tablename = 'perf_samples'
-    AND coalesce(qual, '') || coalesce(with_check, '') LIKE '%auth.uid()%'),
+  FROM pg_policies WHERE schemaname = 'public' AND tablename = 'perf_samples'),
   'own_account_insert INSERT {authenticated}, own_account_select SELECT {authenticated}',
   'у замеров ровно две политики — по аккаунту, не по графу (§3.2); UPDATE/DELETE нет');
+-- ВСЕ политики таблицы — поимённо и без фильтра (гейт задачи 3, M-2): таблица исключена из пинов «× 4 по графу», и
+-- третья политика (скажем, `TO orbis_app USING (true)`) была бы видна только здесь. Что обе спрашивают аккаунт —
+-- отдельной проверкой по клаузам.
+SELECT is((SELECT count(*)::int FROM pg_policies WHERE schemaname = 'public' AND tablename = 'perf_samples'
+    AND coalesce(qual, with_check) = '(account_id = ( SELECT auth.uid() AS uid))'),
+  2, 'обе политики замеров сравнивают account_id с auth.uid() — и ничем иным');
 SELECT is((SELECT count(*)::int FROM cron.job WHERE jobname = 'orbis_perf_samples_cleanup' AND schedule = '17 3 * * *'
     AND command LIKE '%DELETE FROM public.perf_samples WHERE created_at < now() - interval ''30 days''%'), 1,
   'чистка замеров старше 30 дней — задача pg_cron ежедневно в 03:17 UTC (РП-26)');

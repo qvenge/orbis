@@ -1,7 +1,9 @@
-// Сборщик полевых замеров (спека скорости §3.2): пачка раз в 30 с и при уходе страницы в фон, `fetch keepalive`.
+// Сборщик полевых замеров (спека скорости §3.2): эагерный буфер и ленивый транспорт — пачка раз в 30 с и при уходе
+// страницы в фон, `fetch keepalive`.
 import type { PerfSample } from '@orbis/shared';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
-import { recordSample, resetCollectorForTests, startCollector } from './collector';
+import { perfBuffer, recordSample, resetBufferForTests } from './collector';
+import { resetCollectorForTests, startCollector } from './transport';
 
 // Поднимается над импортами (vitest): сборщик читает токен через этот модуль в момент отправки.
 const tokenRef = vi.hoisted(() => ({ value: 't' as string | null }));
@@ -31,17 +33,34 @@ beforeEach(() => {
 
 afterEach(() => {
   resetCollectorForTests();
+  resetBufferForTests();
   vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
 
 describe('perf/collector', () => {
+  test('замеры, записанные ДО загрузки ленивого чанка, уходят первой пачкой (гейт I-1)', async () => {
+    // Метки экрана записи пишут в эагерный буфер с первого кадра, а транспорт приезжает `import()`-ом позже.
+    recordSample({ ...S, metric: 'cold_start_content', durMs: 900 });
+    recordSample({ ...S, metric: 'cold_start_verified', durMs: 900 });
+    const { startPerf } = await import('./boot');
+    startPerf(perfBuffer);
+    recordSample(S);
+    vi.advanceTimersByTime(30_000);
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    expect(bodyOf(0).samples.map((s) => s.metric)).toEqual([
+      'cold_start_content',
+      'cold_start_verified',
+      'inp',
+    ]);
+  });
+
   test('раз в 30 с — одна пачка на perf.report: keepalive, авторизация, тело из буфера', async () => {
     recordSample(S);
     recordSample({ ...S, durMs: 43 });
     recordSample({ ...S, durMs: 44 });
-    startCollector();
+    startCollector(perfBuffer);
     vi.advanceTimersByTime(29_999);
     expect(fetchMock).not.toHaveBeenCalled();
     vi.advanceTimersByTime(1);
@@ -54,7 +73,7 @@ describe('perf/collector', () => {
   });
 
   test('уход страницы в фон — пачка уходит сразу', async () => {
-    startCollector();
+    startCollector(perfBuffer);
     recordSample(S);
     visibility = 'hidden';
     document.dispatchEvent(new Event('visibilitychange', { bubbles: true }));
@@ -63,7 +82,7 @@ describe('perf/collector', () => {
   });
 
   test('видимая страница на visibilitychange пачку не шлёт', async () => {
-    startCollector();
+    startCollector(perfBuffer);
     recordSample(S);
     document.dispatchEvent(new Event('visibilitychange', { bubbles: true }));
     await Promise.resolve();
@@ -71,7 +90,7 @@ describe('perf/collector', () => {
   });
 
   test('pagehide — тоже', async () => {
-    startCollector();
+    startCollector(perfBuffer);
     recordSample(S);
     window.dispatchEvent(new Event('pagehide'));
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
@@ -79,7 +98,7 @@ describe('perf/collector', () => {
 
   test('без токена — ни одного fetch, буфер цел до входа', async () => {
     tokenRef.value = null;
-    startCollector();
+    startCollector(perfBuffer);
     recordSample(S);
     vi.advanceTimersByTime(30_000);
     await Promise.resolve();
@@ -91,7 +110,7 @@ describe('perf/collector', () => {
   });
 
   test('250 замеров — пачки по 100', async () => {
-    startCollector();
+    startCollector(perfBuffer);
     for (let i = 0; i < 250; i++) recordSample({ ...S, durMs: i });
     for (let k = 0; k < 3; k++) vi.advanceTimersByTime(30_000);
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));

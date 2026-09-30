@@ -25,27 +25,36 @@ export const PERF_SCREENS = [
   'other',
 ] as const;
 export const PERF_ACTION_KINDS = ['checkbox', 'status', 'title', 'create', 'other'] as const;
-export const perfSampleSchema = z
-  .object({
-    metric: z.enum(PERF_METRICS),
-    screen: z.enum(PERF_SCREENS).optional(),
-    kind: z.enum(PERF_ACTION_KINDS).optional(),
-    procedure: z
-      .string()
-      .regex(/^[a-zA-Z.,]{1,200}$/)
-      .optional(),
-    durMs: z.number().nonnegative().max(600_000),
-    serverMs: z.number().nonnegative().optional(),
-    dbMs: z.number().nonnegative().optional(),
-    device: z.enum(['mobile', 'desktop']),
-    net: z.enum(['slow-2g', '2g', '3g', '4g']).optional(),
-    cached: z.boolean().optional(),
-    appVersion: z.string().regex(/^\d+\.\d+\.\d+$/),
-  })
-  .strict();
-export const perfReportInput = z
-  .object({ samples: z.array(perfSampleSchema).min(1).max(100) })
-  .strict();
+/**
+ * Схемы — ВЫЗОВАМИ фабрик с пометкой `@__PURE__` (приём R-19 среза 1в, `registry/builtin-properties.ts`): web берёт из
+ * контракта только типы и списки, а цепочку `z.object(…).strict()` сборщик чистой не считает и без пометки тащил бы
+ * схему в бандл экрана записи мёртвым кодом (гейт задачи 3, I-1). Сервер разбирает вход ими же.
+ */
+function makeSampleSchema() {
+  return z
+    .object({
+      metric: z.enum(PERF_METRICS),
+      screen: z.enum(PERF_SCREENS).optional(),
+      kind: z.enum(PERF_ACTION_KINDS).optional(),
+      procedure: z
+        .string()
+        .regex(/^[a-zA-Z.,]{1,200}$/)
+        .optional(),
+      durMs: z.number().nonnegative().max(600_000),
+      serverMs: z.number().nonnegative().optional(),
+      dbMs: z.number().nonnegative().optional(),
+      device: z.enum(['mobile', 'desktop']),
+      net: z.enum(['slow-2g', '2g', '3g', '4g']).optional(),
+      cached: z.boolean().optional(),
+      appVersion: z.string().regex(/^\d+\.\d+\.\d+$/),
+    })
+    .strict();
+}
+function makeReportInput(sample: ReturnType<typeof makeSampleSchema>) {
+  return z.object({ samples: z.array(sample).min(1).max(100) }).strict();
+}
+export const perfSampleSchema = /* @__PURE__ */ makeSampleSchema();
+export const perfReportInput = /* @__PURE__ */ makeReportInput(perfSampleSchema);
 export interface PerfReportResult {
   accepted: number;
   dropped: number;

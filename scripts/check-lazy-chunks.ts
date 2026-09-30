@@ -231,6 +231,16 @@ const FORBIDDEN_EDGES: readonly { from: string; to: string; hint: string }[] = [
       "Ищите импортёра: `grep -rn \"RefListControl'\" apps/web/src --include='*.ts*'` — контрол\n" +
       'грузится только лениво из `lib/registry/PropertyControl.tsx` и редактором навигации (задача 21).',
   },
+  {
+    // Полевые замеры (план скорости, задача 3, гейт I-1): транспорт пачек (клиент tRPC с `httpLink`) и наблюдатели
+    // Web Vitals — ленивым чанком `perf/boot` из `main.tsx`; эагерны только метки и буфер. Статический импорт
+    // `boot`, `transport` или `vitals` из эагерного кода вклеил бы их обратно в первый кадр записи (замер: ≈700 Б gzip).
+    from: 'DetailScreen',
+    to: 'boot',
+    hint:
+      "Ищите импортёра: `grep -rn \"perf/\\(boot\\|transport\\|vitals\\)'\" apps/web/src --include='*.ts*'` —\n" +
+      'их грузит только `import()` в `main.tsx`; буфер туда передаётся аргументом (`PerfBuffer`).',
+  },
 ];
 
 // --- Разбор dist: каталог чанков — параметром (ради фикстурного теста) ---------------------
@@ -459,6 +469,17 @@ const FORBIDDEN_CLOSURE_TEXT: readonly ClosureTextRule[] = [
       '`BUILTIN_PROPERTY_META` и что ни один модуль, который грузит web, не читает словарь на\n' +
       'верхнем уровне (образец — `DIRECTION_OPTIONS` в `contracts/budget.ts`).',
   },
+  {
+    // Схема замеров (план скорости, задача 3, гейт I-1): web берёт из контракта только типы и списки, схема разбирает
+    // вход на сервере. Цепочку `z.object(…).strict()` сборщик чистой не считает — без пометки `@__PURE__` у фабрик
+    // схема ехала бы в первый кадр записи мёртвым кодом (≈180 Б gzip). Маркер — маска версии, она есть только в схеме.
+    chunk: 'DetailScreen',
+    text: '/^\\d+\\.\\d+\\.\\d+$/',
+    source: 'packages/shared/src/contracts/perf.ts',
+    hint:
+      'Схема замеров приехала в первый кадр. Проверьте пометки `@__PURE__` у `perfSampleSchema` и\n' +
+      '`perfReportInput` и что web не читает их (только типы `PerfSample`, списки `PERF_*`).',
+  },
 ];
 
 /**
@@ -642,7 +663,7 @@ function main(argv: readonly string[]): void {
       `${LAZY_FRAME_MODULES.length} ленивых модулей рамки), список экранов сверен с роутером, ` +
       `состав чанков сверен по запрещённым рёбрам (${FORBIDDEN_EDGES.length}) ` +
       `(${FORBIDDEN_EDGES.map((e) => `${e.from} ↛ ${e.to}`).join(', ')}), ` +
-      `содержимое замыканий — по ${FORBIDDEN_CLOSURE_TEXT.length} маркеру (R-19).`,
+      `содержимое замыканий — по ${FORBIDDEN_CLOSURE_TEXT.length} маркерам (R-19).`,
   );
   for (const line of weight.lines) console.log(line);
 }

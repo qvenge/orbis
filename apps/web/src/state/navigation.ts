@@ -36,6 +36,7 @@ import {
   type SectionKey,
 } from '@orbis/shared/nav';
 import { create } from 'zustand';
+import { markNavigationStart, type NavTarget } from '../perf/marks';
 import { mayLeave } from './leave-guard';
 
 export type { AppKey, SectionKey };
@@ -145,10 +146,34 @@ function persist(model: NavModel): void {
   }
 }
 
+/** Цель места — для метки перехода: запись, домашняя или (`null`) экран хоста, у которого готовности записи нет. */
+function navTargetOf(model: NavModel): NavTarget | null {
+  const a = currentEntry(model).address;
+  if (a.kind === 'record') return { kind: 'record', id: a.id };
+  return a.kind === 'home' ? { kind: 'home' } : null;
+}
+
+/** Ключ цели: запись — по id (рамка приложения экран записи не меняет), прочее — по адресу. */
+function targetKeyOf(model: NavModel): string {
+  const a = currentEntry(model).address;
+  return a.kind === 'record' ? `record ${a.id}` : buildAddress(a);
+}
+
+/**
+ * Метка начала перехода (спека скорости §3.1; гейт задачи 3, I-4) — здесь, в одной точке всех переходов: ссылка,
+ * раздел, плитка, меню, «‹» и системный «назад» (`setNavState` из `popstate`). Ставится, только когда цель СМЕНИЛАСЬ:
+ * `popstate` после нашего же «‹» приносит то же место, и повторная метка сдвинула бы начало замера.
+ */
+function notePlaceChange(prev: NavModel, next: NavModel): void {
+  if (targetKeyOf(prev) !== targetKeyOf(next)) markNavigationStart(navTargetOf(next));
+}
+
 /** Действие → модель и эффект; стража спрашивает вызывающий. */
 function run(action: NavAction): void {
   const s = useNav.getState();
   const r = navReduce(s.model, action, s.mode);
+  // Уточнение места того же экрана (`replace`, РП-21) и состояние экрана (`view`) — не переход.
+  if (action.type !== 'replace' && action.type !== 'view') notePlaceChange(s.model, r.model);
   useNav.setState({ model: r.model, overlay: null });
   persist(r.model);
   port?.apply(r.effect);
@@ -250,6 +275,7 @@ export function setNavState(next: {
   overlay: NavOverlay | null;
   mode?: LaunchMode;
 }): void {
+  notePlaceChange(useNav.getState().model, next.model);
   useNav.setState({
     model: next.model,
     overlay: next.overlay,
