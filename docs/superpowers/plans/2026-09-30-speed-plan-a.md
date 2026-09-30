@@ -1650,7 +1650,7 @@ export function startVitals(): void {
   `cd $W/apps/web && bun run test src/features/entity-detail src/features/browser src/app > $T/t3c.log 2>&1` → PASS.
   Вес: `cd $W && bun run --filter @orbis/web build > $T/t3-build.log 2>&1; echo EXIT=$?` и `cd $W && bun
   scripts/check-lazy-chunks.ts --max-gzip DetailScreen=34889 --max-closure-gzip DetailScreen=325238 > $T/t3-chunks.log 2>&1;
-  echo EXIT=$?` (пороги по плану 1в — сверить с `ci.yml:62`) → 0; в `dist/assets` есть отдельный чанк `web-vitals`
+  echo EXIT=$?` (пороги — `ci.yml:64`, сверено задачей 1) → 0; в `dist/assets` есть отдельный чанк `web-vitals`
   (`ls apps/web/dist/assets | grep -i vitals`). Превышение — СТОП и разбор, порог не поднимается.
 
 - [ ] **Шаг 7: мутации.** (а) политика `own_account_select` → `USING (true)` в копии миграции на стенде (транзакция с откатом в
@@ -2109,7 +2109,7 @@ GRANT SELECT, INSERT ON "action_journal", "action_journal_entities" TO authentic
   отмены передаёт `applyUndo`: `execute(db, req, {sink: makeJournalSink(), internalUndo})`).
   `undo.ts` `applyUndo`: `const undoRecordId = newId()` ДО `execute`; `path` — параметр `undoAction(db, {identity,
   actionId, path})` (умолчание `'ui'` у `ai.undo`; `undoLast` моделью и карточка `undo_of` — `'chat'`; откат прогона — `'ui'`
-  (кнопка владельца, К-45); `migrate-1v --undo` (`undoMigrate1v`, по ветке 1в `:856`) — `'system'`; `ai.undoLast` — `'ui'`);
+  (кнопка владельца, К-45); `migrate-1v --undo` (`undoMigrate1v`, `migrate-1v.ts:826` — сверено задачей 1) — `'system'`; `ai.undoLast` — `'ui'`);
   `onApplied` — прежняя перепроверка `isUndone` и `unmarkRefSources`.
   22 боевых вызова: `makeChatJournalSink()` → `makeJournalSink()` (механически; импорт из того же модуля).
 
@@ -3830,8 +3830,8 @@ export function toClientChatMessage(row: ChatMessageRow): WireChatMessage {
 - [ ] **Шаг 5: эталоны и замер промпта.** `compile.golden.test.ts`: в `Golden` — `fields?: EntityFields`; сверка —
   `compileQueryAst(g.ast, CTX, g.fields === undefined ? {} : { fields: g.fields })`. `test/golden/query-sql.json` — РУКАМИ (шапка
   файла: вывод компилятора записывать запрещено): у каждой записи в `sql` префикс `SELECT id, graph_id, title, emoji, body,
-  body_refs,` → `SELECT id, graph_id, title, emoji, body_refs,` (одна замена; число правленых префиксов = числу записей — 54 +
-  случаи 1в, сверить; `countSql` не меняются); две новые записи — копии самого короткого эталона файла с `"fields": "full"`
+  body_refs,` → `SELECT id, graph_id, title, emoji, body_refs,` (одна замена; число правленых префиксов = числу записей — 54,
+  случаи 1в уже в их числе, сверено задачей 1; `countSql` не меняются); две новые записи — копии самого короткого эталона файла с `"fields": "full"`
   (префикс прежний, с `body`) и `"fields": "start"` (префикс без `body`, в конце списка колонок перед `FROM` — `,
   jsonb_path_query_array(body_doc, 'lax $.doc.content[0 to 7]') AS body_head`), имена `<имя эталона> — выбор полей full (§9)` и
   `… start (§9)`; посчитаны вручную. `test/golden/tool-registry.json` — пересдача по правилу `tools/registry-golden.test.ts:11-20` (сборка
