@@ -25,6 +25,7 @@
 //   bun scripts/ops.ts migrate-1v --apply --i-understand             # перевод графа среза 1в: одна пачка (§6.6)
 //   bun scripts/ops.ts migrate-1v --undo <actionId> --i-understand   # отмена пачки перевода (Undo §6.6)
 //   ORBIS_REHEARSAL_DSN=<DSN> bun scripts/ops.ts migrate-1v --rehearsal <режим>  # репетиция: только localhost
+//   bun scripts/ops.ts perf [--since 7d]  # только чтение: объём журнала (и перцентили замеров)
 //   bun scripts/ops.ts ping           # связность и версия PostgreSQL
 //   bun scripts/ops.ts issue-pat <uuid аккаунта> [метка] [--scope worker]  # headless-токен (§9.3)
 import { join } from 'node:path';
@@ -54,6 +55,7 @@ import {
 } from '../apps/server/src/db/backfill-body-doc';
 import { type CensusV3Row, censusV3, formatCensusV3 } from '../apps/server/src/db/census-v3';
 import { migrate1vIo, runMigrate1v } from '../apps/server/src/db/migrate-1v';
+import { runPerfReport } from '../apps/server/src/db/perf-report';
 import {
   REGISTRY_DELTAS_QUERY,
   REGISTRY_DRIFT_QUERIES,
@@ -615,6 +617,13 @@ async function migrate1vOp(args: string[]): Promise<number> {
   );
 }
 
+/** Только чтение (спека скорости §3.3): объём журнала по графам и дням; с задачи 3 — перцентили замеров. */
+async function perfOp(args: string[]): Promise<number> {
+  return withDb((sql) =>
+    runPerfReport(args, { sql, log: (l) => console.log(l), error: (l) => console.error(l) }),
+  );
+}
+
 async function ping(): Promise<number> {
   await withDb(async (sql) => {
     const [row] = await sql<{ version: string }[]>`SELECT version()`;
@@ -794,6 +803,10 @@ const OPS: Record<string, { run: (args: string[]) => Promise<number>; help: stri
       'срез 1в: --report (только чтение, ДО миграции 0023) | --drop-agenda-rows --i-understand | ' +
       '--apply --i-understand (одна пачка на граф, источник system) | --undo <actionId> --i-understand; ' +
       '--rehearsal — DSN из ORBIS_REHEARSAL_DSN, только localhost',
+  },
+  perf: {
+    run: perfOp,
+    help: 'только чтение: объём журнала по графам и дням [--since 7d] [--metric <m>] (спека скорости §3.3)',
   },
   ping: { run: ping, help: 'связность и версия PostgreSQL' },
   dump: {
