@@ -28,11 +28,13 @@ import {
   writeLegacyUndo,
 } from '../../test/legacy-journal';
 import { ensureEntityThread, ensureGlobalThread } from '../chat/threads';
+import { chatMessages } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { execute } from '../executor/executor';
 import { touchedEntityIds } from '../executor/journal-read';
 import type { ActionRecord, MutationSource } from '../executor/types';
-import { transferJournal } from './transfer';
+import { threadPage } from './thread-page';
+import { legacyJournalReport, transferJournal, transferredLegacyMessageIds } from './transfer';
 
 requireEnv();
 
@@ -145,6 +147,23 @@ describe('transferJournal: сообщения прежней формы → ст
     });
     // Сломанный писатель: нет обязательного `actor_user_id` — не умолчание, а пропуск (счёт missingRequired у задачи 21)
     const { actor_user_id: _no, ...broken } = createOf(g, newId(), 'ui', 'Без актора');
+    // Действие реестра (§Б6-4) с автором-приложением и правленым предложением — все поля атрибуции без потерь (Э-А-1)
+    const registryAction = action(g, {
+      type: 'action',
+      source: 'chat',
+      actor_kind: 'ai',
+      action_id: 'planner/postpone_overdue',
+      module: 'planner',
+      edited_from: newId(),
+      operations: [
+        { op: 'entity_update', payload: { id: z, props: { 'orbis/due_date': '2026-09-01' } } },
+      ],
+      inverse: [
+        { op: 'entity_update', payload: { id: z, props: { 'orbis/due_date': '2026-08-01' } } },
+      ],
+    });
+    // «＋» владельца — тред при переносе не присваивается (§11.4), как у ui и system
+    const quick = createOf(g, newId(), 'quick_capture', 'Быстрый ввод');
 
     const msg = await withIdentity(db, personal(g), async (tx) => {
       const out = {} as Record<
@@ -156,7 +175,9 @@ describe('transferJournal: сообщения прежней формы → ст
         | 'chatBare'
         | 'broken'
         | 'undoUi'
-        | 'undoChat',
+        | 'undoChat'
+        | 'registryAction'
+        | 'quick',
         string
       >;
       out.ui = await writeLegacyAction(tx, {
@@ -222,13 +243,32 @@ describe('transferJournal: сообщения прежней формы → ст
         undoes: chatBare.id,
         createdAt: at(10),
       });
+      out.registryAction = await writeLegacyAction(tx, {
+        graphId: g,
+        threadId: global,
+        action: registryAction,
+        card: { tool: 'batch_execute', entity_id: null, title: 'Действие «Отложить просроченные»' },
+        results: [{ ok: true }],
+        createdAt: at(11),
+      });
+      out.quick = await writeLegacyAction(tx, {
+        graphId: g,
+        threadId: global,
+        action: quick,
+        card: { tool: 'entity_create', entity_id: quick.entity_id, title: 'Быстрый ввод' },
+        createdAt: at(12),
+      });
       return out;
     });
     expect(msg.batch).toBe(legacyBatchMessageId(g, batch.id));
     const messagesBefore = await messagesOfGraph(g);
 
+    // Отчёт до переноса (задача 21, `missingRequired`) — тем же предикатом, что перенос: оставит ровно сломанную запись
+    const reportOf = () => withIdentity(db, personal(g), (tx) => legacyJournalReport(tx, g));
+    expect(await reportOf()).toEqual({ legacyActions: 9, legacyUndo: 2, untransferable: 1 });
     const first = await withIdentity(db, personal(g), (tx) => transferJournal(tx, g));
-    expect(first).toEqual({ moved: 6, undo: 2, skipped: 1 });
+    expect(first).toEqual({ moved: 8, undo: 2, skipped: 1 });
+    expect(await reportOf()).toEqual({ legacyActions: 9, legacyUndo: 2, untransferable: 1 });
 
     // id строки — id ДЕЙСТВИЯ, а не сообщения (Д-4); у пачки — batch_id, а не uuidv5-PK сообщения
     const row = async (id: string) => {
@@ -310,6 +350,28 @@ describe('transferJournal: сообщения прежней формы → ст
     expect(undoChat?.threadId).toBe(entityThread);
     expect(undoChat?.entityIds).toEqual(touchedEntityIds(chatBare));
 
+    // Действие реестра — автор-приложение и правленое предложение перенесены без потерь, тред сохранён (chat)
+    const registryRow = await row(registryAction.id);
+    expect([
+      registryRow.type,
+      registryRow.actionId,
+      registryRow.module,
+      registryRow.editedFrom,
+      registryRow.threadId,
+      registryRow.cardTool,
+    ]).toEqual([
+      'action',
+      'planner/postpone_overdue',
+      'planner',
+      registryAction.edited_from,
+      global,
+      'batch_execute',
+    ]);
+    expect(registryRow.results).toEqual([{ ok: true }]);
+    // «＋» (quick_capture) — без треда (§11.4)
+    const quickRow = await row(quick.id);
+    expect([quickRow.source, quickRow.threadId]).toEqual(['quick_capture', null]);
+
     // Порядок журнала — прежнее время сообщений
     const all = await wholeJournalOf(g);
     expect(all.map((e) => (e.type === 'undo' ? `undo:${e.undoes}` : e.id))).toEqual([
@@ -321,13 +383,31 @@ describe('transferJournal: сообщения прежней формы → ст
       chatBare.id,
       `undo:${ui.id}`,
       `undo:${chatBare.id}`,
+      registryAction.id,
+      quick.id,
     ]);
+
+    // Снос второго прохода (задача 21) — ровно перенесённые сообщения: всё, кроме сломанной записи
+    expect(await withIdentity(db, personal(g), (tx) => transferredLegacyMessageIds(tx, g))).toEqual(
+      [
+        msg.ui,
+        msg.batch,
+        msg.fast,
+        msg.system,
+        msg.chatReplied,
+        msg.chatBare,
+        msg.undoUi,
+        msg.undoChat,
+        msg.registryAction,
+        msg.quick,
+      ],
+    );
 
     // Идемпотентно: второй вызов ничего не переносит; сообщения на месте (их снос — задача 21)
     const again = await withIdentity(db, personal(g), (tx) => transferJournal(tx, g));
     expect(again).toEqual({ moved: 0, undo: 0, skipped: 1 });
     expect(await messagesOfGraph(g)).toBe(messagesBefore);
-    expect((await wholeJournalOf(g)).length).toBe(8);
+    expect((await wholeJournalOf(g)).length).toBe(10);
   });
 
   test('чужой граф переносом не задет', async () => {
@@ -347,5 +427,104 @@ describe('transferJournal: сообщения прежней формы → ст
       skipped: 0,
     });
     expect(await journalOf(other, a.id)).toBeUndefined();
+  });
+
+  // Fable I-1: прежняя запись с не-uuid id (или отмена с мусором в `undoes`) — не 22P02 ни в переносе, ни в отчёте, ни
+  // в выборке сноса: отчёт называет её, перенос пропускает, снос оставляет в сообщениях.
+  test('не-uuid id прежней записи: перенос, отчёт и выборка сноса не падают; запись названа и оставлена', async () => {
+    const g = await freshGraph();
+    const good = createOf(g, newId(), 'mcp', 'Годная');
+    const badId = { ...createOf(g, newId(), 'mcp', 'Кривой id'), id: 'не-uuid-id' } as ActionRecord;
+    const messages = await withIdentity(db, personal(g), async (tx) => {
+      const thread = await ensureGlobalThread(tx, g);
+      return {
+        good: await writeLegacyAction(tx, {
+          graphId: g,
+          action: good,
+          card: { tool: 'entity_create', entity_id: good.entity_id, title: 'Годная' },
+        }),
+        bad: await writeLegacyAction(tx, {
+          graphId: g,
+          action: badId,
+          card: { tool: 'entity_create', entity_id: badId.entity_id, title: 'Кривой id' },
+        }),
+        undoBad: await writeLegacyUndo(tx, { threadId: thread, undoes: 'мусор' }),
+        undoOfBad: await writeLegacyUndo(tx, { threadId: thread, undoes: 'не-uuid-id' }),
+      };
+    });
+    const report = await withIdentity(db, personal(g), (tx) => legacyJournalReport(tx, g));
+    expect(report).toEqual({ legacyActions: 2, legacyUndo: 2, untransferable: 3 });
+    expect(await withIdentity(db, personal(g), (tx) => transferJournal(tx, g))).toEqual({
+      moved: 1,
+      undo: 0,
+      skipped: 3,
+    });
+    expect(await withIdentity(db, personal(g), (tx) => transferredLegacyMessageIds(tx, g))).toEqual(
+      [messages.good],
+    );
+    expect(messages.bad).not.toBe(messages.good);
+  });
+
+  // Рулинг R-12 на перенесённых записях: у прежней записи одобрения id действия = batch_id = pendingId — тот же, что PK
+  // карточки-запроса в треде. После переноса и сноса перенесённого выдача треда обязана давать разные id и однозначный
+  // курсор на стыке с равным временем.
+  test('перенесённое одобрение и его карточка-запрос: разные id в выдаче треда, курсор однозначен при равном времени', async () => {
+    const g = await freshGraph();
+    const pendingId = newId();
+    const at = new Date(Date.UTC(2026, 8, 2, 10, 0, 0));
+    const approval = action(g, {
+      id: pendingId,
+      type: 'batch',
+      source: 'chat',
+      actor_kind: 'ai',
+      operations: [{ op: 'entity_create', payload: { id: newId(), title: 'Одобрено' } }],
+      inverse: [],
+    });
+    const thread = await withIdentity(db, personal(g), async (tx) => {
+      const t = await ensureGlobalThread(tx, g);
+      // Карточка-запрос прежней формы: сообщение с PK = pendingId (`createPending`)
+      await tx.insert(chatMessages).values({
+        id: pendingId,
+        threadId: t,
+        role: 'system',
+        content: 'Требуется подтверждение: проба',
+        metadata: { pending: { id: pendingId, tool: 'batch_execute' }, cards: [] },
+        createdAt: at,
+      });
+      await writeLegacyAction(tx, {
+        graphId: g,
+        threadId: t,
+        action: approval,
+        card: { tool: 'batch_execute', entity_id: null, title: 'batch: операций — 1' },
+        createdAt: at,
+      });
+      return t;
+    });
+    await withIdentity(db, personal(g), (tx) => transferJournal(tx, g));
+    // Снос перенесённого (второй проход задачи 21) — как он будет: ровно выборка сноса
+    const swept = await withIdentity(db, personal(g), (tx) => transferredLegacyMessageIds(tx, g));
+    expect(swept).toEqual([legacyBatchMessageId(g, pendingId)]);
+    const { db: admin, client: adminClient } = adminDb();
+    try {
+      for (const id of swept)
+        await admin.execute(sql`DELETE FROM chat_messages WHERE id = ${id}::uuid`);
+    } finally {
+      await adminClient.end();
+    }
+    const page = (before?: string) =>
+      withIdentity(db, personal(g), (tx) =>
+        threadPage(tx, g, thread, { limit: 1, ...(before !== undefined && { before }) }),
+      );
+    const all = await withIdentity(db, personal(g), (tx) =>
+      threadPage(tx, g, thread, { limit: 50 }),
+    );
+    const ids = all.map((m) => m.id);
+    expect(ids.length).toBe(2);
+    expect(new Set(ids).size).toBe(2);
+    expect(ids).toContain(pendingId);
+    const p1 = await page();
+    const p2 = await page(`${p1[0]?.createdAt}|${p1[0]?.id}`);
+    const p3 = await page(`${p2[0]?.createdAt}|${p2[0]?.id}`);
+    expect([...p1, ...p2, ...p3].map((m) => m.id)).toEqual(ids);
   });
 });

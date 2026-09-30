@@ -988,7 +988,7 @@ export async function reportMergeConflictUnit(
  *
  * Сериализация против reject (fix round): проверка (2) в отдельном tx — лишь
  * fast-path; авторитетная перепроверка «не отклонён» выполняется ПОД advisory-lock'ом
- * по pendingId, взятым ДО ПЕРВОГО ЧТЕНИЯ СОСТОЯНИЯ в audit-tx executor'а (beforeStages) —
+ * по pendingId, взятым ДО ПЕРВОГО ЧТЕНИЯ СОСТОЯНИЯ в транзакции исполнителя (beforeStages) —
  * В ТОМ ЖЕ tx, где пишется запись журнала. Именно «до первого чтения», а не «первым
  * statement'ом»: два первых statement'а любого такого tx ставит сам `withIdentity`
  * (set_config + SET LOCAL ROLE), и буквальная формулировка не выполнялась бы НИКОГДА —
@@ -1071,7 +1071,7 @@ export async function approvePending(
     // ОТКАТ ИСПОЛНЯЕТ UNDO, А НЕ ПАЧКА (Р-К-21, В-8). `execute` обратных операций породил бы НОВЫЙ
     // action, то есть сам откат стал бы отменяемым, а отменённое действие осталось бы в журнале
     // неотменённым — «отмени последнее» второй раз вернуло бы всё обратно. Внутренний режим
-    // (`undoAction` → `applyUndo`) вместо action пишет {type:'undo', undoes} тем же tx и снимает
+    // (`undoAction` → `applyUndo`) вместо action пишет запись отмены (строку журнала `type:'undo'`) тем же tx и снимает
     // пометки `needs-review` — ровно то, что сделал бы прямой `undo_last` на уровне `execute`.
     const undoOf = pending.undo_of;
     if (undoOf !== undefined) return await approveUndoUnit(db, args, undoOf);
@@ -1120,7 +1120,7 @@ export async function approvePending(
       },
       {
         sink,
-        // Первый statement audit-tx (до replay-проверки и стадий 1–7): замок +
+        // Первый statement транзакции исполнителя (до replay-проверки и стадий 1–7): замок +
         // авторитетная перепроверка «не отклонён» — см. док approvePending
         beforeStages: async (tx) => {
           await acquirePendingLock(tx, args.pendingId);
@@ -1259,8 +1259,8 @@ async function approveRolloverUnit(
  * «Принять» карточки отката (`undo_of`, В-8) — та же судьба, что у пачки, другим исполнением
  * (фикс-раунд 1 задачи 8, I-3).
  *
- * ЗАМОК ЕДИНИЦЫ И «НЕ ОТКЛОНЕНА» — В ТРАНЗАКЦИИ UNDO-СООБЩЕНИЯ (шов `beforeStages` у `undoAction`),
- * ровно как у пачки в audit-tx: иначе параллельные «Принять» и «Отклонить» проходили бы свои
+ * ЗАМОК ЕДИНИЦЫ И «НЕ ОТКЛОНЕНА» — В ТРАНЗАКЦИИ ЗАПИСИ ОТМЕНЫ (шов `beforeStages` у `undoAction`),
+ * ровно как у пачки в транзакции её записи журнала: иначе параллельные «Принять» и «Отклонить» проходили бы свои
  * проверки до чужого коммита (write-skew, докблок `approvePending`). Исполненность отката для
  * `rejectPendingTx` — запись отмены отменяемого действия (`isUndone`), записи пачки у отката нет.
  *
@@ -1348,8 +1348,8 @@ export type RejectPendingResult =
  *
  * Сериализация против approve (fix round): advisory-lock по pendingId берётся ЗДЕСЬ, до
  * первого чтения состояния (см. док acquirePendingLock) — конкурентный approve держит тот
- * же замок в audit-tx; проверка «уже исполнено» идёт строго после захвата, поэтому видит
- * его закоммиченный audit (или сама коммитится первой, и approve увидит reject).
+ * же замок в транзакции записи журнала; проверка «уже исполнено» идёт строго после захвата, поэтому видит
+ * его закоммиченную запись пачки (или сама коммитится первой, и approve увидит reject).
  * Повторный reject идемпотентен: проверка isRejected под замком + ON CONFLICT DO NOTHING
  * по детерминированному PK (двойная страховка — второго сообщения не бывает).
  *

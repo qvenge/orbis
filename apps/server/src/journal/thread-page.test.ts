@@ -6,7 +6,16 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import type { GraphId } from '@orbis/shared';
 import { globalThreadId, newId, processingMessageId } from '@orbis/shared';
-import { appDb, freshGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
+import { sql } from 'drizzle-orm';
+import {
+  accountOf,
+  adminDb,
+  appDb,
+  freshGraph,
+  personal,
+  requireEnv,
+  truncateAll,
+} from '../../test/helpers';
 import { journalOf } from '../../test/journal-helpers';
 import { appendMessage, type WireChatMessage } from '../chat/messages';
 import { ensureGlobalThread } from '../chat/threads';
@@ -16,6 +25,7 @@ import { execute } from '../executor/executor';
 import { makeJournalSink } from '../executor/journal';
 import type { ExecuteOk, ExecuteRequest, MutationSource, WireEntity } from '../executor/types';
 import { undoAction } from '../executor/undo';
+import { approvePending, createSystemPending } from '../policy/pending';
 import { threadPage } from './thread-page';
 
 requireEnv();
@@ -60,6 +70,10 @@ function page(g: GraphId, thread: string, p: { before?: string; limit: number })
 }
 
 const cursorOf = (m: WireChatMessage): string => `${m.createdAt}|${m.id}`;
+
+/** id действия строки журнала — из сводки (`metadata.actions[0].id`); у сообщения — его id. */
+const keyOf = (m: WireChatMessage): string =>
+  (m.metadata.actions as Array<{ id: string }> | undefined)?.[0]?.id ?? m.id;
 
 /** (createdAt DESC, id DESC) — порядок выдачи треда. */
 function isDescending(items: readonly WireChatMessage[]): boolean {
@@ -117,7 +131,7 @@ describe('threadPage: сообщения и карточки журнала од
     expect(undone.ok).toBe(true);
 
     const all = await page(g, thread, { limit: 50 });
-    expect(new Set(all.map((m) => m.id))).toEqual(
+    expect(new Set(all.map(keyOf))).toEqual(
       new Set([first, twin, fast.actionId, ui.actionId, userMsg]),
     );
     expect(isDescending(all)).toBe(true);
@@ -132,8 +146,8 @@ describe('threadPage: сообщения и карточки журнала од
     }
     expect(paged.map((m) => m.id)).toEqual(all.map((m) => m.id));
 
-    const fastItem = all.find((m) => m.id === fast.actionId);
-    const uiItem = all.find((m) => m.id === ui.actionId);
+    const fastItem = all.find((m) => keyOf(m) === fast.actionId);
+    const uiItem = all.find((m) => keyOf(m) === ui.actionId);
     if (fastItem === undefined || uiItem === undefined) throw new Error('карточек журнала нет');
     // Прежняя форма провода: system-строка с заголовком, сводка действия и карточка
     expect([fastItem.role, fastItem.content, fastItem.threadId]).toEqual([
@@ -205,7 +219,7 @@ describe('threadPage: сообщения и карточки журнала од
     );
     expect(batch.ok).toBe(true);
     const items = await page(g, thread, { limit: 50 });
-    const cardOf = (id: string) => items.find((m) => m.id === id)?.metadata.cards;
+    const cardOf = (id: string) => items.find((m) => keyOf(m) === id)?.metadata.cards;
     const routineEntity = (routine.results[0] as WireEntity).id;
     expect(cardOf(routine.actionId)).toEqual([
       {
@@ -220,7 +234,9 @@ describe('threadPage: сообщения и карточки журнала од
     // Сводка действия рутины несёт прогон — по нему лента подписывает «рутина»
     expect(
       (
-        items.find((m) => m.id === routine.actionId)?.metadata.actions as Array<{ run_id?: string }>
+        items.find((m) => keyOf(m) === routine.actionId)?.metadata.actions as Array<{
+          run_id?: string;
+        }>
       )[0]?.run_id,
     ).toBeDefined();
     // chat: карточку с «Отменить» несёт ответ ассистента — из журнала только прежняя ActionCard (без дубля)
@@ -245,6 +261,110 @@ describe('threadPage: сообщения и карточки журнала од
       limit: 10,
       before: new Date(oldAt.getTime() + 1).toISOString(),
     });
-    expect(p.map((m) => m.id)).toEqual([old.actionId]);
+    expect(p.map(keyOf)).toEqual([old.actionId]);
   });
+});
+
+/** Все страницы выдачи по `limit` строк, курсор — `createdAt|id` последней строки (как строит клиент). */
+async function allPages(g: GraphId, thread: string, limit: number): Promise<WireChatMessage[]> {
+  const out: WireChatMessage[] = [];
+  let before: string | undefined;
+  for (let i = 0; i < 50; i += 1) {
+    const p = await page(g, thread, { limit, ...(before !== undefined && { before }) });
+    if (p.length === 0) break;
+    out.push(...p);
+    before = cursorOf(p[p.length - 1] as WireChatMessage);
+  }
+  return out;
+}
+
+/**
+ * Рулинг R-12: одобренная единица исполняется пачкой с `batchId = pendingId`, ключ записи журнала — сам `batch_id`, а
+ * карточка-запрос — сообщение треда с PK `pendingId`. Выдача треда — один поток: id его элементов уникальны, а курсор
+ * однозначен и на стыке «запрос/одобрение» с равным временем.
+ */
+describe('threadPage: одобренная единица и её карточка-запрос — разные id на проводе (R-12)', () => {
+  async function approvedUnit(g: GraphId): Promise<{ pendingId: string; thread: string }> {
+    const who = personal(g);
+    const created = await withIdentity(db, who, async (tx) => {
+      const thread = await ensureGlobalThread(tx, g);
+      const p = await createSystemPending(tx, {
+        graphId: g,
+        tool: 'entity_create',
+        input: { id: newId(), title: 'Проба одобрения', tags: [] },
+        summary: 'проба',
+      });
+      return { pendingId: p.id, thread };
+    });
+    const r = await approvePending(db, { identity: who, pendingId: created.pendingId });
+    if (!r.ok) throw new Error(JSON.stringify(r.error));
+    expect(r.actionId).toBe(created.pendingId); // ключ записи пачки — сам pendingId (хранимые ключи не тронуты)
+    return created;
+  }
+
+  test('запрос → «Принять» → выдача треда: оба элемента на месте, id не повторяются, id действия — в сводке', async () => {
+    const g = await freshGraph();
+    const { pendingId, thread } = await approvedUnit(g);
+    const items = await page(g, thread, { limit: 50 });
+    const ids = items.map((m) => m.id);
+    expect(new Set(ids).size).toBe(ids.length);
+    const request = items.find((m) => m.id === pendingId);
+    const executed = items.find((m) => m.metadata.actions !== undefined && keyOf(m) === pendingId);
+    expect(request?.metadata.pending).toBeDefined();
+    expect(executed?.role).toBe('system');
+    expect(executed?.id).not.toBe(pendingId);
+    // Производный id детерминирован: перечитывание треда даёт те же id (дедуп и ключи клиента стабильны)
+    expect((await page(g, thread, { limit: 50 })).map((m) => m.id)).toEqual(ids);
+  });
+
+  test('стык «запрос/одобрение» с равным временем: постранично по одному — каждый элемент ровно один раз', async () => {
+    const g = await freshGraph();
+    const { pendingId, thread } = await approvedUnit(g);
+    const at = (await journalOf(g, pendingId))?.createdAt;
+    if (at === undefined) throw new Error('записи одобрения нет');
+    // Подделка хранилища админ-DSN: время карточки-запроса — ровно время записи одобрения, стык двух таблиц
+    const { db: admin, client: adminClient } = adminDb();
+    try {
+      await admin.execute(
+        sql`UPDATE chat_messages SET created_at = ${at.toISOString()}::timestamptz WHERE id = ${pendingId}::uuid`,
+      );
+    } finally {
+      await adminClient.end();
+    }
+    const all = await page(g, thread, { limit: 50 });
+    expect(all.filter((m) => keyOf(m) === pendingId)).toHaveLength(2);
+    expect((await allPages(g, thread, 1)).map((m) => m.id)).toEqual(all.map((m) => m.id));
+  });
+});
+
+// Порядок и курсор выборки журнала — по производному id элемента, а не по id записи: у записей одной транзакции время
+// одно, и выборка с `LIMIT` обязана брать их в том же порядке, в каком их режет курсор, — иначе строка теряется.
+test('несколько записей журнала с одним временем (одна транзакция): постранично по одному — все ровно по разу', async () => {
+  const g = await freshGraph();
+  const thread = await withIdentity(db, personal(g), (tx) => ensureGlobalThread(tx, g));
+  const ids = Array.from({ length: 6 }, () => newId());
+  await withIdentity(db, personal(g), async (tx) => {
+    for (const id of ids) {
+      await sink.write(tx, {
+        graphId: g,
+        threadId: thread,
+        action: {
+          id,
+          type: 'entity_updated',
+          entity_id: null,
+          actor_user_id: accountOf(g),
+          actor_kind: 'agent',
+          source: 'mcp',
+          mechanism: 'user',
+          operations: [],
+          inverse: [],
+        },
+        card: { tool: 'entity_update', entity_id: null, title: `правка ${id}` },
+      });
+    }
+  });
+  const all = await page(g, thread, { limit: 50 });
+  expect(new Set(all.map(keyOf))).toEqual(new Set(ids));
+  expect(new Set(all.map((m) => m.createdAt)).size).toBe(1);
+  expect((await allPages(g, thread, 1)).map((m) => m.id)).toEqual(all.map((m) => m.id));
 });

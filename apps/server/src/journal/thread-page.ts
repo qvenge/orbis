@@ -6,7 +6,8 @@
 // `entity.get` отдавал тред без фильтра маркеров и целиком).
 //
 // Провод прежний (РП-10, новое поведение тредов — задача 6): карточка журнала — system-строка с заголовком и
-// `metadata {actions: [сводка], cards: [карточка ленты]}`, но БЕЗ тел действия (§9 приватность): ни операций, ни
+// `metadata {actions: [сводка], cards: [карточка ленты]}` (id строки — производный id элемента треда, рулинг R-12;
+// id действия — в сводке), но БЕЗ тел действия (§9 приватность): ни операций, ни
 // данных отмены, ни результатов пачки, ни актора-аккаунта. Сводка несёт ровно то, что читают лента
 // (`authorLabel`: actor_kind, actor_grant_id, source) и сжатие строк контекста (`compressSystemRow`: type,
 // entity_id, source, actor_kind).
@@ -40,11 +41,15 @@ function actionSummary(e: JournalEntry): Record<string, unknown> {
   };
 }
 
-/** Запись журнала → строка треда прежней формы провода. */
-function journalItem(e: JournalEntry, threadId: string): WireChatMessage {
+/**
+ * Запись журнала → строка треда прежней формы провода. id строки — производный id элемента треда (`itemId`, рулинг
+ * R-12: у одобренной единицы id записи совпал бы с PK её карточки-запроса в том же треде); id ДЕЙСТВИЯ — в сводке
+ * `actions[0].id` и в `undoActionId` карточки ленты — по нему отмена.
+ */
+function journalItem(e: JournalEntry & { itemId: string }, threadId: string): WireChatMessage {
   const card = { tool: e.cardTool, entity_id: e.entityId, title: e.title };
   return {
-    id: e.id,
+    id: e.itemId,
     threadId,
     role: 'system',
     content: e.title,
@@ -57,9 +62,10 @@ function journalItem(e: JournalEntry, threadId: string): WireChatMessage {
 }
 
 /**
- * Порядок выдачи `(created_at DESC, id DESC)` — тот же, что у каждой выборки в SQL. Время — ISO с миллисекундами
- * (обе колонки `timestamptz(3)`), id — каноничный uuid в нижнем регистре (текст PG): лексикографика строк совпадает
- * с порядком PG (`uuid` сравнивается побайтно), поэтому слияние в TS не расходится с курсором SQL.
+ * Порядок выдачи `(created_at DESC, id DESC)` по id НА ПРОВОДЕ — тот же, что у каждой выборки в SQL (сообщения — по PK,
+ * журнал — по производному id элемента). Время — ISO с миллисекундами (обе колонки `timestamptz(3)`), id — каноничный
+ * uuid в нижнем регистре (текст PG): лексикографика строк совпадает с порядком PG (`uuid` сравнивается побайтно),
+ * поэтому слияние в TS не расходится с курсором SQL, а id элементов потока уникальны — курсор однозначен.
  */
 function newerFirst(a: WireChatMessage, b: WireChatMessage): number {
   if (a.createdAt !== b.createdAt) return a.createdAt < b.createdAt ? 1 : -1;

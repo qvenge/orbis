@@ -338,7 +338,9 @@ describe('chat.listMessages: сообщения и карточки журнал
     }>;
     expect(actions[0]?.entity_id).toBe(e.id);
     expect(actions[0]?.source).toBe('fast_path');
-    expect(card.id).toBe(actions[0]?.id ?? 'нет сводки'); // id строки треда — id действия
+    // id строки треда — производный id элемента (R-12), id действия — в сводке
+    expect(actions[0]?.id).toBeDefined();
+    expect(card.id).not.toBe(actions[0]?.id);
     expect(JSON.stringify(card.metadata)).not.toContain('"inverse"');
     // Постранично по одному — тот же список
     const p1 = await caller.chat.listMessages({ threadId, limit: 1 });

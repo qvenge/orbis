@@ -14,6 +14,11 @@
 // с не-uuid там, где колонка uuid, не переносится и не подменяется умолчанием: её считает `skipped`, а отчёт задачи 21
 // (`missingRequired`) останавливает операцию до окна. Умолчание одно — `mechanism: 'user'` у записей, сделанных до
 // появления поля (§А4-4): тогда механизм был только один.
+//
+// Шов с задачей 21 — ОДИН предикат переносимости на три места (Fable I-1): перенос (`transferJournal`), отчёт до окна
+// (`legacyJournalReport` — сколько записей перенос оставит) и снос второго прохода (`transferredLegacyMessageIds` —
+// какие сообщения можно удалять). Иначе отчёт мог бы насчитать ноль там, где перенос запись пропустит, а снос —
+// оставить её в сообщениях навсегда или упасть 22P02 на не-uuid id прежней записи (id сравниваются ТЕКСТОМ).
 import type { GraphId } from '@orbis/shared';
 import { type SQL, sql } from 'drizzle-orm';
 import type { Tx } from '../db/with-identity';
@@ -52,8 +57,12 @@ const LEGACY_ACTIONS = (graph: GraphId): SQL => sql`
    WHERE t.graph_id = ${graph}::uuid AND m.role = 'system'
      AND NOT (m.metadata @> '{"type": "undo"}'::jsonb)`;
 
-/** Обязательные поля записи действия — есть и нужной формы (иначе запись не переносится). */
-const COMPLETE = sql`jsonb_typeof(l.a -> 'id') = 'string' AND (l.a ->> 'id') ~* ${UUID}
+/**
+ * Предикат «переносимая запись действия» (`l`): обязательные поля есть и нужной формы, uuid-поля — каноничные uuid.
+ * `COALESCE(…, false)`: у отсутствующего ключа `jsonb_typeof` — NULL, и без него `NOT` в отчёте не счёл бы такую запись
+ * непереносимой (NOT NULL = NULL), хотя перенос её пропускает.
+ */
+const TRANSFERABLE_ACTION = sql`COALESCE(jsonb_typeof(l.a -> 'id') = 'string' AND (l.a ->> 'id') ~* ${UUID}
   AND jsonb_typeof(l.a -> 'type') = 'string'
   AND jsonb_typeof(l.a -> 'actor_kind') = 'string'
   AND jsonb_typeof(l.a -> 'source') = 'string'
@@ -61,7 +70,12 @@ const COMPLETE = sql`jsonb_typeof(l.a -> 'id') = 'string' AND (l.a ->> 'id') ~* 
   AND jsonb_typeof(l.a -> 'operations') = 'array'
   AND jsonb_typeof(l.a -> 'inverse') = 'array'
   AND ${optionalUuid('entity_id')} AND ${optionalUuid('actor_grant_id')}
-  AND ${optionalUuid('run_id')} AND ${optionalUuid('edited_from')}`;
+  AND ${optionalUuid('run_id')} AND ${optionalUuid('edited_from')}, false)`;
+
+/** Запись действия `l` уже в таблице — сравнение ТЕКСТОМ: id сломанной прежней записи может быть не uuid (22P02). */
+const ACTION_PRESENT = (graph: GraphId): SQL =>
+  sql`EXISTS (SELECT 1 FROM action_journal j
+               WHERE j.graph_id = ${graph}::uuid AND j.id::text = lower(l.a ->> 'id'))`;
 
 /**
  * SQL-двойник `touchedEntityIds` (`executor/journal-read.ts`) — тот же отбор в том же порядке: `entity_id` действия,
@@ -99,6 +113,14 @@ const CARD_TOOL = sql`COALESCE(${CARD} ->> 'tool', CASE l.a ->> 'type'
     WHEN 'action' THEN 'batch_execute'
     ELSE l.a ->> 'type' END)`;
 
+/**
+ * Заголовок строки — заголовок карточки ЭТОГО элемента (`cards[i].title`), и только без неё — текст сообщения. У
+ * прежнего синка сообщение несло ровно одно действие, и `content = card.title` (`legacy-journal.ts`) — для живых данных
+ * это тождественно «`title` — `m.content`» брифа; карточка по номеру вернее на сообщении с несколькими действиями, где
+ * `content` — заголовок только первого. Тем же правилом заголовок читал прежний читатель журнала (задача 4).
+ */
+const TITLE = sql`COALESCE(${CARD} ->> 'title', l.content)`;
+
 const castUuid = (field: string): SQL => sql`(l.a ->> ${field})::uuid`;
 
 /** Прежние сообщения отмены графа (`u`) — по времени: из повторных отмен одного действия переносится первая. */
@@ -133,14 +155,14 @@ export async function transferJournal(tx: Tx, graph: GraphId): Promise<TransferR
              COALESCE(l.a ->> 'mechanism', 'user'), ${castUuid('actor_grant_id')}, ${castUuid('run_id')},
              l.a ->> 'action_id', l.a ->> 'module', ${castUuid('edited_from')},
              CASE WHEN l.a ->> 'source' IN ('ui', 'quick_capture', 'system') THEN NULL ELSE l.thread_id END,
-             COALESCE(${CARD} ->> 'title', l.content), ${CARD_TOOL}, ${ENTITY_IDS},
+             ${TITLE}, ${CARD_TOOL}, ${ENTITY_IDS},
              l.a -> 'operations', l.a -> 'inverse', l.metadata -> 'results',
              (l.a ->> 'source' = 'chat' AND EXISTS (
                SELECT 1 FROM chat_messages r
                 WHERE r.thread_id = l.thread_id AND r.role = 'assistant'
                   AND r.metadata -> 'cards' @> jsonb_build_array(jsonb_build_object('undoActionId', l.a ->> 'id'))))
         FROM (${LEGACY_ACTIONS(graph)}) l
-       WHERE ${COMPLETE}
+       WHERE ${TRANSFERABLE_ACTION}
        ORDER BY l.created_at, l.message_id, l.ord
       ON CONFLICT DO NOTHING
       RETURNING 1)
@@ -191,17 +213,96 @@ export async function transferJournal(tx: Tx, graph: GraphId): Promise<TransferR
      WHERE j.graph_id = ${graph}::uuid
     ON CONFLICT DO NOTHING`);
 
-  // Не перенесённые — те прежние записи, чьего id нет в таблице и после переноса (сравнение текстом: у сломанной
-  // записи id может быть не uuid).
-  const skipped = await count(
-    tx,
-    sql`SELECT
-      (SELECT count(*) FROM (${LEGACY_ACTIONS(graph)}) l
-        WHERE NOT EXISTS (SELECT 1 FROM action_journal j
-                           WHERE j.graph_id = ${graph}::uuid AND j.id::text = lower(l.a ->> 'id')))
-      + (SELECT count(*) FROM (${LEGACY_UNDOS(graph)}) u
-          WHERE NOT EXISTS (SELECT 1 FROM action_journal j WHERE j.graph_id = ${graph}::uuid AND j.id = u.id))
-      AS n`,
-  );
+  // Не перенесённые — те прежние записи, которых нет в таблице и после переноса: ровно то, что до него насчитал
+  // отчёт (`legacyJournalReport.untransferable`) — тем же предикатом.
+  const skipped = (await legacyJournalReport(tx, graph)).untransferable;
   return { moved, undo, skipped };
+}
+
+/**
+ * Прежняя отмена `u` переносима сейчас: `undoes` — uuid, отменённое действие есть в таблице или переносимо, это первая
+ * по времени прежняя отмена этого действия, и записи отмены у него в таблице ещё нет (иначе уникальность `(graph_id,
+ * undoes)` её не пропустит). Всё — ровно условия второго прохода `transferJournal`; `COALESCE` — у отмены без `undoes`
+ * регэксп даёт NULL, и `NOT` в отчёте иначе её не посчитал бы.
+ */
+const UNDO_TRANSFERABLE = (graph: GraphId): SQL => sql`COALESCE(u.undoes ~* ${UUID}
+  AND (EXISTS (SELECT 1 FROM action_journal j
+                WHERE j.graph_id = ${graph}::uuid AND j.type <> 'undo' AND j.id::text = lower(u.undoes))
+       OR EXISTS (SELECT 1 FROM (${LEGACY_ACTIONS(graph)}) l
+                   WHERE ${TRANSFERABLE_ACTION} AND lower(l.a ->> 'id') = lower(u.undoes)))
+  AND NOT EXISTS (SELECT 1 FROM (${LEGACY_UNDOS(graph)}) p
+                   WHERE lower(p.undoes) = lower(u.undoes) AND (p.created_at, p.id) < (u.created_at, u.id))
+  AND NOT EXISTS (SELECT 1 FROM action_journal j
+                   WHERE j.graph_id = ${graph}::uuid AND j.undoes::text = lower(u.undoes)), false)`;
+
+/**
+ * Отчёт о прежнем журнале графа (только чтение): прежних записей действий и отмен и сколько из них перенос ОСТАВИТ —
+ * нет в таблице и не перенесутся (обязательное поле отсутствует или не той формы, не-uuid id, отмена неперенесённого
+ * действия, повторная отмена). Для задачи 21: `missingRequired` отчёта `--report` — это `untransferable` (ненулевой —
+ * стоп до окна). Тот же предикат, что у переноса: до переноса число — прогноз, после — факт (`skipped`).
+ */
+export function legacyJournalReportQuery(graph: GraphId): SQL {
+  return sql`SELECT
+      (SELECT count(*) FROM (${LEGACY_ACTIONS(graph)}) l) AS legacy_actions,
+      (SELECT count(*) FROM (${LEGACY_UNDOS(graph)}) u) AS legacy_undo,
+      (SELECT count(*) FROM (${LEGACY_ACTIONS(graph)}) l
+        WHERE NOT ${ACTION_PRESENT(graph)} AND NOT ${TRANSFERABLE_ACTION})
+      + (SELECT count(*) FROM (${LEGACY_UNDOS(graph)}) u
+          WHERE NOT EXISTS (SELECT 1 FROM action_journal j WHERE j.graph_id = ${graph}::uuid AND j.id = u.id)
+            AND NOT ${UNDO_TRANSFERABLE(graph)}) AS untransferable`;
+}
+
+export interface LegacyJournalReport {
+  /** Прежних записей действий (элементов `metadata.actions` audit-сообщений). */
+  legacyActions: number;
+  /** Прежних сообщений отмены. */
+  legacyUndo: number;
+  /** Прежних записей, которых нет в таблице и которые перенос не перенесёт. */
+  untransferable: number;
+}
+
+export async function legacyJournalReport(tx: Tx, graph: GraphId): Promise<LegacyJournalReport> {
+  const rows = (await tx.execute(legacyJournalReportQuery(graph))) as unknown as Array<
+    Record<'legacy_actions' | 'legacy_undo' | 'untransferable', number | string>
+  >;
+  const row = rows[0];
+  return {
+    legacyActions: Number(row?.legacy_actions ?? 0),
+    legacyUndo: Number(row?.legacy_undo ?? 0),
+    untransferable: Number(row?.untransferable ?? 0),
+  };
+}
+
+/**
+ * Прежние сообщения журнала графа, которые можно сносить (второй проход задачи 21, РП-2 «снос только перенесённого»):
+ * audit-сообщение — если КАЖДОЕ его действие есть в таблице; сообщение отмены — если есть строка с его id. id
+ * сравниваются ТЕКСТОМ и массив разбирается под `CASE`: сломанная прежняя запись (не-uuid id, `actions` не массив)
+ * остаётся в сообщениях и не роняет проход 22P02 — её уже назвал отчёт (`legacyJournalReport`).
+ */
+export function transferredLegacyMessagesQuery(graph: GraphId): SQL {
+  return sql`SELECT m.id::text AS id FROM chat_messages m
+      JOIN chat_threads t ON t.id = m.thread_id
+     WHERE t.graph_id = ${graph}::uuid AND m.role = 'system'
+       AND CASE
+             WHEN m.metadata @> '{"type": "undo"}'::jsonb THEN
+               EXISTS (SELECT 1 FROM action_journal j WHERE j.graph_id = ${graph}::uuid AND j.id = m.id)
+             WHEN jsonb_typeof(m.metadata -> 'actions') = 'array'
+                  AND jsonb_array_length(m.metadata -> 'actions') > 0 THEN
+               NOT EXISTS (
+                 SELECT 1 FROM jsonb_array_elements(
+                   CASE WHEN jsonb_typeof(m.metadata -> 'actions') = 'array' THEN m.metadata -> 'actions'
+                        ELSE '[]'::jsonb END) AS a(value)
+                  WHERE NOT EXISTS (SELECT 1 FROM action_journal j
+                                     WHERE j.graph_id = ${graph}::uuid AND j.type <> 'undo'
+                                       AND j.id::text = lower(a.value ->> 'id')))
+             ELSE false
+           END
+     ORDER BY m.created_at, m.id`;
+}
+
+export async function transferredLegacyMessageIds(tx: Tx, graph: GraphId): Promise<string[]> {
+  const rows = (await tx.execute(transferredLegacyMessagesQuery(graph))) as unknown as Array<{
+    id: string;
+  }>;
+  return rows.map((r) => r.id);
 }

@@ -226,7 +226,10 @@ describe('ai.sendMessage (а): «создай задачу» — цикл из t
       'assistant',
     ]);
     expect(msgs[0]?.id).toBe(msgId);
-    expect(msgs[1]?.id).toBe(card.undoActionId as string);
+    // Строка журнала: id действия — в сводке (id строки на проводе — производный, рулинг R-12)
+    expect((msgs[1]?.metadata.actions as Array<{ id: string }> | undefined)?.[0]?.id).toBe(
+      card.undoActionId as string,
+    );
     // Запись журнала действия — в этом треде, актор ai, источник chat (API журнала)
     const action = await journalOf(user, card.undoActionId as string);
     expect(action?.threadId).toBe(threadId);

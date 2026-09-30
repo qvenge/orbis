@@ -514,11 +514,9 @@ export async function ownerExtensionWord(
   return { enabled: lastExtensionSwitch(said.inverse, module) ?? !enabled, at: undo.createdAt };
 }
 
-/** Строго до курсора в порядке выдачи `(created_at DESC, id DESC)`; курсор без ключа — строго раньше по времени. */
-function beforeCursor(before: { at: Date; key?: string } | undefined): SQL {
+/** Строго до курсора журнала в порядке `(created_at DESC, id DESC)`. */
+function beforeCursor(before: JournalCursor | undefined): SQL {
   if (before === undefined) return sql``;
-  if (before.key === undefined)
-    return sql`AND j.created_at < ${before.at.toISOString()}::timestamptz`;
   return sql`AND (j.created_at, j.id) < (${before.at.toISOString()}::timestamptz, ${before.key}::uuid)`;
 }
 
@@ -543,24 +541,52 @@ export async function threadActions(
 }
 
 /**
+ * id строки журнала В ВЫДАЧЕ ТРЕДА (рулинг R-12) — производный и детерминированный от ключа записи `(graph_id, id)`:
+ * md5 строки `orbis-journal-item:<граф>:<id>`, приведённый к uuid.
+ *
+ * Почему не сам id записи: выдача треда — один поток из двух таблиц, и id его элементов обязаны быть уникальны. У
+ * одобренной единицы ключ записи пачки — `pendingId` (`approvePending` исполняет пачку с `batchId = pendingId`), а
+ * `pendingId` — это и PK сообщения-карточки запроса в том же треде: с id записи оба элемента пришли бы с одним id
+ * (React-ключ, дедуп клиента по id, склейка у агента), а курсор `(время, id)` на их стыке при равном времени терял бы
+ * один из них. Хранимые ключи и идемпотентность пачки (РП-12) при этом не меняются — меняется только провод; id
+ * действия элемент несёт в сводке (`metadata.actions[0].id`), а карточки ленты — в `undoActionId`.
+ *
+ * Почему в SQL, а не в TS: порядок выдачи и курсор страницы обязаны идти по ТОМУ ЖЕ ключу, что id на проводе (клиент
+ * строит курсор из `createdAt|id` последнего элемента), — значит, выборка журнала сортирует и режет по нему, и
+ * вычисляется он одним местом. `md5` — ядро PG, без расширений.
+ */
+const THREAD_ITEM_ID = sql`md5('orbis-journal-item:' || j.graph_id::text || ':' || j.id::text)::uuid`;
+
+/** Строго до курсора выдачи треда по `(created_at, id элемента на проводе)`; без id — строго раньше по времени. */
+function beforeItemCursor(before: { at: Date; key?: string } | undefined): SQL {
+  if (before === undefined) return sql``;
+  const at = sql`${before.at.toISOString()}::timestamptz`;
+  if (before.key === undefined) return sql`AND j.created_at < ${at}`;
+  // Разложено на `created_at <= …` (диапазон индекса треда) и тай-брейк по производному id — выражению, а не колонке
+  return sql`AND j.created_at <= ${at} AND (j.created_at < ${at} OR ${THREAD_ITEM_ID} < ${before.key}::uuid)`;
+}
+
+/**
  * Карточки журнала в выдаче треда (`journal/thread-page.ts`, спека §11.3): действия треда, которые тред показывает, —
  * без записей отмены (своей строки у отмены нет, К-45: «отменено» — признак строки отменённого) и без `system`
- * (материализация и прод-процедуры скрыты, как было фильтром ленты). Курсор — тот же, что у сообщений треда: время и
- * id; курсор без id (легаси-форма клиента `<iso>`) — строго раньше по времени.
+ * (материализация и прод-процедуры скрыты, как было фильтром ленты). Каждая запись — со своим id элемента треда
+ * (`itemId`, см. `THREAD_ITEM_ID`); порядок и курсор — `(created_at DESC, itemId DESC)`, как у сообщений треда по их
+ * PK. Курсор без id (легаси-форма клиента `<iso>`) — строго раньше по времени.
  */
 export async function threadFeed(
   tx: Tx,
   graph: GraphId,
   threadId: string,
   page: { before?: { at: Date; key?: string }; limit: number },
-): Promise<JournalEntry[]> {
-  return entriesOf(
-    tx,
-    sql`${SELECT_ROW} WHERE ${inGraph(graph)} AND j.thread_id = ${threadId}::uuid
-          AND ${IS_ACTION} AND j.source <> 'system' ${beforeCursor(page.before)}
-        ORDER BY j.created_at DESC, j.id DESC
-        LIMIT ${page.limit}`,
-  );
+): Promise<Array<JournalEntry & { itemId: string }>> {
+  const rows = (await tx.execute(
+    sql`SELECT ${COLUMNS}, ${THREAD_ITEM_ID}::text AS item_id FROM action_journal j
+         WHERE ${inGraph(graph)} AND j.thread_id = ${threadId}::uuid
+           AND ${IS_ACTION} AND j.source <> 'system' ${beforeItemCursor(page.before)}
+         ORDER BY j.created_at DESC, item_id DESC
+         LIMIT ${page.limit}`,
+  )) as unknown as Array<Row & { item_id: string }>;
+  return rows.map((row) => ({ ...entryFromRow(row), itemId: row.item_id }));
 }
 
 /**
