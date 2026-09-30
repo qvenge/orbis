@@ -13,15 +13,16 @@ import {
   ROLE_REF,
 } from '@orbis/shared';
 import { readBodyDoc } from '@orbis/shared/doc';
-import { desc, eq, or, sql } from 'drizzle-orm';
+import { eq, or, sql } from 'drizzle-orm';
 import type { WireChatMessage } from './chat/messages';
-import { chatMessages, entities, relations } from './db/schema';
+import { entities, relations } from './db/schema';
 import type { Tx } from './db/with-identity';
 import { ExecError } from './errors';
 import type { WireEntity, WireRelation } from './executor/types';
+import { threadPage } from './journal/thread-page';
 import { effectiveRegistry, parseRegistryOfSnapshot } from './registry/cache';
 import type { RegistrySnapshot } from './registry/load';
-import { toWireChatMessage, toWireEntity, toWireEntityFromSql, toWireRelation } from './wire';
+import { toWireEntity, toWireEntityFromSql, toWireRelation } from './wire';
 
 /**
  * Источник обратной ссылки (02-core-os §3.5.8): явная связь роли `mention`, упоминание из
@@ -57,6 +58,9 @@ export interface Backlink {
 
 /** Потолок объединённой секции «Связанное» (sign-off K1): это экран, а не выгрузка. */
 const BACKLINKS_LIMIT = 100;
+
+/** Страница треда в `entity.get` — та же, что страница `chat.listMessages` по умолчанию (Д-7). */
+const THREAD_PAGE = 50;
 
 /**
  * Подпись упоминания из тела. Не из реестра, и это не пробел: у ссылки `[[entity:…]]` роли
@@ -300,14 +304,14 @@ export async function readEntity(
     if (truncated) out.backlinksTruncated = true;
   }
   if (include.has('thread')) {
-    // Детерминированный id (§4.5); лениво НЕ создаёт: нет треда → пустой список
+    // Детерминированный id (§4.5); лениво НЕ создаёт: нет треда → пустой список. Выдача — та же страница, что у
+    // `chat.listMessages` (Д-7: раньше тред отдавался целиком и без фильтра — маркеры «думает» и журнал с телами
+    // уходили клиенту и агентам): последние THREAD_PAGE строк, новые первыми, карточки журнала без тел.
     const threadId = entityThreadId(graphId, row.id);
-    const msgs = await tx
-      .select()
-      .from(chatMessages)
-      .where(eq(chatMessages.threadId, threadId))
-      .orderBy(desc(chatMessages.createdAt), desc(chatMessages.id));
-    out.thread = { threadId, messages: msgs.map(toWireChatMessage) };
+    out.thread = {
+      threadId,
+      messages: await threadPage(tx, graphId, threadId, { limit: THREAD_PAGE }),
+    };
   }
   return out;
 }

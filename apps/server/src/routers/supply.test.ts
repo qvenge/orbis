@@ -25,7 +25,7 @@ import { appDb, freshGraph, personal, requireEnv, truncateAll } from '../../test
 import { actionsOf } from '../../test/journal-helpers';
 import { withIdentity } from '../db/with-identity';
 import { execute } from '../executor/executor';
-import { makeChatJournalSink } from '../executor/journal';
+import { makeJournalSink } from '../executor/journal';
 import { effectiveRegistry } from '../registry/cache';
 import { appRouter } from '../router';
 import { supplyCreateOps, supplyRecordId } from '../supply/records';
@@ -35,7 +35,7 @@ requireEnv();
 
 const { db, client } = appDb();
 const createCaller = createCallerFactory(appRouter);
-const sink = makeChatJournalSink();
+const sink = makeJournalSink();
 
 beforeAll(async () => {
   await truncateAll();

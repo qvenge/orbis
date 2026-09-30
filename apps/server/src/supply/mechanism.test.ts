@@ -39,7 +39,7 @@ import { actionsOf } from '../../test/journal-helpers';
 import { withIdentity } from '../db/with-identity';
 import { ExecError } from '../errors';
 import { execute } from '../executor/executor';
-import { makeChatJournalSink } from '../executor/journal';
+import { makeJournalSink } from '../executor/journal';
 import { undoAction } from '../executor/undo';
 import { effectiveRegistry } from '../registry/cache';
 import { dispatchTool } from '../tools/dispatch';
@@ -57,7 +57,7 @@ import { canonicalPageText, supplyCreateOps, supplyRecordId } from './records';
 requireEnv();
 
 const { db, client } = appDb();
-const sink = makeChatJournalSink();
+const sink = makeJournalSink();
 
 beforeAll(async () => {
   await truncateAll();

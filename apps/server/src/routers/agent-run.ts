@@ -16,7 +16,7 @@ import { sweepStaleRuns } from '../agent-loop/sweep';
 import { withIdentity } from '../db/with-identity';
 import { ExecError, execErrorToTRPC } from '../errors';
 import { execute } from '../executor/executor';
-import { makeChatJournalSink } from '../executor/journal';
+import { makeJournalSink } from '../executor/journal';
 import type { WireEntity } from '../executor/types';
 import { effectiveRegistry } from '../registry/cache';
 import {
@@ -29,7 +29,7 @@ import { ownerOnlyProcedure, router } from '../trpc';
 import type { WireRollbackResult } from '../wire';
 
 // Боевой синк — один инстанс на модуль (состояния не хранит, пишет тем же tx, §7.8).
-const sink = makeChatJournalSink();
+const sink = makeJournalSink();
 
 /** Потолок ответа — тот же, что у вопроса чекпойнта в схеме аспекта (4000). */
 const answerCheckpointInput = z

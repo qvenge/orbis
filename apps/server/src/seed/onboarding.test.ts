@@ -36,7 +36,7 @@ import { entities } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { assertEntityProps } from '../executor/aspects-validate';
 import { execute } from '../executor/executor';
-import { makeChatJournalSink } from '../executor/journal';
+import { makeJournalSink } from '../executor/journal';
 import { parseGraphId } from '../identity';
 import { effectiveRegistry } from '../registry/cache';
 import { validateEntityProps } from '../registry/validate-props';
@@ -241,7 +241,7 @@ async function composition(user: GraphId): Promise<Record<string, unknown>> {
   }
 }
 
-const journal = makeChatJournalSink();
+const journal = makeJournalSink();
 
 /** Правка владельца обычным путём — исполнитель, механизм `user`, журнал. */
 async function ownerEdit(user: GraphId, input: Record<string, unknown>): Promise<void> {

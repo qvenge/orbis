@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { sql } from 'drizzle-orm';
 import { withIdentity } from '../src/db/with-identity';
 import { execute } from '../src/executor/executor';
-import { makeChatJournalSink } from '../src/executor/journal';
+import { makeJournalSink } from '../src/executor/journal';
 import { identityOfGrant } from '../src/identity';
 import { accountOf, addMember, adminDb, appDb, freshGraph, personal, truncateAll } from './helpers';
 import { actionsOf } from './journal-helpers';
@@ -15,7 +15,7 @@ const { db, client } = appDb();
  * против пустой). С боевым синком тот же сюжет заодно проверяет новые политики производных
  * таблиц: глобальный тред графа А заводит А, а сообщение в него дописывает оператор Б.
  */
-const sink = makeChatJournalSink();
+const sink = makeJournalSink();
 
 /** Код ошибки Postgres — у drizzle он лежит либо в `code`, либо в `cause.code`. */
 const pgCode = (e: unknown): string =>

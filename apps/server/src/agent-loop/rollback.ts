@@ -37,7 +37,7 @@ import { sql } from 'drizzle-orm';
 import type { Db } from '../db/client';
 import { type Tx, withIdentity } from '../db/with-identity';
 import { execute } from '../executor/executor';
-import { makeChatJournalSink } from '../executor/journal';
+import { makeJournalSink } from '../executor/journal';
 import {
   actionsTouchingAfter,
   isUndone,
@@ -52,7 +52,7 @@ import type { RollbackConflict, WireRollbackResult } from '../wire';
 import type { RunProps } from './queries';
 
 /** Боевой синк — один инстанс на модуль (состояния не хранит), как в dispatch.ts. */
-const sink = makeChatJournalSink();
+const sink = makeJournalSink();
 
 /**
  * Постоянный текст успешного отката (С12). Именно постоянный, а не собранный по факту:
@@ -364,7 +364,8 @@ export async function rollbackRun(
   // здесь — прочитанный план, а не рабочий буфер.
   const undone: string[] = [];
   for (const entry of [...plan.live].reverse()) {
-    const result = await undoAction(db, { identity, actionId: entry.id });
+    // Путь — `ui`: откат прогона — кнопка владельца на экране прогона (К-45), отмены пишутся от его имени
+    const result = await undoAction(db, { identity, actionId: entry.id, path: 'ui' });
     if (!result.ok) {
       return {
         ok: false,

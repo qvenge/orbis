@@ -35,7 +35,7 @@ import { ensureGlobalThread } from '../chat/threads';
 import { userSettings } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { execute } from '../executor/executor';
-import { makeChatJournalSink } from '../executor/journal';
+import { makeJournalSink } from '../executor/journal';
 import type { ExecuteResult } from '../executor/types';
 import { undoAction } from '../executor/undo';
 import { buildContext } from '../llm/context';
@@ -58,7 +58,7 @@ requireEnv();
 const { db, client } = appDb();
 const { seedRoutine, seedRoutineRun } = agentLoopHelpers(db);
 // Боевой синк журнала: Undo (пункт 8) адресует действие журнала, без синка его бы не было.
-const sink = makeChatJournalSink();
+const sink = makeJournalSink();
 const createCaller = createCallerFactory(appRouter);
 
 const TZ = 'Europe/Moscow';

@@ -1,19 +1,17 @@
 // apps/server/src/executor/undo.ts
-// Undo §7.8 при append-only журнале (§4.6): отмена НЕ правит записанное сообщение —
-// добавляет НОВОЕ системное сообщение {type:'undo', undoes:<action_id>} в тот же тред
-// и применяет inverse В ОДНОМ tx с его записью. Нового action undo не порождает
-// (undo неотменяем). Применение inverse идёт через executor во внутреннем режиме
-// (InternalUndoMode, см. types.ts) — стадии, инварианты и RLS общие, конвейер не
-// дублируется; режим недостижим через tRPC/тулы.
+// Undo §7.8 при append-only журнале (спека скорости §11.2): отмена НЕ правит запись действия — добавляет
+// НОВУЮ строку журнала `type:'undo'` (`undoes` — отменённое, тред — тред отменённого, источник — путь отмены)
+// и применяет inverse В ОДНОМ tx с ней. Нового action undo не порождает (undo неотменяем). Применение
+// inverse идёт через executor во внутреннем режиме (InternalUndoMode, см. types.ts) — стадии, инварианты и
+// RLS общие, конвейер не дублируется; режим недостижим через tRPC/тулы.
 import { newId } from '@orbis/shared';
-import { appendMessage } from '../chat/messages';
-import { ensureGlobalThread } from '../chat/threads';
 import type { Db } from '../db/client';
 import { withIdentity } from '../db/with-identity';
 import type { Identity } from '../identity';
 import { unmarkRefSources } from '../registry/ref';
 import { ExecError } from './errors';
 import { execute } from './executor';
+import { makeJournalSink } from './journal';
 import {
   actionRecordOf,
   findAction,
@@ -28,7 +26,11 @@ import type {
   ExecuteRequest,
   ExecuteResult,
   ExecutorDeps,
+  UndoPath,
 } from './types';
+
+/** Боевой синк записи отмены — один инстанс: состояния не хранит. */
+const sink = makeJournalSink();
 
 /**
  * То же «последнее неотменённое», но БЕЗ применения (В-8): политике §7.10 нужно посмотреть на обратные
@@ -49,7 +51,7 @@ export async function peekLastUndoable(
  * Применение inverse найденного действия: операции журнала — это тулы executor'а,
  * поэтому просто прогоняем их конвейером во внутреннем режиме. Multi-op inverse
  * (batch-действие) идёт batch-путём с техническим batchId — атомарность §7.8;
- * в журнал он не попадает (internal-режим пишет undo-сообщение вместо action).
+ * в журнал он не попадает (internal-режим пишет запись отмены вместо action).
  *
  * Отсюда требование к ФОРМЕ полезной нагрузки, которое ломается молча: `iv.payload`
  * уезжает во вход тула и разбирается fail-closed'ом (`entityUpdateExecInput`), поэтому
@@ -83,6 +85,7 @@ async function applyUndo(
   db: Db,
   who: Identity,
   action: JournalEntry,
+  path: UndoPath,
   beforeStages?: ExecutorDeps['beforeStages'],
 ): Promise<ExecuteResult> {
   if (action.inverse.length === 0) {
@@ -92,26 +95,34 @@ async function applyUndo(
       error: { code: 'VALIDATION', message: `у действия ${action.id} нет inverse-операций` },
     };
   }
+  // id записи отмены — ДО применения (РП-11): на нём стоят ответ и продолжения отмены (задача 10)
+  const undoRecordId = newId();
   const req: ExecuteRequest = {
     identity: who,
     actorKind: 'owner', // MVP: undo инициирует владелец графа
+    // Исполнение — всегда `system` (инварианты читают `req.source`), путь отмены — поле записи отмены (РП-11)
     source: 'system',
     operations: action.inverse.map((iv) => ({ tool: iv.op, input: iv.payload })),
     batchId: action.inverse.length > 1 ? newId() : undefined,
   };
   const result = await execute(db, req, {
+    sink,
     // Шов сериализации карточки отката (`approvePending`, ключ `undo_of`): замок единицы и
-    // перепроверка «не отклонена» — в ТОЙ ЖЕ транзакции, что undo-сообщение (см. `undoAction`).
+    // перепроверка «не отклонена» — в ТОЙ ЖЕ транзакции, что запись отмены (см. `undoAction`).
     ...(beforeStages !== undefined && { beforeStages }),
     internalUndo: {
-      // Вызывается ПОСЛЕ применения inverse В ТОМ ЖЕ tx — атомарность undo (§7.8)
-      async writeUndoMessage(tx) {
+      undoRecordId,
+      undoing: action,
+      path,
+      // Вызывается ПОСЛЕ применения inverse В ТОМ ЖЕ tx, до записи отмены — атомарность undo (§7.8)
+      async onApplied(tx) {
         // Перепроверка под замками строк: конкурентный undo того же action мог
         // закоммититься, пока этот tx ждал FOR UPDATE (READ COMMITTED увидит его);
         // отказ откатывает и применённый inverse — двойного отката не бывает
         if (await isUndone(tx, who.graph, action.id)) {
           throw new ExecError('VALIDATION', `действие ${action.id} уже отменено`, {
             actionId: action.id,
+            reason: 'already_undone',
           });
         }
         // Снятие пометки `needs-review`, поставленной архивацией цели ссылки (Р-11-1).
@@ -120,15 +131,6 @@ async function applyUndo(
         // inverse — цель к этому моменту уже разархивирована, и условие «не осталось ссылок
         // на архивную цель» внутри `unmarkRefSources` считается по восстановленному графу.
         await unmarkRefSources(tx, who.graph, markedRefSources(action));
-        await appendMessage(tx, {
-          id: newId(),
-          // Тот же тред, где записано отменяемое действие. У прежнего хранилища тред есть у каждой записи;
-          // запись без треда (таблица журнала, задача 5) отменой не будит разговор — глобальный тред владельца.
-          threadId: action.threadId ?? (await ensureGlobalThread(tx, who.graph)),
-          role: 'system',
-          content: `Отменено действие ${action.id}`,
-          metadata: { type: 'undo', undoes: action.id },
-        });
       },
     },
   });
@@ -140,6 +142,10 @@ async function applyUndo(
 /**
  * Отмена конкретного действия по id из журнала (§7.8).
  *
+ * `path` — путь отмены, поле `source` записи отмены (РП-11): `ui` (умолчание) — кнопка владельца и откат прогона
+ * с экрана прогона (К-45); `chat` — «отмени последнее» моделью и карточка отката `undo_of`; `system` — прод-операции
+ * (`migrate-1v --undo`).
+ *
  * `beforeStages` — ровно тот же шов, что у `approvePending` для пачки (`ExecutorDeps`): карточка
  * отката (`undo_of`, В-8) исполняется здесь, а не `execute` payload'а, и без шва её «Принять» и
  * «Отклонить» не делили бы замок единицы — владелец мог получить в ленте «отменено» и «отклонено»
@@ -147,7 +153,7 @@ async function applyUndo(
  */
 export async function undoAction(
   db: Db,
-  args: { identity: Identity; actionId: string },
+  args: { identity: Identity; actionId: string; path?: UndoPath },
   deps: { beforeStages?: ExecutorDeps['beforeStages'] } = {},
 ): Promise<ExecuteResult> {
   try {
@@ -164,11 +170,12 @@ export async function undoAction(
       if (await isUndone(tx, args.identity.graph, args.actionId)) {
         throw new ExecError('VALIDATION', `действие ${args.actionId} уже отменено`, {
           actionId: args.actionId,
+          reason: 'already_undone',
         });
       }
       return found;
     });
-    return await applyUndo(db, args.identity, found, deps.beforeStages);
+    return await applyUndo(db, args.identity, found, args.path ?? 'ui', deps.beforeStages);
   } catch (e) {
     if (e instanceof ExecError) {
       return { ok: false, error: { code: e.code, message: e.message, details: e.details } };
@@ -180,7 +187,7 @@ export async function undoAction(
 /**
  * Что именно отменило «отмени последнее» — для того, кто НЕ выбирал действие сам: чат-модели
  * (тул `undo_last`, tools/dispatch.ts) нужно назвать владельцу откаченное, а `actionId` без
- * подписи ей ничего не говорит. `title` — заголовок audit-сообщения («Создана сущность
+ * подписи ей ничего не говорит. `title` — заголовок записи журнала («Создана сущность
  * «…»»), `type`/`entityId` — из самой записи журнала.
  */
 export interface UndoneAction {
@@ -198,8 +205,15 @@ export interface UndoneAction {
  */
 export type UndoLastResult = (ExecuteOk & { undone: UndoneAction }) | ExecuteErr;
 
-/** «Отмени последнее» (§7.8): inverse первого неотменённого действия с конца журнала. */
-export async function undoLast(db: Db, args: { identity: Identity }): Promise<UndoLastResult> {
+/**
+ * «Отмени последнее» (§7.8): inverse первого неотменённого действия с конца журнала. Путь — `ui` (умолчание):
+ * единственный вызывающий — `ai.undoLast` кнопки владельца; «отмени последнее» словами в чате идёт политикой
+ * (`tools/dispatch.ts`: `peekLastUndoable` + `undoAction` с путём `chat`).
+ */
+export async function undoLast(
+  db: Db,
+  args: { identity: Identity; path?: UndoPath },
+): Promise<UndoLastResult> {
   try {
     const found = await withIdentity(db, args.identity, (tx) =>
       findLastUndoable(tx, args.identity.graph),
@@ -214,7 +228,7 @@ export async function undoLast(db: Db, args: { identity: Identity }): Promise<Un
         },
       };
     }
-    const result = await applyUndo(db, args.identity, found);
+    const result = await applyUndo(db, args.identity, found, args.path ?? 'ui');
     if (!result.ok) return result;
     // `findLastUndoable` записей отмены не отдаёт (К-22) — запись журнала здесь всегда действие
     const record = actionRecordOf(found);

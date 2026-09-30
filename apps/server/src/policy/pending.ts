@@ -17,12 +17,11 @@
 // исполняется атомарной группой с batch_id = pendingId (одиночный тул — batch из
 // одной операции, валиден по §9.2; payload-batch_execute — собственная структура с
 // ПЕРЕЗАПИСЬЮ его batch_id на pendingId — двойная идемпотентность по одному ключу).
-// Детерминированный audit-id = batchAuditMessageId(owner, pendingId) — он заменяет
-// отдельную формулу uuidv5('approval:<owner>:<pendingId>') ранней редакции брифа:
-// та же детерминированность и идемпотентность по PK chat_messages, но одним общим
-// механизмом (резолюция координатора). Подмена batch_id безопасна: pendingId
-// генерирует сервер (uuidv7), коллизия с клиентским batch_id невероятна. Повторный
-// approve: findByAuditId → replay сохранённого результата; гонка одинаковых approve →
+// Ключ записи журнала исполненной единицы — сам pendingId (`(graph_id, id)` таблицы журнала,
+// спека скорости §11.2): та же детерминированность и идемпотентность, что у любой пачки, одним
+// общим механизмом (резолюция координатора). Подмена batch_id безопасна: pendingId генерирует
+// сервер (uuidv7), коллизия с клиентским batch_id невероятна. Повторный approve: запись пачки
+// найдена (`findBatchWrite`) → replay сохранённого результата; гонка одинаковых approve →
 // AuditIdConflictError → тот же replay (§7.8).
 //
 // ЕДИНИЦЫ ПАЧКИ (D42 ОЧ.2): тот же носитель несёт отложенные действия и ВОПРОСЫ рутины —
@@ -35,7 +34,6 @@ import { createHash } from 'node:crypto';
 import {
   type ActionDefinition,
   answerMessageId,
-  batchAuditMessageId,
   batchExecuteInput,
   canonicalJson,
   effectiveLabel,
@@ -72,7 +70,7 @@ import { chatMessages } from '../db/schema';
 import { type Tx, withIdentity } from '../db/with-identity';
 import { ExecError, type StructuredError } from '../errors';
 import { execute } from '../executor/executor';
-import { makeChatJournalSink } from '../executor/journal';
+import { makeJournalSink } from '../executor/journal';
 import { executedIds, findBatch, isUndone } from '../executor/journal-read';
 import type { ActorKind, ExecuteResult } from '../executor/types';
 import { undoAction } from '../executor/undo';
@@ -84,8 +82,8 @@ import { lockOwnerRegistry } from '../registry/ops';
 import type { Card } from '../tools/registry';
 import type { ConfirmationLevel } from './confirmation';
 
-// Боевой синк §7.8 — audit-сообщение approve пишется тем же tx, что стадия 5
-const sink = makeChatJournalSink();
+// Боевой синк §7.8 — запись журнала approve пишется тем же tx, что стадия 5
+const sink = makeJournalSink();
 
 /** Русский плюрал операций batch: 1 операция, 2 операции, 5 операций. */
 export function operationsNoun(n: number): string {
@@ -982,8 +980,8 @@ export async function reportMergeConflictUnit(
  * Одобрение §7.10: исполнить СОХРАНЁННЫЙ payload, не повторяя вызов модели.
  * Порядок проверок: (1) pending виден под RLS (чужой и несуществующий → единый
  * NOT_FOUND); (2) не отклонён → VALIDATION «отклонено»; (3) исполненность проверяет
- * сам executor batch-путём (findByAuditId по batchAuditMessageId(owner, pendingId) →
- * идемпотентный replay сохранённого результата — «как executor для batch», §7.8).
+ * сам executor batch-путём (запись пачки с ключом pendingId → идемпотентный replay
+ * сохранённого результата — «как executor для batch», §7.8).
  * Исполнение — полный конвейер (стадии 1–7): это и есть «ревалидация текущего
  * состояния» §7.10 — изменившееся/удалённое состояние даёт структурную ошибку
  * (NOT_FOUND/STALE_VERSION/INVARIANT/...), не тихий провал, и ничего не пишет.
@@ -991,13 +989,13 @@ export async function reportMergeConflictUnit(
  * Сериализация против reject (fix round): проверка (2) в отдельном tx — лишь
  * fast-path; авторитетная перепроверка «не отклонён» выполняется ПОД advisory-lock'ом
  * по pendingId, взятым ДО ПЕРВОГО ЧТЕНИЯ СОСТОЯНИЯ в audit-tx executor'а (beforeStages) —
- * В ТОМ ЖЕ tx, где пишется audit-сообщение. Именно «до первого чтения», а не «первым
+ * В ТОМ ЖЕ tx, где пишется запись журнала. Именно «до первого чтения», а не «первым
  * statement'ом»: два первых statement'а любого такого tx ставит сам `withIdentity`
  * (set_config + SET LOCAL ROLE), и буквальная формулировка не выполнялась бы НИКОГДА —
  * ни здесь, ни у reject'а. Точный контракт и цена ошибки — в доке `acquirePendingLock`. Конкурентный reject держит тот же замок: он либо
  * закоммитился ДО захвата (перепроверка увидит reject-сообщение свежим snapshot'ом
  * READ COMMITTED → «отклонено», ни одной записи), либо ждёт наш commit и увидит
- * audit-сообщение → «уже исполнено». Write-skew исключён; закреплено гонным тестом.
+ * запись журнала → «уже исполнено». Write-skew исключён; закреплено гонным тестом.
  */
 export async function approvePending(
   db: Db,
@@ -1264,12 +1262,12 @@ async function approveRolloverUnit(
  * ЗАМОК ЕДИНИЦЫ И «НЕ ОТКЛОНЕНА» — В ТРАНЗАКЦИИ UNDO-СООБЩЕНИЯ (шов `beforeStages` у `undoAction`),
  * ровно как у пачки в audit-tx: иначе параллельные «Принять» и «Отклонить» проходили бы свои
  * проверки до чужого коммита (write-skew, докблок `approvePending`). Исполненность отката для
- * `rejectPendingTx` — undo-сообщение по отменяемому действию (`isUndone`), audit у отката нет.
+ * `rejectPendingTx` — запись отмены отменяемого действия (`isUndone`), записи пачки у отката нет.
  *
  * ПОВТОР — replay, а не отказ: если отменяемое действие уже отменено (этой же карточкой раньше или
  * параллельным нажатием), «Принять» отвечает успехом с id отменённого действия и
  * `idempotentReplay`, как повтор пачки по audit. Проверка — ПОСЛЕ неудачи и отдельной транзакцией:
- * проигравшая гонка узнаёт о чужом коммите только так, а отказ «отклонено» с undo-сообщением не
+ * проигравшая гонка узнаёт о чужом коммите только так, а отказ «отклонено» с записью отмены не
  * совпадает никогда (под замком одно исключает другое).
  */
 async function approveUndoUnit(
@@ -1282,7 +1280,8 @@ async function approveUndoUnit(
   let rejected = false;
   const r = await undoAction(
     db,
-    { identity: args.identity, actionId: undoOf },
+    // Путь — `chat`: карточку отката (`undo_of`) поставил разговор, владелец её принимает (РП-11)
+    { identity: args.identity, actionId: undoOf, path: 'chat' },
     {
       beforeStages: async (tx) => {
         await acquirePendingLock(tx, args.pendingId);
@@ -1343,9 +1342,9 @@ export type RejectPendingResult =
  * Отклонение §7.10 В ЧУЖОЙ ТРАНЗАКЦИИ — тело rejectPending без собственного withIdentity.
  * Журнал append-only (§4.6): карточка-запрос не правится, в её тред пишется НОВОЕ
  * системное сообщение {type:'confirmation_rejected', rejects} с детерминированным PK
- * rejectMessageId(owner, pendingId) — идемпотентность reject по PK, как у audit-сообщений
- * (§7.8). Уже исполненный pending отклонить нельзя (audit-сообщение по детерминированному
- * PK уже существует) → VALIDATION.
+ * rejectMessageId(owner, pendingId) — идемпотентность reject по PK, как у записей журнала
+ * (§7.8). Уже исполненный pending отклонить нельзя (запись журнала пачки с ключом pendingId
+ * уже существует) → VALIDATION.
  *
  * Сериализация против approve (fix round): advisory-lock по pendingId берётся ЗДЕСЬ, до
  * первого чтения состояния (см. док acquirePendingLock) — конкурентный approve держит тот
@@ -1362,7 +1361,7 @@ export type RejectPendingResult =
  * КОНТРАКТ ВЫЗЫВАТЕЛЯ:
  *  - tx открыт withIdentity(db, args.identity) — ПОД ТОЙ ЖЕ парой. Проверка этого стоила бы
  *    round-trip на каждый вызов, поэтому её нет: findPendingMessage/rejectedReason
- *    скоупит RLS по identity транзакции, а rejectMessageId/batchAuditMessageId считаются
+ *    скоупит RLS по identity транзакции, а rejectMessageId и проба журнала считаются
  *    от args.identity.graph — рассинхрон дал бы отказ мимо цели. Тот же контракт у createPending.
  *  - никакого чтения состояния этого pendingId в этой транзакции ДО вызова: замок берётся
  *    здесь, и прочитанное раньше — снапшот до захвата (тот самый write-skew). Вызывателю,
@@ -1386,18 +1385,18 @@ export async function rejectPendingTx(
   // Гейт — в tx-форме, а не в обёртке: иначе мимо него прошли бы вызовы из открытых
   // транзакций (лестница правки Ш1, гашение пачки)
   assertNotQuestion(msg.pending);
-  const auditId = batchAuditMessageId(args.identity.graph, args.pendingId);
+  // Адрес исполненной единицы в журнале — сам pendingId (ключ записи пачки), отдельного id записи нет
   if ((await findBatch(tx, args.identity.graph, args.pendingId)) !== undefined) {
     throw new ExecError(
       'VALIDATION',
       `подтверждение ${args.pendingId} уже исполнено — отклонить нельзя`,
-      { pendingId: args.pendingId, auditId },
+      { pendingId: args.pendingId },
     );
   }
-  // Карточка отката (`undo_of`, В-8) исполняется `undoAction`, и audit-сообщения по ней нет:
-  // исполненность — undo-сообщение по отменяемому действию. Без этой проверки «Отклонить» после
+  // Карточка отката (`undo_of`, В-8) исполняется `undoAction`, и записи пачки по ней нет:
+  // исполненность — запись отмены отменяемого действия. Без этой проверки «Отклонить» после
   // «Принять» писало бы «отклонено» рядом с «отменено» (фикс-раунд 1 задачи 8, I-3). Читается
-  // под тем же замком: «Принять» отката держит его в транзакции undo-сообщения (`approveUndoUnit`).
+  // под тем же замком: «Принять» отката держит его в транзакции записи отмены (`approveUndoUnit`).
   const undoOf = msg.pending.undo_of;
   if (undoOf !== undefined && (await isUndone(tx, args.identity.graph, undoOf))) {
     throw new ExecError(

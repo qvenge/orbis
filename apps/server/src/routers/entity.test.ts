@@ -10,6 +10,8 @@ import { TRPCError } from '@trpc/server';
 import { sql } from 'drizzle-orm';
 import { adminDb, appDb, freshGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
 import { threadJournal } from '../../test/journal-helpers';
+import { execute } from '../executor/executor';
+import { makeJournalSink } from '../executor/journal';
 import { appRouter } from '../router';
 import { createCallerFactory } from '../trpc';
 
@@ -179,6 +181,59 @@ describe('entity.create / entity.get (§9.2)', () => {
     } finally {
       await adminClient.end();
     }
+  });
+
+  // Д-7: тред в entity.get отдавался целиком и без фильтра — маркеры «думает» и журнал с телами уходили клиенту и агентам.
+  // Теперь это та же выдача, что chat.listMessages (`journal/thread-page.ts`): страница 50, без маркеров, карточки журнала
+  // треда — без тел действия.
+  test('get include=thread: страница 50 новых первыми тем же читателем, что listMessages; маркер «думает» скрыт; журнал — без тел', async () => {
+    const user = await freshGraph();
+    const caller = callerFor(user);
+    const e = await caller.entity.create({
+      input: { title: 'Длинный тред', tags: [] },
+      source: 'ui',
+    });
+    const { threadId } = await caller.chat.ensureThread({ entityId: e.id });
+    const base = Date.UTC(2026, 8, 1, 9, 0, 0);
+    const { db: admin, client: adminClient } = adminDb();
+    try {
+      for (let i = 0; i < 55; i += 1) {
+        await admin.execute(
+          sql`INSERT INTO chat_messages (id, thread_id, role, content, created_at)
+              VALUES (gen_random_uuid(), ${threadId}::uuid, 'user', ${`сообщение ${i}`},
+                      ${new Date(base + i * 1000).toISOString()}::timestamptz)`,
+        );
+      }
+      await admin.execute(
+        sql`INSERT INTO chat_messages (id, thread_id, role, content, metadata, created_at)
+            VALUES (gen_random_uuid(), ${threadId}::uuid, 'system', '', '{"type":"processing"}'::jsonb,
+                    ${new Date(base + 60_000).toISOString()}::timestamptz)`,
+      );
+    } finally {
+      await adminClient.end();
+    }
+    // Правка из разговора в треде записи — карточка журнала этого треда (время — сейчас, новее всех сообщений)
+    const upd = await execute(
+      db,
+      {
+        identity: personal(user),
+        actorKind: 'ai',
+        source: 'chat',
+        threadId,
+        operations: [{ tool: 'entity_update', input: { id: e.id, title: 'Длинный тред 2' } }],
+      },
+      { sink: makeJournalSink() },
+    );
+    expect(upd.ok).toBe(true);
+
+    const got = await caller.entity.get({ id: e.id, include: ['thread'] });
+    const messages = got.thread?.messages ?? [];
+    expect(messages.length).toBe(50);
+    expect(messages.some((m) => m.metadata.type === 'processing')).toBe(false);
+    expect(messages[0]?.role).toBe('system'); // карточка правки — самая новая
+    expect(JSON.stringify(messages[0]?.metadata)).not.toContain('"operations"');
+    expect(messages[1]?.content).toBe('сообщение 54');
+    expect(messages[49]?.content).toBe('сообщение 6');
   });
 });
 

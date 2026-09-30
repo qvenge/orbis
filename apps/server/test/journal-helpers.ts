@@ -6,6 +6,7 @@
 // Пул — на вызов, как у прочих общих помощников (`finance-on.ts`, `surfaces.ts`): модуль общий на весь процесс
 // bun test (модули кешируются), и пул, закрытый хуком одного файла, был бы отнят у следующих.
 import type { GraphId } from '@orbis/shared';
+import { sql } from 'drizzle-orm';
 import { type Tx, withIdentity } from '../src/db/with-identity';
 import * as J from '../src/executor/journal-read';
 import { appDb, personal } from './helpers';
@@ -44,4 +45,20 @@ export function threadJournal(graph: GraphId, threadId: string) {
 /** Весь журнал графа по времени, ВКЛЮЧАЯ записи отмены (счёт отмен, порядок «действие → отмена»). */
 export function wholeJournalOf(graph: GraphId) {
   return read(graph, (tx) => J.exportJournal(tx, graph));
+}
+
+/**
+ * Записи графа, затронутые действием, — строки БОКОВОЙ таблицы `action_journal_entities` (РП-8), по времени записи.
+ * Единственное место в тестах, где хранилище читается мимо API журнала, и это не случайность: боковая таблица —
+ * индекс проб «по затронутой записи», у API нет читателя её строк как таковых (пробы отдают записи журнала). Сверить,
+ * что синк и перенос положили её строки ТОЙ ЖЕ транзакцией, по каждой затронутой записи, можно только прямо.
+ */
+export async function journalEntitiesOf(graph: GraphId, actionId: string): Promise<string[]> {
+  const rows = await read(graph, (tx) =>
+    tx.execute(
+      sql`SELECT entity_id::text AS id FROM action_journal_entities
+           WHERE graph_id = ${graph}::uuid AND action_id = ${actionId}::uuid ORDER BY entity_id`,
+    ),
+  );
+  return (rows as unknown as Array<{ id: string }>).map((r) => r.id);
 }

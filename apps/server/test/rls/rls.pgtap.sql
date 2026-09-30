@@ -3,7 +3,7 @@
 -- Всё в одной транзакции с ROLLBACK: БД не мутируется.
 BEGIN;
 CREATE EXTENSION IF NOT EXISTS pgtap;
-SELECT plan(167);
+SELECT plan(180);
 
 -- Графы фикстур (0020): с FK на graphs владельца «из воздуха» не бывает. Весь файл — одна транзакция
 -- с ROLLBACK, отложенные триггеры И-1 до проверки не доходят — гранты заведены ради политик.
@@ -151,9 +151,24 @@ INSERT INTO registry_deltas (id, graph_id, target_kind, target_id, base_version,
 INSERT INTO envelope_spent_cache (envelope_id, graph_id, as_of, spent, owner_version, system_version) VALUES
   ('00000000-0000-7000-8000-0000000000a1', '00000000-0000-4000-8000-00000000000a', '2026-09-01', 100, 0, 1),
   ('00000000-0000-7000-8000-0000000000b1', '00000000-0000-4000-8000-00000000000b', '2026-09-01', 200, 0, 1);
+-- Журнал действий (0025) — по строке у A и у B и по строке боковой таблицы: без строки B «видит только свою» была бы
+-- ложно-зелёной и при снятой политике.
+INSERT INTO action_journal (graph_id, id, type, entity_id, actor_user_id, actor_kind, source, mechanism, title,
+                            card_tool, entity_ids, operations, inverse) VALUES
+  ('00000000-0000-4000-8000-00000000000a', '00000000-0000-7000-8000-0000000000a6', 'entity_created',
+   '00000000-0000-7000-8000-0000000000a1', '00000000-0000-4000-8000-00000000000a', 'owner', 'ui', 'user',
+   'A: создана', 'entity_create', '{00000000-0000-7000-8000-0000000000a1}', '[]', '[]'),
+  ('00000000-0000-4000-8000-00000000000b', '00000000-0000-7000-8000-0000000000b6', 'entity_created',
+   '00000000-0000-7000-8000-0000000000b1', '00000000-0000-4000-8000-00000000000b', 'owner', 'ui', 'user',
+   'B: создана', 'entity_create', '{00000000-0000-7000-8000-0000000000b1}', '[]', '[]');
+INSERT INTO action_journal_entities (graph_id, action_id, entity_id, created_at) VALUES
+  ('00000000-0000-4000-8000-00000000000a', '00000000-0000-7000-8000-0000000000a6',
+   '00000000-0000-7000-8000-0000000000a1', now()),
+  ('00000000-0000-4000-8000-00000000000b', '00000000-0000-7000-8000-0000000000b6',
+   '00000000-0000-7000-8000-0000000000b1', now());
 
--- 1) RLS включён и FORCE на всех 22 таблицах (11 исходных + 7 реестров реформы 0014 + кэш spent 0018
---    + graphs и graph_members 0020 + замеры perf_samples 0024)
+-- 1) RLS включён и FORCE на всех 24 таблицах (11 исходных + 7 реестров реформы 0014 + кэш spent 0018
+--    + graphs и graph_members 0020 + замеры perf_samples 0024 + журнал action_journal и его боковая таблица 0025)
 SELECT is(
   (SELECT count(*)::int FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
    WHERE n.nspname = 'public' AND c.relkind = 'r'
@@ -163,9 +178,10 @@ SELECT is(
                        'property_definitions','relation_role_definitions',
                        'contract_definitions','subscription_definitions',
                        'action_definitions','registry_deltas','registry_system',
-                       'envelope_spent_cache','graphs','graph_members','perf_samples')
+                       'envelope_spent_cache','graphs','graph_members','perf_samples',
+                       'action_journal','action_journal_entities')
      AND c.relrowsecurity AND c.relforcerowsecurity),
-  22, 'RLS ENABLE+FORCE на всех двадцати двух таблицах');
+  24, 'RLS ENABLE+FORCE на всех двадцати четырёх таблицах');
 
 -- Как пользователь A
 SELECT set_config('request.jwt.claims',
@@ -341,6 +357,8 @@ SELECT results_eq('SELECT count(*)::int FROM relations', ARRAY[0],
 -- (0005), поэтому «ничего не видно» здесь обеспечивает именно RLS, а не отсутствие права.
 SELECT results_eq('SELECT count(*)::int FROM agent_grants', ARRAY[0],
   'без identity: agent_grants — 0 строк');
+SELECT results_eq('SELECT count(*)::int FROM action_journal', ARRAY[0],
+  'без identity: action_journal — 0 строк');
 RESET ROLE;
 
 -- Замеры (спека скорости §3.2, §13.1): аккаунт пишет и читает только своё; UPDATE/DELETE гранта нет.
@@ -371,6 +389,56 @@ SELECT is((SELECT count(*)::int FROM pg_policies WHERE schemaname = 'public' AND
 SELECT is((SELECT count(*)::int FROM cron.job WHERE jobname = 'orbis_perf_samples_cleanup' AND schedule = '17 3 * * *'
     AND command LIKE '%DELETE FROM public.perf_samples WHERE created_at < now() - interval ''30 days''%'), 1,
   'чистка замеров старше 30 дней — задача pg_cron ежедневно в 03:17 UTC (РП-26)');
+
+-- Журнал действий (спека скорости §11.2, 0025): граф читает и дописывает только свой; правки и удаления нет ни у кого
+-- из ролей приложения — гранта нет (REVOKE ALL в миграции), поэтому UPDATE/DELETE — 42501, а не «0 строк».
+SELECT set_config('request.jwt.claims', '{"sub":"00000000-0000-4000-8000-00000000000a","role":"authenticated","graph":"00000000-0000-4000-8000-00000000000a"}', true);
+SET LOCAL ROLE authenticated;
+SELECT results_eq('SELECT id::text FROM action_journal', ARRAY['00000000-0000-7000-8000-0000000000a6'],
+  'журнал: A видит ровно свою запись');
+SELECT results_eq('SELECT action_id::text FROM action_journal_entities', ARRAY['00000000-0000-7000-8000-0000000000a6'],
+  'боковая таблица журнала: A видит ровно свою строку');
+SELECT lives_ok($$INSERT INTO action_journal (graph_id, id, type, actor_user_id, actor_kind, source, mechanism, title,
+    card_tool, operations, inverse) VALUES ('00000000-0000-4000-8000-00000000000a', '00000000-0000-7000-8000-0000000000a7',
+    'batch', '00000000-0000-4000-8000-00000000000a', 'owner', 'ui', 'user', 'A: пачка', 'batch_execute', '[]', '[]')$$,
+  'журнал: запись в свой граф проходит');
+SELECT throws_ok($$INSERT INTO action_journal (graph_id, id, type, actor_user_id, actor_kind, source, mechanism, title,
+    card_tool, operations, inverse) VALUES ('00000000-0000-4000-8000-00000000000b', '00000000-0000-7000-8000-0000000000c6',
+    'batch', '00000000-0000-4000-8000-00000000000a', 'owner', 'ui', 'user', 'подлог', 'batch_execute', '[]', '[]')$$,
+  '42501', NULL, 'журнал: запись в чужой граф отклоняется WITH CHECK');
+SELECT throws_ok($$INSERT INTO action_journal_entities (graph_id, action_id, entity_id, created_at) VALUES
+    ('00000000-0000-4000-8000-00000000000b', '00000000-0000-7000-8000-0000000000b6',
+     '00000000-0000-7000-8000-0000000000a1', now())$$,
+  '42501', NULL, 'боковая таблица: строка в чужой граф отклоняется WITH CHECK');
+SELECT throws_ok($$UPDATE action_journal SET title = 'правка'$$, '42501', NULL,
+  'журнал только дописывается: UPDATE — нет гранта');
+SELECT throws_ok($$DELETE FROM action_journal$$, '42501', NULL,
+  'журнал только дописывается: DELETE — нет гранта');
+SELECT throws_ok($$UPDATE action_journal_entities SET created_at = now()$$, '42501', NULL,
+  'боковая таблица только дописывается: UPDATE — нет гранта');
+SELECT throws_ok($$DELETE FROM action_journal_entities$$, '42501', NULL,
+  'боковая таблица только дописывается: DELETE — нет гранта');
+RESET ROLE;
+SELECT set_config('request.jwt.claims', '{"sub":"00000000-0000-4000-8000-00000000000b","role":"authenticated","graph":"00000000-0000-4000-8000-00000000000b"}', true);
+SET LOCAL ROLE authenticated;
+SELECT results_eq('SELECT id::text FROM action_journal', ARRAY['00000000-0000-7000-8000-0000000000b6'],
+  'журнал: B видит ровно свою запись — запись A ему невидима');
+RESET ROLE;
+-- Политики журнала — поимённо и без фильтра по роли: таблицы исключены из пинов «× 4 по графу» ниже, и лишняя политика
+-- (UPDATE, DELETE или `TO orbis_app USING (true)`) была бы видна только здесь.
+SELECT is((SELECT string_agg(tablename::text || '.' || policyname::text || ' ' || cmd::text || ' ' || roles::text COLLATE "C",
+      ', ' ORDER BY tablename::text COLLATE "C", policyname::text COLLATE "C")
+  FROM pg_policies WHERE schemaname = 'public' AND tablename IN ('action_journal', 'action_journal_entities')),
+  'action_journal.current_graph_insert INSERT {authenticated}, action_journal.current_graph_select SELECT {authenticated}, '
+  || 'action_journal_entities.current_graph_insert INSERT {authenticated}, '
+  || 'action_journal_entities.current_graph_select SELECT {authenticated}',
+  'у журнала и боковой таблицы — ровно по две политики (SELECT, INSERT); UPDATE/DELETE нет');
+SELECT is((SELECT count(*)::int FROM pg_policies p WHERE p.schemaname = 'public'
+    AND p.tablename IN ('action_journal', 'action_journal_entities')
+    AND coalesce(p.qual, p.with_check) LIKE '%current_graph_id()%'
+    AND coalesce(p.qual, p.with_check) LIKE '%' || CASE WHEN p.cmd = 'SELECT' THEN 'actor_reads_current_graph()'
+           ELSE 'actor_writes_current_graph()' END || '%'),
+  4, 'каждая политика журнала спрашивает текущий граф и свою половину: SELECT — actor_reads, INSERT — actor_writes');
 
 -- Группа 9: oauth_clients закрыта для чужих — оба барьера поимённо (§9.3, D34).
 --
@@ -1031,11 +1099,15 @@ SELECT col_not_null('public', 'agent_grants', 'issued_by', 'у гранта аг
 --     переноса выше), но пин обещал больше, чем проверял. Теперь у КАЖДОЙ политики каждая
 --     ПРИСУТСТВУЮЩАЯ клауза обязана нести обе половины: `qual` у SELECT/DELETE, `with_check` у
 --     INSERT, ОБЕ у UPDATE.
+-- Журнал действий и его боковая таблица (0025) из «× 4» исключены явно: они только дописываются, у них ровно по две
+-- политики (SELECT, INSERT) — это пинится поимённо и по клаузам в блоке журнала выше.
 SELECT is((SELECT count(*)::int FROM pg_policies WHERE schemaname = 'public'
-    AND roles = '{authenticated}' AND tablename NOT IN ('graphs','graph_members','perf_samples')),
+    AND roles = '{authenticated}' AND tablename NOT IN ('graphs','graph_members','perf_samples',
+      'action_journal','action_journal_entities')),
   68, 'политик строк ровно 68 — 17 таблиц × 4 команды, ни одной лишней и ни одной пропавшей');
 SELECT is((SELECT count(*)::int FROM pg_policies p WHERE p.schemaname = 'public'
-    AND p.roles = '{authenticated}' AND p.tablename NOT IN ('graphs','graph_members','perf_samples')
+    AND p.roles = '{authenticated}'
+    AND p.tablename NOT IN ('graphs','graph_members','perf_samples','action_journal','action_journal_entities')
     AND NOT (p.qual IS NULL AND p.with_check IS NULL)
     AND (p.qual IS NULL OR p.qual LIKE '%current_graph_id()%')
     AND (p.with_check IS NULL OR p.with_check LIKE '%current_graph_id()%')),
@@ -1044,7 +1116,8 @@ SELECT is((SELECT count(*)::int FROM pg_policies p WHERE p.schemaname = 'public'
 -- грантом, запись требует owner|operator, а гранты агентов — только owner. Подмена одной на другую
 -- (`actor_writes` в INSERT `agent_grants`) даёт operator'у право выписать себе полный доступ.
 SELECT is((SELECT count(*)::int FROM pg_policies p WHERE p.schemaname = 'public'
-    AND p.roles = '{authenticated}' AND p.tablename NOT IN ('graphs','graph_members','perf_samples')
+    AND p.roles = '{authenticated}'
+    AND p.tablename NOT IN ('graphs','graph_members','perf_samples','action_journal','action_journal_entities')
     AND NOT (p.qual IS NULL AND p.with_check IS NULL)
     AND (p.qual IS NULL OR p.qual LIKE '%' || CASE WHEN p.cmd = 'SELECT' THEN 'actor_reads_current_graph()'
            WHEN p.tablename = 'agent_grants' THEN 'actor_owns_current_graph()'

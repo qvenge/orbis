@@ -701,7 +701,8 @@ function captureSink(inner: JournalSink): { sink: JournalSink; entries: JournalW
         await inner.write(tx, entry);
         entries.push(entry);
       },
-      findByAuditId: (tx, id) => inner.findByAuditId(tx, id),
+      writeUndo: (tx, entry) => inner.writeUndo(tx, entry),
+      findBatchWrite: (tx, graph, batchId) => inner.findBatchWrite(tx, graph, batchId),
     },
   };
 }
@@ -854,7 +855,12 @@ async function runUndoLast(
   // применением в журнал могло лечь новое действие (владелец правит с другого экрана), и `undoLast`
   // снял бы уже его — мимо уровня, посчитанного для другого inverse: ровно та дыра, ради которой
   // проба и заведена.
-  const r = await undoAction(ctx.db, { identity: ctx.identity, actionId: peeked.action.id });
+  // Путь — `chat`: «отмени последнее» словами в разговоре (РП-11)
+  const r = await undoAction(ctx.db, {
+    identity: ctx.identity,
+    actionId: peeked.action.id,
+    path: 'chat',
+  });
   if (r.ok) {
     return {
       status: 'ok',
@@ -1554,7 +1560,7 @@ const SURFACE_LABEL: Record<string, string> = {
  *
  * ИЗВЕСТНОЕ РАСХОЖДЕНИЕ, НАЗВАННОЕ ВСЛУХ: заголовок ДЕЙСТВИЯ в журнале (§7.8, `registryPlan`
  * в `executor/executor.ts`) у правки свойства говорит `«<id>»`, а не подпись. Владелец видит
- * его в audit-строке рядом с этой карточкой. Расхождение не чинится здесь: заголовок журнала
+ * его в строке журнала рядом с этой карточкой. Расхождение не чинится здесь: заголовок журнала
  * — территория Задачи 15, и правка его тянет за собой снимок в исполнителе; остаток записан
  * в отчёт.
  */

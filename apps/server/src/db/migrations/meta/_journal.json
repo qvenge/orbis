@@ -162,6 +162,13 @@
       "when": 1790737115410,
       "tag": "0024_perf_samples",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1790754551426,
+      "tag": "0025_action_journal",
+      "breakpoints": true
     }
   ]
 }

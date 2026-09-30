@@ -23,7 +23,7 @@ import { appRouter } from '../router';
 import { dispatchTool } from '../tools/dispatch';
 import { createCallerFactory } from '../trpc';
 import { execute } from './executor';
-import { makeChatJournalSink } from './journal';
+import { makeJournalSink } from './journal';
 import type { JournalEntry } from './journal-read';
 import type { ExecuteRequest, ExecuteResult, WireEntity } from './types';
 
@@ -31,7 +31,7 @@ requireEnv();
 
 const { db, client } = appDb();
 const createCaller = createCallerFactory(appRouter);
-const sink = makeChatJournalSink();
+const sink = makeJournalSink();
 
 beforeAll(async () => {
   await truncateAll();

@@ -49,7 +49,7 @@ import { entities } from '../db/schema';
 import { type Tx, withIdentity } from '../db/with-identity';
 import { ExecError, type ExecErrorCode } from '../errors';
 import { execute } from '../executor/executor';
-import { makeChatJournalSink } from '../executor/journal';
+import { makeJournalSink } from '../executor/journal';
 import { actionsOnEntity, isUndone, type JournalEntry } from '../executor/journal-read';
 import type { MutationMechanism } from '../executor/types';
 import type { Identity } from '../identity';
@@ -59,7 +59,7 @@ import type { ExecOperation } from '../routines/propose';
 import { etalonHash } from './hash';
 import { appEtalonProps, type ResolveSupplyKey, supplyCreateOps, supplyTextOf } from './records';
 
-const sink = makeChatJournalSink();
+const sink = makeJournalSink();
 
 /** Подпись закреплённой версии тела перед заменой (§9.1 п. 2 «прежняя версия сохранится», п. 4). */
 export const PREVIOUS_VERSION_LABEL = 'Прежняя версия';

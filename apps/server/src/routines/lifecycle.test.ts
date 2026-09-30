@@ -21,7 +21,7 @@ import { chatMessages, entities } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { ROUTINE_RUNS_PER_DAY_KEY } from '../entitlements';
 import { execute } from '../executor/executor';
-import { makeChatJournalSink } from '../executor/journal';
+import { makeJournalSink } from '../executor/journal';
 import type { JournalEntry } from '../executor/journal-read';
 import { ScriptedProvider } from '../llm/scripted';
 import {
@@ -426,7 +426,7 @@ describe('closeOpenOfRun: гашение пачки списком (D42 ОЧ.8)'
       identity: personal(owner),
       subject: { kind: 'routine', routineId },
       clock: () => T0,
-      sink: makeChatJournalSink(),
+      sink: makeJournalSink(),
     };
   }
 

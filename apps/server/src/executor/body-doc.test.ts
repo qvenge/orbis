@@ -13,10 +13,19 @@ import {
   entityGetUiInput,
   entityUpdateInput,
   entityUpdateUiInput,
+  newId,
 } from '@orbis/shared';
 import { canonicalizeBody, DOC_SCHEMA_VERSION, serializeBody } from '@orbis/shared/doc';
 import { eq, sql } from 'drizzle-orm';
-import { adminDb, appDb, freshGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
+import {
+  accountOf,
+  adminDb,
+  appDb,
+  freshGraph,
+  personal,
+  requireEnv,
+  truncateAll,
+} from '../../test/helpers';
 import { entities } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { readEntity } from '../entity-read';
@@ -24,9 +33,10 @@ import type { Identity } from '../identity';
 import { dispatchTool, type ToolCallCtx } from '../tools/dispatch';
 import { toWireEntity, toWireEntityFromSql } from '../wire';
 import { execute } from './executor';
-import { makeChatJournalSink } from './journal';
+import { makeJournalSink } from './journal';
+import type { JournalEntry } from './journal-read';
 import { extractBodyRefs } from './normalize';
-import type { ExecuteOk, ExecuteRequest, WireEntity } from './types';
+import type { ExecuteOk, ExecuteRequest, InternalUndoMode, WireEntity } from './types';
 import { undoAction } from './undo';
 
 requireEnv();
@@ -87,6 +97,36 @@ async function createOne(body?: string): Promise<{ entity: WireEntity; owner: Gr
   if (body !== undefined) input.body = body;
   const entity = okFirst(await execute(db, req('entity_create', input, personal(owner))));
   return { entity, owner };
+}
+
+/**
+ * Отменяемая запись журнала для внутреннего режима без синка: исполнитель читает из неё только то, что уходит в
+ * запись отмены, а без синка записи нет — форма нужна компилятору, а не поведению.
+ */
+function undoingOf(owner: GraphId, entityId: string): JournalEntry {
+  return {
+    id: newId(),
+    graphId: owner,
+    createdAt: new Date(),
+    type: 'entity_updated',
+    entityId,
+    actorUserId: accountOf(owner),
+    actorKind: 'owner',
+    source: 'ui',
+    mechanism: 'user',
+    threadId: null,
+    title: 'проба',
+    cardTool: 'entity_update',
+    entityIds: [entityId],
+    touchedKeys: [entityId],
+    operations: [],
+    inverse: [],
+    textSession: false,
+    bodyBefore: null,
+    undoes: null,
+    pinnedVersionIds: [],
+    cardInReply: false,
+  };
 }
 
 /** Первый узел документа — им проверяется ПРЕДПОСЫЛКА теста (raw это или разобранное дерево). */
@@ -1400,7 +1440,13 @@ describe('гейт §5.2 покрывает ОБА поля тела', () => {
   test('внутренний undo гейт ПРОПУСКАЕТ — и для body, и для bodyDoc', async () => {
     // Иначе сломался бы откат: inverse-операция журнала expectedUpdatedAt не несёт (§7.8).
     const { entity, owner } = await createOne();
-    const internalUndo = { writeUndoMessage: async () => {} };
+    // Внутренний режим без синка (NOOP): записи отмены нет, проверяется только гейт стадии применения
+    const internalUndo: InternalUndoMode = {
+      undoRecordId: newId(),
+      undoing: undoingOf(owner, entity.id),
+      path: 'ui',
+      onApplied: async () => {},
+    };
 
     const viaBody = await execute(
       db,
@@ -1441,7 +1487,7 @@ describe('откат сохранения редактора', () => {
     // Сценарий, которого до этой работы не существовало: журнал §7.8 несёт только строковый
     // body, а сохранение пришло документом. Откат идёт «модельной» веткой — и обязан привести
     // body_doc в согласие с восстановленным body, иначе формы разъезжаются молча.
-    const sink = makeChatJournalSink();
+    const sink = makeJournalSink();
     const { entity, owner } = await createOne('- раз\n- два');
     const saved = await execute(
       db,

@@ -12,7 +12,7 @@ import type {
   MyQueueResult,
   RunStepResult,
 } from '@orbis/shared';
-import { batchAuditMessageId, newId } from '@orbis/shared';
+import { newId } from '@orbis/shared';
 import { eq, sql } from 'drizzle-orm';
 import {
   adminDb,
@@ -24,10 +24,10 @@ import {
   truncateAll,
 } from '../../test/helpers';
 import { actionsOf, journalOf } from '../../test/journal-helpers';
-import { chatMessages, entities } from '../db/schema';
+import { entities } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { execute } from '../executor/executor';
-import { makeChatJournalSink } from '../executor/journal';
+import { makeJournalSink } from '../executor/journal';
 import { answerPendingQuestion } from '../policy/pending';
 import { effectiveRegistry } from '../registry/cache';
 import { statusPatch } from '../registry/class-write';
@@ -256,11 +256,12 @@ describe('orbis_claim_task: атомарный захват (С7, инвариа
   }
 
   /**
-   * ПОДДЕЛКА хранилища, а не чтение журнала: снимок правится там, где он лежит (сообщение чата). Переезд
-   * хранилища (задача 5) переносит эту подделку вместе с ним — чтение снимка идёт через API (`savedResults`).
+   * ПОДДЕЛКА хранилища, а не чтение журнала: снимок правится там, где он лежит (колонка `results` строки журнала,
+   * ключ — граф и batch_id вызова). Чтение снимка идёт через API (`savedResults`).
    *
    * Правка СОХРАНЁННОГО ответа (§7.8) админ-DSN — мимо исполнителя, как расходящаяся
-   * строка `entities` у соседних проб. Иначе форму снимка не выбрать: обе колонки в нём
+   * строка `entities` у соседних проб. Журнал только дописывается, и у ролей приложения правки нет — её делает
+   * админ-DSN, как любая подделка хранилища в тестах. Иначе форму снимка не выбрать: обе колонки в нём
    * согласованы по построению, и «какую читает replay» поведением не наблюдаемо.
    *
    * Подтверждение подстановки живёт СНАРУЖИ — вызывающий читает снимок `savedResults` до
@@ -271,19 +272,19 @@ describe('orbis_claim_task: атомарный захват (С7, инвариа
     callId: string,
     edit: (results: Array<Record<string, unknown>>) => Array<Record<string, unknown>>,
   ): Promise<void> {
-    const auditId = batchAuditMessageId(owner, callId);
     const { db: admin, client: adminClient } = adminDb();
     try {
-      const rows = await admin
-        .select({ metadata: chatMessages.metadata })
-        .from(chatMessages)
-        .where(eq(chatMessages.id, auditId));
-      const md = rows[0]?.metadata as { results?: Array<Record<string, unknown>> } | undefined;
-      if (md?.results === undefined) throw new Error(`снимок ответа ${auditId} не найден`);
-      await admin
-        .update(chatMessages)
-        .set({ metadata: { ...md, results: edit(md.results) } })
-        .where(eq(chatMessages.id, auditId));
+      const rows = (await admin.execute(
+        sql`SELECT results FROM action_journal WHERE graph_id = ${owner}::uuid AND id = ${callId}::uuid`,
+      )) as unknown as Array<{ results: Array<Record<string, unknown>> | null }>;
+      const results = rows[0]?.results;
+      if (results === undefined || results === null) {
+        throw new Error(`снимок ответа ${callId} не найден`);
+      }
+      await admin.execute(
+        sql`UPDATE action_journal SET results = ${JSON.stringify(edit(results))}::jsonb
+             WHERE graph_id = ${owner}::uuid AND id = ${callId}::uuid`,
+      );
     } finally {
       await adminClient.end();
     }
@@ -660,7 +661,7 @@ describe('orbis_claim_task: атомарный захват (С7, инвариа
         batchId: callId,
         operations: [{ tool: 'entity_update', input: { id: note.id, title: 'Заметка (правка)' } }],
       },
-      { sink: makeChatJournalSink() },
+      { sink: makeJournalSink() },
     );
     expect(pre.ok).toBe(true);
 
@@ -1418,7 +1419,7 @@ describe('субъект прогона — рутина (V1.5)', () => {
       identity: personal(owner),
       subject: { kind: 'routine', routineId },
       clock,
-      sink: makeChatJournalSink(),
+      sink: makeJournalSink(),
     };
   }
 

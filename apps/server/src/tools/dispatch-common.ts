@@ -26,7 +26,7 @@ import { withIdentity } from '../db/with-identity';
 import type { EntitlementResolver } from '../entitlements';
 import { ExecError } from '../errors';
 import { ROUTINE_UNTOUCHABLE_OBJECTS, routineUntouchableError } from '../executor/invariants';
-import { makeChatJournalSink } from '../executor/journal';
+import { makeJournalSink } from '../executor/journal';
 import type { ActorKind } from '../executor/types';
 import type { Identity } from '../identity';
 import type { GrantRef } from '../oauth/grants';
@@ -34,7 +34,7 @@ import type { ConfirmationLevel, Reconfigures } from '../policy/confirmation';
 import type { Card, RoutineRef } from './registry';
 
 // Боевой синк — один инстанс на модуль (состояния не хранит), как в роутерах 1a.
-export const sink = makeChatJournalSink();
+export const sink = makeJournalSink();
 
 export interface ToolCallCtx {
   db: Db;
@@ -47,7 +47,7 @@ export interface ToolCallCtx {
    * и правки рутины он обязан отличать в ленте.
    */
   source: 'chat' | 'mcp' | 'routine';
-  threadId?: string; // тред диалога — туда лягут audit-сообщения
+  threadId?: string; // тред диалога — тред записей журнала действий
   explicitCommand: boolean; // вход политики §7.10; в 1b всегда false
   clock?: () => Date;
   /**

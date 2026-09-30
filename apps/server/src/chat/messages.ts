@@ -1,7 +1,8 @@
 // apps/server/src/chat/messages.ts
 // §4.6: chat_messages append-only — только INSERT, updated_at в таблице отсутствует,
-// metadata неизменяема после записи. Отмена действия — не правка журнала, а НОВОЕ
-// системное сообщение {type:'undo', undoes} (§7.8) — тоже через appendMessage.
+// metadata неизменяема после записи. Журнал действий сообщений не пишет: он — своя таблица
+// `action_journal` (спека скорости §11), и в тред попадает объединением на чтении
+// (`journal/thread-page.ts`).
 import { eq, type SQL, sql } from 'drizzle-orm';
 import { chatMessages } from '../db/schema';
 import type { Tx } from '../db/with-identity';
@@ -31,24 +32,23 @@ export interface AppendMessageInput {
 
 /**
  * Append-only вставка; RLS отклоняет чужой тред политикой БД (§4.10, §13 п.5).
- * Занятый id пробрасывает сырой 23505 НАМЕРЕННО: на нём стоит контракт боевого
- * JournalSink (23505 по PK → AuditIdConflictError → replay batch, §7.8).
- * Клиентскому пути нужен appendMessageIdempotent.
+ * Занятый id пробрасывается сырым 23505: молча принять его за повтор здесь нельзя —
+ * клиентскому пути, которому повтор штатен, нужен appendMessageIdempotent.
  */
 /**
- * SQL-предикаты «инфраструктурная system-строка невидима»: единый фрагмент для
- * chat.listMessages (клиент) и historyMessages LLM-контекста (§7.1) — фильтры обязаны
- * оставаться зеркальными, и оба применяются В SQL до limit rolling-окна (иначе плотный
- * системный шум вытеснял бы живой диалог из окна модели). Журнал §7.8 не трогаем —
- * только отображение. Скрывается:
+ * SQL-предикаты «инфраструктурная system-строка невидима» — фрагмент выборки сообщений
+ * выдачи треда (`journal/thread-page.ts`: chat.listMessages, тред entity.get, историю
+ * LLM-контекста §7.1) — в SQL до limit rolling-окна (иначе плотный системный шум вытеснял
+ * бы живой диалог из окна модели). Скрывается:
  * - processing-маркер ai.sendMessage (§7.9): живой давал бы пустой system-пузырь в окне
  *   рефетча, маркер краша висел бы навсегда; IS NOT DISTINCT FROM — NULL-безопасно
  *   (у audit/undo-строк ключа type нет, обычное `=` выкинуло бы их вместе с маркерами);
- * - audit СИСТЕМНЫХ действий (source='system' — материализация recurring-инстансов
- *   §5.4): «batch: операций — N» на каждый пересчёт агенды — шум. @>-containment по
- *   массиву actions; COALESCE — NULL-безопасно (урок A1): у user/undo/pending-строк
- *   ключа actions нет → NULL @> … = NULL, без COALESCE они терялись бы.
- *   Audit chat/fast_path/mcp/ui — видим.
+ * - audit СИСТЕМНЫХ действий прежнего хранилища журнала (source='system' — материализация
+ *   recurring-инстансов §5.4) — сообщения, ещё не снесённые прод-операцией переноса (задача 21):
+ *   «batch: операций — N» на каждый пересчёт агенды — шум. @>-containment по массиву actions;
+ *   COALESCE — NULL-безопасно (урок A1): у user/pending-строк ключа actions нет → NULL @> … =
+ *   NULL, без COALESCE они терялись бы. Системные записи ТАБЛИЦЫ журнала скрывает её выборка
+ *   (`journal-read.threadFeed`).
  */
 export function excludeInfraSystemRows(): SQL[] {
   return [

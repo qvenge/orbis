@@ -7,6 +7,7 @@ import type { GraphId } from '@orbis/shared';
 import {
   aspectDefinitionSchema,
   entitySchema,
+  globalThreadId,
   propertyDefinitionSchema,
   relationRoleDefinitionSchema,
 } from '@orbis/shared';
@@ -41,9 +42,9 @@ describe('user.exportData (§9.4)', () => {
 
     const exp = await caller.user.exportData();
     expect(exp.format).toBe('orbis-export');
-    // Версия 2 — не косметика: сущности едут НОВОЙ формой (§А1-1), и читатель обязан уметь
-    // отличить её от дампа v1, где та же запись описана несовместимо (карта аспектов).
-    expect(exp.version).toBe(2);
+    // Версия 3 (спека скорости §11): журнал действий едет своим ключом `journal`, а не внутри сообщений чата — дамп v2
+    // нёс его системными сообщениями, и читатель обязан различить, где искать журнал. v2 сменил форму сущностей (§А1-1).
+    expect(exp.version).toBe(3);
     expect(typeof exp.exportedAt).toBe('string');
     expect(exp.exportedAt.endsWith('Z')).toBe(true);
 
@@ -76,7 +77,7 @@ describe('user.exportData (§9.4)', () => {
   });
 
   /**
-   * ROUND-TRIP дампа v2: то, что выгрузилось, разбирается ОБРАТНО каноническими схемами —
+   * ROUND-TRIP дампа (с v2): то, что выгрузилось, разбирается ОБРАТНО каноническими схемами —
    * теми же, которыми реестр и граф читает сервер.
    *
    * Проверяется именно ОБРАТНЫЙ разбор, а не «поля на месте»: схемы `z.object` срезают всё,
@@ -164,7 +165,46 @@ describe('user.exportData (§9.4)', () => {
     expect(exp.relations).toEqual([]);
     expect(exp.chatThreads).toEqual([]);
     expect(exp.chatMessages).toEqual([]);
+    expect(exp.journal).toEqual([]);
     expect(exp.userSettings).toBeNull();
     expect(exp.aspectDefinitions).toEqual([]);
+  });
+
+  test('журнал — ключом journal: все записи графа по времени, включая отмены; сообщения — прежним ключом, без журнала', async () => {
+    const user = await freshGraph();
+    const caller = callerFor(user);
+    const a = await caller.entity.create({
+      input: { title: 'Раз', tags: [] },
+      source: 'fast_path',
+    });
+    const b = await caller.entity.create({
+      input: { title: 'Два', tags: [] },
+      source: 'fast_path',
+    });
+    const audit = await caller.chat.listMessages({ threadId: globalThreadId(user) });
+    const actionOf = (entityId: string) =>
+      audit.find(
+        (m) =>
+          (m.metadata.actions as Array<{ entity_id?: string }> | undefined)?.[0]?.entity_id ===
+          entityId,
+      )?.id;
+    const first = actionOf(a.id);
+    if (first === undefined) throw new Error('действия создания нет в треде');
+    await caller.ai.undo({ actionId: first });
+
+    const exp = await caller.user.exportData();
+    expect(exp.journal.map((e) => (e.type === 'undo' ? `undo:${e.undoes}` : e.entityId))).toEqual([
+      a.id,
+      b.id,
+      `undo:${first}`,
+    ]);
+    // Запись журнала — полная (дамп владельца: операции и данные отмены — его данные), без вычисляемых полей API
+    const created = exp.journal[0];
+    expect(created?.operations.length).toBe(1);
+    expect(created?.inverse.length).toBe(1);
+    expect(created !== undefined && 'touchedKeys' in created).toBe(false);
+    // Журнал в сообщениях больше не лежит: тред создан, сообщений нет
+    expect(exp.chatThreads.length).toBe(1);
+    expect(exp.chatMessages).toEqual([]);
   });
 });

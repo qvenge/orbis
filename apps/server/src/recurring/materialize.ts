@@ -46,7 +46,7 @@ import type { Db } from '../db/client';
 import { entities, userSettings } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { execute } from '../executor/executor';
-import { makeChatJournalSink } from '../executor/journal';
+import { makeJournalSink } from '../executor/journal';
 import type { Identity } from '../identity';
 import { DEFAULT_TIMEZONE, isValidTimeZone } from '../query/context';
 import { effectiveRegistry } from '../registry/cache';
@@ -68,8 +68,8 @@ const RECURRENCE = 'orbis/recurrence';
 const MAX_ATTEMPTS = 3;
 
 // Один инстанс синка на модуль (как в routers/entity.ts): состояния не хранит,
-// audit-сообщение batch пишется тем же tx, что операции executor'а (§7.8).
-const sink = makeChatJournalSink();
+// запись журнала пачки пишется тем же tx, что операции executor'а (§7.8).
+const sink = makeJournalSink();
 
 type TemplateRow = typeof entities.$inferSelect;
 

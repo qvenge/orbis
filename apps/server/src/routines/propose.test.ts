@@ -15,7 +15,7 @@ import { closeRoutineRun, runAgentVerb } from '../agent-loop/verbs';
 import { chatMessages } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { execute } from '../executor/executor';
-import { makeChatJournalSink } from '../executor/journal';
+import { makeJournalSink } from '../executor/journal';
 import { issuePatGrant, verifyBearer } from '../oauth/grants';
 import { approvePending, rejectPending } from '../policy/pending';
 import { agentLoopHelpers, T0 } from '../test/agent-loop-helpers';
@@ -732,7 +732,7 @@ describe('orbis_propose: форма и запрет по объекту (V1.6, �
         identity: personal(owner),
         subject: { kind: 'routine', routineId },
         clock: () => T0,
-        sink: makeChatJournalSink(),
+        sink: makeJournalSink(),
       },
       'orbis_run_step',
       { run_id: runId, id: stepId, summary: 'entity_query: ok', external: false },
@@ -799,7 +799,7 @@ describe('orbis_propose: форма и запрет по объекту (V1.6, �
         identity: personal(owner),
         subject: { kind: 'routine', routineId },
         clock: () => T0,
-        sink: makeChatJournalSink(),
+        sink: makeJournalSink(),
       },
       'orbis_run_step',
       { run_id: runId, id: stepId, summary: 'entity_query: ok', external: false },
@@ -845,7 +845,7 @@ describe('orbis_propose: форма и запрет по объекту (V1.6, �
         identity: personal(owner),
         subject: { kind: 'routine', routineId },
         clock: () => T0,
-        sink: makeChatJournalSink(),
+        sink: makeJournalSink(),
       },
       { runId, outcome: 'failed', failNote: 'дедлайн прогона' },
     );

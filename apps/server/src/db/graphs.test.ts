@@ -283,7 +283,12 @@ describe('бэкфилл 0020 на непустой базе (спека Ш-1б)
         const fks = await tx.execute(sql`SELECT conrelid::regclass::text AS tbl, conname,
             pg_get_constraintdef(oid) AS def FROM pg_constraint
           WHERE contype = 'f' AND confrelid = 'public.graphs'::regclass`);
-        expect(fks.length).toBe(16); // 15 таблиц с ключом владения + graph_members
+        // 15 таблиц с ключом владения + graph_members + журнал действий (0025): его таблица моложе 0020, в базе
+        // «до 0020» её строк нет (зачистка выше), и бэкфилл её не касается — ключ снимается и возвращается со всеми
+        expect(fks.map((f) => String(f.tbl)).filter((t) => t === 'action_journal')).toEqual([
+          'action_journal',
+        ]);
+        expect(fks.length).toBe(17);
         for (const fk of fks) {
           await tx.execute(sql.raw(`ALTER TABLE ${fk.tbl} DROP CONSTRAINT "${fk.conname}"`));
         }

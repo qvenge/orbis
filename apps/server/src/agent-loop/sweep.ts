@@ -15,7 +15,7 @@ import type { Db } from '../db/client';
 import { withIdentity } from '../db/with-identity';
 import { ExecError, type ExecErrorCode } from '../errors';
 import { execute } from '../executor/executor';
-import { makeChatJournalSink } from '../executor/journal';
+import { makeJournalSink } from '../executor/journal';
 import type { ActorKind } from '../executor/types';
 import type { Identity } from '../identity';
 import { listRunUnits } from '../policy/pending';
@@ -31,7 +31,7 @@ import { DELEGABLE_CONTRACT, RUN_STALE_AFTER_MS, TICKET_ASPECT } from './constan
 import { type RunRow, runsOfParent, staleRuns, ticketOfRun } from './queries';
 
 // Боевой синк — один инстанс на модуль (состояния не хранит), как в tools/dispatch.ts.
-const sink = makeChatJournalSink();
+const sink = makeJournalSink();
 
 export interface SweepArgs {
   /** Пара «актор + текущий граф» (D44): подметание пишет журнал актором, а строки — в графе. */

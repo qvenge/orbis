@@ -11,6 +11,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import {
   APP_NAV,
   type GraphId,
+  globalThreadId,
   newId,
   SUPPLY_ASPECT,
   SUPPLY_DECLINED,
@@ -27,7 +28,7 @@ import {
   type SupplyEtalon,
 } from '@orbis/shared/supply';
 import { supplyStatusOf } from '@orbis/shared/supply/print';
-import { and, eq, sql } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import type { Sql, TransactionSql } from 'postgres';
 import { adminDb, appDb, freshGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
 import { actionsOf, wholeJournalOf } from '../../test/journal-helpers';
@@ -38,12 +39,12 @@ import {
   OWNER_LINE,
   seedWorld1b,
 } from '../../test/world-1b';
-import { excludeInfraSystemRows } from '../chat/messages';
 import { ExecError } from '../errors';
 import { execute } from '../executor/executor';
-import { makeChatJournalSink } from '../executor/journal';
+import { makeJournalSink } from '../executor/journal';
 import type { JournalEntry } from '../executor/journal-read';
 import type { Identity } from '../identity';
+import { threadPage } from '../journal/thread-page';
 import { effectiveRegistry } from '../registry/cache';
 import { seedOwner } from '../seed/onboarding';
 import { etalonHash } from '../supply/hash';
@@ -75,7 +76,7 @@ import { withIdentity } from './with-identity';
 requireEnv();
 
 const { db, client } = appDb();
-const journal = makeChatJournalSink();
+const journal = makeJournalSink();
 
 beforeAll(async () => {
   await truncateAll();
@@ -172,6 +173,8 @@ async function worldSnapshot(graph: GraphId): Promise<Record<string, unknown>> {
         'chat_messages',
         sql`x.thread_id IN (SELECT id FROM chat_threads WHERE graph_id = ${graph}::uuid)`,
       ),
+      // Журнал — своя таблица (спека скорости §11): отказ отмены не пишет и записи отмены
+      journal: await digest('action_journal', ofGraph),
       versions: await digest('entity_versions', ofGraph),
       settings: await digest('user_settings', ofGraph),
       deltas: await digest('registry_deltas', ofGraph),
@@ -235,9 +238,9 @@ async function etalonTextIn(graph: GraphId, e: SupplyEtalon): Promise<string> {
 }
 
 /**
- * Журнал графа (API журнала, помощник `wholeJournalOf`), все сообщения графа и видимые лентой (тот же фильтр, что
- * `chat.listMessages`): запись перевода обязана лечь в журнал, прибавить в разговорах графа ровно одну строку (её
- * носитель — прежнее хранилище) и НЕ появиться в ленте.
+ * Журнал графа (API журнала, помощник `wholeJournalOf`), все сообщения графа и видимое лентой глобального треда (та
+ * же выдача, что `chat.listMessages`, — `journal/thread-page.ts`): запись перевода обязана лечь в журнал, НЕ прибавить
+ * ни одного сообщения в разговорах графа (журнал — своя таблица, §11) и НЕ появиться в ленте (источник `system`).
  */
 async function journalOf(
   graph: GraphId,
@@ -252,10 +255,7 @@ async function journalOf(
       .select({ id: chatMessages.id })
       .from(chatMessages)
       .where(sql`${chatMessages.threadId} IN ${threads}`);
-    const shown = await tx
-      .select({ id: chatMessages.id })
-      .from(chatMessages)
-      .where(and(sql`${chatMessages.threadId} IN ${threads}`, ...excludeInfraSystemRows()));
+    const shown = await threadPage(tx, graph, globalThreadId(graph), { limit: 200 });
     return { messages: everything.map((r) => r.id).sort(), visible: shown.map((r) => r.id).sort() };
   });
   return { all, messages, visible };
@@ -620,8 +620,8 @@ describe('(в) --apply на графе формы прода: одна пачк�
     const after = await journalOf(graph);
     const added = after.all.filter((e) => !journalBefore.all.some((b) => b.id === e.id));
     expect(added).toHaveLength(1);
-    // Ровно одна новая строка во всём графе — прежняя проверка: ничего сверх записи журнала не написано
-    expect(after.messages.filter((id) => !journalBefore.messages.includes(id))).toHaveLength(1);
+    // Ни одного нового сообщения во всём графе: ничего сверх записи журнала не написано
+    expect(after.messages.filter((id) => !journalBefore.messages.includes(id))).toHaveLength(0);
     expect(after.visible).toEqual(journalBefore.visible);
     expect(added[0]?.id).toBe(actionId);
     expect(added[0]?.source).toBe('system');
@@ -1240,25 +1240,29 @@ describe('боевой IO операции (migrate1vIo — его зовёт op
   });
 });
 
+/**
+ * Синтетическая строка журнала (подделка хранилища админ-DSN, мимо исполнителя): отказ `--undo` судит по источнику и
+ * подписи записи, а собрать «чужую» запись с нужной парой боевым путём нельзя — её пишет только сама операция.
+ */
+function forgeJournalRow(graph: GraphId, actionId: string, source: string, title: string) {
+  return admin(({ db: a }) =>
+    a.execute(sql`INSERT INTO action_journal (graph_id, id, type, actor_user_id, actor_kind, source, mechanism,
+                                              title, card_tool, operations, inverse)
+      VALUES (${graph}::uuid, ${actionId}::uuid, 'batch', ${graph}::uuid, 'owner', ${source}, 'user', ${title},
+              'batch_execute', '[]'::jsonb, '[]'::jsonb)`),
+  );
+}
+
 describe('фикс-круг 2', () => {
-  test('ре-ревью rm-2: --undo судит о действии с названным id, а не о первом действии записи', async () => {
+  test('ре-ревью rm-2: --undo судит о действии с названным id, а не о соседней записи', async () => {
     const graph = await freshGraph();
     await seedWorld1b(db, graph, 'prod');
     const first = newId();
     const named = newId();
-    // Запись журнала, где ПЕРВОЕ действие похоже на пачку операции (system, подпись В-4), а названное —
-    // обычная правка: проверка по `actions[0]` пропустила бы её к откату.
-    await admin(({ db: a }) =>
-      a.execute(sql`INSERT INTO chat_messages (id, thread_id, role, content, metadata)
-        SELECT ${newId()}::uuid, t.id, 'system', 'пачка', ${JSON.stringify({
-          actions: [
-            { id: first, source: 'system' },
-            { id: named, source: 'ui' },
-          ],
-          cards: [{ title: MIGRATE_1V_LABEL }, { title: 'Правка' }],
-        })}::jsonb
-          FROM chat_threads t WHERE t.graph_id = ${graph}::uuid LIMIT 1`),
-    );
+    // Рядом с названным действием (обычная правка) — запись, похожая на пачку операции (system, подпись В-4): суд
+    // по чужой записи пропустил бы названную к откату. (У прежнего хранилища обе лежали одним сообщением.)
+    await forgeJournalRow(graph, first, 'system', MIGRATE_1V_LABEL);
+    await forgeJournalRow(graph, named, 'ui', 'Правка');
     const before = await worldSnapshot(graph);
     const t = testIo([personal(graph)]);
     expect(await runMigrate1v(['--undo', named, '--i-understand'], t.io)).toBe(1);
@@ -1273,19 +1277,10 @@ describe('фикс-круг 2', () => {
     await seedWorld1b(db, graph, 'prod');
     const otherSystem = newId();
     const labelNotSystem = newId();
-    const journal = (actionId: string, source: string, title: string) =>
-      admin(({ db: a }) =>
-        a.execute(sql`INSERT INTO chat_messages (id, thread_id, role, content, metadata)
-          SELECT ${newId()}::uuid, t.id, 'system', 'пачка', ${JSON.stringify({
-            actions: [{ id: actionId, source }],
-            cards: [{ title }],
-          })}::jsonb
-            FROM chat_threads t WHERE t.graph_id = ${graph}::uuid LIMIT 1`),
-      );
     // Системная пачка другой операции: источник тот же, подпись чужая.
-    await journal(otherSystem, 'system', 'Материализация повторов');
+    await forgeJournalRow(graph, otherSystem, 'system', 'Материализация повторов');
     // Подпись В-4, но источник — не `system`.
-    await journal(labelNotSystem, 'ui', MIGRATE_1V_LABEL);
+    await forgeJournalRow(graph, labelNotSystem, 'ui', MIGRATE_1V_LABEL);
     const before = await worldSnapshot(graph);
     for (const actionId of [otherSystem, labelNotSystem]) {
       const t = testIo([personal(graph)]);

@@ -1,7 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import {
   answerMessageId,
-  batchAuditMessageId,
   bodyDraftNoteId,
   entityThreadId,
   globalThreadId,
@@ -128,13 +127,14 @@ describe('детерминированные ID (01 §5.4, §4.5, §7.8)', () =>
     expect(globalThreadId(owner)).toBe(globalThreadId(owner));
     expect(entityThreadId(owner, entity)).toBe(entityThreadId(owner, entity));
     expect(globalThreadId(owner)).not.toBe(entityThreadId(owner, entity));
-    expect(batchAuditMessageId(owner, entity)).not.toBe(entityThreadId(owner, entity));
   });
-  test('rejectMessageId (§7.10) детерминирован, lowercase-нормализован и не пересекается с batch-audit', () => {
+  // Запись журнала исполненной единицы — строка таблицы журнала с ключом pendingId (спека скорости §11.2), а не
+  // сообщение чата: пересекаться с PK сообщения отказа ей больше не в чем.
+  test('rejectMessageId (§7.10) детерминирован, lowercase-нормализован и отличен от самого pendingId', () => {
     const owner = '00000000-0000-4000-8000-00000000000a';
     const pending = '00000000-0000-7000-8000-0000000000b2';
     expect(rejectMessageId(owner, pending)).toBe(rejectMessageId(owner.toUpperCase(), pending));
-    expect(rejectMessageId(owner, pending)).not.toBe(batchAuditMessageId(owner, pending));
+    expect(rejectMessageId(owner, pending)).not.toBe(pending);
   });
   test('processingMessageId детерминирован, lowercase-нормализован, отличен от исходного id', () => {
     const userMsg = '00000000-0000-7000-8000-0000000000c3';

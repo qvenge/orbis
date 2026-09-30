@@ -27,7 +27,7 @@ import { resolveEntitlement } from '../entitlements';
 import { readEntity } from '../entity-read';
 import { issuePatGrant, revokeGrant, verifyBearer } from '../oauth/grants';
 import { projectBodyTemplate } from '../seed/project-body';
-import { makeChatJournalSink } from './journal';
+import { makeJournalSink } from './journal';
 import type { JournalEntry } from './journal-read';
 import type { ExecuteOk, ExecuteRequest, WireEntity, WireEntityVersion } from './types';
 import { InMemoryJournalSink } from './types';
@@ -1009,7 +1009,7 @@ describe('ADE-срез 1: инварианты назначения и засе�
   test("27. undo attach'а, который засеял тело: аспект снят И тело снова пустое", async () => {
     // Засев — часть эффекта attach, поэтому и откатывается вместе с ним: иначе на заметке,
     // которая проектом быть перестала, осталась бы заготовка с живыми query-блоками.
-    const sink = makeChatJournalSink(); // undo ищет action в журнале — NOOP_SINK ему не годится
+    const sink = makeJournalSink(); // undo ищет action в журнале — NOOP_SINK ему не годится
     const e = firstEntity(
       await execute(db, req('entity_create', { title: 'Заметка под откат', tags: [] }), { sink }),
     );
@@ -1083,7 +1083,7 @@ describe('ADE-срез 1: закреплённые версии тела (С11)'
   }
 
   test('28. entity_version_pin: снимок тела в журнале, undo удаляет строку физически', async () => {
-    const sink = makeChatJournalSink(); // undo ищет action в журнале — NOOP_SINK ему не годится
+    const sink = makeJournalSink(); // undo ищет action в журнале — NOOP_SINK ему не годится
     const e = firstEntity(
       await execute(
         db,

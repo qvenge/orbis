@@ -22,7 +22,7 @@ import {
 } from '@orbis/shared';
 import { appDb, freshGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
 import { execute } from '../executor/executor';
-import { makeChatJournalSink } from '../executor/journal';
+import { makeJournalSink } from '../executor/journal';
 import type { ExecuteRequest, ExecuteResult, WireEntity } from '../executor/types';
 import { undoAction } from '../executor/undo';
 import { appRouter } from '../router';
@@ -41,7 +41,7 @@ afterAll(async () => {
 
 const T0 = new Date('2026-09-27T09:00:00.000Z');
 // Боевой синк журнала: без него действие не легло бы в журнал, и откат (`undoAction`) его не нашёл бы.
-const sink = makeChatJournalSink();
+const sink = makeJournalSink();
 
 function run(
   graph: GraphId,

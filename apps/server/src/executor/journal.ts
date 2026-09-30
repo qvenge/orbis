@@ -1,27 +1,34 @@
 // apps/server/src/executor/journal.ts
-// Боевой JournalSink (§7.8): audit-сообщение в chat_messages ТЕМ ЖЕ tx, что и стадия 5.
-// metadata = { actions: [action], cards: [card] } (§4.6) + results — источник ответа
-// идемпотентного повтора batch (§7.8). Форма карточки зависит от source — см.
-// FEED_CARD_SOURCES/feedCard. Целевой тред — entry.threadId, иначе глобальный
-// тред владельца (создаётся в том же tx). Retention журнала (RET-02) здесь НЕ
-// реализуется — отложен. Подключение по умолчанию не меняется (NOOP_SINK): боевой
-// синк передают явно тесты и роутеры Task 12.
-import { newId } from '@orbis/shared';
-import { eq } from 'drizzle-orm';
-import { appendMessage } from '../chat/messages';
+// Боевой JournalSink (§7.8, спека скорости §11.2): строка таблицы `action_journal` ТЕМ ЖЕ tx, что и стадия 5, и её
+// строки боковой `action_journal_entities` (РП-8) — одной инструкцией. Строка — действие целиком (весь `ActionRecord`,
+// РП-7), заголовок и тул карточки, результаты пачки (ответ идемпотентного повтора, §7.8); запись отмены — отдельная
+// строка `type:'undo'` (`writeUndo`). Целевой тред — entry.threadId, иначе глобальный тред графа (создаётся в том же
+// tx; РП-10 — как до таблицы, новое поведение тредов — задача 6). Журнал только дописывается: у ролей приложения нет
+// ни UPDATE, ни DELETE (0025). Retention журнала (RET-02) здесь НЕ реализуется — отложен (К-15).
+//
+// Форма карточки ленты больше не хранится: она собирается на чтении (`feedCard`, `journal/thread-page.ts`) из
+// заголовка, тула и записи — хранить её значило бы держать вторую копию того, что уже лежит в строке.
+import type { GraphId } from '@orbis/shared';
+import { type SQL, sql } from 'drizzle-orm';
 import { ensureGlobalThread } from '../chat/threads';
-import { chatMessages, chatThreads } from '../db/schema';
 import type { Tx } from '../db/with-identity';
 import { ExecError } from '../errors';
-import { parseGraphId } from '../identity';
 import type { Card } from '../tools/registry';
 import { pgErrorInfo } from './executor';
-import type { ActionCard, ActionRecord, JournalSink, JournalWrite, MutationSource } from './types';
+import { actionRecordOf, findBatch, touchedEntityIds } from './journal-read';
+import type {
+  ActionCard,
+  ActionRecord,
+  JournalSink,
+  JournalWrite,
+  MutationSource,
+  UndoWrite,
+} from './types';
 import { AuditIdConflictError } from './types';
 
 /**
- * Источники, чьё audit-сообщение — ЕДИНСТВЕННЫЙ носитель карточки в ленте: только для
- * них в metadata.cards пишется форма клиентского union'а (02-core-os §2.3, с kind).
+ * Источники, чья строка журнала — ЕДИНСТВЕННЫЙ носитель карточки в ленте: только для
+ * них в metadata.cards отдаётся форма клиентского union'а (02-core-os §2.3, с kind).
  * Без kind renderCards уходит в default (apps/web/.../cards/renderCards.tsx) и после
  * перезагрузки от карточки остаётся голая строка content.
  *
@@ -33,11 +40,11 @@ import { AuditIdConflictError } from './types';
  *   кэше react-query (features/chat/useFastPath.ts), а из БД приезжает голая строка;
  * - 'mcp' | 'ui' | 'quick_capture' — карточки в ленте не было НИКОГДА, ни живьём, ни
  *   после перезагрузки: карточка тут была бы новой функцией, а не починкой;
- * - 'system' — audit скрыт фильтром ленты (chat/messages.ts), рисовать нечего;
+ * - 'system' — скрыт выдачей треда (`journal-read.threadFeed`), рисовать нечего;
  * - 'routine' (V1.5) — как fast_path, только хуже: у правки прогона НЕТ другого носителя
  *   вовсе. Ответа ассистента за ней не стоит (диалога не было), клиентского кэша тоже
- *   (владельца в этот момент не было в приложении) — audit-сообщение единственное, что
- *   он увидит, и без клиентской формы от него осталась бы голая строка без «Отменить».
+ *   (владельца в этот момент не было в приложении) — строка журнала единственное, что
+ *   он увидит, и без клиентской формы от неё осталась бы голая строка без «Отменить».
  */
 const FEED_CARD_SOURCES: ReadonlySet<MutationSource> = new Set<MutationSource>([
   'fast_path',
@@ -54,18 +61,20 @@ const FEED_CARD_SOURCES: ReadonlySet<MutationSource> = new Set<MutationSource>([
 type FeedEntityCard = Extract<Card, { kind: 'entity_card' }> & { undoActionId: string };
 
 /**
- * Что ляжет в metadata.cards[0]. Вне белого списка — сегодняшняя ActionCard дословно.
+ * Что ляжет в metadata.cards[0] строки журнала в треде. Вне белого списка — ActionCard дословно
+ * (`{tool, entity_id, title}` — прежняя форма провода, РП-10).
  *
- * Карточка НИКОГДА не пустая и cards[0] всегда есть: на нём стоит findByAuditId, а на
- * нём — идемпотентный replay batch (§7.8). Отсюда же второе условие: при entity_id ===
- * null (batch, одиночные relation-мутации) форма остаётся прежней — entityId клиентской
- * карточки обязан быть строкой, null там был бы враньём.
+ * При entity_id === null (batch, одиночные relation-мутации) форма остаётся прежней —
+ * entityId клиентской карточки обязан быть строкой, null там был бы враньём.
  *
- * aspects/keyFields пустые СОЗНАТЕЛЬНО, а не по недосмотру: у синка нет ни WireEntity,
+ * aspects/keyFields пустые СОЗНАТЕЛЬНО, а не по недосмотру: у журнала нет ни WireEntity,
  * ни viewConfig.keyFields (они собираются в tools/dispatch.ts из реестра аспектов) —
  * обогащать нечем. Карточка беднее живой, зато переживает перезагрузку и несёт «Отменить».
  */
-function feedCard(action: ActionRecord, card: ActionCard): ActionCard | FeedEntityCard {
+export function feedCard(
+  action: Pick<ActionRecord, 'id' | 'source'>,
+  card: ActionCard,
+): ActionCard | FeedEntityCard {
   if (!FEED_CARD_SOURCES.has(action.source) || card.entity_id === null) return card;
   return {
     kind: 'entity_card',
@@ -78,91 +87,191 @@ function feedCard(action: ActionRecord, card: ActionCard): ActionCard | FeedEnti
   };
 }
 
+/** `ARRAY[$1,…]::uuid[]`; пустой список — пустой массив того же типа (шаблон drizzle развернул бы JS-массив в кортеж). */
+function uuidArray(ids: readonly string[]): SQL {
+  if (ids.length === 0) return sql`ARRAY[]::uuid[]`;
+  return sql`ARRAY[${sql.join(
+    ids.map((id) => sql`${id}`),
+    sql`, `,
+  )}]::uuid[]`;
+}
+
+const json = (v: unknown): SQL => sql`${JSON.stringify(v)}::jsonb`;
+const uuidOrNull = (v: string | null | undefined): SQL =>
+  v === undefined || v === null ? sql`NULL` : sql`${v}::uuid`;
+const textOrNull = (v: string | null | undefined): SQL =>
+  v === undefined || v === null ? sql`NULL` : sql`${v}`;
+
+/** Колонки строки журнала в порядке `VALUES` ниже. */
+interface JournalRowValues {
+  graphId: GraphId;
+  id: string;
+  type: string;
+  entityId: string | null;
+  actorUserId: string;
+  actorKind: string;
+  source: string;
+  mechanism: string;
+  actorGrantId?: string;
+  runId?: string;
+  actionId?: string;
+  module?: string;
+  editedFrom?: string;
+  threadId: string | null;
+  title: string;
+  cardTool: string;
+  entityIds: readonly string[];
+  operations: unknown;
+  inverse: unknown;
+  results?: unknown[];
+  textSession: boolean;
+  bodyBefore: Record<string, string | null> | null;
+  undoes: string | null;
+  pinnedVersionIds: readonly string[];
+  cardInReply: boolean;
+}
+
+/**
+ * ОДНА инструкция: строка журнала и её строки боковой таблицы (CTE с `RETURNING`). Внешний ключ боковой таблицы
+ * проверяется в конце инструкции — строка журнала к тому моменту вставлена. Время боковых строк — время строки
+ * журнала (`created_at` из `RETURNING`), иначе пробы по записи и порядок журнала разъехались бы. `DISTINCT` — id
+ * в разном регистре приводятся к одному uuid и дали бы повтор ключа боковой строки.
+ */
+async function insertRow(tx: Tx, v: JournalRowValues): Promise<void> {
+  await tx.execute(sql`
+    WITH j AS (
+      INSERT INTO action_journal (graph_id, id, type, entity_id, actor_user_id, actor_kind, source, mechanism,
+                                  actor_grant_id, run_id, action_id, module, edited_from, thread_id, title, card_tool,
+                                  entity_ids, operations, inverse, results, text_session, body_before, undoes,
+                                  pinned_version_ids, card_in_reply)
+      VALUES (${v.graphId}::uuid, ${v.id}::uuid, ${v.type}, ${uuidOrNull(v.entityId)}, ${v.actorUserId}::uuid,
+              ${v.actorKind}, ${v.source}, ${v.mechanism}, ${uuidOrNull(v.actorGrantId)}, ${uuidOrNull(v.runId)},
+              ${textOrNull(v.actionId)}, ${textOrNull(v.module)}, ${uuidOrNull(v.editedFrom)},
+              ${uuidOrNull(v.threadId)}, ${v.title}, ${v.cardTool}, ${uuidArray(v.entityIds)},
+              ${json(v.operations)}, ${json(v.inverse)}, ${v.results === undefined ? sql`NULL` : json(v.results)},
+              ${v.textSession}, ${v.bodyBefore === null ? sql`NULL` : json(v.bodyBefore)},
+              ${uuidOrNull(v.undoes)}, ${uuidArray(v.pinnedVersionIds)}, ${v.cardInReply})
+      RETURNING graph_id, id, created_at, entity_ids
+    )
+    INSERT INTO action_journal_entities (graph_id, action_id, entity_id, created_at)
+    SELECT DISTINCT j.graph_id, j.id, e.entity_id, j.created_at
+      FROM j CROSS JOIN LATERAL unnest(j.entity_ids) AS e(entity_id)`);
+}
+
 /** Фабрика боевого синка; состояние не хранит — один инстанс переиспользуем. */
-export function makeChatJournalSink(): JournalSink {
+export function makeJournalSink(): JournalSink {
   return {
     async write(tx: Tx, entry: JournalWrite): Promise<void> {
-      // Инвариант §7.8 «один action на audit-сообщение»: API журнала (journal-read.ts)
-      // читает metadata.actions[0]. Несколько action в одном
-      // сообщении молча потеряли бы всё, кроме первого, при отмене — поэтому нормализуем
-      // и проверяем ровно один ДО любой записи (guard страхует будущий формат/баг
-      // вызывающего; отказ — VALIDATION, как прочие ошибки конвейера §9.2).
+      // Инвариант §7.8 «одна строка — одно действие»: отмена, откат прогона и повтор пачки читают действие строкой.
+      // Несколько action в одной записи молча потеряли бы всё, кроме первого, — поэтому нормализуем и проверяем ровно
+      // один ДО любой записи (guard страхует будущий формат/баг вызывающего; отказ — VALIDATION, §9.2).
       const asList = entry.action as ActionRecord | readonly ActionRecord[];
       const actions: readonly ActionRecord[] = Array.isArray(asList) ? asList : [asList];
       const action = actions.length === 1 ? actions[0] : undefined;
       if (action === undefined) {
-        throw new ExecError('VALIDATION', 'audit-сообщение должно нести ровно один action (§7.8)', {
-          count: actions.length,
-        });
+        throw new ExecError(
+          'VALIDATION',
+          'запись журнала должна нести ровно одно действие (§7.8)',
+          {
+            count: actions.length,
+          },
+        );
       }
       const threadId = entry.threadId ?? (await ensureGlobalThread(tx, entry.graphId));
-      const id = entry.id ?? newId();
-      const metadata: Record<string, unknown> = {
-        actions,
-        cards: [feedCard(action, entry.card)],
-      };
-      // Результаты операций batch — сохранённый ответ идемпотентного повтора (§7.8)
-      if (entry.results !== undefined) metadata.results = entry.results;
       try {
-        await appendMessage(tx, {
-          id,
+        await insertRow(tx, {
+          graphId: entry.graphId,
+          id: action.id,
+          type: action.type,
+          entityId: action.entity_id,
+          actorUserId: action.actor_user_id,
+          actorKind: action.actor_kind,
+          source: action.source,
+          mechanism: action.mechanism,
+          ...(action.actor_grant_id !== undefined && { actorGrantId: action.actor_grant_id }),
+          ...(action.run_id !== undefined && { runId: action.run_id }),
+          ...(action.action_id !== undefined && { actionId: action.action_id }),
+          ...(action.module !== undefined && { module: action.module }),
+          ...(action.edited_from !== undefined && { editedFrom: action.edited_from }),
           threadId,
-          role: 'system',
-          content: entry.card.title,
-          metadata,
+          title: entry.card.title,
+          cardTool: entry.card.tool,
+          entityIds: touchedEntityIds(action),
+          operations: action.operations,
+          inverse: action.inverse,
+          ...(entry.results !== undefined && { results: entry.results }),
+          textSession: action.text_session ?? false,
+          bodyBefore: action.body_before ?? null,
+          undoes: null,
+          pinnedVersionIds: [],
+          cardInReply: entry.cardInReply ?? false,
         });
       } catch (e) {
-        // Контракт JournalSink: явный id уже занят (конкурент вставил audit первым) →
-        // 23505 по PK chat_messages → AuditIdConflictError. tx уже abort'нут PG —
-        // executor откатит его и вернёт сохранённый результат отдельным tx (§7.8).
+        // Контракт JournalSink: ключ `(graph_id, id)` уже занят (конкурент вставил пачку первым, или batch_id совпал с
+        // id одиночного действия — РП-12) → 23505 по PK журнала → AuditIdConflictError. tx уже abort'нут PG —
+        // executor откатит его и ответит сохранённым результатом пачки или отказом (§7.8).
         const pg = pgErrorInfo(e);
-        if (
-          entry.id !== undefined &&
-          pg.code === '23505' &&
-          pg.constraint === 'chat_messages_pkey'
-        ) {
-          throw new AuditIdConflictError(entry.id);
+        if (pg.code === '23505' && pg.constraint === 'action_journal_pkey') {
+          throw new AuditIdConflictError(action.id);
         }
         throw e;
       }
     },
 
-    async findByAuditId(tx: Tx, id: string): Promise<JournalWrite | undefined> {
-      const rows = await tx
-        .select({
-          id: chatMessages.id,
-          threadId: chatMessages.threadId,
-          metadata: chatMessages.metadata,
-          graphId: chatThreads.graphId,
-        })
-        .from(chatMessages)
-        .innerJoin(chatThreads, eq(chatThreads.id, chatMessages.threadId))
-        .where(eq(chatMessages.id, id));
-      const row = rows[0];
-      if (!row) return undefined;
-      const md = row.metadata as {
-        actions?: ActionRecord[];
-        cards?: ActionCard[];
-        results?: unknown[];
-      };
-      const action = md.actions?.[0];
-      const card = md.cards?.[0];
-      // id занят не-audit сообщением — источником replay быть не может
-      if (!action || !card) return undefined;
-      // Тип cards честен для всех читаемых здесь строк: искомый id — всегда
-      // детерминированный batchAuditMessageId, а у batch card.entity_id === null,
-      // то есть feedCard оставляет прежнюю ActionCard.
+    async writeUndo(tx: Tx, entry: UndoWrite): Promise<void> {
+      const undoing = entry.undoing;
+      try {
+        await insertRow(tx, {
+          graphId: entry.graphId,
+          id: entry.undoRecordId,
+          type: 'undo',
+          // Своей записи-адреса у отмены нет: карточка отменённого показывает «отменено» по ссылке undoes (К-45)
+          entityId: null,
+          actorUserId: entry.actorUserId,
+          actorKind: 'owner',
+          source: entry.path,
+          mechanism: 'user',
+          threadId: undoing.threadId,
+          title: `Отменено: ${undoing.title}`,
+          cardTool: 'undo',
+          entityIds: undoing.entityIds,
+          operations: entry.operations,
+          // Отмена неотменяема (§0.2 п. 7): своего inverse у записи отмены нет
+          inverse: [],
+          textSession: false,
+          bodyBefore: entry.bodyBefore,
+          undoes: undoing.id,
+          pinnedVersionIds: entry.pinnedVersionIds,
+          cardInReply: false,
+        });
+      } catch (e) {
+        // «Уже отменено» держит уникальность (graph_id, undoes): гонка двух отмен, прошедших перепроверку до чужого
+        // коммита, — штатный отказ, а не сырой 23505 наружу
+        const pg = pgErrorInfo(e);
+        if (pg.code === '23505' && pg.constraint === 'action_journal_undoes_uniq') {
+          throw new ExecError('VALIDATION', 'действие уже отменено', {
+            actionId: undoing.id,
+            reason: 'already_undone',
+          });
+        }
+        throw e;
+      }
+    },
+
+    async findBatchWrite(
+      tx: Tx,
+      graph: GraphId,
+      batchId: string,
+    ): Promise<JournalWrite | undefined> {
+      const e = await findBatch(tx, graph, batchId);
+      if (e === undefined) return undefined;
       return {
-        id: row.id,
-        // Строка БД — та же граница внешнего мира, что строка гранта и строка реестра у
-        // пересева: значение приехало из колонки, а не из пары вызывающего, и бренд ему
-        // выдаёт `parseGraphId`. Приведением типа его выдавать нельзя — тогда сюда так
-        // же молча проехал бы и id аккаунта (греп-гейт Ш-2: приведений вне резолверов ноль).
-        graphId: parseGraphId(row.graphId),
-        threadId: row.threadId,
-        action,
-        card,
-        results: md.results,
+        graphId: e.graphId,
+        ...(e.threadId !== null && { threadId: e.threadId }),
+        action: actionRecordOf(e),
+        card: { tool: e.cardTool, entity_id: e.entityId, title: e.title },
+        ...(e.results !== undefined && { results: e.results }),
+        cardInReply: e.cardInReply,
       };
     },
   };

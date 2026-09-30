@@ -13,7 +13,7 @@ import { sql } from 'drizzle-orm';
 import type { Db } from '../db/client';
 import { withIdentity } from '../db/with-identity';
 import { execute } from '../executor/executor';
-import { makeChatJournalSink } from '../executor/journal';
+import { makeJournalSink } from '../executor/journal';
 import type { Identity } from '../identity';
 import { effectiveRegistry } from '../registry/cache';
 import { disabledExtensionsOf } from '../registry/extensions';
@@ -24,8 +24,8 @@ const FINANCIAL_ASPECT = 'orbis/financial';
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 // Один инстанс синка на модуль (как materialize.ts): состояния не хранит,
-// audit-сообщение batch пишется тем же tx, что операции executor'а (§7.8).
-const sink = makeChatJournalSink();
+// запись журнала пачки пишется тем же tx, что операции executor'а (§7.8).
+const sink = makeJournalSink();
 
 export interface PostDueDeps {
   db: Db;

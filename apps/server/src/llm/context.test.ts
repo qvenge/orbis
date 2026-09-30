@@ -16,6 +16,7 @@ import {
 import { and, eq, isNull } from 'drizzle-orm';
 import { extensionIdsIn } from '../../test/extension-ids';
 import {
+  accountOf,
   appDb,
   entityColumns,
   executeWithFixtureCategories as execute,
@@ -29,6 +30,9 @@ import { appendMessage } from '../chat/messages';
 import { ensureEntityThread, ensureGlobalThread } from '../chat/threads';
 import { aspectDefinitions, chatMessages, entities, userSettings } from '../db/schema';
 import { type Tx, withIdentity } from '../db/with-identity';
+import { makeJournalSink } from '../executor/journal';
+import type { ActionRecord, MutationSource } from '../executor/types';
+import { undoAction } from '../executor/undo';
 import { effectiveRegistry } from '../registry/cache';
 import { setExtensionDisabled } from '../registry/extensions';
 import { buildRoutineContext } from '../routines/context';
@@ -700,39 +704,37 @@ describe('buildContext — слой 4: rolling-история (решение 6 
 
 describe('buildContext — слой 4: сжатие audit/системных сообщений', () => {
   /** system-сообщение журнала в тред напрямую (формат journal.ts §7.8). */
+  /**
+   * Запись журнала треда — строкой таблицы журнала через боевой синк (спека скорости §11.2): в историю модели она
+   * попадает выдачей треда (`journal/thread-page.ts`) сводкой без тел. Сырой payload с меткой — проверка, что тела
+   * действия в контекст не текут.
+   */
   async function appendAudit(
     tx: Tx,
     threadId: string,
     opts: {
-      type: string;
+      type: ActionRecord['type'];
       entityId: string | null;
-      actorUserId: string;
+      graph: GraphId;
       actorKind: 'owner' | 'ai' | 'agent';
-      source: string;
+      source: MutationSource;
     },
   ): Promise<void> {
-    await appendMessage(tx, {
-      id: newId(),
+    await makeJournalSink().write(tx, {
+      graphId: opts.graph,
       threadId,
-      role: 'system',
-      content: 'Создана сущность «Тестовая»',
-      metadata: {
-        actions: [
-          {
-            id: newId(),
-            type: opts.type,
-            entity_id: opts.entityId,
-            actor_user_id: opts.actorUserId,
-            actor_kind: opts.actorKind,
-            source: opts.source,
-            operations: [
-              { op: 'entity_create', payload: { title: 'СЫРОЙ-PAYLOAD-НЕ-В-КОНТЕКСТ' } },
-            ],
-            inverse: [{ op: 'entity_update', payload: { archived: true } }],
-          },
-        ],
-        cards: [{ tool: 'entity_create', entity_id: opts.entityId, title: 'Создана сущность' }],
+      action: {
+        id: newId(),
+        type: opts.type,
+        entity_id: opts.entityId,
+        actor_user_id: accountOf(opts.graph),
+        actor_kind: opts.actorKind,
+        source: opts.source,
+        mechanism: 'user',
+        operations: [{ op: 'entity_create', payload: { title: 'СЫРОЙ-PAYLOAD-НЕ-В-КОНТЕКСТ' } }],
+        inverse: [{ op: 'entity_update', payload: { archived: true } }],
       },
+      card: { tool: 'entity_create', entity_id: opts.entityId, title: 'Создана сущность' },
     });
   }
 
@@ -749,7 +751,7 @@ describe('buildContext — слой 4: сжатие audit/системных с�
       appendAudit(tx, threadId, {
         type: 'entity_created',
         entityId,
-        actorUserId: user,
+        graph: user,
         actorKind: 'ai',
         source: 'chat',
       }),
@@ -774,7 +776,7 @@ describe('buildContext — слой 4: сжатие audit/системных с�
       appendAudit(tx, threadId, {
         type: 'entity_created',
         entityId: newId(),
-        actorUserId: user,
+        graph: user,
         actorKind: 'ai',
         source: 'chat',
       }),
@@ -795,7 +797,7 @@ describe('buildContext — слой 4: сжатие audit/системных с�
       await appendAudit(tx, threadId, {
         type: 'entity_updated',
         entityId,
-        actorUserId: user,
+        graph: user,
         actorKind: 'agent',
         source: 'mcp',
       });
@@ -817,7 +819,7 @@ describe('buildContext — слой 4: сжатие audit/системных с�
       appendAudit(tx, threadId, {
         type: 'batch',
         entityId: null,
-        actorUserId: user,
+        graph: user,
         actorKind: 'ai',
         source: 'chat',
       }),
@@ -831,22 +833,30 @@ describe('buildContext — слой 4: сжатие audit/системных с�
     ]);
   });
 
-  test('недействийные system-сообщения (undo/pending/reject) → user «[система] <content>» без metadata', async () => {
+  test('служебные system-сообщения (pending/reject) → user «[система] <content>» без metadata; запись отмены своей строки не имеет', async () => {
     const user = await freshGraph();
-    const actionId = newId();
     const pendingId = newId();
     // Отдельные транзакции: created_at = transaction_timestamp(), в одном tx
-    // оба сообщения получили бы одинаковое время — порядок стал бы зависеть от id
+    // обе строки получили бы одинаковое время — порядок стал бы зависеть от id
     const threadId = await withIdentity(db, personal(user), (tx) => ensureGlobalThread(tx, user));
-    await withIdentity(db, personal(user), (tx) =>
-      appendMessage(tx, {
-        id: newId(),
+    const created = await execute(
+      db,
+      {
+        identity: personal(user),
+        actorKind: 'owner',
+        source: 'ui',
         threadId,
-        role: 'system',
-        content: `Отменено действие ${actionId}`,
-        metadata: { type: 'undo', undoes: actionId },
-      }),
+        operations: [{ tool: 'entity_create', input: { title: 'Отменю', tags: [] } }],
+      },
+      { sink: makeJournalSink() },
     );
+    if (!created.ok) throw new Error(created.error.message);
+    const entityId = (created.results[0] as { id: string }).id;
+    // Запись отмены — строка журнала без своей строки в треде (К-45: «отменено» — признак строки отменённого,
+    // задача 6), поэтому и в истории модели её нет; отменённое действие своей строкой остаётся
+    expect(
+      (await undoAction(db, { identity: personal(user), actionId: created.actionId })).ok,
+    ).toBe(true);
     await withIdentity(db, personal(user), (tx) =>
       appendMessage(tx, {
         id: pendingId,
@@ -870,7 +880,7 @@ describe('buildContext — слой 4: сжатие audit/системных с�
       buildContext(tx, { graphId: user, threadId }),
     );
     expect(ctx.messages).toEqual([
-      { role: 'user', content: `[система] Отменено действие ${actionId}` },
+      { role: 'user', content: `[система] [действие: entity_created ${entityId} (ui)]` },
       {
         role: 'user',
         content: '[система] Требует подтверждения: массовое изменение (11 операций)',
@@ -899,30 +909,16 @@ describe('buildContext — слой 4: сжатие audit/системных с�
         content: 'живой ответ',
         createdAt: new Date(base + 1000),
       });
-      // Плотный поток системного шума НОВЕЕ диалога: 30 batch-audit материализации
-      // (source='system') + processing-маркер — фильтр ПОСЛЕ .limit(30) съедал бы
-      // ими всё окно и модель теряла бы живой диалог
+      // Плотный поток системного шума НОВЕЕ диалога: 30 записей журнала материализации
+      // (source='system', время записи — сейчас) + processing-маркер — фильтр ПОСЛЕ .limit(30)
+      // съедал бы ими всё окно и модель теряла бы живой диалог
       for (let i = 0; i < CONTEXT_HISTORY_LIMIT; i++) {
-        await tx.insert(chatMessages).values({
-          id: newId(),
-          threadId,
-          role: 'system',
-          content: `batch: операций — ${i + 1}`,
-          metadata: {
-            actions: [
-              {
-                id: newId(),
-                type: 'batch',
-                entity_id: null,
-                actor_user_id: user,
-                actor_kind: 'owner',
-                source: 'system',
-                operations: [],
-                inverse: [],
-              },
-            ],
-          },
-          createdAt: new Date(base + 2000 + i * 1000),
+        await appendAudit(tx, threadId, {
+          type: 'batch',
+          entityId: null,
+          graph: user,
+          actorKind: 'owner',
+          source: 'system',
         });
       }
       await tx.insert(chatMessages).values({
@@ -957,7 +953,7 @@ describe('buildContext — слой 4: сжатие audit/системных с�
       appendAudit(tx, threadId, {
         type: 'batch',
         entityId: null,
-        actorUserId: user,
+        graph: user,
         actorKind: 'owner',
         source: 'system',
       }),
@@ -967,7 +963,7 @@ describe('buildContext — слой 4: сжатие audit/системных с�
       appendAudit(tx, threadId, {
         type: 'entity_updated',
         entityId,
-        actorUserId: user,
+        graph: user,
         actorKind: 'owner',
         source: 'ui',
       }),

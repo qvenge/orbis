@@ -36,7 +36,7 @@ import { actionsOf, journalOf, threadJournal } from '../../test/journal-helpers'
 import { ensureEntityThread, ensureGlobalThread } from '../chat/threads';
 import { chatMessages, entities, propertyDefinitions } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
-import { makeChatJournalSink } from '../executor/journal';
+import { makeJournalSink } from '../executor/journal';
 import type { WireEntity } from '../executor/types';
 import { issuePatGrant, verifyBearer } from '../oauth/grants';
 import { reconfiguresOf } from '../policy/confirmation';
@@ -200,9 +200,9 @@ describe('dispatchTool: мутации через executor (§9.2; уровни 
       undoActionId: expect.any(String),
     });
 
-    // запись журнала легла в переданный тред; актор — внутренний AI. Тред кроме неё пуст: вызов тула
-    // не пишет в разговор ничего своего (счёт сообщений — прежняя проверка, счёт журнала — новая)
-    expect((await messagesIn(userA, threadId)).length).toBe(1);
+    // запись журнала легла в переданный тред; актор — внутренний AI. Сообщений в треде нет: вызов тула
+    // не пишет в разговор ничего своего, а журнал — своя таблица (спека скорости §11)
+    expect((await messagesIn(userA, threadId)).length).toBe(0);
     const journal = await threadJournal(userA, threadId);
     expect(journal.length).toBe(1);
     const action = journal[0];
@@ -229,7 +229,7 @@ describe('dispatchTool: мутации через executor (§9.2; уровни 
     });
     expect(r.status).toBe('ok');
 
-    expect((await messagesIn(userA, threadId)).length).toBe(1);
+    expect((await messagesIn(userA, threadId)).length).toBe(0);
     const journal = await threadJournal(userA, threadId);
     expect(journal.length).toBe(1);
     expect(journal[0]?.runId).toBe(runId);
@@ -266,7 +266,8 @@ describe('dispatchTool: мутации через executor (§9.2; уровни 
 
     const after = await threadJournal(userA, globalThread);
     expect(after.length).toBe(before + 1);
-    expect((await messagesIn(userA, globalThread)).length).toBe(messagesBefore + 1);
+    // журнал — своя таблица: в сообщения треда вызов не пишет ничего (спека скорости §11)
+    expect((await messagesIn(userA, globalThread)).length).toBe(messagesBefore);
     // Журнал треда — новые первыми
     expect(after[0]?.actorKind).toBe('ai');
   });
@@ -330,7 +331,7 @@ describe('dispatchTool: мутации через executor (§9.2; уровни 
     expect(r.status).toBe('ok');
     if (r.status !== 'ok') return;
     expect((r.result as unknown[]).length).toBe(2);
-    expect((await messagesIn(userA, threadId)).length).toBe(1);
+    expect((await messagesIn(userA, threadId)).length).toBe(0);
     const journal = await threadJournal(userA, threadId);
     expect(journal.length).toBe(1);
     expect(journal[0]?.type).toBe('batch');
@@ -1014,7 +1015,7 @@ describe('dispatchTool: undo_last — «отмени последнее» сло
         source: 'fast_path',
         operations: [{ tool: 'entity_create', input: { title: 'Обед 340', tags: [] } }],
       },
-      { sink: makeChatJournalSink() },
+      { sink: makeJournalSink() },
     );
     if (!created.ok) throw new Error(created.error.message);
     const entity = created.results[0] as WireEntity;
@@ -1059,7 +1060,7 @@ describe('dispatchTool: undo_last — «отмени последнее» сло
         source: 'system',
         operations: [{ tool: 'entity_create', input: { title: 'Системный след', tags: [] } }],
       },
-      { sink: makeChatJournalSink() },
+      { sink: makeJournalSink() },
     );
     if (!sys.ok) throw new Error(sys.error.message);
 
@@ -1085,7 +1086,7 @@ describe('dispatchTool: undo_last — «отмени последнее» сло
         source: 'fast_path',
         operations: [{ tool: 'entity_create', input: { title: 'Не трогать', tags: [] } }],
       },
-      { sink: makeChatJournalSink() },
+      { sink: makeJournalSink() },
     );
     if (!before.ok) throw new Error(before.error.message);
     const untouched = (before.results[0] as WireEntity).id;

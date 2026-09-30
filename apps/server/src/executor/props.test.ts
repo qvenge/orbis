@@ -57,7 +57,7 @@ import type { PropsViolation } from '../registry/validate-props';
 import { bumpOwnerRegistryVersion } from '../registry/version';
 import { toWireEntity, toWireEntityFromSql } from '../wire';
 import { touchesBudgetContour } from './executor';
-import { makeChatJournalSink } from './journal';
+import { makeJournalSink } from './journal';
 import {
   applyPropsPatch,
   comparePropertyValue,
@@ -76,7 +76,7 @@ requireEnv();
 
 const { db, client } = appDb();
 const owner = mintGraph();
-const sink = makeChatJournalSink();
+const sink = makeJournalSink();
 const T0 = new Date('2026-08-26T10:00:00.000Z');
 const CATEGORY_A = '019e4466-aaaa-7e07-b5d4-64be9721da51';
 const CATEGORY_B = '019e4466-bbbb-7e07-b5d4-64be9721da52';

@@ -24,7 +24,7 @@ import { defaultCurrencyOf } from '../budget/binding';
 import { ensureGlobalThread } from '../chat/threads';
 import { userSettings } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
-import { makeChatJournalSink } from '../executor/journal';
+import { makeJournalSink } from '../executor/journal';
 import type { JournalEntry } from '../executor/journal-read';
 import { undoLast } from '../executor/undo';
 import { buildContext } from '../llm/context';
@@ -49,7 +49,7 @@ const owner = mintGraph();
 const maskOwner = mintGraph();
 // Боевой синк журнала: без него `execute` уходит в NOOP_SINK, и «отмени последнее» не
 // нашло бы ни одного действия — предмет проверки блока `module_set` пропал бы вместе с ним.
-const sink = makeChatJournalSink();
+const sink = makeJournalSink();
 const createCaller = createCallerFactory(appRouter);
 const caller = createCaller({
   identity: personal(owner),

@@ -21,11 +21,11 @@ import { entities } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { ExecError, execErrorToTRPC } from '../errors';
 import { execute } from '../executor/executor';
-import { makeChatJournalSink } from '../executor/journal';
+import { makeJournalSink } from '../executor/journal';
 import type { Identity } from '../identity';
 import { ownerOnlyProcedure, router } from '../trpc';
 
-const sink = makeChatJournalSink();
+const sink = makeJournalSink();
 
 /** Ключ эталона оболочки хоста: хост выключить и удалить нельзя (§4.2). */
 const HOST_SHELL_KEY = 'host-shell';

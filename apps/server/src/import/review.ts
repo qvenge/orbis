@@ -54,7 +54,7 @@ import { type Tx, withIdentity } from '../db/with-identity';
 import { type EntitlementResolver, IMPORT_CSV_KEY, resolveEntitlement } from '../entitlements';
 import { ExecError, type ExecErrorCode } from '../errors';
 import { execute } from '../executor/executor';
-import { makeChatJournalSink } from '../executor/journal';
+import { makeJournalSink } from '../executor/journal';
 import { findBatch } from '../executor/journal-read';
 import type { ExecuteRequest, WireEntity } from '../executor/types';
 import type { Identity } from '../identity';
@@ -64,9 +64,9 @@ import { memoryRulesWhere } from '../memory/select';
 import { disabledExtensionsOf } from '../registry/extensions';
 import type { Card } from '../tools/registry';
 
-// Синк один на модуль (как rollover/post-due): состояния не хранит, audit-сообщение
-// batch пишется тем же tx, что и операции исполнителя (§7.8).
-const sink = makeChatJournalSink();
+// Синк один на модуль (как rollover/post-due): состояния не хранит, запись журнала
+// пачки пишется тем же tx, что и операции исполнителя (§7.8).
+const sink = makeJournalSink();
 
 /**
  * Свойство категории (§А8/В1) — оно же подпись зеркала-ребра в `meta.property`. Литералом
@@ -685,8 +685,8 @@ async function assertAdoptTargets(db: Db, who: Identity, input: ImportConfirmInp
  * не оставляют следа нигде: по таким строкам сущностей не создаётся. До этой правки
  * метрика была объявлена в PRD, но измерить её было физически нечем.
  *
- * Пишется отдельным системным сообщением, а не в audit действия: журнал append-only
- * (§4.6), и метаданные существующего audit-сообщения править нельзя. PK детерминирован
+ * Пишется отдельным системным сообщением, а не в запись журнала действия: журнал только
+ * дописывается (§11.2), и существующую запись править нельзя. PK детерминирован
  * по batchId — идемпотентный повтор confirm не удваивает статистику. Своя ошибка
  * логируется и НЕ пробрасывается: импорт уже закоммичен, и провал статистики не имеет
  * права его ронять (тот же контракт, что у эскалации правил, K7).

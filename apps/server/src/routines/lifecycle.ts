@@ -63,7 +63,7 @@ import {
 } from '../entitlements';
 import { ExecError, type ExecErrorCode, type StructuredError } from '../errors';
 import { execute } from '../executor/executor';
-import { makeChatJournalSink } from '../executor/journal';
+import { makeJournalSink } from '../executor/journal';
 import type { ActorKind, JournalSink, MutationSource } from '../executor/types';
 import type { Identity } from '../identity';
 import type { LLMProvider } from '../llm/types';
@@ -113,7 +113,7 @@ import { namedAspects } from './propose';
 const UNSET_ROW_VALUE = '—';
 
 /** Боевой синк — один инстанс на модуль (состояния не хранит), как в dispatch.ts. */
-const defaultSink = makeChatJournalSink();
+const defaultSink = makeJournalSink();
 
 /**
  * Минимум, которым пишется бухгалтерия прогона и решения владельца по нему: БД, часы,
@@ -742,7 +742,7 @@ function skip(reason: Extract<StartOutcome, { started: false }>['reason']): Star
  * Почему batch, а не два вызова: прогон без связи с рутиной — сирота, которого не видит
  * ни история, ни стоп-кран, ни экран; атомарность даёт executor. Почему детерминированный
  * batchId (Р-1): replay-семантика одиночного entity_create в batch не действует — занятый
- * id там всегда CONFLICT/id_conflict; а по PK audit-сообщения тот же batch у второго
+ * id там всегда CONFLICT/id_conflict; а по ключу записи журнала тот же batch у второго
  * вызывающего становится `idempotentReplay`. Оба исхода читаются одинаково: «проиграл,
  * модель не гоню» — и два тика в одну минуту (два инстанса на деплое) сходятся к одному
  * прогону и одному вызову модели.

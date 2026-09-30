@@ -24,7 +24,7 @@ import {
 import { journalOf } from '../../test/journal-helpers';
 import { entities } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
-import { makeChatJournalSink } from '../executor/journal';
+import { makeJournalSink } from '../executor/journal';
 import type { JournalEntry } from '../executor/journal-read';
 import { dropStaleCarryover, envelopeIdentityOf } from '../executor/normalize';
 import type {
@@ -44,7 +44,7 @@ import { propOfSlot, SLOT_CATEGORY, SLOT_CURRENCY, SLOT_DATE } from './contour';
 requireEnv();
 
 const { db, client } = appDb();
-const sink = makeChatJournalSink();
+const sink = makeJournalSink();
 
 beforeAll(async () => {
   await truncateAll();

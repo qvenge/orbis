@@ -2,8 +2,8 @@
 // Роутер ai (§9.1): LLM-диалог (sendMessage — tool-цикл Task 9), журнал действий —
 // Undo (§7.8) и pending-подтверждения (§7.10, Task 6). Обёртки над undoAction/undoLast
 // и approvePending/rejectPending: их структурированные результаты мапятся как у мутаций
-// (ошибки → TRPCError); undo-сообщение пишет сам undo-путь тем же tx (internalUndo),
-// JournalSink ему не нужен — undo не порождает нового action (undo неотменяем).
+// (ошибки → TRPCError); запись отмены пишет сам undo-путь тем же tx (internalUndo, путь `ui` —
+// кнопка владельца) — undo не порождает нового action (undo неотменяем).
 // approve/reject и sendMessage — ownerOnly (§9.3): подтверждение — решение владельца
 // аккаунта; внутренний чат — владельческая поверхность: действия sendMessage
 // атрибутируются актором 'ai' (§7.8), что верно только для чата владельца —
@@ -71,7 +71,7 @@ export const aiRouter = router({
   /**
    * Одобрение pending-подтверждения (§7.10): исполняет сохранённый payload полным
    * конвейером executor'а (ревалидация текущего состояния), без обращения к LLM;
-   * повторный approve — идемпотентный replay по PK audit-сообщения (§7.8).
+   * повторный approve — идемпотентный replay по ключу записи журнала пачки (§7.8).
    */
   approve: ownerOnlyProcedure
     .input(pendingIdInput)

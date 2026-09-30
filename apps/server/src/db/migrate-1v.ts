@@ -57,7 +57,7 @@ import { drizzle } from 'drizzle-orm/postgres-js';
 import type { ISql, Sql } from 'postgres';
 import { ExecError, type ExecErrorCode } from '../errors';
 import { execute } from '../executor/executor';
-import { makeChatJournalSink } from '../executor/journal';
+import { makeJournalSink } from '../executor/journal';
 import { exportJournalRaw, findAction, type JournalCursor } from '../executor/journal-read';
 import { undoAction } from '../executor/undo';
 import { type Identity, identitiesForScheduler, parseGraphId } from '../identity';
@@ -86,7 +86,7 @@ export const MIGRATE_1V_LABEL = 'Повестка вместо Upcoming (сре�
  */
 export type SqlClient = ISql;
 
-const sink = makeChatJournalSink();
+const sink = makeJournalSink();
 
 /** Id встроенной подписки Повестки (снимает миграция `0023`) и её движок (§6.5). */
 const AGENDA_SUBSCRIPTION = 'orbis/agenda';
@@ -841,7 +841,8 @@ export async function undoMigrate1v(
       { actionId },
     );
   }
-  const r = await undoAction(db, { identity: who, actionId });
+  // Путь — `system`: отмену ведёт прод-операция, а не кнопка владельца и не разговор (РП-11)
+  const r = await undoAction(db, { identity: who, actionId, path: 'system' });
   if (!r.ok) throw new ExecError(r.error.code as ExecErrorCode, r.error.message, r.error.details);
   return { undone: true };
 }

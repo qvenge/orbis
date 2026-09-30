@@ -1,14 +1,10 @@
 // apps/server/src/executor/journal-read.test.ts
-// API чтения журнала (задача 4 плана А, РП-9): один модуль читает журнал за всех читателей, и смена
-// хранилища (задача 5) проходит одним местом. Записи — настоящим `execute` с боевым синком, как пишут
-// боевые пути; отмены — настоящим `undoAction`. Этот тест — единственный, кроме тестов синка, кто знает,
-// где лежит журнал: синтетические записи ниже держат правила API НЕЗАВИСИМО от формы хранилища.
+// API чтения журнала (задача 4 плана А, РП-9; с задачи 5 — таблица `action_journal`): один модуль читает журнал за
+// всех читателей. Записи — настоящим `execute` с боевым синком, как пишут боевые пути; отмены — настоящим `undoAction`
+// (запись отмены — строка того же вида, что действие, с операциями — применённым inverse, К-22).
 import { afterAll, describe, expect, test } from 'bun:test';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import type { GraphId } from '@orbis/shared';
-import { batchAuditMessageId, globalThreadId, newId } from '@orbis/shared';
+import { globalThreadId, newId } from '@orbis/shared';
 import {
   accountOf,
   appDb,
@@ -17,17 +13,16 @@ import {
   personal,
   requireEnv,
 } from '../../test/helpers';
-import { appendMessage } from '../chat/messages';
 import { withIdentity } from '../db/with-identity';
 import { execute } from './executor';
-import { makeChatJournalSink } from './journal';
+import { makeJournalSink } from './journal';
 import * as J from './journal-read';
 import type { ActionRecord, MutationSource, WireEntity } from './types';
 import { undoAction } from './undo';
 
 requireEnv();
 const { db, client } = appDb();
-const sink = makeChatJournalSink();
+const sink = makeJournalSink();
 
 afterAll(async () => {
   await client.end();
@@ -145,33 +140,10 @@ describe('API чтения журнала (задача 4, РП-9)', () => {
       expect([...(await J.executedIds(tx, g, [batchId, crypto.randomUUID()]))]).toEqual([batchId]);
     });
     expect(r.ok).toBe(true);
-    // РП-12: запись под ключом пачки, которая пачкой НЕ является (одиночное действие), — не «повтор».
-    // Прежнее хранилище держит это разными пространствами PK (одиночное пишется под случайным id),
-    // поэтому случай собран синком руками: проверка «пачка ли это» обязана жить в API, а не в форме —
-    // в таблице (задача 5) ключ пачки и id одиночного действия — одно пространство.
-    const lookalike = crypto.randomUUID();
-    const forged: ActionRecord = {
-      id: lookalike,
-      type: 'entity_created',
-      entity_id: null,
-      actor_user_id: accountOf(g),
-      actor_kind: 'owner',
-      source: 'ui',
-      mechanism: 'user',
-      operations: [],
-      inverse: [],
-    };
-    await withIdentity(db, personal(g), (tx) =>
-      sink.write(tx, {
-        id: batchAuditMessageId(g, lookalike),
-        graphId: g,
-        action: forged,
-        card: { tool: 'entity_create', entity_id: null, title: 'одиночное под ключом пачки' },
-      }),
-    );
+    // РП-12: в таблице id одиночного действия и batch_id пачки — одно пространство ключей `(graph_id, id)`: запись
+    // под ключом, которая пачкой НЕ является (одиночное действие), — не «повтор» и не «исполненная пачка».
     await withIdentity(db, personal(g), async (tx) => {
-      expect(await J.findBatch(tx, g, lookalike)).toBeUndefined();
-      expect([...(await J.executedIds(tx, g, [lookalike]))]).toEqual([]);
+      expect([...(await J.executedIds(tx, g, [single.actionId]))]).toEqual([]);
     });
   });
 
@@ -333,7 +305,7 @@ describe('API чтения журнала (задача 4, РП-9)', () => {
     expect(undo.cardTool).toBe('undo');
     expect(undo.inverse).toEqual([]);
     const created = must(all[0], 'первое действие');
-    // Поля, которых в сообщении прежнего хранилища нет, — значения по умолчанию (бриф задачи 4)
+    // Поля среза, которые заполнят задачи 7 и 9, — умолчания колонок
     expect(created.textSession).toBe(false);
     expect(created.bodyBefore).toBeNull();
     expect(created.pinnedVersionIds).toEqual([]);
@@ -343,247 +315,137 @@ describe('API чтения журнала (задача 4, РП-9)', () => {
     expect(created.actorUserId).toBe(accountOf(g));
   });
 
-  // К-22: записи отмены исключаются из проб «действия» ЯВНО, а не формой хранилища. Сегодняшняя запись
-  // отмены `actions` не несёт, и форма это держит сама, — но в таблице (задача 5) строка отмены несёт
-  // операции (применённый inverse), и без явного исключения она всплыла бы «последним действием»,
-  // чужой правкой отката прогона и исправлением категории. Здесь запись отмены собрана с `actions`
-  // руками — она и держит явное правило на прежнем хранилище.
-  test('запись отмены, несущая операции, — не «действие» ни для одной пробы (К-22)', async () => {
+  // К-22 на таблице: запись отмены — строка того же вида, что действие, и несёт операции (применённый inverse). Без
+  // явного исключения она всплыла бы «последним действием по записи» (R-18), чужой правкой окна отката прогона и
+  // исправлением категории у эскалации.
+  test('запись отмены правки категории X→Y (её операции — Y→X) — не последнее по записи, не чужая правка окна отката, не исправление в X (К-22)', async () => {
     const g = await freshGraph();
     const runId = newId();
-    const created = await create(g, 'цель');
-    const target = entityOf(created);
-    const first = await update(
+    const x = newId();
+    const y = newId();
+    const txn = await executeWithFixtureCategories(
+      db,
+      {
+        identity: personal(g),
+        actorKind: 'owner',
+        source: 'ui',
+        operations: [
+          {
+            tool: 'entity_create',
+            input: {
+              title: 'кофе',
+              tags: [],
+              aspects: ['orbis/financial'],
+              props: {
+                'orbis/amount': '250.00',
+                'orbis/direction': 'expense',
+                'orbis/finance_category': x,
+                'orbis/occurred_on': '2026-07-20',
+              },
+            },
+          },
+        ],
+      },
+      { sink },
+    );
+    if (!txn.ok) throw new Error(txn.error.message);
+    const id = entityOf(txn);
+    // Шаг прогона рутины переносит X→Y; владелец его отменяет — запись отмены несёт Y→X
+    const step = await update(
       g,
-      { id: target, title: 'шаг прогона' },
+      { id, props: { 'orbis/finance_category': y } },
       { source: 'routine', runId },
     );
-    const category = newId();
-    const forged: ActionRecord = {
-      id: newId(),
-      type: 'entity_updated',
-      entity_id: target,
+    const undone = await undoAction(db, { identity: personal(g), actionId: step.actionId });
+    expect(undone.ok).toBe(true);
+    const since = new Date(Date.now() - 3600_000);
+    await withIdentity(db, personal(g), async (tx) => {
+      const undo = must(await J.undoRecordOf(tx, g, step.actionId), 'запись отмены');
+      expect(undo.operations.map((op) => op.payload.props)).toEqual([
+        { 'orbis/finance_category': x },
+      ]);
+      // Последнее ДЕЙСТВИЕ по записи — шаг прогона (запись отмены действием не является)
+      expect((await J.lastActionTouching(tx, g, id))?.id).toBe(step.actionId);
+      expect((await J.actionsOnEntity(tx, g, id, 10)).map((e) => e.id)).toEqual([
+        step.actionId,
+        txn.actionId,
+      ]);
+      // Окно конфликтов отката: после шага прогона запись тронула только отмена владельца — это не чужая правка
+      const run = await J.runActions(tx, g, runId);
+      expect(run.map((e) => e.id)).toEqual([step.actionId]);
+      expect(await J.actionsTouchingAfter(tx, g, must(run[0], 'шаг прогона').cursor, [id])).toEqual(
+        [],
+      );
+      // Эскалация: отмена вернула запись в X, но исправлением «в X» она не является
+      expect(await J.financialUpdatesSince(tx, g, since, [x])).toEqual([]);
+      // И не «последнее отменяемое», не «действие» по id, не правка владельца в интерфейсе
+      expect((await J.findLastUndoable(tx, g))?.id).toBe(txn.actionId);
+      expect(await J.findAction(tx, g, undo.id)).toBeUndefined();
+      expect((await J.recentOwnerEdits(tx, g, since, 10)).map((e) => e.id)).toEqual([txn.actionId]);
+      // А как запись отмены она видна: отменённое — отменено, в экспорте — отменой с её записями
+      expect(await J.isUndone(tx, g, step.actionId)).toBe(true);
+      const undos = (await J.exportJournal(tx, g)).filter((e) => e.type === 'undo');
+      expect(undos.map((e) => [e.undoes, e.entityIds])).toEqual([[step.actionId, [id]]]);
+    });
+  });
+
+  // R-18 поставки (`supply/mechanism.ts`): «последнее по записи» — последнее действие, чьи ОПЕРАЦИИ правили саму запись
+  // (`payload.id`), а не любая связь с ней. Связь, легшая после «добавить», ответа R-18 не меняет.
+  test('lastActionTouching — по операциям над самой записью: связь после «добавить» ответа не меняет', async () => {
+    const g = await freshGraph();
+    const added = await create(g, 'добавлено');
+    const a = entityOf(added);
+    const b = entityOf(await create(g, 'сосед'));
+    const rel = await execute(
+      db,
+      {
+        identity: personal(g),
+        actorKind: 'owner',
+        source: 'ui',
+        operations: [
+          { tool: 'relation_create', input: { source_id: a, target_id: b, role: 'mention' } },
+        ],
+      },
+      { sink },
+    );
+    if (!rel.ok) throw new Error(rel.error.message);
+    await withIdentity(db, personal(g), async (tx) => {
+      // Связь тронула запись (она в её записях журнала), но саму запись не правила
+      expect((await J.findAction(tx, g, rel.actionId))?.entityIds).toContain(a);
+      expect((await J.lastActionTouching(tx, g, a))?.id).toBe(added.actionId);
+    });
+  });
+
+  test('поля записи — как лежат: необязательных ключей без значения нет', async () => {
+    const g = await freshGraph();
+    const bare = crypto.randomUUID();
+    const partial: ActionRecord = {
+      id: bare,
+      type: 'batch',
+      entity_id: null,
       actor_user_id: accountOf(g),
       actor_kind: 'owner',
       source: 'ui',
       mechanism: 'user',
-      run_id: runId,
-      operations: [
-        {
-          op: 'entity_update',
-          payload: { id: target, props: { 'orbis/finance_category': category } },
-        },
-      ],
-      inverse: [{ op: 'entity_update', payload: { id: target, title: 'шаг прогона' } }],
-    };
-    await withIdentity(db, personal(g), (tx) =>
-      appendMessage(tx, {
-        id: newId(),
-        threadId: globalThreadId(g),
-        role: 'system',
-        content: 'Отменено действие',
-        metadata: { type: 'undo', undoes: first.actionId, actions: [forged] },
-      }),
-    );
-    await withIdentity(db, personal(g), async (tx) => {
-      // Шаг прогона отменён записью отмены — последнее отменяемое действие — создание цели
-      expect((await J.findLastUndoable(tx, g))?.id).toBe(created.actionId);
-      expect(await J.findAction(tx, g, forged.id)).toBeUndefined();
-      expect((await J.lastActionTouching(tx, g, target))?.id).toBe(first.actionId);
-      expect((await J.runActions(tx, g, runId)).map((e) => e.id)).toEqual([first.actionId]);
-      const run = await J.runActions(tx, g, runId);
-      const cursor = must(run[0], 'действие прогона').cursor;
-      expect(await J.actionsTouchingAfter(tx, g, cursor, [target])).toEqual([]);
-      const since = new Date(Date.now() - 3600_000);
-      expect(await J.financialUpdatesSince(tx, g, since, [category])).toEqual([]);
-      // Правка владельца в интерфейсе — только создание цели (шаг прогона — `routine`)
-      expect((await J.recentOwnerEdits(tx, g, since, 10)).map((e) => e.id)).toEqual([
-        created.actionId,
-      ]);
-      // А как запись отмены она видна: отменённое — отменено, в экспорте — отменой с её операциями
-      expect(await J.isUndone(tx, g, first.actionId)).toBe(true);
-      const undos = (await J.exportJournal(tx, g)).filter((e) => e.type === 'undo');
-      expect(undos.map((e) => [e.undoes, e.entityIds])).toEqual([[first.actionId, [target]]]);
-    });
-  });
-  // M-1/M-2 фикс-круга 1: поля записи действия — как лежат. Подставленный актор или отброшенный `null` сделали бы
-  // проверки атрибуции и «ключа нет вовсе» во всех тестах, читающих журнал, пустыми.
-  test('поля записи — как лежат: актора нет — его нет, ключ со значением null — есть', async () => {
-    const g = await freshGraph();
-    const bare = crypto.randomUUID();
-    const partial = {
-      id: bare,
-      type: 'batch',
-      entity_id: null,
-      actor_kind: 'owner',
-      source: 'ui',
-      mechanism: 'user',
-      module: null,
+      action_id: 'orbis/probe',
       operations: [],
       inverse: [],
-    } as unknown as ActionRecord; // запись без `actor_user_id` и с `module: null` — сломанный писатель
+    };
     await withIdentity(db, personal(g), (tx) =>
       sink.write(tx, {
-        id: batchAuditMessageId(g, bare),
         graphId: g,
         action: partial,
-        card: { tool: 'batch_execute', entity_id: null, title: 'без актора' },
+        card: { tool: 'batch_execute', entity_id: null, title: 'без модуля' },
       }),
     );
     const e = must(
       await withIdentity(db, personal(g), (tx) => J.findAction(tx, g, bare)),
-      'запись без актора',
+      'запись без модуля',
     );
-    expect(e.actorUserId).toBeUndefined();
-    expect(Object.hasOwn(e, 'module')).toBe(true);
-    expect(e.module).toBeNull();
-    expect(Object.hasOwn(e, 'runId')).toBe(false);
-  });
-});
-
-// ─────────────────────────── сторож: журнал читает только этот модуль ───────────────────────────
-
-/**
- * КОД-формы чтения журнала прежнего хранилища (фикс-круг 1, M-7: регэксп брифа видел только SQL-пробы по metadata):
- *  - SQL-проба по metadata (`@>`, `->`, `->>`, `?`) на ключ `actions`/`type`, доступ `.metadata.actions`, приведение
- *    `metadata as {… actions …}` — регэксп брифа;
- *  - проба ПЕРЕМЕННОЙ (`metadata @> ${probe}`) — через саму пробу: объект журнальной формы `{ actions: [` (в строку или
- *    построчно — `actions: [` в конце строки) и `type: 'undo'`;
- *  - PK-проба пачки и чтение синком: `batchAuditMessageId(` и `findByAuditId(`.
- * `[[:space:]]`, а не `\s`: ERE Apple Git `\s` не понимает. Прогон по BASE задачи 4 (`0fda57a0`) находит всех прежних
- * читателей — undo, rollback, mechanism, escalation, pending (три), setup-graph, aggregates, plan-to-fact, review,
- * migrate-1v (два) — отчёт фикс-круга 1.
- */
-const JOURNAL_READ_PATTERN = [
-  'metadata[[:space:]]*(@>|->>?|\\?)[[:space:]]*\'?\\{?"?(actions|type)',
-  '\\.metadata\\.actions',
-  'metadata as \\{[^}]*actions',
-  '\\{[[:space:]]*actions:[[:space:]]*\\[',
-  '^[[:space:]]*actions:[[:space:]]*\\[$',
-  "type:[[:space:]]*'undo'",
-  'batchAuditMessageId\\(',
-  'findByAuditId\\(',
-].join('|');
-
-/**
- * Не читатели — поимённо, построчно (файл + фрагмент строки) и с причиной. Пишет журнал исполнитель и `undo.ts`
- * (глобальное ограничение плана); повтор пачки исполнитель берёт у СВОЕГО синка — это путь записи, задача 5 переименует
- * его в `findBatchWrite`.
- */
-const NOT_READERS: ReadonlyArray<{ file: string; text: string; why: string }> = [
-  {
-    file: 'apps/server/src/executor/executor.ts',
-    text: 'const auditId = batchAuditMessageId(req.identity.graph, batchId);',
-    why: 'ключ записи пачки при записи',
-  },
-  {
-    file: 'apps/server/src/executor/executor.ts',
-    text: 'sink.findByAuditId(tx, auditId)',
-    why: 'повтор пачки — у синка писателя (задача 5: findBatchWrite)',
-  },
-  {
-    file: 'apps/server/src/executor/types.ts',
-    text: 'findByAuditId(',
-    why: 'интерфейс синка и синк в памяти',
-  },
-  {
-    file: 'apps/server/src/executor/undo.ts',
-    text: "metadata: { type: 'undo', undoes: action.id },",
-    why: 'ЗАПИСЬ отмены — писатель журнала',
-  },
-  {
-    file: 'apps/server/src/tools/dispatch.ts',
-    text: 'findByAuditId: (tx, id) => inner.findByAuditId(tx, id),',
-    why: 'синк захвата делегирует повтор пачки внутреннему синку исполнителя',
-  },
-  {
-    file: 'apps/server/src/policy/pending.ts',
-    text: 'const auditId = batchAuditMessageId(args.identity.graph, args.pendingId);',
-    why: 'адрес исполненной пачки в деталях отказа «уже исполнено» — не чтение',
-  },
-];
-
-const REPO_ROOT = `${import.meta.dir}/../../../..`;
-
-/** Строка `git grep -n` — комментарий (`//`, `*`, `/**`)? Докблоки читателями не являются. */
-const isComment = (line: string): boolean => /^[^:]+:\d+:\s*(\/\/|\/?\*)/.test(line);
-
-describe('сторож РП-9: журнал читает только journal-read.ts', () => {
-  test('регэксп сторожа ловит все формы чтения (положительный контроль тем же движком git grep)', () => {
-    const samples = [
-      '  const x = row.metadata as { actions?: ActionRecord[] };',
-      "      sql`SELECT metadata -> 'actions' -> 0 ->> 'id' AS action_id",
-      '        WHERE m.metadata @> \'{"actions": []}\'::jsonb',
-      "        AND m.metadata->'actions'->0->>'source' IS DISTINCT FROM 'system'",
-      '        WHERE u.metadata @> \'{"type":"undo"}\'::jsonb',
-      "     WHERE m.role = 'system' AND m.metadata ? 'actions'",
-      '  const a = msg.metadata.actions[0];',
-      // формы BASE задачи 4, которых регэксп брифа не видел (M-7)
-      '  const probe = JSON.stringify({ actions: [{ id: actionId }] });',
-      "  const probe = JSON.stringify({ type: 'undo', undoes: actionId });",
-      '    actions: [',
-      '    .where(eq(chatMessages.id, batchAuditMessageId(graphId, pendingId)));',
-      '    const replay = (await rolloverSink.findByAuditId(tx, auditId)) !== undefined;',
-    ];
-    const dir = mkdtempSync(join(tmpdir(), 'journal-guard-'));
-    try {
-      writeFileSync(join(dir, 'samples.ts'), `${samples.join('\n')}\n`);
-      const out = Bun.spawnSync(
-        ['git', 'grep', '--no-index', '-n', '-E', JOURNAL_READ_PATTERN, '--', 'samples.ts'],
-        { cwd: dir },
-      );
-      const hits = out.stdout
-        .toString()
-        .trim()
-        .split('\n')
-        .filter((l) => l !== '');
-      expect(hits.length).toBe(samples.length);
-      // Отрицательный контроль: сводка ответа ассистента — не проба журнала
-      writeFileSync(
-        join(dir, 'samples.ts'),
-        '    return { assistantMessage: pre.existingAnswer, actions: [], pending: [], replayed: true };\n',
-      );
-      const miss = Bun.spawnSync(
-        ['git', 'grep', '--no-index', '-n', '-E', JOURNAL_READ_PATTERN, '--', 'samples.ts'],
-        { cwd: dir },
-      );
-      expect(miss.stdout.toString().trim()).toBe('');
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
+    expect(e.actionId).toBe('orbis/probe');
+    for (const k of ['module', 'runId', 'actorGrantId', 'editedFrom', 'results']) {
+      expect([k, Object.hasOwn(e, k)]).toEqual([k, false]);
     }
-  });
-
-  test('вне journal-read.ts журнал в chat_messages никто не читает (РП-9)', () => {
-    const out = Bun.spawnSync(
-      [
-        'git',
-        'grep',
-        '-n',
-        '-E',
-        JOURNAL_READ_PATTERN,
-        '--',
-        'apps/server/src',
-        ':(exclude)apps/server/src/**/*.test.ts',
-        ':(exclude)apps/server/src/test/',
-        ':(exclude)apps/server/src/executor/journal-read.ts',
-        // синк журнала — он пишет
-        ':(exclude)apps/server/src/executor/journal.ts',
-        // поимённо: фильтр выдачи треда снимает задача 6, сжатие строк контекста переводит задача 5 (threadPage)
-        ':(exclude)apps/server/src/chat/messages.ts',
-        ':(exclude)apps/server/src/llm/context.ts',
-        // поимённо: `ops.ts perf` меряет САМО хранилище (байты строк, все графы, BYPASSRLS) и выбирает его по
-        // каталогу — прежнее или таблицу (задача 2); это замер хранилища, а не чтение действий, и API журнала
-        // (по графу, под идентичностью) его не выражает. Ветку прежнего хранилища снимает задача 5.
-        ':(exclude)apps/server/src/db/perf-report.ts',
-      ],
-      { cwd: REPO_ROOT },
-    );
-    const lines = out.stdout
-      .toString()
-      .trim()
-      .split('\n')
-      .filter((l) => l !== '' && !isComment(l))
-      .filter((l) => !NOT_READERS.some((n) => l.startsWith(`${n.file}:`) && l.includes(n.text)));
-    expect(lines).toEqual([]);
+    expect(e.threadId).toBe(globalThreadId(g));
   });
 });

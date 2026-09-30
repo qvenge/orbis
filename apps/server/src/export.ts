@@ -15,6 +15,7 @@ import { asc, eq } from 'drizzle-orm';
 import type { WireChatMessage } from './chat/messages';
 import { chatMessages, chatThreads, entities, relations, userSettings } from './db/schema';
 import type { Tx } from './db/with-identity';
+import { exportJournal, type JournalEntry } from './executor/journal-read';
 import type { WireEntity, WireRelation } from './executor/types';
 import { effectiveRegistry } from './registry/cache';
 import {
@@ -28,7 +29,20 @@ import {
 } from './wire';
 
 /**
+ * Запись журнала в дампе — строка журнала целиком (дамп владельца: операции и данные отмены — его данные), без
+ * вычисляемого при чтении `touchedKeys`: дамп несёт то, что лежит, а не производное от него. Время — ISO-строкой,
+ * как все таймстампы провода (решение 12 плана).
+ */
+export type ExportedJournalEntry = Omit<JournalEntry, 'touchedKeys' | 'createdAt'> & {
+  createdAt: string;
+};
+
+/**
  * Форма дампа §9.4/§С5: стабильный конверт для импорта/переноса.
+ *
+ * ВЕРСИЯ 3 (спека скорости §11, план А задача 5): журнал действий едет своим ключом `journal` — все записи графа
+ * по времени, включая записи отмены. До v3 он лежал системными сообщениями внутри `chatMessages`; с таблицы журнала
+ * сообщения его не несут, и читатель обязан различить, где искать журнал, — отсюда номер, а не молчаливое расширение.
  *
  * ВЕРСИЯ 2 (Задача 13c). Что изменилось против первой и почему номер, а не молчаливое
  * расширение:
@@ -48,12 +62,13 @@ import {
  */
 export interface OrbisExport {
   format: 'orbis-export';
-  version: 2;
+  version: 3;
   exportedAt: string;
   entities: WireEntity[];
   relations: WireRelation[];
   chatThreads: WireThread[];
   chatMessages: WireChatMessage[];
+  journal: ExportedJournalEntry[];
   userSettings: WireUserSettings | null;
   /** Только строки ТЕКУЩЕГО ГРАФА (`graph_id` — граф, не аккаунт); форма — декларация реестра (§А2-1). */
   propertyDefinitions: PropertyDefinition[];
@@ -106,10 +121,16 @@ export async function exportData(
     .from(userSettings)
     .where(eq(userSettings.graphId, graphId));
   const registry = await effectiveRegistry(tx, graphId);
+  const journal = (await exportJournal(tx, graphId)).map(
+    ({ touchedKeys: _derived, createdAt, ...entry }): ExportedJournalEntry => ({
+      ...entry,
+      createdAt: createdAt.toISOString(),
+    }),
+  );
 
   return {
     format: 'orbis-export',
-    version: 2,
+    version: 3,
     exportedAt: clock().toISOString(),
     // Стрелкой, а не `.map(toWireEntity)`: вторым позиционным параметром туда поехал бы
     // ИНДЕКС массива, и выгрузка начала бы отдавать документ со второй сущности.
@@ -117,6 +138,7 @@ export async function exportData(
     relations: relationRows.map(toWireRelation),
     chatThreads: threadRows.map(toWireThread),
     chatMessages: messageRows.map(toWireChatMessage),
+    journal,
     userSettings: settingsRows[0] ? toWireUserSettings(settingsRows[0]) : null,
     propertyDefinitions: ownRows(registry.properties),
     aspectDefinitions: ownRows(registry.aspects),

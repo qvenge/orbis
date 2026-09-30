@@ -8,13 +8,13 @@ import { relations } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { execErrorToTRPC } from '../errors';
 import { execute } from '../executor/executor';
-import { makeChatJournalSink } from '../executor/journal';
+import { makeJournalSink } from '../executor/journal';
 import type { WireRelation } from '../executor/types';
 import { ownerOnlyProcedure, protectedProcedure, router } from '../trpc';
 import { toWireRelation } from '../wire';
 
 // Боевой синк — один инстанс на модуль (без состояния, пишет тем же tx, §7.8)
-const sink = makeChatJournalSink();
+const sink = makeJournalSink();
 
 export const relationRouter = router({
   create: ownerOnlyProcedure

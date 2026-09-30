@@ -25,15 +25,15 @@ import type { Db } from '../db/client';
 import { withIdentity } from '../db/with-identity';
 import { ExecError, type ExecErrorCode } from '../errors';
 import { execute } from '../executor/executor';
-import { makeChatJournalSink } from '../executor/journal';
+import { makeJournalSink } from '../executor/journal';
 import { findBatch } from '../executor/journal-read';
 import type { Identity } from '../identity';
 import { effectiveRegistry } from '../registry/cache';
 import { disabledExtensionsOf } from '../registry/extensions';
 
-// Синк один на модуль (как post-due.ts / rollover): состояния не хранит, audit-сообщение
-// batch пишется тем же tx, что операции executor'а (§7.8).
-const sink = makeChatJournalSink();
+// Синк один на модуль (как post-due.ts / rollover): состояния не хранит, запись журнала
+// пачки пишется тем же tx, что операции executor'а (§7.8).
+const sink = makeJournalSink();
 
 /** Декларация, которой ручка переводит покупку (`BUILTIN_ACTION_DEFS`, модуль Финансы). */
 const PLAN_TO_FACT_ACTION = 'finance/plan-to-fact';

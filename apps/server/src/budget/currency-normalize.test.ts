@@ -20,14 +20,14 @@ import {
   truncateAll,
   withRule,
 } from '../../test/helpers';
-import { makeChatJournalSink } from '../executor/journal';
+import { makeJournalSink } from '../executor/journal';
 import type { ExecuteErr, ExecuteOk, ExecuteRequest, ExecuteResult } from '../executor/types';
 import * as binding from './binding';
 
 requireEnv();
 
 const { db, client } = appDb();
-const sink = makeChatJournalSink();
+const sink = makeJournalSink();
 
 beforeAll(async () => {
   await truncateAll();

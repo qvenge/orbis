@@ -8,6 +8,7 @@ import type { GraphId } from '@orbis/shared';
 import { globalThreadId, memoryRuleSuggestionId, newId } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import {
+  accountOf,
   adminDb,
   appDb,
   executeWithFixtureCategories as execute,
@@ -19,9 +20,9 @@ import {
 import { journalOf } from '../../test/journal-helpers';
 import { appendMessage } from '../chat/messages';
 import { ensureGlobalThread } from '../chat/threads';
-import { chatMessages } from '../db/schema';
+import { actionJournal, chatMessages } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
-import { makeChatJournalSink } from '../executor/journal';
+import { makeJournalSink } from '../executor/journal';
 import type { JournalEntry } from '../executor/journal-read';
 import type { ExecuteOk, ExecuteRequest, ExecuteResult, WireEntity } from '../executor/types';
 import { appRouter } from '../router';
@@ -38,7 +39,7 @@ import {
 requireEnv();
 
 const { db, client } = appDb();
-const sink = makeChatJournalSink();
+const sink = makeJournalSink();
 
 beforeAll(async () => {
   await truncateAll();
@@ -612,44 +613,40 @@ describe('эскалация повторных исправлений кате�
   test('14. скан журнала ограничен потолком выборки и берёт свежие действия', async () => {
     const { user, food, fun } = await freshOwner();
     const extra = 3;
-    // Форма audit-строки повторена руками: гнать 200+ рекатегоризаций через executor
-    // ради проверки потолка незачем, а под пробу строка обязана попадать
+    // Строка журнала повторена руками: гнать 200+ рекатегоризаций через executor ради проверки потолка
+    // незачем, а под пробу строка обязана попадать. Время — явное, чтобы «свежие» было проверяемо.
     const made = Array.from({ length: JOURNAL_SCAN_LIMIT + extra }, (_, i) => {
       const actionId = newId();
       return {
         actionId,
         row: {
-          id: newId(),
+          graphId: user,
+          id: actionId,
+          type: 'entity_updated',
+          entityId: fun,
+          actorUserId: accountOf(user),
+          actorKind: 'owner',
+          source: 'ui',
+          mechanism: 'user',
           threadId: globalThreadId(user),
-          role: 'system',
-          content: `псевдо-audit ${i}`,
-          metadata: {
-            actions: [
-              {
-                id: actionId,
-                type: 'entity_updated',
-                operations: [
-                  {
-                    op: 'entity_update',
-                    payload: { id: fun, props: { 'orbis/finance_category': fun } },
-                  },
-                ],
-                inverse: [
-                  {
-                    op: 'entity_update',
-                    payload: { id: fun, props: { 'orbis/finance_category': food } },
-                  },
-                ],
-              },
-            ],
-          },
+          title: `псевдо-правка ${i}`,
+          cardTool: 'entity_update',
+          operations: [
+            { op: 'entity_update', payload: { id: fun, props: { 'orbis/finance_category': fun } } },
+          ],
+          inverse: [
+            {
+              op: 'entity_update',
+              payload: { id: fun, props: { 'orbis/finance_category': food } },
+            },
+          ],
           createdAt: new Date(Date.now() - i * 60_000), // i=0 — самое свежее
         },
       };
     });
     await withIdentity(db, personal(user), async (tx) => {
       await ensureGlobalThread(tx, user);
-      await tx.insert(chatMessages).values(made.map((m) => m.row));
+      await tx.insert(actionJournal).values(made.map((m) => m.row));
     });
 
     const scanned = (await scanActions(user, [fun])).map((a) => a.id).sort();

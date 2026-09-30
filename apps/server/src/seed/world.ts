@@ -74,8 +74,8 @@ export const WORLD_SEED_MECHANISM = 'seed' as const;
  * пачка — одна транзакция и один атомарный исход. Наполовину засеянный набор категорий выглядит для
  * владельца как испорченный, а не как «сейчас досеется».
  *
- * `batchId` детерминирован от владельца: audit-сообщение пачки адресуется им
- * (`batchAuditMessageId`), и случайный id при живом синке дал бы повтору вторую запись.
+ * `batchId` детерминирован от владельца: запись журнала пачки адресуется им (ключ `(graph_id, batch_id)`),
+ * и случайный id при живом синке дал бы повтору вторую запись.
  *
  * ФИНАНСЫ ДОЛЖНЫ БЫТЬ ВКЛЮЧЕНЫ: аспект категории — Финансов, и при выключенных сев получил бы
  * `MODULE_DISABLED`. Маску перед севом снимает заведение графа (`setupGraph`, Д-1).
@@ -145,7 +145,7 @@ export async function seedOwnerWorld(
   return { created: missing.size, skipped: wanted.length - missing.size };
 }
 
-/** batchId пачки сева — детерминированный: повтор не заводит второго audit-сообщения. */
+/** batchId пачки сева — детерминированный: повтор не заводит второй записи журнала. */
 function worldBatchId(graphId: GraphId): string {
   return uuidv5(`${graphId.toLowerCase()}:seed-world`, ORBIS_NAMESPACE);
 }

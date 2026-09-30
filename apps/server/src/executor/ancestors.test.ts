@@ -27,7 +27,7 @@ import { withIdentity } from '../db/with-identity';
 import { effectiveRegistry } from '../registry/cache';
 import { nearestAncestorRuleOf } from '../rules/carriers';
 import { recomputeProjectAncestors } from './ancestors';
-import { makeChatJournalSink } from './journal';
+import { makeJournalSink } from './journal';
 import type { JournalEntry } from './journal-read';
 import type {
   ActionOperation,
@@ -317,7 +317,7 @@ test('undo relation_create иерархического ребра: parent_proje
   const task = await createEntity(owner, { title: 'Задача отката' });
   // Боевой синк, а не InMemory: undo ищет действие в журнале БД, и на памяти теста
   // проверялся бы не откат, а его отсутствие (NOT_FOUND).
-  const created = await relate(owner, p.id, task.id, 'subitem', {}, makeChatJournalSink());
+  const created = await relate(owner, p.id, task.id, 'subitem', {}, makeJournalSink());
   expect(await ancestorsOf(owner, task.id)).toEqual({ parent: p.id, root: p.id });
 
   // Строка пересчёта записана, а обратной операции у неё НЕТ: откат пересчитывает заново

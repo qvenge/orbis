@@ -25,7 +25,7 @@ import { PgDialect } from 'drizzle-orm/pg-core';
 import { adminDb, appDb, freshGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
 import { withIdentity } from '../db/with-identity';
 import { execute } from '../executor/executor';
-import { makeChatJournalSink } from '../executor/journal';
+import { makeJournalSink } from '../executor/journal';
 import type { ExecuteRequest, ExecuteResult, WireEntity } from '../executor/types';
 import { undoAction } from '../executor/undo';
 import { parseGraphId } from '../identity';
@@ -639,7 +639,7 @@ test('ref: два ссылочных свойства на одну цель —
 
 test('ref: undo правки категории возвращает и свойство, и зеркало-ребро', async () => {
   const user = await freshGraph();
-  const sink = makeChatJournalSink();
+  const sink = makeJournalSink();
   const food = await createCategory(user, 'Еда');
   const fun = await createCategory(user, 'Развлечения');
   const txn = await createTxn(user, 'Обед', food);
@@ -668,7 +668,7 @@ test('ref: undo правки категории возвращает и свой
 
 test('ref: undo архивации цели снимает needs-review — и только у тех, кого пометила эта операция (Р-11-1)', async () => {
   const user = await freshGraph();
-  const sink = makeChatJournalSink();
+  const sink = makeJournalSink();
   const food = await createCategory(user, 'Еда');
   const fun = await createCategory(user, 'Развлечения');
   const onlyFood = await createTxn(user, 'Обед', food);
@@ -973,7 +973,7 @@ test('ref × merge: слияние переписывает подпись зе�
   // самопочинки навсегда — `syncRefMirror` снимает устаревшие только по подписям из
   // `changed`, а поглощённого id в `props` больше нет.
   const user = await freshGraph();
-  const sink = makeChatJournalSink();
+  const sink = makeJournalSink();
   const c1 = await createCategory(user, 'Еда');
   const c2 = await createCategory(user, 'Развлечения');
   const a = await ownRefProperty(user, 'user/client', 'Клиент');
@@ -1020,7 +1020,7 @@ test('ref × merge: слияние переписывает подпись зе�
 
 test('ref × merge: undo слияния возвращает подпись зеркала поглощённому свойству', async () => {
   const user = await freshGraph();
-  const sink = makeChatJournalSink();
+  const sink = makeJournalSink();
   const c = await createCategory(user, 'Еда');
   const a = await ownRefProperty(user, 'user/client', 'Клиент');
   const b = await ownRefProperty(user, 'user/customer', 'Покупатель');
@@ -1054,7 +1054,7 @@ test('ref × merge: undo слияния возвращает подпись зе
 
 test('ref: архив страницы-раздела — приложение БЕЗ needs-review, обычная запись со ссылкой на ту же страницу — с тегом', async () => {
   const user = await freshGraph();
-  const sink = makeChatJournalSink();
+  const sink = makeJournalSink();
   const section = okEntity(
     await execute(
       db,
@@ -1142,7 +1142,7 @@ test('ref: архив страницы-раздела — приложение �
 
 test('ref: запись помечена архивом цели, потом стала приложением — откат архива тег снимает (R-15 п. 1)', async () => {
   const user = await freshGraph();
-  const sink = makeChatJournalSink();
+  const sink = makeJournalSink();
   const home = okEntity(
     await execute(
       db,

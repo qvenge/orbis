@@ -23,7 +23,7 @@ import {
   truncateAll,
 } from '../../test/helpers';
 import { actionsOf } from '../../test/journal-helpers';
-import { makeChatJournalSink } from '../executor/journal';
+import { makeJournalSink } from '../executor/journal';
 import type { ExecuteRequest, WireEntity } from '../executor/types';
 import { undoAction } from '../executor/undo';
 import { materializeInstances } from '../recurring/materialize';
@@ -33,7 +33,7 @@ import { createCallerFactory } from '../trpc';
 requireEnv();
 
 const { db, client } = appDb();
-const sink = makeChatJournalSink();
+const sink = makeJournalSink();
 const createCaller = createCallerFactory(appRouter);
 
 beforeAll(async () => {

@@ -38,7 +38,7 @@ import { userSettings } from '../db/schema';
 import { type Tx, withIdentity } from '../db/with-identity';
 import { ExecError, type ExecErrorCode } from '../errors';
 import { execute } from '../executor/executor';
-import { makeChatJournalSink } from '../executor/journal';
+import { makeJournalSink } from '../executor/journal';
 import { findBatch } from '../executor/journal-read';
 import type {
   ActorKind,
@@ -270,9 +270,9 @@ export async function categoryTrend(
 // нового периода одним batch_execute
 // ---------------------------------------------------------------------------
 
-// Синк один на модуль (как post-due.ts): состояния не хранит, audit-сообщение batch
+// Синк один на модуль (как post-due.ts): состояния не хранит, запись журнала пачки
 // пишется тем же tx, что операции executor'а (§7.8).
-const rolloverSink = makeChatJournalSink();
+const rolloverSink = makeJournalSink();
 
 /**
  * Округление ВВЕРХ до кратного 100 — эвристика suggestedLimit для категории с тратами
@@ -559,7 +559,7 @@ export async function rolloverCreate(
   },
   /**
    * Шов сериализации «Принять» (`approvePending`): замок единицы и перепроверка «не отклонена» —
-   * В ТОЙ ЖЕ транзакции, что audit-сообщение, как у пачки (`ExecutorDeps.beforeStages`). Без него
+   * В ТОЙ ЖЕ транзакции, что запись журнала, как у пачки (`ExecutorDeps.beforeStages`). Без него
    * конкурентные «Принять» и «Отклонить» проходили бы свои проверки до чужого коммита (write-skew).
    */
   beforeStages?: ExecutorDeps['beforeStages'],

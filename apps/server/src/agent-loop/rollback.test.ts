@@ -12,7 +12,7 @@ import { actionsOf, wholeJournalOf } from '../../test/journal-helpers';
 import { entities } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { execute } from '../executor/executor';
-import { makeChatJournalSink } from '../executor/journal';
+import { makeJournalSink } from '../executor/journal';
 import type { JournalEntry } from '../executor/journal-read';
 import { undoAction } from '../executor/undo';
 import { effectiveRegistry } from '../registry/cache';
@@ -316,7 +316,7 @@ describe('rollbackRun (С12, инвариант 7)', () => {
  * (инвариант 7): ключ подписки — не uuid записи, и окно, смотрящее только на записи графа, её не увидело бы.
  */
 describe('откат прогона видит ключи реестра (R-11)', () => {
-  const sink = makeChatJournalSink();
+  const sink = makeJournalSink();
   const SUBSCRIPTION = 'orbis/budget-overview';
   const SURFACE = 'finance/budget-overview';
   const BUDGET_SUB = BUILTIN_SUBSCRIPTION_DEFS.find((d) => d.id === SUBSCRIPTION)
@@ -383,5 +383,46 @@ describe('откат прогона видит ключи реестра (R-11)'
     // Предпроверка ничего не отменила: правка владельца на месте, отмен нет
     expect(await warnAtOf(owner)).toBe('0.7');
     expect((await wholeJournalOf(owner)).filter((e) => e.type === 'undo')).toEqual([]);
+  });
+
+  // К-22 для ключей реестра: запись отмены несёт операции (применённый inverse) по тому же ключу подписки, и окно
+  // конфликтов, просматривающее записи графа по времени, обязано не принять её за чужую правку. Владелец поправил
+  // подписку и сам отменил свою правку — чужой правки в окне нет, прогон откатывается.
+  test('владелец поправил подписку и сам отменил правку — запись отмены не конфликт, прогон откатывается', async () => {
+    const owner = await freshGraph();
+    const routineId = await seedRoutine(owner, {
+      routine: { 'orbis/routine_mode': 'act', 'orbis/allowed_tools': ['subscription_set'] },
+    });
+    const { runId } = await seedRoutineRun(owner, { routineId });
+    const set = (warnAt: string, over: { source: 'routine' | 'ui'; runId?: string }) =>
+      execute(
+        db,
+        {
+          identity: personal(owner),
+          actorKind: over.source === 'routine' ? 'ai' : 'owner',
+          source: over.source,
+          ...(over.runId !== undefined && { runId: over.runId }),
+          operations: [
+            {
+              tool: 'subscription_set',
+              input: { id: SUBSCRIPTION, surface: SURFACE, definition: withWarnAt(warnAt) },
+            },
+          ],
+        },
+        { sink },
+      );
+    const byRoutine = await set('0.5', { source: 'routine', runId });
+    if (!byRoutine.ok) throw new Error(JSON.stringify(byRoutine.error));
+    const byOwner = await set('0.7', { source: 'ui' });
+    if (!byOwner.ok) throw new Error(JSON.stringify(byOwner.error));
+    const undone = await undoAction(db, { identity: personal(owner), actionId: byOwner.actionId });
+    expect(undone.ok).toBe(true);
+    expect(await warnAtOf(owner)).toBe('0.5');
+
+    const out = await rollbackRun(db, { identity: personal(owner), runId });
+    expect(out.ok).toBe(true);
+    if (!out.ok) throw new Error(`ожидался откат: ${JSON.stringify(out)}`);
+    expect(out.undone).toEqual([byRoutine.actionId]);
+    expect(await warnAtOf(owner)).toBe(BUDGET_SUB.alerts.warn_at);
   });
 });

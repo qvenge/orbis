@@ -526,16 +526,11 @@ describe('e2e слайс 1b: агент через MCP ведёт проект �
       taskMsgs.some((m) => (m.metadata as { author_kind?: string }).author_kind === 'agent'),
     ).toBe(true);
 
-    // Глобальный тред дампа несёт audit агентских действий (actor_kind=agent). Это проверка ФОРМАТА
-    // экспорта (журнал сегодня выгружается сообщениями треда), а не чтение журнала: формат экспорта с
-    // журналом отдельным ключом меняет задача 5.
-    const globalMsgs = exp.chatMessages.filter((m) => m.threadId === globalThreadId(owner));
+    // Журнал дампа (ключ `journal`, v3 — спека скорости §11) несёт действия агента (actor_kind=agent) в глобальном
+    // треде. Это проверка ФОРМАТА экспорта, а не чтение журнала.
+    expect(exp.version).toBe(3);
     expect(
-      globalMsgs.some((m) =>
-        ((m.metadata as { actions?: Array<{ actor_kind?: string }> }).actions ?? []).some(
-          (a) => a.actor_kind === 'agent',
-        ),
-      ),
+      exp.journal.some((e) => e.actorKind === 'agent' && e.threadId === globalThreadId(owner)),
     ).toBe(true);
   });
 });

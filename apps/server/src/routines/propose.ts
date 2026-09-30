@@ -39,7 +39,7 @@ import { closeRoutineRun } from '../agent-loop/verbs';
 import { ensureEntityThread } from '../chat/threads';
 import { chatMessages } from '../db/schema';
 import { type Tx, withIdentity } from '../db/with-identity';
-import { makeChatJournalSink } from '../executor/journal';
+import { makeJournalSink } from '../executor/journal';
 import { carrierAspects, resolvePropertyRef } from '../executor/props';
 import { createPending, rejectedReason, rejectPending } from '../policy/pending';
 import { effectiveRegistry } from '../registry/cache';
@@ -49,7 +49,7 @@ import { editsNoun } from './constants';
 import { countProposalRows } from './edits';
 
 /** Боевой синк журнала — один инстанс на модуль (состояния не хранит), как в dispatch.ts. */
-const sink = makeChatJournalSink();
+const sink = makeJournalSink();
 
 /**
  * Аспекты, до которых предложение не дотягивается вовсе (инвариант 6, V1.10). Тот же

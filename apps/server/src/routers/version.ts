@@ -10,13 +10,13 @@ import { entityVersions } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { execErrorToTRPC } from '../errors';
 import { execute } from '../executor/executor';
-import { makeChatJournalSink } from '../executor/journal';
+import { makeJournalSink } from '../executor/journal';
 import type { ActorKind, WireEntity, WireEntityVersion } from '../executor/types';
 import { ownerOnlyProcedure, router } from '../trpc';
 
 // Боевой синк — один инстанс на модуль (без состояния, пишет тем же tx, §7.8). Без него
 // закрепление не попало бы в журнал, и «отмени последнее» его бы не нашло.
-const sink = makeChatJournalSink();
+const sink = makeJournalSink();
 
 // Подпись версии — одна строка списка, потолок тот же, что в схеме операции executor'а;
 // trim ДО min(1) — там же и по той же причине (пробельная подпись = снимок без подписи)

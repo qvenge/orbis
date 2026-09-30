@@ -1,4 +1,5 @@
-// Формулы — дословно PRD 01 §5.4 (инстансы), §4.5 (треды), §7.8 (batch-audit).
+// Формулы — дословно PRD 01 §5.4 (инстансы), §4.5 (треды). Прежняя формула PK audit-сообщения пачки (§7.8) снята
+// задачей 5 плана А: ключ записи журнала пачки — сам batch_id (спека скорости §11.2).
 // Формулы с graph_id — на ключе ГРАФА (D44): единица владения — граф, а не аккаунт.
 import { v5 as uuidv5, v7 as uuidv7 } from 'uuid';
 
@@ -62,10 +63,6 @@ export function entityThreadId(graphId: string, entityId: string): string {
     `${graphId.toLowerCase()}:entity-thread:${entityId.toLowerCase()}`,
     ORBIS_NAMESPACE,
   );
-}
-
-export function batchAuditMessageId(graphId: string, batchId: string): string {
-  return uuidv5(`batch:${graphId.toLowerCase()}:${batchId.toLowerCase()}`, ORBIS_NAMESPACE);
 }
 
 /**
@@ -249,8 +246,8 @@ export function routineRunId(routineId: string, bucket: string, attempt: number)
 }
 
 /**
- * batch_id создания прогона рутины (V1.3) — своя формула, а не id прогона: audit-PK
- * batchAuditMessageId считается ОТ batch_id, и совпадение сузило бы два независимых
+ * batch_id создания прогона рутины (V1.3) — своя формула, а не id прогона: ключ записи журнала
+ * пачки — сам batch_id (спека скорости §11.2), и совпадение с id прогона сузило бы два независимых
  * пространства ключей в одно. Идемпотентность та же: повтор того же бакета — тот же batch.
  */
 export function routineRunBatchId(routineId: string, bucket: string, attempt: number): string {

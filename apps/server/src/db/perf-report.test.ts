@@ -3,7 +3,7 @@ import { newId } from '@orbis/shared';
 import type postgres from 'postgres';
 import { adminDb, appDb, freshGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
 import { execute } from '../executor/executor';
-import { makeChatJournalSink } from '../executor/journal';
+import { makeJournalSink } from '../executor/journal';
 import { appRouter } from '../router';
 import { createCallerFactory } from '../trpc';
 import {
@@ -26,7 +26,7 @@ import {
 requireEnv();
 const { db, client } = appDb();
 const admin = adminDb();
-const sink = makeChatJournalSink();
+const sink = makeJournalSink();
 beforeAll(truncateAll);
 afterAll(async () => {
   await truncateAll();

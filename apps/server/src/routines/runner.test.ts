@@ -21,7 +21,7 @@ import { closeRoutineRun } from '../agent-loop/verbs';
 import { MAX_TOKENS_NOTE, STEP_LIMIT_NOTE } from '../ai/send-message';
 import { aiUsage } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
-import { makeChatJournalSink } from '../executor/journal';
+import { makeJournalSink } from '../executor/journal';
 import type { JournalSink } from '../executor/types';
 import { ScriptedProvider } from '../llm/scripted';
 import type { LLMProvider, LLMResponse } from '../llm/types';
@@ -93,7 +93,7 @@ class HookedProvider implements LLMProvider {
   }
 }
 
-const realSink = makeChatJournalSink();
+const realSink = makeJournalSink();
 
 /** Закрыть прогон «чужой рукой» — как это сделало бы подметание или другой процесс. */
 async function closeForeign(routineId: string, runId: string, failNote: string): Promise<void> {
@@ -125,7 +125,8 @@ function faultySink(times: number): JournalSink {
       }
       return realSink.write(tx, entry);
     },
-    findByAuditId: (tx, id) => realSink.findByAuditId(tx, id),
+    writeUndo: (tx, entry) => realSink.writeUndo(tx, entry),
+    findBatchWrite: (tx, graph, batchId) => realSink.findBatchWrite(tx, graph, batchId),
   };
 }
 

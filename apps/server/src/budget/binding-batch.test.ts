@@ -27,7 +27,7 @@ import {
 } from '../../test/helpers';
 import * as schema from '../db/schema';
 import { withIdentity } from '../db/with-identity';
-import { makeChatJournalSink } from '../executor/journal';
+import { makeJournalSink } from '../executor/journal';
 import type { ExecuteRequest, ExecuteResult, WireEntity } from '../executor/types';
 import { budgetOverview } from './aggregates';
 import { selectEnvelope, selectEnvelopes } from './binding';
@@ -35,7 +35,7 @@ import { selectEnvelope, selectEnvelopes } from './binding';
 requireEnv();
 
 const { db, client } = appDb();
-const sink = makeChatJournalSink();
+const sink = makeJournalSink();
 
 beforeAll(async () => {
   await truncateAll();

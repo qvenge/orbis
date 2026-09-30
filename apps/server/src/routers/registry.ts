@@ -21,7 +21,7 @@ import { z } from 'zod';
 import { withIdentity } from '../db/with-identity';
 import { execErrorToTRPC } from '../errors';
 import { execute } from '../executor/executor';
-import { makeChatJournalSink } from '../executor/journal';
+import { makeJournalSink } from '../executor/journal';
 import type { Identity } from '../identity';
 import { reportMergeConflictUnit } from '../policy/pending';
 import { effectiveRegistry } from '../registry/cache';
@@ -49,7 +49,7 @@ import { ownerOnlyProcedure, protectedProcedure, router } from '../trpc';
 import { registryVersionOf } from '../wire';
 
 // Боевой синк — один инстанс на модуль (без состояния, пишет тем же tx, §7.8)
-const sink = makeChatJournalSink();
+const sink = makeJournalSink();
 
 /**
  * Мутации реестра — ЗЕРКАЛА ТУЛОВ, а не вторая реализация (§А9-2, §А10-2).

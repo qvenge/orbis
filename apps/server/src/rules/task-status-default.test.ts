@@ -11,7 +11,7 @@ import { appDb, freshGraph, personal, requireEnv, truncateAll } from '../../test
 import { entities } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { execute } from '../executor/executor';
-import { makeChatJournalSink } from '../executor/journal';
+import { makeJournalSink } from '../executor/journal';
 import type { ExecuteResult, WireEntity } from '../executor/types';
 import { undoAction } from '../executor/undo';
 
@@ -28,7 +28,7 @@ afterAll(async () => {
 const T0 = new Date('2026-09-24T09:00:00.000Z');
 const T1 = new Date('2026-09-25T12:30:00.000Z');
 /** Откат ищет действие в журнале чата — пустой сток журнала ему не годится. */
-const sink = makeChatJournalSink();
+const sink = makeJournalSink();
 
 function run(
   graph: GraphId,

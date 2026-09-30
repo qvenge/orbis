@@ -4,6 +4,7 @@ import {
   boolean,
   check,
   date,
+  foreignKey,
   index,
   integer,
   jsonb,
@@ -19,12 +20,13 @@ import {
   uuid,
 } from 'drizzle-orm/pg-core';
 
-// Схема 22 таблиц: одиннадцать исходных (docs/prd/01-architecture.md §4 — восемь §4.1–§4.8,
+// Схема 24 таблиц: одиннадцать исходных (docs/prd/01-architecture.md §4 — восемь §4.1–§4.8,
 // две таблицы доступа внешних агентов §4.13–§4.14 D34 в конце файла, entity_versions
 // ADE-среза 1), восемь таблиц реформы свойств (§С6 спеки «Реформа свойств»): пять реестров,
 // таблица дельт, однострочная таблица версии system-реестра и кэш `spent` конверта (§Б5-5),
 // две таблицы среза «Г — единица владения» (D44): `graphs` и `graph_members` в самом конце файла, —
-// и полевые замеры `perf_samples` (спека скорости §3.2) сразу за `user_settings`: не граф, ключ — аккаунт.
+// полевые замеры `perf_samples` (спека скорости §3.2) сразу за `user_settings`: не граф, ключ — аккаунт, —
+// и журнал действий `action_journal` с боковой `action_journal_entities` (спека скорости §11.2) за `chat_messages`.
 // RLS-политики и сид аспектов — Слайс 1; здесь только структура, defaults, индексы, FK.
 // graph_id — ключ владения и изоляции (D44): строка принадлежит ГРАФУ. У личного графа id равен id
 // аккаунта Supabase по построению (CHECK таблицы graphs, срез Г-2). FK на auth-схему не объявляем —
@@ -277,6 +279,90 @@ export const chatMessages = pgTable('chat_messages', {
   // ровно тот случай, ради которого курсор вводили, — пропадали на границе страниц.
   createdAt: timestamp('created_at', { withTimezone: true, precision: 3 }).notNull().defaultNow(),
 });
+
+// Журнал действий (спека скорости §11.2, миграция 0025): отдельная таблица вместо системных сообщений чата.
+// Строка — действие целиком (весь `ActionRecord`, РП-7) либо запись отмены (`type = 'undo'`, `undoes`). Только
+// дописывается: политики — SELECT и INSERT. Ключ `(graph_id, id)`: id действия, у пачки — её `batch_id`.
+// Имена полей — camelCase колонок; политики, гранты и CHECK формы отмены — в рукописном SQL миграции.
+export const actionJournal = pgTable(
+  'action_journal',
+  {
+    graphId: uuid('graph_id')
+      .notNull()
+      .references(() => graphs.id, { onDelete: 'cascade' }),
+    id: uuid('id').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true, precision: 3 }).notNull().defaultNow(),
+    type: text('type').notNull(),
+    entityId: uuid('entity_id'),
+    actorUserId: uuid('actor_user_id').notNull(),
+    actorKind: text('actor_kind').notNull(),
+    source: text('source').notNull(),
+    mechanism: text('mechanism').notNull(),
+    actorGrantId: uuid('actor_grant_id'),
+    runId: uuid('run_id'),
+    actionId: text('action_id'),
+    module: text('module'),
+    editedFrom: uuid('edited_from'),
+    threadId: uuid('thread_id').references(() => chatThreads.id, { onDelete: 'set null' }),
+    title: text('title').notNull(),
+    cardTool: text('card_tool').notNull(),
+    entityIds: uuid('entity_ids').array().notNull().default(sql`'{}'`),
+    operations: jsonb('operations').notNull(),
+    inverse: jsonb('inverse').notNull(),
+    results: jsonb('results'),
+    textSession: boolean('text_session').notNull().default(false),
+    bodyBefore: jsonb('body_before'),
+    undoes: uuid('undoes'),
+    pinnedVersionIds: uuid('pinned_version_ids').array().notNull().default(sql`'{}'`),
+    cardInReply: boolean('card_in_reply').notNull().default(false),
+  },
+  (t) => [
+    primaryKey({ name: 'action_journal_pkey', columns: [t.graphId, t.id] }),
+    check('action_journal_undo_shape', sql`(${t.type} = 'undo') = (${t.undoes} IS NOT NULL)`),
+    uniqueIndex('action_journal_undoes_uniq')
+      .on(t.graphId, t.undoes)
+      .where(sql`${t.undoes} IS NOT NULL`),
+    index('action_journal_graph_time').on(
+      t.graphId,
+      t.createdAt.desc().nullsFirst(),
+      t.id.desc().nullsFirst(),
+    ),
+    index('action_journal_thread_time')
+      .on(t.graphId, t.threadId, t.createdAt.desc().nullsFirst(), t.id.desc().nullsFirst())
+      .where(sql`${t.threadId} IS NOT NULL`),
+    index('action_journal_run').on(t.graphId, t.runId).where(sql`${t.runId} IS NOT NULL`),
+    index('action_journal_type_time').on(t.graphId, t.type, t.createdAt.desc().nullsFirst()),
+  ],
+);
+
+// Боковая таблица проб «по затронутой записи» (РП-8): под RLS `uuid[] @>`/`&&` не leakproof и индекс не берут,
+// равенство uuid — leakproof, поэтому пробы R-18, окна конфликтов отката и будущего журнала записи идут btree сюда.
+// Пишет её тот же синк журнала той же транзакцией; `created_at` — копия времени строки журнала.
+export const actionJournalEntities = pgTable(
+  'action_journal_entities',
+  {
+    graphId: uuid('graph_id').notNull(),
+    actionId: uuid('action_id').notNull(),
+    entityId: uuid('entity_id').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true, precision: 3 }).notNull(),
+  },
+  (t) => [
+    primaryKey({
+      name: 'action_journal_entities_pkey',
+      columns: [t.graphId, t.actionId, t.entityId],
+    }),
+    foreignKey({
+      name: 'action_journal_entities_action_fk',
+      columns: [t.graphId, t.actionId],
+      foreignColumns: [actionJournal.graphId, actionJournal.id],
+    }).onDelete('cascade'),
+    index('action_journal_entities_probe').on(
+      t.graphId,
+      t.entityId,
+      t.createdAt.desc().nullsFirst(),
+    ),
+  ],
+);
 
 // §4.7 ai_usage — метеринг LLM на ГРАФ/день/модель (расход — на граф, D44); PK (graph_id, date, model)
 export const aiUsage = pgTable(

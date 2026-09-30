@@ -32,7 +32,7 @@ import { type Tx, withIdentity } from '../db/with-identity';
 import { type EntityReadResult, readEntity } from '../entity-read';
 import { ExecError, execErrorToTRPC } from '../errors';
 import { execute } from '../executor/executor';
-import { makeChatJournalSink } from '../executor/journal';
+import { makeJournalSink } from '../executor/journal';
 import type { WireEntity } from '../executor/types';
 import { type GoalProgress, goalProgressFor } from '../goals/progress';
 import type { Identity } from '../identity';
@@ -45,9 +45,9 @@ import { ownerOnlyProcedure, protectedProcedure, router } from '../trpc';
 import { registryVersionOf, toWireEntityFromSql } from '../wire';
 import { runBlocks } from './entity-blocks';
 
-// Боевой синк — один инстанс на модуль: makeChatJournalSink состояния не хранит,
+// Боевой синк — один инстанс на модуль: makeJournalSink состояния не хранит,
 // а тред/сообщение он пишет тем же tx, что executor (§7.8).
-const sink = makeChatJournalSink();
+const sink = makeJournalSink();
 
 /**
  * Разбор и компиляция запроса: структурный отказ → BAD_REQUEST со структурой в `cause` (§6.4).

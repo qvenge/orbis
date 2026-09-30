@@ -23,6 +23,7 @@ import { ensureGlobalThread } from '../chat/threads';
 import { aiUsage, chatMessages, entities } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import type { WireEntity } from '../executor/types';
+import { threadPage } from '../journal/thread-page';
 import { CONTINUATIONS_BLOCK, PROMPT_BODY } from '../llm/context';
 import { SYSTEM_PROMPT_V9, TOOL_RESULT_MARKER } from '../llm/prompts/v9';
 import { ScriptedProvider } from '../llm/scripted';
@@ -213,10 +214,19 @@ describe('ai.sendMessage (а): «создай задачу» — цикл из t
     ]);
     expect(r.pending).toEqual([]);
 
-    // Хронология треда: user → audit executor'а (актор ai, source chat) → assistant
-    const msgs = await threadMessages(user, threadId);
+    // Хронология треда, как её видит клиент (выдача треда — сообщения и карточки журнала, спека скорости §11.3):
+    // user → строка журнала executor'а (актор ai, source chat) → assistant. Сообщений при этом два — журнал
+    // в разговор больше не пишется
+    const msgs = (
+      await withIdentity(db, personal(user), (tx) => threadPage(tx, user, threadId, { limit: 50 }))
+    ).reverse();
     expect(msgs.map((m) => m.role)).toEqual(['user', 'system', 'assistant']);
+    expect((await threadMessages(user, threadId)).map((m) => m.role)).toEqual([
+      'user',
+      'assistant',
+    ]);
     expect(msgs[0]?.id).toBe(msgId);
+    expect(msgs[1]?.id).toBe(card.undoActionId as string);
     // Запись журнала действия — в этом треде, актор ai, источник chat (API журнала)
     const action = await journalOf(user, card.undoActionId as string);
     expect(action?.threadId).toBe(threadId);

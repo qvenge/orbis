@@ -11,7 +11,6 @@
 import {
   attachAspectInput,
   attachToolName,
-  batchAuditMessageId,
   batchExecuteInput,
   type EntityUpdatePrecondition,
   type EntityUpdatePreconditionItem,
@@ -415,11 +414,12 @@ export class BatchState {
   }
 }
 
-/** Синк по умолчанию: стадии 6–7 вычисляются, но никуда не пишутся (боевой — Task 11).
+/** Синк по умолчанию: стадии 6–7 вычисляются, но никуда не пишутся (боевой — `makeJournalSink`).
  *  ВНИМАНИЕ: без персистентного синка идемпотентность batch по batch_id недоступна. */
 const NOOP_SINK: JournalSink = {
   write: async () => {},
-  findByAuditId: async () => undefined,
+  writeUndo: async () => {},
+  findBatchWrite: async () => undefined,
 };
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -561,7 +561,7 @@ export async function execute(
         followUps = [...followUps, ...(await applyHomeFollowUpsOf(ctx, [plan]))];
       }
       // Стадии 6–7. Внутренний режим undo: вместо action тем же tx пишется
-      // undo-сообщение — undo не порождает нового action (undo неотменяем, §7.8).
+      // запись отмены — undo не порождает нового action (undo неотменяем, §7.8).
       // Иначе — обычный журнал; идемпотентный replay по client-UUID его пропускает (§5.3)
       if (ctx.internalUndo) {
         // Пересчёт предков (§А8) откату НУЖЕН: inverse вернул ребро, предки обязаны сойтись
@@ -576,7 +576,7 @@ export async function execute(
         // целиком — это один ленивый пересчёт против неполной модели того, что откат сделал.
         // Отмена — редкая явная операция, цена честная.
         await invalidateSpentCacheOfOwner(tx, req.identity.graph);
-        await ctx.internalUndo.writeUndoMessage(tx);
+        await writeUndoRecord(ctx, ctx.internalUndo);
       } else if (out.replay !== true) {
         const allPlans = [plan, ...followUps];
         // Пересчёт — ПОСЛЕ бюджет-хука: снятие устаревшей привязки удаляет ребро, а роль
@@ -657,14 +657,12 @@ async function executeBatch(
     ops = req.operations;
   }
 
-  // Идемпотентность §7.8: детерминированный PK audit-сообщения
-  const auditId = batchAuditMessageId(req.identity.graph, batchId);
-
+  // Идемпотентность §7.8: ключ записи пачки в журнале — сам batch_id (`(graph_id, id)`, спека скорости §11.2)
   try {
     return await withIdentity(db, req.identity, async (tx) => {
       // Шов сериализации §7.10 — до первого чтения состояния, ДО replay-проверки и стадий
       // (см. ExecutorDeps.beforeStages): конкурентный reject либо закоммичен (проверка
-      // beforeStages его увидит), либо ждёт этот tx и увидит audit-сообщение
+      // beforeStages его увидит), либо ждёт этот tx и увидит запись журнала
       if (beforeStages) await beforeStages(tx);
       // Снимок реестра — ДО замка контура (см. одиночный путь: плановые SELECT'ы в цикл
       // ожидания не входят, а предикат контура без реестра неполон — Р-27)
@@ -691,7 +689,7 @@ async function executeBatch(
       // Повтор batch_id: вернуть сохранённый результат, ничего не применяя (§7.8, §13.4).
       // Внутренний режим undo не идемпотентен по batch_id (id технический) — не проверяем.
       if (!internalUndo) {
-        const existing = await sink.findByAuditId(tx, auditId);
+        const existing = await sink.findBatchWrite(tx, req.identity.graph, batchId);
         if (existing) return replayFromAudit(batchId, existing);
       }
 
@@ -720,7 +718,7 @@ async function executeBatch(
       }
 
       // Стадии 6–7. Внутренний режим undo: вместо action тем же tx пишется
-      // undo-сообщение (undo не порождает нового action — undo неотменяем, §7.8)
+      // запись отмены (undo не порождает нового action — undo неотменяем, §7.8)
       if (internalUndo) {
         // См. одиночный путь: откату пересчёт предков и сведение зеркал нужны, журнала нет.
         await applyAncestorRecompute(ctx, plans);
@@ -728,7 +726,7 @@ async function executeBatch(
         // Кэш spent — см. одиночный путь: откат идёт мимо хука, задетые сущности планами не
         // выражены, снос владельца дешевле неполной модели.
         await invalidateSpentCacheOfOwner(tx, req.identity.graph);
-        await internalUndo.writeUndoMessage(tx);
+        await writeUndoRecord(ctx, internalUndo);
         return { ok: true as const, actionId: batchId, results, idempotentReplay: false };
       }
       // Бюджет-хук A4 (§2.3): после применения ВСЕХ операций batch — привязка/ребиндинг
@@ -746,7 +744,7 @@ async function executeBatch(
       const recomputeOps = await applyAncestorRecompute(ctx, allPlans);
       const refOps = await applyRefEffects(ctx, allPlans);
       // Обычный batch: ОДИН action на весь batch, id = batch_id; inverse — в обратном
-      // порядке исполнения (§7.8). PK audit-сообщения — batchAuditMessageId.
+      // порядке исполнения (§7.8). Ключ строки журнала — `(graph_id, batch_id)`.
       const action: ActionRecord = {
         id: batchId,
         // §Б6-4: строка действия отличима от голой пачки ТИПОМ, а не догадкой по metadata.
@@ -766,7 +764,6 @@ async function executeBatch(
         inverse: aggregateInverse(allPlans),
       };
       await sink.write(tx, {
-        id: auditId,
         graphId: req.identity.graph,
         threadId: req.threadId,
         action,
@@ -785,11 +782,24 @@ async function executeBatch(
       return { ok: true as const, actionId: batchId, results, idempotentReplay: false };
     });
   } catch (e) {
-    // Гонка одинаковых batch'ей: конкурент вставил audit-сообщение первым → конфликт PK
+    // Гонка одинаковых batch'ей: конкурент вставил запись пачки первым → конфликт ключа журнала
     // (23505) → tx уже откачен → читаем сохранённый результат отдельным tx (§7.8)
     if (e instanceof AuditIdConflictError) {
-      const saved = await withIdentity(db, req.identity, (tx) => sink.findByAuditId(tx, auditId));
+      const saved = await withIdentity(db, req.identity, (tx) =>
+        sink.findBatchWrite(tx, req.identity.graph, batchId),
+      );
       if (saved) return replayFromAudit(batchId, saved);
+      // Ключ занят записью, которая пачкой не является (РП-12): клиентский batch_id совпал с id одиночного действия
+      // графа — ключи журнала одно пространство `(graph_id, id)`. Это не повтор: чужая запись не отдаётся, пачка
+      // откачена. Отказ — тот же, что у занятого client-UUID сообщения (`appendMessageIdempotent`).
+      throw new ExecError(
+        'CONFLICT',
+        'batch_id занят другой записью журнала — сгенерируйте новый UUID',
+        {
+          batchId,
+          reason: 'id_conflict',
+        },
+      );
     }
     throw e;
   }
@@ -1266,6 +1276,26 @@ async function writeJournal(ctx: ExecCtx, p: JournalPlan): Promise<void> {
     threadId: ctx.req.threadId,
     action,
     card: { tool: p.tool, entity_id: p.entityId, title: p.title },
+  });
+}
+
+/**
+ * Запись отмены (внутренний режим, §7.8, РП-11) — ПОСЛЕ применения inverse ТЕМ ЖЕ tx: сначала перепроверка «уже
+ * отменено» и снятие пометок ссылок (`onApplied`, `undo.ts`), затем строка `type:'undo'` с id, заведённым до
+ * применения. Операции записи — применённый inverse отменённого действия (аудит, К-45): ровно его исполнитель
+ * прогнал как тулы. Закреплённые версии и «действие тела до» у отмены — задача 10; до неё пусты.
+ */
+async function writeUndoRecord(ctx: ExecCtx, undo: InternalUndoMode): Promise<void> {
+  await undo.onApplied(ctx.tx);
+  await ctx.sink.writeUndo(ctx.tx, {
+    graphId: ctx.req.identity.graph,
+    undoRecordId: undo.undoRecordId,
+    undoing: undo.undoing,
+    path: undo.path,
+    actorUserId: ctx.req.identity.actor,
+    operations: undo.undoing.inverse,
+    pinnedVersionIds: [],
+    bodyBefore: null,
   });
 }
 

@@ -1,11 +1,11 @@
 // apps/server/src/executor/journal.test.ts
-// Интеграционные тесты Task 11: боевой JournalSink над chat_messages (§7.8) —
-// формат action (дословно + атрибуция D11), целевой тред, один audit на batch
-// (PK = batchAuditMessageId), идемпотентный повтор без второго сообщения,
-// конкурентная PK-гонка одинаковых batch'ей (перенесённое обязательство Task 10).
+// Боевой синк журнала (§7.8, спека скорости §11.2): строка `action_journal` ТЕМ ЖЕ tx, что и правка, — формат
+// действия (весь `ActionRecord` + атрибуция D11), тред строки, одна строка на пачку (id = batch_id), идемпотентный
+// повтор без второй строки, гонка одинаковых пачек (арбитр — PK журнала), боковая таблица затронутых записей и
+// отсутствие чего-либо в `chat_messages`. Журнал читается только помощниками (`test/journal-helpers.ts`).
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import type { GraphId } from '@orbis/shared';
-import { batchAuditMessageId, globalThreadId, newId } from '@orbis/shared';
+import { globalThreadId, newId } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import {
   accountOf,
@@ -17,13 +17,14 @@ import {
   requireEnv,
   truncateAll,
 } from '../../test/helpers';
+import { actionsOf, journalEntitiesOf, journalOf, threadJournal } from '../../test/journal-helpers';
 import { ensureEntityThread } from '../chat/threads';
 import { withIdentity } from '../db/with-identity';
 import { resolveEntitlement } from '../entitlements';
 import { ExecError } from '../errors';
 import { identityOfGrant } from '../identity';
 import { execute } from './executor';
-import { makeChatJournalSink } from './journal';
+import { makeJournalSink } from './journal';
 import {
   type ActionRecord,
   type ExecuteOk,
@@ -37,7 +38,7 @@ import {
 requireEnv();
 
 const { db, client } = appDb();
-const sink = makeChatJournalSink();
+const sink = makeJournalSink();
 
 beforeAll(async () => {
   await truncateAll();
@@ -75,33 +76,11 @@ function batchReq(
   return { identity: personal(user), actorKind: 'owner', source: 'chat', operations, batchId };
 }
 
-/** Первый элемент массива с внятным падением (вместо non-null assertion). */
-function first<T>(items: readonly T[]): T {
-  const v = items[0];
-  if (v === undefined) throw new Error('ожидался хотя бы один элемент');
-  return v;
-}
-
-interface MessageRow {
-  id: string;
-  thread_id: string;
-  role: string;
-  content: string;
-  metadata: Record<string, unknown>;
-}
-
-/** Сообщения треда по created_at (админ-DSN — RLS обходится). */
-async function messagesInThread(threadId: string): Promise<MessageRow[]> {
-  const { db: admin, client: adminClient } = adminDb();
-  try {
-    const rows = await admin.execute(
-      sql`SELECT id, thread_id, role, content, metadata FROM chat_messages
-          WHERE thread_id = ${threadId} ORDER BY created_at, id`,
-    );
-    return [...rows] as unknown as MessageRow[];
-  } finally {
-    await adminClient.end();
-  }
+/** Запись журнала по id с внятным падением. */
+async function mustJournal(user: GraphId, actionId: string) {
+  const e = await journalOf(user, actionId);
+  if (e === undefined) throw new Error(`действия ${actionId} нет в журнале`);
+  return e;
 }
 
 async function adminCount(query: ReturnType<typeof sql>): Promise<number> {
@@ -114,8 +93,12 @@ async function adminCount(query: ReturnType<typeof sql>): Promise<number> {
   }
 }
 
-function actionsOf(msg: MessageRow): ActionRecord[] {
-  return (msg.metadata as { actions?: ActionRecord[] }).actions ?? [];
+/** Сообщений чата в тредах графа — журнал в них больше не пишется ничего (§11.1). */
+function messagesOfGraph(user: GraphId): Promise<number> {
+  return adminCount(
+    sql`SELECT count(*)::int AS n FROM chat_messages m JOIN chat_threads t ON t.id = m.thread_id
+        WHERE t.graph_id = ${user}::uuid`,
+  );
 }
 
 /**
@@ -126,21 +109,20 @@ function actionsOf(msg: MessageRow): ActionRecord[] {
  * не доходила до синка вовсе: WITH CHECK у `entities` отбивал её `42501` ДО стадии журнала —
  * in-memory синк «не ходит в базу», но исполнитель перед ним ходит. Поведенческая половина
  * этого пина живёт в `test/graph-vs-account.test.ts` и с миграции 0021 зелена без пометок:
- * там журнал пишется боевым синком, и строка ложится в тред ЧУЖОГО для актора графа.
+ * там журнал пишется боевым синком, и строка ложится в граф ЧУЖОГО для актора графа.
  *
  * Что пинится ЗДЕСЬ и краснеет на мутации уже сегодня: разведение по ДВУМ ПОЛЯМ формы и
  * то, что поля несут РАЗНЫЕ бренды. Мутация `graphId: req.identity.actor` в
  * `executor.ts` (сборка JournalWrite) делает красным `bun run typecheck`, а не этот файл, —
  * директивы ниже держат ровно это и станут неиспользуемыми (TS2578), если бренды сольют.
  */
-describe('журнал: actor_user_id — аккаунт, graphId сообщения — граф (D44)', () => {
+describe('журнал: actor_user_id — аккаунт, graphId записи — граф (D44)', () => {
   test('исполнитель раскладывает пару по двум полям записи — актор ЧУЖОЙ графу', async () => {
     // Фикстура НАМЕРЕННО «оператор в чужом графе», а не личный граф. В личном графе
     // `accountOf(graph)` и `graph` — одна и та же строка, и подмена полей местами
     // (`graphId: identity.actor`, `actor_user_id: identity.graph`) оставляла оба `toBe`
-    // зелёными (Ф-Г-44: до 0021 пара с разными значениями до синка не доходила). После 0021
-    // препятствия нет: `addMember` выдаёт второму аккаунту грант `operator` в графе, и
-    // резолвер 2 даёт пару, у которой половины РАЗНЫЕ, — теперь подмена красит обе строки.
+    // зелёными (Ф-Г-44). После 0021 `addMember` выдаёт второму аккаунту грант `operator` в
+    // графе, и резолвер 2 даёт пару, у которой половины РАЗНЫЕ, — подмена красит обе строки.
     const graph = await freshGraph();
     const operator = accountOf(await freshGraph());
     await addMember(graph, operator, 'operator');
@@ -179,45 +161,29 @@ describe('журнал: actor_user_id — аккаунт, graphId сообщен
   });
 });
 
-describe('боевой JournalSink: audit-сообщение в chat_messages (§7.8)', () => {
-  test('1. execute(entity_create, fast_path) без threadId → системное сообщение в глобальном треде; формат action дословно §7.8 + атрибуция', async () => {
+describe('боевой синк: строка action_journal (§7.8, §11.2)', () => {
+  test('1. одиночное действие → ОДНА строка: id = actionId, граф, поля ActionRecord, entity_ids и боковые строки; в chat_messages — ничего', async () => {
     const user = await freshGraph();
     const r = ok(
       await execute(db, req(user, 'entity_create', { title: 'Кофе', tags: ['Кофе'] }), { sink }),
     );
     const e = r.results[0] as WireEntity;
 
-    const msgs = await messagesInThread(globalThreadId(user));
-    expect(msgs.length).toBe(1); // глобальный тред создан тем же tx, сообщение — в нём
-    const msg = first(msgs);
-    expect(msg.role).toBe('system');
-
-    const actions = actionsOf(msg);
-    expect(actions.length).toBe(1);
-    const action = first(actions);
-    // все поля формата — и ничего сверх формата
-    expect(Object.keys(action).sort()).toEqual([
-      'actor_kind',
-      'actor_user_id',
-      'entity_id',
-      'id',
-      'inverse',
-      // Вторая ось операции (§А4-4): КАКИМ МЕХАНИЗМОМ она сделана. Пишется всегда, в
-      // отличие от `run_id`/`actor_grant_id`: механизм есть у каждого действия, и «ключа
-      // нет» читалось бы как «неизвестно».
-      'mechanism',
-      'operations',
-      'source',
-      'type',
-    ]);
-    expect(action.id).toBe(r.actionId);
-    expect(action.type).toBe('entity_created');
-    expect(action.entity_id).toBe(e.id);
-    expect(action.actor_user_id).toBe(accountOf(user));
-    expect(action.actor_kind).toBe('owner');
-    expect(action.source).toBe('fast_path');
-    expect(action.mechanism).toBe('user'); // умолчание §А4-4: прямое действие владельца
-    expect(action.operations).toEqual([
+    const all = await actionsOf(user);
+    expect(all.map((a) => a.id)).toEqual([r.actionId]); // ровно одна запись — id действия
+    const row = await mustJournal(user, r.actionId);
+    expect(row.graphId).toBe(user);
+    expect(row.type).toBe('entity_created');
+    expect(row.entityId).toBe(e.id);
+    expect(row.actorUserId).toBe(accountOf(user));
+    expect(row.actorKind).toBe('owner');
+    expect(row.source).toBe('fast_path');
+    expect(row.mechanism).toBe('user'); // умолчание §А4-4: прямое действие владельца
+    // Без гранта и прогона ключей нет вовсе (атрибуция D11 — по наличию, а не null)
+    for (const k of ['actorGrantId', 'runId', 'actionId', 'module', 'editedFrom', 'results']) {
+      expect([k, Object.hasOwn(row, k)]).toEqual([k, false]);
+    }
+    expect(row.operations).toEqual([
       {
         op: 'entity_create',
         payload: {
@@ -226,33 +192,31 @@ describe('боевой JournalSink: audit-сообщение в chat_messages (�
           emoji: null,
           body: '',
           tags: ['кофе'],
-          // `meta` из полезной нагрузки ушла вместе с записью колонки (§А1-1).
-          // Единица журнала — СВОЙСТВО (§А7-4): вместо карты `{аспект: {поле: …}}`
-          // полезная нагрузка несёт плоские `props` по id свойства и список аспектов.
+          // Единица журнала — СВОЙСТВО (§А7-4): плоские `props` по id свойства и список аспектов.
           props: {},
           aspects: [],
         },
       },
     ]);
     // §7.8: создание → архивация
-    expect(action.inverse).toEqual([
-      { op: 'entity_update', payload: { id: e.id, archived: true } },
-    ]);
-    // Карточка действия. fast_path — единственный источник, чья карточка живёт только
-    // в кэше клиента (useFastPath) и пропадает при первом же перечитывании треда,
-    // поэтому в ленту пишется форма клиентского union'а (02-core-os §2.3): с kind,
-    // иначе renderCards уходит в default и от карточки остаётся голая строка.
-    // aspects/keyFields пусты: реестра аспектов у синка нет (см. journal.ts).
-    expect((msg.metadata as { cards?: unknown[] }).cards).toEqual([
-      {
-        kind: 'entity_card',
-        entityId: e.id,
-        title: 'Кофе',
-        aspects: [],
-        keyFields: {},
-        undoActionId: r.actionId, // тот же id, что уходит в ai.undo({actionId})
-      },
-    ]);
+    expect(row.inverse).toEqual([{ op: 'entity_update', payload: { id: e.id, archived: true } }]);
+    // Карточка — заголовок и тул; форма карточки ленты собирается на чтении (`journal/thread-page.ts`)
+    expect([row.title, row.cardTool]).toEqual(['Кофе', 'entity_create']);
+    // Тред без явного — глобальный (РП-10: до задачи 6 как сегодня)
+    expect(row.threadId).toBe(globalThreadId(user));
+    // Поля среза — умолчания, пока их не заполнят задачи 7 и 9
+    expect([
+      row.textSession,
+      row.bodyBefore,
+      row.undoes,
+      row.pinnedVersionIds,
+      row.cardInReply,
+    ]).toEqual([false, null, null, [], false]);
+    expect(row.entityIds).toEqual([e.id]);
+    // Боковая таблица — по строке на каждую затронутую запись, той же транзакцией (РП-8)
+    expect(await journalEntitiesOf(user, r.actionId)).toEqual([e.id]);
+    // Журнал в сообщения чата не пишется ничего — ни audit, ни пустого треда с сообщением
+    expect(await messagesOfGraph(user)).toBe(0);
   });
 
   test('1b. запись entity_update: props по id свойства, без meta и без карты аспектов; mechanism на месте (§А7-4)', async () => {
@@ -283,11 +247,7 @@ describe('боевой JournalSink: audit-сообщение в chat_messages (�
       ),
     );
 
-    const msgs = await messagesInThread(globalThreadId(user));
-    const actionOf = (id: string) =>
-      first(actionsOf(first(msgs.filter((m) => actionsOf(m)[0]?.id === id))));
-    // Запись СОЗДАНИЯ несёт то же самое: свойства по id и список аспектов, не карту
-    expect(actionOf(created.actionId).operations[0]?.payload).toEqual({
+    expect((await mustJournal(user, created.actionId)).operations[0]?.payload).toEqual({
       id: e.id,
       title: 'Тикет',
       emoji: null,
@@ -296,20 +256,7 @@ describe('боевой JournalSink: audit-сообщение в chat_messages (�
       props: { 'orbis/task_status': 'inbox', 'orbis/priority': 'low' },
       aspects: ['orbis/task'],
     });
-    const action = actionOf(updated.actionId);
-    // Тот же перечень полей записи, что и у create: реформа двигает ПОЛЕЗНУЮ НАГРУЗКУ,
-    // а не формат action (§7.8)
-    expect(Object.keys(action).sort()).toEqual([
-      'actor_kind',
-      'actor_user_id',
-      'entity_id',
-      'id',
-      'inverse',
-      'mechanism',
-      'operations',
-      'source',
-      'type',
-    ]);
+    const action = await mustJournal(user, updated.actionId);
     expect(action.mechanism).toBe('user');
     expect(action.operations).toEqual([
       {
@@ -332,8 +279,7 @@ describe('боевой JournalSink: audit-сообщение в chat_messages (�
         },
       },
     ]);
-    // Старой карты в полезной нагрузке нет ни в одной половине записи: у `aspects`
-    // новой формы ключи только `attach`/`detach`, id аспекта ключом означал бы карту
+    // Старой карты в полезной нагрузке нет ни в одной половине записи
     for (const op of [...action.operations, ...action.inverse]) {
       expect(Object.hasOwn(op.payload, 'meta')).toBe(false);
       const aspects = (op.payload.aspects ?? {}) as Record<string, unknown>;
@@ -341,7 +287,7 @@ describe('боевой JournalSink: audit-сообщение в chat_messages (�
     }
   });
 
-  test('2. явный req.threadId: audit-сообщение попадает в указанный тред, не в глобальный', async () => {
+  test('2. явный req.threadId: строка — в указанном треде, не в глобальном', async () => {
     const user = await freshGraph();
     const created = ok(
       await execute(db, req(user, 'entity_create', { title: 'Носитель', tags: [] }), { sink }),
@@ -349,7 +295,7 @@ describe('боевой JournalSink: audit-сообщение в chat_messages (�
     const e = created.results[0] as WireEntity;
     const tid = await withIdentity(db, personal(user), (tx) => ensureEntityThread(tx, user, e.id));
 
-    ok(
+    const upd = ok(
       await execute(
         db,
         req(user, 'entity_update', { id: e.id, title: 'Новее' }, { threadId: tid }),
@@ -359,16 +305,14 @@ describe('боевой JournalSink: audit-сообщение в chat_messages (�
       ),
     );
 
-    const inEntityThread = await messagesInThread(tid);
-    expect(inEntityThread.length).toBe(1);
-    expect(first(actionsOf(first(inEntityThread))).type).toBe('entity_updated');
-    // в глобальном — только audit создания
-    const inGlobal = await messagesInThread(globalThreadId(user));
-    expect(inGlobal.length).toBe(1);
-    expect(first(actionsOf(first(inGlobal))).type).toBe('entity_created');
+    expect((await threadJournal(user, tid)).map((j) => j.id)).toEqual([upd.actionId]);
+    // в глобальном — только создание
+    expect((await threadJournal(user, globalThreadId(user))).map((j) => j.id)).toEqual([
+      created.actionId,
+    ]);
   });
 
-  test('3. batch: ровно одно сообщение с PK = batchAuditMessageId, action.id = batch_id, results сохранены; повтор — idempotentReplay без второго сообщения', async () => {
+  test('3. пачка: ОДНА строка, id = batch_id, type batch, results сохранены; повтор — idempotentReplay без второй строки', async () => {
     const user = await freshGraph();
     const batchId = newId();
     const ops = [
@@ -378,47 +322,92 @@ describe('боевой JournalSink: audit-сообщение в chat_messages (�
     const r = ok(await execute(db, batchReq(user, ops, batchId), { sink }));
     expect(r.idempotentReplay).toBe(false);
 
-    const msgs = await messagesInThread(globalThreadId(user));
-    expect(msgs.length).toBe(1); // один action на весь batch (§7.8)
-    const msg = first(msgs);
-    expect(msg.id).toBe(batchAuditMessageId(user, batchId)); // детерминированный PK
-    const action = first(actionsOf(msg));
-    expect(action.id).toBe(batchId);
+    expect((await actionsOf(user)).map((a) => a.id)).toEqual([batchId]); // один action на пачку (§7.8)
+    const action = await mustJournal(user, batchId);
     expect(action.type).toBe('batch');
     expect(action.operations.length).toBe(2);
     // results — источник ответа идемпотентного повтора
-    expect((msg.metadata as { results?: unknown[] }).results).toEqual(r.results as unknown[]);
+    expect(action.results).toEqual(r.results as unknown[]);
+    expect([action.title, action.cardTool, action.entityId]).toEqual([
+      'batch: операций — 2',
+      'batch_execute',
+      null,
+    ]);
+    // обе созданные записи — в боковой таблице
+    const ids = (r.results as WireEntity[]).map((x) => x.id).sort();
+    expect(await journalEntitiesOf(user, batchId)).toEqual(ids);
 
-    // последовательный повтор того же batch_id: ничего не применяется, сообщение одно
+    // последовательный повтор того же batch_id: ничего не применяется, строка одна
     const replay = ok(await execute(db, batchReq(user, ops, batchId), { sink }));
     expect(replay.idempotentReplay).toBe(true);
     expect(replay.actionId).toBe(batchId);
     expect(replay.results).toEqual(r.results);
-    expect((await messagesInThread(globalThreadId(user))).length).toBe(1);
+    expect((await actionsOf(user)).length).toBe(1);
     const n = await adminCount(
       sql`SELECT count(*)::int AS n FROM entities WHERE graph_id = ${user}`,
     );
     expect(n).toBe(2); // данные не задвоены
+    // синк отдаёт сохранённую запись пачки той же формы, что писал исполнитель
+    const saved = await withIdentity(db, personal(user), (tx) =>
+      sink.findBatchWrite(tx, user, batchId),
+    );
+    expect(saved?.results).toEqual(r.results as unknown[]);
+    expect(saved?.card).toEqual({
+      tool: 'batch_execute',
+      entity_id: null,
+      title: 'batch: операций — 2',
+    });
+    expect(saved?.action.id).toBe(batchId);
   });
 
-  test('4. идемпотентный replay одиночного entity_create по client-UUID не пишет второго сообщения (§5.3)', async () => {
+  // РП-12: в таблице id одиночного действия и batch_id пачки — ОДНО пространство ключей `(graph_id, id)`. Клиентский
+  // batch_id, совпавший с id одиночного действия, не должен вернуть «повтор» чужой записи.
+  test('3b. пачка с batch_id, равным id одиночного действия, — не повтор: чужая запись не отдана, пачка не исполнена', async () => {
+    const user = await freshGraph();
+    const single = ok(
+      await execute(db, req(user, 'entity_create', { title: 'Одиночное', tags: [] }), { sink }),
+    );
+    const clash = await execute(
+      db,
+      batchReq(
+        user,
+        [{ tool: 'entity_create', input: { title: 'Пачка-двойник', tags: [] } }],
+        single.actionId,
+      ),
+      { sink },
+    );
+    expect(clash.ok).toBe(false);
+    if (clash.ok) throw new Error('недостижимо');
+    expect(clash.error.code).toBe('CONFLICT');
+    expect((clash.error.details as { reason?: string }).reason).toBe('id_conflict');
+    // пачка не исполнена: записи-двойника нет; одиночное действие — прежнее
+    const n = await adminCount(
+      sql`SELECT count(*)::int AS n FROM entities WHERE graph_id = ${user} AND title = 'Пачка-двойник'`,
+    );
+    expect(n).toBe(0);
+    expect((await mustJournal(user, single.actionId)).type).toBe('entity_created');
+    const replay = await withIdentity(db, personal(user), (tx) =>
+      sink.findBatchWrite(tx, user, single.actionId),
+    );
+    expect(replay).toBeUndefined();
+  });
+
+  test('4. идемпотентный replay одиночного entity_create по client-UUID не пишет второй строки (§5.3)', async () => {
     const user = await freshGraph();
     const id = newId();
     const input = { id, title: 'Идемпотент', tags: [] };
     ok(await execute(db, req(user, 'entity_create', input), { sink }));
     const again = ok(await execute(db, req(user, 'entity_create', input), { sink }));
     expect(again.idempotentReplay).toBe(true);
-    expect((await messagesInThread(globalThreadId(user))).length).toBe(1);
+    expect((await actionsOf(user)).length).toBe(1);
   });
 
-  test('5. КОНКУРЕНТНАЯ гонка одинаковых batch: PK chat_messages — арбитр; один applied, другой idempotentReplay, эффекты одни', async () => {
+  test('5. КОНКУРЕНТНАЯ гонка одинаковых пачек: PK журнала — арбитр; один applied, другой idempotentReplay, эффекты одни', async () => {
     const user = await freshGraph();
     const batchId = newId();
-    // Операции БЕЗ явных id: каждый вызов генерирует свои id сущностей, поэтому
-    // единственная точка конфликта конкурентов — PK audit-сообщения
-    // (batchAuditMessageId). Гонку разрешает сама БД (23505 → AuditIdConflictError →
-    // сохранённый результат), а не тайминг теста: при любом интерливинге вставить
-    // audit-строку может ровно одна транзакция.
+    // Операции БЕЗ явных id: каждый вызов генерирует свои id сущностей, поэтому единственная точка
+    // конфликта конкурентов — ключ журнала (graph_id, batch_id). Гонку разрешает сама БД (23505 →
+    // AuditIdConflictError → сохранённый результат), а не тайминг теста.
     const ops = [
       { tool: 'entity_create', input: { title: 'Гонка-А', tags: [] } },
       { tool: 'entity_create', input: { title: 'Гонка-Б', tags: [] } },
@@ -430,19 +419,12 @@ describe('боевой JournalSink: audit-сообщение в chat_messages (�
     const o1 = ok(r1);
     const o2 = ok(r2);
 
-    // ровно один applied, другой — idempotentReplay (оба applied невозможны по PK)
     expect([o1.idempotentReplay, o2.idempotentReplay].sort()).toEqual([false, true]);
     expect(o1.actionId).toBe(batchId);
     expect(o2.actionId).toBe(batchId);
-    // оба вызова получили консистентный (один и тот же сохранённый) результат
     expect(o1.results).toEqual(o2.results);
 
-    // ровно одно audit-сообщение
-    const audits = await adminCount(
-      sql`SELECT count(*)::int AS n FROM chat_messages WHERE id = ${batchAuditMessageId(user, batchId)}`,
-    );
-    expect(audits).toBe(1);
-    // ровно один набор эффектов: по одной сущности каждого титула, всего две
+    expect((await actionsOf(user)).map((a) => a.id)).toEqual([batchId]); // ровно одна строка
     const total = await adminCount(
       sql`SELECT count(*)::int AS n FROM entities WHERE graph_id = ${user}`,
     );
@@ -455,7 +437,7 @@ describe('боевой JournalSink: audit-сообщение в chat_messages (�
     }
   });
 
-  test('6. write отклоняет entry с ≠1 action → VALIDATION: инвариант «один action на сообщение» (§7.8), на metadata.actions[0] опирается findLastUndoable (undo.ts)', async () => {
+  test('6. write отклоняет entry с ≠1 action → VALIDATION до любой записи: инвариант «одна строка — одно действие» (§7.8)', async () => {
     const user = await freshGraph();
     const action: ActionRecord = {
       id: newId(),
@@ -468,8 +450,8 @@ describe('боевой JournalSink: audit-сообщение в chat_messages (�
       operations: [],
       inverse: [],
     };
-    // Нарушение контракта: два action в одном audit-сообщении — undo взял бы только
-    // actions[0], второй молча потерялся бы. write обязан отклонить ДО любой записи.
+    // Нарушение контракта: два action в одной записи — отмена взяла бы только первый, второй
+    // молча потерялся бы. write обязан отклонить ДО любой записи.
     const bad = {
       graphId: user,
       action: [action, action],
@@ -484,107 +466,17 @@ describe('боевой JournalSink: audit-сообщение в chat_messages (�
     }
     expect(caught).toBeInstanceOf(ExecError);
     expect((caught as ExecError).code).toBe('VALIDATION');
-    // ничего не записано: guard срабатывает до ensureGlobalThread/appendMessage
-    expect((await messagesInThread(globalThreadId(user))).length).toBe(0);
+    expect(await actionsOf(user)).toEqual([]);
   });
 
-  test('7. source=chat: карточка БЕЗ kind — сторож против дубля в ленте (карточку чат-пути уже пишет ответ ассистента)', async () => {
-    const user = await freshGraph();
-    const fromChat = req(
-      user,
-      'entity_create',
-      { title: 'Из чата', tags: [] },
-      {
-        source: 'chat',
-      },
-    );
-    const r = ok(await execute(db, fromChat, { sink }));
-    const e = r.results[0] as WireEntity;
-
-    const msg = first(await messagesInThread(globalThreadId(user)));
-    // ai/send-message.ts кладёт СВОЮ, более богатую карточку (aspects/keyFields из
-    // реестра) с ТЕМ ЖЕ undoActionId в assistant-сообщение того же треда. Дай audit
-    // форму клиентского union'а — в ленте окажутся две одинаковые карточки и две
-    // кнопки «Отменить», причём вторая беднее первой.
-    expect((msg.metadata as { cards?: unknown[] }).cards).toEqual([
-      { tool: 'entity_create', entity_id: e.id, title: 'Из чата' },
-    ]);
-  });
-
-  test('8. batch (entity_id = null): карточка прежней формы и НЕ пустая — на cards[0] стоит findByAuditId (идемпотентный replay §7.8)', async () => {
-    const user = await freshGraph();
-    const batchId = newId();
-    const r = ok(
-      await execute(
-        db,
-        batchReq(
-          user,
-          [
-            { tool: 'entity_create', input: { title: 'Пакет-1', tags: [] } },
-            { tool: 'entity_create', input: { title: 'Пакет-2', tags: [] } },
-          ],
-          batchId,
-        ),
-        { sink },
-      ),
-    );
-    expect(r.idempotentReplay).toBe(false);
-
-    const msg = first(await messagesInThread(globalThreadId(user)));
-    expect((msg.metadata as { cards?: unknown[] }).cards).toEqual([
-      { tool: 'batch_execute', entity_id: null, title: 'batch: операций — 2' },
-    ]);
-    // Пустой cards обрушил бы replay: findByAuditId возвращает undefined без cards[0]
-    const saved = await withIdentity(db, personal(user), (tx) =>
-      sink.findByAuditId(tx, batchAuditMessageId(user, batchId)),
-    );
-    expect(saved?.results).toEqual(r.results as unknown[]);
-  });
-
-  test('9. entity_id = null у источника из белого списка: карточка всё равно прежней формы (entityId клиента — строка, не null)', async () => {
-    const user = await freshGraph();
-    const auditId = newId();
-    const action: ActionRecord = {
-      id: newId(),
-      type: 'relation_created',
-      entity_id: null, // не только batch: одиночные relation-мутации тоже без сущности
-      actor_user_id: accountOf(user),
-      actor_kind: 'owner',
-      source: 'fast_path',
-      mechanism: 'user',
-      operations: [],
-      inverse: [],
-    };
-    await withIdentity(db, personal(user), (tx) =>
-      sink.write(tx, {
-        id: auditId,
-        graphId: user,
-        action,
-        card: { tool: 'relation_create', entity_id: null, title: 'связь' },
-      }),
-    );
-
-    const msg = first(await messagesInThread(globalThreadId(user)));
-    expect((msg.metadata as { cards?: unknown[] }).cards).toEqual([
-      { tool: 'relation_create', entity_id: null, title: 'связь' },
-    ]);
-    const saved = await withIdentity(db, personal(user), (tx) => sink.findByAuditId(tx, auditId));
-    expect(saved?.card).toEqual({ tool: 'relation_create', entity_id: null, title: 'связь' });
-  });
-
-  // С2: в записи журнала актор перестаёт быть анонимным «агентом вообще» — видно, каким
-  // грантом и в каком прогоне сделано действие.
-  //
-  // Поля опциональны ПО ОТСУТСТВИЮ КЛЮЧА, а не по null: искать действия прогона придётся
-  // контейнмент-пробой `metadata @> {"actions":[{"run_id": …}]}` (единственный предикат,
-  // который берёт jsonb-индекс). Запись `"run_id": null` у владельческих действий сделала
-  // бы такую пробу ложно-положительной для проб вида `{"run_id": null}` и раздула бы
-  // каждую строку журнала двумя пустыми ключами.
-  test('10. actorGrantId/runId одиночного вызова: поля в action, контейнмент-проба находит; без них ключей НЕТ', async () => {
+  // С2: актор — не анонимный «агент вообще»: видно, каким грантом и в каком прогоне сделано действие.
+  // Ключи — по наличию: без гранта и прогона их нет вовсе, иначе пробы по прогонам ловили бы и
+  // действия, сделанные руками владельца.
+  test('7. actorGrantId/runId одиночного вызова: поля в строке, проба прогона находит; без них ключей НЕТ', async () => {
     const agentUser = await freshGraph();
     const grantId = newId();
     const runId = newId();
-    ok(
+    const r = ok(
       await execute(
         db,
         req(
@@ -596,34 +488,22 @@ describe('боевой JournalSink: audit-сообщение в chat_messages (�
         { sink },
       ),
     );
+    const action = await mustJournal(agentUser, r.actionId);
+    expect(action.actorGrantId).toBe(grantId);
+    expect(action.runId).toBe(runId);
 
-    const agentThread = globalThreadId(agentUser);
-    const action = first(actionsOf(first(await messagesInThread(agentThread))));
-    expect(action.actor_grant_id).toBe(grantId);
-    expect(action.run_id).toBe(runId);
-
-    // ровно та проба, которой действия прогона ищутся по журналу
-    const byRun = await adminCount(
-      sql`SELECT count(*)::int AS n FROM chat_messages
-          WHERE thread_id = ${agentThread}
-            AND metadata @> ${JSON.stringify({ actions: [{ run_id: runId }] })}::jsonb`,
-    );
-    expect(byRun).toBe(1);
-
-    // владельческий путь: ключей нет вовсе — иначе пробы по грантам/прогонам ловили бы
-    // и действия, сделанные руками владельца
     const ownerUser = await freshGraph();
-    ok(
+    const own = ok(
       await execute(db, req(ownerUser, 'entity_create', { title: 'Своими руками', tags: [] }), {
         sink,
       }),
     );
-    const ownAction = first(actionsOf(first(await messagesInThread(globalThreadId(ownerUser)))));
-    expect(ownAction).not.toHaveProperty('actor_grant_id');
-    expect(ownAction).not.toHaveProperty('run_id');
+    const ownAction = await mustJournal(ownerUser, own.actionId);
+    expect(ownAction).not.toHaveProperty('actorGrantId');
+    expect(ownAction).not.toHaveProperty('runId');
   });
 
-  test('11. batch: грант и прогон попадают в ОБЩИЙ action пакета (§7.8 — один action на batch)', async () => {
+  test('8. пачка: грант и прогон попадают в ОБЩУЮ строку пакета (§7.8 — одна строка на пачку)', async () => {
     const user = await freshGraph();
     const batchId = newId();
     const grantId = newId();
@@ -646,47 +526,9 @@ describe('боевой JournalSink: audit-сообщение в chat_messages (�
         { sink },
       ),
     );
-    const action = first(actionsOf(first(await messagesInThread(globalThreadId(user)))));
+    const action = await mustJournal(user, batchId);
     expect(action.type).toBe('batch');
-    expect(action.actor_grant_id).toBe(grantId);
-    expect(action.run_id).toBe(runId);
-  });
-
-  // V1.5: правки рутины владелец видит в ленте как свои быстрые — с кнопкой «Отменить».
-  // Собственного носителя карточки у источника 'routine' нет (ответа ассистента, как у
-  // 'chat', не будет: за прогоном не стоит диалог), поэтому единственный носитель —
-  // audit-сообщение, и форма обязана быть клиентской (с kind), иначе renderCards уйдёт
-  // в default и от карточки останется голая строка content.
-  test('12. source=routine: карточка ленты клиентской формы с Undo (белый список, как fast_path)', async () => {
-    const user = await freshGraph();
-    const runId = newId();
-    const r = ok(
-      await execute(
-        db,
-        req(
-          user,
-          'entity_create',
-          { title: 'Создано рутиной', tags: [] },
-          { actorKind: 'ai', source: 'routine', runId },
-        ),
-        { sink },
-      ),
-    );
-    const e = r.results[0] as WireEntity;
-
-    const msg = first(await messagesInThread(globalThreadId(user)));
-    const action = first(actionsOf(msg));
-    expect(action.source).toBe('routine');
-    expect(action.run_id).toBe(runId);
-    expect((msg.metadata as { cards?: unknown[] }).cards).toEqual([
-      {
-        kind: 'entity_card',
-        entityId: e.id,
-        title: 'Создано рутиной',
-        aspects: [],
-        keyFields: {},
-        undoActionId: r.actionId,
-      },
-    ]);
+    expect(action.actorGrantId).toBe(grantId);
+    expect(action.runId).toBe(runId);
   });
 });

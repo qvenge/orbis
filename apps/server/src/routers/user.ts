@@ -16,7 +16,7 @@ import { userSettings } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { ExecError, execErrorToTRPC } from '../errors';
 import { execute } from '../executor/executor';
-import { makeChatJournalSink } from '../executor/journal';
+import { makeJournalSink } from '../executor/journal';
 import { exportData, type OrbisExport } from '../export';
 import { isValidTimeZone } from '../query/context';
 import { seedOwner } from '../seed/onboarding';
@@ -49,7 +49,7 @@ const updateSettingsInput = z
 
 // Боевой синк журнала — один инстанс на модуль (состояния не хранит), как в роутерах 1a:
 // без него действие ушло бы в NOOP_SINK, и «отмени последнее» переключение не нашло бы.
-const journalSink = makeChatJournalSink();
+const journalSink = makeJournalSink();
 
 export const userRouter = router({
   // §9.3: сид/настройки/экспорт — управление аккаунтом, PAT-агенту закрыто (ownerOnly);

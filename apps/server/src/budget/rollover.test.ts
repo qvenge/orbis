@@ -21,7 +21,7 @@ import {
 } from '../../test/helpers';
 import { actionsOf } from '../../test/journal-helpers';
 import { execute } from '../executor/executor';
-import { makeChatJournalSink } from '../executor/journal';
+import { makeJournalSink } from '../executor/journal';
 import type { ExecuteRequest, WireEntity } from '../executor/types';
 import { undoAction } from '../executor/undo';
 import { appRouter } from '../router';
@@ -31,7 +31,7 @@ import { rolloverPreview } from './aggregates';
 requireEnv();
 
 const { db, client } = appDb();
-const sink = makeChatJournalSink();
+const sink = makeJournalSink();
 const createCaller = createCallerFactory(appRouter);
 
 beforeAll(async () => {

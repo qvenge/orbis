@@ -39,7 +39,7 @@ import type { Tx } from '../db/with-identity';
 import { withIdentity } from '../db/with-identity';
 import { ExecError } from '../errors';
 import { execute } from '../executor/executor';
-import { makeChatJournalSink } from '../executor/journal';
+import { makeJournalSink } from '../executor/journal';
 import { envelopeIdentityOf } from '../executor/normalize';
 import type { ExecuteRequest, ExecuteResult } from '../executor/types';
 import { undoAction } from '../executor/undo';
@@ -87,7 +87,7 @@ import { readRegistryVersions } from './version';
 requireEnv();
 
 const { db, client } = appDb();
-const sink = makeChatJournalSink();
+const sink = makeJournalSink();
 const owner = mintGraph();
 
 beforeAll(async () => {

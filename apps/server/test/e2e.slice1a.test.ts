@@ -388,11 +388,12 @@ describe('e2e слайс 1a: день из 02 §5 (два пользовател
   });
 
   // ── Шаг 7: экспорт содержит ВЕСЬ граф A (сущности, связи, сообщения, настройки) ─
-  test('шаг 7: exportData(A) — 28 записей, 3 связи дня (dependency + два зеркала ref) и ссылки оболочки хоста, 1 тред, 8 сообщений (вкл. audit и undo)', async () => {
+  test('шаг 7: exportData(A) — 28 записей, 3 связи дня (dependency + два зеркала ref) и ссылки оболочки хоста, 1 тред, 1 сообщение, журнал — 6 действий и 1 отмена', async () => {
     const exp = await a.user.exportData();
     expect(exp.format).toBe('orbis-export');
-    // v2 (§С5): сущности новой формы плюс строки реестров ВЛАДЕЛЬЦА (Задача 13c).
-    expect(exp.version).toBe(2);
+    // v3 (спека скорости §11): журнал — своим ключом `journal`; v2 (§С5) — сущности новой формы плюс строки
+    // реестров ВЛАДЕЛЬЦА (Задача 13c).
+    expect(exp.version).toBe(3);
 
     // 24 сида + «Обед» + «купить кроссовки» + «Продлить страховку» (контроль шага 4b) +
     // «Дождаться зарплаты» = 28
@@ -426,24 +427,14 @@ describe('e2e слайс 1a: день из 02 §5 (два пользовател
       expect((edge.meta as { property?: string }).property).toBe('orbis/finance_category');
     }
 
-    // Один тред (глобальный) и 8 сообщений: 1 user + 7 системных
+    // Один тред (глобальный) и одно сообщение — реплика владельца: журнал в сообщениях больше не лежит (§11)
     expect(exp.chatThreads.length).toBe(1);
     expect(exp.chatThreads[0]?.entityId).toBeNull();
-    expect(exp.chatMessages.length).toBe(8);
-    // Пользовательская реплика присутствует
-    expect(exp.chatMessages.some((m) => m.role === 'user' && m.content === 'обед 340')).toBe(true);
-    // audit-сообщений с непустым action — 6 (create×4, update×1, relation×1), ровно одно
-    // undo-сообщение. Это проверка ФОРМАТА экспорта (журнал сегодня выгружается сообщениями треда),
-    // а не чтение журнала: формат экспорта с журналом отдельным ключом меняет задача 5.
-    type ExportedJournalMeta = { actions?: unknown[]; type?: string };
-    const auditCount = exp.chatMessages.filter(
-      (m) => ((m.metadata as ExportedJournalMeta).actions ?? []).length > 0,
-    ).length;
-    expect(auditCount).toBe(6);
-    const undoCount = exp.chatMessages.filter(
-      (m) => (m.metadata as ExportedJournalMeta).type === 'undo',
-    ).length;
-    expect(undoCount).toBe(1);
+    expect(exp.chatMessages.map((m) => [m.role, m.content])).toEqual([['user', 'обед 340']]);
+    // Журнал — ключом `journal`: 6 действий (create×4, update×1, relation×1) и ровно одна запись отмены. Это
+    // проверка ФОРМАТА экспорта, а не чтение журнала: ниже то же самое через помощники API журнала.
+    expect(exp.journal.filter((e) => e.type !== 'undo').length).toBe(6);
+    expect(exp.journal.filter((e) => e.type === 'undo').length).toBe(1);
     // Журнал графа — то же самое (помощники API журнала)
     expect((await actionsOf(userA)).length).toBe(6);
     expect((await wholeJournalOf(userA)).filter((e) => e.type === 'undo').length).toBe(1);

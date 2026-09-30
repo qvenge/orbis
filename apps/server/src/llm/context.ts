@@ -26,12 +26,12 @@
 // §Б7-6: промпт v9 приезжает в канал ДВУМЯ кусками (PROMPT_BODY + CONTINUATIONS_BLOCK) —
 // блок продолжений обязан быть последним для модели, а не последним в тексте константы.
 import { extensionPromptFragments, type GraphId } from '@orbis/shared';
-import { and, desc, eq, inArray } from 'drizzle-orm';
-import { excludeInfraSystemRows } from '../chat/messages';
-import { chatMessages, entities } from '../db/schema';
+import { inArray } from 'drizzle-orm';
+import { entities } from '../db/schema';
 import type { Tx } from '../db/with-identity';
 import { readEntity } from '../entity-read';
 import type { ActionRecord } from '../executor/types';
+import { threadPage } from '../journal/thread-page';
 import {
   formatRuleLabel,
   MEMORY_KIND,
@@ -409,12 +409,13 @@ export async function anchorBlock(
 // ---------------------------------------------------------------------------
 
 /**
- * Сжатие system-строк журнала в LLM-историю. Роли — РЕШЕНИЕ Task 8:
- * - audit СВОЕГО действия (metadata.actions[0].actor_kind === 'ai') → role
+ * Сжатие system-строк треда в LLM-историю. Роли — РЕШЕНИЕ Task 8:
+ * - карточка журнала СВОЕГО действия (metadata.actions[0].actor_kind === 'ai') → role
  *   'assistant': действие исполняла модель, она должна видеть его как своё
  *   («[действие: <type> <entity_id> (<source>)]»);
- * - audit действий агента/владельца, undo, pending, reject → role 'user'
+ * - карточки действий агента/владельца, pending, reject → role 'user'
  *   с префиксом «[система]»: для модели это наблюдаемые события среды.
+ * Сводка действия в строке треда — прежние поля `actions[0]` без тел (`journal/thread-page.ts`).
  * Протокол Anthropic чередования не требует (маппер Task 7 транслирует как есть).
  * Сырой metadata-JSON (operations/inverse/payload) в контекст НЕ попадает.
  */
@@ -427,8 +428,8 @@ function compressSystemRow(content: string, metadata: Record<string, unknown>): 
     if (action.actor_kind === 'ai') return { role: 'assistant', content: line };
     return { role: 'user', content: `[система] ${line}` };
   }
-  // undo/pending/reject и будущие служебные записи: content — короткий
-  // человекочитаемый текст (undo.ts / pending.ts), metadata не тащим
+  // pending/reject и будущие служебные записи: content — короткий
+  // человекочитаемый текст (pending.ts), metadata не тащим
   return { role: 'user', content: `[система] ${content}` };
 }
 
@@ -453,24 +454,15 @@ function authorPrefix(metadata: Record<string, unknown>): string {
 }
 
 /**
- * Последние CONTEXT_HISTORY_LIMIT сообщений треда — В ХРОНОЛОГИЧЕСКОМ ПОРЯДКЕ.
- * Инфраструктурные system-строки (processing-маркеры §7.9, audit системных действий
- * §5.4) невидимы модели, как и клиенту — общий SQL-фрагмент с chat.listMessages
- * (excludeInfraSystemRows). Фильтр — В SQL, до limit (финальное ревью фазы A):
- * JS-фильтр после .limit(30) съедал бы окно плотным системным шумом — 30+ audit-строк
- * материализации новее живого диалога вытесняли бы его из истории целиком.
+ * Последние CONTEXT_HISTORY_LIMIT строк треда — В ХРОНОЛОГИЧЕСКОМ ПОРЯДКЕ. Читатель — та же выдача треда, что у
+ * клиента (`journal/thread-page.ts`, спека скорости §11.3): сообщения треда и карточки журнала этого треда одной
+ * страницей (окно 30 делят оба вида строк — П-9; как делить иначе — задача 6). Инфраструктурные строки
+ * (processing-маркеры §7.9, действия `system` §5.4, записи отмены) невидимы модели, как и клиенту; фильтр — в SQL
+ * каждой выборки, до limit (финальное ревью фазы A): JS-фильтр после .limit(30) съедал бы окно плотным системным
+ * шумом — 30+ записей материализации новее живого диалога вытесняли бы его из истории целиком.
  */
-async function historyMessages(tx: Tx, threadId: string): Promise<LLMMessage[]> {
-  const rows = await tx
-    .select({
-      role: chatMessages.role,
-      content: chatMessages.content,
-      metadata: chatMessages.metadata,
-    })
-    .from(chatMessages)
-    .where(and(eq(chatMessages.threadId, threadId), ...excludeInfraSystemRows()))
-    .orderBy(desc(chatMessages.createdAt), desc(chatMessages.id))
-    .limit(CONTEXT_HISTORY_LIMIT);
+async function historyMessages(tx: Tx, graphId: GraphId, threadId: string): Promise<LLMMessage[]> {
+  const rows = await threadPage(tx, graphId, threadId, { limit: CONTEXT_HISTORY_LIMIT });
   rows.reverse(); // выборка «последние N» шла с конца — возвращаем хронологию
   const msgs = rows.map((r) => {
     const metadata = r.metadata as Record<string, unknown>;
@@ -534,7 +526,7 @@ export async function buildContext(tx: Tx, input: BuildContextInput): Promise<Bu
   }
 
   // Слой 4: rolling-история текущего треда (§7.3: скоупится разговор)
-  const messages = await historyMessages(tx, input.threadId);
+  const messages = await historyMessages(tx, input.graphId, input.threadId);
 
   // PROMPT_BODY уже кончается разделителем абзаца (он отрезан по месту заголовка блока
   // продолжений) — первая динамическая секция приклеивается к нему напрямую, иначе между

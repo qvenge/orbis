@@ -31,7 +31,7 @@ import { entities } from '../db/schema';
 import { type Tx, withIdentity } from '../db/with-identity';
 import { ExecError } from '../errors';
 import { execute, targetEntityIdsOf, uniqueRuleKeysOf } from '../executor/executor';
-import { makeChatJournalSink } from '../executor/journal';
+import { makeJournalSink } from '../executor/journal';
 import type { ExecuteOk, ExecuteResult, JournalSink, WireEntity } from '../executor/types';
 import { undoAction } from '../executor/undo';
 import { effectiveRegistry } from '../registry/cache';
@@ -221,7 +221,7 @@ describe('режим отката — по ЭКЗЕМПЛЯРУ правила, 
     const w = await worldWith(GATE_FIN_ASPECT);
     const row = entityOf(await w.mk({ [GATE_PROPS.finState]: 'void', [GATE_PROPS.finWhen]: AT }));
     await seedCustomAspect(w.graph, { ...GATE_FIN_ASPECT, rules: [forbidVoidMoment(undo)] });
-    const sink = makeChatJournalSink(); // undo ищет действие в журнале — NOOP_SINK ему не годится
+    const sink = makeJournalSink(); // undo ищет действие в журнале — NOOP_SINK ему не годится
     const unset = await w.run('entity_update', { id: row.id, unset: [GATE_PROPS.finWhen] }, sink);
     expect(refusalOf(unset)).toBe('ok'); // после снятия правило не нарушено
     return undoAction(db, { identity: personal(w.graph), actionId: (unset as ExecuteOk).actionId });
@@ -1504,7 +1504,7 @@ describe('unique_among: края шаблона (задача 12)', () => {
  */
 describe('waiting_for живёт только в ожидании (В-П-8 (в), две строки на orbis/task)', () => {
   let graph: GraphId;
-  const sink = makeChatJournalSink();
+  const sink = makeJournalSink();
   beforeAll(async () => {
     graph = await freshGraph();
   });

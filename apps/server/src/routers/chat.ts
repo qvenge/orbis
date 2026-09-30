@@ -1,16 +1,17 @@
 // apps/server/src/routers/chat.ts
 // Роутер chat (§9.1): треды §4.5 (детерминированные id, ensure-семантика) и сообщения
-// §4.6 (append-only). Только трансляция: примитивы — chat/threads.ts и chat/messages.ts.
+// §4.6 (append-only). Только трансляция: примитивы — chat/threads.ts, chat/messages.ts и
+// выдача треда journal/thread-page.ts.
 import { chatThreadEntityInput } from '@orbis/shared';
-import { and, desc, eq, lt, or, type SQL } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
-import { appendMessageIdempotent, excludeInfraSystemRows } from '../chat/messages';
+import { appendMessageIdempotent } from '../chat/messages';
 import { ensureEntityThread, ensureGlobalThread } from '../chat/threads';
-import { chatMessages, chatThreads } from '../db/schema';
+import { chatThreads } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { ExecError, execErrorToTRPC } from '../errors';
+import { threadPage } from '../journal/thread-page';
 import { ownerOnlyProcedure, protectedProcedure, router } from '../trpc';
-import { toWireChatMessage } from '../wire';
 
 /** ExecError доменных примитивов (NOT_FOUND треда/сущности) → TRPCError; прочее — наружу. */
 function mapExecError(e: unknown): never {
@@ -67,6 +68,8 @@ export const chatRouter = router({
   // `"<iso>|<id>"` (createdAt+id самого старого загруженного, §2.1 UUIDv7): устойчив к
   // ms-коллизии двух сообщений в одну createdAt. Легаси-форма `<iso>` (клиент 1c-1, без
   // `|`) принимается как раньше — фильтр только по createdAt (обратная совместимость).
+  // Выдача — сообщения треда и карточки журнала этого треда одной процедурой (спека скорости
+  // §11.3, `journal/thread-page.ts`): тот же читатель у треда `entity.get` и окна контекста модели.
   listMessages: protectedProcedure
     .input(
       z
@@ -82,40 +85,12 @@ export const chatRouter = router({
         .strict(),
     )
     .query(({ ctx, input }) =>
-      withIdentity(ctx.db, ctx.identity, async (tx) => {
-        const conds: (SQL | undefined)[] = [
-          eq(chatMessages.threadId, input.threadId),
-          // Инфраструктурные system-строки (processing-маркеры §7.9, audit системных
-          // действий §5.4) — не контент треда; журнал §7.8 остаётся в chat_messages.
-          // Общий SQL-фрагмент с historyMessages LLM-контекста — фильтры зеркальны
-          ...excludeInfraSystemRows(),
-        ];
-        if (input.before !== undefined) {
-          const sep = input.before.indexOf('|');
-          if (sep === -1) {
-            // Легаси-курсор `<iso>` (клиент 1c-1): фильтр только по createdAt
-            conds.push(lt(chatMessages.createdAt, new Date(input.before)));
-          } else {
-            // Составной `<iso>|<id>`: строгое «раньше» в лексикографике (createdAt, id) —
-            // зеркалит DESC-сортировку (createdAt, id), устойчиво к ms-коллизии
-            const createdAt = new Date(input.before.slice(0, sep));
-            const id = input.before.slice(sep + 1);
-            conds.push(
-              or(
-                lt(chatMessages.createdAt, createdAt),
-                and(eq(chatMessages.createdAt, createdAt), lt(chatMessages.id, id)),
-              ),
-            );
-          }
-        }
-        const rows = await tx
-          .select()
-          .from(chatMessages)
-          .where(and(...conds))
-          .orderBy(desc(chatMessages.createdAt), desc(chatMessages.id))
-          .limit(input.limit ?? 50);
-        return rows.map(toWireChatMessage);
-      }),
+      withIdentity(ctx.db, ctx.identity, (tx) =>
+        threadPage(tx, ctx.identity.graph, input.threadId, {
+          ...(input.before !== undefined && { before: input.before }),
+          limit: input.limit ?? 50,
+        }),
+      ),
     ),
 
   // id — client-generated UUIDv7 (§2.1); role всегда 'user' — assistant/system пишет

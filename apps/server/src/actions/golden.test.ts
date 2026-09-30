@@ -51,7 +51,7 @@ import {
 import { journalOf as journalEntryOf, wholeJournalOf } from '../../test/journal-helpers';
 import { confirmPurchase } from '../budget/plan-to-fact';
 import { withIdentity } from '../db/with-identity';
-import { makeChatJournalSink } from '../executor/journal';
+import { makeJournalSink } from '../executor/journal';
 import { actionRecordOf } from '../executor/journal-read';
 import { stateDelta } from '../executor/props';
 import type { ActionCard, ActionRecord, WireEntity } from '../executor/types';
@@ -65,7 +65,7 @@ import { actionCallFacts } from './run';
 
 requireEnv();
 const { db, client } = appDb();
-const sink = makeChatJournalSink();
+const sink = makeJournalSink();
 
 /**
  * Владельцы половин: `legacy` — сегодняшний код, `action` — декларация конвейером (`resolveAction`
@@ -469,15 +469,31 @@ async function stateOf(
 }
 
 /**
- * Запись отката в журнале — undo-сообщение `{type:'undo', undoes}` (§7.8): нового action откат не
- * порождает (undo неотменяем), поэтому «строка журнала» случая отката — именно оно.
+ * Запись отката в журнале — строка `type:'undo'` (§7.8, спека скорости §11.2): нового action откат не
+ * порождает (undo неотменяем), поэтому «строка журнала» случая отката — именно она. Форма эталона — поля строки
+ * snake_case, как у записи действия выше: путь отмены, актор, заголовок и тул, затронутые записи, операции
+ * (применённый inverse — аудит) и пустой собственный inverse. Эталон пересдан задачей 5 руками (прежняя запись
+ * отмены несла только `{type, undoes}`).
  */
 async function undoRecordOf(owner: GraphId, actionId: string): Promise<unknown> {
   const undos = (await wholeJournalOf(owner)).filter((e) => e.undoes === actionId);
-  if (undos.length !== 1)
+  const u = undos[0];
+  if (undos.length !== 1 || u === undefined)
     throw new Error(`записей отмены ${actionId}: ${undos.length}, ждали одну`);
-  // Форма эталона — прежняя запись отмены `{type, undoes}`; эталон пересдаёт задача 5
-  return { type: 'undo', undoes: undos[0]?.undoes };
+  return {
+    type: u.type,
+    undoes: u.undoes,
+    source: u.source,
+    actor_kind: u.actorKind,
+    actor_user_id: u.actorUserId,
+    mechanism: u.mechanism,
+    entity_id: u.entityId,
+    entity_ids: u.entityIds,
+    title: u.title,
+    card_tool: u.cardTool,
+    operations: u.operations,
+    inverse: u.inverse,
+  };
 }
 
 beforeAll(async () => {
