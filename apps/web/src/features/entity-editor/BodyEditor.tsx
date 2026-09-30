@@ -112,6 +112,7 @@ export function BodyEditor({
   onAccept,
   onReady,
   focusAt,
+  reseat = 0,
 }: {
   doc: BodyDoc;
   onChange: (doc: BodyDoc) => void;
@@ -134,6 +135,13 @@ export function BodyEditor({
    * фокус не забирать вовсе. Читается ОДИН раз, при первом рендере (см. `focusAtRef`).
    */
   focusAt?: { left: number; top: number } | null;
+  /**
+   * Счётчик ПРИНУДИТЕЛЬНОЙ посадки: сменился — редактор сажает `doc`, даже если это тот же объект и человек только что
+   * набирал в фокусе. Его двигает «Обновить» на плашке конфликта (рулинг R-17, приёмка §13.4 п. 2 (б)): после отказа
+   * `STALE_VERSION` чужой текст уже лежит в кэше тем же объектом (структурное разделение react-query), эффект приезда
+   * по `doc` не прогоняется, и без явного сигнала выйти из конфликта в открытом экране было бы нечем.
+   */
+  reseat?: number;
 }) {
   // Последнее ПРИНЯТОЕ содержимое: транзакции, не менявшие смысла (простановка id),
   // правкой не считаются — иначе каждое открытие сущности писало бы в БД (Б4).
@@ -243,13 +251,20 @@ export function BodyEditor({
   // (см. `typed` выше). Полноценное решение — слияние (Р13 дизайна).
   // Сравнение тоже по смыслу, а не по строке: иначе приезд собственного же сохранённого
   // документа (он вернётся без блочных id) переставлял бы содержимое редактора.
+  const reseatRef = useRef(reseat);
   useEffect(() => {
     // isDestroyed — не перестраховка: React 19 переигрывает пассивные эффекты при раскрытии
     // Suspense (reconnectPassiveEffects), и эффект успевает выстрелить на редакторе, у
     // которого useEditor уже снёс view. Без стража это ронял `Cannot read properties of null
     // (reading 'commands')` — НЕ падением теста, а необработанной ошибкой прогона: ассерты
     // оставались зелёными, а код возврата становился 1 (поймано тестами раунда правок 1).
-    if (!editor || editor.isDestroyed || (editor.isFocused && typed.current)) return;
+    if (!editor || editor.isDestroyed) return;
+    // Принудительная посадка (см. `reseat`) — явное решение человека показать серверный текст: страж набранного её
+    // не держит, и набор начинается заново — следующая чужая правка до первой буквы снова доедет сама.
+    const forced = reseatRef.current !== reseat;
+    reseatRef.current = reseat;
+    if (forced) typed.current = false;
+    else if (editor.isFocused && typed.current) return;
     if (!sameDoc(editor.getJSON(), doc.doc)) {
       lastAccepted.current = doc.doc;
       editor.commands.setContent(doc.doc, { emitUpdate: false });
@@ -279,7 +294,7 @@ export function BodyEditor({
      * посадку.
      */
     onAcceptRef.current?.(doc);
-  }, [editor, doc]);
+  }, [editor, doc, reseat]);
 
   // Ссылки берутся из ДОКУМЕНТА, а не из живого дерева редактора: bodyRefsFromDoc ходит и по
   // raw-блокам, а пересчёт на каждую транзакцию стоил бы обхода всего тела на нажатие клавиши.

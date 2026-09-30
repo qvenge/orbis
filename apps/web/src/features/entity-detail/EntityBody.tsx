@@ -78,7 +78,7 @@ export function bodyKindOf(entity: Pick<Entity, 'aspects' | 'props'>): BodyKind 
  */
 export type BodyGate = Pick<
   BodySave,
-  'hasUnsent' | 'flush' | 'blocked' | 'offline' | 'keptOffline'
+  'hasUnsent' | 'flush' | 'blocked' | 'offline' | 'keptOffline' | 'expectedRevision'
 >;
 export type BodyGateRef = MutableRefObject<BodyGate | null>;
 
@@ -163,16 +163,16 @@ export function EntityBody({
   bodyGate: BodyGateRef;
 }) {
   const save = useBodySave(entity.id, { ...entity, bodyRevision: shownBodyRevision(entity) });
-  const { hasUnsent, flush, blocked, offline, keptOffline } = save;
+  const { hasUnsent, flush, blocked, offline, keptOffline, expectedRevision } = save;
   // Регистрация — эффектом: снимается при размонтировании ТОЛЬКО своя запись, иначе уходящее
   // тело стёрло бы уже вставшее на его место (смена записи — новый экземпляр по key).
   useEffect(() => {
-    const gate: BodyGate = { hasUnsent, flush, blocked, offline, keptOffline };
+    const gate: BodyGate = { hasUnsent, flush, blocked, offline, keptOffline, expectedRevision };
     bodyGate.current = gate;
     return () => {
       if (bodyGate.current === gate) bodyGate.current = null;
     };
-  }, [bodyGate, hasUnsent, flush, blocked, offline, keptOffline]);
+  }, [bodyGate, hasUnsent, flush, blocked, offline, keptOffline, expectedRevision]);
   const utils = trpc.useUtils();
   /**
    * Отказ «сохранить в заметку» — В САМОМ БАННЕРЕ, а не тостом.
@@ -217,6 +217,8 @@ export function EntityBody({
    * размена, но это именно размен, и он записан здесь, а не подразумевается.
    */
   const [localDoc, setLocalDoc] = useState<BodyDoc | null>(null);
+  /** Счётчик принудительной посадки серверного документа в редактор — его двигает «Обновить» (`BodyEditor.reseat`). */
+  const [reseat, setReseat] = useState(0);
   const serverDoc = asBodyDoc(entity.bodyDoc);
   // Кэш догнал — местная копия больше не нужна, и держать её нельзя: она заслоняла бы правку,
   // приехавшую с другого устройства. Сравнение по СМЫСЛУ: свой же сохранённый документ вернётся
@@ -355,6 +357,11 @@ export function EntityBody({
             onClick={() => {
               onRefresh();
               save.dismissConflict();
+              // Выход из конфликта в открытом экране (рулинг R-17): редактор СРАЗУ сажает серверный текст — даже тот
+              // же объект, что уже в кэше, — и его ревизия становится основой; местная копия больше не заслоняет базу.
+              // Набранное до «Обновить» остаётся отложенным и черновиком на диске, как и прежде.
+              setLocalDoc(null);
+              setReseat((n) => n + 1);
             }}
           >
             Обновить
@@ -460,6 +467,7 @@ export function EntityBody({
             doc={doc}
             markdown={entity.body}
             onChange={onEditorChange}
+            reseat={reseat}
             onAccept={(accepted) => {
               shownDocRef.current = accepted;
               // Редактор показывает документ КЭША — основа следующей правки теперь его ревизия (рулинг R-17). Местная

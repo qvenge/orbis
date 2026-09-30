@@ -300,6 +300,7 @@ export function EditorShell({
   markdown,
   onChange,
   onAccept,
+  reseat,
   readOnly = false,
 }: {
   doc: BodyDoc | null;
@@ -311,6 +312,8 @@ export function EditorShell({
    * рядом второго потребителя показанного документа, режим разметки.
    */
   onAccept?: (doc: BodyDoc) => void;
+  /** Счётчик принудительной посадки документа — проносится редактору как есть (`BodyEditor.reseat`). */
+  reseat?: number;
   readOnly?: boolean;
 }) {
   const [mount, setMount] = useState<Mount | null>(null);
@@ -385,7 +388,13 @@ export function EditorShell({
   if (readOnly || mount === null || doc === null) return preview;
   return (
     <Suspense fallback={preview}>
-      <BodyEditor doc={doc} onChange={onChange} onAccept={onAccept} focusAt={mount.focusAt} />
+      <BodyEditor
+        doc={doc}
+        onChange={onChange}
+        onAccept={onAccept}
+        focusAt={mount.focusAt}
+        reseat={reseat}
+      />
     </Suspense>
   );
 }

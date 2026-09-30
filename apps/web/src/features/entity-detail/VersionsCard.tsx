@@ -273,7 +273,10 @@ export function VersionsCard({ entity, active }: { entity: Entity; active: boole
                     // Ревизия тела ОТКРЫТОЙ записи: сервер сверит её и откажет 409, если текст
                     // правили, пока экран смотрел на список (§8.1) — молча затирать чужое нельзя.
                     // Нынешний текст сервер закрепит версией первой операцией того же действия.
-                    expectedBodyRevision: shownBodyRevision(entity),
+                    // Из тела экрана, если оно есть: после своего досыла кэш отстаёт до перечитывания,
+                    // и повтор нажатия в это окно ушёл бы в 409 «с собственным сохранением» (M-A).
+                    expectedBodyRevision:
+                      gate?.current?.expectedRevision() ?? shownBodyRevision(entity),
                   });
                 }}
               >

@@ -115,6 +115,12 @@ export interface BodySave {
    * ревизией в `STALE_VERSION`, а не затирает её молча.
    */
   onShown: (revision: number) => void;
+  /**
+   * Ревизия тела, поверх которой запись стоит СЕЙЧАС: большая из подтверждённой своим сохранением и кэшной. Нужна
+   * жестам, пишущим тело мимо набора («Восстановить» версию): после своего досыла кэш отстаёт до перечитывания, и
+   * ревизия из него дала бы 409 «с собственным сохранением».
+   */
+  expectedRevision: () => number;
   flush: () => void;
   /**
    * Есть ли набранное, чего сервер ещё не подтвердил: отложенный документ, ОТЛИЧНЫЙ по смыслу от
@@ -1026,6 +1032,7 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
   return {
     onDocChange,
     onShown,
+    expectedRevision: currentExpected,
     flush,
     hasUnsent,
     blocked,

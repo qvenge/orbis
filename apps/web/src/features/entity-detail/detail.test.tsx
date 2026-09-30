@@ -4259,6 +4259,60 @@ describe('ADE: версии', () => {
     );
   }, 30_000);
 
+  test('повтор «Восстановить» ДО перечитывания после своего досыла — ревизия своего сохранения, не отставшего кэша (M-A)', async () => {
+    // Перечитывание после досыла ещё не пришло (зависает): кэш держит ревизию ДО досыла. Возьми восстановление её —
+    // ушло бы в 409 «с собственным сохранением». Ревизию даёт тело экрана — подтверждённую своим сохранением.
+    let reads = 0;
+    const updates: unknown[] = [];
+    const versions = versionsHandler();
+    const { calls } = renderWithProviders(
+      <>
+        <DetailScreen entityId="e1" />
+        <Toaster />
+      </>,
+      (path, input) => {
+        if (path === 'entity.get') {
+          reads += 1;
+          if (reads > 1 && updates.length > 0) return new Promise(() => {});
+          return { entity, relations: [], thread: null };
+        }
+        if (path === 'entity.update') {
+          updates.push(input);
+          return { ...entity, bodyRevision: (entity.bodyRevision as number) + 1 };
+        }
+        return versions(path, input);
+      },
+    );
+    const field = await editorField();
+    await userEvent.click(field);
+    await userEvent.type(field, ' и хвост');
+    await expectEditorHas('и хвост');
+
+    await openDetails();
+    const card = await screen.findByTestId('versions-card');
+    await waitFor(() => expect(within(card).getAllByRole('listitem')).toHaveLength(2));
+    const row = within(card).getAllByRole('listitem')[0] as HTMLElement;
+    await userEvent.click(within(row).getByRole('button', { name: 'Восстановить' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Восстановить' }));
+    expect((await screen.findAllByText(BODY_SAVING)).length).toBeGreaterThan(0);
+    await waitFor(() => expect(updates).toHaveLength(1));
+    // Ответ досыла осел (оседание — промисом), перечитывание висит
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+
+    fireEvent.click(
+      within(screen.getByRole('dialog')).getByRole('button', { name: 'Восстановить' }),
+    );
+    await waitFor(() =>
+      expect(calls.find((c) => c.path === 'version.restore')?.input).toEqual({
+        versionId: 'v1',
+        expectedBodyRevision: (entity.bodyRevision as number) + 1,
+      }),
+    );
+  }, 30_000);
+
   test('409 при восстановлении: инлайн «Документ изменился в другом месте» и «Обновить»', async () => {
     const { calls } = renderWithProviders(
       <DetailScreen entityId="e1" />,
@@ -6496,4 +6550,72 @@ test('агент правит текст, пока владелец печата
   expect(server.body).toBe('текст агента');
   expect(screen.getByTestId('body-editor')).toHaveTextContent('ещё');
   expect(JSON.stringify(readDraft('e1')?.doc)).toContain('ещё');
+}, 30_000);
+
+test('«Обновить» на плашке конфликта сажает текст агента в редактор, даже тем же объектом кэша; следующая буква сохраняется без конфликта (R-17, I-2)', async () => {
+  // Продолжение сюжета «агент правит текст, пока владелец печатает»: после отказа `STALE_VERSION` перечитывание уже
+  // положило текст агента в кэш, и «Обновить» приносит ТОТ ЖЕ объект — эффект приезда по `doc` не прогнался бы.
+  // Посадку делает явный сигнал: в редакторе текст агента, его ревизия — основа, набор поверх уходит без 409.
+  // Набранное до «Обновить» остаётся черновиком на диске — как «Обновить» и было устроено.
+  const server = {
+    revision: entity.bodyRevision as number,
+    title: entity.title,
+    doc: entity.bodyDoc,
+    body: entity.body,
+  };
+  let agent = true;
+  const updates: Array<{ expectedBodyRevision?: number; bodyDoc?: unknown }> = [];
+  const shown = () => ({
+    ...entity,
+    title: server.title,
+    body: server.body,
+    bodyDoc: server.doc,
+    bodyRevision: server.revision,
+  });
+  renderWithProviders(<DetailScreen entityId="e1" />, (path, input) => {
+    if (path === 'entity.get')
+      return { entity: shown(), relations: [], thread: { threadId: 'th1', messages: [] } };
+    if (path === 'entity.update') {
+      const inp = input as { expectedBodyRevision?: number; bodyDoc?: typeof entity.bodyDoc };
+      updates.push(inp);
+      if (inp.bodyDoc === undefined) return shown();
+      if (inp.expectedBodyRevision !== server.revision)
+        throw staleBodyError({ expected: inp.expectedBodyRevision, current: server.revision });
+      server.revision += 1;
+      server.doc = inp.bodyDoc;
+      const saved = shown();
+      if (agent) {
+        agent = false;
+        server.revision += 1;
+        server.title = 'Правлено агентом';
+        server.body = 'текст агента';
+        server.doc = parseBody('текст агента');
+      }
+      return saved;
+    }
+    return registryReply(path) ?? {};
+  });
+  const field = await editorField();
+  await userEvent.click(field);
+  await userEvent.type(field, ' и хвост');
+  await waitFor(() => expect(updates).toHaveLength(1), EDITOR_READY);
+  await screen.findByRole('heading', { name: 'Правлено агентом' }, EDITOR_READY);
+  await userEvent.type(field, ' ещё');
+  const refresh = await screen.findByRole('button', { name: 'Обновить' }, EDITOR_READY);
+  const agentRevision = server.revision;
+
+  // Фокус НЕ уводим: посадка по «Обновить» — явный жест, страж набранного её не держит
+  fireEvent.click(refresh);
+  await expectEditorText('текст агента');
+  expect(screen.getByTestId('body-editor')).not.toHaveTextContent('ещё');
+  expect(screen.queryByText(/Изменено в другом месте — обновите/)).toBeNull();
+  expect(JSON.stringify(readDraft('e1')?.doc)).toContain('ещё'); // набранное до «Обновить» — черновиком
+
+  const again = screen.getByTestId('body-editor').querySelector('[contenteditable]') as HTMLElement;
+  await userEvent.click(again);
+  await userEvent.type(again, ' и моё');
+  await waitFor(() => expect(updates).toHaveLength(3), EDITOR_READY);
+  expect(updates[2]?.expectedBodyRevision).toBe(agentRevision);
+  expect(server.revision).toBe(agentRevision + 1); // сервер принял
+  expect(screen.queryByText(/Изменено в другом месте — обновите/)).toBeNull();
 }, 30_000);
