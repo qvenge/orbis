@@ -25,8 +25,8 @@
 //   bun scripts/ops.ts migrate-1v --apply --i-understand             # перевод графа среза 1в: одна пачка (§6.6)
 //   bun scripts/ops.ts migrate-1v --undo <actionId> --i-understand   # отмена пачки перевода (Undo §6.6)
 //   ORBIS_REHEARSAL_DSN=<DSN> bun scripts/ops.ts migrate-1v --rehearsal <режим>  # репетиция: только localhost
-//   bun scripts/ops.ts perf [--since 7d]  # только чтение: объём журнала (и перцентили замеров)
-//   bun scripts/ops.ts ping           # связность и версия PostgreSQL
+//   bun scripts/ops.ts perf [--since 7d] [--metric <m>]  # только чтение: объём журнала, перцентили замеров, чистка pg_cron
+//   bun scripts/ops.ts ping           # связность, версия PostgreSQL и состояние pg_cron
 //   bun scripts/ops.ts issue-pat <uuid аккаунта> [метка] [--scope worker]  # headless-токен (§9.3)
 import { join } from 'node:path';
 import {
@@ -617,17 +617,30 @@ async function migrate1vOp(args: string[]): Promise<number> {
   );
 }
 
-/** Только чтение (спека скорости §3.3): объём журнала по графам, дням (UTC) и источникам действия (§3.1); с задачи 3 — перцентили замеров. */
+/** Только чтение (спека скорости §3.3): объём журнала по графам, дням (UTC) и источникам действия (§3.1), перцентили полевых замеров с разрезами и последний прогон чистки `pg_cron`. */
 async function perfOp(args: string[]): Promise<number> {
   return withDb((sql) =>
     runPerfReport(args, { sql, log: (l) => console.log(l), error: (l) => console.error(l) }),
   );
 }
 
+/**
+ * Связность и версия PostgreSQL; с плана скорости — и `pg_cron` (предпроверка прод-задачи плана А, ПВ-5): миграция 0024
+ * ставит расширение и задачу чистки замеров, а без библиотеки в `shared_preload_libraries` `CREATE EXTENSION` упадёт.
+ */
 async function ping(): Promise<number> {
   await withDb(async (sql) => {
     const [row] = await sql<{ version: string }[]>`SELECT version()`;
     console.log(row?.version ?? 'нет ответа');
+    const [cron] = await sql<
+      { available: string | null; installed: string | null; preload: boolean }[]
+    >`
+      SELECT (SELECT default_version FROM pg_available_extensions WHERE name = 'pg_cron') AS available,
+             (SELECT extversion FROM pg_extension WHERE extname = 'pg_cron') AS installed,
+             current_setting('shared_preload_libraries') LIKE '%pg_cron%' AS preload`;
+    console.log(
+      `pg_cron: доступно ${cron?.available ?? 'нет'}, установлено ${cron?.installed ?? 'нет'}, в shared_preload_libraries: ${cron?.preload ? 'да' : 'нет'}`,
+    );
   });
   return 0;
 }
@@ -806,9 +819,9 @@ const OPS: Record<string, { run: (args: string[]) => Promise<number>; help: stri
   },
   perf: {
     run: perfOp,
-    help: 'только чтение: объём журнала по графам, дням (UTC) и источникам действия [--since 7d] [--metric <m>] (спека скорости §3.3)',
+    help: 'только чтение: объём журнала по графам, дням (UTC) и источникам действия, перцентили полевых замеров, чистка pg_cron [--since 7d] [--metric <m>] (спека скорости §3.3)',
   },
-  ping: { run: ping, help: 'связность и версия PostgreSQL' },
+  ping: { run: ping, help: 'связность, версия PostgreSQL и состояние pg_cron' },
   dump: {
     run: dumpOp,
     help: 'только чтение: плейн-дамп прода в <каталог> вне git (личные данные — удалить после репетиции)',

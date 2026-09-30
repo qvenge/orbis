@@ -3,7 +3,7 @@
 -- Всё в одной транзакции с ROLLBACK: БД не мутируется.
 BEGIN;
 CREATE EXTENSION IF NOT EXISTS pgtap;
-SELECT plan(160);
+SELECT plan(166);
 
 -- Графы фикстур (0020): с FK на graphs владельца «из воздуха» не бывает. Весь файл — одна транзакция
 -- с ROLLBACK, отложенные триггеры И-1 до проверки не доходят — гранты заведены ради политик.
@@ -152,8 +152,8 @@ INSERT INTO envelope_spent_cache (envelope_id, graph_id, as_of, spent, owner_ver
   ('00000000-0000-7000-8000-0000000000a1', '00000000-0000-4000-8000-00000000000a', '2026-09-01', 100, 0, 1),
   ('00000000-0000-7000-8000-0000000000b1', '00000000-0000-4000-8000-00000000000b', '2026-09-01', 200, 0, 1);
 
--- 1) RLS включён и FORCE на всех 21 таблице (11 исходных + 7 реестров реформы 0014 + кэш spent 0018
---    + graphs и graph_members 0020)
+-- 1) RLS включён и FORCE на всех 22 таблицах (11 исходных + 7 реестров реформы 0014 + кэш spent 0018
+--    + graphs и graph_members 0020 + замеры perf_samples 0024)
 SELECT is(
   (SELECT count(*)::int FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
    WHERE n.nspname = 'public' AND c.relkind = 'r'
@@ -163,9 +163,9 @@ SELECT is(
                        'property_definitions','relation_role_definitions',
                        'contract_definitions','subscription_definitions',
                        'action_definitions','registry_deltas','registry_system',
-                       'envelope_spent_cache','graphs','graph_members')
+                       'envelope_spent_cache','graphs','graph_members','perf_samples')
      AND c.relrowsecurity AND c.relforcerowsecurity),
-  21, 'RLS ENABLE+FORCE на всех двадцати одной таблице');
+  22, 'RLS ENABLE+FORCE на всех двадцати двух таблицах');
 
 -- Как пользователь A
 SELECT set_config('request.jwt.claims',
@@ -342,6 +342,30 @@ SELECT results_eq('SELECT count(*)::int FROM relations', ARRAY[0],
 SELECT results_eq('SELECT count(*)::int FROM agent_grants', ARRAY[0],
   'без identity: agent_grants — 0 строк');
 RESET ROLE;
+
+-- Замеры (спека скорости §3.2, §13.1): аккаунт пишет и читает только своё; UPDATE/DELETE гранта нет.
+SELECT set_config('request.jwt.claims', '{"sub":"00000000-0000-4000-8000-00000000000b","role":"authenticated","graph":"00000000-0000-4000-8000-00000000000b"}', true);
+SET LOCAL ROLE authenticated;
+INSERT INTO perf_samples (metric, dur_ms, device, app_version) VALUES ('inp', 10, 'desktop', '0.6.0');
+RESET ROLE;
+SELECT set_config('request.jwt.claims', '{"sub":"00000000-0000-4000-8000-00000000000a","role":"authenticated","graph":"00000000-0000-4000-8000-00000000000a"}', true);
+SET LOCAL ROLE authenticated;
+SELECT lives_ok($$INSERT INTO perf_samples (metric, dur_ms, device, app_version) VALUES ('lcp', 900, 'mobile', '0.6.0')$$,
+  'замер пишется под своим аккаунтом (account_id по умолчанию — auth.uid())');
+SELECT results_eq('SELECT count(*)::int FROM perf_samples', ARRAY[1], 'чужие замеры не видны');
+SELECT throws_ok($$INSERT INTO perf_samples (account_id, metric, dur_ms, device, app_version)
+  VALUES ('00000000-0000-4000-8000-00000000000b', 'inp', 1, 'desktop', '0.6.0')$$, '42501', NULL, 'замер от чужого имени отклоняется WITH CHECK');
+SELECT throws_ok($$UPDATE perf_samples SET dur_ms = 0$$, '42501', NULL, 'правки замеров нет: грант только SELECT и INSERT');
+RESET ROLE;
+SELECT is((SELECT string_agg(policyname::text || ' ' || cmd::text || ' ' || roles::text COLLATE "C", ', '
+      ORDER BY policyname::text COLLATE "C")
+  FROM pg_policies WHERE schemaname = 'public' AND tablename = 'perf_samples'
+    AND coalesce(qual, '') || coalesce(with_check, '') LIKE '%auth.uid()%'),
+  'own_account_insert INSERT {authenticated}, own_account_select SELECT {authenticated}',
+  'у замеров ровно две политики — по аккаунту, не по графу (§3.2); UPDATE/DELETE нет');
+SELECT is((SELECT count(*)::int FROM cron.job WHERE jobname = 'orbis_perf_samples_cleanup' AND schedule = '17 3 * * *'
+    AND command LIKE '%DELETE FROM public.perf_samples WHERE created_at < now() - interval ''30 days''%'), 1,
+  'чистка замеров старше 30 дней — задача pg_cron ежедневно в 03:17 UTC (РП-26)');
 
 -- Группа 9: oauth_clients закрыта для чужих — оба барьера поимённо (§9.3, D34).
 --
@@ -977,10 +1001,12 @@ SELECT is((SELECT count(*)::int FROM pg_proc p JOIN pg_namespace n ON n.oid = p.
     AND p.proname IN ('current_graph_id','actor_reads_current_graph','actor_writes_current_graph','actor_owns_current_graph')
     AND NOT p.prosecdef AND p.proconfig @> ARRAY['search_path=""']),
   4, 'четыре функции политик — SECURITY INVOKER с пустым search_path: обхода RLS нет (0013:7-8)');
+-- Исключение `perf_samples` (0024) — не граф: замер — про устройство и сеть АККАУНТА, ключ владения у таблицы
+-- `auth.uid()` намеренно (спека скорости §3.2); её две политики пинятся поимённо в блоке замеров выше.
 SELECT is((SELECT count(*)::int FROM pg_policies WHERE schemaname = 'public'
-    AND tablename NOT IN ('graphs','graph_members')
+    AND tablename NOT IN ('graphs','graph_members','perf_samples')
     AND (coalesce(qual, '') LIKE '%auth.uid()%' OR coalesce(with_check, '') LIKE '%auth.uid()%')),
-  0, 'ни одна политика строк не сравнивает ключ с auth.uid(): вечного доступа по равенству id нет');
+  0, 'ни одна политика строк графа не сравнивает ключ с auth.uid(): вечного доступа по равенству id нет');
 SELECT col_not_null('public', 'agent_grants', 'issued_by', 'у гранта агента всегда есть выдавший аккаунт');
 -- ФОРМА ВСЕХ 68 ПОЛИТИК СТРОК — по каталогу, а не по тексту миграции (Important-3 гейт-ревью).
 -- Поведением обе половины проверены на `entities` (группа 23 целиком) и на двух формах-исключениях
@@ -1001,10 +1027,10 @@ SELECT col_not_null('public', 'agent_grants', 'issued_by', 'у гранта аг
 --     ПРИСУТСТВУЮЩАЯ клауза обязана нести обе половины: `qual` у SELECT/DELETE, `with_check` у
 --     INSERT, ОБЕ у UPDATE.
 SELECT is((SELECT count(*)::int FROM pg_policies WHERE schemaname = 'public'
-    AND roles = '{authenticated}' AND tablename NOT IN ('graphs','graph_members')),
+    AND roles = '{authenticated}' AND tablename NOT IN ('graphs','graph_members','perf_samples')),
   68, 'политик строк ровно 68 — 17 таблиц × 4 команды, ни одной лишней и ни одной пропавшей');
 SELECT is((SELECT count(*)::int FROM pg_policies p WHERE p.schemaname = 'public'
-    AND p.roles = '{authenticated}' AND p.tablename NOT IN ('graphs','graph_members')
+    AND p.roles = '{authenticated}' AND p.tablename NOT IN ('graphs','graph_members','perf_samples')
     AND NOT (p.qual IS NULL AND p.with_check IS NULL)
     AND (p.qual IS NULL OR p.qual LIKE '%current_graph_id()%')
     AND (p.with_check IS NULL OR p.with_check LIKE '%current_graph_id()%')),
@@ -1013,7 +1039,7 @@ SELECT is((SELECT count(*)::int FROM pg_policies p WHERE p.schemaname = 'public'
 -- грантом, запись требует owner|operator, а гранты агентов — только owner. Подмена одной на другую
 -- (`actor_writes` в INSERT `agent_grants`) даёт operator'у право выписать себе полный доступ.
 SELECT is((SELECT count(*)::int FROM pg_policies p WHERE p.schemaname = 'public'
-    AND p.roles = '{authenticated}' AND p.tablename NOT IN ('graphs','graph_members')
+    AND p.roles = '{authenticated}' AND p.tablename NOT IN ('graphs','graph_members','perf_samples')
     AND NOT (p.qual IS NULL AND p.with_check IS NULL)
     AND (p.qual IS NULL OR p.qual LIKE '%' || CASE WHEN p.cmd = 'SELECT' THEN 'actor_reads_current_graph()'
            WHEN p.tablename = 'agent_grants' THEN 'actor_owns_current_graph()'

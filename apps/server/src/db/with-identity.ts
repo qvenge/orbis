@@ -14,6 +14,7 @@ import { sql } from 'drizzle-orm';
 // полный граф импортов `identity.ts` это {db/client, db/schema}, то есть ровно то, что здесь уже
 // есть через `import type { Identity }`; из значений `identity.ts` импортирует один `sql`, цикла нет.
 import { type Identity, isIdentity } from '../identity';
+import { addDbTime } from '../perf/server-timing';
 import type { Db } from './client';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -44,23 +45,30 @@ export async function withIdentity<T>(
   if (!UUID_RE.test(who.graph)) {
     throw new Error(`withIdentity: graph не UUID: ${JSON.stringify(who.graph)}`);
   }
-  return db.transaction(async (tx) => {
-    // Текущий граф — ключом ВНУТРИ тех же claims (спека §3.5): один set_config, одно время жизни с
-    // `sub` (is_local = true: умирает на commit И на rollback).
-    //
-    // Регистр — нижний, и ПРИЧИНА НАЗВАНА ПО ЗАМЕРУ. Политикам он безразличен: `current_graph_id()`
-    // и `auth.uid()` кастуют значение `::uuid`, а uuid регистронезависим — мутация «снять
-    // `.toLowerCase()`» не краснит ни одной RLS-проверки. Нормализация нужна СТРОКОВЫМ ключам,
-    // которые из этих id собираются вне базы: замки `hashtextextended('<граф>:registry')`, ключ
-    // кеша реестра, сравнения `toBe` в сьютах (подробнее — докблок `parseGraphId`). Здесь она
-    // повторена, а не выброшена, потому что вход сюда приходит и из `scripts/`, где типов нет.
-    const claims = JSON.stringify({
-      sub: who.actor.toLowerCase(),
-      role: 'authenticated',
-      graph: who.graph.toLowerCase(),
+  // Длительность транзакции целиком — в `Server-Timing` запроса (спека скорости §3.1, РП-3): `withIdentity` — единственная
+  // дверь транзакций приложения, поэтому счёт здесь покрывает их все. `finally` — чтобы откат и отказ тоже вошли в счёт.
+  const t0 = performance.now();
+  try {
+    return await db.transaction(async (tx) => {
+      // Текущий граф — ключом ВНУТРИ тех же claims (спека §3.5): один set_config, одно время жизни с
+      // `sub` (is_local = true: умирает на commit И на rollback).
+      //
+      // Регистр — нижний, и ПРИЧИНА НАЗВАНА ПО ЗАМЕРУ. Политикам он безразличен: `current_graph_id()`
+      // и `auth.uid()` кастуют значение `::uuid`, а uuid регистронезависим — мутация «снять
+      // `.toLowerCase()`» не краснит ни одной RLS-проверки. Нормализация нужна СТРОКОВЫМ ключам,
+      // которые из этих id собираются вне базы: замки `hashtextextended('<граф>:registry')`, ключ
+      // кеша реестра, сравнения `toBe` в сьютах (подробнее — докблок `parseGraphId`). Здесь она
+      // повторена, а не выброшена, потому что вход сюда приходит и из `scripts/`, где типов нет.
+      const claims = JSON.stringify({
+        sub: who.actor.toLowerCase(),
+        role: 'authenticated',
+        graph: who.graph.toLowerCase(),
+      });
+      await tx.execute(sql`SELECT set_config('request.jwt.claims', ${claims}, true)`);
+      await tx.execute(sql`SET LOCAL ROLE authenticated`);
+      return fn(tx);
     });
-    await tx.execute(sql`SELECT set_config('request.jwt.claims', ${claims}, true)`);
-    await tx.execute(sql`SET LOCAL ROLE authenticated`);
-    return fn(tx);
-  });
+  } finally {
+    addDbTime(performance.now() - t0);
+  }
 }

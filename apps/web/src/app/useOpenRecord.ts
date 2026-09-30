@@ -1,5 +1,6 @@
 import { HOST_APP } from '@orbis/shared/nav';
 import { useCallback, useContext } from 'react';
+import { markNavigationStart } from '../perf/marks';
 import { useNav } from '../state/navigation';
 import { FrameAppContext } from './frame/FrameApp';
 
@@ -16,6 +17,8 @@ export function useOpenRecord(): (id: string) => void {
   const frame = useContext(FrameAppContext);
   return useCallback(
     (id: string) => {
+      // Начало перехода (спека скорости §3.1): замер закроет готовность экрана ЭТОЙ записи.
+      markNavigationStart(id);
       const nav = useNav.getState();
       if (frame?.via === 'host-screen' || frame?.via === 'host-page') {
         // Чат и поиск снимаются переходом; настройки и память остаются под записью (§7.3).

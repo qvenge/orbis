@@ -5,6 +5,8 @@ export * from './contracts/apps';
 export * from './contracts/blocks';
 export * from './contracts/budget';
 export * from './contracts/import';
+// Полевые замеры ступени 0 (спека скорости §3.2): схема пачки `perf.report` — её разбирает сервер, её собирает web.
+export * from './contracts/perf';
 export * from './contracts/tools';
 // date.ts — почти весь внутренний модуль (fromParts/partsFromEpochDays/…); наружу выходит
 // сдвиг даты (у сервера была своя копия в recurring/materialize.ts, третьей копии быть не

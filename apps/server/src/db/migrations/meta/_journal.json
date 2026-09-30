@@ -155,6 +155,13 @@
       "when": 1790680990543,
       "tag": "0023_agenda_subscription_drop",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1790737115410,
+      "tag": "0024_perf_samples",
+      "breakpoints": true
     }
   ]
 }

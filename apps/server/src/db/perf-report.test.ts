@@ -4,13 +4,20 @@ import type postgres from 'postgres';
 import { adminDb, appDb, freshGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
 import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
+import { appRouter } from '../router';
+import { createCallerFactory } from '../trpc';
 import {
   chatJournalVolume,
+  cronCleanupStatus,
   formatJournalVolume,
+  formatPerfPercentiles,
   type JournalVolumeRow,
   journalSourceOf,
   journalVolume,
+  PERF_CLEANUP_JOB,
+  type PerfStatRow,
   parsePerfArgs,
+  perfPercentiles,
   runPerfReport,
 } from './perf-report';
 
@@ -53,6 +60,54 @@ describe('ops.ts perf: разбор флагов', () => {
     expect(parsePerfArgs(['--since', '30'])).toHaveProperty('error');
     expect(parsePerfArgs(['--since', '400d'])).toHaveProperty('error');
     expect(parsePerfArgs(['--wat'])).toHaveProperty('error');
+  });
+
+  test('--metric сверяется со списком метрик: неизвестная — ошибка разбора', () => {
+    expect(parsePerfArgs(['--metric', 'wat'])).toHaveProperty('error');
+    expect(parsePerfArgs(['--metric'])).toHaveProperty('error');
+    expect(parsePerfArgs(['--metric', 'cold_start_content'])).toEqual({
+      sinceDays: 7,
+      metric: 'cold_start_content',
+    });
+  });
+});
+
+describe('ops.ts perf: перцентили замеров и чистка pg_cron', () => {
+  const createCaller = createCallerFactory(appRouter);
+
+  test('perf.report десять inp 10…100 → p50 55, p75 77.5; --metric отсекает прочие', async () => {
+    const g = await freshGraph();
+    const caller = createCaller({
+      identity: personal(g),
+      actorKind: 'owner',
+      db,
+      clientVersion: null,
+    });
+    const base = { device: 'desktop', appVersion: '0.6.0' } as const;
+    await caller.perf.report({
+      samples: [
+        ...Array.from({ length: 10 }, (_, i) => ({
+          ...base,
+          metric: 'inp' as const,
+          durMs: 10 * (i + 1),
+        })),
+        { ...base, metric: 'lcp', durMs: 1200, screen: 'record', cached: true },
+      ],
+    });
+    const only = await admin.client.begin('read only', (tx) => perfPercentiles(tx, 7, 'inp'));
+    expect(only).toContainEqual(
+      expect.objectContaining({ metric: 'inp', appVersion: '0.6.0', n: 10, p50: 55, p75: 77.5 }),
+    );
+    expect(only.every((r) => r.metric === 'inp')).toBe(true);
+    const all = await admin.client.begin('read only', (tx) => perfPercentiles(tx, 7, null));
+    expect(all.map((r) => r.metric)).toContain('lcp');
+  });
+
+  test('cronCleanupStatus — строка о задаче чистки, а не «не найдена» и не «нет доступа»', async () => {
+    const line = await admin.client.begin('read only', (tx) => cronCleanupStatus(tx));
+    expect(line).toContain(PERF_CLEANUP_JOB);
+    expect(line).not.toContain('не найдена');
+    expect(line).not.toContain('нет доступа');
   });
 });
 
@@ -261,7 +316,65 @@ describe('ops.ts perf: печать и обвязка', () => {
     expect(out[0]).toMatch(
       /^Объём журнала за 30 дн\. \(источник: (chat_messages|action_journal); день — UTC\)$/,
     );
-    expect(out.at(-1)).toStartWith('Итого: ');
+    // Раздел журнала кончается итогом, за ним — замеры; последней строкой — чистка pg_cron.
+    const perfAt = out.indexOf('Замеры за 30 дн.');
+    expect(out[perfAt - 1]).toStartWith('Итого: ');
+    expect(out.at(-1)).toStartWith(`задача pg_cron ${PERF_CLEANUP_JOB}: `);
+    expect(await runPerfReport(['--metric', 'wat'], io)).toBe(2);
+    expect(err.at(-1)).toStartWith('ops perf: ');
+  });
+});
+
+describe('ops.ts perf: печать перцентилей', () => {
+  const ROW: PerfStatRow = {
+    metric: 'request',
+    appVersion: '0.6.0',
+    cached: null,
+    screen: null,
+    kind: null,
+    procedure: 'entity.get,entity.query',
+    n: 3,
+    p50: 120,
+    p75: 150.25,
+    p95: 300,
+    serverP75: 40,
+    dbP75: 25,
+  };
+
+  test('шапка с окном и метрикой, строка на группу, пусто — «замеров нет»', () => {
+    const lines = formatPerfPercentiles(
+      [
+        ROW,
+        {
+          ...ROW,
+          metric: 'transition',
+          screen: 'record',
+          procedure: null,
+          cached: true,
+          serverP75: null,
+          dbP75: null,
+        },
+      ],
+      7,
+      null,
+    );
+    expect(lines[0]).toBe('Замеры за 7 дн.');
+    expect(
+      lines.some((l) =>
+        /request\s+0\.6\.0\s+—\s+—\s+entity\.get,entity\.query\s+—\s+3\s+120\/150\.3\/300 мс\s+\[сервер p75 40, база p75 25\]$/.test(
+          l,
+        ),
+      ),
+    ).toBe(true);
+    expect(
+      lines.some((l) =>
+        /transition\s+0\.6\.0\s+record\s+—\s+—\s+кеш\s+3\s+120\/150\.3\/300 мс$/.test(l),
+      ),
+    ).toBe(true);
+    expect(formatPerfPercentiles([], 30, 'inp')).toEqual([
+      'Замеры за 30 дн. (метрика inp)',
+      'замеров нет',
+    ]);
   });
 });
 

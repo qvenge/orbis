@@ -17,6 +17,7 @@ import { makeMcpHandler } from './mcp/transport';
 import { mountOAuthMetadata } from './oauth/metadata';
 import { makeRegisterHandler } from './oauth/register';
 import { makeTokenHandler } from './oauth/token-endpoint';
+import { serverTiming } from './perf/server-timing';
 import { appRouter } from './router';
 
 /**
@@ -175,12 +176,15 @@ export function createApp({
   });
 
   // --- API-роуты: регистрируются ПЕРЕД статикой (порядок = приоритет) ---
+  // `Server-Timing` (спека скорости §3.1, РП-3) — до tRPC и MCP, чтобы время приложения покрывало разбор входа.
+  app.use('/trpc/*', serverTiming());
   // Size-гейт ДО tRPC-хендлера: сверхлимитное тело отсекается прежде JSON-парсинга и
   // любой zod-валидации (порядок регистрации = порядок исполнения middleware).
   app.use('/trpc/*', trpcBodyLimit);
   app.use('/trpc/*', trpcServer({ router: appRouter, createContext: makeCreateContext(db, ai) }));
   // MCP-эндпоинт внешних агентов (§9.3): Streamable HTTP, только по гранту из
   // agent_grants — access-токен OAuth или headless-PAT (transport.ts)
+  app.use('/mcp', serverTiming());
   app.all('/mcp', makeMcpHandler({ db }));
   // Метаданные OAuth (§9.3): публичные, до статики — иначе их съест SPA-fallback
   mountOAuthMetadata(app);

@@ -1,9 +1,10 @@
-import { RULE_TASK_STATUS_DEFAULT } from '@orbis/shared';
+import { type PerfActionKind, RULE_TASK_STATUS_DEFAULT } from '@orbis/shared';
 import type { JSONContent } from '@tiptap/core';
 import { TRPCClientError } from '@trpc/client';
 import { useRef, useState } from 'react';
 import { invalidateGraph } from '../../lib/invalidate';
 import { useNoteRegistryVersion } from '../../lib/registry/useRegistry';
+import { startAction } from '../../perf/marks';
 import { type RouterInputs, type RouterOutputs, trpc } from '../../trpc';
 // Листовые модули: своих рантайм-зависимостей у них нет вовсе, и схему редактора они не тянут
 // (стережёт save.test.tsx). Зачем они здесь — см. `settleBodyDraft` ниже.
@@ -179,6 +180,12 @@ function settleBodyDraft(vars: UpdateInput, err?: unknown): void {
  */
 const OPTIMISTIC = new WeakMap<UpdateInput, UpdateInput>();
 
+/**
+ * Вид действия для замера отклика (спека скорости §3.1) — по ОБЪЕКТУ правки, тем же приёмом, что `OPTIMISTIC`: чекбокс
+ * и выбор статуса шлют одинаковую правку статуса, различает их только место вызова, а на провод поле не попадает.
+ */
+const PERF_KIND = new WeakMap<UpdateInput, PerfActionKind>();
+
 /** Значение возврата из закрытия на время полёта — строка `default` каталога поставки (Б-2 №98). */
 const REOPEN_STATUS = (RULE_TASK_STATUS_DEFAULT.params as { value: { const: string } }).value.const;
 
@@ -262,6 +269,19 @@ export function useEntityUpdate(
 
   const mutation = trpc.entity.update.useMutation({
     onMutate: async (vars) => {
+      // Отклик действия (спека скорости §3.1) — от нажатия, поэтому ДО первого `await`. Автосохранение текста — не
+      // действие: сеанс печати меряется иначе, и замер каждого сохранения засорил бы отклик кнопок.
+      const action =
+        vars.body !== undefined || vars.bodyDoc !== undefined
+          ? null
+          : startAction(
+              PERF_KIND.get(vars) ??
+                (vars.title !== undefined
+                  ? 'title'
+                  : vars.props !== undefined && 'orbis/task_status' in vars.props
+                    ? 'status'
+                    : 'other'),
+            );
       setConflict(false);
       await utils.entity.get.cancel(input);
       const prev = utils.entity.get.getData(input);
@@ -269,6 +289,8 @@ export function useEntityUpdate(
       utils.entity.get.setData(input, (old) =>
         old ? { ...old, entity: applyPatch(old.entity, shown) } : old,
       );
+      // «Видно» — кадр после оптимистичного патча: к нему React успевает нарисовать правку.
+      if (action) requestAnimationFrame(() => action.visible());
       seqRef.current += 1;
       latestRef.current[vars.id] = {
         seq: seqRef.current,
@@ -278,7 +300,13 @@ export function useEntityUpdate(
       // Ключ едет в контекст ВМЕСТЕ со снимком. Откат обязан лечь туда же, откуда снимок
       // взят, а `input` — замыкание ПОСЛЕДНЕГО рендера: смени экран сущность, пока запрос в
       // полёте, и откат положил бы данные прежней записи под ключ новой (ревью Задачи 13, I1).
-      return { prev, input, seq: seqRef.current, expectedUpdatedAt: vars.expectedUpdatedAt };
+      return {
+        prev,
+        input,
+        seq: seqRef.current,
+        expectedUpdatedAt: vars.expectedUpdatedAt,
+        action,
+      };
     },
     onError: (err, vars, ctx) => {
       // Диск — первым делом и БЕЗ единой отсечки: он про запись, а не про то, чья очередь
@@ -333,7 +361,9 @@ export function useEntityUpdate(
     // и backlinks и в строках query_result чата (EntityRef читает ключ {id} без include,
     // backlinks приезжают внутри ответа соседа — точечный ключ detail не задевал ни то,
     // ни другое).
-    onSettled: (_data, _err, vars) => {
+    onSettled: (_data, err, vars, ctx) => {
+      // «Подтверждено» — ответ сервера без ошибки; отказ подтверждением не считается.
+      if (!err) ctx?.action?.confirmed();
       invalidateGraph(utils);
       // Довесок вызывающего — здесь же, на уровне мутации (см. докблок хука): у секций записи это
       // гашение денежных агрегатов бюджета, которые `invalidateGraph` не покрывает по построению.
@@ -385,12 +415,15 @@ export function useRecordEdits(entityId: string, entity: Entity | undefined) {
    */
   function toggleTask(done: boolean) {
     if (done) {
-      mutation.mutate({ id: entityId, props: { 'orbis/task_status': 'done' } });
+      const vars: UpdateInput = { id: entityId, props: { 'orbis/task_status': 'done' } };
+      PERF_KIND.set(vars, 'checkbox');
+      mutation.mutate(vars);
       return;
     }
     const vars: UpdateInput = { id: entityId, unset: ['orbis/task_status'] };
     // Чекбокс не пропадает на время полёта (C2 M-1): в кеше — значение возврата, на проводе — `unset`.
     OPTIMISTIC.set(vars, { id: entityId, props: { 'orbis/task_status': REOPEN_STATUS } });
+    PERF_KIND.set(vars, 'checkbox');
     mutation.mutate(vars);
   }
 

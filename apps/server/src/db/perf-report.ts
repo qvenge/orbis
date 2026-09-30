@@ -1,6 +1,7 @@
 // apps/server/src/db/perf-report.ts — `bun scripts/ops.ts perf` (спека §3.3): объём журнала по графам, дням
-// (UTC) и источникам действия (§3.1).
-// Только чтение (транзакция READ ONLY — забор, как у `check`). Перцентили замеров добавит задача 3.
+// (UTC) и источникам действия (§3.1), перцентили полевых замеров с разрезами и состояние чистки `pg_cron`.
+// Только чтение (транзакция READ ONLY — забор, как у `check`).
+import { PERF_METRICS } from '@orbis/shared';
 import type postgres from 'postgres';
 
 export type SqlTx = postgres.TransactionSql;
@@ -20,7 +21,9 @@ export function parsePerfArgs(args: readonly string[]): PerfArgs | { error: stri
       out.sinceDays = days;
     } else if (a === '--metric') {
       const v = args[++i];
-      if (v === undefined) return { error: '--metric <имя метрики>' };
+      if (v === undefined || !(PERF_METRICS as readonly string[]).includes(v)) {
+        return { error: `--metric <имя метрики>: одна из ${PERF_METRICS.join(', ')}` };
+      }
       out.metric = v;
     } else return { error: `неизвестный флаг «${a}»` };
   }
@@ -167,6 +170,87 @@ export function formatJournalVolume(
   ];
 }
 
+export const PERF_CLEANUP_JOB = 'orbis_perf_samples_cleanup';
+export interface PerfStatRow {
+  metric: string;
+  appVersion: string;
+  cached: boolean | null;
+  screen: string | null;
+  kind: string | null;
+  procedure: string | null;
+  n: number;
+  p50: number;
+  p75: number;
+  p95: number;
+  serverP75: number | null;
+  dbP75: number | null;
+}
+/** Разрезы §3.3 (кеш, версия приложения) + вид экрана и действия; процедура — разрез «сервер против сети» (§3.1). */
+export async function perfPercentiles(
+  sql: SqlTx,
+  sinceDays: number,
+  metric: string | null,
+): Promise<PerfStatRow[]> {
+  return [
+    ...(await sql<PerfStatRow[]>`
+    SELECT metric, app_version AS "appVersion", cached, screen, kind, procedure, count(*)::int AS n,
+           percentile_cont(0.5) WITHIN GROUP (ORDER BY dur_ms)::float8 AS p50,
+           percentile_cont(0.75) WITHIN GROUP (ORDER BY dur_ms)::float8 AS p75,
+           percentile_cont(0.95) WITHIN GROUP (ORDER BY dur_ms)::float8 AS p95,
+           percentile_cont(0.75) WITHIN GROUP (ORDER BY server_ms)::float8 AS "serverP75",
+           percentile_cont(0.75) WITHIN GROUP (ORDER BY db_ms)::float8 AS "dbP75"
+      FROM perf_samples
+     WHERE created_at >= now() - make_interval(days => ${sinceDays}) ${metric === null ? sql`` : sql`AND metric = ${metric}`}
+     GROUP BY metric, app_version, cached, screen, kind, procedure
+     ORDER BY metric, app_version, screen NULLS FIRST, kind NULLS FIRST, procedure NULLS FIRST, cached NULLS FIRST`),
+  ];
+}
+/** Последний прогон чистки — в точке сохранения: нет доступа к схеме cron — строка, а не сбой отчёта. */
+export async function cronCleanupStatus(sql: SqlTx): Promise<string> {
+  try {
+    return await sql.savepoint(async (sp) => {
+      const [r] = await sp<{ status: string | null; at: string | null }[]>`
+        SELECT d.status, d.start_time::text AS at FROM cron.job j
+          LEFT JOIN LATERAL (SELECT status, start_time FROM cron.job_run_details x WHERE x.jobid = j.jobid
+                              ORDER BY start_time DESC LIMIT 1) d ON true
+         WHERE j.jobname = ${PERF_CLEANUP_JOB}`;
+      if (r === undefined) return `задача pg_cron ${PERF_CLEANUP_JOB}: не найдена`;
+      return r.status === null
+        ? `задача pg_cron ${PERF_CLEANUP_JOB}: ещё не запускалась`
+        : `задача pg_cron ${PERF_CLEANUP_JOB}: последний прогон ${r.at} — ${r.status}`;
+    });
+  } catch (e) {
+    return `задача pg_cron ${PERF_CLEANUP_JOB}: нет доступа (${e instanceof Error ? e.message : String(e)})`;
+  }
+}
+
+/**
+ * Печать перцентилей: строка на группу разрезов. Пустые разрезы — «—»; кеш — «кеш» (экран из кеша) или «сеть»
+ * (данные ждали сети); время сервера и базы — в скобках, где замер его несёт (метрика `request`).
+ */
+export function formatPerfPercentiles(
+  rows: readonly PerfStatRow[],
+  sinceDays: number,
+  metric: string | null,
+): string[] {
+  const head = `Замеры за ${sinceDays} дн.${metric === null ? '' : ` (метрика ${metric})`}`;
+  if (rows.length === 0) return [head, 'замеров нет'];
+  const num = (v: number) => String(Math.round(v * 10) / 10);
+  const cell = (v: string | null) => v ?? '—';
+  const cache = (v: boolean | null) => (v === null ? '—' : v ? 'кеш' : 'сеть');
+  return [
+    head,
+    'метрика              версия   экран     вид       процедура                 кеш|сеть  n       p50/p75/p95',
+    ...rows.map((r) => {
+      const server =
+        r.serverP75 === null && r.dbP75 === null
+          ? ''
+          : `  [сервер p75 ${r.serverP75 === null ? '—' : num(r.serverP75)}, база p75 ${r.dbP75 === null ? '—' : num(r.dbP75)}]`;
+      return `${r.metric.padEnd(19)}  ${r.appVersion.padEnd(7)}  ${cell(r.screen).padEnd(8)}  ${cell(r.kind).padEnd(8)}  ${cell(r.procedure).padEnd(24)}  ${cache(r.cached).padEnd(8)}  ${String(r.n).padEnd(6)}  ${num(r.p50)}/${num(r.p75)}/${num(r.p95)} мс${server}`;
+    }),
+  ];
+}
+
 export interface PerfReportIo {
   sql: postgres.Sql;
   log(line: string): void;
@@ -185,6 +269,13 @@ export async function runPerfReport(args: readonly string[], io: PerfReportIo): 
       parsed.sinceDays,
     ))
       io.log(line);
+    for (const line of formatPerfPercentiles(
+      await perfPercentiles(tx, parsed.sinceDays, parsed.metric),
+      parsed.sinceDays,
+      parsed.metric,
+    ))
+      io.log(line);
+    io.log(await cronCleanupStatus(tx));
   });
   return 0;
 }

@@ -2,6 +2,7 @@ import { newId, ROLE_SUBITEM } from '@orbis/shared';
 import { Plus } from 'lucide-react';
 import { type FormEvent, useState } from 'react';
 import { invalidateGraph } from '../../lib/invalidate';
+import { startAction } from '../../perf/marks';
 import { trpc } from '../../trpc';
 import { Spinner } from '../../ui/Spinner';
 import { useToast } from '../../ui/toast-store';
@@ -28,6 +29,8 @@ export function QuickCapture({ context }: { context: CaptureContext }) {
     e.preventDefault();
     const title = text.trim();
     if (!title || isPending) return;
+    // Отклик «＋» (спека скорости §3.1): видимого до подтверждения нет — оптимистика «＋» в плане Б (§7.1).
+    const action = startAction('create');
     const id = newId();
     // НОВАЯ форма (§А1-1): статус — плоским свойством, аспект — ЯВНЫМ списком. Старая карта
     // вешала `orbis/task` самим фактом ключа `status`; без списка запись под родителем
@@ -52,6 +55,7 @@ export function QuickCapture({ context }: { context: CaptureContext }) {
           role: ROLE_SUBITEM,
         });
       }
+      action.confirmed();
       setText('');
     } catch {
       show('Не удалось сохранить', 'danger');

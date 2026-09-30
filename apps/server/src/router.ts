@@ -15,6 +15,7 @@ import { entityRouter } from './routers/entity';
 // `import` — зарезервированное слово JS: ключ роутера так назвать можно, переменную нет
 import { importRouter } from './routers/import';
 import { oauthRouter } from './routers/oauth';
+import { perfRouter } from './routers/perf';
 import { registryRouter } from './routers/registry';
 import { relationRouter } from './routers/relation';
 import { routineRouter } from './routers/routine';
@@ -55,6 +56,8 @@ export const appRouter = router({
   app: appsRouter,
   // Записи поставки (срез 1б §9.1): обновления — только предложениями, каждое действие — владельца
   supply: supplyRouter,
+  // Полевые замеры ступени 0 (спека скорости §3.2)
+  perf: perfRouter,
 });
 
 export type AppRouter = typeof appRouter;

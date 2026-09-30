@@ -170,7 +170,7 @@ export async function truncateAll(): Promise<void> {
   const { db, client } = adminDb();
   await db.execute(sql`TRUNCATE entities, relations, user_settings, chat_threads,
     chat_messages, ai_usage, entity_origins, entity_versions, agent_grants, oauth_clients,
-    envelope_spent_cache
+    envelope_spent_cache, perf_samples
     RESTART IDENTITY CASCADE`);
   // Встроенные строки реестров сознательно переживают зачистку: их кладёт один раз
   // `bun run db:prepare`, и пересевать реестр между сьютами значило бы гонять сид сотни раз.

@@ -10,6 +10,7 @@ import {
   numeric,
   pgTable,
   primaryKey,
+  real,
   smallint,
   text,
   timestamp,
@@ -18,11 +19,12 @@ import {
   uuid,
 } from 'drizzle-orm/pg-core';
 
-// Схема 21 таблицы: одиннадцать исходных (docs/prd/01-architecture.md §4 — восемь §4.1–§4.8,
+// Схема 22 таблиц: одиннадцать исходных (docs/prd/01-architecture.md §4 — восемь §4.1–§4.8,
 // две таблицы доступа внешних агентов §4.13–§4.14 D34 в конце файла, entity_versions
 // ADE-среза 1), восемь таблиц реформы свойств (§С6 спеки «Реформа свойств»): пять реестров,
-// таблица дельт, однострочная таблица версии system-реестра и кэш `spent` конверта (§Б5-5) —
-// и две таблицы среза «Г — единица владения» (D44): `graphs` и `graph_members` в самом конце файла.
+// таблица дельт, однострочная таблица версии system-реестра и кэш `spent` конверта (§Б5-5),
+// две таблицы среза «Г — единица владения» (D44): `graphs` и `graph_members` в самом конце файла, —
+// и полевые замеры `perf_samples` (спека скорости §3.2) сразу за `user_settings`: не граф, ключ — аккаунт.
 // RLS-политики и сид аспектов — Слайс 1; здесь только структура, defaults, индексы, FK.
 // graph_id — ключ владения и изоляции (D44): строка принадлежит ГРАФУ. У личного графа id равен id
 // аккаунта Supabase по построению (CHECK таблицы graphs, срез Г-2). FK на auth-схему не объявляем —
@@ -211,6 +213,32 @@ export const userSettings = pgTable('user_settings', {
   disabledModules: text('disabled_modules').array().notNull().default(sql`'{}'`),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
+
+/**
+ * Полевые замеры (спека скорости §3.2): НЕ граф и НЕ журнал — содержимого нет (ни текстов, ни заголовков, ни id записей).
+ * Ключ владения — АККАУНТ (`auth.uid()`), не граф: замер — про устройство и сеть человека, а не про данные графа.
+ * Хранение 30 дней — задача `pg_cron` в самой базе (0024).
+ */
+export const perfSamples = pgTable(
+  'perf_samples',
+  {
+    id: bigint('id', { mode: 'number' }).primaryKey().generatedAlwaysAsIdentity(),
+    accountId: uuid('account_id').notNull().default(sql`auth.uid()`),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    metric: text('metric').notNull(),
+    screen: text('screen'),
+    kind: text('kind'),
+    procedure: text('procedure'),
+    durMs: real('dur_ms').notNull(),
+    serverMs: real('server_ms'),
+    dbMs: real('db_ms'),
+    device: text('device').notNull(),
+    net: text('net'),
+    appVersion: text('app_version').notNull(),
+    cached: boolean('cached'),
+  },
+  (t) => [index('perf_samples_account_created').on(t.accountId, t.createdAt)],
+);
 
 // §4.5 chat_threads — NULL entity_id = глобальный тред; инвариант — два partial unique index
 export const chatThreads = pgTable(
