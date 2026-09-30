@@ -1934,7 +1934,7 @@ executor, индексы), §11.3 первый абзац (объединени�
 
 **Файлы:**
 - Создать: `apps/server/src/db/migrations/0025_action_journal.sql`, `meta/0025_snapshot.json`, строка `meta/_journal.json`
-  (`cd $W/apps/server && bunx drizzle-kit generate --custom --name action_journal`; SQL рукописный, образец шапки —
+  (`cd $W/apps/server && bunx drizzle-kit generate --name action_journal` — обычная генерация, НЕ `--custom`: он пишет снимок без новых таблиц, и следующая миграция создала бы их заново (рулинг R-9, задача 3); SQL затем заменить рукописным, как 0017/0018/0024, образец шапки —
   `0018_spent_cache_modules.sql:1-41`, политики — `0021_graph_rls.sql:71-83`); `apps/server/src/journal/thread-page.ts`
   (+ тест), `apps/server/src/journal/transfer.ts` (+ тест), `apps/server/test/legacy-journal.ts` (писатель сообщений
   ПРЕЖНЕЙ формы — копия удаляемого `makeChatJournalSink` для тестов переноса).
@@ -2302,7 +2302,7 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>" -- apps/se
 
 **Файлы:**
 - Создать: `apps/server/src/db/migrations/0026_body_revision.sql`, `meta/0026_snapshot.json`, строка `meta/_journal.json`
-  (`cd $W/apps/server && bunx drizzle-kit generate --custom --name body_revision`; образец формы функции триггера —
+  (`cd $W/apps/server && bunx drizzle-kit generate --name body_revision` — обычная генерация, НЕ `--custom` (снимок без новых колонок, R-9); SQL затем заменить рукописным; образец формы функции триггера —
   `0020_graphs_members.sql:97-128`); `apps/server/src/executor/body-stamp.test.ts`.
 - Изменить: `src/db/schema.ts:32` (`entities`: `bodyRevision`, `bodyActionId`, `bodyChangedAt`), `src/executor/executor.ts`
   (`:522` и `:662` — объявление действия; `:1933-2145` создание и виртуальная строка `:2102`; `:2441-2605` ветки тела,
