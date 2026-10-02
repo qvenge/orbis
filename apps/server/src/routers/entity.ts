@@ -5,6 +5,7 @@
 import {
   type BodyActionInfo,
   type EntityBlocksResult,
+  type EntityUpdateUiInput,
   entityBlocksInput,
   entityCreateUiInput,
   entityGetUiInput,
@@ -51,6 +52,13 @@ import { runBlocks } from './entity-blocks';
 // Боевой синк — один инстанс на модуль: makeJournalSink состояния не хранит,
 // а тред/сообщение он пишет тем же tx, что executor (§7.8).
 const sink = makeJournalSink();
+
+/** Видимый заголовок владельца сверяет executor готовым предусловием под FOR UPDATE (§8.2, К-35). */
+function withTitleLock({ expectedTitle, ...fields }: Omit<EntityUpdateUiInput, 'autosave'>) {
+  return expectedTitle === undefined
+    ? fields
+    : { ...fields, precondition: [{ property: 'orbis/title', in: [expectedTitle] }] };
+}
 
 /**
  * Разбор и компиляция запроса: структурный отказ → BAD_REQUEST со структурой в `cause` (§6.4).
@@ -316,7 +324,8 @@ export const entityRouter = router({
         ctx,
         input,
       }): Promise<WireEntityWithRevision & { bodyAction: BodyActionInfo | null }> => {
-        const { autosave, ...fields } = input;
+        const { autosave, ...uiFields } = input;
+        const fields = withTitleLock(uiFields);
         const r = await execute(
           ctx.db,
           {
@@ -366,6 +375,9 @@ export const entityRouter = router({
   updateBatch: ownerOnlyProcedure
     .input(entityUpdateBatchInput)
     .mutation(async ({ ctx, input }): Promise<{ actionId: string; results: unknown[] }> => {
+      const operations = input.operations.map((op) =>
+        op.tool === 'entity_update' ? { ...op, input: withTitleLock(op.input) } : op,
+      );
       const r = await execute(
         ctx.db,
         {
@@ -373,7 +385,7 @@ export const entityRouter = router({
           actorKind: 'owner',
           source: 'ui',
           batchId: newId(),
-          operations: input.operations,
+          operations,
           ...(input.label !== undefined && { batchLabel: input.label }),
         },
         { sink },
@@ -384,7 +396,7 @@ export const entityRouter = router({
       await escalateAfterMutation(ctx.db, {
         identity: ctx.identity,
         actionId: r.actionId,
-        operations: input.operations,
+        operations,
       });
       return { actionId: r.actionId, results: r.results };
     }),

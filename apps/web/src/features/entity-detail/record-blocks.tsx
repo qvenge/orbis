@@ -1,5 +1,5 @@
 import type { RecordBlockName } from '@orbis/shared/doc/page-grammar';
-import type { ComponentType } from 'react';
+import { type ComponentType, useRef, useState } from 'react';
 import { ThisEntityProvider } from '../../lib/query-blocks/this-entity';
 import { Backlinks } from './Backlinks';
 import { Blockers } from './Blockers';
@@ -26,21 +26,34 @@ import { VersionsCard } from './VersionsCard';
  */
 export function TitleBlock() {
   const { entity, extensionHooks } = useRecordHost();
-  // Флаг `conflict` этого экземпляра никуда не выведен — и не может зажечься: заголовок и
-  // чекбокс сервер проводит по LWW, версию он сверяет только у правок тела (`executor.ts`, гейт
-  // §5.2 под `body || bodyDoc`), так что 409 у них не бывает. Откат при прочих отказах — в
-  // самой обвязке (`useEntityUpdate`).
-  const { toggleTask, saveTitle } = useRecordEdits(entity.id, entity);
+  const { toggleTask, saveTitle, titleStale, refreshTitle, dismissTitleStale } = useRecordEdits(
+    entity.id,
+    entity,
+  );
+  const [titleRefresh, setTitleRefresh] = useState(0);
+  const refresh = useRef({ id: entity.id, generation: 0 });
+  // Возврат к тому же id не возвращает право старому ответу стереть новый черновик.
+  if (refresh.current.id !== entity.id) {
+    refresh.current.id = entity.id;
+    refresh.current.generation += 1;
+  }
   return (
     // Notion-style шапка страницы: крупная emoji-иконка над заголовком. Нет emoji — ничего не
     // рендерим (без плейсхолдера); в самой шапке экрана — только title.
-    <div className="flex flex-col gap-3">
+    <div
+      className="flex flex-col gap-3"
+      onChange={() => {
+        // Ввод во время чтения важнее ответа: поле и отказ остаются до нового «Обновить».
+        refresh.current.generation += 1;
+      }}
+    >
       {entity.emoji && (
         <span aria-hidden className="text-4xl leading-none">
           {entity.emoji}
         </span>
       )}
       <NativeRow
+        key={`${entity.id}:${titleRefresh}`}
         entity={entity}
         onToggleTask={(done) => {
           toggleTask(done);
@@ -49,6 +62,26 @@ export function TitleBlock() {
         }}
         onSaveTitle={saveTitle}
       />
+      {titleStale && (
+        <p role="alert" className="text-sm text-danger">
+          Заголовок изменён в другом месте — обновите{' '}
+          <button
+            type="button"
+            onClick={() => {
+              const generation = ++refresh.current.generation;
+              void refreshTitle()
+                .then(() => {
+                  if (refresh.current.generation !== generation) return;
+                  dismissTitleStale();
+                  setTitleRefresh((n) => n + 1);
+                })
+                .catch(() => {});
+            }}
+          >
+            Обновить
+          </button>
+        </p>
+      )}
     </div>
   );
 }

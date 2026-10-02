@@ -1,10 +1,10 @@
 import { ownCardOrder } from '@orbis/shared';
+import { lazy, Suspense } from 'react';
 import { EXTENSION_CARDS, type OwnCard } from '../../app/extension-registry';
 import { useOpenRecord } from '../../app/useOpenRecord';
 import { AspectSection, AspectSections } from './AspectSection';
 import { AssignmentCard } from './AssignmentCard';
 import { ROUTINE_ASPECT, RoutineStatusBlock } from './RoutineStatusBlock';
-import { RunFeed } from './RunFeed';
 import { RunsList } from './RunsList';
 import { useRecordHost, type WireEntity } from './record-host';
 import { TicketWaitingBlock } from './TicketWaitingBlock';
@@ -27,6 +27,9 @@ const TASK = 'orbis/task';
 const ASSIGNMENT = 'orbis/assignment';
 
 const CARD_CLASS = 'flex flex-col gap-6';
+
+// Лента нужна только прогону: её код не утяжеляет первый кадр обычной записи (R-29).
+const RunFeed = lazy(() => import('./RunFeed').then((m) => ({ default: m.RunFeed })));
 
 /**
  * Назначение: карточка исполнителя, а у тикета (задача С назначением) — ещё ожидание человека и
@@ -78,7 +81,11 @@ function AgentRunCard() {
   const { entity } = useRecordHost();
   // key — лента держит своё состояние (открытое подтверждение отката), и переезжать на
   // соседний прогон оно не должно.
-  return <RunFeed key={`run-${entity.id}`} entity={entity} />;
+  return (
+    <Suspense fallback={null}>
+      <RunFeed key={`run-${entity.id}`} entity={entity} />
+    </Suspense>
+  );
 }
 
 const hasAspect =

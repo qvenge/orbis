@@ -134,7 +134,11 @@ const BODY_XOR_BODY_DOC_ISSUE = {
  * механизм — ось гейтов прав. Форму входа с признаком (только тело) проверяет исполнитель (`text-session.ts`) —
  * отказ `VALIDATION`, как у прочих структурных правил правки. В контракте тула его нет: сеанс — только у редактора.
  */
-const entityUpdateUiFields = entityUpdateInput.extend({ bodyDoc: bodyDocSchema.optional() });
+const entityUpdateUiFields = entityUpdateInput.extend({
+  bodyDoc: bodyDocSchema.optional(),
+  // Замок заголовка владельца (§8.2): тул агента остаётся без этого поля.
+  expectedTitle: z.string().optional(),
+});
 export const entityUpdateUiInput = entityUpdateUiFields
   .extend({ autosave: z.literal(true).optional() })
   .refine(bodyXorBodyDoc, BODY_XOR_BODY_DOC_ISSUE);

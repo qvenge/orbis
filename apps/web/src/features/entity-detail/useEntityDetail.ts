@@ -3,7 +3,7 @@ import type { JSONContent } from '@tiptap/core';
 import { TRPCClientError } from '@trpc/client';
 import { useRef, useState } from 'react';
 import { invalidateGraph } from '../../lib/invalidate';
-import { isBodyStale } from '../../lib/orbis-error';
+import { isBodyStale, isTitleStale } from '../../lib/orbis-error';
 import { useNoteRegistryVersion } from '../../lib/registry/useRegistry';
 import { startAction } from '../../perf/marks';
 import { type RouterInputs, type RouterOutputs, trpc } from '../../trpc';
@@ -198,6 +198,7 @@ export function useEntityUpdate(
   const utils = trpc.useUtils();
   const input = detailGetInput(entityId);
   const [conflict, setConflict] = useState(false);
+  const [titleStale, setTitleStale] = useState(false);
 
   // Флаг — про ЭТУ запись, поэтому смена сущности под тем же хуком его гасит: иначе «Изменено
   // в другом месте» переезжало бы с записи, где конфликт был, на соседнюю, где его не было.
@@ -205,6 +206,7 @@ export function useEntityUpdate(
   if (prevIdRef.current !== entityId) {
     prevIdRef.current = entityId;
     setConflict(false);
+    setTitleStale(false);
   }
 
   /**
@@ -332,6 +334,7 @@ export function useEntityUpdate(
       // (ревью Задачи 13, И-4). `entityId` здесь — из ПОСЛЕДНЕГО рендера (react-query
       // проталкивает свежие опции в незавершённую мутацию), `vars.id` — из отправки.
       if (vars.id !== entityId) return;
+      if (isTitleStale(err)) setTitleStale(true);
       // Молчим только о конфликте, который преемник принесёт и сам (см. bringsSameConflict).
       if (old && bringsSameConflict(vars.id, ctx)) return;
       // Конфликт — отказ замка текста по структурному коду (`data.orbis`, РП-5), а не любой 409.
@@ -374,7 +377,13 @@ export function useEntityUpdate(
     },
   });
 
-  return { mutation, conflict, dismissConflict: () => setConflict(false) };
+  return {
+    mutation,
+    conflict,
+    dismissConflict: () => setConflict(false),
+    titleStale,
+    dismissTitleStale: () => setTitleStale(false),
+  };
 }
 
 export function useEntityDetail(entityId: string) {
@@ -403,7 +412,9 @@ export function useEntityDetail(entityId: string) {
  * одинаково.
  */
 export function useRecordEdits(entityId: string, entity: Entity | undefined) {
-  const { mutation, conflict, dismissConflict } = useEntityUpdate(entityId);
+  const utils = trpc.useUtils();
+  const { mutation, conflict, dismissConflict, titleStale, dismissTitleStale } =
+    useEntityUpdate(entityId);
 
   /**
    * Чекбокс task (§3.6): шлёт ТОЛЬКО смену статуса (optimistic + откат при ошибке).
@@ -436,13 +447,14 @@ export function useRecordEdits(entityId: string, entity: Entity | undefined) {
   // нём держались два теста — то есть зелёными они были на пути, которого в проде нет
   // (ревью раунда 3). Сюжеты переписаны на достижимый путь, метод удалён.
 
-  // Правка заголовка (DF п.3): у memory-правила title и есть вся его машиночитаемая часть
-  // (K19.4), и правка «формулировки», обещанная экраном «Память AI», — это именно правка title.
-  // Замка у неё пока нет — LWW (замок заголовка `expectedTitle` — задача 12 плана А); прежняя
-  // метка `updatedAt` уходила сюда «для единообразия» и сервером не сверялась никогда.
-  function saveTitle(title: string) {
+  // Замок — видимое значение на начало ввода; результат нужен TitleEditor и будущим стрелкам (§7.5).
+  function saveTitle(title: string, expectedTitle: string) {
     if (!entity) return;
-    mutation.mutate({ id: entityId, title });
+    return mutation.mutateAsync({ id: entityId, title, expectedTitle });
+  }
+
+  function refreshTitle() {
+    return utils.entity.get.fetch(detailGetInput(entityId));
   }
 
   function setArchived(archived: boolean) {
@@ -453,6 +465,9 @@ export function useRecordEdits(entityId: string, entity: Entity | undefined) {
     update: mutation,
     toggleTask,
     saveTitle,
+    titleStale,
+    refreshTitle,
+    dismissTitleStale,
     setArchived,
     conflict,
     dismissConflict,

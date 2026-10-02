@@ -28,3 +28,9 @@ export function orbisErrorOf(e: unknown): OrbisErrorData | null {
 export function isBodyStale(e: unknown): boolean {
   return orbisErrorOf(e)?.code === 'STALE_VERSION';
 }
+
+/** Замок заголовка отличается от тела и других CAS-отказов именно свойством расхождения (§8.2). */
+export function isTitleStale(e: unknown): boolean {
+  const mismatches = orbisErrorOf(e)?.details?.mismatches;
+  return Array.isArray(mismatches) && mismatches.some((m) => m?.property === 'orbis/title');
+}

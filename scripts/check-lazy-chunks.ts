@@ -132,6 +132,8 @@ const LAZY_DETAIL_MODULES = [
   // Срез 1в (§5.2, РП-18, задача 7): лента по дням — группы, подписи дней и колонка времени в поясе
   // владельца — нужна редкому блоку страницы (точка лени — `features/page/blocks/DayGroupsSlot.tsx`).
   'DayGroups',
+  // Скорость, задача 12 (R-29): лента нужна только записи прогона, не первому кадру каждой записи.
+  'RunFeed',
 ];
 
 /**
@@ -192,6 +194,11 @@ const LAZY_FRAME_MODULES = [
  * нет, но ребро остаётся: он появится с первым же новым местом показа блока.
  */
 const FORBIDDEN_EDGES: readonly { from: string; to: string; hint: string }[] = [
+  {
+    from: 'DetailScreen',
+    to: 'RunFeed',
+    hint: 'Ленту прогона грузит только lazy() из entity-detail/own-cards.tsx (R-29).',
+  },
   {
     from: 'DetailScreen',
     to: 'doc',

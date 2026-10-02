@@ -4,7 +4,7 @@
 // результат → wire, ошибки executor'а → TRPCError (§9.1, §5.2, §6.4).
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import type { GraphId } from '@orbis/shared';
-import { entitySchema, entityThreadId, globalThreadId } from '@orbis/shared';
+import { entitySchema, entityThreadId, entityUpdateInput, globalThreadId } from '@orbis/shared';
 import { PAGE_ONLY_HINT, QUERY_TREE_DEPTH_CAP } from '@orbis/shared/query';
 import { TRPCError } from '@trpc/server';
 import { fetchRequestHandler } from '@trpc/server/adapters/fetch';
@@ -14,6 +14,7 @@ import { actionsOf, journalOf } from '../../test/journal-helpers';
 import { execute } from '../executor/executor';
 import { makeJournalSink } from '../executor/journal';
 import { appRouter } from '../router';
+import { dispatchTool } from '../tools/dispatch';
 import { createCallerFactory } from '../trpc';
 
 requireEnv();
@@ -267,6 +268,76 @@ async function postMutation(
     body: (await res.json()) as { error?: { data?: Record<string, unknown> } },
   };
 }
+
+describe('замок заголовка владельца через интерфейс (§8.2)', () => {
+  test('MCP переименовывает без замка; устаревший expectedTitle от UI даёт структурный отказ, совпавший — успех', async () => {
+    const user = await freshGraph();
+    const caller = callerFor(user);
+    const created = await caller.entity.create({
+      input: { title: 'прежнее', tags: [] },
+      source: 'ui',
+    });
+    const agent = await dispatchTool(
+      { db, identity: personal(user), actorKind: 'agent', source: 'mcp', explicitCommand: false },
+      'entity_update',
+      { id: created.id, title: 'агентское' },
+    );
+    expect(agent.status).toBe('ok');
+    expect(entityUpdateInput.shape).not.toHaveProperty('expectedTitle');
+    expect(
+      entityUpdateInput.safeParse({ id: created.id, title: 'x', expectedTitle: 'агентское' })
+        .success,
+    ).toBe(false);
+    const res = await postMutation(user, 'entity.update', {
+      id: created.id,
+      title: 'новое',
+      expectedTitle: 'прежнее',
+    });
+    expect(res.status).toBe(409);
+    expect(res.body.error?.data?.orbis).toEqual({
+      code: 'CONFLICT',
+      details: {
+        reason: 'precondition_failed',
+        mismatches: [{ property: 'orbis/title', expected: ['прежнее'], actual: 'агентское' }],
+      },
+    });
+    expect((await caller.entity.get({ id: created.id })).entity.title).toBe('агентское');
+    const ok = await postMutation(user, 'entity.update', {
+      id: created.id,
+      title: 'новое',
+      expectedTitle: 'агентское',
+    });
+    expect(ok.status).toBe(200);
+    expect((await caller.entity.get({ id: created.id })).entity.title).toBe('новое');
+  });
+
+  test('пачка переводит expectedTitle каждого элемента: отказ атомарен, совпавший замок проходит', async () => {
+    const user = await freshGraph();
+    const caller = callerFor(user);
+    const a = await caller.entity.create({ input: { title: 'А', tags: [] }, source: 'ui' });
+    const b = await caller.entity.create({ input: { title: 'Б', tags: [] }, source: 'ui' });
+    const res = await postMutation(user, 'entity.updateBatch', {
+      operations: [
+        { tool: 'entity_update', input: { id: a.id, title: 'А2', expectedTitle: 'А' } },
+        { tool: 'entity_update', input: { id: b.id, title: 'Б2', expectedTitle: 'прежнее' } },
+      ],
+    });
+    expect(res.status).toBe(409);
+    expect(res.body.error?.data?.orbis).toEqual({
+      code: 'CONFLICT',
+      details: {
+        reason: 'precondition_failed',
+        mismatches: [{ property: 'orbis/title', expected: ['прежнее'], actual: 'Б' }],
+      },
+    });
+    expect((await caller.entity.get({ id: a.id })).entity.title).toBe('А');
+    const ok = await postMutation(user, 'entity.updateBatch', {
+      operations: [{ tool: 'entity_update', input: { id: b.id, title: 'Б2', expectedTitle: 'Б' } }],
+    });
+    expect(ok.status).toBe(200);
+    expect((await caller.entity.get({ id: b.id })).entity.title).toBe('Б2');
+  });
+});
 
 describe('entity.update: замок текста по ревизии тела (спека скорости §8.1–§8.2)', () => {
   test('стухшая ревизия → CONFLICT; повтор с ревизией из ответа — успех; tags — LWW без проверки', async () => {

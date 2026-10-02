@@ -4,9 +4,10 @@ import {
   effectiveLabel,
   OWNER_LOCALE,
 } from '@orbis/shared';
-import { screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { expect, test } from 'vitest';
+import { useState } from 'react';
+import { expect, test, vi } from 'vitest';
 import type { MockHandler } from '../../test/harness';
 import { renderWithProviders, trpcError, wireEntity } from '../../test/harness';
 import { BUILTIN_REGISTRY, registryReply } from '../../test/registry';
@@ -59,6 +60,97 @@ const row = (
 const CAT_FOOD = 'a3d6d4b2-7f3a-4a1f-9c1e-2d5b8f0a1c77';
 // Ссылка в категорию, которой в списке нет — запасной вариант «показать uuid».
 const CAT_GHOST = 'd1f0c8e5-4b2a-4d6e-8f01-9a7c3b5e2d44';
+
+test('замок заголовка фиксируется первой буквой и не берётся заново на blur', async () => {
+  const save = vi.fn();
+  let changeTitle: (title: string) => void = () => {};
+  function Host() {
+    const [title, setTitle] = useState('Видимое');
+    changeTitle = setTitle;
+    return <NativeRow entity={row({}, [], { title })} onToggleTask={() => {}} onSaveTitle={save} />;
+  }
+  renderWithProviders(<Host />, registryHandler);
+  const field = screen.getByLabelText('Заголовок');
+  fireEvent.focus(field);
+  fireEvent.change(field, { target: { value: 'Моё' } });
+  act(() => changeTitle('Чужое'));
+  expect(field).toHaveValue('Моё');
+  fireEvent.blur(field);
+  expect(save).toHaveBeenCalledWith('Моё', 'Видимое');
+});
+
+test('рефетч чистого поля после фокуса до первой буквы становится видимой основой', () => {
+  const save = vi.fn();
+  let changeTitle: (title: string) => void = () => {};
+  function Host() {
+    const [title, setTitle] = useState('Прежде');
+    changeTitle = setTitle;
+    return <NativeRow entity={row({}, [], { title })} onToggleTask={() => {}} onSaveTitle={save} />;
+  }
+  renderWithProviders(<Host />, registryHandler);
+  const field = screen.getByLabelText('Заголовок');
+  fireEvent.focus(field);
+  act(() => changeTitle('Уже видно'));
+  expect(field).toHaveValue('Уже видно');
+  fireEvent.change(field, { target: { value: 'Моё' } });
+  fireEvent.blur(field);
+  expect(save).toHaveBeenCalledWith('Моё', 'Уже видно');
+});
+
+test('возврат ввода к серверному значению на blur оставляет поле чистым для чужого рефетча', () => {
+  const save = vi.fn();
+  let changeTitle: (title: string) => void = () => {};
+  function Host() {
+    const [title, setTitle] = useState('Прежде');
+    changeTitle = setTitle;
+    return <NativeRow entity={row({}, [], { title })} onToggleTask={() => {}} onSaveTitle={save} />;
+  }
+  renderWithProviders(<Host />, registryHandler);
+  const field = screen.getByLabelText('Заголовок');
+  fireEvent.focus(field);
+  fireEvent.change(field, { target: { value: 'Временное' } });
+  fireEvent.change(field, { target: { value: 'Прежде' } });
+  fireEvent.blur(field);
+  expect(save).not.toHaveBeenCalled();
+  act(() => changeTitle('Чужое'));
+  expect(field).toHaveValue('Чужое');
+});
+
+test('отказ заголовка вызывает onStale и сохраняет набранное; иной отказ его не вызывает', async () => {
+  const stale = vi.fn();
+  const titleError = trpcError('CONFLICT', 'Заголовок изменён', {
+    code: 'CONFLICT',
+    details: {
+      reason: 'precondition_failed',
+      mismatches: [{ property: 'orbis/title', expected: ['Прежде'], actual: 'Чужое' }],
+    },
+  });
+  for (const [error, calls] of [
+    [titleError, 1],
+    [trpcError('CONFLICT', 'Тело', { code: 'STALE_VERSION' }), 1],
+  ] as const) {
+    const rejected = Promise.reject(error);
+    void rejected.catch(() => {});
+    const { unmount } = renderWithProviders(
+      <NativeRow
+        entity={row({}, [], { title: 'Прежде' })}
+        onToggleTask={() => {}}
+        onSaveTitle={() => rejected}
+        onStale={stale}
+      />,
+      registryHandler,
+    );
+    const field = screen.getByLabelText('Заголовок');
+    fireEvent.change(field, { target: { value: 'Набранное' } });
+    await act(async () => {
+      fireEvent.blur(field);
+      await rejected.catch(() => {});
+    });
+    expect(stale).toHaveBeenCalledTimes(calls);
+    expect(field).toHaveValue('Набранное');
+    unmount();
+  }
+});
 
 test('financial: сумма с минусом и тоном danger', async () => {
   renderWithProviders(

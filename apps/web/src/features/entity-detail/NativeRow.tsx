@@ -1,7 +1,8 @@
 import { rowAllDayOf } from '@orbis/shared';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useRefTitle } from '../../lib/entity-ref/RefField';
 import { formatMoney, type MoneyTone } from '../../lib/format';
+import { isTitleStale } from '../../lib/orbis-error';
 import { displayText } from '../../lib/registry/format';
 import { classLabel, fieldLabel } from '../../lib/registry/labels';
 import {
@@ -62,36 +63,48 @@ const TOGGLE_BLOCKED_TITLE = 'переключение доступно толь
 function Title({
   value,
   onSave,
+  onStale,
   className = '',
 }: {
   value: string;
-  onSave?: (title: string) => void;
+  onSave?: TitleSave;
+  onStale?: () => void;
   className?: string;
 }) {
   if (onSave === undefined) {
     return <span className={`flex-1 ${TITLE_CLASS} ${className}`}>{value}</span>;
   }
-  return <TitleEditor value={value} onSave={onSave} className={className} />;
+  return <TitleEditor value={value} onSave={onSave} onStale={onStale} className={className} />;
 }
+
+type TitleSave = (title: string, expectedTitle: string) => unknown;
 
 function TitleEditor({
   value,
   onSave,
+  onStale,
   className,
 }: {
   value: string;
-  onSave: (title: string) => void;
+  onSave: TitleSave;
+  onStale?: () => void;
   className: string;
 }) {
   const [draft, setDraft] = useState(value);
   const [serverValue, setServerValue] = useState(value);
+  const lockRef = useRef<string | null>(null);
+  const savingRef = useRef(false);
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
 
   // Тот же приём, что у редактора тела (BodyEditor) и AspectField (D6c п.3): внешнее
   // значение подхватываем, но ТОЛЬКО если черновик не трогали — иначе текст, который
   // владелец печатает прямо сейчас, затирался бы рефетчем после чужой мутации.
   if (value !== serverValue) {
     setServerValue(value);
-    if (draft === serverValue) setDraft(value);
+    // Оптимистичный title совпадает с draft, но отказ ещё может вернуть прежнее value:
+    // основа ввода держит набранное и через optimistic→rollback→чужое перечитывание.
+    if (lockRef.current === null && draft === serverValue) setDraft(value);
   }
 
   return (
@@ -99,12 +112,33 @@ function TitleEditor({
       aria-label="Заголовок"
       data-testid="title-edit"
       value={draft}
-      onChange={(e) => setDraft(e.target.value)}
+      onFocus={() => {
+        // Грязный черновик после отказа не видел нового title: рефокус CAS не обходит (R-28).
+        if (draft === value && !savingRef.current) lockRef.current = null;
+      }}
+      onChange={(e) => {
+        lockRef.current ??= serverValue;
+        setDraft(e.target.value);
+      }}
       // Пустой заголовок сущности не бывает (entityUpdateInput: title.min(1)) — вместо
       // заведомо отказного запроса возвращаем серверное значение.
-      onBlur={() => {
-        if (draft.trim() === '') setDraft(value);
-        else if (draft !== value) onSave(draft);
+      onBlur={async () => {
+        if (draft.trim() === '') {
+          lockRef.current = null;
+          setDraft(value);
+        } else if (draft !== value) {
+          const expected = lockRef.current ?? serverValue;
+          savingRef.current = true;
+          try {
+            await onSave(draft, expected);
+            // Новая буква за время запроса продолжает правку уже сохранённого заголовка.
+            lockRef.current = draftRef.current === draft ? null : draft;
+          } catch (err) {
+            if (isTitleStale(err)) onStale?.();
+          } finally {
+            savingRef.current = false;
+          }
+        } else if (!savingRef.current) lockRef.current = null;
       }}
       className={`min-w-0 flex-1 rounded-md bg-transparent px-1 ${TITLE_CLASS} outline-none transition hover:bg-surface-2/60 focus-visible:bg-surface-2/70 focus-visible:ring-2 focus-visible:ring-accent/30 ${className}`}
     />
@@ -129,10 +163,12 @@ function MemoryRow({
   title,
   props,
   onSaveTitle,
+  onStale,
 }: {
   title: string;
   props: Record<string, unknown>;
-  onSaveTitle?: (title: string) => void;
+  onSaveTitle?: TitleSave;
+  onStale?: () => void;
 }) {
   const registry = useRegistry();
   const kind = props['orbis/memory_kind'];
@@ -149,7 +185,7 @@ function MemoryRow({
   const isRule = kind === 'rule';
   return (
     <div className="flex items-center gap-2" data-testid="native-memory">
-      <Title value={title} onSave={onSaveTitle} />
+      <Title value={title} onSave={onSaveTitle} onStale={onStale} />
       {isRule && typeof pattern === 'string' && pattern !== '' && (
         <span data-testid="memory-rule-pattern" className="truncate text-sm text-text-secondary">
           {pattern}
@@ -200,10 +236,12 @@ export function NativeRow({
   entity,
   onToggleTask,
   onSaveTitle,
+  onStale,
 }: {
   entity: Entity;
   onToggleTask: (done: boolean) => void;
-  onSaveTitle?: (title: string) => void;
+  onSaveTitle?: TitleSave;
+  onStale?: () => void;
 }) {
   const props = entity.props;
   const aspects = new Set(entity.aspects);
@@ -225,7 +263,9 @@ export function NativeRow({
   // Память — своя строка (В7): её смысл (образец сопоставления и цель) живёт в свойствах, а не в
   // контрактах; в таблицу M14 запись памяти не входит.
   if (aspects.has('orbis/memory'))
-    return <MemoryRow title={entity.title} props={props} onSaveTitle={saveTitle} />;
+    return (
+      <MemoryRow title={entity.title} props={props} onSaveTitle={saveTitle} onStale={onStale} />
+    );
 
   const closed = row.checkbox?.closed === true;
   const togglable =
@@ -263,6 +303,7 @@ export function NativeRow({
       <Title
         value={entity.title}
         onSave={saveTitle}
+        onStale={onStale}
         className={closed ? 'text-text-muted line-through' : ''}
       />
       {row.date !== null && (

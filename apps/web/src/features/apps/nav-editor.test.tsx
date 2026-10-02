@@ -19,7 +19,8 @@ import {
   SUPPLY_ASPECT,
   TEMPLATE_FOR_PROPERTY,
 } from '@orbis/shared';
-import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { useState } from 'react';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { App } from '../../App';
 import {
@@ -53,6 +54,7 @@ import {
 import { BUILTIN_REGISTRY, registryReply } from '../../test/registry';
 import { useToastStore } from '../../ui/toast-store';
 import { AspectSection } from '../entity-detail/AspectSection';
+import { NavEditor } from './NavEditor';
 
 installCrashTrap();
 
@@ -236,6 +238,29 @@ const rowTitles = (editor: HTMLElement) =>
 
 const HOST_TITLES = ['Записи', 'Daily Planning', 'Повестка', 'All Tasks', 'Год', 'Рутины'];
 
+test('редактор навигации сохраняет основу видимого имени при чужом рефетче во время ввода', async () => {
+  let rename: (title: string) => void = () => {};
+  function Host() {
+    const [title, setTitle] = useState('Orbis');
+    rename = setTitle;
+    return <NavEditor app={{ ...SHELL_ROW, title } as never} onClose={() => {}} />;
+  }
+  const { calls } = renderWithProviders(<Host />, frameHandler());
+  const editor = await screen.findByTestId('nav-editor');
+  await waitFor(() => expect(rowTitles(editor)).toEqual(HOST_TITLES));
+  fireEvent.change(within(editor).getByLabelText('Имя'), { target: { value: 'Мой Orbis' } });
+  act(() => rename('Чужое имя'));
+  expect(within(editor).getByLabelText('Имя')).toHaveValue('Мой Orbis');
+  fireEvent.click(within(editor).getByRole('button', { name: 'Сохранить' }));
+  await waitFor(() =>
+    expect(calls.find((c) => c.path === 'entity.updateBatch')?.input).toMatchObject({
+      operations: [
+        { tool: 'entity_update', input: { id: SHELL, title: 'Мой Orbis', expectedTitle: 'Orbis' } },
+      ],
+    }),
+  );
+});
+
 // ─── (б) «Настроить навигацию» ─────────────────────────────────────────────────────────────────
 
 test('(б) хост на «/»: «Повестка» выше «Daily Planning» → одна пачка с новым порядком', async () => {
@@ -309,6 +334,7 @@ test('(б) добавить поиском, убрать, сменить дом�
         input: {
           id: SHELL,
           title: 'Мой Orbis',
+          expectedTitle: 'Orbis',
           emoji: '🌍',
           props: {
             [APP_NAV]: [RECORDS, DAILY, AGENDA, ALL_TASKS, ROUTINES, BREAD],

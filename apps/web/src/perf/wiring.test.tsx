@@ -64,7 +64,7 @@ describe('отклик действий записи (useEntityUpdate)', () => {
   });
 
   test('заголовок — вид title; статус свойством — вид status', async () => {
-    press((e) => e.saveTitle('Новый'));
+    press((e) => e.saveTitle('Новый', 'Запись'));
     await waitFor(() => expect(actions()).toContainEqual(['action_confirmed', 'title']));
     recorded.length = 0;
     press((e) => e.update.mutate({ id: 'e1', props: { 'orbis/task_status': 'next' } }));

@@ -241,6 +241,8 @@ const ORBIS_ERROR_FIELDS: Partial<
   Record<ExecErrorCode, (d: Record<string, unknown>) => Record<string, unknown>>
 > = {
   STALE_VERSION: (d) => pick(d, ['id', 'expected', 'current']),
+  // Заголовок сверяется существующим CAS; остальные причины CONFLICT не раскрывают деталей.
+  CONFLICT: (d) => (d.reason === 'precondition_failed' ? pick(d, ['reason', 'mismatches']) : {}),
   // Отказ правила отмены текста (§8.6): что отменялось (id и заголовок действия), перечень записей (id, заголовок записи,
   // актор, время) и место продолжения — клиент рисует по ним кнопку «Всё равно отменить».
   UNDO_TEXT_CHANGED: (d) => pick(d, ['action', 'entries', 'continuation']),

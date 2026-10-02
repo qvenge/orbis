@@ -29,6 +29,7 @@ import { cleanNav, goneOf, navOf } from './nav-edit';
 
 interface Draft {
   title: string;
+  expectedTitle: string;
   emoji: string;
   home: string | null;
   form: NavForm;
@@ -40,6 +41,7 @@ function draftOf(app: WireEntity): Draft {
   const form = app.props[APP_NAV_FORM];
   return {
     title: app.title,
+    expectedTitle: app.title,
     emoji: app.emoji ?? '',
     home: typeof home === 'string' && home !== '' ? home : null,
     form: (NAV_FORMS as readonly unknown[]).includes(form) ? (form as NavForm) : 'header-list',
@@ -76,7 +78,8 @@ export function navEditOperation(
   }
   const input = {
     id: app.id,
-    ...(title !== was.title && { title }),
+    // Черновик не подхватывает чужое имя: замок остаётся на том, что человек видел при открытии.
+    ...(title !== draft.expectedTitle && { title, expectedTitle: draft.expectedTitle }),
     ...(emoji !== was.emoji && { emoji: emoji === '' ? null : emoji }),
     ...(Object.keys(props).length > 0 && { props }),
     ...(unset.length > 0 && { unset }),
