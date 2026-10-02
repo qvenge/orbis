@@ -34,7 +34,7 @@ import { withIdentity } from '../db/with-identity';
 import { appRouter } from '../router';
 import { seedCategoryId, seedOwnerGraph } from '../seed/onboarding';
 import { createCallerFactory } from '../trpc';
-import type { ExecuteErr, ExecuteOk, ExecuteResult } from './types';
+import type { ExecuteErr, ExecuteResult } from './types';
 import { undoAction, undoLast } from './undo';
 
 requireEnv();
@@ -118,12 +118,20 @@ let controlBefore: EntitySnapshot;
 // Хелперы: сырые админ-запросы (мимо RLS и мимо кода, который тестируется)
 // ---------------------------------------------------------------------------
 
-function ok(r: ExecuteResult): ExecuteOk {
+function ok<
+  T extends
+    | ExecuteResult
+    | (Omit<Extract<ExecuteResult, { ok: true }>, 'consequences'> & { consequences?: never }),
+>(r: T): Extract<T, { ok: true }> {
   if (!r.ok) throw new Error(`ожидался успех, получено: ${JSON.stringify(r.error)}`);
-  return r;
+  return r as Extract<T, { ok: true }>;
 }
 
-function err(r: ExecuteResult): ExecuteErr {
+function err(
+  r:
+    | ExecuteResult
+    | (Omit<Extract<ExecuteResult, { ok: true }>, 'consequences'> & { consequences?: never }),
+): ExecuteErr {
   if (r.ok) throw new Error('ожидался структурированный отказ, получен успех');
   return r;
 }

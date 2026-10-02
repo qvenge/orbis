@@ -6,6 +6,7 @@
 // произвольные периоды (§2.9) не участвуют ни как источник, ни как преемник-блокер;
 // needsSetup — «первый месяц без истории» (§3.5); мутация rollover — идемпотентна по
 // batchId, атомарна (INVARIANT всего batch), Undo сносит все конверты одним action.
+
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import type { GraphId } from '@orbis/shared';
 import { newId, ROLE_CATEGORY_PARENT, RULE_ENVELOPE_UNIQUE, RULE_ROLLOVER } from '@orbis/shared';
@@ -20,6 +21,7 @@ import {
   withRule,
 } from '../../test/helpers';
 import { actionsOf } from '../../test/journal-helpers';
+import { expectJournalRef } from '../../test/journal-ref-helpers';
 import { execute } from '../executor/executor';
 import { makeJournalSink } from '../executor/journal';
 import type { ExecuteRequest, WireEntity } from '../executor/types';
@@ -438,6 +440,7 @@ describe('budget.rollover (03-budget §3.5): атомарное создание
         { categoryId: catFun, limit: '10000.00', carryover: '0' },
       ],
     });
+    await expectJournalRef(user, r, true);
     expect(r.idempotentReplay).toBe(false);
     expect(r.actionId).toBe(batchId);
     expect(r.envelopeIds).toHaveLength(2);
@@ -481,6 +484,7 @@ describe('budget.rollover (03-budget §3.5): атомарное создание
     expect(first.idempotentReplay).toBe(false);
 
     const second = await ownerCaller(user).budget.rollover(input);
+    await expectJournalRef(user, second);
     expect(second.idempotentReplay).toBe(true);
     expect(second.envelopeIds).toEqual(first.envelopeIds);
     expect(second.actionId).toBe(batchId);

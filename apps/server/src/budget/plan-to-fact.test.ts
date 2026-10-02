@@ -9,6 +9,7 @@
 // Тело переехало в декларацию `finance/plan-to-fact` (§Б6-1); здесь проверяется РУЧКА — вход,
 // идемпотентность и код отказа, который экран читает (Р-23). Эквивалентность коду доказывает
 // `src/actions/golden.test.ts` (§С8-27).
+
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import type { GraphId } from '@orbis/shared';
 import { newId, recurringInstanceId } from '@orbis/shared';
@@ -23,6 +24,7 @@ import {
   truncateAll,
 } from '../../test/helpers';
 import { actionsOf } from '../../test/journal-helpers';
+import { expectJournalRef } from '../../test/journal-ref-helpers';
 import { makeJournalSink } from '../executor/journal';
 import type { ExecuteRequest, WireEntity } from '../executor/types';
 import { undoAction } from '../executor/undo';
@@ -176,6 +178,7 @@ describe('budget.confirmPurchase (03-budget §2.7): перевод planned→fac
       occurredOn: ACTUAL_ON,
       batchId,
     });
+    await expectJournalRef(user, r, true);
     expect(r.idempotentReplay).toBe(false);
     expect(r.actionId).toBe(batchId);
 
@@ -233,6 +236,7 @@ describe('budget.confirmPurchase (03-budget §2.7): перевод planned→fac
     expect(first.idempotentReplay).toBe(false);
 
     const second = await ownerCaller(user).budget.confirmPurchase(input);
+    await expectJournalRef(user, second, true);
     expect(second.idempotentReplay).toBe(true);
     expect(second.actionId).toBe(batchId);
 

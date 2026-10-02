@@ -4,6 +4,7 @@
 // Против живой БД, caller как в бою (createCallerFactory с инжектированным ai —
 // провайдер/часы, лекало send-message.test.ts), предложение рождается НАСТОЯЩИМ
 // прогоном через `runNow`: собранный руками pending проверял бы фикстуру, а не путь.
+
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { manualBucket, newId, pendingMessageId, routineRunId } from '@orbis/shared';
 import { parseBody, readBodyDoc, serializeBody } from '@orbis/shared/doc';
@@ -13,6 +14,7 @@ import { TRPCError } from '@trpc/server';
 import { eq, sql } from 'drizzle-orm';
 import { appDb, mintGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
 import { actionsOf } from '../../test/journal-helpers';
+import { expectJournalRef } from '../../test/journal-ref-helpers';
 import { routineById, runsOfParent } from '../agent-loop/queries';
 import { ROUTINE_ROLLBACK_NOTE, rollbackRun } from '../agent-loop/rollback';
 import { ensureEntityThread } from '../chat/threads';
@@ -710,7 +712,8 @@ describe('routine.answerCheckpoint', () => {
       runId,
       answer: 'Да, перенеси на 10:00',
     });
-    expect(answered).toEqual({ runId });
+    expect(answered).toMatchObject({ runId });
+    await expectJournalRef(owner, answered, false);
 
     const aspect = await runAspect(runId);
     expect(aspect['orbis/run_outcome']).toBe('answered');
@@ -780,6 +783,7 @@ describe('routine.proposal / decideProposal', () => {
     });
     expect(applied.status).toBe('applied');
     if (applied.status !== 'applied') throw new Error('не applied');
+    await expectJournalRef(owner, applied, false);
     expect(typeof applied.actionId).toBe('string');
     expect(await taskStatus(taskId)).toBe('planned');
 
@@ -1220,6 +1224,7 @@ describe('routine.proposal / decideProposal', () => {
     });
     expect(again).toEqual({
       status: 'applied',
+      consequences: false,
       actionId: first.actionId,
       editedFrom: pendingId,
     });
@@ -1238,7 +1243,7 @@ describe('routine.proposal / decideProposal', () => {
       decision: 'approve',
       edits: {},
     });
-    expect(applied).toEqual({ status: 'applied', actionId: pendingId });
+    expect(applied).toEqual({ status: 'applied', actionId: pendingId, consequences: false });
     expect(await pendingCount(runId)).toBe(1); // второго предложения нет
     expect(await taskStatus(taskId)).toBe('planned');
     expect(await rejectReason(pendingId)).toBeUndefined();
@@ -2349,6 +2354,7 @@ describe('routine.decideDeferred: отложенное действие (D42 §6
     const { pendingId, targetId } = await deferUnit(routineId, runId, 'Прошлогодний отчёт');
 
     const applied = await callerLater().routine.decideDeferred({ pendingId, decision: 'approve' });
+    await expectJournalRef(owner, applied, false);
     expect(applied.status).toBe('applied');
     if (applied.status !== 'applied') throw new Error('не applied');
     expect(await isArchived(targetId)).toBe(true);
@@ -2790,6 +2796,9 @@ describe('routine.decideAll', () => {
     await ownerSets(stale.targetId, 'in_progress');
 
     const summary = await callerLater().routine.decideAll({ runId });
+    expect(summary).not.toHaveProperty('actionId');
+    expect(summary).not.toHaveProperty('consequences');
+    expect(summary.every((item) => !('consequences' in item))).toBe(true);
 
     // Порядок сводки = порядок пачки (`created_at, id` — контракт listRunUnits): экран
     // рисует её тем же списком, что и карточки, а два нажатия обходят единицы одинаково

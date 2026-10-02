@@ -1,3 +1,4 @@
+import type { JournalRef } from '@orbis/shared';
 // apps/server/src/routers/entity.ts
 // Роутер entity (§9.1): ТОЛЬКО трансляция — вход → executor/компилятор, результат → wire,
 // коды executor'а → TRPCError. Бизнес-логики здесь нет: мутации идут единственным путём
@@ -37,6 +38,7 @@ import { bodyActionOf } from '../executor/body-chain';
 import { execute } from '../executor/executor';
 import { makeJournalSink } from '../executor/journal';
 import { bodyColumnProbe } from '../executor/journal-read';
+import { journalRef } from '../executor/journal-ref';
 import type { WireEntityWithRevision } from '../executor/types';
 import { type GoalProgress, goalProgressFor } from '../goals/progress';
 import type { Identity } from '../identity';
@@ -282,7 +284,7 @@ export const entityRouter = router({
         threadId: z.string().uuid().optional(),
       }),
     )
-    .mutation(async ({ ctx, input }): Promise<WireEntityWithRevision & { actionId?: string }> => {
+    .mutation(async ({ ctx, input }): Promise<WireEntityWithRevision & Partial<JournalRef>> => {
       if (input.threadId !== undefined && input.source !== 'fast_path') {
         throw execErrorToTRPC(
           new ExecError('VALIDATION', 'тред передаётся только быстрым вводом (source: fast_path)', {
@@ -309,7 +311,7 @@ export const entityRouter = router({
       // поле поверх wire-сущности, потребители `.id` не задеты. При идемпотентном
       // replay (§5.3) журнал не писался — actionId под этим id не существует, не отдаём.
       const entity = r.results[0] as WireEntityWithRevision;
-      return r.idempotentReplay ? entity : { ...entity, actionId: r.actionId };
+      return r.idempotentReplay ? entity : { ...entity, ...journalRef(r) };
     }),
 
   // UI-вариант схемы: у владельца из редактора есть структурная форма тела, у тула модели —
@@ -323,7 +325,7 @@ export const entityRouter = router({
       async ({
         ctx,
         input,
-      }): Promise<WireEntityWithRevision & { bodyAction: BodyActionInfo | null }> => {
+      }): Promise<WireEntityWithRevision & JournalRef & { bodyAction: BodyActionInfo | null }> => {
         const { autosave, ...uiFields } = input;
         const fields = withTitleLock(uiFields);
         const r = await execute(
@@ -352,7 +354,11 @@ export const entityRouter = router({
         // правки запись не перечитывает, а пункт «Вернуть текст как на …» стоит на нём. Считает его исполнитель в
         // транзакции правки (`reportBodyAction`, R-22) — отдельная читающая транзакция стоила бы каждому
         // автосохранению лишних обходов.
-        return { ...(r.results[0] as WireEntityWithRevision), bodyAction: r.bodyAction ?? null };
+        return {
+          ...(r.results[0] as WireEntityWithRevision),
+          bodyAction: r.bodyAction ?? null,
+          ...journalRef(r),
+        };
       },
     ),
 
@@ -360,7 +366,7 @@ export const entityRouter = router({
    * Пачка правок одним Undo (срез 1а, спека §4.3 и §8.4): `entity_update` и
    * `entity_version_pin` одним `execute` с `batchId` — исполнитель пишет ОДИН action с
    * id = batchId и общим inverse, и `ai.undo({actionId})` откатывает пачку целиком. Одиночный
-   * `update` выше `actionId` не отдаёт, а N его вызовов дали бы N действий и N Undo.
+   * `update` отдаёт id своего действия, а N его вызовов дали бы N действий и N Undo.
    *
    * Операции уходят в исполнитель без перекладки: вход — форма тулов (`entity_id` у
    * закрепления). Порядок значим — закрепление первым снимает тело ДО замены (§8.4). `label` —
@@ -374,7 +380,7 @@ export const entityRouter = router({
    */
   updateBatch: ownerOnlyProcedure
     .input(entityUpdateBatchInput)
-    .mutation(async ({ ctx, input }): Promise<{ actionId: string; results: unknown[] }> => {
+    .mutation(async ({ ctx, input }): Promise<JournalRef & { results: unknown[] }> => {
       const operations = input.operations.map((op) =>
         op.tool === 'entity_update' ? { ...op, input: withTitleLock(op.input) } : op,
       );
@@ -398,7 +404,7 @@ export const entityRouter = router({
         actionId: r.actionId,
         operations,
       });
-      return { actionId: r.actionId, results: r.results };
+      return { ...journalRef(r), results: r.results };
     }),
 
   // §9.2 entity_get: include-логика вынесена в общий хелпер entity-read.ts —

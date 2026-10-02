@@ -73,6 +73,54 @@ function entityOf(r: { results: unknown[] }): string {
   return (r.results[0] as WireEntity).id;
 }
 
+test('results читает старый массив и новый envelope прежним массивом, сохраняя исходный признак', async () => {
+  const g = await freshGraph();
+  for (const consequences of [undefined, true, false]) {
+    const id = newId();
+    const results = [{ id: 'сохранённый ответ' }];
+    const action: ActionRecord = {
+      id,
+      type: 'batch',
+      entity_id: null,
+      actor_user_id: personal(g).actor,
+      actor_kind: 'owner',
+      source: 'ui',
+      mechanism: 'user',
+      operations: [],
+      inverse: [],
+    };
+    await withIdentity(db, personal(g), (tx) =>
+      sink.write(tx, {
+        graphId: g,
+        action,
+        card: { tool: 'batch_execute', entity_id: null, title: 'Ответ пачки' },
+        results,
+        ...(consequences !== undefined && { consequences }),
+      }),
+    );
+    const saved = await withIdentity(db, personal(g), (tx) => J.findBatch(tx, g, id));
+    expect(saved?.results).toEqual([{ id: 'сохранённый ответ' }]);
+    if (consequences === undefined) expect(saved).not.toHaveProperty('consequences');
+    else expect(saved?.consequences).toBe(consequences);
+    const replay = await execute(
+      db,
+      {
+        identity: personal(g),
+        actorKind: 'owner',
+        source: 'ui',
+        batchId: id,
+        operations: [{ tool: 'entity_create', input: { title: 'Не будет создано', tags: [] } }],
+      },
+      { sink },
+    );
+    expect(replay.ok).toBe(true);
+    if (!replay.ok) throw new Error(replay.error.message);
+    expect(replay.results).toEqual([{ id: 'сохранённый ответ' }]);
+    expect(replay.consequences).toBe(consequences ?? false);
+    expect(replay.idempotentReplay).toBe(true);
+  }
+});
+
 describe('API чтения журнала (задача 4, РП-9)', () => {
   test('findAction находит действие по id, отмена — отдельной записью', async () => {
     const g = await freshGraph();

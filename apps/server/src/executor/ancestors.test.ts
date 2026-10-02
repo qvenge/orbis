@@ -53,9 +53,13 @@ afterAll(async () => {
   await client.end();
 });
 
-function ok(r: ExecuteResult): ExecuteOk {
+function ok<
+  T extends
+    | ExecuteResult
+    | (Omit<Extract<ExecuteResult, { ok: true }>, 'consequences'> & { consequences?: never }),
+>(r: T): Extract<T, { ok: true }> {
   if (!r.ok) throw new Error(`ожидался успех, получено: ${JSON.stringify(r.error)}`);
-  return r;
+  return r as Extract<T, { ok: true }>;
 }
 
 function req(owner: GraphId, tool: string, input: unknown, over: Partial<ExecuteRequest> = {}) {

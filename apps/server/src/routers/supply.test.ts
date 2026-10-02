@@ -2,6 +2,7 @@
 // Ручки поставки (срез 1б §9.1, С1б-6): все — только владельцу; каждая пишущая — ОДНА запись журнала.
 // Против живой БД через createCallerFactory, как в бою. Эталоны у ручек — эталоны кода; «прежний релиз»
 // фикстура кладёт в записи сама (подменённый эталон «Домой»), чтобы обновление было что принимать.
+
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import {
   type GraphId,
@@ -23,6 +24,7 @@ import { sql } from 'drizzle-orm';
 import { ZodError } from 'zod';
 import { appDb, freshGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
 import { actionsOf } from '../../test/journal-helpers';
+import { expectJournalRef } from '../../test/journal-ref-helpers';
 import { withIdentity } from '../db/with-identity';
 import { execute } from '../executor/executor';
 import { makeJournalSink } from '../executor/journal';
@@ -170,6 +172,7 @@ describe('supply.* — снятый с поставки ключ upcoming (1в �
     );
     const owner = callerFor(graph);
     const reverted = await owner.supply.revert({ key: 'upcoming' });
+    await expectJournalRef(graph, reverted);
     expect(await journalCount(graph, reverted.actionId)).toBe(1);
     const title = await withIdentity(db, personal(graph), (tx) =>
       tx.execute(sql`SELECT title FROM entities WHERE id = ${id}::uuid`),
@@ -208,12 +211,15 @@ describe('supply.* — каждая пишущая ручка — одна за�
     ]);
 
     const declined = await owner.supply.decline({ key: 'records' });
+    await expectJournalRef(graph, declined);
     expect(await journalCount(graph, declined.actionId)).toBe(1);
 
     const accepted = await owner.supply.accept({ key: 'home' });
+    await expectJournalRef(graph, accepted);
     expect(await journalCount(graph, accepted.actionId)).toBe(1);
 
     const added = await owner.supply.add({ key: 'all-tasks' });
+    await expectJournalRef(graph, added);
     expect(await journalCount(graph, added.actionId)).toBe(1);
     // Оболочка заводилась без «All Tasks» (записи не было) — после «Добавить» её раздел приходит
     // предложением обновить оболочку (Fable I-1 задачи 9 среза 1в), а не молча.
@@ -225,14 +231,19 @@ describe('supply.* — каждая пишущая ручка — одна за�
     const id = supplyRecordId(graph, 'home');
     await owner.entity.update({ id, title: 'Главная' });
     const reverted = await owner.supply.revert({ key: 'home' });
+    await expectJournalRef(graph, reverted);
     expect(await journalCount(graph, reverted.actionId)).toBe(1);
 
     // «Принять все» — одна запись на все принятые.
     const graph2 = await freshGraph();
     await seedOld(graph2);
     const all = await callerFor(graph2).supply.acceptAll();
+    await expectJournalRef(graph2, all);
     expect(all.accepted).toEqual(['home', 'records']);
     if (all.actionId === null) throw new Error('ожидался action');
     expect(await journalCount(graph2, all.actionId)).toBe(1);
+    const noop = await callerFor(graph2).supply.acceptAll();
+    expect(noop).toEqual({ actionId: null, accepted: [] });
+    expect(noop).not.toHaveProperty('consequences');
   });
 });

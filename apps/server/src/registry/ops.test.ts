@@ -117,12 +117,19 @@ function run(
   );
 }
 
-function ok(r: ExecuteResult): { actionId: string; results: unknown[] } {
+function ok(r: ExecuteResult | import('../executor/undo').UndoOutcomeServer): {
+  actionId: string;
+  results: unknown[];
+} {
   if (!r.ok) throw new Error(`ожидался успех, пришёл ${r.error.code}: ${r.error.message}`);
   return { actionId: r.actionId, results: r.results };
 }
 
-function err(r: ExecuteResult): { code: string; message: string; details?: unknown } {
+function err(r: ExecuteResult | import('../executor/undo').UndoOutcomeServer): {
+  code: string;
+  message: string;
+  details?: unknown;
+} {
   if (r.ok) throw new Error('ожидался отказ, пришёл успех');
   return r.error;
 }

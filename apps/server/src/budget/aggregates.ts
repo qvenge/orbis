@@ -658,6 +658,7 @@ export async function rolloverCreate(
   }
   return {
     actionId: r.actionId,
+    consequences: r.consequences,
     // results batch — только запрошенные операции (§9.2): по конверту на row
     envelopeIds: (r.results as WireEntity[]).map((e) => e.id),
     idempotentReplay: r.idempotentReplay,

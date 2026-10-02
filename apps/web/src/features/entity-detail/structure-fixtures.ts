@@ -23,6 +23,7 @@ import { noteRegistryVersion, resetRegistryVersionForTests } from '../../lib/reg
 import { HOST_HOME, useNav } from '../../state/navigation';
 import {
   type MockHandler,
+  mockEntityUpdateResult,
   renderWithProviders,
   trpcError,
   type WireEntityFixture,
@@ -574,6 +575,12 @@ export function structureHandler(
         const other = WORLD.get(wanted);
         if (other === undefined) throw trpcError('NOT_FOUND');
         return { ...base, entity: other };
+      }
+      case 'entity.update': {
+        const patch = input as { id: string; tags?: string[] };
+        const row = patch.id === main.id ? main : WORLD.get(patch.id);
+        if (row === undefined) throw trpcError('NOT_FOUND');
+        return mockEntityUpdateResult({ ...row, tags: patch.tags ?? row.tags });
       }
       case 'entity.query': {
         // Записи поставки (`useSupplyRecords`): шаблон хоста по варианту фикстуры.

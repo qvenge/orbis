@@ -7,7 +7,7 @@ import type { ReactNode } from 'react';
 import { afterEach, beforeEach, expect, test } from 'vitest';
 import { buildQueryRegistry } from '../../lib/query-blocks/catalog';
 import { useRetryBuffer } from '../../state/retry';
-import { mockLink, trpcError, wireEntity } from '../../test/harness';
+import { mockEntityUpdateResult, mockLink, trpcError, wireEntity } from '../../test/harness';
 import { BUILTIN_REGISTRY } from '../../test/registry';
 import { trpc } from '../../trpc';
 import { type ChatMessage, chatThreadKey, useChatThread } from './useChatThread';
@@ -491,7 +491,7 @@ test('CONFLICT дважды подряд → карточка ждёт отпр�
 
 test('«разобрать с AI» → archived:true + ai.sendMessage исходной строки (одна строка ≠ две сущности)', async () => {
   const { Wrap, calls } = wrapper((path, input) => {
-    if (path === 'entity.update') return { id: 'e1', title: 'обед' };
+    if (path === 'entity.update') return mockEntityUpdateResult({ id: 'e1', title: 'обед' });
     if (path === 'ai.sendMessage') return assistantReply;
     return handlerBase(path, input);
   });

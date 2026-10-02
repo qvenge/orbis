@@ -1,3 +1,4 @@
+import type { JournalRef } from '@orbis/shared';
 // apps/server/src/routers/apps.ts
 // Действия владельца над записью-приложением (срез 1б §8.6, РП-12): «Выключить/Включить
 // приложение» и «Удалить приложение». Каждое — ОДНА пачка исполнителя: правка записи-приложения и
@@ -22,6 +23,7 @@ import { withIdentity } from '../db/with-identity';
 import { ExecError, execErrorToTRPC } from '../errors';
 import { execute } from '../executor/executor';
 import { makeJournalSink } from '../executor/journal';
+import { journalRef } from '../executor/journal-ref';
 import type { Identity } from '../identity';
 import { ownerOnlyProcedure, router } from '../trpc';
 
@@ -79,7 +81,7 @@ async function runAppBatch(
   label: string,
   appUpdate: Record<string, unknown>,
   extensions: ReadonlyArray<{ module: string; enabled: boolean }>,
-): Promise<{ actionId: string }> {
+): Promise<JournalRef> {
   const r = await execute(
     ctx.db,
     {
@@ -99,7 +101,7 @@ async function runAppBatch(
     { sink },
   );
   if (!r.ok) throw execErrorToTRPC(r.error);
-  return { actionId: r.actionId };
+  return journalRef(r);
 }
 
 export const appsRouter = router({

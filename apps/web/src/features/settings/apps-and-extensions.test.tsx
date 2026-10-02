@@ -134,21 +134,21 @@ function render(updates: () => SupplyUpdate[] = () => []) {
           for (const k of (op.unset as string[] | undefined) ?? []) delete props[k];
           apps.set(op.id, { ...cur, props });
         }
-        return { actionId: ACT };
+        return { actionId: ACT, consequences: false, results: [] };
       }
       case 'supply.updates':
         return updates();
       case 'supply.acceptAll':
-        return { actionId: ACT, accepted: ['home'] };
+        return { actionId: ACT, consequences: false, accepted: ['home'] };
       case 'user.setModuleEnabled':
-        return { ...SETTINGS, actionId: ACT };
+        return { ...SETTINGS, actionId: ACT, consequences: false };
       case 'supply.accept':
       case 'supply.decline':
       case 'supply.add':
       case 'supply.revert':
       case 'app.setDisabled':
       case 'app.archive':
-        return { actionId: ACT };
+        return { actionId: ACT, consequences: false };
       case 'ai.undo':
         return { ok: true, actionId: ACT };
       case 'entity.resolveRefs':

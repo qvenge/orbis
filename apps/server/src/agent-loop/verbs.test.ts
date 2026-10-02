@@ -276,13 +276,19 @@ describe('orbis_claim_task: атомарный захват (С7, инвариа
     try {
       const rows = (await admin.execute(
         sql`SELECT results FROM action_journal WHERE graph_id = ${owner}::uuid AND id = ${callId}::uuid`,
-      )) as unknown as Array<{ results: Array<Record<string, unknown>> | null }>;
-      const results = rows[0]?.results;
+      )) as unknown as Array<{
+        results:
+          | Array<Record<string, unknown>>
+          | { items: Array<Record<string, unknown>>; consequences: boolean }
+          | null;
+      }>;
+      const saved = rows[0]?.results;
+      const results = Array.isArray(saved) ? saved : saved?.items;
       if (results === undefined || results === null) {
         throw new Error(`снимок ответа ${callId} не найден`);
       }
       await admin.execute(
-        sql`UPDATE action_journal SET results = ${JSON.stringify(edit(results))}::jsonb
+        sql`UPDATE action_journal SET results = ${JSON.stringify(Array.isArray(saved) ? edit(results) : { ...saved, items: edit(results) })}::jsonb
              WHERE graph_id = ${owner}::uuid AND id = ${callId}::uuid`,
       );
     } finally {

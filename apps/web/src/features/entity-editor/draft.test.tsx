@@ -4,11 +4,12 @@ import { useEffect, useState } from 'react';
 import { beforeEach, expect, test, vi } from 'vitest';
 import {
   installCrashTrap,
+  mockEntityUpdateResult,
   renderWithProviders,
   staleBodyError,
   trpcError,
 } from '../../test/harness';
-import { trpc } from '../../trpc';
+import { type RouterOutputs, trpc } from '../../trpc';
 import { detailGetInput } from '../entity-detail/useEntityDetail';
 import { setDraftScope } from './draft-storage';
 import { SaveIndicator } from './SaveIndicator';
@@ -59,9 +60,14 @@ const MOVED: BodySaveEntity = {
   bodyDoc: THREE,
 };
 /** Ответ сервера на entity.update. */
-const SAVED = { id: 'e1', updatedAt: '2026-08-14T11:00:00.000Z', bodyRevision: 4 };
+const SAVED = mockEntityUpdateResult({
+  id: 'e1',
+  updatedAt: '2026-08-14T11:00:00.000Z',
+  bodyRevision: 4,
+});
 
-type Respond = (input: unknown) => unknown;
+type UpdateReply = RouterOutputs['entity']['update'];
+type Respond = (input: unknown) => Partial<UpdateReply> | PromiseLike<Partial<UpdateReply>>;
 const ok: Respond = () => SAVED;
 const fail500: Respond = () => {
   throw trpcError('INTERNAL_SERVER_ERROR');
@@ -77,17 +83,22 @@ const MAX_SENDS = 12;
 
 /** Сервер, который отвечает не сам, а когда скажут (и может не ответить вовсе). */
 function gatedServer() {
-  const gates: { settle: (v: unknown) => void; fail: (e: unknown) => void }[] = [];
+  const gates: { settle: (v: Partial<UpdateReply>) => void; fail: (e: unknown) => void }[] = [];
   const respond: Respond = () =>
-    new Promise((resolve, reject) => {
+    new Promise<Partial<UpdateReply>>((resolve, reject) => {
       gates.push({ settle: resolve, fail: reject });
     });
-  const answer = async (i: number, value: unknown, mode: 'ok' | 'fail' = 'ok') => {
+  const answer = async (
+    ...args:
+      | [i: number, value: Partial<UpdateReply>, mode?: 'ok']
+      | [i: number, value: unknown, mode: 'fail']
+  ) => {
+    const [i, value, mode] = args;
     const gate = gates[i];
     if (gate === undefined) throw new Error(`запроса №${i} не было — отвечать нечему`);
     await act(async () => {
-      if (mode === 'ok') gate.settle(value);
-      else gate.fail(value);
+      if (mode === 'fail') gate.fail(value);
+      else gate.settle(value);
       await vi.advanceTimersByTimeAsync(0);
     });
   };
@@ -127,7 +138,7 @@ function mount(
       if (path !== 'entity.update') throw new Error(`сохранение тела не ходит на ${path}`);
       sends += 1;
       if (sends > MAX_SENDS) return new Promise(() => {});
-      return box.respond(input);
+      return mockEntityUpdateResult(box.respond(input));
     },
     { strict: opts.strict },
   );

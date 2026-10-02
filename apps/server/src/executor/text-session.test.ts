@@ -72,9 +72,13 @@ function callerFor(g: GraphId, identity: Identity = personal(g)): Caller {
   return createCaller({ identity, actorKind: 'owner', db, clientVersion: null });
 }
 
-function ok(r: ExecuteResult): Extract<ExecuteResult, { ok: true }> {
+function ok<
+  T extends
+    | ExecuteResult
+    | (Omit<Extract<ExecuteResult, { ok: true }>, 'consequences'> & { consequences?: never }),
+>(r: T): Extract<T, { ok: true }> {
   if (!r.ok) throw new Error(`ожидался успех, получено: ${JSON.stringify(r.error)}`);
-  return r;
+  return r as Extract<T, { ok: true }>;
 }
 
 async function trpcError(p: Promise<unknown>): Promise<TRPCError> {

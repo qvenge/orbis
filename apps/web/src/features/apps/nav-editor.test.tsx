@@ -162,7 +162,7 @@ function store(rows: WireEntityFixture[]) {
         });
         homeFollowUp(op.id);
       }
-      return { actionId: 'act-21' };
+      return { actionId: 'act-21', consequences: false, results: [] };
     }
     if (path === 'entity.suggest') {
       const term = (input as { term: string }).term.toLowerCase();

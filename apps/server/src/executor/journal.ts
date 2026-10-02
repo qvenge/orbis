@@ -71,7 +71,7 @@ interface JournalRowValues {
   entityIds: readonly string[];
   operations: unknown;
   inverse: unknown;
-  results?: unknown[];
+  results?: unknown[] | { items: unknown[]; consequences: boolean };
   textSession: boolean;
   bodyBefore: Record<string, string | null> | null;
   undoes: string | null;
@@ -154,7 +154,12 @@ export function makeJournalSink(): JournalSink {
           entityIds: touchedEntityIds(action),
           operations: action.operations,
           inverse: action.inverse,
-          ...(entry.results !== undefined && { results: entry.results }),
+          ...(entry.results !== undefined && {
+            results:
+              entry.consequences === undefined
+                ? entry.results
+                : { items: entry.results, consequences: entry.consequences },
+          }),
           textSession: action.text_session ?? false,
           bodyBefore: action.body_before ?? null,
           undoes: null,
@@ -226,6 +231,7 @@ export function makeJournalSink(): JournalSink {
         action: actionRecordOf(e),
         card: { tool: e.cardTool, entity_id: e.entityId, title: e.title },
         ...(e.results !== undefined && { results: e.results }),
+        ...(e.consequences !== undefined && { consequences: e.consequences }),
         cardInReply: e.cardInReply,
       };
     },

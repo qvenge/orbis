@@ -18,7 +18,7 @@ import { setupGraph } from '../seed/setup-graph';
 import { bodyChanges, stampVirtualBody } from './body-stamp';
 import { execute } from './executor';
 import { makeJournalSink } from './journal';
-import type { ExecuteOk, ExecuteRequest, ExecuteResult, WireEntity } from './types';
+import type { ExecuteRequest, ExecuteResult, WireEntity } from './types';
 import { undoAction } from './undo';
 
 requireEnv();
@@ -32,9 +32,13 @@ afterAll(async () => {
   await admin.client.end();
 });
 
-function ok(r: ExecuteResult): ExecuteOk {
+function ok<
+  T extends
+    | ExecuteResult
+    | (Omit<Extract<ExecuteResult, { ok: true }>, 'consequences'> & { consequences?: never }),
+>(r: T): Extract<T, { ok: true }> {
   if (!r.ok) throw new Error(`ожидался успех, получено: ${JSON.stringify(r.error)}`);
-  return r;
+  return r as Extract<T, { ok: true }>;
 }
 
 function req(

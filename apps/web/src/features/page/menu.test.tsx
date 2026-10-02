@@ -224,7 +224,7 @@ function worldHandler(f: StructureFixture, world: World): MockHandler {
     if (isTemplatesList(path, input)) return templatesOf(world);
     if (path === 'entity.updateBatch') {
       applyBatch(world, (input as { operations: Op[] }).operations);
-      return { actionId: ACTION_ID, results: [] };
+      return { actionId: ACTION_ID, consequences: false, results: [] };
     }
     if (path === 'ai.undo') {
       if (world.beforeBatch !== null) world.rows = world.beforeBatch;

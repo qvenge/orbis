@@ -3,6 +3,7 @@
 // пачка (`entity_update` приложения + `module_set` отмеченных расширений), один Undo; оболочку
 // хоста выключить и заархивировать нельзя; правка «Состава» маску не меняет (С1б-11).
 // Против живой БД через createCallerFactory, как в бою.
+
 import { afterAll, beforeAll, expect, test } from 'bun:test';
 import {
   APP_ASPECT,
@@ -16,6 +17,7 @@ import { TRPCError } from '@trpc/server';
 import { sql } from 'drizzle-orm';
 import { appDb, freshGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
 import { actionsOf } from '../../test/journal-helpers';
+import { expectJournalRef } from '../../test/journal-ref-helpers';
 import { withIdentity } from '../db/with-identity';
 import { execute } from '../executor/executor';
 import { makeJournalSink } from '../executor/journal';
@@ -135,6 +137,7 @@ test('setDisabled(A, true, [goals]) — «Выключено» и маска о�
   expect((await rowOf(graph, a)).disabled).toBe(true);
   expect(await mask(graph)).toEqual(['goals']);
 
+  await expectJournalRef(graph, r, false);
   const actions = await actionsWithId(graph, r.actionId);
   expect(actions).toHaveLength(1);
   expect(actions[0]?.operations.map((o) => o.op)).toEqual(['entity_update', 'module_set']);
@@ -207,6 +210,7 @@ test('archive(A, [goals]) — A в архиве и расширение выкл
   const r = await callerFor(graph).app.archive({ appId: a, disableExtensions: ['goals'] });
   expect((await rowOf(graph, a)).archived).toBe(true);
   expect(await mask(graph)).toEqual(['goals']);
+  await expectJournalRef(graph, r, false);
   const actions = await actionsWithId(graph, r.actionId);
   expect(actions).toHaveLength(1);
 

@@ -8,6 +8,7 @@
 //   §7.4 «Импорт пересекающихся файлов» — другой файл с той же операцией даёт ⊘;
 //   §3.4.1 последний абзац — Undo импорта ФИЗИЧЕСКИ удаляет строки entity_origins,
 //   поэтому тот же файл импортируется заново без ложных «уже импортирована».
+
 import { afterAll, beforeAll, describe, expect, spyOn, test } from 'bun:test';
 import type { GraphId } from '@orbis/shared';
 import {
@@ -33,6 +34,7 @@ import {
   requireEnv,
   truncateAll,
 } from '../../test/helpers';
+import { expectJournalRef } from '../../test/journal-ref-helpers';
 import { aiUsage, entities, relations } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { type EntitlementResolver, IMPORT_CSV_KEY } from '../entitlements';
@@ -698,6 +700,7 @@ describe('import.confirm: атомарная группа и origins (§3.4, §4
       items: [{ row, action: 'create', categoryRef: foodId }],
     });
 
+    await expectJournalRef(user, r);
     expect(r.created).toBe(1);
     expect(r.adopted).toBe(0);
     expect(r.skipped).toBe(0);
@@ -991,6 +994,7 @@ describe('import.confirm: атомарная группа и origins (§3.4, §4
       tx.update(entities).set({ archived: true }).where(eq(entities.id, manualId)),
     );
     const second = await caller.import.confirm(input);
+    await expectJournalRef(user, second);
     expect(second.idempotentReplay).toBe(true);
     expect(second.adopted).toBe(1);
     expect(await rawOrigins(user)).toHaveLength(1);

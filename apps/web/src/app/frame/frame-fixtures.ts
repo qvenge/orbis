@@ -29,6 +29,7 @@ import {
   BLOCKS_TIME_ZONE,
   BLOCKS_TODAY,
   type MockHandler,
+  mockEntityUpdateResult,
   trpcError,
   type WireEntityFixture,
   wireEntity,
@@ -184,6 +185,12 @@ export function frameHandler(world: FrameWorld = frameWorld()): MockHandler {
           thread: { threadId: `thread-${wanted}`, messages: [] },
           registryVersion: BUILTIN_REGISTRY.version,
         };
+      }
+      case 'entity.update': {
+        const patch = input as { id: string; archived?: boolean };
+        const row = byId.get(patch.id);
+        if (row === undefined) throw trpcError('NOT_FOUND');
+        return mockEntityUpdateResult({ ...row, archived: patch.archived ?? row.archived });
       }
       case 'entity.query': {
         const q = (input as { query?: string }).query ?? '';

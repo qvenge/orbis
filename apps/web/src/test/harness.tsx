@@ -17,6 +17,7 @@ import { APPS_QUERY } from '../features/apps/useApps';
 import { PAGE_TEMPLATES_QUERY } from '../features/page/usePageTemplates';
 import { SUPPLY_RECORDS_QUERY } from '../features/page/useSupplyRecords';
 import { QueryBatchProvider } from '../lib/query-blocks/batch';
+import type { RouterOutputs } from '../trpc';
 import { authErrorLink, trpc } from '../trpc';
 
 /**
@@ -412,5 +413,31 @@ export function wireEntity(
     ...over,
     props,
     aspects,
+  };
+}
+
+type EntityUpdateResult = RouterOutputs['entity']['update'];
+
+/** Полная wire-форма успеха мутации: чтение записи не несёт JournalRef, сохранение — несёт (§8.2). */
+export function mockEntityUpdateResult(entity: Partial<EntityUpdateResult>): EntityUpdateResult;
+export function mockEntityUpdateResult(
+  entity: PromiseLike<Partial<EntityUpdateResult>>,
+): Promise<EntityUpdateResult>;
+export function mockEntityUpdateResult(
+  entity: Partial<EntityUpdateResult> | PromiseLike<Partial<EntityUpdateResult>>,
+): EntityUpdateResult | Promise<EntityUpdateResult>;
+export function mockEntityUpdateResult(
+  entity: Partial<EntityUpdateResult> | PromiseLike<Partial<EntityUpdateResult>>,
+): EntityUpdateResult | Promise<EntityUpdateResult> {
+  if ('then' in entity)
+    return Promise.resolve(entity).then((value) => mockEntityUpdateResult(value));
+  const wire = wireEntity({ id: 'e1', title: 'Запись', ...entity });
+  return {
+    ...wire,
+    bodyRevision: entity.bodyRevision ?? 1,
+    bodyChangedAt: entity.bodyChangedAt ?? wire.updatedAt,
+    bodyAction: entity.bodyAction ?? null,
+    actionId: entity.actionId ?? `action-${wire.id}`,
+    consequences: entity.consequences ?? false,
   };
 }

@@ -396,6 +396,10 @@ interface BudgetHook {
 
 /** Результат стадий 1–4: план записи. apply — стадия 5, единственные записи в БД. */
 interface PreparedOp {
+  /** Уже разрешённые адреса входа: дельта журнала сравнивается с ними, а не с ключами полей ядра. */
+  touchedProperties?: ReadonlySet<string>;
+  /** Засев тела сверх входа — эффект правил подготовки, даже если его нет среди свойств дельты. */
+  seededBody?: boolean;
   journal: JournalPlan;
   apply(ctx: ExecCtx): Promise<OpOutcome>;
   budgetHook?: BudgetHook;
@@ -627,6 +631,26 @@ function toWireOrigin(row: typeof entityOrigins.$inferSelect): WireOrigin {
   };
 }
 
+/** Последствия — по собранным планам той же транзакции; клиент не угадывает правила и дописанные операции. */
+function consequencesOf(
+  plans: readonly PreparedOp[],
+  followUps: readonly PreparedOp[],
+  extra: readonly ActionOperation[],
+): boolean {
+  if (followUps.length > 0 || extra.length > 0) return true;
+  return plans.some((plan) => {
+    if (plan.seededBody === true) return true;
+    if (plan.touchedProperties === undefined) return false;
+    return plan.journal.operations.some(({ payload }) => {
+      const props = payload.props as Record<string, unknown> | undefined;
+      const unset = payload.unset as string[] | undefined;
+      return [...Object.keys(props ?? {}), ...(unset ?? [])].some(
+        (key) => !plan.touchedProperties?.has(key),
+      );
+    });
+  });
+}
+
 export async function execute(
   db: Db,
   req: ExecuteRequest,
@@ -695,6 +719,7 @@ export async function execute(
         // между ними безразличен, а общий шов «после всех дописанных» держит один путь с пачкой.
         followUps = [...followUps, ...(await applyHomeFollowUpsOf(ctx, [plan]))];
       }
+      let consequences = false;
       // Стадии 6–7. Внутренний режим undo: вместо action тем же tx пишется
       // запись отмены — undo не порождает нового action (undo неотменяем, §7.8).
       // Иначе — обычный журнал; идемпотентный replay по client-UUID его пропускает (§5.3)
@@ -721,6 +746,7 @@ export async function execute(
         // менять его ради этого не за что.)
         const recomputeOps = await applyAncestorRecompute(ctx, allPlans);
         const refOps = await applyRefEffects(ctx, allPlans);
+        consequences = consequencesOf([plan], followUps, [...recomputeOps, ...refOps]);
         if (plan.journal.textSession === true) {
           // Сеанс правки текста (§8.5): вход — только тело, дописанных операций у записи сеанса быть не может — ни у
           // новой (её операции — без «после»), ни у продолженной (своей записи нет, их данные отмены терялись бы молча).
@@ -756,6 +782,7 @@ export async function execute(
         actionId: ctx.continuedSession ?? actionId,
         results: [out.result],
         idempotentReplay: out.replay === true,
+        consequences,
         ...(reported !== undefined && { bodyAction: reported }),
       };
     });
@@ -890,7 +917,13 @@ async function executeBatch(
         // выражены, снос владельца дешевле неполной модели.
         await invalidateSpentCacheOfOwner(tx, req.identity.graph);
         await writeUndoRecord(ctx, internalUndo, plans);
-        return { ok: true as const, actionId: batchId, results, idempotentReplay: false };
+        return {
+          ok: true as const,
+          actionId: batchId,
+          results,
+          idempotentReplay: false,
+          consequences: false,
+        };
       }
       // Бюджет-хук A4 (§2.3): после применения ВСЕХ операций batch — привязка/ребиндинг
       // тем же tx. Дописанные операции входят в тот же action (Undo откатывает целиком);
@@ -906,6 +939,11 @@ async function executeBatch(
       // Пересчёт предков — после бюджет-хука (см. одиночный путь).
       const recomputeOps = await applyAncestorRecompute(ctx, allPlans);
       const refOps = await applyRefEffects(ctx, allPlans);
+      const consequences = consequencesOf(
+        plans,
+        [...followUps, ...homeFollowUps],
+        [...recomputeOps, ...refOps],
+      );
       // Обычный batch: ОДИН action на весь batch, id = batch_id; inverse — в обратном
       // порядке исполнения (§7.8). Ключ строки журнала — `(graph_id, batch_id)`.
       const bodyBefore = collectBodyBefore(allPlans);
@@ -943,9 +981,16 @@ async function executeBatch(
               : (req.batchLabel ?? `batch: операций — ${ops.length}`),
         },
         results,
+        consequences,
         ...(req.cardInReply !== undefined && { cardInReply: req.cardInReply }),
       });
-      return { ok: true as const, actionId: batchId, results, idempotentReplay: false };
+      return {
+        ok: true as const,
+        actionId: batchId,
+        results,
+        idempotentReplay: false,
+        consequences,
+      };
     });
   } catch (e) {
     // Гонка одинаковых batch'ей: конкурент вставил запись пачки первым → конфликт ключа журнала
@@ -977,6 +1022,8 @@ function replayFromAudit(batchId: string, saved: JournalWrite): ExecuteResult {
     actionId: batchId,
     results: saved.results ?? [],
     idempotentReplay: true,
+    // Старый массив не хранил признак: отсутствие не позволяет достоверно восстановить исторические правила (R-32).
+    consequences: saved.consequences ?? false,
   };
 }
 
@@ -2320,7 +2367,8 @@ async function prepareEntityCreate(
   // проект, заведённый чатом, MCP и UI, получает одно и то же тело. У create «тело до
   // операции» — это канон входа (пусто, если body не прислали ИЛИ прислали пустую строку:
   // что считать телом входа, решает hasBodyInInput — одно правило на все три пути).
-  if (needsProjectSeed(undefined, state, body, hasBodyInInput(input))) {
+  const seededBody = needsProjectSeed(undefined, state, body, hasBodyInInput(input));
+  if (seededBody) {
     ({ body, bodyDoc, bodyRefs, queryRefs } = bodyFieldsFromMarkdown(
       projectBodyTemplate(id),
       ctx.registry,
@@ -2397,6 +2445,8 @@ async function prepareEntityCreate(
   return {
     journal,
     budgetHook: { before: null, after: created },
+    touchedProperties: touchedProperties(propsPatch),
+    seededBody,
     ...homeHookOf(null, created),
     ...refWrite,
     // Стадия 5: идемпотентная вставка по client-UUID (§5.3, §9.1)
@@ -2873,6 +2923,10 @@ async function prepareEntityUpdate(
   return {
     journal,
     budgetHook: { before: current, after: afterRow },
+    touchedProperties: touchedProperties(propsPatch),
+    seededBody:
+      ctx.internalUndo === undefined &&
+      needsProjectSeed(before, state, current.body, hasBodyInInput(input)),
     ...homeHookOf(current, afterRow),
     ...ancestorRootsOnProjectChange(ctx.registry, input.id, before, state),
     // Ссылочная половина записи (§А6): проверка целей и зеркала — после стадии 5.
@@ -3061,6 +3115,8 @@ async function prepareAttach(
   return {
     journal,
     budgetHook: { before: current, after: afterRow },
+    touchedProperties: touchedProperties(propsPatch),
+    seededBody: seed !== undefined,
     // Тот же признак, что у `entity_update`: attach навешивает «приложение» с местами, и два пути
     // записи одних свойств не должны разъезжаться (довод `ancestorRootsOnProjectChange`).
     ...homeHookOf(current, afterRow),

@@ -82,7 +82,7 @@ import {
   isUndone,
   type JournalEntry,
 } from '../executor/journal-read';
-import type { ActorKind, ExecuteResult } from '../executor/types';
+import type { ActorKind, ExecuteErr, ExecuteOk, ExecuteResult } from '../executor/types';
 import { undoAction } from '../executor/undo';
 import type { Identity } from '../identity';
 import { ownerTimeZone } from '../query/context';
@@ -1035,10 +1035,14 @@ export async function reportMergeConflictUnit(
  * READ COMMITTED → «отклонено», ни одной записи), либо ждёт наш commit и увидит
  * запись журнала → «уже исполнено». Write-skew исключён; закреплено гонным тестом.
  */
+/** Одобрение отмены — прежний ответ с id отменённого действия, без признака нового действия (К-41, R-31). */
+export type ApproveUndoOk = Omit<ExecuteOk, 'consequences'> & { consequences?: never };
+export type ApproveResult = ExecuteResult | ApproveUndoOk;
+
 export async function approvePending(
   db: Db,
   args: { identity: Identity; pendingId: string; clock?: () => Date },
-): Promise<ExecuteResult> {
+): Promise<ApproveResult> {
   const graphId = args.identity.graph;
   try {
     const found = await withIdentity(db, args.identity, async (tx) => {
@@ -1311,6 +1315,7 @@ async function approveRolloverUnit(
   return {
     ok: true,
     actionId: r.actionId,
+    consequences: r.consequences,
     results: r.envelopeIds,
     idempotentReplay: r.idempotentReplay,
   };
@@ -1343,7 +1348,7 @@ async function approveUndoUnit(
   args: { identity: Identity; pendingId: string },
   undoOf: string,
   undoing: { entry: JournalEntry; continuation: UndoContinuation } | undefined,
-): Promise<ExecuteResult> {
+): Promise<ApproveUndoOk | ExecuteErr> {
   // Отказ «отклонено» под замком — не повод для replay, даже если действие успели отменить другим
   // путём: судьба карточки уже записана, и она — «отклонено».
   let rejected = false;
@@ -1401,7 +1406,7 @@ async function closeRefusedUndoUnit(
   args: { identity: Identity; pendingId: string },
   details: UndoTextChangedDetails,
   undoing: Pick<JournalEntry, 'textSession' | 'source'> | undefined,
-): Promise<ExecuteResult | undefined> {
+): Promise<ExecuteErr | undefined> {
   let closed: { result: RejectPendingTxResult; text: string };
   try {
     closed = await withIdentity(db, args.identity, async (tx) => {

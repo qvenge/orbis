@@ -1,3 +1,4 @@
+import type { JournalRef } from '@orbis/shared';
 // apps/server/src/routers/relation.ts
 // Роутер relation (§9.1): мутации — единственным путём через execute (§9.2),
 // чтение графа — под withIdentity (RLS). Только трансляция, без бизнес-логики.
@@ -9,6 +10,7 @@ import { withIdentity } from '../db/with-identity';
 import { execErrorToTRPC } from '../errors';
 import { execute } from '../executor/executor';
 import { makeJournalSink } from '../executor/journal';
+import { journalRef } from '../executor/journal-ref';
 import type { WireRelation } from '../executor/types';
 import { ownerOnlyProcedure, protectedProcedure, router } from '../trpc';
 import { toWireRelation } from '../wire';
@@ -19,7 +21,7 @@ const sink = makeJournalSink();
 export const relationRouter = router({
   create: ownerOnlyProcedure
     .input(relationCreateInput)
-    .mutation(async ({ ctx, input }): Promise<WireRelation> => {
+    .mutation(async ({ ctx, input }): Promise<WireRelation & JournalRef> => {
       const r = await execute(
         ctx.db,
         {
@@ -31,7 +33,7 @@ export const relationRouter = router({
         { sink },
       );
       if (!r.ok) throw execErrorToTRPC(r.error);
-      return r.results[0] as WireRelation;
+      return { ...(r.results[0] as WireRelation), ...journalRef(r) };
     }),
 
   delete: ownerOnlyProcedure.input(relationDeleteInput).mutation(async ({ ctx, input }) => {
@@ -46,7 +48,7 @@ export const relationRouter = router({
       { sink },
     );
     if (!r.ok) throw execErrorToTRPC(r.error);
-    return { ok: true as const };
+    return { ok: true as const, ...journalRef(r) };
   }),
 
   /** Связи сущности, обе стороны (source и target); RLS скоупит владельцем. */

@@ -33,7 +33,7 @@ import { ExecError } from '../errors';
 import { undoContinuationOf } from '../executor/body-chain';
 import { execute } from '../executor/executor';
 import { makeJournalSink } from '../executor/journal';
-import type { ExecuteResult, WireEntity } from '../executor/types';
+import type { WireEntity } from '../executor/types';
 import { threadPage } from '../journal/thread-page';
 import { proposalBodyRows } from '../routines/proposal-diff';
 import { agentLoopHelpers } from '../test/agent-loop-helpers';
@@ -128,7 +128,7 @@ async function pendingArchive(
   return { target, pendingId: r.pendingId };
 }
 
-function expectExecError(r: ExecuteResult, code: string): void {
+function expectExecError(r: import('../policy/pending').ApproveResult, code: string): void {
   expect(r.ok).toBe(false);
   if (!r.ok) expect(r.error.code).toBe(code);
 }

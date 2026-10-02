@@ -1,3 +1,4 @@
+import type { JournalRef } from '@orbis/shared';
 // apps/server/src/supply/mechanism.ts
 // Механизм поставки (срез 1б §9.1 п. 2–4, РП-6, С1б-6): обновления записей поставки — ТОЛЬКО
 // предложениями.
@@ -51,6 +52,7 @@ import { ExecError, type ExecErrorCode } from '../errors';
 import { execute } from '../executor/executor';
 import { makeJournalSink } from '../executor/journal';
 import { actionsOnEntity, isUndone, type JournalEntry } from '../executor/journal-read';
+import { journalRef } from '../executor/journal-ref';
 import type { MutationMechanism } from '../executor/types';
 import type { Identity } from '../identity';
 import { effectiveRegistry } from '../registry/cache';
@@ -345,7 +347,7 @@ async function run(
   mechanism: MutationMechanism,
   label: string,
   operations: ExecOperation[],
-): Promise<{ actionId: string }> {
+): Promise<JournalRef> {
   const r = await execute(
     ctx.db,
     {
@@ -360,7 +362,7 @@ async function run(
     { sink },
   );
   if (!r.ok) throw new ExecError(r.error.code as ExecErrorCode, r.error.message, r.error.details);
-  return { actionId: r.actionId };
+  return journalRef(r);
 }
 
 /**
@@ -453,7 +455,7 @@ export async function acceptUpdate(
   key: SupplyKey,
   etalons: readonly SupplyEtalon[] = SUPPLY_ETALONS,
   seam: RaceSeam = {},
-): Promise<{ actionId: string }> {
+): Promise<JournalRef> {
   const s = await snapshot(ctx);
   await seam.afterRead?.();
   const row = liveOrRefuse(s, key);
@@ -478,7 +480,10 @@ export async function acceptUpdate(
 export async function acceptAll(
   ctx: SupplyCtx,
   etalons: readonly SupplyEtalon[] = SUPPLY_ETALONS,
-): Promise<{ actionId: string | null; accepted: SupplyKey[] }> {
+): Promise<
+  | { actionId: null; accepted: SupplyKey[]; consequences?: never }
+  | (JournalRef & { accepted: SupplyKey[] })
+> {
   const s = await snapshot(ctx);
   const resolve = resolverOf(s);
   const accepted: SupplyKey[] = [];
@@ -492,13 +497,8 @@ export async function acceptAll(
     ops.push(...acceptOps(row, e, s.reg, resolve));
   }
   if (accepted.length === 0) return { actionId: null, accepted };
-  const { actionId } = await run(
-    ctx,
-    'supply',
-    `Принять все обновления поставки (${accepted.length})`,
-    ops,
-  );
-  return { actionId, accepted };
+  const ref = await run(ctx, 'supply', `Принять все обновления поставки (${accepted.length})`, ops);
+  return { ...ref, accepted };
 }
 
 /** «Оставить своё» (§9.1 п. 2): отказ от ЭТОГО эталона — помнится, пока не придёт следующий. */
@@ -506,7 +506,7 @@ export async function declineUpdate(
   ctx: SupplyCtx,
   key: SupplyKey,
   etalons: readonly SupplyEtalon[] = SUPPLY_ETALONS,
-): Promise<{ actionId: string }> {
+): Promise<JournalRef> {
   const s = await snapshot(ctx);
   const row = liveOrRefuse(s, key);
   const e = etalonIn(etalons, key);
@@ -532,7 +532,7 @@ export async function revertToEtalon(
   key: SupplyKeyValue,
   expectedUpdatedAt?: string,
   seam: RaceSeam = {},
-): Promise<{ actionId: string }> {
+): Promise<JournalRef> {
   const s = await snapshot(ctx);
   await seam.afterRead?.();
   const row = liveOrRefuse(s, key);
@@ -673,7 +673,7 @@ export async function addSupplyRecord(
   ctx: SupplyCtx,
   key: SupplyKey,
   etalons: readonly SupplyEtalon[] = SUPPLY_ETALONS,
-): Promise<{ actionId: string }> {
+): Promise<JournalRef> {
   const s = await snapshot(ctx);
   const restorable = liveOf(s, key) === undefined ? restorableOf(s, key) : undefined;
   if (restorable !== undefined) {

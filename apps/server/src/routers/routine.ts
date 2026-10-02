@@ -1,3 +1,4 @@
+import type { JournalRef } from '@orbis/shared';
 // apps/server/src/routers/routine.ts
 // Роутер routine (§9.1, V1) — владельческая половина внутреннего исполнителя: «прогнать
 // сейчас» (V1.3), ответ на вопрос прогона (V1.9), чтение предложения и решение по нему
@@ -185,7 +186,7 @@ export const routineRouter = router({
    */
   answerCheckpoint: ownerOnlyProcedure
     .input(answerCheckpointInput)
-    .mutation(async ({ ctx, input }): Promise<{ runId: string }> => {
+    .mutation(async ({ ctx, input }): Promise<{ runId: string } & JournalRef> => {
       try {
         return await answerRoutineCheckpoint(writeDeps(ctx), {
           identity: ctx.identity,

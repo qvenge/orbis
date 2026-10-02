@@ -14,6 +14,12 @@ export type MutationSourceWire =
   | 'system'
   | 'routine';
 
+/** Ссылка ответа мутации на действие (§8.2): у продолжения правки текста actionId — id сеанса. */
+export interface JournalRef {
+  actionId: string;
+  consequences: boolean;
+}
+
 /**
  * Элемент журнала в треде — `metadata.journal` строки `role: 'system'`. `actionId` — id ДЕЙСТВИЯ (по нему
  * `ai.undo`); id самой строки треда — свой, производный (рулинг R-12). `undoable` — показывать ли «Отменить»

@@ -35,6 +35,31 @@ afterAll(async () => {
 });
 
 describe('user.exportData (§9.4)', () => {
+  test('новая пачка экспортирует прежний results[] без внутреннего consequences', async () => {
+    const user = await freshGraph();
+    const caller = callerFor(user);
+    const entity = await caller.entity.create({
+      input: {
+        title: 'Задача',
+        tags: [],
+        aspects: ['orbis/task'],
+        props: { 'orbis/task_status': 'inbox' },
+      },
+      source: 'ui',
+    });
+    const batch = await caller.entity.updateBatch({
+      operations: [
+        { tool: 'entity_update', input: { id: entity.id, props: { 'orbis/task_status': 'done' } } },
+      ],
+    });
+    expect(batch.consequences).toBe(true);
+    const entry = (await caller.user.exportData()).journal.find(
+      (item) => item.id === batch.actionId,
+    );
+    expect(entry?.results).toEqual(batch.results);
+    expect(entry).not.toHaveProperty('consequences');
+  });
+
   test('после сидирования: 24 записи, настройки, глобальный тред, 0 aspectDefinitions', async () => {
     const user = await freshGraph();
     const caller = callerFor(user);

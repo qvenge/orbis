@@ -24,7 +24,7 @@ import { withIdentity } from '../db/with-identity';
 import { materializeInstances } from '../recurring/materialize';
 import { makeJournalSink } from './journal';
 import type { JournalEntry } from './journal-read';
-import type { ExecuteErr, ExecuteOk, ExecuteRequest, ExecuteResult, WireEntity } from './types';
+import type { ExecuteErr, ExecuteRequest, ExecuteResult, WireEntity } from './types';
 import { undoAction, undoLast } from './undo';
 
 requireEnv();
@@ -40,12 +40,20 @@ afterAll(async () => {
   await client.end();
 });
 
-function ok(r: ExecuteResult): ExecuteOk {
+function ok<
+  T extends
+    | ExecuteResult
+    | (Omit<Extract<ExecuteResult, { ok: true }>, 'consequences'> & { consequences?: never }),
+>(r: T): Extract<T, { ok: true }> {
   if (!r.ok) throw new Error(`ожидался успех, получено: ${JSON.stringify(r.error)}`);
-  return r;
+  return r as Extract<T, { ok: true }>;
 }
 
-function err(r: ExecuteResult): ExecuteErr {
+function err(
+  r:
+    | ExecuteResult
+    | (Omit<Extract<ExecuteResult, { ok: true }>, 'consequences'> & { consequences?: never }),
+): ExecuteErr {
   if (r.ok) throw new Error('ожидался структурированный отказ, получен успех');
   return r;
 }

@@ -9,6 +9,7 @@ import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { beforeEach, expect, test } from 'vitest';
 import {
   type MockHandler,
+  mockEntityUpdateResult,
   renderWithProviders,
   trpcError,
   wireEntity as wireFixture,
@@ -80,7 +81,9 @@ const handler =
     }
     if (path === 'entity.update') {
       const { id } = input as { id: string };
-      return { ...([purchase, plainTask].find((e) => e.id === id) ?? ent(id, 'x')) };
+      return mockEntityUpdateResult({
+        ...([purchase, plainTask].find((e) => e.id === id) ?? ent(id, 'x')),
+      });
     }
     if (path === 'relation.listFor') return [];
     if (path === 'budget.confirmPurchase') return (over.confirm ?? okConfirm)(input);

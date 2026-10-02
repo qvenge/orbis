@@ -1816,7 +1816,12 @@ describe('возобновление лестницы правки: крэш-о�
       decision: 'approve',
       edits,
     });
-    expect(decided).toEqual({ status: 'applied', actionId: child, editedFrom: pendingId });
+    expect(decided).toEqual({
+      status: 'applied',
+      actionId: child,
+      editedFrom: pendingId,
+      consequences: false,
+    });
 
     expect(await taskStatusOf(taskId)).toBe('in_progress');
     expect(await proposalOf(runId)).toMatchObject({
@@ -1871,7 +1876,12 @@ describe('возобновление лестницы правки: крэш-о�
       pendingId: child,
       decision: 'approve',
     });
-    expect(decided).toEqual({ status: 'applied', actionId: child, editedFrom: pendingId });
+    expect(decided).toEqual({
+      status: 'applied',
+      actionId: child,
+      editedFrom: pendingId,
+      consequences: false,
+    });
     expect(await taskStatusOf(taskId)).toBe('in_progress');
     expect(await proposalOf(runId)).toMatchObject({
       pending_id: child,

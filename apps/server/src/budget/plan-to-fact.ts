@@ -60,7 +60,11 @@ export async function confirmPurchase(
   if (replay !== undefined) {
     // Сохранённый результат — из журнала: `execute` вернул бы его же batch-веткой, но для
     // этого ему нужны операции, а резолвить их у повтора нечем (см. докблок выше).
-    return { actionId: replay.id, idempotentReplay: true };
+    return {
+      actionId: replay.id,
+      consequences: replay.consequences ?? false,
+      idempotentReplay: true,
+    };
   }
   try {
     // «Сегодня» и зона — той же функцией, что у `runAction` и «Принять» (`actionDateArgs`):
@@ -118,7 +122,11 @@ export async function confirmPurchase(
       { sink },
     );
     if (!r.ok) throw new ExecError(r.error.code as ExecErrorCode, r.error.message, r.error.details);
-    return { actionId: r.actionId, idempotentReplay: r.idempotentReplay };
+    return {
+      actionId: r.actionId,
+      consequences: r.consequences,
+      idempotentReplay: r.idempotentReplay,
+    };
   } catch (e) {
     throw asLegacyRefusal(e);
   }

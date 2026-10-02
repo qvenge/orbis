@@ -13,7 +13,7 @@ import { z } from 'zod';
 import { declineRuleSuggestion, RULE_PATTERN_MAX } from '../ai/escalation';
 import { defaultAiDeps, type SendMessageResult, sendMessage } from '../ai/send-message';
 import { ExecError, execErrorToTRPC } from '../errors';
-import type { ExecuteOk } from '../executor/types';
+
 import { type UndoLastResult, undoAction, undoLast } from '../executor/undo';
 import { approvePending, rejectPending } from '../policy/pending';
 import { ownerOnlyProcedure, router } from '../trpc';
@@ -102,14 +102,19 @@ export const aiRouter = router({
    */
   approve: ownerOnlyProcedure
     .input(pendingIdInput)
-    .mutation(async ({ ctx, input }): Promise<ExecuteOk> => {
-      const r = await approvePending(ctx.db, {
-        identity: ctx.identity,
-        pendingId: input.pendingId,
-      });
-      if (!r.ok) throw execErrorToTRPC(r.error);
-      return r;
-    }),
+    .mutation(
+      async ({
+        ctx,
+        input,
+      }): Promise<Exclude<Awaited<ReturnType<typeof approvePending>>, { ok: false }>> => {
+        const r = await approvePending(ctx.db, {
+          identity: ctx.identity,
+          pendingId: input.pendingId,
+        });
+        if (!r.ok) throw execErrorToTRPC(r.error);
+        return r;
+      },
+    ),
 
   /**
    * Отклонение pending-подтверждения (§7.10): reject-сообщение в тред карточки.

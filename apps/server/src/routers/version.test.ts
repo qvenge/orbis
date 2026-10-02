@@ -2,6 +2,7 @@
 // Тесты роутера version (§9.1, С11): закрепление версии тела, выдача снимков и откат.
 // Роутер — только трансляция: pin/restore идут через executor (единственный путь мутаций,
 // 00-arch §4), list читает под RLS. Против живой БД, caller как в бою (createCallerFactory).
+
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import type { GraphId } from '@orbis/shared';
 import { newId } from '@orbis/shared';
@@ -18,6 +19,7 @@ import {
   truncateAll,
 } from '../../test/helpers';
 import { actionsOf } from '../../test/journal-helpers';
+import { expectJournalRef } from '../../test/journal-ref-helpers';
 import { withIdentity } from '../db/with-identity';
 import { appRouter } from '../router';
 import { createCallerFactory } from '../trpc';
@@ -90,6 +92,7 @@ describe('version.pin / version.list / version.restore (С11)', () => {
     await a.relation.create({ source_id: id, target_id: neighbour, role: 'mention' });
 
     const v = await a.version.pin({ entityId: id, label: 'до правки' });
+    await expectJournalRef(owner, v, false);
     expect(v.hasDoc).toBe(true);
     expect(v.entityId).toBe(id);
     expect(v.actorKind).toBe('owner');
@@ -115,6 +118,7 @@ describe('version.pin / version.list / version.restore (С11)', () => {
       versionId: v.id,
       expectedBodyRevision: rev(e2.entity),
     });
+    await expectJournalRef(owner, restored, false);
     expect(restored.body).toBe(canonicalizeBody('# Раз\n\n- два\n').body);
     // Инвариант 8: откат трогает ТОЛЬКО тело — аспекты остаются текущими (С11),
     expect(restored.props['orbis/task_status']).toBe('waiting');

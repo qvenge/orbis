@@ -4,6 +4,7 @@
 // (createCallerFactory), глаголы исполнителя — через dispatchTool с worker-контекстом:
 // иначе «ответ владельца» проверялся бы на руками вылепленном прогоне, а не на том,
 // который оставляет настоящий агент.
+
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import type { ClaimTaskResult, GraphId, MyQueueResult } from '@orbis/shared';
 import { TRPCError } from '@trpc/server';
@@ -16,6 +17,7 @@ import {
   truncateAll,
 } from '../../test/helpers';
 import { actionsOf } from '../../test/journal-helpers';
+import { expectJournalRef } from '../../test/journal-ref-helpers';
 import type { JournalEntry } from '../executor/journal-read';
 import { appRouter } from '../router';
 import { type AnyRecord, agentLoopHelpers } from '../test/agent-loop-helpers';
@@ -116,6 +118,7 @@ describe('agentRun.answerCheckpoint (С3, приёмка 8)', () => {
     const answer = 'Бери zod — он уже в зависимостях.';
     const out = await a.agentRun.answerCheckpoint({ ticketId, runId, answer });
 
+    await expectJournalRef(owner, out, true);
     // Тикет вернулся в работу человека: хвост ожидания снят, а не оставлен рядом с planned
     expect(out.ticket.id).toBe(ticketId);
     // Значения — плоско по id свойства (§А1-1): `waiting_for` снят вместе со статусом.

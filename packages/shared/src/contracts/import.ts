@@ -303,6 +303,7 @@ export const importConfirmInput = z
  */
 export const importConfirmResultSchema = z
   .object({
+    consequences: z.boolean(),
     actionId: z.string().uuid(), // = batchId: Undo откатывает весь импорт одной группой
     idempotentReplay: z.boolean(),
     created: z.number().int().nonnegative(),

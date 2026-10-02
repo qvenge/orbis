@@ -1,3 +1,4 @@
+import type { JournalRef } from '@orbis/shared';
 // apps/server/src/routines/lifecycle.ts
 // Жизненный цикл рутины вокруг прогона: что делает НОВЫЙ прогон с наследством прошлых
 // (V1.8) и когда рутина сама себя останавливает (V1.12).
@@ -64,6 +65,7 @@ import {
 import { ExecError, type ExecErrorCode, type StructuredError } from '../errors';
 import { execute } from '../executor/executor';
 import { makeJournalSink } from '../executor/journal';
+import { journalRef } from '../executor/journal-ref';
 import type { ActorKind, JournalSink, MutationSource } from '../executor/types';
 import type { Identity } from '../identity';
 import type { LLMProvider } from '../llm/types';
@@ -213,7 +215,7 @@ interface PatchActor {
 const ACCOUNTING_ACTOR: PatchActor = { kind: 'ai', source: 'system' };
 
 /** Исход патча: структурированная ошибка целиком — её текст едет владельцу на экран. */
-type PatchResult = { ok: true } | { ok: false; error: StructuredError };
+type PatchResult = ({ ok: true } & JournalRef) | { ok: false; error: StructuredError };
 
 /**
  * Патч свойств прогона/рутины одним execute (§А1-1).
@@ -269,7 +271,7 @@ async function patchRun(
   // Не бросаем: гашение и пауза — гигиена вокруг работы, и провалившаяся гигиена не повод
   // не сделать (или отменить) саму работу. Владельческие вызывающие решают сами — им
   // отдаётся структурированная ошибка целиком.
-  return r.ok ? { ok: true } : { ok: false, error: r.error };
+  return r.ok ? { ok: true, ...journalRef(r) } : { ok: false, error: r.error };
 }
 
 /**
@@ -1113,7 +1115,7 @@ type RunProposal = ContractRunProposal;
 export async function answerRoutineCheckpoint(
   deps: RoutineWriteDeps,
   args: { identity: Identity; runId: string; answer: string },
-): Promise<{ runId: string }> {
+): Promise<{ runId: string } & JournalRef> {
   const row = await withIdentity(deps.db, args.identity, (tx) => runById(tx, args.runId));
   // Чужой, несуществующий и ТИКЕТНЫЙ прогон здесь неразличимы намеренно: у тикетного своя
   // процедура (agentRun.answerCheckpoint), и отвечать на него отсюда — не «нельзя», а
@@ -1140,7 +1142,7 @@ export async function answerRoutineCheckpoint(
     actor: { kind: 'owner', source: 'ui', runId: args.runId },
   });
   if (!patched.ok) throw toExecError(patched.error);
-  return { runId: args.runId };
+  return { runId: args.runId, actionId: patched.actionId, consequences: patched.consequences };
 }
 
 /**
@@ -1257,6 +1259,7 @@ export type DecideProposalResult =
   | {
       status: 'applied';
       actionId: string;
+      consequences: boolean;
       /**
        * Применено предложение, рождённое правкой владельца: здесь id ИСХОДНОГО, которое
        * эта правка погасила. Экран исходной карточки по нему понимает, что применено не
@@ -2025,7 +2028,7 @@ async function approveProposal(
     const editedFrom = proposal.edited_from;
     const done: DecideProposalResult = {
       status: 'applied',
-      actionId: applied.actionId,
+      ...journalRefOfApproval(applied),
       ...(editedFrom !== undefined && { editedFrom }),
     };
     // Возобновление шагов 3–4 (двойной тап по «Принять»): батч исполнен идемпотентно, тем
@@ -2176,7 +2179,7 @@ async function settleProposal(
  * изменилось, вот что именно» — это ответ экрану, который он рисует списком расхождений.
  */
 export type DecideDeferredResult =
-  | { status: 'applied'; actionId: string }
+  | ({ status: 'applied' } & JournalRef)
   /** Предусловия единицы (ОЧ.13) разошлись с графом; карточка при этом уже погашена. */
   | { status: 'stale'; mismatches: PreconditionMismatch[]; bodyChanged: boolean }
   | { status: 'rejected' }
@@ -2259,7 +2262,10 @@ export async function decideDeferredUnit(
  * приезжает СПИСКОМ, и без `pendingId` экран не знал бы, какой карточке принадлежит
  * «устарело» и какие расхождения под ней рисовать.
  */
-export type DecideAllItem = { pendingId: string } & DecideDeferredResult;
+export type DecideAllItem = { pendingId: string } & (
+  | Exclude<DecideDeferredResult, { status: 'applied' }>
+  | { status: 'applied'; actionId: string }
+);
 
 /**
  * «Принять все» (ОЧ.11, приёмка 6): владелец разбирает пачку одним нажатием.
@@ -2313,7 +2319,12 @@ export async function decideAllDeferred(
       pendingId: unit.pendingId,
       decision: 'approve',
     });
-    summary.push({ pendingId: unit.pendingId, ...decided });
+    // Сводка N независимых решений не представляет одно действие для плашки/стека (К-41).
+    summary.push(
+      decided.status === 'applied'
+        ? { pendingId: unit.pendingId, status: decided.status, actionId: decided.actionId }
+        : { pendingId: unit.pendingId, ...decided },
+    );
   }
   return summary;
 }
@@ -2325,7 +2336,7 @@ async function approveUnit(
 ): Promise<DecideDeferredResult> {
   const { identity, pendingId } = args;
   const applied = await approvePending(deps.db, { identity, pendingId, clock: deps.clock });
-  if (applied.ok) return { status: 'applied', actionId: applied.actionId };
+  if (applied.ok) return { status: 'applied', ...journalRefOfApproval(applied) };
 
   const divergence = divergenceOf(applied.error);
   if (divergence === null) {
@@ -2904,4 +2915,13 @@ function preconditionValues(precondition: unknown): Map<string, { value: unknown
     }
   }
   return out;
+}
+
+/** Предложения рутины — действия; запись отмены не может попасть в их ответ как новая правка. */
+function journalRefOfApproval(
+  result: Exclude<Awaited<ReturnType<typeof approvePending>>, { ok: false }>,
+): JournalRef {
+  if (typeof result.consequences !== 'boolean')
+    throw new Error('предложение рутины исполнило отмену вместо действия');
+  return { actionId: result.actionId, consequences: result.consequences };
 }

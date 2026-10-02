@@ -20,6 +20,7 @@ import { resetNavForTests, useNav } from '../../state/navigation';
 import {
   installCrashTrap,
   type MockHandler,
+  mockEntityUpdateResult,
   renderWithProviders,
   staleBodyError,
   trpcError,
@@ -244,15 +245,15 @@ function bodyServer(opts: {
     if (opts.hold !== undefined) await opts.hold;
     if (opts.reject === true) throw trpcError('BAD_REQUEST', 'тело не принято');
     if (opts.offline?.() === true) throw new Error('Failed to fetch');
-    const inp = input as { bodyDoc?: { v: number; doc: object } };
+    const inp = input as { bodyDoc?: { v: number; doc: Record<string, unknown> } };
     const base = dashboard();
-    return {
+    return mockEntityUpdateResult({
       ...base,
       updatedAt: '2026-09-25T13:00:00.000Z',
       ...(inp.bodyDoc === undefined
         ? {}
         : { bodyDoc: inp.bodyDoc, body: serializeBody(inp.bodyDoc as never) }),
-    };
+    });
   };
 }
 
@@ -685,7 +686,7 @@ describe('уход с настройки без связи (рулинг R-5)', 
       const a = answer(n++);
       if (a === 'hold') await new Promise(() => {});
       if (a instanceof Error) throw a;
-      const inp = input as { bodyDoc?: { v: number; doc: object } };
+      const inp = input as { bodyDoc?: { v: number; doc: Record<string, unknown> } };
       return {
         ...dashboard(),
         updatedAt: '2026-09-25T13:00:00.000Z',

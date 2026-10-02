@@ -5,7 +5,12 @@ import { cleanup, fireEvent, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 import { QuickCapture } from '../features/browser/QuickCapture';
 import { useRecordEdits } from '../features/entity-detail/useEntityDetail';
-import { renderWithProviders, trpcError, wireEntity } from '../test/harness';
+import {
+  mockEntityUpdateResult,
+  renderWithProviders,
+  trpcError,
+  wireEntity,
+} from '../test/harness';
 import { resetMarksForTests } from './marks';
 
 const recorded = vi.hoisted(() => [] as PerfSample[]);
@@ -39,7 +44,7 @@ function press(run: (e: Edits) => void, fail = false) {
   renderWithProviders(<Edit run={run} />, (path) => {
     if (path !== 'entity.update') return {};
     if (fail) throw trpcError('INTERNAL_SERVER_ERROR');
-    return { ...ENTITY };
+    return mockEntityUpdateResult({ ...ENTITY });
   });
   fireEvent.click(screen.getByRole('button', { name: 'править' }));
 }

@@ -56,6 +56,8 @@ export interface JournalEntry {
   operations: ActionOperation[];
   inverse: ActionOperation[];
   results?: unknown[];
+  /** Внутренний признак сохранённого ответа пачки; наружу results остаётся массивом. */
+  consequences?: boolean;
   textSession: boolean;
   bodyBefore: Record<string, string | null> | null;
   undoes: string | null;
@@ -199,7 +201,14 @@ function jsonValue(value: unknown): unknown {
 function entryFromRow(row: Row): JournalEntry {
   const operations = jsonArray<ActionOperation>(row.operations);
   const inverse = jsonArray<ActionOperation>(row.inverse);
-  const results = jsonValue(row.results);
+  const savedResults = jsonValue(row.results);
+  // Новые пачки хранят исходный признак рядом с items (R-32); перенесённые массивы читаются прежней формой.
+  const envelope =
+    !Array.isArray(savedResults) && typeof savedResults === 'object' && savedResults !== null
+      ? (savedResults as { items?: unknown; consequences?: unknown })
+      : undefined;
+  const results = envelope?.items ?? savedResults;
+
   const bodyBefore = jsonValue(row.body_before);
   return {
     id: row.id,
@@ -224,6 +233,7 @@ function entryFromRow(row: Row): JournalEntry {
     operations,
     inverse,
     ...(results !== null && results !== undefined && { results: results as unknown[] }),
+    ...(typeof envelope?.consequences === 'boolean' && { consequences: envelope.consequences }),
     textSession: row.text_session,
     bodyBefore: (bodyBefore ?? null) as Record<string, string | null> | null,
     undoes: row.undoes,

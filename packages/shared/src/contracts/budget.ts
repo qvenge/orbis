@@ -142,6 +142,7 @@ export const rolloverInput = z
 
 /** Результат rollover: один action = batchId, Undo откатывает всю группу (§3.5). */
 export const rolloverResultSchema = z.object({
+  consequences: z.boolean(),
   actionId: z.string().uuid(),
   envelopeIds: z.array(z.string().uuid()),
   idempotentReplay: z.boolean(),
@@ -164,6 +165,7 @@ export const confirmPurchaseInput = z
 
 /** Результат: один action = batchId; Undo восстанавливает план и прежнюю привязку (§2.7). */
 export const confirmPurchaseResultSchema = z.object({
+  consequences: z.boolean(),
   actionId: z.string().uuid(),
   idempotentReplay: z.boolean(),
 });

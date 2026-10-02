@@ -171,7 +171,7 @@ function openRecord(
     }
     if (path === 'entity.updateBatch') {
       applyBatch(world, input);
-      return { actionId: ACTION_ID, results: [] };
+      return { actionId: ACTION_ID, consequences: false, results: [] };
     }
     if (path === 'ai.undo') return { ok: true, actionId: ACTION_ID, results: [] };
     return blocks(path, input) ?? screenHandler(path, input);
@@ -347,7 +347,7 @@ describe('выбор шаблона (§4.2)', () => {
             return [crashing];
           if (path === 'entity.updateBatch') {
             batches.push((input as { operations: unknown }).operations);
-            return { actionId: ACTION_ID, results: [] };
+            return { actionId: ACTION_ID, consequences: false, results: [] };
           }
           return undefined;
         },

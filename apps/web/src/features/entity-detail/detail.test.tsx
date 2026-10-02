@@ -24,6 +24,7 @@ import {
   installCrashTrap,
   isRecordScreenListCall,
   type MockHandler,
+  mockEntityUpdateResult,
   renderWithProviders,
   staleBodyError,
   trpcError,
@@ -31,7 +32,7 @@ import {
 } from '../../test/harness';
 import { navAt, recordAddress, topAddress } from '../../test/nav';
 import { registryReply } from '../../test/registry';
-import { trpc } from '../../trpc';
+import { type RouterOutputs, trpc } from '../../trpc';
 import { Toaster } from '../../ui/Toast';
 import { useChatThread } from '../chat/useChatThread';
 import { resetEnsuredThreads } from '../chat/useEnsuredThread';
@@ -242,10 +243,10 @@ test('чекбокс шлёт только смену статуса: штамп
     if (path === 'entity.get')
       return { entity, relations: [], thread: { threadId: 'th1', messages: [] } };
     if (path === 'entity.update')
-      return {
+      return mockEntityUpdateResult({
         ...entity,
         props: { 'orbis/task_status': 'done', 'orbis/completed_at': 'now' },
-      };
+      });
     return registryReply(path) ?? {};
   });
   // Этап 3: title теперь и в ScreenHeader (h1), и в NativeRow — целимся в шапку.
@@ -269,7 +270,7 @@ test('снятие галочки у закрытой задачи — снят�
   const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
     if (path === 'entity.get')
       return { entity: closed, relations: [], thread: { threadId: 'th1', messages: [] } };
-    if (path === 'entity.update') return { ...entity };
+    if (path === 'entity.update') return mockEntityUpdateResult({ ...entity });
     return registryReply(path) ?? {};
   });
   await waitFor(() => expect(screen.getByRole('heading', { name: 'Задача' })).toBeInTheDocument());
@@ -332,7 +333,7 @@ test('нетронутый редактор подхватывает правк�
         thread: { threadId: 'th1', messages: [] },
       };
     }
-    if (path === 'entity.update') return entity;
+    if (path === 'entity.update') return mockEntityUpdateResult(entity);
     return registryReply(path) ?? {};
   });
   await openEditor();
@@ -371,7 +372,7 @@ test('редактор посадил чужую правку тела — на�
     }
     if (path === 'entity.update') {
       updates.push(input as { bodyDoc?: unknown; expectedBodyRevision?: number });
-      return outside;
+      return mockEntityUpdateResult(outside);
     }
     return registryReply(path) ?? {};
   });
@@ -417,7 +418,7 @@ test('набранное в редакторе переживает чужую �
         thread: { threadId: 'th1', messages: [] },
       };
     }
-    if (path === 'entity.update') return entity;
+    if (path === 'entity.update') return mockEntityUpdateResult(entity);
     return registryReply(path) ?? {};
   });
   const field = await editorField();
@@ -677,7 +678,8 @@ test('inline правка заголовка уходит в entity.update с н
   const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
     if (path === 'entity.get')
       return { entity, relations: [], thread: { threadId: 'th1', messages: [] } };
-    if (path === 'entity.update') return { ...entity, title: 'кофе → Транспорт' };
+    if (path === 'entity.update')
+      return mockEntityUpdateResult({ ...entity, title: 'кофе → Транспорт' });
     return registryReply(path) ?? {};
   });
   const field = await screen.findByLabelText('Заголовок');
@@ -711,7 +713,7 @@ function externalTitleChange(): { handler: MockHandler; getCalls: () => number }
           thread: { threadId: 'th1', messages: [] },
         };
       }
-      if (path === 'entity.update') return renamed;
+      if (path === 'entity.update') return mockEntityUpdateResult(renamed);
       return registryReply(path) ?? {};
     },
   };
@@ -759,7 +761,7 @@ test('отказ замка заголовка сохраняет ввод; ре
           });
         current = { ...current, title: vars.title };
       }
-      return current;
+      return mockEntityUpdateResult(current);
     }
     return registryReply(path) ?? {};
   });
@@ -897,7 +899,7 @@ test.each([
   let saves = 0;
   let reads = 0;
   let rejectSave: (error: unknown) => void = () => {};
-  const pendingSave = new Promise((_, reject) => {
+  const pendingSave = new Promise<never>((_, reject) => {
     rejectSave = reject;
   });
   const stale = () =>
@@ -933,7 +935,7 @@ test.each([
           current = { ...initial, title: 'Агентское' };
           throw stale();
         }
-        return pendingSave;
+        return mockEntityUpdateResult(pendingSave);
       }
       return registryReply(path) ?? {};
     },
@@ -997,12 +999,12 @@ test('принятое обновление одного клиента не с�
   await firstScreen.findByText('Заголовок изменён в другом месте — обновите');
   await waitFor(() => expect(first.calls.filter((c) => c.path === 'entity.get')).toHaveLength(2));
   let rejectSave: (error: unknown) => void = () => {};
-  const pendingSave = new Promise((_, reject) => {
+  const pendingSave = new Promise<never>((_, reject) => {
     rejectSave = reject;
   });
   const second = renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
     if (path === 'entity.get') return { entity: initial, relations: [], thread: null };
-    if (path === 'entity.update') return pendingSave;
+    if (path === 'entity.update') return mockEntityUpdateResult(pendingSave);
     return registryReply(path) ?? {};
   });
   const secondScreen = within(second.container);
@@ -1026,7 +1028,7 @@ test('принятое обновление одного клиента не с�
 test('принятое обновление после холодного перехода не откатывает title-save старого экземпляра', async () => {
   let changeId: (id: string) => void = () => {};
   let rejectSave: (error: unknown) => void = () => {};
-  const pendingSave = new Promise((_, reject) => {
+  const pendingSave = new Promise<never>((_, reject) => {
     rejectSave = reject;
   });
   const pendingNeighbor = new Promise(() => {});
@@ -1062,7 +1064,7 @@ test('принятое обновление после холодного пер
     }
     if (path === 'entity.update') {
       saves += 1;
-      if (saves === 2) return pendingSave;
+      if (saves === 2) return mockEntityUpdateResult(pendingSave);
       current = { ...initial, title: saves === 1 ? 'Агентское' : 'Новое агентское' };
       throw stale();
     }
@@ -1222,7 +1224,7 @@ function externalStatusChange(): { handler: MockHandler; getCalls: () => number 
           thread: { threadId: 'th1', messages: [] },
         };
       }
-      if (path === 'entity.update') return done;
+      if (path === 'entity.update') return mockEntityUpdateResult(done);
       return registryReply(path) ?? {};
     },
   };
@@ -1279,7 +1281,7 @@ const finHandler = (path: string) => {
   if (path === 'entity.get')
     return { entity: finEntity, relations: [], thread: { threadId: 'th1', messages: [] } };
   if (path === 'entity.query') return [category(CAT_FOOD, 'Еда'), category(CAT_FUN, 'Развлечения')];
-  if (path === 'entity.update') return finEntity;
+  if (path === 'entity.update') return mockEntityUpdateResult(finEntity);
   return registryReply(path) ?? {};
 };
 
@@ -1391,7 +1393,7 @@ test('financial: рефетч списка упал, но список уже е
       if (queries === 1) return [category(CAT_FOOD, 'Еда'), category(CAT_FUN, 'Развлечения')];
       throw trpcError('INTERNAL_SERVER_ERROR');
     }
-    if (path === 'entity.update') return orphan;
+    if (path === 'entity.update') return mockEntityUpdateResult(orphan);
     return registryReply(path) ?? {};
   });
   const select = await screen.findByLabelText('Категория');
@@ -1452,7 +1454,7 @@ test('нефинансовая сущность: контрол по типу с
   const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
     if (path === 'entity.get')
       return { entity, relations: [], thread: { threadId: 'th1', messages: [] } };
-    if (path === 'entity.update') return entity;
+    if (path === 'entity.update') return mockEntityUpdateResult(entity);
     return registryReply(path) ?? {};
   });
   // Тип свойства решает контрол: у `orbis/task_status` он `select` (варианты закрыты
@@ -1517,14 +1519,14 @@ function CardsUntilHidden({ entity: target }: { entity: typeof taskedFin }) {
 test('правка Финансов гасит агрегаты, даже если экран размонтирован до ответа сервера', async () => {
   // Ответ сервера держим за нитку: правка обязана уйти, экран — исчезнуть, и только потом
   // мутация оседает. На поштучном `onSuccess` инвалидации в этот момент уже не случается.
-  let settle: (value: unknown) => void = () => {};
-  const pending = new Promise((resolve) => {
+  let settle: (value: Partial<RouterOutputs['entity']['update']>) => void = () => {};
+  const pending = new Promise<Partial<RouterOutputs['entity']['update']>>((resolve) => {
     settle = resolve;
   });
   const { calls } = renderWithProviders(<CardsUntilHidden entity={taskedFin} />, (path) => {
     if (path === 'budget.alertCount') return 0;
     if (path === 'entity.query') return [category(CAT_FOOD, 'Еда')];
-    if (path === 'entity.update') return pending;
+    if (path === 'entity.update') return mockEntityUpdateResult(pending);
     return registryReply(path) ?? {};
   });
   const budgetReads = () => calls.filter((c) => c.path === 'budget.alertCount').length;
@@ -1562,14 +1564,14 @@ test('правка Финансов гасит агрегаты, даже есл
  * тот же сюжет, что у правки суммы, и колбэк уровня вызова здесь не позвали бы вовсе.
  */
 test('снятие аспекта Финансов гасит агрегаты, даже если экран размонтирован до ответа', async () => {
-  let settle: (value: unknown) => void = () => {};
-  const pending = new Promise((resolve) => {
+  let settle: (value: Partial<RouterOutputs['entity']['update']>) => void = () => {};
+  const pending = new Promise<Partial<RouterOutputs['entity']['update']>>((resolve) => {
     settle = resolve;
   });
   const { calls } = renderWithProviders(<CardsUntilHidden entity={taskedFin} />, (path) => {
     if (path === 'budget.alertCount') return 0;
     if (path === 'entity.query') return [category(CAT_FOOD, 'Еда')];
-    if (path === 'entity.update') return pending;
+    if (path === 'entity.update') return mockEntityUpdateResult(pending);
     return registryReply(path) ?? {};
   });
   const budgetReads = () => calls.filter((c) => c.path === 'budget.alertCount').length;
@@ -1604,7 +1606,7 @@ test('правка суммы (стандартное свойство ядра 
     (path) => {
       if (path === 'budget.alertCount') return 0;
       if (path === 'entity.query') return [category(CAT_FOOD, 'Еда')];
-      if (path === 'entity.update') return taskedFin;
+      if (path === 'entity.update') return mockEntityUpdateResult(taskedFin);
       return registryReply(path) ?? {};
     },
   );
@@ -1790,7 +1792,7 @@ async function openDetailMenu(): Promise<void> {
 const menuHandler: MockHandler = (path) => {
   if (path === 'entity.get')
     return { entity, relations: [], thread: { threadId: 'th1', messages: [] } };
-  if (path === 'entity.update') return entity;
+  if (path === 'entity.update') return mockEntityUpdateResult(entity);
   return registryReply(path) ?? {};
 };
 
@@ -1889,7 +1891,7 @@ const twoEntitiesHandler: MockHandler = (path, input) => {
       thread: null,
     };
   }
-  if (path === 'entity.update') return entity;
+  if (path === 'entity.update') return mockEntityUpdateResult(entity);
   return registryReply(path) ?? {};
 };
 
@@ -1971,7 +1973,7 @@ test('меню ⋮: у архивной сущности пункт зовётс
   const archived = { ...entity, archived: true };
   const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
     if (path === 'entity.get') return { entity: archived, relations: [], thread: null };
-    if (path === 'entity.update') return archived;
+    if (path === 'entity.update') return mockEntityUpdateResult(archived);
     return registryReply(path) ?? {};
   });
   await openDetailMenu();
@@ -2031,7 +2033,8 @@ const bodyHandler =
         relations: [],
         thread: null,
       };
-    if (path === 'entity.update') return { ...entity, updatedAt: '2026-07-05T11:00:00.000Z' };
+    if (path === 'entity.update')
+      return mockEntityUpdateResult({ ...entity, updatedAt: '2026-07-05T11:00:00.000Z' });
     const reg = registryReply(path);
     if (reg !== undefined) return reg;
     // Каждому блоку тела — одна и та же строка: тестам тела важно, что блок ЖИВОЙ, а не какой.
@@ -2241,7 +2244,7 @@ function bodyConflictHandler(seen: unknown[]): MockHandler {
     if (path === 'entity.update') {
       seen.push(input);
       if ((input as { bodyDoc?: unknown }).bodyDoc !== undefined) throw staleBodyError();
-      return entity;
+      return mockEntityUpdateResult(entity);
     }
     return registryReply(path) ?? {};
   };
@@ -2349,7 +2352,7 @@ const richHandler: MockHandler = (path, input) => {
     };
   }
   if (path === 'entity.resolveRefs') return [];
-  if (path === 'entity.update') return entity;
+  if (path === 'entity.update') return mockEntityUpdateResult(entity);
   // Реестр НАСТОЯЩИЙ: по нему подписаны и секции аспектов, и строки свойств (§А9-2).
   return registryReply(path) ?? {};
 };
@@ -3097,7 +3100,7 @@ test('ничего не трогали: приехавшее тело не за�
   renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
     if (path === 'entity.get')
       return { entity: serve.outside ? outside : entity, relations: [], thread: null };
-    if (path === 'entity.update') return entity;
+    if (path === 'entity.update') return mockEntityUpdateResult(entity);
     return registryReply(path) ?? {};
   });
   await openEditor(); // редактор поднят, но НИ ОДНОГО нажатия в нём не было
@@ -3584,7 +3587,8 @@ test('смена записи размонтирует тело и досыла�
           thread: null,
         };
       }
-      if (path === 'entity.update') return { ...entity, updatedAt: '2026-07-05T11:00:00.000Z' };
+      if (path === 'entity.update')
+        return mockEntityUpdateResult({ ...entity, updatedAt: '2026-07-05T11:00:00.000Z' });
       return registryReply(path) ?? {};
     },
   );
@@ -3681,7 +3685,7 @@ function adeHandler(opts: { entity?: unknown; runs?: unknown[] } = {}): MockHand
     if (path === 'oauth.listGrants') return [GRANT];
     if (path === 'agentRun.sweep') return { swept: 0 };
     if (path === 'agentRun.answerCheckpoint') return { ticket: target, run: RUN };
-    if (path === 'entity.update') return target;
+    if (path === 'entity.update') return mockEntityUpdateResult(target);
     return registryReply(path) ?? {};
   };
 }
@@ -4769,7 +4773,11 @@ describe('ADE: версии', () => {
           server.revision += 1;
           // Метка для причинного барьера ниже: перечитывание после сохранения видно по заголовку
           server.title = 'Задача, текст сохранён';
-          return { ...entity, title: server.title, bodyRevision: server.revision };
+          return mockEntityUpdateResult({
+            ...entity,
+            title: server.title,
+            bodyRevision: server.revision,
+          });
         }
         return versions(path, input);
       },
@@ -4826,7 +4834,10 @@ describe('ADE: версии', () => {
         }
         if (path === 'entity.update') {
           updates.push(input);
-          return { ...entity, bodyRevision: (entity.bodyRevision as number) + 1 };
+          return mockEntityUpdateResult({
+            ...entity,
+            bodyRevision: (entity.bodyRevision as number) + 1,
+          });
         }
         return versions(path, input);
       },
@@ -5041,7 +5052,7 @@ function routineHandler(
     if (path === 'entity.update') {
       const patch = (input as { props?: Record<string, unknown> }).props?.['orbis/routine_stage'];
       if (typeof patch === 'string') stage = patch;
-      return current();
+      return mockEntityUpdateResult(current());
     }
     // Часовой пояс владельца — тот же шов, что у ленты прогона и истории: без него время
     // печаталось бы в зоне машины, и проверка даты зависела бы от того, где идёт прогон.
@@ -6108,7 +6119,7 @@ function overlayHandler(
     if (path === 'routine.proposalsForEntity') return opts.proposals ?? [proposalFor()];
     if (path === 'routine.decideProposal')
       return opts.decide ?? { status: 'applied', actionId: 'a1' };
-    if (path === 'entity.update') return entity;
+    if (path === 'entity.update') return mockEntityUpdateResult(entity);
     if (path === 'chat.listMessages') return [];
     // Реестр НАСТОЯЩИЙ: по нему подписаны и строки плашки, и инпуты правки (§А9-2).
     return registryReply(path) ?? {};
@@ -6893,7 +6904,7 @@ describe('412 и 401 посреди набора', () => {
       if (path === 'entity.update') {
         seen.push(input);
         if (box.refuse) throw trpcError(code);
-        return entity;
+        return mockEntityUpdateResult(entity);
       }
       return registryReply(path) ?? {};
     };
@@ -6997,7 +7008,7 @@ describe('412 и 401 посреди набора', () => {
         return { entity: moved, relations: [], thread: { threadId: 'th1', messages: [] } };
       if (path === 'entity.update') {
         after.push(input);
-        return moved;
+        return mockEntityUpdateResult(moved);
       }
       return registryReply(path) ?? {};
     });
@@ -7023,7 +7034,7 @@ describe('412 и 401 посреди набора', () => {
         return { entity, relations: [], thread: { threadId: 'th1', messages: [] } };
       if (path === 'entity.update') {
         seen.push(input);
-        return entity;
+        return mockEntityUpdateResult(entity);
       }
       return registryReply(path) ?? {};
     });
@@ -7046,7 +7057,7 @@ describe('412 и 401 посреди набора', () => {
         return { entity, relations: [], thread: { threadId: 'th1', messages: [] } };
       if (path === 'entity.update') {
         again.push(input);
-        return entity;
+        return mockEntityUpdateResult(entity);
       }
       return registryReply(path) ?? {};
     });
@@ -7103,7 +7114,7 @@ test('агент правит текст, пока владелец печата
     if (path === 'entity.update') {
       const inp = input as { expectedBodyRevision?: number; bodyDoc?: typeof entity.bodyDoc };
       updates.push(inp);
-      if (inp.bodyDoc === undefined) return shown();
+      if (inp.bodyDoc === undefined) return mockEntityUpdateResult(shown());
       if (inp.expectedBodyRevision !== server.revision)
         throw staleBodyError({ expected: inp.expectedBodyRevision, current: server.revision });
       server.revision += 1;
@@ -7117,7 +7128,7 @@ test('агент правит текст, пока владелец печата
         server.body = 'текст агента';
         server.doc = parseBody('текст агента');
       }
-      return saved;
+      return mockEntityUpdateResult(saved);
     }
     return registryReply(path) ?? {};
   });
@@ -7166,7 +7177,7 @@ test('«Обновить» на плашке конфликта сажает т�
     if (path === 'entity.update') {
       const inp = input as { expectedBodyRevision?: number; bodyDoc?: typeof entity.bodyDoc };
       updates.push(inp);
-      if (inp.bodyDoc === undefined) return shown();
+      if (inp.bodyDoc === undefined) return mockEntityUpdateResult(shown());
       if (inp.expectedBodyRevision !== server.revision)
         throw staleBodyError({ expected: inp.expectedBodyRevision, current: server.revision });
       server.revision += 1;
@@ -7179,7 +7190,7 @@ test('«Обновить» на плашке конфликта сажает т�
         server.body = 'текст агента';
         server.doc = parseBody('текст агента');
       }
-      return saved;
+      return mockEntityUpdateResult(saved);
     }
     return registryReply(path) ?? {};
   });

@@ -31,7 +31,7 @@ import { parseBody } from '@orbis/shared/doc';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, expect, test, vi } from 'vitest';
-import { renderWithProviders, wireEntity } from '../../test/harness';
+import { mockEntityUpdateResult, renderWithProviders, wireEntity } from '../../test/harness';
 import { navAt } from '../../test/nav';
 import { DetailScreen } from './DetailScreen';
 
@@ -57,7 +57,8 @@ test.runIf(process.env.PERF === '1')(
   async () => {
     renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
       if (path === 'entity.get') return { entity, relations: [], thread: null };
-      if (path === 'entity.update') return { ...entity, updatedAt: '2026-07-05T11:00:00.000Z' };
+      if (path === 'entity.update')
+        return mockEntityUpdateResult({ ...entity, updatedAt: '2026-07-05T11:00:00.000Z' });
       return {};
     });
     fireEvent.click(await screen.findByTestId('editor-preview'));

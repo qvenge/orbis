@@ -84,13 +84,21 @@ function createSupply(
   );
 }
 
-function okId(r: ExecuteResult): string {
+function okId(
+  r:
+    | ExecuteResult
+    | (Omit<Extract<ExecuteResult, { ok: true }>, 'consequences'> & { consequences?: never }),
+): string {
   if (!r.ok) throw new Error(`ожидался успех, получено ${JSON.stringify(r.error)}`);
   return (r.results[0] as WireEntity).id;
 }
 
 /** Отказ в форме «код/invariant-или-reason» — одна строка на сравнение, падение назовёт причину. */
-function verdict(r: ExecuteResult): string {
+function verdict(
+  r:
+    | ExecuteResult
+    | (Omit<Extract<ExecuteResult, { ok: true }>, 'consequences'> & { consequences?: never }),
+): string {
   if (r.ok) return 'ok';
   const d = (r.error.details ?? {}) as { invariant?: string; reason?: string };
   return `${r.error.code}/${d.invariant ?? d.reason ?? '-'}`;
@@ -201,7 +209,11 @@ test('записи поставки видны в обычной выдаче: �
 // ---------------------------------------------------------------------------
 
 /** Код и `reason` отказа одной строкой; успех — «ok». */
-function refusal(r: ExecuteResult): string {
+function refusal(
+  r:
+    | ExecuteResult
+    | (Omit<Extract<ExecuteResult, { ok: true }>, 'consequences'> & { consequences?: never }),
+): string {
   if (r.ok) return 'ok';
   const d = (r.error.details ?? {}) as { reason?: string; invariant?: string };
   return `${r.error.code}/${d.invariant ?? d.reason ?? '-'}`;

@@ -202,7 +202,7 @@ export function appsHandler(w: AppsWorld): MockHandler {
         for (const k of op.unset ?? []) delete props[k];
         w.apps[i] = { ...cur, props, ...(op.archived !== undefined && { archived: op.archived }) };
       }
-      return { actionId: 'act-1' };
+      return { actionId: 'act-1', consequences: false, results: [] };
     }
     if (path === 'app.setDisabled') {
       const { appId, disabled } = input as { appId: string; disabled: boolean };
@@ -214,7 +214,7 @@ export function appsHandler(w: AppsWorld): MockHandler {
         else delete props[APP_DISABLED];
         w.apps[i] = { ...cur, props };
       }
-      return { actionId: 'act-2' };
+      return { actionId: 'act-2', consequences: false };
     }
     return frameHandler(frameWorld({ all: all() }))(path, input, type);
   };

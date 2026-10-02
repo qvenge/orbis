@@ -101,14 +101,22 @@ async function worldWith(...specs: CustomAspectSpec[]): Promise<World> {
   return { graph, run, mk, categoryId };
 }
 
-function entityOf(r: ExecuteResult): WireEntity {
+function entityOf(
+  r:
+    | ExecuteResult
+    | (Omit<Extract<ExecuteResult, { ok: true }>, 'consequences'> & { consequences?: never }),
+): WireEntity {
   if (!r.ok)
     throw new Error(`ожидался успех исполнителя, пришёл отказ: ${JSON.stringify(r.error)}`);
   return r.results[0] as WireEntity;
 }
 
 /** Отказ исполнителя в форме «код + invariant + причина» — одна строка на сравнение. */
-function refusalOf(r: ExecuteResult): string {
+function refusalOf(
+  r:
+    | ExecuteResult
+    | (Omit<Extract<ExecuteResult, { ok: true }>, 'consequences'> & { consequences?: never }),
+): string {
   if (r.ok) return 'ok';
   const d = (r.error.details ?? {}) as { invariant?: string; reason?: string };
   return `${r.error.code}/${d.invariant ?? d.reason ?? '-'}`;
@@ -217,7 +225,9 @@ describe('режим отката — по ЭКЗЕМПЛЯРУ правила, 
     when: { op: '=', args: [{ prop: GATE_PROPS.finState }, { const: 'void' }] },
     params: { property: GATE_PROPS.finWhen },
   });
-  async function undoOfUnset(undo: 'check' | 'skip'): Promise<ExecuteResult> {
+  async function undoOfUnset(
+    undo: 'check' | 'skip',
+  ): Promise<ExecuteResult | import('../executor/undo').UndoOutcomeServer> {
     const w = await worldWith(GATE_FIN_ASPECT);
     const row = entityOf(await w.mk({ [GATE_PROPS.finState]: 'void', [GATE_PROPS.finWhen]: AT }));
     await seedCustomAspect(w.graph, { ...GATE_FIN_ASPECT, rules: [forbidVoidMoment(undo)] });

@@ -67,7 +67,8 @@ describe('entity.create / entity.get (§9.2)', () => {
     expect(created.tags).toEqual(['task']); // нормализация executor'а, не роутера
     expect(created.createdAt.endsWith('Z')).toBe(true);
     // actionId — аддитивное поле поверх wire-сущности (Undo из UI-форм, 03-budget §3.6)
-    const { actionId, ...createdEntity } = created;
+    const { actionId, consequences, ...createdEntity } = created;
+    expect(typeof consequences).toBe('boolean');
     expect(typeof actionId).toBe('string');
 
     const got = await caller.entity.get({ id: created.id });
@@ -732,7 +733,7 @@ describe('relation.create / relation.delete / relation.listFor (§4.2)', () => {
         target_id: b.id,
         role: 'mention',
       }),
-    ).toEqual({ ok: true });
+    ).toMatchObject({ ok: true });
     expect((await caller.relation.listFor({ entityId: a.id })).map((r) => r.id)).toEqual([ca.id]);
 
     // повторное удаление — NOT_FOUND

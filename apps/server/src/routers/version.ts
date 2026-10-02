@@ -1,3 +1,4 @@
+import type { JournalRef } from '@orbis/shared';
 // apps/server/src/routers/version.ts
 // Роутер version (§9.1, С11): закреплённые версии тела — «сохранить как есть» перед тем,
 // как отдать запись агенту, и откат к сохранённому. ТОЛЬКО трансляция: pin и restore идут
@@ -13,6 +14,7 @@ import { execErrorToTRPC } from '../errors';
 import { VERSION_LABEL_MAX, versionLabel } from '../executor/body-chain';
 import { execute } from '../executor/executor';
 import { makeJournalSink } from '../executor/journal';
+import { journalRef } from '../executor/journal-ref';
 import type { ActorKind, WireEntityVersion, WireEntityWithRevision } from '../executor/types';
 import { ownerOnlyProcedure, router } from '../trpc';
 
@@ -65,7 +67,7 @@ export const versionRouter = router({
    */
   pin: ownerOnlyProcedure
     .input(z.object({ entityId: z.string().uuid(), label: labelInput }).strict())
-    .mutation(async ({ ctx, input }): Promise<WireEntityVersion> => {
+    .mutation(async ({ ctx, input }): Promise<WireEntityVersion & JournalRef> => {
       const r = await execute(
         ctx.db,
         {
@@ -82,7 +84,7 @@ export const versionRouter = router({
         { sink },
       );
       if (!r.ok) throw execErrorToTRPC(r.error);
-      return r.results[0] as WireEntityVersion;
+      return { ...(r.results[0] as WireEntityVersion), ...journalRef(r) };
     }),
 
   /** Снимки сущности, свежие сверху (§4.10: RLS скоупит владельцем — своего graph_id в WHERE нет). */
@@ -141,7 +143,7 @@ export const versionRouter = router({
         })
         .strict(),
     )
-    .mutation(async ({ ctx, input }): Promise<WireEntityWithRevision> => {
+    .mutation(async ({ ctx, input }): Promise<WireEntityWithRevision & JournalRef> => {
       // Снимок читается под RLS: чужая и несуществующая версия неразличимы — NOT_FOUND
       const version = await withIdentity(ctx.db, ctx.identity, async (tx) => {
         const rows = await tx
@@ -187,6 +189,6 @@ export const versionRouter = router({
         { sink },
       );
       if (!r.ok) throw execErrorToTRPC(r.error);
-      return r.results[1] as WireEntityWithRevision;
+      return { ...(r.results[1] as WireEntityWithRevision), ...journalRef(r) };
     }),
 });

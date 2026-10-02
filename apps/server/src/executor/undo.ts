@@ -351,7 +351,11 @@ export interface UndoneAction {
  * сообщения было бы хрупко.
  */
 export type UndoLastResult =
-  | (ExecuteOk & { undone: UndoneAction; pinnedVersions: UndoResult['pinnedVersions'] })
+  | (Omit<ExecuteOk, 'consequences'> & {
+      consequences?: never;
+      undone: UndoneAction;
+      pinnedVersions: UndoResult['pinnedVersions'];
+    })
   | ExecuteErr;
 
 /**

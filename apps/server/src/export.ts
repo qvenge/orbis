@@ -33,7 +33,10 @@ import {
  * вычисляемого при чтении `touchedKeys`: дамп несёт то, что лежит, а не производное от него. Время — ISO-строкой,
  * как все таймстампы провода (решение 12 плана).
  */
-export type ExportedJournalEntry = Omit<JournalEntry, 'touchedKeys' | 'createdAt'> & {
+export type ExportedJournalEntry = Omit<
+  JournalEntry,
+  'touchedKeys' | 'createdAt' | 'consequences'
+> & {
   createdAt: string;
 };
 
@@ -122,7 +125,12 @@ export async function exportData(
     .where(eq(userSettings.graphId, graphId));
   const registry = await effectiveRegistry(tx, graphId);
   const journal = (await exportJournal(tx, graphId)).map(
-    ({ touchedKeys: _derived, createdAt, ...entry }): ExportedJournalEntry => ({
+    ({
+      touchedKeys: _derived,
+      consequences: _internal,
+      createdAt,
+      ...entry
+    }): ExportedJournalEntry => ({
       ...entry,
       createdAt: createdAt.toISOString(),
     }),

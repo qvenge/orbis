@@ -845,6 +845,7 @@ export async function confirmImport(
   await writeImportSummary(db, who, input, { created, adopted });
   return {
     actionId: r.actionId,
+    consequences: r.consequences,
     idempotentReplay: r.idempotentReplay,
     created,
     adopted,

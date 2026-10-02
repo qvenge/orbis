@@ -1,3 +1,4 @@
+import type { JournalRef } from '@orbis/shared';
 // apps/server/src/routers/agent-run.ts
 // Роутер agentRun (§9.1) — владельческая половина круга исполнителя: ответить на чекпойнт
 // (С3), подмести брошенные прогоны с экрана (С6) и откатить прогон (С12). ТОЛЬКО
@@ -17,6 +18,7 @@ import { withIdentity } from '../db/with-identity';
 import { ExecError, execErrorToTRPC } from '../errors';
 import { execute } from '../executor/executor';
 import { makeJournalSink } from '../executor/journal';
+import { journalRef } from '../executor/journal-ref';
 import type { WireEntity } from '../executor/types';
 import { effectiveRegistry } from '../registry/cache';
 import {
@@ -67,131 +69,134 @@ export const agentRunRouter = router({
    */
   answerCheckpoint: ownerOnlyProcedure
     .input(answerCheckpointInput)
-    .mutation(async ({ ctx, input }): Promise<{ ticket: WireEntity; run: WireEntity }> => {
-      try {
-        // Предпроверка под RLS — ради ВНЯТНОГО отказа: гонку закрывают предусловия ниже,
-        // но без чтения человек получал бы на неверную пару id безымянный CONFLICT
-        // предусловия вместо «прогон не принадлежит этому тикету».
-        const pre = await withIdentity(ctx.db, ctx.identity, async (tx) => {
-          // Снимок реестра — тем же походом: состояние тикета читается и пишется КЛАССОМ, и
-          // перевести класс в значение без снимка нечем.
-          const reg = await effectiveRegistry(tx, ctx.identity.graph);
-          const run = await runById(tx, input.runId);
-          // Чужой и несуществующий под RLS неразличимы — единый NOT_FOUND
-          if (run === null) {
-            throw new ExecError('NOT_FOUND', 'прогон не найден', { runId: input.runId });
-          }
-          const ticket = await ticketOfRun(tx, input.runId);
-          if (ticket === null || ticket.id !== input.ticketId) {
-            throw new ExecError('NOT_FOUND', 'прогон не принадлежит этому тикету', {
-              runId: input.runId,
-              ticketId: input.ticketId,
-            });
-          }
-          // Признак носителя стоит в SQL `ticketOfRun` (`'orbis/task' = ANY(e.aspects)`), а состояние
-          // читается КЛАССОМ: какой вариант статуса значит «ждёт», решает привязка.
-          if (classOfEntity(reg, ticket, DELEGABLE_CONTRACT) !== 'waiting') {
-            throw new ExecError('CONFLICT', 'тикет не ждёт ответа — отвечать не на что', {
-              ticketId: input.ticketId,
-              // В details едет ЗНАЧЕНИЕ: человек в карточке отказа читает то, что лежит в базе.
-              // Чтение по адресу из привязки — через `Record<string, unknown>`: строковый ключ по
-              // узкому `TicketProps` даёт TS7053 при `strict`/`noUncheckedIndexedAccess`.
-              status: (ticket.props as Record<string, unknown>)[
-                slotPropertyOf(reg, TICKET_ASPECT, DELEGABLE_CONTRACT, 'status')
-              ],
-            });
-          }
-          // Отвечают ПОСЛЕДНЕМУ прогону тикета. Все прошлые прогоны терминальны, и
-          // предусловие исхода их пропускает: устаревший экран (или чужой вызов API) с
-          // прежним runId положил бы ответ в старый прогон, вернул тикет в очередь — а
-          // вопрос текущего прогона остался бы без ответа, и агент прочитал бы в истории
-          // чужую реплику. Порядок — тот же created_at ASC, что у экрана истории.
-          const runs = await runsOfTicket(tx, input.ticketId);
-          if (runs.at(-1)?.id !== input.runId) {
-            throw new ExecError('CONFLICT', 'ответ адресуется последнему прогону тикета', {
-              ticketId: input.ticketId,
-              runId: input.runId,
-              lastRunId: runs.at(-1)?.id,
-            });
-          }
-          return { outcome: run.props['orbis/run_outcome'], reg };
-        });
-        // Открытый ВОПРОС ответ закрывает: исход `checkpoint` → `answered` (V1, D38) — иначе
-        // отвеченный прогон вечно сидел бы в блоке «Ждут ответа» списка «Рутины» и в его
-        // бейдже (запрос `outcome=checkpoint` по всем прогонам; отсечь тикетные грамматика
-        // не умеет). Ответ на уже законченный прогон (`finished`/`abandoned` — человек ответил
-        // после итога или подметания) исход не переписывает: он не был вопросом.
-        const answersQuestion = pre.outcome === 'checkpoint';
+    .mutation(
+      async ({ ctx, input }): Promise<{ ticket: WireEntity; run: WireEntity } & JournalRef> => {
+        try {
+          // Предпроверка под RLS — ради ВНЯТНОГО отказа: гонку закрывают предусловия ниже,
+          // но без чтения человек получал бы на неверную пару id безымянный CONFLICT
+          // предусловия вместо «прогон не принадлежит этому тикету».
+          const pre = await withIdentity(ctx.db, ctx.identity, async (tx) => {
+            // Снимок реестра — тем же походом: состояние тикета читается и пишется КЛАССОМ, и
+            // перевести класс в значение без снимка нечем.
+            const reg = await effectiveRegistry(tx, ctx.identity.graph);
+            const run = await runById(tx, input.runId);
+            // Чужой и несуществующий под RLS неразличимы — единый NOT_FOUND
+            if (run === null) {
+              throw new ExecError('NOT_FOUND', 'прогон не найден', { runId: input.runId });
+            }
+            const ticket = await ticketOfRun(tx, input.runId);
+            if (ticket === null || ticket.id !== input.ticketId) {
+              throw new ExecError('NOT_FOUND', 'прогон не принадлежит этому тикету', {
+                runId: input.runId,
+                ticketId: input.ticketId,
+              });
+            }
+            // Признак носителя стоит в SQL `ticketOfRun` (`'orbis/task' = ANY(e.aspects)`), а состояние
+            // читается КЛАССОМ: какой вариант статуса значит «ждёт», решает привязка.
+            if (classOfEntity(reg, ticket, DELEGABLE_CONTRACT) !== 'waiting') {
+              throw new ExecError('CONFLICT', 'тикет не ждёт ответа — отвечать не на что', {
+                ticketId: input.ticketId,
+                // В details едет ЗНАЧЕНИЕ: человек в карточке отказа читает то, что лежит в базе.
+                // Чтение по адресу из привязки — через `Record<string, unknown>`: строковый ключ по
+                // узкому `TicketProps` даёт TS7053 при `strict`/`noUncheckedIndexedAccess`.
+                status: (ticket.props as Record<string, unknown>)[
+                  slotPropertyOf(reg, TICKET_ASPECT, DELEGABLE_CONTRACT, 'status')
+                ],
+              });
+            }
+            // Отвечают ПОСЛЕДНЕМУ прогону тикета. Все прошлые прогоны терминальны, и
+            // предусловие исхода их пропускает: устаревший экран (или чужой вызов API) с
+            // прежним runId положил бы ответ в старый прогон, вернул тикет в очередь — а
+            // вопрос текущего прогона остался бы без ответа, и агент прочитал бы в истории
+            // чужую реплику. Порядок — тот же created_at ASC, что у экрана истории.
+            const runs = await runsOfTicket(tx, input.ticketId);
+            if (runs.at(-1)?.id !== input.runId) {
+              throw new ExecError('CONFLICT', 'ответ адресуется последнему прогону тикета', {
+                ticketId: input.ticketId,
+                runId: input.runId,
+                lastRunId: runs.at(-1)?.id,
+              });
+            }
+            return { outcome: run.props['orbis/run_outcome'], reg };
+          });
+          // Открытый ВОПРОС ответ закрывает: исход `checkpoint` → `answered` (V1, D38) — иначе
+          // отвеченный прогон вечно сидел бы в блоке «Ждут ответа» списка «Рутины» и в его
+          // бейдже (запрос `outcome=checkpoint` по всем прогонам; отсечь тикетные грамматика
+          // не умеет). Ответ на уже законченный прогон (`finished`/`abandoned` — человек ответил
+          // после итога или подметания) исход не переписывает: он не был вопросом.
+          const answersQuestion = pre.outcome === 'checkpoint';
 
-        const r = await execute(
-          ctx.db,
-          {
-            identity: ctx.identity,
-            actorKind: 'owner',
-            source: 'ui', // прямое действие владельца в UI (не chat/mcp/system)
-            // …но МЕХАНИЗМ — глагол исполнителя (§А4-4): ответ ложится в служебные
-            // свойства прогона (`reply`, `outcome`), а они `system_writable` (§А2-5).
-            // Оси разные ровно поэтому: канал — рука владельца, механизм — бухгалтерия.
-            mechanism: 'verb',
-            // Ответ — про ЭТОТ прогон: обратная ссылка ставит его в историю прогона на
-            // экране рядом с вопросом. Откатом прогона она его не уносит — там действия
-            // владельца намеренно не считаются работой исполнителя (rollback.ts).
-            runId: input.runId,
-            batchId: newId(),
-            operations: [
-              {
-                tool: 'entity_update',
-                input: {
-                  id: input.runId,
-                  // Прогон обязан быть ЗАКОНЧЕН: отвечать в идущий прогон нельзя — агент
-                  // его не перечитывает, и ответ утонул бы. `finished`/`abandoned`
-                  // допущены наравне с `checkpoint`: человек мог ответить на вопрос уже
-                  // после того, как прогон подмели (С6) или он успел завершиться сам.
-                  // Предусловие сужено до прочитанного исхода: CAS против второго экрана,
-                  // который успел ответить (и перевести вопрос в `answered`) секундой раньше.
-                  precondition: [
-                    {
-                      property: 'orbis/run_outcome',
-                      in: answersQuestion ? ['checkpoint'] : ['finished', 'abandoned'],
+          const r = await execute(
+            ctx.db,
+            {
+              identity: ctx.identity,
+              actorKind: 'owner',
+              source: 'ui', // прямое действие владельца в UI (не chat/mcp/system)
+              // …но МЕХАНИЗМ — глагол исполнителя (§А4-4): ответ ложится в служебные
+              // свойства прогона (`reply`, `outcome`), а они `system_writable` (§А2-5).
+              // Оси разные ровно поэтому: канал — рука владельца, механизм — бухгалтерия.
+              mechanism: 'verb',
+              // Ответ — про ЭТОТ прогон: обратная ссылка ставит его в историю прогона на
+              // экране рядом с вопросом. Откатом прогона она его не уносит — там действия
+              // владельца намеренно не считаются работой исполнителя (rollback.ts).
+              runId: input.runId,
+              batchId: newId(),
+              operations: [
+                {
+                  tool: 'entity_update',
+                  input: {
+                    id: input.runId,
+                    // Прогон обязан быть ЗАКОНЧЕН: отвечать в идущий прогон нельзя — агент
+                    // его не перечитывает, и ответ утонул бы. `finished`/`abandoned`
+                    // допущены наравне с `checkpoint`: человек мог ответить на вопрос уже
+                    // после того, как прогон подмели (С6) или он успел завершиться сам.
+                    // Предусловие сужено до прочитанного исхода: CAS против второго экрана,
+                    // который успел ответить (и перевести вопрос в `answered`) секундой раньше.
+                    precondition: [
+                      {
+                        property: 'orbis/run_outcome',
+                        in: answersQuestion ? ['checkpoint'] : ['finished', 'abandoned'],
+                      },
+                    ],
+                    props: {
+                      'orbis/run_reply': { text: input.answer, at: new Date().toISOString() },
+                      ...(answersQuestion && { 'orbis/run_outcome': 'answered' }),
                     },
-                  ],
-                  props: {
-                    'orbis/run_reply': { text: input.answer, at: new Date().toISOString() },
-                    ...(answersQuestion && { 'orbis/run_outcome': 'answered' }),
                   },
                 },
-              },
-              {
-                tool: 'entity_update',
-                input: {
-                  id: input.ticketId,
-                  // Тикет всё ещё ждёт: между чтением и записью на него мог ответить
-                  // второй экран владельца, и второй ответ поверх первого затёр бы его
-                  precondition: [
-                    classPrecondition(pre.reg, TICKET_ASPECT, DELEGABLE_CONTRACT, ['waiting']),
-                  ],
-                  // Ответ возвращает тикет в очередь.
-                  // `waiting_for` снимает ПРАВИЛО каталога `waiting_for` при уходе из класса
-                  // `waiting`, а держит его там `waiting_for_only_when_waiting`: вопрос вне
-                  // ожидания невозможен, и подчищать тут нечего (§Б4-3, В-П-8). Статус ставится
-                  // классом — `statusPatch` (14а).
-                  props: statusPatch(pre.reg, TICKET_ASPECT, DELEGABLE_CONTRACT, 'queued'),
+                {
+                  tool: 'entity_update',
+                  input: {
+                    id: input.ticketId,
+                    // Тикет всё ещё ждёт: между чтением и записью на него мог ответить
+                    // второй экран владельца, и второй ответ поверх первого затёр бы его
+                    precondition: [
+                      classPrecondition(pre.reg, TICKET_ASPECT, DELEGABLE_CONTRACT, ['waiting']),
+                    ],
+                    // Ответ возвращает тикет в очередь.
+                    // `waiting_for` снимает ПРАВИЛО каталога `waiting_for` при уходе из класса
+                    // `waiting`, а держит его там `waiting_for_only_when_waiting`: вопрос вне
+                    // ожидания невозможен, и подчищать тут нечего (§Б4-3, В-П-8). Статус ставится
+                    // классом — `statusPatch` (14а).
+                    props: statusPatch(pre.reg, TICKET_ASPECT, DELEGABLE_CONTRACT, 'queued'),
+                  },
                 },
-              },
-            ],
-          },
-          { sink },
-        );
-        if (!r.ok) throw execErrorToTRPC(r.error);
-        return {
-          run: wireEntityAt(r.results, 0, input.runId),
-          ticket: wireEntityAt(r.results, 1, input.ticketId),
-        };
-      } catch (e) {
-        if (e instanceof ExecError) throw execErrorToTRPC(e);
-        throw e;
-      }
-    }),
+              ],
+            },
+            { sink },
+          );
+          if (!r.ok) throw execErrorToTRPC(r.error);
+          return {
+            ...journalRef(r),
+            run: wireEntityAt(r.results, 0, input.runId),
+            ticket: wireEntityAt(r.results, 1, input.ticketId),
+          };
+        } catch (e) {
+          if (e instanceof ExecError) throw execErrorToTRPC(e);
+          throw e;
+        }
+      },
+    ),
 
   /**
    * Подметание брошенных прогонов с экранов проекта и тикета (С6). Отдельная процедура,

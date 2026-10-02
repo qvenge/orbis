@@ -27,13 +27,7 @@ import { withIdentity } from '../db/with-identity';
 import { makeJournalSink } from '../executor/journal';
 import type { JournalEntry } from '../executor/journal-read';
 import { dropStaleCarryover, envelopeIdentityOf } from '../executor/normalize';
-import type {
-  ExecuteErr,
-  ExecuteOk,
-  ExecuteRequest,
-  ExecuteResult,
-  WireEntity,
-} from '../executor/types';
+import type { ExecuteErr, ExecuteRequest, ExecuteResult, WireEntity } from '../executor/types';
 import { undoAction } from '../executor/undo';
 import { effectiveRegistry } from '../registry/cache';
 import type { RegistrySnapshot } from '../registry/load';
@@ -69,12 +63,20 @@ function req(
   };
 }
 
-function ok(r: ExecuteResult): ExecuteOk {
+function ok<
+  T extends
+    | ExecuteResult
+    | (Omit<Extract<ExecuteResult, { ok: true }>, 'consequences'> & { consequences?: never }),
+>(r: T): Extract<T, { ok: true }> {
   if (!r.ok) throw new Error(`ожидался успех, получено: ${JSON.stringify(r.error)}`);
-  return r;
+  return r as Extract<T, { ok: true }>;
 }
 
-function err(r: ExecuteResult): ExecuteErr {
+function err(
+  r:
+    | ExecuteResult
+    | (Omit<Extract<ExecuteResult, { ok: true }>, 'consequences'> & { consequences?: never }),
+): ExecuteErr {
   if (r.ok) throw new Error('ожидался структурированный отказ, получен успех');
   return r;
 }
