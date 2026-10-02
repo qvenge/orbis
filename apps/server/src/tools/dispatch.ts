@@ -29,6 +29,7 @@ import {
   extensionName,
   extensionOfTool,
   type GraphId,
+  globalThreadId,
   isActionToolName,
   newId,
   pendingMessageId,
@@ -81,7 +82,7 @@ import { type Tx, withIdentity } from '../db/with-identity';
 import { ROUTINES_MAX_KEY, resolveEntitlement } from '../entitlements';
 import { readEntity } from '../entity-read';
 import { ExecError } from '../errors';
-import { continuationOf, continuationPlace } from '../executor/body-chain';
+import { undoRefusalText } from '../executor/body-chain';
 import { execute } from '../executor/executor';
 import { nearestPropertyKey, resolvePropertyRef } from '../executor/props';
 import type { ActionRecord, JournalSink, JournalWrite, WireEntity } from '../executor/types';
@@ -115,6 +116,7 @@ import {
   compileSumByCurrencyAst,
   sumsOf,
 } from '../query/compile-ast';
+import { ownerTimeZone } from '../query/context';
 import { parseQueryText, parseRegistryOf } from '../query/parse-text';
 import { queryWithMaterialization } from '../recurring/with-materialization';
 import { effectiveRegistry, parseRegistryOfSnapshot } from '../registry/cache';
@@ -864,14 +866,18 @@ async function runUndoLast(
   // снял бы уже его — мимо уровня, посчитанного для другого inverse: ровно та дыра, ради которой
   // проба и заведена.
   // Путь — `chat`: «отмени последнее» словами в разговоре (РП-11). Продолжения «Всё равно отменить» у этого пути нет
-  // (Р-17): отказ правила §8.6 несёт место, где его может нажать человек (`continuationOf`, К-46)
+  // (Р-17): отказ правила §8.6 несёт место, где его может нажать человек (`undoContinuationOf`, К-46)
   const r = await undoAction(ctx.db, {
     identity: ctx.identity,
     actionId: peeked.action.id,
     path: 'chat',
-    continuation: continuationOf(peeked.entry),
+    continuation: peeked.continuation,
   });
   if (r.ok) {
+    // Отмена закрепила текущий текст версией (страховка сеанса правки текста «перед возвратом к ЧЧ:ММ», §7.5 п. 3):
+    // подтверждение называет версию и место (§8.6 «Черновик и подтверждение») — для этого пути подтверждение и есть
+    // ответ модели, иначе владелец не узнал бы, где набранный им текст
+    const pinned = r.pinnedVersions.map((p) => p.label);
     return {
       status: 'ok',
       result: {
@@ -881,22 +887,31 @@ async function runUndoLast(
         ...(peeked.action.entity_id !== null && { entityId: peeked.action.entity_id }),
         // У сеанса правки текста — «правка текста «…» 14:02–14:18» (§8.5, `peekLastUndoable`): модель называет отрезок
         title: peeked.title,
-        note: 'действие отменено; сообщи пользователю, что именно откачено',
+        ...(pinned.length > 0 && { pinnedVersions: pinned }),
+        note:
+          pinned.length > 0
+            ? `действие отменено; текст до отмены сохранён версией ${pinned.map((l) => `«${l}»`).join(', ')} ` +
+              '(Детали → Версии) — сообщи пользователю, что именно откачено и где теперь его текст'
+            : 'действие отменено; сообщи пользователю, что именно откачено',
       },
     };
   }
   if (r.error.code === 'UNDO_TEXT_CHANGED') {
     // Отказ правила §8.6 (Р-17, К-46): модель не заменяет текст сама — флага «всё равно» у тула нет, закрепление версий
-    // остаётся поверхностью владельца. Сообщение — заметка модели и строка карточки ошибки в ленте разом: называет
-    // место продолжения (карточка, вкладка, меню записи или «карточки нет»); детали — перечень записей и место
+    // остаётся поверхностью владельца. Сообщение — заметка модели и строка карточки ошибки в ленте разом, поэтому оно
+    // для человека: какие записи, кто и когда сменил текст, где отменить действие самому (`undoRefusalText`)
     const details = r.error.details as UndoTextChangedDetails;
+    const timeZone = await withIdentity(ctx.db, ctx.identity, (tx) =>
+      ownerTimeZone(tx, ctx.identity.graph),
+    );
+    const text = undoRefusalText(details, peeked.entry, {
+      globalThreadId: globalThreadId(ctx.identity.graph),
+      timeZone,
+      now: (ctx.clock ?? (() => new Date()))(),
+    });
     return {
       status: 'error',
-      error: {
-        code: 'UNDO_TEXT_CHANGED',
-        message: `текст записи изменён после этого действия; вернуть его можно только по кнопке человека: ${continuationPlace(details.continuation)}`,
-        details,
-      },
+      error: { code: 'UNDO_TEXT_CHANGED', message: `Не отменено: ${text}`, details },
     };
   }
   return { status: 'error', error: r.error };

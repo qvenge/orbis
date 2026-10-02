@@ -12,7 +12,7 @@ import { withIdentity } from '../db/with-identity';
 import type { Identity } from '../identity';
 import { clockTime, ownerTimeZone } from '../query/context';
 import { unmarkRefSources } from '../registry/ref';
-import { bodyEntitiesOf, bodyRuleFailures, versionLabel } from './body-chain';
+import { bodyEntitiesOf, bodyRuleFailures, undoContinuationOf, versionLabel } from './body-chain';
 import { ExecError } from './errors';
 import { execute } from './executor';
 import { makeJournalSink } from './journal';
@@ -48,15 +48,20 @@ export async function peekLastUndoable(
   db: Db,
   who: Identity,
   now: Date = new Date(),
-): Promise<{ action: ActionRecord; entry: JournalEntry; title: string } | undefined> {
+): Promise<
+  | { action: ActionRecord; entry: JournalEntry; title: string; continuation: UndoContinuation }
+  | undefined
+> {
   return withIdentity(db, who, async (tx) => {
     const found = await findLastUndoable(tx, who.graph);
     if (found === undefined) return undefined;
     return {
       action: actionRecordOf(found),
-      // Запись журнала целиком — место продолжения отказа §8.6 (`continuationOf`: тред, сеанс, источник, прогон)
+      // Запись журнала целиком — фраза отказа §8.6 называет по ней сеанс и тред (`undoRefusalText`)
       entry: found,
       title: await undoableTitle(tx, who.graph, found, now),
+      // Место продолжения отказа §8.6 (Р-17, К-46) — той же транзакцией, что выбор последнего
+      continuation: await undoContinuationOf(tx, found),
     };
   });
 }
@@ -352,7 +357,7 @@ export type UndoLastResult =
 /**
  * «Отмени последнее» (§7.8): inverse первого неотменённого действия с конца журнала. Путь — `ui` (умолчание):
  * единственный вызывающий — `ai.undoLast` кнопки владельца; «отмени последнее» словами в чате идёт политикой
- * (`tools/dispatch.ts`: `peekLastUndoable` + `undoAction` с путём `chat` и местом `continuationOf` — Р-17, К-46).
+ * (`tools/dispatch.ts`: `peekLastUndoable` + `undoAction` с путём `chat` и местом `undoContinuationOf` — Р-17, К-46).
  * Своего продолжения правила §8.6 у «отмени последнее» нет (`force` не принимается); `continuation` — место, которое
  * назовёт отказ. У кнопки владельца это `here`: продолжение — `ai.undo({actionId: details.action.id, force: true})` с
  * того же экрана (отказ называет отменявшееся действие, и точечная отмена с продолжением доступна там же; Fable M-2

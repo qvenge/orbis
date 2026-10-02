@@ -43,10 +43,22 @@ export interface AppendMessageInput {
 }
 
 /**
- * Append-only вставка; RLS отклоняет чужой тред политикой БД (§4.10, §13 п.5).
- * Занятый id пробрасывается сырым 23505: молча принять его за повтор здесь нельзя —
- * клиентскому пути, которому повтор штатен, нужен appendMessageIdempotent.
+ * Есть ли карточка-запрос подтверждения (§7.10) с этим id: карточка лежит сообщением с id = pendingId и ключом
+ * `metadata.pending`. Одобренная единица исполняется пачкой с тем же ключом (`approvePending`, `batchId = pendingId`) —
+ * так место продолжения отмены (`executor/body-chain.ts`, `undoContinuationOf`) отличает её от правки во вкладке.
+ * Выборка по ключу сообщения (индекс берётся и под RLS).
  */
+export async function isPendingCardMessage(tx: Tx, id: string): Promise<boolean> {
+  const rows = await tx
+    .select({ id: chatMessages.id })
+    .from(chatMessages)
+    .where(
+      sql`${chatMessages.id} = ${id}::uuid AND (${chatMessages.metadata} -> 'pending') IS NOT NULL`,
+    )
+    .limit(1);
+  return rows.length > 0;
+}
+
 /**
  * SQL-предикаты «инфраструктурная system-строка невидима» — фрагмент выборки сообщений
  * выдачи треда (`journal/thread-page.ts`: chat.listMessages, тред entity.get, историю
@@ -68,6 +80,11 @@ export function excludeInfraSystemRows(): SQL[] {
   ];
 }
 
+/**
+ * Append-only вставка; RLS отклоняет чужой тред политикой БД (§4.10, §13 п.5).
+ * Занятый id пробрасывается сырым 23505: молча принять его за повтор здесь нельзя —
+ * клиентскому пути, которому повтор штатен, нужен appendMessageIdempotent.
+ */
 export async function appendMessage(tx: Tx, msg: AppendMessageInput): Promise<WireChatMessage> {
   const rows = await tx
     .insert(chatMessages)

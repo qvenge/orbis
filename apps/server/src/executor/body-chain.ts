@@ -9,8 +9,8 @@
 // целиком (`assertUndoTextRule`) — его executor зовёт ОДНИМ вызовом в начале каждой транзакции отмены (одиночный путь и
 // пачка), после `beforeStages` и advisory-замков. У `applyUndo` (`undo.ts`) — закрепления версий первыми операциями
 // записи отмены (страховка сеанса и продолжение). Действующее действие для экрана записи — `bodyActionOf` (§8.2, К-37).
-// Пути без своего продолжения (задача 11): место продолжения по записи журнала (`continuationOf`, `continuationPlace`)
-// и цепочка тела серии отмен для предпроверки отката прогона (`seriesChainBreaks`).
+// Пути без своего продолжения (задача 11): место продолжения по записи журнала (`continuationOf`, `undoContinuationOf`),
+// фраза отказа (`undoRefusalText`) и цепочка тела серии отмен для предпроверки отката прогона (`seriesChainBreaks`).
 import type {
   BodyActionInfo,
   GraphId,
@@ -19,9 +19,11 @@ import type {
   UndoTextChangedDetails,
 } from '@orbis/shared';
 import { and, eq } from 'drizzle-orm';
+import { isPendingCardMessage } from '../chat/messages';
 import { agentGrants, entities } from '../db/schema';
 import type { Tx } from '../db/with-identity';
 import type { Identity } from '../identity';
+import { clockTime, todayInTimeZone } from '../query/context';
 import { ExecError } from './errors';
 import {
   findAction,
@@ -321,16 +323,22 @@ export async function seriesChainBreaks(
  * Место продолжения отмены действия, у пути которой своего продолжения нет (§8.6 «Где есть продолжение», Р-17, К-43,
  * К-46): «отмени последнее» словами в чате и карточка подтверждения отката (`undo_of`) называют, где человек может
  * отменить это действие «Всё равно отменить».
- * - `menu` — запись сеанса правки текста: пункт «Вернуть текст как на …» меню записи (Э-А-16; в стек Ctrl/Cmd+Z сеанс
- *   не входит, §7.5 п. 2);
  * - `card` — у действия есть карточка или строка с «Отменить» в треде (`thread-page.ts`, §11.3): быстрый ввод, рутина,
  *   разговор (карточка в ответе или строка пачки) и агент по MCP вне прогона (Р-16);
  * - `tab` — прочие правки владельца в интерфейсе и быстрый захват: треда у них нет (Р-12), продолжение — Ctrl/Cmd+Z или
  *   плашка во вкладке, где сделано;
- * - `none` — карточки нет: глаголы прогона агента (`mcp` с `run_id` — откатывается прогон целиком, К-42) и `system`.
+ * - `none` — карточки нет: глаголы прогона агента (`mcp` с `run_id` — откатывается прогон целиком, К-42), `system`,
+ *   одобренная с карточки системная единица (`approvedFromCard`: запись `ui` без треда, К-29, но в стек вкладки действия
+ *   с карточек не входят, §7.5 п. 2) и ЗАПИСЬ СЕАНСА ПРАВКИ ТЕКСТА (рулинг R-23). У сеанса продолжения при отказе нет:
+ *   в стек Ctrl/Cmd+Z он не входит (§7.5 п. 2), карточки у него нет (Р-12), а пункт «Вернуть текст как на …» виден, только
+ *   пока текст дал этот сеанс (§7.5 п. 3) — отказ правила случается ровно тогда, когда текст дал уже не он. Вариант
+ *   `menu` контракта (Э-А-16 плана) поэтому не производится.
  */
-export function continuationOf(entry: JournalEntry): UndoContinuation {
-  if (entry.textSession) return { kind: 'menu' };
+export function continuationOf(
+  entry: JournalEntry,
+  opts: { approvedFromCard?: boolean } = {},
+): UndoContinuation {
+  if (entry.textSession) return { kind: 'none' };
   const threadCard =
     entry.source === 'fast_path' ||
     entry.source === 'routine' ||
@@ -339,27 +347,113 @@ export function continuationOf(entry: JournalEntry): UndoContinuation {
   if (entry.threadId !== null && threadCard) {
     return { kind: 'card', threadId: entry.threadId, actionId: entry.id };
   }
-  if (entry.source === 'ui' || entry.source === 'quick_capture') return { kind: 'tab' };
+  if (
+    (entry.source === 'ui' || entry.source === 'quick_capture') &&
+    opts.approvedFromCard !== true
+  ) {
+    return { kind: 'tab' };
+  }
   return { kind: 'none' };
 }
 
 /**
- * Место продолжения словами — одна фраза для всех, кто называет его человеку или модели: заметка модели у отказа
- * «отмени последнее» («…вернуть его можно только по кнопке человека: <место>») и закрытие карточки отката («…вернуть
- * его можно <место>»). Фраза читается в обеих рамках.
+ * `continuationOf` с пробой «одобрено с карточки»: пачка `ui`, чей ключ — id карточки-запроса (`approvePending` исполняет
+ * единицу с `batchId = pendingId`, а карточка-запрос лежит с тем же id). Проба — один запрос по ключу сообщения и только
+ * у пачек `ui`: у прочих место от неё не зависит.
  */
-export function continuationPlace(c: UndoContinuation): string {
+export async function undoContinuationOf(tx: Tx, entry: JournalEntry): Promise<UndoContinuation> {
+  const approvedFromCard =
+    entry.source === 'ui' && entry.type === 'batch' && (await isPendingCardMessage(tx, entry.id));
+  return continuationOf(entry, { approvedFromCard });
+}
+
+/** Чем фраза отказа называет тред и время: общий тред графа, зона владельца и «сейчас» (дата у несегодняшней правки). */
+export interface RefusalWords {
+  globalThreadId: string;
+  timeZone: string;
+  now: Date;
+}
+
+/**
+ * Фраза отказа правила отмены текста на пути без продолжения — владельцу и модели одной строкой (строка карточки ошибки
+ * в ленте, заметка модели, закрытие карточки отката): какие записи, кто и когда сменил текст после отменявшегося, и где
+ * человек отменит действие сам. Без id и ссылок на спеку — её читает человек.
+ *
+ * Сеанс правки текста (R-23): места нет, фраза без обещаний — текст после сеанса менял кто-то ещё, вернуть «как до
+ * сеанса» одним действием нельзя.
+ */
+export function undoRefusalText(
+  details: UndoTextChangedDetails,
+  undoing: Pick<JournalEntry, 'textSession' | 'source'>,
+  words: RefusalWords,
+): string {
+  if (details.entries.length > 1) {
+    // У каждой записи мог быть свой писатель: общий автор для всего перечня приписал бы чужую правку первому.
+    const records = details.entries
+      .map((e) => {
+        const by = changedBy(e, words);
+        return `«${e.title}» (${by.who}, ${by.when})`;
+      })
+      .join(', ');
+    return undoing.textSession
+      ? `после этого сеанса правки текст записей ${records} менялся — вернуть текст «как до сеанса» одним действием нельзя`
+      : `текст записей ${records} изменён после этого действия — ${continuationClause(details.continuation, undoing, words)}`;
+  }
+  const titles = details.entries.map((e) => `«${e.title}»`).join(', ');
+  const records = details.entries.length > 1 ? `записей ${titles}` : `записи ${titles}`;
+  const first = details.entries[0];
+  const by = first === undefined ? undefined : changedBy(first, words);
+  if (undoing.textSession) {
+    const who = by === undefined ? 'кто-то ещё' : `${by.who} в ${by.when}`;
+    return `после этого сеанса правки текст ${records} менял ${who} — вернуть текст «как до сеанса» одним действием нельзя`;
+  }
+  const who = by === undefined ? '' : ` (${by.who}, ${by.when})`;
+  return `текст ${records} изменён после этого действия${who} — ${continuationClause(details.continuation, undoing, words)}`;
+}
+
+/** Кто и когда дал текст, остановивший проверку (строка перечня отказа), словами владельца. */
+function changedBy(entry: UndoConflictEntry, words: RefusalWords): { who: string; when: string } {
+  const who =
+    entry.actorLabel === OUTSIDE_APP_LABEL
+      ? 'кто-то вне приложения'
+      : entry.actorKind === 'agent'
+        ? entry.actorLabel !== null && entry.actorLabel !== AGENT_LABEL
+          ? `агент «${entry.actorLabel}»`
+          : 'агент'
+        : entry.actorKind === 'ai'
+          ? 'ассистент'
+          : 'владелец';
+  const at = new Date(entry.at);
+  const time = clockTime(at, words.timeZone);
+  const day = todayInTimeZone(words.timeZone, at);
+  const when = day === todayInTimeZone(words.timeZone, words.now) ? time : `${day} ${time}`;
+  return { who, when };
+}
+
+/** Где человек отменит действие сам — по месту продолжения; у карточки — какой тред (общий, рутины, разговора). */
+function continuationClause(
+  c: UndoContinuation,
+  undoing: Pick<JournalEntry, 'source'>,
+  words: RefusalWords,
+): string {
   switch (c.kind) {
     case 'here':
-      return 'здесь же, кнопкой «Всё равно отменить»';
-    case 'card':
-      return 'с карточки этого действия в треде';
+      return 'отменить его можно здесь же, кнопкой «Всё равно отменить»';
+    case 'card': {
+      const thread =
+        c.threadId === words.globalThreadId
+          ? 'в общем треде'
+          : undoing.source === 'routine'
+            ? 'в треде прогона рутины'
+            : 'в треде разговора, где оно сделано';
+      return `отменить его можно с его карточки ${thread}`;
+    }
     case 'menu':
-      return 'пунктом «Вернуть текст как на …» в меню записи';
+      return 'вернуть текст можно пунктом «Вернуть текст как на …» в меню записи';
     case 'tab':
-      return 'клавишами Ctrl/Cmd+Z во вкладке, где сделана правка';
+      return 'отменить его можно клавишами Ctrl/Cmd+Z во вкладке, где оно сделано, или вернуть текст из версий записи';
     case 'none':
-      return 'из версий записи (карточки у этого действия нет)';
+      return 'карточки у этого действия нет, вернуть текст можно из версий записи';
   }
 }
 

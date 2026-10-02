@@ -38,6 +38,7 @@ import {
   canonicalJson,
   effectiveLabel,
   type GraphId,
+  globalThreadId,
   newId,
   pendingMessageId,
   QUESTION_MAX,
@@ -71,7 +72,7 @@ import type { Db } from '../db/client';
 import { chatMessages } from '../db/schema';
 import { type Tx, withIdentity } from '../db/with-identity';
 import { ExecError, type StructuredError } from '../errors';
-import { continuationOf, continuationPlace } from '../executor/body-chain';
+import { undoContinuationOf, undoRefusalText } from '../executor/body-chain';
 import { execute } from '../executor/executor';
 import { makeJournalSink } from '../executor/journal';
 import {
@@ -84,6 +85,7 @@ import {
 import type { ActorKind, ExecuteResult } from '../executor/types';
 import { undoAction } from '../executor/undo';
 import type { Identity } from '../identity';
+import { ownerTimeZone } from '../query/context';
 import { actionHash } from '../registry/actions';
 import { effectiveRegistry } from '../registry/cache';
 import type { RegistrySnapshot } from '../registry/load';
@@ -848,7 +850,7 @@ function closedCardError(pendingId: string, reason: RejectReason): ExecError {
   if (reason === 'undo_refused') {
     return new ExecError(
       'VALIDATION',
-      `подтверждение ${pendingId} уже закрыто: текст изменён после действия — откат не применён (§8.6)`,
+      'Подтверждение уже закрыто: текст изменён после действия, откат не применён',
       { pendingId, reason },
     );
   }
@@ -1092,10 +1094,14 @@ export async function approvePending(
       if (rejected !== undefined) throw closedCardError(args.pendingId, rejected);
       // Отменяемое действие карточки отката — ради места продолжения её отказа (`continuationOf`, К-43): журнал
       // append-only, запись действия неизменяема, и читать её в этой транзакции безопасно
-      const undoing =
+      const found =
         msg.pending.undo_of === undefined
           ? undefined
           : await findAction(tx, graphId, msg.pending.undo_of);
+      const undoing =
+        found === undefined
+          ? undefined
+          : { entry: found, continuation: await undoContinuationOf(tx, found) };
       return { msg, stale: null, staleOf: null, live: act ?? undefined, undoing };
     });
     if (found.stale !== null && found.staleOf === 'delta') {
@@ -1336,7 +1342,7 @@ async function approveUndoUnit(
   db: Db,
   args: { identity: Identity; pendingId: string },
   undoOf: string,
-  undoing: JournalEntry | undefined,
+  undoing: { entry: JournalEntry; continuation: UndoContinuation } | undefined,
 ): Promise<ExecuteResult> {
   // Отказ «отклонено» под замком — не повод для replay, даже если действие успели отменить другим
   // путём: судьба карточки уже записана, и она — «отклонено».
@@ -1349,7 +1355,7 @@ async function approveUndoUnit(
       identity: args.identity,
       actionId: undoOf,
       path: 'chat',
-      continuation: undoing === undefined ? { kind: 'none' } : continuationOf(undoing),
+      continuation: undoing?.continuation ?? { kind: 'none' },
     },
     {
       beforeStages: async (tx) => {
@@ -1367,7 +1373,12 @@ async function approveUndoUnit(
   if (r.ok) return { ok: true, actionId: r.undone.id, results: r.results, idempotentReplay: false };
   if (rejected) return r;
   if (r.error.code === 'UNDO_TEXT_CHANGED') {
-    const closed = await closeRefusedUndoUnit(db, args, r.error.details as UndoTextChangedDetails);
+    const closed = await closeRefusedUndoUnit(
+      db,
+      args,
+      r.error.details as UndoTextChangedDetails,
+      undoing?.entry,
+    );
     if (closed !== undefined) return closed;
   }
   const undone = await withIdentity(db, args.identity, (tx) =>
@@ -1389,28 +1400,36 @@ async function closeRefusedUndoUnit(
   db: Db,
   args: { identity: Identity; pendingId: string },
   details: UndoTextChangedDetails,
+  undoing: Pick<JournalEntry, 'textSession' | 'source'> | undefined,
 ): Promise<ExecuteResult | undefined> {
-  const text = `${REJECT_CONTENT.undo_refused} — вернуть его можно ${continuationPlace(details.continuation)}`;
-  let closed: RejectPendingTxResult;
+  let closed: { result: RejectPendingTxResult; text: string };
   try {
-    closed = await withIdentity(db, args.identity, (tx) =>
-      rejectPendingTx(tx, {
+    closed = await withIdentity(db, args.identity, async (tx) => {
+      // Зона владельца — не состояние карточки: читать её до замка `rejectPendingTx` можно (контракт его докблока)
+      const words = {
+        globalThreadId: globalThreadId(args.identity.graph),
+        timeZone: await ownerTimeZone(tx, args.identity.graph),
+        now: new Date(),
+      };
+      const text = `Откат не применён: ${undoRefusalText(details, undoing ?? { textSession: false, source: 'system' }, words)}`;
+      const result = await rejectPendingTx(tx, {
         identity: args.identity,
         pendingId: args.pendingId,
         reason: 'undo_refused',
         continuation: details.continuation,
         text,
-      }),
-    );
+      });
+      return { result, text };
+    });
   } catch (e) {
     if (e instanceof ExecError && e.code === 'VALIDATION') return undefined;
     throw e;
   }
-  if (closed.alreadyRejected && closed.reason !== 'undo_refused') {
-    const err = closedCardError(args.pendingId, closed.reason);
+  if (closed.result.alreadyRejected && closed.result.reason !== 'undo_refused') {
+    const err = closedCardError(args.pendingId, closed.result.reason);
     return { ok: false, error: { code: err.code, message: err.message, details: err.details } };
   }
-  return { ok: false, error: { code: 'UNDO_TEXT_CHANGED', message: text, details } };
+  return { ok: false, error: { code: 'UNDO_TEXT_CHANGED', message: closed.text, details } };
 }
 
 /**

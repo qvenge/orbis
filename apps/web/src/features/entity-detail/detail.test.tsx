@@ -3880,7 +3880,7 @@ describe('ADE: прогон', () => {
     );
   });
 
-  test('конфликт: список чужих правок и «Ничего не откачено»', async () => {
+  test('конфликт внутри цепочки прогона: список правок, честная причина и карточки треда прогона как выход', async () => {
     const { calls } = renderWithProviders(
       <DetailScreen entityId="r1" />,
       runHandler({
@@ -3907,6 +3907,11 @@ describe('ADE: прогон', () => {
     const result = await screen.findByTestId('rollback-result');
     // Инвариант 7: конфликт значит, что граф НЕ тронут вовсе, — и сказать это надо словами.
     expect(result).toHaveTextContent('Ничего не откачено');
+    expect(result).toHaveTextContent('эти записи менялись помимо прогона');
+    expect(result).toHaveTextContent(
+      'отдельные действия можно отменить с карточек в треде прогона',
+    );
+    expect(result).not.toHaveTextContent('после прогона');
     // Задетая запись названа ЗАГОЛОВКОМ: по uuid человек не решит, чем он готов пожертвовать.
     expect(await within(result).findByText('Починить парсер')).toBeInTheDocument();
     // Источник правки — по-русски: «ui» не отвечает владельцу, своей это было рукой или чужой.

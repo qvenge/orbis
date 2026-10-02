@@ -360,7 +360,7 @@ describe('confirmation explicit actions (детерминированное вр
     expect(within(shown).queryByRole('button')).not.toBeInTheDocument();
     refused.unmount();
 
-    // После перезагрузки карточка не знает судьбы; «Подтвердить» закрытой — «уже закрыто» с причиной кодом: тоже гаснет
+    // Устаревший клиент мог ещё не получить признак закрытия: ответ «уже закрыто» тоже гасит кнопки
     renderWithProviders(<div>{card()}</div>, (path) => {
       if (path === 'ai.approve') {
         throw trpcError('BAD_REQUEST', 'подтверждение p-undo уже закрыто', {
@@ -374,6 +374,30 @@ describe('confirmation explicit actions (детерминированное вр
     const again = await screen.findByTestId('confirmation-card');
     expect(await within(again).findByRole('alert')).toHaveTextContent('уже закрыто');
     expect(within(again).queryByRole('button')).not.toBeInTheDocument();
+  });
+
+  test('перечитанная карточка отката с closed: видна с первого рендера, кнопок и надписи «Устарело» нет', () => {
+    const { calls } = renderWithProviders(
+      <div>
+        {renderCards(
+          msg([
+            {
+              kind: 'confirmation_card',
+              mode: 'explicit',
+              pendingId: 'p-closed',
+              summary: 'Откат: «Инструкция»',
+              closed: true,
+            },
+          ]),
+        )}
+      </div>,
+      () => ({}),
+    );
+    const card = screen.getByTestId('confirmation-card');
+    expect(card).toHaveTextContent('Откат: «Инструкция»');
+    expect(within(card).queryAllByRole('button')).toHaveLength(0);
+    expect(card).not.toHaveTextContent('Устарело');
+    expect(calls.some((c) => c.path === 'ai.approve' || c.path === 'ai.reject')).toBe(false);
   });
 
   test('confirmation: прочий отказ «Подтвердить» (не правило отмены) карточку не закрывает — кнопки остаются', async () => {

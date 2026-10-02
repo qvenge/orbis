@@ -3,7 +3,13 @@
 // тела — колонка `body_action_id`, а пока она указывает на запись отмены — «действие тела до» у действия, которое
 // та отменила. Цепочки собираются настоящими правками и отменами; журнал читается только API журнала и помощниками.
 import { afterAll, describe, expect, test } from 'bun:test';
-import { type GraphId, newId } from '@orbis/shared';
+import {
+  type GraphId,
+  newId,
+  type UndoConflictEntry,
+  type UndoContinuation,
+  type UndoTextChangedDetails,
+} from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import { adminDb, appDb, freshGraph, personal, requireEnv } from '../../test/helpers';
 import { journalOf, undoRecordOf } from '../../test/journal-helpers';
@@ -13,8 +19,8 @@ import { createCallerFactory } from '../trpc';
 import {
   bodyEntitiesOf,
   continuationOf,
-  continuationPlace,
   effectiveBodyAction,
+  undoRefusalText,
   versionLabel,
 } from './body-chain';
 import { execute } from './executor';
@@ -258,11 +264,12 @@ test('подпись версии — в потолке 200, срез по ко�
   expect(/[\uD800-\uDBFF]…$/.test(long)).toBe(false);
 });
 
-describe('continuationOf (§8.6 «Где есть продолжение», Р-17, К-43, К-46; Э-А-16): место продолжения по записи журнала', () => {
+describe('continuationOf (§8.6 «Где есть продолжение», Р-17, К-43, К-46; рулинг R-23): место продолжения по записи журнала', () => {
   /** Запись журнала — только поля, от которых зависит место (тред, источник, прогон, сеанс). */
   const entry = (over: Partial<JournalEntry>): JournalEntry =>
     ({
       id: 'act-1',
+      type: 'action',
       threadId: null,
       source: 'ui',
       textSession: false,
@@ -303,9 +310,9 @@ describe('continuationOf (§8.6 «Где есть продолжение», Р-1
       { kind: 'none' },
     ],
     [
-      'сеанс правки текста — пункт меню записи',
+      'сеанс правки текста — места нет (R-23: пункт меню виден, только пока текст дал сеанс)',
       { source: 'ui', textSession: true },
-      { kind: 'menu' },
+      { kind: 'none' },
     ],
     ['правка владельца в интерфейсе', { source: 'ui' }, { kind: 'tab' }],
     ['быстрый захват', { source: 'quick_capture' }, { kind: 'tab' }],
@@ -314,16 +321,117 @@ describe('continuationOf (§8.6 «Где есть продолжение», Р-1
     expect(continuationOf(entry(over as Partial<JournalEntry>))).toEqual(want);
   });
 
-  test('фраза места читается и в заметке модели, и в закрытии карточки — у каждого вида своя', () => {
-    const kinds = [
-      { kind: 'here' },
-      { kind: 'card', threadId: T, actionId: 'act-1' },
-      { kind: 'menu' },
-      { kind: 'tab' },
-      { kind: 'none' },
-    ] as const;
-    const phrases = kinds.map((c) => continuationPlace(c));
-    expect(new Set(phrases).size).toBe(kinds.length);
-    expect(continuationPlace({ kind: 'none' })).toContain('из версий записи');
+  test('одобренная с карточки единица (`ui` без треда, К-29) — не вкладка: в стек вкладки действия с карточек не входят (§7.5 п. 2)', () => {
+    expect(
+      continuationOf(entry({ source: 'ui', type: 'batch' }), { approvedFromCard: true }),
+    ).toEqual({
+      kind: 'none',
+    });
+  });
+});
+
+describe('undoRefusalText: отказ правила словами владельца (без id и ссылок на спеку)', () => {
+  const G = 'global-thread';
+  const words = {
+    globalThreadId: G,
+    timeZone: 'Europe/Moscow',
+    now: new Date('2026-07-04T12:00:00.000Z'),
+  };
+  const details = (
+    continuation: UndoContinuation,
+    entries: UndoConflictEntry[] = [
+      {
+        entityId: 'e1',
+        title: 'Заметка',
+        actorKind: 'agent',
+        actorLabel: 'Код',
+        at: '2026-07-04T11:20:00.000Z',
+      },
+    ],
+  ): UndoTextChangedDetails => ({
+    action: { id: 'act-1', title: 'Правка' },
+    entries,
+    continuation,
+  });
+  const plain = { textSession: false, source: 'mcp' } as const;
+
+  test('карточка называет тред: общий, прогона рутины, разговора; кто и когда сменил текст — в скобках', () => {
+    expect(
+      undoRefusalText(details({ kind: 'card', threadId: G, actionId: 'a' }), plain, words),
+    ).toBe(
+      'текст записи «Заметка» изменён после этого действия (агент «Код», 14:20) — отменить его можно с его карточки в общем треде',
+    );
+    expect(
+      undoRefusalText(
+        details({ kind: 'card', threadId: 't', actionId: 'a' }),
+        { textSession: false, source: 'routine' },
+        words,
+      ),
+    ).toContain('с его карточки в треде прогона рутины');
+    expect(
+      undoRefusalText(
+        details({ kind: 'card', threadId: 't', actionId: 'a' }),
+        { textSession: false, source: 'chat' },
+        words,
+      ),
+    ).toContain('с его карточки в треде разговора, где оно сделано');
+  });
+
+  test('несколько записей с разными писателями: каждый заголовок связан со своим автором и временем (R-25)', () => {
+    const text = undoRefusalText(
+      details({ kind: 'card', threadId: G, actionId: 'a' }, [
+        {
+          entityId: 'e1',
+          title: 'Заметка',
+          actorKind: 'agent',
+          actorLabel: 'Код',
+          at: '2026-07-04T11:20:00.000Z',
+        },
+        {
+          entityId: 'e2',
+          title: 'План',
+          actorKind: 'owner',
+          actorLabel: null,
+          at: '2026-07-04T11:35:00.000Z',
+        },
+      ]),
+      plain,
+      words,
+    );
+    expect(text).toBe(
+      'текст записей «Заметка» (агент «Код», 14:20), «План» (владелец, 14:35) изменён после этого действия — отменить его можно с его карточки в общем треде',
+    );
+  });
+
+  test('вкладка — с запасным выходом «из версий»; «карточки нет» — версии; писатель без журнала и вчерашнее время', () => {
+    expect(
+      undoRefusalText(details({ kind: 'tab' }), { textSession: false, source: 'ui' }, words),
+    ).toContain(
+      'клавишами Ctrl/Cmd+Z во вкладке, где оно сделано, или вернуть текст из версий записи',
+    );
+    const outside = details({ kind: 'none' }, [
+      {
+        entityId: 'e1',
+        title: 'Заметка',
+        actorKind: 'owner',
+        actorLabel: 'вне приложения',
+        at: '2026-07-03T08:05:00.000Z',
+      },
+    ]);
+    expect(undoRefusalText(outside, plain, words)).toBe(
+      'текст записи «Заметка» изменён после этого действия (кто-то вне приложения, 2026-07-03 11:05) — карточки у этого действия нет, вернуть текст можно из версий записи',
+    );
+  });
+
+  test('сеанс правки текста (R-23): без места и обещаний — кто менял текст после сеанса и что «как до сеанса» одним действием не вернуть', () => {
+    const text = undoRefusalText(
+      details({ kind: 'none' }),
+      { textSession: true, source: 'ui' },
+      words,
+    );
+    expect(text).toBe(
+      'после этого сеанса правки текст записи «Заметка» менял агент «Код» в 14:20 — вернуть текст «как до сеанса» одним действием нельзя',
+    );
+    expect(text).not.toContain('меню');
   });
 });

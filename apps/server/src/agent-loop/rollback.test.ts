@@ -523,6 +523,17 @@ describe('откат прогона рутины: цепочка тела в п�
     expect((await bodyRow(noteId)).body).toBe('исходный');
   });
 
+  test('три правки, среднюю (A2) владелец отменил до A3 → откат проходит целиком: A3, затем A1 — раскрутка от «до» A3 через запись отмены A2 посреди цепочки', async () => {
+    const { owner, runId, noteId, a1, a2 } = await twoEdits('Заметка трёх правок');
+    expect((await undoAction(db, { identity: personal(owner), actionId: a2 })).ok).toBe(true);
+    // «до» A3 — запись отмены A2: предпроверка звена A1 обязана пройти её раскруткой, как правило в транзакции отмены A1
+    const a3 = await bodyEdit(owner, noteId, 'рутина 3', { routineRun: runId });
+    const out = await rollbackRun(db, { identity: personal(owner), runId });
+    if (!out.ok) throw new Error(`ожидался откат: ${JSON.stringify(out)}`);
+    expect(out.undone).toEqual([a3, a1]);
+    expect((await bodyRow(noteId)).body).toBe('исходный');
+  });
+
   test('текст сменил писатель без журнала → конфликт той же гранулярности {запись, «вне приложения»}; окно чужих действий его не видит', async () => {
     // После прогона — поверх A2; между A1 и A2 — внутри цепочки прогона: оба видны до первой отмены
     const after = await twoEdits('Заметка после прогона');

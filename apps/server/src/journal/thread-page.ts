@@ -9,9 +9,15 @@
 // (id строки — производный id элемента треда, рулинг R-12; id действия — `journal.actionId`) БЕЗ тел действия (§9
 // приватность): ни операций, ни данных отмены, ни результатов пачки, ни аккаунта актора. Какие действия тред
 // показывает и с «Отменить» ли — таблица источников §11.3 (см. `journalCardMeta` и `journal-read.threadFeed`).
-// Карточки в сообщениях (ответ ассистента) получают на чтении признак `undone` (R-14, `markUndoneReplyCards`).
-import type { GraphId, JournalCardMeta, MutationSourceWire } from '@orbis/shared';
-import { and, desc, eq, lt, or, type SQL } from 'drizzle-orm';
+// Карточки в сообщениях (ответ ассистента) получают на чтении признак `undone` (R-14, `markUndoneReplyCards`), карточки
+// подтверждения — признак `closed` у отказанных (`markClosedConfirmationCards`, гейт задачи 11).
+import {
+  type GraphId,
+  type JournalCardMeta,
+  type MutationSourceWire,
+  rejectMessageId,
+} from '@orbis/shared';
+import { and, desc, eq, inArray, lt, or, type SQL } from 'drizzle-orm';
 import { excludeInfraSystemRows, type WireChatMessage } from '../chat/messages';
 import { chatMessages } from '../db/schema';
 import type { Tx } from '../db/with-identity';
@@ -191,10 +197,10 @@ export async function threadPage(
 ): Promise<WireChatMessage[]> {
   const before = parseBefore(page.before);
   const cursor = { ...(before !== undefined && { before }), limit: page.limit };
-  const messages = await markUndoneReplyCards(
+  const messages = await markClosedConfirmationCards(
     tx,
     graph,
-    await threadMessages(tx, threadId, cursor),
+    await markUndoneReplyCards(tx, graph, await threadMessages(tx, threadId, cursor)),
   );
   const journal = (await threadFeed(tx, graph, threadId, cursor)).map((e) =>
     journalItem(e, threadId),
@@ -235,6 +241,53 @@ async function markUndoneReplyCards(
     if (!undoActionIdsOf(m).some(isUndone)) return m;
     const cards = (m.metadata.cards as Array<Record<string, unknown>>).map((c) =>
       c.kind === 'entity_card' && isUndone(c.undoActionId) ? { ...c, undone: true } : c,
+    );
+    return { ...m, metadata: { ...m.metadata, cards } };
+  });
+}
+
+/** pendingId карточек подтверждения сообщения — тех, что несут кнопки (`mode:'explicit'`). */
+function confirmationPendingIdsOf(m: WireChatMessage): string[] {
+  const cards = m.metadata.cards;
+  if (!Array.isArray(cards)) return [];
+  return cards.flatMap((c) => {
+    const card = c as { kind?: unknown; mode?: unknown; pendingId?: unknown };
+    return card.kind === 'confirmation_card' &&
+      card.mode === 'explicit' &&
+      typeof card.pendingId === 'string'
+      ? [card.pendingId]
+      : [];
+  });
+}
+
+/**
+ * Признак «закрыта» у карточек подтверждения (гейт задачи 11, I-1; §8.6 строка `undo_of`, К-43): отказанная карточка —
+ * отклонённая владельцем, устаревшая или закрытая отказом правила отмены текста (`undo_refused`) — после перечитывания
+ * треда не предлагает кнопку, которая откажет снова. Судьба карточки — сообщение отказа с детерминированным ключом
+ * (`rejectMessageId`, `policy/pending.ts`); признак считается на чтении одной выборкой по ключам страницы и в сообщение не
+ * пишется (`chat_messages` неизменяемы, §4.6), как «отменено» у карточек ответа (`markUndoneReplyCards`). Почему закрыта,
+ * называет строка отказа в том же треде; карточке нужен только сам признак. Страница без таких карточек запроса не платит.
+ */
+async function markClosedConfirmationCards(
+  tx: Tx,
+  graph: GraphId,
+  messages: WireChatMessage[],
+): Promise<WireChatMessage[]> {
+  const ids = [...new Set(messages.flatMap(confirmationPendingIdsOf))];
+  if (ids.length === 0) return messages;
+  const byKey = new Map(ids.map((id) => [rejectMessageId(graph, id), id]));
+  const rows = await tx
+    .select({ id: chatMessages.id })
+    .from(chatMessages)
+    .where(inArray(chatMessages.id, [...byKey.keys()]));
+  if (rows.length === 0) return messages;
+  const closed = new Set(rows.map((r) => byKey.get(r.id)));
+  return messages.map((m) => {
+    if (!confirmationPendingIdsOf(m).some((id) => closed.has(id))) return m;
+    const cards = (m.metadata.cards as Array<Record<string, unknown>>).map((c) =>
+      c.kind === 'confirmation_card' && closed.has(c.pendingId as string)
+        ? { ...c, closed: true }
+        : c,
     );
     return { ...m, metadata: { ...m.metadata, cards } };
   });

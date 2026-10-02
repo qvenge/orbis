@@ -30,9 +30,11 @@ import { ensureEntityThread } from '../chat/threads';
 import { chatMessages, entities } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { ExecError } from '../errors';
+import { undoContinuationOf } from '../executor/body-chain';
 import { execute } from '../executor/executor';
 import { makeJournalSink } from '../executor/journal';
 import type { ExecuteResult, WireEntity } from '../executor/types';
+import { threadPage } from '../journal/thread-page';
 import { proposalBodyRows } from '../routines/proposal-diff';
 import { agentLoopHelpers } from '../test/agent-loop-helpers';
 import { dispatchTool, type ToolCallCtx } from '../tools/dispatch';
@@ -2022,6 +2024,15 @@ describe('карточка отката `undo_of`: отказ правила о�
     if (edit === undefined) throw new Error('правки инструкции нет в журнале');
     const editThread = edit.threadId;
     if (editThread === null) throw new Error('у правки чата нет треда');
+    const readThread = (before?: string) =>
+      withIdentity(db, personal(owner), (tx) =>
+        threadPage(tx, owner, editThread, { limit: 100, ...(before && { before }) }),
+      );
+    const openCard = (await readThread()).find((m) => m.id === pendingId);
+    expect(openCard?.metadata.cards).toEqual([
+      expect.objectContaining({ kind: 'confirmation_card', pendingId }),
+    ]);
+    expect((openCard?.metadata.cards as Array<{ closed?: boolean }>)[0]?.closed).toBeUndefined();
     // Владелец дописывает инструкцию в интерфейсе
     const typed = await execute(
       db,
@@ -2058,9 +2069,11 @@ describe('карточка отката `undo_of`: отказ правила о�
       actionId: editId,
     });
     expect(details.entries.map((e) => e.entityId)).toEqual([routineId]);
-    const closing =
-      'Откат не применён: текст изменён после действия — вернуть его можно с карточки этого действия в треде';
-    expect(r.error.message).toBe(closing);
+    // Текст закрытия — владельцу: какая запись, кто и когда сменил текст, где отменить действие самому (без id)
+    const closing = r.error.message;
+    expect(closing).toMatch(
+      /^Откат не применён: текст записи «Утренняя рутина» изменён после этого действия \(владелец, \d\d:\d\d\) — отменить его можно с его карточки в общем треде$/,
+    );
     // Ничего не применено: текст владельца цел, записи отмены нет
     expect((await bodyOf(owner, routineId)).body).toBe('инструкция ассистента + владелец');
     expect(await undoRecordOf(owner, editId)).toBeUndefined();
@@ -2072,7 +2085,11 @@ describe('карточка отката `undo_of`: отказ правила о�
     );
     const rows = await withIdentity(db, personal(owner), (tx) =>
       tx
-        .select({ content: chatMessages.content, metadata: chatMessages.metadata })
+        .select({
+          content: chatMessages.content,
+          metadata: chatMessages.metadata,
+          createdAt: chatMessages.createdAt,
+        })
         .from(chatMessages)
         .where(eq(chatMessages.id, rejectMessageId(owner, pendingId))),
     );
@@ -2085,12 +2102,40 @@ describe('карточка отката `undo_of`: отказ правила о�
       continuation: { kind: 'card', threadId: editThread, actionId: editId },
     });
 
+    // Перезагрузка перечитывает исходную карточку с признаком закрытия. Даже если строка отказа уже на другой
+    // странице курсора, кнопок с первого кадра быть не должно (§8.6, I-1 гейта); хранимое сообщение не меняется.
+    const closingAt = rows[0]?.createdAt;
+    if (closingAt === undefined) throw new Error('у закрытия нет времени');
+    const reloaded = await readThread(
+      `${closingAt.toISOString()}|${rejectMessageId(owner, pendingId)}`,
+    );
+    expect(reloaded.some((m) => m.id === rejectMessageId(owner, pendingId))).toBe(false);
+    expect(reloaded.find((m) => m.id === pendingId)?.metadata.cards).toEqual([
+      expect.objectContaining({
+        kind: 'confirmation_card',
+        mode: 'explicit',
+        pendingId,
+        closed: true,
+      }),
+    ]);
+    const stored = await withIdentity(db, personal(owner), (tx) =>
+      tx
+        .select({ metadata: chatMessages.metadata })
+        .from(chatMessages)
+        .where(eq(chatMessages.id, pendingId)),
+    );
+    const storedCards = (stored[0]?.metadata as { cards?: Array<{ closed?: boolean }> } | undefined)
+      ?.cards;
+    expect(storedCards?.[0]?.closed).toBeUndefined();
+
     // Повторное «Принять» — карточка уже закрыта: «уже закрыто», не второй отказ правила и не второе закрытие
     const again = await approvePending(db, { identity: personal(owner), pendingId });
     expect(again.ok).toBe(false);
     if (again.ok) return;
     expect(again.error.code).toBe('VALIDATION');
-    expect(again.error.message).toContain('уже закрыто');
+    expect(again.error.message).toBe(
+      'Подтверждение уже закрыто: текст изменён после действия, откат не применён',
+    );
     expect(again.error.details).toMatchObject({ reason: 'undo_refused' });
     const closings = await withIdentity(db, personal(owner), (tx) =>
       tx
@@ -2104,6 +2149,81 @@ describe('карточка отката `undo_of`: отказ правила о�
     // «Отклонить» закрытую — идемпотентно, с ИСХОДНОЙ причиной
     const rejected = await rejectPending(db, { identity: personal(owner), pendingId });
     expect(rejected.ok && rejected.alreadyRejected && rejected.reason).toBe('undo_refused');
+  });
+
+  test('место продолжения у единицы, одобренной с карточки (`ui` без треда, К-29), — «карточки нет», а не вкладка; обычная пачка интерфейса — вкладка', async () => {
+    const owner = await freshGraph();
+    const note = await seedEntity(owner, { title: 'Заметка единицы', tags: [], body: 'исходный' });
+    const revision = (await bodyOf(owner, note.id)).rev;
+    const { id } = await withIdentity(db, personal(owner), (tx) =>
+      createSystemPending(tx, {
+        graphId: owner,
+        tool: 'entity_update',
+        input: {
+          id: note.id,
+          body: 'из карточки',
+          expectedBodyRevision: revision,
+        },
+        summary: 'Система предлагает переписать текст',
+      }),
+    );
+    const approved = await approvePending(db, { identity: personal(owner), pendingId: id });
+    if (!approved.ok) throw new Error(approved.error.message);
+    const unit = await journalOf(owner, id);
+    if (unit === undefined) throw new Error('одобренной единицы нет в журнале');
+    // Предпосылка: запись — правка владельца в интерфейсе без треда, как у пачки вкладки
+    expect([unit.source, unit.type, unit.threadId]).toEqual(['ui', 'batch', null]);
+    expect(await withIdentity(db, personal(owner), (tx) => undoContinuationOf(tx, unit))).toEqual({
+      kind: 'none',
+    });
+
+    // Через настоящий тул, а не только вычисление места: писатель без журнала меняет текст поверх принятой единицы.
+    // Эта карточка не заносила действие в стек вкладки, и отказ не должен направлять туда владельца.
+    const outside = adminDb();
+    try {
+      await outside.db.execute(
+        sql`UPDATE entities SET body = 'после карточки' WHERE id = ${note.id}::uuid`,
+      );
+    } finally {
+      await outside.client.end();
+    }
+    const refused = await dispatchTool(ctxFor({ identity: personal(owner) }), 'undo_last', {});
+    expect(refused.status).toBe('error');
+    if (refused.status !== 'error') throw new Error('ожидался отказ отмены принятой единицы');
+    expect(refused.error.code).toBe('UNDO_TEXT_CHANGED');
+    expect((refused.error.details as UndoTextChangedDetails).continuation).toEqual({
+      kind: 'none',
+    });
+    expect(refused.error.message).toContain('карточки у этого действия нет');
+    expect((await bodyOf(owner, note.id)).body).toBe('после карточки');
+    expect(await undoRecordOf(owner, id)).toBeUndefined();
+
+    const typed = await execute(
+      db,
+      {
+        identity: personal(owner),
+        actorKind: 'owner',
+        source: 'ui',
+        batchId: newId(),
+        operations: [
+          {
+            tool: 'entity_update',
+            input: {
+              id: note.id,
+              body: 'из вкладки',
+              expectedBodyRevision: (await bodyOf(owner, note.id)).rev,
+            },
+          },
+        ],
+      },
+      { sink },
+    );
+    if (!typed.ok) throw new Error(typed.error.message);
+    const tabEntry = await journalOf(owner, typed.actionId);
+    if (tabEntry === undefined) throw new Error('пачки вкладки нет в журнале');
+    expect(
+      await withIdentity(db, personal(owner), (tx) => undoContinuationOf(tx, tabEntry)),
+    ).toEqual({ kind: 'tab' });
   });
 
   test('текст не менялся → «Принять» откатывает правку: запись отмены — путь `chat` (карточку поставил разговор)', async () => {

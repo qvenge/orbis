@@ -23,7 +23,9 @@ export function ConfirmationCard({
   readOnly?: boolean;
   now?: number; // инъектируемое время (детерминизм тестов); по умолчанию — настенные часы
 }) {
-  const [resolved, setResolved] = useState<null | 'approved' | 'rejected' | 'closed'>(null);
+  const [resolved, setResolved] = useState<null | 'approved' | 'rejected' | 'closed'>(
+    card.closed ? 'closed' : null,
+  );
   /**
    * Подписи строк диффа — из реестра (§А9-2). Ключи в `diff` это id СВОЙСТВ и имена полей
    * записи (`entityUpdatePreviewDiff` раскрывает `props`/`unset` ПОШТУЧНО с §А7-4), и
@@ -60,7 +62,7 @@ export function ConfirmationCard({
   const reject = trpc.ai.reject.useMutation({ onSuccess: () => setResolved('rejected') });
 
   const pendingId = card.pendingId;
-  const explicit = card.mode === 'explicit' && pendingId && !resolved && !readOnly;
+  const explicit = card.mode === 'explicit' && pendingId && !resolved && !card.closed && !readOnly;
   const disabled = expired || approve.isPending || reject.isPending;
 
   return (
@@ -96,7 +98,7 @@ export function ConfirmationCard({
           </Button>
         </div>
       )}
-      {expired && !resolved && (
+      {expired && !resolved && !card.closed && (
         <p className="text-xs text-text-muted">Устарело — переспросите AI</p>
       )}
       {resolved === 'approved' && <p className="text-xs text-accent">Подтверждено</p>}

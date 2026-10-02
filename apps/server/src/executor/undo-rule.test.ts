@@ -686,6 +686,12 @@ describe('отмена сеанса правки текста (§7.5 п. 3, К-2
     await placeAt(g1, s1.id, AT('11:02'));
     const said = await dispatchTool(chatCtx(g1), 'undo_last', {});
     expect(said.status).toBe('ok');
+    // Ответ модели называет закреплённую версию и место (§8.6 «Черновик и подтверждение»): для пути «отмени последнее»
+    // подтверждение и есть ответ модели — иначе владелец не узнал бы, где набранный им текст (гейт задачи 11, I-3)
+    if (said.status !== 'ok') return;
+    const result = said.result as { pinnedVersions?: string[]; note?: string };
+    expect(result.pinnedVersions).toEqual(['перед возвратом к 14:02']);
+    expect(result.note).toContain('версией «перед возвратом к 14:02» (Детали → Версии)');
     const rec1 = await mustUndoRecord(g1, s1.id);
     expect(rec1.source).toBe('chat');
     expect(rec1.operations[0]).toMatchObject({

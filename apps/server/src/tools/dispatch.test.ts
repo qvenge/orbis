@@ -1192,7 +1192,8 @@ describe('undo_last: отказ правила отмены текста — м�
     actionId: string,
   ): Promise<{ message: string; details: UndoTextChangedDetails }> {
     const before = (await bodyRow(noteId)).body;
-    const r = await dispatchTool(chat(owner), 'undo_last', {});
+    // Часы вызова — настоящие: правки легли сейчас, и время в фразе отказа — «ЧЧ:ММ» без даты
+    const r = await dispatchTool(chat(owner, { clock: () => new Date() }), 'undo_last', {});
     if (r.status !== 'error') throw new Error(`ожидался отказ, получено: ${JSON.stringify(r)}`);
     expect(r.error.code).toBe('UNDO_TEXT_CHANGED');
     const details = r.error.details as UndoTextChangedDetails;
@@ -1200,13 +1201,17 @@ describe('undo_last: отказ правила отмены текста — м�
     expect(details.entries.map((e) => e.entityId)).toEqual([noteId]);
     // Продолжения «здесь» у пути нет (Р-17): место всегда ДРУГОЕ — там, где кнопку нажмёт человек
     expect(details.continuation.kind).not.toBe('here');
+    // Строка — для человека (она же карточка ошибки в ленте): без id, ссылок на спеку и «кнопки человека»
+    expect(r.error.message).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-/);
+    expect(r.error.message).not.toContain('§');
+    expect(r.error.message).not.toContain('кнопке человека');
     // Ничего не применено: текст писателя цел, записи отмены нет
     expect((await bodyRow(noteId)).body).toBe(before);
     expect(await undoRecordOf(owner, actionId)).toBeUndefined();
     return { message: r.error.message, details };
   }
 
-  test('правка тела агентом (MCP, карточка в глобальном треде) → место `card` с тредом и id действия; модели — «только по кнопке человека»', async () => {
+  test('правка тела агентом (MCP, карточка в общем треде) → место `card` с тредом и id действия; фраза называет общий тред, кто и когда сменил текст', async () => {
     const owner = await freshGraph();
     const note = await seedEntity(owner, { title: 'Заметка', tags: [], body: 'исходный' });
     const a = await bodyEdit(owner, note.id, 'агент', { actorKind: 'agent', source: 'mcp' });
@@ -1215,14 +1220,13 @@ describe('undo_last: отказ правила отмены текста — м�
     const { message, details } = await refused(owner, note.id, a);
     const global = await withIdentity(db, personal(owner), (tx) => ensureGlobalThread(tx, owner));
     expect(details.continuation).toEqual({ kind: 'card', threadId: global, actionId: a });
-    expect(message).toBe(
-      'текст записи изменён после этого действия; вернуть его можно только по кнопке человека: ' +
-        'с карточки этого действия в треде',
+    expect(message).toMatch(
+      /^Не отменено: текст записи «Заметка» изменён после этого действия \(кто-то вне приложения, \d\d:\d\d\) — отменить его можно с его карточки в общем треде$/,
     );
     expect(details.entries[0]?.actorLabel).toBe('вне приложения');
   });
 
-  test('правка владельца в интерфейсе (`ui`, пачка) → место `tab`; сеанс правки текста → `menu` («Вернуть текст как на …»)', async () => {
+  test('правка владельца в интерфейсе (`ui`, пачка) → место `tab` с запасным выходом «из версий»; сеанс правки текста → места нет (R-23): кто менял текст после сеанса, «как до сеанса» одним действием не вернуть', async () => {
     const owner = await freshGraph();
     const n1 = await seedEntity(owner, { title: 'Заметка 1', tags: [], body: 'исходный 1' });
     const o = await caller(owner).entity.updateBatch({
@@ -1237,7 +1241,9 @@ describe('undo_last: отказ правила отмены текста — м�
     await outsideWrite(n1.id, 'владелец + вне приложения');
     const tab = await refused(owner, n1.id, o.actionId);
     expect(tab.details.continuation).toEqual({ kind: 'tab' });
-    expect(tab.message).toContain('клавишами Ctrl/Cmd+Z во вкладке, где сделана правка');
+    expect(tab.message).toContain(
+      'отменить его можно клавишами Ctrl/Cmd+Z во вкладке, где оно сделано, или вернуть текст из версий записи',
+    );
 
     const g2 = await freshGraph();
     const n2 = await seedEntity(g2, { title: 'Заметка 2', tags: [], body: 'исходный 2' });
@@ -1250,9 +1256,12 @@ describe('undo_last: отказ правила отмены текста — м�
     const session = (await actionsOf(g2)).find((e) => e.textSession);
     if (session === undefined) throw new Error('сеанса правки текста нет');
     await outsideWrite(n2.id, 'сеанс + вне приложения');
-    const menu = await refused(g2, n2.id, session.id);
-    expect(menu.details.continuation).toEqual({ kind: 'menu' });
-    expect(menu.message).toContain('пунктом «Вернуть текст как на …» в меню записи');
+    const sessionRefusal = await refused(g2, n2.id, session.id);
+    // Пункт «Вернуть текст как на …» виден, только пока текст дал сеанс (§7.5 п. 3) — отказ как раз значит, что не он
+    expect(sessionRefusal.details.continuation).toEqual({ kind: 'none' });
+    expect(sessionRefusal.message).toMatch(
+      /^Не отменено: после этого сеанса правки текст записи «Заметка 2» менял кто-то вне приложения в \d\d:\d\d — вернуть текст «как до сеанса» одним действием нельзя$/,
+    );
   });
 
   test('правка чата с карточкой в ответе (`card_in_reply`) → `card` с тредом РАЗГОВОРА; глагол прогона агента (`mcp` с `run_id`) → `none` («карточки нет»)', async () => {
@@ -1278,6 +1287,9 @@ describe('undo_last: отказ правила отмены текста — м�
       threadId,
       actionId: edited.actionId,
     });
+    expect(inReply.message).toContain(
+      'отменить его можно с его карточки в треде разговора, где оно сделано',
+    );
 
     const g2 = await freshGraph();
     const n2 = await seedEntity(g2, { title: 'Заметка прогона', tags: [], body: 'исходный' });
@@ -1289,9 +1301,8 @@ describe('undo_last: отказ правила отмены текста — м�
     await outsideWrite(n2.id, 'прогон + вне приложения');
     const none = await refused(g2, n2.id, verb);
     expect(none.details.continuation).toEqual({ kind: 'none' });
-    expect(none.message).toBe(
-      'текст записи изменён после этого действия; вернуть его можно только по кнопке человека: ' +
-        'из версий записи (карточки у этого действия нет)',
+    expect(none.message).toMatch(
+      /— карточки у этого действия нет, вернуть текст можно из версий записи$/,
     );
   });
 

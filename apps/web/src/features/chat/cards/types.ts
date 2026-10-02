@@ -52,6 +52,8 @@ export type ConfirmationData = {
   pendingId?: string;
   summary: string;
   diff?: Record<string, { before: unknown; after: unknown }>;
+  /** Отказанная карточка закрыта: выдача треда добавляет признак на чтении, хранимое сообщение неизменно. */
+  closed?: true;
 };
 export type ErrorCardData = { kind: 'error_card'; code: string; message: string };
 // 03-budget §3.4: карточка импорта в ленте. Производителя на сервере с 1в нет — инструмент агента,
