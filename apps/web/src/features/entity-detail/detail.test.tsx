@@ -3880,7 +3880,7 @@ describe('ADE: прогон', () => {
     );
   });
 
-  test('конфликт внутри цепочки прогона: список правок, честная причина и карточки треда прогона как выход', async () => {
+  test('конфликт внутри цепочки grant-прогона: список правок и честная причина без совета недоступных карточек', async () => {
     const { calls } = renderWithProviders(
       <DetailScreen entityId="r1" />,
       runHandler({
@@ -3908,9 +3908,8 @@ describe('ADE: прогон', () => {
     // Инвариант 7: конфликт значит, что граф НЕ тронут вовсе, — и сказать это надо словами.
     expect(result).toHaveTextContent('Ничего не откачено');
     expect(result).toHaveTextContent('эти записи менялись помимо прогона');
-    expect(result).toHaveTextContent(
-      'отдельные действия можно отменить с карточек в треде прогона',
-    );
+    // Claim/step/finish — бухгалтерия MCP-прогона без индивидуальной отмены (§11.3).
+    expect(result).not.toHaveTextContent(/карточ|тред|отдельные действия/i);
     expect(result).not.toHaveTextContent('после прогона');
     // Задетая запись названа ЗАГОЛОВКОМ: по uuid человек не решит, чем он готов пожертвовать.
     expect(await within(result).findByText('Починить парсер')).toBeInTheDocument();
@@ -4828,6 +4827,7 @@ function routineRunHandler(
     decideAll?: unknown;
     /** Обзор рутины: блок пачки читает его РАДИ ПАУЗЫ (`nextBucketAt === null`). */
     overview?: unknown;
+    rollback?: unknown;
   } = {},
 ): MockHandler {
   const run = routineRunEntity(opts.props ?? ROUTINE_RUN_CHECKPOINT, opts.archived ?? false);
@@ -4849,7 +4849,8 @@ function routineRunHandler(
     if (path === 'routine.decideProposal')
       return opts.decide ?? { status: 'applied', actionId: 'a1' };
     if (path === 'routine.answerCheckpoint') return { runId: 'rr1' };
-    if (path === 'agentRun.rollback') return { ok: true, undone: ['a1'], note: ROLLBACK_NOTE };
+    if (path === 'agentRun.rollback')
+      return opts.rollback ?? { ok: true, undone: ['a1'], note: ROLLBACK_NOTE };
     // D42: пачка решений. Пустой список — обычный ответ (прогон, который ничего не откладывал
     // и ни о чём не спрашивал), поэтому он же и умолчание.
     if (path === 'routine.runUnits') return opts.units ?? [];
@@ -4872,6 +4873,44 @@ function routineRunHandler(
 }
 
 describe('V1: прогон рутины', () => {
+  test('конфликт внутри цепочки рутинного прогона: честная причина и карточки треда прогона как выход', async () => {
+    const { calls } = renderWithProviders(
+      <DetailScreen entityId="rr1" />,
+      routineRunHandler({
+        props: {
+          ...ROUTINE_RUN_CHECKPOINT,
+          'orbis/run_outcome': 'finished',
+          'orbis/run_checkpoint': undefined,
+          'orbis/run_finished_at': '2026-08-18T04:02:00.000Z',
+        },
+        rollback: {
+          ok: false,
+          reason: 'conflict',
+          conflicts: [
+            { entityId: 'e2', actionId: 'a9', at: '2026-08-18T04:01:00.000Z', source: 'ui' },
+          ],
+        },
+      }),
+    );
+    const feed = await screen.findByTestId('run-feed');
+    await userEvent.click(within(feed).getByRole('button', { name: 'Откатить прогон в Orbis' }));
+    await userEvent.click(
+      within(await screen.findByRole('dialog')).getByRole('button', { name: 'Откатить' }),
+    );
+
+    const result = await screen.findByTestId('rollback-result');
+    expect(result).toHaveTextContent('Ничего не откачено');
+    expect(result).toHaveTextContent('эти записи менялись помимо прогона');
+    expect(result).toHaveTextContent(
+      /отдельные действия можно отменить с карточек в треде прогона/i,
+    );
+    expect(result).not.toHaveTextContent('после прогона');
+    expect(await within(result).findByText('Купить билеты')).toBeInTheDocument();
+    expect(result).toHaveTextContent('с экрана');
+    expect(calls.some((c) => c.path === 'oauth.listGrants')).toBe(false);
+    expect(calls.find((c) => c.path === 'agentRun.rollback')?.input).toEqual({ runId: 'rr1' });
+  });
+
   test('прогон с routine_id и outcome checkpoint: блок вопроса с полем ответа; «Ответить» зовёт routine.answerCheckpoint; шапка — рутина и слот, исполнителя нет (приёмка 5)', async () => {
     const { calls } = renderWithProviders(<DetailScreen entityId="rr1" />, routineRunHandler());
     const feed = await screen.findByTestId('run-feed');
