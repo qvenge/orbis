@@ -1,5 +1,5 @@
 import { rowAllDayOf } from '@orbis/shared';
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useRefTitle } from '../../lib/entity-ref/RefField';
 import { formatMoney, type MoneyTone } from '../../lib/format';
 import { isTitleStale } from '../../lib/orbis-error';
@@ -96,6 +96,13 @@ function TitleEditor({
   const savingRef = useRef(false);
   const draftRef = useRef(draft);
   draftRef.current = draft;
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   // Тот же приём, что у редактора тела (BodyEditor) и AspectField (D6c п.3): внешнее
   // значение подхватываем, но ТОЛЬКО если черновик не трогали — иначе текст, который
@@ -134,7 +141,8 @@ function TitleEditor({
             // Новая буква за время запроса продолжает правку уже сохранённого заголовка.
             lockRef.current = draftRef.current === draft ? null : draft;
           } catch (err) {
-            if (isTitleStale(err)) onStale?.();
+            // Принятый refresh заменяет поле: старый save не сбрасывает стек нового редактора.
+            if (mountedRef.current && isTitleStale(err)) onStale?.();
           } finally {
             savingRef.current = false;
           }

@@ -152,6 +152,58 @@ test('отказ заголовка вызывает onStale и сохраняе
   }
 });
 
+test('принятое новое поле не вызывает onStale позднего сохранения старого редактора', async () => {
+  const stale = vi.fn();
+  let rejectSave: (error: unknown) => void = () => {};
+  const pendingSave = new Promise((_, reject) => {
+    rejectSave = reject;
+  });
+  const titleError = trpcError('CONFLICT', 'Заголовок изменён', {
+    code: 'CONFLICT',
+    details: { reason: 'precondition_failed', mismatches: [{ property: 'orbis/title' }] },
+  });
+  const save = vi.fn((title: string) =>
+    title === 'Черновик' ? pendingSave : Promise.reject(titleError),
+  );
+  function Host() {
+    const [accepted, setAccepted] = useState(false);
+    return (
+      <>
+        <NativeRow
+          key={String(accepted)}
+          entity={row({}, [], { title: accepted ? 'Новое агентское' : 'Прежде' })}
+          onToggleTask={() => {}}
+          onSaveTitle={save}
+          onStale={stale}
+        />
+        <button type="button" onClick={() => setAccepted(true)}>
+          Обновить
+        </button>
+      </>
+    );
+  }
+  renderWithProviders(<Host />, registryHandler, { strict: true });
+  const user = userEvent.setup();
+  const field = screen.getByLabelText('Заголовок');
+  await user.click(field);
+  fireEvent.change(field, { target: { value: 'Черновик' } });
+  await user.click(screen.getByRole('button', { name: 'Обновить' }));
+  expect(save).toHaveBeenCalledWith('Черновик', 'Прежде');
+  expect(screen.getByLabelText('Заголовок')).toHaveValue('Новое агентское');
+  await act(async () => {
+    rejectSave(titleError);
+    await pendingSave.catch(() => {});
+  });
+  expect(stale).not.toHaveBeenCalled();
+  expect(screen.getByLabelText('Заголовок')).toHaveValue('Новое агентское');
+  await user.click(screen.getByLabelText('Заголовок'));
+  fireEvent.change(screen.getByLabelText('Заголовок'), { target: { value: 'Новая правка' } });
+  await user.tab();
+  await waitFor(() => expect(stale).toHaveBeenCalledTimes(1));
+  expect(save).toHaveBeenLastCalledWith('Новая правка', 'Новое агентское');
+  expect(screen.getByLabelText('Заголовок')).toHaveValue('Новая правка');
+});
+
 test('financial: сумма с минусом и тоном danger', async () => {
   renderWithProviders(
     <NativeRow

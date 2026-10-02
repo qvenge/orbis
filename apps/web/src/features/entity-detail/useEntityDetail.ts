@@ -1,4 +1,5 @@
 import { type PerfActionKind, RULE_TASK_STATUS_DEFAULT } from '@orbis/shared';
+import { type QueryClient, useQueryClient } from '@tanstack/react-query';
 import type { JSONContent } from '@tiptap/core';
 import { TRPCClientError } from '@trpc/client';
 import { useRef, useState } from 'react';
@@ -20,6 +21,9 @@ import { runPollInterval } from './run-poll';
 
 type Entity = RouterOutputs['entity']['get']['entity'];
 type UpdateInput = RouterInputs['entity']['update'];
+
+// Принятие переживает размонтирование редактора, но не переезжает в кэш другого клиента.
+const TITLE_GENERATIONS = new WeakMap<QueryClient, Record<string, number>>();
 
 // §9.2: detail тянет body+relations+backlinks+thread (backlinks — секция «Связанное»
 // §3.5.8, Task D5). Один и тот же input — ключ кэша для useQuery и точечных
@@ -196,6 +200,9 @@ export function useEntityUpdate(
   opts: { onSettled?: (vars: UpdateInput) => void } = {},
 ) {
   const utils = trpc.useUtils();
+  const queryClient = useQueryClient();
+  const titleGenerations: Record<string, number> = TITLE_GENERATIONS.get(queryClient) ?? {};
+  TITLE_GENERATIONS.set(queryClient, titleGenerations);
   const input = detailGetInput(entityId);
   const [conflict, setConflict] = useState(false);
   const [titleStale, setTitleStale] = useState(false);
@@ -239,6 +246,13 @@ export function useEntityUpdate(
   const checksVersion = (vars: UpdateInput) =>
     vars.body !== undefined || vars.bodyDoc !== undefined;
 
+  // Явно принятое имя важнее старого title-only save. Тело остаётся на своей ревизии.
+  const titleAccepted = (vars: UpdateInput, ctx?: { titleGeneration: number }) =>
+    ctx !== undefined &&
+    vars.title !== undefined &&
+    !checksVersion(vars) &&
+    ctx.titleGeneration !== (titleGenerations[vars.id] ?? 0);
+
   /**
    * Приехал ли ответ мутации, которую УЖЕ сменила следующая по той же записи.
    *
@@ -273,6 +287,7 @@ export function useEntityUpdate(
 
   const mutation = trpc.entity.update.useMutation({
     onMutate: async (vars) => {
+      const titleGeneration = titleGenerations[vars.id] ?? 0;
       // Отклик действия (спека скорости §3.1) — от нажатия, поэтому ДО первого `await`. Автосохранение текста — не
       // действие: сеанс печати меряется иначе, и замер каждого сохранения засорил бы отклик кнопок.
       const action =
@@ -290,9 +305,10 @@ export function useEntityUpdate(
       await utils.entity.get.cancel(input);
       const prev = utils.entity.get.getData(input);
       const shown = OPTIMISTIC.get(vars) ?? vars;
-      utils.entity.get.setData(input, (old) =>
-        old ? { ...old, entity: applyPatch(old.entity, shown) } : old,
-      );
+      if (!titleAccepted(vars, { titleGeneration }))
+        utils.entity.get.setData(input, (old) =>
+          old ? { ...old, entity: applyPatch(old.entity, shown) } : old,
+        );
       // «Видно» — кадр после оптимистичного патча: к нему React успевает нарисовать правку.
       if (action) requestAnimationFrame(() => action.visible());
       seqRef.current += 1;
@@ -309,6 +325,7 @@ export function useEntityUpdate(
         input,
         seq: seqRef.current,
         expectedBodyRevision: vars.expectedBodyRevision,
+        titleGeneration,
         action,
       };
     },
@@ -317,9 +334,9 @@ export function useEntityUpdate(
       // сейчас на экране (см. settleBodyDraft).
       settleBodyDraft(vars, err);
       const old = superseded(vars.id, ctx);
-      // Брошенная мутация не откатывает ничего: поверх её снимка уже лёг патч преемника.
-      // Откат — иначе ВСЕГДА и по ключу из контекста: он про свою запись, чья бы очередь ни шла.
-      if (ctx && !old) utils.entity.get.setData(ctx.input, ctx.prev);
+      const accepted = titleAccepted(vars, ctx);
+      // Снимок до преемника или принятого title уже устарел; остальные откаты — по своему ключу.
+      if (ctx && !old && !accepted) utils.entity.get.setData(ctx.input, ctx.prev);
       // Отказ «по объекту» — прежде всего `MODULE_DISABLED` (срез 1б §8.3): расширение выключили в
       // другом месте, и маска в кеше экрана устарела — перечитать её, чтобы поля встали только
       // чтением и появилась плашка. На проводе это `FORBIDDEN` (`cause` по HTTP не сериализуется), и
@@ -334,7 +351,7 @@ export function useEntityUpdate(
       // (ревью Задачи 13, И-4). `entityId` здесь — из ПОСЛЕДНЕГО рендера (react-query
       // проталкивает свежие опции в незавершённую мутацию), `vars.id` — из отправки.
       if (vars.id !== entityId) return;
-      if (isTitleStale(err)) setTitleStale(true);
+      if (!accepted && isTitleStale(err)) setTitleStale(true);
       // Молчим только о конфликте, который преемник принесёт и сам (см. bringsSameConflict).
       if (old && bringsSameConflict(vars.id, ctx)) return;
       // Конфликт — отказ замка текста по структурному коду (`data.orbis`, РП-5), а не любой 409.
@@ -382,7 +399,11 @@ export function useEntityUpdate(
     conflict,
     dismissConflict: () => setConflict(false),
     titleStale,
-    dismissTitleStale: () => setTitleStale(false),
+    dismissTitleStale: () => {
+      // TitleBlock вызывает это лишь после успешного актуального «Обновить».
+      titleGenerations[entityId] = (titleGenerations[entityId] ?? 0) + 1;
+      setTitleStale(false);
+    },
   };
 }
 

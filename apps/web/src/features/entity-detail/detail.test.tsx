@@ -884,6 +884,237 @@ test('позднее обновление заголовка прежней за
 });
 
 test.each([
+  { readFails: false, keyboard: false },
+  { readFails: true, keyboard: false },
+  { readFails: false, keyboard: true },
+  { readFails: true, keyboard: true },
+])('принятое обновление заголовка переживает поздний отказ blur; чтение отказывает=$readFails, Enter=$keyboard', async ({
+  readFails,
+  keyboard,
+}) => {
+  const initial = { ...entity, title: 'Прежде' };
+  let current = initial;
+  let saves = 0;
+  let reads = 0;
+  let rejectSave: (error: unknown) => void = () => {};
+  const pendingSave = new Promise((_, reject) => {
+    rejectSave = reject;
+  });
+  const stale = () =>
+    trpcError('CONFLICT', 'Чужой заголовок', {
+      code: 'CONFLICT',
+      details: {
+        reason: 'precondition_failed',
+        mismatches: [{ property: 'orbis/title' }],
+      },
+    });
+  function TitleProbe() {
+    const get = trpc.entity.get.useQuery(detailGetInput('e1'));
+    return (
+      <output aria-label="Заголовок в кэше" data-read-status={get.fetchStatus}>
+        {get.data?.entity.title}
+      </output>
+    );
+  }
+  const { calls } = renderWithProviders(
+    <>
+      <DetailScreen entityId="e1" />
+      <TitleProbe />
+    </>,
+    (path) => {
+      if (path === 'entity.get') {
+        reads += 1;
+        if (readFails && reads === 4) throw trpcError('INTERNAL_SERVER_ERROR', 'Чтение недоступно');
+        return { entity: current, relations: [], thread: null };
+      }
+      if (path === 'entity.update') {
+        saves += 1;
+        if (saves === 1) {
+          current = { ...initial, title: 'Агентское' };
+          throw stale();
+        }
+        return pendingSave;
+      }
+      return registryReply(path) ?? {};
+    },
+  );
+  const field = await screen.findByLabelText('Заголовок');
+  fireEvent.change(field, { target: { value: 'Черновик' } });
+  fireEvent.blur(field);
+  await screen.findByText('Заголовок изменён в другом месте — обновите');
+  await waitFor(() =>
+    expect(screen.getByLabelText('Заголовок в кэше')).toHaveTextContent('Агентское'),
+  );
+  expect(field).toHaveValue('Черновик');
+  current = { ...initial, title: 'Новое агентское' };
+  const user = userEvent.setup();
+  await user.click(field);
+  // Настоящий переход фокуса отправляет старый draft на blur перед кликом refresh.
+  if (keyboard) {
+    await user.tab();
+    await waitFor(() => expect(saves).toBe(2));
+    expect(screen.getByRole('button', { name: 'Обновить' })).toHaveFocus();
+    await user.keyboard('{Enter}');
+  } else await user.click(screen.getByRole('button', { name: 'Обновить' }));
+  await waitFor(() => expect(saves).toBe(2));
+  expect(calls.filter((c) => c.path === 'entity.update').at(-1)?.input).toEqual({
+    id: 'e1',
+    title: 'Черновик',
+    expectedTitle: 'Прежде',
+  });
+  await waitFor(() => expect(screen.getByLabelText('Заголовок')).toHaveValue('Новое агентское'));
+  expect(screen.getByLabelText('Заголовок в кэше')).toHaveTextContent('Новое агентское');
+  expect(screen.queryByText('Заголовок изменён в другом месте — обновите')).not.toBeInTheDocument();
+  await act(async () => {
+    rejectSave(stale());
+    await pendingSave.catch(() => {});
+  });
+  await waitFor(() => expect(reads).toBe(4));
+  await waitFor(() =>
+    expect(screen.getByLabelText('Заголовок в кэше')).toHaveAttribute('data-read-status', 'idle'),
+  );
+  expect(screen.getByLabelText('Заголовок')).toHaveValue('Новое агентское');
+  expect(screen.getByLabelText('Заголовок в кэше')).toHaveTextContent('Новое агентское');
+  expect(screen.queryByText('Заголовок изменён в другом месте — обновите')).not.toBeInTheDocument();
+});
+
+test('принятое обновление одного клиента не скрывает актуальный title-отказ другого', async () => {
+  const initial = { ...entity, title: 'Прежде' };
+  const stale = () =>
+    trpcError('CONFLICT', 'Чужой заголовок', {
+      code: 'CONFLICT',
+      details: { reason: 'precondition_failed', mismatches: [{ property: 'orbis/title' }] },
+    });
+  const first = renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
+    if (path === 'entity.get') return { entity: initial, relations: [], thread: null };
+    if (path === 'entity.update') throw stale();
+    return registryReply(path) ?? {};
+  });
+  const firstScreen = within(first.container);
+  const firstField = await firstScreen.findByLabelText('Заголовок');
+  fireEvent.change(firstField, { target: { value: 'Первый draft' } });
+  fireEvent.blur(firstField);
+  await firstScreen.findByText('Заголовок изменён в другом месте — обновите');
+  await waitFor(() => expect(first.calls.filter((c) => c.path === 'entity.get')).toHaveLength(2));
+  let rejectSave: (error: unknown) => void = () => {};
+  const pendingSave = new Promise((_, reject) => {
+    rejectSave = reject;
+  });
+  const second = renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
+    if (path === 'entity.get') return { entity: initial, relations: [], thread: null };
+    if (path === 'entity.update') return pendingSave;
+    return registryReply(path) ?? {};
+  });
+  const secondScreen = within(second.container);
+  const secondField = await secondScreen.findByLabelText('Заголовок');
+  fireEvent.change(secondField, { target: { value: 'Второй draft' } });
+  fireEvent.blur(secondField);
+  await waitFor(() => expect(second.calls.some((c) => c.path === 'entity.update')).toBe(true));
+  await userEvent.click(firstScreen.getByRole('button', { name: 'Обновить' }));
+  await waitFor(() => expect(firstScreen.getByLabelText('Заголовок')).toHaveValue('Прежде'));
+  expect(
+    firstScreen.queryByText('Заголовок изменён в другом месте — обновите'),
+  ).not.toBeInTheDocument();
+  await act(async () => {
+    rejectSave(stale());
+    await pendingSave.catch(() => {});
+  });
+  await secondScreen.findByText('Заголовок изменён в другом месте — обновите');
+  expect(secondScreen.getByLabelText('Заголовок')).toHaveValue('Второй draft');
+});
+
+test('принятое обновление после холодного перехода не откатывает title-save старого экземпляра', async () => {
+  let changeId: (id: string) => void = () => {};
+  let rejectSave: (error: unknown) => void = () => {};
+  const pendingSave = new Promise((_, reject) => {
+    rejectSave = reject;
+  });
+  const pendingNeighbor = new Promise(() => {});
+  const initial = { ...entity, title: 'Прежде' };
+  let current = initial;
+  let saves = 0;
+  let reads = 0;
+  let failReads = false;
+  const stale = () =>
+    trpcError('CONFLICT', 'Чужой заголовок', {
+      code: 'CONFLICT',
+      details: { reason: 'precondition_failed', mismatches: [{ property: 'orbis/title' }] },
+    });
+  function Host() {
+    const [id, setId] = useState('e1');
+    changeId = setId;
+    const get = trpc.entity.get.useQuery(detailGetInput('e1'));
+    return (
+      <>
+        <DetailScreen entityId={id} />
+        <output aria-label="Заголовок в кэше" data-read-status={get.fetchStatus}>
+          {get.data?.entity.title}
+        </output>
+      </>
+    );
+  }
+  renderWithProviders(<Host />, (path, input) => {
+    if (path === 'entity.get') {
+      if ((input as { id: string }).id === 'e2') return pendingNeighbor;
+      reads += 1;
+      if (failReads) throw trpcError('INTERNAL_SERVER_ERROR', 'Чтение недоступно');
+      return { entity: current, relations: [], thread: null };
+    }
+    if (path === 'entity.update') {
+      saves += 1;
+      if (saves === 2) return pendingSave;
+      current = { ...initial, title: saves === 1 ? 'Агентское' : 'Новое агентское' };
+      throw stale();
+    }
+    return registryReply(path) ?? {};
+  });
+  const user = userEvent.setup();
+  let field = await screen.findByLabelText('Заголовок');
+  fireEvent.change(field, { target: { value: 'Черновик' } });
+  fireEvent.blur(field);
+  await screen.findByText('Заголовок изменён в другом месте — обновите');
+  await waitFor(() =>
+    expect(screen.getByLabelText('Заголовок в кэше')).toHaveTextContent('Агентское'),
+  );
+  await user.click(field);
+  await user.tab();
+  await waitFor(() => expect(saves).toBe(2));
+  act(() => changeId('e2'));
+  // Холодный сосед снимает TitleBlock; новый экземпляр возникает при возврате на e1.
+  await waitFor(() => expect(screen.queryByLabelText('Заголовок')).not.toBeInTheDocument());
+  act(() => changeId('e1'));
+  field = await screen.findByLabelText('Заголовок');
+  await user.click(field);
+  fireEvent.change(field, { target: { value: 'Новый черновик' } });
+  await user.tab();
+  await screen.findByText('Заголовок изменён в другом месте — обновите');
+  await waitFor(() =>
+    expect(screen.getByLabelText('Заголовок в кэше')).toHaveTextContent('Новое агентское'),
+  );
+  await user.click(field);
+  await user.click(screen.getByRole('button', { name: 'Обновить' }));
+  await waitFor(() => expect(screen.getByLabelText('Заголовок')).toHaveValue('Новое агентское'));
+  await waitFor(() =>
+    expect(
+      screen.queryByText('Заголовок изменён в другом месте — обновите'),
+    ).not.toBeInTheDocument(),
+  );
+  const readsBeforeLateSave = reads;
+  failReads = true;
+  await act(async () => {
+    rejectSave(stale());
+    await pendingSave.catch(() => {});
+  });
+  await waitFor(() => expect(reads).toBeGreaterThan(readsBeforeLateSave));
+  await waitFor(() =>
+    expect(screen.getByLabelText('Заголовок в кэше')).toHaveAttribute('data-read-status', 'idle'),
+  );
+  expect(screen.getByLabelText('Заголовок')).toHaveValue('Новое агентское');
+  expect(screen.getByLabelText('Заголовок в кэше')).toHaveTextContent('Новое агентское');
+  expect(screen.queryByText('Заголовок изменён в другом месте — обновите')).not.toBeInTheDocument();
+});
+
+test.each([
   { label: 'новый ввод при том же id', roundTrip: false, readFails: false },
   { label: 'возврат e1→e2→e1 на тёплом кэше', roundTrip: true, readFails: false },
   { label: 'отказ чтения', roundTrip: false, readFails: true },
