@@ -39,6 +39,7 @@ import {
   observeTitleValue,
   recordTitleChange,
   redoTitle,
+  rejectTitleSend,
   undoTitle,
 } from '../entity-editor/title-history';
 import { useExtensionEnabled } from '../settings/extension-mask';
@@ -159,13 +160,15 @@ function TitleEditor({
   const commit = async (v: string, expected: string) => {
     if (!current()) return;
     const sequence = ++saveSequence.current;
-    markTitleSent(entityId, v);
+    const token = markTitleSent(entityId, v);
     savingRef.current = true;
     try {
       await latest.current.onSave(v, expected);
       if (current() && sequence === saveSequence.current)
         lockRef.current = draftRef.current === v ? null : v;
     } catch (err) {
+      if (isUndoEpoch(intent.epoch) && intent.generation === stepsGeneration())
+        rejectTitleSend(entityId, token);
       if (current() && sequence === saveSequence.current && isTitleStale(err))
         latest.current.onStale?.();
     } finally {

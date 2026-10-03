@@ -7,13 +7,19 @@ import { StrictMode, useState } from 'react';
 import { expect, test, vi } from 'vitest';
 import { DetailScreen } from '../../features/entity-detail/DetailScreen';
 import { NativeRow } from '../../features/entity-detail/NativeRow';
-import { canRedoStep, canUndoStep } from '../../features/entity-editor/arrows-stack';
+import { canRedoStep, canUndoStep, clearAllSteps } from '../../features/entity-editor/arrows-stack';
 import { BodyEditor } from '../../features/entity-editor/BodyEditor';
-import { renderWithProviders, trpcError, wireEntity } from '../../test/harness';
+import {
+  mockEntityUpdateResult,
+  renderWithProviders,
+  trpcError,
+  wireEntity,
+} from '../../test/harness';
 import { navAt } from '../../test/nav';
 import { registryReply } from '../../test/registry';
 import { trpc } from '../../trpc';
 import { observeTitleValue } from '../entity-editor/title-history';
+import { resetUndoSession } from '../undo/undo-epoch';
 import { detailGetInput } from './useEntityDetail';
 
 const doc = parseBody('тело');
@@ -364,3 +370,135 @@ test('actual title-only LRU eviction forgets retained observer basis', async () 
   expect(observeTitleValue('e1', 'cold unseen')).toBe(false);
   expect(observeTitleValue('e6', 'foreign current')).toBe(true);
 });
+
+for (const foreign of ['План Б', 'Чужое имя'])
+  test(`failed unobserved title send does not authorize foreign cold value ${foreign}`, async () => {
+    navAt('e1');
+    let change: (id: string) => void = () => {};
+    let qc: QueryClient | null = null;
+    let firstTitle = 'План',
+      writes = 0;
+    let reject: (e: unknown) => void = () => {};
+    const held = new Promise((_resolve, rej) => {
+      reject = rej;
+    });
+    function Host() {
+      const [id, set] = useState('e1');
+      change = set;
+      qc = useQueryClient();
+      const warm = trpc.entity.get.useQuery(detailGetInput('e2'));
+      return (
+        <>
+          <span data-testid="warm">{warm.data?.entity.title}</span>
+          <DetailScreen entityId={id} />
+        </>
+      );
+    }
+    renderWithProviders(
+      <Host />,
+      (path, input) => {
+        const vars = input as { id?: string; title?: string; expectedTitle?: string };
+        if (path === 'entity.get')
+          return {
+            entity: {
+              ...entity,
+              id: vars.id ?? 'e1',
+              title: vars.id === 'e2' ? 'Сосед' : firstTitle,
+            },
+            relations: [],
+            thread: null,
+          };
+        if (path === 'entity.update') {
+          writes++;
+          if (writes === 1) return held;
+          expect(vars).toMatchObject({ id: 'e1', title: 'План', expectedTitle: foreign });
+          firstTitle = vars.title ?? '';
+          return mockEntityUpdateResult({ ...entity, title: firstTitle });
+        }
+        return (
+          registryReply(path) ??
+          (path === 'entity.resolveRefs' || path === 'entity.suggest' ? [] : {})
+        );
+      },
+      { queries: { gcTime: 0 } },
+    );
+    const field = await screen.findByTestId('title-edit');
+    await waitFor(() => expect(screen.getByTestId('warm')).toHaveTextContent('Сосед'));
+    fireEvent.change(field, { target: { value: 'План Б' } });
+    act(() => {
+      fireEvent.blur(field);
+      change('e2');
+    });
+    await waitFor(() => expect(screen.getByTestId('title-edit')).toHaveValue('Сосед'));
+    await waitFor(() => expect(writes).toBe(1));
+    await act(async () => {
+      reject(trpcError('INTERNAL_SERVER_ERROR', 'Запрос не записал title'));
+      await held.catch(() => {});
+    });
+    await waitFor(() =>
+      expect(
+        qc
+          ?.getQueryCache()
+          .getAll()
+          .filter((q) => JSON.stringify(q.queryKey).includes('"e1"')),
+      ).toHaveLength(0),
+    );
+    firstTitle = foreign; // Независимая чужая запись после отказа собственной мутации.
+    act(() => change('e1'));
+    await waitFor(() => expect(screen.getByTestId('title-edit')).toHaveValue(foreign));
+    if (canUndoStep('e1')) {
+      fireEvent.keyDown(screen.getByTestId('title-edit'), {
+        key: 'z',
+        code: 'KeyZ',
+        ctrlKey: true,
+      });
+      await waitFor(() => expect(writes).toBe(2));
+      expect(firstTitle).toBe('План');
+    }
+    expect(writes).toBe(1);
+  });
+
+for (const scope of ['same', 'owner', 'generation'])
+  for (const newer of ['План Б', 'План В'])
+    test(`late failed send preserves ${scope} newer unobserved ${newer}`, async () => {
+      let show: (title: string | null) => void = () => {};
+      let reject: (error: unknown) => void = () => {};
+      const held = new Promise<void>((_resolve, fail) => {
+        reject = fail;
+      });
+      const save = vi
+        .fn()
+        .mockImplementationOnce(() => held)
+        .mockResolvedValue(undefined);
+      function Host() {
+        const [title, set] = useState<string | null>('План');
+        show = set;
+        return title === null ? null : (
+          <NativeRow entity={{ ...entity, title }} onToggleTask={() => {}} onSaveTitle={save} />
+        );
+      }
+      renderWithProviders(<Host />, fallback);
+      fireEvent.change(await screen.findByTestId('title-edit'), { target: { value: 'План Б' } });
+      fireEvent.blur(screen.getByTestId('title-edit'));
+      await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+      act(() => show(null));
+      if (scope === 'owner') act(resetUndoSession);
+      if (scope === 'generation') act(clearAllSteps);
+      act(() => show('План'));
+      fireEvent.change(screen.getByTestId('title-edit'), { target: { value: newer } });
+      fireEvent.blur(screen.getByTestId('title-edit'));
+      await waitFor(() => expect(save).toHaveBeenCalledTimes(2));
+      await act(async () => {
+        reject(new Error('old request did not write'));
+        await held.catch(() => {});
+      });
+      act(() => show(newer));
+      expect(canUndoStep('e1')).toBe(true);
+      fireEvent.keyDown(screen.getByTestId('title-edit'), {
+        key: 'z',
+        code: 'KeyZ',
+        ctrlKey: true,
+      });
+      expect(screen.getByTestId('title-edit')).toHaveValue('План');
+      expect(save).toHaveBeenLastCalledWith('План', newer);
+    });

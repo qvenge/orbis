@@ -6,6 +6,7 @@ import {
   observeTitleValue,
   recordTitleChange,
   redoTitle,
+  rejectTitleSend,
   resetTitleHistory,
   undoTitle,
 } from './title-history';
@@ -50,4 +51,48 @@ test('duplicate refresh preserves newer pending and noop sends do not trust late
   expect(observeTitleValue('e', 'C')).toBe(false);
   expect(observeTitleValue('e', 'B')).toBe(false);
   expect(observeTitleValue('e', 'C')).toBe(true);
+});
+
+test('failed token retires only its own send, preserving newer and duplicate values', () => {
+  observeTitleValue('e', 'A');
+  const b = markTitleSent('e', 'B');
+  markTitleSent('e', 'C');
+  rejectTitleSend('e', b);
+  expect(observeTitleValue('e', 'B')).toBe(true);
+  expect(observeTitleValue('e', 'C')).toBe(false);
+  const old = markTitleSent('e', 'D');
+  markTitleSent('e', 'D');
+  rejectTitleSend('e', old);
+  expect(observeTitleValue('e', 'D')).toBe(false);
+  expect(markTitleSent('e', 'D')).toBeUndefined();
+  rejectTitleSend('e', undefined);
+  markTitleSent('e', 'accepted'); // Успешные ещё не наблюдавшиеся отправки сохраняют своё распознавание.
+  expect(observeTitleValue('e', 'accepted')).toBe(false);
+});
+test('late rejection cannot recreate, alter reset basis, or remove a new entry token', () => {
+  observeTitleValue('e', 'A');
+  const observed = markTitleSent('e', 'B');
+  expect(observeTitleValue('e', 'B')).toBe(false);
+  markTitleSent('e', 'C');
+  rejectTitleSend('e', observed);
+  expect(observeTitleValue('e', 'C')).toBe(false);
+  const reset = markTitleSent('e', 'D');
+  resetTitleHistory('e');
+  rejectTitleSend('e', reset);
+  expect(observeTitleValue('e', 'D')).toBe(true);
+  const evicted = markTitleSent('e', 'E');
+  forgetTitleHistory('e');
+  rejectTitleSend('e', evicted);
+  expect(observeTitleValue('e', 'initial')).toBe(false);
+  markTitleSent('e', 'E');
+  rejectTitleSend('e', evicted);
+  expect(observeTitleValue('e', 'E')).toBe(false);
+});
+
+test('coalesced observation retires every earlier unobserved own send', () => {
+  observeTitleValue('e', 'A');
+  markTitleSent('e', 'B');
+  markTitleSent('e', 'C');
+  expect(observeTitleValue('e', 'C')).toBe(false);
+  expect(observeTitleValue('e', 'B')).toBe(true);
 });

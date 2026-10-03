@@ -3,7 +3,7 @@ export const TITLE_GROUP_DELAY_MS = 500;
 export const TITLE_DEPTH = 100;
 interface History {
   seen?: string;
-  pending: string[];
+  pending: { value: string }[];
   done: string[];
   undone: string[];
   open: boolean;
@@ -29,18 +29,25 @@ function history(id: string): History {
 export function observeTitleValue(id: string, value: string): boolean {
   const h = history(id);
   if (h.seen === value) return false;
-  const observed = h.pending.indexOf(value);
+  const observed = h.pending.findIndex((v) => v.value === value);
   const foreign = h.seen !== undefined && observed < 0;
   h.seen = value;
   if (observed >= 0) h.pending.splice(0, observed + 1);
   return foreign;
 }
-export function markTitleSent(id: string, value: string): void {
+export function markTitleSent(id: string, value: string) {
   const h = history(id);
   if (value !== h.seen) {
-    h.pending = h.pending.filter((v) => v !== value);
-    h.pending.push(value);
+    h.pending = h.pending.filter((v) => v.value !== value);
+    const token = { value };
+    h.pending.push(token);
+    return token;
   }
+}
+/** Отказ снимает только своё намерение, даже если поле уже размонтировано. */
+export function rejectTitleSend(id: string, token: ReturnType<typeof markTitleSent>): void {
+  const h = histories.get(id);
+  if (h) h.pending = h.pending.filter((v) => v !== token);
 }
 export function recordTitleChange(
   id: string,
