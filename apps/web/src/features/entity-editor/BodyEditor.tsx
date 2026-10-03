@@ -156,9 +156,9 @@ function bodyEditorOptions(
     },
     onTransaction: ({ editor: e, transaction }) => {
       if (entityId === undefined || !current() || isHistoryTransaction(transaction)) return;
-      if (transaction.docChanged && transaction.getMeta('addToHistory') !== false)
-        discardRedo(entityId);
-      syncBodyDepth(entityId, undoDepth(e.state));
+      const historyEdit = transaction.docChanged && transaction.getMeta('addToHistory') !== false;
+      if (historyEdit) discardRedo(entityId);
+      syncBodyDepth(entityId, undoDepth(e.state), historyEdit);
     },
   };
 }

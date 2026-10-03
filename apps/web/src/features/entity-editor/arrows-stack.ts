@@ -81,7 +81,7 @@ function move(id: string, from: 'done' | 'undone'): boolean {
 }
 export const undoStep = (id: string): boolean => move(id, 'done');
 export const redoStep = (id: string): boolean => move(id, 'undone');
-export function syncBodyDepth(id: string, depth: number): void {
+export function syncBodyDepth(id: string, depth: number, historyEdit = false): void {
   if (applying.has(id)) return;
   const s = of(id),
     count = s.done.filter((o) => o === 'body').length;
@@ -90,8 +90,13 @@ export function syncBodyDepth(id: string, depth: number): void {
     for (let i = count; i < depth; i++) s.done.push('body');
     s.undone = [];
   } else if (depth < count) {
-    let drop = count - depth;
+    let drop = count - depth + Number(historyEdit);
     s.done = s.done.filter((o) => !(o === 'body' && drop-- > 0));
+    if (historyEdit) {
+      closeTitleGroup(id);
+      s.done.push('body');
+      s.undone = [];
+    }
   } else return;
   emit();
 }

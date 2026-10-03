@@ -1,6 +1,7 @@
 import type { UndoResult, UndoTextChangedDetails } from '@orbis/shared';
 import { invalidateBudget, invalidateGraph } from '../../lib/invalidate';
 import { orbisErrorOf } from '../../lib/orbis-error';
+import { resetSteps } from '../entity-editor/arrows-stack';
 import {
   beginBodyRewrite,
   type FinishBodyRewrite,
@@ -60,6 +61,7 @@ export async function runUndo(
       release();
       return { kind: 'failed', message: UNDO_FAILED };
     }
+    for (const { entityId } of result.bodyRevisions) resetSteps(entityId);
     for (const [id, finish] of gates)
       finish(result.bodyRevisions.find((r) => r.entityId === id)?.bodyRevision);
     refresh(utils);

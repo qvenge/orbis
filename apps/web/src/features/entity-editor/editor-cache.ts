@@ -1,5 +1,6 @@
 import type { Editor } from '@tiptap/core';
 import { bindStepOwner, resetSteps, stepsGeneration } from './arrows-stack';
+import { forgetTitleHistory } from './title-history';
 export const EDITOR_CACHE_CAP = 5;
 type Slot = { editor: Editor | null; body: boolean; title: number; generation: number };
 /** Один LRU для текста и title-only; активные поля не теряют историю при открытии соседних. */
@@ -14,6 +15,7 @@ function evict(): void {
     slots.delete(id);
     bindStepOwner(id, 'body', null);
     resetSteps(id);
+    forgetTitleHistory(id);
     if (s.editor) {
       owner.delete(s.editor);
       s.editor.destroy();

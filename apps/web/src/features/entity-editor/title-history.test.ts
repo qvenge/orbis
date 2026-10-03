@@ -1,6 +1,9 @@
 import { afterEach, expect, test } from 'vitest';
 import {
   clearTitleHistories,
+  forgetTitleHistory,
+  markTitleSent,
+  observeTitleValue,
   recordTitleChange,
   redoTitle,
   resetTitleHistory,
@@ -22,4 +25,29 @@ test('слово, пауза и смена направления образую
   expect(recordTitleChange('e', 'Ку аб', 'Ку а', 950)).toBe(true);
   resetTitleHistory('e');
   expect(undoTitle('e', 'Ку а')).toBeNull();
+});
+
+test('retained observer consumes only provisional prefix; reset preserves basis, eviction forgets', () => {
+  expect(observeTitleValue('e', 'A')).toBe(false);
+  markTitleSent('e', 'B');
+  markTitleSent('e', 'C');
+  expect(observeTitleValue('e', 'B')).toBe(false);
+  expect(observeTitleValue('e', 'C')).toBe(false);
+  expect(observeTitleValue('e', 'B')).toBe(true);
+  resetTitleHistory('e');
+  expect(observeTitleValue('e', 'D')).toBe(true);
+  forgetTitleHistory('e');
+  expect(observeTitleValue('e', 'E')).toBe(false);
+});
+test('duplicate refresh preserves newer pending and noop sends do not trust later foreign return', () => {
+  observeTitleValue('e', 'A');
+  markTitleSent('e', 'A');
+  expect(observeTitleValue('e', 'foreign')).toBe(true);
+  expect(observeTitleValue('e', 'A')).toBe(true);
+  markTitleSent('e', 'B');
+  markTitleSent('e', 'C');
+  markTitleSent('e', 'B');
+  expect(observeTitleValue('e', 'C')).toBe(false);
+  expect(observeTitleValue('e', 'B')).toBe(false);
+  expect(observeTitleValue('e', 'C')).toBe(true);
 });

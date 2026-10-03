@@ -380,11 +380,9 @@ export function useEntityUpdate(
       // зажигал бы «Изменено в другом месте» на соседней, которой никто не касался
       // (ревью Задачи 13, И-4). `entityId` здесь — из ПОСЛЕДНЕГО рендера (react-query
       // проталкивает свежие опции в незавершённую мутацию), `vars.id` — из отправки.
+      if (!accepted && isTitleStale(err)) resetSteps(vars.id);
       if (vars.id !== entityId) return;
-      if (!accepted && isTitleStale(err)) {
-        resetSteps(vars.id);
-        setTitleStale(true);
-      }
+      if (!accepted && isTitleStale(err)) setTitleStale(true);
       // Молчим только о конфликте, который преемник принесёт и сам (см. bringsSameConflict).
       if (old && bringsSameConflict(vars.id, ctx)) return;
       // Конфликт — отказ замка текста по структурному коду (`data.orbis`, РП-5), а не любой 409.

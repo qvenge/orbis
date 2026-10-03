@@ -1,5 +1,12 @@
 import { rowAllDayOf } from '@orbis/shared';
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from 'react';
 import { useRefTitle } from '../../lib/entity-ref/RefField';
 import { formatMoney, type MoneyTone } from '../../lib/format';
 import { isTitleStale } from '../../lib/orbis-error';
@@ -27,7 +34,13 @@ import {
   undoStep,
 } from '../entity-editor/arrows-stack';
 import { mountRecord } from '../entity-editor/editor-cache';
-import { recordTitleChange, redoTitle, undoTitle } from '../entity-editor/title-history';
+import {
+  markTitleSent,
+  observeTitleValue,
+  recordTitleChange,
+  redoTitle,
+  undoTitle,
+} from '../entity-editor/title-history';
 import { useExtensionEnabled } from '../settings/extension-mask';
 import { isUndoEpoch, subscribeUndoEpoch, undoEpoch } from '../undo/undo-epoch';
 import { useHostReadOnly } from './record-host';
@@ -123,12 +136,6 @@ function TitleEditor({
   const draftRef = useRef(draft);
   draftRef.current = draft;
   const mountedRef = useRef(true);
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-    };
-  }, []);
 
   // Тот же приём, что у редактора тела (BodyEditor) и AspectField (D6c п.3): внешнее
   // значение подхватываем, но ТОЛЬКО если черновик не трогали — иначе текст, который
@@ -143,7 +150,6 @@ function TitleEditor({
   const latest = useRef({ onSave, onStale, serverValue });
   latest.current = { onSave, onStale, serverValue };
   const intent = useRef({ epoch: undoEpoch(), generation: stepsGeneration() }).current;
-  const sent = useRef([] as string[]);
   const saveSequence = useRef(0);
   const current = useCallback(
     () =>
@@ -153,10 +159,7 @@ function TitleEditor({
   const commit = async (v: string, expected: string) => {
     if (!current()) return;
     const sequence = ++saveSequence.current;
-    if (v !== latest.current.serverValue) {
-      sent.current = sent.current.filter((s) => s !== v);
-      sent.current.push(v);
-    }
+    markTitleSent(entityId, v);
     savingRef.current = true;
     try {
       await latest.current.onSave(v, expected);
@@ -171,7 +174,8 @@ function TitleEditor({
   };
   const commitRef = useRef(commit);
   commitRef.current = commit;
-  useEffect(() => {
+  useLayoutEffect(() => {
+    mountedRef.current = true;
     const release = mountRecord(entityId);
     const apply = (v: string | null) => {
       if (v === null || !current()) return false;
@@ -187,18 +191,13 @@ function TitleEditor({
       reset: () => {},
     });
     return () => {
+      mountedRef.current = false;
       unbind();
       release();
     };
   }, [entityId, current]);
-  const previousValue = useRef(value);
-  useEffect(() => {
-    if (previousValue.current === value) return;
-    previousValue.current = value;
-    const observed = sent.current.indexOf(value);
-    if (observed < 0) {
-      if (current()) resetSteps(entityId);
-    } else sent.current.splice(0, observed + 1);
+  useLayoutEffect(() => {
+    if (current() && observeTitleValue(entityId, value)) resetSteps(entityId);
   }, [value, entityId, current]);
   return (
     <input

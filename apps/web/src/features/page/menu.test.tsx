@@ -12,6 +12,7 @@ import { parseBody, serializeBody } from '@orbis/shared/doc';
 import { buildAddress, currentEntry } from '@orbis/shared/nav';
 import { focusManager } from '@tanstack/react-query';
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { closeHistory, redoDepth, undoDepth } from '@tiptap/pm/history';
 import type { Editor } from '@tiptap/react';
 import { useState } from 'react';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
@@ -41,6 +42,7 @@ import {
   structureHandler,
 } from '../entity-detail/structure-fixtures';
 import { type DetailStructure, snapshotDetailStructure } from '../entity-detail/structure-snapshot';
+import { canRedoStep, canUndoStep } from '../entity-editor/arrows-stack';
 import { readDraft } from '../entity-editor/draft-storage';
 import { CHANGE_VIEW_QUESTION, HIDE_AS_VERSION_HINT } from './ChangeViewDialog';
 import { changeViewPlan, TEXT_BEFORE_VIEW_CHANGE } from './change-view';
@@ -1285,3 +1287,42 @@ describe('меню при настройке чужого шаблона — п�
     expect(topAddress()).toEqual(recordAddress(TPL_A));
   });
 });
+
+for (const bodyGesture of [false, true])
+  test(`Task20 populated histories actual page menu ${bodyGesture ? 'body batch resets' : 'aspect-only make-page preserves'}`, async () => {
+    const f = fixture('note-plain');
+    const r = open(f);
+    fireEvent.click(await screen.findByTestId('editor-preview'));
+    const node = await waitFor(
+      () => {
+        const node = screen.getByTestId('body-editor').querySelector('.ProseMirror');
+        if (!node) throw new Error('native editor pending');
+        return node as HTMLElement & { editor: Editor };
+      },
+      { timeout: 5000 },
+    );
+    const ed = node.editor;
+    act(() => {
+      ed.commands.insertContentAt(1, 'XYZ');
+      ed.view.dispatch(closeHistory(ed.state.tr));
+      ed.commands.deleteRange({ from: 1, to: 4 });
+    });
+    fireEvent.change(screen.getByTestId('title-edit'), { target: { value: 'Новое имя' } });
+    expect(canUndoStep(f.entity.id)).toBe(true);
+    expect(undoDepth(ed.state)).toBe(2);
+    await choose(bodyGesture ? 'Изменить вид только этой записи' : 'Сделать страницей');
+    await waitFor(() => expect(r.batches()).toHaveLength(1));
+    const op = r.batches()[0]?.find((op) => op.tool === 'entity_update');
+    if (op?.tool !== 'entity_update') throw new Error('actual page update missing');
+    if (bodyGesture) {
+      expect(op.input.body).toBeDefined();
+      await waitFor(() => expect(canUndoStep(f.entity.id)).toBe(false));
+      expect(canRedoStep(f.entity.id)).toBe(false);
+      expect(undoDepth(ed.state)).toBe(0);
+      expect(redoDepth(ed.state)).toBe(0);
+    } else {
+      expect(op.input.body).toBeUndefined();
+      expect(canUndoStep(f.entity.id)).toBe(true);
+      expect(undoDepth(ed.state)).toBe(2);
+    }
+  });
