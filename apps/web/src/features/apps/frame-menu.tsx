@@ -1,6 +1,6 @@
 import { APP_NAV, SUPPLY_TEXT } from '@orbis/shared';
 import { type AppKey, HOST_APP } from '@orbis/shared/nav';
-import { supplyStatusOf } from '@orbis/shared/supply/print';
+import { supplyPrintNeedsBody, supplyStatusOf } from '@orbis/shared/supply/print';
 import { ListTree, RotateCcw } from 'lucide-react';
 import { lazy, type ReactNode, Suspense, useState } from 'react';
 import { useNav } from '../../state/navigation';
@@ -103,8 +103,9 @@ const RevertShellDialog = lazy(() =>
  * не запись поставки (нет аспекта — своя или выведенная из поставки, R-17) — признака нет.
  */
 export function supplyNoteOf(row: WireEntity): string | undefined {
-  // У приложений печать поставки читает title/emoji/props; список useApps не просит тело.
-  const status = supplyStatusOf({ ...row, body: row.body ?? '' });
+  // Mixed-kind запись с известным page-ключом требует настоящего текста; ожидание — без статуса.
+  if (row.body === undefined && supplyPrintNeedsBody(row)) return undefined;
+  const status = supplyStatusOf({ ...row, body: row.body ?? null });
   return status === null ? undefined : status === 'etalon' ? STATUS_ETALON : STATUS_EDITED;
 }
 
@@ -113,10 +114,11 @@ export function supplyNoteOf(row: WireEntity): string | undefined {
  * возвращать не к чему — сервер ответил бы отказом, а пункт обещал бы действие, которого нет.
  */
 export function canRevert(row: WireEntity): boolean {
+  if (row.body === undefined && supplyPrintNeedsBody(row)) return false;
   // Архивная запись — не запись поставки ключа: сервер ищет живую (`liveOrRefuse`) и отказал бы.
   return (
     !row.archived &&
-    supplyStatusOf({ ...row, body: row.body ?? '' }) === 'edited' &&
+    supplyStatusOf({ ...row, body: row.body ?? null }) === 'edited' &&
     typeof row.props[SUPPLY_TEXT] === 'string'
   );
 }
@@ -161,11 +163,25 @@ export function useFrameMenu(): {
   const apps = useApps();
   const active = useNav((s) => s.model.activeApp);
   const frame = frameRecordOf(active, apps);
+  const needsBody =
+    frame !== null && frame.row.body === undefined && supplyPrintNeedsBody(frame.row);
+  // useApps остаётся лёгким: только открытое ленивое меню дочитывает текст для page-печати.
+  const body = trpc.entity.get.useQuery(
+    { id: frame?.id ?? '', include: ['body'] },
+    { enabled: needsBody },
+  );
+  const read = body.data?.entity;
+  // Кеш ключуется id; ответ старой рамки не относится к новой. Метаданные списка могут быть свежее чтения.
+  const statusRow = needsBody
+    ? !body.isError && read?.id === frame?.id && typeof read?.body === 'string'
+      ? { ...frame.row, body: read.body }
+      : null
+    : (frame?.row ?? null);
   // Снимок записи на момент жеста: редактор правит ту версию, которую открыл.
   const [editing, setEditing] = useState<WireEntity | null>(null);
   const [reverting, setReverting] = useState<WireEntity | null>(null);
-  const note = frame === null ? undefined : supplyNoteOf(frame.row);
-  const revertOffered = useShellRevertOffered(frame?.row ?? null);
+  const note = statusRow === null ? undefined : supplyNoteOf(statusRow);
+  const revertOffered = useShellRevertOffered(statusRow);
   const sections: DropdownMenuSection[] =
     frame === null
       ? []

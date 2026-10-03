@@ -128,6 +128,19 @@ function isSupplyKey(v: unknown): v is SupplyKey {
   return typeof v === 'string' && (SUPPLY_KEYS as readonly string[]).includes(v);
 }
 
+type SupplyPrintSource = { aspects: readonly string[]; props: Record<string, unknown> };
+function isAppPrint(r: SupplyPrintSource): boolean {
+  const key = r.props[SUPPLY_KEY];
+  return isSupplyKey(key) ? etalonOf(key).kind === 'app' : r.aspects.includes(APP_ASPECT);
+}
+
+/** Тело нужно только для сравнения page-печати: известный ключ важнее навешенного аспекта app. */
+export function supplyPrintNeedsBody(r: SupplyPrintSource): boolean {
+  return (
+    r.aspects.includes(SUPPLY_ASPECT) && typeof r.props[SUPPLY_TEXT] === 'string' && !isAppPrint(r)
+  );
+}
+
 /**
  * «как в поставке» | «изменено вами» | не запись поставки (§9.1 п. 5).
  *
@@ -149,9 +162,7 @@ export function supplyStatusOf(r: {
   // Эталона в записи нет — сказать «как в поставке» нечем; «изменено вами» честнее: такую запись
   // «Принять все» не тронет без явного взгляда владельца.
   if (typeof text !== 'string') return 'edited';
-  const key = r.props[SUPPLY_KEY];
-  const isApp = isSupplyKey(key) ? etalonOf(key).kind === 'app' : r.aspects.includes(APP_ASPECT);
-  const print = isApp
+  const print = isAppPrint(r)
     ? printAppProps({ title: r.title, emoji: r.emoji, props: r.props })
     : printPageRecord({ title: r.title, emoji: r.emoji, body: r.body ?? '' });
   return print === text ? 'etalon' : 'edited';
