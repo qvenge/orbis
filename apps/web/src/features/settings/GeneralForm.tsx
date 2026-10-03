@@ -40,6 +40,11 @@ export function GeneralForm({ settings }: { settings: Settings }) {
     if (timezone !== settings.timezone) patch.timezone = timezone;
     if (defaultCurrency !== settings.defaultCurrency) patch.defaultCurrency = defaultCurrency;
     if (weekStartDay !== settings.weekStartDay) patch.weekStartDay = weekStartDay;
+    // Тема уже сохранена локально; неизменённые серверные поля не создают пустое действие.
+    if (Object.keys(patch).length === 0) {
+      show('Сохранено');
+      return;
+    }
     update.mutate(patch);
   }
 

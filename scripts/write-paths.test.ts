@@ -101,25 +101,112 @@ function schemaTables(): Map<string, string> {
   return out;
 }
 
-const WRITE_SQL =
-  /\b(INSERT\s+INTO|UPDATE|DELETE\s+FROM|TRUNCATE(?:\s+TABLE)?)\s+(?:ONLY\s+)?((?:"?[a-z_][a-z0-9_]*"?|\$\{[^}]*\})(?:\s*,\s*(?:"?[a-z_][a-z0-9_]*"?|\$\{[^}]*\}))*)/gi;
+const SQL_IDENTIFIER = '(?:"(?:[^"]|"")*"|[a-z_][a-z0-9_$]*)';
+const SQL_TABLE = `(?:\\$\\{[^}]*\\}|${SQL_IDENTIFIER}(?:\\s*\\.\\s*${SQL_IDENTIFIER})*)`;
+const SQL_TABLE_ITEM = `(?:ONLY\\s+)?${SQL_TABLE}`;
+const WRITE_SQL = new RegExp(
+  `\\b(INSERT\\s+INTO|UPDATE|DELETE\\s+FROM|TRUNCATE(?:\\s+TABLE)?)\\s+(${SQL_TABLE_ITEM}(?:\\s*,\\s*${SQL_TABLE_ITEM})*)`,
+  'gi',
+);
 const NOT_A_TABLE = new Set(['set', 'of', 'skip', 'nowait']); // DO UPDATE SET, FOR UPDATE [OF|SKIP LOCKED|NOWAIT]
-const BODY_SQL = [
-  /\bUPDATE\s+\S+\s+(?:\w+\s+)?SET\b[\s\S]*?\bbody_(?:revision|action_id|changed_at)\s*=/i,
-  /\bINSERT\s+INTO\s+\S+\s*\([^)]*\bbody_(?:revision|action_id|changed_at)\b/i,
-];
+const BODY_COLUMNS = new Set(['body_revision', 'body_action_id', 'body_changed_at']);
+const BODY_SET = new RegExp(
+  `\\b(?:UPDATE\\s+(?:ONLY\\s+)?${SQL_TABLE}(?:\\s+(?:AS\\s+)?${SQL_IDENTIFIER})?\\s+SET|ON\\s+CONFLICT\\b[^;]*?\\bDO\\s+UPDATE\\s+SET)\\b`,
+  'gi',
+);
+const INSERT_COLUMNS = new RegExp(
+  `\\bINSERT\\s+INTO\\s+${SQL_TABLE}(?:\\s+AS\\s+${SQL_IDENTIFIER})?\\s*\\(([^)]*)\\)`,
+  'gi',
+);
+const sqlIdentifier = (name: string): string =>
+  name.startsWith('"') ? name.slice(1, -1).replaceAll('""', '"') : name.toLowerCase();
+const hasBodyIdentifier = (text: string): boolean =>
+  (text.match(new RegExp(SQL_IDENTIFIER, 'gi')) ?? []).some((name) =>
+    BODY_COLUMNS.has(sqlIdentifier(name)),
+  );
+type SqlCode = { text: string; opaque: Array<[number, number]> };
+const opaqueAt = (code: SqlCode, i: number) => code.opaque.find(([a, b]) => a <= i && i < b);
+
+/**
+ * Комментарии снимаются только вне SQL literals. Их содержимое тоже маскируется: SELECT строки
+ * «UPDATE ...» не писатель. Quoted identifiers и ${…} остаются токенами; иначе пропадали
+ * реальные writes после '--' и ломалась динамическая таблица с join(', '). Это lexer, не SQL parser.
+ */
+function sqlCode(text: string): SqlCode {
+  const out: string[] = [];
+  const opaque: Array<[number, number]> = [];
+  const mask = (part: string) => part.replace(/[^\n\r]/g, ' ');
+  for (let i = 0; i < text.length; ) {
+    const start = i;
+    if (text.startsWith('${', i)) {
+      const close = text.indexOf('}', i + 2);
+      i = close < 0 ? text.length : close + 1;
+      out.push(text.slice(start, i));
+      opaque.push([start, i]);
+    } else if (text[i] === '"') {
+      i++;
+      while (i < text.length) {
+        if (text[i++] !== '"') continue;
+        if (text[i] === '"') i++;
+        else break;
+      }
+      out.push(text.slice(start, i));
+      opaque.push([start, i]);
+    } else if (text[i] === "'") {
+      const escaped = /[eE]/.test(text[i - 1] ?? '') && !/[a-z0-9_$]/i.test(text[i - 2] ?? '');
+      i++;
+      while (i < text.length) {
+        if (escaped && text[i] === '\\') {
+          i += 2;
+          continue;
+        }
+        if (text[i++] !== "'") continue;
+        if (text[i] === "'") i++;
+        else break;
+      }
+      out.push(mask(text.slice(start, i)));
+    } else if (text[i] === '$' && /^\$(?:[a-z_][a-z0-9_]*)?\$/i.test(text.slice(i))) {
+      const tag = text.slice(i).match(/^\$(?:[a-z_][a-z0-9_]*)?\$/i)?.[0] ?? '$$';
+      const close = text.indexOf(tag, i + tag.length);
+      i = close < 0 ? text.length : close + tag.length;
+      out.push(mask(text.slice(start, i)));
+    } else if (text.startsWith('--', i)) {
+      i += 2;
+      while (i < text.length && text[i] !== '\n' && text[i] !== '\r') i++;
+      out.push(mask(text.slice(start, i)));
+    } else if (text.startsWith('/*', i)) {
+      let depth = 1;
+      i += 2;
+      while (i < text.length && depth > 0) {
+        if (text.startsWith('/*', i)) {
+          depth++;
+          i += 2;
+        } else if (text.startsWith('*/', i)) {
+          depth--;
+          i += 2;
+        } else i++;
+      }
+      out.push(mask(text.slice(start, i)));
+    } else out.push(text[i++] ?? '');
+  }
+  return { text: out.join(''), opaque };
+}
 
 /** Таблицы, в которые пишет SQL-текст; `${…}` — по исходнику выражения. */
 export function sqlWrites(text: string): Array<{ table: string; dynamic: boolean }> {
   const out: Array<{ table: string; dynamic: boolean }> = [];
-  for (const m of text.replace(/--[^\n]*|\/\*[\s\S]*?\*\//g, '').matchAll(WRITE_SQL)) {
+  const code = sqlCode(text);
+  for (const m of code.text.matchAll(WRITE_SQL)) {
+    if (opaqueAt(code, m.index)) continue;
     const verb = (m[1] ?? '').toUpperCase();
     // Запятая внутри ${WORLD_TABLES.join(', ')} — часть выражения, а не разделитель таблиц.
-    const list = (m[2] ?? '').match(/\$\{[^}]*\}|"?[a-z_][a-z0-9_]*"?/gi) ?? [];
+    const list = (m[2] ?? '').match(new RegExp(SQL_TABLE_ITEM, 'gi')) ?? [];
     for (const raw of verb.startsWith('TRUNCATE') ? list : list.slice(0, 1)) {
-      const t = raw.trim().replaceAll('"', '');
+      const table = raw.replace(/^ONLY\s+/i, '');
+      const name = table.match(new RegExp(SQL_IDENTIFIER, 'gi'))?.at(-1) ?? table;
+      const t = table.startsWith('${') ? table : sqlIdentifier(name);
       if (verb === 'UPDATE' && NOT_A_TABLE.has(t.toLowerCase())) continue;
-      if (!t.startsWith('${')) out.push({ table: t.toLowerCase(), dynamic: false });
+      if (!t.startsWith('${')) out.push({ table: t, dynamic: false });
       else if (t.includes('RULE_TABLE'))
         for (const c of RULE_CARRIERS) out.push({ table: c, dynamic: false });
       else out.push({ table: t, dynamic: true });
@@ -127,8 +214,44 @@ export function sqlWrites(text: string): Array<{ table: string; dynamic: boolean
   }
   return out;
 }
-export const bodyColumnSql = (text: string): boolean =>
-  BODY_SQL.some((re) => re.test(text.replace(/--[^\n]*|\/\*[\s\S]*?\*\//g, '')));
+/** Только левая сторона SET: WHERE equality и вложенный SELECT читают stamp, не пишут. */
+function bodyAssigned(code: SqlCode, start: number): boolean {
+  const assignment = new RegExp(`^\\s*(${SQL_IDENTIFIER}|\\([^)]*\\))\\s*=`, 'i');
+  const assignedAt = (i: number) => {
+    const left = code.text.slice(i).match(assignment)?.[1];
+    return left !== undefined && hasBodyIdentifier(left);
+  };
+  if (assignedAt(start)) return true;
+  let depth = 0;
+  for (let i = start; i < code.text.length; i++) {
+    const opaque = opaqueAt(code, i);
+    if (opaque) {
+      i = opaque[1] - 1;
+      continue;
+    }
+    const char = code.text[i];
+    if (char === '(' || char === '[') depth++;
+    else if (char === ')' || char === ']') depth--;
+    else if (depth === 0) {
+      if (
+        char === ';' ||
+        (!/[a-z0-9_$]/i.test(code.text[i - 1] ?? '') &&
+          /^(?:WHERE|RETURNING)\b/i.test(code.text.slice(i)))
+      )
+        break;
+      if (char === ',' && assignedAt(i + 1)) return true;
+    }
+  }
+  return false;
+}
+export function bodyColumnSql(text: string): boolean {
+  const code = sqlCode(text);
+  for (const m of code.text.matchAll(INSERT_COLUMNS))
+    if (!opaqueAt(code, m.index) && hasBodyIdentifier(m[1] ?? '')) return true;
+  for (const m of code.text.matchAll(BODY_SET))
+    if (!opaqueAt(code, m.index) && bodyAssigned(code, m.index + m[0].length)) return true;
+  return false;
+}
 
 function literalText(n: ts.Node, sf: ts.SourceFile): string | null {
   if (ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n)) return n.text;
@@ -431,6 +554,124 @@ describe('сторожа путей записи (спека скорости §
         'tx.execute(sql`SELECT 1; -- update entities SET title = 1\n/* DELETE FROM entities */`);',
       ),
     ).toEqual([]);
+  });
+  test('SQL: qualified и quoted таблицы сохраняют границы всех четырёх видов записи', () => {
+    for (const name of ['public.entities', '"public"."entities"', 'public . "entities"']) {
+      for (const query of [
+        `UPDATE ONLY ${name} SET title = 'x'`,
+        `INSERT INTO ${name} (id) VALUES (1)`,
+        `DELETE FROM ONLY ${name} WHERE id = 1`,
+        `TRUNCATE TABLE ONLY ${name}`,
+      ])
+        expect(fileHits('routers/x.ts', `tx.execute(sql\`${query}\`)`, new Map())).toEqual([
+          { rule: 'graph', table: 'entities', line: 1 },
+        ]);
+    }
+    expect(sqlWrites('TRUNCATE public.entities, "public"."action_journal", chat_messages')).toEqual(
+      [
+        { table: 'entities', dynamic: false },
+        { table: 'action_journal', dynamic: false },
+        { table: 'chat_messages', dynamic: false },
+      ],
+    );
+    expect(sqlWrites('INSERT INTO "public"."action_journal" (id) VALUES (1)')).toEqual([
+      { table: 'action_journal', dynamic: false },
+    ]);
+    expect(sqlWrites('DELETE FROM public.chat_messages WHERE id = 1')).toEqual([
+      { table: 'chat_messages', dynamic: false },
+    ]);
+    expect(sqlWrites('TRUNCATE entities, ONLY action_journal')).toEqual([
+      { table: 'entities', dynamic: false },
+      { table: 'action_journal', dynamic: false },
+    ]);
+    expect(sqlWrites('SELECT id FROM entities FOR UPDATE OF entities SKIP LOCKED')).toEqual([]);
+    expect(sqlWrites('SELECT id FROM entities FOR UPDATE NOWAIT')).toEqual([]);
+  });
+  test('SQL: quoted body stamps запрещены в UPDATE и INSERT', () => {
+    for (const column of ['body_revision', 'body_action_id', 'body_changed_at']) {
+      expect(bodyColumnSql(`UPDATE ONLY "public"."entities" SET "${column}" = NULL`)).toBe(true);
+      expect(bodyColumnSql(`INSERT INTO public.entities (id, "${column}") VALUES (1, NULL)`)).toBe(
+        true,
+      );
+      expect(bodyColumnSql(`INSERT INTO entities AS "e" ("${column}") VALUES (NULL)`)).toBe(true);
+    }
+  });
+  test('SQL: conflict UPDATE запрещает все body stamps даже вне INSERT columns', () => {
+    for (const column of ['body_revision', 'body_action_id', 'body_changed_at'])
+      for (const name of [column, `"${column}"`])
+        expect(
+          fileHits(
+            'apps/server/src/executor/executor.ts',
+            `tx.execute(sql\`INSERT INTO public.entities (id, title) VALUES (1, 'x') ON CONFLICT (id) DO UPDATE SET ${name} = NULL\`)`,
+            new Map(),
+          )
+            .map((h) => h.rule)
+            .sort(),
+        ).toEqual(['body-columns', 'graph']);
+    expect(
+      bodyColumnSql(
+        'INSERT INTO entities (id) VALUES (1) ON CONFLICT (id) DO UPDATE SET title = excluded.title',
+      ),
+    ).toBe(false);
+    expect(bodyColumnSql('SELECT "body_revision", body_action_id FROM entities FOR UPDATE')).toBe(
+      false,
+    );
+  });
+  test('SQL: string/comment lexer сохраняет настоящий writer после литерала', () => {
+    for (const literal of [
+      "'--'",
+      "'/* DELETE FROM entities */'",
+      "'it''s --'",
+      String.raw`E'it\'s --'`,
+      '$$-- /* text */$$',
+      '$tag$-- /* text */$tag$',
+    ]) {
+      expect(sqlWrites(`WITH s AS (SELECT ${literal} AS value) DELETE FROM chat_messages`)).toEqual(
+        [{ table: 'chat_messages', dynamic: false }],
+      );
+      expect(bodyColumnSql(`UPDATE entities SET title = ${literal}, body_revision = 1`)).toBe(true);
+      expect(sqlWrites(`SELECT ${literal}`)).toEqual([]);
+      expect(bodyColumnSql(`SELECT ${literal}`)).toBe(false);
+    }
+    expect(sqlWrites('WITH s AS (SELECT "a--b", "a""/*b") DELETE FROM chat_messages')).toEqual([
+      { table: 'chat_messages', dynamic: false },
+    ]);
+    expect(sqlWrites("SELECT 'UPDATE entities SET body_revision = 1'")).toEqual([]);
+    expect(bodyColumnSql("SELECT 'UPDATE entities SET body_revision = 1'")).toBe(false);
+    expect(sqlWrites('SELECT "UPDATE entities SET body_revision = 1"')).toEqual([]);
+    expect(bodyColumnSql('SELECT "UPDATE entities SET body_revision = 1"')).toBe(false);
+    expect(
+      sqlWrites('SELECT 1; /* outer /* inner */ DELETE FROM entities */ -- UPDATE entities\n'),
+    ).toEqual([]);
+    expect(
+      bodyColumnSql('SELECT 1; /* outer /* inner */ UPDATE entities SET body_revision = 1 */'),
+    ).toBe(false);
+    expect(
+      sqlWrites(`TRUNCATE public.entities, \${WORLD_TABLES.join(', ')} RESTART IDENTITY`),
+    ).toEqual([
+      { table: 'entities', dynamic: false },
+      { table: `\${WORLD_TABLES.join(', ')}`, dynamic: true },
+    ]);
+  });
+  test('SQL: body equality в WHERE и SELECT — чтение, assignment в SET — запись', () => {
+    expect(bodyColumnSql("UPDATE entities SET title='x' WHERE body_revision=1")).toBe(false);
+    expect(
+      bodyColumnSql(
+        'UPDATE entities SET title=(SELECT title FROM entities WHERE body_revision=1) WHERE id=1',
+      ),
+    ).toBe(false);
+    expect(
+      bodyColumnSql(
+        'WITH s AS (SELECT body_revision FROM entities) SELECT * FROM s WHERE body_revision=1',
+      ),
+    ).toBe(false);
+    expect(bodyColumnSql("UPDATE entities SET title='body_revision=1' WHERE id=1")).toBe(false);
+    expect(bodyColumnSql('UPDATE entities SET body_revision=1 WHERE id=1')).toBe(true);
+    expect(
+      bodyColumnSql(
+        'UPDATE entities SET title=(SELECT title FROM entities WHERE body_revision=1), body_revision=2 WHERE id=1',
+      ),
+    ).toBe(true);
   });
   test('(в) известные писатели видны: executor пишет граф, синк — журнал, модуль разговоров — сообщения', () => {
     expect(hits.get('apps/server/src/executor/executor.ts')?.some((h) => h.rule === 'graph')).toBe(

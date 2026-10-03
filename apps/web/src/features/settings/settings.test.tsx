@@ -1,7 +1,9 @@
+import { settingsSetInput } from '@orbis/shared';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { beforeEach, expect, test, vi } from 'vitest';
-import { isSupplyRecordsCall, renderWithProviders } from '../../test/harness';
+import { isSupplyRecordsCall, renderWithProviders, trpcError } from '../../test/harness';
 import { BUILTIN_REGISTRY } from '../../test/registry';
+import { useToastStore } from '../../ui/toast-store';
 import { AspectsList } from './AspectsList';
 import { ExportButton } from './ExportButton';
 import { GeneralForm } from './GeneralForm';
@@ -20,9 +22,35 @@ const settings = {
   updatedAt: 'x',
 };
 
+function settingsResponse(path: string, input: unknown) {
+  if (path !== 'user.updateSettings') return {};
+  const parsed = settingsSetInput.safeParse(input);
+  if (!parsed.success) throw trpcError('BAD_REQUEST', parsed.error.message);
+  return { ...settings, ...parsed.data, actionId: 'a', consequences: false };
+}
+const savedLocally = () => {
+  expect(useToastStore.getState().toasts.map((t) => ({ title: t.title, tone: t.tone }))).toEqual([
+    { title: 'Сохранено', tone: 'default' },
+  ]);
+};
+async function proveNoEmptyRequest(calls: { path: string; input: unknown }[]) {
+  // Непустой запрос — барьер реального tRPC batch: отсутствие пустого нельзя проверять
+  // сразу после синхронного локального тоста, пока предыдущий запрос ещё в очереди.
+  fireEvent.change(screen.getByLabelText(/таймзона/i), { target: { value: 'UTC' } });
+  fireEvent.submit(screen.getByTestId('general-form'));
+  await waitFor(() => expect(useToastStore.getState().toasts).toHaveLength(2));
+  expect(calls.filter((x) => x.path === 'user.updateSettings').map((x) => x.input)).toEqual([
+    { timezone: 'UTC' },
+  ]);
+  expect(
+    useToastStore.getState().toasts.every((t) => t.title === 'Сохранено' && t.tone === 'default'),
+  ).toBe(true);
+}
+
 test('GeneralForm сабмитит частичный апдейт (только изменённый timezone)', async () => {
-  const { calls } = renderWithProviders(<GeneralForm settings={settings as never} />, (path) =>
-    path === 'user.updateSettings' ? settings : {},
+  const { calls } = renderWithProviders(
+    <GeneralForm settings={settings as never} />,
+    settingsResponse,
   );
   fireEvent.change(screen.getByLabelText(/таймзона/i), { target: { value: 'UTC' } });
   fireEvent.submit(screen.getByTestId('general-form'));
@@ -41,22 +69,43 @@ test('«Начало недели» подписано: на «эту недел
   );
 });
 
-test('сегмент темы: клик «Тёмная» → data-theme + localStorage, в patch тема НЕ попадает', async () => {
+test('сегмент темы: клик «Тёмная» → data-theme + localStorage, Save успешен без серверной правки', async () => {
   localStorage.removeItem('orbis:theme');
   document.documentElement.removeAttribute('data-theme');
-  const { calls } = renderWithProviders(<GeneralForm settings={settings as never} />, (path) =>
-    path === 'user.updateSettings' ? settings : {},
+  const { calls } = renderWithProviders(
+    <GeneralForm settings={settings as never} />,
+    settingsResponse,
   );
   fireEvent.click(screen.getByRole('button', { name: 'Тёмная' }));
   expect(localStorage.getItem('orbis:theme')).toBe('dark');
   expect(document.documentElement.dataset.theme).toBe('dark');
 
-  // Сабмит без изменений полей формы → мутация с пустым patch, без ключа темы.
+  // Локальная тема сохранена сразу; пустой серверный patch не создаёт действие в журнале.
   fireEvent.submit(screen.getByTestId('general-form'));
-  await waitFor(() => {
-    const c = calls.find((x) => x.path === 'user.updateSettings');
-    expect(c?.input).toEqual({});
-  });
+  await waitFor(savedLocally);
+  await proveNoEmptyRequest(calls);
+});
+
+test('GeneralForm Save без изменений успешен локально и не отправляет пустую правку', async () => {
+  const { calls } = renderWithProviders(
+    <GeneralForm settings={settings as never} />,
+    settingsResponse,
+  );
+  fireEvent.click(screen.getByRole('button', { name: 'Сохранить' }));
+  await waitFor(savedLocally);
+  await proveNoEmptyRequest(calls);
+});
+
+test('GeneralForm возврат timezone к исходному значению не создаёт серверную правку', async () => {
+  const { calls } = renderWithProviders(
+    <GeneralForm settings={settings as never} />,
+    settingsResponse,
+  );
+  fireEvent.change(screen.getByLabelText(/таймзона/i), { target: { value: 'UTC' } });
+  fireEvent.change(screen.getByLabelText(/таймзона/i), { target: { value: settings.timezone } });
+  fireEvent.submit(screen.getByTestId('general-form'));
+  await waitFor(savedLocally);
+  await proveNoEmptyRequest(calls);
 });
 
 // Вкладка «Агенты» (§9.3) — единственный вход к отзыву выданных доступов: без неё
@@ -121,6 +170,7 @@ test('настройки не монтируют неактивные вклад
 });
 
 beforeEach(() => {
+  for (const toast of useToastStore.getState().toasts) useToastStore.getState().dismiss(toast.id);
   // jsdom не имеет createObjectURL
   Object.defineProperty(URL, 'createObjectURL', {
     value: vi.fn(() => 'blob:x'),
