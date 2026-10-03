@@ -6,7 +6,7 @@ import {
   type EntityBlockTextItem,
   entityBlocksInput,
 } from '@orbis/shared';
-import { type DefaultOptions, QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { type DefaultOptions, QueryClientProvider } from '@tanstack/react-query';
 import { type RenderResult, render } from '@testing-library/react';
 import { TRPCClientError, type TRPCLink } from '@trpc/client';
 import { observable } from '@trpc/server/observable';
@@ -19,7 +19,7 @@ import { SUPPLY_RECORDS_QUERY } from '../features/page/useSupplyRecords';
 import { UndoBinder } from '../features/undo/undo-binding';
 import { QueryBatchProvider } from '../lib/query-blocks/batch';
 import type { RouterOutputs } from '../trpc';
-import { authErrorLink, trpc } from '../trpc';
+import { authErrorLink, makeQueryClient, trpc } from '../trpc';
 
 /**
  * Ловушка для КРАХОВ В ОБРАБОТЧИКАХ. Зовётся на верхнем уровне файла тестов.
@@ -206,9 +206,7 @@ export function renderWithProviders(
   opts: { strict?: boolean; queries?: DefaultOptions['queries']; authErrors?: boolean } = {},
 ): RenderResult & { calls: { path: string; input: unknown }[] } {
   const calls: { path: string; input: unknown }[] = [];
-  const qc = new QueryClient({
-    defaultOptions: { queries: { retry: false, ...opts.queries }, mutations: { retry: false } },
-  });
+  const qc = makeQueryClient({ staleTime: 0, ...opts.queries });
   const client = trpc.createClient({
     links: [
       ...(opts.authErrors

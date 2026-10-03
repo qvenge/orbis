@@ -30,6 +30,7 @@ import { EditorShell } from '../entity-editor/EditorShell';
 import { SaveIndicator } from '../entity-editor/SaveIndicator';
 import { sameDoc } from '../entity-editor/strip-ids';
 import { type BodyDoc, type BodySave, useBodySave } from '../entity-editor/useBodySave';
+import { isUndoEpoch, undoEpoch } from '../undo/undo-epoch';
 import { shownBodyRevision } from './record-host';
 
 type Entity = RouterOutputs['entity']['get']['entity'];
@@ -178,6 +179,18 @@ export function EntityBody({
     };
   }, []);
   const save = useBodySave(entity.id, { ...entity, bodyRevision: shownBodyRevision(entity) });
+  const epoch = undoEpoch();
+  const previousEpoch = useRef(epoch);
+  const ownerChanged = previousEpoch.current !== epoch;
+  if (ownerChanged) {
+    previousEpoch.current = epoch;
+    markdownDirty.current = false;
+    rewriteLocked.current = false;
+    markdownRewriteRevision.current = undefined;
+    rewriteToken.current += 1;
+    markdownReseat.current += 1;
+  }
+
   const { hasUnsent, flush, blocked, offline, keptOffline, expectedRevision } = save;
   // Регистрация — эффектом: снимается при размонтировании ТОЛЬКО своя запись, иначе уходящее
   // тело стёрло бы уже вставшее на его место (смена записи — новый экземпляр по key).
@@ -234,6 +247,10 @@ export function EntityBody({
   const [localDoc, setLocalDoc] = useState<BodyDoc | null>(null);
   /** Счётчик принудительной посадки серверного документа в редактор — его двигает «Обновить» (`BodyEditor.reseat`). */
   const [reseat, setReseat] = useState(0);
+  if (ownerChanged) {
+    setLocalDoc(null);
+    setReseat((value) => value + 1);
+  }
   useEffect(() => {
     if (save.rewritePending) {
       setLocalDoc(null);
@@ -283,6 +300,7 @@ export function EntityBody({
    * между нажатиями не перерисовывается вовсе.
    */
   const shownDocRef = useRef<BodyDoc | null>(null);
+  if (ownerChanged) shownDocRef.current = null;
 
   function onEditorChange(next: BodyDoc) {
     shownDocRef.current = next;
@@ -334,6 +352,7 @@ export function EntityBody({
    */
   const prevMarkdownRef = useRef(asMarkdown);
   const openedWithRef = useRef<Entity['bodyDoc']>(entity.bodyDoc);
+  if (ownerChanged) openedWithRef.current = entity.bodyDoc;
   if (prevMarkdownRef.current !== asMarkdown) {
     prevMarkdownRef.current = asMarkdown;
     if (!asMarkdown) markdownDirty.current = false;
@@ -366,11 +385,12 @@ export function EntityBody({
     return markdownDirty.current ? ('blocked' as const) : result;
   }, [save.flushSettled]);
   const beginRewrite = useCallback(() => {
+    const epoch = undoEpoch();
     rewriteLocked.current = true;
     const token = ++rewriteToken.current;
     const finish = save.beginRewrite();
     return (revision?: number) => {
-      if (!rewriteAlive.current || token !== rewriteToken.current) return;
+      if (!isUndoEpoch(epoch) || !rewriteAlive.current || token !== rewriteToken.current) return;
       markdownRewriteRevision.current = revision;
       if (revision === undefined) rewriteLocked.current = false;
       finish(revision);

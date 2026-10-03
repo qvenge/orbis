@@ -3,6 +3,8 @@ import { useCallback } from 'react';
 import { invalidateGraph } from '../../lib/invalidate';
 import { trpc } from '../../trpc';
 import { useToast } from '../../ui/toast-store';
+import { journalRefOf } from '../undo/journal-ref';
+import { isUndoEpoch, undoEpoch } from '../undo/undo-epoch';
 import { offerUndoLazy } from '../undo/undo-lazy';
 
 /** Подписи действий над приложением — кнопки «Приложений и расширений» и заголовки диалогов. */
@@ -44,13 +46,15 @@ export function useAppAction(): (act: AppAct) => Promise<boolean> {
   const { show } = useToast();
   return useCallback(
     async (act) => {
+      const epoch = undoEpoch();
+      let journalResponse: unknown;
       const refresh = () => {
         invalidateGraph(utils);
         void utils.user.getSettings.invalidate();
       };
       let actionId: string;
       try {
-        ({ actionId } =
+        ({ actionId } = journalResponse =
           act.kind === 'archive'
             ? await utils.client.app.archive.mutate({
                 appId: act.appId,
@@ -62,11 +66,14 @@ export function useAppAction(): (act: AppAct) => Promise<boolean> {
                 extensions: act.extensions,
               }));
       } catch {
+        if (!isUndoEpoch(epoch)) return false;
         show(APP_ACTION_FAILED, 'danger');
         refresh();
         return false;
       }
+      if (!isUndoEpoch(epoch)) return false;
       refresh();
+      if (journalRefOf(journalResponse) === null) return true;
       offerUndoLazy({ title: doneTitle(act), actionId: actionId, entityIds: [] });
       return true;
     },

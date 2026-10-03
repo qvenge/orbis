@@ -40,6 +40,7 @@ export function ConfirmationCard({
 
   const utils = trpc.useUtils();
   const approve = trpc.ai.approve.useMutation({
+    meta: { undoStack: 'skip' },
     onSuccess: () => {
       setResolved('approved');
       // Подтверждают именно РИСКОВАННОЕ (удаление, массовая правка) — путь, после

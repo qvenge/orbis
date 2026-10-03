@@ -70,6 +70,7 @@ export function DeferredActionCard({
   );
 
   const decide = trpc.routine.decideDeferred.useMutation({
+    meta: { undoStack: 'skip' },
     onSuccess: (result) => {
       setStaleRows(result.status === 'stale' ? divergenceRows(registry, result) : null);
       setAlready(

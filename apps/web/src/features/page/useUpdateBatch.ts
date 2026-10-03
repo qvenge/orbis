@@ -3,6 +3,8 @@ import { useCallback } from 'react';
 import { invalidateGraph } from '../../lib/invalidate';
 import { trpc } from '../../trpc';
 import { useToast } from '../../ui/toast-store';
+import { journalRefOf } from '../undo/journal-ref';
+import { isUndoEpoch, undoEpoch } from '../undo/undo-epoch';
 import { offerUndoLazy } from '../undo/undo-lazy';
 
 /** Одна операция пачки — `entity_update` в форме роутера или `entity_version_pin` в форме тула. */
@@ -53,18 +55,23 @@ export function useUpdateBatch(): RunUpdateBatch {
   const { show } = useToast();
   return useCallback(
     async (operations, doneTitle, options = {}) => {
+      const epoch = undoEpoch();
+      let journalResponse: unknown;
       let actionId: string;
       try {
-        ({ actionId } = await utils.client.entity.updateBatch.mutate({
+        ({ actionId } = journalResponse = await utils.client.entity.updateBatch.mutate({
           operations,
           ...(options.action !== undefined && { label: options.action }),
         }));
       } catch {
+        if (!isUndoEpoch(epoch)) return false;
         show(options.failed ?? BATCH_FAILED, 'danger');
         invalidateGraph(utils);
         return false;
       }
+      if (!isUndoEpoch(epoch)) return false;
       invalidateGraph(utils);
+      if (journalRefOf(journalResponse) === null) return true;
       offerUndoLazy({
         title: doneTitle,
         actionId: actionId,

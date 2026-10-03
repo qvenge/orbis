@@ -17,7 +17,7 @@ import { type RouterOutputs, trpc } from '../../trpc';
 import { detailGetInput } from '../entity-detail/useEntityDetail';
 import { runUndo, UNDO_OFFLINE } from '../undo/undo-action';
 import { registerBodyFlush } from './body-flush';
-import { readDraft } from './draft-storage';
+import { captureDraftWriter, readDraft, setDraftScope } from './draft-storage';
 import { SaveIndicator, SLOW_SAVE_MS } from './SaveIndicator';
 import { UNIQUE_ID_TYPES } from './strip-ids';
 import { type BodySave, type BodySaveEntity, type BodySaveState, useBodySave } from './useBodySave';
@@ -99,9 +99,11 @@ const MAX_SENDS = 12;
 
 function setup(opts: { entity?: BodySaveEntity; respond?: Respond } = {}) {
   const box = { respond: opts.respond ?? ok };
-  const hold: { api: BodySave | null } = { api: null };
+  const hold: { api: BodySave | null; refresh?: () => void } = { api: null };
 
   function Probe() {
+    const [, setRender] = useState(0);
+    hold.refresh = () => setRender((value) => value + 1);
     const api = useBodySave('e1', opts.entity ?? ENTITY);
     hold.api = api;
     // Индикатор — здесь, а не в отдельном дереве: требование «отказ показывает „Не
@@ -130,6 +132,7 @@ function setup(opts: { entity?: BodySaveEntity; respond?: Respond } = {}) {
     /** Всё, что ушло МИМО сохранения: «мутаций нет» обязано значить «в сеть не ходили вовсе». */
     stray: () => calls.filter((c) => c.path !== 'entity.update'),
     api: () => hold.api as BodySave,
+    rerender: () => act(() => hold.refresh?.()),
     /** Смена поведения сервера посреди теста (отказ → успех). */
     serve: (respond: Respond) => {
       box.respond = respond;
@@ -166,6 +169,7 @@ beforeEach(() => {
   // следующего — лишней мутацией, которой тот не ждёт. Судьба самого черновика проверяется
   // в draft.test.tsx; здесь он обязан быть пуст.
   localStorage.clear();
+  setDraftScope('');
   // Системное время далеко от `updatedAt` сущности — см. ENTITY выше.
   vi.useFakeTimers().setSystemTime(new Date('2030-01-01T00:00:00.000Z'));
   return () => {
@@ -1127,7 +1131,7 @@ test('оптимистичный патч кладёт документ в кэ�
     read.get = () => utils.entity.get.getData(detailGetInput('e1')) as Cached;
     return null;
   }
-  const hold: { api: BodySave | null } = { api: null };
+  const hold: { api: BodySave | null; refresh?: () => void } = { api: null };
   function SaveProbe() {
     hold.api = useBodySave('e1', ENTITY);
     return null;
@@ -1645,6 +1649,12 @@ test('модули первого кадра не тянут схему реда
     '../entity-detail/body-gate.ts',
     './body-flush.ts',
     '../undo/undo-lazy.ts',
+    '../undo/undo-stack.ts',
+    '../undo/undo-epoch.ts',
+    '../undo/body-provenance.ts',
+    '../undo/mutation-epoch.ts',
+    '../undo/is-editable-target.ts',
+    '../undo/useUndoHotkey.ts',
     '../undo/undo-binding.ts',
     '../undo/journal-ref.ts',
     '../../state/leave-guard.ts',
@@ -2081,3 +2091,125 @@ for (const failure of ['timeout', 'transport'] as const)
       remove();
     }
   });
+
+import { resetUndoSession } from '../undo/undo-epoch';
+
+test('Task18: per-call callback старой сессии не повышает ревизию живого редактора', async () => {
+  const server = gatedServer();
+  const s = setup({ respond: server.respond });
+  s.api().onDocChange(ONE);
+  await tick(SAVE_PAUSE);
+  expect(s.updates()).toHaveLength(1);
+  setDraftScope('t18-new-owner');
+  resetUndoSession();
+  await server.answer(0, SAVED);
+  expect(s.api().revisionForRewrite()).toBe(3);
+});
+
+test('Task18: смена epoch тем же редактором освобождает old waiter и не освобождает новый flight', async () => {
+  const server = gatedServer();
+  const s = setup({ respond: server.respond });
+  s.api().onDocChange(ONE);
+  await tick(SAVE_PAUSE);
+  let settled: unknown;
+  void s
+    .api()
+    .flushSettled()
+    .then((value) => {
+      settled = value;
+    });
+  setDraftScope('t18-new-owner');
+  resetUndoSession();
+  s.rerender();
+  await tick();
+  expect(settled).toBe('nothing');
+  s.api().onDocChange(TWO);
+  await tick(SAVE_PAUSE);
+  expect(s.updates()).toHaveLength(2);
+  await server.answer(0, SAVED);
+  expect(s.api().state).toBe('saving');
+  expect(s.api().revisionForRewrite()).toBe(3);
+  await server.answer(1, SAVED);
+  await tick();
+  expect(s.api().state).toBe('idle');
+  expect(s.api().revisionForRewrite()).toBe(4);
+});
+
+test('Task18: старый render flush до уведомления epoch не пишет и не отправляет чужой draft', async () => {
+  const s = setup();
+  s.api().onDocChange(ONE);
+  const old = s.api();
+  setDraftScope('t18-new-owner');
+  act(() => {
+    resetUndoSession();
+    old.flush();
+  });
+  await tick();
+  expect(s.updates()).toHaveLength(0);
+  expect(readDraft('e1')).toBeNull();
+  s.api().onDocChange(TWO);
+  await tick(SAVE_PAUSE);
+  expect(s.updates()).toHaveLength(1);
+  expect((s.updates()[0]?.input as { bodyDoc: BodyDoc }).bodyDoc).toEqual(TWO);
+});
+
+test('Task18: epoch после flight сохраняет последние pending слова, old closure не пишет новый draft', async () => {
+  const server = gatedServer();
+  const s = setup({ respond: server.respond });
+  s.api().onDocChange(ONE);
+  await tick(SAVE_PAUSE);
+  s.api().onDocChange(TWO);
+  const old = s.api();
+  const ownerKey =
+    Object.keys(localStorage).find((k) => k.startsWith('orbis:body-draft:') && k.endsWith(':e1')) ??
+    '';
+  expect(ownerKey).not.toBe('');
+  setDraftScope('t18-new-owner');
+  resetUndoSession();
+  await tick();
+  expect(localStorage.getItem(ownerKey)).toContain('тело, правка и ещё одна');
+  expect(readDraft('e1')).toBeNull();
+  s.api().onDocChange(THREE);
+  old.flush();
+  expect(localStorage.getItem(ownerKey)).not.toContain('совсем другое тело');
+  expect(readDraft('e1')).toBeNull();
+  await tick(SAVE_PAUSE);
+  expect(s.updates()).toHaveLength(2);
+  await server.answer(0, SAVED);
+  expect(s.api().state).toBe('saving');
+  await server.answer(1, SAVED);
+  expect(s.api().state).toBe('idle');
+});
+
+for (const dismiss of [false, true])
+  test(`Task18: epoch preserves offered foreign disk slot ${dismiss}`, async () => {
+    const foreign = { ...THREE, v: 999 };
+    captureDraftWriter('e1')(foreign, 3, new Date().toISOString());
+    const stored = localStorage.getItem('orbis:body-draft::e1');
+    const s = setup();
+    await tick();
+    expect(s.api().pendingDraft?.foreignSchema).toBe(true);
+    if (dismiss) s.api().dismissPendingDraft();
+    s.api().onDocChange(TWO);
+    setDraftScope('t18-new-owner');
+    resetUndoSession();
+    await tick();
+    expect(localStorage.getItem('orbis:body-draft::e1')).toBe(stored);
+    expect(readDraft('e1')).toBeNull();
+    expect(s.updates()).toHaveLength(0);
+  });
+
+test('Task18: epoch сохраняет собственный exact rejected draft без снятия приговора', async () => {
+  const server = gatedServer();
+  const s = setup({ respond: server.respond });
+  s.api().onDocChange(ONE);
+  await tick(SAVE_PAUSE);
+  await server.answer(0, trpcError('BAD_REQUEST'), 'fail');
+  setDraftScope('t18-new-owner');
+  resetUndoSession();
+  await tick();
+  const draft = JSON.parse(localStorage.getItem('orbis:body-draft::e1') ?? 'null');
+  expect(draft).toMatchObject({ doc: ONE, rejected: true, baseRevision: 3 });
+  expect(readDraft('e1')).toBeNull();
+  expect(s.updates()).toHaveLength(1);
+});

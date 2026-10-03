@@ -3,6 +3,8 @@ import { formatClock } from '../../lib/format-clock';
 import { toastActionGeneration, useToastStore } from '../../ui/toast-store';
 import { runUndo, UNDO_FAILED, type UndoOutcome } from './undo-action';
 import { boundUndoUtils } from './undo-binding';
+import { isUndoEpoch, undoEpoch } from './undo-epoch';
+import { dropUndoable, pushUndoable } from './undo-stack';
 export type UndoToastRule =
   | { kind: 'always'; title: string }
   | { kind: 'if-consequences'; title: string }
@@ -15,21 +17,30 @@ export interface OfferUndoInput {
 }
 export const UNDO_LABEL = 'Отменить';
 export const CONTINUE_UNDO = 'Всё равно отменить — текущий текст сохранится версией';
+export const ALREADY_UNDONE_ELSEWHERE = 'Уже отменено с другого устройства: ';
 export const ALREADY_UNDONE = 'Уже отменено';
 const ACTOR_WORD = { owner: 'вы', ai: 'AI', agent: 'агент' } as const;
 
 /** Плашка «<действие> · Отменить» (§7.5 п. 1): заменяет прежнюю плашку с действием, отмена — по id записи журнала. */
 export function offerUndo(o: OfferUndoInput): void {
+  pushUndoable({
+    actionId: o.actionId,
+    title: o.title,
+    ...(o.entityIds !== undefined && { entityIds: o.entityIds }),
+  });
+  const epoch = undoEpoch();
   let pending = false;
   let generation = 0;
   const run = (force?: true): void => {
-    if (pending) return;
+    if (pending || !isUndoEpoch(epoch)) return;
     pending = true;
     void runUndo(o.actionId, {
       ...(o.entityIds !== undefined && { entityIds: o.entityIds }),
       ...(force && { force }),
     }).then((out) => {
+      if (!isUndoEpoch(epoch)) return;
       pending = false;
+      if (out.kind === 'undone' || out.kind === 'already') dropUndoable(o.actionId);
       const current = generation === toastActionGeneration();
       reportUndoOutcome(
         out.kind === 'failed' && out.message === UNDO_FAILED && o.failed !== undefined
@@ -45,7 +56,14 @@ export function offerUndo(o: OfferUndoInput): void {
   generation = toastActionGeneration();
 }
 /** Исход отмены: подтверждение (с версией, где текст, §8.6), причина отказа с продолжением, «уже отменено», сбой. */
-export function reportUndoOutcome(o: UndoOutcome, retry: () => void, allowAction = true): void {
+export function reportUndoOutcome(
+  o: UndoOutcome,
+  retry: () => void,
+  titleOrAllowAction?: string | boolean,
+  allowAction = true,
+): void {
+  const title = typeof titleOrAllowAction === 'string' ? titleOrAllowAction : undefined;
+  if (typeof titleOrAllowAction === 'boolean') allowAction = titleOrAllowAction;
   const { show } = useToastStore.getState();
   switch (o.kind) {
     case 'undone':
@@ -69,7 +87,7 @@ export function reportUndoOutcome(o: UndoOutcome, retry: () => void, allowAction
       return;
     }
     case 'already':
-      show(ALREADY_UNDONE);
+      show(title === undefined ? ALREADY_UNDONE : `${ALREADY_UNDONE_ELSEWHERE}${title}`);
       return;
     case 'failed':
       show(o.message, 'danger');

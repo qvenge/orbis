@@ -20,3 +20,8 @@ import '@testing-library/jest-dom/vitest';
 import { installProseMirrorJsdomPolyfills } from './prosemirror-polyfill';
 
 installProseMirrorJsdomPolyfills();
+
+import { afterEach } from 'vitest';
+import { clearUndoStack } from '../src/features/undo/undo-stack';
+
+afterEach(clearUndoStack);

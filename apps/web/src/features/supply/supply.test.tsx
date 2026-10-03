@@ -108,7 +108,7 @@ function renderApp(opts: {
       case 'supply.accept':
       case 'supply.decline':
       case 'supply.revert':
-        return { actionId: ACT };
+        return { actionId: ACT, consequences: false };
       case 'ai.undo':
         return {
           actionId: ACT,

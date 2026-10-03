@@ -6943,6 +6943,43 @@ describe('412 и 401 посреди набора', () => {
     await waitFor(() => expect(readDraft('e1')).toBeNull());
   });
 
+  test('Task18: actual401 unmount сохраняет latest suffix после отправки только oldowner', async () => {
+    let fail!: (error: unknown) => void;
+    const seen: unknown[] = [];
+    renderWithProviders(
+      <AuthProvider>
+        <DetailScreen entityId="e1" />
+      </AuthProvider>,
+      (path, input) => {
+        if (path === 'entity.get')
+          return { entity, relations: [], thread: { threadId: 'th1', messages: [] } };
+        if (path === 'entity.update') {
+          seen.push(input);
+          return new Promise((_resolve, reject) => {
+            fail = reject;
+          });
+        }
+        return registryReply(path) ?? {};
+      },
+      { authErrors: true },
+    );
+    await typeTail();
+    await waitFor(() => expect(seen).toHaveLength(1), EDITOR_READY);
+    await userEvent.type(
+      screen.getByTestId('body-editor').querySelector('[contenteditable]') as HTMLElement,
+      ' ещё',
+    );
+    await expectEditorHas('и хвост', 'ещё');
+    await act(async () => fail(trpcError('UNAUTHORIZED')));
+    await screen.findByTestId('login-screen', undefined, EDITOR_READY);
+    const draft = JSON.parse(localStorage.getItem(DRAFT_KEY) ?? 'null');
+    expect(JSON.stringify(draft?.doc)).toContain('и хвост ещё');
+    expect(draft?.baseRevision).toBe(entity.bodyRevision);
+    expect(readDraft('e1')).toBeNull();
+    expect(localStorage.getItem('orbis:body-draft::e1')).toBeNull();
+    expect(seen).toHaveLength(1);
+  });
+
   test('401 посреди набора → выход, черновик на диске цел; повторный вход тем же аккаунтом — черновик на месте и досылается', async () => {
     const box = { refuse: true };
     const seen: unknown[] = [];
@@ -6957,9 +6994,11 @@ describe('412 и 401 посреди набора', () => {
     // 401 → выход: экран входа вместо записи
     await screen.findByTestId('login-screen', undefined, EDITOR_READY);
     expect(screen.queryByTestId('body-editor')).toBeNull();
-    expect(draftText()).toContain('и хвост');
-
-    expect(readDraft('e1')?.baseRevision).toBe(entity.bodyRevision);
+    const ownerDraft = JSON.parse(localStorage.getItem(DRAFT_KEY) ?? 'null');
+    expect(JSON.stringify(ownerDraft?.doc)).toContain('и хвост');
+    expect(ownerDraft?.baseRevision).toBe(entity.bodyRevision);
+    expect(readDraft('e1')).toBeNull();
+    expect(localStorage.getItem('orbis:body-draft::e1')).toBeNull();
     const sentBefore = seen.length;
 
     // Повторный вход ТЕМ ЖЕ аккаунтом: скоуп черновиков тот же — `setDraftScope` его не стёр и не спрятал, и запись,
@@ -6991,15 +7030,21 @@ describe('412 и 401 посреди набора', () => {
     // Тело записи с тех пор сменили: ревизия выросла — автодосыла нет, выбор человеку
     const moved = { ...entity, body: 'чужое', bodyDoc: parseBody('чужое'), bodyRevision: 4 };
     const after: unknown[] = [];
-    renderWithProviders(<DetailScreen entityId="e1" />, (path, input) => {
-      if (path === 'entity.get')
-        return { entity: moved, relations: [], thread: { threadId: 'th1', messages: [] } };
-      if (path === 'entity.update') {
-        after.push(input);
-        return mockEntityUpdateResult(moved);
-      }
-      return registryReply(path) ?? {};
-    });
+    session.value = AUTHED;
+    renderWithProviders(
+      <AuthProvider>
+        <DetailScreen entityId="e1" />
+      </AuthProvider>,
+      (path, input) => {
+        if (path === 'entity.get')
+          return { entity: moved, relations: [], thread: { threadId: 'th1', messages: [] } };
+        if (path === 'entity.update') {
+          after.push(input);
+          return mockEntityUpdateResult(moved);
+        }
+        return registryReply(path) ?? {};
+      },
+    );
     await screen.findByTestId('draft-banner');
     expect(after).toEqual([]);
     expect(draftText()).toContain('и хвост');
@@ -7771,3 +7816,92 @@ test('fix1: markdown набранный пока flush ждёт autosave бло�
   expect(calls.filter((c) => c.path === 'ai.undo')).toHaveLength(0);
   expect(calls.filter((c) => c.path === 'entity.update')).toHaveLength(1);
 }, 30_000);
+
+test('Task18: stable AuthProvider ownerchange сбрасывает markdown ownership и old undo не освобождает новый gate', async () => {
+  const { runUndo } = await import('../undo/undo-action');
+  vi.mocked(useSession).mockReturnValue({ token: 'jwt1', userId: 't18-old', status: 'authed' });
+  const replies: Array<(value: unknown) => void> = [];
+  let fresh = false;
+  const next = {
+    ...entity,
+    bodyRevision: (entity.bodyRevision as number) + 1,
+    body: 'Новый владелец',
+    bodyDoc: parseBody('Новый владелец'),
+  };
+  const stable = (
+    <>
+      <DetailScreen entityId="e1" />
+      <button type="button" onClick={() => void runUndo('a', { entityIds: ['e1'] })}>
+        Отмена owner
+      </button>
+    </>
+  );
+  function Host() {
+    const [, refresh] = useState(0);
+    return (
+      <>
+        <button type="button" onClick={() => refresh((value) => value + 1)}>
+          Сменить owner
+        </button>
+        <AuthProvider>{stable}</AuthProvider>
+      </>
+    );
+  }
+  const { calls } = renderWithProviders(<Host />, (path) => {
+    if (path === 'entity.get')
+      return { entity: fresh ? next : entity, relations: [], thread: null };
+    if (path === 'ai.undo')
+      return new Promise((resolve) => {
+        replies.push(resolve);
+      });
+    return registryReply(path) ?? {};
+  });
+  await editorField();
+  await openDetailMenu();
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Править как markdown' }));
+  let area = await screen.findByTestId('markdown-source');
+  fireEvent.change(area, { target: { value: 'Старый сырой буфер ![x](image.png)' } });
+  vi.mocked(useSession).mockReturnValue({ token: 'jwt2', userId: 't18-new', status: 'authed' });
+  fireEvent.click(screen.getByText('Сменить owner'));
+  await waitFor(() =>
+    expect(screen.getByTestId('markdown-source')).not.toHaveValue(
+      'Старый сырой буфер ![x](image.png)',
+    ),
+  );
+  expect(calls.filter((c) => c.path === 'entity.update')).toHaveLength(0);
+  fireEvent.click(screen.getByText('Отмена owner'));
+  await waitFor(() => expect(replies).toHaveLength(1));
+  area = screen.getByTestId('markdown-source');
+  expect(area).toHaveAttribute('readonly');
+  vi.mocked(useSession).mockReturnValue({ token: 'jwt3', userId: 't18-third', status: 'authed' });
+  fireEvent.click(screen.getByText('Сменить owner'));
+  await waitFor(() => expect(area).not.toHaveAttribute('readonly'));
+  fireEvent.click(screen.getByText('Отмена owner'));
+  await waitFor(() => expect(replies).toHaveLength(2));
+  expect(area).toHaveAttribute('readonly');
+  await act(async () =>
+    replies[0]?.({
+      actionId: 'old-undo',
+      undone: { id: 'a', title: 'Старое' },
+      pinnedVersions: [],
+      bodyRevisions: [{ entityId: 'e1', bodyRevision: 99 }],
+    }),
+  );
+  expect(area).toHaveAttribute('readonly');
+  fresh = true;
+  await act(async () =>
+    replies[1]?.({
+      actionId: 'new-undo',
+      undone: { id: 'a', title: 'Новое' },
+      pinnedVersions: [],
+      bodyRevisions: [{ entityId: 'e1', bodyRevision: next.bodyRevision }],
+    }),
+  );
+  await waitFor(() => expect(area).toHaveValue('Новый владелец'));
+  expect(area).not.toHaveAttribute('readonly');
+  fireEvent.change(area, { target: { value: 'Новый владелец ещё' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Применить' }));
+  await waitFor(() => expect(calls.filter((c) => c.path === 'entity.update')).toHaveLength(1), {
+    timeout: 3000,
+  });
+}, 10000);

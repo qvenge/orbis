@@ -3,6 +3,8 @@ import { useCallback } from 'react';
 import { invalidateGraph } from '../../lib/invalidate';
 import { trpc } from '../../trpc';
 import { useToast } from '../../ui/toast-store';
+import { journalRefOf } from '../undo/journal-ref';
+import { isUndoEpoch, undoEpoch } from '../undo/undo-epoch';
 import { offerUndoLazy } from '../undo/undo-lazy';
 
 // Чтение маски живёт в листовом модуле `extension-mask.ts` (вес первого кадра записи, см. его докблок);
@@ -38,19 +40,27 @@ export function useSetExtensionEnabled(): (ext: ExtensionId, enabled: boolean) =
   const { show } = useToast();
   return useCallback(
     async (ext, enabled) => {
+      const epoch = undoEpoch();
+      let journalResponse: unknown;
       const refresh = () => {
         invalidateGraph(utils);
         void utils.user.getSettings.invalidate();
       };
       let actionId: string;
       try {
-        ({ actionId } = await utils.client.user.setModuleEnabled.mutate({ module: ext, enabled }));
+        ({ actionId } = journalResponse = await utils.client.user.setModuleEnabled.mutate({
+          module: ext,
+          enabled,
+        }));
       } catch {
+        if (!isUndoEpoch(epoch)) return;
         show(EXTENSION_TOGGLE_FAILED, 'danger');
         refresh();
         return;
       }
+      if (!isUndoEpoch(epoch)) return;
       refresh();
+      if (journalRefOf(journalResponse) === null) return;
       offerUndoLazy({
         title: extensionToggleTitle(ext, enabled),
         actionId: actionId,

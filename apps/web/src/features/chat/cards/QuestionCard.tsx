@@ -62,6 +62,7 @@ export function QuestionCard({
   const [outcome, setOutcome] = useState<AnswerOutcome | null>(null);
 
   const answer = trpc.routine.answerQuestion.useMutation({
+    meta: { undoStack: 'skip' },
     onSuccess: (result) => {
       setOutcome(result.status === 'answered' ? null : result);
       if (result.status === 'answered') setDraft('');

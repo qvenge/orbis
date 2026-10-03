@@ -77,6 +77,7 @@ test('entity_card: Undo зовёт ai.undo(undoActionId) и гасит карт�
   await waitFor(() =>
     expect(screen.getByTestId('entity-card')).toHaveAttribute('data-undone', 'true'),
   );
+  expect(peekUndoable()).toBeUndefined();
 });
 
 // C3-устойчивость audit-карточки из истории проверяется через НАСТОЯЩИЙ путь ленты —
@@ -2340,3 +2341,33 @@ for (const kind of ['journal', 'entity'] as const) {
     });
   }
 }
+
+import { peekUndoable } from '../../undo/undo-stack';
+
+test('Task18: принятие предложения чата с настоящим JournalRef не кладёт запись в стек', async () => {
+  let decided = false;
+  renderWithProviders(<div>{renderCards(msg([PROPOSAL_CARD]))}</div>, (path, input) => {
+    if (path === 'routine.decideProposal') {
+      decided = true;
+      return { status: 'applied', actionId: 'chat-action', consequences: true };
+    }
+    return proposalHandler(decided ? { status: 'approved' } : {})(path, input);
+  });
+  const card = await screen.findByTestId('proposal-card');
+  fireEvent.click(await within(card).findByRole('button', { name: 'Принять' }));
+  await waitFor(() => expect(within(card).queryByRole('button', { name: 'Принять' })).toBeNull());
+  expect(peekUndoable()).toBeUndefined();
+});
+
+test('Task18: запомнить memory правило из карточки чата не кладёт запись в стек', async () => {
+  renderWithProviders(
+    <div>{renderCards(msg([suggestion], { createdAt: new Date().toISOString() }))}</div>,
+    (path) =>
+      path === 'entity.create'
+        ? { ...createdEntity, actionId: 'chat-memory', consequences: false }
+        : [],
+  );
+  fireEvent.click(screen.getByRole('button', { name: 'Запомнить' }));
+  await waitFor(() => expect(screen.queryByRole('button', { name: 'Запомнить' })).toBeNull());
+  expect(peekUndoable()).toBeUndefined();
+});

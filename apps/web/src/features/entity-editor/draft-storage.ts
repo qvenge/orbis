@@ -188,6 +188,15 @@ function parseDraft(raw: string): Draft | null {
   };
 }
 
+/** Захваченный ключ сохраняет последние слова прежнему владельцу без записи в новый scope. */
+export function captureDraftWriter(entityId: string) {
+  const capturedKey = key(entityId);
+  return (doc: BodyDoc, baseRevision: number, now: string, rejected = false): void => {
+    const draft: Draft = { doc, baseRevision, savedAt: now, rejected };
+    writeKey(capturedKey, JSON.stringify(draft));
+  };
+}
+
 export function saveDraft(entityId: string, doc: BodyDoc, baseRevision: number, now: string): void {
   const draft: Draft = { doc, baseRevision, savedAt: now, rejected: false };
   // Переполненное или отключённое хранилище (приватный режим, квота) не повод ронять набор

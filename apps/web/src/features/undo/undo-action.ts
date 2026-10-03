@@ -8,6 +8,7 @@ import {
   mountedBodyIds,
 } from '../entity-editor/body-flush';
 import { boundUndoUtils, type UndoUtils } from './undo-binding';
+import { isUndoEpoch, undoEpoch } from './undo-epoch';
 
 export const UNDO_FAILED = 'Не удалось отменить изменения';
 export const UNDO_BODY_BLOCKED =
@@ -24,6 +25,7 @@ export async function runUndo(
   actionId: string,
   opts: { force?: true; entityIds?: string[] } = {},
 ): Promise<UndoOutcome> {
+  const epoch = undoEpoch();
   const utils = boundUndoUtils();
   if (utils === null) return { kind: 'failed', message: UNDO_FAILED };
   const gates = new Map<string, FinishBodyRewrite>();
@@ -40,9 +42,13 @@ export async function runUndo(
           message: flushed === 'blocked' ? UNDO_BODY_BLOCKED : UNDO_OFFLINE,
         };
       }
+      if (!isUndoEpoch(epoch) || boundUndoUtils() !== utils) {
+        release();
+        return { kind: 'failed', message: UNDO_FAILED };
+      }
       gates.set(id, beginBodyRewrite(id));
     }
-    if (boundUndoUtils() !== utils) {
+    if (!isUndoEpoch(epoch) || boundUndoUtils() !== utils) {
       release();
       return { kind: 'failed', message: UNDO_FAILED };
     }
@@ -50,12 +56,17 @@ export async function runUndo(
       actionId,
       ...(opts.force && { force: true as const }),
     });
+    if (!isUndoEpoch(epoch) || boundUndoUtils() !== utils) {
+      release();
+      return { kind: 'failed', message: UNDO_FAILED };
+    }
     for (const [id, finish] of gates)
       finish(result.bodyRevisions.find((r) => r.entityId === id)?.bodyRevision);
     refresh(utils);
     return { kind: 'undone', result };
   } catch (e) {
     release();
+    if (!isUndoEpoch(epoch)) return { kind: 'failed', message: UNDO_FAILED };
     const orbis = orbisErrorOf(e);
     if (orbis?.code === 'UNDO_TEXT_CHANGED' && orbis.details !== undefined)
       return { kind: 'refused', details: orbis.details as unknown as UndoTextChangedDetails };

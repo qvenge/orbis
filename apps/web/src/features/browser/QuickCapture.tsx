@@ -7,6 +7,7 @@ import { trpc } from '../../trpc';
 import { Spinner } from '../../ui/Spinner';
 import { useToast } from '../../ui/toast-store';
 import { journalRefOf } from '../undo/journal-ref';
+import { isUndoEpoch, undoEpoch } from '../undo/undo-epoch';
 import { offerUndoLazy } from '../undo/undo-lazy';
 
 // §3.7 / D-g: текст → title БЕЗ интерпретации. Контекст задаёт связь: `entity` — подзадача записи
@@ -19,6 +20,7 @@ export function QuickCapture({ context }: { context: CaptureContext }) {
   const { show } = useToast();
   const utils = trpc.useUtils();
   const create = trpc.entity.create.useMutation({
+    meta: { undoStack: 'self' },
     onSuccess: (data, vars) => {
       invalidateGraph(utils);
       const ref = journalRefOf(data);
@@ -37,6 +39,7 @@ export function QuickCapture({ context }: { context: CaptureContext }) {
 
   async function submit(e: FormEvent) {
     e.preventDefault();
+    const epoch = undoEpoch();
     const title = text.trim();
     if (!title || isPending) return;
     // Отклик «＋» (спека скорости §3.1): видимого до подтверждения нет — оптимистика «＋» в плане Б (§7.1).
@@ -65,10 +68,13 @@ export function QuickCapture({ context }: { context: CaptureContext }) {
           ? { link: { parentId: context.parentId, role: ROLE_SUBITEM } }
           : {}),
       });
+      if (!isUndoEpoch(epoch)) return;
       action.confirmed();
+      if (!isUndoEpoch(epoch)) return;
       attemptRef.current = null;
       setText('');
     } catch {
+      if (!isUndoEpoch(epoch)) return;
       show('Не удалось сохранить', 'danger');
     }
   }

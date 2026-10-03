@@ -3,6 +3,8 @@ import { useCallback } from 'react';
 import { invalidateGraph } from '../../lib/invalidate';
 import { type RouterOutputs, trpc } from '../../trpc';
 import { useToast } from '../../ui/toast-store';
+import { journalRefOf } from '../undo/journal-ref';
+import { isUndoEpoch, undoEpoch } from '../undo/undo-epoch';
 import { offerUndoLazy } from '../undo/undo-lazy';
 
 /**
@@ -113,6 +115,8 @@ export function useSupplyAction(): (act: SupplyAct) => Promise<boolean> {
   const { show } = useToast();
   return useCallback(
     async (act) => {
+      const epoch = undoEpoch();
+      let journalResponse: unknown;
       // `invalidateGraph` гасит и «Обновления» (`lib/invalidate.ts`).
       const refresh = () => invalidateGraph(utils);
       let actionId: string | null;
@@ -121,6 +125,7 @@ export function useSupplyAction(): (act: SupplyAct) => Promise<boolean> {
         const m = utils.client.supply;
         if (act.kind === 'accept-all') {
           const r = await m.acceptAll.mutate();
+          journalResponse = r;
           actionId = r.actionId;
           accepted = r.accepted.length;
         } else if (act.kind === 'revert') {
@@ -130,6 +135,7 @@ export function useSupplyAction(): (act: SupplyAct) => Promise<boolean> {
               ? input
               : { ...input, expectedUpdatedAt: act.expectedUpdatedAt },
           );
+          journalResponse = r;
           actionId = r.actionId;
         } else {
           const input = { key: act.key };
@@ -139,13 +145,16 @@ export function useSupplyAction(): (act: SupplyAct) => Promise<boolean> {
               : act.kind === 'decline'
                 ? await m.decline.mutate(input)
                 : await m.add.mutate(input);
+          journalResponse = r;
           actionId = r.actionId;
         }
       } catch {
+        if (!isUndoEpoch(epoch)) return false;
         show(SUPPLY_FAILED, 'danger');
         refresh();
         return false;
       }
+      if (!isUndoEpoch(epoch)) return false;
       refresh();
       if (actionId === null) {
         // «Принять все» без единой неправленой записи: писать было нечего, отменять — тоже.
@@ -153,6 +162,7 @@ export function useSupplyAction(): (act: SupplyAct) => Promise<boolean> {
         return true;
       }
       const id = actionId;
+      if (journalRefOf(journalResponse) === null) return true;
       offerUndoLazy({ title: doneTitle(act, accepted), actionId: id });
       return true;
     },

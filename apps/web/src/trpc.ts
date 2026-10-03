@@ -1,24 +1,42 @@
 import type { AppRouter } from '@orbis/server/src/router';
 import { CLIENT_VERSION_HEADER } from '@orbis/shared';
-import { QueryClient } from '@tanstack/react-query';
+import { type DefaultOptions, MutationCache, QueryClient } from '@tanstack/react-query';
 import { createTRPCClient, httpBatchLink, TRPCClientError, type TRPCLink } from '@trpc/client';
 import { createTRPCReact } from '@trpc/react-query';
 import type { inferRouterInputs, inferRouterOutputs } from '@trpc/server';
 import { observable } from '@trpc/server/observable';
 import { APP_VERSION } from './app/version';
 import { emitClientOutdated, emitUnauthorized } from './auth/events';
+import { makeBodyQueryCache } from './features/undo/body-provenance';
+import { journalRefOf } from './features/undo/journal-ref';
+import { currentMutationEpoch, guardMutationEpoch } from './features/undo/mutation-epoch';
+import { isUndoEpoch, undoEpoch } from './features/undo/undo-epoch';
+import { pushUndoable } from './features/undo/undo-stack';
 
 export const trpc = createTRPCReact<AppRouter>();
 
 export type RouterInputs = inferRouterInputs<AppRouter>;
 export type RouterOutputs = inferRouterOutputs<AppRouter>;
 
-export const queryClient = new QueryClient({
-  defaultOptions: {
-    queries: { retry: false, refetchOnWindowFocus: false, staleTime: 30_000 },
-    mutations: { retry: false },
-  },
-});
+export function makeQueryClient(queries?: DefaultOptions['queries']): QueryClient {
+  const mutationCache = new MutationCache({
+    onSuccess: (data, _vars, _context, mutation) => {
+      if (!currentMutationEpoch(mutation) || mutation.meta?.undoStack !== undefined) return;
+      const ref = journalRefOf(data);
+      if (ref) pushUndoable({ actionId: ref.actionId, title: 'действие' });
+    },
+  });
+  guardMutationEpoch(mutationCache);
+  return new QueryClient({
+    mutationCache,
+    queryCache: makeBodyQueryCache(),
+    defaultOptions: {
+      queries: { retry: false, refetchOnWindowFocus: false, staleTime: 30_000, ...queries },
+      mutations: { retry: false },
+    },
+  });
+}
+export const queryClient = makeQueryClient();
 
 export function trpcHeaders(getToken: () => string | null): Record<string, string> {
   const token = getToken();
@@ -36,18 +54,19 @@ export function authErrorLink(handlers: {
 }): TRPCLink<AppRouter> {
   return () =>
     ({ op, next }) =>
-      observable((observer) =>
-        next(op).subscribe({
+      observable((observer) => {
+        const epoch = undoEpoch();
+        return next(op).subscribe({
           next: (v) => observer.next(v),
           complete: () => observer.complete(),
           error: (err) => {
             const code = err instanceof TRPCClientError ? err.data?.code : undefined;
             if (code === 'PRECONDITION_FAILED') handlers.onOutdated();
-            else if (code === 'UNAUTHORIZED') handlers.onUnauthorized();
+            else if (code === 'UNAUTHORIZED' && isUndoEpoch(epoch)) handlers.onUnauthorized();
             observer.error(err);
           },
-        }),
-      );
+        });
+      });
 }
 
 // URL tRPC: по умолчанию относительный `/trpc` (Вариант A — same-origin, сервер сам
@@ -62,9 +81,28 @@ export const TRPC_URL = `${API_BASE}/trpc`;
 export const MCP_URL = `${API_BASE || window.location.origin}/mcp`;
 
 export function orbisLinks(getToken: () => string | null): TRPCLink<AppRouter>[] {
+  const scopedBatch: TRPCLink<AppRouter> = (runtime) => {
+    let activeEpoch: number | undefined;
+    let batch: ReturnType<TRPCLink<AppRouter>> | undefined;
+    return (operation) => {
+      const epoch = undoEpoch();
+      if (batch === undefined || activeEpoch !== epoch) {
+        activeEpoch = epoch;
+        // У каждого владельца собственная очередь: старый запрос не объединяется с новым и не получает его токен.
+        batch = httpBatchLink<AppRouter>({
+          url: TRPC_URL,
+          headers: () => {
+            if (!isUndoEpoch(epoch)) throw new Error('Сессия изменилась');
+            return trpcHeaders(getToken);
+          },
+        })(runtime);
+      }
+      return batch(operation);
+    };
+  };
   return [
     authErrorLink({ onOutdated: emitClientOutdated, onUnauthorized: emitUnauthorized }),
-    httpBatchLink({ url: TRPC_URL, headers: () => trpcHeaders(getToken) }),
+    scopedBatch,
   ];
 }
 

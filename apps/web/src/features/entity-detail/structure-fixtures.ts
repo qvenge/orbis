@@ -706,6 +706,14 @@ export async function captureDetail(
     )
       throw new Error(`${f.name}: строка заголовка не встала`);
   });
+  // Lazy RunFeed может разрешиться после нескольких тихих кадров заголовка.
+  // Снимок agent-run требует фактическую карточку; отсутствие остаётся ошибкой waitFor.
+  if (f.entity.aspects.includes('orbis/agent-run')) {
+    await waitFor(() => {
+      if (container.querySelector('[data-testid="run-feed"]') === null)
+        throw new Error(`${f.name}: карточка истории прогонов не встала`);
+    });
+  }
   let last = '';
   let quiet = 0;
   for (let tick = 0; quiet < SETTLE_QUIET_TICKS; tick++) {

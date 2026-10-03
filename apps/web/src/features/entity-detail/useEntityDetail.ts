@@ -1,5 +1,8 @@
 import type { JournalRef } from '@orbis/shared';
+import { confirmBody, markBodyPending } from '../undo/body-provenance';
 import { journalRefOf } from '../undo/journal-ref';
+import { isUndoEpoch, undoEpoch } from '../undo/undo-epoch';
+import { pushUndoable } from '../undo/undo-stack';
 
 export { journalRefOf } from '../undo/journal-ref';
 
@@ -297,7 +300,9 @@ export function useEntityUpdate(
   };
 
   const mutation = trpc.entity.update.useMutation({
+    meta: { undoStack: 'self' },
     onMutate: async (vars) => {
+      const epoch = undoEpoch();
       const titleGeneration = titleGenerations[vars.id] ?? 0;
       // Отклик действия (спека скорости §3.1) — от нажатия, поэтому ДО первого `await`. Автосохранение текста — не
       // действие: сеанс печати меряется иначе, и замер каждого сохранения засорил бы отклик кнопок.
@@ -314,12 +319,16 @@ export function useEntityUpdate(
             );
       setConflict(false);
       await utils.entity.get.cancel(input);
+      if (!isUndoEpoch(epoch)) return;
       const prev = utils.entity.get.getData(input);
       const shown = OPTIMISTIC.get(vars) ?? vars;
       if (!titleAccepted(vars, { titleGeneration }))
         utils.entity.get.setData(input, (old) =>
           old ? { ...old, entity: applyPatch(old.entity, shown) } : old,
         );
+      const pendingBody =
+        vars.autosave === true ? utils.entity.get.getData(input)?.entity.bodyDoc : undefined;
+      markBodyPending(pendingBody);
       // «Видно» — кадр после оптимистичного патча: к нему React успевает нарисовать правку.
       if (action) requestAnimationFrame(() => action.visible());
       seqRef.current += 1;
@@ -333,6 +342,7 @@ export function useEntityUpdate(
       // полёте, и откат положил бы данные прежней записи под ключ новой (ревью Задачи 13, I1).
       return {
         prev,
+        pendingBody,
         input,
         seq: seqRef.current,
         expectedBodyRevision: vars.expectedBodyRevision,
@@ -369,11 +379,21 @@ export function useEntityUpdate(
       if (isBodyStale(err)) setConflict(true);
     },
     onSuccess: (data, vars, ctx) => {
+      confirmBody(ctx?.pendingBody);
       // Тоже первым делом: сохранённый черновик обязан уйти с диска, даже если экран этой
       // записи давно закрыт (см. settleBodyDraft).
       settleBodyDraft(vars);
       const ref = journalRefOf(data);
-      if (ref !== null) offerByRule(opts.undoToast, ref, vars, ctx?.prev?.entity);
+      if (
+        ref !== null &&
+        !offerByRule(opts.undoToast, ref, vars, ctx?.prev?.entity) &&
+        stackable(vars)
+      )
+        pushUndoable({
+          actionId: ref.actionId,
+          title: `правка «${ctx?.prev?.entity.title ?? vars.id}»`,
+          entityIds: vars.body !== undefined || vars.bodyDoc !== undefined ? [vars.id] : [],
+        });
       // Поздний успех устаревшей мутации не говорит ничего о расхождении, которое держит
       // плашку сейчас. Сверки меток здесь нет, и это не забытая симметрия с onError, а разные
       // вопросы: там решается, ПОКАЗЫВАТЬ ли конфликт (промолчать можно лишь о том, который
@@ -543,4 +563,9 @@ export function recordEditRule(vars: UpdateInput, prior: Entity | undefined): Un
   if (vars.unset?.includes('orbis/task_status'))
     return { kind: 'if-consequences', title: `Задача открыта: «${title}»` };
   return null;
+}
+
+/** У текста и заголовка собственные стрелки: одна правка не получает две отмены. */
+function stackable(vars: UpdateInput): boolean {
+  return vars.autosave !== true && vars.title === undefined;
 }

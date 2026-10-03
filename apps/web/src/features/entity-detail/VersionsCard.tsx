@@ -46,6 +46,7 @@ export function PinVersionDialog({ entityId, onClose }: { entityId: string; onCl
   const field = useRef<HTMLInputElement>(null);
 
   const pin = trpc.version.pin.useMutation({
+    meta: { undoStack: 'self' },
     onSuccess: (data) => {
       // Инвалидируется ТОЛЬКО список версий, без invalidateGraph: закрепление пишет строку
       // снимка и саму запись не двигает вовсе (executor.prepareVersionPin — INSERT в
@@ -143,6 +144,7 @@ export function VersionsCard({ entity, active }: { entity: Entity; active: boole
 
   const finishRewrite = useRef<(revision?: number) => void>(() => {});
   const restore = trpc.version.restore.useMutation({
+    meta: { undoStack: 'self' },
     onMutate: () => ({ finish: finishRewrite.current, entityId: entity.id }),
     onSuccess: (data, _vars, ctx) => {
       utils.entity.get.setData(detailGetInput(data.id), (old) =>

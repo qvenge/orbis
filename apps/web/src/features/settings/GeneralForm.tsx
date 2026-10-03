@@ -27,6 +27,15 @@ export function GeneralForm({ settings }: { settings: Settings }) {
   const [timezone, setTimezone] = useState(settings.timezone);
   const [defaultCurrency, setDefaultCurrency] = useState(settings.defaultCurrency);
   const [weekStartDay, setWeekStartDay] = useState(settings.weekStartDay);
+  const [accepted, setAccepted] = useState(settings);
+  if (accepted !== settings) {
+    // Принятое перечитывание меняет лишь поля без живой правки владельца.
+    if (timezone === accepted.timezone) setTimezone(settings.timezone);
+    if (defaultCurrency === accepted.defaultCurrency) setDefaultCurrency(settings.defaultCurrency);
+    if (weekStartDay === accepted.weekStartDay) setWeekStartDay(settings.weekStartDay);
+    setAccepted(settings);
+  }
+
   const [themePref, setThemePref] = useThemePref();
   const tzId = useId();
   const curId = useId();

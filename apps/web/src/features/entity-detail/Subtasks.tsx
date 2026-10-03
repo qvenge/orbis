@@ -9,6 +9,7 @@ import { Button } from '../../ui/Button';
 import { Spinner } from '../../ui/Spinner';
 import { useToast } from '../../ui/toast-store';
 import { journalRefOf } from '../undo/journal-ref';
+import { isUndoEpoch, undoEpoch } from '../undo/undo-epoch';
 import { offerUndoLazy } from '../undo/undo-lazy';
 import { useHostReadOnly } from './record-host';
 
@@ -55,6 +56,7 @@ export function Subtasks({ parentId, relations }: { parentId: string; relations:
   const { show } = useToast();
   const openRecord = useOpenRecord();
   const create = trpc.entity.create.useMutation({
+    meta: { undoStack: 'self' },
     // DF п.5: списки читают ДРУГОЙ ключ со своим staleTime (60 с у Повестки, K16) и сами
     // не протухнут — без этого новая подзадача до минуты не видна ни в Browser, ни в
     // Повестке. Detail родителя (сама секция подзадач) перечитывается тем же вызовом:
@@ -76,6 +78,7 @@ export function Subtasks({ parentId, relations }: { parentId: string; relations:
   const attemptRef = useRef<{ id: string; text: string; parentId: string } | null>(null);
 
   async function add() {
+    const epoch = undoEpoch();
     const title = draft.trim();
     if (!title || isPending) return;
     const previous = attemptRef.current;
@@ -98,9 +101,11 @@ export function Subtasks({ parentId, relations }: { parentId: string; relations:
         source: 'quick_capture',
         link: { parentId, role: ROLE_SUBITEM },
       });
+      if (!isUndoEpoch(epoch)) return;
       attemptRef.current = null;
       setDraft('');
     } catch {
+      if (!isUndoEpoch(epoch)) return;
       show('Не удалось сохранить', 'danger');
     }
   }

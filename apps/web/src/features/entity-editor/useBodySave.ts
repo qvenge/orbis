@@ -13,12 +13,15 @@ import {
 } from '@orbis/shared/doc/types';
 import type { JSONContent } from '@tiptap/core';
 import { TRPCClientError } from '@trpc/client';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { isBodyStale } from '../../lib/orbis-error';
 import type { RouterInputs } from '../../trpc';
 import { useEntityUpdate } from '../entity-detail/useEntityDetail';
+import { isBodyPending } from '../undo/body-provenance';
+import { isUndoEpoch, subscribeUndoEpoch, undoEpoch } from '../undo/undo-epoch';
 import type { FlushResult } from './body-flush';
 import {
+  captureDraftWriter,
   clearDraft,
   DRAFT_REJECTING_CODE,
   type Draft,
@@ -462,7 +465,7 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
     }
   }, []);
 
-  // Смена сущности под ТЕМ ЖЕ хуком обнуляет всё накопленное: отложенный документ, подтверждённую
+  // Смена сущности или владельца под ТЕМ ЖЕ хуком обнуляет всё накопленное: отложенный документ, подтверждённую
   // ревизию и терминальную остановку — они про ПРЕЖНЮЮ запись. Без этого отложенное тело одной
   // заметки уехало бы в тело соседней (`{ id: 'вторая', bodyDoc: <тело первой> }`) — молча и
   // необратимо.
@@ -477,8 +480,49 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
   // и это не вкусовщина: эффект отработал бы уже ПОСЛЕ рендера с новым id, и чужой flush() из
   // эффекта родителя, попав в эту щель, уехал бы старым телом под новым id — ровно та ошибка,
   // против которой сброс и написан.
+  const epoch = useSyncExternalStore(subscribeUndoEpoch, undoEpoch, undoEpoch);
+  const writerRef = useRef({
+    epoch,
+    id: entityId,
+    write: captureDraftWriter(entityId),
+    basis: entity.bodyDoc,
+  });
+  const preserveOwnerPending = useCallback(() => {
+    const doc = pendingRef.current;
+    const writer = writerRef.current;
+    if (
+      doc === null ||
+      !pendingFromEditorRef.current ||
+      pendingDraftRef.current !== null ||
+      foreignDraftRef.current !== null
+    )
+      return;
+    // Основа захвачена прежним владельцем, а не взята из новых props/cache перед reset.
+    if (
+      writer.basis != null &&
+      !isBodyPending(writer.basis) &&
+      writer.basis.v === doc.v &&
+      sameDoc(doc.doc, writer.basis.doc as JSONContent)
+    )
+      return;
+    writer.write(
+      doc,
+      pendingBaseRef.current,
+      new Date().toISOString(),
+      rejectedDocRef.current === doc,
+    );
+  }, []);
+  const prevEpochRef = useRef(epoch);
   const prevIdRef = useRef(entityId);
-  if (prevIdRef.current !== entityId) {
+  if (prevIdRef.current !== entityId || prevEpochRef.current !== epoch) {
+    if (prevEpochRef.current !== epoch) preserveOwnerPending();
+    writerRef.current = {
+      epoch,
+      id: entityId,
+      write: captureDraftWriter(entityId),
+      basis: entity.bodyDoc,
+    };
+    prevEpochRef.current = epoch;
     prevIdRef.current = entityId;
     // Поколение — первым делом: с этой строки колбэки уже ушедшего запроса сюда не достучатся.
     genRef.current += 1;
@@ -548,6 +592,13 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
   // Тип объявлен явно: без него `save`, зовущий себя из собственного колбэка, попадает в
   // циклический вывод типа (TS7022).
   const save = useCallback<() => void>(() => {
+    if (!isUndoEpoch(epoch)) {
+      // Старое cleanup до reset сохраняет только собственный pending в захваченный ключ.
+      // После reset реф принадлежит новому owner: старый closure его не читает.
+      if (writerRef.current.epoch === epoch && writerRef.current.id === entityId)
+        preserveOwnerPending();
+      return;
+    }
     clearTimer();
     const doc = pendingRef.current;
     if (doc === null) return;
@@ -559,6 +610,7 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
     // отправлять ли, а здесь выясняется, есть ли что отправлять вообще.
     if (
       base.bodyDoc != null &&
+      !isBodyPending(base.bodyDoc) &&
       base.bodyDoc.v === doc.v &&
       sameDoc(doc.doc, base.bodyDoc.doc as JSONContent)
     ) {
@@ -657,7 +709,8 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
     // Поколение снимается ДО отправки: колбэки ниже сверяются с ним и молчат, если запись
     // под хуком успела смениться.
     const gen = genRef.current;
-    const stale = () => gen !== genRef.current;
+    const requestEpoch = undoEpoch();
+    const stale = () => gen !== genRef.current || !isUndoEpoch(requestEpoch);
 
     inFlightRef.current = true;
     chainedRef.current = false;
@@ -707,6 +760,7 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
           if (stale()) return;
           lastFailedRef.current = false;
           ownDraftRef.current = false;
+          writerRef.current.basis = doc;
           confirmedRef.current = saved.bodyRevision;
           // Ревизия отложенного двигается вместе с подтверждённой, и это обязательно: правка,
           // набранная ПОВЕРХ только что сохранённой, — её потомок, и база у неё теперь ответ
@@ -721,6 +775,7 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
           setFailure(null);
         },
         onError: (err) => {
+          if (stale()) return;
           const terminal =
             err instanceof TRPCClientError && err.data?.code === DRAFT_REJECTING_CODE;
           // Пометку на диске ставит обвязка уровня мутации (см. onSuccess выше). Черновик при
@@ -731,13 +786,11 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
           //
           // Здесь запоминается САМ документ, а не факт отказа: следующая запись черновика ЭТИМ
           // хуком обязана вернуть пометку именно ему и никому другому (см. `rejectedDocRef`).
-          // Реф — состояние живого хука, поэтому и стоит до отсечки, но смысла после
-          // размонтирования не имеет: там за пометку отвечает уровень мутации.
+          // Реф принадлежит текущему поколению записи и владельцу; старый ответ не меняет его.
           if (terminal) rejectedDocRef.current = doc;
           // Замок текста — по структурному коду отказа (`data.orbis`, РП-5), а не по транспортному
           // CONFLICT: 409 бывает и у других отказов, а «досыл обречён» — только у этого.
           if (isBodyStale(err)) staleDocRef.current = doc;
-          if (stale()) return;
           lastFailedRef.current = true;
           // Транспортный — без ответа сервера: не ошибка tRPC вовсе или ошибка без кода и статуса.
           transportFailedRef.current =
@@ -777,7 +830,7 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
         },
       },
     );
-  }, [entityId, mutate, clearTimer, clearGiveUp]);
+  }, [entityId, epoch, mutate, clearTimer, clearGiveUp, preserveOwnerPending]);
 
   const onDocChange = useCallback(
     (doc: BodyDoc) => {
@@ -815,7 +868,12 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
     const doc = pendingRef.current;
     if (doc === null) return false;
     const base = entityRef.current.bodyDoc;
-    return !(base != null && base.v === doc.v && sameDoc(doc.doc, base.doc as JSONContent));
+    return !(
+      !isBodyPending(base) &&
+      base != null &&
+      base.v === doc.v &&
+      sameDoc(doc.doc, base.doc as JSONContent)
+    );
   }, []);
 
   // Плашка конфликта на экране — то, к чему жест отсылает человека. «Обновить» её снимает, и
@@ -976,6 +1034,7 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
     // спросили бы про текст, который уже лежит в базе (ревью раунда 1, И-3).
     if (
       base.bodyDoc != null &&
+      !isBodyPending(base.bodyDoc) &&
       base.bodyDoc.v === draft.doc.v &&
       sameDoc(draft.doc.doc, base.bodyDoc.doc as JSONContent)
     ) {
