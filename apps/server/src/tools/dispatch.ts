@@ -729,7 +729,14 @@ async function runRead(
   // (хук материализации §5.4 / конвейер §2.8 исполняются вне pre-tx)
   if (name === 'entity_get') {
     const parsed = parseEnvelope(entityGetInput, input, 'entity_get');
-    return { status: 'ok', result: await readEntity(tx, ctx.identity.graph, parsed) };
+    // Умолчание тула прежнее (Д-16): описание обещает body+relations, хотя entity.get теперь лёгкий.
+    return {
+      status: 'ok',
+      result: await readEntity(tx, ctx.identity.graph, {
+        ...parsed,
+        include: parsed.include ?? ['body', 'relations'],
+      }),
+    };
   }
   if (name === 'property_catalog') {
     // Каталог читается из СНИМКА реестра — того же, по которому собран список тулов и по
@@ -993,7 +1000,7 @@ async function runEntityQuery(ctx: ToolCallCtx, input: unknown): Promise<ToolDis
         ? parseQueryText(parsed.query as string, cctx)
         : normalizeQueryAst(parsed.ast, parseRegistryOf(cctx)),
     run: async (tx, ast, cctx) => {
-      const compiled = compileQueryAst(ast, cctx);
+      const compiled = compileQueryAst(ast, cctx, { fields: parsed.fields ?? 'none' });
       const rows = await tx.execute(compiled);
       const entities = [...rows].map((r) => toWireEntityFromSql(r as Record<string, unknown>));
       const card: Card = {

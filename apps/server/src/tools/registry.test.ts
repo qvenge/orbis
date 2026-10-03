@@ -534,13 +534,25 @@ describe('buildToolRegistry: состав (§9.2 + §7.6)', () => {
     expect(def.description).toContain('чем наполняется Бюджет');
   });
 
+  test('undo_last: ответ называет отказ и фактические card/tab/none из error.details.continuation', async () => {
+    const description = defOf(await registryFor(userB), 'undo_last').description;
+    expect(description).toContain('что именно отменено');
+    expect(description).toContain('отменять нечего');
+    expect(description).toContain('отказ «текст изменён»');
+    expect(description).toContain('error.details.continuation');
+    expect(description).toContain('card — карточка или строка журнала');
+    expect(description).toContain('tab — Ctrl/Cmd+Z или плашка во вкладке');
+    expect(description).toContain('none — продолжения нет');
+    expect(description).not.toContain('меню записи');
+  });
+
   test('entity_query: второй вход — дерево канона, и его схема уехала В тул целиком', async () => {
     // Провайдер (D29) не резолвит `$ref` за пределы документа тула: определение узла обязано
     // лежать в `$defs` САМОЙ схемы тула, иначе рекурсивная ветка приедет к нему битой.
     const def = defOf(await registryFor(userB), 'entity_query');
     const schema = def.inputJsonSchema;
     const props = schema.properties as Record<string, Record<string, unknown>>;
-    expect(Object.keys(props).sort()).toEqual(['ast', 'query']);
+    expect(Object.keys(props).sort()).toEqual(['ast', 'fields', 'query']);
     expect((schema.$defs as Record<string, unknown>).node).toBeDefined();
     // Ровно один вход за вызов — тем же вердиктом, что даёт zod-envelope.
     expect(schema.oneOf).toEqual([{ required: ['query'] }, { required: ['ast'] }]);

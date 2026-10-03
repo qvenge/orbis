@@ -527,7 +527,8 @@ function RecordMenu({
 
   function changeView(templateText: string) {
     if (!bodySettled()) return;
-    const plan = changeViewPlan(templateText, entity.body);
+    // Экран просит тело всегда (DETAIL_INCLUDE).
+    const plan = changeViewPlan(templateText, entity.body ?? '');
     // Случай 3 — вопрос владельцу: молча ни убрать текст, ни дописать его нельзя (С1а-8).
     if (plan.case === 3) {
       setDialog({

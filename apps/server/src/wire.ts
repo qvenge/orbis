@@ -5,7 +5,9 @@
 // БД хранит микросекунды, но драйвер парсит timestamptz в Date (мс), поэтому сравнение штампа,
 // который клиент видел в wire-форме (предусловие `orbis/updated_at`), с row.updatedAt.toISOString()
 // симметрично.
+
 import type { GrantScope, PropertyDefinition, UndoConflictEntry } from '@orbis/shared';
+import { bodyStartOf } from '@orbis/shared/doc/body-start';
 import type { ChatRole, WireChatMessage } from './chat/messages';
 import type { chatMessages, chatThreads, entities, relations, userSettings } from './db/schema';
 import type { WireEntity, WireEntityWithRevision, WireRelation } from './executor/types';
@@ -19,15 +21,29 @@ type UserSettingsRow = typeof userSettings.$inferSelect;
 
 /**
  * `includeBodyDoc` — явный opt-in (Р6): без него ключа `bodyDoc` в ответе НЕТ вовсе, а не
- * `null`. Документ весит столько же, сколько тело, и в списках сущностей он не нужен.
+ * `null`. Тело независимо выбирается includeBody (§9); мутации по умолчанию несут тело.
  */
-export function toWireEntity(row: EntityRow, includeBodyDoc = false): WireEntity {
+export function toWireEntity(
+  row: EntityRow,
+  includeBodyDoc?: boolean,
+  includeBody?: true,
+): WireEntity & { body: string };
+export function toWireEntity(
+  row: EntityRow,
+  includeBodyDoc: boolean,
+  includeBody: boolean,
+): WireEntity;
+export function toWireEntity(
+  row: EntityRow,
+  includeBodyDoc = false,
+  includeBody = true,
+): WireEntity {
   return {
     id: row.id,
     graphId: row.graphId,
     title: row.title,
     emoji: row.emoji,
-    body: row.body,
+    ...(includeBody ? { body: row.body } : {}),
     ...(includeBodyDoc ? { bodyDoc: (row.bodyDoc ?? null) as WireEntity['bodyDoc'] } : {}),
     bodyRefs: row.bodyRefs,
     tags: row.tags,
@@ -52,10 +68,21 @@ export function toWireEntity(row: EntityRow, includeBodyDoc = false): WireEntity
  */
 export function toWireEntityWithRevision(
   row: EntityRow,
+  includeBodyDoc?: boolean,
+  includeBody?: true,
+): WireEntityWithRevision & { body: string };
+export function toWireEntityWithRevision(
+  row: EntityRow,
+  includeBodyDoc: boolean,
+  includeBody: boolean,
+): WireEntityWithRevision;
+export function toWireEntityWithRevision(
+  row: EntityRow,
   includeBodyDoc = false,
+  includeBody = true,
 ): WireEntityWithRevision {
   return {
-    ...toWireEntity(row, includeBodyDoc),
+    ...toWireEntity(row, includeBodyDoc, includeBody),
     bodyRevision: row.bodyRevision,
     bodyChangedAt: row.bodyChangedAt.toISOString(),
   };
@@ -84,7 +111,8 @@ export interface LlmEntity {
   id: string;
   title: string;
   emoji: string | null;
-  body: string | null;
+  body?: string;
+  bodyStart?: string | null;
   bodyRefs: string[];
   tags: string[];
   props: Record<string, unknown>;
@@ -112,7 +140,8 @@ export function toLlmEntity(
     id: row.id,
     title: row.title,
     emoji: row.emoji,
-    body: row.body,
+    ...(row.body !== undefined ? { body: row.body } : {}),
+    ...(row.bodyStart !== undefined ? { bodyStart: row.bodyStart } : {}),
     bodyRefs: row.bodyRefs,
     tags: row.tags,
     props,
@@ -143,25 +172,32 @@ function toDate(value: unknown): Date {
  */
 export function toWireEntityFromSql(row: Record<string, unknown>): WireEntity {
   return {
-    ...toWireEntity({
-      id: row.id,
-      graphId: row.graph_id,
-      title: row.title,
-      emoji: row.emoji,
-      body: row.body,
-      bodyRefs: row.body_refs,
-      tags: row.tags,
-      // Только НОВАЯ правда (§А1-1): списочное чтение обязано нести ровно тот же состав,
-      // что и одиночное. Пока этих колонок здесь не было, списочные пути отдавали пустую
-      // новую форму при том, что одиночное чтение отдавало правду, — и ни один тест этого
-      // не пиннил.
-      props: row.props,
-      aspects: row.aspects,
-      queryRefs: row.query_refs,
-      createdAt: toDate(row.created_at),
-      updatedAt: toDate(row.updated_at),
-      archived: row.archived,
-    } as EntityRow),
+    ...toWireEntity(
+      {
+        id: row.id,
+        graphId: row.graph_id,
+        title: row.title,
+        emoji: row.emoji,
+        body: row.body,
+        bodyRefs: row.body_refs,
+        tags: row.tags,
+        // Только НОВАЯ правда (§А1-1): списочное чтение обязано нести ровно тот же состав,
+        // что и одиночное. Пока этих колонок здесь не было, списочные пути отдавали пустую
+        // новую форму при том, что одиночное чтение отдавало правду, — и ни один тест этого
+        // не пиннил.
+        props: row.props,
+        aspects: row.aspects,
+        queryRefs: row.query_refs,
+        createdAt: toDate(row.created_at),
+        updatedAt: toDate(row.updated_at),
+        archived: row.archived,
+      } as EntityRow,
+      false,
+      'body' in row,
+    ),
+    ...('body_head' in row
+      ? { bodyStart: bodyStartOf(Array.isArray(row.body_head) ? row.body_head : []) }
+      : {}),
   };
 }
 
@@ -186,6 +222,15 @@ export function toWireChatMessage(row: ChatMessageRow): WireChatMessage {
     metadata: row.metadata as Record<string, unknown>,
     createdAt: row.createdAt.toISOString(),
   };
+}
+
+/** Клиенту вход pending не нужен (§9); предлагаемый текст карточки остаётся для решения. */
+export function toClientChatMessage(row: ChatMessageRow): WireChatMessage {
+  const m = toWireChatMessage(row);
+  const pending = m.metadata.pending;
+  if (pending === null || typeof pending !== 'object' || !('input' in pending)) return m;
+  const { input: _input, ...rest } = pending as Record<string, unknown>;
+  return { ...m, metadata: { ...m.metadata, pending: rest } };
 }
 
 /** Wire-форма треда (§4.5): entityId NULL — глобальный тред владельца. */

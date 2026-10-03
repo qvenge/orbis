@@ -6,11 +6,10 @@
 // ПОЧЕМУ СЕРВЕР, А НЕ КЛИЕНТ (§5.2): день записи — день её ключа В ПОЯСЕ ВЛАДЕЛЬЦА. Браузер в другом
 // поясе (поездка, UTC на рабочем компьютере) поставил бы задачу, закрытую в 23:40, во «вчера» или
 // «завтра», а лента разошлась бы с тем, что видит агент. Клиент получает готовые группы и пояс ответа.
-import type { BlockDayGroup, BlockGroupRow, BlockRowAt } from '../contracts/blocks';
+import type { BlockDayGroup, BlockEntity, BlockGroupRow, BlockRowAt } from '../contracts/blocks';
 import { addDays, daysInclusive } from '../date';
 import { bindingIndexOf } from '../registry/bindings';
 import type { RowRegistry } from '../registry/row';
-import type { Entity } from '../schemas/entity';
 
 /** Слоты значения «даты» контракта «когда» (§4.1) в порядке приоритета «какая дата поставила запись в день». */
 const PRIORITY = ['done', 'moment', 'deadline'] as const;
@@ -23,7 +22,7 @@ const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 /** Строка выборки: запись, её ключ (§3.3, ISO; `null` — без даты) и даты «когда» (только у значения). */
 export interface DayGroupInputRow {
-  entity: Entity;
+  entity: BlockEntity;
   keyAt: string | null;
   dates: ReadonlyArray<{ slot: WhenSlot; at: string; day: string; aspect: string }>;
 }
@@ -77,7 +76,7 @@ export function layoutDayGroups(input: {
   const idx = bindingIndexOf(reg);
 
   /** Значение слота контракта привязки аспекта на записи: свойство или константа `fixed`. */
-  const bound = (entity: Entity, aspect: string, contract: string, slot: string): unknown => {
+  const bound = (entity: BlockEntity, aspect: string, contract: string, slot: string): unknown => {
     const at = idx.slotOf(aspect, contract, slot);
     if (at === undefined) return undefined;
     return 'prop' in at ? entity.props[at.prop] : at.fixed;

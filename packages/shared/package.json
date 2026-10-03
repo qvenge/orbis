@@ -9,6 +9,7 @@
     "./query/fixtures": "./src/query/ast-fixtures.ts",
     "./expr": "./src/expr/index.ts",
     "./doc": "./src/doc/index.ts",
+    "./doc/body-start": "./src/doc/body-start.ts",
     "./doc/diff": "./src/doc/diff.ts",
     "./doc/types": "./src/doc/types.ts",
     "./doc/page-grammar": "./src/doc/page-grammar.ts",

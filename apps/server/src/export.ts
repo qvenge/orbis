@@ -67,7 +67,7 @@ export interface OrbisExport {
   format: 'orbis-export';
   version: 3;
   exportedAt: string;
-  entities: WireEntity[];
+  entities: Array<WireEntity & { body: string }>;
   relations: WireRelation[];
   chatThreads: WireThread[];
   chatMessages: WireChatMessage[];

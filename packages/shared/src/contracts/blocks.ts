@@ -8,6 +8,7 @@
 import { z } from 'zod';
 import type { Entity } from '../schemas/entity';
 import { BLOCK_ITEM_MESSAGES, BLOCK_TEXT_MAX } from './block-messages';
+import { entityFieldsSchema } from './fields';
 import { entityCreateUiInput, entityUpdateBatchItemInput } from './tools';
 
 export * from './block-messages';
@@ -40,6 +41,7 @@ export const entityBlockTextItem = z
   .object({
     key: z.string().min(1).max(200),
     text: z.string().min(1).max(BLOCK_TEXT_MAX, BLOCK_ITEM_MESSAGES.textTooLong),
+    fields: entityFieldsSchema.optional(),
     thisEntityId: z.string().uuid(BLOCK_ITEM_MESSAGES.thisNotId).optional(),
     limit: z
       .number()
@@ -157,8 +159,10 @@ export interface BlockRowAt {
 }
 
 /** Строка группы: запись и её дата в дне (`null` — в группе «Без даты»). */
+/** Строка списка (§9): тело выбирается явно; схема полной записи и экспорт сохраняют прежний контракт. */
+export type BlockEntity = Omit<Entity, 'body'> & { body?: string; bodyStart?: string | null };
 export interface BlockGroupRow {
-  entity: Entity;
+  entity: BlockEntity;
   at: BlockRowAt | null;
 }
 
@@ -191,7 +195,7 @@ export interface BlockDayGroup {
  * последней правки) и её валюта (`null` — не денежное, §3.7).
  */
 export type BlockResult =
-  | { ok: true; kind: 'rows'; rows: Entity[]; more: number; closedIds: string[] }
+  | { ok: true; kind: 'rows'; rows: BlockEntity[]; more: number; closedIds: string[] }
   | { ok: true; kind: 'groups'; groups: BlockDayGroup[]; more: number; closedIds: string[] }
   | { ok: true; kind: 'count'; count: number }
   | { ok: true; kind: 'sum'; count: number; sums: BlockSum[] }

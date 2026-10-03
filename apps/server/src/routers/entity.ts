@@ -9,6 +9,7 @@ import {
   type EntityUpdateUiInput,
   entityBlocksInput,
   entityCreateUiInput,
+  entityFieldsSchema,
   entityGetUiInput,
   entityResolveRefsInput,
   entitySuggestInput,
@@ -93,7 +94,7 @@ function parseOrThrow(query: string, cctx: CompileCtx): QueryAst {
 function compileAstOrThrow(
   ast: QueryAst,
   cctx: CompileCtx,
-  compile: typeof compileQueryAst | typeof compileCountAst,
+  compile: (ast: QueryAst, ctx: CompileCtx) => ReturnType<typeof compileQueryAst>,
 ) {
   try {
     return compile(ast, cctx);
@@ -147,8 +148,8 @@ function runQueryWithMaterialization<T>(
  * после схемы, не выполнилась бы никогда. `z.preprocess` — единственное место конвейера
  * tRPC, которое работает раньше схемы.
  */
-const querySignature = z.preprocess(
-  (raw) => {
+function withTreeDepthGuard<T extends z.ZodTypeAny>(schema: T) {
+  return z.preprocess((raw) => {
     const ast =
       typeof raw === 'object' && raw !== null ? (raw as { ast?: unknown }).ast : undefined;
     // Меряется ДЕРЕВО, а не конверт: число в отказе обязано быть тем же, что считает код.
@@ -161,13 +162,27 @@ const querySignature = z.preprocess(
       });
     }
     return raw;
-  },
+  }, schema);
+}
+const queryShape = {
+  query: z.string().min(1).optional(),
+  ast: queryAstSchema.optional(),
+  thisEntityId: z.string().uuid().optional(),
+};
+const queryRefinement = (v: { query?: string; ast?: unknown }) =>
+  (v.query === undefined) !== (v.ast === undefined);
+const querySignature = withTreeDepthGuard(
   z
-    .object({
-      query: z.string().min(1).optional(),
-      ast: queryAstSchema.optional(),
-      thisEntityId: z.string().uuid().optional(),
-    })
+    .object(queryShape)
+    .strict()
+    .refine(
+      queryRefinement,
+      'entity.query принимает ровно одно: текст запроса (query) ИЛИ готовое дерево (ast)',
+    ),
+);
+const queryListSignature = withTreeDepthGuard(
+  z
+    .object({ ...queryShape, fields: entityFieldsSchema.optional() })
     .strict()
     .refine(
       (v) => (v.query === undefined) !== (v.ast === undefined),
@@ -310,7 +325,7 @@ export const entityRouter = router({
       // actionId — для Undo прямо из UI-формы (03-budget §3.6, quick-add): аддитивное
       // поле поверх wire-сущности, потребители `.id` не задеты. При идемпотентном
       // replay (§5.3) журнал не писался — actionId под этим id не существует, не отдаём.
-      const entity = r.results[0] as WireEntityWithRevision;
+      const entity = r.results[0] as WireEntityWithRevision & { body: string };
       return r.idempotentReplay ? entity : { ...entity, ...journalRef(r) };
     }),
 
@@ -319,48 +334,50 @@ export const entityRouter = router({
   //
   // `autosave` — признак автосохранения редактора (§8.5, РП-18): уходит в запрос как `textSession`, а не во вход
   // операции (вход исполнителя его не знает). Форму автосохранения (только тело) сверяет исполнитель — `VALIDATION`.
-  update: ownerOnlyProcedure
-    .input(entityUpdateUiInput)
-    .mutation(
-      async ({
-        ctx,
-        input,
-      }): Promise<WireEntityWithRevision & JournalRef & { bodyAction: BodyActionInfo | null }> => {
-        const { autosave, ...uiFields } = input;
-        const fields = withTitleLock(uiFields);
-        const r = await execute(
-          ctx.db,
-          {
-            identity: ctx.identity,
-            actorKind: 'owner',
-            source: 'ui', // прямое действие владельца в UI (не chat/mcp/system)
-            ...(autosave === true && { textSession: true }),
-            operations: [{ tool: 'entity_update', input: fields }],
-          },
-          // Действующее действие тела ответа считает исполнитель в транзакции правки (R-22), см. ниже
-          { sink, reportBodyAction: true },
-        );
-        if (!r.ok) throw execErrorToTRPC(r.error);
-        // Эскалация повторных исправлений категории (§7.8, решение K7): пост-коммит
-        // хуков в executor'е нет — вызов идёт ЗДЕСЬ, после успешного execute, отдельной
-        // транзакцией. Своей ошибки наружу не отдаёт: правка категории уже закоммичена.
-        await escalateAfterMutation(ctx.db, {
+  update: ownerOnlyProcedure.input(entityUpdateUiInput).mutation(
+    async ({
+      ctx,
+      input,
+    }): Promise<
+      WireEntityWithRevision & { body: string } & JournalRef & {
+          bodyAction: BodyActionInfo | null;
+        }
+    > => {
+      const { autosave, ...uiFields } = input;
+      const fields = withTitleLock(uiFields);
+      const r = await execute(
+        ctx.db,
+        {
           identity: ctx.identity,
-          actionId: r.actionId,
+          actorKind: 'owner',
+          source: 'ui', // прямое действие владельца в UI (не chat/mcp/system)
+          ...(autosave === true && { textSession: true }),
           operations: [{ tool: 'entity_update', input: fields }],
-        });
-        // Ответ правки — полная строка `RETURNING` с ревизией тела (`toWireEntityWithRevision`): с неё клиент начинает
-        // следующую правку текста (§8.1). И действующее действие тела (§8.2 «ответы с записью»): экран после своей
-        // правки запись не перечитывает, а пункт «Вернуть текст как на …» стоит на нём. Считает его исполнитель в
-        // транзакции правки (`reportBodyAction`, R-22) — отдельная читающая транзакция стоила бы каждому
-        // автосохранению лишних обходов.
-        return {
-          ...(r.results[0] as WireEntityWithRevision),
-          bodyAction: r.bodyAction ?? null,
-          ...journalRef(r),
-        };
-      },
-    ),
+        },
+        // Действующее действие тела ответа считает исполнитель в транзакции правки (R-22), см. ниже
+        { sink, reportBodyAction: true },
+      );
+      if (!r.ok) throw execErrorToTRPC(r.error);
+      // Эскалация повторных исправлений категории (§7.8, решение K7): пост-коммит
+      // хуков в executor'е нет — вызов идёт ЗДЕСЬ, после успешного execute, отдельной
+      // транзакцией. Своей ошибки наружу не отдаёт: правка категории уже закоммичена.
+      await escalateAfterMutation(ctx.db, {
+        identity: ctx.identity,
+        actionId: r.actionId,
+        operations: [{ tool: 'entity_update', input: fields }],
+      });
+      // Ответ правки — полная строка `RETURNING` с ревизией тела (`toWireEntityWithRevision`): с неё клиент начинает
+      // следующую правку текста (§8.1). И действующее действие тела (§8.2 «ответы с записью»): экран после своей
+      // правки запись не перечитывает, а пункт «Вернуть текст как на …» стоит на нём. Считает его исполнитель в
+      // транзакции правки (`reportBodyAction`, R-22) — отдельная читающая транзакция стоила бы каждому
+      // автосохранению лишних обходов.
+      return {
+        ...(r.results[0] as WireEntityWithRevision & { body: string }),
+        bodyAction: r.bodyAction ?? null,
+        ...journalRef(r),
+      };
+    },
+  ),
 
   /**
    * Пачка правок одним Undo (срез 1а, спека §4.3 и §8.4): `entity_update` и
@@ -460,9 +477,11 @@ export const entityRouter = router({
     },
   ),
 
-  query: protectedProcedure.input(querySignature).query(({ ctx, input }) =>
+  query: protectedProcedure.input(queryListSignature).query(({ ctx, input }) =>
     runQueryWithMaterialization(ctx.db, ctx.identity, input, async (tx, ast, cctx) => {
-      const compiled = compileAstOrThrow(ast, cctx, compileQueryAst);
+      const compiled = compileAstOrThrow(ast, cctx, (a, c) =>
+        compileQueryAst(a, c, { fields: input.fields ?? 'none' }),
+      );
       const rows = await tx.execute(compiled);
       return [...rows].map((r) => toWireEntityFromSql(r as Record<string, unknown>));
     }),

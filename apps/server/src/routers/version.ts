@@ -189,6 +189,6 @@ export const versionRouter = router({
         { sink },
       );
       if (!r.ok) throw execErrorToTRPC(r.error);
-      return { ...(r.results[1] as WireEntityWithRevision), ...journalRef(r) };
+      return { ...(r.results[1] as WireEntityWithRevision & { body: string }), ...journalRef(r) };
     }),
 });

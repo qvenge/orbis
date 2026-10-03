@@ -33,7 +33,8 @@ export interface PageTemplates {
 }
 
 export function usePageTemplates(): PageTemplates {
-  const q = trpc.entity.query.useQuery({ query: PAGE_TEMPLATES_QUERY });
+  // Список просит fields: full: шаблоны и поставка читают тело (§9).
+  const q = trpc.entity.query.useQuery({ query: PAGE_TEMPLATES_QUERY, fields: 'full' as const });
   const rows = q.data ?? NO_ROWS;
   const templates = useMemo(() => templatesFromRows(rows), [rows]);
   const status = q.data !== undefined ? 'ok' : q.isError ? 'error' : 'loading';
@@ -54,7 +55,7 @@ export async function patchTemplatesList(
   utils: ReturnType<typeof trpc.useUtils>,
   changes: ReadonlyMap<string, readonly string[]>,
 ): Promise<() => void> {
-  const input = { query: PAGE_TEMPLATES_QUERY };
+  const input = { query: PAGE_TEMPLATES_QUERY, fields: 'full' as const };
   // Летящее старое чтение приехало бы после патча и затёрло бы его прежним выбором.
   await utils.entity.query.cancel(input);
   const before = utils.entity.query.getData(input);

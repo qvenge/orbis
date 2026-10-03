@@ -9,6 +9,7 @@ import { z } from 'zod';
 import { queryAstSchema } from '../query/ast';
 // Кап пачки — константа ДЕЙСТВИЙ (Р-11): лист пакета, обратного ребра к контрактам у неё нет.
 import { BATCH_CAP_DEFAULT } from '../registry/action-type';
+import { entityFieldsSchema } from './fields';
 
 /**
  * ВНУТРЕННЯЯ форма правки значений (§А1-1, РП-3): плоский патч по свойствам плюс
@@ -369,7 +370,11 @@ export const batchExecuteInput = z
  * завели бы второй канон.
  */
 export const entityQueryInput = z
-  .object({ query: z.string().min(1).optional(), ast: queryAstSchema.optional() })
+  .object({
+    query: z.string().min(1).optional(),
+    ast: queryAstSchema.optional(),
+    fields: entityFieldsSchema.optional(),
+  })
   .strict()
   .refine(
     (v) => (v.query === undefined) !== (v.ast === undefined),

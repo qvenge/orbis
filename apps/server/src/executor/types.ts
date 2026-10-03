@@ -163,10 +163,13 @@ export interface WireEntity {
   graphId: string;
   title: string;
   emoji: string | null;
-  body: string;
+  /** Тело — по выбору полей (§9): лёгкие списки и bare entity.get его не несут; мутации несут всегда. */
+  body?: string;
+  /** Начало текста (fields: start); null — у записи текста нет. */
+  bodyStart?: string | null;
   /**
-   * Структурная форма тела. Едет ТОЛЬКО по include('bodyDoc') — см. Р6 дизайна: wire-форма
-   * несёт body всегда, и второй экземпляр тела в каждом ответе удвоил бы вес любого списка.
+   * Структурная форма тела. Едет ТОЛЬКО по include('bodyDoc') — см. Р6 дизайна: тело и документ
+   * выбираются независимо; второй экземпляр тела в каждом ответе удвоил бы вес списка.
    * Отсюда и опциональность ключа: `undefined` = «не запрашивали», а не «документа нет».
    */
   bodyDoc?: { v: number; doc: Record<string, unknown> } | null;

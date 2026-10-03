@@ -34,6 +34,7 @@ import {
   BUILTIN_CONTRACT_DEFS,
   BUILTIN_PROPERTY_META,
   BUILTIN_RELATION_ROLE_META,
+  type EntityFields,
 } from '@orbis/shared';
 import {
   parseQueryAst,
@@ -82,6 +83,7 @@ interface Golden {
   /** Текст key-формы; null — дерево плоской грамматикой v1 не выражается (§А5-3д). */
   query: string | null;
   ast: QueryAst;
+  fields?: EntityFields;
   sql: string;
   params: unknown[];
   /** Опционально: эталон `compileCountAst` для той же строки (бейджи 02 §3.2). */
@@ -106,7 +108,9 @@ describe('golden: текст → Q-AST (парсер по реестру, §А5-
 describe('golden: Q-AST → SQL (новый компилятор, §А5-7)', () => {
   for (const g of GOLDENS) {
     test(g.name, () => {
-      const q = dialect.sqlToQuery(compileQueryAst(g.ast, CTX));
+      const q = dialect.sqlToQuery(
+        compileQueryAst(g.ast, CTX, g.fields === undefined ? {} : { fields: g.fields }),
+      );
       expect(flat(q.sql)).toBe(g.sql);
       expect(q.params).toEqual(g.params);
     });

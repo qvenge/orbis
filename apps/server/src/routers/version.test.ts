@@ -136,13 +136,13 @@ describe('version.pin / version.list / version.restore (С11)', () => {
     });
     const v = await a.version.pin({ entityId: id, label: 'снимок' });
 
-    const e1 = await a.entity.get({ id });
+    const e1 = await a.entity.get({ id, include: ['body'] });
     await a.entity.update({
       id,
       expectedBodyRevision: rev(e1.entity),
       body: 'правка соседа',
     });
-    const e2 = await a.entity.get({ id });
+    const e2 = await a.entity.get({ id, include: ['body'] });
 
     // Стухшая ревизия: тело правил кто-то ещё после того, как экран прочитал сущность (§8.1)
     const err = await trpcError(
@@ -150,7 +150,9 @@ describe('version.pin / version.list / version.restore (С11)', () => {
     );
     expect(err.code).toBe('CONFLICT');
     expect((err.cause as unknown as { code: string }).code).toBe('STALE_VERSION');
-    expect((await a.entity.get({ id })).entity.body).toBe(e2.entity.body);
+    expect((await a.entity.get({ id, include: ['body'] })).entity.body ?? '').toBe(
+      e2.entity.body ?? '',
+    );
     // Отказ — на гейте тела, а не на снимке: версия по-прежнему на месте, а страховка не закреплена — пачка
     // откатилась целиком
     expect((await a.version.list({ entityId: id })).map((x) => x.id)).toEqual([v.id]);
@@ -165,13 +167,13 @@ describe('version.pin / version.list / version.restore (С11)', () => {
       source: 'quick_capture',
     });
     const v = await c.version.pin({ entityId: id, label: 'первая' });
-    const e1 = await c.entity.get({ id });
+    const e1 = await c.entity.get({ id, include: ['body'] });
     await c.entity.update({
       id,
       expectedBodyRevision: rev(e1.entity),
       body: 'вторая редакция',
     });
-    const e2 = await c.entity.get({ id });
+    const e2 = await c.entity.get({ id, include: ['body'] });
     const before = (await actionsOf(g)).length;
 
     const restored = await c.version.restore({
@@ -204,7 +206,7 @@ describe('version.pin / version.list / version.restore (С11)', () => {
 
     // Отмена восстановления: текст — тот, что был до него, страховочная версия удалена, закрепление «первая» — на месте
     await c.ai.undo({ actionId: entry.id });
-    expect((await c.entity.get({ id })).entity.body).toBe('вторая редакция');
+    expect((await c.entity.get({ id, include: ['body'] })).entity.body).toBe('вторая редакция');
     expect((await c.version.list({ entityId: id })).map((x) => x.id)).toEqual([v.id]);
   });
 
@@ -220,9 +222,9 @@ describe('version.pin / version.list / version.restore (С11)', () => {
     // бы его первую половину
     const label = `${'а'.repeat(175)}😀${'б'.repeat(10)}`;
     const v = await c.version.pin({ entityId: id, label });
-    const e1 = await c.entity.get({ id });
+    const e1 = await c.entity.get({ id, include: ['body'] });
     await c.entity.update({ id, expectedBodyRevision: rev(e1.entity), body: 'другой текст' });
-    const e2 = await c.entity.get({ id });
+    const e2 = await c.entity.get({ id, include: ['body'] });
     await c.version.restore({ versionId: v.id, expectedBodyRevision: rev(e2.entity) });
 
     const insurance = (await c.version.list({ entityId: id })).find((x) =>
@@ -258,9 +260,9 @@ describe('version.pin / version.list / version.restore (С11)', () => {
     expect(v.hasDoc).toBe(false); // документ берётся «как лежит»: NULL не конвертируем
     expect((await a.version.list({ entityId: id }))[0]?.hasDoc).toBe(false);
 
-    const before = await a.entity.get({ id });
+    const before = await a.entity.get({ id, include: ['body'] });
     await a.entity.update({ id, expectedBodyRevision: rev(before.entity), body: 'затёрли' });
-    const e2 = await a.entity.get({ id });
+    const e2 = await a.entity.get({ id, include: ['body'] });
 
     const restored = await a.version.restore({
       versionId: v.id,
@@ -311,9 +313,9 @@ describe('version.pin / version.list / version.restore (С11)', () => {
     const v = await a.version.pin({ entityId: id, label: 'до выкатки' });
     expect(v.hasDoc).toBe(true);
 
-    const before = await a.entity.get({ id });
+    const before = await a.entity.get({ id, include: ['body'] });
     await a.entity.update({ id, expectedBodyRevision: rev(before.entity), body: 'затёрли' });
-    const e2 = await a.entity.get({ id });
+    const e2 = await a.entity.get({ id, include: ['body'] });
     const restored = await a.version.restore({
       versionId: v.id,
       expectedBodyRevision: rev(e2.entity),
@@ -366,9 +368,9 @@ describe('version.pin / version.list / version.restore (С11)', () => {
       await adminClient.end();
     }
     const v = await a.version.pin({ entityId: id, label: 'до выкатки v3' });
-    const before = await a.entity.get({ id });
+    const before = await a.entity.get({ id, include: ['body'] });
     await a.entity.update({ id, expectedBodyRevision: rev(before.entity), body: 'затёрли' });
-    const e2 = await a.entity.get({ id });
+    const e2 = await a.entity.get({ id, include: ['body'] });
     const restored = await a.version.restore({
       versionId: v.id,
       expectedBodyRevision: rev(e2.entity),
@@ -406,7 +408,7 @@ describe('version.pin / version.list / version.restore (С11)', () => {
       source: 'quick_capture',
     });
     const v = await a.version.pin({ entityId: id, label: 'моя' });
-    const mine = await a.entity.get({ id });
+    const mine = await a.entity.get({ id, include: ['body'] });
 
     expect(await b.version.list({ entityId: id })).toEqual([]);
     expect(

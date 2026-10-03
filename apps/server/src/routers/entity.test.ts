@@ -71,11 +71,11 @@ describe('entity.create / entity.get (§9.2)', () => {
     expect(typeof consequences).toBe('boolean');
     expect(typeof actionId).toBe('string');
 
-    const got = await caller.entity.get({ id: created.id });
+    const got = await caller.entity.get({ id: created.id, include: ['body', 'relations'] });
     expect(got.entity).toEqual(createdEntity);
     expect(got.entity.props['orbis/task_status']).toBe('inbox');
     expect(got.entity.aspects).toEqual(['orbis/task']);
-    // include default — body+relations; backlinks/thread не запрошены (§9.2)
+    // include body+relations явно; backlinks/thread не запрошены (§9.2)
     expect(got.relations).toEqual([]);
     expect(got.backlinks).toBeUndefined();
     expect(got.thread).toBeUndefined();

@@ -24,7 +24,7 @@ import type { Tx } from '../db/with-identity';
 import { type JournalEntry, threadFeed, undoMarks } from '../executor/journal-read';
 import type { MutationSource } from '../executor/types';
 import type { Card } from '../tools/registry';
-import { toWireChatMessage } from '../wire';
+import { toClientChatMessage, toWireChatMessage } from '../wire';
 
 /** Курсор выдачи: `<iso>` (легаси-клиент 1c-1 — строго раньше по времени) или `<iso>|<id>` (составной). */
 function parseBefore(before: string | undefined): { at: Date; key?: string } | undefined {
@@ -156,6 +156,7 @@ export async function threadMessages(
   tx: Tx,
   threadId: string,
   page: { before?: { at: Date; key?: string }; limit: number },
+  project: (row: typeof chatMessages.$inferSelect) => WireChatMessage = toWireChatMessage,
 ): Promise<WireChatMessage[]> {
   const before = page.before;
   const conds: (SQL | undefined)[] = [
@@ -179,7 +180,7 @@ export async function threadMessages(
       .where(and(...conds))
       .orderBy(desc(chatMessages.createdAt), desc(chatMessages.id))
       .limit(page.limit)
-  ).map(toWireChatMessage);
+  ).map(project);
 }
 
 /**
@@ -200,7 +201,11 @@ export async function threadPage(
   const messages = await markClosedConfirmationCards(
     tx,
     graph,
-    await markUndoneReplyCards(tx, graph, await threadMessages(tx, threadId, cursor)),
+    await markUndoneReplyCards(
+      tx,
+      graph,
+      await threadMessages(tx, threadId, cursor, toClientChatMessage),
+    ),
   );
   const journal = (await threadFeed(tx, graph, threadId, cursor)).map((e) =>
     journalItem(e, threadId),

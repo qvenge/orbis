@@ -248,7 +248,8 @@ describe('e2e слайс 1a: день из 02 §5 (два пользовател
     laterId = later.id;
 
     // Шесть списков с 1б — страницы поставки (§9.4); прочие страницы поставки блоков запроса не несут.
-    const lists = await a.entity.query({ query: 'aspect=orbis/page' });
+    // Тест читает тела страниц поставки, поэтому просит full (§9); пины блоков остаются прежними.
+    const lists = await a.entity.query({ query: 'aspect=orbis/page', fields: 'full' });
     expect(lists.length).toBeGreaterThanOrEqual(6);
     // Параметры страницы (срез 1в §5.1) — значения по умолчанию из объявлений того же тела: так блок
     // исполняет экран, пока владелец не тронул переключатель.

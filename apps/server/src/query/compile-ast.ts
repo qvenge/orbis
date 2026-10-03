@@ -1,3 +1,4 @@
+import type { EntityFields } from '@orbis/shared';
 // apps/server/src/query/compile-ast.ts
 // Компилятор канонического Q-AST (§А5-7) в PostgreSQL по НОВОЙ форме хранения:
 // плоские `props` по id свойства, список `aspects[]`, роль ребра `relations.role` (§А1-1,
@@ -162,8 +163,19 @@ const DEFAULT_LIMIT = 500;
  * секции), но та же проекция строки. Своя копия списка разошлась бы с `toWireEntityFromSql`
  * на первой же новой колонке, и разъезд был бы виден не отказом, а пустым полем у клиента.
  */
-export const ENTITY_SELECT_COLUMNS =
-  'id, graph_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived';
+const COLUMNS_BEFORE_BODY = 'id, graph_id, title, emoji';
+const COLUMNS_AFTER_BODY =
+  'body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived';
+/** Лёгкая строка списка (§9): тело выбирается лишь явно; старый порядок колонок full сохранён. */
+export const ENTITY_SELECT_COLUMNS = `${COLUMNS_BEFORE_BODY}, ${COLUMNS_AFTER_BODY}`;
+/** lax берёт доступные узлы: strict падает на документе короче восьми узлов. */
+export const BODY_HEAD_SQL =
+  "jsonb_path_query_array(body_doc, 'lax $.doc.content[0 to 7]') AS body_head";
+export function entitySelectColumns(fields: EntityFields): string {
+  if (fields === 'full') return `${COLUMNS_BEFORE_BODY}, body, ${COLUMNS_AFTER_BODY}`;
+  if (fields === 'start') return `${ENTITY_SELECT_COLUMNS}, ${BODY_HEAD_SQL}`;
+  return ENTITY_SELECT_COLUMNS;
+}
 
 /** UUID сущности — та же форма, что у `REL_TARGET_PATTERN` канона (§А5-7). */
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -1060,11 +1072,15 @@ function compileOrderBy(ast: QueryAst, ctx: CompileCtx): SQL {
 
 /** Полный SELECT: WHERE + ORDER BY + LIMIT (кап 500 без `limit`). */
 // ОБХОДЧИК-Q: compile
-export function compileQueryAst(ast: QueryAst, ctx: CompileCtx): SQL {
+export function compileQueryAst(
+  ast: QueryAst,
+  ctx: CompileCtx,
+  opts: { fields?: EntityFields } = {},
+): SQL {
   const c = whenLateralCtx(ctx);
   const where = compileWhere(ast, c);
   const order = compileOrderBy(ast, c);
-  return sql`SELECT ${sql.raw(ENTITY_SELECT_COLUMNS)} FROM ${entitiesFrom(c)} WHERE ${where} ORDER BY ${order} LIMIT ${ast.limit ?? DEFAULT_LIMIT}`;
+  return sql`SELECT ${sql.raw(entitySelectColumns(opts.fields ?? 'none'))} FROM ${entitiesFrom(c)} WHERE ${where} ORDER BY ${order} LIMIT ${ast.limit ?? DEFAULT_LIMIT}`;
 }
 
 /**
@@ -1084,9 +1100,13 @@ export function compileQueryAst(ast: QueryAst, ctx: CompileCtx): SQL {
  * Отдельная точка входа, а не колонка `compileQueryAst`: у `entity.query`, тулов и рутин провода блока
  * нет, и лишняя колонка стоила бы им членства в наборе на каждой строке и эталона SQL (§3.5).
  */
-export function compileBlockRowsAst(ast: QueryAst, outer: CompileCtx): SQL {
+export function compileBlockRowsAst(
+  ast: QueryAst,
+  outer: CompileCtx,
+  opts: { fields?: EntityFields } = {},
+): SQL {
   const ctx = whenLateralCtx(outer);
-  const columns = sql`${sql.raw(ENTITY_SELECT_COLUMNS)}, COALESCE(${closedMembershipSql(ctx)}, false) AS __closed, count(*) OVER () AS __total`;
+  const columns = sql`${sql.raw(entitySelectColumns(opts.fields ?? 'none'))}, COALESCE(${closedMembershipSql(ctx)}, false) AS __closed, count(*) OVER () AS __total`;
   const where = compileWhere(ast, ctx);
   const order = compileOrderBy(ast, ctx);
   const limit = ast.limit ?? DEFAULT_LIMIT;

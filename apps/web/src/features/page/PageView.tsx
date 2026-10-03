@@ -28,7 +28,8 @@ export function PageView({ reply }: { reply: EntityGetReply }) {
   // Реакции расширений — состояние хоста, как на экране записи (Ф-1а-18): «план → факт» поднимает
   // чекбокс `{{title}}`, показывает карточка `orbis/financial`, где бы та ни стояла.
   const extensionHooks = useExtensionRecordHooks();
-  const nodes = useMemo(() => parsePageText(entity.body), [entity.body]);
+  // Экран просит тело всегда (DETAIL_INCLUDE).
+  const nodes = useMemo(() => parsePageText(entity.body ?? ''), [entity.body]);
   const kind = bodyKindOf(entity);
   // Корень хоста — вне вкладок: блок, стоящий не во вкладке, виден всегда (`openTab`).
   const host = recordHostValue(reply, { extensionHooks, openTab: 'page', readOnly: false });

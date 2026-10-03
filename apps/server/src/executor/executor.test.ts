@@ -661,7 +661,7 @@ describe('executor: замок текста по ревизии тела (спе
       expect(r.error.details).toEqual({ id: e.id, expected: 1, current: 2 });
     }
     const got = await withIdentity(db, personal(userA), (tx) =>
-      readEntity(tx, userA, { id: e.id }),
+      readEntity(tx, userA, { id: e.id, include: ['body'] }),
     );
     expect([got.entity.body, got.entity.bodyRevision]).toEqual(['v1', 1]);
 
@@ -785,6 +785,7 @@ describe('ADE-срез 1: инварианты назначения и засе�
     const r = await withIdentity(db, personal(userA), (tx) =>
       readEntity(tx, userA, { id, include: ['body'] }),
     );
+    if (r.entity.body === undefined) throw new Error('чтение просило тело');
     return r.entity.body;
   }
 
@@ -793,6 +794,7 @@ describe('ADE-срез 1: инварианты назначения и засе�
     const r = await withIdentity(db, personal(userA), (tx) =>
       readEntity(tx, userA, { id, include: ['body', 'bodyDoc'] }),
     );
+    if (r.entity.body === undefined) throw new Error('чтение просило тело');
     return { body: r.entity.body, bodyDoc: r.entity.bodyDoc ?? null };
   }
 

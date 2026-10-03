@@ -253,7 +253,7 @@ describe('entity.updateBatch — пачка правок, один Undo (§4.3, 
 
     await caller.ai.undo({ actionId: r.actionId });
     const undone = await caller.entity.get({ id: x.id, include: ['body'] });
-    expect(undone.entity.body).toBe(before.entity.body);
+    expect(undone.entity.body ?? '').toBe(before.entity.body ?? '');
     expect(undone.entity.aspects).not.toContain(PAGE_ASPECT);
     expect(await caller.version.list({ entityId: x.id })).toEqual([]);
   });

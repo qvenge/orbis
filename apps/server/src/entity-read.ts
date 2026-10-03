@@ -140,7 +140,8 @@ export async function readEntity(
   graphId: GraphId,
   input: EntityGetUiInput,
 ): Promise<EntityReadResult> {
-  const include = new Set(input.include ?? ['body', 'relations']);
+  // Тело и документ — только по просьбе (§9); экран просит обе формы в DETAIL_INCLUDE.
+  const include = new Set(input.include ?? ['relations']);
   const rows = await tx.select().from(entities).where(eq(entities.id, input.id));
   const row = rows[0];
   // RLS: чужая и несуществующая неразличимы — единый NOT_FOUND
@@ -168,7 +169,9 @@ export async function readEntity(
   }
 
   // Одна запись — с ревизией тела и временем его изменения (§8.1): с них клиент начинает правку текста.
-  const out: EntityReadResult = { entity: toWireEntityWithRevision(row, wantsDoc) };
+  const out: EntityReadResult = {
+    entity: toWireEntityWithRevision(row, wantsDoc, include.has('body')),
+  };
 
   if (include.has('relations')) {
     const rels = await tx
@@ -232,7 +235,7 @@ export async function readEntity(
         UNION
         SELECT id FROM ref_side
       )
-      SELECT e.id, e.graph_id, e.title, e.emoji, e.body, e.body_refs, e.tags,
+      SELECT e.id, e.graph_id, e.title, e.emoji, e.body_refs, e.tags,
              -- Столбцы те же, что в SELECT-листе компилятора (§6): их ждёт
              -- toWireEntityFromSql, и списочное чтение обязано нести ту же новую форму,
              -- что и одиночное (иначе backlinks молча отдают пустые props/aspects).

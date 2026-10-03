@@ -1,3 +1,4 @@
+import type { EntityFields } from '@orbis/shared';
 // apps/server/src/routers/entity-blocks.ts
 // Исполнение пачки блоков страницы (`entity.blocks`, срез 1а, спека §6.3). Процедура в
 // `routers/entity.ts` — только трансляция; вся механика пачки — здесь.
@@ -158,7 +159,7 @@ function prepareBlock(
     block.params ?? {},
     base,
     params,
-    (ast, c) => compileBlock(ast, c, block.limit),
+    (ast, c) => compileBlock(ast, c, block.limit, block.fields ?? 'none'),
   );
 }
 
@@ -299,7 +300,12 @@ function dayGroupField(field: QueryFieldRef): DayGroupField {
  * строка и есть признак «ещё N», а само N — колонка `__total` той же выборки (`count(*) OVER ()`,
  * `shownRows`); второго запроса счётчика нет.
  */
-function compileBlock(ast: QueryAst, cctx: CompileCtx, blockLimit: number | undefined): Plan {
+function compileBlock(
+  ast: QueryAst,
+  cctx: CompileCtx,
+  blockLimit: number | undefined,
+  fields: EntityFields,
+): Plan {
   if (ast.display === 'tile' && ast.aggregate !== undefined) {
     const agg = ast.aggregate;
     if (agg.fn === 'count') return { kind: 'count', sql: compileCountAst(ast, cctx) };
@@ -315,7 +321,7 @@ function compileBlock(ast: QueryAst, cctx: CompileCtx, blockLimit: number | unde
     return { kind: 'latest', sql: compileLatestAst(ast, agg.field, cctx) };
   }
   const limit = Math.min(blockLimit ?? ast.limit ?? BLOCK_ROWS_CAP, BLOCK_ROWS_CAP);
-  const sql = compileBlockRowsAst({ ...ast, limit: limit + 1 }, cctx);
+  const sql = compileBlockRowsAst({ ...ast, limit: limit + 1 }, cctx, { fields });
   if (ast.group === undefined) return { kind: 'rows', sql, limit };
   return {
     kind: 'groups',

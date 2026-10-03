@@ -143,6 +143,7 @@ export function useBodyScreen(): BodyScreenValue {
  * `key={entity.id}`, и вся память о правке (отложенный документ, таймер паузы, предложенный
  * черновик, показанный текст) исчезает вместе с записью, а не переезжает на соседнюю.
  */
+// Экран просит тело всегда (DETAIL_INCLUDE); отсутствие на общем WireEntity обрабатываем пустой строкой.
 export function EntityBody({
   entity,
   asMarkdown,
@@ -465,7 +466,7 @@ export function EntityBody({
         <BodyKindProvider kind={bodyKindOf(entity)}>
           <EditorShell
             doc={doc}
-            markdown={entity.body}
+            markdown={entity.body ?? ''}
             onChange={onEditorChange}
             reseat={reseat}
             onAccept={(accepted) => {
@@ -491,7 +492,7 @@ export function EntityBody({
 export function ReadOnlyEntityBody({ entity }: { entity: Entity }) {
   return (
     <BodyKindProvider kind={bodyKindOf(entity)}>
-      <EditorShell doc={null} markdown={entity.body} onChange={() => {}} readOnly />
+      <EditorShell doc={null} markdown={entity.body ?? ''} onChange={() => {}} readOnly />
     </BodyKindProvider>
   );
 }

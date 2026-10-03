@@ -178,9 +178,15 @@ function hostBrokenReason(body: string, reg: ParseRegistry | null): string | nul
 
 function hostSourceOf(record: WireEntity | undefined, reg: ParseRegistry | null): HostSource {
   if (record === undefined) return ETALON_SOURCE;
-  const broken = hostBrokenReason(record.body, reg);
+  // Списки шаблонов и поставки просят fields: full (§9).
+  const broken = hostBrokenReason(record.body ?? '', reg);
   if (broken !== null) return { ...ETALON_SOURCE, recordId: record.id, broken };
-  return { nodes: parsePageText(record.body), text: record.body, recordId: record.id, broken };
+  return {
+    nodes: parsePageText(record.body ?? ''),
+    text: record.body ?? '',
+    recordId: record.id,
+    broken,
+  };
 }
 
 /**
@@ -316,7 +322,7 @@ export function RecordView({
    */
   const [hostCrash, setHostCrash] = useState<string | null>(null);
   const hostCrashKey =
-    hostRecord === undefined ? null : `${entity.id}\n${hostRecord.id}\n${hostRecord.body}`;
+    hostRecord === undefined ? null : `${entity.id}\n${hostRecord.id}\n${hostRecord.body ?? ''}`;
   const hostSource = useMemo(() => {
     const source = hostSourceOf(hostRecord, reg);
     return hostCrashKey !== null && hostCrash === hostCrashKey && source.broken === null
@@ -459,7 +465,7 @@ function ShownTemplate({
     return (
       <RenderBoundary
         key={template.id}
-        resetKey={`${entityId}:${template.id}:${template.body}`}
+        resetKey={`${entityId}:${template.id}:${template.body ?? ''}`}
         fallback={
           <BlockPlaque message={`Шаблон не отрисовался на этой записи: ${RENDER_CRASH_REASON}.`} />
         }
@@ -484,7 +490,7 @@ function ShownTemplate({
 }
 
 function OwnTemplateTree({ row }: { row: TemplateText }) {
-  const nodes = useMemo(() => parsePageText(row.body), [row.body]);
+  const nodes = useMemo(() => parsePageText(row.body ?? ''), [row.body]);
   return <TemplateTree scope={`template:${row.id}`} nodes={nodes} />;
 }
 

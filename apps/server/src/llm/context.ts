@@ -383,7 +383,7 @@ export async function anchorBlock(
 ): Promise<string> {
   // include: [] — только сама сущность, без relations/backlinks/треда
   // (историю треда несёт слой 4); невидимая/чужая → NOT_FOUND из readEntity
-  const { entity } = await readEntity(tx, graphId, { id: anchorEntityId, include: [] });
+  const { entity } = await readEntity(tx, graphId, { id: anchorEntityId, include: ['body'] });
   // title/tags/body — данные владельца (их пишет и внешний агент через MCP): переводы
   // строк из них не должны подделывать строки этого блока (см. flatten).
   const lines = [

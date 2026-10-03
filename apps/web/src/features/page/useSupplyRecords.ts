@@ -55,7 +55,8 @@ export interface SupplyRecords {
 const NO_ROWS: WireEntity[] = [];
 
 export function useSupplyRecords(): SupplyRecords {
-  const q = trpc.entity.query.useQuery({ query: SUPPLY_RECORDS_QUERY });
+  // Список просит fields: full: шаблоны и поставка читают тело (§9).
+  const q = trpc.entity.query.useQuery({ query: SUPPLY_RECORDS_QUERY, fields: 'full' as const });
   const rows = q.data ?? NO_ROWS;
   const byKey = useMemo(() => {
     const out = new Map<SupplyKeyValue, WireEntity>();

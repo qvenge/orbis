@@ -84,9 +84,9 @@ async function revisionOf(id: string): Promise<number> {
   return Number(rows[0]?.body_revision);
 }
 
-function okFirst(r: Awaited<ReturnType<typeof execute>>): WireEntity {
+function okFirst(r: Awaited<ReturnType<typeof execute>>): WireEntity & { body: string } {
   if (!r.ok) throw new Error(`ожидался успех, получено ${r.error.code}: ${r.error.message}`);
-  return (r as ExecuteOk).results[0] as WireEntity;
+  return (r as ExecuteOk).results[0] as WireEntity & { body: string };
 }
 
 /**
@@ -100,7 +100,9 @@ function err(r: Awaited<ReturnType<typeof execute>>): { code: string; message: s
 }
 
 /** Свежий владелец + пустая сущность: замок текста (§8.1) проверяется на update, а не на create. */
-async function createOne(body?: string): Promise<{ entity: WireEntity; owner: GraphId }> {
+async function createOne(
+  body?: string,
+): Promise<{ entity: WireEntity & { body: string }; owner: GraphId }> {
   const owner = await freshGraph();
   const input: Record<string, unknown> = { title: 'проба', tags: [] };
   if (body !== undefined) input.body = body;
@@ -1663,7 +1665,7 @@ describe('документ наружу — только по явному inclu
       sql`UPDATE entities SET body_doc = ${JSON.stringify({ v: 999, doc: { type: 'doc', content: [] } })}::jsonb WHERE id = ${entity.id}`,
     );
     const out = await withIdentity(db, personal(owner), (tx) =>
-      readEntity(tx, owner, { id: entity.id, include: ['bodyDoc'] }),
+      readEntity(tx, owner, { id: entity.id, include: ['body', 'bodyDoc'] }),
     );
     // Не пустой документ из будущего, а пересборка из текста: теряется оформление, не текст.
     expect(out.entity.bodyDoc?.v).toBe(DOC_SCHEMA_VERSION);

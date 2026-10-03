@@ -103,7 +103,8 @@ const RevertShellDialog = lazy(() =>
  * не запись поставки (нет аспекта — своя или выведенная из поставки, R-17) — признака нет.
  */
 export function supplyNoteOf(row: WireEntity): string | undefined {
-  const status = supplyStatusOf(row);
+  // У приложений печать поставки читает title/emoji/props; список useApps не просит тело.
+  const status = supplyStatusOf({ ...row, body: row.body ?? '' });
   return status === null ? undefined : status === 'etalon' ? STATUS_ETALON : STATUS_EDITED;
 }
 
@@ -114,7 +115,9 @@ export function supplyNoteOf(row: WireEntity): string | undefined {
 export function canRevert(row: WireEntity): boolean {
   // Архивная запись — не запись поставки ключа: сервер ищет живую (`liveOrRefuse`) и отказал бы.
   return (
-    !row.archived && supplyStatusOf(row) === 'edited' && typeof row.props[SUPPLY_TEXT] === 'string'
+    !row.archived &&
+    supplyStatusOf({ ...row, body: row.body ?? '' }) === 'edited' &&
+    typeof row.props[SUPPLY_TEXT] === 'string'
   );
 }
 

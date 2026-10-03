@@ -23,6 +23,7 @@ import { ExecError } from '../errors';
 import { parseGraphId } from '../identity';
 import type { RegistrySnapshot } from '../registry/load';
 import {
+  BODY_HEAD_SQL,
   type CompileCtx,
   compileCountAst,
   compileLatestAst,
@@ -30,6 +31,7 @@ import {
   compileSumAst,
   compileSumByCurrencyAst,
   ENTITY_SELECT_COLUMNS,
+  entitySelectColumns,
   moneyCurrencyExpr,
 } from './compile-ast';
 
@@ -817,7 +819,6 @@ describe('экспорты для движков подписок (§Б5-6)', ()
       'graph_id',
       'title',
       'emoji',
-      'body',
       'body_refs',
       'tags',
       'props',
@@ -827,6 +828,13 @@ describe('экспорты для движков подписок (§Б5-6)', ()
       'updated_at',
       'archived',
     ]);
+    expect(entitySelectColumns('full')).toBe(
+      'id, graph_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived',
+    );
+    expect(entitySelectColumns('start')).toBe(`${ENTITY_SELECT_COLUMNS}, ${BODY_HEAD_SQL}`);
+    expect(BODY_HEAD_SQL).toBe(
+      "jsonb_path_query_array(body_doc, 'lax $.doc.content[0 to 7]') AS body_head",
+    );
   });
 });
 
