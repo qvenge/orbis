@@ -1,14 +1,15 @@
 import type { RecordBlockName } from '@orbis/shared/doc/page-grammar';
-import { type ComponentType, lazy, Suspense, useRef, useState } from 'react';
+import { type ComponentType, lazy, Suspense, useLayoutEffect, useRef, useState } from 'react';
 import { ThisEntityProvider } from '../../lib/query-blocks/this-entity';
 import { Backlinks } from './Backlinks';
 import { Blockers } from './Blockers';
-import { EntityBody, ReadOnlyEntityBody, useBodyScreen } from './EntityBody';
+import { EntityBody, ReadOnlyEntityBody, useBodyArrows, useBodyScreen } from './EntityBody';
 import { EntityThreadTab } from './EntityThreadTab';
 import { NativeRow } from './NativeRow';
 import { useRecordHost } from './record-host';
 import { Subtasks } from './Subtasks';
 import { TagsBlock } from './TagsBlock';
+import { UndoArrowsSlot } from './UndoArrowsSlot';
 import { useRecordEdits } from './useEntityDetail';
 
 const VersionsCard = lazy(() =>
@@ -28,7 +29,13 @@ const VersionsCard = lazy(() =>
  * её карточка `orbis/financial`, которую шаблон вправе поставить в другую вкладку (Ф-1а-18).
  */
 export function TitleBlock() {
-  const { entity, extensionHooks } = useRecordHost();
+  const { entity, extensionHooks, readOnly } = useRecordHost();
+  const arrows = useBodyArrows(),
+    onTitleShown = arrows?.onTitleShown;
+  useLayoutEffect(() => {
+    onTitleShown?.(true);
+    return () => onTitleShown?.(false);
+  }, [onTitleShown]);
   const { toggleTask, saveTitle, titleStale, refreshTitle, dismissTitleStale } = useRecordEdits(
     entity.id,
     entity,
@@ -55,16 +62,21 @@ export function TitleBlock() {
           {entity.emoji}
         </span>
       )}
-      <NativeRow
-        key={`${entity.id}:${titleRefresh}`}
-        entity={entity}
-        onToggleTask={(done) => {
-          toggleTask(done);
-          // Данные сущности ДО перевода: planned ещё true — карточка на переходе в done
-          if (done) extensionHooks.onTaskDone(entity);
-        }}
-        onSaveTitle={saveTitle}
-      />
+      <div className="flex items-start gap-2">
+        <div className="min-w-0 flex-1">
+          <NativeRow
+            key={`${entity.id}:${titleRefresh}`}
+            entity={entity}
+            onToggleTask={(done) => {
+              toggleTask(done);
+              // Данные сущности ДО перевода: planned ещё true — карточка на переходе в done
+              if (done) extensionHooks.onTaskDone(entity);
+            }}
+            onSaveTitle={saveTitle}
+          />
+        </div>
+        {arrows !== undefined && !readOnly && <UndoArrowsSlot entityId={entity.id} />}
+      </div>
       {titleStale && (
         <p role="alert" className="text-sm text-danger">
           Заголовок изменён в другом месте — обновите{' '}
@@ -107,9 +119,14 @@ export function TitleBlock() {
  */
 export function BodyBlock() {
   const { entity, readOnly } = useRecordHost();
-  const screen = useBodyScreen();
+  const { arrows, ...screen } = useBodyScreen();
   return (
     <ThisEntityProvider id={entity.id}>
+      {!readOnly && arrows !== undefined && !arrows.titleShown && (
+        <div className="flex justify-end">
+          <UndoArrowsSlot entityId={entity.id} />
+        </div>
+      )}
       {readOnly ? (
         <ReadOnlyEntityBody entity={entity} />
       ) : (

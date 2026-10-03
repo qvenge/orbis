@@ -22,8 +22,7 @@ import { APP_NAV, type PropertyDefinition } from '@orbis/shared';
  * предложения (Ш1.3) — иначе владелец читал бы их как разные вещи. Прежний дом константы —
  * `features/entity-detail/AspectCards.tsx`; переехала сюда вместе с самими контролами.
  */
-export const FIELD_CLASS =
-  'w-full rounded-md bg-transparent px-2 py-1 text-sm text-text outline-none transition hover:bg-surface-2 focus-visible:bg-surface-2/70 focus-visible:ring-2 focus-visible:ring-accent/40';
+export { FIELD_CLASS } from './field-class';
 
 /**
  * Род контрола. Это НЕ копия словаря типов (§А2-2): типов двенадцать, а контролов меньше —

@@ -18,6 +18,7 @@ import { Button } from '../../ui/Button';
 import { Dialog } from '../../ui/Dialog';
 import { Input } from '../../ui/Input';
 import { useToast } from '../../ui/toast-store';
+import { resetSteps } from '../entity-editor/arrows-stack';
 import { beginBodyRewrite, bodyRevisionOf, flushBodyOf } from '../entity-editor/body-flush';
 import { journalRefOf } from '../undo/journal-ref';
 import { isUndoEpoch, subscribeUndoEpoch, undoEpoch } from '../undo/undo-epoch';
@@ -150,6 +151,7 @@ export function VersionsCard({ entity, active }: { entity: Entity; active: boole
     meta: { undoStack: 'self' },
     onMutate: () => ({ finish: finishRewrite.current, entityId: entity.id }),
     onSuccess: (data, _vars, ctx) => {
+      resetSteps(data.id);
       utils.entity.get.setData(detailGetInput(data.id), (old) =>
         old ? { ...old, entity: data } : old,
       );

@@ -22,6 +22,12 @@ import { installProseMirrorJsdomPolyfills } from './prosemirror-polyfill';
 installProseMirrorJsdomPolyfills();
 
 import { afterEach } from 'vitest';
+import { clearAllSteps } from '../src/features/entity-editor/arrows-stack';
+import { destroyAllEditors } from '../src/features/entity-editor/editor-cache';
 import { clearUndoStack } from '../src/features/undo/undo-stack';
 
-afterEach(clearUndoStack);
+afterEach(() => {
+  clearUndoStack();
+  clearAllSteps();
+  destroyAllEditors();
+});

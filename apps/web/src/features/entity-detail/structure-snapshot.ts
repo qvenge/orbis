@@ -99,8 +99,12 @@ const SECTION_ANCHORS: Readonly<Record<string, string>> = {
  */
 function isEmoji(el: Element): boolean {
   if (el.tagName !== 'SPAN' || el.getAttribute('aria-hidden') !== 'true') return false;
-  const next = el.nextElementSibling?.getAttribute('data-testid');
-  return next === 'native-row' || next === 'native-memory';
+  const next = el.nextElementSibling;
+  // Task20 добавил обёртку общей строки поля и стрелок; эмодзи по-прежнему стоит перед заголовком.
+  return (
+    next?.matches('[data-testid="native-row"],[data-testid="native-memory"]') === true ||
+    next?.querySelector('[data-testid="native-row"],[data-testid="native-memory"]') != null
+  );
 }
 
 /** Ориентир узла или `null`. Карточка аспекта сюда не приходит — у неё свой разбор. */

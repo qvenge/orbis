@@ -31,3 +31,16 @@ export function useIsDesktop(): boolean {
 export function isDesktop(): boolean {
   return isDesktopNow();
 }
+
+export const COARSE_POINTER_QUERY = '(pointer: coarse)';
+const isCoarse = () =>
+  typeof window.matchMedia === 'function' && window.matchMedia(COARSE_POINTER_QUERY).matches;
+function subscribeCoarse(onChange: () => void): () => void {
+  if (typeof window.matchMedia !== 'function') return () => {};
+  const m = window.matchMedia(COARSE_POINTER_QUERY);
+  m.addEventListener('change', onChange);
+  return () => m.removeEventListener('change', onChange);
+}
+export function useIsCoarsePointer(): boolean {
+  return useSyncExternalStore(subscribeCoarse, isCoarse, () => false);
+}

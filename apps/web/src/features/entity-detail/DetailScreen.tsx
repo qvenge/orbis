@@ -59,6 +59,7 @@ export function DetailScreen({
   lead?: ReactNode;
   home?: boolean;
 }) {
+  const [titleShown, setTitleShown] = useState(false);
   const { get, setArchived, conflict, dismissConflict } = useEntityDetail(entityId);
   // Разрез «из кеша» для замера готовности (спека скорости §3.1) — по кешу В МОМЕНТ ОТКРЫТИЯ записи, поэтому до ранних
   // возвратов ниже: хуки безусловны. Сама готовность — листом `ScreenReadyMark` в разметке записи (гейт задачи 3, M-3).
@@ -429,6 +430,7 @@ export function DetailScreen({
       <TabMemoryProvider value={tabs}>
         <BodyScreenProvider
           value={{
+            arrows: { titleShown, onTitleShown: setTitleShown },
             asMarkdown,
             onCloseMarkdown: () => setAsMarkdown(false),
             screenConflict: conflict,

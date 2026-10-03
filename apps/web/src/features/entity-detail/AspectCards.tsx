@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { FIELD_CLASS } from '../../lib/registry/controls';
+import { FIELD_CLASS } from '../../lib/registry/field-class';
 import { fieldLabel, type RegistryLookup } from '../../lib/registry/labels';
 
 // Секции свойств записи — в `AspectSection.tsx`, выбор «какие» — у шаблона (`{{card: X}}` —

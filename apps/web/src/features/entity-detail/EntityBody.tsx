@@ -95,6 +95,8 @@ export type BodyGateRef = MutableRefObject<BodyGate | null>;
  * уронить сразу, чем получить кнопку, которая молча ничего не делает.
  */
 export interface BodyScreenValue {
+  /** Наличие title в текущем шаблоне выбирает единственное место стрелок. */
+  arrows?: { titleShown: boolean; onTitleShown: (shown: boolean) => void };
   asMarkdown: boolean;
   onCloseMarkdown: () => void;
   /**
@@ -130,6 +132,10 @@ export function BodyScreenProvider({
  */
 export function useBodyGate(): BodyGateRef | null {
   return useContext(BodyScreenContext)?.bodyGate ?? null;
+}
+
+export function useBodyArrows(): BodyScreenValue['arrows'] {
+  return useContext(BodyScreenContext)?.arrows;
 }
 
 export function useBodyScreen(): BodyScreenValue {
@@ -554,6 +560,7 @@ export function EntityBody({
         // блок законен, и снаружи род шаблона сюда не протекает.
         <BodyKindProvider kind={bodyKindOf(entity)}>
           <EditorShell
+            entityId={entity.id}
             readOnly={save.rewritePending}
             doc={doc}
             markdown={entity.body ?? ''}

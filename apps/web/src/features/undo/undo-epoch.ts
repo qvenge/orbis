@@ -1,4 +1,5 @@
 import { useToastStore } from '../../ui/toast-store';
+import { clearAllSteps } from '../entity-editor/arrows-stack';
 import { clearUndoStack } from './undo-stack';
 
 const listeners = new Set<() => void>();
@@ -20,6 +21,7 @@ export function resetUndoSession(): void {
     for (const listener of listeners) listener();
   });
   clearUndoStack();
+  clearAllSteps();
   const store = useToastStore.getState();
   for (const toast of store.toasts) store.dismiss(toast.id);
 }

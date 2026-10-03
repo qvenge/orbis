@@ -249,3 +249,37 @@ test('old owner mention success leaves the still mounted editor untouched', asyn
   expect(h.editor?.getJSON()).toEqual(snapshot);
   expect(useToastStore.getState().toasts).toEqual([]);
 });
+
+test('private sameEditor после ownerchange принимает новый ввод и новое mention меню', async () => {
+  vi.mocked(useSession).mockReturnValue({
+    token: 'jwt1',
+    userId: 'live-private1',
+    status: 'authed',
+  } as never);
+  const { r, h, onChange } = await mountEditor('см', api({}));
+  const initial = h.editor;
+  vi.mocked(useSession).mockReturnValue({
+    token: 'jwt2',
+    userId: 'live-private2',
+    status: 'authed',
+  } as never);
+  fireEvent.click(screen.getByText('ownerchange'));
+  expect(h.editor).toBe(initial);
+  onChange.mockClear();
+  h.editor?.commands.focus('end');
+  await userEvent.keyboard(' @Новое');
+  expect(onChange).toHaveBeenCalled();
+  await waitFor(() => expect(rows()).toEqual(['Создать «Новое»']));
+  expect(
+    r.calls.some(
+      (c) => c.path === 'entity.suggest' && (c.input as { term?: string }).term === 'Новое',
+    ),
+  ).toBe(true);
+  await userEvent.keyboard('{Enter}');
+  await waitFor(() => expect(JSON.stringify(h.editor?.getJSON())).toContain(NEW_ID));
+  expect(r.calls.filter((c) => c.path === 'entity.create')).toHaveLength(1);
+  h.editor?.commands.focus('end');
+  await userEvent.keyboard(' /заг');
+  await screen.findByTestId('slash-menu');
+  expect(h.editor).toBe(initial);
+});

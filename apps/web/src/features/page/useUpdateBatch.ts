@@ -3,6 +3,7 @@ import { useCallback } from 'react';
 import { invalidateGraph } from '../../lib/invalidate';
 import { trpc } from '../../trpc';
 import { useToast } from '../../ui/toast-store';
+import { resetSteps } from '../entity-editor/arrows-stack';
 import { journalRefOf } from '../undo/journal-ref';
 import { isUndoEpoch, undoEpoch } from '../undo/undo-epoch';
 import { offerUndoLazy } from '../undo/undo-lazy';
@@ -70,6 +71,8 @@ export function useUpdateBatch(): RunUpdateBatch {
         return false;
       }
       if (!isUndoEpoch(epoch)) return false;
+      for (const op of operations)
+        if (op.tool === 'entity_update' && op.input.body !== undefined) resetSteps(op.input.id);
       invalidateGraph(utils);
       if (journalRefOf(journalResponse) === null) return true;
       offerUndoLazy({

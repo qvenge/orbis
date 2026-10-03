@@ -2,6 +2,7 @@ import { DOC_EXTENSIONS } from '@orbis/shared/doc';
 import type { AnyExtension } from '@tiptap/core';
 import UniqueID from '@tiptap/extension-unique-id';
 import { Placeholder } from '@tiptap/extensions';
+import { ArrowsKeys } from './arrows-keys';
 import { BODY_PLACEHOLDER } from './body-box';
 import { LayoutGuard } from './layout-guard';
 import { MoveBlock } from './move-block';
@@ -120,4 +121,5 @@ export const EDITOR_EXTENSIONS: AnyExtension[] = [
   // Страницы 1а §5.2: страж глубины контейнеров на любом входе — вставке, перетаскивании (см.
   // layout-guard.ts); место держит схема (группа `pageBlock`, 1б). Плагинный, схему не трогает.
   LayoutGuard,
+  ArrowsKeys,
 ];

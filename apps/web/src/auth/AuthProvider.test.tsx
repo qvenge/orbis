@@ -413,3 +413,117 @@ test('R56 actual BodySave factory owner reentry sends unconfirmed cached body; c
   await act(async () => oldReply(mockEntityUpdateResult({ id: 'e1', bodyRevision: 99 })));
   expect(api.revisionForRewrite()).toBe(4);
 });
+
+import type { Editor } from '@tiptap/core';
+import {
+  canRedoStep,
+  canUndoStep,
+  pushStep,
+  undoStep,
+} from '../features/entity-editor/arrows-stack';
+import {
+  acquireEditor,
+  hasLiveEditor,
+  releaseEditor,
+} from '../features/entity-editor/editor-cache';
+
+test('401 стирает шаги; уход пользователя уничтожает отпущенный редактор', () => {
+  mockSession({ token: 'jwt', userId: 'u1', status: 'authed' });
+  const r = render(
+    <AuthProvider>
+      <Child />
+    </AuthProvider>,
+  );
+  const editor = { destroy: vi.fn(), isDestroyed: false } as unknown as Editor;
+  acquireEditor('e1', () => editor);
+  releaseEditor('e1');
+  pushStep('e1', 'title');
+  act(() => emitUnauthorized());
+  expect(canUndoStep('e1')).toBe(false);
+  mockSession({ token: null, userId: null, status: 'anon' });
+  r.rerender(
+    <AuthProvider>
+      <Child />
+    </AuthProvider>,
+  );
+  expect(editor.destroy).toHaveBeenCalledOnce();
+  expect(hasLiveEditor('e1')).toBe(false);
+});
+
+import { NativeRow } from '../features/entity-detail/NativeRow';
+import { BodyEditor } from '../features/entity-editor/BodyEditor';
+import { wireEntity } from '../test/harness';
+import { registryReply } from '../test/registry';
+
+test('тот же id при смене authed владельца: новый Editor переживает old cleanup и использует новые handlers', () => {
+  mockSession({ token: 'a', userId: 'u-a', status: 'authed' });
+  let refresh!: () => void;
+  const changes = vi.fn(),
+    save = vi.fn(),
+    doc = parseBody('тело');
+  function Host() {
+    const [, set] = useState(0);
+    refresh = () => set((n) => n + 1);
+    return (
+      <AuthProvider>
+        <NativeRow
+          entity={wireEntity({ id: 'e1', title: 'План' })}
+          onToggleTask={() => {}}
+          onSaveTitle={save}
+        />
+        <BodyEditor entityId="e1" doc={doc} onChange={changes} />
+      </AuthProvider>
+    );
+  }
+  renderWithProviders(
+    <Host />,
+    (path) =>
+      registryReply(path) ?? (path === 'entity.resolveRefs' || path === 'entity.suggest' ? [] : {}),
+  );
+  const get = () =>
+    (
+      screen.getByTestId('body-editor').querySelector('.ProseMirror') as HTMLElement & {
+        editor: Editor;
+      }
+    ).editor;
+  const old = get();
+  const heldUpdate = old.options.onUpdate;
+  const heldTransaction = old.options.onTransaction;
+  act(() => old.commands.insertContentAt(1, 'А'));
+  expect(canUndoStep('e1')).toBe(true);
+  mockSession({ token: 'b', userId: 'u-b', status: 'authed' });
+  act(() => refresh());
+  expect(screen.getByTestId('body-editor').querySelector('.ProseMirror')).not.toBeNull();
+  const next = get();
+  expect(next === old).toBe(false);
+  expect(old.isDestroyed).toBe(true);
+  expect(next.isDestroyed).toBe(false);
+  expect(canUndoStep('e1')).toBe(false);
+  const heldPayload = {
+    editor: next,
+    transaction: next.state.tr.insertText('Чужое', 1),
+    appendedTransactions: [],
+  };
+  act(() => {
+    heldUpdate?.(heldPayload);
+    heldTransaction?.(heldPayload);
+  });
+  expect(changes).toHaveBeenCalledTimes(1);
+  expect(canUndoStep('e1')).toBe(false);
+  act(() => next.commands.insertContentAt(1, 'Б'));
+  expect(changes).toHaveBeenCalledTimes(2);
+  expect(canUndoStep('e1')).toBe(true);
+  act(() => expect(undoStep('e1')).toBe(true));
+  expect(canRedoStep('e1')).toBe(true);
+  act(() =>
+    heldTransaction?.({
+      editor: next,
+      transaction: next.state.tr.insertText('Чужое', 1),
+      appendedTransactions: [],
+    }),
+  );
+  expect(canRedoStep('e1')).toBe(true);
+  fireEvent.change(screen.getByTestId('title-edit'), { target: { value: 'План В' } });
+  fireEvent.keyDown(screen.getByTestId('title-edit'), { key: 'z', ctrlKey: true });
+  expect(save).toHaveBeenCalledWith('План', 'План');
+});

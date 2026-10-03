@@ -1,13 +1,25 @@
 import { type BodyDoc, bodyRefsFromDoc, DOC_SCHEMA_VERSION } from '@orbis/shared/doc';
-import type { JSONContent } from '@tiptap/core';
-import { type Editor, EditorContent, useEditor } from '@tiptap/react';
-import { useEffect, useMemo, useRef } from 'react';
+import type { EditorOptions, JSONContent } from '@tiptap/core';
+import { closeHistory, isHistoryTransaction, undoDepth } from '@tiptap/pm/history';
+import { EditorState } from '@tiptap/pm/state';
+import { Editor, EditorContent, useEditor } from '@tiptap/react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { subscribeUndoEpoch, undoEpoch } from '../undo/undo-epoch';
+import {
+  bindStepOwner,
+  discardRedo,
+  resetSteps,
+  stepsGeneration,
+  syncBodyDepth,
+} from './arrows-stack';
 import { BubbleToolbar } from './BubbleToolbar';
 import { BODY_BOX_CLASS } from './body-box';
+import { acquireEditor, releaseEditor } from './editor-cache';
 import { EDITOR_EXTENSIONS } from './extensions';
 import { RefTitlesProvider } from './nodes/RefTitlesContext';
 import { pastedRecordId } from './paste-address';
 import { SuggestMenu, useEditorSuggest } from './slash/EditorSuggest';
+import { type SuggestHandlers, suggestionExtensions } from './slash/suggestion';
 import { sameDoc } from './strip-ids';
 
 /**
@@ -106,15 +118,123 @@ function transformPastedHTML(html: string): string {
   return isOwnClipboardHTML(html) ? html : htmlToPlainParagraphs(html);
 }
 
-export function BodyEditor({
+type Binding = {
+  update: ((e: Editor) => void) | null;
+  suggest: SuggestHandlers | null;
+  typed: boolean;
+  generation: number;
+};
+const bindings = new WeakMap<Editor, Binding>();
+/** Привязка меняется при remount; плагины и сама история остаются у экземпляра. */
+function bodyEditorOptions(
+  entityId: string | undefined,
+  content: JSONContent,
+  b: Binding,
+  suggestionBinding: () => Binding = () => b,
+): Partial<EditorOptions> {
+  const current = () => b.generation === stepsGeneration();
+  return {
+    extensions: [
+      ...EDITOR_EXTENSIONS,
+      ...suggestionExtensions({
+        onOpen: (s) => {
+          const active = suggestionBinding();
+          if (active.generation === stepsGeneration()) active.suggest?.onOpen(s);
+        },
+        onClose: (kind) => suggestionBinding().suggest?.onClose(kind),
+        onKeyDown: (kind, event) => {
+          const active = suggestionBinding();
+          return active.generation === stepsGeneration()
+            ? (active.suggest?.onKeyDown(kind, event) ?? false)
+            : false;
+        },
+      }),
+    ],
+    content,
+    onUpdate: ({ editor: e }) => {
+      if (current()) b.update?.(e);
+    },
+    onTransaction: ({ editor: e, transaction }) => {
+      if (entityId === undefined || !current() || isHistoryTransaction(transaction)) return;
+      if (transaction.docChanged && transaction.getMeta('addToHistory') !== false)
+        discardRedo(entityId);
+      syncBodyDepth(entityId, undoDepth(e.state));
+    },
+  };
+}
+function createBodyEditor(entityId: string | undefined, content: JSONContent): Editor {
+  const b: Binding = { update: null, suggest: null, typed: false, generation: stepsGeneration() };
+  const editor = new Editor(bodyEditorOptions(entityId, content, b));
+  const current = () => b.generation === stepsGeneration();
+  bindings.set(editor, b);
+  if (entityId !== undefined)
+    bindStepOwner(entityId, 'body', {
+      closeGroup: () => {
+        if (current() && !editor.isDestroyed) editor.view.dispatch(closeHistory(editor.state.tr));
+      },
+      undo: () => current() && editor.isEditable && editor.commands.undo(),
+      redo: () => current() && editor.isEditable && editor.commands.redo(),
+      reset: () => {
+        if (!editor.isDestroyed)
+          editor.view.updateState(
+            EditorState.create({
+              doc: editor.state.doc,
+              selection: editor.state.selection,
+              plugins: editor.state.plugins,
+            }),
+          );
+      },
+    });
+  return editor;
+}
+export function BodyEditor(props: Parameters<typeof BodyEditorInstance>[0]) {
+  const epoch = useSyncExternalStore(subscribeUndoEpoch, undoEpoch, undoEpoch);
+  return props.entityId === undefined ? (
+    <PrivateBodyEditor {...props} />
+  ) : (
+    <BodyEditorInstance key={`${props.entityId}:${epoch}`} {...props} />
+  );
+}
+/** Частный редактор остаётся под native lifecycle Tiptap, включая отвергнутые StrictMode экземпляры. */
+function PrivateBodyEditor(props: Parameters<typeof BodyEditorInstance>[0]) {
+  const generation = stepsGeneration();
+  const b = useMemo<Binding>(
+    () => ({
+      update: null,
+      suggest: null,
+      typed: false,
+      generation,
+    }),
+    [generation],
+  );
+  // Native plugins сохраняются; live события получают новую binding, async intent — прежнюю epoch.
+  const live = useRef(b);
+  live.current = b;
+  const options = useMemo(
+    () => bodyEditorOptions(undefined, props.doc.doc, b, () => live.current),
+    [b, props.doc.doc],
+  );
+  const editor = useEditor(options);
+  if (!editor) return null;
+  bindings.set(editor, b);
+  return <BodyEditorInstance {...props} nativeEditor={editor} />;
+}
+function BodyEditorInstance({
+  nativeEditor,
   doc,
+  entityId,
+  readOnly = false,
   onChange,
   onAccept,
   onReady,
   focusAt,
   reseat = 0,
 }: {
+  nativeEditor?: Editor;
   doc: BodyDoc;
+  /** Без id — частный редактор предложения, со своей родной историей. */
+  entityId?: string;
+  readOnly?: boolean;
   onChange: (doc: BodyDoc) => void;
   /**
    * Редактор ПРИНЯЛ пришедший документ и показывает теперь его.
@@ -158,10 +278,6 @@ export function BodyEditor({
   // меню на всех. Массив стабилен (useMemo без зависимостей внутри хука) — схему редактора
   // пересобирать нечему.
   const suggest = useEditorSuggest();
-  const extensions = useMemo(
-    () => [...EDITOR_EXTENSIONS, ...suggest.extensions],
-    [suggest.extensions],
-  );
 
   // Снимок момента монтирования: EditorShell отдаёт координаты новым объектом на каждый рендер,
   // и в зависимостях эффекта они дёргали бы фокус на каждую перерисовку экрана.
@@ -181,52 +297,75 @@ export function BodyEditor({
    */
   const typed = useRef(false);
 
-  const editor = useEditor({
-    extensions,
-    content: doc.doc,
-    onUpdate: ({ editor: e }) => {
+  const [cachedEditor] = useState(
+    () =>
+      nativeEditor ??
+      (entityId === undefined
+        ? createBodyEditor(undefined, doc.doc)
+        : acquireEditor(entityId, () => createBodyEditor(entityId, doc.doc))),
+  );
+  const editor = nativeEditor ?? cachedEditor;
+  const generation = stepsGeneration();
+  useEffect(() => {
+    if (entityId === undefined) return;
+    acquireEditor(entityId, () => editor);
+    return () => releaseEditor(entityId, editor);
+  }, [entityId, editor]);
+  useLayoutEffect(() => {
+    const b = bindings.get(editor);
+    if (!b || editor.isDestroyed || b.generation !== generation) return;
+    const update = (e: Editor) => {
       const next = e.getJSON();
       if (sameDoc(next, lastAccepted.current)) return;
       lastAccepted.current = next;
       typed.current = true;
+      b.typed = true;
       onChange({ v: DOC_SCHEMA_VERSION, doc: next });
-    },
-    editorProps: {
-      attributes: {
-        // Та же коробка, что у первого кадра: текст не должен прыгать при подмене.
-        class: `${BODY_BOX_CLASS} outline-none`,
+    };
+    b.update = update;
+    b.suggest = suggest.handlers;
+    editor.setOptions({
+      editable: !readOnly,
+      editorProps: {
+        attributes: {
+          // Та же коробка, что у первого кадра: текст не должен прыгать при подмене.
+          class: `${BODY_BOX_CLASS} outline-none`,
+        },
+        transformPastedHTML,
+        handlePaste: (view, event) => {
+          // §7.4: в данных — ссылка на запись по id, не адрес; адрес вычисляется при нажатии.
+          const id = pastedRecordId(
+            event.clipboardData?.getData('text/plain') ?? '',
+            window.location.origin,
+          );
+          const type = view.state.schema.nodes.entityRef;
+          // В блоке кода адрес — просто текст: строчного узла там не бывает, и ProseMirror, подгоняя
+          // вставку, разрезал бы блок надвое абзацем с чипом (гейт 24, M-4).
+          if (id === null || type === undefined || view.state.selection.$from.parent.type.spec.code)
+            return false;
+          view.dispatch(
+            view.state.tr
+              .replaceSelectionWith(type.create({ entityId: id, label: null }), false)
+              .scrollIntoView(),
+          );
+          return true;
+        },
       },
-      transformPastedHTML,
-      handlePaste: (view, event) => {
-        // §7.4: в данных — ссылка на запись по id, не адрес; адрес вычисляется при нажатии.
-        const id = pastedRecordId(
-          event.clipboardData?.getData('text/plain') ?? '',
-          window.location.origin,
-        );
-        const type = view.state.schema.nodes.entityRef;
-        // В блоке кода адрес — просто текст: строчного узла там не бывает, и ProseMirror, подгоняя
-        // вставку, разрезал бы блок надвое абзацем с чипом (гейт 24, M-4).
-        if (id === null || type === undefined || view.state.selection.$from.parent.type.spec.code)
-          return false;
-        view.dispatch(
-          view.state.tr
-            .replaceSelectionWith(type.create({ entityId: id, label: null }), false)
-            .scrollIntoView(),
-        );
-        return true;
-      },
-    },
-  });
+    });
+    return () => {
+      if (b.update === update) {
+        b.update = null;
+        b.suggest = null;
+      }
+    };
+  }, [editor, onChange, readOnly, suggest.handlers, generation]);
 
   /**
    * Готовность редактора и КАРЕТКА — один эффект, потому что оба про один и тот же экземпляр.
    *
-   * Из эффекта, а не из `onCreate`, и это замерено, а не осторожность: под StrictMode двойной
-   * прогон РЕНДЕРА создаёт ДВА редактора, `onCreate` приходит от обоих, а живым остаётся
-   * первый — значит получатель, хранящий последний, оставался бы с уничтоженным экземпляром
-   * (`view === null`, любая команда падает). `useEditor` же возвращает уцелевший, и эффект
-   * видит именно его. `onReady` в зависимостях НЕТ намеренно: его передают стрелкой по месту,
-   * то есть новой на каждый рендер, и эффект стрелял бы вхолостую после каждой буквы.
+   * `onCreate` относится к созданию, а cache возвращает уже живой экземпляр. Эффект
+   * сообщает готовность текущего монтирования и частного native useEditor. `onReady`
+   * в зависимостях нет: новая стрелка после каждой буквы не означает новый редактор.
    *
    * Каретку кладём ПО КООРДИНАТАМ клика, а не просто фокусируем: клик приходит по ПЕРВОМУ
    * КАДРУ, редактора в этот момент нет вовсе (едет ленивый чанк), поэтому браузерное «клик
@@ -263,11 +402,27 @@ export function BodyEditor({
     // не держит, и набор начинается заново — следующая чужая правка до первой буквы снова доедет сама.
     const forced = reseatRef.current !== reseat;
     reseatRef.current = reseat;
-    if (forced) typed.current = false;
-    else if (editor.isFocused && typed.current) return;
+    if (forced) {
+      typed.current = false;
+      const b = bindings.get(editor);
+      if (b) b.typed = false;
+    } else if (editor.isFocused && (typed.current || bindings.get(editor)?.typed)) return;
     if (!sameDoc(editor.getJSON(), doc.doc)) {
       lastAccepted.current = doc.doc;
-      editor.commands.setContent(doc.doc, { emitUpdate: false });
+      if (entityId !== undefined) resetSteps(entityId);
+      else
+        editor.view.updateState(
+          EditorState.create({
+            doc: editor.state.doc,
+            selection: editor.state.selection,
+            plugins: editor.state.plugins,
+          }),
+        );
+      editor
+        .chain()
+        .setMeta('addToHistory', false)
+        .setContent(doc.doc, { emitUpdate: false })
+        .run();
     }
     /**
      * Извещение уходит ЗА пределами ветки подмены — то есть всякий раз, когда редактор дошёл
@@ -294,7 +449,7 @@ export function BodyEditor({
      * посадку.
      */
     onAcceptRef.current?.(doc);
-  }, [editor, doc, reseat]);
+  }, [editor, doc, reseat, entityId]);
 
   // Ссылки берутся из ДОКУМЕНТА, а не из живого дерева редактора: bodyRefsFromDoc ходит и по
   // raw-блокам, а пересчёт на каждую транзакцию стоил бы обхода всего тела на нажатие клавиши.
@@ -305,7 +460,12 @@ export function BodyEditor({
   // рисует сам EditorContent, — контекст доезжает до них по дереву React, а не по DOM.
   return (
     <RefTitlesProvider ids={ids}>
-      <EditorContent editor={editor} data-testid="body-editor" className="orbis-markdown" />
+      <EditorContent
+        editor={editor}
+        data-testid="body-editor"
+        data-step-record={entityId}
+        className="orbis-markdown"
+      />
       {/* Меню рисуется в дереве РЕДАКТОРА, а не в отдельном React-корне через ReactRenderer:
           строки `@` приезжают из tRPC, а свой корень остался бы без провайдеров запросов. */}
       <SuggestMenu editor={editor} suggest={suggest} />

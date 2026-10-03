@@ -1,4 +1,5 @@
 import type { JournalRef } from '@orbis/shared';
+import { resetSteps } from '../entity-editor/arrows-stack';
 import { confirmBody, markBodyPending } from '../undo/body-provenance';
 import { journalRefOf } from '../undo/journal-ref';
 import { isUndoEpoch, undoEpoch } from '../undo/undo-epoch';
@@ -247,6 +248,7 @@ export function useEntityUpdate(
    * устаревшей мутацию первой, и та лишилась бы отката — ровно того, ради чего он и написан.
    */
   const seqRef = useRef(0);
+  const latestTitle = useRef<Record<string, number>>({});
   const latestRef = useRef<
     Record<string, { seq: number; expectedBodyRevision?: number; checksVersion: boolean }>
   >({});
@@ -304,6 +306,11 @@ export function useEntityUpdate(
     onMutate: async (vars) => {
       const epoch = undoEpoch();
       const titleGeneration = titleGenerations[vars.id] ?? 0;
+      const titleSeq =
+        vars.title !== undefined && !checksVersion(vars)
+          ? (latestTitle.current[vars.id] ?? 0) + 1
+          : undefined;
+      if (titleSeq !== undefined) latestTitle.current[vars.id] = titleSeq;
       // Отклик действия (спека скорости §3.1) — от нажатия, поэтому ДО первого `await`. Автосохранение текста — не
       // действие: сеанс печати меряется иначе, и замер каждого сохранения засорил бы отклик кнопок.
       const action =
@@ -347,6 +354,8 @@ export function useEntityUpdate(
         seq: seqRef.current,
         expectedBodyRevision: vars.expectedBodyRevision,
         titleGeneration,
+        titleSeq,
+        epoch,
         action,
       };
     },
@@ -372,7 +381,10 @@ export function useEntityUpdate(
       // (ревью Задачи 13, И-4). `entityId` здесь — из ПОСЛЕДНЕГО рендера (react-query
       // проталкивает свежие опции в незавершённую мутацию), `vars.id` — из отправки.
       if (vars.id !== entityId) return;
-      if (!accepted && isTitleStale(err)) setTitleStale(true);
+      if (!accepted && isTitleStale(err)) {
+        resetSteps(vars.id);
+        setTitleStale(true);
+      }
       // Молчим только о конфликте, который преемник принесёт и сам (см. bringsSameConflict).
       if (old && bringsSameConflict(vars.id, ctx)) return;
       // Конфликт — отказ замка текста по структурному коду (`data.orbis`, РП-5), а не любой 409.
@@ -398,6 +410,15 @@ export function useEntityUpdate(
       // плашку сейчас. Сверки меток здесь нет, и это не забытая симметрия с onError, а разные
       // вопросы: там решается, ПОКАЗЫВАТЬ ли конфликт (промолчать можно лишь о том, который
       // принесёт и преемник), здесь — ГАСИТЬ ли уже показанный. Проверено мутацией M55.
+      // Подтверждение title имеет свою очередь: успех чекбокса не отменяет принятие имени.
+      if (
+        ctx &&
+        isUndoEpoch(ctx.epoch) &&
+        ctx.titleSeq !== undefined &&
+        ctx.titleSeq === latestTitle.current[vars.id] &&
+        !titleAccepted(vars, ctx)
+      )
+        titleGenerations[vars.id] = (titleGenerations[vars.id] ?? 0) + 1;
       if (superseded(vars.id, ctx)) return;
       // И тот же корень, что у Н-3: гасит плашку только правка, версию которой сервер сверял.
       // Успех чекбокса или архивации о конфликте тела не знает ничего — а обвязка общая, и

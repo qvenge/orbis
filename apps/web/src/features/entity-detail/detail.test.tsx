@@ -154,6 +154,8 @@ const EDITOR_READY = { timeout: 10_000 };
 
 /** Поднимает редактор касанием тела: ленивый чанк + первая сборка схемы ProseMirror. */
 async function openEditor(): Promise<void> {
+  // Task20 возвращает кешированный экземпляр сразу, без повторного превью.
+  if (screen.queryByTestId('body-editor')) return;
   fireEvent.click(await screen.findByTestId('editor-preview'));
   await screen.findByTestId('body-editor', undefined, EDITOR_READY);
 }

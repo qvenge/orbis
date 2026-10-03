@@ -9,7 +9,7 @@ import {
 } from '@orbis/shared';
 import { X } from 'lucide-react';
 import { useState } from 'react';
-import { FIELD_CLASS } from '../../lib/registry/controls';
+import { FIELD_CLASS } from '../../lib/registry/field-class';
 import {
   ARCHIVED_NOTE,
   MISSING_NOTE,

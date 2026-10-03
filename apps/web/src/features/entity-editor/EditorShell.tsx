@@ -20,6 +20,7 @@ import { BlockPlaque, issueTone } from '../page/blocks/BlockPlaque';
 import { PageParamsProvider } from '../page/params';
 import { NO_REGISTRY } from '../page/render-plan';
 import { BODY_BOX_CLASS, BODY_PLACEHOLDER } from './body-box';
+import { hasLiveEditor } from './editor-cache';
 import {
   cardAspectTitle,
   cardStubLabel,
@@ -296,6 +297,7 @@ export function isBodyGesture(target: HTMLElement | null): boolean {
  * (предпросмотр шаблона на чужой записи, спека страниц 1а §9.3). Чанк схемы при этом не тянется.
  */
 export function EditorShell({
+  entityId,
   doc,
   markdown,
   onChange,
@@ -303,6 +305,7 @@ export function EditorShell({
   reseat,
   readOnly = false,
 }: {
+  entityId?: string;
   doc: BodyDoc | null;
   markdown: string;
   onChange: (doc: BodyDoc) => void;
@@ -316,7 +319,9 @@ export function EditorShell({
   reseat?: number;
   readOnly?: boolean;
 }) {
-  const [mount, setMount] = useState<Mount | null>(null);
+  const [mount, setMount] = useState<Mount | null>(() =>
+    entityId !== undefined && hasLiveEditor(entityId) ? BY_IDLE : null,
+  );
   useEffect(() => {
     if (readOnly) return;
     // `m ?? BY_IDLE`, а не голое присваивание: простой наступает и ПОСЛЕ того, как редактор
@@ -389,6 +394,7 @@ export function EditorShell({
   return (
     <Suspense fallback={preview}>
       <BodyEditor
+        entityId={entityId}
         doc={doc}
         onChange={onChange}
         onAccept={onAccept}

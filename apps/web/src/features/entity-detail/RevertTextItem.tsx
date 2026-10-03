@@ -5,6 +5,7 @@ import { formatClock } from '../../lib/format-clock';
 import { trpc } from '../../trpc';
 import type { DropdownMenuItem } from '../../ui/DropdownMenu';
 import { toastActionGeneration } from '../../ui/toast-store';
+import { resetSteps } from '../entity-editor/arrows-stack';
 import { runUndo } from '../undo/undo-action';
 import { isUndoEpoch, subscribeUndoEpoch, undoEpoch } from '../undo/undo-epoch';
 import { dropUndoable } from '../undo/undo-stack';
@@ -41,6 +42,7 @@ export function useRevertTextItem(
     void runUndo(actionId, { entityIds: [entityId], ...(force && { force }) }).then((out) => {
       if (!isUndoEpoch(epoch)) return;
       owned.pending = false;
+      if (out.kind === 'undone') resetSteps(entityId);
       if (out.kind === 'undone' || out.kind === 'already') dropUndoable(actionId);
       reportUndoOutcome(out, () => run(true), generation === toastActionGeneration());
     });

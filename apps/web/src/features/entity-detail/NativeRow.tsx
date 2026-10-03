@@ -1,5 +1,5 @@
 import { rowAllDayOf } from '@orbis/shared';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { useRefTitle } from '../../lib/entity-ref/RefField';
 import { formatMoney, type MoneyTone } from '../../lib/format';
 import { isTitleStale } from '../../lib/orbis-error';
@@ -17,7 +17,19 @@ import { Badge } from '../../ui/Badge';
 import { Checkbox } from '../../ui/Checkbox';
 import { formatDay } from '../browser/EntityRow';
 import { useCategoryTitle } from '../budget/categories';
+import {
+  bindStepOwner,
+  discardRedo,
+  pushStep,
+  redoStep,
+  resetSteps,
+  stepsGeneration,
+  undoStep,
+} from '../entity-editor/arrows-stack';
+import { mountRecord } from '../entity-editor/editor-cache';
+import { recordTitleChange, redoTitle, undoTitle } from '../entity-editor/title-history';
 import { useExtensionEnabled } from '../settings/extension-mask';
+import { isUndoEpoch, subscribeUndoEpoch, undoEpoch } from '../undo/undo-epoch';
 import { useHostReadOnly } from './record-host';
 
 type Entity = RouterOutputs['entity']['query'][number];
@@ -61,30 +73,44 @@ const TOGGLE_BLOCKED_TITLE = 'переключение доступно толь
  * оставленный механизм был бы веткой без единственного вызывателя.
  */
 function Title({
+  entityId,
   value,
   onSave,
   onStale,
   className = '',
 }: {
+  entityId: string;
   value: string;
   onSave?: TitleSave;
   onStale?: () => void;
   className?: string;
 }) {
+  const epoch = useSyncExternalStore(subscribeUndoEpoch, undoEpoch, undoEpoch);
   if (onSave === undefined) {
     return <span className={`flex-1 ${TITLE_CLASS} ${className}`}>{value}</span>;
   }
-  return <TitleEditor value={value} onSave={onSave} onStale={onStale} className={className} />;
+  return (
+    <TitleEditor
+      key={`${entityId}:${epoch}`}
+      entityId={entityId}
+      value={value}
+      onSave={onSave}
+      onStale={onStale}
+      className={className}
+    />
+  );
 }
 
 type TitleSave = (title: string, expectedTitle: string) => unknown;
 
 function TitleEditor({
+  entityId,
   value,
   onSave,
   onStale,
   className,
 }: {
+  entityId: string;
   value: string;
   onSave: TitleSave;
   onStale?: () => void;
@@ -114,10 +140,71 @@ function TitleEditor({
     if (lockRef.current === null && draft === serverValue) setDraft(value);
   }
 
+  const latest = useRef({ onSave, onStale, serverValue });
+  latest.current = { onSave, onStale, serverValue };
+  const intent = useRef({ epoch: undoEpoch(), generation: stepsGeneration() }).current;
+  const sent = useRef([] as string[]);
+  const saveSequence = useRef(0);
+  const current = useCallback(
+    () =>
+      mountedRef.current && isUndoEpoch(intent.epoch) && intent.generation === stepsGeneration(),
+    [intent],
+  );
+  const commit = async (v: string, expected: string) => {
+    if (!current()) return;
+    const sequence = ++saveSequence.current;
+    if (v !== latest.current.serverValue) {
+      sent.current = sent.current.filter((s) => s !== v);
+      sent.current.push(v);
+    }
+    savingRef.current = true;
+    try {
+      await latest.current.onSave(v, expected);
+      if (current() && sequence === saveSequence.current)
+        lockRef.current = draftRef.current === v ? null : v;
+    } catch (err) {
+      if (current() && sequence === saveSequence.current && isTitleStale(err))
+        latest.current.onStale?.();
+    } finally {
+      if (current() && sequence === saveSequence.current) savingRef.current = false;
+    }
+  };
+  const commitRef = useRef(commit);
+  commitRef.current = commit;
+  useEffect(() => {
+    const release = mountRecord(entityId);
+    const apply = (v: string | null) => {
+      if (v === null || !current()) return false;
+      draftRef.current = v;
+      setDraft(v);
+      lockRef.current = null;
+      void commitRef.current(v, latest.current.serverValue);
+      return true;
+    };
+    const unbind = bindStepOwner(entityId, 'title', {
+      undo: () => apply(undoTitle(entityId, draftRef.current)),
+      redo: () => apply(redoTitle(entityId, draftRef.current)),
+      reset: () => {},
+    });
+    return () => {
+      unbind();
+      release();
+    };
+  }, [entityId, current]);
+  const previousValue = useRef(value);
+  useEffect(() => {
+    if (previousValue.current === value) return;
+    previousValue.current = value;
+    const observed = sent.current.indexOf(value);
+    if (observed < 0) {
+      if (current()) resetSteps(entityId);
+    } else sent.current.splice(0, observed + 1);
+  }, [value, entityId, current]);
   return (
     <input
       aria-label="Заголовок"
       data-testid="title-edit"
+      data-step-record={entityId}
       value={draft}
       onFocus={() => {
         // Грязный черновик после отказа не видел нового title: рефокус CAS не обходит (R-28).
@@ -125,28 +212,34 @@ function TitleEditor({
       }}
       onChange={(e) => {
         lockRef.current ??= serverValue;
-        setDraft(e.target.value);
+        if (!current()) return;
+        const next = e.target.value;
+        if (recordTitleChange(entityId, draftRef.current, next)) pushStep(entityId, 'title');
+        else discardRedo(entityId);
+        draftRef.current = next;
+        setDraft(next);
       }}
       // Пустой заголовок сущности не бывает (entityUpdateInput: title.min(1)) — вместо
       // заведомо отказного запроса возвращаем серверное значение.
-      onBlur={async () => {
+      onKeyDown={(e) => {
+        if (!(e.ctrlKey || e.metaKey) || e.altKey || !current()) return;
+        const k = e.key.toLowerCase(),
+          nonLatin = !/^[a-z]$/.test(k);
+        const z = k === 'z' || k === 'я' || (nonLatin && e.code === 'KeyZ'),
+          y = k === 'y' || k === 'н' || (nonLatin && e.code === 'KeyY');
+        if (!z && !y) return;
+        e.preventDefault();
+        if (z && !e.shiftKey) undoStep(entityId);
+        else redoStep(entityId);
+      }}
+      onBlur={() => {
+        if (!current()) return;
         if (draft.trim() === '') {
           lockRef.current = null;
           setDraft(value);
-        } else if (draft !== value) {
-          const expected = lockRef.current ?? serverValue;
-          savingRef.current = true;
-          try {
-            await onSave(draft, expected);
-            // Новая буква за время запроса продолжает правку уже сохранённого заголовка.
-            lockRef.current = draftRef.current === draft ? null : draft;
-          } catch (err) {
-            // Принятый refresh заменяет поле: старый save не сбрасывает стек нового редактора.
-            if (mountedRef.current && isTitleStale(err)) onStale?.();
-          } finally {
-            savingRef.current = false;
-          }
-        } else if (!savingRef.current) lockRef.current = null;
+          resetSteps(entityId);
+        } else if (draft !== value) void commit(draft, lockRef.current ?? serverValue);
+        else if (!savingRef.current) lockRef.current = null;
       }}
       className={`min-w-0 flex-1 rounded-md bg-transparent px-1 ${TITLE_CLASS} outline-none transition hover:bg-surface-2/60 focus-visible:bg-surface-2/70 focus-visible:ring-2 focus-visible:ring-accent/30 ${className}`}
     />
@@ -168,11 +261,13 @@ function TitleEditor({
  * безусловным (та же причина, что у `CategoryBadge`).
  */
 function MemoryRow({
+  entityId,
   title,
   props,
   onSaveTitle,
   onStale,
 }: {
+  entityId: string;
   title: string;
   props: Record<string, unknown>;
   onSaveTitle?: TitleSave;
@@ -193,7 +288,7 @@ function MemoryRow({
   const isRule = kind === 'rule';
   return (
     <div className="flex items-center gap-2" data-testid="native-memory">
-      <Title value={title} onSave={onSaveTitle} onStale={onStale} />
+      <Title entityId={entityId} value={title} onSave={onSaveTitle} onStale={onStale} />
       {isRule && typeof pattern === 'string' && pattern !== '' && (
         <span data-testid="memory-rule-pattern" className="truncate text-sm text-text-secondary">
           {pattern}
@@ -272,7 +367,13 @@ export function NativeRow({
   // контрактах; в таблицу M14 запись памяти не входит.
   if (aspects.has('orbis/memory'))
     return (
-      <MemoryRow title={entity.title} props={props} onSaveTitle={saveTitle} onStale={onStale} />
+      <MemoryRow
+        entityId={entity.id}
+        title={entity.title}
+        props={props}
+        onSaveTitle={saveTitle}
+        onStale={onStale}
+      />
     );
 
   const closed = row.checkbox?.closed === true;
@@ -309,6 +410,7 @@ export function NativeRow({
         />
       )}
       <Title
+        entityId={entity.id}
         value={entity.title}
         onSave={saveTitle}
         onStale={onStale}

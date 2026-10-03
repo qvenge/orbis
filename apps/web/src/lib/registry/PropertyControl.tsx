@@ -26,10 +26,10 @@ import {
   type ControlKind,
   controlKindOf,
   controlText,
-  FIELD_CLASS,
   parseControlValue,
   writeModeOf,
 } from './controls';
+import { FIELD_CLASS } from './field-class';
 import { displayText, EMPTY_TEXT } from './format';
 import { aspectLabel } from './labels';
 import { useRegistry } from './useRegistry';

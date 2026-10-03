@@ -75,6 +75,12 @@ export function runtimeModuleImports(source: string): string[] {
 }
 const SOURCE_LAZY_EDGES = [
   {
+    source: 'apps/web/src/features/entity-detail/AspectSection.tsx',
+    modules: ['AspectSectionView', 'PropertyControl', 'property-edit-rule'],
+  },
+  { source: 'apps/web/src/features/entity-detail/Subtasks.tsx', modules: ['SubtaskAdd'] },
+  { source: 'apps/web/src/lib/entity-ref/RefField.tsx', modules: ['controls'] },
+  {
     source: 'apps/web/src/features/entity-detail/DetailScreen.tsx',
     modules: ['VersionsCard', 'ConfigureView'],
   },
@@ -166,6 +172,9 @@ const LAZY_EDITOR_MODULES = ['BodyEditor', 'MarkdownToggle'];
  * `features/supply/SupplyPlaqueSlot.tsx`.
  */
 const LAZY_DETAIL_MODULES = [
+  'AspectSectionView',
+  'SubtaskAdd',
+  'UndoArrows',
   // R44: настройка после соответствующего жеста.
   'ConfigureView',
   'undo-toast',
@@ -250,6 +259,21 @@ const LAZY_FRAME_MODULES = [
  * нет, но ребро остаётся: он появится с первым же новым местом показа блока.
  */
 const FORBIDDEN_EDGES: readonly { from: string; to: string; hint: string }[] = [
+  {
+    from: 'DetailScreen',
+    to: 'AspectSectionView',
+    hint: 'Форма свойств должна оставаться за lazy фасадом AspectSection.',
+  },
+  {
+    from: 'DetailScreen',
+    to: 'SubtaskAdd',
+    hint: 'Поле создания подзадачи должно оставаться за lazy списком Subtasks.',
+  },
+  {
+    from: 'DetailScreen',
+    to: 'UndoArrows',
+    hint: 'Стрелки и KeyboardBar должны загружаться через UndoArrowsSlot.',
+  },
   { from: 'DetailScreen', to: 'ConfigureView', hint: 'R44: редактор настройки после жеста.' },
   {
     from: 'DetailScreen',

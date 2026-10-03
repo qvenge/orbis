@@ -22,7 +22,7 @@ import { effectiveLabel, OWNER_LOCALE, type PropertyDefinition } from '@orbis/sh
 import type { QueryAst, QueryFilterNode } from '@orbis/shared/query';
 import { useState } from 'react';
 import { type RouterOutputs, trpc } from '../../trpc';
-import { FIELD_CLASS } from '../registry/controls';
+import { FIELD_CLASS } from '../registry/field-class';
 
 /**
  * Потолок выдачи пикера. Число то же, что у прежнего списка категорий

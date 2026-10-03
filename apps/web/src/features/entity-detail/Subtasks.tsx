@@ -1,17 +1,12 @@
-import { newId, ROLE_SUBITEM, ROLE_TICKET } from '@orbis/shared';
-import { Circle, Plus } from 'lucide-react';
-import { useRef, useState } from 'react';
+import { ROLE_SUBITEM, ROLE_TICKET } from '@orbis/shared';
+import { Circle } from 'lucide-react';
+import { lazy, Suspense } from 'react';
 import { useOpenRecord } from '../../app/useOpenRecord';
 import { EntityRef } from '../../lib/entity-ref/EntityRef';
-import { invalidateGraph } from '../../lib/invalidate';
-import { type RouterOutputs, trpc } from '../../trpc';
-import { Button } from '../../ui/Button';
-import { Spinner } from '../../ui/Spinner';
-import { useToast } from '../../ui/toast-store';
-import { journalRefOf } from '../undo/journal-ref';
-import { isUndoEpoch, undoEpoch } from '../undo/undo-epoch';
-import { offerUndoLazy } from '../undo/undo-lazy';
+import type { RouterOutputs } from '../../trpc';
 import { useHostReadOnly } from './record-host';
+
+const SubtaskAdd = lazy(() => import('./SubtaskAdd').then((m) => ({ default: m.SubtaskAdd })));
 
 type Relation = NonNullable<RouterOutputs['entity']['get']['relations']>[number];
 
@@ -32,7 +27,6 @@ const SUBTASK_ROLES: readonly string[] = [ROLE_SUBITEM, ROLE_TICKET];
 // идёт по ключу entity.get: своего ключа у секции больше нет.
 
 export function Subtasks({ parentId, relations }: { parentId: string; relations: Relation[] }) {
-  const utils = trpc.useUtils();
   /**
    * Отсева служебных сущностей здесь БОЛЬШЕ НЕТ, и это прямая выгода реформы. Раньше прогон
    * исполнителя был таким же ребёнком тикета по схлопнутому `parent`, «служебное ли это»
@@ -50,65 +44,8 @@ export function Subtasks({ parentId, relations }: { parentId: string; relations:
   const visibleIds = relations
     .filter((r) => SUBTASK_ROLES.includes(r.role) && r.sourceId === parentId)
     .map((r) => r.targetId);
-  const [draft, setDraft] = useState('');
-  // Предпросмотр шаблона (хост `readOnly`): список и переходы остаются, строки добавления нет.
   const readOnly = useHostReadOnly();
-  const { show } = useToast();
   const openRecord = useOpenRecord();
-  const create = trpc.entity.create.useMutation({
-    meta: { undoStack: 'self' },
-    // DF п.5: списки читают ДРУГОЙ ключ со своим staleTime (60 с у Повестки, K16) и сами
-    // не протухнут — без этого новая подзадача до минуты не видна ни в Browser, ни в
-    // Повестке. Detail родителя (сама секция подзадач) перечитывается тем же вызовом:
-    // invalidateGraph инвалидирует entity.get целиком (Р17), и точечный ключ родителя в
-    // него входит.
-    onSuccess: (data, vars) => {
-      invalidateGraph(utils);
-      const ref = journalRefOf(data);
-      if (ref)
-        offerUndoLazy({
-          title: `Создано: «${vars.input.title}»`,
-          actionId: ref.actionId,
-          entityIds: [],
-        });
-    },
-  });
-  const isPending = create.isPending;
-  // Повтор адресует исходную пачку. Новый родитель требует нового id, иначе replay сохранит прежнюю привязку.
-  const attemptRef = useRef<{ id: string; text: string; parentId: string } | null>(null);
-
-  async function add() {
-    const epoch = undoEpoch();
-    const title = draft.trim();
-    if (!title || isPending) return;
-    const previous = attemptRef.current;
-    const parent = parentId.toLowerCase();
-    const id = previous?.text === title && previous.parentId === parent ? previous.id : newId();
-    attemptRef.current = { id, text: title, parentId: parent };
-    // Ошибку ловим здесь (раньше reject от mutateAsync летел неперехваченным):
-    // тост + черновик остаётся в поле — ввод не теряется.
-    try {
-      await create.mutateAsync({
-        // Новая форма (§А1-1): свойства плоско по id, аспекты — списком того, с чем
-        // сущность рождается (`detach` у создания невыразим — снимать ещё нечего).
-        input: {
-          id,
-          title,
-          tags: [],
-          props: { 'orbis/task_status': 'inbox' },
-          aspects: ['orbis/task'],
-        },
-        source: 'quick_capture',
-        link: { parentId, role: ROLE_SUBITEM },
-      });
-      if (!isUndoEpoch(epoch)) return;
-      attemptRef.current = null;
-      setDraft('');
-    } catch {
-      if (!isUndoEpoch(epoch)) return;
-      show('Не удалось сохранить', 'danger');
-    }
-  }
 
   return (
     <div className="flex flex-col gap-1">
@@ -132,29 +69,9 @@ export function Subtasks({ parentId, relations }: { parentId: string; relations:
       )}
       {/* Тихая строка добавления (Notion): плюс + borderless-инпут, Enter добавляет. */}
       {!readOnly && (
-        <div className="flex items-center gap-2.5 px-2 py-1.5">
-          {isPending ? (
-            <Spinner size={14} aria-label="Сохранение" />
-          ) : (
-            <Plus size={14} aria-hidden className="shrink-0 text-text-muted/70" />
-          )}
-          <input
-            aria-label="Новая подзадача"
-            value={draft}
-            placeholder="Добавить подзадачу…"
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={(e) => {
-              // isComposing: Enter-подтверждение IME-композиции не должно создавать подзадачу.
-              if (e.key === 'Enter' && !e.nativeEvent.isComposing) void add();
-            }}
-            className="min-w-0 flex-1 rounded-md bg-transparent px-1 text-sm text-text outline-none transition placeholder:text-text-muted focus-visible:bg-surface-2/70"
-          />
-          {draft.trim() && (
-            <Button variant="ghost" size="sm" onClick={add} disabled={isPending}>
-              Добавить
-            </Button>
-          )}
-        </div>
+        <Suspense fallback={null}>
+          <SubtaskAdd parentId={parentId} />
+        </Suspense>
       )}
     </div>
   );

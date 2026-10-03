@@ -17,7 +17,7 @@ import { ArrowDown, ArrowUp, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { type RouterOutputs, trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
-import { FIELD_CLASS } from './controls';
+import { FIELD_CLASS } from './field-class';
 import { cleanNav, goneOf, refIdsKey } from './ref-clean';
 
 type RefRow = RouterOutputs['entity']['resolveRefs'][number];

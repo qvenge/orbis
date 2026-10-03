@@ -1718,6 +1718,10 @@ test('модули первого кадра не тянут схему реда
     // Вкладка настроек, которую открывает «⋯ → Настройки» (`ScreenMenu`, задача 22): стор и переход
     // — эагерно из меню экрана записи (финал 1б, C2 M-4).
     '../settings/settings-tab.ts',
+    './editor-cache.ts',
+    './arrows-stack.ts',
+    './title-history.ts',
+    '../entity-detail/UndoArrowsSlot.tsx',
   ]) {
     expect(
       runtimeImports(file).filter((s) => EDITOR_WEIGHT.test(s)),
@@ -2212,4 +2216,35 @@ test('Task18: epoch сохраняет собственный exact rejected dra
   expect(draft).toMatchObject({ doc: ONE, rejected: true, baseRevision: 3 });
   expect(readDraft('e1')).toBeNull();
   expect(s.updates()).toHaveLength(1);
+});
+
+test('R65: eager RefField берёт единую строку класса без runtime controller функций', () => {
+  expect(
+    runtimeImports('../../lib/entity-ref/RefField.tsx').filter((s) =>
+      /registry\/controls$/.test(s),
+    ),
+  ).toEqual([]);
+});
+
+test('R63: создание подзадачи отделено от eager списка и его чтений', () => {
+  expect(
+    runtimeImports('../entity-detail/Subtasks.tsx').filter((s) => /trpc|SubtaskAdd/.test(s)),
+  ).toEqual([]);
+  expect(
+    runtimeImports('../entity-detail/record-blocks.tsx').filter((s) => /SubtaskAdd/.test(s)),
+  ).toEqual([]);
+  expect(runtimeImports('../entity-detail/SubtaskAdd.tsx')).toContain('../../trpc');
+});
+test('R61: eager фасад формы не экспортирует runtime view или policy', () => {
+  expect(
+    runtimeImports('../entity-detail/AspectSection.tsx').filter((s) =>
+      /PropertyControl|AspectSectionView|property-edit-rule/.test(s),
+    ),
+  ).toEqual([]);
+  expect(readModule('../entity-detail/AspectSection.tsx')).not.toMatch(
+    /export\s*\{[^}]*propertyEditRule/,
+  );
+  expect(runtimeImports('../entity-detail/AspectSectionView.tsx')).toContain(
+    '../../lib/registry/PropertyControl',
+  );
 });
