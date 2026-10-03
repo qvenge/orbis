@@ -27,6 +27,7 @@ import { useCategoryTitle } from '../budget/categories';
 import {
   bindStepOwner,
   discardRedo,
+  observeFailedTitleBasis,
   pushStep,
   redoStep,
   resetSteps,
@@ -169,13 +170,7 @@ function TitleEditor({
       if (current() && sequence === saveSequence.current)
         lockRef.current = draftRef.current === v ? null : v;
     } catch (err) {
-      if (current(true)) rejectTitleSend(entityId, token);
-      if (
-        current() &&
-        sequence === saveSequence.current &&
-        observeTitleValue(entityId, latest.current.serverValue)
-      )
-        resetSteps(entityId);
+      if (current(true) && rejectTitleSend(entityId, token)) observeFailedTitleBasis(entityId);
       if (current() && sequence === saveSequence.current && isTitleStale(err))
         latest.current.onStale?.();
     } finally {
@@ -199,6 +194,10 @@ function TitleEditor({
       undo: () => apply(undoTitle(entityId, draftRef.current)),
       redo: () => apply(redoTitle(entityId, draftRef.current)),
       reset: () => {},
+      observe: () => {
+        if (current() && observeTitleValue(entityId, latest.current.serverValue))
+          resetSteps(entityId);
+      },
     });
     return () => {
       mountedRef.current = false;

@@ -4,6 +4,7 @@ import {
   canRedoStep,
   canUndoStep,
   clearAllSteps,
+  observeFailedTitleBasis,
   pushStep,
   redoStep,
   resetSteps,
@@ -11,7 +12,15 @@ import {
   syncBodyDepth,
   undoStep,
 } from './arrows-stack';
-import { recordTitleChange, undoTitle } from './title-history';
+import {
+  acceptTitleSend,
+  forgetTitleHistory,
+  markTitleSent,
+  observeTitleValue,
+  recordTitleChange,
+  rejectTitleSend,
+  undoTitle,
+} from './title-history';
 
 const owner = () => ({ undo: vi.fn(() => true), redo: vi.fn(() => true), reset: vi.fn() });
 afterEach(clearAllSteps);
@@ -89,5 +98,90 @@ test('лимит снимков заголовка не оставляет не�
   }
   for (let i = 0; i < 100; i++) expect(undoStep('e')).toBe(true);
   expect(value).toBe('0');
+  expect(canUndoStep('e')).toBe(false);
+});
+
+test('current title observer survives stale cleanup and reset preserves its binding', () => {
+  let value = 'B';
+  const old = bindStepOwner('e', 'title', { ...owner(), observe: () => pushStep('e', 'title') });
+  const cleanup = bindStepOwner('e', 'title', {
+    ...owner(),
+    observe: () => {
+      if (observeTitleValue('e', value)) resetSteps('e');
+    },
+  });
+  old();
+  const body = owner();
+  const offBody = bindStepOwner('e', 'body', body);
+  observeTitleValue('e', 'A');
+  for (const next of ['B', 'C']) {
+    recordTitleChange('e', next === 'B' ? 'A' : 'B', next, next === 'B' ? 0 : 1000);
+    pushStep('e', 'title');
+    syncBodyDepth('e', 1);
+    value = next;
+    const token = markTitleSent('e', next);
+    observeTitleValue('e', next);
+    expect(rejectTitleSend('e', token)).toBe(true);
+    observeFailedTitleBasis('e');
+    expect(undoTitle('e', next)).toBeNull();
+    expect(canUndoStep('e')).toBe(false);
+  }
+  expect(body.reset).toHaveBeenCalledTimes(2);
+  cleanup();
+  offBody();
+  recordTitleChange('e', 'C', 'D', 2000);
+  pushStep('e', 'title');
+  const detached = markTitleSent('e', 'D');
+  observeTitleValue('e', 'D');
+  expect(rejectTitleSend('e', detached)).toBe(true);
+  observeFailedTitleBasis('e');
+  expect(undoTitle('e', 'D')).toBe('C');
+  expect(canUndoStep('e')).toBe(true);
+});
+
+test('old entry settlement and owner cleanup cannot detach the replacement observer', () => {
+  observeTitleValue('e', 'A');
+  const cleanup = bindStepOwner('e', 'title', { ...owner(), observe: () => resetSteps('e') });
+  const old = markTitleSent('e', 'B');
+  observeTitleValue('e', 'B');
+  forgetTitleHistory('e');
+  observeTitleValue('e', 'A');
+  bindStepOwner('e', 'title', {
+    ...owner(),
+    observe: () => {
+      if (observeTitleValue('e', 'B')) resetSteps('e');
+    },
+  });
+  recordTitleChange('e', 'A', 'B', 0);
+  pushStep('e', 'title');
+  const current = markTitleSent('e', 'B');
+  observeTitleValue('e', 'B');
+  cleanup();
+  acceptTitleSend('e', old);
+  expect(rejectTitleSend('e', old)).toBe(false);
+  expect(canUndoStep('e')).toBe(true);
+  expect(rejectTitleSend('e', current)).toBe(true);
+  observeFailedTitleBasis('e');
+  expect(undoTitle('e', 'B')).toBeNull();
+  expect(canUndoStep('e')).toBe(false);
+});
+
+test('classified failed basis falls back to registered body; clear removes old owners', () => {
+  const old = owner();
+  bindStepOwner('e', 'body', old);
+  syncBodyDepth('e', 1);
+  observeFailedTitleBasis('e');
+  expect(old.reset).toHaveBeenCalledOnce();
+  expect(canUndoStep('e')).toBe(false);
+  clearAllSteps();
+  pushStep('e', 'body');
+  observeFailedTitleBasis('e');
+  expect(canUndoStep('e')).toBe(true);
+  expect(old.reset).toHaveBeenCalledOnce();
+  const current = owner();
+  bindStepOwner('e', 'body', current);
+  observeFailedTitleBasis('e');
+  expect(current.reset).toHaveBeenCalledOnce();
+  expect(old.reset).toHaveBeenCalledOnce();
   expect(canUndoStep('e')).toBe(false);
 });

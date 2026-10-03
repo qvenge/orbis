@@ -187,3 +187,70 @@ test('late settlement after eviction does not recreate any history entry', () =>
   expect(writes).toBe(0);
   expect(observeTitleValue('e', 'first')).toBe(false);
 });
+
+test('accepted newer unobserved intent blocks failed basis and survives refusal', () => {
+  observeTitleValue('e', 'A');
+  recordTitleChange('e', 'A', 'B', 0);
+  const old = markTitleSent('e', 'B');
+  observeTitleValue('e', 'B');
+  const accepted = markTitleSent('e', 'C');
+  acceptTitleSend('e', accepted);
+  expect(rejectTitleSend('e', old)).toBe(false);
+  expect(rejectTitleSend('e', accepted)).toBe(false);
+  expect(observeTitleValue('e', 'C')).toBe(false);
+  expect(undoTitle('e', 'C')).toBe('A');
+});
+
+test('last newer pending refusal classifies the retained failed basis', () => {
+  observeTitleValue('e', 'A');
+  recordTitleChange('e', 'A', 'B', 0);
+  const old = markTitleSent('e', 'B');
+  observeTitleValue('e', 'B');
+  recordTitleChange('e', 'B', 'C', 1000);
+  const pending = markTitleSent('e', 'C');
+  expect(rejectTitleSend('e', old)).toBe(false);
+  expect(undoTitle('e', 'C')).toBe('B');
+  expect(rejectTitleSend('e', pending)).toBe(true);
+  expect(observeTitleValue('e', 'B')).toBe(true);
+  resetTitleHistory('e');
+  expect(undoTitle('e', 'B')).toBeNull();
+  expect(redoTitle('e', 'B')).toBeNull();
+});
+
+test('never observed, accepted, reset and detached sends cannot deliver a failed basis', () => {
+  observeTitleValue('e', 'A');
+  expect(rejectTitleSend('e', undefined)).toBe(false);
+  const unobserved = markTitleSent('e', 'B');
+  expect(rejectTitleSend('e', unobserved)).toBe(false);
+  const accepted = markTitleSent('e', 'C');
+  acceptTitleSend('e', accepted);
+  observeTitleValue('e', 'C');
+  expect(rejectTitleSend('e', accepted)).toBe(false);
+  const reset = markTitleSent('e', 'D');
+  observeTitleValue('e', 'D');
+  resetTitleHistory('e');
+  expect(rejectTitleSend('e', reset)).toBe(false);
+  const forgotten = markTitleSent('e', 'E');
+  observeTitleValue('e', 'E');
+  forgetTitleHistory('e');
+  expect(rejectTitleSend('e', forgotten)).toBe(false);
+  observeTitleValue('e', 'D');
+  const replacement = markTitleSent('e', 'E');
+  observeTitleValue('e', 'E');
+  expect(rejectTitleSend('e', forgotten)).toBe(false);
+  expect(rejectTitleSend('e', replacement)).toBe(true);
+});
+
+for (const accepted of [false, true])
+  test(`same-value refresh retires only the earlier pending prefix accepted=${accepted}`, () => {
+    observeTitleValue('e', 'A');
+    const old = markTitleSent('e', 'B');
+    observeTitleValue('e', 'B');
+    const earlier = markTitleSent('e', 'C');
+    if (accepted) acceptTitleSend('e', earlier);
+    const current = markTitleSent('e', 'B');
+    expect(current).not.toBe(old);
+    acceptTitleSend('e', earlier);
+    rejectTitleSend('e', earlier);
+    expect(observeTitleValue('e', 'C')).toBe(true);
+  });

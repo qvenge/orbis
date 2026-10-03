@@ -1,6 +1,18 @@
 import type { RecordBlockName } from '@orbis/shared/doc/page-grammar';
-import { type ComponentType, lazy, Suspense, useLayoutEffect, useRef, useState } from 'react';
+import {
+  type ComponentType,
+  lazy,
+  Suspense,
+  useCallback,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from 'react';
 import { ThisEntityProvider } from '../../lib/query-blocks/this-entity';
+import { resetSteps, stepsGeneration } from '../entity-editor/arrows-stack';
+import { mountRecord } from '../entity-editor/editor-cache';
+import { observeTitleValue } from '../entity-editor/title-history';
+import { isUndoEpoch, undoEpoch } from '../undo/undo-epoch';
 import { Backlinks } from './Backlinks';
 import { Blockers } from './Blockers';
 import { EntityBody, ReadOnlyEntityBody, useBodyArrows, useBodyScreen } from './EntityBody';
@@ -120,6 +132,23 @@ export function TitleBlock() {
 export function BodyBlock() {
   const { entity, readOnly } = useRecordHost();
   const { arrows, ...screen } = useBodyScreen();
+  const intent = useRef({ epoch: undoEpoch(), generation: stepsGeneration() }).current;
+  const titleShown = arrows?.titleShown;
+  const current = useCallback(
+    () =>
+      !readOnly &&
+      titleShown === false &&
+      isUndoEpoch(intent.epoch) &&
+      intent.generation === stepsGeneration(),
+    [readOnly, titleShown, intent],
+  );
+  // Даже без заголовка и до ленивого редактора наблюдение принадлежит тому же LRU записи.
+  useLayoutEffect(() => {
+    if (current()) return mountRecord(entity.id);
+  }, [entity.id, current]);
+  useLayoutEffect(() => {
+    if (current() && observeTitleValue(entity.id, entity.title)) resetSteps(entity.id);
+  }, [entity.id, entity.title, current]);
   return (
     <ThisEntityProvider id={entity.id}>
       {!readOnly && arrows !== undefined && !arrows.titleShown && (

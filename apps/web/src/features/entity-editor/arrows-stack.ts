@@ -10,6 +10,7 @@ export interface StepOwnerHandlers {
   redo(): boolean;
   reset(): void;
   closeGroup?(): void;
+  observe?(): void;
 }
 interface Steps {
   done: StepOwner[];
@@ -43,6 +44,12 @@ export function bindStepOwner(
   return () => {
     if (owners.get(id)?.[owner] === h) delete o[owner];
   };
+}
+/** Только для уже отвергнутой наблюдавшейся основы без более нового своего намерения. */
+export function observeFailedTitleBasis(id: string): void {
+  const o = owners.get(id);
+  if (o?.title?.observe) o.title.observe();
+  else if (o?.body) resetSteps(id);
 }
 export function pushStep(id: string, owner: StepOwner): void {
   const s = of(id);

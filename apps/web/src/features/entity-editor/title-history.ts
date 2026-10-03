@@ -48,17 +48,26 @@ export function markTitleSent(id: string, value: string): SendToken | undefined 
   if (value !== h.seen) {
     h.pending = h.pending.filter((v) => v.value !== value);
     h.pending.push(token);
-  } else if (h.observed && h.observed.state !== 'accepted') h.observed = token;
-  else return;
+  } else if (h.observed && h.observed.state !== 'accepted') {
+    h.pending.length = 0;
+    h.observed = token;
+  } else return;
   return token;
 }
 /** Отказ снимает только своё намерение, даже если поле уже размонтировано. */
-export function rejectTitleSend(id: string, token: SendToken | undefined): void {
+export function rejectTitleSend(id: string, token: SendToken | undefined): boolean {
   const h = histories.get(id);
-  if (h) {
-    h.pending = h.pending.filter((v) => v !== token);
-    if (token && h.observed === token && token.state !== 'accepted') token.state = 'failed';
-  }
+  if (
+    !h ||
+    !token ||
+    token.state === 'accepted' ||
+    (h.observed !== token && !h.pending.includes(token))
+  )
+    return false;
+  h.pending = h.pending.filter((v) => v !== token);
+  if (h.observed === token) token.state = 'failed';
+  // Более новая отправка, ещё не попавшая в props, не теряет свои шаги из-за старого отказа.
+  return !h.pending.length && h.observed?.state === 'failed';
 }
 /** Успех подтверждает только всё ещё принадлежащее этой записи намерение. */
 export function acceptTitleSend(id: string, token: SendToken | undefined): void {
