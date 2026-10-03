@@ -13,46 +13,73 @@ export type ToastItem = {
   title: string;
   tone: ToastTone;
   action?: ToastAction;
+  description?: string;
 };
 
 const AUTO_DISMISS_MS = 4000;
-/**
- * Тост с действием живёт дольше: «Отменить» — единственный вход Undo пачки в web, и за четыре
- * секунды его не успеть ни прочитать, ни достать с клавиатуры (`type="background"` фокус не
- * берёт). Наведение и фокус ставят таймер на паузу (`pause`/`resume`, финальное ревью, C1-M3).
+/** Тост с действием живёт 10 секунд; hover/focus/touch/hidden независимо удерживают остаток.
+ * Плашка и описание доступны через Tab и aria-live; отмена остаётся доступна также из карточки.
  */
 export const ACTION_DISMISS_MS = 10_000;
 let counter = 0;
+let actionGeneration = 0;
+export const toastActionGeneration = () => actionGeneration;
 
 /** Таймер тоста: ручка, остаток и момент, с которого он идёт (`null` — на паузе). */
-type Timer = { handle: ReturnType<typeof setTimeout> | null; remaining: number; startedAt: number };
+export type PauseReason = 'hover' | 'focus' | 'touch' | 'hidden';
+type Timer = {
+  handle: ReturnType<typeof setTimeout> | null;
+  remaining: number;
+  startedAt: number;
+  paused: Set<PauseReason>;
+};
+const hiddenNow = () => typeof document !== 'undefined' && document.visibilityState === 'hidden';
 const timers = new Map<string, Timer>();
 
 type ToastState = {
   toasts: ToastItem[];
-  show: (title: string, tone?: ToastTone, action?: ToastAction) => string;
+  show: (title: string, tone?: ToastTone, action?: ToastAction, description?: string) => string;
   dismiss: (id: string) => void;
   /** Остановить отсчёт (наведение, фокус внутри тоста); повторная пауза — no-op. */
-  pause: (id: string) => void;
+  pause: (id: string, reason: PauseReason) => void;
   /** Продолжить отсчёт с остатка; без паузы — no-op. */
-  resume: (id: string) => void;
+  resume: (id: string, reason: PauseReason) => void;
 };
 
 export const useToastStore = create<ToastState>((set, get) => {
-  const run = (id: string, ms: number) => {
-    timers.set(id, {
-      handle: setTimeout(() => get().dismiss(id), ms),
-      remaining: ms,
-      startedAt: Date.now(),
-    });
+  const run = (id: string) => {
+    const t = timers.get(id);
+    if (!t || t.paused.size > 0) return;
+    t.startedAt = Date.now();
+    t.handle = setTimeout(() => get().dismiss(id), t.remaining);
   };
   return {
     toasts: [],
-    show: (title, tone = 'default', action) => {
+    show: (title, tone = 'default', action, description) => {
       counter += 1;
+      if (action !== undefined) actionGeneration += 1;
       const id = `toast-${counter}`;
-      set((s) => ({ toasts: [...s.toasts, { id, title, tone, ...(action && { action }) }] }));
-      run(id, action === undefined ? AUTO_DISMISS_MS : ACTION_DISMISS_MS);
+      if (action !== undefined)
+        for (const t of get().toasts) if (t.action !== undefined) get().dismiss(t.id);
+      timers.set(id, {
+        handle: null,
+        remaining: action === undefined ? AUTO_DISMISS_MS : ACTION_DISMISS_MS,
+        startedAt: Date.now(),
+        paused: new Set(hiddenNow() ? ['hidden'] : []),
+      });
+      set((s) => ({
+        toasts: [
+          ...s.toasts,
+          {
+            id,
+            title,
+            tone,
+            ...(action && { action }),
+            ...(description !== undefined && { description }),
+          },
+        ],
+      }));
+      run(id);
       return id;
     },
     // Повторный dismiss того же id — no-op (filter не найдёт).
@@ -62,20 +89,20 @@ export const useToastStore = create<ToastState>((set, get) => {
       timers.delete(id);
       set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) }));
     },
-    pause: (id) => {
-      const timer = timers.get(id);
-      if (timer === undefined || timer.handle === null) return;
-      clearTimeout(timer.handle);
-      timers.set(id, {
-        handle: null,
-        remaining: Math.max(0, timer.remaining - (Date.now() - timer.startedAt)),
-        startedAt: timer.startedAt,
-      });
+    pause: (id, reason) => {
+      const t = timers.get(id);
+      if (!t) return;
+      if (t.handle !== null) {
+        clearTimeout(t.handle);
+        t.remaining = Math.max(0, t.remaining - (Date.now() - t.startedAt));
+        t.handle = null;
+      }
+      t.paused.add(reason);
     },
-    resume: (id) => {
-      const timer = timers.get(id);
-      if (timer === undefined || timer.handle !== null) return;
-      run(id, timer.remaining);
+    resume: (id, reason) => {
+      const t = timers.get(id);
+      if (!t || !t.paused.delete(reason) || t.paused.size > 0) return;
+      run(id);
     },
   };
 });
@@ -85,3 +112,10 @@ export function useToast(): { show: ToastState['show'] } {
   const show = useToastStore((s) => s.show);
   return { show };
 }
+
+// Подписка одна на оболочку, поэтому пауза переживает смену экрана.
+if (typeof document !== 'undefined')
+  document.addEventListener('visibilitychange', () => {
+    const { toasts, pause, resume } = useToastStore.getState();
+    for (const t of toasts) (hiddenNow() ? pause : resume)(t.id, 'hidden');
+  });

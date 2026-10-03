@@ -4586,6 +4586,8 @@ function versionsHandler(
     if (path === 'version.list') return opts.versions ?? VERSIONS;
     if (path === 'version.pin')
       return {
+        actionId: 'pin3',
+        consequences: false,
         id: 'v3',
         entityId: 'e1',
         label: (input as { label: string }).label,
@@ -4593,7 +4595,10 @@ function versionsHandler(
         actorKind: 'owner',
         createdAt: '2026-08-17T12:00:00.000Z',
       };
-    if (path === 'version.restore') return (opts.restore ?? (() => entity))();
+    if (path === 'version.restore')
+      return opts.restore
+        ? opts.restore()
+        : { ...entity, actionId: 'restore1', consequences: true };
     return registryReply(path) ?? {};
   };
 }
@@ -4675,7 +4680,8 @@ describe('ADE: версии', () => {
     // путать их нельзя.
     fireEvent.click(screen.getByRole('menuitem', { name: 'Закрепить версию' }));
 
-    const dialog = await screen.findByRole('dialog');
+    await screen.findByLabelText('Подпись');
+    const dialog = screen.getByRole('dialog');
     // Подпись обязательна: снимок без неё в списке не отличить от соседнего по дате.
     expect(within(dialog).getByRole('button', { name: 'Закрепить' })).toBeDisabled();
     await userEvent.type(within(dialog).getByLabelText('Подпись'), 'до правки агентом');
@@ -4752,7 +4758,7 @@ describe('ADE: версии', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
   });
 
-  test('«Восстановить» при неотправленном наборе: сначала досыл текста — восстановления нет, тост; повтор после сохранения — восстановление с новой ревизией (Fable M-1)', async () => {
+  test('«Восстановить» ждёт досыл и сразу восстанавливает с подтверждённой ревизией', async () => {
     // Иначе страховка «перед восстановлением …» закрепила бы текст БЕЗ набранного, а сам набор уехал бы после
     // восстановления со старой ревизией в 409 «с самим собой».
     const server = { revision: 3, title: entity.title };
@@ -4797,18 +4803,8 @@ describe('ADE: версии', () => {
     const dialog = await screen.findByRole('dialog');
     fireEvent.click(within(dialog).getByRole('button', { name: 'Восстановить' }));
 
-    // Жест отложен: набранное досылается сейчас, человеку сказано, восстановления нет
-    expect(await screen.findByText(BODY_SAVING)).toBeInTheDocument();
     await waitFor(() => expect(updates).toHaveLength(1));
     expect(JSON.stringify((updates[0] as { bodyDoc?: unknown }).bodyDoc)).toContain('и хвост');
-    expect(calls.filter((c) => c.path === 'version.restore')).toEqual([]);
-
-    // Текст сохранён и запись перечитана (барьер — заголовок из перечитывания) — повтор проходит, с ревизией после
-    // сохранения
-    await screen.findAllByText('Задача, текст сохранён', undefined, EDITOR_READY);
-    fireEvent.click(
-      within(screen.getByRole('dialog')).getByRole('button', { name: 'Восстановить' }),
-    );
     await waitFor(() =>
       expect(calls.find((c) => c.path === 'version.restore')?.input).toEqual({
         versionId: 'v1',
@@ -4856,16 +4852,6 @@ describe('ADE: версии', () => {
     await userEvent.click(within(row).getByRole('button', { name: 'Восстановить' }));
     const dialog = await screen.findByRole('dialog');
     fireEvent.click(within(dialog).getByRole('button', { name: 'Восстановить' }));
-    expect((await screen.findAllByText(BODY_SAVING)).length).toBeGreaterThan(0);
-    await waitFor(() => expect(updates).toHaveLength(1));
-    // Ответ досыла осел (оседание — промисом), перечитывание висит
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 50));
-    });
-
-    fireEvent.click(
-      within(screen.getByRole('dialog')).getByRole('button', { name: 'Восстановить' }),
-    );
     await waitFor(() =>
       expect(calls.find((c) => c.path === 'version.restore')?.input).toEqual({
         versionId: 'v1',
@@ -7219,4 +7205,325 @@ test('«Обновить» на плашке конфликта сажает т�
   expect(updates[2]?.expectedBodyRevision).toBe(agentRevision);
   expect(server.revision).toBe(agentRevision + 1); // сервер принял
   expect(screen.queryByText(/Изменено в другом месте — обновите/)).toBeNull();
+}, 30_000);
+
+test('R19: Refresh предлагает последний набор, Keep mine сохраняет поверх показанного агента', async () => {
+  // Продолжение сюжета «агент правит текст, пока владелец печатает»: после отказа `STALE_VERSION` перечитывание уже
+  // положило текст агента в кэш, и «Обновить» приносит ТОТ ЖЕ объект — эффект приезда по `doc` не прогнался бы.
+  // Посадку делает явный сигнал: в редакторе текст агента, его ревизия — основа, набор поверх уходит без 409.
+  // Набранное до «Обновить» остаётся черновиком на диске — как «Обновить» и было устроено.
+  const server = {
+    revision: entity.bodyRevision as number,
+    title: entity.title,
+    doc: entity.bodyDoc,
+    body: entity.body,
+  };
+  let agent = true;
+  const updates: Array<{ expectedBodyRevision?: number; bodyDoc?: unknown }> = [];
+  const shown = () => ({
+    ...entity,
+    title: server.title,
+    body: server.body,
+    bodyDoc: server.doc,
+    bodyRevision: server.revision,
+  });
+  renderWithProviders(<DetailScreen entityId="e1" />, (path, input) => {
+    if (path === 'entity.get')
+      return { entity: shown(), relations: [], thread: { threadId: 'th1', messages: [] } };
+    if (path === 'entity.update') {
+      const inp = input as { expectedBodyRevision?: number; bodyDoc?: typeof entity.bodyDoc };
+      updates.push(inp);
+      if (inp.bodyDoc === undefined) return mockEntityUpdateResult(shown());
+      if (inp.expectedBodyRevision !== server.revision)
+        throw staleBodyError({ expected: inp.expectedBodyRevision, current: server.revision });
+      server.revision += 1;
+      server.doc = inp.bodyDoc;
+      const saved = shown();
+      if (agent) {
+        agent = false;
+        server.revision += 1;
+        server.title = 'Правлено агентом';
+        server.body = 'текст агента';
+        server.doc = parseBody('текст агента');
+      }
+      return mockEntityUpdateResult(saved);
+    }
+    return registryReply(path) ?? {};
+  });
+  const field = await editorField();
+  await userEvent.click(field);
+  await userEvent.type(field, ' и хвост');
+  await waitFor(() => expect(updates).toHaveLength(1), EDITOR_READY);
+  await screen.findByRole('heading', { name: 'Правлено агентом' }, EDITOR_READY);
+  await userEvent.type(field, ' ещё');
+  const refresh = await screen.findByRole('button', { name: 'Обновить' }, EDITOR_READY);
+  const agentRevision = server.revision;
+
+  // Фокус НЕ уводим: посадка по «Обновить» — явный жест, страж набранного её не держит
+  await userEvent.type(field, ' последние слова');
+  fireEvent.click(refresh);
+  await expectEditorText('текст агента');
+  expect(screen.getByTestId('body-editor')).not.toHaveTextContent('ещё');
+  expect(screen.queryByText(/Изменено в другом месте — обновите/)).toBeNull();
+  expect(JSON.stringify(readDraft('e1')?.doc)).toContain('ещё'); // набранное до «Обновить» — черновиком
+
+  fireEvent.click(await screen.findByRole('button', { name: 'Оставить моё' }));
+  await expectEditorHas('последние слова');
+  await waitFor(() => expect(updates).toHaveLength(3), EDITOR_READY);
+  expect(updates[2]?.expectedBodyRevision).toBe(agentRevision);
+  expect(JSON.stringify(updates[2]?.bodyDoc)).toContain('последние слова');
+}, 30_000);
+
+test('свободная decimal Сумма 340 → 430 показывает прежнее значение и Отменить на реальном контроле', async () => {
+  renderWithProviders(
+    <>
+      <DetailScreen entityId="e1" />
+      <Toaster />
+    </>,
+    (path) => {
+      if (path === 'entity.update')
+        return { ...mockEntityUpdateResult(finEntity), actionId: 'amount1', consequences: false };
+      return finHandler(path);
+    },
+  );
+  const field = await screen.findByLabelText('Сумма');
+  fireEvent.change(field, { target: { value: '430' } });
+  fireEvent.blur(field);
+  expect(await screen.findByText(/Сумма 340.* → 430/)).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Отменить' })).toBeInTheDocument();
+});
+
+test('own undo удерживает старый редактор до нового тела при задержанном refetch; следующая буква сохраняется', async () => {
+  const { runUndo } = await import('../undo/undo-action');
+  let undoReply: ((v: unknown) => void) | undefined;
+  let readReply: ((v: unknown) => void) | undefined;
+  let undone = false;
+  const fresh = {
+    ...entity,
+    bodyRevision: (entity.bodyRevision as number) + 1,
+    body: 'до правки',
+    bodyDoc: parseBody('до правки'),
+  };
+  const { calls } = renderWithProviders(
+    <>
+      <DetailScreen entityId="e1" />
+      <button type="button" onClick={() => void runUndo('a1', { entityIds: ['e1'] })}>
+        Отмена через общий путь
+      </button>
+    </>,
+    (path, input) => {
+      if (path === 'entity.get')
+        return undone
+          ? new Promise((resolve) => {
+              readReply = resolve;
+            })
+          : { entity, relations: [], thread: null };
+      if (path === 'ai.undo')
+        return new Promise((resolve) => {
+          undoReply = resolve;
+        });
+      if (path === 'entity.update')
+        return { ...mockEntityUpdateResult(fresh), bodyRevision: fresh.bodyRevision + 1 };
+      return registryReply(path) ?? {};
+    },
+  );
+  await editorField();
+  fireEvent.click(screen.getByRole('button', { name: 'Отмена через общий путь' }));
+  await waitFor(() => expect(undoReply).toBeDefined());
+  // Между досылом и ответом запрещён набор в старое тело, который посадка результата потеряла бы.
+  expect(document.querySelector('[contenteditable="true"]')).toBeNull();
+  undone = true;
+  await act(async () =>
+    undoReply?.({
+      actionId: 'u1',
+      undone: { id: 'a1', title: 'Правка' },
+      pinnedVersions: [],
+      bodyRevisions: [{ entityId: 'e1', bodyRevision: fresh.bodyRevision }],
+    }),
+  );
+  await waitFor(() => expect(readReply).toBeDefined());
+  expect(screen.getByText('Текст изменяется — ждём обновления записи')).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Обновить текст' })).toBeInTheDocument();
+  expect(document.querySelector('[contenteditable="true"]')).toBeNull();
+  await act(async () => readReply?.({ entity: fresh, relations: [], thread: null }));
+  const field = await editorField();
+  await expectEditorHas('до правки');
+  const { flushBodyOf } = await import('../entity-editor/body-flush');
+  await expect(flushBodyOf('e1')).resolves.toBe('nothing');
+  expect(calls.filter((c) => c.path === 'entity.update')).toHaveLength(0);
+  await userEvent.click(field);
+  await userEvent.type(field, ' ещё');
+  await waitFor(
+    () => expect(calls.some((c) => c.path === 'entity.update')).toBe(true),
+    EDITOR_READY,
+  );
+  expect(calls.find((c) => c.path === 'entity.update')?.input).toMatchObject({
+    expectedBodyRevision: fresh.bodyRevision,
+  });
+}, 30_000);
+
+test('R43: empty→nonempty→replaced empty сохраняет ответ, новая запись снимает память; запрос ровно у wrapper', async () => {
+  let live: unknown[] = [];
+  function Tree() {
+    const [id, set] = useState('e1');
+    const utils = trpc.useUtils();
+    return (
+      <>
+        <DetailScreen entityId={id} />
+        <button
+          type="button"
+          onClick={() => void utils.routine.proposalsForEntity.invalidate({ entityId: id })}
+        >
+          Проверить предложения
+        </button>
+        <button type="button" onClick={() => set('e2')}>
+          Другая запись
+        </button>
+      </>
+    );
+  }
+  const { calls } = renderWithProviders(<Tree />, (path, input) => {
+    if (path === 'routine.proposalsForEntity')
+      return (input as { entityId: string }).entityId === 'e1' ? live : [];
+    if (path === 'routine.decideProposal') {
+      live = [];
+      return { status: 'replaced', livePendingId: null, liveStatus: 'applied', reason: 'answered' };
+    }
+    if (path === 'entity.get' && (input as { id: string }).id === 'e2')
+      return { entity: { ...entity, id: 'e2', title: 'Соседняя' }, relations: [], thread: null };
+    return overlayHandler({ proposals: [] })(path, input);
+  });
+  await editorField();
+  expect(screen.queryByTestId('proposal-overlay')).toBeNull();
+  expect(calls.filter((c) => c.path === 'routine.proposalsForEntity')).toHaveLength(1);
+  live = [proposalFor()];
+  fireEvent.click(screen.getByRole('button', { name: 'Проверить предложения' }));
+  const plate = await screen.findByTestId('proposal-plate');
+  togglePlate(plate);
+  fireEvent.click(within(plate).getByRole('button', { name: 'Принять' }));
+  expect(await screen.findByTestId('proposal-replaced-answer')).toBeInTheDocument();
+  await waitFor(() => expect(screen.queryByTestId('proposal-plate')).toBeNull());
+  expect(screen.getByTestId('proposal-replaced-answer')).toBeInTheDocument();
+  expect(calls.filter((c) => c.path === 'routine.proposalsForEntity')).toHaveLength(3);
+  fireEvent.click(screen.getByRole('button', { name: 'Другая запись' }));
+  await screen.findByRole('heading', { name: 'Соседняя' });
+  expect(screen.queryByTestId('proposal-replaced-answer')).toBeNull();
+});
+
+test('общий undo во время optimistic autosave сохраняет неподтверждённый черновик при transport failure', async () => {
+  const { runUndo } = await import('../undo/undo-action');
+  let rejectSave: ((e: unknown) => void) | undefined;
+  const { calls } = renderWithProviders(
+    <>
+      <DetailScreen entityId="e1" />
+      <BodyProbe />
+    </>,
+    (path) => {
+      if (path === 'entity.get') return { entity, relations: [], thread: null };
+      if (path === 'entity.update')
+        return new Promise((_resolve, reject) => {
+          rejectSave = reject;
+        });
+      return registryReply(path) ?? {};
+    },
+  );
+  const field = await editorField();
+  await userEvent.click(field);
+  await userEvent.type(field, ' неподтверждённые слова');
+  await waitFor(() => expect(rejectSave).toBeDefined(), EDITOR_READY);
+  expect(screen.getByTestId('body-probe')).toHaveTextContent('неподтверждённые слова');
+  expect(JSON.stringify(readDraft('e1')?.doc)).toContain('неподтверждённые слова');
+  let outcome: ReturnType<typeof runUndo> | undefined;
+  await act(async () => {
+    outcome = runUndo('a1', { entityIds: ['e1'] });
+  });
+  expect(JSON.stringify(readDraft('e1')?.doc)).toContain('неподтверждённые слова');
+  await act(async () => rejectSave?.(new Error('Соединение прервано')));
+  await expect(outcome).resolves.toMatchObject({
+    kind: 'failed',
+    message: 'Нет связи: набранный текст ещё не на сервере — отмена не отправлена',
+  });
+  expect(JSON.stringify(readDraft('e1')?.doc)).toContain('неподтверждённые слова');
+  expect(calls.filter((c) => c.path === 'ai.undo')).toHaveLength(0);
+  expect(calls.filter((c) => c.path === 'entity.update')).toHaveLength(1);
+}, 30_000);
+
+test('restore во время optimistic autosave сохраняет черновик при transport failure и не отправляет восстановление', async () => {
+  let rejectSave: ((e: unknown) => void) | undefined;
+  const versions = versionsHandler();
+  const { calls } = renderWithProviders(
+    <>
+      <DetailScreen entityId="e1" />
+      <Toaster />
+      <BodyProbe />
+    </>,
+    (path, input) => {
+      if (path === 'entity.update')
+        return new Promise((_resolve, reject) => {
+          rejectSave = reject;
+        });
+      return versions(path, input);
+    },
+  );
+  const field = await editorField();
+  await userEvent.click(field);
+  await userEvent.type(field, ' неподтверждённый restore');
+  await waitFor(() => expect(rejectSave).toBeDefined(), EDITOR_READY);
+  expect(screen.getByTestId('body-probe')).toHaveTextContent('неподтверждённый restore');
+  await openDetails();
+  const card = await screen.findByTestId('versions-card');
+  const row = (await within(card).findAllByRole('listitem'))[0] as HTMLElement;
+  await userEvent.click(within(row).getByRole('button', { name: 'Восстановить' }));
+  const dialog = await screen.findByRole('dialog');
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Восстановить' }));
+  expect(JSON.stringify(readDraft('e1')?.doc)).toContain('неподтверждённый restore');
+  await act(async () => rejectSave?.(new Error('Соединение прервано')));
+  await screen.findByText(/Нет связи.*восстановление не отправлено/);
+  expect(JSON.stringify(readDraft('e1')?.doc)).toContain('неподтверждённый restore');
+  expect(calls.filter((c) => c.path === 'version.restore')).toHaveLength(0);
+  expect(calls.filter((c) => c.path === 'entity.update')).toHaveLength(1);
+}, 30_000);
+
+test('общий undo ждёт successful optimistic autosave и не досылает тот же документ повторно', async () => {
+  const { runUndo } = await import('../undo/undo-action');
+  let resolveSave: ((v: unknown) => void) | undefined;
+  let savedDoc: unknown;
+  const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, (path, input) => {
+    if (path === 'entity.get') return { entity, relations: [], thread: null };
+    if (path === 'entity.update') {
+      savedDoc = (input as { bodyDoc: unknown }).bodyDoc;
+      return new Promise((resolve) => {
+        resolveSave = resolve;
+      });
+    }
+    if (path === 'ai.undo')
+      return {
+        actionId: 'u1',
+        undone: { id: 'a1', title: 'Правка' },
+        pinnedVersions: [],
+        bodyRevisions: [],
+      };
+    return registryReply(path) ?? {};
+  });
+  const field = await editorField();
+  await userEvent.click(field);
+  await userEvent.type(field, ' подтверждённые слова');
+  await waitFor(() => expect(resolveSave).toBeDefined(), EDITOR_READY);
+  let outcome: ReturnType<typeof runUndo> | undefined;
+  await act(async () => {
+    outcome = runUndo('a1', { entityIds: ['e1'] });
+  });
+  expect(calls.filter((c) => c.path === 'ai.undo')).toHaveLength(0);
+  expect(JSON.stringify(readDraft('e1')?.doc)).toContain('подтверждённые слова');
+  await act(async () =>
+    resolveSave?.({
+      ...mockEntityUpdateResult(entity),
+      bodyDoc: savedDoc,
+      bodyRevision: (entity.bodyRevision as number) + 1,
+    }),
+  );
+  await expect(outcome).resolves.toMatchObject({ kind: 'undone' });
+  expect(calls.filter((c) => c.path === 'entity.update')).toHaveLength(1);
+  expect(calls.filter((c) => c.path === 'ai.undo')).toHaveLength(1);
+  expect(readDraft('e1')).toBeNull();
 }, 30_000);

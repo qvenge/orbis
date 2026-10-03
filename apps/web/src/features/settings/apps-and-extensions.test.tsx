@@ -150,7 +150,12 @@ function render(updates: () => SupplyUpdate[] = () => []) {
       case 'app.archive':
         return { actionId: ACT, consequences: false };
       case 'ai.undo':
-        return { ok: true, actionId: ACT };
+        return {
+          actionId: ACT,
+          undone: { id: ACT, title: 'Правка' },
+          pinnedVersions: [],
+          bodyRevisions: [],
+        };
       case 'entity.resolveRefs':
         return (input as { ids: string[] }).ids.flatMap((rid) => {
           const title = TITLES[rid];

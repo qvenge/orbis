@@ -17,6 +17,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { isBodyStale } from '../../lib/orbis-error';
 import type { RouterInputs } from '../../trpc';
 import { useEntityUpdate } from '../entity-detail/useEntityDetail';
+import type { FlushResult } from './body-flush';
 import {
   clearDraft,
   DRAFT_REJECTING_CODE,
@@ -122,6 +123,12 @@ export interface BodySave {
    */
   expectedRevision: () => number;
   flush: () => void;
+  /** Ждёт весь полёт и очередь, а отказ не выдаёт за сохранение. */
+  flushSettled: () => Promise<FlushResult>;
+  revisionForRewrite: () => number;
+  beginRewrite: () => (revision?: number) => void;
+  rewritePending: boolean;
+  offerConflictDraft: () => void;
   /**
    * Есть ли набранное, чего сервер ещё не подтвердил: отложенный документ, ОТЛИЧНЫЙ по смыслу от
    * тела записи, или сохранение в полёте. Нужен жестам меню, которые переписывают запись пачкой
@@ -351,6 +358,13 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
   const shownRevisionRef = useRef(entity.bodyRevision);
   const timerRef = useRef<number | null>(null);
   const inFlightRef = useRef(false);
+  const mountedRef = useRef(true);
+  const settleWaitersRef = useRef<Array<(r: FlushResult) => void>>([]);
+  const lastFailedRef = useRef(false);
+  const settleRef = useRef<() => void>(() => {});
+  const rewriteRef = useRef<number | null | undefined>(undefined);
+  const rewriteToken = useRef(0);
+  const [rewritePending, setRewritePending] = useState(false);
   const stoppedRef = useRef(false);
   /** «Как только текущий запрос осядет — отправить отложенное». Ставится вместо второй попытки. */
   const chainedRef = useRef(false);
@@ -498,6 +512,10 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
     // Отвергнутый документ — про ПРЕЖНЮЮ запись: под новой этот объект не встретится никогда,
     // но держать ссылку на чужое тело здесь незачем ровно так же, как и отложенное.
     rejectedDocRef.current = null;
+    for (const r of settleWaitersRef.current.splice(0)) r('nothing');
+    rewriteRef.current = undefined;
+    rewriteToken.current += 1;
+    setRewritePending(false);
     confirmedRef.current = null;
     stoppedRef.current = false;
     chainedRef.current = false;
@@ -608,7 +626,7 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
       if (rejectedDocRef.current === doc) markDraftRejected(entityId);
     }
 
-    if (stoppedRef.current) return;
+    if (stoppedRef.current || rewriteRef.current !== undefined) return;
     // Ревизия неизвестна (0 — `shownBodyRevision`): замок взять не с чего, а отказ разбора хук принял бы за приговор
     // документу — пометил бы черновик «сервер отверг» и выключил сохранение. Не шлём: текст лежит черновиком.
     if (expectedBodyRevision === 0) {
@@ -658,13 +676,18 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
       setSaving(false);
       // Ответа не было вовсе — отказ транспортный (`transportFailedRef`).
       transportFailedRef.current = true;
+      lastFailedRef.current = true;
       setFailure('network');
       // Досыл — только если его просили, пока шёл запрос. Сам по себе повтор не заводится:
       // круг «выдержка → повтор → выдержка → повтор» тратил бы сеть без единой новой правки.
-      if (chainedRef.current) {
-        chainedRef.current = false;
-        save();
-      }
+      const queued =
+        chainedRef.current &&
+        pendingRef.current !== null &&
+        !sameDoc(pendingRef.current.doc, doc.doc);
+      chainedRef.current = false;
+      // Явный досыл отказал; обычный НОВЫЙ набор живёт отдельно и получает один следующий круг.
+      settleRef.current();
+      if (queued) save();
     }, SAVE_GIVE_UP_MS);
     mutate(
       // Приведение, а не проверка формы: `JSONContent` описывает ЛЮБОЙ узел ProseMirror, а
@@ -682,6 +705,7 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
           // досыл уходит из уборки эффекта, когда наблюдателя уже отцепили (ревью раунда 1,
           // I-1). Здесь остаётся ровно то, что про ЭТОТ хук и умирает вместе с ним.
           if (stale()) return;
+          lastFailedRef.current = false;
           ownDraftRef.current = false;
           confirmedRef.current = saved.bodyRevision;
           // Ревизия отложенного двигается вместе с подтверждённой, и это обязательно: правка,
@@ -714,6 +738,7 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
           // CONFLICT: 409 бывает и у других отказов, а «досыл обречён» — только у этого.
           if (isBodyStale(err)) staleDocRef.current = doc;
           if (stale()) return;
+          lastFailedRef.current = true;
           // Транспортный — без ответа сервера: не ошибка tRPC вовсе или ошибка без кода и статуса.
           transportFailedRef.current =
             !(err instanceof TRPCClientError) ||
@@ -742,10 +767,13 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
           // отказ повтора не заводит: тот ушёл бы с той же протухшей ревизией и
           // получил бы тот же 409 — и так по кругу. Флаг снимается перед вызовом, поэтому
           // круг «отказ → досыл → отказ → досыл» невозможен: второй досыл никто не просил.
-          if (chainedRef.current) {
+          if (lastFailedRef.current) settleRef.current();
+          const queued = pendingRef.current !== null && !sameDoc(pendingRef.current.doc, doc.doc);
+          if (chainedRef.current && (!lastFailedRef.current || queued)) {
             chainedRef.current = false;
             save();
           }
+          settleRef.current();
         },
       },
     );
@@ -753,6 +781,18 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
 
   const onDocChange = useCallback(
     (doc: BodyDoc) => {
+      if (rewriteRef.current !== undefined) {
+        // Позднее событие редактора сохраняем отдельным предложением, а не кладём поверх результата отмены.
+        const draft: Draft = {
+          doc,
+          baseRevision: currentExpected(shownRevisionRef.current),
+          savedAt: new Date().toISOString(),
+          rejected: false,
+        };
+        saveDraft(entityId, doc, draft.baseRevision!, draft.savedAt);
+        setPendingDraft(draft);
+        return;
+      }
       pendingRef.current = doc;
       // Ревизия ПОКАЗАННОГО текста (или своего подтверждённого сохранения, если оно новее): человек печатает поверх
       // того, что видит, а не поверх того, что успело приехать в кэш (рулинг R-17).
@@ -761,7 +801,7 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
       clearTimer();
       timerRef.current = window.setTimeout(save, SAVE_DEBOUNCE_MS);
     },
-    [save, clearTimer, currentExpected],
+    [save, clearTimer, currentExpected, entityId, setPendingDraft],
   );
 
   const onShown = useCallback((revision: number) => {
@@ -807,11 +847,83 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
   const blocked = useCallback(
     (): boolean =>
       stoppedRef.current ||
+      rewriteRef.current !== undefined ||
       (conflictRef.current &&
         pendingRef.current !== null &&
         pendingRef.current === staleDocRef.current),
     [],
   );
+
+  settleRef.current = () => {
+    if (settleWaitersRef.current.length === 0 || inFlightRef.current) return;
+    let result: FlushResult;
+    if (lastFailedRef.current || blocked())
+      result = transportFailedRef.current ? 'offline' : 'blocked';
+    else if (hasUnsent()) {
+      save();
+      if (inFlightRef.current) return;
+      result = 'blocked';
+    } else result = 'saved';
+    for (const resolve of settleWaitersRef.current.splice(0)) resolve(result);
+  };
+  const flushSettled = useCallback((): Promise<FlushResult> => {
+    if (!mountedRef.current) return Promise.resolve('nothing');
+    if (blocked()) return Promise.resolve('blocked');
+    if (offline()) return Promise.resolve('offline');
+    if (!hasUnsent()) return Promise.resolve('nothing');
+    return new Promise((resolve) => {
+      settleWaitersRef.current.push(resolve);
+      lastFailedRef.current = false;
+      // Оптимистичный cache ещё не подтверждает отправленный документ: save() мог бы
+      // принять его за nothing и удалить черновик до исхода текущего запроса.
+      if (inFlightRef.current) chainedRef.current = true;
+      else save();
+      settleRef.current();
+    });
+  }, [blocked, offline, hasUnsent, save]);
+  // Показанное и собственное подтверждение — разрешение переписывать; невидимый кэш таким разрешением не является.
+  const revisionForRewrite = useCallback(
+    () => currentExpected(shownRevisionRef.current),
+    [currentExpected],
+  );
+  const beginRewrite = useCallback(() => {
+    const token = ++rewriteToken.current;
+    const gen = genRef.current;
+    rewriteRef.current = null;
+    setRewritePending(true);
+    return (revision?: number) => {
+      if (!mountedRef.current || gen !== genRef.current || token !== rewriteToken.current) return;
+      rewriteRef.current = revision;
+      if (revision === undefined) setRewritePending(false);
+    };
+  }, []);
+  useEffect(() => {
+    const revision = rewriteRef.current;
+    if (typeof revision === 'number' && entity.bodyRevision >= revision) {
+      // Пока затвор стоял, экран показывал превью серверного тела: ревизия относится к этому же документу.
+      shownRevisionRef.current = entity.bodyRevision;
+      rewriteRef.current = undefined;
+      setRewritePending(false);
+    }
+  });
+  const offerConflictDraft = useCallback(() => {
+    const doc = pendingRef.current;
+    if (doc !== null) {
+      const draft: Draft = {
+        doc,
+        baseRevision: pendingBaseRef.current,
+        savedAt: new Date().toISOString(),
+        rejected: false,
+      };
+      saveDraft(entityId, doc, pendingBaseRef.current, draft.savedAt);
+      setPendingDraft(draft);
+    } else {
+      const draft = readDraft(entityId);
+      if (draft !== null) setPendingDraft(draft);
+    }
+    pendingRef.current = null;
+    clearTimer();
+  }, [entityId, setPendingDraft, clearTimer]);
 
   /**
    * Возврат к записи, у которой на диске остался неотправленный черновик.
@@ -919,7 +1031,7 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
     // чужой — этого и просит единственная кнопка, которую человек нажал. Уйди она со старой
     // ревизией, сервер ответил бы 409, то есть «оставить моё» не делало бы ничего. Она же — основа того, что
     // теперь показано (экран сажает черновик местной копией, и `onShown` о ней молчит).
-    pendingBaseRef.current = currentExpected();
+    pendingBaseRef.current = currentExpected(shownRevisionRef.current);
     shownRevisionRef.current = pendingBaseRef.current;
     pendingFromEditorRef.current = false; // документ с диска: человек выбрал его, а не набрал
     // Терминальная остановка снимается: она про НАБОР (иначе каждое нажатие уходило бы в сеть
@@ -1006,7 +1118,14 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
   useEffect(() => {
     flushRef.current = save;
   });
-  useEffect(() => () => flushRef.current(), []);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      flushRef.current();
+      mountedRef.current = false;
+      for (const r of settleWaitersRef.current.splice(0)) r('nothing');
+    };
+  }, []);
 
   /**
    * Закрытие вкладки — уход с записи, которого React не видит.
@@ -1036,6 +1155,11 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
     onShown,
     expectedRevision: currentExpected,
     flush,
+    flushSettled,
+    revisionForRewrite,
+    beginRewrite,
+    rewritePending,
+    offerConflictDraft,
     hasUnsent,
     blocked,
     offline,

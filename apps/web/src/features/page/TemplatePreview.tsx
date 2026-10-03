@@ -12,7 +12,7 @@ import { detailGetInput } from '../entity-detail/useEntityDetail';
 import { SupplyPlaqueSlot } from '../supply/SupplyPlaqueSlot';
 import { PageView } from './PageView';
 import { RecordView } from './RecordView';
-import { templateForOf } from './TemplateBanner';
+import { templateForOf } from './template-for';
 
 type EntityGetReply = RouterOutputs['entity']['get'];
 

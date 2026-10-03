@@ -110,7 +110,12 @@ function renderApp(opts: {
       case 'supply.revert':
         return { actionId: ACT };
       case 'ai.undo':
-        return { ok: true, actionId: ACT };
+        return {
+          actionId: ACT,
+          undone: { id: ACT, title: 'Правка' },
+          pinnedVersions: [],
+          bodyRevisions: [],
+        };
       case 'entity.resolveRefs':
         if (
           opts.refsFailWith !== undefined &&
@@ -151,6 +156,7 @@ test('(д) «Рутины» с обновлением: плашка с [Срав
     within(plaque).getByRole('button', { name: 'Принять — прежняя версия сохранится' }),
   );
   await waitFor(() => expect(callsOf('supply.accept')).toEqual([{ key: 'routines' }]));
+  await vi.dynamicImportSettled();
   const toast = useToastStore.getState().toasts.find((t) => t.title.includes('Обновление принято'));
   expect(toast?.action?.label).toBe('Отменить');
 });

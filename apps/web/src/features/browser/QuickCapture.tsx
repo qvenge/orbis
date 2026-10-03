@@ -6,6 +6,8 @@ import { startAction } from '../../perf/marks';
 import { trpc } from '../../trpc';
 import { Spinner } from '../../ui/Spinner';
 import { useToast } from '../../ui/toast-store';
+import { journalRefOf } from '../undo/journal-ref';
+import { offerUndoLazy } from '../undo/undo-lazy';
 
 // §3.7 / D-g: текст → title БЕЗ интерпретации. Контекст задаёт связь: `entity` — подзадача записи
 // («＋» на записи, спека 1б §6.4, РП-9), `root` — без контекста. Вариант `smart-list` снят (§9.4):
@@ -17,7 +19,16 @@ export function QuickCapture({ context }: { context: CaptureContext }) {
   const { show } = useToast();
   const utils = trpc.useUtils();
   const create = trpc.entity.create.useMutation({
-    onSuccess: () => invalidateGraph(utils),
+    onSuccess: (data, vars) => {
+      invalidateGraph(utils);
+      const ref = journalRefOf(data);
+      if (ref)
+        offerUndoLazy({
+          title: `Создано: «${vars.input.title}»`,
+          actionId: ref.actionId,
+          entityIds: [],
+        });
+    },
   });
   // Потерянный ответ повторяется по тому же id (РП-21). Смена контекста — новое намерение:
   // иначе replay прежней пачки вернёт запись, привязанную к другому родителю.

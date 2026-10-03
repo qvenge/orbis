@@ -120,3 +120,5 @@ export function plural(n: number, one: string, few: string, many: string): strin
   if (last >= 2 && last <= 4) return few;
   return many;
 }
+
+export { formatClock } from './format-clock';

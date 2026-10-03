@@ -16,6 +16,7 @@ import { emitClientOutdated, emitUnauthorized } from '../auth/events';
 import { APPS_QUERY } from '../features/apps/useApps';
 import { PAGE_TEMPLATES_QUERY } from '../features/page/usePageTemplates';
 import { SUPPLY_RECORDS_QUERY } from '../features/page/useSupplyRecords';
+import { UndoBinder } from '../features/undo/undo-binding';
 import { QueryBatchProvider } from '../lib/query-blocks/batch';
 import type { RouterOutputs } from '../trpc';
 import { authErrorLink, trpc } from '../trpc';
@@ -229,6 +230,7 @@ export function renderWithProviders(
         {/* Собиратель пачки блоков — как в main.tsx: без него блок данных не знает, куда
             положить просьбу. */}
         <QueryBatchProvider>
+          <UndoBinder />
           <Suspense fallback={SUSPENDED}>{ui}</Suspense>
         </QueryBatchProvider>
       </QueryClientProvider>

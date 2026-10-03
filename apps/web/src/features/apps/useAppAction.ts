@@ -3,7 +3,7 @@ import { useCallback } from 'react';
 import { invalidateGraph } from '../../lib/invalidate';
 import { trpc } from '../../trpc';
 import { useToast } from '../../ui/toast-store';
-import { UNDO_FAILED } from '../page/useUpdateBatch';
+import { offerUndoLazy } from '../undo/undo-lazy';
 
 /** Подписи действий над приложением — кнопки «Приложений и расширений» и заголовки диалогов. */
 export const DISABLE_APP = 'Выключить приложение';
@@ -67,15 +67,7 @@ export function useAppAction(): (act: AppAct) => Promise<boolean> {
         return false;
       }
       refresh();
-      show(doneTitle(act), 'default', {
-        label: 'Отменить',
-        onSelect: () => {
-          void utils.client.ai.undo
-            .mutate({ actionId })
-            .then(refresh)
-            .catch(() => show(UNDO_FAILED, 'danger'));
-        },
-      });
+      offerUndoLazy({ title: doneTitle(act), actionId: actionId, entityIds: [] });
       return true;
     },
     [utils, show],

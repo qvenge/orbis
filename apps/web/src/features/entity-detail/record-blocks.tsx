@@ -1,5 +1,5 @@
 import type { RecordBlockName } from '@orbis/shared/doc/page-grammar';
-import { type ComponentType, useRef, useState } from 'react';
+import { type ComponentType, lazy, Suspense, useRef, useState } from 'react';
 import { ThisEntityProvider } from '../../lib/query-blocks/this-entity';
 import { Backlinks } from './Backlinks';
 import { Blockers } from './Blockers';
@@ -10,7 +10,10 @@ import { useRecordHost } from './record-host';
 import { Subtasks } from './Subtasks';
 import { TagsBlock } from './TagsBlock';
 import { useRecordEdits } from './useEntityDetail';
-import { VersionsCard } from './VersionsCard';
+
+const VersionsCard = lazy(() =>
+  import('./VersionsCard').then((m) => ({ default: m.VersionsCard })),
+);
 
 /**
  * Примитивы обвязки записи по имени блока (спека страниц 1а §5.3, §7.3). Каждый показывает
@@ -138,7 +141,20 @@ export function BacklinksBlock() {
  */
 export function VersionsBlock() {
   const { entity, openTab } = useRecordHost();
-  return <VersionsCard key={`versions-${entity.id}`} entity={entity} active={openTab !== null} />;
+  const opened = useRef(false);
+  if (openTab !== null) opened.current = true;
+  if (!opened.current)
+    return (
+      <section aria-label="Версии" data-testid="versions-card" className="flex flex-col gap-2">
+        <p className="text-2xs font-medium uppercase tracking-wide text-text-muted">Версии</p>
+        <p className="text-sm text-text-muted">…</p>
+      </section>
+    );
+  return (
+    <Suspense fallback={<p role="status">Загружаем версии…</p>}>
+      <VersionsCard key={`versions-${entity.id}`} entity={entity} active={openTab !== null} />
+    </Suspense>
+  );
 }
 
 /**

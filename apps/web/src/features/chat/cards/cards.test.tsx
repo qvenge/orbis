@@ -1,4 +1,5 @@
-import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { useState } from 'react';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { resetNavForTests } from '../../../state/navigation';
 import {
@@ -9,6 +10,7 @@ import {
 } from '../../../test/harness';
 import { recordAddress, topAddress } from '../../../test/nav';
 import { registryReply } from '../../../test/registry';
+import { Toaster } from '../../../ui/Toast';
 import { smoothAuditText } from '../format-audit';
 import { MEMORY_RULES_QUERY } from '../memoryRules';
 import { type ChatMessage, useChatThread } from '../useChatThread';
@@ -60,7 +62,12 @@ test('entity_card: Undo зовёт ai.undo(undoActionId) и гасит карт�
     </div>,
     (path) =>
       path === 'ai.undo'
-        ? { ok: true, actionId: 'act1', results: [], idempotentReplay: false }
+        ? {
+            actionId: 'act1',
+            undone: { id: 'act1', title: 'Правка' },
+            pinnedVersions: [],
+            bodyRevisions: [],
+          }
         : {},
   );
   fireEvent.click(screen.getByRole('button', { name: /отменить|undo/i }));
@@ -637,7 +644,12 @@ test('после Undo строка остатка снимается вмест�
   renderWithProviders(<div>{renderCards(fastMsg('confirmed'))}</div>, (path) => {
     if (path === 'budget.envelopeForCategory') return envStatus;
     if (path === 'ai.undo')
-      return { ok: true, actionId: 'act1', results: [], idempotentReplay: false };
+      return {
+        actionId: 'act1',
+        undone: { id: 'act1', title: 'Правка' },
+        pinnedVersions: [],
+        bodyRevisions: [],
+      };
     return {};
   });
   await waitFor(() => expect(screen.getByTestId('envelope-remaining')).toBeInTheDocument());
@@ -1970,7 +1982,14 @@ test('строка журнала агента (mcp): «<заголовок> · 
       )}
     </div>,
     (path) =>
-      path === 'ai.undo' ? { ok: true, actionId: 'a1', results: [], idempotentReplay: false } : {},
+      path === 'ai.undo'
+        ? {
+            actionId: 'a1',
+            undone: { id: 'a1', title: 'Правка' },
+            pinnedVersions: [],
+            bodyRevisions: [],
+          }
+        : {},
   );
   const row = screen.getByTestId('journal-card');
   expect(row).toHaveTextContent('Правка агента');
@@ -2011,16 +2030,18 @@ test('строка журнала: глагол прогона агента (run
 
 test('строка журнала: отказ отмены показан словами', async () => {
   renderWithProviders(
-    <div>{renderCards(journalMsg(journalMeta({ source: 'mcp', actorKind: 'agent' })))}</div>,
+    <>
+      <div>{renderCards(journalMsg(journalMeta({ source: 'mcp', actorKind: 'agent' })))}</div>
+      <Toaster />
+    </>,
     (path) => {
       if (path === 'ai.undo') throw trpcError('CONFLICT', 'запись уже изменена');
       return {};
     },
   );
   fireEvent.click(screen.getByRole('button', { name: 'Отменить' }));
-  expect(await screen.findByRole('alert')).toHaveTextContent(
-    'не удалось отменить: запись уже изменена',
-  );
+  expect(await screen.findByText('Не удалось отменить изменения')).toBeInTheDocument();
+  expect(screen.queryByText(/запись уже изменена/)).toBeNull();
 });
 
 test('строка журнала в ленте только для чтения — без «Отменить»', () => {
@@ -2101,4 +2122,117 @@ test('строка журнала одиночной одобренной еди
   const row = screen.getByTestId('journal-card');
   expect(row).toHaveTextContent('Операция выполнена');
   expect(row).not.toHaveTextContent('batch');
+});
+
+test('EntityCard отказ не гасит; force продолжения гасит только после ответа и показывает страховку', async () => {
+  let n = 0;
+  const { calls } = renderWithProviders(
+    <>
+      <div>
+        {renderCards(
+          msg([
+            {
+              kind: 'entity_card',
+              entityId: 'e1',
+              title: 'Запись',
+              aspects: ['orbis/note'],
+              keyFields: {},
+              undoActionId: 'act1',
+            },
+          ]),
+        )}
+      </div>
+      <Toaster />
+    </>,
+    (path) => {
+      if (path !== 'ai.undo') return {};
+      if (++n === 1)
+        throw trpcError('CONFLICT', 'не показывать', {
+          code: 'UNDO_TEXT_CHANGED',
+          details: {
+            action: { id: 'act1', title: 'Правка агента' },
+            continuation: { kind: 'here' },
+            entries: [
+              {
+                entityId: 'e1',
+                title: 'Запись',
+                actorKind: 'owner',
+                actorLabel: null,
+                at: new Date().toISOString(),
+              },
+            ],
+          },
+        });
+      return {
+        actionId: 'u1',
+        undone: { id: 'act1', title: 'Правка агента' },
+        pinnedVersions: [
+          { entityId: 'e1', versionId: 'v1', label: 'перед отменой: Правка агента' },
+        ],
+        bodyRevisions: [],
+      };
+    },
+  );
+  fireEvent.click(screen.getByRole('button', { name: 'Отменить' }));
+  const proceed = await screen.findByRole('button', { name: /Всё равно отменить/ });
+  expect(screen.getByTestId('entity-card')).toHaveAttribute('data-undone', 'false');
+  fireEvent.click(proceed);
+  await waitFor(() =>
+    expect(screen.getByTestId('entity-card')).toHaveAttribute('data-undone', 'true'),
+  );
+  expect(calls.filter((c) => c.path === 'ai.undo').map((c) => c.input)).toEqual([
+    { actionId: 'act1' },
+    { actionId: 'act1', force: true },
+  ]);
+  expect(await screen.findByText(/ваш текст — в версии/)).toBeInTheDocument();
+});
+test('JournalCard видит чужую отмену при обновлении meta', async () => {
+  let set: ((v: boolean) => void) | undefined;
+  function Tree() {
+    const [undone, change] = useState(false);
+    set = change;
+    return <>{renderCards(journalMsg(journalMeta({ undone })))}</>;
+  }
+  renderWithProviders(<Tree />, () => ({}));
+  act(() => set?.(true));
+  expect(screen.getByTestId('journal-card')).toHaveAttribute('data-undone', 'true');
+  expect(screen.queryByRole('button', { name: 'Отменить' })).toBeNull();
+});
+
+test('EntityCard в полёте не отменена и кнопка недоступна до ответа', async () => {
+  let resolve: ((v: unknown) => void) | undefined;
+  renderWithProviders(
+    <>
+      {renderCards(
+        msg([
+          {
+            kind: 'entity_card',
+            entityId: 'e1',
+            title: 'Запись',
+            aspects: ['orbis/note'],
+            keyFields: {},
+            undoActionId: 'a1',
+          },
+        ]),
+      )}
+    </>,
+    (path) =>
+      path === 'ai.undo'
+        ? new Promise((r) => {
+            resolve = r;
+          })
+        : {},
+  );
+  fireEvent.click(screen.getByRole('button', { name: 'Отменить' }));
+  await waitFor(() => expect(resolve).toBeDefined());
+  expect(screen.getByRole('button', { name: 'Отменить' })).toBeDisabled();
+  expect(screen.getByTestId('entity-card')).toHaveAttribute('data-undone', 'false');
+  await act(async () =>
+    resolve?.({
+      actionId: 'u1',
+      undone: { id: 'a1', title: 'Правка' },
+      pinnedVersions: [],
+      bodyRevisions: [],
+    }),
+  );
 });

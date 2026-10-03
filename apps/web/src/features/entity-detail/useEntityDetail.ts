@@ -1,3 +1,14 @@
+import type { JournalRef } from '@orbis/shared';
+import { journalRefOf } from '../undo/journal-ref';
+
+export { journalRefOf } from '../undo/journal-ref';
+
+import { offerUndoLazy } from '../undo/undo-lazy';
+import type { UndoToastRule } from '../undo/undo-toast';
+export type UndoToastOption =
+  | UndoToastRule
+  | ((vars: UpdateInput, prior: Entity | undefined) => UndoToastRule | null);
+
 import { type PerfActionKind, RULE_TASK_STATUS_DEFAULT } from '@orbis/shared';
 import { type QueryClient, useQueryClient } from '@tanstack/react-query';
 import type { JSONContent } from '@tiptap/core';
@@ -197,7 +208,7 @@ const REOPEN_STATUS = (RULE_TASK_STATUS_DEFAULT.params as { value: { const: stri
 
 export function useEntityUpdate(
   entityId: string,
-  opts: { onSettled?: (vars: UpdateInput) => void } = {},
+  opts: { onSettled?: (vars: UpdateInput) => void; undoToast?: UndoToastOption } = {},
 ) {
   const utils = trpc.useUtils();
   const queryClient = useQueryClient();
@@ -357,10 +368,12 @@ export function useEntityUpdate(
       // Конфликт — отказ замка текста по структурному коду (`data.orbis`, РП-5), а не любой 409.
       if (isBodyStale(err)) setConflict(true);
     },
-    onSuccess: (_data, vars, ctx) => {
+    onSuccess: (data, vars, ctx) => {
       // Тоже первым делом: сохранённый черновик обязан уйти с диска, даже если экран этой
       // записи давно закрыт (см. settleBodyDraft).
       settleBodyDraft(vars);
+      const ref = journalRefOf(data);
+      if (ref !== null) offerByRule(opts.undoToast, ref, vars, ctx?.prev?.entity);
       // Поздний успех устаревшей мутации не говорит ничего о расхождении, которое держит
       // плашку сейчас. Сверки меток здесь нет, и это не забытая симметрия с onError, а разные
       // вопросы: там решается, ПОКАЗЫВАТЬ ли конфликт (промолчать можно лишь о том, который
@@ -434,8 +447,10 @@ export function useEntityDetail(entityId: string) {
  */
 export function useRecordEdits(entityId: string, entity: Entity | undefined) {
   const utils = trpc.useUtils();
-  const { mutation, conflict, dismissConflict, titleStale, dismissTitleStale } =
-    useEntityUpdate(entityId);
+  const { mutation, conflict, dismissConflict, titleStale, dismissTitleStale } = useEntityUpdate(
+    entityId,
+    { undoToast: recordEditRule },
+  );
 
   /**
    * Чекбокс task (§3.6): шлёт ТОЛЬКО смену статуса (optimistic + откат при ошибке).
@@ -493,4 +508,39 @@ export function useRecordEdits(entityId: string, entity: Entity | undefined) {
     conflict,
     dismissConflict,
   };
+}
+
+/**
+ * Плашка по правилу (§7.5 п. 1). Последствия называет сервер (`consequences`, §8.2) — клиент их не угадывает. Правки с
+ * правилом тела не пишут (заголовок, свойства, архив), поэтому досыла перед их отменой нет (`entityIds: []`).
+ */
+function offerByRule(
+  option: UndoToastOption | undefined,
+  ref: JournalRef,
+  vars: UpdateInput,
+  prior: Entity | undefined,
+): boolean {
+  if (option === undefined) return false;
+  const rule = typeof option === 'function' ? option(vars, prior) : option;
+  if (rule === null || (rule.kind === 'if-consequences' && !ref.consequences)) return false;
+  offerUndoLazy({
+    title: rule.kind === 'free-value' ? `${rule.title} ${rule.prior} → ${rule.next}` : rule.title,
+    actionId: ref.actionId,
+    entityIds: [],
+  });
+  return true;
+}
+/** Правило шапки записи: галочка — по последствиям, архив — всегда, заголовок — без плашки (у него стрелки, п. 4). */
+export function recordEditRule(vars: UpdateInput, prior: Entity | undefined): UndoToastRule | null {
+  const title = prior?.title ?? '';
+  if (vars.archived !== undefined)
+    return {
+      kind: 'always',
+      title: vars.archived ? `В архиве: «${title}»` : `Из архива: «${title}»`,
+    };
+  if (vars.props?.['orbis/task_status'] === 'done')
+    return { kind: 'if-consequences', title: `Задача закрыта: «${title}»` };
+  if (vars.unset?.includes('orbis/task_status'))
+    return { kind: 'if-consequences', title: `Задача открыта: «${title}»` };
+  return null;
 }

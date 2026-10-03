@@ -15,6 +15,8 @@ import {
 } from '../../test/harness';
 import { type RouterOutputs, trpc } from '../../trpc';
 import { detailGetInput } from '../entity-detail/useEntityDetail';
+import { runUndo, UNDO_OFFLINE } from '../undo/undo-action';
+import { registerBodyFlush } from './body-flush';
 import { readDraft } from './draft-storage';
 import { SaveIndicator, SLOW_SAVE_MS } from './SaveIndicator';
 import { UNIQUE_ID_TYPES } from './strip-ids';
@@ -1641,6 +1643,10 @@ test('модули первого кадра не тянут схему реда
     // Хвосты 1а (срез 1б, задача 2): правило неотправленной правки тела — общее у настройки
     // (эагерной) и меню; страж ухода зовёт стор навигации первого кадра.
     '../entity-detail/body-gate.ts',
+    './body-flush.ts',
+    '../undo/undo-lazy.ts',
+    '../undo/undo-binding.ts',
+    '../undo/journal-ref.ts',
     '../../state/leave-guard.ts',
     // Шаблон хоста — запись поставки и свои карточки (срез 1б, задача 17): записи поставки читает
     // каждое открытие записи, `{{cards: own}}` стоит в шаблоне хоста, карточки расширений приходят
@@ -1913,3 +1919,165 @@ test('`import.meta` с колонки 1 оператором импорта НЕ
   // Отступ по-прежнему уводит строку из-под `^` — но теперь это уже не единственная защита.
   expect(parseRuntimeImports("  import.meta.url;\nimport { A } from './a';")).toEqual(['./a']);
 });
+
+test('flushSettled: пустой набор — nothing, запросов нет', async () => {
+  const s = setup();
+  await expect(s.api().flushSettled()).resolves.toBe('nothing');
+  expect(s.updates()).toEqual([]);
+});
+test('flushSettled ждёт полёт и всю очередь до второго подтверждения', async () => {
+  const srv = gatedServer();
+  const s = setup({ respond: srv.respond });
+  act(() => s.api().onDocChange(ONE));
+  act(() => s.api().flush());
+  act(() => s.api().onDocChange(TWO));
+  let settled: string | null = null;
+  void s
+    .api()
+    .flushSettled()
+    .then((r) => {
+      settled = r;
+    });
+  await tick();
+  expect([s.updates().length, settled]).toEqual([1, null]);
+  await srv.answer(0, SAVED);
+  expect([s.updates().length, settled]).toEqual([2, null]);
+  await srv.answer(1, { ...SAVED, bodyRevision: 5 });
+  expect(settled).toBe('saved');
+  expect(s.api().revisionForRewrite()).toBe(5);
+});
+test('flushSettled: размонтирование освобождает ждущего', async () => {
+  const srv = gatedServer();
+  const s = setup({ respond: srv.respond });
+  act(() => s.api().onDocChange(ONE));
+  const waiting = s.api().flushSettled();
+  await tick();
+  s.unmount();
+  await expect(waiting).resolves.toBe('nothing');
+});
+
+test('rewrite читает показанную ревизию, скрытая чужая в cache не разрешает перезапись', async () => {
+  let change: ((v: BodySaveEntity) => void) | undefined;
+  let api: BodySave | undefined;
+  function Probe() {
+    const [base, set] = useState(ENTITY);
+    change = set;
+    api = useBodySave('e1', base);
+    return null;
+  }
+  const updates: unknown[] = [];
+  renderWithProviders(<Probe />, (path, input) => {
+    if (path === 'entity.update') {
+      updates.push(input);
+      throw staleBodyError();
+    }
+    return {};
+  });
+  act(() => change?.({ ...ENTITY, bodyRevision: 9, bodyDoc: THREE }));
+  expect(api?.revisionForRewrite()).toBe(3);
+  act(() => api?.onDocChange(ONE));
+  await expect(api?.flushSettled()).resolves.toBe('blocked');
+  expect(updates[0]).toMatchObject({ expectedBodyRevision: 3 });
+});
+test('Refresh сохраняет последние слова до таймера; Keep mine не принимает невидимую чужую ревизию', async () => {
+  let change: ((v: BodySaveEntity) => void) | undefined;
+  let api: BodySave | undefined;
+  function Probe() {
+    const [base, set] = useState(ENTITY);
+    change = set;
+    api = useBodySave('e1', base);
+    return null;
+  }
+  const updates: unknown[] = [];
+  renderWithProviders(<Probe />, (path, input) => {
+    if (path === 'entity.update') {
+      updates.push(input);
+      throw staleBodyError();
+    }
+    return {};
+  });
+  act(() => api?.onDocChange(ONE));
+  act(() => api?.flush());
+  await tick();
+  act(() => api?.onDocChange(TWO));
+  act(() => api?.offerConflictDraft());
+  expect(api?.pendingDraft?.doc).toEqual(TWO);
+  act(() => {
+    api?.onShown(4);
+    change?.({ ...ENTITY, bodyRevision: 9, bodyDoc: THREE });
+  });
+  act(() => api?.applyPendingDraft());
+  await tick();
+  expect(updates[1]).toMatchObject({ expectedBodyRevision: 4, bodyDoc: TWO });
+});
+
+for (const [label, error, outcome] of [
+  ['CAS', staleBodyError(), 'blocked'],
+  ['terminal', trpcError('BAD_REQUEST'), 'blocked'],
+  ['transport', new Error('нет ответа'), 'offline'],
+] as const)
+  test(`flushSettled ${label} не выдаёт отказ за saved`, async () => {
+    const srv = gatedServer();
+    const s = setup({ respond: srv.respond });
+    act(() => s.api().onDocChange(ONE));
+    const waiting = s.api().flushSettled();
+    await tick();
+    await srv.answer(0, error, 'fail');
+    await expect(waiting).resolves.toBe(outcome);
+  });
+test('flushSettled без ответа освобождает ожидание через 30с без повторов', async () => {
+  const srv = gatedServer();
+  const s = setup({ respond: srv.respond });
+  act(() => s.api().onDocChange(ONE));
+  const waiting = s.api().flushSettled();
+  await tick(30_000);
+  await expect(waiting).resolves.toBe('offline');
+  expect(s.updates()).toHaveLength(1);
+});
+
+test('rewrite удерживает записи старого документа, late набор сохранён предложением; failure unlock и old token не трогает новый', async () => {
+  const s = setup();
+  let old: ((revision?: number) => void) | undefined;
+  act(() => {
+    old = s.api().beginRewrite();
+  });
+  expect(s.api().rewritePending).toBe(true);
+  act(() => s.api().onDocChange(TWO));
+  await tick(SAVE_PAUSE);
+  expect(s.updates()).toHaveLength(0);
+  expect(s.api().pendingDraft?.doc).toEqual(TWO);
+  let next: ((revision?: number) => void) | undefined;
+  act(() => {
+    next = s.api().beginRewrite();
+    old?.();
+  });
+  expect(s.api().rewritePending).toBe(true);
+  act(() => next?.());
+  expect(s.api().rewritePending).toBe(false);
+});
+
+for (const failure of ['timeout', 'transport'] as const)
+  test(`flush ${failure}: новый queued набор досылается один раз, отказ ожидания не отправляет undo`, async () => {
+    const srv = gatedServer();
+    const s = setup({ respond: srv.respond });
+    const remove = registerBodyFlush('e1', () => s.api().flushSettled());
+    try {
+      act(() => s.api().onDocChange(ONE));
+      act(() => s.api().flush());
+      act(() => s.api().onDocChange(TWO));
+      const undo = runUndo('action', { entityIds: ['e1'] });
+      await tick();
+      expect(s.updates()).toHaveLength(1);
+      if (failure === 'timeout') await tick(30_000);
+      else await srv.answer(0, new Error('нет ответа'), 'fail');
+      await expect(undo).resolves.toEqual({ kind: 'failed', message: UNDO_OFFLINE });
+      expect(s.updates()).toHaveLength(2);
+      expect((s.updates()[1]?.input as { bodyDoc: BodyDoc }).bodyDoc).toEqual(TWO);
+      expect(s.stray()).toEqual([]);
+      await tick(60_000);
+      expect(s.updates()).toHaveLength(2);
+      expect(s.stray()).toEqual([]);
+    } finally {
+      remove();
+    }
+  });

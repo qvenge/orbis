@@ -8,6 +8,8 @@ import { type RouterOutputs, trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
 import { Spinner } from '../../ui/Spinner';
 import { useToast } from '../../ui/toast-store';
+import { journalRefOf } from '../undo/journal-ref';
+import { offerUndoLazy } from '../undo/undo-lazy';
 import { useHostReadOnly } from './record-host';
 
 type Relation = NonNullable<RouterOutputs['entity']['get']['relations']>[number];
@@ -58,7 +60,16 @@ export function Subtasks({ parentId, relations }: { parentId: string; relations:
     // Повестке. Detail родителя (сама секция подзадач) перечитывается тем же вызовом:
     // invalidateGraph инвалидирует entity.get целиком (Р17), и точечный ключ родителя в
     // него входит.
-    onSuccess: () => invalidateGraph(utils),
+    onSuccess: (data, vars) => {
+      invalidateGraph(utils);
+      const ref = journalRefOf(data);
+      if (ref)
+        offerUndoLazy({
+          title: `Создано: «${vars.input.title}»`,
+          actionId: ref.actionId,
+          entityIds: [],
+        });
+    },
   });
   const isPending = create.isPending;
   // Повтор адресует исходную пачку. Новый родитель требует нового id, иначе replay сохранит прежнюю привязку.

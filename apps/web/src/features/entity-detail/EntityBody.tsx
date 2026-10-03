@@ -24,6 +24,7 @@ import { invalidateGraph } from '../../lib/invalidate';
 import { BodyKindProvider } from '../../lib/query-blocks/body-kind';
 import { type RouterOutputs, trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
+import { registerBodyFlush } from '../entity-editor/body-flush';
 import { EditorShell } from '../entity-editor/EditorShell';
 import { SaveIndicator } from '../entity-editor/SaveIndicator';
 import { sameDoc } from '../entity-editor/strip-ids';
@@ -220,6 +221,12 @@ export function EntityBody({
   const [localDoc, setLocalDoc] = useState<BodyDoc | null>(null);
   /** Счётчик принудительной посадки серверного документа в редактор — его двигает «Обновить» (`BodyEditor.reseat`). */
   const [reseat, setReseat] = useState(0);
+  useEffect(() => {
+    if (save.rewritePending) {
+      setLocalDoc(null);
+      setReseat((n) => n + 1);
+    }
+  }, [save.rewritePending]);
   const serverDoc = asBodyDoc(entity.bodyDoc);
   // Кэш догнал — местная копия больше не нужна, и держать её нельзя: она заслоняла бы правку,
   // приехавшую с другого устройства. Сравнение по СМЫСЛУ: свой же сохранённый документ вернётся
@@ -329,6 +336,11 @@ export function EntityBody({
 
   // Локальная копия ради сужения типа: внутри колбэка кнопки TS `save.pendingDraft` уже не
   // сужает — поле объекта могло бы смениться между рендером и нажатием.
+  useEffect(
+    () =>
+      registerBodyFlush(entity.id, save.flushSettled, save.revisionForRewrite, save.beginRewrite),
+    [entity.id, save.flushSettled, save.revisionForRewrite, save.beginRewrite],
+  );
   const draft = save.pendingDraft;
 
   /**
@@ -346,6 +358,14 @@ export function EntityBody({
           перечитать запись, оставив на экране прежнюю тревогу, — обман. Флаги заголовка и
           чекбокса (`TitleBlock`) и свойств (секции аспектов) сюда не выведены: 409 у этих
           правок не бывает (см. `checksVersion` в useEntityDetail). */}
+      {save.rewritePending && (
+        <div role="status" className="flex items-center gap-2 text-sm">
+          <span>Текст изменяется — ждём обновления записи</span>
+          <Button size="sm" variant="outline" onClick={onRefresh}>
+            Обновить текст
+          </Button>
+        </div>
+      )}
       {(screenConflict || save.conflict) && (
         <div
           role="alert"
@@ -356,11 +376,12 @@ export function EntityBody({
             variant="outline"
             size="sm"
             onClick={() => {
+              save.offerConflictDraft();
               onRefresh();
               save.dismissConflict();
               // Выход из конфликта в открытом экране (рулинг R-17): редактор СРАЗУ сажает серверный текст — даже тот
               // же объект, что уже в кэше, — и его ревизия становится основой; местная копия больше не заслоняет базу.
-              // Набранное до «Обновить» остаётся отложенным и черновиком на диске, как и прежде.
+              // Последний набор предложен отдельным черновиком: «Оставить моё / Отбросить» сразу доступны.
               setLocalDoc(null);
               setReseat((n) => n + 1);
             }}
@@ -465,6 +486,7 @@ export function EntityBody({
         // блок законен, и снаружи род шаблона сюда не протекает.
         <BodyKindProvider kind={bodyKindOf(entity)}>
           <EditorShell
+            readOnly={save.rewritePending}
             doc={doc}
             markdown={entity.body ?? ''}
             onChange={onEditorChange}

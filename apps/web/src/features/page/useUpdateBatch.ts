@@ -3,13 +3,13 @@ import { useCallback } from 'react';
 import { invalidateGraph } from '../../lib/invalidate';
 import { trpc } from '../../trpc';
 import { useToast } from '../../ui/toast-store';
+import { offerUndoLazy } from '../undo/undo-lazy';
 
 /** Одна операция пачки — `entity_update` в форме роутера или `entity_version_pin` в форме тула. */
 export type UpdateBatchOperation = EntityUpdateBatchInput['operations'][number];
 
 /** Отказ пачки: что именно не записано, человек знает по жесту — текст общий (если жест не дал свой). */
 export const BATCH_FAILED = 'Не удалось сохранить изменения';
-export const UNDO_FAILED = 'Не удалось отменить изменения';
 
 /** Что жест говорит о себе сверх операций. */
 export interface UpdateBatchOptions {
@@ -65,17 +65,29 @@ export function useUpdateBatch(): RunUpdateBatch {
         return false;
       }
       invalidateGraph(utils);
-      show(doneTitle, 'default', {
-        label: 'Отменить',
-        onSelect: () => {
-          void utils.client.ai.undo
-            .mutate({ actionId })
-            .then(() => invalidateGraph(utils))
-            .catch(() => show(options.undoFailed ?? UNDO_FAILED, 'danger'));
-        },
+      offerUndoLazy({
+        title: doneTitle,
+        actionId: actionId,
+        entityIds: bodyIdsOf(operations),
+        ...(options.undoFailed !== undefined && { failed: options.undoFailed }),
       });
       return true;
     },
     [utils, show],
   );
+}
+
+/** Досыл только тех тел, которые пачка может переписывать. */
+function bodyIdsOf(operations: UpdateBatchOperation[]): string[] {
+  return [
+    ...new Set(
+      operations.flatMap((op) =>
+        op.tool === 'entity_update'
+          ? [op.input.id]
+          : op.tool === 'entity_version_pin'
+            ? [op.input.entity_id]
+            : [],
+      ),
+    ),
+  ];
 }

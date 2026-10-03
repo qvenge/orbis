@@ -8,7 +8,7 @@
 // Восстанавливается ТОЛЬКО тело — аспекты, связи и заголовок в снимок не входят (инвариант 8
 // среза). Об этом сказано в подтверждении: «восстановить версию» без оговорки читается как
 // «вернуть запись целиком», и человек нажимал бы её, ожидая большего, чем случится.
-import { useId, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { formatDate } from '../../lib/format';
 import { invalidateGraph } from '../../lib/invalidate';
 import { isBodyStale } from '../../lib/orbis-error';
@@ -18,9 +18,11 @@ import { Button } from '../../ui/Button';
 import { Dialog } from '../../ui/Dialog';
 import { Input } from '../../ui/Input';
 import { useToast } from '../../ui/toast-store';
-import { settleBody } from './body-gate';
-import { useBodyGate } from './EntityBody';
+import { beginBodyRewrite, bodyRevisionOf, flushBodyOf } from '../entity-editor/body-flush';
+import { journalRefOf } from '../undo/journal-ref';
+import { offerUndoLazy } from '../undo/undo-lazy';
 import { shownBodyRevision, useHostReadOnly } from './record-host';
+import { detailGetInput } from './useEntityDetail';
 
 type Entity = RouterOutputs['entity']['get']['entity'];
 type Version = RouterOutputs['version']['list'][number];
@@ -39,18 +41,18 @@ const LABEL_MAX = 200;
  */
 export function PinVersionDialog({ entityId, onClose }: { entityId: string; onClose: () => void }) {
   const utils = trpc.useUtils();
-  const { show } = useToast();
   const [label, setLabel] = useState('');
   const fieldId = useId();
   const field = useRef<HTMLInputElement>(null);
 
   const pin = trpc.version.pin.useMutation({
-    onSuccess: () => {
+    onSuccess: (data) => {
       // Инвалидируется ТОЛЬКО список версий, без invalidateGraph: закрепление пишет строку
       // снимка и саму запись не двигает вовсе (executor.prepareVersionPin — INSERT в
       // entity_versions, entities не тронут), то есть протух ровно этот список.
       void utils.version.list.invalidate({ entityId });
-      show('Версия закреплена');
+      const ref = journalRefOf(data);
+      if (ref) offerUndoLazy({ title: 'Версия закреплена', actionId: ref.actionId, entityIds: [] });
       onClose();
     },
   });
@@ -124,7 +126,6 @@ export function VersionsCard({ entity, active }: { entity: Entity; active: boole
   const readOnly = useHostReadOnly();
   const utils = trpc.useUtils();
   const { show } = useToast();
-  const gate = useBodyGate();
   // Часовой пояс — по УЖЕ живому ключу кэша (его читает сам экран): своей сети секция не
   // добавляет.
   const tz = trpc.user.getSettings.useQuery().data?.timezone;
@@ -140,18 +141,73 @@ export function VersionsCard({ entity, active }: { entity: Entity; active: boole
   const [target, setTarget] = useState<Version | null>(null);
   const cancelId = useId();
 
+  const finishRewrite = useRef<(revision?: number) => void>(() => {});
   const restore = trpc.version.restore.useMutation({
-    onSuccess: () => {
-      setTarget(null);
+    onMutate: () => ({ finish: finishRewrite.current, entityId: entity.id }),
+    onSuccess: (data, _vars, ctx) => {
+      utils.entity.get.setData(detailGetInput(data.id), (old) =>
+        old ? { ...old, entity: data } : old,
+      );
+      ctx?.finish(data.bodyRevision);
+      if (currentId.current === data.id && alive.current) setTarget(null);
       // Тело записи переписано — граф перечитывается целиком (Р17): та же запись открыта в
       // редакторе, а её строка живёт в чужих подзадачах и backlinks.
       invalidateGraph(utils);
-      show('Тело восстановлено');
+      const ref = journalRefOf(data);
+      if (ref)
+        offerUndoLazy({
+          title: 'Тело восстановлено',
+          actionId: ref.actionId,
+          entityIds: [entity.id],
+        });
     },
     // Отказ показываем строкой ниже, а модалку закрываем: открытый диалог поверх сообщения об
     // отказе читался бы как «нажми ещё раз» (тот же порядок в RunFeed).
-    onError: () => setTarget(null),
+    onError: (_error, _vars, ctx) => {
+      ctx?.finish();
+      if (currentId.current === ctx?.entityId && alive.current) setTarget(null);
+    },
   });
+
+  const alive = useRef(true);
+  const currentId = useRef(entity.id);
+  currentId.current = entity.id;
+  useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+    };
+  }, []);
+  const flushPending = useRef(false);
+  const [flushing, setFlushing] = useState(false);
+  const restoreTo = async (version: Version) => {
+    if (flushPending.current || restore.isPending) return;
+    flushPending.current = true;
+    const id = entity.id;
+    setFlushing(true);
+    try {
+      const flushed = await flushBodyOf(id);
+      if (!alive.current || currentId.current !== id) return;
+      if (flushed === 'blocked' || flushed === 'offline') {
+        setTarget(null);
+        show(
+          flushed === 'blocked'
+            ? 'Текст не сохранён — сначала разрешите конфликт текста, затем восстанавливайте'
+            : 'Нет связи: набранный текст ещё не на сервере — восстановление не отправлено',
+          'danger',
+        );
+        return;
+      }
+      finishRewrite.current = beginBodyRewrite(id);
+      restore.mutate({
+        versionId: version.id,
+        expectedBodyRevision: bodyRevisionOf(id) ?? shownBodyRevision(entity),
+      });
+    } finally {
+      flushPending.current = false;
+      if (alive.current && currentId.current === id) setFlushing(false);
+    }
+  };
 
   /**
    * Отказ замка текста (`STALE_VERSION` в `data.orbis`, спека скорости §8.1) — НЕ плашка тела
@@ -225,7 +281,7 @@ export function VersionsCard({ entity, active }: { entity: Entity; active: boole
                 <Button
                   variant="outline"
                   size="sm"
-                  disabled={restore.isPending}
+                  disabled={restore.isPending || flushing}
                   onClick={() => setTarget(v)}
                 >
                   Восстановить
@@ -262,23 +318,8 @@ export function VersionsCard({ entity, active }: { entity: Entity; active: boole
               </Button>
               <Button
                 size="sm"
-                disabled={restore.isPending}
-                onClick={() => {
-                  // Неотправленный набор — сначала на сервер (правило жестов меню, `settleBody`): иначе страховка
-                  // «перед восстановлением …» закрепила бы текст БЕЗ него, а сам он уехал бы после восстановления в 409
-                  // «с самим собой». Досыл идёт сейчас, человек повторяет нажатие, когда текст сохранён.
-                  if (!settleBody(gate?.current ?? null, show)) return;
-                  restore.mutate({
-                    versionId: target.id,
-                    // Ревизия тела ОТКРЫТОЙ записи: сервер сверит её и откажет 409, если текст
-                    // правили, пока экран смотрел на список (§8.1) — молча затирать чужое нельзя.
-                    // Нынешний текст сервер закрепит версией первой операцией того же действия.
-                    // Из тела экрана, если оно есть: после своего досыла кэш отстаёт до перечитывания,
-                    // и повтор нажатия в это окно ушёл бы в 409 «с собственным сохранением» (M-A).
-                    expectedBodyRevision:
-                      gate?.current?.expectedRevision() ?? shownBodyRevision(entity),
-                  });
-                }}
+                disabled={restore.isPending || flushing}
+                onClick={() => void restoreTo(target)}
               >
                 Восстановить
               </Button>

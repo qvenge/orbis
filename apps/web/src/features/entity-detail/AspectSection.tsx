@@ -32,6 +32,7 @@ import { useRegistry } from '../../lib/registry/useRegistry';
 import { type RouterOutputs, trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
 import { useDisabledExtensions } from '../settings/extension-mask';
+import type { UndoToastRule } from '../undo/undo-toast';
 import { useHostReadOnly } from './record-host';
 import { useEntityUpdate } from './useEntityDetail';
 
@@ -101,6 +102,7 @@ function useAspectEdits(entity: Entity) {
   // отказывает сервер (задача 7), поэтому экран не обещает правки, которую сервер отвергнет.
   const disabled = useDisabledExtensions();
   const { mutation, conflict } = useEntityUpdate(entity.id, {
+    undoToast: (vars, prior) => propertyEditRule(registry, vars, prior),
     /**
      * Денежные агрегаты считает сервер, и `invalidateGraph` о них не знает по построению (он
      * про `entity.query/get/count`) — после правки они протухли.
@@ -385,4 +387,36 @@ function PropertyRow({
 function RefTitle({ def, refId }: { def: PropertyDefinition; refId: string }) {
   const { title, isPending } = useRefTitle(def, refId);
   return <>{isPending ? '…' : title}</>;
+}
+
+/** Свободные значения (§7.5 п. 1): прежнее с экрана исчезает, «тем же элементом» его не вернуть — подпись называет его. */
+const FREE_VALUE_KINDS: ReadonlySet<string> = new Set([
+  'text',
+  'number',
+  'decimal',
+  'date',
+  'timestamp',
+  'time',
+]);
+export function propertyEditRule(
+  registry: RegistryLookup,
+  vars: import('../../trpc').RouterInputs['entity']['update'],
+  prior: Entity | undefined,
+): UndoToastRule | null {
+  if (vars.aspects !== undefined) return null; // аспект — без плашки
+  const id = [...Object.keys(vars.props ?? {}), ...(vars.unset ?? [])][0];
+  if (id === undefined) return null;
+  const def = registry.property(id);
+  const label = fieldLabel(registry, id);
+  // Ссылка: прежнее значение — id записи, подпись без него честнее uuid; разыменование — хук, а правило вне рендера.
+  if (def?.type.kind === 'ref') return { kind: 'always', title: `${label} изменено` };
+  const next = displayText(def, vars.props?.[id], registry);
+  if (def !== undefined && FREE_VALUE_KINDS.has(def.type.kind))
+    return {
+      kind: 'free-value',
+      title: label,
+      prior: displayText(def, prior?.props[id], registry),
+      next,
+    };
+  return { kind: 'if-consequences', title: `${label}: ${next}` }; // закрытый список: статус, флаг, выбор аспекта
 }

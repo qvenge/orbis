@@ -3,7 +3,7 @@ import { useCallback } from 'react';
 import { invalidateGraph } from '../../lib/invalidate';
 import { type RouterOutputs, trpc } from '../../trpc';
 import { useToast } from '../../ui/toast-store';
-import { UNDO_FAILED } from '../page/useUpdateBatch';
+import { offerUndoLazy } from '../undo/undo-lazy';
 
 /**
  * Обновления поставки в интерфейсе (срез 1б §9.1 п. 2–5, С1б-6 web). Всё здесь — ПРЕДЛОЖЕНИЯ: релиз
@@ -153,15 +153,7 @@ export function useSupplyAction(): (act: SupplyAct) => Promise<boolean> {
         return true;
       }
       const id = actionId;
-      show(doneTitle(act, accepted), 'default', {
-        label: 'Отменить',
-        onSelect: () => {
-          void utils.client.ai.undo
-            .mutate({ actionId: id })
-            .then(refresh)
-            .catch(() => show(UNDO_FAILED, 'danger'));
-        },
-      });
+      offerUndoLazy({ title: doneTitle(act, accepted), actionId: id });
       return true;
     },
     [utils, show],

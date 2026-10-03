@@ -3,7 +3,7 @@ import { useCallback } from 'react';
 import { invalidateGraph } from '../../lib/invalidate';
 import { trpc } from '../../trpc';
 import { useToast } from '../../ui/toast-store';
-import { UNDO_FAILED } from '../page/useUpdateBatch';
+import { offerUndoLazy } from '../undo/undo-lazy';
 
 // Чтение маски живёт в листовом модуле `extension-mask.ts` (вес первого кадра записи, см. его докблок);
 // `useExtensionEnabled` — ТОЛЬКО оттуда: импорт через этот модуль потянул бы в первый кадр переключатель
@@ -51,14 +51,10 @@ export function useSetExtensionEnabled(): (ext: ExtensionId, enabled: boolean) =
         return;
       }
       refresh();
-      show(extensionToggleTitle(ext, enabled), 'default', {
-        label: 'Отменить',
-        onSelect: () => {
-          void utils.client.ai.undo
-            .mutate({ actionId })
-            .then(refresh)
-            .catch(() => show(UNDO_FAILED, 'danger'));
-        },
+      offerUndoLazy({
+        title: extensionToggleTitle(ext, enabled),
+        actionId: actionId,
+        entityIds: [],
       });
     },
     [utils, show],

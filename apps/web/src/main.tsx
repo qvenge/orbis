@@ -6,6 +6,7 @@ import { App } from './App';
 import { AuthProvider, getCurrentToken } from './auth/AuthProvider';
 import { ConsentScreen } from './features/oauth/ConsentScreen';
 import { OnboardingGate } from './features/onboarding/OnboardingGate';
+import { UndoBinder } from './features/undo/undo-binding';
 import { QueryBatchProvider } from './lib/query-blocks/batch';
 import { initTheme } from './lib/theme';
 import { perfBuffer } from './perf/collector';
@@ -54,6 +55,7 @@ createRoot(rootElement).render(
               </OnboardingGate>
             )}
             {/* Тосты доступны и до прохождения онбординга, поэтому вне гейта. */}
+            <UndoBinder />
             <Toaster />
           </AuthProvider>
         </QueryBatchProvider>

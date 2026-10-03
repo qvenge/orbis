@@ -173,7 +173,13 @@ function openRecord(
       applyBatch(world, input);
       return { actionId: ACTION_ID, consequences: false, results: [] };
     }
-    if (path === 'ai.undo') return { ok: true, actionId: ACTION_ID, results: [] };
+    if (path === 'ai.undo')
+      return {
+        actionId: ACTION_ID,
+        undone: { id: ACTION_ID, title: 'Правка' },
+        pinnedVersions: [],
+        bodyRevisions: [],
+      };
     return blocks(path, input) ?? screenHandler(path, input);
   };
   return renderWithProviders(

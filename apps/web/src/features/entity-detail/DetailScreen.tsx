@@ -1,6 +1,6 @@
 import { PAGE_ASPECT } from '@orbis/shared';
 import { type Address, buildAddress, currentEntry } from '@orbis/shared/nav';
-import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, type ReactNode, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { ScreenMenuProvider } from '../../app/frame/ScreenMenu';
 import { NotFoundScreen } from '../../app/NotFoundScreen';
 import { ScreenHeader } from '../../app/ScreenHeader';
@@ -11,13 +11,13 @@ import { mayLeave } from '../../state/leave-guard';
 import { placeKeyOf, useNav } from '../../state/navigation';
 import { trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
+import { Dialog } from '../../ui/Dialog';
 import { Input } from '../../ui/Input';
 import { Skeleton } from '../../ui/Skeleton';
 import { useToast } from '../../ui/toast-store';
 import { OpenPlaques } from '../apps/OpenPlaques';
 import { useApps } from '../apps/useApps';
 import { useOpening } from '../apps/useOpening';
-import { ConfigureView } from '../page/ConfigureView';
 import { PageView } from '../page/PageView';
 import { type DisputeRequest, type RecordShown, RecordView } from '../page/RecordView';
 import { type TabMemory, TabMemoryProvider, TabMemoryScope } from '../page/TabsContainer';
@@ -30,7 +30,14 @@ import { type BodyGate, BodyScreenProvider, bodyKindOf } from './EntityBody';
 import { ProposalOverlay } from './ProposalOverlay';
 import { ROUTINE_ASPECT } from './RoutineStatusBlock';
 import { useEntityDetail } from './useEntityDetail';
-import { PinVersionDialog } from './VersionsCard';
+
+const ConfigureView = lazy(() =>
+  import('../page/ConfigureView').then((m) => ({ default: m.ConfigureView })),
+);
+
+const PinVersionDialog = lazy(() =>
+  import('./VersionsCard').then((m) => ({ default: m.PinVersionDialog })),
+);
 
 const TASK = 'orbis/task';
 const ASSIGNMENT = 'orbis/assignment';
@@ -436,7 +443,25 @@ export function DetailScreen({
           открывают его из меню, а меню одно на все вкладки. Монтируется только открытым —
           набранная и брошенная подпись не переживает закрытие. */}
           {pinVersion && (
-            <PinVersionDialog entityId={entity.id} onClose={() => setPinVersion(false)} />
+            <Suspense
+              fallback={
+                <Dialog
+                  open
+                  title="Загрузка окна версии"
+                  onOpenChange={(open) => {
+                    if (!open) setPinVersion(false);
+                  }}
+                >
+                  <p role="status">Загружаем версии…</p>
+                </Dialog>
+              }
+            >
+              <PinVersionDialog
+                key={`pin-${entity.id}`}
+                entityId={entity.id}
+                onClose={() => setPinVersion(false)}
+              />
+            </Suspense>
           )}
           {/* Запасной путь копирования — ВНЕ табов: ссылку просят из меню, а меню одно на все
           табы, и прятать ответ на вкладке «Запись» значило бы иногда не отвечать вовсе. */}
@@ -516,7 +541,13 @@ export function DetailScreen({
             Режим «Настроить» (§9.1) заменяет показ телом в редакторе, шаблон страницы — его
             предпросмотром на записи (§9.3). */}
             {mode?.kind === 'configure' ? (
-              <ConfigureView targetId={mode.targetId} onDone={() => setMode(null)} />
+              <Suspense fallback={<p role="status">Загружаем настройку…</p>}>
+                <ConfigureView
+                  key={mode.targetId}
+                  targetId={mode.targetId}
+                  onDone={() => setMode(null)}
+                />
+              </Suspense>
             ) : isPage && !asRecord ? (
               // Вкладки страницы — её собственные: пространство памяти по id страницы. Иначе третья
               // вкладка страницы A открывала бы третью вкладку страницы B — это разные тексты.

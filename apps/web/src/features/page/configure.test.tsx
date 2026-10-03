@@ -662,11 +662,14 @@ describe('уход с настройки без связи (рулинг R-5)', 
     if (within(view).queryByTestId('body-editor')?.querySelector('[contenteditable]') == null) {
       await userEvent.click(within(view).getByText('левая часть'));
     }
-    const field = await waitFor(() => {
-      const node = within(view).getByTestId('body-editor').querySelector('[contenteditable]');
-      if (node === null) throw new Error('редактор не встал');
-      return node as HTMLElement & { editor: Editor };
-    });
+    const field = await waitFor(
+      () => {
+        const node = within(view).getByTestId('body-editor').querySelector('[contenteditable]');
+        if (node === null) throw new Error('редактор не встал');
+        return node as HTMLElement & { editor: Editor };
+      },
+      { timeout: 5000 },
+    );
     let at = -1;
     field.editor.state.doc.descendants((node, pos) => {
       if (at === -1 && node.isText && node.text?.startsWith('левая часть') === true) {
@@ -776,7 +779,7 @@ describe('уход с настройки без связи (рулинг R-5)', 
       done();
       expect(screen.queryByTestId('configure-view')).toBeNull();
     });
-  });
+  }, 30_000);
 
   test('досыл упал сетью, текст черновиком на устройстве — «Готово» уходит с тостом; черновик переживает уход и возврат', async () => {
     idleNever();

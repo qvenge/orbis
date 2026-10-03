@@ -10,7 +10,13 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { gzipSync } from 'node:zlib';
-import { checkBudgets, checkClosureText, closureOf, parseBudgetArgs } from './check-lazy-chunks.ts';
+import {
+  checkBudgets,
+  checkClosureText,
+  closureOf,
+  parseBudgetArgs,
+  runtimeModuleImports,
+} from './check-lazy-chunks.ts';
 
 const dirs: string[] = [];
 
@@ -144,4 +150,23 @@ test('содержимое замыкания (R-19): маркер в стати
   const stale = checkClosureText(lazy, [rule], source('другой текст'));
   expect(stale.code).toBe(1);
   expect(stale.lines.join('\n')).toContain('устарела');
+});
+
+test('source guard видит runtime imports/reexports, типы и dynamic import не считает', () => {
+  expect(
+    runtimeModuleImports(`import { PinVersionDialog } from './VersionsCard';
+export { ConfigureView } from '../page/ConfigureView';`),
+  ).toEqual(['./VersionsCard', '../page/ConfigureView']);
+  expect(
+    runtimeModuleImports(`import type { X } from './VersionsCard';
+import { type Y } from './VersionsCard';
+export type { Z } from './VersionsCard';
+export { type A } from './VersionsCard';
+const load = () => import('./VersionsCard');`),
+  ).toEqual([]);
+  expect(
+    runtimeModuleImports(`import { type X, Y } from './VersionsCard';
+export * from './VersionsCard';
+import './VersionsCard';`),
+  ).toEqual(['./VersionsCard', './VersionsCard', './VersionsCard']);
 });

@@ -229,7 +229,12 @@ function worldHandler(f: StructureFixture, world: World): MockHandler {
     if (path === 'ai.undo') {
       if (world.beforeBatch !== null) world.rows = world.beforeBatch;
       world.beforeBatch = null;
-      return { ok: true, actionId: ACTION_ID, results: [] };
+      return {
+        actionId: ACTION_ID,
+        undone: { id: ACTION_ID, title: 'Правка' },
+        pinnedVersions: [],
+        bodyRevisions: [],
+      };
     }
     if (path === 'entity.get') {
       const row = world.rows.get((input as { id: string }).id);
@@ -394,6 +399,7 @@ describe('«Сделать страницей»', () => {
     await openMenu();
     expect(menuLabels()).not.toContain('Сделать страницей');
     fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('menu')).toBeNull());
 
     fireEvent.click(await screen.findByRole('button', { name: 'Отменить' }));
     await waitFor(() =>
@@ -1194,16 +1200,12 @@ describe('жест меню при неотправленной правке т�
     expect(sent()).toBe(before);
     expect(r.batches()).toEqual([]);
 
-    // «Обновить» снимает плашку — к ней больше не отослать: жест снова пробует досыл (честное
-    // «Сохраняем текст…»), а упади он опять 409 — плашка вернётся вместе с запретом.
+    // R19: Refresh предлагает отдельный черновик, а не пытается молча дослать его старой ревизией.
     fireEvent.click(await screen.findByRole('button', { name: 'Обновить' }));
-    await waitFor(() => expect(screen.queryByRole('button', { name: 'Обновить' })).toBeNull());
-    useToastStore.setState({ toasts: [] });
+    expect(await screen.findByRole('button', { name: 'Оставить моё' })).toBeInTheDocument();
     await choose('Сделать страницей');
-    expect(await screen.findByText(BODY_SAVING)).toBeInTheDocument();
-    await waitFor(() => expect(sent()).toBe(before + 1));
-    expect(await screen.findByRole('button', { name: 'Обновить' })).toBeInTheDocument();
-    expect(r.batches()).toEqual([]);
+    await waitFor(() => expect(r.batches()).toHaveLength(1));
+    expect(sent()).toBe(before);
   });
 
   test('«Сделать страницей»: пачки нет, тост, текст досылается без 409', async () => {

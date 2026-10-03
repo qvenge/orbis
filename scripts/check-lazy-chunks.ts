@@ -35,6 +35,55 @@
  */
 import { readdirSync, readFileSync } from 'node:fs';
 import { gzipSync } from 'node:zlib';
+import ts from 'typescript';
+
+/** Сборщик может оставить lazy export в отдельном чанке, но вынести static sibling в общий. Проверяем также исходные рёбра. */
+export function runtimeModuleImports(source: string): string[] {
+  const file = ts.createSourceFile(
+    'source.tsx',
+    source,
+    ts.ScriptTarget.Latest,
+    false,
+    ts.ScriptKind.TSX,
+  );
+  return file.statements.flatMap((node) => {
+    if (ts.isImportDeclaration(node)) {
+      const clause = node.importClause;
+      const bindings = clause?.namedBindings;
+      const runtime =
+        clause === undefined ||
+        (!clause.isTypeOnly &&
+          (clause.name !== undefined ||
+            (bindings !== undefined &&
+              (ts.isNamespaceImport(bindings) || bindings.elements.some((e) => !e.isTypeOnly)))));
+      return runtime && ts.isStringLiteral(node.moduleSpecifier) ? [node.moduleSpecifier.text] : [];
+    }
+    if (
+      ts.isExportDeclaration(node) &&
+      !node.isTypeOnly &&
+      node.moduleSpecifier !== undefined &&
+      ts.isStringLiteral(node.moduleSpecifier)
+    ) {
+      const runtime =
+        node.exportClause === undefined ||
+        ts.isNamespaceExport(node.exportClause) ||
+        node.exportClause.elements.some((e) => !e.isTypeOnly);
+      return runtime ? [node.moduleSpecifier.text] : [];
+    }
+    return [];
+  });
+}
+const SOURCE_LAZY_EDGES = [
+  {
+    source: 'apps/web/src/features/entity-detail/DetailScreen.tsx',
+    modules: ['VersionsCard', 'ConfigureView'],
+  },
+  { source: 'apps/web/src/features/entity-detail/record-blocks.tsx', modules: ['VersionsCard'] },
+  {
+    source: 'apps/web/src/features/entity-detail/ProposalOverlay.tsx',
+    modules: ['ProposalOverlayView'],
+  },
+];
 
 const ASSETS_DIR = 'apps/web/dist/assets';
 const ROUTER = 'apps/web/src/app/router.tsx';
@@ -117,6 +166,13 @@ const LAZY_EDITOR_MODULES = ['BodyEditor', 'MarkdownToggle'];
  * `features/supply/SupplyPlaqueSlot.tsx`.
  */
 const LAZY_DETAIL_MODULES = [
+  // R44: настройка после соответствующего жеста.
+  'ConfigureView',
+  'undo-toast',
+  // R42: версии и диалог закрепления грузятся после первого открытия списка или жеста.
+  'VersionsCard',
+  // R43: запрос eager, представление непустого предложения lazy.
+  'ProposalOverlayView',
   'DetailMenu',
   'RecordsBlock',
   'OpenPlaqueList',
@@ -194,6 +250,22 @@ const LAZY_FRAME_MODULES = [
  * нет, но ребро остаётся: он появится с первым же новым местом показа блока.
  */
 const FORBIDDEN_EDGES: readonly { from: string; to: string; hint: string }[] = [
+  { from: 'DetailScreen', to: 'ConfigureView', hint: 'R44: редактор настройки после жеста.' },
+  {
+    from: 'DetailScreen',
+    to: 'ProposalOverlayView',
+    hint: 'R43: query wrapper не импортирует представление статически.',
+  },
+  {
+    from: 'DetailScreen',
+    to: 'VersionsCard',
+    hint: 'R42: оба потребителя версий грузят модуль только через lazy().',
+  },
+  {
+    from: 'DetailScreen',
+    to: 'undo-toast',
+    hint: 'Отмена и плашка — только через undo-lazy, после первого действия.',
+  },
   {
     from: 'DetailScreen',
     to: 'RunFeed',
@@ -542,6 +614,23 @@ function main(argv: readonly string[]): void {
   // то есть ровно тем способом, против которого этот страж и написан. Сверяем не число, а
   // ИМЕНА: чанк называется по базовому имени модуля из import(), поэтому список обязан совпасть
   // с набором ленивых импортов роутера точь-в-точь.
+  for (const edge of SOURCE_LAZY_EDGES) {
+    const imports = runtimeModuleImports(readFileSync(edge.source, 'utf8'));
+    const forbidden = imports.filter((path) =>
+      edge.modules.includes(
+        path
+          .replace(/\.(?:tsx?|jsx?)$/, '')
+          .split('/')
+          .at(-1) ?? '',
+      ),
+    );
+    if (forbidden.length > 0) {
+      console.error(
+        `check-lazy-chunks: source static edge ${edge.source} → ${forbidden.join(', ')}; siblings одного модуля тоже должны оставаться lazy.`,
+      );
+      process.exit(1);
+    }
+  }
   const routerSrc = readFileSync(ROUTER, 'utf8');
   const inRouter = [...routerSrc.matchAll(/lazy\([\s\S]{0,200}?import\('([^']+)'\)/g)].map(
     (m) => m[1].split('/').pop() as string,

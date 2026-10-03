@@ -6,6 +6,8 @@ import { invalidateQueryBlocks } from '../../lib/query-blocks/batch';
 import { type RouterOutputs, trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
 import { Spinner } from '../../ui/Spinner';
+import { journalRefOf } from '../undo/journal-ref';
+import { offerUndoLazy } from '../undo/undo-lazy';
 import { useHostReadOnly } from './record-host';
 import { detailGetInput } from './useEntityDetail';
 
@@ -141,7 +143,14 @@ export function Blockers({ entityId, relations }: { entityId: string; relations:
     onMutate: () => {
       relate.reset();
     },
-    onSuccess: (_data, vars) => {
+    onSuccess: (data, vars) => {
+      const ref = journalRefOf(data);
+      if (ref)
+        offerUndoLazy({
+          title: `Блокировка снята: «${title(vars.source_id === entityId ? vars.target_id : vars.source_id)}»`,
+          actionId: ref.actionId,
+          entityIds: [],
+        });
       setConfirming(null);
       refresh(vars.source_id === entityId ? vars.target_id : vars.source_id);
     },

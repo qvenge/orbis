@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import { useOpenRecord } from '../../../app/useOpenRecord';
 import { formatAmount } from '../../../lib/format';
-import { invalidateGraph } from '../../../lib/invalidate';
 import { fieldLabel } from '../../../lib/registry/labels';
 import { useRegistry } from '../../../lib/registry/useRegistry';
 import { trpc } from '../../../trpc';
@@ -11,6 +10,7 @@ import { useCategoryTitle } from '../../budget/categories';
 // Валютный символ — общий envelopeView (одно отображение валюты для всех мест показа денег), маппинг не дублируем
 import { envelopeView } from '../../budget/EnvelopeCard';
 import { useExtensionEnabled } from '../../settings/extension-mask';
+import { undoWithReport } from '../../undo/undo-lazy';
 import type { EntityCardData } from './types';
 
 // inline-правка полей аспекта — на detail-экране (Task 14); в чат-карточке read-only + Undo + тап в detail (MVP §2.3)
@@ -34,7 +34,6 @@ export function EntityCard({
   const [undoneHere, setUndone] = useState(false);
   const undone = undoneOnServer || undoneHere;
   const openRecord = useOpenRecord();
-  const utils = trpc.useUtils();
   // Подписи полей — из реестра (§А9-2): ключи `keyFields` это id СВОЙСТВ, и словарь имён
   // старой схемы, живший здесь раньше, не знал ни одного из них.
   const registry = useRegistry();
@@ -89,17 +88,7 @@ export function EntityCard({
     isError: categoryFailed,
   } = useCategoryTitle(typeof categoryRef === 'string' ? categoryRef : '');
 
-  const undo = trpc.ai.undo.useMutation({
-    onSuccess: () => {
-      setUndone(true);
-      // Р17: Undo — такая же правка графа, как create, и списки о ней узнать обязаны
-      // (раньше инвалидировался ТОЛЬКО ключ самой карточки, и отменённая запись висела
-      // в Browser/Повестке до истечения staleTime, а прогресс цели считал её своей).
-      invalidateGraph(utils);
-      // Undo транзакции меняет агрегаты Budget (остаток, бейдж §6.1) — B2+-правило
-      if (isFinancial) void utils.budget.invalidate();
-    },
-  });
+  const [pending, setPending] = useState(false);
 
   const undoActionId = card.undoActionId;
 
@@ -142,7 +131,14 @@ export function EntityCard({
           variant="ghost"
           size="sm"
           className="self-start"
-          onClick={() => undo.mutate({ actionId: undoActionId })}
+          disabled={pending}
+          onClick={() => {
+            setPending(true);
+            undoWithReport(undoActionId, { entityIds: [card.entityId] }, (o) => {
+              setPending(false);
+              if (o.kind === 'undone' || o.kind === 'already') setUndone(true);
+            });
+          }}
         >
           Отменить
         </Button>
