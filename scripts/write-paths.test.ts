@@ -103,19 +103,21 @@ function schemaTables(): Map<string, string> {
 
 const SQL_IDENTIFIER = '(?:"(?:[^"]|"")*"|[a-z_\\u0080-\\uffff][a-z0-9_$\\u0080-\\uffff]*)';
 const SQL_TABLE = `(?:\\$\\{[^}]*\\}|${SQL_IDENTIFIER}(?:\\s*\\.\\s*${SQL_IDENTIFIER})*)`;
-const SQL_TABLE_ITEM = `(?:ONLY\\s+)?${SQL_TABLE}`;
+// PostgreSQL relation_expr: ONLY имя/(имя) либо имя*. INSERT использует qualified_name.
+const SQL_TARGET = `(?:ONLY\\s*(?:\\(\\s*${SQL_TABLE}\\s*\\)|\\s+${SQL_TABLE})|${SQL_TABLE}(?:\\s*\\*)?)`;
 const WRITE_SQL = new RegExp(
-  `\\b(INSERT\\s+INTO|UPDATE|DELETE\\s+FROM|TRUNCATE(?:\\s+TABLE)?)\\s+(${SQL_TABLE_ITEM}(?:\\s*,\\s*${SQL_TABLE_ITEM})*)`,
+  `\\b(?:(INSERT\\s+INTO)\\s+(${SQL_TABLE})|(UPDATE|DELETE\\s+FROM|TRUNCATE(?:\\s+TABLE)?)\\s+(${SQL_TARGET}(?:\\s*,\\s*${SQL_TARGET})*))`,
   'gi',
 );
 const NOT_A_TABLE = new Set(['set', 'of', 'skip', 'nowait']); // DO UPDATE SET, FOR UPDATE [OF|SKIP LOCKED|NOWAIT]
 const BODY_COLUMNS = new Set(['body_revision', 'body_action_id', 'body_changed_at']);
+const SQL_TARGET_GAP = '(?:\\s+|(?<=[)*"]))';
 const BODY_SET = new RegExp(
-  `\\b(?:UPDATE\\s+(?:ONLY\\s+)?${SQL_TABLE}(?:\\s+(?:AS\\s+)?${SQL_IDENTIFIER})?\\s+SET|ON\\s+CONFLICT\\b[^;]*?\\bDO\\s+UPDATE\\s+SET)\\b`,
+  `\\b(?:UPDATE\\s+${SQL_TARGET}(?:${SQL_TARGET_GAP}(?:AS(?:\\s+|(?=")))?${SQL_IDENTIFIER})?${SQL_TARGET_GAP}SET|ON\\s+CONFLICT\\b[^;]*?\\bDO\\s+UPDATE\\s+SET)\\b`,
   'gi',
 );
 const INSERT_COLUMNS = new RegExp(
-  `\\bINSERT\\s+INTO\\s+${SQL_TABLE}(?:\\s+AS\\s+${SQL_IDENTIFIER})?\\s*\\(([^)]*)\\)`,
+  `\\bINSERT\\s+INTO\\s+${SQL_TABLE}(?:${SQL_TARGET_GAP}AS(?:\\s+|(?="))${SQL_IDENTIFIER})?\\s*\\(([^)]*)\\)`,
   'gi',
 );
 const sqlIdentifier = (name: string): string =>
@@ -132,6 +134,137 @@ const opaqueAt = (code: SqlCode, i: number) => code.opaque.find(([a, b]) => a <=
 const keywordStart = (code: SqlCode, i: number): boolean =>
   !opaqueAt(code, i) && !SQL_IDENTIFIER_CONTINUATION.test(code.text[i - 1] ?? '');
 
+/** Пробелы/комментарии между U& identifier и его необязательным UESCAPE. */
+function sqlTriviaEnd(text: string, start: number): number {
+  let i = start;
+  while (i < text.length) {
+    if (/\s/.test(text[i] ?? '')) i++;
+    else if (text.startsWith('--', i)) {
+      while (i < text.length && text[i] !== '\n' && text[i] !== '\r') i++;
+    } else if (text.startsWith('/*', i)) {
+      let depth = 1;
+      i += 2;
+      while (i < text.length && depth > 0) {
+        if (text.startsWith('/*', i)) {
+          depth++;
+          i += 2;
+        } else if (text.startsWith('*/', i)) {
+          depth--;
+          i += 2;
+        } else i++;
+      }
+    } else break;
+  }
+  return i;
+}
+/** SCONST после UESCAPE: обычный/E literal с newline continuation либо dollar literal. */
+function escapeConstant(text: string, start: number): { end: number; value: string | null } {
+  const delimiter = text.slice(start).match(DOLLAR_QUOTE)?.[0];
+  if (delimiter) {
+    const close = text.indexOf(delimiter, start + delimiter.length);
+    return close < 0
+      ? { end: text.length, value: null }
+      : { end: close + delimiter.length, value: text.slice(start + delimiter.length, close) };
+  }
+  const escaped = /^[eE]'/.test(text.slice(start));
+  let i = start + (escaped ? 1 : 0);
+  if (text[i] !== "'") return { end: text.length, value: null };
+  let raw = '';
+  while (text[i] === "'") {
+    i++;
+    let closed = false;
+    while (i < text.length) {
+      if (escaped && text[i] === '\\') {
+        raw += text.slice(i, i + 2);
+        i += 2;
+      } else if (text[i] !== "'") raw += text[i++] ?? '';
+      else if (text[i + 1] === "'") {
+        raw += "'";
+        i += 2;
+      } else {
+        i++;
+        closed = true;
+        break;
+      }
+    }
+    if (!closed) return { end: text.length, value: null };
+    const next = sqlTriviaEnd(text, i);
+    if (!/[\n\r]/.test(text.slice(i, next)) || text[next] !== "'") break;
+    i = next;
+  }
+  let valid = true;
+  const value = escaped
+    ? raw.replace(
+        /\\(?:([0-7]{1,3})|x([a-fA-F0-9]{1,2})|u([a-fA-F0-9]{4})|U([a-fA-F0-9]{8})|([\s\S]))/g,
+        (_, octal: string, hex: string, small: string, big: string, other: string) => {
+          if (octal) return String.fromCharCode(Number.parseInt(octal, 8) & 0xff);
+          if (hex) return String.fromCharCode(Number.parseInt(hex, 16));
+          if (small || big) {
+            const n = Number.parseInt(small || big, 16);
+            if (n > 0x10ffff) {
+              valid = false;
+              return '';
+            }
+            return String.fromCodePoint(n);
+          }
+          if (other === 'u' || other === 'U') valid = false;
+          return (
+            ({ b: '\b', f: '\f', n: '\n', r: '\r', t: '\t' } as Record<string, string>)[other] ??
+            other
+          );
+        },
+      )
+    : raw;
+  return { end: i, value: valid ? value : null };
+}
+/** PostgreSQL U& quoted identifier: case сохраняется, escape относится только к этому токену. */
+function unicodeIdentifier(text: string, start: number): { end: number; name: string | null } {
+  const token = text.slice(start).match(/^u&"((?:[^"]|"")*)"/i);
+  if (!token) return { end: text.length, name: null };
+  let end = start + token[0].length;
+  let escapeChar = '\\';
+  const clause = sqlTriviaEnd(text, end);
+  if (/^UESCAPE(?![a-z0-9_$\u0080-\uffff])/i.test(text.slice(clause))) {
+    const literalStart = sqlTriviaEnd(text, clause + 'UESCAPE'.length);
+    const literal = escapeConstant(text, literalStart);
+    end = literal.end;
+    if (literal.value === null) return { end, name: null };
+    escapeChar = literal.value;
+    // PostgreSQL требует один байт escape character; Unicode multibyte здесь syntax error.
+    if (
+      escapeChar.length !== 1 ||
+      escapeChar.charCodeAt(0) === 0 ||
+      escapeChar.charCodeAt(0) > 0x7f ||
+      /[0-9a-f+'"\s]/i.test(escapeChar)
+    )
+      return { end, name: null };
+  }
+  const raw = (token[1] ?? '').replaceAll('""', '"');
+  let name = '';
+  for (let i = 0; i < raw.length; ) {
+    if (!raw.startsWith(escapeChar, i)) {
+      name += raw[i++] ?? '';
+      continue;
+    }
+    i += escapeChar.length;
+    if (raw.startsWith(escapeChar, i)) {
+      name += escapeChar;
+      i += escapeChar.length;
+      continue;
+    }
+    const hex = raw.slice(i).match(/^(?:\+[0-9a-f]{6}|[0-9a-f]{4})/i)?.[0];
+    if (!hex) return { end, name: null };
+    const codepoint = Number.parseInt(hex.replace(/^\+/, ''), 16);
+    if (codepoint === 0 || codepoint > 0x10ffff) return { end, name: null };
+    name += String.fromCodePoint(codepoint);
+    i += hex.length;
+  }
+  // Итерация по строке объединяет surrogate pairs; одинокие surrogates и ноль недопустимы.
+  if (!name || [...name].some((c) => c.codePointAt(0) === 0 || /^[\ud800-\udfff]$/.test(c)))
+    return { end, name: null };
+  return { end, name };
+}
+
 /**
  * Комментарии снимаются только вне SQL literals. Их содержимое тоже маскируется: SELECT строки
  * «UPDATE ...» не писатель. Quoted identifiers и ${…} остаются токенами; иначе пропадали
@@ -140,14 +273,31 @@ const keywordStart = (code: SqlCode, i: number): boolean =>
 function sqlCode(text: string): SqlCode {
   const out: string[] = [];
   const opaque: Array<[number, number]> = [];
+  let length = 0;
+  const append = (part: string, hidden = false) => {
+    out.push(part);
+    if (hidden) opaque.push([length, length + part.length]);
+    length += part.length;
+  };
   const mask = (part: string) => part.replace(/[^\n\r]/g, ' ');
   for (let i = 0; i < text.length; ) {
     const start = i;
     if (text.startsWith('${', i)) {
       const close = text.indexOf('}', i + 2);
       i = close < 0 ? text.length : close + 1;
-      out.push(text.slice(start, i));
-      opaque.push([start, i]);
+      append(text.slice(start, i), true);
+    } else if (
+      /^u&"/i.test(text.slice(i)) &&
+      !SQL_IDENTIFIER_CONTINUATION.test(text[i - 1] ?? '')
+    ) {
+      const identifier = unicodeIdentifier(text, i);
+      i = identifier.end;
+      append(
+        identifier.name === null
+          ? mask(text.slice(start, i))
+          : `"${identifier.name.replaceAll('"', '""')}"`,
+        true,
+      );
     } else if (text[i] === '"') {
       i++;
       while (i < text.length) {
@@ -155,8 +305,7 @@ function sqlCode(text: string): SqlCode {
         if (text[i] === '"') i++;
         else break;
       }
-      out.push(text.slice(start, i));
-      opaque.push([start, i]);
+      append(text.slice(start, i), true);
     } else if (text[i] === "'") {
       const escaped =
         /[eE]/.test(text[i - 1] ?? '') && !SQL_IDENTIFIER_CONTINUATION.test(text[i - 2] ?? '');
@@ -170,7 +319,7 @@ function sqlCode(text: string): SqlCode {
         if (text[i] === "'") i++;
         else break;
       }
-      out.push(mask(text.slice(start, i)));
+      append(mask(text.slice(start, i)));
     } else if (
       text[i] === '$' &&
       !SQL_IDENTIFIER_CONTINUATION.test(text[i - 1] ?? '') &&
@@ -179,11 +328,11 @@ function sqlCode(text: string): SqlCode {
       const tag = text.slice(i).match(DOLLAR_QUOTE)?.[0] ?? '$$';
       const close = text.indexOf(tag, i + tag.length);
       i = close < 0 ? text.length : close + tag.length;
-      out.push(mask(text.slice(start, i)));
+      append(mask(text.slice(start, i)));
     } else if (text.startsWith('--', i)) {
       i += 2;
       while (i < text.length && text[i] !== '\n' && text[i] !== '\r') i++;
-      out.push(mask(text.slice(start, i)));
+      append(mask(text.slice(start, i)));
     } else if (text.startsWith('/*', i)) {
       let depth = 1;
       i += 2;
@@ -196,8 +345,8 @@ function sqlCode(text: string): SqlCode {
           i += 2;
         } else i++;
       }
-      out.push(mask(text.slice(start, i)));
-    } else out.push(text[i++] ?? '');
+      append(mask(text.slice(start, i)));
+    } else append(text[i++] ?? '');
   }
   return { text: out.join(''), opaque };
 }
@@ -208,11 +357,17 @@ export function sqlWrites(text: string): Array<{ table: string; dynamic: boolean
   const code = sqlCode(text);
   for (const m of code.text.matchAll(WRITE_SQL)) {
     if (!keywordStart(code, m.index)) continue;
-    const verb = (m[1] ?? '').toUpperCase();
+    const verb = (m[1] ?? m[3] ?? '').toUpperCase();
     // Запятая внутри ${WORLD_TABLES.join(', ')} — часть выражения, а не разделитель таблиц.
-    const list = (m[2] ?? '').match(new RegExp(SQL_TABLE_ITEM, 'gi')) ?? [];
+    const list = m[2] ? [m[2]] : ((m[4] ?? '').match(new RegExp(SQL_TARGET, 'gi')) ?? []);
     for (const raw of verb.startsWith('TRUNCATE') ? list : list.slice(0, 1)) {
-      const table = raw.replace(/^ONLY\s+/i, '');
+      const only = /^ONLY(?=\s|\()/i.test(raw);
+      const target = only ? raw.replace(/^ONLY\s*/i, '') : raw;
+      const table = (only && target.startsWith('(') ? target.slice(1, -1).trim() : target).replace(
+        /\s*\*$/,
+        '',
+      );
+      if (!table || /^ONLY$/i.test(table)) continue;
       const name = table.match(new RegExp(SQL_IDENTIFIER, 'gi'))?.at(-1) ?? table;
       const t = table.startsWith('${') ? table : sqlIdentifier(name);
       if (verb === 'UPDATE' && NOT_A_TABLE.has(t.toLowerCase())) continue;
@@ -733,6 +888,252 @@ describe('сторожа путей записи (спека скорости §
       expect(bodyColumnSql(`UPDATE entities SET title='x' ${keyword} body_revision=1`)).toBe(false);
     for (const name of ['nameDELETE', 'имяDELETE'])
       expect(sqlWrites(`SELECT ${name} FROM entities`)).toEqual([]);
+  });
+  test('SQL: ONLY parenthesized targets сохраняют graph/body/chat/journal boundaries', () => {
+    const rules = (query: string) =>
+      fileHits(
+        'apps/server/src/executor/executor.ts',
+        `tx.unsafe(${JSON.stringify(query)});`,
+        new Map(),
+      )
+        .map((h) => h.rule)
+        .sort();
+    expect(rules('UPDATE ONLY (public.entities) SET body_revision=1')).toEqual([
+      'body-columns',
+      'graph',
+    ]);
+    expect(rules('UPDATE ONLY("public"."entities") AS e SET body_action_id=NULL')).toEqual([
+      'body-columns',
+      'graph',
+    ]);
+    expect(rules('DELETE FROM ONLY (public.chat_messages) WHERE id=1')).toEqual(['chat']);
+    expect(rules('DELETE FROM ONLY ("public"."action_journal") WHERE id=1')).toEqual(['journal']);
+    expect(rules('SELECT body_revision FROM ONLY (public.entities) FOR UPDATE')).toEqual([]);
+    expect(rules("SELECT 'UPDATE ONLY (entities) SET body_revision=1'")).toEqual([]);
+    expect(sqlWrites('INSERT INTO ONLY (entities) (body_revision) VALUES(1)')).toEqual([]);
+    expect(sqlWrites('TRUNCATE ONLY (entities)')).toEqual([{ table: 'entities', dynamic: false }]);
+  });
+  test('SQL: inheritance star сохраняет UPDATE body assignment и отрицательный reader', () => {
+    for (const name of [
+      'entities',
+      'entities *',
+      'entities*',
+      'public.entities *',
+      'U&"entities"* AS я',
+    ]) {
+      expect(
+        fileHits(
+          'apps/server/src/executor/executor.ts',
+          `tx.unsafe(${JSON.stringify(`UPDATE ${name} SET body_revision=1`)});`,
+          new Map(),
+        )
+          .map((h) => h.rule)
+          .sort(),
+      ).toEqual(['body-columns', 'graph']);
+    }
+    expect(sqlWrites('SELECT body_revision FROM entities* FOR UPDATE')).toEqual([]);
+    expect(bodyColumnSql('SELECT body_revision FROM entities* FOR UPDATE')).toBe(false);
+  });
+  test('SQL: punctuation target boundary отделяет SET без разрыва ordinary identifier', () => {
+    for (const query of [
+      'UPDATE ONLY(entities)SET body_revision=1',
+      'UPDATE entities*SET body_revision=1',
+      'UPDATE "entities"SET"body_revision"=1',
+    ]) {
+      expect(
+        fileHits(
+          'apps/server/src/executor/executor.ts',
+          `tx.unsafe(${JSON.stringify(query)});`,
+          new Map(),
+        )
+          .map((h) => h.rule)
+          .sort(),
+      ).toEqual(['body-columns', 'graph']);
+    }
+    expect(sqlWrites('UPDATE entitiesSET body_revision=1')).toEqual([
+      { table: 'entitiesset', dynamic: false },
+    ]);
+    expect(bodyColumnSql('UPDATE entitiesSET body_revision=1')).toBe(false);
+  });
+  test('SQL: quoted INSERT target и alias отделяют AS как token без пробела', () => {
+    for (const query of [
+      'INSERT INTO "entities"AS e (body_revision) VALUES(1)',
+      'INSERT INTO U&"entities"AS e (body_revision) VALUES(1)',
+      'INSERT INTO "entities"AS"e"(body_revision) VALUES(1)',
+      'UPDATE "entities"AS"e"SET body_revision=1',
+    ])
+      expect(
+        fileHits(
+          'apps/server/src/executor/executor.ts',
+          `tx.unsafe(${JSON.stringify(query)});`,
+          new Map(),
+        )
+          .map((h) => h.rule)
+          .sort(),
+      ).toEqual(['body-columns', 'graph']);
+    expect(bodyColumnSql('INSERT INTO entitiesAS e (body_revision) VALUES(1)')).toBe(false);
+    expect(sqlWrites('INSERT INTO entitiesAS e (body_revision) VALUES(1)')).toEqual([
+      { table: 'entitiesas', dynamic: false },
+    ]);
+  });
+  test('SQL: TRUNCATE relation list поддерживает ONLY parens/star/dynamic/escaped names', () => {
+    expect(sqlWrites('TRUNCATE ONLY (entities)')).toEqual([{ table: 'entities', dynamic: false }]);
+    expect(
+      sqlWrites(
+        'TRUNCATE TABLE entities*, ONLY ("public"."action_journal"), U&"chat_!006dessages" UESCAPE \'!\'',
+      ),
+    ).toEqual([
+      { table: 'entities', dynamic: false },
+      { table: 'action_journal', dynamic: false },
+      { table: 'chat_messages', dynamic: false },
+    ]);
+    expect(
+      sqlWrites(`TRUNCATE ONLY (public.entities), \${WORLD_TABLES.join(', ')} RESTART IDENTITY`),
+    ).toEqual([
+      { table: 'entities', dynamic: false },
+      { table: `\${WORLD_TABLES.join(', ')}`, dynamic: true },
+    ]);
+    expect(sqlWrites('SELECT 1 FROM ONLY (entities)')).toEqual([]);
+    expect(sqlWrites("SELECT 'TRUNCATE ONLY (entities)'")).toEqual([]);
+  });
+  test('SQL: U& quoted table identifiers декодируют carrier и сохраняют quoted case', () => {
+    const rules = (query: string) =>
+      fileHits(
+        'apps/server/src/routers/entity.ts',
+        `tx.unsafe(${JSON.stringify(query)});`,
+        new Map(),
+      )
+        .map((h) => h.rule)
+        .sort();
+    for (const name of [
+      'U&"public"."entities"',
+      String.raw`u&"\0065ntiti\+000065s"`,
+      `U&"!0065ntities" UESCAPE '!'`,
+      `U&"!0065ntities"/* nested /* trivia */ */UESCAPE '!'`,
+      `U&"public".U&"!0065ntities" UESCAPE '!'`,
+    ]) {
+      expect(rules(`UPDATE ${name} SET body_revision=1`)).toEqual(['body-columns', 'graph']);
+      expect(rules(`INSERT INTO ${name} (id) VALUES(1)`)).toEqual(['graph']);
+      expect(rules(`TRUNCATE ${name}`)).toEqual(['graph']);
+      expect(rules(`SELECT body_revision FROM ${name} FOR UPDATE`)).toEqual([]);
+    }
+    expect(rules(String.raw`DELETE FROM U&"chat_\006dessages" WHERE id=1`)).toEqual(['chat']);
+    expect(rules(`DELETE FROM U&"action_!006aournal" UESCAPE '!' WHERE id=1`)).toEqual(['journal']);
+    expect(
+      rules(`UPDATE ONLY (U&"public".U&"!0065ntities" UESCAPE '!') SET body_revision=1`),
+    ).toEqual(['body-columns', 'graph']);
+    expect(rules('DELETE FROM U&"Entities" WHERE id=1')).toEqual([]);
+    expect(rules(String.raw`DELETE FROM "\0065ntities" WHERE id=1`)).toEqual([]);
+    expect(rules(`SELECT U&'UPDATE entities SET body_revision=1'`)).toEqual([]);
+    expect(rules(`SELECT U&"UPDATE entities SET body_revision=1"`)).toEqual([]);
+    expect(sqlWrites(String.raw`DELETE FROM U&"a\\b"`)).toEqual([
+      { table: 'a\\b', dynamic: false },
+    ]);
+    expect(sqlWrites(`DELETE FROM U&"a!!b" UESCAPE '!'`)).toEqual([
+      { table: 'a!b', dynamic: false },
+    ]);
+    expect(sqlWrites(`DELETE FROM U&"a""b"`)).toEqual([{ table: 'a"b', dynamic: false }]);
+    expect(sqlWrites(String.raw`DELETE FROM U&"\D83D\DE00"`)).toEqual([
+      { table: '😀', dynamic: false },
+    ]);
+  });
+  test('SQL: U& body identifiers декодируются только на assignment/insert LHS', () => {
+    for (const column of ['body_revision', 'body_action_id', 'body_changed_at']) {
+      const encoded = `U&"!0062${column.slice(1)}" UESCAPE '!'`;
+      expect(bodyColumnSql(`UPDATE ONLY (entities) SET ${encoded}=NULL`)).toBe(true);
+      expect(bodyColumnSql(`INSERT INTO U&"entities" (${encoded}) VALUES(NULL)`)).toBe(true);
+      expect(
+        bodyColumnSql(
+          `INSERT INTO entities(id) VALUES(1) ON CONFLICT(id) DO UPDATE SET (${encoded}, title)=(NULL, 'x')`,
+        ),
+      ).toBe(true);
+      expect(bodyColumnSql(`UPDATE entities SET title='x' WHERE ${encoded}=NULL`)).toBe(false);
+      expect(bodyColumnSql(`SELECT ${encoded} FROM entities FOR UPDATE`)).toBe(false);
+    }
+    expect(bodyColumnSql(String.raw`UPDATE entities SET U&"\0062ody_\+000072evision"=1`)).toBe(
+      true,
+    );
+    expect(bodyColumnSql(String.raw`UPDATE entities SET "\0062ody_revision"=1`)).toBe(false);
+    expect(bodyColumnSql('UPDATE entities SET U&"Body_revision"=1')).toBe(false);
+  });
+  test('SQL: UESCAPE принимает documented single, E и dollar string constants', () => {
+    for (const clause of [
+      "'!'",
+      "E'!'",
+      String.raw`E'\041'`,
+      String.raw`E'\x21'`,
+      String.raw`E'\u0021'`,
+      '$$!$$',
+      '$tag$!$tag$',
+      "'!'\n''",
+    ]) {
+      expect(sqlWrites(`DELETE FROM U&"chat_!006dessages" UESCAPE ${clause}`)).toEqual([
+        { table: 'chat_messages', dynamic: false },
+      ]);
+      expect(bodyColumnSql(`UPDATE entities SET U&"!0062ody_revision" UESCAPE ${clause}=1`)).toBe(
+        true,
+      );
+      expect(sqlWrites(`SELECT ${clause}`)).toEqual([]);
+    }
+    expect(sqlWrites(`DELETE FROM U&"entities" UESCAPE U&'!'`)).toEqual([]);
+  });
+  test('SQL: ONLY token не снимает prefix обычного имени таблицы', () => {
+    for (const name of [
+      'onlyentities',
+      'ONLYentities',
+      'onlychat_messages',
+      'onlyaction_journal',
+    ]) {
+      expect(sqlWrites(`DELETE FROM ${name}`)).toEqual([
+        { table: name.toLowerCase(), dynamic: false },
+      ]);
+      expect(
+        fileHits('routers/x.ts', `tx.unsafe(${JSON.stringify(`DELETE FROM ${name}`)});`, new Map()),
+      ).toEqual([]);
+    }
+    expect(sqlWrites('DELETE FROM ONLY (entities)')).toEqual([
+      { table: 'entities', dynamic: false },
+    ]);
+  });
+  test('SQL: Unicode normalization сохраняет opaque offsets перед следующим writer/assignment', () => {
+    expect(
+      sqlWrites(
+        String.raw`SELECT U&"\0055PDATE entities SET body_revision=1"; DELETE FROM chat_messages`,
+      ),
+    ).toEqual([{ table: 'chat_messages', dynamic: false }]);
+    expect(bodyColumnSql(String.raw`SELECT U&"\0055PDATE entities SET body_revision=1"`)).toBe(
+      false,
+    );
+    expect(
+      bodyColumnSql(String.raw`UPDATE U&"entities" SET title=U&"\0057HERE", body_revision=1`),
+    ).toBe(true);
+    expect(
+      bodyColumnSql(String.raw`UPDATE U&"entities" SET title=U&"\0057HERE" WHERE body_revision=1`),
+    ).toBe(false);
+    expect(
+      sqlWrites(`TRUNCATE U&"entities", \${WORLD_TABLES.join(', ')} RESTART IDENTITY`),
+    ).toEqual([
+      { table: 'entities', dynamic: false },
+      { table: `\${WORLD_TABLES.join(', ')}`, dynamic: true },
+    ]);
+    expect(sqlWrites(String.raw`DELETE FROM U&"\0065ntities" UESCAPE E'\\'`)).toEqual([
+      { table: 'entities', dynamic: false },
+    ]);
+  });
+  test('SQL: invalid Unicode escape tokens не нормализуются в реальные carriers/stamps', () => {
+    for (const name of [
+      String.raw`U&"\0000entities"`,
+      String.raw`U&"\D800entities"`,
+      String.raw`U&"\+110000entities"`,
+      String.raw`U&"\00ZZentities"`,
+      `U&"entities" UESCAPE '0'`,
+      `U&"entities" UESCAPE '+'`,
+      `U&"entities" UESCAPE 'xx'`,
+      `U&"λ0065ntities" UESCAPE 'λ'`,
+      `U&"😀0065ntities" UESCAPE '😀'`,
+    ])
+      expect(sqlWrites(`DELETE FROM ${name}`)).toEqual([]);
+    expect(bodyColumnSql(`UPDATE entities SET U&"body_revision" UESCAPE '0'=1`)).toBe(false);
   });
   test('(в) известные писатели видны: executor пишет граф, синк — журнал, модуль разговоров — сообщения', () => {
     expect(hits.get('apps/server/src/executor/executor.ts')?.some((h) => h.rule === 'graph')).toBe(
