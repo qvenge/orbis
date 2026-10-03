@@ -856,6 +856,7 @@ async function executeBatch(
 
   // Идемпотентность §7.8: ключ записи пачки в журнале — сам batch_id (`(graph_id, id)`, спека скорости §11.2)
   const bodyAction = bodyActionOf(sink, internalUndo, batchId);
+  let replayChecked = false;
   try {
     return await withIdentity(db, req.identity, async (tx) => {
       // Действие текущего тела — ОДНО на всю пачку (§8.1, см. одиночный путь): её строка журнала одна, id = batch_id
@@ -894,6 +895,7 @@ async function executeBatch(
       // Внутренний режим undo не идемпотентен по batch_id (id технический) — не проверяем.
       if (!internalUndo) {
         const existing = await sink.findBatchWrite(tx, req.identity.graph, batchId);
+        replayChecked = true;
         if (existing) return replayFromAudit(batchId, existing);
       }
 
@@ -1007,13 +1009,20 @@ async function executeBatch(
       };
     });
   } catch (e) {
-    // Гонка одинаковых batch'ей: конкурент вставил запись пачки первым → конфликт ключа журнала
-    // (23505) → tx уже откачен → читаем сохранённый результат отдельным tx (§7.8)
-    if (e instanceof AuditIdConflictError) {
+    // Конкурент мог сохранить эту пачку, пока мы ждали замка: проигравшая подготовка тоже может
+    // отказать до INSERT журнала. tx уже откачен — восстанавливаем исходный результат (§7.8, R-39).
+    // Ранние гейты (beforeStages, RLS треда) должны пройти ДО любого replay; internalUndo должен
+    // исполнить inverse, а не вернуть сохранённое прямое действие.
+    if (!internalUndo && replayChecked) {
       const saved = await withIdentity(db, req.identity, (tx) =>
         sink.findBatchWrite(tx, req.identity.graph, batchId),
-      );
+      ).catch(() => {
+        // Без доступного журнала replay не доказан: сохраняем исходный реальный отказ.
+        throw e;
+      });
       if (saved) return replayFromAudit(batchId, saved);
+    }
+    if (e instanceof AuditIdConflictError) {
       // Ключ занят записью, которая пачкой не является (РП-12): клиентский batch_id совпал с id одиночного действия
       // графа — ключи журнала одно пространство `(graph_id, id)`. Это не повтор: чужая запись не отдаётся, пачка
       // откачена. Отказ — тот же, что у занятого client-UUID сообщения (`appendMessageIdempotent`).

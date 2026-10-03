@@ -17,7 +17,13 @@ import {
   requireEnv,
   truncateAll,
 } from '../../test/helpers';
-import { actionsOf, journalEntitiesOf, journalOf, threadJournal } from '../../test/journal-helpers';
+import {
+  actionsOf,
+  journalEntitiesOf,
+  journalOf,
+  threadJournal,
+  undoRecordOf,
+} from '../../test/journal-helpers';
 import { ensureEntityThread } from '../chat/threads';
 import { withIdentity } from '../db/with-identity';
 import { resolveEntitlement } from '../entitlements';
@@ -380,6 +386,9 @@ describe('боевой синк: строка action_journal (§7.8, §11.2)', (
     expect(clash.ok).toBe(false);
     if (clash.ok) throw new Error('недостижимо');
     expect(clash.error.code).toBe('CONFLICT');
+    expect(clash.error.message).toBe(
+      'batch_id занят другой записью журнала — сгенерируйте новый UUID',
+    );
     expect((clash.error.details as { reason?: string }).reason).toBe('id_conflict');
     // пачка не исполнена: записи-двойника нет; одиночное действие — прежнее
     const n = await adminCount(
@@ -617,5 +626,192 @@ describe('правило треда строки журнала (§11.3, Р-12)'
       ),
     );
     expect((await mustJournal(user, fast.actionId)).threadId).toBe(tid);
+  });
+});
+
+describe('восстановление replay после отказа пачки (R-39)', () => {
+  for (const code of ['VALIDATION', 'NOT_FOUND'] as const) {
+    test(`ранний beforeStages ${code} сохраняет отказ при существующей пачке`, async () => {
+      const user = await freshGraph();
+      const batchId = newId();
+      const request = batchReq(
+        user,
+        [{ tool: 'entity_create', input: { title: 'Сохранённая пачка', tags: [] } }],
+        batchId,
+      );
+      ok(await execute(db, request, { sink }));
+      let reads = 0;
+      const counted = {
+        ...sink,
+        findBatchWrite: async (...args: Parameters<typeof sink.findBatchWrite>) => {
+          reads += 1;
+          return sink.findBatchWrite(...args);
+        },
+      };
+      const refused = await execute(db, request, {
+        sink: counted,
+        beforeStages: async () => {
+          throw new ExecError(code, 'ранняя проверка отказала', { reason: 'early_gate' });
+        },
+      });
+      expect(refused).toMatchObject({
+        ok: false,
+        error: { code, message: 'ранняя проверка отказала', details: { reason: 'early_gate' } },
+      });
+      expect(reads).toBe(0);
+      expect((await actionsOf(user)).map((entry) => entry.id)).toEqual([batchId]);
+    });
+  }
+
+  test('чужой граф с тем же batchId не получает сохранённый ответ: отсутствующий родитель откатывает создание', async () => {
+    const owner = await freshGraph();
+    const other = await freshGraph();
+    const parent = newId();
+    const batchId = newId();
+    ok(
+      await execute(
+        db,
+        batchReq(
+          owner,
+          [{ tool: 'entity_create', input: { id: parent, title: 'Чужой родитель', tags: [] } }],
+          batchId,
+        ),
+        { sink },
+      ),
+    );
+    const child = newId();
+    const refused = await execute(
+      db,
+      batchReq(
+        other,
+        [
+          { tool: 'entity_create', input: { id: child, title: 'Не сохранится', tags: [] } },
+          {
+            tool: 'relation_create',
+            input: { source_id: parent, target_id: child, role: 'subitem' },
+          },
+        ],
+        batchId,
+      ),
+      { sink },
+    );
+    expect(refused).toMatchObject({ ok: false, error: { code: 'NOT_FOUND' } });
+    expect(await actionsOf(other)).toHaveLength(0);
+    expect(
+      await adminCount(sql`SELECT count(*)::int AS n FROM entities WHERE id = ${child}::uuid`),
+    ).toBe(0);
+    expect((await actionsOf(owner)).map((entry) => entry.id)).toEqual([batchId]);
+  });
+
+  test('single под тем же id не превращает настоящий отказ подготовки в успех', async () => {
+    const user = await freshGraph();
+    const single = ok(
+      await execute(db, req(user, 'entity_create', { title: 'Одиночное', tags: [] }), { sink }),
+    );
+    const refused = await execute(
+      db,
+      batchReq(
+        user,
+        [{ tool: 'entity_update', input: { id: newId(), title: 'Нет записи' } }],
+        single.actionId,
+      ),
+      { sink },
+    );
+    expect(refused).toMatchObject({ ok: false, error: { code: 'NOT_FOUND' } });
+    expect((await actionsOf(user)).map((entry) => entry.id)).toEqual([single.actionId]);
+  });
+
+  test('internalUndo не возвращает сохранённую пачку вместо отказа inverse', async () => {
+    const user = await freshGraph();
+    const batchId = newId();
+    ok(
+      await execute(
+        db,
+        batchReq(
+          user,
+          [{ tool: 'entity_create', input: { title: 'Для отмены', tags: [] } }],
+          batchId,
+        ),
+        { sink },
+      ),
+    );
+    const undoing = await mustJournal(user, batchId);
+    const refused = await execute(
+      db,
+      {
+        ...batchReq(
+          user,
+          [{ tool: 'entity_update', input: { id: newId(), archived: true } }],
+          batchId,
+        ),
+        source: 'system',
+      },
+      {
+        sink,
+        internalUndo: {
+          undoRecordId: newId(),
+          undoing,
+          path: 'ui',
+          force: false,
+          pinned: new Set(),
+          continuation: { kind: 'none' },
+          onApplied: async () => {},
+        },
+      },
+    );
+    expect(refused).toMatchObject({ ok: false, error: { code: 'NOT_FOUND' } });
+    expect(await undoRecordOf(user, batchId)).toBeUndefined();
+    expect((await actionsOf(user)).map((entry) => entry.id)).toEqual([batchId]);
+  });
+
+  test('недоступное чтение recovery сохраняет исходный реальный отказ', async () => {
+    const user = await freshGraph();
+    let reads = 0;
+    const unavailable = {
+      ...sink,
+      findBatchWrite: async (...args: Parameters<typeof sink.findBatchWrite>) => {
+        reads += 1;
+        if (reads === 2) throw new Error('журнал временно недоступен');
+        return sink.findBatchWrite(...args);
+      },
+    };
+    const refused = await execute(
+      db,
+      batchReq(
+        user,
+        [{ tool: 'entity_update', input: { id: newId(), title: 'Нет записи' } }],
+        newId(),
+      ),
+      { sink: unavailable },
+    );
+    expect(refused).toMatchObject({ ok: false, error: { code: 'NOT_FOUND' } });
+    expect(reads).toBe(2);
+    expect(await actionsOf(user)).toHaveLength(0);
+  });
+
+  test('обычный успех делает одну проверку журнала', async () => {
+    const user = await freshGraph();
+    let reads = 0;
+    const counted = {
+      ...sink,
+      findBatchWrite: async (...args: Parameters<typeof sink.findBatchWrite>) => {
+        reads += 1;
+        return sink.findBatchWrite(...args);
+      },
+    };
+    const result = ok(
+      await execute(
+        db,
+        batchReq(
+          user,
+          [{ tool: 'entity_create', input: { title: 'Без recovery', tags: [] } }],
+          newId(),
+        ),
+        { sink: counted },
+      ),
+    );
+    expect(result.idempotentReplay).toBe(false);
+    expect(reads).toBe(1);
+    expect((await actionsOf(user)).map((entry) => entry.id)).toEqual([result.actionId]);
   });
 });

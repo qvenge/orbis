@@ -1,8 +1,10 @@
 // Создание и привязка проверяются через настоящий executor, журнал и отмену владельца.
 import { afterAll, beforeAll, expect, test } from 'bun:test';
 import { createLinkBatchId, type GraphId, newId, ROLE_SUBITEM } from '@orbis/shared';
-import { appDb, freshGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
+import { sql } from 'drizzle-orm';
+import { adminDb, appDb, freshGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
 import { actionsOf, journalOf, undoRecordOf } from '../../test/journal-helpers';
+import { withIdentity } from '../db/with-identity';
 import { appRouter } from '../router';
 import { createCallerFactory } from '../trpc';
 
@@ -218,3 +220,139 @@ test('пачка с последствиями сохраняет исходны
   expect((await journalOf(graph, actionIdOf(first)))?.consequences).toBe(true);
   expect(await caller.entity.create(input)).toEqual(first);
 });
+
+test('сохранённый create.link не обходит проверку треда при повторе fast_path', async () => {
+  const { caller, parent, linkCall } = await fixture();
+  const id = newId();
+  const first = await linkCall(id);
+  await expect(
+    caller.entity.create({
+      input: { id, title: 'Подзадача', tags: [], aspects: ['orbis/task'] },
+      source: 'fast_path',
+      threadId: newId(),
+      link: { parentId: parent, role: ROLE_SUBITEM },
+    }),
+  ).rejects.toMatchObject({ code: 'NOT_FOUND', message: 'тред не найден' });
+  expect(await linkCall(id)).toEqual(first);
+});
+
+/** Замок родителя удерживает оба запроса после их первой проверки журнала, без шва в production-коде. */
+async function overlappingCreates(
+  graph: GraphId,
+  parent: string,
+  payload: Parameters<ReturnType<typeof callerFor>['entity']['create']>[0],
+) {
+  let announce: (pid: number) => void = () => {};
+  let failLock: (error: unknown) => void = () => {};
+  const locked = new Promise<number>((resolve, reject) => {
+    announce = resolve;
+    failLock = reject;
+  });
+  let release: () => void = () => {};
+  const unlocked = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const blocker = withIdentity(db, personal(graph), async (tx) => {
+    const rows = await tx.execute(
+      sql`SELECT pg_backend_pid()::int AS pid FROM entities WHERE id = ${parent}::uuid FOR UPDATE`,
+    );
+    announce(rows[0]?.pid as number);
+    await unlocked;
+  });
+  void blocker.catch(failLock);
+  let inFlight: Promise<unknown> = Promise.resolve();
+  let observerClient: ReturnType<typeof adminDb>['client'] | undefined;
+  try {
+    const pid = await locked;
+    const responses = Promise.allSettled([
+      callerFor(graph).entity.create(payload),
+      callerFor(graph).entity.create(payload),
+    ]);
+    inFlight = responses;
+    const connection = adminDb();
+    const observer = connection.db;
+    observerClient = connection.client;
+    const deadline = performance.now() + 3000;
+    while (true) {
+      // Второй запрос может ждать первый: рекурсивно считаем всю очередь за нашим замком.
+      const rows = await observer.execute(sql`WITH RECURSIVE blocked AS (
+        SELECT pid FROM pg_stat_activity WHERE ${pid}::int = ANY(pg_blocking_pids(pid))
+        UNION
+        SELECT a.pid FROM pg_stat_activity a JOIN blocked b ON b.pid = ANY(pg_blocking_pids(a.pid))
+      ) SELECT count(*)::int AS n FROM blocked`);
+      if ((rows[0]?.n as number) >= 2) break;
+      if (performance.now() >= deadline) throw new Error('оба запроса не дошли до замка родителя');
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    return responses;
+  } finally {
+    release();
+    try {
+      await blocker;
+    } finally {
+      try {
+        await inFlight;
+      } finally {
+        await observerClient?.end();
+      }
+    }
+  }
+}
+
+for (const completed of [false, true]) {
+  test(`перекрывающиеся create.link возвращают исходный ответ: consequences=${completed}`, async () => {
+    const { graph, caller, parent } = await fixture();
+    const id = newId();
+    const payload = {
+      input: {
+        id,
+        title: 'Перекрытие',
+        tags: [],
+        aspects: ['orbis/task'],
+        props: { 'orbis/task_status': completed ? 'done' : 'inbox' },
+      },
+      source: 'quick_capture' as const,
+      link: { parentId: parent, role: ROLE_SUBITEM } as const,
+    };
+    const responses = await overlappingCreates(graph, parent, payload);
+    expect(responses.map((response) => response.status)).toEqual(['fulfilled', 'fulfilled']);
+    const values = responses.map((response) => {
+      if (response.status === 'rejected') throw response.reason;
+      return response.value;
+    });
+    const first = values[0];
+    if (first === undefined) throw new Error('нет первого ответа');
+    expect(values[1]).toEqual(first);
+    expect(first).toMatchObject({
+      id,
+      actionId: createLinkBatchId(graph, id),
+      consequences: completed,
+      body: '',
+    });
+    const entries = (await actionsOf(graph)).filter((entry) => entry.entityIds.includes(id));
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      id: first.actionId,
+      type: 'batch',
+      consequences: completed,
+    });
+    const relations =
+      (await caller.entity.get({ id: parent, include: ['relations'] })).relations ?? [];
+    expect(
+      relations.filter(
+        (relation) =>
+          relation.sourceId === parent &&
+          relation.targetId === id &&
+          relation.role === ROLE_SUBITEM,
+      ),
+    ).toHaveLength(1);
+    expect((await caller.entity.get({ id })).entity).toMatchObject({ id, archived: false });
+    await caller.entity.update({
+      id,
+      title: 'Поздняя правка',
+      body: 'Поздний текст',
+      expectedBodyRevision: first.bodyRevision,
+    });
+    expect(await caller.entity.create(payload)).toEqual(first);
+  });
+}
