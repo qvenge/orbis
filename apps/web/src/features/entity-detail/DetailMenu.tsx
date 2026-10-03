@@ -1,4 +1,5 @@
 import {
+  type BodyActionInfo,
   contendersOf,
   HOME_PROPERTY,
   openPlacesOf,
@@ -58,6 +59,7 @@ import { type UpdateBatchOperation, useUpdateBatch } from '../page/useUpdateBatc
 import { REVERT, useSupplyAction } from '../supply/useSupply';
 import { settleBody } from './body-gate';
 import type { BodyGateRef } from './EntityBody';
+import { useRevertTextItem } from './RevertTextItem';
 import { shownBodyRevision, type WireEntity } from './record-host';
 
 /**
@@ -169,6 +171,8 @@ export function DetailMenu(props: DetailMenuProps & ScreenMenuContentProps) {
 }
 
 interface RecordMenuProps {
+  /** Действующий сеанс текущего тела считает сервер, независимо от памяти стрелок. */
+  bodyAction: BodyActionInfo | null;
   onArchive: () => void;
   onCopyLink: () => void;
   /** Закрепить ВЕРСИЮ ТЕЛА (С11). */
@@ -215,6 +219,7 @@ type MenuDialog =
   | null;
 
 function RecordMenu({
+  bodyAction,
   onArchive,
   onCopyLink,
   onPinVersion,
@@ -231,6 +236,7 @@ function RecordMenu({
   hostItems,
   frameMenu,
 }: RecordMenuProps & ScreenMenuContentProps & { frameMenu: ReturnType<typeof useFrameMenu> }) {
+  const revertText = useRevertTextItem(entity.id, bodyAction);
   const runBatch = useUpdateBatch();
   const runSupply = useSupplyAction();
   const writeNav = useNavWrite();
@@ -307,6 +313,7 @@ function RecordMenu({
         icon: <History size={16} aria-hidden />,
         onSelect: onPinVersion,
       },
+      ...(revertText === null ? [] : [revertText]),
       // Пункт появляется, только когда есть что править (см. проп): предлагать действие,
       // которое молча ничего не делает, хуже, чем не предлагать его вовсе.
       ...(onToggleMarkdown === undefined

@@ -362,6 +362,7 @@ export function DetailScreen({
   const configuringId =
     mode?.kind === 'configure' && mode.targetId !== entity.id ? mode.targetId : null;
   const menuProps: DetailMenuProps = {
+    bodyAction: get.data?.bodyAction ?? null,
     onArchive: () => setArchived(!entity.archived),
     onCopyLink: () => void copyLink(configuringId ?? entityId),
     onPinVersion: () => setPinVersion(true),
