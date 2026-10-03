@@ -7527,3 +7527,247 @@ test('общий undo ждёт successful optimistic autosave и не досыл
   expect(calls.filter((c) => c.path === 'ai.undo')).toHaveLength(1);
   expect(readDraft('e1')).toBeNull();
 }, 30_000);
+
+test('fix1: clean markdown участвует в rewrite gate и принимает тело undo перед следующей Apply', async () => {
+  const { runUndo } = await import('../undo/undo-action');
+  let undoReply: ((v: unknown) => void) | undefined;
+  let readReply: ((v: unknown) => void) | undefined;
+  let undone = false;
+  const fresh = {
+    ...entity,
+    bodyRevision: (entity.bodyRevision as number) + 1,
+    body: 'новое тело после отмены',
+    bodyDoc: parseBody('новое тело после отмены'),
+  };
+  const { calls } = renderWithProviders(
+    <>
+      <DetailScreen entityId="e1" />
+      <button type="button" onClick={() => void runUndo('a1', { entityIds: ['e1'] })}>
+        Общая отмена
+      </button>
+    </>,
+    (path, input) => {
+      if (path === 'entity.get')
+        return undone
+          ? new Promise((resolve) => {
+              readReply = resolve;
+            })
+          : { entity, relations: [], thread: null };
+      if (path === 'ai.undo')
+        return new Promise((resolve) => {
+          undoReply = resolve;
+        });
+      if (path === 'entity.update')
+        return {
+          ...mockEntityUpdateResult(fresh),
+          bodyDoc: (input as { bodyDoc: unknown }).bodyDoc,
+        };
+      return registryReply(path) ?? {};
+    },
+  );
+  await editorField();
+  await openDetailMenu();
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Править как markdown' }));
+  const area = await screen.findByTestId('markdown-source');
+  fireEvent.click(screen.getByRole('button', { name: 'Общая отмена' }));
+  await waitFor(() => expect(undoReply).toBeDefined());
+  expect(area).toHaveAttribute('readonly');
+  expect(screen.getByRole('button', { name: 'Применить' })).toBeDisabled();
+  undone = true;
+  await act(async () =>
+    undoReply?.({
+      actionId: 'u1',
+      undone: { id: 'a1', title: 'Правка' },
+      pinnedVersions: [],
+      bodyRevisions: [{ entityId: 'e1', bodyRevision: fresh.bodyRevision }],
+    }),
+  );
+  await waitFor(() => expect(readReply).toBeDefined());
+  expect(area).toHaveAttribute('readonly');
+  fireEvent.click(screen.getByRole('button', { name: 'Применить' }));
+  expect(calls.filter((c) => c.path === 'entity.update')).toHaveLength(0);
+  await act(async () => readReply?.({ entity: fresh, relations: [], thread: null }));
+  await waitFor(() =>
+    expect(screen.getByTestId('markdown-source')).toHaveValue('новое тело после отмены'),
+  );
+  fireEvent.change(screen.getByTestId('markdown-source'), {
+    target: { value: 'новое тело после отмены ещё' },
+  });
+  fireEvent.click(screen.getByRole('button', { name: 'Применить' }));
+  await waitFor(
+    () => expect(calls.filter((c) => c.path === 'entity.update')).toHaveLength(1),
+    EDITOR_READY,
+  );
+  expect(calls.find((c) => c.path === 'entity.update')?.input).toMatchObject({
+    expectedBodyRevision: fresh.bodyRevision,
+  });
+  expect(JSON.stringify(calls.find((c) => c.path === 'entity.update')?.input)).toContain(
+    'новое тело после отмены ещё',
+  );
+}, 30_000);
+
+test('fix1: dirty markdown удерживает undo без autosave и сохраняет сырой буфер до Apply', async () => {
+  const { runUndo } = await import('../undo/undo-action');
+  const { calls } = renderWithProviders(
+    <DetailScreen entityId="e1" />,
+    bodyHandler('исходное тело'),
+  );
+  await editorField();
+  await openDetailMenu();
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Править как markdown' }));
+  const area = await screen.findByTestId('markdown-source');
+  fireEvent.change(area, { target: { value: 'исходное тело\n\n![новая картинка](image.png)' } });
+  await expect(runUndo('a1', { entityIds: ['e1'] })).resolves.toMatchObject({ kind: 'failed' });
+  expect(area).toHaveValue('исходное тело\n\n![новая картинка](image.png)');
+  expect(calls.filter((c) => c.path === 'ai.undo' || c.path === 'entity.update')).toHaveLength(0);
+  fireEvent.click(screen.getByRole('button', { name: 'Применить' }));
+  expect(screen.getByRole('alert')).toHaveTextContent('Часть разметки не разобрана');
+  expect(calls.filter((c) => c.path === 'entity.update')).toHaveLength(0);
+}, 30_000);
+
+test('fix1: committed undo при failed read удерживает markdown; Refresh сажает новое тело', async () => {
+  const { runUndo } = await import('../undo/undo-action');
+  let readFails = false;
+  let undone = false;
+  const fresh = {
+    ...entity,
+    bodyRevision: (entity.bodyRevision as number) + 1,
+    body: 'после отмены',
+    bodyDoc: parseBody('после отмены'),
+  };
+  const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
+    if (path === 'entity.get') {
+      if (readFails) throw trpcError('INTERNAL_SERVER_ERROR', 'Чтение недоступно');
+      return { entity: undone ? fresh : entity, relations: [], thread: null };
+    }
+    if (path === 'ai.undo') {
+      undone = true;
+      readFails = true;
+      return {
+        actionId: 'u1',
+        undone: { id: 'a1', title: 'Правка' },
+        pinnedVersions: [],
+        bodyRevisions: [{ entityId: 'e1', bodyRevision: fresh.bodyRevision }],
+      };
+    }
+    return registryReply(path) ?? {};
+  });
+  await editorField();
+  await openDetailMenu();
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Править как markdown' }));
+  await screen.findByTestId('markdown-source');
+  let outcome: Awaited<ReturnType<typeof runUndo>> | undefined;
+  await act(async () => {
+    outcome = await runUndo('a1', { entityIds: ['e1'] });
+  });
+  expect(outcome?.kind).toBe('undone');
+  await screen.findByRole('button', { name: 'Обновить текст' });
+  expect(screen.getByTestId('markdown-source')).toHaveAttribute('readonly');
+  fireEvent.change(screen.getByTestId('markdown-source'), { target: { value: 'поздние слова' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Применить' }));
+  expect(calls.filter((c) => c.path === 'entity.update')).toHaveLength(0);
+  readFails = false;
+  fireEvent.click(screen.getByRole('button', { name: 'Обновить текст' }));
+  await waitFor(() => expect(screen.getByTestId('markdown-source')).toHaveValue('после отмены'));
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Применить' })).toBeEnabled());
+}, 30_000);
+
+test('fix1: clean markdown ждёт restore и показывает returned full body; dirty буфер блокирует restore', async () => {
+  let restoreReply: ((v: unknown) => void) | undefined;
+  const versions = versionsHandler();
+  let restored = false;
+  const fresh = {
+    ...entity,
+    bodyRevision: (entity.bodyRevision as number) + 1,
+    body: 'восстановленное тело',
+    bodyDoc: parseBody('восстановленное тело'),
+    actionId: 'restore1',
+    consequences: true,
+  };
+  const { calls } = renderWithProviders(
+    <>
+      <DetailScreen entityId="e1" />
+      <Toaster />
+    </>,
+    (path, input) => {
+      if (path === 'entity.get' && restored) return { entity: fresh, relations: [], thread: null };
+      return path === 'version.restore'
+        ? new Promise((resolve) => {
+            restoreReply = (v) => {
+              restored = true;
+              resolve(v);
+            };
+          })
+        : versions(path, input);
+    },
+  );
+  await editorField();
+  await openDetailMenu();
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Править как markdown' }));
+  const area = await screen.findByTestId('markdown-source');
+  fireEvent.change(area, { target: { value: 'мой сырой буфер' } });
+  await openDetails();
+  const card = await screen.findByTestId('versions-card');
+  const restoreButton = within(
+    (await within(card).findAllByRole('listitem'))[0] as HTMLElement,
+  ).getByRole('button', { name: 'Восстановить' });
+  fireEvent.click(restoreButton);
+  fireEvent.click(
+    within(await screen.findByRole('dialog')).getByRole('button', { name: 'Восстановить' }),
+  );
+  await screen.findByText(/сначала закончите правку.*восстанавливайте/);
+  expect(calls.filter((c) => c.path === 'version.restore')).toHaveLength(0);
+  expect(area).toHaveValue('мой сырой буфер');
+  fireEvent.change(area, { target: { value: serializeBody(parseBody(entity.body ?? '')) } });
+  fireEvent.click(restoreButton);
+  fireEvent.click(
+    within(await screen.findByRole('dialog')).getByRole('button', { name: 'Восстановить' }),
+  );
+  await waitFor(() => expect(restoreReply).toBeDefined());
+  expect(area).toHaveAttribute('readonly');
+  fireEvent.change(area, { target: { value: 'late old body' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Применить', hidden: true }));
+  expect(calls.filter((c) => c.path === 'entity.update')).toHaveLength(0);
+  await act(async () => restoreReply?.(fresh));
+  await waitFor(() => expect(area).toHaveValue('восстановленное тело'));
+  await waitFor(() => expect(area).not.toHaveAttribute('readonly'));
+}, 30_000);
+
+test('fix1: markdown набранный пока flush ждёт autosave блокирует undo после flush без потери сырого буфера', async () => {
+  const { runUndo } = await import('../undo/undo-action');
+  let resolveSave: ((v: unknown) => void) | undefined;
+  let savedDoc: unknown;
+  const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, (path, input) => {
+    if (path === 'entity.get') return { entity, relations: [], thread: null };
+    if (path === 'entity.update') {
+      savedDoc = (input as { bodyDoc: unknown }).bodyDoc;
+      return new Promise((resolve) => {
+        resolveSave = resolve;
+      });
+    }
+    return registryReply(path) ?? {};
+  });
+  const field = await editorField();
+  await userEvent.click(field);
+  await userEvent.type(field, ' слова до разметки');
+  await waitFor(() => expect(resolveSave).toBeDefined(), EDITOR_READY);
+  await openDetailMenu();
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Править как markdown' }));
+  const area = await screen.findByTestId('markdown-source');
+  let outcome: ReturnType<typeof runUndo> | undefined;
+  await act(async () => {
+    outcome = runUndo('a1', { entityIds: ['e1'] });
+  });
+  fireEvent.change(area, { target: { value: 'поздний сырой markdown ![картинка](image.png)' } });
+  await act(async () =>
+    resolveSave?.({
+      ...mockEntityUpdateResult(entity),
+      bodyDoc: savedDoc,
+      bodyRevision: (entity.bodyRevision as number) + 1,
+    }),
+  );
+  await expect(outcome).resolves.toMatchObject({ kind: 'failed' });
+  expect(area).toHaveValue('поздний сырой markdown ![картинка](image.png)');
+  expect(calls.filter((c) => c.path === 'ai.undo')).toHaveLength(0);
+  expect(calls.filter((c) => c.path === 'entity.update')).toHaveLength(1);
+}, 30_000);

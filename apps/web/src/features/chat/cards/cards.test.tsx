@@ -2236,3 +2236,107 @@ test('EntityCard в полёте не отменена и кнопка недо�
     }),
   );
 });
+
+for (const kind of ['journal', 'entity'] as const) {
+  for (const ending of ['undone', 'already', 'failed', 'refused'] as const) {
+    test(`fix1: ${kind} card force pending и исход ${ending}`, async () => {
+      const { useToastStore } = await import('../../../ui/toast-store');
+      for (const toast of useToastStore.getState().toasts)
+        useToastStore.getState().dismiss(toast.id);
+      let n = 0;
+      let release: (() => void) | undefined;
+      const card =
+        kind === 'journal'
+          ? journalMsg(journalMeta({ actionId: 'a1', entityId: 'e1' }))
+          : msg([
+              {
+                kind: 'entity_card',
+                entityId: 'e1',
+                title: 'Запись',
+                aspects: [],
+                keyFields: {},
+                undoActionId: 'a1',
+              },
+            ]);
+      const { calls } = renderWithProviders(
+        <>
+          <div>{renderCards(card)}</div>
+          <Toaster />
+        </>,
+        (path) => {
+          if (path !== 'ai.undo') return {};
+          if (++n === 1)
+            throw trpcError('CONFLICT', 'refusal', {
+              code: 'UNDO_TEXT_CHANGED',
+              details: {
+                action: { id: 'a1', title: 'Правка' },
+                continuation: { kind: 'here' },
+                entries: [
+                  {
+                    entityId: 'e1',
+                    title: 'Запись',
+                    actorKind: 'owner',
+                    actorLabel: null,
+                    at: new Date().toISOString(),
+                  },
+                ],
+              },
+            });
+          return new Promise((resolve, reject) => {
+            release = () => {
+              if (ending === 'undone')
+                resolve({
+                  actionId: 'u1',
+                  undone: { id: 'a1', title: 'Правка' },
+                  pinnedVersions: [],
+                  bodyRevisions: [],
+                });
+              else if (ending === 'already')
+                reject(
+                  trpcError('BAD_REQUEST', 'already', {
+                    code: 'VALIDATION',
+                    details: { reason: 'already_undone' },
+                  }),
+                );
+              else if (ending === 'failed') reject(new Error('offline'));
+              else
+                reject(
+                  trpcError('CONFLICT', 'refusal', {
+                    code: 'UNDO_TEXT_CHANGED',
+                    details: {
+                      action: { id: 'a1', title: 'Правка' },
+                      continuation: { kind: 'here' },
+                      entries: [],
+                    },
+                  }),
+                );
+            };
+          });
+        },
+      );
+      const original = screen.getByRole('button', { name: 'Отменить' });
+      fireEvent.click(original);
+      const proceed = await screen.findByRole('button', { name: /Всё равно отменить/ });
+      expect(original).toBeEnabled();
+      fireEvent.click(proceed);
+      await waitFor(() => expect(release).toBeDefined());
+      expect(original).toBeDisabled();
+      fireEvent.click(original);
+      fireEvent.click(proceed);
+      await act(async () => {});
+      expect(calls.filter((c) => c.path === 'ai.undo').map((c) => c.input)).toEqual([
+        { actionId: 'a1' },
+        { actionId: 'a1', force: true },
+      ]);
+      await act(async () => release?.());
+      if (ending === 'undone' || ending === 'already')
+        await waitFor(() =>
+          expect(screen.getByTestId(`${kind}-card`)).toHaveAttribute('data-undone', 'true'),
+        );
+      else {
+        await waitFor(() => expect(original).toBeEnabled());
+        expect(screen.getByTestId(`${kind}-card`)).toHaveAttribute('data-undone', 'false');
+      }
+    });
+  }
+}

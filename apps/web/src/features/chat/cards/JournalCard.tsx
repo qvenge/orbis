@@ -44,9 +44,9 @@ export function JournalCard({ meta, readOnly }: { meta: JournalCardMeta; readOnl
               meta.actionId,
               meta.entityId === null ? {} : { entityIds: [meta.entityId] },
               (o) => {
-                setPending(false);
                 if (o.kind === 'undone' || o.kind === 'already') setUndone(true);
               },
+              setPending,
             );
           }}
         >

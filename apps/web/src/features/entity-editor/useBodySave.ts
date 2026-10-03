@@ -900,7 +900,7 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
   useEffect(() => {
     const revision = rewriteRef.current;
     if (typeof revision === 'number' && entity.bodyRevision >= revision) {
-      // Пока затвор стоял, экран показывал превью серверного тела: ревизия относится к этому же документу.
+      // Затвор блокировал запись старого тела; EntityBody причинно сажает принятое тело в каждый режим до unlock.
       shownRevisionRef.current = entity.bodyRevision;
       rewriteRef.current = undefined;
       setRewritePending(false);

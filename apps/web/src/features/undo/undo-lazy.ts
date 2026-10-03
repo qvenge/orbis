@@ -17,6 +17,7 @@ export function undoWithReport(
   actionId: string,
   opts: { entityIds?: string[] } = {},
   onOutcome?: (o: UndoOutcome) => void,
+  onPending?: (pending: boolean) => void,
 ): void {
   let generation = toastActionGeneration();
   void Promise.all([import('./undo-action'), import('./undo-toast')]).then(
@@ -25,8 +26,10 @@ export function undoWithReport(
       const run = (force?: true): void => {
         if (pending) return;
         pending = true;
+        onPending?.(true);
         void runUndo(actionId, { ...opts, ...(force && { force }) }).then((o) => {
           pending = false;
+          onPending?.(false);
           onOutcome?.(o);
           reportUndoOutcome(o, () => run(true), generation === toastActionGeneration());
           generation = toastActionGeneration();

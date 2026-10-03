@@ -14,6 +14,7 @@ import {
   type MutableRefObject,
   type ReactNode,
   Suspense,
+  useCallback,
   useContext,
   useEffect,
   useRef,
@@ -164,6 +165,18 @@ export function EntityBody({
   onRefresh: () => void;
   bodyGate: BodyGateRef;
 }) {
+  const markdownDirty = useRef(false);
+  const rewriteLocked = useRef(false);
+  const markdownRewriteRevision = useRef<number | undefined>(undefined);
+  const markdownReseat = useRef(0);
+  const rewriteToken = useRef(0);
+  const rewriteAlive = useRef(true);
+  useEffect(() => {
+    rewriteAlive.current = true;
+    return () => {
+      rewriteAlive.current = false;
+    };
+  }, []);
   const save = useBodySave(entity.id, { ...entity, bodyRevision: shownBodyRevision(entity) });
   const { hasUnsent, flush, blocked, offline, keptOffline, expectedRevision } = save;
   // Регистрация — эффектом: снимается при размонтировании ТОЛЬКО своя запись, иначе уходящее
@@ -280,6 +293,7 @@ export function EntityBody({
 
   /** Правка из тумблера — наоборот, ДОЛЖНА сесть в редактор: он её ещё не видел. */
   function onMarkdownChange(next: BodyDoc) {
+    if (rewriteLocked.current) return;
     // Здесь запоминаем САМИ, а не ждём `onAccept`: редактор сейчас размонтирован (экран рисует
     // одно из двух) и встанет уже С ЭТИМ документом в `content` — подмены, а значит и извещения,
     // не случится вовсе.
@@ -322,6 +336,7 @@ export function EntityBody({
   const openedWithRef = useRef<Entity['bodyDoc']>(entity.bodyDoc);
   if (prevMarkdownRef.current !== asMarkdown) {
     prevMarkdownRef.current = asMarkdown;
+    if (!asMarkdown) markdownDirty.current = false;
     const shown = shownDocRef.current;
     if (asMarkdown) {
       openedWithRef.current = entity.bodyDoc;
@@ -334,12 +349,39 @@ export function EntityBody({
     }
   }
 
+  // Returned revision относится к собственной переписи. Сажаем её документ в ОБА режима
+  // до снятия readOnly, не обновляем сырой буфер от произвольного refetch.
+  const rewritten = markdownRewriteRevision.current;
+  if (rewritten !== undefined && shownBodyRevision(entity) >= rewritten && serverDoc !== null) {
+    markdownRewriteRevision.current = undefined;
+    shownDocRef.current = serverDoc;
+    openedWithRef.current = entity.bodyDoc;
+    markdownReseat.current += 1;
+    rewriteLocked.current = false;
+    if (localDoc !== null) setLocalDoc(null);
+  }
+  const settledBody = useCallback(async () => {
+    if (markdownDirty.current) return 'blocked' as const;
+    const result = await save.flushSettled();
+    return markdownDirty.current ? ('blocked' as const) : result;
+  }, [save.flushSettled]);
+  const beginRewrite = useCallback(() => {
+    rewriteLocked.current = true;
+    const token = ++rewriteToken.current;
+    const finish = save.beginRewrite();
+    return (revision?: number) => {
+      if (!rewriteAlive.current || token !== rewriteToken.current) return;
+      markdownRewriteRevision.current = revision;
+      if (revision === undefined) rewriteLocked.current = false;
+      finish(revision);
+    };
+  }, [save.beginRewrite]);
+
   // Локальная копия ради сужения типа: внутри колбэка кнопки TS `save.pendingDraft` уже не
   // сужает — поле объекта могло бы смениться между рендером и нажатием.
   useEffect(
-    () =>
-      registerBodyFlush(entity.id, save.flushSettled, save.revisionForRewrite, save.beginRewrite),
-    [entity.id, save.flushSettled, save.revisionForRewrite, save.beginRewrite],
+    () => registerBodyFlush(entity.id, settledBody, save.revisionForRewrite, beginRewrite),
+    [entity.id, settledBody, save.revisionForRewrite, beginRewrite],
   );
   const draft = save.pendingDraft;
 
@@ -477,6 +519,12 @@ export function EntityBody({
               и уходит в тумблер. То есть обе ветки дают одно и то же: показанное. */}
           <MarkdownToggle
             doc={shownDocRef.current ?? doc}
+            readOnly={save.rewritePending}
+            isReadOnly={() => rewriteLocked.current}
+            reseat={markdownReseat.current}
+            onDirty={(dirty) => {
+              markdownDirty.current = dirty;
+            }}
             onChange={onMarkdownChange}
             onClose={onCloseMarkdown}
           />

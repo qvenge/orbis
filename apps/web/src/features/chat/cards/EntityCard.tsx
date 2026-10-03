@@ -134,10 +134,14 @@ export function EntityCard({
           disabled={pending}
           onClick={() => {
             setPending(true);
-            undoWithReport(undoActionId, { entityIds: [card.entityId] }, (o) => {
-              setPending(false);
-              if (o.kind === 'undone' || o.kind === 'already') setUndone(true);
-            });
+            undoWithReport(
+              undoActionId,
+              { entityIds: [card.entityId] },
+              (o) => {
+                if (o.kind === 'undone' || o.kind === 'already') setUndone(true);
+              },
+              setPending,
+            );
           }}
         >
           Отменить
