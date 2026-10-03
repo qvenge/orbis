@@ -1,6 +1,6 @@
 import { newId, ROLE_SUBITEM, ROLE_TICKET } from '@orbis/shared';
 import { Circle, Plus } from 'lucide-react';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useOpenRecord } from '../../app/useOpenRecord';
 import { EntityRef } from '../../lib/entity-ref/EntityRef';
 import { invalidateGraph } from '../../lib/invalidate';
@@ -20,8 +20,8 @@ type Relation = NonNullable<RouterOutputs['entity']['get']['relations']>[number]
  */
 const SUBTASK_ROLES: readonly string[] = [ROLE_SUBITEM, ROLE_TICKET];
 
-// Подзадачи: дети по РОЛИ `subitem` (source=родитель, §А4-3). Создание — quick_capture
-// entity_create + relation_create, оба под §5.2/журнал сервера.
+// Подзадачи: дети по РОЛИ `subitem` (source=родитель, §А4-3). Создание — одной операцией
+// «создать и привязать» (§7.2), источник quick_capture сохраняется.
 //
 // Связи приходят готовыми в entity.get(include:['relations']) экрана (prop relations) —
 // свой relation.listFor секция не заводит: это была ТА ЖЕ выборка вторым сетевым чтением
@@ -52,8 +52,7 @@ export function Subtasks({ parentId, relations }: { parentId: string; relations:
   const readOnly = useHostReadOnly();
   const { show } = useToast();
   const openRecord = useOpenRecord();
-  const create = trpc.entity.create.useMutation();
-  const relate = trpc.relation.create.useMutation({
+  const create = trpc.entity.create.useMutation({
     // DF п.5: списки читают ДРУГОЙ ключ со своим staleTime (60 с у Повестки, K16) и сами
     // не протухнут — без этого новая подзадача до минуты не видна ни в Browser, ни в
     // Повестке. Detail родителя (сама секция подзадач) перечитывается тем же вызовом:
@@ -61,15 +60,19 @@ export function Subtasks({ parentId, relations }: { parentId: string; relations:
     // него входит.
     onSuccess: () => invalidateGraph(utils),
   });
-  const isPending = create.isPending || relate.isPending;
+  const isPending = create.isPending;
+  // Повтор адресует исходную пачку. Новый родитель требует нового id, иначе replay сохранит прежнюю привязку.
+  const attemptRef = useRef<{ id: string; text: string; parentId: string } | null>(null);
 
   async function add() {
     const title = draft.trim();
     if (!title || isPending) return;
-    const id = newId();
+    const previous = attemptRef.current;
+    const parent = parentId.toLowerCase();
+    const id = previous?.text === title && previous.parentId === parent ? previous.id : newId();
+    attemptRef.current = { id, text: title, parentId: parent };
     // Ошибку ловим здесь (раньше reject от mutateAsync летел неперехваченным):
     // тост + черновик остаётся в поле — ввод не теряется.
-    let created = false;
     try {
       await create.mutateAsync({
         // Новая форма (§А1-1): свойства плоско по id, аспекты — списком того, с чем
@@ -82,26 +85,12 @@ export function Subtasks({ parentId, relations }: { parentId: string; relations:
           aspects: ['orbis/task'],
         },
         source: 'quick_capture',
+        link: { parentId, role: ROLE_SUBITEM },
       });
-      created = true;
-      await relate.mutateAsync({ source_id: parentId, target_id: id, role: ROLE_SUBITEM });
+      attemptRef.current = null;
       setDraft('');
     } catch {
-      // Частичный отказ (задача создана, связь — нет) — НЕ «не удалось сохранить»:
-      // сущность в графе есть, и молчать о ней нельзя. Инвалидируем граф (свой ключ
-      // со staleTime 60 с сам не протухнет) и очищаем черновик — иначе повторный Enter
-      // уходит с новым newId() и плодит вторую сироту. Сирота — такая же запись графа,
-      // как всякая другая: чужая открытая цель могла её посчитать (Р17), поэтому
-      // инвалидация здесь та же полная, а не «только списки».
-      if (created) {
-        invalidateGraph(utils);
-        setDraft('');
-        // Куда делась запись — обязательная часть сообщения: связи в списке подзадач нет,
-        // тост живёт 4 секунды, и без адреса владелец её просто не найдёт.
-        show('Задача создана, но не привязана — найдёте её в списке задач', 'danger');
-      } else {
-        show('Не удалось сохранить', 'danger');
-      }
+      show('Не удалось сохранить', 'danger');
     }
   }
 

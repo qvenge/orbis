@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test';
+import * as ids from './ids';
 import {
   answerMessageId,
   bodyDraftNoteId,
@@ -217,4 +218,16 @@ describe('детерминированные ID (01 §5.4, §4.5, §7.8)', () =>
   test('константа namespace дословно из PRD', () => {
     expect(ORBIS_NAMESPACE).toBe('cb339e97-82d7-4d16-91c6-942d42df7054');
   });
+});
+
+test('createLinkBatchId: детерминизм, регистронезависимость, разделение графов и записей', () => {
+  expect(typeof ids.createLinkBatchId).toBe('function');
+  const graph = '019DED47-D100-717A-8307-A5B7A5BE722F';
+  const entity = 'E7D0BFA4-F62A-59C1-B560-1C17CB32E89F';
+  const id = ids.createLinkBatchId(graph, entity);
+  expect(id).toBe(ids.createLinkBatchId(graph.toLowerCase(), entity.toLowerCase()));
+  expect(id).toBe(ids.createLinkBatchId(graph, entity));
+  expect(id).not.toBe(ids.createLinkBatchId(entity, entity));
+  expect(id).not.toBe(ids.createLinkBatchId(graph, graph));
+  expect(id).not.toBe(entity.toLowerCase());
 });

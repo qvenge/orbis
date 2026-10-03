@@ -42,6 +42,7 @@ import { BODY_SAVING } from './body-gate';
 import { resetDetailMenuModuleForTests } from './DetailMenuSlot';
 import { DetailScreen } from './DetailScreen';
 import { RoutineStatusBlock } from './RoutineStatusBlock';
+import { Subtasks } from './Subtasks';
 import { detailGetInput } from './useEntityDetail';
 
 // Сессия — стабом: экран записи сам сессию не читает, а сюжеты «412 и 401 посреди набора» ниже монтируют НАСТОЯЩИЙ
@@ -511,19 +512,8 @@ test('подзадачи: подпункт рождается ЗАДАЧЕЙ; с
     }
     if (path === 'entity.create') {
       const { input: created } = input as { input: { id: string; title: string } };
+      childId = created.id;
       return { ...entity, id: created.id, title: created.title };
-    }
-    if (path === 'relation.create') {
-      childId = (input as { target_id: string }).target_id;
-      return {
-        id: 'r1',
-        sourceId: 'e1',
-        targetId: childId,
-        role: 'subitem',
-        meta: {},
-        createdAt: '2026-07-05T00:00:00.000Z',
-        updatedAt: '2026-07-05T00:00:00.000Z',
-      };
     }
     return registryReply(path) ?? {};
   });
@@ -553,6 +543,12 @@ test('подзадачи: подпункт рождается ЗАДАЧЕЙ; с
   };
   expect(createInput.input.aspects).toEqual(['orbis/task']);
   expect(createInput.input.props).toEqual({ 'orbis/task_status': 'inbox' });
+  expect(createInput).toMatchObject({
+    source: 'quick_capture',
+    link: { parentId: 'e1', role: 'subitem' },
+  });
+  expect(calls.filter((call) => call.path === 'entity.create')).toHaveLength(1);
+  expect(calls.filter((call) => call.path === 'relation.create')).toHaveLength(0);
 
   expect(await screen.findByTestId('subtask')).toBeInTheDocument();
   expect(await screen.findByRole('button', { name: 'Купить молоко' })).toBeInTheDocument();
@@ -585,18 +581,6 @@ test('создание подзадачи инвалидирует entity.query 
         const { input: created } = input as { input: { id: string; title: string } };
         return { ...entity, id: created.id, title: created.title };
       }
-      if (path === 'relation.create') {
-        const { target_id } = input as { target_id: string };
-        return {
-          id: 'r1',
-          sourceId: 'e1',
-          targetId: target_id,
-          role: 'subitem',
-          meta: {},
-          createdAt: '2026-07-05T00:00:00.000Z',
-          updatedAt: '2026-07-05T00:00:00.000Z',
-        };
-      }
       if (path === 'entity.query') return [];
       return registryReply(path) ?? {};
     },
@@ -616,56 +600,74 @@ test('создание подзадачи инвалидирует entity.query 
   await waitFor(() => expect(probes().length).toBeGreaterThan(1));
   // Роль связи — `subitem` (§А4-3): по ней же секция и отбирает детей, поэтому чужая роль
   // означала бы «подзадача создана, но в списке её нет»
-  expect(calls.find((c) => c.path === 'relation.create')?.input).toMatchObject({
-    source_id: 'e1',
-    role: 'subitem',
+  expect(calls.find((c) => c.path === 'entity.create')?.input).toMatchObject({
+    link: { parentId: 'e1', role: 'subitem' },
   });
+  expect(calls.filter((call) => call.path === 'relation.create')).toHaveLength(0);
 });
 
-// Частичный отказ: entity.create прошёл, relation.create упал. Задача СОЗДАНА, и списки
-// обязаны её увидеть — иначе она не видна до истечения staleTime (60 с у Повестки), а
-// тост «Не удалось сохранить» уверяет владельца, что ничего не создалось, и он жмёт ещё
-// раз, плодя сироту (бэклог фазы D, ревью фикс-волны).
-test('подзадача создана, а связь упала: списки инвалидируются, тост говорит правду', async () => {
+test('атомарный отказ подзадачи: тост, сохранённый черновик и тот же id при повторе', async () => {
+  let attempts = 0;
   const { calls } = renderWithProviders(
     <>
-      <DetailScreen entityId="e1" />
-      <ListProbe />
+      <Subtasks parentId="e1" relations={[]} />
       <Toaster />
     </>,
     (path, input) => {
-      if (path === 'entity.get') {
-        const { id } = input as { id: string };
-        if (id !== 'e1') return { entity: { ...entity, id, title: 'Купить молоко' } };
-        return { entity, relations: [], thread: { threadId: 'th1', messages: [] } };
-      }
       if (path === 'entity.create') {
-        const { input: created } = input as { input: { id: string; title: string } };
+        if (++attempts === 1) throw trpcError('NOT_FOUND');
+        const created = (input as { input: { id: string; title: string } }).input;
         return { ...entity, id: created.id, title: created.title };
       }
-      if (path === 'relation.create') throw trpcError('INTERNAL_SERVER_ERROR');
-      if (path === 'entity.query') return [];
       return registryReply(path) ?? {};
     },
   );
-  await screen.findByRole('heading', { name: 'Задача' }); // экран отрисован; тело здесь ни при чём
-  const probes = () =>
-    calls.filter(
-      (c) =>
-        c.path === 'entity.query' && (c.input as { query: string }).query === SUBTASK_PROBE.query,
-    );
-  await waitFor(() => expect(probes()).toHaveLength(1));
-
   const field = screen.getByLabelText('Новая подзадача');
   fireEvent.change(field, { target: { value: 'Купить молоко' } });
   fireEvent.keyDown(field, { key: 'Enter' });
+  expect(await screen.findByText('Не удалось сохранить')).toBeInTheDocument();
+  expect(field).toHaveValue('Купить молоко');
+  fireEvent.keyDown(field, { key: 'Enter' });
+  await waitFor(() => expect(field).toHaveValue(''));
+  const creates = calls.filter((call) => call.path === 'entity.create');
+  expect(creates).toHaveLength(2);
+  expect(creates[1]?.input).toEqual(creates[0]?.input);
+  expect(creates[1]?.input).toMatchObject({ link: { parentId: 'e1', role: 'subitem' } });
+  expect(calls.filter((call) => call.path === 'relation.create')).toHaveLength(0);
+});
 
-  // Списки перечитываются: сущность в графе есть, и её обязано быть видно сразу.
-  await waitFor(() => expect(probes().length).toBeGreaterThan(1));
-  // Текст тоста не врёт про потерю записи: создана, но не привязана.
-  expect(
-    await screen.findByText(/создана, но не привязана — найдёте её в списке задач/i),
-  ).toBeInTheDocument();
+function SubtasksSwitch() {
+  const [parentId, setParentId] = useState('e1');
+  return (
+    <>
+      <Subtasks parentId={parentId} relations={[]} />
+      <button type="button" onClick={() => setParentId('e2')}>
+        Другой родитель
+      </button>
+      <Toaster />
+    </>
+  );
+}
+
+test('подзадача: тот же текст после отказа и смены родителя получает новый id', async () => {
+  const { calls } = renderWithProviders(<SubtasksSwitch />, (path) => {
+    if (path === 'entity.create') throw trpcError('NOT_FOUND');
+    return registryReply(path) ?? {};
+  });
+  const field = screen.getByLabelText('Новая подзадача');
+  fireEvent.change(field, { target: { value: 'Купить молоко' } });
+  fireEvent.keyDown(field, { key: 'Enter' });
+  await screen.findByText('Не удалось сохранить');
+  fireEvent.click(screen.getByRole('button', { name: 'Другой родитель' }));
+  fireEvent.keyDown(field, { key: 'Enter' });
+  await waitFor(() =>
+    expect(calls.filter((call) => call.path === 'entity.create')).toHaveLength(2),
+  );
+  const creates = calls
+    .filter((call) => call.path === 'entity.create')
+    .map((call) => call.input as { input: { id: string }; link: { parentId: string } });
+  expect(creates[1]?.input.id).not.toBe(creates[0]?.input.id);
+  expect(creates[1]?.link).toEqual({ parentId: 'e2', role: 'subitem' });
 });
 
 // --- inline-правка заголовка (DF п.3) --------------------------------------------------

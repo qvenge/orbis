@@ -3,6 +3,7 @@
 // expectedBodyRevision в entity_update — замок ТЕКСТА (спека скорости §8.1–§8.2): ревизия тела, от которой
 // начата правка. Поле опционально в envelope, обязательность при body/bodyDoc держит executor.
 import { z } from 'zod';
+import { ROLE_SUBITEM } from '../constants';
 // Канон Q-AST — прямым путём к модулю, а не через баррель: конфликт имени `QueryAst` со
 // старой грамматикой снят вместе с ней (21b), и корневой баррель канон отдаёт, — но импорт
 // одного модуля не тянет за собой весь пакет.
@@ -262,6 +263,12 @@ export const BODY_NOTE_PROPERTY = 'orbis/body';
  */
 export const entityCreateUiInput = entityCreateInput.strict();
 export type EntityCreateUiInput = z.infer<typeof entityCreateUiInput>;
+
+/** Родитель → новая запись (§7.2): одна роль ограничивает операцию потребителями «＋» и подзадачами. */
+export const entityCreateLink = z
+  .object({ parentId: z.string().uuid(), role: z.literal(ROLE_SUBITEM) })
+  .strict();
+export type EntityCreateLink = z.infer<typeof entityCreateLink>;
 
 /**
  * Надмножество entity_create для executor'а. Совпадает сегодня с UI-входом побайтово и

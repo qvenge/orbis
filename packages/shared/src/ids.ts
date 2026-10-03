@@ -79,6 +79,14 @@ export function retryCreateId(originalId: string): string {
 }
 
 /**
+ * Ключ пачки «создать и привязать» (§7.2, РП-21) зависит от клиентского id записи: потерянный ответ
+ * повторяется по тому же журналу, без второй записи или связи. Граф входит в формулу, потому что id виден за его пределами.
+ */
+export function createLinkBatchId(graphId: string, entityId: string): string {
+  return uuidv5(`create-link:${graphId.toLowerCase()}:${entityId.toLowerCase()}`, ORBIS_NAMESPACE);
+}
+
+/**
  * PK сводки импорта (00-product §8, метрика покрытия транзакций). Детерминирован по
  * batchId: идемпотентный повтор confirm возвращает исходное сообщение, а не пишет вторую
  * сводку, — иначе один и тот же файл считался бы дважды.

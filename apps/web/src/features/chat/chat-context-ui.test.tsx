@@ -252,7 +252,11 @@ async function capture(calls: Calls, text: string) {
   const call = created(calls).find(
     (c) => (c.input as { input: { title: string } }).input.title === text,
   );
-  return (call?.input as { input: { aspects?: string[] } }).input;
+  return call?.input as {
+    input: { id: string; aspects?: string[] };
+    source: string;
+    link?: { parentId: string; role: string };
+  };
 }
 
 describe.each([
@@ -266,9 +270,14 @@ describe.each([
     await heading('Починить кран');
     await frameReady(desktop);
     const input = await capture(calls, 'купить прокладку');
-    expect(input.aspects).toEqual(['orbis/task']);
-    await waitFor(() => expect(related(calls)).toHaveLength(1));
-    expect(related(calls)[0]?.input).toMatchObject({ source_id: TASK, role: ROLE_SUBITEM });
+    expect(input.input.aspects).toEqual(['orbis/task']);
+    expect(input).toMatchObject({
+      source: 'quick_capture',
+      link: { parentId: TASK, role: ROLE_SUBITEM },
+    });
+    await act(async () => {});
+    expect(created(calls)).toHaveLength(1);
+    expect(related(calls)).toEqual([]);
   });
 
   test('на странице — без связи', async () => {
@@ -278,7 +287,8 @@ describe.each([
     await heading('Повестка');
     await frameReady(desktop);
     const input = await capture(calls, 'идея');
-    expect(input.aspects).toBeUndefined();
+    expect(input.input.aspects).toBeUndefined();
+    expect(input).not.toHaveProperty('link');
     await act(async () => {});
     expect(related(calls)).toEqual([]);
   });
@@ -300,7 +310,8 @@ test.each([
   await heading(title);
   expect(useNav.getState().model.activeApp).toBe(HOST_APP);
   const input = await capture(calls, 'мысль');
-  expect(input.aspects).toBeUndefined();
+  expect(input.input.aspects).toBeUndefined();
+  expect(input).not.toHaveProperty('link');
   await act(async () => {});
   expect(related(calls)).toEqual([]);
 });
@@ -317,7 +328,8 @@ test('(в) «＋» на странице, пока её запись не про
   const { calls } = renderApp({ id: AGENDA, until });
   await screen.findByTestId('host-buttons');
   const early = await capture(calls, 'рано');
-  expect(early.aspects).toBeUndefined();
+  expect(early.input.aspects).toBeUndefined();
+  expect(early).not.toHaveProperty('link');
   release();
   await heading('Повестка');
   // Форма «＋» ещё открыта (второе нажатие закрыло бы её): пишем в неё же.
@@ -327,8 +339,9 @@ test('(в) «＋» на странице, пока её запись не про
   });
   fireEvent.submit(form);
   await waitFor(() => expect(created(calls)).toHaveLength(2));
-  const late = (created(calls)[1]?.input as { input: { aspects?: string[] } }).input;
-  expect(late.aspects).toBeUndefined();
+  const late = created(calls)[1]?.input as { input: { aspects?: string[] }; link?: unknown };
+  expect(late.input.aspects).toBeUndefined();
+  expect(late).not.toHaveProperty('link');
   await act(async () => {});
   expect(related(calls)).toEqual([]);
 });
@@ -352,8 +365,14 @@ test('(в) «＋» на записи-задаче, чья запись прие�
     target: { value: 'подзадача' },
   });
   fireEvent.submit(form);
-  await waitFor(() => expect(related(calls)).toHaveLength(1));
-  expect(related(calls)[0]?.input).toMatchObject({ source_id: TASK, role: ROLE_SUBITEM });
+  await waitFor(() => expect(created(calls)).toHaveLength(1));
+  expect(created(calls)[0]?.input).toMatchObject({
+    input: { aspects: ['orbis/task'] },
+    source: 'quick_capture',
+    link: { parentId: TASK, role: ROLE_SUBITEM },
+  });
+  await act(async () => {});
+  expect(related(calls)).toEqual([]);
 });
 
 const BUDGET_OVERLAY = { kind: 'reserved', key: 'budget', path: '/budget' } as const;
@@ -366,7 +385,8 @@ test('(в) телефон: плашка поверх записи-задачи �
   act(() => useNav.setState({ overlay: BUDGET_OVERLAY }));
   await screen.findByText(/Бюджет придёт/);
   const input = await capture(calls, 'под плашкой');
-  expect(input.aspects).toBeUndefined();
+  expect(input.input.aspects).toBeUndefined();
+  expect(input).not.toHaveProperty('link');
   await act(async () => {});
   expect(related(calls)).toEqual([]);
 

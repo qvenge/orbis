@@ -5,9 +5,13 @@ import type { JournalRef } from '@orbis/shared';
 // через execute (§9.2), чтения — под withIdentity (RLS, §4.10).
 import {
   type BodyActionInfo,
+  createLinkBatchId,
   type EntityBlocksResult,
+  type EntityCreateLink,
+  type EntityCreateUiInput,
   type EntityUpdateUiInput,
   entityBlocksInput,
+  entityCreateLink,
   entityCreateUiInput,
   entityFieldsSchema,
   entityGetUiInput,
@@ -283,10 +287,57 @@ async function currentBodyAction(
   return probe === undefined ? null : bodyActionOf(tx, who, probe, probe.live);
 }
 
+/**
+ * «Создать и привязать» (§7.2, РП-21) — одна транзакция, запись журнала и отмена.
+ * Порядок значим: связь видит созданную перед ней запись; inverse сначала снимает связь, затем архивирует запись.
+ * Повтор по клиентскому id возвращает сохранённый ответ пачки, включая исходный JournalRef.
+ */
+async function createAndLink(
+  ctx: { db: Db; identity: Identity },
+  input: EntityCreateUiInput,
+  source: 'fast_path' | 'quick_capture' | 'ui',
+  link: EntityCreateLink,
+  threadId?: string,
+): Promise<WireEntityWithRevision & { body: string } & JournalRef> {
+  if (input.id === undefined) {
+    throw execErrorToTRPC(
+      new ExecError(
+        'VALIDATION',
+        'привязка при создании требует id записи от клиента — иначе повтор не найдёт пачку',
+      ),
+    );
+  }
+  const result = await execute(
+    ctx.db,
+    {
+      identity: ctx.identity,
+      actorKind: 'owner',
+      source,
+      ...(threadId !== undefined && { threadId }),
+      batchId: createLinkBatchId(ctx.identity.graph, input.id),
+      batchLabel: `Создано и привязано: ${input.title}`,
+      operations: [
+        { tool: 'entity_create', input },
+        {
+          tool: 'relation_create',
+          input: { source_id: link.parentId, target_id: input.id, role: link.role },
+        },
+      ],
+    },
+    { sink, ...(threadId !== undefined && { beforeStages: threadVisible(threadId) }) },
+  );
+  if (!result.ok) throw execErrorToTRPC(result.error);
+  return {
+    ...(result.results[0] as WireEntityWithRevision & { body: string }),
+    ...journalRef(result),
+  };
+}
+
 export const entityRouter = router({
   // Источник клиентского create ограничен fast_path/quick_capture/ui (§7.5, 02 §5;
   // 'ui' — прямое действие владельца в форме, например создание конверта 03 §3.1);
   // 'chat'/'mcp'/'system' недостижимы через этот роутер по построению.
+  // `link` исполняет создание и привязку одной пачкой (§7.2), с клиентским id для повтора после потерянного ответа.
   //
   // `threadId` — тред ввода быстрого пути (спека скорости §11.3, РП-13): карточка, которую клиент положил в тред
   // оптимистично, приходит с сервера туда же. У правки в интерфейсе и быстрой записи треда нет (Р-12) — переданный
@@ -295,39 +346,52 @@ export const entityRouter = router({
     .input(
       z.object({
         input: entityCreateUiInput,
+        link: entityCreateLink.optional(),
         source: z.enum(['fast_path', 'quick_capture', 'ui']),
         threadId: z.string().uuid().optional(),
       }),
     )
-    .mutation(async ({ ctx, input }): Promise<WireEntityWithRevision & Partial<JournalRef>> => {
-      if (input.threadId !== undefined && input.source !== 'fast_path') {
-        throw execErrorToTRPC(
-          new ExecError('VALIDATION', 'тред передаётся только быстрым вводом (source: fast_path)', {
+    .mutation(
+      async ({
+        ctx,
+        input,
+      }): Promise<WireEntityWithRevision & { body: string } & Partial<JournalRef>> => {
+        if (input.threadId !== undefined && input.source !== 'fast_path') {
+          throw execErrorToTRPC(
+            new ExecError(
+              'VALIDATION',
+              'тред передаётся только быстрым вводом (source: fast_path)',
+              {
+                source: input.source,
+              },
+            ),
+          );
+        }
+        if (input.link !== undefined) {
+          return createAndLink(ctx, input.input, input.source, input.link, input.threadId);
+        }
+        const r = await execute(
+          ctx.db,
+          {
+            identity: ctx.identity,
+            actorKind: 'owner',
             source: input.source,
-          }),
+            ...(input.threadId !== undefined && { threadId: input.threadId }),
+            operations: [{ tool: 'entity_create', input: input.input }],
+          },
+          {
+            sink,
+            ...(input.threadId !== undefined && { beforeStages: threadVisible(input.threadId) }),
+          },
         );
-      }
-      const r = await execute(
-        ctx.db,
-        {
-          identity: ctx.identity,
-          actorKind: 'owner',
-          source: input.source,
-          ...(input.threadId !== undefined && { threadId: input.threadId }),
-          operations: [{ tool: 'entity_create', input: input.input }],
-        },
-        {
-          sink,
-          ...(input.threadId !== undefined && { beforeStages: threadVisible(input.threadId) }),
-        },
-      );
-      if (!r.ok) throw execErrorToTRPC(r.error);
-      // actionId — для Undo прямо из UI-формы (03-budget §3.6, quick-add): аддитивное
-      // поле поверх wire-сущности, потребители `.id` не задеты. При идемпотентном
-      // replay (§5.3) журнал не писался — actionId под этим id не существует, не отдаём.
-      const entity = r.results[0] as WireEntityWithRevision & { body: string };
-      return r.idempotentReplay ? entity : { ...entity, ...journalRef(r) };
-    }),
+        if (!r.ok) throw execErrorToTRPC(r.error);
+        // actionId — для Undo прямо из UI-формы (03-budget §3.6, quick-add): аддитивное
+        // поле поверх wire-сущности, потребители `.id` не задеты. При идемпотентном
+        // replay (§5.3) журнал не писался — actionId под этим id не существует, не отдаём.
+        const entity = r.results[0] as WireEntityWithRevision & { body: string };
+        return r.idempotentReplay ? entity : { ...entity, ...journalRef(r) };
+      },
+    ),
 
   // UI-вариант схемы: у владельца из редактора есть структурная форма тела, у тула модели —
   // нет. Тело процедуры от этого не меняется: путь записи один — executor.

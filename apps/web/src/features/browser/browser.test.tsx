@@ -1,5 +1,6 @@
 import { BUILTIN_CONTRACT_DEFS, effectiveLabel, OWNER_LOCALE } from '@orbis/shared';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { useState } from 'react';
 import { beforeEach, expect, test } from 'vitest';
 import { resetNavForTests } from '../../state/navigation';
 import { renderWithProviders, trpcError, wireEntity } from '../../test/harness';
@@ -8,7 +9,7 @@ import { Toaster } from '../../ui/Toast';
 import { useToastStore } from '../../ui/toast-store';
 import { EntityList } from './EntityList';
 import { EntityRow } from './EntityRow';
-import { QuickCapture } from './QuickCapture';
+import { type CaptureContext, QuickCapture } from './QuickCapture';
 
 const ent = (id: string, title: string) => wireEntity({ id, title });
 
@@ -62,6 +63,7 @@ test('QuickCapture: title-only через entity.create(source:quick_capture) б
     });
     // никакой интерпретации: нет aspects orbis/financial
     expect((c?.input as { input: { aspects?: unknown } }).input.aspects).toBeUndefined();
+    expect(c?.input).not.toHaveProperty('link');
   });
 });
 
@@ -87,17 +89,15 @@ test('QuickCapture внутри записи: подпункт рождаетс�
   await waitFor(() => expect(calls.some((c) => c.path === 'entity.create')).toBe(true));
   const create = calls.find((c) => c.path === 'entity.create')?.input as {
     input: { title: string; props?: Record<string, unknown>; aspects?: string[] };
+    link: { parentId: string; role: string };
   };
   expect(create.input.aspects).toEqual(['orbis/task']);
   expect(create.input.props).toEqual({ 'orbis/task_status': 'inbox' });
 
-  await waitFor(() =>
-    expect(calls.find((c) => c.path === 'relation.create')?.input).toEqual({
-      source_id: 'p1',
-      target_id: 'child',
-      role: 'subitem',
-    }),
-  );
+  await waitFor(() => expect(screen.getByLabelText(/быстрая запись/i)).toHaveValue(''));
+  expect(calls.filter((call) => call.path === 'entity.create')).toHaveLength(1);
+  expect(create.link).toEqual({ parentId: 'p1', role: 'subitem' });
+  expect(calls.filter((call) => call.path === 'relation.create')).toHaveLength(0);
 });
 
 test('EntityList: загрузка → skeleton-ряды (role=status), не текст «Загрузка…»', () => {
@@ -138,6 +138,81 @@ test('QuickCapture: ошибка мутации → toast «Не удалось 
   // Введённый текст НЕ очищен — пользователь может повторить сабмит.
   expect(screen.getByLabelText(/быстрая запись/i)).toHaveValue('важная заметка');
 });
+
+// Контекст входит в намерение: потерянный ответ предыдущего родителя не должен перехватить новую отправку.
+function CaptureSwitch({ initial }: { initial: CaptureContext }) {
+  const [context, setContext] = useState(initial);
+  return (
+    <>
+      <QuickCapture context={context} />
+      <button type="button" onClick={() => setContext({ kind: 'entity', parentId: 'p2' })}>
+        Другой родитель
+      </button>
+      <button type="button" onClick={() => setContext({ kind: 'root' })}>
+        Без родителя
+      </button>
+      <Toaster />
+    </>
+  );
+}
+
+test('QuickCapture: отказ сохраняет черновик; повтор того же намерения шлёт тот же id', async () => {
+  let attempts = 0;
+  const { calls } = renderWithProviders(
+    <CaptureSwitch initial={{ kind: 'entity', parentId: 'p1' }} />,
+    (path, input) => {
+      if (path === 'entity.create') {
+        if (++attempts === 1) throw trpcError('INTERNAL_SERVER_ERROR');
+        const created = (input as { input: { id: string; title: string } }).input;
+        return ent(created.id, created.title);
+      }
+      return {};
+    },
+  );
+  const field = screen.getByLabelText(/быстрая запись/i);
+  fireEvent.change(field, { target: { value: 'Тот же текст' } });
+  fireEvent.submit(screen.getByTestId('quick-capture-form'));
+  expect(await screen.findByText('Не удалось сохранить')).toBeInTheDocument();
+  expect(field).toHaveValue('Тот же текст');
+  fireEvent.submit(screen.getByTestId('quick-capture-form'));
+  await waitFor(() => expect(field).toHaveValue(''));
+  const creates = calls.filter((call) => call.path === 'entity.create');
+  expect(creates).toHaveLength(2);
+  expect(creates[1]?.input).toEqual(creates[0]?.input);
+  expect(calls.filter((call) => call.path === 'relation.create')).toHaveLength(0);
+});
+
+for (const next of ['Другой родитель', 'Без родителя']) {
+  test(`QuickCapture: одинаковый текст после отказа и смены контекста «${next}» получает новый id`, async () => {
+    const { calls } = renderWithProviders(
+      <CaptureSwitch initial={{ kind: 'entity', parentId: 'p1' }} />,
+      (path) => {
+        if (path === 'entity.create') throw trpcError('INTERNAL_SERVER_ERROR');
+        return {};
+      },
+    );
+    fireEvent.change(screen.getByLabelText(/быстрая запись/i), {
+      target: { value: 'Тот же текст' },
+    });
+    fireEvent.submit(screen.getByTestId('quick-capture-form'));
+    await screen.findByText('Не удалось сохранить');
+    fireEvent.click(screen.getByRole('button', { name: next }));
+    fireEvent.submit(screen.getByTestId('quick-capture-form'));
+    await waitFor(() =>
+      expect(calls.filter((call) => call.path === 'entity.create')).toHaveLength(2),
+    );
+    const creates = calls
+      .filter((call) => call.path === 'entity.create')
+      .map(
+        (call) =>
+          call.input as { input: { id: string }; link?: { parentId: string; role: string } },
+      );
+    expect(creates[1]?.input.id).not.toBe(creates[0]?.input.id);
+    if (next === 'Другой родитель')
+      expect(creates[1]?.link).toEqual({ parentId: 'p2', role: 'subitem' });
+    else expect(creates[1]).not.toHaveProperty('link');
+  });
+}
 
 // Строка списка — таблица M14 (§Б5-6): порядок чекбокс → заголовок → дата → сумма → бейджи, и ни
 // одного `if` по имени аспекта. Реестр НАСТОЯЩИЙ: правило берётся из привязок встроенных аспектов.

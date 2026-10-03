@@ -1,6 +1,6 @@
 import { newId, ROLE_SUBITEM } from '@orbis/shared';
 import { Plus } from 'lucide-react';
-import { type FormEvent, useState } from 'react';
+import { type FormEvent, useRef, useState } from 'react';
 import { invalidateGraph } from '../../lib/invalidate';
 import { startAction } from '../../perf/marks';
 import { trpc } from '../../trpc';
@@ -19,11 +19,10 @@ export function QuickCapture({ context }: { context: CaptureContext }) {
   const create = trpc.entity.create.useMutation({
     onSuccess: () => invalidateGraph(utils),
   });
-  // Связь с родителем (context.kind === 'entity') создаётся ПОСЛЕ сущности, то есть
-  // после инвалидации выше: без второго вызова секция подзадач родителя перечиталась бы
-  // ровно до появления связи и не показала бы её.
-  const relation = trpc.relation.create.useMutation({ onSuccess: () => invalidateGraph(utils) });
-  const isPending = create.isPending || relation.isPending;
+  // Потерянный ответ повторяется по тому же id (РП-21). Смена контекста — новое намерение:
+  // иначе replay прежней пачки вернёт запись, привязанную к другому родителю.
+  const attemptRef = useRef<{ id: string; text: string; parentId: string | null } | null>(null);
+  const isPending = create.isPending;
 
   async function submit(e: FormEvent) {
     e.preventDefault();
@@ -31,7 +30,10 @@ export function QuickCapture({ context }: { context: CaptureContext }) {
     if (!title || isPending) return;
     // Отклик «＋» (спека скорости §3.1): видимого до подтверждения нет — оптимистика «＋» в плане Б (§7.1).
     const action = startAction('create');
-    const id = newId();
+    const parentId = context.kind === 'entity' ? context.parentId.toLowerCase() : null;
+    const previous = attemptRef.current;
+    const id = previous?.text === title && previous.parentId === parentId ? previous.id : newId();
+    attemptRef.current = { id, text: title, parentId };
     // НОВАЯ форма (§А1-1): статус — плоским свойством, аспект — ЯВНЫМ списком. Старая карта
     // вешала `orbis/task` самим фактом ключа `status`; без списка запись под родителем
     // родилась бы не задачей — без чекбокса и мимо Повестки.
@@ -39,7 +41,7 @@ export function QuickCapture({ context }: { context: CaptureContext }) {
     const tags: string[] = [];
     // Ошибка мутации — toast, введённый текст НЕ очищается (ввод не теряется).
     try {
-      const ent = await create.mutateAsync({
+      await create.mutateAsync({
         input: {
           id,
           title,
@@ -47,15 +49,13 @@ export function QuickCapture({ context }: { context: CaptureContext }) {
           ...(subtask ? { props: { 'orbis/task_status': 'inbox' }, aspects: ['orbis/task'] } : {}),
         },
         source: 'quick_capture',
+        // Одна операция не оставляет созданную запись без связи (§7.2).
+        ...(context.kind === 'entity'
+          ? { link: { parentId: context.parentId, role: ROLE_SUBITEM } }
+          : {}),
       });
-      if (context.kind === 'entity') {
-        await relation.mutateAsync({
-          source_id: context.parentId,
-          target_id: ent.id,
-          role: ROLE_SUBITEM,
-        });
-      }
       action.confirmed();
+      attemptRef.current = null;
       setText('');
     } catch {
       show('Не удалось сохранить', 'danger');
