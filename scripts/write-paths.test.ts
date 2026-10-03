@@ -101,7 +101,7 @@ function schemaTables(): Map<string, string> {
   return out;
 }
 
-const SQL_IDENTIFIER = '(?:"(?:[^"]|"")*"|[a-z_][a-z0-9_$]*)';
+const SQL_IDENTIFIER = '(?:"(?:[^"]|"")*"|[a-z_\\u0080-\\uffff][a-z0-9_$\\u0080-\\uffff]*)';
 const SQL_TABLE = `(?:\\$\\{[^}]*\\}|${SQL_IDENTIFIER}(?:\\s*\\.\\s*${SQL_IDENTIFIER})*)`;
 const SQL_TABLE_ITEM = `(?:ONLY\\s+)?${SQL_TABLE}`;
 const WRITE_SQL = new RegExp(
@@ -124,8 +124,13 @@ const hasBodyIdentifier = (text: string): boolean =>
   (text.match(new RegExp(SQL_IDENTIFIER, 'gi')) ?? []).some((name) =>
     BODY_COLUMNS.has(sqlIdentifier(name)),
   );
+// `$` продолжает unquoted identifier (включая Unicode), delimiter начинается отдельным токеном.
+const SQL_IDENTIFIER_CONTINUATION = /[a-z0-9_$\u0080-\uffff]/i;
+const DOLLAR_QUOTE = /^\$(?:[a-z_\u0080-\uffff][a-z0-9_\u0080-\uffff]*)?\$/i;
 type SqlCode = { text: string; opaque: Array<[number, number]> };
 const opaqueAt = (code: SqlCode, i: number) => code.opaque.find(([a, b]) => a <= i && i < b);
+const keywordStart = (code: SqlCode, i: number): boolean =>
+  !opaqueAt(code, i) && !SQL_IDENTIFIER_CONTINUATION.test(code.text[i - 1] ?? '');
 
 /**
  * Комментарии снимаются только вне SQL literals. Их содержимое тоже маскируется: SELECT строки
@@ -153,7 +158,8 @@ function sqlCode(text: string): SqlCode {
       out.push(text.slice(start, i));
       opaque.push([start, i]);
     } else if (text[i] === "'") {
-      const escaped = /[eE]/.test(text[i - 1] ?? '') && !/[a-z0-9_$]/i.test(text[i - 2] ?? '');
+      const escaped =
+        /[eE]/.test(text[i - 1] ?? '') && !SQL_IDENTIFIER_CONTINUATION.test(text[i - 2] ?? '');
       i++;
       while (i < text.length) {
         if (escaped && text[i] === '\\') {
@@ -165,8 +171,12 @@ function sqlCode(text: string): SqlCode {
         else break;
       }
       out.push(mask(text.slice(start, i)));
-    } else if (text[i] === '$' && /^\$(?:[a-z_][a-z0-9_]*)?\$/i.test(text.slice(i))) {
-      const tag = text.slice(i).match(/^\$(?:[a-z_][a-z0-9_]*)?\$/i)?.[0] ?? '$$';
+    } else if (
+      text[i] === '$' &&
+      !SQL_IDENTIFIER_CONTINUATION.test(text[i - 1] ?? '') &&
+      DOLLAR_QUOTE.test(text.slice(i))
+    ) {
+      const tag = text.slice(i).match(DOLLAR_QUOTE)?.[0] ?? '$$';
       const close = text.indexOf(tag, i + tag.length);
       i = close < 0 ? text.length : close + tag.length;
       out.push(mask(text.slice(start, i)));
@@ -197,7 +207,7 @@ export function sqlWrites(text: string): Array<{ table: string; dynamic: boolean
   const out: Array<{ table: string; dynamic: boolean }> = [];
   const code = sqlCode(text);
   for (const m of code.text.matchAll(WRITE_SQL)) {
-    if (opaqueAt(code, m.index)) continue;
+    if (!keywordStart(code, m.index)) continue;
     const verb = (m[1] ?? '').toUpperCase();
     // Запятая внутри ${WORLD_TABLES.join(', ')} — часть выражения, а не разделитель таблиц.
     const list = (m[2] ?? '').match(new RegExp(SQL_TABLE_ITEM, 'gi')) ?? [];
@@ -233,10 +243,12 @@ function bodyAssigned(code: SqlCode, start: number): boolean {
     if (char === '(' || char === '[') depth++;
     else if (char === ')' || char === ']') depth--;
     else if (depth === 0) {
+      const keyword = code.text.slice(i).match(/^(?:WHERE|RETURNING)/i)?.[0];
       if (
         char === ';' ||
-        (!/[a-z0-9_$]/i.test(code.text[i - 1] ?? '') &&
-          /^(?:WHERE|RETURNING)\b/i.test(code.text.slice(i)))
+        (keywordStart(code, i) &&
+          keyword !== undefined &&
+          !SQL_IDENTIFIER_CONTINUATION.test(code.text[i + keyword.length] ?? ''))
       )
         break;
       if (char === ',' && assignedAt(i + 1)) return true;
@@ -247,9 +259,9 @@ function bodyAssigned(code: SqlCode, start: number): boolean {
 export function bodyColumnSql(text: string): boolean {
   const code = sqlCode(text);
   for (const m of code.text.matchAll(INSERT_COLUMNS))
-    if (!opaqueAt(code, m.index) && hasBodyIdentifier(m[1] ?? '')) return true;
+    if (keywordStart(code, m.index) && hasBodyIdentifier(m[1] ?? '')) return true;
   for (const m of code.text.matchAll(BODY_SET))
-    if (!opaqueAt(code, m.index) && bodyAssigned(code, m.index + m[0].length)) return true;
+    if (keywordStart(code, m.index) && bodyAssigned(code, m.index + m[0].length)) return true;
   return false;
 }
 
@@ -672,6 +684,55 @@ describe('сторожа путей записи (спека скорости §
         'UPDATE entities SET title=(SELECT title FROM entities WHERE body_revision=1), body_revision=2 WHERE id=1',
       ),
     ).toBe(true);
+  });
+  test('SQL: dollar delimiter внутри ASCII/Unicode identifier не скрывает writer', () => {
+    for (const name of ['cte_tag', 'cte$tag$', 'λ_cte', 'λ_cte$tag$', 'имя$метка$']) {
+      const query = `WITH ${name} AS (SELECT 1) UPDATE entities SET body_revision=1`;
+      expect(
+        fileHits('apps/server/src/routers/entity.ts', `tx.execute(sql\`${query}\`)`, new Map())
+          .map((h) => h.rule)
+          .sort(),
+      ).toEqual(['body-columns', 'graph']);
+    }
+  });
+  test('SQL: настоящие ASCII/Unicode dollar literals не создают fake write и сохраняют следующий', () => {
+    for (const delimiter of ['$tag$', '$$', '$метка$', '$λtag$']) {
+      const literal = `${delimiter}UPDATE entities SET body_revision=1; -- /* quoted text */${delimiter}`;
+      expect(sqlWrites(`SELECT ${literal}`)).toEqual([]);
+      expect(bodyColumnSql(`SELECT ${literal}`)).toBe(false);
+      expect(
+        fileHits(
+          'apps/server/src/routers/entity.ts',
+          `tx.execute(sql\`WITH c AS (SELECT ${literal}) UPDATE entities SET body_revision=1\`)`,
+          new Map(),
+        )
+          .map((h) => h.rule)
+          .sort(),
+      ).toEqual(['body-columns', 'graph']);
+    }
+  });
+  for (const query of [
+    'UPDATE entities AS ALIAS SET body_revision=1',
+    'INSERT INTO entities AS ALIAS (body_revision) VALUES(1)',
+  ]) {
+    test(`SQL: ASCII/Unicode alias сохраняет body hit в ${query.split(' ')[0]}`, () => {
+      for (const alias of ['e', 'я', 'λ_alias'])
+        expect(bodyColumnSql(query.replace('ALIAS', alias))).toBe(true);
+    });
+  }
+  test('SQL: WHERE/RETURNING внутри ASCII/Unicode identifier не завершает SET', () => {
+    for (const suffix of ['WHERE', 'RETURNING'])
+      for (const prefix of ['name', 'имя'])
+        for (const name of [`${prefix}${suffix}`, `${suffix}${prefix}`])
+          expect(
+            bodyColumnSql(
+              `UPDATE entities SET title=${name}, body_revision=1 FROM (SELECT 'x' AS ${name}) s`,
+            ),
+          ).toBe(true);
+    for (const keyword of ['WHERE', 'RETURNING'])
+      expect(bodyColumnSql(`UPDATE entities SET title='x' ${keyword} body_revision=1`)).toBe(false);
+    for (const name of ['nameDELETE', 'имяDELETE'])
+      expect(sqlWrites(`SELECT ${name} FROM entities`)).toEqual([]);
   });
   test('(в) известные писатели видны: executor пишет граф, синк — журнал, модуль разговоров — сообщения', () => {
     expect(hits.get('apps/server/src/executor/executor.ts')?.some((h) => h.rule === 'graph')).toBe(
