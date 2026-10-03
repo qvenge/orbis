@@ -35,6 +35,7 @@ import {
 } from '../entity-editor/arrows-stack';
 import { mountRecord } from '../entity-editor/editor-cache';
 import {
+  acceptTitleSend,
   markTitleSent,
   observeTitleValue,
   recordTitleChange,
@@ -153,8 +154,8 @@ function TitleEditor({
   const intent = useRef({ epoch: undoEpoch(), generation: stepsGeneration() }).current;
   const saveSequence = useRef(0);
   const current = useCallback(
-    () =>
-      mountedRef.current && isUndoEpoch(intent.epoch) && intent.generation === stepsGeneration(),
+    (mounted = mountedRef.current) =>
+      mounted && isUndoEpoch(intent.epoch) && intent.generation === stepsGeneration(),
     [intent],
   );
   const commit = async (v: string, expected: string) => {
@@ -164,11 +165,17 @@ function TitleEditor({
     savingRef.current = true;
     try {
       await latest.current.onSave(v, expected);
+      if (current(true) && sequence === saveSequence.current) acceptTitleSend(entityId, token);
       if (current() && sequence === saveSequence.current)
         lockRef.current = draftRef.current === v ? null : v;
     } catch (err) {
-      if (isUndoEpoch(intent.epoch) && intent.generation === stepsGeneration())
-        rejectTitleSend(entityId, token);
+      if (current(true)) rejectTitleSend(entityId, token);
+      if (
+        current() &&
+        sequence === saveSequence.current &&
+        observeTitleValue(entityId, latest.current.serverValue)
+      )
+        resetSteps(entityId);
       if (current() && sequence === saveSequence.current && isTitleStale(err))
         latest.current.onStale?.();
     } finally {

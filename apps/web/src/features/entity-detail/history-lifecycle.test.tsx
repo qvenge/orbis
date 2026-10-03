@@ -18,6 +18,7 @@ import {
 import { navAt } from '../../test/nav';
 import { registryReply } from '../../test/registry';
 import { trpc } from '../../trpc';
+import * as titleHistory from '../entity-editor/title-history';
 import { observeTitleValue } from '../entity-editor/title-history';
 import { resetUndoSession } from '../undo/undo-epoch';
 import { detailGetInput } from './useEntityDetail';
@@ -502,3 +503,548 @@ for (const scope of ['same', 'owner', 'generation'])
       expect(screen.getByTestId('title-edit')).toHaveValue('План');
       expect(save).toHaveBeenLastCalledWith('План', newer);
     });
+
+for (const foreign of ['План Б', 'Чужое имя'])
+  test(`failed observed optimistic title send does not authorize foreign cold value ${foreign}`, async () => {
+    const observed = vi.spyOn(titleHistory, 'observeTitleValue');
+    navAt('e1');
+    let change: (id: string) => void = () => {};
+    let qc: QueryClient | null = null;
+    let firstTitle = 'План',
+      writes = 0;
+    let reject: (e: unknown) => void = () => {};
+    const held = new Promise((_resolve, rej) => {
+      reject = rej;
+    });
+    function Host() {
+      const [id, set] = useState('e1');
+      change = set;
+      qc = useQueryClient();
+      const warm = trpc.entity.get.useQuery(detailGetInput('e2'));
+      return (
+        <>
+          <span data-testid="warm">{warm.data?.entity.title}</span>
+          <DetailScreen entityId={id} />
+        </>
+      );
+    }
+    renderWithProviders(
+      <Host />,
+      (path, input) => {
+        const vars = input as { id?: string; title?: string; expectedTitle?: string };
+        if (path === 'entity.get')
+          return {
+            entity: {
+              ...entity,
+              id: vars.id ?? 'e1',
+              title: vars.id === 'e2' ? 'Сосед' : firstTitle,
+            },
+            relations: [],
+            thread: null,
+          };
+        if (path === 'entity.update') {
+          writes++;
+          if (writes === 1) return held;
+          expect(vars).toMatchObject({ id: 'e1', title: 'План', expectedTitle: foreign });
+          firstTitle = vars.title ?? '';
+          return mockEntityUpdateResult({ ...entity, title: firstTitle });
+        }
+        return (
+          registryReply(path) ??
+          (path === 'entity.resolveRefs' || path === 'entity.suggest' ? [] : {})
+        );
+      },
+      { queries: { gcTime: 0 } },
+    );
+    const field = await screen.findByTestId('title-edit');
+    await waitFor(() => expect(screen.getByTestId('warm')).toHaveTextContent('Сосед'));
+    fireEvent.change(field, { target: { value: 'План Б' } });
+    fireEvent.blur(field);
+    await waitFor(() => expect(writes).toBe(1));
+    await waitFor(() =>
+      expect(
+        qc
+          ?.getQueryCache()
+          .getAll()
+          .some(
+            (q) =>
+              (q.state.data as { entity?: { id?: string; title?: string } })?.entity?.id === 'e1' &&
+              (q.state.data as { entity?: { id?: string; title?: string } })?.entity?.title ===
+                'План Б',
+          ),
+      ).toBe(true),
+    );
+    await waitFor(() => expect(observed).toHaveBeenCalledWith('e1', 'План Б'));
+    act(() => change('e2'));
+    await waitFor(() => expect(screen.getByTestId('title-edit')).toHaveValue('Сосед'));
+    await waitFor(() => expect(writes).toBe(1));
+    await act(async () => {
+      reject(trpcError('INTERNAL_SERVER_ERROR', 'Запрос не записал title'));
+      await held.catch(() => {});
+    });
+    await waitFor(() =>
+      expect(
+        qc
+          ?.getQueryCache()
+          .getAll()
+          .filter((q) => JSON.stringify(q.queryKey).includes('"e1"')),
+      ).toHaveLength(0),
+    );
+    firstTitle = foreign; // Независимая чужая запись после отказа собственной мутации.
+    act(() => change('e1'));
+    await waitFor(() => expect(screen.getByTestId('title-edit')).toHaveValue(foreign));
+    if (canUndoStep('e1')) {
+      fireEvent.keyDown(screen.getByTestId('title-edit'), {
+        key: 'z',
+        code: 'KeyZ',
+        ctrlKey: true,
+      });
+      await waitFor(() => expect(writes).toBe(2));
+      expect(firstTitle).toBe('План');
+    }
+    expect(writes).toBe(1);
+  });
+
+for (const accepted of [false, true])
+  for (const observed of [false, true])
+    test(`observed old refusal preserves newer C accepted=${accepted} observed=${observed}`, async () => {
+      let show: (title: string | null) => void = () => {};
+      let reject: (error: unknown) => void = () => {};
+      const held = new Promise<void>((_resolve, fail) => {
+        reject = fail;
+      });
+      const save = vi
+        .fn()
+        .mockImplementationOnce(() => held)
+        .mockImplementation(() => (accepted ? Promise.resolve() : new Promise(() => {})));
+      function Host() {
+        const [title, set] = useState<string | null>('План');
+        show = set;
+        return title === null ? null : (
+          <NativeRow entity={{ ...entity, title }} onToggleTask={() => {}} onSaveTitle={save} />
+        );
+      }
+      renderWithProviders(<Host />, fallback);
+      fireEvent.change(await screen.findByTestId('title-edit'), { target: { value: 'План Б' } });
+      fireEvent.blur(screen.getByTestId('title-edit'));
+      await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+      act(() => show('План Б'));
+      fireEvent.change(screen.getByTestId('title-edit'), { target: { value: 'План В' } });
+      fireEvent.blur(screen.getByTestId('title-edit'));
+      await waitFor(() => expect(save).toHaveBeenCalledTimes(2));
+      if (observed) act(() => show('План В'));
+      act(() => show(null));
+      await act(async () => {
+        reject(new Error('отказ без записи'));
+        await held.catch(() => {});
+      });
+      act(() => show('План В'));
+      expect(canUndoStep('e1')).toBe(true);
+      fireEvent.keyDown(screen.getByTestId('title-edit'), {
+        key: 'z',
+        code: 'KeyZ',
+        ctrlKey: true,
+      });
+      expect(screen.getByTestId('title-edit')).toHaveValue('План');
+      expect(save).toHaveBeenLastCalledWith('План', 'План В');
+    });
+
+test('observed same-value undo success survives old failure and cold return', async () => {
+  let show: (title: string | null) => void = () => {};
+  let reject: (error: unknown) => void = () => {};
+  const held = new Promise<void>((_resolve, fail) => {
+    reject = fail;
+  });
+  const save = vi
+    .fn()
+    .mockImplementationOnce(() => held)
+    .mockResolvedValue(undefined);
+  function Host() {
+    const [title, set] = useState<string | null>('План');
+    show = set;
+    return title === null ? null : (
+      <NativeRow entity={{ ...entity, title }} onToggleTask={() => {}} onSaveTitle={save} />
+    );
+  }
+  renderWithProviders(<Host />, fallback);
+  fireEvent.change(await screen.findByTestId('title-edit'), { target: { value: 'План Б' } });
+  fireEvent.blur(screen.getByTestId('title-edit'));
+  await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+  act(() => show('План Б'));
+  await new Promise((done) => setTimeout(done, titleHistory.TITLE_GROUP_DELAY_MS + 1));
+  fireEvent.change(screen.getByTestId('title-edit'), { target: { value: 'План В' } });
+  fireEvent.keyDown(screen.getByTestId('title-edit'), { key: 'z', code: 'KeyZ', ctrlKey: true });
+  await waitFor(() => expect(save).toHaveBeenCalledTimes(2));
+  expect(save).toHaveBeenLastCalledWith('План Б', 'План Б');
+  act(() => show(null));
+  await act(async () => {
+    reject(new Error('старый запрос не записал имя'));
+    await held.catch(() => {});
+  });
+  act(() => show('План Б'));
+  expect(canUndoStep('e1')).toBe(true);
+  fireEvent.keyDown(screen.getByTestId('title-edit'), { key: 'z', code: 'KeyZ', ctrlKey: true });
+  expect(screen.getByTestId('title-edit')).toHaveValue('План');
+});
+
+test('successful observed send settles offscreen and retains cold own history', async () => {
+  let show: (title: string | null) => void = () => {};
+  let resolve: () => void = () => {};
+  const held = new Promise<void>((done) => {
+    resolve = done;
+  });
+  const save = vi
+    .fn()
+    .mockImplementationOnce(() => held)
+    .mockResolvedValue(undefined);
+  function Host() {
+    const [title, set] = useState<string | null>('План');
+    show = set;
+    return title === null ? null : (
+      <NativeRow entity={{ ...entity, title }} onToggleTask={() => {}} onSaveTitle={save} />
+    );
+  }
+  renderWithProviders(<Host />, fallback);
+  fireEvent.change(await screen.findByTestId('title-edit'), { target: { value: 'План Б' } });
+  fireEvent.blur(screen.getByTestId('title-edit'));
+  await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+  act(() => show('План Б'));
+  act(() => show(null));
+  await act(async () => {
+    resolve();
+    await held;
+  });
+  act(() => show('План Б'));
+  expect(canUndoStep('e1')).toBe(true);
+  fireEvent.keyDown(screen.getByTestId('title-edit'), { key: 'z', code: 'KeyZ', ctrlKey: true });
+  expect(screen.getByTestId('title-edit')).toHaveValue('План');
+  expect(save).toHaveBeenLastCalledWith('План', 'План Б');
+});
+
+for (const scope of ['owner', 'generation'])
+  for (const outcome of ['success', 'failure'])
+    test(`observed old ${outcome} cannot alter new ${scope} token`, async () => {
+      let show: (title: string | null) => void = () => {};
+      let resolve: () => void = () => {};
+      let reject: (error: unknown) => void = () => {};
+      const held = new Promise<void>((done, fail) => {
+        resolve = done;
+        reject = fail;
+      });
+      const save = vi
+        .fn()
+        .mockImplementationOnce(() => held)
+        .mockResolvedValue(undefined);
+      function Host() {
+        const [title, set] = useState<string | null>('План');
+        show = set;
+        return title === null ? null : (
+          <NativeRow entity={{ ...entity, title }} onToggleTask={() => {}} onSaveTitle={save} />
+        );
+      }
+      renderWithProviders(<Host />, fallback);
+      fireEvent.change(await screen.findByTestId('title-edit'), { target: { value: 'План Б' } });
+      fireEvent.blur(screen.getByTestId('title-edit'));
+      await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+      act(() => show('План Б'));
+      act(() => show(null));
+      act(scope === 'owner' ? resetUndoSession : clearAllSteps);
+      act(() => show('План'));
+      fireEvent.change(screen.getByTestId('title-edit'), { target: { value: 'План Б' } });
+      fireEvent.blur(screen.getByTestId('title-edit'));
+      await waitFor(() => expect(save).toHaveBeenCalledTimes(2));
+      await act(async () => {
+        if (outcome === 'success') resolve();
+        else reject(new Error('старый отказ'));
+        await held.catch(() => {});
+      });
+      act(() => show('План Б'));
+      expect(canUndoStep('e1')).toBe(true);
+      fireEvent.keyDown(screen.getByTestId('title-edit'), {
+        key: 'z',
+        code: 'KeyZ',
+        ctrlKey: true,
+      });
+      expect(screen.getByTestId('title-edit')).toHaveValue('План');
+    });
+test('failed observed foreign basis resets retained native body and common steps', async () => {
+  let show: (title: string | null) => void = () => {};
+  let reject: (error: unknown) => void = () => {};
+  const held = new Promise<void>((_done, fail) => {
+    reject = fail;
+  });
+  const save = vi.fn(() => held);
+  function Host() {
+    const [title, set] = useState<string | null>('План');
+    show = set;
+    return title === null ? null : (
+      <>
+        <NativeRow entity={{ ...entity, title }} onToggleTask={() => {}} onSaveTitle={save} />
+        <BodyEditor entityId="e1" doc={doc} onChange={() => {}} />
+      </>
+    );
+  }
+  renderWithProviders(<Host />, fallback);
+  const field = await screen.findByTestId('title-edit');
+  const editor = (
+    screen.getByTestId('body-editor').querySelector('.ProseMirror') as HTMLElement & {
+      editor: Editor;
+    }
+  ).editor;
+  act(() => editor.commands.insertContentAt(1, 'own'));
+  fireEvent.change(field, { target: { value: 'План Б' } });
+  fireEvent.blur(field);
+  await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+  act(() => show('План Б'));
+  expect(undoDepth(editor.state)).toBe(1);
+  act(() => show(null));
+  await act(async () => {
+    reject(new Error('отказ без записи'));
+    await held.catch(() => {});
+  });
+  act(() => show('План Б'));
+  expect(
+    (
+      screen.getByTestId('body-editor').querySelector('.ProseMirror') as HTMLElement & {
+        editor: Editor;
+      }
+    ).editor,
+  ).toBe(editor);
+  expect(undoDepth(editor.state)).toBe(0);
+  expect(redoDepth(editor.state)).toBe(0);
+  expect(canUndoStep('e1')).toBe(false);
+  fireEvent.keyDown(screen.getByTestId('title-edit'), { key: 'z', code: 'KeyZ', ctrlKey: true });
+  expect(save).toHaveBeenCalledTimes(1);
+});
+
+test('confirmed own basis survives a refused same-value native undo send', async () => {
+  let show: (title: string | null) => void = () => {};
+  const save = vi
+    .fn()
+    .mockResolvedValueOnce(undefined)
+    .mockRejectedValueOnce(new Error('noop не записал имя'))
+    .mockResolvedValue(undefined);
+  function Host() {
+    const [title, set] = useState<string | null>('План');
+    show = set;
+    return title === null ? null : (
+      <NativeRow entity={{ ...entity, title }} onToggleTask={() => {}} onSaveTitle={save} />
+    );
+  }
+  renderWithProviders(<Host />, fallback);
+  fireEvent.change(await screen.findByTestId('title-edit'), { target: { value: 'План Б' } });
+  fireEvent.blur(screen.getByTestId('title-edit'));
+  await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+  act(() => show('План Б'));
+  await new Promise((done) => setTimeout(done, titleHistory.TITLE_GROUP_DELAY_MS + 1));
+  fireEvent.change(screen.getByTestId('title-edit'), { target: { value: 'План В' } });
+  await act(async () => {
+    fireEvent.keyDown(screen.getByTestId('title-edit'), { key: 'z', code: 'KeyZ', ctrlKey: true });
+  });
+  expect(save).toHaveBeenLastCalledWith('План Б', 'План Б');
+  act(() => show(null));
+  act(() => show('План Б'));
+  expect(canUndoStep('e1')).toBe(true);
+  fireEvent.keyDown(screen.getByTestId('title-edit'), { key: 'z', code: 'KeyZ', ctrlKey: true });
+  expect(screen.getByTestId('title-edit')).toHaveValue('План');
+});
+
+for (const bodyTop of [false, true])
+  for (const foreign of ['План Б', 'Чужое имя'])
+    test(`mounted checkbox refusal resets title and netzero body ${foreign} bodyTop=${bodyTop}`, async () => {
+      const task = { ...entity, aspects: ['orbis/task'], props: { 'orbis/task_status': 'inbox' } };
+      const observed = vi.spyOn(titleHistory, 'observeTitleValue');
+      navAt('e1');
+      let qc: QueryClient | null = null;
+      let serverTitle = 'План',
+        writes = 0,
+        checkboxes = 0,
+        reads = 0;
+      let reject: (e: unknown) => void = () => {};
+      const held = new Promise((_resolve, rej) => {
+        reject = rej;
+      });
+      const checkboxHeld = new Promise(() => {});
+      function Host() {
+        qc = useQueryClient();
+        return <DetailScreen entityId="e1" />;
+      }
+      renderWithProviders(<Host />, (path, input) => {
+        const vars = input as { id?: string; title?: string; expectedTitle?: string };
+        if (path === 'entity.get') {
+          reads++;
+          return { entity: { ...task, title: serverTitle }, relations: [], thread: null };
+        }
+        if (path === 'entity.update') {
+          if (vars.title === undefined) {
+            checkboxes++;
+            return checkboxHeld;
+          }
+          writes++;
+          if (writes === 1) return held;
+          expect(vars).toMatchObject({ id: 'e1', title: 'План', expectedTitle: foreign });
+          serverTitle = vars.title;
+          return mockEntityUpdateResult({ ...task, title: serverTitle });
+        }
+        return (
+          registryReply(path) ??
+          (path === 'entity.resolveRefs' || path === 'entity.suggest' ? [] : {})
+        );
+      });
+      await screen.findByTestId('body-editor', undefined, { timeout: 10000 });
+      const field = await screen.findByTestId('title-edit');
+      fireEvent.change(field, { target: { value: 'План Б' } });
+      fireEvent.blur(field);
+      await waitFor(() => expect(writes).toBe(1));
+      await waitFor(() =>
+        expect(
+          qc
+            ?.getQueryCache()
+            .getAll()
+            .some(
+              (q) =>
+                (q.state.data as { entity?: { title: string } } | undefined)?.entity?.title ===
+                'План Б',
+            ),
+        ).toBe(true),
+      );
+      await waitFor(() => expect(observed).toHaveBeenCalledWith('e1', 'План Б'));
+      await screen.findByTestId('body-editor', undefined, { timeout: 10000 });
+      const editor = (
+        screen.getByTestId('body-editor').querySelector('.ProseMirror') as HTMLElement & {
+          editor: Editor;
+        }
+      ).editor;
+
+      if (bodyTop) act(() => editor.chain().focus().insertContentAt(1, 'own').run());
+      if (bodyTop) act(() => editor.commands.deleteRange({ from: 1, to: 4 }));
+      if (bodyTop) expect(undoDepth(editor.state)).toBe(1);
+      fireEvent.click(screen.getByRole('checkbox', { name: /готово/i }));
+      if (bodyTop) act(() => editor.commands.focus());
+      await waitFor(() => expect(checkboxes).toBe(1));
+      const before = reads,
+        observedBefore = observed.mock.calls.filter((c) => c[1] === 'План Б').length;
+      // Независимый писатель меняет сервер; первый запрос title ничего не записал.
+      serverTitle = foreign;
+      await act(async () => {
+        reject(trpcError('INTERNAL_SERVER_ERROR', 'Запрос не записал title'));
+        await held.catch(() => {});
+      });
+      await waitFor(() => expect(reads).toBeGreaterThan(before));
+      await waitFor(() =>
+        expect(
+          qc
+            ?.getQueryCache()
+            .getAll()
+            .some(
+              (q) =>
+                (q.state.data as { entity?: { title: string } } | undefined)?.entity?.title ===
+                foreign,
+            ),
+        ).toBe(true),
+      );
+      if (foreign !== 'План Б') await waitFor(() => expect(canUndoStep('e1')).toBe(false));
+      expect(observedBefore).toBeGreaterThan(0);
+      if (bodyTop) {
+        expect(canUndoStep('e1')).toBe(false);
+        expect(undoDepth(editor.state)).toBe(0);
+        expect(redoDepth(editor.state)).toBe(0);
+      }
+      if (canUndoStep('e1')) {
+        fireEvent.keyDown(screen.getByTestId('title-edit'), {
+          key: 'z',
+          code: 'KeyZ',
+          ctrlKey: true,
+        });
+        await waitFor(() => expect(writes).toBe(2));
+      }
+      expect(writes).toBe(1);
+    });
+
+for (const accepted of [false, true])
+  for (const observed of [false, true])
+    test(`mounted observed old refusal preserves newer C accepted=${accepted} observed=${observed}`, async () => {
+      let show: (title: string | null) => void = () => {};
+      let reject: (error: unknown) => void = () => {};
+      const held = new Promise<void>((_resolve, fail) => {
+        reject = fail;
+      });
+      const save = vi
+        .fn()
+        .mockImplementationOnce(() => held)
+        .mockImplementation(() => (accepted ? Promise.resolve() : new Promise(() => {})));
+      function Host() {
+        const [title, set] = useState<string | null>('План');
+        show = set;
+        return title === null ? null : (
+          <NativeRow entity={{ ...entity, title }} onToggleTask={() => {}} onSaveTitle={save} />
+        );
+      }
+      renderWithProviders(<Host />, fallback);
+      fireEvent.change(await screen.findByTestId('title-edit'), { target: { value: 'План Б' } });
+      fireEvent.blur(screen.getByTestId('title-edit'));
+      await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+      act(() => show('План Б'));
+      fireEvent.change(screen.getByTestId('title-edit'), { target: { value: 'План В' } });
+      fireEvent.blur(screen.getByTestId('title-edit'));
+      await waitFor(() => expect(save).toHaveBeenCalledTimes(2));
+      if (observed) act(() => show('План В'));
+      await act(async () => {
+        reject(new Error('отказ без записи'));
+        await held.catch(() => {});
+      });
+      expect(canUndoStep('e1')).toBe(true);
+      act(() => show('План В'));
+      expect(canUndoStep('e1')).toBe(true);
+      fireEvent.keyDown(screen.getByTestId('title-edit'), {
+        key: 'z',
+        code: 'KeyZ',
+        ctrlKey: true,
+      });
+      expect(screen.getByTestId('title-edit')).toHaveValue('План');
+      expect(save).toHaveBeenLastCalledWith('План', 'План В');
+    });
+
+test('mounted latest double refusal clears failed basis before fresh input', async () => {
+  let show: (title: string | null) => void = () => {};
+  let reject: (error: unknown) => void = () => {};
+  const held = new Promise<void>((_resolve, fail) => {
+    reject = fail;
+  });
+  let rejectNew: (error: unknown) => void = () => {};
+  const newer = new Promise<void>((_done, fail) => {
+    rejectNew = fail;
+  });
+  const save = vi
+    .fn()
+    .mockImplementationOnce(() => held)
+    .mockImplementation(() => newer);
+  function Host() {
+    const [title, set] = useState<string | null>('План');
+    show = set;
+    return title === null ? null : (
+      <NativeRow entity={{ ...entity, title }} onToggleTask={() => {}} onSaveTitle={save} />
+    );
+  }
+  renderWithProviders(<Host />, fallback);
+  fireEvent.change(await screen.findByTestId('title-edit'), { target: { value: 'План Б' } });
+  fireEvent.blur(screen.getByTestId('title-edit'));
+  await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+  act(() => show('План Б'));
+  fireEvent.change(screen.getByTestId('title-edit'), { target: { value: 'План В' } });
+  fireEvent.blur(screen.getByTestId('title-edit'));
+  await waitFor(() => expect(save).toHaveBeenCalledTimes(2));
+
+  await act(async () => {
+    reject(new Error('отказ без записи'));
+    await held.catch(() => {});
+  });
+  expect(canUndoStep('e1')).toBe(true);
+  await act(async () => {
+    rejectNew(new Error('новый запрос тоже ничего не записал'));
+    await newer.catch(() => {});
+  });
+  expect(canUndoStep('e1')).toBe(false);
+  fireEvent.change(screen.getByTestId('title-edit'), { target: { value: 'Новое' } });
+  expect(canUndoStep('e1')).toBe(true);
+});

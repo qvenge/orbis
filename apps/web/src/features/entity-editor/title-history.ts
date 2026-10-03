@@ -1,9 +1,14 @@
 /** Снимки поля браузера недоступны программно: заголовок держит свою историю во вкладке. */
 export const TITLE_GROUP_DELAY_MS = 500;
 export const TITLE_DEPTH = 100;
+interface SendToken {
+  value: string;
+  state?: 'accepted' | 'failed';
+}
 interface History {
   seen?: string;
-  pending: { value: string }[];
+  pending: SendToken[];
+  observed?: SendToken;
   done: string[];
   undone: string[];
   open: boolean;
@@ -28,26 +33,40 @@ function history(id: string): History {
 /** Наблюдение переживает холодный возврат; provisional значения не подтверждают CAS. */
 export function observeTitleValue(id: string, value: string): boolean {
   const h = history(id);
-  if (h.seen === value) return false;
+  if (h.seen === value && h.observed?.state !== 'failed') return false;
   const observed = h.pending.findIndex((v) => v.value === value);
   const foreign = h.seen !== undefined && observed < 0;
   h.seen = value;
+  const token = h.pending[observed];
+  h.observed = token?.state === 'accepted' ? undefined : token;
   if (observed >= 0) h.pending.splice(0, observed + 1);
   return foreign;
 }
-export function markTitleSent(id: string, value: string) {
+export function markTitleSent(id: string, value: string): SendToken | undefined {
   const h = history(id);
+  const token = { value };
   if (value !== h.seen) {
     h.pending = h.pending.filter((v) => v.value !== value);
-    const token = { value };
     h.pending.push(token);
-    return token;
-  }
+  } else if (h.observed && h.observed.state !== 'accepted') h.observed = token;
+  else return;
+  return token;
 }
 /** Отказ снимает только своё намерение, даже если поле уже размонтировано. */
-export function rejectTitleSend(id: string, token: ReturnType<typeof markTitleSent>): void {
+export function rejectTitleSend(id: string, token: SendToken | undefined): void {
   const h = histories.get(id);
-  if (h) h.pending = h.pending.filter((v) => v !== token);
+  if (h) {
+    h.pending = h.pending.filter((v) => v !== token);
+    if (token && h.observed === token && token.state !== 'accepted') token.state = 'failed';
+  }
+}
+/** Успех подтверждает только всё ещё принадлежащее этой записи намерение. */
+export function acceptTitleSend(id: string, token: SendToken | undefined): void {
+  const h = histories.get(id);
+  if (token && h && (h.observed === token || h.pending.includes(token))) {
+    token.state = 'accepted';
+    if (h.observed === token) h.observed = undefined;
+  }
 }
 export function recordTitleChange(
   id: string,
@@ -86,6 +105,7 @@ export const resetTitleHistory = (id: string): void => {
   if (h) {
     h.done.length = h.undone.length = h.pending.length = 0;
     h.open = false;
+    h.observed = undefined;
   }
 };
 export const forgetTitleHistory = (id: string): void => {
