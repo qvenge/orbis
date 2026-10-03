@@ -13,7 +13,7 @@
 // и из него же разбирает текст запроса `query/parse-text.ts`. Один снимок на запрос, а не
 // два чтения: реестр читается пятью запросами, и второй его загрузкой ради разбора текста
 // платил бы каждый вызов entity.query.
-import type { GraphId } from '@orbis/shared';
+import { type GraphId, isValidTimeZone } from '@orbis/shared';
 import type { WeekStart } from '@orbis/shared/query';
 import { eq } from 'drizzle-orm';
 import { userSettings } from '../db/schema';
@@ -24,15 +24,7 @@ import type { CompileCtx } from './compile-ast';
 /** Дефолт таймзоны при отсутствующей строке настроек (онбординг ещё не пройден). */
 export const DEFAULT_TIMEZONE = 'Europe/Moscow';
 
-/** Принимает ли Intl эту зону как IANA-идентификатор (иначе конструктор бросает RangeError). */
-export function isValidTimeZone(timezone: string): boolean {
-  try {
-    new Intl.DateTimeFormat('en-CA', { timeZone: timezone });
-    return true;
-  } catch {
-    return false;
-  }
-}
+export { isValidTimeZone } from '@orbis/shared';
 
 /** Валюта владельца при отсутствующей строке настроек — умолчание схемы `user_settings.defaultCurrency`. */
 export const DEFAULT_CURRENCY = 'RUB';

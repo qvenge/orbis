@@ -101,7 +101,7 @@ curl -fsS https://<prod-host>/ | head -c 200   # index.html веб-клиент�
 >
 > **Готовой операции для этого в `bun scripts/ops.ts` НЕТ**, и выдумывать её не надо:
 > белый список — `check`, `migrate`, `seed-registries`, `coverage`, `census`, `audit-bodies`,
-> `census-v3`, `backfill-body-doc`, `reset-world`, `migrate-1v`, `ping`, `dump`, `graphs`, `issue-pat` (`migrate-1b` —
+> `census-v3`, `reset-world`, `migrate-1v`, `ping`, `dump`, `graphs`, `issue-pat` (`migrate-1b` —
 > исполнена 28.09.2026, снята срезом 1в), произвольного
 > SQL там нет по замыслу. Запрос идёт тем же админским DSN, которым `psql` ходит в §4.3, а секрет
 > берётся из Ключницы — из неё же читает и `ops.ts`, так что открытым текстом в историю
@@ -240,7 +240,6 @@ bun scripts/ops.ts seed-registries           # тот же сид, что seed-r
 bun scripts/ops.ts coverage                  # только чтение: покрытие транзакций за 90 дней (§8)
 bun scripts/ops.ts census                    # только чтение: сколько тел перенос изменит сильнее прочих
 bun scripts/ops.ts audit-bodies              # только чтение: агрегаты по корпусу тел перед конверсией
-bun scripts/ops.ts backfill-body-doc         # конверсия тел в body_doc — ТОЛЬКО после audit-bodies
 bun scripts/ops.ts ping                      # связность и версия PostgreSQL
 bun scripts/ops.ts dump <каталог>            # только чтение: плейн-дамп прода вне git (§4.3)
 bun scripts/ops.ts graphs                    # только чтение: перепись графов, членства и грантов

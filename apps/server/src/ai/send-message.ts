@@ -27,7 +27,7 @@
 //      ошибка с возможностью повторить, user-сообщение сохранено, очереди нет (§7.9);
 //      если до сбоя цикл УЖЕ исполнил действия — в тред ложится ответ-ошибка с их
 //      карточками (спека скорости §13.1, К-44), и повтор отдаёт его, а не гонит цикл.
-import { MAX_AGENT_STEPS, newId, processingMessageId } from '@orbis/shared';
+import { MAX_AGENT_STEPS, newId } from '@orbis/shared';
 import { and, eq, sql } from 'drizzle-orm';
 import {
   appendMessage,
@@ -35,6 +35,7 @@ import {
   PROCESSING_TTL_MS,
   type WireChatMessage,
 } from '../chat/messages';
+import { clearProcessing, markProcessing, processingStartedAt } from '../chat/processing';
 import type { Db } from '../db/client';
 import { aiUsage, chatMessages, chatThreads } from '../db/schema';
 import { type Tx, withIdentity } from '../db/with-identity';
@@ -214,7 +215,6 @@ export async function sendMessage(
 ): Promise<SendMessageResult> {
   const clock = deps.clock ?? (() => new Date());
   const resolve = deps.entitlements ?? resolveEntitlement;
-  const markerId = processingMessageId(input.id);
 
   // 1. Персист user-сообщения ПЕРВЫМ отдельным tx (§7.9: не теряется ни при гейте,
   //    ни при сбое провайдера) + якорь треда. Чужой/несуществующий тред под RLS
@@ -252,37 +252,23 @@ export async function sendMessage(
       // 1b. Ответа нет. Маркер processing моложе TTL — первый прогон ЖИВ: второй
       // параллельный tool-цикл не запускается (двойное исполнение действий, двойной
       // метеринг, два ответа с одним replyTo) — клиенту сигнал «ответ готовится».
-      const markerRows = await tx
-        .select({ createdAt: chatMessages.createdAt })
-        .from(chatMessages)
-        .where(eq(chatMessages.id, markerId));
-      const marker = markerRows[0];
-      if (marker && clock().getTime() - marker.createdAt.getTime() < PROCESSING_TTL_MS) {
+      const startedAt = await processingStartedAt(tx, input.id);
+      if (startedAt && clock().getTime() - startedAt.getTime() < PROCESSING_TTL_MS) {
         return { anchorEntityId: thread.entityId, processing: true };
       }
       // Прогона нет (сбой снял маркер, §7.9) либо он умер, не сняв (краш процесса,
       // маркер старше TTL) → легитимный перезапуск; протухший маркер пересоздаётся
       // ниже со свежим createdAt той же tx.
-      if (marker) await tx.delete(chatMessages).where(eq(chatMessages.id, markerId));
+      if (startedAt) await clearProcessing(tx, input.id);
     }
     // Маркер «прогон идёт» — той же tx, что и user-сообщение: конкурентный ретрай
     // либо увидит закоммиченную пару (сообщение + маркер), либо подождёт её на
     // unique-индексе PK. Детерминированный id — processingMessageId(client-UUID).
     // Конфликт PK достижим только в гонке перезапусков мёртвого прогона (оба увидели
     // протухший маркер, конкурент пересоздал первым) → цикл ведёт он, нам — processing.
-    const inserted = await tx
-      .insert(chatMessages)
-      .values({
-        id: markerId,
-        threadId: input.threadId,
-        role: 'system',
-        content: '',
-        metadata: { type: 'processing', replyTo: input.id },
-        createdAt: clock(),
-      })
-      .onConflictDoNothing({ target: chatMessages.id })
-      .returning({ id: chatMessages.id });
-    if (inserted.length === 0) {
+    if (
+      !(await markProcessing(tx, { threadId: input.threadId, replyTo: input.id, now: clock() }))
+    ) {
       return { anchorEntityId: thread.entityId, processing: true };
     }
     return { anchorEntityId: thread.entityId };
@@ -303,7 +289,6 @@ export async function sendMessage(
       clock,
       resolve,
       anchorEntityId,
-      markerId,
       collected,
     });
   } catch (e) {
@@ -314,7 +299,7 @@ export async function sendMessage(
     try {
       await withIdentity(db, input.identity, async (tx) => {
         if (collected.actions.length > 0) await appendFailureReply(tx, input, collected, e);
-        await tx.delete(chatMessages).where(eq(chatMessages.id, markerId));
+        await clearProcessing(tx, input.id);
       });
     } catch (cleanupError) {
       console.error('[ai.sendMessage] ответ-ошибка и снятие маркера не записаны:', cleanupError);
@@ -371,11 +356,10 @@ async function runAgentLoop(
     clock: () => Date;
     resolve: EntitlementResolver;
     anchorEntityId: string | null;
-    markerId: string;
     collected: Collected;
   },
 ): Promise<SendMessageAnswer> {
-  const { clock, resolve, anchorEntityId, markerId, collected } = run;
+  const { clock, resolve, anchorEntityId, collected } = run;
 
   // 2. Entitlements-гейт §8 — ДО первого вызова провайдера
   await gateAiEntitlements(db, input.identity, resolve, clock);
@@ -506,7 +490,7 @@ async function runAgentLoop(
       content: finalText,
       metadata: { cards, replyTo: input.id, ...(suggestions.length > 0 && { suggestions }) },
     });
-    await tx.delete(chatMessages).where(eq(chatMessages.id, markerId));
+    await clearProcessing(tx, input.id);
     return message;
   });
 

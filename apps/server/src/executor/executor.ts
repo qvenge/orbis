@@ -27,7 +27,9 @@ import {
   type RuleDefinition,
   relationCreateInput,
   relationDeleteInput,
+  type SettingsSetInput,
   setExtensionEnabledInput,
+  settingsSetInput,
   surfaceExtensionOf,
 } from '@orbis/shared';
 // Конверсия тела живёт в @orbis/shared/doc — ОДИН экземпляр правил разбора и сериализации
@@ -60,7 +62,7 @@ import {
   invalidateSpentCacheOfOwner,
 } from '../budget/spent-cache';
 import type { Db } from '../db/client';
-import { entities, entityOrigins, entityVersions, relations } from '../db/schema';
+import { entities, entityOrigins, entityVersions, relations, userSettings } from '../db/schema';
 import { type Tx, withIdentity } from '../db/with-identity';
 import { resolveEntitlement } from '../entitlements';
 import type { CompileCtx } from '../query/compile-ast';
@@ -157,7 +159,13 @@ import {
 // Date→ISO живёт ТОЛЬКО в wire.ts (Task 12); executor использует те же функции. Ответ мутации записи — строка
 // `RETURNING` с ревизией тела и временем его изменения (`toWireEntityWithRevision`, спека скорости §8.1); строки для
 // хуков (бюджет, «дом») — без них, им колонки тела не нужны.
-import { toWireEntity as toWire, toWireEntityWithRevision, toWireRelation } from '../wire';
+import {
+  toWireEntity as toWire,
+  toWireEntityWithRevision,
+  toWireRelation,
+  toWireUserSettings,
+  type WireUserSettings,
+} from '../wire';
 import { recomputeProjectAncestors } from './ancestors';
 import { assertEntityProps } from './aspects-validate';
 // `bodyActionOf` body-chain — действующее действие тела для ответа; имя здесь занято объявлением действия транзакции
@@ -356,7 +364,13 @@ export type WireRegistryResult =
   | { module: string; enabled: boolean };
 
 interface OpOutcome {
-  result: WireEntity | WireRelation | WireOrigin | WireEntityVersion | WireRegistryResult;
+  result:
+    | WireEntity
+    | WireRelation
+    | WireOrigin
+    | WireEntityVersion
+    | WireRegistryResult
+    | WireUserSettings;
   replay?: boolean;
   /**
    * Строка записи после правки (`RETURNING`, с колонками тела) — у `entity_update`: по ней одиночный путь считает
@@ -1416,6 +1430,7 @@ async function prepareOp(
   if (tool === 'aspect_row_restore') return prepareAspectRowRestore(ctx, input);
   if (tool === 'rule_delta_restore') return prepareRuleDeltaRestore(ctx, input);
   if (tool === 'module_set') return prepareModuleSet(ctx, input);
+  if (tool === 'settings_set') return prepareSettingsSet(ctx, input);
   if (tool === 'property_row_restore') return preparePropertyRowRestore(ctx, input);
   if (tool === 'property_merge_undo') return preparePropertyMergeUndo(ctx, input);
   if (tool.startsWith('attach_')) {
@@ -4180,6 +4195,70 @@ async function prepareModuleSet(ctx: ExecCtx, rawInput: unknown): Promise<Prepar
         payload: { module: input.module, enabled: wasEnabled },
       });
       return { result: { module: input.module, enabled: input.enabled } };
+    },
+  };
+}
+
+const SETTINGS_LABELS: Record<keyof SettingsSetInput, string> = {
+  timezone: 'часовой пояс',
+  defaultCurrency: 'валюта',
+  weekStartDay: 'начало недели',
+  tagColors: 'цвета тегов',
+  installedViews: 'виды',
+  pinnedEntities: 'записи на главной',
+  viewPreferences: 'вид списков',
+};
+
+/**
+ * Правка настроек владельца (спека скорости §10.2 п. 1): через executor, с журналом и Undo — до этой задачи ручка писала
+ * `user_settings` прямым UPDATE мимо журнала, и у одного вида данных было два пути (включение расширений — уже executor).
+ * ВНУТРЕННЯЯ операция, как `module_set`: в реестре тулов её нет, единственный вход — `user.updateSettings`.
+ * Гейт по актору — защита в глубину (довод `prepareModuleSet`). Inverse — прежние значения ТРОНУТЫХ полей, прочитанные
+ * под замком строки, а не «обратное входу».
+ */
+async function prepareSettingsSet(ctx: ExecCtx, rawInput: unknown): Promise<PreparedOp> {
+  if (ctx.req.actorKind !== 'owner') {
+    throw new ExecError('FORBIDDEN_LEVEL', 'правка настроек — операция владельца (§10.2)', {
+      tool: 'settings_set',
+      actorKind: ctx.req.actorKind,
+    });
+  }
+  const input = parseEnvelope(settingsSetInput, rawInput, 'settings_set');
+  const fields = Object.keys(input) as Array<keyof SettingsSetInput>;
+  // Обычные настройки — данные графа, не перенастройка реестра: registryPlan обозначает
+  // именно его писателей для инварианта §С8-23. Отмена настроек остаётся без подтверждения.
+  const journal: JournalPlan = {
+    type: 'settings_set',
+    entityId: null,
+    tool: 'settings_set',
+    title: `Настройки: ${fields.map((f) => SETTINGS_LABELS[f]).join(', ')}`,
+    operations: [],
+    inverse: [],
+  };
+  return {
+    journal,
+    async apply(applyCtx: ExecCtx): Promise<OpOutcome> {
+      const graph = applyCtx.req.identity.graph;
+      const [before] = await applyCtx.tx
+        .select()
+        .from(userSettings)
+        .where(eq(userSettings.graphId, graph))
+        .for('update');
+      if (before === undefined)
+        throw new ExecError('NOT_FOUND', 'настройки не найдены', { graphId: graph });
+      const [after] = await applyCtx.tx
+        .update(userSettings)
+        .set({ ...input, updatedAt: applyCtx.clock() })
+        .where(eq(userSettings.graphId, graph))
+        .returning();
+      if (after === undefined)
+        throw new ExecError('NOT_FOUND', 'настройки не найдены', { graphId: graph });
+      journal.operations.push({ op: 'settings_set', payload: { ...input } });
+      journal.inverse.push({
+        op: 'settings_set',
+        payload: Object.fromEntries(fields.map((f) => [f, before[f]])),
+      });
+      return { result: toWireUserSettings(after) };
     },
   };
 }

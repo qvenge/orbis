@@ -18,7 +18,7 @@ import {
   requireEnv,
   truncateAll,
 } from '../../test/helpers';
-import { actionsOf, journalOf } from '../../test/journal-helpers';
+import { actionsOf, journalOf, undoRecordOf } from '../../test/journal-helpers';
 import { ensureGlobalThread } from '../chat/threads';
 import { aiUsage, chatMessages, entities } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
@@ -1212,4 +1212,25 @@ describe('ai.sendMessage: реестр тулов чата не содержит
     // «Отмени последнее» словами (хвост V1, Д-1) — internalOnly-тул именно чата
     expect(toolNames).toContain('undo_last');
   });
+});
+
+// Настоящий tool-цикл вправе отменить действие владельца; прямой settings_set для AI закрыт.
+test('«отмени последнее» настроек проходит ai.sendMessage → agent loop → undo_last без подтверждения', async () => {
+  const graph = await freshGraph();
+  const provider = new ScriptedProvider([
+    toolUse([{ name: 'undo_last', input: {} }]),
+    endTurn('Настройки возвращены.'),
+  ]);
+  const caller = callerWith(graph, provider);
+  await caller.user.seedOnboarding();
+  const before = await caller.user.getSettings();
+  const edited = await caller.user.updateSettings({ timezone: 'Asia/Almaty' });
+  const threadId = await globalThread(graph);
+  const r = answered(
+    await caller.ai.sendMessage({ id: newId(), threadId, content: 'отмени последнее' }),
+  );
+  expect(r.pending).toEqual([]);
+  expect(r.actions).toEqual([]);
+  expect((await caller.user.getSettings()).timezone).toBe(before.timezone);
+  expect(await undoRecordOf(graph, edited.actionId)).toBeDefined();
 });

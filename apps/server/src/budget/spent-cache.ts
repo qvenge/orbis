@@ -22,8 +22,8 @@
 //    транзакцией) и три в `undoMerge`: обе операции сносят кэш владельца целиком
 //    (`invalidateSpentCacheOfOwner` в `preparePropertyMerge.apply` и на пути отката);
 //  — `registry/ref.ts` (два вызова) — правит только `tags` зеркала ссылок;
-//    `executor/ancestors.ts` — только вычисляемые `orbis/*_project`; `seed/onboarding.ts` и
-//    `db/backfill-body-doc.ts` — только тело документа: денег не касается ни один;
+//    `executor/ancestors.ts` — только вычисляемые `orbis/*_project`; сев мира идёт через
+//    executor, поэтому денежные изменения покрыты тем же хуком;
 //  — четыре писателя, идущих ЧЕРЕЗ `execute` и потому покрытых хуком: `import/review.ts`,
 //    `recurring/post-due.ts`, `recurring/materialize.ts`, `budget/plan-to-fact.ts`.
 // Пятый путь — суточная граница, и её закрывает не писатель, а КЛЮЧ `(envelope_id, as_of)`.

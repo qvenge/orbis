@@ -18,7 +18,6 @@
 //   bun scripts/ops.ts census         # только чтение: сколько тел перенос изменит сильнее прочих
 //   bun scripts/ops.ts audit-bodies   # только чтение: агрегаты по корпусу тел перед конверсией
 //   bun scripts/ops.ts census-v3      # только чтение: что изменит формат тела v3 (станут блоками, display=)
-//   bun scripts/ops.ts backfill-body-doc  # конверсия тел в body_doc — ТОЛЬКО после audit-bodies
 //   bun scripts/ops.ts reset-world --confirm <PROD_REF> --i-understand RESET  # РАЗРУШАЮЩАЯ (РП-7)
 //   bun scripts/ops.ts migrate-1v --report                           # только чтение: отчёт среза 1в (ДО миграции 0023)
 //   bun scripts/ops.ts migrate-1v --drop-agenda-rows --i-understand  # подписки/дельты владельца на Повестку (§6.5)
@@ -47,12 +46,6 @@ import {
   FLAGGED_LIMIT,
   formatFlagged,
 } from '../apps/server/src/db/audit-bodies';
-import {
-  backfillBodyDoc,
-  backfillExitCode,
-  describeRoleAccess,
-  drizzleBackfillIo,
-} from '../apps/server/src/db/backfill-body-doc';
 import { type CensusV3Row, censusV3, formatCensusV3 } from '../apps/server/src/db/census-v3';
 import { migrate1vIo, runMigrate1v } from '../apps/server/src/db/migrate-1v';
 import { runPerfReport } from '../apps/server/src/db/perf-report';
@@ -61,6 +54,7 @@ import {
   REGISTRY_DRIFT_QUERIES,
 } from '../apps/server/src/db/registry-drift';
 import { runResetWorld } from '../apps/server/src/db/reset-world';
+import { describeRoleAccess } from '../apps/server/src/db/role-access';
 import * as schema from '../apps/server/src/db/schema';
 import {
   codeSystemDefinitions,
@@ -372,7 +366,7 @@ async function auditBodiesOp(): Promise<number> {
     });
     console.log(`тел всего: ${r.total}`);
     console.log(`канон изменит body: ${r.changed}`);
-    // ДВА СТОП-КРАНА прода. Оба обязаны быть нулевыми до запуска backfill-body-doc: «канон
+    // ДВА СТОП-КРАНА прода. Оба обязаны быть нулевыми для признания конверсии: «канон
     // изменит body» на эту роль не годится — он велик и на здоровом корпусе (нормализация
     // разметки), а эти два растут только от настоящей беды.
     console.log(`СТОП-КРАН канон неустойчив (canon(canon) ≠ canon): ${r.unstable}`);
@@ -418,67 +412,6 @@ async function auditBodiesOp(): Promise<number> {
       );
     }
     return auditExitCode(who, r);
-  });
-}
-
-/**
- * Разовая конверсия тел в структурную форму (`entities.body_doc`) — ЕДИНСТВЕННАЯ пишущая
- * операция белого списка, которая трогает пользовательские данные.
- *
- * Порядок на проде жёсткий: сперва `migrate` (колонки без неё нет), потом READ-ONLY
- * `audit-bodies` — и только если его числа приемлемы, эта команда. Аудит для того и заведён:
- * заметная доля raw-блоков или ненулевые «ссылки внутри raw» означают, что до конверсии надо
- * расширять белые списки токенов, а не запускать бэкфилл. Откатывать нечем.
- *
- * Идемпотентна: берёт только строки с `body_doc IS NULL`, поэтому повторный запуск не делает
- * ничего. Пишет ОБЕ колонки — `body` тоже выравнивается до канона, иначе инвариант
- * «body === serializeBody(body_doc)» ломался бы на самом первом шаге.
- *
- * Работает по ЖИВОЙ базе, поэтому запись идёт под CAS: строку, которую владелец или агент
- * тронул между выборкой и записью, бэкфилл НЕ переписывает (иначе затёр бы свежий текст
- * каноном прочитанного старого). Такие строки попадают в «пропущено» и остаются на ленивую
- * конверсию при первом чтении.
- *
- * Печатает ТРИ числа и ФАКТ РОЛИ. Одних чисел мало: роль с грантами, но без `BYPASSRLS`, под
- * FORCE RLS видит ноль строк — и «0 / 0 / 0» у неё неотличимо от «корпус уже сконвертирован»
- * (воспроизведено пробой под `authenticated`: `count(*)` вернул 0 при непустой таблице). Три
- * числа этот случай различить НЕ МОГУТ в принципе — различает только `rolbypassrls`, поэтому
- * он и печатается (ревью M-2, второй круг).
- *
- * Ни цикл, ни SQL здесь не дублируются: сырой пул `withDb` оборачивается в drizzle (так же, как
- * в migrateOp и issuePat выше) и отдаётся тому же `drizzleBackfillIo`, который прогоняет тест.
- * Дословная вторая копия цикла осталась бы непокрытой и разошлась бы с проверенной на первой же
- * правке (ревью И16).
- */
-async function backfillBodyDocOp(): Promise<number> {
-  return withDb(async (sql) => {
-    const db = drizzle(sql, { schema });
-    const who = await describeRoleAccess(db);
-    console.log(`роль: ${who.role} (BYPASSRLS: ${who.bypassRls ? 'да' : 'НЕТ'})`);
-    const result = await backfillBodyDoc(drizzleBackfillIo(db));
-    const { done, skipped, pending } = result;
-    console.log(`сконвертировано тел: ${done}`);
-    console.log(`осталось неконвертированных: ${pending}`);
-    console.log(`пропущено (тело изменилось во время прогона): ${skipped}`);
-    // `done === 0` в гейте обязателен наравне с остатком: без BYPASSRLS обнуляется И pending
-    // (он считается тем же SELECT под той же политикой), поэтому гейт только по остатку
-    // молчал бы ровно в том случае, ради которого заведён.
-    if (pending > 0 || done === 0) {
-      console.log(
-        who.bypassRls
-          ? '\nОстаток — норма, если тела правили во время прогона: их догонит повторный запуск' +
-              '\n(или ленивая конверсия при первом чтении). Если же и остаток, и сконвертировано' +
-              '\nнулевые — корпус либо уже сконвертирован, либо пуст; сверь с `audit-bodies`.'
-          : `\nВНИМАНИЕ: роль ${who.role} НЕ несёт BYPASSRLS, а на entities включён FORCE RLS` +
-              '\nс политикой current_graph_select (текущий граф И грант актора в нём). Прямое' +
-              '\nподключение не выставляет ни того, ни другого, поэтому такая роль видит НОЛЬ строк —' +
-              '\nи нули выше означают «корпус НЕ ВИДЕН», а НЕ «корпус сконвертирован».' +
-              '\nНужен DSN роли с BYPASSRLS (на Supabase — postgres).',
-      );
-    }
-    // Код возврата, а не только предупреждение (итоговое ревью, находка 6): печать читает
-    // человек, а запуск из скрипта читает КОД, и он врал успехом на «корпус не виден».
-    return backfillExitCode(who, result);
   });
 }
 
@@ -798,10 +731,6 @@ const OPS: Record<string, { run: (args: string[]) => Promise<number>; help: stri
   'census-v3': {
     run: censusV3Op,
     help: 'только чтение: что изменит формат тела v3 — станут блоками, плашки, display=table/list; узлы страницы не на месте (не ноль — СТОП перед 1б; тела не печатаются)',
-  },
-  'backfill-body-doc': {
-    run: backfillBodyDocOp,
-    help: 'конверсия тел в body_doc + выравнивание body до канона; ТОЛЬКО после audit-bodies',
   },
   'reset-world': {
     run: resetWorldOp,

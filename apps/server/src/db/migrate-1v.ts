@@ -71,8 +71,8 @@ import {
   supplyRecordId,
   supplyTextOf,
 } from '../supply/records';
-import { describeRoleAccess } from './backfill-body-doc';
 import type { Db } from './client';
+import { describeRoleAccess } from './role-access';
 import * as schema from './schema';
 import { entities } from './schema';
 import { withIdentity } from './with-identity';
