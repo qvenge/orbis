@@ -8,7 +8,7 @@
 // Восстанавливается ТОЛЬКО тело — аспекты, связи и заголовок в снимок не входят (инвариант 8
 // среза). Об этом сказано в подтверждении: «восстановить версию» без оговорки читается как
 // «вернуть запись целиком», и человек нажимал бы её, ожидая большего, чем случится.
-import { useEffect, useId, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState, useSyncExternalStore } from 'react';
 import { formatDate } from '../../lib/format';
 import { invalidateGraph } from '../../lib/invalidate';
 import { isBodyStale } from '../../lib/orbis-error';
@@ -20,6 +20,7 @@ import { Input } from '../../ui/Input';
 import { useToast } from '../../ui/toast-store';
 import { beginBodyRewrite, bodyRevisionOf, flushBodyOf } from '../entity-editor/body-flush';
 import { journalRefOf } from '../undo/journal-ref';
+import { isUndoEpoch, subscribeUndoEpoch, undoEpoch } from '../undo/undo-epoch';
 import { offerUndoLazy } from '../undo/undo-lazy';
 import { shownBodyRevision, useHostReadOnly } from './record-host';
 import { detailGetInput } from './useEntityDetail';
@@ -142,6 +143,8 @@ export function VersionsCard({ entity, active }: { entity: Entity; active: boole
   const [target, setTarget] = useState<Version | null>(null);
   const cancelId = useId();
 
+  const epoch = useSyncExternalStore(subscribeUndoEpoch, undoEpoch, undoEpoch);
+  const restoreEpoch = useRef(epoch);
   const finishRewrite = useRef<(revision?: number) => void>(() => {});
   const restore = trpc.version.restore.useMutation({
     meta: { undoStack: 'self' },
@@ -180,16 +183,20 @@ export function VersionsCard({ entity, active }: { entity: Entity; active: boole
       alive.current = false;
     };
   }, []);
-  const flushPending = useRef(false);
-  const [flushing, setFlushing] = useState(false);
+  const flushPending = useRef<{ epoch: number } | null>(null);
+  const [flushingEpoch, setFlushingEpoch] = useState<number | null>(null);
+  const flushing = flushingEpoch === epoch;
+  const restoreOwned = isUndoEpoch(restoreEpoch.current);
+  const restoring = restore.isPending && restoreOwned;
   const restoreTo = async (version: Version) => {
-    if (flushPending.current || restore.isPending) return;
-    flushPending.current = true;
+    if ((flushPending.current && isUndoEpoch(flushPending.current.epoch)) || restoring) return;
+    const intent = { epoch: undoEpoch() };
+    flushPending.current = intent;
     const id = entity.id;
-    setFlushing(true);
+    setFlushingEpoch(intent.epoch);
     try {
       const flushed = await flushBodyOf(id);
-      if (!alive.current || currentId.current !== id) return;
+      if (!isUndoEpoch(intent.epoch) || !alive.current || currentId.current !== id) return;
       if (flushed === 'blocked' || flushed === 'offline') {
         setTarget(null);
         show(
@@ -201,13 +208,18 @@ export function VersionsCard({ entity, active }: { entity: Entity; active: boole
         return;
       }
       finishRewrite.current = beginBodyRewrite(id);
+      restoreEpoch.current = intent.epoch;
       restore.mutate({
         versionId: version.id,
         expectedBodyRevision: bodyRevisionOf(id) ?? shownBodyRevision(entity),
       });
     } finally {
-      flushPending.current = false;
-      if (alive.current && currentId.current === id) setFlushing(false);
+      // Cleanup принадлежит этому ожиданию: поздний finally не снимает новый flight.
+      if (flushPending.current === intent) {
+        flushPending.current = null;
+        if (isUndoEpoch(intent.epoch) && alive.current && currentId.current === id)
+          setFlushingEpoch(null);
+      }
     }
   };
 
@@ -217,7 +229,7 @@ export function VersionsCard({ entity, active }: { entity: Entity; active: boole
    * useEntityDetail, а восстановление идёт своим роутером и до неё не доезжает никогда. Секция
    * обязана сказать о своём отказе сама.
    */
-  const conflict = isBodyStale(restore.error);
+  const conflict = restoreOwned && isBodyStale(restore.error);
 
   const versions = list.data;
 
@@ -245,7 +257,7 @@ export function VersionsCard({ entity, active }: { entity: Entity; active: boole
           </Button>
         </div>
       )}
-      {restore.isError && !conflict && (
+      {restoreOwned && restore.isError && !conflict && (
         <p role="alert" className="text-danger text-sm">
           {restore.error.message}
         </p>
@@ -283,7 +295,7 @@ export function VersionsCard({ entity, active }: { entity: Entity; active: boole
                 <Button
                   variant="outline"
                   size="sm"
-                  disabled={restore.isPending || flushing}
+                  disabled={restoring || flushing}
                   onClick={() => setTarget(v)}
                 >
                   Восстановить
@@ -320,7 +332,7 @@ export function VersionsCard({ entity, active }: { entity: Entity; active: boole
               </Button>
               <Button
                 size="sm"
-                disabled={restore.isPending || flushing}
+                disabled={restoring || flushing}
                 onClick={() => void restoreTo(target)}
               >
                 Восстановить

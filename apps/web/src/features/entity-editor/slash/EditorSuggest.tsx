@@ -13,6 +13,7 @@ import {
 import { useBodyKind } from '../../../lib/query-blocks/body-kind';
 import { trpc } from '../../../trpc';
 import { useToast } from '../../../ui/toast-store';
+import { isUndoEpoch, undoEpoch } from '../../undo/undo-epoch';
 import { AspectChooser } from '../nodes/AspectChooser';
 import { filterSlashItems } from './items';
 import { type MenuRow, SlashMenu, type SlashMenuHandle } from './SlashMenu';
@@ -247,13 +248,16 @@ export function SuggestMenu({
     if (id === CREATE_ROW) {
       // Второй Enter по той же строке — второй Enter, а не вторая сущность.
       if (create.isPending) return;
+      const epoch = undoEpoch();
       try {
         const created = await create.mutateAsync({
           input: { title: term, tags: [] },
           source: 'ui', // прямое действие владельца в интерфейсе (§7.5)
         });
+        if (!isUndoEpoch(epoch)) return;
         insertRef(created.id, term);
       } catch {
+        if (!isUndoEpoch(epoch)) return;
         // Отказ ГРОМКИЙ, и набранное остаётся текстом: молча проглоченное создание — та же
         // потеря мысли, только без следа.
         show('Не удалось создать запись', 'danger');
