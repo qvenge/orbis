@@ -1913,8 +1913,10 @@ diff <(docker exec supabase_db_orbis psql -U postgres -d postgres -At -c "$Q") \
      <(psql "$TARGET_DSN" -At -c "$Q") && echo 'права совпали'
 ```
 
-Проверка после восстановления — все **21** таблица прод-схемы на месте (одиннадцать исходных,
-восемь таблиц реформы свойств (D43), две — владения (D44)):
+Проверка после восстановления зависит от версии дампа и эталона на том же коммите. У схемы плана А
+после выкатки — все **24** таблицы: одиннадцать исходных, восемь реформы свойств (D43), две владения (D44)
+и три плана А. Датированный дамп до плана А содержит **21** таблицу; отсутствие трёх новых в нём ожидаемо.
+Для дампа после А отсутствие любой из новых таблиц — неполное восстановление:
 
 ```bash
 psql "$ADMIN_DSN" -c "\dt public.*"
@@ -1923,7 +1925,9 @@ psql "$ADMIN_DSN" -c "\dt public.*"
 #           oauth_clients, agent_grants, entity_versions,
 #           property_definitions, relation_role_definitions, contract_definitions,
 #           subscription_definitions, action_definitions, registry_deltas, registry_system,
-#           envelope_spent_cache, graphs, graph_members
+#           envelope_spent_cache, graphs, graph_members,
+#           perf_samples, action_journal, action_journal_entities
+# Для датированного дампа до плана А последние три отсутствуют.
 ```
 
 #### Репетиция `migrate-1v` (срез 1в) на дампе прода
