@@ -5,6 +5,8 @@ import { Button } from '../../ui/Button';
 import { Input } from '../../ui/Input';
 import { Spinner } from '../../ui/Spinner';
 import { useToast } from '../../ui/toast-store';
+import { journalRefOf } from '../undo/journal-ref';
+import { offerUndoLazy } from '../undo/undo-lazy';
 
 type Settings = RouterOutputs['user']['getSettings'];
 
@@ -18,9 +20,45 @@ export function GeneralForm({ settings }: { settings: Settings }) {
   const utils = trpc.useUtils();
   const { show } = useToast();
   const update = trpc.user.updateSettings.useMutation({
-    onSuccess: () => {
+    onMutate: (patch) => {
+      const labels = {
+        timezone: 'Таймзона',
+        defaultCurrency: 'Валюта',
+        weekStartDay: 'Начало недели',
+      };
+      const keys = Object.keys(patch) as (keyof typeof labels)[];
+      return {
+        offer: keys.length > 1 || keys.some((key) => key !== 'weekStartDay'),
+        title: keys
+          .map(
+            (key) =>
+              `${labels[key]}: ${
+                key === 'weekStartDay'
+                  ? settings[key] === 'monday'
+                    ? 'Понедельник'
+                    : 'Воскресенье'
+                  : settings[key]
+              } → ${
+                key === 'weekStartDay'
+                  ? patch[key] === 'monday'
+                    ? 'Понедельник'
+                    : 'Воскресенье'
+                  : patch[key]
+              }`,
+          )
+          .join(', '),
+      };
+    },
+    onSuccess: (data, _patch, intent) => {
       void utils.user.getSettings.invalidate();
-      show('Сохранено');
+      const ref = journalRefOf(data);
+      if (ref && (intent?.offer || ref.consequences))
+        offerUndoLazy({
+          title: intent?.title ?? 'Настройки изменены',
+          actionId: ref.actionId,
+          entityIds: [],
+        });
+      else show('Сохранено');
     },
     onError: () => show('Не удалось сохранить настройки', 'danger'),
   });

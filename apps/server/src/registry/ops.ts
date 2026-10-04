@@ -1310,7 +1310,11 @@ export interface MergeInverse {
     bodyActionBefore?: string | null;
   }>;
   /** Строки `registry_deltas` с переписанными адресами: прежняя дельта целиком. */
-  deltas: Array<{ id: string; delta: unknown }>;
+  deltas: Array<{
+    id: string;
+    delta: unknown;
+    target?: { kind: RegistryDeltaTargetKind; id: string };
+  }>;
   /**
    * Зеркала-рёбра (§А6-2), чью подпись `meta.property` слияние перевело на цель.
    *
@@ -1333,7 +1337,12 @@ export interface MergeInverse {
    * `rules` ЦЕЛИКОМ — откат присваивает абсолютное значение. Поле НЕОБЯЗАТЕЛЬНОЕ по доводу `mirrors`:
    * журнал append-only, и слияния, записанные до шестого рода, ключа не несут.
    */
-  rules?: Array<{ carrier: 'aspect' | 'property' | 'role'; id: string; rules: unknown }>;
+  rules?: Array<{
+    carrier: 'aspect' | 'property' | 'role';
+    id: string;
+    key?: string;
+    rules: unknown;
+  }>;
 }
 
 export interface MergeResult {
@@ -1730,12 +1739,16 @@ export async function mergeProperty(
     }
     if (holder.kind === 'delta') {
       const rows = (await tx.execute(sql`
-        SELECT delta FROM registry_deltas
+        SELECT delta, target_kind, target_id FROM registry_deltas
         WHERE graph_id = ${graphId}::uuid AND id = ${holder.id}::uuid FOR UPDATE
       `)) as unknown as RawRow[];
       const row = rows[0];
       if (row === undefined) continue;
-      deltas.push({ id: holder.id, delta: row.delta });
+      deltas.push({
+        id: holder.id,
+        delta: row.delta,
+        target: { kind: row.target_kind as RegistryDeltaTargetKind, id: String(row.target_id) },
+      });
       await tx.execute(sql`
         UPDATE registry_deltas SET delta = ${JSON.stringify(
           rewriteDelta(row.delta, names, astTarget),
@@ -1748,12 +1761,12 @@ export async function mergeProperty(
       // канон, движок ищет свойство по id (докблок `rewriteRuleAddresses`).
       const carrier = holder.carrier ?? 'aspect';
       const rows = (await tx.execute(sql`
-        SELECT rules FROM ${RULE_TABLE[carrier]}
+        SELECT rules, key FROM ${RULE_TABLE[carrier]}
          WHERE graph_id = ${graphId}::uuid AND id = ${holder.id} FOR UPDATE`)) as unknown as RawRow[];
       const row = rows[0];
       if (row === undefined) continue;
       const before = (row.rules ?? []) as RuleDefinition[];
-      ruleRows.push({ carrier, id: holder.id, rules: before });
+      ruleRows.push({ carrier, id: holder.id, key: String(row.key), rules: before });
       const next = before.map((r) => rewriteRuleAddresses(r, names, astTarget));
       await tx.execute(sql`
         UPDATE ${RULE_TABLE[carrier]} SET rules = ${JSON.stringify(next)}::jsonb
@@ -1825,14 +1838,17 @@ export async function mergeProperty(
     );
     // Колонки тела ставит триггер из действия, объявленного транзакцией executor'а (§8.1): сырой SQL здесь их не пишет.
     // «Сменила» — ревизия после записи выросла: переписывание, оставившее документ прежним, «до» не заводит.
+    const nextBody = serializeBody(nextDoc);
     const written = (await tx.execute(sql`
       UPDATE entities
-         SET body = ${serializeBody(nextDoc)},
+         SET body = ${nextBody},
              body_doc = ${JSON.stringify(nextDoc)}::jsonb,
              body_refs = ${textArray(bodyRefsFromDoc(nextDoc))},
              query_refs = ${textArray(queryRefsFromDoc(nextDoc))},
              updated_at = now()
        WHERE id = ${holder.id}::uuid
+         AND (body IS DISTINCT FROM ${nextBody}
+              OR body_doc IS DISTINCT FROM ${JSON.stringify(nextDoc)}::jsonb)
       RETURNING id::text AS id, body_revision`)) as unknown as RawRow[];
     const after = written[0];
     // Данные отмены держателя — ТОЛЬКО если слияние сменило его тело (рулинг R-21): откат, пишущий тело, которого

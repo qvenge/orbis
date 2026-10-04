@@ -192,3 +192,34 @@ test('makeRetrySend: зависшая отправка оседает по та�
     vi.useRealTimers();
   }
 });
+
+test.each([
+  false,
+  true,
+])('stored originating thread survives retry conflict=%s', async (conflict) => {
+  const { useRetryBuffer } = await import('./retry');
+  const { localStorageQueue } = await import('../lib/retry-buffer');
+  const id = '019a0000-0000-7000-8000-000000000010';
+  const threadId = '019a0000-0000-7000-8000-000000000011';
+  // The producer and storage are real; only the server boundary is held here.
+  useRetryBuffer.getState().enqueueCreate({ id, title: 'queued', tags: [] }, 'fast_path', threadId);
+  const op = localStorageQueue.load().find((item) => item.clientId === id);
+  if (!op) throw new Error('missing queued fixture');
+  const sent: unknown[] = [];
+  const mutate = async (packet: unknown) => {
+    sent.push(packet);
+    if (conflict && sent.length === 1) throw trpcError('CONFLICT');
+    return {};
+  };
+  const send = makeRetrySend({ entity: { create: { mutate } } } as Parameters<
+    typeof makeRetrySend
+  >[0]);
+  expect(await send(op)).toBe('confirmed');
+  expect(sent).toEqual(
+    (conflict ? [id, retryCreateId(id)] : [id]).map((nextId) => ({
+      input: { id: nextId, title: 'queued', tags: [] },
+      source: 'fast_path',
+      threadId,
+    })),
+  );
+});

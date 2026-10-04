@@ -336,7 +336,7 @@ describe('(г) боковой чат — не элемент истории (§6
     // Данные видны, кнопки хоста на месте.
     expect(screen.getByRole('heading', { level: 1, name: 'Купить хлеб' })).toBeInTheDocument();
     expect(hostButtons()).toBeInTheDocument();
-    expect(within(side).getByRole('textbox', { name: 'Сообщение' })).toBeInTheDocument();
+    expect(await within(side).findByRole('textbox', { name: 'Сообщение' })).toBeInTheDocument();
 
     fireEvent.click(chatButton());
     await waitFor(() => expect(screen.queryByRole('complementary', { name: 'Чат' })).toBeNull());

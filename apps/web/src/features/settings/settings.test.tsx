@@ -42,9 +42,13 @@ async function proveNoEmptyRequest(calls: { path: string; input: unknown }[]) {
   expect(calls.filter((x) => x.path === 'user.updateSettings').map((x) => x.input)).toEqual([
     { timezone: 'UTC' },
   ]);
-  expect(
-    useToastStore.getState().toasts.every((t) => t.title === 'Сохранено' && t.tone === 'default'),
-  ).toBe(true);
+  await waitFor(() =>
+    expect(useToastStore.getState().toasts.map((t) => t.title)).toEqual([
+      'Сохранено',
+      'Таймзона: Europe/Moscow → UTC',
+    ]),
+  );
+  expect(useToastStore.getState().toasts[1]?.action?.label).toBe('Отменить');
 }
 
 test('GeneralForm сабмитит частичный апдейт (только изменённый timezone)', async () => {

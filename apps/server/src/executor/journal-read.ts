@@ -18,6 +18,7 @@ import type { ISql } from 'postgres';
 import { PROCESSING_TTL_MS } from '../chat/messages';
 import type { Tx } from '../db/with-identity';
 import { parseAccountId, parseGraphId } from '../identity';
+import type { MergeInverse } from '../registry/ops';
 import type {
   ActionOperation,
   ActionRecord,
@@ -465,6 +466,145 @@ export async function runActions(
   ).map(withCursor);
 }
 
+/** Missing historical delta identities fail closed only in the run rollback reader. */
+const LEGACY_DELTA = 'rollback:legacy-delta';
+const LEGACY_PROPERTY_RULE = 'rollback:legacy-property-rule';
+const ruleTargetKey = (kind: string, id: string) => `rollback:rule:${kind}:${id}`;
+const deltaTargetKey = (kind: string, id: string) => `rollback:delta:${kind}:${id}`;
+
+/** Extra typed dependencies belong to run rollback, not the generic journal/feed index. */
+export function rollbackTouchedKeys(
+  entry: Pick<JournalEntry, 'touchedKeys' | 'operations' | 'inverse'>,
+  legacyDeltaCandidate = false,
+  legacyPropertyRuleCandidate = false,
+): string[] {
+  const keys = new Set(entry.touchedKeys);
+  const add = (value: unknown) => {
+    if (typeof value === 'string') keys.add(value);
+  };
+  const target = (kind: unknown, id: unknown) => {
+    if (typeof kind !== 'string' || typeof id !== 'string') return;
+    add(id);
+    add(deltaTargetKey(kind, id));
+  };
+  const relevantDelta = () => {
+    if (legacyDeltaCandidate) keys.add(LEGACY_DELTA);
+  };
+  for (const op of [...entry.operations, ...entry.inverse]) {
+    const p = op.payload;
+    if (['aspect_delta_set', 'aspect_delta_remove'].includes(op.op)) {
+      target('aspect', p.aspect);
+      relevantDelta();
+    } else if (['contract_sets_delta_set', 'contract_sets_delta_remove'].includes(op.op)) {
+      target('contract', p.contract);
+      relevantDelta();
+    } else if (['aspect_implements_set', 'aspect_implements_remove'].includes(op.op)) {
+      add(p.aspect);
+    } else if (['rule_set', 'rule_remove'].includes(op.op)) {
+      const address = p.target as { aspect?: string; property?: string; role?: string } | undefined;
+      if (address) {
+        target('aspect', address.aspect);
+        target('property', address.property);
+        target('relation_role', address.role);
+        for (const kind of ['aspect', 'property', 'role'] as const) {
+          const id = address[kind];
+          if (typeof id === 'string') keys.add(ruleTargetKey(kind, id));
+        }
+        if (typeof address.property === 'string' && legacyPropertyRuleCandidate)
+          keys.add(LEGACY_PROPERTY_RULE);
+      }
+      relevantDelta();
+    } else if (op.op === 'rule_delta_restore') {
+      target(p.target_kind, p.target_id);
+      relevantDelta();
+    }
+  }
+  for (const op of entry.inverse) {
+    if (op.op !== 'property_merge_undo') continue;
+    const merge = op.payload as unknown as Partial<MergeInverse>;
+    add(merge.source);
+    add(merge.into);
+    for (const key of merge.compacted ?? []) add(key);
+    for (const key of merge.mirrors ?? []) add(key);
+    for (const row of merge.values ?? []) add(row.entityId);
+    for (const row of merge.progress ?? []) add(row.entityId);
+    for (const row of merge.bodies ?? []) add(row.entityId);
+    for (const row of merge.registry ?? []) add(row.id);
+    for (const row of merge.deltas ?? []) {
+      add(row.id);
+      if (row.target) add(deltaTargetKey(row.target.kind, row.target.id));
+      else keys.add(LEGACY_DELTA);
+      relevantDelta();
+    }
+    for (const row of merge.binds ?? []) add(row.id);
+    for (const row of merge.rules ?? []) {
+      add(row.id);
+      add(ruleTargetKey(row.carrier, row.id));
+      if (row.key) add(ruleTargetKey(row.carrier, row.key));
+      else if (row.carrier === 'property') keys.add(LEGACY_PROPERTY_RULE);
+      if (row.carrier === 'property' && legacyPropertyRuleCandidate) keys.add(LEGACY_PROPERTY_RULE);
+    }
+  }
+  return [...keys];
+}
+
+/** Internal match markers never become the public conflict address. */
+export function rollbackConflictKeys(
+  keys: readonly string[],
+  historicalDeltaIds: readonly string[],
+  rules: ReturnType<typeof rollbackRuleAddresses>,
+): string[] {
+  return [
+    ...new Set(
+      keys.flatMap((key) => {
+        if (key === LEGACY_DELTA) return historicalDeltaIds;
+        if (key === LEGACY_PROPERTY_RULE) return rules.historicalPropertyIds;
+        if (key.startsWith('rollback:rule:')) return rules.aliases.get(key) ?? [];
+        const prefix = 'rollback:delta:';
+        if (!key.startsWith(prefix)) return [key];
+        const address = key.slice(prefix.length);
+        return [address.slice(address.indexOf(':') + 1)];
+      }),
+    ),
+  ];
+}
+
+export function rollbackRuleAddresses(entries: readonly Pick<JournalEntry, 'inverse'>[]) {
+  const aliases = new Map<string, string[]>();
+  const historicalPropertyIds = new Set<string>();
+  for (const entry of entries)
+    for (const op of entry.inverse) {
+      if (op.op !== 'property_merge_undo') continue;
+      for (const row of (op.payload as unknown as Partial<MergeInverse>).rules ?? []) {
+        for (const address of [row.id, row.key]) {
+          if (!address) continue;
+          const key = ruleTargetKey(row.carrier, address);
+          aliases.set(key, [...new Set([...(aliases.get(key) ?? []), row.id])]);
+        }
+        if (row.carrier === 'property' && !row.key) historicalPropertyIds.add(row.id);
+      }
+    }
+  return { aliases, historicalPropertyIds: [...historicalPropertyIds] };
+}
+
+export function historicalRollbackDeltaIds(
+  entries: readonly Pick<JournalEntry, 'inverse'>[],
+): string[] {
+  return [
+    ...new Set(
+      entries.flatMap((entry) =>
+        entry.inverse.flatMap((op) =>
+          op.op === 'property_merge_undo'
+            ? ((op.payload as unknown as Partial<MergeInverse>).deltas ?? [])
+                .filter((row) => !row.target)
+                .map((row) => row.id)
+            : [],
+        ),
+      ),
+    ),
+  ];
+}
+
 /**
  * Действия после курсора (строго: составной ключ `(created_at, id)`, как порядок `runActions`), тронувшие хоть один
  * из КЛЮЧЕЙ `keys` — uuid записей или ключ реестра (`touchedKeys`, рулинг R-11: прежняя ширина окна конфликтов отката);
@@ -481,6 +621,7 @@ export async function actionsTouchingAfter(
   graph: GraphId,
   after: JournalCursor,
   keys: string[],
+  scope?: 'rollback',
 ): Promise<Array<JournalEntry & { cursor: JournalCursor }>> {
   if (keys.length === 0) return [];
   const wanted = new Set(keys);
@@ -488,13 +629,26 @@ export async function actionsTouchingAfter(
   const query =
     entityKeys.length === keys.length
       ? sql`${SELECT_ROW} WHERE ${inGraph(graph)} AND ${IS_ACTION} AND ${afterCursor(after)}
-              AND EXISTS (SELECT 1 FROM action_journal_entities e
+              AND (EXISTS (SELECT 1 FROM action_journal_entities e
                            WHERE e.graph_id = j.graph_id AND e.action_id = j.id
                              AND e.entity_id = ANY(${uuidArray(entityKeys)}))
+                   ${scope === 'rollback' ? sql`OR j.inverse @> '[{"op":"property_merge_undo"}]'::jsonb` : sql``})
             ORDER BY j.created_at ASC, j.id ASC`
       : sql`${SELECT_ROW} WHERE ${inGraph(graph)} AND ${IS_ACTION} AND ${afterCursor(after)}
             ORDER BY j.created_at ASC, j.id ASC`;
   return (await entriesOf(tx, query))
+    .map((e) =>
+      scope === 'rollback'
+        ? {
+            ...e,
+            touchedKeys: rollbackTouchedKeys(
+              e,
+              wanted.has(LEGACY_DELTA),
+              wanted.has(LEGACY_PROPERTY_RULE),
+            ),
+          }
+        : e,
+    )
     .filter((e) => e.touchedKeys.some((key) => wanted.has(key)))
     .map(withCursor);
 }

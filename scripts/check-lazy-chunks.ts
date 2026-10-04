@@ -74,6 +74,8 @@ export function runtimeModuleImports(source: string): string[] {
   });
 }
 const SOURCE_LAZY_EDGES = [
+  { source: 'apps/web/src/features/chat/ChatScreen.tsx', modules: ['ChatPanel', 'useFastPath'] },
+  { source: 'apps/web/src/app/frame/SideChat.tsx', modules: ['ChatPanel', 'useFastPath'] },
   {
     source: 'apps/web/src/features/entity-detail/AspectSection.tsx',
     modules: ['AspectSectionView', 'PropertyControl', 'property-edit-rule'],
@@ -129,6 +131,7 @@ const SHARED_CHUNKS: readonly string[] = [
   // панель и есть его первый модуль (замерено сборкой задачи 24: `SearchPanel-*.js`). Статический
   // импорт панели из эагерного кода (кнопка 🔍, хоткей, рамка) вклеил бы её во входной чанк.
   'SearchPanel',
+  'ChatPanel',
 ];
 
 /**
@@ -294,6 +297,12 @@ const FORBIDDEN_EDGES: readonly { from: string; to: string; hint: string }[] = [
     from: 'DetailScreen',
     to: 'RunFeed',
     hint: 'Ленту прогона грузит только lazy() из entity-detail/own-cards.tsx (R-29).',
+  },
+
+  {
+    from: 'DetailScreen',
+    to: 'ChatPanel',
+    hint: 'R118: оба входа чата грузят панель после открытия.',
   },
   {
     from: 'DetailScreen',
@@ -563,6 +572,12 @@ export interface ClosureTextRule {
  * проверку вечным «ok» (маркер пропал бы из сборки вместе с источником).
  */
 const FORBIDDEN_CLOSURE_TEXT: readonly ClosureTextRule[] = [
+  {
+    chunk: 'DetailScreen',
+    text: 'Нет сети — доступен только быстрый ввод (сумма + категория).',
+    source: 'apps/web/src/features/chat/useFastPath.ts',
+    hint: 'R118: useFastPath должен оставаться за ленивой панелью обоих входов чата.',
+  },
   {
     chunk: 'DetailScreen',
     text: 'Деньги приходят или уходят',

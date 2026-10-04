@@ -6,7 +6,7 @@ import {
   type RowRegistry,
 } from '@orbis/shared';
 import { lazy, Suspense } from 'react';
-import { useRefTitle } from '../../lib/entity-ref/RefField';
+import { refQueryAst, refTargetOf, useRefTitle } from '../../lib/entity-ref/RefField';
 import { invalidateBudget } from '../../lib/invalidate';
 import { displayText, valueText } from '../../lib/registry/format';
 import { aspectLabel, fieldLabel, type RegistryLookup } from '../../lib/registry/labels';
@@ -70,7 +70,20 @@ function useAspectEdits(entity: Entity, snapshot: AspectSnapshot) {
   const utils = trpc.useUtils();
   const { registry, readOnly, disabled } = snapshot;
   const { mutation, conflict } = useEntityUpdate(entity.id, {
-    undoToast: (vars, prior) => propertyEditRule(registry, vars, prior),
+    undoToast: (vars, prior) => {
+      const key = [...Object.keys(vars.props ?? {}), ...(vars.unset ?? [])][0];
+      const def = key ? registry.property(key) : undefined;
+      const ast = def ? refQueryAst(refTargetOf(def), '') : null;
+      const options = ast ? utils.entity.query.getData({ ast }) : undefined;
+      return propertyEditRule(
+        registry,
+        vars,
+        prior,
+        (id) =>
+          options?.find((entry) => entry.id === id)?.title ??
+          utils.entity.get.getData({ id })?.entity.title,
+      );
+    },
     /**
      * Денежные агрегаты считает сервер, и `invalidateGraph` о них не знает по построению (он
      * про `entity.query/get/count`) — после правки они протухли.

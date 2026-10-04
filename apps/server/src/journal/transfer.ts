@@ -75,7 +75,18 @@ const TRANSFERABLE_ACTION = sql`COALESCE(jsonb_typeof(l.a -> 'id') = 'string' AN
 /** Запись действия `l` уже в таблице — сравнение ТЕКСТОМ: id сломанной прежней записи может быть не uuid (22P02). */
 const ACTION_PRESENT = (graph: GraphId): SQL =>
   sql`EXISTS (SELECT 1 FROM action_journal j
-               WHERE j.graph_id = ${graph}::uuid AND j.id::text = lower(l.a ->> 'id'))`;
+               WHERE j.graph_id = ${graph}::uuid AND j.type <> 'undo' AND j.id::text = lower(l.a ->> 'id'))`;
+
+/** A transferable legacy action also needs its slot free, or an authoritative current action. */
+const ACTION_SLOT_FREE = (graph: GraphId): SQL => sql`NOT EXISTS (
+  SELECT 1 FROM action_journal j WHERE j.graph_id = ${graph}::uuid AND j.id::text = lower(l.a ->> 'id'))`;
+
+/** Same key alone proves nothing: certify the type and valid matching target before the UUID cast. */
+const UNDO_PRESENT = (graph: GraphId, id: SQL, target: SQL): SQL => sql`CASE
+  WHEN ${target} ~* ${UUID} THEN EXISTS (
+    SELECT 1 FROM action_journal j WHERE j.graph_id = ${graph}::uuid AND j.id = ${id}
+      AND j.type = 'undo' AND j.undoes = (${target})::uuid)
+  ELSE false END`;
 
 /**
  * SQL-двойник `touchedEntityIds` (`executor/journal-read.ts`) — тот же отбор в том же порядке: `entity_id` действия,
@@ -197,6 +208,7 @@ export async function transferJournal(tx: Tx, graph: GraphId): Promise<TransferR
           JOIN action_journal j
             ON j.graph_id = ${graph}::uuid AND j.type <> 'undo'
            AND j.id = CASE WHEN u.undoes ~* ${UUID} THEN u.undoes::uuid END
+         WHERE ${UNDO_TRANSFERABLE(graph)}
          ORDER BY u.created_at, u.id
         ON CONFLICT DO NOTHING
         RETURNING 1)
@@ -226,14 +238,18 @@ export async function transferJournal(tx: Tx, graph: GraphId): Promise<TransferR
  * регэксп даёт NULL, и `NOT` в отчёте иначе её не посчитал бы.
  */
 const UNDO_TRANSFERABLE = (graph: GraphId): SQL => sql`COALESCE(u.undoes ~* ${UUID}
+  AND NOT EXISTS (SELECT 1 FROM action_journal j WHERE j.graph_id = ${graph}::uuid AND j.id = u.id)
+  AND NOT EXISTS (SELECT 1 FROM (${LEGACY_ACTIONS(graph)}) l
+    WHERE ${TRANSFERABLE_ACTION} AND ${ACTION_SLOT_FREE(graph)} AND lower(l.a ->> 'id') = u.id::text)
   AND (EXISTS (SELECT 1 FROM action_journal j
                 WHERE j.graph_id = ${graph}::uuid AND j.type <> 'undo' AND j.id::text = lower(u.undoes))
        OR EXISTS (SELECT 1 FROM (${LEGACY_ACTIONS(graph)}) l
-                   WHERE ${TRANSFERABLE_ACTION} AND lower(l.a ->> 'id') = lower(u.undoes)))
+                   WHERE ${TRANSFERABLE_ACTION} AND ${ACTION_SLOT_FREE(graph)}
+                     AND lower(l.a ->> 'id') = lower(u.undoes)))
   AND NOT EXISTS (SELECT 1 FROM (${LEGACY_UNDOS(graph)}) p
                    WHERE lower(p.undoes) = lower(u.undoes) AND (p.created_at, p.id) < (u.created_at, u.id))
   AND NOT EXISTS (SELECT 1 FROM action_journal j
-                   WHERE j.graph_id = ${graph}::uuid AND j.undoes::text = lower(u.undoes)), false)`;
+                   WHERE j.graph_id = ${graph}::uuid AND j.type = 'undo' AND j.undoes::text = lower(u.undoes)), false)`;
 
 /**
  * Отчёт о прежнем журнале графа (только чтение): прежних записей действий и отмен и сколько из них перенос ОСТАВИТ —
@@ -246,9 +262,9 @@ export function legacyJournalReportQuery(graph: GraphId): SQL {
       (SELECT count(*) FROM (${LEGACY_ACTIONS(graph)}) l) AS legacy_actions,
       (SELECT count(*) FROM (${LEGACY_UNDOS(graph)}) u) AS legacy_undo,
       (SELECT count(*) FROM (${LEGACY_ACTIONS(graph)}) l
-        WHERE NOT ${ACTION_PRESENT(graph)} AND NOT ${TRANSFERABLE_ACTION})
+        WHERE NOT ${ACTION_PRESENT(graph)} AND NOT (${TRANSFERABLE_ACTION} AND ${ACTION_SLOT_FREE(graph)}))
       + (SELECT count(*) FROM (${LEGACY_UNDOS(graph)}) u
-          WHERE NOT EXISTS (SELECT 1 FROM action_journal j WHERE j.graph_id = ${graph}::uuid AND j.id = u.id)
+          WHERE NOT ${UNDO_PRESENT(graph, sql`u.id`, sql`u.undoes`)}
             AND NOT ${UNDO_TRANSFERABLE(graph)}) AS untransferable`;
 }
 
@@ -285,7 +301,7 @@ export function transferredLegacyMessagesQuery(graph: GraphId): SQL {
      WHERE t.graph_id = ${graph}::uuid AND m.role = 'system'
        AND CASE
              WHEN m.metadata @> '{"type": "undo"}'::jsonb THEN
-               EXISTS (SELECT 1 FROM action_journal j WHERE j.graph_id = ${graph}::uuid AND j.id = m.id)
+               ${UNDO_PRESENT(graph, sql`m.id`, sql`m.metadata ->> 'undoes'`)}
              WHEN jsonb_typeof(m.metadata -> 'actions') = 'array'
                   AND jsonb_array_length(m.metadata -> 'actions') > 0 THEN
                NOT EXISTS (
@@ -318,7 +334,7 @@ export function prospectiveJournalQuery(graph: GraphId): SQL {
              (l.a ->> 'id')::uuid AS id, l.created_at, l.a ->> 'type' AS type,
              l.a -> 'operations' AS operations, NULL::uuid AS undoes
         FROM (${LEGACY_ACTIONS(graph)}) l
-       WHERE ${TRANSFERABLE_ACTION} AND NOT ${ACTION_PRESENT(graph)}
+       WHERE ${TRANSFERABLE_ACTION} AND ${ACTION_SLOT_FREE(graph)}
        ORDER BY lower(l.a ->> 'id'), l.created_at, l.message_id, l.ord
     ), actions AS (
       SELECT j.id, j.created_at, j.type, j.operations, j.undoes
@@ -327,7 +343,7 @@ export function prospectiveJournalQuery(graph: GraphId): SQL {
     )
     SELECT * FROM actions
     UNION ALL
-    SELECT u.id, u.created_at, 'undo'::text, '[]'::jsonb, u.undoes::uuid
+    SELECT u.id, u.created_at, 'undo'::text, '[]'::jsonb, CASE WHEN u.undoes ~* ${UUID} THEN u.undoes::uuid END
       FROM (${LEGACY_UNDOS(graph)}) u
      WHERE ${UNDO_TRANSFERABLE(graph)}
        AND NOT EXISTS (SELECT 1 FROM actions a WHERE a.id = u.id)`;

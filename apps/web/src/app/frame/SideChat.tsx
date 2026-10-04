@@ -1,11 +1,16 @@
 import { HOST_APP } from '@orbis/shared/nav';
 import { X } from 'lucide-react';
-import { ChatPanel } from '../../features/chat/ChatPanel';
+import { lazy, Suspense } from 'react';
+import { ThreadSkeleton } from '../../features/chat/MessageList';
 import { ReloadButton } from '../ChunkErrorBoundary';
 import { type FrameApp, FrameAppContext } from './FrameApp';
 import { PartBoundary } from './PartBoundary';
 import { useSideChat } from './side-chat-store';
 import { useChatContext } from './useChatContext';
+
+const ChatPanel = lazy(() =>
+  import('../../features/chat/ChatPanel').then((m) => ({ default: m.ChatPanel })),
+);
 
 /**
  * Ссылки бокового чата — как из содержимого хоста (решение плана 13). Боковой чат — не элемент
@@ -42,7 +47,7 @@ export function SideChat() {
       </header>
       <div className="flex min-h-0 flex-1 flex-col">
         {/* Упавшая карточка сообщения — кадр в колонке чата, а не белый экран (гейт 25, I-1):
-            повторное открытие чата пробует заново (граница новая). */}
+            повторное открытие пробует рендер карточки заново; отказ чанка требует обновления. */}
         <PartBoundary
           fallback={
             <div role="alert" className="flex flex-col items-center gap-3 p-6 text-sm text-danger">
@@ -52,7 +57,9 @@ export function SideChat() {
           }
         >
           <FrameAppContext.Provider value={SIDE_FRAME}>
-            <ChatPanel context={context} />
+            <Suspense fallback={<ThreadSkeleton />}>
+              <ChatPanel context={context} />
+            </Suspense>
           </FrameAppContext.Provider>
         </PartBoundary>
       </div>

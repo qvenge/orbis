@@ -14,6 +14,7 @@ import { invalidateGraph } from '../../lib/invalidate';
 import { useFlushBuffer, useOnline, useRetryBuffer } from '../../state/retry';
 import { isConflict, mapSendError } from '../../state/retry-send';
 import { trpc } from '../../trpc';
+import { isUndoEpoch, undoEpoch } from '../undo/undo-epoch';
 import { MEMORY_RULES_QUERY, MEMORY_RULES_STALE_TIME, RULES_SCOPE } from './memoryRules';
 import { withRecordContext } from './record-context';
 import { type ChatMessage, chatThreadKey, upsertNewest, useSendMessage } from './useChatThread';
@@ -141,11 +142,13 @@ export function useFastPath(threadId: string) {
   }
 
   // Онлайн: свежий ctx (getData() тёплый кэш → иначе fetch, staleTime 30s).
-  async function loadCtx(): Promise<FastPathCtx> {
+  async function loadCtx(epoch: number): Promise<FastPathCtx | undefined> {
     const cats =
       utils.entity.query.getData(CATEGORY_QUERY) ??
       (await utils.entity.query.fetch(CATEGORY_QUERY));
+    if (!isUndoEpoch(epoch)) return;
     const settings = utils.user.getSettings.getData() ?? (await utils.user.getSettings.fetch());
+    if (!isUndoEpoch(epoch)) return;
     // Правила — getData-first, ровно как категории. Блокирующий fetch здесь означал бы
     // СЕТЬ ПЕРЕД КАЖДЫМ вводом: успешный create инвалидирует весь префикс entity.query, а
     // fetchQuery на инвалидированной query перечитывает независимо от staleTime. Карточка
@@ -167,6 +170,7 @@ export function useFastPath(threadId: string) {
         staleTime: MEMORY_RULES_STALE_TIME,
       });
     } catch (e) {
+      if (!isUndoEpoch(epoch)) return;
       // Деградация остаётся (правила необязательны), но она больше не немая. Сюда падают
       // и транспортный отказ, и BAD_REQUEST парсера запроса: на непересеянном реестре
       // аспектов (ловушка релиза фазы C) «aspect=orbis/memory» не разбирается, и правила
@@ -175,6 +179,7 @@ export function useFastPath(threadId: string) {
       console.warn('[fast-path] правила памяти не загрузились, разбираем по алиасам:', e);
       rules = undefined;
     }
+    if (!isUndoEpoch(epoch)) return;
     return mapCtx(cats, settings, rules);
   }
 
@@ -205,46 +210,33 @@ export function useFastPath(threadId: string) {
     messageId: string = newId(),
   ): string {
     const card = fastPathCard(create);
-    const synthetic: ChatMessage = {
-      id: messageId,
-      threadId,
-      role: 'assistant',
-      content: note,
-      metadata: {
+    insertMessage(
+      note,
+      {
         cards: [
           {
             kind: 'entity_card',
             entityId: fastPath.entityId ?? '',
             title: String(card.title ?? ''),
-            // Аспекты — ровно те, с которыми запись создаётся: при выключенных Финансах их нет
-            // (`createUnderMask`), и карточка не должна обещать финансовую запись.
             aspects: create.aspects ?? [],
             keyFields: card,
           },
         ],
         fastPath,
       },
-      createdAt: new Date().toISOString(),
-    } as ChatMessage;
-    queryClient.setQueryData(key, (old) => upsertNewest(old as never, synthetic));
+      messageId,
+    );
     return messageId;
   }
 
   // Бизнес-отказ сервера: карточка успеха заменяется error_card (§5.3 — такой отказ
   // показывается пользователю и в буфер не попадает).
   function replaceCardWithError(messageId: string, message: string, code: string) {
-    const errorMsg: ChatMessage = {
-      id: messageId,
-      threadId,
-      role: 'assistant',
-      content: '',
-      metadata: { cards: [{ kind: 'error_card', code, message }] },
-      createdAt: new Date().toISOString(),
-    } as ChatMessage;
-    queryClient.setQueryData(key, (old) => upsertNewest(old as never, errorMsg));
+    insertMessage('', { cards: [{ kind: 'error_card', code, message }] }, messageId);
   }
 
   async function submit(text: string): Promise<void> {
+    const epoch = undoEpoch();
     // Гейт !online — ДО любого сетевого ctx: офлайн строим ctx только из кэша, сеть не трогаем (§2.6).
     if (!online) {
       const ctx = cachedCtx();
@@ -253,7 +245,7 @@ export function useFastPath(threadId: string) {
         const toCreate = createUnderMask(parsed.create, text, cachedMask());
         // Уверенный (категории прогреты) → retry-буфер + «⏳ ждёт отправки».
         try {
-          enqueueCreate(toCreate, 'fast_path');
+          enqueueCreate(toCreate, 'fast_path', threadId);
         } catch {
           // localStorage недоступен (квота, private mode): Composer уже очистил поле —
           // молча потерять ввод нельзя, возвращаем его пользователю текстом заметки.
@@ -275,7 +267,8 @@ export function useFastPath(threadId: string) {
       return;
     }
 
-    const ctx = await loadCtx();
+    const ctx = await loadCtx(epoch);
+    if (!ctx || !isUndoEpoch(epoch)) return;
     const parsed = parseFastPath(text, ctx);
     if (!parsed.ok) {
       // Неуверенно → LLM-путь (ошибку и потерю текста закрывает useSendMessage.onError, §3).
@@ -296,6 +289,7 @@ export function useFastPath(threadId: string) {
       // Тред ввода — с запросом (спека скорости §11.3, РП-13): строка журнала ляжет туда же, где стоит карточка
       // «⚡ без AI», и при перечитывании треда заменит её, а не встанет второй карточкой в другом треде
       await create.mutateAsync({ input: toCreate, source: 'fast_path', threadId });
+      if (!isUndoEpoch(epoch)) return;
       // §5.1: созданная сущность обязана появиться в списках Browser и счётчиках.
       // invalidateGraph, а не query-only: открытая цель считает прогресс на чтении
       // entity.get, и без него полоса осталась бы вчерашней (Р17).
@@ -304,6 +298,7 @@ export function useFastPath(threadId: string) {
       // и бейдж alertCount перечитываются ПОСЛЕ записи, не до.
       void utils.budget.invalidate();
     } catch (err) {
+      if (!isUndoEpoch(epoch)) return;
       // CONFLICT — НЕ успех (уборочная фаза, решение 7; прецедент — быстрая запись Бюджета, B4):
       // честный повтор владельца executor отдаёт replay-успехом, а CONFLICT кидается
       // ровно тогда, когда id занят невидимой под RLS чужой строкой — записи владельца
@@ -320,6 +315,7 @@ export function useFastPath(threadId: string) {
             source: 'fast_path',
             threadId,
           });
+          if (!isUndoEpoch(epoch)) return;
           // Карточка была вставлена ДО запроса с отвергнутым id: без переписи её «Разобрать
           // с AI» архивировал бы ЧУЖУЮ строку (NOT_FOUND), а тап открывал бы пустоту.
           // upsertNewest дедупит по messageId — карточка обновляется на месте, не мигая.
@@ -332,11 +328,12 @@ export function useFastPath(threadId: string) {
           invalidateGraph(utils);
           void utils.budget.invalidate();
         } catch {
+          if (!isUndoEpoch(epoch)) return;
           // Второй отказ не разбираем по кодам: карточка деградирует в «⏳ ждёт отправки»
           // тем же путём, что транспортный сбой ниже, — ввод уходит в буфер С ТЕМ ЖЕ
           // замещающим id (буфер идемпотентен по client-UUID).
           insertCard(toCreate, '⏳ ждёт отправки', { text, status: 'pending' }, cardId);
-          enqueueCreate({ ...toCreate, id: retryId }, 'fast_path');
+          enqueueCreate({ ...toCreate, id: retryId }, 'fast_path', threadId);
           void flushBuffer();
         }
         return;
@@ -362,7 +359,7 @@ export function useFastPath(threadId: string) {
       // без «Разобрать с AI» (02 §2.5: действия недоступны до подтверждения сервером).
       // Иначе reparse архивировал бы несуществующий id, а буфер позже создал вторую сущность.
       insertCard(toCreate, '⏳ ждёт отправки', { text, status: 'pending' }, cardId);
-      enqueueCreate(toCreate, 'fast_path');
+      enqueueCreate(toCreate, 'fast_path', threadId);
       void flushBuffer();
     }
   }
@@ -383,16 +380,19 @@ export function useFastPath(threadId: string) {
     sendMessage(text);
   }
 
-  function insertSystemNote(note: string) {
-    const synthetic: ChatMessage = {
-      id: newId(),
+  function insertMessage(content: string, metadata: ChatMessage['metadata'], id = newId()) {
+    const synthetic = {
+      id,
       threadId,
       role: 'assistant',
-      content: note,
-      metadata: {},
+      content,
+      metadata,
       createdAt: new Date().toISOString(),
     } as ChatMessage;
     queryClient.setQueryData(key, (old) => upsertNewest(old as never, synthetic));
+  }
+  function insertSystemNote(note: string) {
+    insertMessage(note, {});
   }
 
   // isSending — pending LLM-отправки (typing-индикатор в ChatScreen); проброс строго аддитивен.

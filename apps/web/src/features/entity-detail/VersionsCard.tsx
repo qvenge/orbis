@@ -47,9 +47,28 @@ export function PinVersionDialog({ entityId, onClose }: { entityId: string; onCl
   const fieldId = useId();
   const field = useRef<HTMLInputElement>(null);
 
+  const epoch = useSyncExternalStore(subscribeUndoEpoch, undoEpoch, undoEpoch);
+  const alive = useRef(true);
+  const currentId = useRef(entityId);
+  currentId.current = entityId;
+  useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+    };
+  }, []);
+  const pending = useRef<{ epoch: number; id: string } | null>(null);
+  type Intent = { epoch: number; id: string };
+  const [waiting, setWaiting] = useState<Intent | null>(null);
+  const [error, setError] = useState<{ intent: Intent; message: string } | null>(null);
+  const pinIntent = useRef<Intent>({ epoch, id: entityId });
+  const current = (intent: { epoch: number; id: string }) =>
+    isUndoEpoch(intent.epoch) && alive.current && currentId.current === intent.id;
   const pin = trpc.version.pin.useMutation({
     meta: { undoStack: 'self' },
-    onSuccess: (data) => {
+    onMutate: (vars) => ({ epoch: pinIntent.current.epoch, id: vars.entityId }),
+    onSuccess: (data, _vars, intent) => {
+      if (!intent || !current(intent)) return;
       // Инвалидируется ТОЛЬКО список версий, без invalidateGraph: закрепление пишет строку
       // снимка и саму запись не двигает вовсе (executor.prepareVersionPin — INSERT в
       // entity_versions, entities не тронут), то есть протух ровно этот список.
@@ -63,6 +82,39 @@ export function PinVersionDialog({ entityId, onClose }: { entityId: string; onCl
   // По краям подпись из одних пробелов сервер примет (min(1) её длину считает честной), а в
   // списке она будет пустой строкой — режем здесь, до отправки.
   const trimmed = label.trim();
+  const submit = async () => {
+    if (
+      !trimmed ||
+      (pending.current && current(pending.current)) ||
+      (pin.isPending && current(pinIntent.current))
+    )
+      return;
+    const intent = { epoch: undoEpoch(), id: entityId };
+    pending.current = intent;
+    setWaiting(intent);
+    setError(null);
+    try {
+      const flushed = await flushBodyOf(intent.id);
+      if (!current(intent)) return;
+      if (flushed === 'blocked' || flushed === 'offline') {
+        setError({
+          intent,
+          message:
+            flushed === 'blocked'
+              ? 'Текст записи не сохранён — сначала закончите правку или разрешите конфликт текста'
+              : 'Нет связи: набранный текст ещё не на сервере — закрепление не отправлено',
+        });
+        return;
+      }
+      pinIntent.current = intent;
+      pin.mutate({ entityId: intent.id, label: trimmed });
+    } finally {
+      if (pending.current === intent) {
+        pending.current = null;
+        if (current(intent)) setWaiting(null);
+      }
+    }
+  };
 
   return (
     <Dialog
@@ -84,7 +136,7 @@ export function PinVersionDialog({ entityId, onClose }: { entityId: string; onCl
         className="flex flex-col gap-3 pt-2"
         onSubmit={(e) => {
           e.preventDefault();
-          if (trimmed !== '') pin.mutate({ entityId, label: trimmed });
+          void submit();
         }}
       >
         <p className="text-sm text-text-secondary">
@@ -103,9 +155,9 @@ export function PinVersionDialog({ entityId, onClose }: { entityId: string; onCl
             onChange={(e) => setLabel(e.target.value)}
           />
         </div>
-        {pin.isError && (
+        {((error && current(error.intent)) || (current(pinIntent.current) && pin.isError)) && (
           <p role="alert" className="text-danger text-sm">
-            {pin.error.message}
+            {error && current(error.intent) ? error.message : pin.error?.message}
           </p>
         )}
         <div className="flex flex-wrap justify-end gap-2">
@@ -114,7 +166,15 @@ export function PinVersionDialog({ entityId, onClose }: { entityId: string; onCl
           </Button>
           {/* Пустая подпись — гарантированный отказ сервера (min(1)): не отправляем вовсе, и
               видно это до нажатия. */}
-          <Button type="submit" size="sm" disabled={trimmed === '' || pin.isPending}>
+          <Button
+            type="submit"
+            size="sm"
+            disabled={
+              trimmed === '' ||
+              (waiting !== null && current(waiting)) ||
+              (pin.isPending && current(pinIntent.current))
+            }
+          >
             Закрепить
           </Button>
         </div>

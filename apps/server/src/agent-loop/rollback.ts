@@ -43,9 +43,13 @@ import { execute } from '../executor/executor';
 import { makeJournalSink } from '../executor/journal';
 import {
   actionsTouchingAfter,
+  historicalRollbackDeltaIds,
   isUndone,
   type JournalCursor,
   type JournalEntry,
+  rollbackConflictKeys,
+  rollbackRuleAddresses,
+  rollbackTouchedKeys,
   runActions,
 } from '../executor/journal-read';
 import type { ExecutorDeps } from '../executor/types';
@@ -219,7 +223,7 @@ async function ownRunActions(
  */
 function touchedKeys(entries: readonly RunEntry[]): Set<string> {
   const touched = new Set<string>();
-  for (const entry of entries) for (const key of entry.touchedKeys) touched.add(key);
+  for (const entry of entries) for (const key of rollbackTouchedKeys(entry)) touched.add(key);
   return touched;
 }
 
@@ -266,12 +270,18 @@ async function foreignChangesAfter(
     runId: string;
     after: RunEntry;
     touched: ReadonlySet<string>;
+    historicalDeltaIds: readonly string[];
+    ruleAddresses: ReturnType<typeof rollbackRuleAddresses>;
     policy: RollbackPolicy;
   },
 ): Promise<RollbackConflict[]> {
-  const candidates = await actionsTouchingAfter(tx, args.graph, args.after.cursor, [
-    ...args.touched,
-  ]);
+  const candidates = await actionsTouchingAfter(
+    tx,
+    args.graph,
+    args.after.cursor,
+    [...args.touched],
+    'rollback',
+  );
   const conflicts: RollbackConflict[] = [];
   for (const action of candidates) {
     // Своё — то, что откатываем; «о прогоне» (у рутины — бухгалтерия и решения владельца)
@@ -283,7 +293,11 @@ async function foreignChangesAfter(
     // Дешёвый фильтр (API отдаёт только тронувших `touched`) сначала — и запрос уходит только
     // за настоящими кандидатами. `touchedKeys` записи уже без повторов: ключ встречается и в
     // операции, и в inverse одного действия, а конфликт {действие, ключ} — один.
-    const hits = action.touchedKeys.filter((key) => args.touched.has(key));
+    const hits = rollbackConflictKeys(
+      action.touchedKeys.filter((key) => args.touched.has(key)),
+      args.historicalDeltaIds,
+      args.ruleAddresses,
+    );
     if (hits.length === 0) continue;
     if (await isUndone(tx, args.graph, action.id)) continue;
     // Поле провода называется `entityId`, но несёт ключ любого вида (как до перевода на API журнала)
@@ -408,6 +422,8 @@ export async function rollbackRun(
       runId,
       after: first,
       touched: touchedKeys(live),
+      historicalDeltaIds: historicalRollbackDeltaIds(live),
+      ruleAddresses: rollbackRuleAddresses(live),
       policy,
     });
     // Цепочка тела — до первой отмены (§8.6, D37 п. 6): расхождение — список, серия не начинается

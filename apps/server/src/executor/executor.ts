@@ -68,7 +68,12 @@ import { resolveEntitlement } from '../entitlements';
 import type { CompileCtx } from '../query/compile-ast';
 import { ownerQuerySettings, todayInTimeZone, WEEK_START } from '../query/context';
 import { effectiveRegistry, parseRegistryOfSnapshot } from '../registry/cache';
-import { type AspectDelta, aspectDeltaAfterRemove, aspectDeltaAfterSet } from '../registry/deltas';
+import {
+  type AspectDelta,
+  aspectDeltaAfterRemove,
+  aspectDeltaAfterSet,
+  REGISTRY_DELTA_TARGET_KINDS,
+} from '../registry/deltas';
 import { disabledExtensionsOf, setExtensionDisabled } from '../registry/extensions';
 import type { RegistrySnapshot } from '../registry/load';
 import {
@@ -3918,7 +3923,20 @@ const propertyMergeUndoInput = z
     // ОПЦИОНАЛЬНО, и это не небрежность: журнал append-only (§4.6), и действия, записанные
     // до появления четвёртого рода держателей (дельты), ключа `deltas` не несут вовсе.
     // Требовать его значило бы сделать неоткатываемыми вчерашние слияния владельца.
-    deltas: z.array(z.object({ id: z.string().uuid(), delta: z.unknown() }).strict()).optional(),
+    deltas: z
+      .array(
+        z
+          .object({
+            id: z.string().uuid(),
+            delta: z.unknown(),
+            target: z
+              .object({ kind: z.enum(REGISTRY_DELTA_TARGET_KINDS), id: z.string().min(1) })
+              .strict()
+              .optional(),
+          })
+          .strict(),
+      )
+      .optional(),
     // Тем же порядком и по той же причине — id зеркал-рёбер (§А6-2), чью подпись слияние
     // перевело на цель; у слияний, записанных до этого, ключа нет.
     mirrors: z.array(z.string().uuid()).optional(),
@@ -3936,6 +3954,7 @@ const propertyMergeUndoInput = z
           .object({
             carrier: z.enum(['aspect', 'property', 'role']),
             id: z.string().min(1),
+            key: z.string().min(1).optional(),
             rules: z.unknown(),
           })
           .strict(),

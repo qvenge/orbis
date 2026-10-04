@@ -382,6 +382,7 @@ export function useEntityUpdate(
       // проталкивает свежие опции в незавершённую мутацию), `vars.id` — из отправки.
       if (!accepted && isTitleStale(err)) resetSteps(vars.id);
       if (vars.id !== entityId) return;
+      if (!old && ctx && isUndoEpoch(ctx.epoch) && isBodyStale(err)) resetSteps(vars.id);
       if (!accepted && isTitleStale(err)) setTitleStale(true);
       // Молчим только о конфликте, который преемник принесёт и сам (см. bringsSameConflict).
       if (old && bringsSameConflict(vars.id, ctx)) return;

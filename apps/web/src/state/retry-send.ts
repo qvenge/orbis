@@ -68,6 +68,7 @@ async function attemptCreate(
   client: OrbisVanillaClient,
   input: EntityCreateInput,
   source: 'fast_path',
+  threadId?: string,
 ): Promise<AttemptOutcome> {
   const control = new AbortController();
   let onDeadline: (outcome: AttemptOutcome) => void = () => {};
@@ -80,10 +81,12 @@ async function attemptCreate(
   }, SEND_TIMEOUT_MS);
   // Отказ разбирается здесь же, поэтому `sent` никогда не отклоняется: проигравшая гонку
   // ветка не оставит необработанного rejection.
-  const sent = client.entity.create.mutate({ input, source }, { signal: control.signal }).then(
-    (): AttemptOutcome => 'confirmed',
-    (err: unknown): AttemptOutcome => (isConflict(err) ? 'id_conflict' : mapSendError(err)),
-  );
+  const sent = client.entity.create
+    .mutate({ input, source, ...(threadId && { threadId }) }, { signal: control.signal })
+    .then(
+      (): AttemptOutcome => 'confirmed',
+      (err: unknown): AttemptOutcome => (isConflict(err) ? 'id_conflict' : mapSendError(err)),
+    );
   try {
     return await Promise.race([sent, deadline]);
   } finally {
@@ -95,11 +98,15 @@ export function makeRetrySend(
   client: OrbisVanillaClient,
 ): (op: QueuedCreate) => Promise<FlushOutcome> {
   return async (op) => {
-    const { input, source } = op.payload as { input: EntityCreateInput; source: 'fast_path' };
+    const { input, source, threadId } = op.payload as {
+      input: EntityCreateInput;
+      source: 'fast_path';
+      threadId?: string;
+    };
     // Идемпотентность по client-UUID (§5.3): id операции — из payload, если он там есть
     // (упавший онлайн-create уже отправлял его серверу), иначе clientId очереди.
     const id = input.id ?? op.clientId;
-    const first = await attemptCreate(client, { ...input, id }, source);
+    const first = await attemptCreate(client, { ...input, id }, source, threadId);
     if (first !== 'id_conflict') return first;
     // id занят ЧУЖОЙ строкой — своя дала бы replay-успех. Запись владельца не создана,
     // и ждать бессмысленно: повторяем РОВНО один раз с замещающим id. Он ДЕТЕРМИНИРОВАН
@@ -108,7 +115,12 @@ export function makeRetrySend(
     // сервер отвечает replay-успехом на свою строку, второй сущности не появляется.
     // Бесконечного цикла нет: второй CONFLICT (замещающий id тоже занят чужим) уходит
     // в business_rejection и вычищает операцию из очереди.
-    const second = await attemptCreate(client, { ...input, id: retryCreateId(id) }, source);
+    const second = await attemptCreate(
+      client,
+      { ...input, id: retryCreateId(id) },
+      source,
+      threadId,
+    );
     return second === 'id_conflict' ? 'business_rejection' : second;
   };
 }

@@ -1,6 +1,9 @@
+import { lazy, Suspense } from 'react';
 import { useChatContext } from '../../app/frame/useChatContext';
 import { ScreenHeader } from '../../app/ScreenHeader';
-import { ChatPanel } from './ChatPanel';
+import { ThreadSkeleton } from './MessageList';
+
+const ChatPanel = lazy(() => import('./ChatPanel').then((m) => ({ default: m.ChatPanel })));
 
 /**
  * Экран хоста «Чат» (`/chat`, спека 1б §6.4): шапка и тело чата (`ChatPanel`). Телефон открывает его
@@ -14,7 +17,9 @@ export function ChatScreen() {
       <ScreenHeader title="Чат" />
       {/* Контент центрирован (шапка — на всю ширину main), скролл — внутри MessageList. */}
       <div className="mx-auto flex min-h-0 w-full max-w-3xl flex-1 flex-col">
-        <ChatPanel context={context} />
+        <Suspense fallback={<ThreadSkeleton />}>
+          <ChatPanel context={context} />
+        </Suspense>
       </div>
     </div>
   );
