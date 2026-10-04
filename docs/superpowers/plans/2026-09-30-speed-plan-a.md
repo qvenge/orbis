@@ -2133,7 +2133,7 @@ GRANT SELECT, INSERT ON "action_journal", "action_journal_entities" TO authentic
   ответа ассистента того же треда, чьи `metadata.cards` несут `undoActionId` = id действия (иначе у исторической правки из
   чата рядом с карточкой ответа появилась бы вторая — §11.3), отсутствие обязательного поля у аудит-сообщения (`id`, `type`,
   `actor_kind`, `source`, `actor_user_id`, `operations`, `inverse`) — не умолчание, а счёт `missingRequired` в `--report`
-  задачи 21 (ненулевой → стоп до окна); умолчание одно — `mechanism` → `'user'` у записей до появления поля (докблок)), затем строки отмены из
+  задачи 21 (после схемы0024–26; ненулевой → стоп до применения, нового кода и сноса); умолчание одно — `mechanism` → `'user'` у записей до появления поля (докблок)), затем строки отмены из
   `{type:'undo'}` (`id = m.id`, `undoes`, `type:'undo'`, `source:'ui'` (В-3), `actor_kind:'owner'`, `actor_user_id` — владелец
   графа, `mechanism:'user'`, `title` — `'Отменено: ' || заголовок отменённого`, `card_tool:'undo'`, `operations` — копия inverse
   отменённого, `inverse:'[]'`, `thread_id` — тред ПЕРЕНЕСЁННОЙ строки отменённого действия (NULL,
@@ -5730,8 +5730,8 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>" -- apps/we
 // apps/server/src/db/migrate-speed-a.ts
 export interface MigrateSpeedAReport { graph: string; legacyActions: number; legacyUndo: number;
   alreadyInTable: number; seedable: number; staleProposals: string[];
-  missingRequired: number }   // аудит-сообщения без обязательного поля (id, type, actor_kind, source, actor_user_id,
-                               // operations, inverse) — ненулевой счёт: СТОП до окна (перенос их не угадывает)
+  missingRequired: number }   // непредставимые записи: неверная форма, повторная отмена, коллизия типа/цели
+                               // отчёт после схемы0024–26; ненулевой счёт: СТОП до apply, нового кода и sweep
 export function reportMigrateSpeedA(sql: SqlClient, graph: string): Promise<MigrateSpeedAReport>;   // только чтение
 export function applyMigrateSpeedA(db: Db, sql: SqlClient, who: Identity, opts: { sweepMessages: boolean }):
   Promise<{ moved: number; undo: number; deletedMessages: number; seeded: number; closedProposals: string[] }>;

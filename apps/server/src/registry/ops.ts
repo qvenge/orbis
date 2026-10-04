@@ -1064,9 +1064,9 @@ export async function collectPropertyHolders(tx: Tx, graphId: GraphId): Promise<
     if (names.length > 0) out.push({ kind: 'body', id: r.id as string, properties: [...names] });
   }
 
-  // Дельты — четвёртый род. Читаются ВСЕ цели, а не только `aspect`: строка вида
-  // `property`/`contract` в срезе А появиться не может (тулов нет), но обход, отбирающий
-  // по `target_kind`, промолчал бы о ней ровно тогда, когда она всё-таки появится.
+  // Дельты — четвёртый род. Читаются ВСЕ цели, включая дельты наборов контрактов,
+  // создаваемые `contract_sets_delta_set`: отбор по одному `target_kind` пропустил бы
+  // ссылки на свойства в дельтах остальных видов.
   const deltaRows = (await tx.execute(sql`
     SELECT id, delta FROM registry_deltas WHERE graph_id = ${graphId}::uuid`)) as unknown as RawRow[];
   for (const r of deltaRows) {
