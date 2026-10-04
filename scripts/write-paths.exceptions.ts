@@ -8,6 +8,13 @@ export interface WriteException {
 
 export const WRITE_PATH_EXCEPTIONS: Record<Rule, Record<string, WriteException>> = {
   graph: {
+    'apps/server/src/db/migrate-speed-a.ts': {
+      count: 1,
+      reason:
+        'прод-операция переноса журнала, РП-2: UPDATE entities засевает только действие текущего тела',
+      removedBy:
+        'после переноса на проде в задаче 24 — модуль операции и исключение снимаются (остаток плана А)',
+    },
     'apps/server/src/seed/setup-graph.ts': {
       count: 1,
       reason:
@@ -44,8 +51,24 @@ export const WRITE_PATH_EXCEPTIONS: Record<Rule, Record<string, WriteException>>
         'после переноса на проде — модуль и исключение снимаются (остаток плана А, remainders-a.md)',
     },
   },
-  chat: {},
-  'body-columns': {},
+  chat: {
+    'apps/server/src/db/migrate-speed-a.ts': {
+      count: 1,
+      reason:
+        'прод-операция переноса журнала, РП-2: DELETE chat_messages удаляет только перенесённые сообщения второго прохода',
+      removedBy:
+        'после переноса на проде в задаче 24 — модуль операции и исключение снимаются (остаток плана А)',
+    },
+  },
+  'body-columns': {
+    'apps/server/src/db/migrate-speed-a.ts': {
+      count: 1,
+      reason:
+        'прод-операция переноса журнала, РП-2: body_action_id заполняется только при совпадении текущего текста',
+      removedBy:
+        'после переноса на проде в задаче 24 — модуль операции и исключение снимаются (остаток плана А)',
+    },
+  },
   'dynamic-table': {
     'apps/server/src/db/reset-world.ts': {
       count: 2,

@@ -824,10 +824,19 @@ async function isExecuted(tx: Tx, graphId: GraphId, pendingId: string): Promise<
  * неизменяема, §4.6) — читаются как отказ владельца: до V1.8 отклонить pending могла
  * только его кнопка, так что это не догадка, а факт истории.
  */
-export async function rejectedReason(tx: Tx, pendingId: string): Promise<RejectReason | undefined> {
+export async function rejectedReason(
+  tx: Tx,
+  pendingId: string,
+  graphId?: GraphId,
+): Promise<RejectReason | undefined> {
   const probe = JSON.stringify({ type: 'confirmation_rejected', rejects: pendingId });
   const rows = await tx.execute(
-    sql`SELECT metadata FROM chat_messages WHERE metadata @> ${probe}::jsonb LIMIT 1`,
+    sql`SELECT metadata FROM chat_messages WHERE metadata @> ${probe}::jsonb ${
+      graphId === undefined
+        ? sql``
+        : sql`AND EXISTS (SELECT 1 FROM chat_threads t
+        WHERE t.id = chat_messages.thread_id AND t.graph_id = ${graphId}::uuid)`
+    } LIMIT 1`,
   );
   const row = rows[0];
   if (!row) return undefined;
@@ -1609,6 +1618,37 @@ const OLD_BODY_CONTRACT_PATHS = [
   '$.pending ? (@.tool == "batch_execute").input.operations[*] ? (@.tool == "entity_update" && exists(@.input.expectedUpdatedAt))',
 ] as const;
 
+/** Один классификатор старого payload для отчёта и снятия; явный граф нужен также админскому SELECT. */
+async function oldBodyProposalRows(tx: Tx, graph: GraphId): Promise<Array<{ id: string | null }>> {
+  const rows = (await tx.execute(sql`
+    SELECT metadata->'pending'->>'id' AS id
+      FROM chat_messages m JOIN chat_threads t ON t.id = m.thread_id
+     WHERE t.graph_id = ${graph}::uuid AND metadata ? 'pending'
+       AND (jsonb_path_exists(metadata, ${OLD_BODY_CONTRACT_PATHS[0]}::jsonpath)
+         OR jsonb_path_exists(metadata, ${OLD_BODY_CONTRACT_PATHS[1]}::jsonpath))
+     ORDER BY m.created_at, m.id`)) as unknown as Array<{ id: string | null }>;
+  return rows;
+}
+
+/** Только чтение: предстоящие снятия без advisory-замков и записи судьбы. */
+export async function listStaleBodyProposals(
+  tx: Tx,
+  graph: GraphId,
+  executedBeforeTransfer: ReadonlySet<string> = new Set(),
+): Promise<string[]> {
+  const out: string[] = [];
+  for (const { id } of await oldBodyProposalRows(tx, graph)) {
+    if (
+      id !== null &&
+      !executedBeforeTransfer.has(id.toLowerCase()) &&
+      !(await isExecuted(tx, graph, id)) &&
+      (await rejectedReason(tx, id, graph)) === undefined
+    )
+      out.push(id);
+  }
+  return out;
+}
+
 // Хранимые предложения старого контракта (§8.2, РП-14): вход entity_update с expectedUpdatedAt после смены контракта
 // упал бы при одобрении VALIDATION (схема .strict()). Переписать поле в expectedBodyRevision = текущая значило бы
 // обнулить проверку предложения, поэтому такие предложения снимаются отказом stale тем же путём, что rejectPendingTx.
@@ -1619,13 +1659,7 @@ const OLD_BODY_CONTRACT_PATHS = [
 // повтор возвращает пустой список. Исполненность спрашивается ПОД замком предложения (acquirePendingLock, контракт
 // rejectPendingTx: состояние единицы читается только после захвата).
 export async function closeStaleBodyProposals(tx: Tx, who: Identity): Promise<string[]> {
-  const rows = (await tx.execute(sql`
-    SELECT metadata->'pending'->>'id' AS id
-      FROM chat_messages
-     WHERE metadata ? 'pending'
-       AND (jsonb_path_exists(metadata, ${OLD_BODY_CONTRACT_PATHS[0]}::jsonpath)
-         OR jsonb_path_exists(metadata, ${OLD_BODY_CONTRACT_PATHS[1]}::jsonpath))
-     ORDER BY created_at, id`)) as unknown as Array<{ id: string | null }>;
+  const rows = await oldBodyProposalRows(tx, who.graph);
   const closed: string[] = [];
   for (const { id } of rows) {
     if (id === null) continue;

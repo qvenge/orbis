@@ -24,6 +24,10 @@
 //   bun scripts/ops.ts migrate-1v --apply --i-understand             # перевод графа среза 1в: одна пачка (§6.6)
 //   bun scripts/ops.ts migrate-1v --undo <actionId> --i-understand   # отмена пачки перевода (Undo §6.6)
 //   ORBIS_REHEARSAL_DSN=<DSN> bun scripts/ops.ts migrate-1v --rehearsal <режим>  # репетиция: только localhost
+//   bun scripts/ops.ts migrate-speed-a --report                    # отчёт переноса журнала, только чтение
+//   bun scripts/ops.ts migrate-speed-a --apply --i-understand        # первый проход: сообщения остаются
+//   bun scripts/ops.ts migrate-speed-a --apply --sweep-messages --i-understand # второй проход после нового кода
+//   ORBIS_REHEARSAL_DSN=<DSN> bun scripts/ops.ts migrate-speed-a --rehearsal <режим> # только localhost
 //   bun scripts/ops.ts perf [--since 7d] [--metric <m>]  # только чтение: объём журнала, перцентили замеров, чистка pg_cron
 //   bun scripts/ops.ts ping           # связность, версия PostgreSQL и состояние pg_cron
 //   bun scripts/ops.ts issue-pat <uuid аккаунта> [метка] [--scope worker]  # headless-токен (§9.3)
@@ -48,6 +52,7 @@ import {
 } from '../apps/server/src/db/audit-bodies';
 import { type CensusV3Row, censusV3, formatCensusV3 } from '../apps/server/src/db/census-v3';
 import { migrate1vIo, runMigrate1v } from '../apps/server/src/db/migrate-1v';
+import { migrateSpeedAIo, runMigrateSpeedA } from '../apps/server/src/db/migrate-speed-a';
 import { runPerfReport } from '../apps/server/src/db/perf-report';
 import {
   REGISTRY_DELTAS_QUERY,
@@ -550,6 +555,20 @@ async function migrate1vOp(args: string[]): Promise<number> {
   );
 }
 
+/** Перенос журнала плана А (РП-2): подтверждение и локальная репетиция проверяются до чтения Ключницы. */
+async function migrateSpeedAOp(args: string[]): Promise<number> {
+  return runMigrateSpeedA(
+    args,
+    migrateSpeedAIo({
+      readDsn,
+      env: process.env,
+      openSql: (dsn) => postgres(dsn, { max: 1 }),
+      log: (line) => console.log(line),
+      error: (line) => console.error(line),
+    }),
+  );
+}
+
 /** Только чтение (спека скорости §3.3): объём журнала по графам, дням (UTC) и источникам действия (§3.1), перцентили полевых замеров с разрезами и последний прогон чистки `pg_cron`. */
 async function perfOp(args: string[]): Promise<number> {
   return withDb((sql) =>
@@ -745,6 +764,10 @@ const OPS: Record<string, { run: (args: string[]) => Promise<number>; help: stri
       'срез 1в: --report (только чтение, ДО миграции 0023) | --drop-agenda-rows --i-understand | ' +
       '--apply --i-understand (одна пачка на граф, источник system) | --undo <actionId> --i-understand; ' +
       '--rehearsal — DSN из ORBIS_REHEARSAL_DSN, только localhost',
+  },
+  'migrate-speed-a': {
+    run: migrateSpeedAOp,
+    help: 'перенос журнала: --report | --apply [--sweep-messages] --i-understand; --rehearsal — модификатор режима, DSN только localhost/127.0.0.1',
   },
   perf: {
     run: perfOp,

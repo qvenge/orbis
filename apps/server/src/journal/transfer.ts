@@ -306,3 +306,29 @@ export async function transferredLegacyMessageIds(tx: Tx, graph: GraphId): Promi
   }>;
   return rows.map((r) => r.id);
 }
+
+/**
+ * Прогноз журнала после переноса — только SELECT для засева в отчёте задачи 21. Переносимость ровно та же,
+ * что у transferJournal; при конфликте таблица сильнее старого сообщения, а среди прежних дублей выигрывает
+ * первая строка в порядке INSERT. Отмены идут после действий, поэтому их PK не вытесняет действие.
+ */
+export function prospectiveJournalQuery(graph: GraphId): SQL {
+  return sql`WITH legacy AS MATERIALIZED (
+      SELECT DISTINCT ON (lower(l.a ->> 'id'))
+             (l.a ->> 'id')::uuid AS id, l.created_at, l.a ->> 'type' AS type,
+             l.a -> 'operations' AS operations, NULL::uuid AS undoes
+        FROM (${LEGACY_ACTIONS(graph)}) l
+       WHERE ${TRANSFERABLE_ACTION} AND NOT ${ACTION_PRESENT(graph)}
+       ORDER BY lower(l.a ->> 'id'), l.created_at, l.message_id, l.ord
+    ), actions AS (
+      SELECT j.id, j.created_at, j.type, j.operations, j.undoes
+        FROM action_journal j WHERE j.graph_id = ${graph}::uuid
+      UNION ALL SELECT * FROM legacy
+    )
+    SELECT * FROM actions
+    UNION ALL
+    SELECT u.id, u.created_at, 'undo'::text, '[]'::jsonb, u.undoes::uuid
+      FROM (${LEGACY_UNDOS(graph)}) u
+     WHERE ${UNDO_TRANSFERABLE(graph)}
+       AND NOT EXISTS (SELECT 1 FROM actions a WHERE a.id = u.id)`;
+}

@@ -323,6 +323,11 @@ export async function findBatch(
   );
 }
 
+/** Тот же признак исполненной пачки для SELECT-прогноза переноса, без отдельного декодера типов. */
+export function batchIdsInJournalQuery(journal: SQL): SQL {
+  return sql`SELECT j.id::text AS id FROM (${journal}) j WHERE ${IS_BATCH}`;
+}
+
 /** Действие отменено ⇔ есть запись отмены с его id (§7.8); уникальный индекс `(graph_id, undoes)`. */
 export async function isUndone(tx: Tx, graph: GraphId, actionId: string): Promise<boolean> {
   if (!isUuid(actionId)) return false;
