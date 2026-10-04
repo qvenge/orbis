@@ -172,7 +172,7 @@ async function usageRows(user: GraphId) {
 // ---------------------------------------------------------------------------
 
 describe('ai.sendMessage (а): «создай задачу» — цикл из tool_use + end_turn', () => {
-  test('сущность в БД, audit-сообщение, entity_card, метеринг суммой двух шагов', async () => {
+  test('сущность в БД, запись журнала, entity_card, метеринг суммой двух шагов', async () => {
     const user = await freshGraph();
     const threadId = await globalThread(user);
     const scripted = new ScriptedProvider([

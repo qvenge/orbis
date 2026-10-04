@@ -245,7 +245,7 @@ export type Card =
       entityIds: string[];
       /**
        * `sums` — суммы по валютам (спека 1в §3.6), только у новых карточек `sum`: карточки хранятся в
-       * журнале чата (`chat_messages.metadata.cards`), журнал только дополняется, и прежняя карточка
+       * сообщении чата (`chat_messages.metadata.cards`), и прежняя карточка
        * без `sums` рисуется своим `value`. `value` — сумма первой валюты по правилу провода.
        */
       aggregate?: { op: 'sum' | 'count'; value: string; sums?: BlockSum[] };

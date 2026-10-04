@@ -694,7 +694,7 @@ describe('routine.runNow', () => {
 describe('routine.answerCheckpoint', () => {
   test('вопрос → ответ: outcome answered с reply; действие владельца source ui и с run_id; откат прогона не снимает ответ и не считает его конфликтом (инвариант 7)', async () => {
     // Вопрос задаёт НАСТОЯЩИЙ прогон: откат читает журнал, а сид фикстурой идёт мимо
-    // синка (без audit-сообщений откатывать было бы нечего, и проверка стала бы пустой)
+    // синка (без записей журнала откатывать было бы нечего, и проверка стала бы пустой)
     const routineId = await seedRoutine(owner, { title: 'Рутина: вопрос' });
     const runId = routineRunId(routineId, MANUAL_BUCKET, 1);
     const provider = new ScriptedProvider([

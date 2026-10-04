@@ -442,7 +442,7 @@ describe('e2e слайс 1b: агент через MCP ведёт проект �
     expect(after).toHaveLength(11);
     for (const row of after) expect(row.archived).toBe(true);
 
-    // Повторный approve — идемпотентный replay по PK audit-сообщения (§7.8)
+    // Повторный approve — идемпотентный replay по (graph_id, id) журнала (§7.8)
     const again = await ownerCaller.ai.approve({ pendingId });
     expect(again.idempotentReplay).toBe(true);
   });

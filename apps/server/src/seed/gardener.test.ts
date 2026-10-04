@@ -220,7 +220,7 @@ describe('сид садовника словаря (Р-17-1)', () => {
     expect(props['orbis/routine_stage']).toBe('active');
   });
 
-  test('сев прошёл ЧЕРЕЗ исполнителя и МИМО журнала: аспект на строке есть, audit-сообщения нет', async () => {
+  test('сев прошёл ЧЕРЕЗ исполнителя и МИМО журнала: аспект на строке есть, записи журнала нет', async () => {
     const owner = await freshGraph();
     await callerFor(owner).user.seedOnboarding();
 

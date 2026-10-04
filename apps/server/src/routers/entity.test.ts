@@ -435,7 +435,7 @@ describe('entity.update: замок текста по ревизии тела (�
     expect(missing.body.error?.data?.orbis).toBeUndefined();
   });
 
-  test('audit-сообщение update атрибутировано source=ui (прямое действие владельца в UI, не fast_path)', async () => {
+  test('запись журнала update атрибутирована source=ui (прямое действие владельца в UI, не fast_path)', async () => {
     const user = await freshGraph();
     const caller = callerFor(user);
     const created = await caller.entity.create({

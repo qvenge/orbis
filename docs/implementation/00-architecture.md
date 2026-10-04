@@ -170,6 +170,20 @@ packages/shared — Zod-схемы wire-контрактов (вход/выхо�
 
 **Примечание о размещении экрана согласия OAuth.** Authorization server живёт в `apps/server`, но страница, на которой владелец жмёт «Разрешить», — в `apps/web`, и серверного роута под `GET /oauth/authorize` нет вовсе: запрос доходит до SPA-fallback, страницу распознаёт клиент. Причина не в удобстве: сессию владельца держит веб-клиент (Supabase-токен в `localStorage`), и серверный HTML её не увидел бы — ему понадобилась бы собственная кука и второй способ логина. Сама выдача кода при этом остаётся серверной (tRPC-процедуры согласия), то есть граница «UI решает, сервер выдаёт» не размывается. Путь страницы записан один раз в `packages/shared` и читается обеими сторонами — метаданные AS и SPA обязаны называть один адрес.
 
+### Модули плана А (реализованы в ветке; прод — задача 24)
+
+| Область | Фактические модули и контракт |
+|---|---|
+| Серверный журнал | `executor/journal.ts` — sink; `journal-read.ts` — единое чтение; `body-chain.ts` — раскрутка действия тела; `text-session.ts` — сеанс/подпись; `journal-ref.ts` — ссылки ответов |
+| Тред и перенос | `journal/thread-page.ts` — две выборки и общий курсор; `journal/transfer.ts` — канонические SELECT/перенос legacy; `db/migrate-speed-a.ts` — report/apply/засев/снятие старых предложений, временная операция |
+| Разговоры | `chat/processing.ts`, `chat/messages.ts` — единственный путь записи сообщений; граф ими не пишется |
+| Замеры | server `perf/server-timing.ts`, `perf/rate-limit.ts`, `routers/perf.ts`, `db/perf-report.ts`; web `perf/{boot,collector,transport,vitals,marks}.ts`; `scripts/lab/{scenario,run,summary}.ts` |
+| Отмена web | `features/undo/{undo-action,undo-stack,undo-toast,undo-epoch,mutation-epoch,body-provenance,undo-binding,journal-ref,useUndoHotkey}.ts` (хуки/реальный суффикс — по файлам); native Toaster и lazy вход `undo-lazy.ts` |
+| Заголовок и тело | `features/entity-editor/{editor-cache,arrows-stack,title-history,arrows-keys,body-flush}.ts`; `EntityBody`, `NativeRow`, `DetailScreen` — интеграция. Пять LRU экземпляров, bounded общий/native стек, CAS заголовка по показанному основанию |
+| Сторожа | `scripts/write-paths.test.ts` + точные исключения; `scripts/lab/selectors.test.ts` держит actual scenario и реальные производители web; `records.test.ts` исполняет закрытую функцию сценария с заменой IO |
+
+Сняты `db/backfill-body-doc.ts` и `makeChatJournalSink`; форма старых body-предложений не мигрирует в новую ревизию. `audit-bodies` и `0012_drop_body_before_doc.sql` остаются отдельными остатками с решением владельца.
+
 ### §1.1 Правила направления зависимостей
 
 Адаптировано из архивной карты `docs/implementation_old/01-application-architecture.md` под v3.1: убраны пакеты `client-db`/`server-db`/`sync` (собственной БД у клиента нет, синхронизации нет — PRD 01 §4.12, §5.1), добавлен retry-буфер как единственное персистентное клиентское состояние.
@@ -232,7 +246,7 @@ flowchart TD
 - **Retry-буфер** стоит на стороне `apps/web` перед tRPC и участвует только в пути fast-path-create (Chat fast-path, §7.5) — офлайн-правки существующих сущностей и LLM-путь через него не идут (PRD 01 §5.3, §7.9). Quick-capture (PRD 02 §3.7) в буфер не заходит: это отдельный не-чатовый путь без AI и без fast-path-грамматики, идущий в tRPC напрямую — контракт буфера (PRD 01 §5.3) охватывает только fast-path-create.
 - **Ветвление по политике подтверждений** относится только к путям LLM tool-call и MCP-агента; fast-path/quick-capture — прямая, детерминированная команда пользователя, политика §7.10 к ней не применяется. На диаграмме это показано на уровне потока; внутри самого семистадийного конвейера (§9.2) классификация уровня фактически происходит после стадий 1–2 (структурная валидация) и до стадии 5 (apply) — здесь показан только факт наличия этой проверки для LLM/MCP-путей.
 - **Executor 7 стадий** (§9.2): validate envelope → validate props → load state → validate all before first write → apply in transaction → inverse ops + cards → audit. Вторая стадия проверяет значения по **типам свойств из реестра** (PRD 01 §4.16), а не по схемам из кода [D43]; число и порядок стадий реформа не меняет. Все семь стадий выполняются в `apps/server`, вне зависимости от источника мутации. Правила каталога врезаны в тот же конвейер: T-шаблоны (`on_enter_class`, `default`) применяются перед второй стадией, C-шаблоны (`requires_when`, `forbidden_when`, `unique_among`) — на четвёртой, вместе с доменными инвариантами, которые они заменили (срез Б-2).
-- **Журнал actions + Postgres — одна транзакция**: карточка чата и запись в `chat_messages.metadata.actions` появляются только после успешного `apply` (§7.8).
+- **Журнал actions + Postgres — одна транзакция**: строка `action_journal` и боковой индекс появляются после успешного apply; карточка ответа/реплика пишется модулем разговоров, а карточка журнала строится на чтении (§7.8).
 - **Инвалидация server-state-кэша** — заключительный шаг на клиенте: TanStack Query перечитывает данные с сервера после успешной мутации (§5.1); сервер не хранит и не обязан знать состояние клиентского кэша.
 
 ---
@@ -414,59 +428,55 @@ sequenceDiagram
 
 Обязательные элементы присутствуют: `entity_query(updated_at > cursor)` с аутентификацией по Bearer-токену гранта (браузерный вход или PAT — §9.3, D34), изменённые задачи, `entity_get(include:["thread"])`, инструкции владельца из треда, `entity_update(status)` + заметка в тред, прохождение через executor и запись в журнал с актором-агентом; курсор хранится у самого агента, не на сервере Orbis (§9.3).
 
-### §4.4 Optimistic-check body
-
-Контракт: PRD 01 §5.2 (конкурентность, optimistic-check по `updated_at`).
+### §4.4 Optimistic-check body и запись журнала
 
 ```mermaid
 sequenceDiagram
-    actor TabA as Вкладка A
-    actor TabB as Вкладка B
-    participant TRPC as apps/server: tRPC entity.update/get (§9.1)
+    actor A as Вкладка A
+    actor B as Вкладка B
+    participant API as tRPC / executor
     participant DB as PostgreSQL
-
-    TabA->>TRPC: entity.get(id)
-    TRPC->>DB: SELECT
-    DB-->>TRPC: updated_at = t0
-    TRPC-->>TabA: сущность (updated_at = t0)
-
-    TabB->>TRPC: entity.get(id)
-    TRPC->>DB: SELECT
-    DB-->>TRPC: updated_at = t0
-    TRPC-->>TabB: сущность (updated_at = t0)
-
-    TabA->>TRPC: entity.update(body, updated_at = t0)
-    TRPC->>DB: optimistic-check: серверный updated_at == t0?
-    DB-->>TRPC: совпадает — применить, новый updated_at = t1
-    TRPC-->>TabA: успех (updated_at = t1)
-
-    TabB->>TRPC: entity.update(body, updated_at = t0)
-    TRPC->>DB: optimistic-check: серверный updated_at == t0?
-    DB-->>TRPC: не совпадает (сейчас t1)
-    TRPC-->>TabB: 409, структурированная ошибка "устаревшая версия"
-
-    TabB->>TRPC: entity.get(id) — перезагрузка сущности
-    TRPC->>DB: SELECT
-    DB-->>TRPC: updated_at = t1
-    TRPC-->>TabB: сущность (updated_at = t1)
-
-    TabB->>TRPC: entity.update(body, updated_at = t1) — повтор правки
-    TRPC->>DB: optimistic-check: серверный updated_at == t1?
-    DB-->>TRPC: совпадает — применить, новый updated_at = t2
-    TRPC-->>TabB: успех (updated_at = t2)
+    A->>API: entity.get(body)
+    API-->>A: bodyDoc, bodyRevision=R
+    B->>API: entity.get(body)
+    API-->>B: bodyDoc, bodyRevision=R
+    A->>API: entity.update(bodyDoc, expectedBodyRevision=R, autosave=true)
+    API->>DB: identity + set_config(orbis.body_action, S, true)
+    API->>DB: lock, проверить R, UPDATE body/body_doc
+    DB->>DB: entities_body_stamp: revision=R+1, action=S
+    API->>DB: INSERT action_journal + action_journal_entities
+    DB-->>API: COMMIT (граф и журнал атомарны)
+    API-->>A: entity + JournalRef(actionId=S, consequences)
+    B->>API: entity.update(bodyDoc, expectedBodyRevision=R)
+    API-->>B: STALE_VERSION + data.orbis (без текста)
+    B->>API: entity.get(body) — показать свежую основу
+    API-->>B: bodyDoc, bodyRevision=R+1
+    B->>API: «Оставить моё», expectedBodyRevision=R+1
+    API-->>B: подтверждённый документ и новая ревизия
 ```
 
-Обязательная последовательность присутствует: обе вкладки читают `updated_at = t0`, первая правит успешно (`t1`), вторая получает 409 «устаревшая версия», перезагружает сущность и повторяет правку успешно.
+Продолжение того же сеанса переобъявляет S и физически сохраняет текст без новой строки журнала. Undo заранее получает id U, проверяет всю цепочку тела, при разрешённом force первым делом закрепляет текущие тексты, объявляет U, применяет inverse и дописывает `type=undo, undoes=S`. При конфликте отказывает целиком; старый редактор после успешной отмены остаётся заблокирован до причинно подтверждённого документа. Другой пользователь/epoch не наследует старую доставку или стек.
 
----
+```mermaid
+sequenceDiagram
+    participant UI as Лента web
+    participant TP as journal/threadPage
+    participant DB as PostgreSQL
+    UI->>TP: graph, thread, before=ISO|id, limit
+    TP->>DB: threadMessages (без infra rows), limit
+    TP->>DB: threadFeed журнала, тот же курсор/limit
+    TP->>DB: отметки undone/closed по id карточек страницы
+    TP->>TP: общий порядок DESC(time,id), первые limit
+    TP-->>UI: реплики + JournalCardMeta без тел операций
+```
 
 ## §5. ER-схема
 
-**Двадцать одна таблица** — состав и колонки скопированы из PRD 01 §4 без добавлений и без пропусков; версионных или репликационных служебных полей на сущностях нет, владение — `graph_id` (PRD 01 §4.10, 04-decision-log D44). Восемь исходных пришли с Task 1; `oauth_clients` и `agent_grants` (PRD 01 §4.13–§4.14) — со слайсом 4b: состояние доступа внешних агентов, без которого не бывает ни одноразового кода, ни отзыва (04-decision-log D34); `entity_versions` (PRD 01 §4.15) — с ADE-срезом 1: закреплённые владельцем версии тела (04-decision-log D37); `envelope_spent_cache` (PRD 01 §3.5, §Б5-5) — материализация `spent` по конверту, приехала со срезом Б-1 (миграция `0018`); **`graphs` и `graph_members`** (PRD 01 §4.10) — со срезом Г: сами графы и гранты аккаунтов на них (04-decision-log D44, миграция `0020`). Сплошной истории правок здесь нет и не появится — снимок делает человек.
+**Двадцать четыре таблицы** — состав и колонки скопированы из PRD 01 §4 без добавлений и без пропусков; ревизия тела служит замком текста, репликационных служебных полей на сущностях нет, владение — `graph_id` (PRD 01 §4.10, 04-decision-log D44). Восемь исходных пришли с Task 1; `oauth_clients` и `agent_grants` (PRD 01 §4.13–§4.14) — со слайсом 4b: состояние доступа внешних агентов, без которого не бывает ни одноразового кода, ни отзыва (04-decision-log D34); `entity_versions` (PRD 01 §4.15) — с ADE-срезом 1: закреплённые владельцем версии тела (04-decision-log D37); `envelope_spent_cache` (PRD 01 §3.5, §Б5-5) — материализация `spent` по конверту, приехала со срезом Б-1 (миграция `0018`); **`graphs` и `graph_members`** (PRD 01 §4.10) — со срезом Г: сами графы и гранты аккаунтов на них (04-decision-log D44, миграция `0020`). Сплошной истории правок здесь нет: снимок делает человек либо страховка конкретного восстановления/отмены. План А добавляет perf_samples, action_journal и action_journal_entities (0024–0025).
 
 **Семь последних пришли с реформой свойств** (PRD 01 §4.16, 04-decision-log D43): шесть реестров структуры — `property_definitions`, `relation_role_definitions`, `contract_definitions`, `subscription_definitions`, `action_definitions` и переделанный `aspect_definitions` — плюс журнал персональных правок `registry_deltas` и однострочная таблица версии system-реестра `registry_system`. Три из шести (`contract_definitions`, `subscription_definitions`, `action_definitions`) в срезе А были **созданы пустыми**; контракты и подписки засеяны срезом Б-1 (6 и 2), действия — срезом Б-2 (2), там же седьмой контракт — `orbis/delegable`. Пустых реестров структуры больше нет. Правила каталога отдельной таблицы не получили: они живут колонкой `rules` в строках своих носителей (миграция `0022`).
 
-Реформа при этом не только добавила: у `entities` **сняты** `meta` и старая jsonb-карта аспектов, у `relations` — `relation_type`, у `aspect_definitions` — колонка `schema` (JSON Schema стала генерируемой производной набора свойств). Ниже — состояние **после** миграции `0022`.
+Реформа при этом не только добавила: у `entities` **сняты** `meta` и старая jsonb-карта аспектов, у `relations` — `relation_type`, у `aspect_definitions` — колонка `schema` (JSON Schema стала генерируемой производной набора свойств). Ниже — состояние **после** миграций плана А `0024`–`0026`; нового состояния ленты плана Б здесь нет.
 
 ```mermaid
 erDiagram
@@ -477,6 +487,9 @@ erDiagram
         text emoji
         text body
         jsonb body_doc
+        int body_revision
+        uuid body_action_id
+        timestamptz body_changed_at
         text body_before_doc
         text_array body_refs
         text_array query_refs
@@ -658,6 +671,59 @@ erDiagram
         timestamptz created_at
     }
 
+    action_journal {
+        uuid graph_id PK,FK
+        uuid id PK
+        timestamptz created_at
+        text type
+        uuid entity_id
+        uuid actor_user_id
+        text actor_kind
+        text source
+        text mechanism
+        uuid actor_grant_id
+        uuid run_id
+        text action_id
+        text module
+        uuid edited_from
+        uuid thread_id FK
+        text title
+        text card_tool
+        uuid_array entity_ids
+        jsonb operations
+        jsonb inverse
+        jsonb results
+        boolean text_session
+        jsonb body_before
+        uuid undoes
+        uuid_array pinned_version_ids
+        boolean card_in_reply
+    }
+
+    action_journal_entities {
+        uuid graph_id PK,FK
+        uuid action_id PK,FK
+        uuid entity_id PK
+        timestamptz created_at
+    }
+
+    perf_samples {
+        bigint id PK
+        uuid account_id
+        timestamptz created_at
+        text metric
+        text screen
+        text kind
+        text procedure
+        real dur_ms
+        real server_ms
+        real db_ms
+        text device
+        text net
+        text app_version
+        boolean cached
+    }
+
     ai_usage {
         uuid graph_id PK
         date date PK
@@ -739,6 +805,9 @@ erDiagram
     entities ||--o{ entity_origins : "entity_id"
     entities ||--o{ entity_versions : "entity_id (ON DELETE cascade)"
     entities |o--o| chat_threads : "entity_id (nullable, глобальный тред = NULL)"
+    graphs ||--o{ action_journal : "graph_id CASCADE"
+    action_journal ||--o{ action_journal_entities : "graph_id + action_id CASCADE"
+    chat_threads o|--o{ action_journal : "thread_id SET NULL"
     chat_threads ||--o{ chat_messages : "thread_id"
     oauth_clients |o--o{ agent_grants : "client_id (nullable, у PAT — NULL)"
     graphs ||--o{ entities : "graph_id"
@@ -770,11 +839,13 @@ erDiagram
 - `ai_usage` — составной первичный ключ `(graph_id, date, model)`, без собственного суррогатного `id` (PRD 01 §4.7); расход пишется **на граф**, а тариф — на аккаунт (D44).
 - `chat_threads.entity_id` — nullable: `NULL` означает глобальный тред ГРАФА (мессенджер-модель), не связанный ни с одной сущностью; связь `entities |o--o| chat_threads` на диаграмме относится только к тредам сущностей — не более одного треда на сущность (PRD 01 §4.5).
 - Типы `text_array` на диаграмме соответствуют Postgres `text[]` (ограничение синтаксиса Mermaid ER на символы в имени типа); `date`, `jsonb`, `bigint`, `boolean`, `timestamptz` — типы колонок как в PRD 01 §4.
-- Владение — `graph_id` на каждой таблице, где оно применимо (кроме `relations` и `chat_messages`, чьё владение резолвится транзитивно через связанные `entities`/`chat_threads`, `registry_system`, у которой владельца нет по построению — она одна на базу, — и `oauth_clients`, у которой графа нет вовсе: регистрация клиента происходит до согласия — RLS-политика PRD 01 §4.10). У шести реестров определений `graph_id` **nullable**, и это несёт смысл: `NULL` — встроенная строка, приехавшая сидом из кода и читаемая всеми (и читаемая **без текущего графа**, иначе стартовая проверка дрейфа объявила бы дрейф); не-`NULL` — строка графа. У `registry_deltas` он `NOT NULL` — дельта без графа бессмысленна. Сам `graph_id` — FK на `graphs.id` (`ON DELETE NO ACTION`, миграция `0020`), а владелец графа лежит записью в `graphs.owner_kind` / `owner_ref`: человек или организация (D44). Таблицы `graphs` и `graph_members` **переживают пересев мира** (`reset-world`) — сносится содержимое графов, а не сами графы и гранты.
+- Владение — `graph_id` на каждой таблице, где оно применимо (кроме аккаунтной `perf_samples`, `relations` и `chat_messages`, чьё владение резолвится транзитивно через связанные `entities`/`chat_threads`, `registry_system`, у которой владельца нет по построению — она одна на базу, — и `oauth_clients`, у которой графа нет вовсе: регистрация клиента происходит до согласия — RLS-политика PRD 01 §4.10). У шести реестров определений `graph_id` **nullable**, и это несёт смысл: `NULL` — встроенная строка, приехавшая сидом из кода и читаемая всеми (и читаемая **без текущего графа**, иначе стартовая проверка дрейфа объявила бы дрейф); не-`NULL` — строка графа. У `registry_deltas` он `NOT NULL` — дельта без графа бессмысленна. Сам `graph_id` — FK на `graphs.id` (`ON DELETE NO ACTION`, миграция `0020`), а владелец графа лежит записью в `graphs.owner_kind` / `owner_ref`: человек или организация (D44). Таблицы `graphs` и `graph_members` **переживают пересев мира** (`reset-world`) — сносится содержимое графов, а не сами графы и гранты.
 - `entity_versions` — снимок **тела** сущности, а не самой сущности: `body` (markdown-проекция) хранится всегда, `body_doc` — только если документ у записи на момент снимка уже был. `ON DELETE cascade` намеренный: снимок без своей записи ничего не значит. Владение прямое, по `graph_id`, как у `entity_origins`; на записи RLS дополнительно требует, чтобы сама сущность лежала в том же графе (PRD 01 §4.10, §4.15).
 - `agent_grants` и `oauth_clients` в графе сущностей не участвуют: они не связаны с `entities` ни одной ссылкой и не подлежат Undo — это состояние доступа, а не пользовательские данные. Хеши токенов (`code_hash`, `access_hash`, `refresh_hash`, `prev_refresh_hash`) — единственная форма, в которой токен попадает в базу; сырых значений схема не хранит нигде (PRD 01 §4.14).
 
 ---
+
+План А: у тела триггерные revision/action/time; у action нет FK из `body_action_id`, потому что журнал пишется после графа в той же транзакции. Таблицы журнала и замеров дописываются, RLS и гранты допускают приложению только SELECT/INSERT. `perf_samples` принадлежит аккаунту; остальные новые строки — графу. Полные DDL и текущие исключения операции — в `handoff-plan-b.md` леджера.
 
 ## §6. Граница детализации
 

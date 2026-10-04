@@ -3,7 +3,7 @@
 // подтверждения НИЧЕГО не записано ни в граф, ни в журнал; approve исполняет
 // СОХРАНЁННЫЙ payload полным конвейером executor'а (ревалидация текущего состояния)
 // без обращения к LLM; идемпотентность approve — по PK детерминированного
-// audit-сообщения (batch-механика §7.8, batch_id = pendingId).
+// записи журнала (batch-механика §7.8, batch_id = pendingId).
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import type { GraphId, UndoTextChangedDetails } from '@orbis/shared';
 import {

@@ -116,7 +116,7 @@ describe('e2e слайс 1a: день из 02 §5 (два пользовател
   });
 
   // ── Шаг 2: эмуляция fast-path-результата (расход «обед 340») ───────────────
-  test('шаг 2: ввод «обед 340» + entity.create расхода → audit-сообщение с action и inverse', async () => {
+  test('шаг 2: ввод «обед 340» + entity.create расхода → запись журнала с action и inverse', async () => {
     // id «Еды» — из результата сидирования (query по тегу+FTS), НЕ хардкод uuid
     const found = await a.entity.query({ query: 'tags=category, search=Еда' });
     expect(found.length).toBe(1);

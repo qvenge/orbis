@@ -23,8 +23,9 @@ export const SURVIVE_CEILING_MS = 10_000;
 export const SEARCH_TEXT_MAX = 40;
 /**
  * Набор (§3.4 п. 4, R-5): очередями с паузой ДЛИННЕЕ паузы сохранения тела (`SAVE_DEBOUNCE_MS` = 2 с,
- * `useBodySave.ts`; таймер перезаводится на каждую правку) — каждая очередь даёт одно сохранение, и запросы
- * считаются по каждому (цель §0.3 п. 8: сохранение при открытом чате не перечитывает ни чат, ни экран). Сплошной
+ * `useBodySave.ts`; таймер перезаводится на каждую правку) — ожидается одно сохранение на очередь. Запросы
+ * считаются по временным окнам (N1/R99: поздний зависимый запрос может попасть в следующее окно, причинная
+ * принадлежность сохранению этим счётом не доказана; общий счёт верен). Сплошной
  * набор не дал бы ни одного сохранения за все 30 с. Латиница — клавиши US-раскладки: кириллицу Playwright
  * вставляет `insertText` без keydown/keyup, и у таких событий нет `interactionId` — INP мерил бы одни пробелы.
  */
@@ -35,11 +36,106 @@ export const TYPING = {
   pauseMs: 2500,
 } as const;
 export const RECORD_KINDS = ['task', 'note', 'page-with-blocks', 'project', 'no-blocks'] as const;
+/** Все CSS-селекторы и доступные имена сценария; сторож сверяет их с реальными производителями web.
+ * `${*}` обозначает переменную часть адреса, а не отдельный селектор для каждой лабораторной записи.
+ * Вкладку «Детали» поставляет общий эталон: web рисует подпись дерева, поэтому сторож проверяет и этот источник.
+ */
+export const LAB_SELECTORS = [
+  ['main[data-testid="screen-content"]', ['app/router.tsx', '<main data-testid="screen-content"']],
+  [
+    'main[data-testid="screen-content"][data-place$="/r/${*}"]',
+    ['app/router.tsx', 'data-place={place}'],
+  ],
+  [
+    '[data-testid="record-area"]',
+    ['features/entity-detail/DetailScreen.tsx', 'data-testid="record-area"'],
+  ],
+  [
+    '[data-testid="record-view-wait"]',
+    ['features/page/RecordView.tsx', 'data-testid="record-view-wait"'],
+  ],
+  [
+    '[role="status"][aria-label="Загрузка"]',
+    ['ui/Skeleton.tsx', 'role="status"', 'aria-label="Загрузка"'],
+  ],
+  ['[role="status"]', ['features/page/blocks/DataBlock.tsx', 'role="status"', 'Загрузка…']],
+  ['[data-testid="login-screen"]', ['auth/LoginScreen.tsx', 'data-testid="login-screen"']],
+  [
+    'input[aria-label="Строка поиска"]',
+    ['features/search/SearchPanel.tsx', 'aria-label="Строка поиска"', '<Input'],
+    ['ui/Input.tsx', '<input'],
+  ],
+  [
+    '[data-testid="search-hit-${*}"]',
+    ['features/search/SearchPanel.tsx', 'data-testid={`search-hit-${hit.id}`}'],
+  ],
+  ['[data-testid="host-back"]', ['app/frame/HostPresence.tsx', 'data-testid="host-back"']],
+  ['[data-testid="host-new"]', ['app/frame/HostButtons.tsx', 'data-testid="host-new"']],
+  [
+    'form[data-testid="quick-capture-form"] input[aria-label="Быстрая запись"]',
+    [
+      'features/browser/QuickCapture.tsx',
+      '<form data-testid="quick-capture-form"',
+      'aria-label="Быстрая запись"',
+      '<input',
+    ],
+  ],
+  [
+    'form[data-testid="quick-capture-form"] button[aria-label="Добавить"]',
+    ['features/browser/QuickCapture.tsx', 'aria-label="Добавить"', '<button'],
+  ],
+  [
+    '[data-testid="native-row"] [role="checkbox"][aria-label="Готово"]',
+    [
+      'features/entity-detail/NativeRow.tsx',
+      'data-testid="native-row"',
+      '<Checkbox',
+      'aria-label="Готово"',
+    ],
+    ['ui/Checkbox.tsx', '<RC.Root'],
+  ],
+  [
+    'role:tab;name:Детали',
+    ['features/page/TabsContainer.tsx', 'label: tab.label'],
+    ['ui/Tabs.tsx', '<RT.Trigger', '{t.label}'],
+  ],
+  [
+    'select[data-testid="prop-orbis/task_status"]',
+    ['lib/registry/PropertyControl.tsx', '<select', 'data-testid={`prop-${def.id}`}'],
+  ],
+  [
+    '[data-testid="body-editor"] .ProseMirror',
+    ['features/entity-editor/BodyEditor.tsx', '<EditorContent', 'data-testid="body-editor"'],
+  ],
+  [
+    '[data-testid="editor-preview"]',
+    ['features/entity-editor/EditorShell.tsx', 'data-testid="editor-preview"'],
+  ],
+  ['[data-testid="host-chat"]', ['app/frame/HostButtons.tsx', 'data-testid="host-chat"']],
+  [
+    '[data-testid="draft-banner"]',
+    ['features/entity-detail/EntityBody.tsx', 'data-testid="draft-banner"'],
+  ],
+  [
+    'main[data-testid="screen-content"] [data-testid="record-area"]',
+    ['app/router.tsx', 'data-testid="screen-content"'],
+    ['features/entity-detail/DetailScreen.tsx', 'data-testid="record-area"'],
+  ],
+  [
+    'button[data-testid="screen-menu"]',
+    ['app/frame/ScreenMenu.tsx', 'data-testid="screen-menu"', '<button'],
+  ],
+  [
+    'role:menuitem;name:Архивировать',
+    ['features/entity-detail/DetailMenu.tsx', "archived ? 'Разархивировать' : 'Архивировать'"],
+    ['ui/DropdownMenu.tsx', '<RDM.Item', '{item.label}'],
+  ],
+] as const;
 export type RecordKind = (typeof RECORD_KINDS)[number];
 export interface TypingResult {
   /** Запросы tRPC по процедурам за весь набор. */
   requests: Record<string, number>;
-  /** Запросы по окнам «очередь + пауза»: в каждом окне — одно сохранение и то, что оно потянуло. */
+  /** Запросы по временным окнам «очередь + пауза»; поздние ответы могут пересечь границу (N1/R99). */
   perSave: Array<Record<string, number>>;
   /** Маркер, набранный перед закрытием вкладки без паузы, виден на новом открытии в пределах потолка. */
   textSurvived: boolean;
@@ -284,18 +380,33 @@ async function pickRecords(page: Page, notes: string[]): Promise<Partial<Record<
   const out: Partial<Record<RecordKind, Row>> = {};
   const taken = new Set<string>();
   let changed = false;
+  // R99: сначала резервируем все пригодные сохранённые записи. Иначе замена раннего вида могла забрать
+  // запись позднего вида; повтор сохранённого id принадлежит первому виду и позже перевыбирается.
+  const validated = new Map<
+    string,
+    { entity: EntityRead['entity'] | undefined; why: string | null }
+  >();
   for (const kind of RECORD_KINDS) {
     const kept = stored[kind];
     if (kept !== undefined) {
-      const e = (await read(kept))?.entity;
+      let checked = validated.get(kept);
+      if (checked === undefined) {
+        const entity = (await read(kept))?.entity;
+        const why =
+          entity === undefined
+            ? 'не читается'
+            : entity.archived
+              ? 'в архиве'
+              : !(await searchFinds(page, entity.id, searchTextOf(entity.title)))
+                ? 'не находится поиском'
+                : null;
+        checked = { entity, why };
+        validated.set(kept, checked);
+      }
+      const { entity: e } = checked;
       const why =
-        e === undefined
-          ? 'не читается'
-          : e.archived
-            ? 'в архиве'
-            : !(await searchFinds(page, e.id, searchTextOf(e.title)))
-              ? 'не находится поиском'
-              : null;
+        checked.why ??
+        (e !== undefined && taken.has(e.id) ? 'уже сохранена для другого вида' : null);
       if (why === null && e !== undefined) {
         out[kind] = { id: e.id, title: e.title };
         taken.add(e.id);
@@ -305,6 +416,9 @@ async function pickRecords(page: Page, notes: string[]): Promise<Partial<Record<
         `records.json: запись вида ${kind} (${kept}) ${why} — перевыбрана, вид несравним с прежними прогонами`,
       );
     }
+  }
+  for (const kind of RECORD_KINDS) {
+    if (out[kind] !== undefined) continue;
     changed = true;
     const { query, fits } = KIND_SOURCES[kind];
     let skipped = 0;
@@ -556,7 +670,7 @@ async function focusEditor(page: Page): Promise<void> {
 
 /**
  * Набор ≈30 с при открытом чате (§3.4 п. 4, R-5): очереди `TYPING` с паузой длиннее паузы сохранения — запросы по
- * каждому сохранению и INP. Затем маркер без паузы и закрытие вкладки: текст живёт только в досыле на `pagehide`
+ * временным окнам и INP (N1/R99: это не причинная атрибуция сохранению). Затем маркер без паузы и закрытие вкладки: текст живёт только в досыле на `pagehide`
  * и в черновике. Новая вкладка — после события закрытия старой (I-4); маркер ждём в области записи (превью или
  * редактор) до потолка: до ответа сервера просмотр показывает прежний текст, черновик досылается при подъёме.
  */

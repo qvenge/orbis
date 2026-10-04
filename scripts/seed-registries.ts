@@ -1,4 +1,4 @@
-// scripts/seed-registries.ts — сид встроенных строк трёх реестров (свойства, роли, аспекты)
+// scripts/seed-registries.ts — сид встроенных строк шести реестров (свойства, роли, аспекты, контракты, подписки, действия)
 // для локальной базы и CI. Шаг `bun run db:prepare` (package.json). Требует
 // DATABASE_URL_ADMIN: system-строки (`graph_id IS NULL`) пишутся мимо RLS.
 //
