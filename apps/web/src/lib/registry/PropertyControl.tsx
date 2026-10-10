@@ -30,6 +30,7 @@ import {
   parseControlValue,
   writeModeOf,
 } from './controls';
+import type { DraftValue } from './draft-value';
 import { displayText, EMPTY_TEXT } from './format';
 import { aspectLabel } from './labels';
 import { useRegistry } from './useRegistry';
@@ -43,6 +44,10 @@ const RefListField = lazy(() =>
   import('./RefListControl').then((m) => ({ default: m.RefListField })),
 );
 
+const ScalarListControl = lazy(() =>
+  import('./ScalarListControl').then((m) => ({ default: m.ScalarListControl })),
+);
+
 /**
  * Контрол свойства.
  *
@@ -54,14 +59,17 @@ const RefListField = lazy(() =>
  */
 export function PropertyControl({
   def,
-  value,
-  onChange,
+  value: savedValue,
+  onChange: legacyOnChange,
+  draft,
   readOnly = false,
   selfId,
 }: {
   def: PropertyDefinition;
   value: unknown;
   onChange: (v: unknown | undefined) => void;
+  /** Opt-in immediate raw state; legacy callbacks are never invoked in this mode. */
+  draft?: { state: DraftValue; onChange: (next: DraftValue) => void };
   readOnly?: boolean;
   /**
    * Запись, чьё это свойство. Список ссылок не предлагает её поиском: «Навигация» приложения на себя
@@ -71,7 +79,33 @@ export function PropertyControl({
 }) {
   const label = effectiveLabel(def.label, OWNER_LOCALE);
   const mode = writeModeOf(def);
-  const kind = controlKindOf(def);
+  const declaredKind = controlKindOf(def);
+  const scalarList =
+    declaredKind === 'text-list' ||
+    declaredKind === 'number-list' ||
+    declaredKind === 'decimal-list';
+  // Legacy list cards remain read-only; only the new draft forms load list editors.
+  const kind = scalarList && !draft ? 'readonly' : declaredKind;
+  const value = draft
+    ? draft.state.kind === 'value'
+      ? draft.state.value
+      : draft.state.kind === 'raw'
+        ? draft.state.raw
+        : draft.state.kind === 'list'
+          ? draft.state.items
+          : undefined
+    : savedValue;
+  const onChange = draft
+    ? (next: unknown) =>
+        draft.onChange(
+          next === undefined &&
+            (kind === 'select-many' || kind === 'aspects-many' || kind === 'ref-list')
+            ? { kind: 'value', value: [] }
+            : next === undefined
+              ? { kind: 'unset' }
+              : { kind: 'value', value: next },
+        )
+    : legacyOnChange;
   const locked = readOnly || mode !== 'editable' || kind === 'readonly';
 
   if (locked) {
@@ -113,6 +147,23 @@ export function PropertyControl({
    * `orbis/parent_project` и `orbis/root_project` считает правило (`model_writable: false`),
    * и пикер у них означал бы обещание правки, которую сервер отвергнет.
    */
+  if (draft && scalarList) {
+    const items =
+      draft.state.kind === 'list'
+        ? draft.state.items
+        : Array.isArray(value)
+          ? value.map((item) => String(item))
+          : [];
+    return (
+      <Suspense fallback={null}>
+        <ScalarListControl
+          def={def}
+          value={items}
+          onChange={(items) => draft.onChange({ kind: 'list', items })}
+        />
+      </Suspense>
+    );
+  }
   if (kind === 'ref') return <RefField def={def} label={label} value={value} onChange={onChange} />;
   if (kind === 'ref-list')
     return (
@@ -134,6 +185,19 @@ export function PropertyControl({
     return <SelectManyControl def={def} label={label} value={value} onChange={onChange} />;
   if (kind === 'aspects-many')
     return <AspectsManyControl def={def} label={label} value={value} onChange={onChange} />;
+  if (draft)
+    return (
+      <input
+        type="text"
+        aria-label={label}
+        data-testid={`prop-${def.id}`}
+        data-kind={kind}
+        className={FIELD_CLASS}
+        inputMode={kind === 'number' || kind === 'decimal' ? 'decimal' : undefined}
+        value={controlText(value)}
+        onChange={(e) => draft.onChange({ kind: 'raw', raw: e.target.value })}
+      />
+    );
   return <TextControl def={def} label={label} kind={kind} value={value} onChange={onChange} />;
 }
 

@@ -36,6 +36,9 @@ export type ControlKind =
   | 'text'
   | 'number'
   | 'decimal'
+  | 'text-list'
+  | 'number-list'
+  | 'decimal-list'
   | 'boolean'
   | 'date'
   | 'timestamp'
@@ -50,11 +53,10 @@ export type ControlKind =
 /**
  * Контрол по объявлению свойства.
  *
- * `many` разбирается ровно для `select`: у вариантов из закрытого словаря список набирается
- * чипами без единой двусмысленности. Список СВОБОДНОГО текста (`orbis/aliases`,
- * `orbis/allowed_tools`) остаётся `readonly`, и это не пробел: однострочной формы у него нет
- * — разделитель пришлось бы выбрать, а алиас с запятой внутри такой контрол молча разрезал
- * бы надвое. Показывается он перечислением (`displayText`), правится тулом и импортом.
+ * `select many` набирается чипами из закрытого словаря. Списки свободного текста
+ * и чисел имеют отдельные строки (`*-list`) в opt-in draft формах:
+ * запятая внутри текста остаётся частью строки. Legacy карточки показывают эти списки
+ * только чтением; их blur-путь не меняется.
  *
  * `json`, `grant`, `registry_ref` — `readonly` по той же причине, по какой ими не правят с
  * клавиатуры: у `json` форма значения описана схемой, у `grant` — это id живого доступа
@@ -69,7 +71,7 @@ export function controlKindOf(def: PropertyDefinition): ControlKind {
     case 'text':
     case 'number':
     case 'decimal':
-      return type.cardinality === 'many' ? 'readonly' : type.kind;
+      return type.cardinality === 'many' ? `${type.kind}-list` : type.kind;
     case 'boolean':
     case 'date':
     case 'timestamp':

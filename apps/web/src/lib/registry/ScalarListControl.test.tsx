@@ -1,0 +1,65 @@
+import { fireEvent, render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { useState } from 'react';
+import { expect, test, vi } from 'vitest';
+import {
+  field,
+  textManyDef,
+} from '../../features/entity-detail/properties-relations/test-fixtures';
+import { ScalarListControl } from './ScalarListControl';
+
+function Harness({ initial = ['Дом, работа', 'Второе'] }: { initial?: string[] }) {
+  const [items, setItems] = useState(initial);
+  return (
+    <>
+      <ScalarListControl def={textManyDef} value={items} onChange={setItems} />
+      <output data-testid="items">{JSON.stringify(items)}</output>
+    </>
+  );
+}
+
+test('отдельные строки без split: add/remove/raw/[]', async () => {
+  const user = userEvent.setup();
+  render(<Harness />);
+  const first = screen.getByRole('textbox', { name: 'Поле теста: строка 1' });
+  expect(first).toHaveValue('Дом, работа');
+  await user.type(first, ', ещё');
+  expect(screen.getByTestId('items')).toHaveTextContent('["Дом, работа, ещё","Второе"]');
+  await user.click(screen.getByRole('button', { name: 'Добавить строку' }));
+  expect(screen.getByRole('textbox', { name: 'Поле теста: строка 3' })).toHaveValue('');
+  await user.click(screen.getByRole('button', { name: 'Удалить строку 2' }));
+  expect(screen.getByTestId('items')).toHaveTextContent('["Дом, работа, ещё",""]');
+  await user.click(screen.getByRole('button', { name: 'Удалить строку 2' }));
+  await user.click(screen.getByRole('button', { name: 'Удалить строку 1' }));
+  expect(screen.getByTestId('items')).toHaveTextContent('[]');
+});
+
+test('keyboard доступен без submit; disabled блокирует input/add/remove', async () => {
+  const user = userEvent.setup();
+  const onChange = vi.fn();
+  const { rerender } = render(
+    <ScalarListControl
+      def={field({ kind: 'number', cardinality: 'many' })}
+      value={['1e']}
+      onChange={onChange}
+    />,
+  );
+  const input = screen.getByRole('textbox', { name: 'Поле теста: строка 1' });
+  expect(input).toHaveValue('1e');
+  expect(input).toHaveAttribute('inputmode', 'decimal');
+  await user.tab();
+  expect(input).toHaveFocus();
+  await user.tab();
+  await user.keyboard('{Enter}');
+  expect(onChange).toHaveBeenLastCalledWith([]);
+  rerender(<ScalarListControl def={textManyDef} value={['один']} onChange={onChange} disabled />);
+  expect(screen.getByRole('textbox')).toBeDisabled();
+  for (const button of screen.getAllByRole('button')) {
+    expect(button).toBeDisabled();
+    expect(button).toHaveAttribute('type', 'button');
+  }
+  onChange.mockClear();
+  fireEvent.click(screen.getByRole('button', { name: 'Добавить строку' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Удалить строку 1' }));
+  expect(onChange).not.toHaveBeenCalled();
+});

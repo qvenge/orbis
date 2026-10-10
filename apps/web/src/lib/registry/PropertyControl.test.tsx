@@ -4,11 +4,20 @@
 // флаги здесь ровно те, что увидит владелец, — иначе «select показывает подпись варианта»
 // доказывалось бы вариантом, которого в проде нет.
 import { BUILTIN_PROPERTY_META, type PropertyDefinition } from '@orbis/shared';
-import { fireEvent, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { useState } from 'react';
 import { describe, expect, test, vi } from 'vitest';
+import {
+  field,
+  numberDef,
+  textDef,
+  textManyDef,
+} from '../../features/entity-detail/properties-relations/test-fixtures';
 import { renderWithProviders } from '../../test/harness';
 import { registryReply } from '../../test/registry';
 import { controlKindOf, parseControlValue, writeModeOf } from './controls';
+import { type DraftValue, parseDraftValue } from './draft-value';
 import { displayText } from './format';
 import { AspectsManyControl, PropertyControl } from './PropertyControl';
 
@@ -30,8 +39,8 @@ test('контрол выбирается по kind, а не по значени
   expect(controlKindOf(def('orbis/waiting_for'))).toBe('text');
   // `select` с `cardinality: many` — чипы, а не один выбор.
   expect(controlKindOf(def('orbis/routine_days'))).toBe('select-many');
-  // Список СВОБОДНОГО текста однострочной формы не имеет — только показ.
-  expect(controlKindOf(def('orbis/aliases'))).toBe('readonly');
+  // Списки получают отдельные строки в opt-in draft, legacy остаётся только показом.
+  expect(controlKindOf(def('orbis/aliases'))).toBe('text-list');
   expect(controlKindOf(def('orbis/progress_source'))).toBe('readonly');
 });
 
@@ -368,4 +377,216 @@ describe('скрытый выбранный аспект виден и сним�
     fireEvent.click(screen.getByRole('checkbox', { name: /user\/нет/ }));
     expect(onChange).toHaveBeenLastCalledWith(['orbis/task']);
   });
+});
+
+function DraftHarness({
+  definition = textDef,
+  initial = { kind: 'raw', raw: '' },
+  disabled = false,
+}: {
+  definition?: PropertyDefinition;
+  initial?: DraftValue;
+  disabled?: boolean;
+}) {
+  const [state, onChange] = useState<DraftValue>(initial);
+  const [result, setResult] = useState<unknown>();
+  const parsed = parseDraftValue(definition, state);
+  return (
+    <>
+      <PropertyControl
+        def={definition}
+        value="серверное"
+        onChange={() => {
+          throw new Error('legacy callback в draft mode');
+        }}
+        draft={{ state, onChange }}
+        readOnly={disabled}
+      />
+      {!parsed.ok && <p role="alert">{parsed.message}</p>}
+      <button
+        type="button"
+        disabled={!parsed.ok}
+        onPointerDown={() => setResult(parseDraftValue(definition, state))}
+        onClick={() => setResult(parseDraftValue(definition, state))}
+      >
+        Сохранить
+      </button>
+      <button type="button" onClick={() => onChange({ kind: 'unset' })}>
+        Снять значение
+      </button>
+      <output data-testid="draft">{JSON.stringify(state)}</output>
+      <output data-testid="result">{JSON.stringify(result)}</output>
+    </>
+  );
+}
+
+test('draft последний фокус: pointerDown Save видит последнюю строку до blur', async () => {
+  const user = userEvent.setup();
+  renderWithProviders(<DraftHarness />);
+  const input = screen.getByRole('textbox', { name: 'Поле теста' });
+  await user.type(input, '  последняя строка  ');
+  expect(input).toHaveFocus();
+  fireEvent.pointerDown(screen.getByRole('button', { name: 'Сохранить' }));
+  expect(input).toHaveFocus();
+  expect(JSON.parse(screen.getByTestId('result').textContent ?? '{}')).toEqual({
+    ok: true,
+    value: '  последняя строка  ',
+  });
+});
+
+test('draft number хранит неполное число, объясняет ошибку и не разрешает save', async () => {
+  const user = userEvent.setup();
+  renderWithProviders(<DraftHarness definition={numberDef} />);
+  const input = screen.getByRole('textbox', { name: 'Поле теста' });
+  expect(input).toHaveAttribute('type', 'text');
+  expect(input).toHaveAttribute('inputmode', 'decimal');
+  await user.type(input, '1e');
+  expect(input).toHaveValue('1e');
+  expect(screen.getByTestId('draft')).toHaveTextContent('"raw":"1e"');
+  expect(screen.getByRole('button', { name: 'Сохранить' })).toBeDisabled();
+  expect(screen.getByRole('alert')).not.toBeEmptyDOMElement();
+  await user.type(input, '2');
+  fireEvent.pointerDown(screen.getByRole('button', { name: 'Сохранить' }));
+  expect(screen.getByTestId('result')).toHaveTextContent('{"ok":true,"value":100}');
+});
+
+test('draft empty text отличается от explicit unset и отказ не сбрасывает raw', async () => {
+  const onChange = vi.fn();
+  const { rerender } = render(
+    <PropertyControl
+      def={textDef}
+      value="серверное"
+      onChange={onChange}
+      draft={{ state: { kind: 'raw', raw: 'с ошибкой' }, onChange }}
+    />,
+  );
+  const input = screen.getByRole('textbox', { name: 'Поле теста' });
+  expect(input).toHaveValue('с ошибкой');
+  rerender(
+    <PropertyControl
+      def={textDef}
+      value="старое серверное"
+      onChange={onChange}
+      draft={{ state: { kind: 'raw', raw: 'с ошибкой' }, onChange }}
+    />,
+  );
+  expect(input).toHaveValue('с ошибкой');
+  // Controlled state is parent-owned: callback receives raw immediately, not on blur.
+  onChange.mockClear();
+  fireEvent.change(input, { target: { value: '' } });
+  expect(onChange).toHaveBeenCalledOnce();
+  expect(onChange).toHaveBeenCalledWith({ kind: 'raw', raw: '' });
+  fireEvent.blur(input);
+  expect(onChange).toHaveBeenCalledOnce();
+});
+
+test('draft lists используют отдельные lazy строки и снятие отдельно от []', async () => {
+  const user = userEvent.setup();
+  renderWithProviders(
+    <DraftHarness definition={textManyDef} initial={{ kind: 'list', items: ['один'] }} />,
+  );
+  await user.click(await screen.findByRole('button', { name: 'Удалить строку 1' }));
+  fireEvent.pointerDown(screen.getByRole('button', { name: 'Сохранить' }));
+  expect(screen.getByTestId('result')).toHaveTextContent('{"ok":true,"value":[]}');
+  await user.click(screen.getByRole('button', { name: 'Снять значение' }));
+  fireEvent.pointerDown(screen.getByRole('button', { name: 'Сохранить' }));
+  expect(screen.getByTestId('result')).toHaveTextContent('{"ok":true,"unset":true}');
+});
+
+test('legacy blur отправляет ровно один onChange, draft readOnly не даёт input', () => {
+  const onChange = vi.fn();
+  const { unmount } = renderWithProviders(
+    <PropertyControl def={textDef} value="старое" onChange={onChange} />,
+  );
+  const input = screen.getByRole('textbox', { name: 'Поле теста' });
+  fireEvent.change(input, { target: { value: 'новое' } });
+  expect(onChange).not.toHaveBeenCalled();
+  fireEvent.blur(input);
+  expect(onChange).toHaveBeenCalledExactlyOnceWith('новое');
+  unmount();
+  renderWithProviders(<DraftHarness initial={{ kind: 'raw', raw: 'новое' }} disabled />);
+  expect(screen.queryByRole('textbox')).toBeNull();
+});
+
+test.each([
+  'text',
+  'number',
+  'decimal',
+] as const)('scalar list kind %s загружается только в draft, legacy остаётся readonly', async (kind) => {
+  const definition = field({ kind, cardinality: 'many' });
+  expect(controlKindOf(definition)).toBe(`${kind}-list`);
+  const onChange = vi.fn();
+  const { unmount } = renderWithProviders(
+    <PropertyControl def={definition} value={['1']} onChange={onChange} />,
+  );
+  expect(screen.queryByRole('textbox')).toBeNull();
+  expect(screen.getByTestId(`prop-${definition.id}`)).toHaveAttribute('data-kind', 'readonly');
+  unmount();
+  renderWithProviders(
+    <PropertyControl
+      def={definition}
+      value={['1']}
+      onChange={onChange}
+      draft={{ state: { kind: 'list', items: ['1'] }, onChange }}
+    />,
+  );
+  const input = await screen.findByRole('textbox', { name: 'Поле теста: строка 1' });
+  fireEvent.change(input, { target: { value: kind === 'text' ? 'Дом, работа' : '1e' } });
+  expect(onChange).toHaveBeenCalledExactlyOnceWith({
+    kind: 'list',
+    items: [kind === 'text' ? 'Дом, работа' : '1e'],
+  });
+});
+
+test('draft boolean false и select-many [] идут в draft callback, legacy не вызывается', () => {
+  const legacy = vi.fn();
+  const change = vi.fn();
+  const { unmount } = renderWithProviders(
+    <PropertyControl
+      def={def('orbis/all_day')}
+      value={true}
+      onChange={legacy}
+      draft={{ state: { kind: 'value', value: true }, onChange: change }}
+    />,
+  );
+  fireEvent.click(screen.getByRole('checkbox', { name: 'Весь день' }));
+  expect(change).toHaveBeenCalledExactlyOnceWith({ kind: 'value', value: false });
+  unmount();
+  change.mockClear();
+  renderWithProviders(
+    <PropertyControl
+      def={def('orbis/routine_days')}
+      value={['we']}
+      onChange={legacy}
+      draft={{ state: { kind: 'value', value: ['we'] }, onChange: change }}
+    />,
+  );
+  fireEvent.click(screen.getByRole('checkbox', { name: 'Ср' }));
+  expect(change).toHaveBeenCalledExactlyOnceWith({ kind: 'value', value: [] });
+  expect(legacy).not.toHaveBeenCalled();
+});
+
+test('draft json null остаётся readonly, system flags запрещают raw input', () => {
+  const onChange = vi.fn();
+  const { unmount } = renderWithProviders(
+    <PropertyControl
+      def={field({ kind: 'json' })}
+      value="старое"
+      onChange={onChange}
+      draft={{ state: { kind: 'value', value: null }, onChange }}
+    />,
+  );
+  expect(screen.queryByRole('textbox')).toBeNull();
+  expect(onChange).not.toHaveBeenCalled();
+  unmount();
+  renderWithProviders(
+    <PropertyControl
+      def={{ ...textDef, flags: { system_writable: true } }}
+      value="старое"
+      onChange={onChange}
+      draft={{ state: { kind: 'raw', raw: 'сохранённый черновик' }, onChange }}
+    />,
+  );
+  expect(screen.queryByRole('textbox')).toBeNull();
+  expect(screen.getByTestId(`prop-${textDef.id}`)).toHaveTextContent('сохранённый черновик');
 });
