@@ -16,6 +16,52 @@ import type { Context, Entity, PanelCommand, Relation } from './types';
 
 const A = '00000000-0000-4000-8000-000000000001';
 const B = entity.id;
+it.each([
+  'subitem',
+  'dependency',
+])('relation remove buttons distinguish coincident role labels on the same original pair: %s', async (roleId) => {
+  const sent = vi.fn();
+  const catalog = {
+    ...registry,
+    roles: registry.roles.map((role) => ({ ...role, label: { ru: 'Связь' } })),
+  };
+  renderWithProviders(
+    <Host
+      reg={catalog}
+      edges={[edge('first', 'subitem', A, B), edge('second', 'dependency', A, B)]}
+      sent={sent}
+    />,
+    handler,
+  );
+  const buttons = await screen.findAllByRole('button', { name: /^Снять связь:/ });
+  expect(new Set(buttons.map((button) => button.getAttribute('aria-label'))).size).toBe(2);
+  const roleKey = registry.roles.find((role) => role.id === roleId)?.key;
+  const first = buttons.find((button) =>
+    button.getAttribute('aria-label')?.includes(`(${roleKey})`),
+  );
+  if (!first) throw new Error('role subject missing');
+  fireEvent.click(first);
+  fireEvent.click(
+    screen.getByRole('button', { name: /^Подтвердить снятие связи: Связь.*Проект →.*Задача/ }),
+  );
+  expect(sent).toHaveBeenCalledWith({
+    kind: 'deleteRelation',
+    entityId: B,
+    key: { role: roleId, source_id: A, target_id: B },
+  });
+});
+it('remove and confirmation names include original addresses when the referenced title is unavailable', async () => {
+  renderWithProviders(<Host edges={[edge('missing', 'subitem', A, B)]} />, (path) =>
+    path === 'entity.resolveRefs' ? [] : [],
+  );
+  const remove = await screen.findByRole('button', { name: /^Снять связь:/ });
+  expect(remove.getAttribute('aria-label')).toContain(A);
+  expect(remove.getAttribute('aria-label')).toContain(B);
+  fireEvent.click(remove);
+  expect(
+    screen.getByRole('button', { name: /^Подтвердить снятие связи:/ }).getAttribute('aria-label'),
+  ).toContain(A);
+});
 const C = '00000000-0000-4000-8000-000000000003';
 const record = { ...entity, title: 'Задача' };
 const title = (id: string) => (id === A ? 'Проект' : id === B ? 'Задача' : 'Сосед');
@@ -132,9 +178,9 @@ describe('complete directional relation browser', () => {
     expect(
       await screen.findByText(`Начало ${role} — Проект → Конец ${role} — Задача`),
     ).toBeVisible();
-    fireEvent.click(screen.getByRole('button', { name: 'Снять связь' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Снять связь/ }));
     expect(sent).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole('button', { name: 'Подтвердить снятие' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Подтвердить снятие/ }));
     expect(sent).toHaveBeenCalledExactlyOnceWith({
       kind: 'deleteRelation',
       entityId: B,
@@ -160,7 +206,7 @@ describe('complete directional relation browser', () => {
   ])('%s is visible but never removable or pickable', async (role) => {
     renderWithProviders(<Host edges={[edge('one', role)]} />, handler);
     await screen.findByTestId('relation-one');
-    expect(screen.queryByRole('button', { name: 'Снять связь' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Снять связь/ })).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Добавить связь' }));
     expect(
       within(screen.getByLabelText('Роль связи')).queryByRole('option', { name: role }),
@@ -491,9 +537,9 @@ describe('relation current-state and shell seams', () => {
   ])('delete repeats current %s guard after opening confirmation', (button) => {
     const sent = vi.fn();
     renderWithProviders(<Host edges={[edge('one')]} sent={sent} />, handler);
-    fireEvent.click(screen.getByRole('button', { name: 'Снять связь' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Снять связь/ }));
     fireEvent.click(screen.getByRole('button', { name: button }));
-    fireEvent.click(screen.getByRole('button', { name: 'Подтвердить снятие' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Подтвердить снятие/ }));
     expect(sent).not.toHaveBeenCalled();
     expect(screen.getAllByRole('alert').length).toBeGreaterThan(0);
     expect(screen.getByTestId('relation-one')).toBeVisible();
@@ -523,7 +569,7 @@ describe('relation current-state and shell seams', () => {
       />,
       handler,
     );
-    expect(screen.queryByRole('button', { name: 'Снять связь' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Снять связь/ })).toBeNull();
     expect(screen.getAllByText('Управляется системой')).toHaveLength(2);
     expect(screen.getByRole('button', { name: 'Добавить связь' })).toBeDisabled();
   });
@@ -535,9 +581,9 @@ describe('relation current-state and shell seams', () => {
       />,
       handler,
     );
-    expect(screen.getByRole('button', { name: 'Снять связь' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /^Снять связь/ })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Добавить связь' })).toBeDisabled();
-    expect(screen.queryByRole('button', { name: 'Подтвердить снятие' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Подтвердить снятие/ })).toBeNull();
   });
   it('requestAction defers local delete until shell explicitly runs guarded action', () => {
     let action: (() => void) | undefined;
@@ -577,11 +623,11 @@ describe('relation current-state and shell seams', () => {
       );
     }
     renderWithProviders(<Shell />, handler);
-    fireEvent.click(screen.getByRole('button', { name: 'Снять связь' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Снять связь/ }));
     expect(request).toHaveBeenCalledOnce();
-    expect(screen.queryByRole('button', { name: 'Подтвердить снятие' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Подтвердить снятие/ })).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'discard confirmed' }));
-    expect(screen.getByRole('button', { name: 'Подтвердить снятие' })).toBeVisible();
+    expect(screen.getByRole('button', { name: /^Подтвердить снятие/ })).toBeVisible();
   });
   it('shared ref edge remains one row after refresh removes one reflected property', () => {
     function Shell() {
@@ -604,7 +650,7 @@ describe('relation current-state and shell seams', () => {
     expect(screen.getAllByTestId(/^relation-/)).toHaveLength(1);
     fireEvent.click(screen.getByRole('button', { name: 'one property cleared' }));
     expect(screen.getAllByTestId(/^relation-/)).toHaveLength(1);
-    expect(screen.queryByRole('button', { name: 'Снять связь' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Снять связь/ })).toBeNull();
   });
   it('role module off remains manual create and delete authority', () => {
     const reg = {
@@ -784,8 +830,8 @@ it.each([
     handler,
   );
   expect(await screen.findByText(`Начало ${role} — Проект → Конец ${role} — Задача`)).toBeVisible();
-  fireEvent.click(screen.getByRole('button', { name: 'Снять связь' }));
-  fireEvent.click(screen.getByRole('button', { name: 'Подтвердить снятие' }));
+  fireEvent.click(screen.getByRole('button', { name: /^Снять связь/ }));
+  fireEvent.click(screen.getByRole('button', { name: /^Подтвердить снятие/ }));
   expect(sent).toHaveBeenCalledExactlyOnceWith({
     kind: 'deleteRelation',
     entityId: A,
@@ -821,9 +867,9 @@ it('old unscoped search response cannot enter the new contract role scope', asyn
 it('delete confirmation and both endpoint preview stay inside the original edge row', async () => {
   renderWithProviders(<Host edges={[edge('one')]} />, handler);
   await screen.findByText('Родитель — Проект → Подпункт — Задача');
-  fireEvent.click(screen.getByRole('button', { name: 'Снять связь' }));
+  fireEvent.click(screen.getByRole('button', { name: /^Снять связь/ }));
   const row = within(screen.getByTestId('relation-one'));
-  expect(row.getByRole('button', { name: 'Подтвердить снятие' })).toBeVisible();
+  expect(row.getByRole('button', { name: /^Подтвердить снятие/ })).toBeVisible();
   expect(row.getByRole('button', { name: 'Отмена' })).toBeVisible();
   expect(row.getAllByText('Родитель — Проект → Подпункт — Задача').length).toBeGreaterThan(0);
 });
@@ -872,9 +918,9 @@ it('coincident role rows expose accessible description and key before original i
     expect(row.getByText(`Ключ роли: ${key}`)).toBeVisible();
   }
   fireEvent.click(
-    within(screen.getByTestId('relation-wait')).getByRole('button', { name: 'Снять связь' }),
+    within(screen.getByTestId('relation-wait')).getByRole('button', { name: /^Снять связь/ }),
   );
-  fireEvent.click(screen.getByRole('button', { name: 'Подтвердить снятие' }));
+  fireEvent.click(screen.getByRole('button', { name: /^Подтвердить снятие/ }));
   expect(sent).toHaveBeenCalledExactlyOnceWith({
     kind: 'deleteRelation',
     entityId: B,

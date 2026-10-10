@@ -7,19 +7,111 @@
 
 import { BUILTIN_PROPERTY_META } from '@orbis/shared';
 import { act, fireEvent, screen, waitFor } from '@testing-library/react';
+import { useState } from 'react';
 import { beforeEach, expect, test } from 'vitest';
+import { useEntityDetail } from '../../features/entity-detail/useEntityDetail';
 import { renderWithProviders } from '../../test/harness';
 import { BUILTIN_REGISTRY } from '../../test/registry';
 import { trpc } from '../../trpc';
 import { EntityRef } from '../entity-ref/EntityRef';
 import { invalidateGraph } from '../invalidate';
 import { fieldLabel } from './labels';
-import { resetRegistryVersionForTests, useRegistry } from './useRegistry';
+import { noteRegistryVersion, resetRegistryVersionForTests, useRegistry } from './useRegistry';
+
+test('cached detail remount cannot replace a newer registry observation', async () => {
+  function Reader() {
+    useEntityDetail('e1');
+    const view = useRegistry();
+    return (
+      <output data-testid="stale">
+        {view.version}:{String(view.versionStale)}
+      </output>
+    );
+  }
+  function Host() {
+    const [key, setKey] = useState(0);
+    return (
+      <>
+        <Reader key={key} />
+        <button type="button" onClick={() => setKey(key + 1)}>
+          Remount cached detail
+        </button>
+      </>
+    );
+  }
+  renderWithProviders(
+    <Host />,
+    (path) =>
+      path === 'registry.effective'
+        ? renamed('old', 'Old')
+        : path === 'entity.get'
+          ? {
+              entity: { id: 'e1', title: 'Record', props: {}, aspects: [] },
+              registryVersion: 'old',
+            }
+          : {},
+    { queries: { staleTime: Infinity } },
+  );
+  await waitFor(() => expect(screen.getByTestId('stale')).toHaveTextContent('old:false'));
+  await act(async () => noteRegistryVersion('new'));
+  await waitFor(() => expect(screen.getByTestId('stale')).toHaveTextContent('true'));
+  fireEvent.click(screen.getByRole('button', { name: 'Remount cached detail' }));
+  await waitFor(() => expect(screen.getByTestId('stale')).toHaveTextContent('true'));
+});
+
+test('cached registry reader remount cannot replace an observed newer version', async () => {
+  function Reader() {
+    const view = useRegistry();
+    return (
+      <output data-testid="stale">
+        {view.version}:{String(view.versionStale)}
+      </output>
+    );
+  }
+  function Host() {
+    const [key, setKey] = useState(0);
+    return (
+      <>
+        <Reader key={key} />
+        <button type="button" onClick={() => setKey(key + 1)}>
+          Remount cached reader
+        </button>
+      </>
+    );
+  }
+  renderWithProviders(<Host />, (path) =>
+    path === 'registry.effective' ? renamed('old', 'Old') : {},
+  );
+  await waitFor(() => expect(screen.getByTestId('stale')).toHaveTextContent('old:false'));
+  await act(async () => noteRegistryVersion('new'));
+  await waitFor(() => expect(screen.getByTestId('stale')).toHaveTextContent('true'));
+  fireEvent.click(screen.getByRole('button', { name: 'Remount cached reader' }));
+  await waitFor(() => expect(screen.getByTestId('stale')).toHaveTextContent('true'));
+});
 
 beforeEach(() => {
   // Наблюдённая версия живёт МОДУЛЕМ и переживает размонтирование дерева — как и должна в
   // бою. Между тестами её надо снимать, иначе второй тест стартовал бы с чужой версией.
   resetRegistryVersionForTests();
+});
+test('fresh same-version observation advances provenance before an intermediate cached other version', async () => {
+  renderWithProviders(<Probe />, (path) =>
+    path === 'registry.effective'
+      ? renamed('old', 'Old')
+      : path === 'entity.get'
+        ? { entity: { id: 'e1', title: 'Record' }, registryVersion: 'old' }
+        : {},
+  );
+  await waitFor(() => expect(screen.getByTestId('label')).toHaveTextContent('Old'));
+  const base = Date.now() + 100;
+  await act(async () => {
+    noteRegistryVersion('new', base);
+    noteRegistryVersion('new', base + 2);
+    noteRegistryVersion('old', base + 1);
+  });
+  expect(JSON.parse(screen.getByTestId('registry-state').textContent ?? '{}').versionStale).toBe(
+    true,
+  );
 });
 
 /** Реестр с ПОДМЕНЁННОЙ подписью одного свойства — «владелец переименовал поле». */

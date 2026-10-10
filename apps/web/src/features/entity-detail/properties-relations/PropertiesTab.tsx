@@ -88,7 +88,11 @@ export function PropertiesTab(form: PanelFormProps) {
       {!draft && (
         <Button
           className="min-h-11"
-          disabled={Boolean(contextReason(context)) || submissionLocked(form.submission)}
+          disabled={
+            Boolean(contextReason(context)) ||
+            submissionLocked(form.submission) ||
+            Boolean(form.metadataUnavailable)
+          }
           onClick={() => onDraftChange(startDraft(entity, registry, { kind: 'values' }, context))}
         >
           Редактировать свойства
@@ -116,7 +120,12 @@ export function PropertiesTab(form: PanelFormProps) {
               return (
                 <div key={def.id} className="flex flex-col gap-1">
                   <Button
-                    disabled={!access.canSet || access.editor !== 'generic' || busy}
+                    disabled={
+                      !access.canSet ||
+                      access.editor !== 'generic' ||
+                      busy ||
+                      Boolean(form.metadataUnavailable)
+                    }
                     onClick={() => {
                       if (!propertyAccess(def, context).canSet || access.editor !== 'generic')
                         return;

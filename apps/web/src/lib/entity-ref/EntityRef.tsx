@@ -19,7 +19,7 @@ export function EntityRef({ id, onOpen }: { id: string; onOpen?: (id: string) =>
    * снятым при последнем открытии записи. Хук идемпотентен: та же строка не будит никого,
    * поэтому десяток чипов на экране стоит один раз.
    */
-  useNoteRegistryVersion(q.data?.registryVersion);
+  useNoteRegistryVersion(q.data?.registryVersion, q.dataUpdatedAt);
   if (q.isLoading) return <Skeleton className="inline-block h-4 w-24 align-middle" />;
   const title = q.data?.entity.title;
   if (!title)

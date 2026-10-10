@@ -276,6 +276,44 @@ it('delayed dispatcher reads after import; A to B and context changes cannot use
   await next;
   expect(same.setHostView).not.toHaveBeenCalled();
 });
+it('distinct lazy getters for the same host share its actual pending intent and release after failure', async () => {
+  const host = latest();
+  let release: () => void = () => {};
+  const load = new Promise<void>((resolve) => (release = resolve));
+  let reject: (error: unknown) => void = () => {};
+  const mutation = new Promise((_resolve, rejection) => (reject = rejection));
+  host.makePage = vi.fn(() => mutation);
+  const loader = async () => {
+    await load;
+    return import('./panel-host');
+  };
+  const first = runLazyPanelHost('makePage', { entityId: id, readOnly: false }, () => host, loader);
+  const second = runLazyPanelHost(
+    'makePage',
+    { entityId: id, readOnly: false },
+    () => host,
+    loader,
+  );
+  release();
+  await waitFor(() => expect(host.makePage).toHaveBeenCalledTimes(1));
+  reject(new Error('write failed'));
+  await Promise.allSettled([first, second]);
+  host.makePage = vi.fn(async () => false);
+  await runLazyPanelHost('makePage', { entityId: id, readOnly: false }, () => host);
+  expect(host.makePage).toHaveBeenCalledTimes(1);
+});
+it('failed lazy host loading releases the intent for an explicit retry', async () => {
+  const host = latest();
+  const read = () => host;
+  await expect(
+    runLazyPanelHost('makePage', { entityId: id, readOnly: false }, read, async () => {
+      throw new Error('chunk failed');
+    }),
+  ).rejects.toThrow('chunk failed');
+  expect(host.makePage).not.toHaveBeenCalled();
+  await runLazyPanelHost('makePage', { entityId: id, readOnly: false }, read);
+  expect(host.makePage).toHaveBeenCalledTimes(1);
+});
 it('body navigation addresses foreign preview target and refused leave never changes any view', () => {
   const host = latest();
   const off = registerLeaveGuard(() => false);

@@ -153,7 +153,7 @@ export function AspectsTab(form: PanelFormProps) {
             {access.reason && <p className="text-sm text-text-muted">{access.reason}</p>}
             {access.canDetach && (
               <Button
-                disabled={submissionLocked(form.submission)}
+                disabled={submissionLocked(form.submission) || Boolean(form.metadataUnavailable)}
                 onClick={() =>
                   form.onRequestAction ? form.onRequestAction(() => setDetach(id)) : setDetach(id)
                 }
@@ -165,6 +165,7 @@ export function AspectsTab(form: PanelFormProps) {
               <Button
                 disabled={
                   submissionLocked(form.submission) ||
+                  Boolean(form.metadataUnavailable) ||
                   Boolean(form.specialReason?.(access.route as 'assignment' | 'page' | 'app'))
                 }
                 onClick={() => form.onSpecial(access.route as 'assignment' | 'page' | 'app')}
@@ -182,7 +183,7 @@ export function AspectsTab(form: PanelFormProps) {
         <FormFooter form={form} errors={errors} onSave={() => {}} hideActions>
           <p>Значения свойств сохранятся. Связанные вычисления и правила могут измениться</p>
           <Button
-            disabled={submissionLocked(form.submission)}
+            disabled={submissionLocked(form.submission) || Boolean(form.metadataUnavailable)}
             onClick={() => {
               const access = aspectAccess(lookup.aspect(detach), context);
               if (!access.canDetach) {
@@ -227,6 +228,7 @@ export function AspectsTab(form: PanelFormProps) {
                   disabled={
                     access.route === 'readonly' ||
                     submissionLocked(form.submission) ||
+                    Boolean(form.metadataUnavailable) ||
                     (access.route !== 'generic' && Boolean(form.specialReason?.(access.route)))
                   }
                   onClick={() => {

@@ -1,5 +1,187 @@
-import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { useQueryClient } from '@tanstack/react-query';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { useState } from 'react';
+import { noteRegistryVersion, REGISTRY_QUERY_KEY } from '../../../lib/registry/useRegistry';
+
+it.each([
+  'human',
+  'agent',
+])('special assignment %s reaches one coherent addressed shell batch', async (executor) => {
+  const { calls } = renderWithProviders(panel(), (path, input, type) =>
+    path === 'oauth.listGrants'
+      ? [{ id: 'grant-live', label: 'Live', scope: 'worker', revokedAt: null, connected: true }]
+      : type === 'mutation'
+        ? { ok: true }
+        : handler(path, input),
+  );
+  fireEvent.click(await screen.findByRole('button', { name: 'Добавить: Исполнитель' }));
+  if (executor === 'agent') {
+    fireEvent.click(screen.getByLabelText('Агент'));
+    await screen.findByRole('option', { name: 'Live · исполнитель' });
+    fireEvent.change(screen.getByLabelText('Доступ агента'), { target: { value: 'grant-live' } });
+  }
+  fireEvent.click(screen.getByRole('button', { name: 'Сохранить' }));
+  await waitFor(() =>
+    expect(calls.filter((call) => call.path === 'entity.updateBatch')).toHaveLength(1),
+  );
+  const patch =
+    executor === 'human'
+      ? { props: { 'orbis/executor': 'human' }, unset: ['orbis/grant', 'orbis/may_close'] }
+      : {
+          props: {
+            'orbis/executor': 'agent',
+            'orbis/grant': 'grant-live',
+            'orbis/may_close': false,
+          },
+        };
+  expect(calls.find((call) => call.path === 'entity.updateBatch')?.input).toMatchObject({
+    operations: [
+      { tool: 'entity_update', input: { id, aspects: { attach: ['orbis/assignment'] }, ...patch } },
+    ],
+  });
+});
+it.each([
+  'readonly',
+  'archive',
+  'generated-unset',
+  'mask',
+])('special assignment refuses current %s gates including generated clears', async (gate) => {
+  let queryClient: ReturnType<typeof useQueryClient> | undefined;
+  let restricted = false;
+  const catalog = {
+    ...registry,
+    properties: registry.properties.map((def) =>
+      def.id === 'orbis/grant' && gate === 'mask' ? { ...def, module: 'finance' as const } : def,
+    ),
+  };
+  function Host() {
+    queryClient = useQueryClient();
+    const [readonly, setReadonly] = useState(false);
+    return (
+      <>
+        <button type="button" onClick={() => setReadonly(true)}>
+          Force preview
+        </button>
+        <PropertiesRelationsPanel
+          target={{ entityId: id, readOnly: readonly }}
+          host={host}
+          onClose={() => {}}
+        />
+      </>
+    );
+  }
+  const { calls } = renderWithProviders(<Host />, (path, input) => {
+    if (path === 'registry.effective')
+      return restricted && gate === 'generated-unset'
+        ? {
+            ...catalog,
+            properties: catalog.properties.map((def) =>
+              def.id === 'orbis/grant' ? { ...def, flags: { model_writable: false } } : def,
+            ),
+          }
+        : catalog;
+    if (path === 'user.getSettings')
+      return { disabledModules: restricted && gate === 'mask' ? ['finance'] : [] };
+    if (path === 'entity.get')
+      return {
+        entity: { ...entity, archived: restricted && gate === 'archive' },
+        relations: [],
+        registryVersion: registry.version,
+      };
+    return handler(path, input);
+  });
+  fireEvent.click(await screen.findByRole('button', { name: 'Добавить: Исполнитель' }));
+  restricted = true;
+  if (gate === 'readonly')
+    fireEvent.click(screen.getByRole('button', { name: 'Force preview', hidden: true }));
+  else
+    await act(async () => {
+      await queryClient?.invalidateQueries();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+  fireEvent.click(screen.getByRole('button', { name: 'Сохранить' }));
+  expect(calls.some((call) => call.path === 'entity.updateBatch')).toBe(false);
+  expect(screen.getByRole('button', { name: 'Отменить' })).toBeVisible();
+});
+it.each([
+  'failure',
+  'version',
+])('retained registry %s preserves raw, blocks new editor/save and retries explicitly', async (mode) => {
+  let queryClient: ReturnType<typeof useQueryClient> | undefined;
+  let failed = false;
+  let version = registry.version;
+  function Host() {
+    queryClient = useQueryClient();
+    return panel();
+  }
+  const { calls } = renderWithProviders(<Host />, (path, input) => {
+    if (path === 'registry.effective') {
+      if (failed) throw trpcError('INTERNAL_SERVER_ERROR');
+      return { ...registry, version };
+    }
+    if (path === 'entity.get') return { entity, relations: [], registryVersion: version };
+    return handler(path, input);
+  });
+  await properties();
+  fireEvent.change(screen.getByLabelText('Поле теста'), { target: { value: 'local' } });
+  if (mode === 'failure') {
+    failed = true;
+    await act(async () => {
+      await queryClient?.invalidateQueries({ queryKey: REGISTRY_QUERY_KEY });
+    });
+  } else
+    await act(async () => {
+      noteRegistryVersion('new-version');
+    });
+  expect(
+    await screen.findByRole('button', { name: 'Повторить загрузку определений' }),
+  ).toBeVisible();
+  expect(screen.getByLabelText('Поле теста')).toHaveValue('local');
+  expect(screen.getByRole('button', { name: 'Сохранить' })).toBeDisabled();
+  fireEvent.click(screen.getByRole('tab', { name: 'Аспекты' }));
+  expect(screen.getByRole('button', { name: 'Добавить: Задача' })).toBeDisabled();
+  fireEvent.click(screen.getByRole('tab', { name: 'Свойства' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Отменить' }));
+  expect(screen.getByRole('button', { name: 'Редактировать свойства' })).toBeDisabled();
+  expect(calls.some((call) => call.path === 'entity.updateBatch')).toBe(false);
+  failed = false;
+  version = mode === 'version' ? 'new-version' : registry.version;
+  fireEvent.click(screen.getByRole('button', { name: 'Повторить загрузку определений' }));
+  await waitFor(() =>
+    expect(screen.getByRole('button', { name: 'Редактировать свойства' })).not.toBeDisabled(),
+  );
+});
+it('explicit metadata retry refreshes its own cached entity version as well as the retained registry', async () => {
+  let queryClient: ReturnType<typeof useQueryClient> | undefined;
+  let version = registry.version;
+  function Host() {
+    queryClient = useQueryClient();
+    return panel();
+  }
+  const { calls } = renderWithProviders(
+    <Host />,
+    (path, input) =>
+      path === 'registry.effective'
+        ? { ...registry, version }
+        : path === 'entity.get'
+          ? { entity, relations: [], registryVersion: version }
+          : handler(path, input),
+    { queries: { staleTime: Infinity } },
+  );
+  await properties();
+  fireEvent.change(screen.getByLabelText('Поле теста'), {
+    target: { value: 'raw through recovery' },
+  });
+  version = 'new-snapshot-version';
+  await act(async () => {
+    await queryClient?.invalidateQueries({ queryKey: REGISTRY_QUERY_KEY });
+  });
+  fireEvent.click(await screen.findByRole('button', { name: 'Повторить загрузку определений' }));
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Сохранить' })).not.toBeDisabled());
+  expect(screen.getByLabelText('Поле теста')).toHaveValue('raw through recovery');
+  expect(calls.some((call) => call.path === 'entity.updateBatch')).toBe(false);
+});
+
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { resetRegistryVersionForTests } from '../../../lib/registry/useRegistry';
 import { mayLeave } from '../../../state/leave-guard';
@@ -261,7 +443,7 @@ it.each([
   else {
     fireEvent.click(await screen.findByRole('tab', { name: 'Связи' }));
     if (kind === 'deleteRelation')
-      fireEvent.click(screen.getByRole('button', { name: 'Снять связь' }));
+      fireEvent.click(screen.getByRole('button', { name: /^Снять связь/ }));
     else {
       fireEvent.click(screen.getByRole('button', { name: 'Добавить связь' }));
       fireEvent.change(screen.getByLabelText('Роль связи'), { target: { value: 'subitem' } });
@@ -272,7 +454,7 @@ it.each([
     }
   }
   const save = screen.getByRole('button', {
-    name: kind === 'detach' || kind === 'deleteRelation' ? 'Подтвердить снятие' : 'Сохранить',
+    name: kind === 'detach' || kind === 'deleteRelation' ? /^Подтвердить снятие/ : 'Сохранить',
   });
   fireEvent.click(save);
   await waitFor(() => expect(writes).toBe(1));
@@ -518,7 +700,11 @@ it('preview exposes only reading and body navigation, no mutation from any form'
   fireEvent.click(screen.getByRole('tab', { name: 'Свойства' }));
   expect(screen.getByRole('button', { name: 'Редактировать свойства' })).toBeDisabled();
   fireEvent.click(screen.getByRole('button', { name: 'Открыть текст записи' }));
-  expect(host.run).toHaveBeenCalledWith('openBody', { entityId: id, readOnly: true });
+  expect(host.run).toHaveBeenCalledWith(
+    'openBody',
+    { entityId: id, readOnly: true },
+    expect.any(Function),
+  );
   expect(
     calls.some((c) =>
       ['entity.updateBatch', 'entity.update', 'relation.create', 'relation.delete'].includes(

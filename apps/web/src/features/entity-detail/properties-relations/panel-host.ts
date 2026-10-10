@@ -9,13 +9,14 @@ export type LatestPanelHost = {
   restricted: boolean;
   setMode: () => void;
   setHostView: () => void;
-  restore: () => void;
-  makePage: () => void;
-  stopPage: () => void;
+  /** Mutation producers return their promise, awaited by dispatch before unlocking. */
+  restore: () => unknown;
+  makePage: () => unknown;
+  stopPage: () => unknown;
   onClose: () => void;
 };
 /** Loaded on the gesture. The getter is read after import, never a pre-import snapshot. */
-export function dispatchPanelHost(
+export async function dispatchPanelHost(
   action: PanelHostAction,
   target: PanelTarget,
   readLatest: () => LatestPanelHost,
@@ -45,8 +46,8 @@ export function dispatchPanelHost(
   )
     return;
   if (action === 'restore') {
-    if (host.entity.archived) host.restore();
-  } else if (action === 'makePage') host.makePage();
-  else if (action === 'stopPage') host.stopPage();
+    if (host.entity.archived) await host.restore();
+  } else if (action === 'makePage') await host.makePage();
+  else if (action === 'stopPage') await host.stopPage();
   else host.setHostView();
 }

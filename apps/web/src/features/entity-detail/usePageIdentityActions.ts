@@ -11,7 +11,7 @@ export function usePageIdentityActions(entity: WireEntity | undefined, bodyGate:
   return {
     makePage: () => {
       if (entity && settleBody(bodyGate.current, show))
-        void batch(
+        return batch(
           [{ tool: 'entity_update', input: { id: entity.id, aspects: { attach: [PAGE_ASPECT] } } }],
           'Запись стала страницей',
           { action: 'Сделать страницей' },
@@ -19,7 +19,7 @@ export function usePageIdentityActions(entity: WireEntity | undefined, bodyGate:
     },
     stopPage: () => {
       if (entity && settleBody(bodyGate.current, show))
-        void batch(
+        return batch(
           [{ tool: 'entity_update', input: { id: entity.id, aspects: { detach: [PAGE_ASPECT] } } }],
           'Запись больше не страница',
           { action: 'Перестать быть страницей' },

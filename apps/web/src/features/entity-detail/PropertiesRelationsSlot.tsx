@@ -2,30 +2,52 @@ import { Component, lazy, type ReactNode, Suspense, useState } from 'react';
 import type { BodyGateRef } from './EntityBody';
 import type { LatestPanelHost } from './properties-relations/panel-host';
 import type { WireEntity } from './record-host';
+
+const hostFlights = new WeakSet<() => LatestPanelHost>();
+const executingHosts = new WeakSet<LatestPanelHost>();
 export async function runLazyPanelHost(
   action: PanelHostAction,
   target: PanelTarget,
   readLatest: () => LatestPanelHost,
   loader = () => import('./properties-relations/panel-host'),
+  execute?: (dispatch: () => Promise<void>) => Promise<void>,
 ) {
+  if (hostFlights.has(readLatest)) return;
+  hostFlights.add(readLatest);
   const frozen = { ...target };
-  const module = await loader();
-  module.dispatchPanelHost(action, frozen, readLatest);
+  let executing: LatestPanelHost | undefined;
+  try {
+    const module = await loader();
+    const latest = readLatest();
+    if (executingHosts.has(latest)) return;
+    executing = latest;
+    executingHosts.add(latest);
+    const dispatch = () => module.dispatchPanelHost(action, frozen, readLatest);
+    await (execute ? execute(dispatch) : dispatch());
+  } finally {
+    if (executing) executingHosts.delete(executing);
+    hostFlights.delete(readLatest);
+  }
 }
 export type PanelTarget = { entityId: string; readOnly: boolean };
 export type PanelHostAction = 'openBody' | 'restore' | 'makePage' | 'stopPage' | 'configureApp';
 export type PanelHostActions = {
   screenEntityId: string;
   available: ReadonlySet<PanelHostAction>;
-  run: (action: PanelHostAction, target: PanelTarget) => void;
+  pending?: boolean;
+  run: (
+    action: PanelHostAction,
+    target: PanelTarget,
+    execute?: (dispatch: () => Promise<void>) => Promise<void>,
+  ) => void;
   /** Lazy bridge binds current host handlers, with an address checked again by dispatch. */
   pageContext?: {
     entity: WireEntity | undefined;
     bodyGate: BodyGateRef;
     publish: (actions: {
       id: string | undefined;
-      makePage: () => void;
-      stopPage: () => void;
+      makePage: () => unknown;
+      stopPage: () => unknown;
     }) => void;
   };
 };

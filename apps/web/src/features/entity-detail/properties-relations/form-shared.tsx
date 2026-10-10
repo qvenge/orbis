@@ -41,6 +41,8 @@ export type PanelFormProps = {
   onCancel: () => void;
   onSpecial: (editor: SpecialEditor) => void;
   specialReason?: (editor: SpecialEditor) => string | undefined;
+  metadataUnavailable?: string;
+  actionPending?: boolean;
   onRequestAction?: (action: () => void) => void;
   /** Shell explicitly clears local confirmations/picker state before another guarded action. */
   registerReset?: (reset: () => void) => () => void;
@@ -398,13 +400,21 @@ export function FormFooter({
       )}
       {!hideActions && (
         <div className="flex flex-wrap gap-2">
-          <Button className="min-h-11" disabled={submissionLocked(submission)} onClick={onSave}>
+          <Button
+            className="min-h-11"
+            disabled={
+              form.actionPending ||
+              submissionLocked(submission) ||
+              Boolean(form.metadataUnavailable)
+            }
+            onClick={onSave}
+          >
             Сохранить
           </Button>
           <Button
             className="min-h-11"
             variant="ghost"
-            disabled={result === 'pending'}
+            disabled={form.actionPending || result === 'pending'}
             onClick={form.onCancel}
           >
             Отменить

@@ -1,4 +1,5 @@
 import { type ComponentType, lazy, Suspense, useState } from 'react';
+import { PropertiesRelationsOwner } from '../features/entity-detail/PropertiesRelationsOwner';
 import { useSearchDialog } from '../features/search/search-dialog-store';
 import { useSearchHotkey } from '../features/search/useSearchHotkey';
 import { Button } from '../ui/Button';
@@ -115,7 +116,9 @@ export function AppShell() {
   const searchOpen = useSearchDialog((s) => s.open);
   return (
     <>
-      {desktop ? <DesktopSlot /> : <PhoneFrame />}
+      <PropertiesRelationsOwner>
+        {desktop ? <DesktopSlot /> : <PhoneFrame />}
+      </PropertiesRelationsOwner>
       {searchOpen && (
         <div className="fixed inset-x-0 top-0 z-50 bg-surface empty:hidden">
           <ChunkErrorBoundary resetKey="search-dialog" failed={<SearchDialogFailed />}>

@@ -73,7 +73,7 @@ export function RelationsTab(props: RelationsTabProps) {
     .filter((r) => roleAccess(r, context).canCreate)
     .slice()
     .sort((a, b) => a.rank - b.rank || a.id.localeCompare(b.id));
-  const locked = submissionLocked(props.submission);
+  const locked = submissionLocked(props.submission) || Boolean(props.metadataUnavailable);
   const controlsLocked =
     locked || Boolean(contextReason(context)) || Boolean(draft && draft.entityId !== entity.id);
   const submitted = props.submission?.command;
@@ -100,6 +100,8 @@ export function RelationsTab(props: RelationsTabProps) {
     const def = lookup.role(key.role);
     return `${def ? effectiveLabel(def.sourceLabel, OWNER_LOCALE) : key.role} — ${name(key.source_id)} → ${def ? effectiveLabel(def.targetLabel, OWNER_LOCALE) : key.role} — ${name(key.target_id)}`;
   };
+  const subject = (key: RelationKey) =>
+    `${lookup.label(key.role)} (${lookup.role(key.role)?.key ?? key.role}) — ${pair(key)} [${key.source_id} → ${key.target_id}]`;
   const currentContract =
     editor?.side === 'source'
       ? role?.constraints.source_contract
@@ -218,7 +220,11 @@ export function RelationsTab(props: RelationsTabProps) {
       {footer(
         true,
         <>
-          <Button disabled={locked} onClick={save}>
+          <Button
+            aria-label={`Подтвердить снятие связи: ${subject(keyOf(confirm.edge))}`}
+            disabled={locked}
+            onClick={save}
+          >
             Подтвердить снятие
           </Button>
           <Button disabled={props.submission?.result === 'pending'} onClick={form.onCancel}>
@@ -299,6 +305,7 @@ export function RelationsTab(props: RelationsTabProps) {
                   )}
                   {access.canDelete && r.role !== 'ref' && !confirm && (
                     <Button
+                      aria-label={`Снять связь: ${subject(keyOf(r))}`}
                       disabled={locked || Boolean(draft && !props.onRequestAction)}
                       onClick={() =>
                         request(() => {

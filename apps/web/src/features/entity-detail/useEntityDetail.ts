@@ -356,7 +356,7 @@ export function useEntityDetail(entityId: string) {
    * уходит отсюда после КАЖДОЙ правки графа (`invalidateGraph`), то есть ровно тогда, когда
    * снимок мог устареть, и подписи карточек аспектов обновляются без перезагрузки.
    */
-  useNoteRegistryVersion(get.data?.registryVersion);
+  useNoteRegistryVersion(get.data?.registryVersion, get.dataUpdatedAt);
   const entity = get.data?.entity;
   return { get, entity, ...useRecordEdits(entityId, entity) };
 }

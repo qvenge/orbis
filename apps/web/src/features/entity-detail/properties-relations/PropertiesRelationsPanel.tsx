@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { lookupOf } from '../../../lib/registry/labels';
 import { useNoteRegistryVersion, useRegistry } from '../../../lib/registry/useRegistry';
-import { registerLeaveGuard } from '../../../state/leave-guard';
+import { mayLeave, registerLeaveGuard } from '../../../state/leave-guard';
 import { useNav } from '../../../state/navigation';
 import { trpc } from '../../../trpc';
 import { Button } from '../../../ui/Button';
@@ -66,8 +66,16 @@ export function PropertiesRelationsPanel({
   host.pageContext?.publish({ id: host.pageContext.entity?.id, ...pageActions });
   const get = trpc.entity.get.useQuery(detailGetInput(target.entityId));
   const reg = useRegistry();
-  useNoteRegistryVersion(get.data?.registryVersion);
+  useNoteRegistryVersion(get.data?.registryVersion, get.dataUpdatedAt);
   const disabledExtensions = useDisabledExtensions();
+  const latestExecutionContext = useRef({
+    readOnly: target.readOnly,
+    metadataUnavailable: reg.refreshFailed || reg.versionStale,
+  });
+  latestExecutionContext.current = {
+    readOnly: target.readOnly,
+    metadataUnavailable: reg.refreshFailed || reg.versionStale,
+  };
   const utils = trpc.useUtils();
   const { show } = useToast();
   const [tab, setTab] = useState<Tab>('Аспекты');
@@ -89,13 +97,23 @@ export function PropertiesRelationsPanel({
     };
   }, []);
   const epochRef = useRef(epoch);
+  const submissionAttempt = useRef(0);
+  const reconciliationRead = useRef(0);
   const mounted = useRef(true);
   const allowing = useRef(false);
   const state = useRef({ draft, localOwner, submission });
   state.current = { draft, localOwner, submission };
-  const pending = () => state.current.submission?.result === 'pending';
+  const hostRef = useRef(host);
+  hostRef.current = host;
+  const pending = () => hostRef.current.pending || state.current.submission?.result === 'pending';
   const dirty = useCallback(
-    () => Boolean(state.current.draft || state.current.localOwner || state.current.submission),
+    () =>
+      Boolean(
+        hostRef.current.pending ||
+          state.current.draft ||
+          state.current.localOwner ||
+          state.current.submission,
+      ),
     [],
   );
   function reset() {
@@ -106,6 +124,8 @@ export function PropertiesRelationsPanel({
     setLocalOwner(null);
     setSubmission(undefined);
     epochRef.current += 1;
+    submissionAttempt.current += 1;
+    reconciliationRead.current += 1;
     setEpoch(epochRef.current);
   }
   function execute(action: () => void) {
@@ -129,6 +149,7 @@ export function PropertiesRelationsPanel({
   useEffect(() => {
     mounted.current = true;
     const off = registerLeaveGuard(() => {
+      if (allowing.current) return true;
       if (!dirty()) return true;
       latestRequest.current(() => show('Изменения отброшены — повторите переход'));
       return false;
@@ -147,12 +168,37 @@ export function PropertiesRelationsPanel({
     };
   }, [show, dirty]);
   async function reconcile(command: PanelCommand, ticket = epochRef.current) {
+    const submitted = state.current.submission;
+    if (
+      !submitted ||
+      submitted.command !== command ||
+      submitted.result === 'pending' ||
+      submitted.result.kind !== 'unknown'
+    )
+      return;
+    const attempt = submissionAttempt.current;
+    const read = ++reconciliationRead.current;
     const result = await commandRef.current?.reconcile(structuredClone(command));
-    if (!mounted.current || ticket !== epochRef.current || !result) return;
+    if (
+      !mounted.current ||
+      ticket !== epochRef.current ||
+      attempt !== submissionAttempt.current ||
+      read !== reconciliationRead.current ||
+      state.current.submission?.command !== command ||
+      !result
+    )
+      return;
     // reconcile fetch publishes the fresh detail key before exposing matches/differs.
     const fresh = utils.entity.get.getData(detailGetInput(target.entityId));
     if (result !== 'unavailable' && fresh?.entity.id !== target.entityId) return;
-    setSubmission((previous) => previous && { ...previous, reconciliation: result });
+    if (
+      state.current.submission.result === 'pending' ||
+      state.current.submission.result.kind !== 'unknown'
+    )
+      return;
+    const reconciled = { ...state.current.submission, reconciliation: result };
+    state.current.submission = reconciled;
+    setSubmission(reconciled);
   }
   if (!get.data || !reg.data || get.data.entity.id !== target.entityId)
     return (
@@ -184,6 +230,11 @@ export function PropertiesRelationsPanel({
     );
   const entity = get.data.entity;
   const registry = reg.data;
+  const metadataUnavailable = reg.refreshFailed
+    ? 'Не удалось обновить определения'
+    : reg.versionStale
+      ? 'Определения изменились — дождитесь актуальной версии'
+      : undefined;
   const context = { readOnly: target.readOnly, archived: entity.archived, disabledExtensions };
   const owner = draft ? ownerOf(draft) : localOwner;
   function change(next: PanelDraft | null) {
@@ -200,6 +251,7 @@ export function PropertiesRelationsPanel({
       previous.editor.kind === next.editor.kind &&
       (next.editor.kind !== 'attach' ||
         (previous.editor.kind === 'attach' && previous.editor.aspectId === next.editor.aspectId));
+    if (metadataUnavailable && !sameEditor) return;
     const apply = () => {
       state.current.draft = next;
       state.current.localOwner = null;
@@ -212,6 +264,7 @@ export function PropertiesRelationsPanel({
   async function submit(command: PanelCommand) {
     if (
       confirmation ||
+      metadataUnavailable ||
       pending() ||
       command.entityId !== target.entityId ||
       context.readOnly ||
@@ -262,10 +315,15 @@ export function PropertiesRelationsPanel({
       if (!checked.ok) reason = Object.values(checked.errors).join('; ');
       if (command.kind === 'attach') {
         const access = aspectAccess(lookup.aspect(command.aspectId), context);
-        if (!access.canAttach) reason = access.reason ?? 'Добавление недоступно';
+        const assignment =
+          command.aspectId === 'orbis/assignment' &&
+          candidate.editor.kind === 'assignment' &&
+          access.route === 'assignment';
+        if (!access.canAttach && !assignment) reason = access.reason ?? 'Добавление недоступно';
       }
     }
     if (reason) {
+      submissionAttempt.current += 1;
       const next: FormSubmission = {
         command: structuredClone(command),
         result: { kind: 'rejected', message: reason },
@@ -275,6 +333,7 @@ export function PropertiesRelationsPanel({
       return;
     }
     const snapshot = structuredClone(command);
+    submissionAttempt.current += 1;
     const ticket = epochRef.current;
     const next: FormSubmission = { command: snapshot, result: 'pending' };
     state.current.submission = next;
@@ -289,6 +348,7 @@ export function PropertiesRelationsPanel({
   }
   const hostReady = host.screenEntityId === target.entityId && !target.readOnly;
   function specialReason(editor: SpecialEditor) {
+    if (metadataUnavailable) return metadataUnavailable;
     if (editor === 'assignment') return undefined;
     if (!hostReady) return 'Откройте эту запись, чтобы выполнить действие';
     const action =
@@ -301,8 +361,25 @@ export function PropertiesRelationsPanel({
     return undefined;
   }
   function hostAction(action: PanelHostAction) {
+    if (action !== 'openBody' && metadataUnavailable) return;
     const frozen = { ...target };
-    request(() => host.run(action, frozen));
+    request(() =>
+      host.run(action, frozen, (dispatch) => {
+        let result = Promise.resolve();
+        if (
+          action !== 'openBody' &&
+          (latestExecutionContext.current.readOnly ||
+            latestExecutionContext.current.metadataUnavailable)
+        )
+          return result;
+        // Only this approved gesture skips our own leave guard, synchronously.
+        // The async mutation remains locked for every later event/navigation.
+        execute(() => {
+          if (mayLeave()) result = dispatch();
+        });
+        return result;
+      }),
+    );
   }
   function special(editor: SpecialEditor) {
     if (editor === 'assignment')
@@ -318,6 +395,8 @@ export function PropertiesRelationsPanel({
   }
   function form(forTab: Tab): PanelFormProps {
     return {
+      metadataUnavailable,
+      actionPending: host.pending,
       specialReason,
       registerReset,
       entity,
@@ -333,12 +412,14 @@ export function PropertiesRelationsPanel({
       submission: owner === forTab ? submission : undefined,
       onReconcile: (command) => void reconcile(command),
       onAcceptCurrent: reset,
-      onRequestAction: (action) =>
+      onRequestAction: (action) => {
+        if (metadataUnavailable) return;
         request(() => {
           state.current.localOwner = forTab;
           setLocalOwner(forTab);
           action();
-        }),
+        });
+      },
     };
   }
   return (
@@ -367,11 +448,29 @@ export function PropertiesRelationsPanel({
         <p className="break-all text-2xs text-text-muted">{entity.id}</p>
       </header>
       {target.readOnly && <p>Предпросмотр — только чтение</p>}
+      {metadataUnavailable && (
+        <div role="alert">
+          <p>{metadataUnavailable}</p>
+          <Button
+            onClick={() => {
+              void get.refetch();
+              reg.retry();
+            }}
+          >
+            Повторить загрузку определений
+          </Button>
+        </div>
+      )}
       {entity.archived && (
         <div>
           <p>Запись в архиве — только чтение</p>
           <Button
-            disabled={!hostReady || !host.available.has('restore')}
+            disabled={
+              !hostReady ||
+              pending() ||
+              Boolean(metadataUnavailable) ||
+              !host.available.has('restore')
+            }
             onClick={() => hostAction('restore')}
           >
             Восстановить запись
@@ -419,7 +518,11 @@ export function PropertiesRelationsPanel({
           </Button>
         ))}
       </div>
-      <div data-testid="panel-scroll" className="min-h-0 flex-1 overflow-y-auto">
+      <fieldset
+        disabled={host.pending}
+        data-testid="panel-scroll"
+        className="min-h-0 flex-1 overflow-y-auto"
+      >
         {tabs.map((name, index) => (
           <div
             key={name}
@@ -453,7 +556,7 @@ export function PropertiesRelationsPanel({
           .map((action) => (
             <Button
               key={action}
-              disabled={!hostReady || pending()}
+              disabled={!hostReady || pending() || Boolean(metadataUnavailable)}
               onClick={() => hostAction(action)}
             >
               {action === 'makePage'
@@ -463,7 +566,7 @@ export function PropertiesRelationsPanel({
                   : 'Настроить приложение'}
             </Button>
           ))}
-      </div>
+      </fieldset>
       <div
         ref={setFooter}
         data-testid="panel-footer"

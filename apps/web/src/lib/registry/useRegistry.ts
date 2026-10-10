@@ -43,6 +43,9 @@ export const REGISTRY_QUERY_KEY = ['registry'] as const;
  * названная позже версия перечитывает его, только если разошлась с версией снимка.
  */
 let observedVersion: string | undefined;
+/** Query update time prevents a new mount from announcing an older cached response.
+ * It orders client observations, not opaque server versions or replica state. */
+let observedAt = 0;
 /**
  * Версия, ради которой снимок уже перечитан: одно перечитывание на одну новую версию, без петли.
  * Без неё сервер, отдающий снимок старше названной версии (реплика отстала), гонял бы запрос по
@@ -56,8 +59,11 @@ const listeners = new Set<() => void>();
  * будит ни одного подписчика — иначе каждый `entity.get` (а он уходит на каждое открытие
  * записи) перерисовывал бы всех читателей реестра.
  */
-export function noteRegistryVersion(version: string | undefined): void {
-  if (version === undefined || version === observedVersion) return;
+export function noteRegistryVersion(version: string | undefined, readAt = Date.now()): void {
+  if (version === undefined || readAt < observedAt) return;
+  // A fresh observation of the same version also supersedes older cached graph reads.
+  observedAt = readAt;
+  if (version === observedVersion) return;
   observedVersion = version;
   for (const listener of [...listeners]) listener();
 }
@@ -80,6 +86,7 @@ function subscribe(listener: () => void): () => void {
  */
 export function resetRegistryVersionForTests(): void {
   observedVersion = undefined;
+  observedAt = 0;
   refetchedFor = undefined;
   for (const listener of [...listeners]) listener();
 }
@@ -89,8 +96,8 @@ export function resetRegistryVersionForTests(): void {
  * что делать это надо ПОСЛЕ рендера: `noteRegistryVersion` будит подписчиков, а обновление
  * внешнего хранилища во время рендера — предупреждение React и лишний кадр.
  */
-export function useNoteRegistryVersion(version: string | undefined): void {
-  useEffect(() => noteRegistryVersion(version), [version]);
+export function useNoteRegistryVersion(version: string | undefined, readAt?: number): void {
+  useEffect(() => noteRegistryVersion(version, readAt), [version, readAt]);
 }
 
 /** Снимок реестра для читателя: словари, поиск, подписи и версия, под которой он сложен. */
@@ -152,7 +159,11 @@ export function useRegistry(): RegistryView {
     // выше), а первый запрос холодного старта сюда не попадает — снимка ещё нет.
     void queryClient.invalidateQueries({ queryKey: REGISTRY_QUERY_KEY }, { cancelRefetch: true });
   }, [version, data, queryClient]);
-  useNoteRegistryVersion(data?.version);
+  // Cached readers mount repeatedly. Their snapshot initializes the version once;
+  // it cannot supersede a newer version already reported by graph reads.
+  useEffect(() => {
+    if (observedVersion === undefined) noteRegistryVersion(data?.version, query.dataUpdatedAt);
+  }, [data?.version, query.dataUpdatedAt]);
   // Локаль здесь НЕ параметр хука, хотя `label()` её принимает: снимок один на всё
   // приложение, а локаль владельца — одна и общая с сервером (`OWNER_LOCALE`). Параметр
   // хука означал бы два разных перевода одного реестра на одном экране.

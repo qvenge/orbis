@@ -27,12 +27,8 @@ import type { DetailMenuProps } from './DetailMenu';
 import { loadDetailMenu } from './DetailMenuSlot';
 import { type BodyGate, BodyScreenProvider, bodyKindOf } from './EntityBody';
 import { PinVersionDialogSlot } from './PinVersionDialogSlot';
-import {
-  type PanelHostAction,
-  type PanelTarget,
-  PropertiesRelationsSlot,
-  runLazyPanelHost,
-} from './PropertiesRelationsSlot';
+import { usePropertiesRelationsOwner } from './PropertiesRelationsOwner';
+import type { PanelHostAction, PanelTarget } from './PropertiesRelationsSlot';
 import { ProposalOverlay } from './ProposalOverlay';
 import type { LatestPanelHost } from './properties-relations/panel-host';
 import { ROUTINE_ASPECT } from './RoutineStatusBlock';
@@ -58,7 +54,7 @@ export function DetailScreen({
   lead?: ReactNode;
   home?: boolean;
 }) {
-  const { get, setArchived, conflict, dismissConflict } = useEntityDetail(entityId);
+  const { get, setArchived, update, conflict, dismissConflict } = useEntityDetail(entityId);
   const utils = trpc.useUtils();
   const openRecord = useOpenRecord();
   /**
@@ -175,7 +171,6 @@ export function DetailScreen({
    */
   const bodyGate = useRef<BodyGate | null>(null);
   // A panel gesture freezes its address independently of subsequent route/projection changes.
-  const [panelTarget, setPanelTarget] = useState<PanelTarget | null>(null);
   const [previewTarget, setPreviewTarget] = useState<{
     pageId: string;
     target: PanelTarget | null;
@@ -250,61 +245,56 @@ export function DetailScreen({
   const loaded = get.data?.entity;
   const pageActions = useRef<{
     id: string | undefined;
-    makePage: () => void;
-    stopPage: () => void;
+    makePage: () => unknown;
+    stopPage: () => unknown;
   } | null>(null);
-  const available = new Set<PanelHostAction>(['openBody']);
   const restricted = mode !== null;
-  if (loaded && !restricted) {
-    if (loaded.archived) available.add('restore');
-    else {
-      available.add(loaded.aspects.includes(PAGE_ASPECT) ? 'stopPage' : 'makePage');
-      if (loaded.aspects.includes('orbis/app')) available.add('configureApp');
+  const available = useMemo(() => {
+    const actions = new Set<PanelHostAction>(['openBody']);
+    if (loaded && !restricted) {
+      if (loaded.archived) actions.add('restore');
+      else {
+        actions.add(loaded.aspects.includes(PAGE_ASPECT) ? 'stopPage' : 'makePage');
+        if (loaded.aspects.includes('orbis/app')) actions.add('configureApp');
+      }
     }
-  }
+    return actions;
+  }, [loaded, restricted]);
   const latestHostRef = useRef<LatestPanelHost | null>(null);
+  const registration = useMemo(
+    () => ({
+      readLatest: () => latestHostRef.current as LatestPanelHost,
+      host: {
+        screenEntityId: entityId,
+        available,
+        pageContext: {
+          entity: loaded?.id === entityId ? loaded : undefined,
+          bodyGate,
+          publish: (actions: NonNullable<typeof pageActions.current>) => {
+            pageActions.current = actions;
+          },
+        },
+      },
+    }),
+    [entityId, available, loaded],
+  );
+  const panelOwner = usePropertiesRelationsOwner(registration);
   latestHostRef.current = {
     entity: loaded?.id === entityId ? loaded : undefined,
     available,
     restricted,
     setMode: () => setMode(null),
     setHostView: () => setOpenVia(HOST_VIEW),
-    restore: () => setArchived(false),
+    restore: () => loaded && update.mutateAsync({ id: loaded.id, archived: false }),
     makePage: () => {
-      if (pageActions.current?.id === loaded?.id) pageActions.current?.makePage();
+      if (pageActions.current?.id === loaded?.id) return pageActions.current?.makePage();
     },
     stopPage: () => {
-      if (pageActions.current?.id === loaded?.id) pageActions.current?.stopPage();
+      if (pageActions.current?.id === loaded?.id) return pageActions.current?.stopPage();
     },
-    onClose: () => setPanelTarget(null),
+    onClose: panelOwner.close,
   };
-  const runPanelHost = useCallback(
-    (action: PanelHostAction, target: PanelTarget) => {
-      const frozen = { ...target };
-      void runLazyPanelHost(action, frozen, () => latestHostRef.current as LatestPanelHost).catch(
-        () => show('Не удалось открыть действие — повторите попытку', 'danger'),
-      );
-    },
-    [show],
-  );
-  const panelSlot = (
-    <PropertiesRelationsSlot
-      target={panelTarget}
-      host={{
-        screenEntityId: entityId,
-        available,
-        run: runPanelHost,
-        pageContext: {
-          entity: latestHostRef.current.entity,
-          bodyGate,
-          publish: (actions) => {
-            pageActions.current = actions;
-          },
-        },
-      }}
-      onClose={() => setPanelTarget(null)}
-    />
-  );
+  const panelSlot = panelOwner.slot;
   /**
    * Запись стала страницей или перестала ею быть (меню ⋮, Undo, агент) — разовый вид прежнего
    * рода больше не про неё. «Открыть через шаблон хоста», переживший «Изменить вид только этой
@@ -447,7 +437,7 @@ export function DetailScreen({
   const menuProps: DetailMenuProps = {
     ...(configuringId === null &&
       (chosenTarget
-        ? { onOpenProperties: () => setPanelTarget({ ...chosenTarget }) }
+        ? { onOpenProperties: () => panelOwner.open(chosenTarget) }
         : { propertiesUnavailableReason: 'дождитесь записи предпросмотра' })),
     onArchive: () => setArchived(!entity.archived),
     onCopyLink: () => void copyLink(configuringId ?? entityId),
