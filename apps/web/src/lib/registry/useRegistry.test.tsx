@@ -47,6 +47,17 @@ function Probe() {
     <div>
       <EntityRef id="e1" />
       <p data-testid="label">{fieldLabel(registry, 'orbis/task_status')}</p>
+      <output data-testid="registry-state">
+        {JSON.stringify({
+          failed: registry.failed,
+          refreshFailed: registry.refreshFailed,
+          refreshing: registry.refreshing,
+          versionStale: registry.versionStale,
+        })}
+      </output>
+      <button type="button" onClick={registry.retry}>
+        Повторить реестр
+      </button>
       {/* Ровно то, что делает боевой код после ЛЮБОЙ правки графа (`lib/invalidate.ts`). */}
       <button type="button" onClick={() => invalidateGraph(utils)}>
         Перечитать
@@ -163,4 +174,68 @@ test('вторая версия, названная, пока снимок пе�
   hold = null;
   release();
   await waitFor(() => expect(node).toHaveTextContent('Стадия работы'));
+});
+
+test('отказ нового snapshot сохраняет labels, отмечает stale/error без петли; retry восстанавливает', async () => {
+  let version = '1.0';
+  let reject = false;
+  let release: () => void = () => {};
+  let gate: Promise<void> | undefined;
+  const { calls } = renderWithProviders(<Probe />, async (path) => {
+    if (path === 'entity.get')
+      return { entity: { id: 'e1', title: 'Запись' }, registryVersion: version };
+    if (path === 'registry.effective') {
+      if (gate) await gate;
+      if (reject) throw new Error('Сеть недоступна');
+      return renamed(version, version === '1.0' ? 'Состояние задачи' : 'Стадия работы');
+    }
+    return {};
+  });
+  const state = () => JSON.parse(screen.getByTestId('registry-state').textContent ?? '{}');
+  const count = () => calls.filter((c) => c.path === 'registry.effective').length;
+  const node = screen.getByTestId('label');
+  await waitFor(() => expect(node).toHaveTextContent('Состояние задачи'));
+  await waitFor(() =>
+    expect(state()).toEqual({
+      failed: false,
+      refreshFailed: false,
+      refreshing: false,
+      versionStale: false,
+    }),
+  );
+  version = '1.1';
+  reject = true;
+  gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  fireEvent.click(screen.getByRole('button', { name: 'Перечитать' }));
+  await waitFor(() => expect(state()).toMatchObject({ refreshing: true, versionStale: true }));
+  expect(node).toHaveTextContent('Состояние задачи');
+  gate = undefined;
+  release();
+  await waitFor(() =>
+    expect(state()).toEqual({
+      failed: false,
+      refreshFailed: true,
+      refreshing: false,
+      versionStale: true,
+    }),
+  );
+  expect(node).toHaveTextContent('Состояние задачи');
+  expect(count()).toBe(2);
+  await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
+  expect(count()).toBe(2);
+  reject = false;
+  fireEvent.click(screen.getByRole('button', { name: 'Повторить реестр' }));
+  await waitFor(() => expect(node).toHaveTextContent('Стадия работы'));
+  expect(screen.getByTestId('label')).toBe(node);
+  await waitFor(() =>
+    expect(state()).toEqual({
+      failed: false,
+      refreshFailed: false,
+      refreshing: false,
+      versionStale: false,
+    }),
+  );
+  expect(count()).toBe(3);
 });

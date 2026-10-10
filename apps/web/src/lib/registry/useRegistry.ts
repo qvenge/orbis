@@ -25,7 +25,7 @@
 // (`utils.client`), так что мок-линк тестов и заголовки прода работают как у любой другой
 // процедуры.
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useEffect, useMemo, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useMemo, useSyncExternalStore } from 'react';
 import { trpc } from '../../trpc';
 import { type EffectiveRegistry, lookupOf, type RegistryLookup } from './labels';
 
@@ -104,6 +104,12 @@ export interface RegistryView extends RegistryLookup {
    * неразличимы, и читатель, который ждёт реестр (выбор шаблона экрана записи), ждал бы вечно.
    */
   failed: boolean;
+  /** Любой отказ чтения, в том числе обновления уже имеющегося snapshot. */
+  refreshFailed: boolean;
+  refreshing: boolean;
+  /** Сервер назвал версию, которой ещё нет в сохранённом snapshot. */
+  versionStale: boolean;
+  retry: () => void;
 }
 
 export function useRegistry(): RegistryView {
@@ -124,6 +130,12 @@ export function useRegistry(): RegistryView {
   });
   const data = query.data;
   const failed = query.isError && data === undefined;
+  const refreshFailed = query.isError;
+  const refreshing = query.isFetching;
+  const versionStale = version !== undefined && data?.version !== version;
+  const retry = useCallback(() => {
+    void query.refetch();
+  }, [query.refetch]);
   useEffect(() => {
     if (
       version === undefined ||
@@ -145,7 +157,16 @@ export function useRegistry(): RegistryView {
   // приложение, а локаль владельца — одна и общая с сервером (`OWNER_LOCALE`). Параметр
   // хука означал бы два разных перевода одного реестра на одном экране.
   return useMemo(
-    () => ({ ...lookupOf(data), data, version: data?.version ?? '', failed }),
-    [data, failed],
+    () => ({
+      ...lookupOf(data),
+      data,
+      version: data?.version ?? '',
+      failed,
+      refreshFailed,
+      refreshing,
+      versionStale,
+      retry,
+    }),
+    [data, failed, refreshFailed, refreshing, versionStale, retry],
   );
 }
