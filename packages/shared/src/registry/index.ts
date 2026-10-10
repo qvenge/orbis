@@ -23,6 +23,7 @@ export * from './contract-type';
 // корпусе нет (Р-К-10).
 export * from './extensions';
 export * from './property-type';
+export * from './ref-metadata';
 export * from './row';
 // Форма правила каталога (§Б4-1) и словарь её фикстур (§С8-25/§С8-26) — в барреле по тому же
 // доводу, что и `subscription-fixtures` ниже: здесь только литералы и схемы, ни одного `parse` на

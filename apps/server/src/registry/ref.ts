@@ -32,7 +32,14 @@
 // зависят от порядка и гасят друг друга. Поэтому inverse у зеркала нет вовсе, а сходится оно
 // само: `syncRefMirror` зовётся и во внутреннем режиме undo. Проверяется это тестом
 // «undo правки категории возвращает и свойство, и зеркало-ребро» (`ref.test.ts`).
-import { APP_ASPECT, type GraphId, newId, type PropertyType, ROLE_REF } from '@orbis/shared';
+import {
+  APP_ASPECT,
+  type GraphId,
+  mirrorMetaKey,
+  newId,
+  type PropertyType,
+  ROLE_REF,
+} from '@orbis/shared';
 import type { QueryAst } from '@orbis/shared/query';
 import { type SQL, sql } from 'drizzle-orm';
 import type { Tx } from '../db/with-identity';
@@ -371,10 +378,11 @@ export async function syncRefMirror(
 ): Promise<void> {
   const rule = mirrorRuleOf(reg);
   // Ключ подписи свойства в `meta` ребра — параметр строки каталога: писатель и сверка ЭТОЙ функции
-  // говорят одним ключом из одной строки. Прочие адреса подписи (переподпись слияния `registry/ops.ts`,
-  // backlinks `entity-read.ts`, сводка импорта `import/review.ts`) держат литерал `property` — ключ
+  // говорят одним ключом из одной строки, как и backlinks в `entity-read.ts`. Прочие адреса подписи
+  // (переподпись слияния `registry/ops.ts`, сводка импорта `import/review.ts`) держат литерал `property` — ключ
   // заморожен уже лежащими рёбрами, остаток назван у переподписи слияния.
-  const key = rule.params.meta_key;
+  const key = mirrorMetaKey([rule]);
+  if (key === undefined) throw new Error('правило зеркала не задаёт единственный meta_key');
   const wanted = changed.filter((c) => isMirroredRef(reg, c.propertyId, rule));
   if (wanted.length === 0) return;
   const properties = wanted.map((c) => c.propertyId);

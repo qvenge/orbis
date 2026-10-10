@@ -9,6 +9,8 @@ import {
   globalThreadId,
   newId,
   PAGE_ASPECT,
+  RULE_TASK_STATUS_DEFAULT,
+  ruleDefinitionSchema,
   TEMPLATE_FOR_PROPERTY,
   TEMPLATE_WINS_OVER_PROPERTY,
   UPDATE_BATCH_CAP,
@@ -419,4 +421,76 @@ describe('entity.updateBatch — пачка правок, один Undo (§4.3, 
     );
     expect(err.code).toBe('FORBIDDEN');
   });
+});
+
+test('ПС-03/04: attach и поля одной операцией', async () => {
+  const graph = await freshGraph();
+  const caller = callerFor(graph);
+  const source = await caller.entity.create({
+    input: { title: 'Заметка', tags: [], body: 'Текст остаётся' },
+    source: 'ui',
+  });
+  const before = await caller.entity.get({ id: source.id, include: ['body', 'relations'] });
+  const defaultRule = ruleDefinitionSchema.parse(RULE_TASK_STATUS_DEFAULT);
+  if (defaultRule.template !== 'default' || !('const' in defaultRule.params.value))
+    throw new Error('ожидалось правило default с const');
+  const journal = async () => {
+    const { db: admin, client: adminClient } = adminDb();
+    try {
+      const rows =
+        await admin.execute(sql`SELECT metadata->'actions'->0->>'id' AS id FROM chat_messages
+        WHERE thread_id = ${globalThreadId(graph)} AND metadata->'actions'->0->>'id' IS NOT NULL ORDER BY id`);
+      return [...rows].map((r) => r.id as string);
+    } finally {
+      await adminClient.end();
+    }
+  };
+  const actions = await journal();
+  // Незатронутый task_status отсутствует в patch: default применяет только сервер.
+  const made = await caller.entity.updateBatch({
+    operations: [
+      {
+        tool: 'entity_update',
+        input: {
+          id: source.id,
+          aspects: { attach: ['orbis/task'] },
+          props: { 'orbis/due_date': '2026-10-20' },
+        },
+      },
+    ],
+  });
+  expect((await journal()).filter((id) => !actions.includes(id))).toEqual([made.actionId]);
+  const after = await caller.entity.get({ id: source.id, include: ['body'] });
+  expect(after.entity.id).toBe(source.id);
+  expect(after.entity.body).toBe(before.entity.body);
+  expect(after.entity.aspects).toContain('orbis/task');
+  expect(after.entity.props['orbis/due_date']).toBe('2026-10-20');
+  expect(after.entity.props['orbis/task_status']).toBe(defaultRule.params.value.const);
+  expect((made.results[0] as { props: Record<string, unknown> }).props['orbis/task_status']).toBe(
+    defaultRule.params.value.const,
+  );
+  await caller.ai.undo({ actionId: made.actionId });
+  const undone = await caller.entity.get({ id: source.id, include: ['body', 'relations'] });
+  expect(undone.entity.aspects).toEqual(before.entity.aspects);
+  expect(undone.entity.props).toEqual(before.entity.props);
+  expect(undone.entity.body).toBe(before.entity.body);
+  const journalBeforeInvalid = await journal();
+  await expect(
+    caller.entity.updateBatch({
+      operations: [
+        {
+          tool: 'entity_update',
+          input: {
+            id: source.id,
+            aspects: { attach: ['orbis/task'] },
+            props: { 'orbis/due_date': '2026-13-40' },
+          },
+        },
+      ],
+    }),
+  ).rejects.toThrow();
+  expect(await caller.entity.get({ id: source.id, include: ['body', 'relations'] })).toEqual(
+    undone,
+  );
+  expect(await journal()).toEqual(journalBeforeInvalid);
 });

@@ -19,7 +19,7 @@ const sink = makeChatJournalSink();
 export const relationRouter = router({
   create: ownerOnlyProcedure
     .input(relationCreateInput)
-    .mutation(async ({ ctx, input }): Promise<WireRelation> => {
+    .mutation(async ({ ctx, input }): Promise<WireRelation & { actionId?: string }> => {
       const r = await execute(
         ctx.db,
         {
@@ -31,23 +31,28 @@ export const relationRouter = router({
         { sink },
       );
       if (!r.ok) throw execErrorToTRPC(r.error);
-      return r.results[0] as WireRelation;
+      const relation = r.results[0] as WireRelation;
+      return r.idempotentReplay ? relation : { ...relation, actionId: r.actionId };
     }),
 
-  delete: ownerOnlyProcedure.input(relationDeleteInput).mutation(async ({ ctx, input }) => {
-    const r = await execute(
-      ctx.db,
-      {
-        identity: ctx.identity,
-        actorKind: 'owner',
-        source: 'ui', // прямое действие владельца в UI
-        operations: [{ tool: 'relation_delete', input }],
-      },
-      { sink },
-    );
-    if (!r.ok) throw execErrorToTRPC(r.error);
-    return { ok: true as const };
-  }),
+  delete: ownerOnlyProcedure
+    .input(relationDeleteInput)
+    .mutation(async ({ ctx, input }): Promise<{ ok: true; actionId?: string }> => {
+      const r = await execute(
+        ctx.db,
+        {
+          identity: ctx.identity,
+          actorKind: 'owner',
+          source: 'ui', // прямое действие владельца в UI
+          operations: [{ tool: 'relation_delete', input }],
+        },
+        { sink },
+      );
+      if (!r.ok) throw execErrorToTRPC(r.error);
+      return r.idempotentReplay
+        ? { ok: true as const }
+        : { ok: true as const, actionId: r.actionId };
+    }),
 
   /** Связи сущности, обе стороны (source и target); RLS скоупит владельцем. */
   listFor: protectedProcedure

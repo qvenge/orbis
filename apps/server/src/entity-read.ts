@@ -9,6 +9,7 @@ import {
   type EntityGetUiInput,
   entityThreadId,
   type GraphId,
+  mirrorMetaKey,
   ROLE_MENTION,
   ROLE_REF,
 } from '@orbis/shared';
@@ -21,6 +22,7 @@ import { ExecError } from './errors';
 import type { WireEntity, WireRelation } from './executor/types';
 import { effectiveRegistry, parseRegistryOfSnapshot } from './registry/cache';
 import type { RegistrySnapshot } from './registry/load';
+import { mirrorRuleOf } from './rules/carriers';
 import { toWireChatMessage, toWireEntity, toWireEntityFromSql, toWireRelation } from './wire';
 
 /**
@@ -170,6 +172,8 @@ export async function readEntity(
     out.relations = rels.map(toWireRelation);
   }
   if (include.has('backlinks')) {
+    const metaKey = mirrorMetaKey([mirrorRuleOf(await registry())]);
+    if (metaKey === undefined) throw new Error('правило зеркала не задаёт единственный meta_key');
     // §3.5.8: ОДНА секция из двух источников — явные связи роли `mention` обеих сторон и
     // упоминания через body_refs (GIN-индекс §4.9). row.id — каноничный
     // lowercase из БД (body_refs нормализованы экстрактором, сравнение text[]
@@ -211,10 +215,8 @@ export async function readEntity(
         -- между той же парой концов. Свёртки, как у rel_side выше, здесь не требуется —
         -- источник, сославшийся на нас двумя разными свойствами, делит ОДНО ребро (подпись
         -- лежит в meta, вне ключа уникальности; см. syncRefMirror — фаза 2 считает
-        -- remaining по ЦЕЛИ ровно поэтому). Ключ подписи — литерал property: параметр meta_key
-        -- строки mirror_ref читает только писатель зеркала, ключ заморожен лежащими рёбрами
-        -- (остаток назван у переподписи слияния, registry/ops.ts).
-        SELECT source_id AS id, meta->>'property' AS property FROM relations
+        -- remaining по ЦЕЛИ ровно поэтому). Ключ подписи читает то же правило mirror_relation, что и писатель зеркала.
+        SELECT source_id AS id, meta->>${metaKey}::text AS property FROM relations
           WHERE target_id = ${row.id} AND role = ${ROLE_REF}
       ), ids AS (
         SELECT id FROM entities WHERE body_refs @> ARRAY[${row.id}]::text[]
@@ -244,23 +246,14 @@ export async function readEntity(
        LIMIT ${BACKLINKS_LIMIT + 1}`);
     const refs = [...rows] as Array<Record<string, unknown>>;
     const truncated = refs.length > BACKLINKS_LIMIT;
-    // Подписи сторон — одним запросом и ТОЛЬКО когда в секции есть хоть одна связь: у
-    // упоминаний из тела роли нет вовсе, и на большинстве открытий detail запрос не уходит.
+    // Подписи сторон готовятся только для показанных строк из уже прочитанного снимка:
+    // упоминания из тела не несут роли и подписи её стороны не требуют.
     const shown = refs.slice(0, BACKLINKS_LIMIT);
     //
-    // Снимок реестра берётся ЛЕНИВО и ОДИН на обе подписи. ЦЕНА ЗАМЕРЕНА НА ЭТОМ ПУТИ
-    // (`entity.get` с `include: ['backlinks']` на категории с двумя ссылочными обратными
-    // связями; счётчик запросов на уровне драйвера, до и после перевода на снимок):
-    //   секция пуста ................................ 7 → 7   (снимок не берётся вовсе)
-    //   секция со ссылками, кеш ГОРЯЧИЙ .............. 8 → 8   (SELECT версии вместо
-    //                                                          точечного SELECT подписей)
-    //   секция со ссылками, кеш ХОЛОДНЫЙ ............. 8 → 13  (+версия, +три реестра,
-    //                                                          +дельты)
-    // То есть плата одна и разовая: первое открытие такой секции на НОВОЙ версии реестра
-    // стоит сборки снимка, дальше все читатели этого владельца платят один SELECT версии
-    // вместо своих точечных запросов. Прежний замер ссылался на счётчик `progress.test.ts`
-    // — тот зовёт `entity.get` без `include`, и эта ветка в нём не исполняется вовсе
-    // (ре-ревью фикс-раунда 1, Minor-6).
+    // Снимок уже получен для meta_key зеркала перед SQL backlinks, в том числе при пустой
+    // секции. Подписи сторон и свойств ниже используют то же обещание registry(), поэтому
+    // повторного чтения версии или сборки снимка внутри этого вызова нет. Глобальный кеш
+    // effectiveRegistry по-прежнему переиспользует снимок до изменения версии реестра.
     const needsSides = shown.some((r) => r.via_relation === true);
     // Подписи свойств — тем же правилом «только если есть кого подписывать»; берутся по
     // ПОКАЗЫВАЕМЫМ строкам, а не по всей выдаче: усечённая строка подписи не получит.

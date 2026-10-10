@@ -6,7 +6,7 @@
 // Реальная БД под withIdentity (RLS enforced), без моков.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import type { GraphId } from '@orbis/shared';
-import { newId } from '@orbis/shared';
+import { globalThreadId, newId } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import {
   adminDb,
@@ -19,6 +19,8 @@ import {
   seedCustomRole,
   truncateAll,
 } from '../../test/helpers';
+import { appRouter } from '../router';
+import { createCallerFactory } from '../trpc';
 import type {
   ExecuteErr,
   ExecuteOk,
@@ -1107,4 +1109,178 @@ describe('source_contract / target_contract роли (§А4-2, ИО-7)', () => {
     const t = await task('Тикет');
     ok(await createRelation(project.id, t.id, 'ticket', as()));
   });
+});
+
+test('ПС-16/27: отказы рёбер', async () => {
+  const graph = await freshGraph();
+  const createCaller = createCallerFactory(appRouter);
+  const api = createCaller({
+    identity: personal(graph),
+    actorKind: 'owner',
+    db,
+    clientVersion: null,
+  });
+  const entity = (title: string) => api.entity.create({ input: { title, tags: [] }, source: 'ui' });
+  const a = await entity('Источник A');
+  const b = await entity('Источник B');
+  const c = await entity('Цель C');
+  await seedCustomRole(graph, {
+    key: 'user/one-parent',
+    label: { ru: 'Один родитель' },
+    sourceLabel: { ru: 'Родитель' },
+    targetLabel: { ru: 'Ребёнок' },
+    constraints: { created_by: 'any', target_max_incoming: 1 },
+  });
+  await api.relation.create({ source_id: a.id, target_id: b.id, role: 'mention' });
+  await api.relation.create({ source_id: a.id, target_id: b.id, role: 'dependency' });
+  await api.relation.create({ source_id: b.id, target_id: c.id, role: 'dependency' });
+  await api.relation.create({ source_id: a.id, target_id: c.id, role: 'user/one-parent' });
+  const snapshot = async () => {
+    const ends = await Promise.all(
+      [a, b, c].map((e) => api.entity.get({ id: e.id, include: ['body', 'relations'] })),
+    );
+    const { db: admin, client: adminClient } = adminDb();
+    try {
+      const rows = await admin.execute(
+        sql`SELECT metadata->'actions'->0->>'id' AS id FROM chat_messages WHERE thread_id = ${globalThreadId(graph)} AND metadata->'actions'->0->>'id' IS NOT NULL ORDER BY id`,
+      );
+      return { ends, actions: [...rows].map((r) => r.id as string) };
+    } finally {
+      await adminClient.end();
+    }
+  };
+  const before = await snapshot();
+  for (const key of [
+    { source_id: a.id, target_id: a.id, role: 'mention' },
+    { source_id: a.id, target_id: b.id, role: 'mention' },
+    { source_id: c.id, target_id: a.id, role: 'dependency' },
+    { source_id: a.id, target_id: c.id, role: 'ticket' },
+    { source_id: b.id, target_id: c.id, role: 'user/one-parent' },
+  ]) {
+    await expect(api.relation.create(key)).rejects.toThrow();
+    expect(await snapshot()).toEqual(before);
+  }
+  const other = createCaller({
+    identity: personal(await freshGraph()),
+    actorKind: 'owner',
+    db,
+    clientVersion: null,
+  });
+  await expect(other.entity.get({ id: a.id })).rejects.toMatchObject({ code: 'NOT_FOUND' });
+  expect(await other.relation.listFor({ entityId: a.id })).toEqual([]);
+  await expect(
+    other.relation.create({ source_id: a.id, target_id: c.id, role: 'mention' }),
+  ).rejects.toThrow();
+  await expect(
+    other.relation.delete({ source_id: a.id, target_id: b.id, role: 'mention' }),
+  ).rejects.toThrow();
+  expect(await snapshot()).toEqual(before);
+  const agent = createCaller({
+    identity: personal(graph),
+    actorKind: 'agent',
+    db,
+    clientVersion: null,
+  });
+  await expect(
+    agent.relation.create({ source_id: a.id, target_id: c.id, role: 'mention' }),
+  ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+  await expect(
+    agent.relation.delete({ source_id: a.id, target_id: b.id, role: 'mention' }),
+  ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+  expect(await snapshot()).toEqual(before);
+});
+
+test('ПС-17/19: зеркало одно и системное', async () => {
+  const graph = await freshGraph();
+  const api = createCallerFactory(appRouter)({
+    identity: personal(graph),
+    actorKind: 'owner',
+    db,
+    clientVersion: null,
+  });
+  const ref = async (key: string) => {
+    const raw = await api.registry.createProperty({
+      key,
+      label: { ru: key },
+      description: { ru: 'Отражаемая ссылка' },
+      type: { kind: 'ref' },
+      status: 'active',
+    });
+    return (raw as { property: string }).property;
+  };
+  const first = await ref('user/first_ref');
+  const second = await ref('user/second_ref');
+  const source = await api.entity.create({ input: { title: 'Источник', tags: [] }, source: 'ui' });
+  const target = await api.entity.create({ input: { title: 'Цель', tags: [] }, source: 'ui' });
+  const made = await api.entity.updateBatch({
+    operations: [
+      {
+        tool: 'entity_update',
+        input: { id: source.id, props: { [first]: target.id, [second]: target.id } },
+      },
+    ],
+  });
+  const mirrors = async () =>
+    (await api.relation.listFor({ entityId: source.id })).filter(
+      (r) => r.role === 'ref' && r.targetId === target.id,
+    );
+  expect(await mirrors()).toHaveLength(1);
+  const unset = await api.entity.updateBatch({
+    operations: [{ tool: 'entity_update', input: { id: source.id, unset: [first] } }],
+  });
+  expect((await api.entity.get({ id: source.id, include: [] })).entity.props[second]).toBe(
+    target.id,
+  );
+  expect(
+    (await api.entity.get({ id: source.id, include: [] })).entity.props[first],
+  ).toBeUndefined();
+  expect(await mirrors()).toHaveLength(1);
+  await api.ai.undo({ actionId: unset.actionId });
+  const restored = await api.entity.get({ id: source.id, include: [] });
+  expect(restored.entity.props[first]).toBe(target.id);
+  expect(restored.entity.props[second]).toBe(target.id);
+  expect(await mirrors()).toHaveLength(1);
+  // run-ребро реально существует до отказа delete: отсутствие не может озеленить тест.
+  ok(
+    await execute(db, {
+      identity: personal(graph),
+      actorKind: 'owner',
+      source: 'ui',
+      mechanism: 'seed',
+      operations: [
+        {
+          tool: 'relation_create',
+          input: { source_id: source.id, target_id: target.id, role: 'run' },
+        },
+      ],
+    }),
+  );
+  const systemSnapshot = async () => {
+    const ends = await Promise.all(
+      [source, target].map((e) => api.entity.get({ id: e.id, include: ['body', 'relations'] })),
+    );
+    const { db: admin, client: adminClient } = adminDb();
+    try {
+      const rows = await admin.execute(
+        sql`SELECT metadata->'actions'->0->>'id' AS id FROM chat_messages WHERE thread_id = ${globalThreadId(graph)} AND metadata->'actions'->0->>'id' IS NOT NULL ORDER BY id`,
+      );
+      return { ends, actions: [...rows].map((r) => r.id as string) };
+    } finally {
+      await adminClient.end();
+    }
+  };
+  for (const role of ['ref', 'run']) {
+    const key = { source_id: source.id, target_id: target.id, role };
+    const before = await systemSnapshot();
+    for (const mutation of [() => api.relation.create(key), () => api.relation.delete(key)]) {
+      await expect(mutation()).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+        cause: { code: 'ROLE_SYSTEM_ONLY' },
+      });
+      expect(await systemSnapshot()).toEqual(before);
+    }
+  }
+  // И создание значений отменяется по тому же живому журналу, вместе с общим зеркалом.
+  await api.ai.undo({ actionId: made.actionId });
+  expect(await mirrors()).toEqual([]);
 });

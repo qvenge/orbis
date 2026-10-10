@@ -462,7 +462,7 @@ describe('relation.create / relation.delete / relation.listFor (§4.2)', () => {
         target_id: b.id,
         role: 'mention',
       }),
-    ).toEqual({ ok: true });
+    ).toMatchObject({ ok: true, actionId: expect.any(String) });
     expect((await caller.relation.listFor({ entityId: a.id })).map((r) => r.id)).toEqual([ca.id]);
 
     // повторное удаление — NOT_FOUND

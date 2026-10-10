@@ -15,9 +15,11 @@ import {
   BUILTIN_CONTRACT_DEFS,
   BUILTIN_PROPERTY_META,
   BUILTIN_RELATION_ROLE_META,
+  globalThreadId,
   HOME_PROPERTY,
   newId,
   PAGE_ASPECT,
+  ruleDefinitionSchema,
 } from '@orbis/shared';
 import { assertStaticQuery, type QueryAst } from '@orbis/shared/query';
 import { sql } from 'drizzle-orm';
@@ -26,11 +28,13 @@ import { adminDb, appDb, freshGraph, personal, requireEnv, truncateAll } from '.
 import { withIdentity } from '../db/with-identity';
 import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
-import type { ExecuteRequest, ExecuteResult, WireEntity } from '../executor/types';
+import type { ExecuteRequest, ExecuteResult, JournalSink, WireEntity } from '../executor/types';
 import { undoAction } from '../executor/undo';
 import { parseGraphId } from '../identity';
 import type { CompileCtx } from '../query/compile-ast';
+import { appRouter } from '../router';
 import { mirrorRuleOf } from '../rules/carriers';
+import { createCallerFactory } from '../trpc';
 import { effectiveRegistry } from './cache';
 import type { RegistrySnapshot } from './load';
 import { changedRefProps, refTargetMembershipSql, syncRefMirror } from './ref';
@@ -1187,4 +1191,167 @@ test('ref: запись помечена архивом цели, потом с�
   const undone = await undoAction(db, { identity: personal(user), actionId: archived.actionId });
   expect(undone.ok).toBe(true);
   expect(await tagsOf(user, pageId)).toEqual([]);
+});
+
+test('ПС-04: rollback после apply', async () => {
+  const graph = await freshGraph();
+  const api = createCallerFactory(appRouter)({
+    identity: personal(graph),
+    actorKind: 'owner',
+    db,
+    clientVersion: null,
+  });
+  const raw = await api.registry.createProperty({
+    key: 'user/shared_title',
+    label: { ru: 'Общий текст' },
+    description: { ru: 'Поле аспекта' },
+    type: { kind: 'text' },
+    status: 'active',
+  });
+  const propertyId = (raw as { property: string }).property;
+  await api.registry.createAspect({
+    key: 'user/first',
+    label: { ru: 'Первый' },
+    description: { ru: 'Носитель' },
+    properties: [{ propertyId, required: true }],
+  });
+  const aspect = (await api.registry.effective()).aspects.find((a) => a.key === 'user/first');
+  if (!aspect) throw new Error('созданный аспект не найден');
+  const first = aspect.id;
+  const refRaw = await api.registry.createProperty({
+    key: 'user/ref',
+    label: { ru: 'Ссылка' },
+    description: { ru: 'Зеркало' },
+    type: { kind: 'ref' },
+    status: 'active',
+  });
+  const ref = (refRaw as { property: string }).property;
+  const source = await api.entity.create({
+    input: { title: 'Источник', tags: [], props: { [propertyId]: 'старое' } },
+    source: 'ui',
+  });
+  const target = await api.entity.create({ input: { title: 'Цель', tags: [] }, source: 'ui' });
+  const before = await api.entity.get({ id: source.id, include: ['body', 'relations'] });
+  const targetBefore = await api.entity.get({ id: target.id, include: ['body', 'relations'] });
+  const journal = () =>
+    withIdentity(db, personal(graph), async (tx) => {
+      const rows =
+        await tx.execute(sql`SELECT metadata->'actions'->0->>'id' AS id FROM chat_messages
+      WHERE thread_id = ${globalThreadId(graph)} AND metadata->'actions'->0->>'id' IS NOT NULL ORDER BY id`);
+      return [...rows].map((r) => r.id as string);
+    });
+  const actions = await journal();
+  const realSink = makeChatJournalSink();
+  let applied:
+    | { props: unknown; aspects: unknown; mirrors: number; journalWritten: boolean }
+    | undefined;
+  const failingSink: JournalSink = {
+    findByAuditId: (tx, id) => realSink.findByAuditId(tx, id),
+    write: async (tx, entry) => {
+      await realSink.write(tx, entry);
+      const rows = await tx.execute(
+        sql`SELECT props, aspects FROM entities WHERE id = ${source.id}::uuid`,
+      );
+      const refs = await tx.execute(
+        sql`SELECT id FROM relations WHERE source_id = ${source.id}::uuid AND target_id = ${target.id}::uuid AND role = 'ref'`,
+      );
+      const journalRows = await tx.execute(
+        sql`SELECT id FROM chat_messages WHERE thread_id = ${globalThreadId(graph)} AND metadata->'actions'->0->>'id' = ${entry.action.id}`,
+      );
+      applied = {
+        props: rows[0]?.props,
+        aspects: rows[0]?.aspects,
+        mirrors: refs.length,
+        journalWritten: journalRows.length === 1,
+      };
+      throw new Error('journal failure');
+    },
+  };
+  await expect(
+    execute(
+      db,
+      {
+        identity: personal(graph),
+        actorKind: 'owner',
+        source: 'ui',
+        batchId: newId(),
+        operations: [
+          {
+            tool: 'entity_update',
+            input: {
+              id: source.id,
+              aspects: { attach: [first] },
+              props: { [propertyId]: 'новое', [ref]: target.id },
+            },
+          },
+        ],
+      },
+      { sink: failingSink },
+    ),
+  ).rejects.toThrow('journal failure');
+  expect(applied).toBeDefined();
+  expect(applied?.props).toEqual({ [propertyId]: 'новое', [ref]: target.id });
+  expect(applied?.aspects).toContain(first);
+  expect(applied?.mirrors).toBe(1);
+  expect(applied?.journalWritten).toBe(true);
+  // Новые транзакции после отказа: ни patch, ни производное зеркало, ни журнал не пережили rollback.
+  expect(await api.entity.get({ id: source.id, include: ['body', 'relations'] })).toEqual(before);
+  expect(await api.entity.get({ id: target.id, include: ['body', 'relations'] })).toEqual(
+    targetBefore,
+  );
+  expect(await journal()).toEqual(actions);
+});
+
+test('writer и backlinks читают один meta_key из декларации зеркала', async () => {
+  const graph = await freshGraph();
+  const api = createCallerFactory(appRouter)({
+    identity: personal(graph),
+    actorKind: 'owner',
+    db,
+    clientVersion: null,
+  });
+  const raw = await api.registry.createProperty({
+    key: 'user/cause',
+    label: { ru: 'Причина' },
+    description: { ru: 'Ссылка с иной меткой' },
+    type: { kind: 'ref' },
+    status: 'active',
+  });
+  const propertyId = (raw as { property: string }).property;
+  const source = await api.entity.create({ input: { title: 'Источник', tags: [] }, source: 'ui' });
+  const target = await api.entity.create({ input: { title: 'Цель', tags: [] }, source: 'ui' });
+  const { db: admin, client: adminClient } = adminDb();
+  const previous = await admin.execute(
+    sql`SELECT rules FROM relation_role_definitions WHERE id = 'ref' AND graph_id IS NULL`,
+  );
+  const original = (previous[0]?.rules as unknown[]).map((rule) =>
+    ruleDefinitionSchema.parse(rule),
+  );
+  const changed = original.map((rule) =>
+    rule.template === 'mirror_relation'
+      ? { ...rule, params: { ...rule.params, meta_key: 'cause' } }
+      : rule,
+  );
+  const setRules = async (rules: unknown) => {
+    await admin.execute(
+      sql`UPDATE relation_role_definitions SET rules = ${JSON.stringify(rules)}::jsonb WHERE id = 'ref' AND graph_id IS NULL`,
+    );
+    await admin.execute(sql`UPDATE registry_system SET version = version + 1 WHERE id = 1`);
+  };
+  try {
+    await setRules(changed);
+    await api.entity.update({ id: source.id, props: { [propertyId]: target.id } });
+    const edges = (await api.relation.listFor({ entityId: source.id })).filter(
+      (edge) => edge.role === 'ref',
+    );
+    expect(edges).toHaveLength(1);
+    expect(edges[0]?.meta).toEqual({ cause: propertyId });
+    const got = await api.entity.get({ id: target.id, include: ['backlinks'] });
+    expect(
+      got.backlinks?.map((link) => ({ id: link.entity.id, via: link.via, label: link.viaLabel })),
+    ).toEqual([{ id: source.id, via: 'ref', label: 'Причина' }]);
+  } finally {
+    await setRules(original);
+    await adminClient.end();
+  }
 });
