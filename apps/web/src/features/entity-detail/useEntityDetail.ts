@@ -1,6 +1,8 @@
 import { RULE_TASK_STATUS_DEFAULT } from '@orbis/shared';
+import { useQueryClient } from '@tanstack/react-query';
 import type { JSONContent } from '@tiptap/core';
 import { TRPCClientError } from '@trpc/client';
+import { getQueryKey } from '@trpc/react-query';
 import { useRef, useState } from 'react';
 import { invalidateGraph } from '../../lib/invalidate';
 import { useNoteRegistryVersion } from '../../lib/registry/useRegistry';
@@ -187,6 +189,7 @@ export function useEntityUpdate(
   opts: { onSettled?: (vars: UpdateInput) => void } = {},
 ) {
   const utils = trpc.useUtils();
+  const queryClient = useQueryClient();
   const input = detailGetInput(entityId);
   const [conflict, setConflict] = useState(false);
 
@@ -265,9 +268,15 @@ export function useEntityUpdate(
       setConflict(false);
       await utils.entity.get.cancel(input);
       const prev = utils.entity.get.getData(input);
+      const prevUpdatedAt =
+        queryClient.getQueryState(getQueryKey(trpc.entity.get, input, 'query'))?.dataUpdatedAt ?? 0;
       const shown = OPTIMISTIC.get(vars) ?? vars;
-      utils.entity.get.setData(input, (old) =>
-        old ? { ...old, entity: applyPatch(old.entity, shown) } : old,
+      // Local entity edits retain the response's registryVersion and read provenance.
+      // A cache write must not announce that retained version as a new server read.
+      utils.entity.get.setData(
+        input,
+        (old) => (old ? { ...old, entity: applyPatch(old.entity, shown) } : old),
+        { updatedAt: prevUpdatedAt },
       );
       seqRef.current += 1;
       latestRef.current[vars.id] = {
@@ -278,7 +287,13 @@ export function useEntityUpdate(
       // Ключ едет в контекст ВМЕСТЕ со снимком. Откат обязан лечь туда же, откуда снимок
       // взят, а `input` — замыкание ПОСЛЕДНЕГО рендера: смени экран сущность, пока запрос в
       // полёте, и откат положил бы данные прежней записи под ключ новой (ревью Задачи 13, I1).
-      return { prev, input, seq: seqRef.current, expectedUpdatedAt: vars.expectedUpdatedAt };
+      return {
+        prev,
+        prevUpdatedAt,
+        input,
+        seq: seqRef.current,
+        expectedUpdatedAt: vars.expectedUpdatedAt,
+      };
     },
     onError: (err, vars, ctx) => {
       // Диск — первым делом и БЕЗ единой отсечки: он про запись, а не про то, чья очередь
@@ -287,7 +302,8 @@ export function useEntityUpdate(
       const old = superseded(vars.id, ctx);
       // Брошенная мутация не откатывает ничего: поверх её снимка уже лёг патч преемника.
       // Откат — иначе ВСЕГДА и по ключу из контекста: он про свою запись, чья бы очередь ни шла.
-      if (ctx && !old) utils.entity.get.setData(ctx.input, ctx.prev);
+      if (ctx && !old)
+        utils.entity.get.setData(ctx.input, ctx.prev, { updatedAt: ctx.prevUpdatedAt });
       // Отказ «по объекту» — прежде всего `MODULE_DISABLED` (срез 1б §8.3): расширение выключили в
       // другом месте, и маска в кеше экрана устарела — перечитать её, чтобы поля встали только
       // чтением и появилась плашка. На проводе это `FORBIDDEN` (`cause` по HTTP не сериализуется), и
