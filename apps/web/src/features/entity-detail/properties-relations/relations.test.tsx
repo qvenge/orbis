@@ -840,3 +840,77 @@ it('role and side changes retain search text while clearing only the other selec
   expect(input).toHaveValue('Про');
   expect(screen.getByLabelText('Сторона текущей записи')).toHaveValue('target');
 });
+
+const collidingRoles = {
+  ...registry,
+  roles: registry.roles.map((role) =>
+    ['subitem', 'dependency'].includes(role.id)
+      ? {
+          ...role,
+          label: { ru: 'Одинаковая роль' },
+          sourceLabel: { ru: 'Начало' },
+          targetLabel: { ru: 'Конец' },
+          key: `user/${role.id}`,
+          description: { ru: role.id === 'subitem' ? 'Часть целого' : 'Ожидание другой работы' },
+        }
+      : role,
+  ),
+};
+it('coincident role rows expose accessible description and key before original incoming delete', async () => {
+  const sent = vi.fn();
+  renderWithProviders(
+    <Host reg={collidingRoles} edges={[edge('part'), edge('wait', 'dependency')]} sent={sent} />,
+    handler,
+  );
+  for (const [id, description, key] of [
+    ['part', 'Часть целого', 'user/subitem'],
+    ['wait', 'Ожидание другой работы', 'user/dependency'],
+  ] as const) {
+    const row = within(screen.getByTestId(`relation-${id}`));
+    fireEvent.click(row.getByText('О роли'));
+    expect(row.getByText(description)).toBeVisible();
+    expect(row.getByText(`Ключ роли: ${key}`)).toBeVisible();
+  }
+  fireEvent.click(
+    within(screen.getByTestId('relation-wait')).getByRole('button', { name: 'Снять связь' }),
+  );
+  fireEvent.click(screen.getByRole('button', { name: 'Подтвердить снятие' }));
+  expect(sent).toHaveBeenCalledExactlyOnceWith({
+    kind: 'deleteRelation',
+    entityId: B,
+    key: { source_id: A, target_id: B, role: 'dependency' },
+  });
+});
+it('coincident picker options expose descriptions and keys, selected detail updates without confusing command IDs', async () => {
+  const sent = vi.fn();
+  renderWithProviders(
+    <Host
+      reg={collidingRoles}
+      initial={relationDraft('subitem', 'source', undefined, collidingRoles)}
+      sent={sent}
+    />,
+    handler,
+  );
+  const picker = screen.getByLabelText('Роль связи');
+  expect(
+    within(picker).getByRole('option', { name: 'Одинаковая роль — Часть целого (user/subitem)' }),
+  ).toBeVisible();
+  expect(
+    within(picker).getByRole('option', {
+      name: 'Одинаковая роль — Ожидание другой работы (user/dependency)',
+    }),
+  ).toBeVisible();
+  expect(screen.getByText('Часть целого')).toBeVisible();
+  expect(screen.getByText('Ключ роли: user/subitem')).toBeVisible();
+  fireEvent.change(picker, { target: { value: 'dependency' } });
+  expect(screen.getByText('Ожидание другой работы')).toBeVisible();
+  expect(screen.getByText('Ключ роли: user/dependency')).toBeVisible();
+  expect(screen.queryByText('Часть целого')).toBeNull();
+  fireEvent.click(await screen.findByRole('button', { name: 'Выбрать: Проект' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Сохранить' }));
+  expect(sent).toHaveBeenCalledExactlyOnceWith({
+    kind: 'createRelation',
+    entityId: B,
+    key: { source_id: B, target_id: A, role: 'dependency' },
+  });
+});

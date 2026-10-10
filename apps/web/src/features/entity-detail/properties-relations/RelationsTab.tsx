@@ -250,6 +250,13 @@ export function RelationsTab(props: RelationsTabProps) {
                   <p className="text-sm font-medium">
                     {r.role === 'ref' ? 'Ссылка из свойств' : lookup.label(r.role)}
                   </p>
+                  {def && (
+                    <details className="text-sm text-text-muted">
+                      <summary className="min-h-11 cursor-pointer">О роли</summary>
+                      <p>{effectiveLabel(def.description, OWNER_LOCALE)}</p>
+                      <p>Ключ роли: {def.key}</p>
+                    </details>
+                  )}
                   <p className="text-sm">{pair(keyOf(r))}</p>
                   {neighbor?.archived && <span className="text-2xs text-text-muted">В архиве</span>}
                   {!neighbor &&
@@ -356,11 +363,17 @@ export function RelationsTab(props: RelationsTabProps) {
               )}
               {manual.map((r) => (
                 <option key={r.id} value={r.id}>
-                  {lookup.label(r.id)}
+                  {lookup.label(r.id)} — {effectiveLabel(r.description, OWNER_LOCALE)} ({r.key})
                 </option>
               ))}
             </select>
           </label>
+          {role && (
+            <div className="text-sm text-text-muted">
+              <p>{effectiveLabel(role.description, OWNER_LOCALE)}</p>
+              <p>Ключ роли: {role.key}</p>
+            </div>
+          )}
           <label className="text-sm">
             Сторона текущей записи
             <select
