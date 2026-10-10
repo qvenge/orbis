@@ -32,6 +32,7 @@ import {
 } from './controls';
 import type { DraftValue } from './draft-value';
 import { displayText, EMPTY_TEXT } from './format';
+import { LazyListControl, loadRefManyControl, loadScalarListControl } from './LazyListControl';
 import { aspectLabel } from './labels';
 import { useRegistry } from './useRegistry';
 
@@ -42,14 +43,6 @@ import { useRegistry } from './useRegistry';
  */
 const RefListField = lazy(() =>
   import('./RefListControl').then((m) => ({ default: m.RefListField })),
-);
-
-const RefManyControl = lazy(() =>
-  import('./RefManyControl').then((m) => ({ default: m.RefManyControl })),
-);
-
-const ScalarListControl = lazy(() =>
-  import('./ScalarListControl').then((m) => ({ default: m.ScalarListControl })),
 );
 
 /**
@@ -156,13 +149,13 @@ export function PropertyControl({
       ? value.filter((id): id is string => typeof id === 'string')
       : [];
     return (
-      <Suspense fallback={null}>
-        <RefManyControl
-          def={def}
-          value={ids}
-          onChange={(ids) => draft.onChange({ kind: 'value', value: ids })}
-        />
-      </Suspense>
+      <LazyListControl
+        key={`${def.id}:ref-many`}
+        load={loadRefManyControl}
+        def={def}
+        value={ids}
+        onChange={(ids) => draft.onChange({ kind: 'value', value: ids })}
+      />
     );
   }
   if (draft && scalarList) {
@@ -173,13 +166,13 @@ export function PropertyControl({
           ? value.map((item) => String(item))
           : [];
     return (
-      <Suspense fallback={null}>
-        <ScalarListControl
-          def={def}
-          value={items}
-          onChange={(items) => draft.onChange({ kind: 'list', items })}
-        />
-      </Suspense>
+      <LazyListControl
+        key={`${def.id}:${declaredKind}`}
+        load={loadScalarListControl}
+        def={def}
+        value={items}
+        onChange={(items) => draft.onChange({ kind: 'list', items })}
+      />
     );
   }
   if (kind === 'ref') return <RefField def={def} label={label} value={value} onChange={onChange} />;

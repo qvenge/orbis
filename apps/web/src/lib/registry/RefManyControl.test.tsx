@@ -19,6 +19,33 @@ const resolved = {
   completable: null,
 };
 
+test.each([
+  'unavailable',
+  'failed',
+  'same title',
+])('two %s selected references have distinct addressed remove names and preserve exact removal', async (state) => {
+  const onChange = vi.fn();
+  renderWithProviders(
+    <RefManyControl def={definition} value={[old, missing]} onChange={onChange} />,
+    (path) => {
+      if (path !== 'entity.resolveRefs') return [];
+      if (state === 'failed') throw new Error('network');
+      return state === 'unavailable' ? [] : [resolved, { ...resolved, id: missing }];
+    },
+  );
+  await waitFor(() => expect(screen.queryByText('Загрузка…')).toBeNull());
+  const remove = screen.getAllByRole('button', { name: /^Убрать:/ });
+  expect(new Set(remove.map((button) => button.getAttribute('aria-label'))).size).toBe(2);
+  expect(remove[0]?.getAttribute('aria-label')).toContain(old);
+  expect(remove[1]?.getAttribute('aria-label')).toContain(missing);
+  if (state !== 'same title') {
+    expect(screen.getByText(old)).toBeVisible();
+    expect(screen.getByText(missing)).toBeVisible();
+  } else expect(screen.getAllByText('в архиве')).toHaveLength(2);
+  fireEvent.click(remove[1] as HTMLButtonElement);
+  expect(onChange).toHaveBeenCalledExactlyOnceWith([old]);
+});
+
 test('архив/недоступные/51 выбранная остаются, add полный массив без очистки/self rule', async () => {
   const onChange = vi.fn();
   const ids = [
@@ -45,7 +72,7 @@ test('архив/недоступные/51 выбранная остаются, 
   expect(onChange).not.toHaveBeenCalled();
   fireEvent.click(await screen.findByRole('button', { name: 'Добавить: Сама запись' }));
   expect(onChange).toHaveBeenCalledExactlyOnceWith([...ids, next]);
-  fireEvent.click(screen.getByRole('button', { name: 'Убрать: Старое в архиве' }));
+  fireEvent.click(screen.getByRole('button', { name: `Убрать: Старое в архиве (${old})` }));
   expect(onChange).toHaveBeenLastCalledWith(ids.slice(1));
 });
 

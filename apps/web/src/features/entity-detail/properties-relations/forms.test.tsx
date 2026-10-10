@@ -529,7 +529,7 @@ describe('refusal and command lifecycle integration', () => {
     expect(screen.getByLabelText('Поле теста')).toHaveValue('  raw survives  ');
     expect(screen.getByTestId('draft')).toHaveTextContent(oldRef);
     expect(writes).toBe(1);
-    fireEvent.click(screen.getByRole('button', { name: 'Убрать: Старое в архиве' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Убрать: Старое в архиве \(/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Сохранить' }));
     await waitFor(() => expect(writes).toBe(2));
     const calls = result.calls.filter((c) => c.path === 'entity.updateBatch');
@@ -570,7 +570,7 @@ describe('refusal and command lifecycle integration', () => {
             ? []
             : {},
     );
-    fireEvent.click(await screen.findByRole('button', { name: 'Убрать: Старое в архиве' }));
+    fireEvent.click(await screen.findByRole('button', { name: /^Убрать: Старое в архиве \(/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Отменить правку: Ссылки' }));
     fireEvent.change(screen.getByLabelText('Поле теста'), { target: { value: 'only text' } });
     fireEvent.click(screen.getByRole('button', { name: 'Сохранить' }));
@@ -767,9 +767,9 @@ it('pending preserves mounted batched ref control and disables edits without per
           ? { entity: refEntity }
           : {},
   );
-  await screen.findByRole('button', { name: 'Убрать: Старое в архиве' });
+  await screen.findByRole('button', { name: /^Убрать: Старое в архиве \(/ });
   fireEvent.click(screen.getByText('pending'));
-  expect(screen.getByRole('button', { name: 'Убрать: Старое в архиве' })).toBeDisabled();
+  expect(screen.getByRole('button', { name: /^Убрать: Старое в архиве \(/ })).toBeDisabled();
   expect(screen.getByLabelText('Поле теста')).toBeDisabled();
   expect(result.calls.filter((c) => c.path === 'entity.get')).toHaveLength(0);
 });

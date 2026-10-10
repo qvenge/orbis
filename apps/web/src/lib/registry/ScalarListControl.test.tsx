@@ -18,6 +18,25 @@ function Harness({ initial = ['Дом, работа', 'Второе'] }: { initi
   );
 }
 
+test('same-label scalar lists distinguish the property key and remove only the addressed raw row', () => {
+  const first = vi.fn();
+  const second = vi.fn();
+  const other = field({ kind: 'text', cardinality: 'many' }, 'user/second-list');
+  render(
+    <>
+      <ScalarListControl def={textManyDef} value={['Одинаково']} onChange={first} />
+      <ScalarListControl def={other} value={['Одинаково']} onChange={second} />
+    </>,
+  );
+  const buttons = screen.getAllByRole('button', { name: /^Удалить строку 1/ });
+  expect(new Set(buttons.map((button) => button.getAttribute('aria-label'))).size).toBe(2);
+  expect(buttons[0]?.getAttribute('aria-label')).toContain(textManyDef.key);
+  expect(buttons[1]?.getAttribute('aria-label')).toContain(other.key);
+  fireEvent.click(buttons[1] as HTMLButtonElement);
+  expect(second).toHaveBeenCalledExactlyOnceWith([]);
+  expect(first).not.toHaveBeenCalled();
+});
+
 test('отдельные строки без split: add/remove/raw/[]', async () => {
   const user = userEvent.setup();
   render(<Harness />);
@@ -27,10 +46,10 @@ test('отдельные строки без split: add/remove/raw/[]', async ()
   expect(screen.getByTestId('items')).toHaveTextContent('["Дом, работа, ещё","Второе"]');
   await user.click(screen.getByRole('button', { name: 'Добавить строку' }));
   expect(screen.getByRole('textbox', { name: 'Поле теста: строка 3' })).toHaveValue('');
-  await user.click(screen.getByRole('button', { name: 'Удалить строку 2' }));
+  await user.click(screen.getByRole('button', { name: /^Удалить строку 2:/ }));
   expect(screen.getByTestId('items')).toHaveTextContent('["Дом, работа, ещё",""]');
-  await user.click(screen.getByRole('button', { name: 'Удалить строку 2' }));
-  await user.click(screen.getByRole('button', { name: 'Удалить строку 1' }));
+  await user.click(screen.getByRole('button', { name: /^Удалить строку 2:/ }));
+  await user.click(screen.getByRole('button', { name: /^Удалить строку 1:/ }));
   expect(screen.getByTestId('items')).toHaveTextContent('[]');
 });
 
@@ -60,6 +79,6 @@ test('keyboard доступен без submit; disabled блокирует input
   }
   onChange.mockClear();
   fireEvent.click(screen.getByRole('button', { name: 'Добавить строку' }));
-  fireEvent.click(screen.getByRole('button', { name: 'Удалить строку 1' }));
+  fireEvent.click(screen.getByRole('button', { name: /^Удалить строку 1:/ }));
   expect(onChange).not.toHaveBeenCalled();
 });

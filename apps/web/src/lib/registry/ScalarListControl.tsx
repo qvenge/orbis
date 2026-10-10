@@ -44,7 +44,7 @@ export function ScalarListControl({
           <button
             type="button"
             disabled={disabled}
-            aria-label={`Удалить строку ${index + 1}`}
+            aria-label={`Удалить строку ${index + 1}: ${label} (${def.key})`}
             className={BUTTON_CLASS}
             onClick={() => onChange(value.filter((_, at) => at !== index))}
           >

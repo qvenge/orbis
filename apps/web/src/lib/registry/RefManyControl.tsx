@@ -53,10 +53,11 @@ export function RefManyControl({
             >
               {row?.emoji && <span aria-hidden>{row.emoji}</span>}
               <span className="min-w-0 flex-1 break-words">{title}</span>
+              {!row && <span className="min-w-0 break-all text-2xs text-text-muted">{id}</span>}
               {row?.archived && <span className="text-2xs text-text-muted">в архиве</span>}
               <button
                 type="button"
-                aria-label={`Убрать: ${title}`}
+                aria-label={`Убрать: ${title} (${id})`}
                 disabled={disabled}
                 className={BUTTON}
                 onClick={() => onChange(value.filter((_, at) => at !== index))}

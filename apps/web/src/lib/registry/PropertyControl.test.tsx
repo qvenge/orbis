@@ -485,7 +485,7 @@ test('draft lists используют отдельные lazy строки и �
   renderWithProviders(
     <DraftHarness definition={textManyDef} initial={{ kind: 'list', items: ['один'] }} />,
   );
-  await user.click(await screen.findByRole('button', { name: 'Удалить строку 1' }));
+  await user.click(await screen.findByRole('button', { name: /^Удалить строку 1:/ }));
   fireEvent.pointerDown(screen.getByRole('button', { name: 'Сохранить' }));
   expect(screen.getByTestId('result')).toHaveTextContent('{"ok":true,"value":[]}');
   await user.click(screen.getByRole('button', { name: 'Снять значение' }));
