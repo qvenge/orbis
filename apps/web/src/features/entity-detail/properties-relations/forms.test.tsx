@@ -1,5 +1,5 @@
 import type { AspectDefinition } from '@orbis/shared';
-import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BUILTIN_REGISTRY } from '../../../test/registry';
@@ -297,7 +297,7 @@ describe('carried current-context obligations', () => {
       fireEvent.change(screen.getByLabelText('Поле теста'), { target: { value: 'raw retained' } });
     else fireEvent.click(screen.getByRole('button', { name: 'Снять значение: Поле теста' }));
     fireEvent.click(screen.getByText('Disable finance'));
-    await screen.findByText(/Расширение «.*» выключено/);
+    await within(screen.getByTestId('field-user/money')).findByText(/Расширение «.*» выключено/);
     fireEvent.click(screen.getByRole('button', { name: 'Сохранить' }));
     expect(sent).not.toHaveBeenCalled();
     expect(result.calls.filter((c) => c.path === 'entity.updateBatch')).toHaveLength(0);
@@ -1009,4 +1009,665 @@ it('cancel closes validation errors so a new values edit starts cleanly', () => 
   fireEvent.click(screen.getByRole('button', { name: 'Редактировать свойства' }));
   expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   expect(screen.getByLabelText('Поле теста')).toHaveValue('4');
+});
+
+describe('review round 1: retained rows and coherent resolution', () => {
+  it.each([
+    'keep',
+    'accept',
+  ] as const)('remote unset retains touched free row and neighbor through explicit %s', async (choice) => {
+    const extra = { ...field({ kind: 'text' }, 'user/extra'), label: { ru: 'Сосед' } };
+    const reg = { ...registry, properties: [...registry.properties, extra] };
+    const initial = { ...entity, props: { ...entity.props, 'user/extra': 'old' } };
+    const sent = vi.fn();
+    function RemoteUnsetHost() {
+      const [record, setEntity] = useState(initial);
+      const [draft, onDraftChange] = useState<PanelDraft | null>(() =>
+        editField(
+          editField(initialValues(reg, initial), 'user/title', {
+            kind: 'raw',
+            raw: 'retained raw',
+          }),
+          'user/extra',
+          { kind: 'raw', raw: 'neighbor' },
+        ),
+      );
+      return (
+        <>
+          <button
+            type="button"
+            onClick={() => setEntity({ ...initial, props: { 'user/extra': 'old' } })}
+          >
+            remote unset
+          </button>
+          <PropertiesTab
+            entity={record}
+            registry={reg}
+            context={context}
+            draft={draft}
+            onDraftChange={onDraftChange}
+            onSubmit={sent}
+            onCancel={() => {}}
+            onSpecial={() => {}}
+          />
+        </>
+      );
+    }
+    renderWithProviders(<RemoteUnsetHost />);
+    fireEvent.click(screen.getByText('remote unset'));
+    await screen.findByText('Значение изменилось. Сейчас: Не задано');
+    expect(screen.getByLabelText('Поле теста')).toHaveValue('retained raw');
+    expect(screen.getByLabelText('Сосед')).toHaveValue('neighbor');
+    fireEvent.click(screen.getByRole('button', { name: 'Сохранить' }));
+    expect(sent).not.toHaveBeenCalled();
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: choice === 'keep' ? 'Оставить мой ввод: Поле теста' : 'Принять новое: Поле теста',
+      }),
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Сохранить' }));
+    expect(sent).toHaveBeenCalledExactlyOnceWith({
+      kind: 'values',
+      entityId: entity.id,
+      patch: {
+        props:
+          choice === 'keep'
+            ? { 'user/title': 'retained raw', 'user/extra': 'neighbor' }
+            : { 'user/extra': 'neighbor' },
+      },
+    });
+  });
+  it('removed declaration keeps the orphan raw and cancel action while aspect metadata blocks Save', async () => {
+    const sent = vi.fn();
+    function OrphanHost() {
+      const [reg, setRegistry] = useState<EffectiveRegistry>(customRegistry);
+      const [draft, onDraftChange] = useState<PanelDraft | null>(
+        editField(
+          startDraft(entity, customRegistry, { kind: 'attach', aspectId: custom.id }, context),
+          'user/due',
+          { kind: 'raw', raw: '2026-10-20' },
+        ),
+      );
+      return (
+        <>
+          <button
+            type="button"
+            onClick={() =>
+              setRegistry({
+                ...customRegistry,
+                aspects: customRegistry.aspects.map((a) =>
+                  a.id === custom.id
+                    ? { ...a, properties: a.properties.filter((p) => p.propertyId !== 'user/due') }
+                    : a,
+                ),
+              })
+            }
+          >
+            remove property
+          </button>
+          <AspectsTab
+            entity={entity}
+            registry={reg}
+            context={context}
+            draft={draft}
+            onDraftChange={onDraftChange}
+            onSubmit={sent}
+            onCancel={() => {}}
+            onSpecial={() => {}}
+          />
+        </>
+      );
+    }
+    renderWithProviders(<OrphanHost />);
+    fireEvent.click(screen.getByText('remove property'));
+    await waitFor(() =>
+      expect(screen.getByTestId('field-user/due')).toHaveTextContent('Поле теста'),
+    );
+    expect(within(screen.getByTestId('field-user/due')).getByLabelText('Поле теста')).toHaveValue(
+      '2026-10-20',
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Сохранить' }));
+    expect(sent).not.toHaveBeenCalled();
+    expect(screen.getByRole('alert')).toHaveTextContent('Определение изменилось');
+    fireEvent.click(
+      within(screen.getByTestId('field-user/due')).getByRole('button', {
+        name: 'Отменить правку: Поле теста',
+      }),
+    );
+    expect(screen.queryByTestId('field-user/due')).not.toBeInTheDocument();
+  });
+  it.each([
+    'keep',
+    'accept',
+  ] as const)('assignment remote human-to-agent provides explicit group %s', async (choice) => {
+    const initial = { ...entity, props: { 'orbis/executor': 'human' } };
+    const remote = {
+      ...entity,
+      props: { 'orbis/executor': 'agent', 'orbis/grant': 'remote', 'orbis/may_close': true },
+    };
+    const sent = vi.fn();
+    function AssignmentConflictHost() {
+      const [record, setEntity] = useState(initial);
+      const [draft, onDraftChange] = useState<PanelDraft | null>(
+        editField(
+          startDraft(initial, registry, { kind: 'assignment' }, context),
+          'orbis/executor',
+          { kind: 'value', value: 'human' },
+        ),
+      );
+      return (
+        <>
+          <button type="button" onClick={() => setEntity(remote)}>
+            remote assignment
+          </button>
+          <AspectsTab
+            entity={record}
+            registry={registry}
+            context={context}
+            draft={draft}
+            onDraftChange={onDraftChange}
+            onSubmit={sent}
+            onCancel={() => {}}
+            onSpecial={() => {}}
+          />
+        </>
+      );
+    }
+    renderWithProviders(<AssignmentConflictHost />, (path) =>
+      path === 'oauth.listGrants'
+        ? [
+            {
+              id: 'remote',
+              label: 'Remote access',
+              scope: 'worker',
+              connected: true,
+              revokedAt: null,
+            },
+          ]
+        : {},
+    );
+    fireEvent.click(screen.getByText('remote assignment'));
+    await screen.findByText('Назначение изменилось. Сейчас в записи:');
+    expect(screen.getByLabelText('Человек')).toBeChecked();
+    expect(screen.getByText('remote')).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Сохранить' }));
+    expect(sent).not.toHaveBeenCalled();
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: choice === 'keep' ? 'Оставить мой ввод назначения' : 'Принять новое назначение',
+      }),
+    );
+    if (choice === 'accept') {
+      expect(screen.getByLabelText('Агент')).toBeChecked();
+      await screen.findByRole('option', { name: 'Remote access · исполнитель' });
+      expect(screen.getByLabelText('Доступ агента')).toHaveValue('remote');
+      expect(screen.getByLabelText('Может закрывать сам')).toBeChecked();
+    } else expect(screen.getByLabelText('Человек')).toBeChecked();
+    fireEvent.click(screen.getByRole('button', { name: 'Сохранить' }));
+    expect(sent).toHaveBeenCalledExactlyOnceWith({
+      kind: 'attach',
+      entityId: entity.id,
+      aspectId: 'orbis/assignment',
+      patch:
+        choice === 'keep'
+          ? { props: { 'orbis/executor': 'human' }, unset: ['orbis/grant', 'orbis/may_close'] }
+          : {
+              props: {
+                'orbis/executor': 'agent',
+                'orbis/grant': 'remote',
+                'orbis/may_close': true,
+              },
+            },
+    });
+  });
+});
+
+describe('review round 1: picker and factual reconciliation', () => {
+  it.each([
+    'json',
+    'flags',
+    'mask',
+  ] as const)('unavailable free %s item explains its current access', (gate) => {
+    const def = {
+      ...field({ kind: 'json' }, 'user/json'),
+      label: { ru: 'JSON новое' },
+      ...(gate === 'flags'
+        ? { flags: { model_writable: false } }
+        : gate === 'mask'
+          ? { module: 'finance' as const }
+          : {}),
+    };
+    const reg = { ...registry, properties: [...registry.properties, def] };
+    renderWithProviders(
+      <Host
+        reg={reg}
+        ctx={gate === 'mask' ? { ...context, disabledExtensions: ['finance'] } : context}
+      />,
+    );
+    fireEvent.click(screen.getByText('Добавить свободное свойство'));
+    const button = screen.getByRole('button', { name: 'Добавить поле: JSON новое' });
+    expect(button).toBeDisabled();
+    expect(
+      within(button.parentElement as HTMLElement).getByText(
+        gate === 'json'
+          ? 'Для этого типа нет редактора; значение можно снять'
+          : gate === 'flags'
+            ? 'Значение вычисляется'
+            : 'Расширение выключено',
+      ),
+    ).toBeVisible();
+    if (gate === 'mask')
+      expect(
+        within(button.parentElement as HTMLElement).getByText(/Расширение «.*» выключено/),
+      ).toBeVisible();
+  });
+  it.each([
+    'allowed',
+    'flags',
+    'mask',
+    'aspect-mask',
+  ] as const)('free assignment route %s respects current gates', (gate) => {
+    const executor = registry.properties.find((p) => p.id === 'orbis/executor');
+    if (!executor) throw new Error('executor fixture');
+    const reg = {
+      ...registry,
+      properties: [
+        {
+          ...executor,
+          ...(gate === 'flags'
+            ? { flags: { system_writable: true } }
+            : gate === 'mask'
+              ? { module: 'finance' as const }
+              : {}),
+        },
+      ],
+      aspects: registry.aspects.map((a) =>
+        a.id === 'orbis/assignment' && gate === 'aspect-mask'
+          ? { ...a, module: 'finance' as const }
+          : a,
+      ),
+    };
+    const special = vi.fn();
+    renderWithProviders(
+      <PropertiesTab
+        entity={{ ...entity, props: {} }}
+        registry={reg}
+        context={
+          gate === 'mask' || gate === 'aspect-mask'
+            ? { ...context, disabledExtensions: ['finance'] }
+            : context
+        }
+        draft={null}
+        onDraftChange={() => {}}
+        onSubmit={() => {}}
+        onCancel={() => {}}
+        onSpecial={special}
+      />,
+    );
+    fireEvent.click(screen.getByText('Добавить свободное свойство'));
+    const button = screen.queryByRole('button', {
+      name: `Назначение: ${lookupOf(reg).label(executor.id)}`,
+    });
+    if (gate === 'allowed') {
+      expect(button).toBeEnabled();
+      fireEvent.click(button as HTMLElement);
+      expect(special).toHaveBeenCalledExactlyOnceWith('assignment');
+    } else {
+      if (button) expect(button).toBeDisabled();
+      expect(special).not.toHaveBeenCalled();
+    }
+  });
+  it.each([
+    false,
+    true,
+  ])('empty attach differs shows original aspect %s presence in fresh entity', (present) => {
+    const command: PanelCommand = {
+      kind: 'attach',
+      entityId: entity.id,
+      aspectId: 'orbis/task',
+      patch: {},
+    };
+    renderWithProviders(
+      <AspectsTab
+        entity={{ ...entity, aspects: present ? ['orbis/task'] : [] }}
+        registry={registry}
+        context={context}
+        draft={startDraft(entity, registry, { kind: 'attach', aspectId: 'orbis/task' }, context)}
+        onDraftChange={() => {}}
+        onSubmit={() => {}}
+        onCancel={() => {}}
+        onSpecial={() => {}}
+        submission={{
+          command,
+          result: { kind: 'unknown', message: 'internal' },
+          reconciliation: 'differs',
+        }}
+      />,
+    );
+    expect(
+      screen.getByText(
+        `${lookupOf(registry).label('orbis/task')}: ${present ? 'аспект присутствует' : 'аспект отсутствует'}`,
+      ),
+    ).toBeVisible();
+    expect(document.querySelector('dl:empty')).toBeNull();
+  });
+});
+
+describe('review round 1: coherent keep never widens access', () => {
+  const initial = {
+    ...entity,
+    props: { 'orbis/executor': 'agent', 'orbis/grant': 'local', 'orbis/may_close': false },
+  };
+  function localGroup() {
+    let result = startDraft(initial, registry, { kind: 'assignment' }, context);
+    for (const [id, value] of Object.entries(initial.props))
+      result = editField(result, id, { kind: 'value', value });
+    return result;
+  }
+  const grants = [
+    { id: 'local', label: 'Local access', scope: 'worker', connected: true, revokedAt: null },
+    { id: 'remote', label: 'Remote access', scope: 'worker', connected: true, revokedAt: null },
+  ];
+  it('keeping agent grant conflict preserves local grant/mayClose and submits one coherent group', async () => {
+    const sent = vi.fn();
+    const remote = {
+      ...initial,
+      props: { ...initial.props, 'orbis/grant': 'remote', 'orbis/may_close': true },
+    };
+    function AgentHost() {
+      const [draft, onDraftChange] = useState<PanelDraft | null>(localGroup());
+      return (
+        <AspectsTab
+          entity={remote}
+          registry={registry}
+          context={context}
+          draft={draft}
+          onDraftChange={onDraftChange}
+          onSubmit={sent}
+          onCancel={() => {}}
+          onSpecial={() => {}}
+        />
+      );
+    }
+    renderWithProviders(<AgentHost />, (path) => (path === 'oauth.listGrants' ? grants : {}));
+    await screen.findByRole('option', { name: 'Local access · исполнитель' });
+    fireEvent.click(screen.getByRole('button', { name: 'Оставить мой ввод назначения' }));
+    expect(screen.getByLabelText('Доступ агента')).toHaveValue('local');
+    expect(screen.getByLabelText('Может закрывать сам')).not.toBeChecked();
+    fireEvent.click(screen.getByRole('button', { name: 'Сохранить' }));
+    expect(sent).toHaveBeenCalledExactlyOnceWith({
+      kind: 'attach',
+      entityId: entity.id,
+      aspectId: 'orbis/assignment',
+      patch: { props: initial.props },
+    });
+  });
+  it.each([
+    'flags',
+    'mask',
+    'readOnly',
+    'archive',
+    'metadata',
+    'deprecated',
+  ] as const)('group keep preserves current %s restriction', async (gate) => {
+    const reg: EffectiveRegistry = {
+      ...registry,
+      properties: registry.properties.map((p) =>
+        p.id === 'orbis/grant'
+          ? {
+              ...p,
+              ...(gate === 'flags'
+                ? { flags: { system_writable: true } }
+                : gate === 'mask'
+                  ? { module: 'finance' as const }
+                  : gate === 'metadata'
+                    ? { type: { kind: 'number' as const } }
+                    : gate === 'deprecated'
+                      ? { status: 'deprecated' as const }
+                      : {}),
+            }
+          : p,
+      ),
+    };
+    const ctx: Context = {
+      ...context,
+      disabledExtensions: gate === 'mask' ? ['finance'] : [],
+      readOnly: gate === 'readOnly',
+      archived: gate === 'archive',
+    };
+    const sent = vi.fn();
+    const remote = { ...initial, props: { ...initial.props, 'orbis/grant': 'remote' } };
+    function GuardHost() {
+      const [draft, onDraftChange] = useState<PanelDraft | null>(localGroup());
+      return (
+        <>
+          <output data-testid="draft">{JSON.stringify(draft?.fields)}</output>
+          <AspectsTab
+            entity={remote}
+            registry={reg}
+            context={ctx}
+            draft={draft}
+            onDraftChange={onDraftChange}
+            onSubmit={sent}
+            onCancel={() => {}}
+            onSpecial={() => {}}
+          />
+        </>
+      );
+    }
+    renderWithProviders(<GuardHost />, (path) => (path === 'oauth.listGrants' ? grants : {}));
+    await screen.findByRole('option', { name: 'Local access · исполнитель' });
+    fireEvent.click(screen.getByRole('button', { name: 'Оставить мой ввод назначения' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Сохранить' }));
+    expect(sent).not.toHaveBeenCalled();
+    expect(screen.getAllByRole('alert').length).toBeGreaterThan(0);
+    expect(screen.getByTestId('draft')).toHaveTextContent('local');
+  });
+  it('unknown cannot accept or keep the group or replace the submitted snapshot', () => {
+    const command: PanelCommand = {
+      kind: 'attach',
+      entityId: entity.id,
+      aspectId: 'orbis/assignment',
+      patch: { props: initial.props },
+    };
+    const changed = vi.fn();
+    renderWithProviders(
+      <AspectsTab
+        entity={{ ...initial, props: { ...initial.props, 'orbis/grant': 'remote' } }}
+        registry={registry}
+        context={context}
+        draft={localGroup()}
+        onDraftChange={changed}
+        onSubmit={() => {}}
+        onCancel={() => {}}
+        onSpecial={() => {}}
+        submission={{ command, result: { kind: 'unknown', message: 'internal' } }}
+      />,
+      (path) => (path === 'oauth.listGrants' ? grants : {}),
+    );
+    expect(screen.getByRole('button', { name: 'Оставить мой ввод назначения' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Принять новое назначение' })).toBeDisabled();
+    // Observation may update current read context; conflict actions cannot replace inputs.
+    expect(command.patch.props).toEqual(initial.props);
+  });
+});
+
+describe('review round 1: bounded semantic observation', () => {
+  it.each([
+    { name: 'absent to null', before: {}, after: { 'user/json': null }, conflict: true },
+    { name: 'null to absent', before: { 'user/json': null }, after: {}, conflict: true },
+    {
+      name: 'false to null',
+      before: { 'user/json': false },
+      after: { 'user/json': null },
+      conflict: true,
+    },
+    {
+      name: 'ref array order',
+      before: { 'user/json': ['old', 'new'] },
+      after: { 'user/json': ['new', 'old'] },
+      conflict: true,
+    },
+    {
+      name: 'object key order',
+      before: { 'user/json': { x: 1, y: 2 } },
+      after: { 'user/json': { y: 2, x: 1 } },
+      conflict: false,
+    },
+  ])('equivalent wrappers terminate and preserve $name semantics', async ({
+    before,
+    after,
+    conflict,
+  }) => {
+    const json = field({ kind: 'json' }, 'user/json');
+    const reg = { ...registry, properties: [...registry.properties, json] };
+    const initial = { ...entity, props: { ...entity.props, ...before } };
+    let observations = 0;
+    function WrappingHost() {
+      const [record, setEntity] = useState(initial);
+      const [draft, setDraft] = useState<PanelDraft | null>(
+        editField(
+          editField(initialValues(reg, initial), 'user/title', { kind: 'raw', raw: 'retained' }),
+          'user/json',
+          { kind: 'unset' },
+        ),
+      );
+      return (
+        <>
+          <button
+            type="button"
+            onClick={() => setEntity({ ...entity, props: { ...entity.props, ...after } })}
+          >
+            actual remote
+          </button>
+          <output data-testid="observations">{observations}</output>
+          <PropertiesTab
+            entity={{ ...record, props: { ...record.props }, aspects: [...record.aspects] }}
+            registry={{ ...reg }}
+            context={{ ...context }}
+            draft={draft}
+            onDraftChange={(next) => {
+              observations++;
+              if (observations > 8) throw new Error('bounded equivalent-wrapper observation loop');
+              setDraft(next);
+            }}
+            onSubmit={() => {}}
+            onCancel={() => {}}
+            onSpecial={() => {}}
+          />
+        </>
+      );
+    }
+    renderWithProviders(<WrappingHost />);
+    expect(observations).toBe(0);
+    expect(screen.getByLabelText('Поле теста')).toHaveValue('retained');
+    fireEvent.click(screen.getByText('actual remote'));
+    await waitFor(() => expect(observations).toBe(conflict ? 1 : 0));
+    expect(screen.getByLabelText('Поле теста')).toHaveValue('retained');
+    expect(Boolean(screen.queryByRole('button', { name: 'Оставить мой ввод: Поле теста' }))).toBe(
+      conflict,
+    );
+  });
+  it('recreated wrappers still observe real mask, aspects and semantic registry changes', async () => {
+    const initial = { ...financeEntity, aspects: ['orbis/task'] };
+    let observations = 0;
+    function SemanticHost() {
+      const [record, setEntity] = useState(initial);
+      const [reg, setRegistry] = useState<EffectiveRegistry>(financeRegistry);
+      const [ctx, setContext] = useState<Context>(context);
+      const [draft, setDraft] = useState<PanelDraft | null>(
+        editField(initialValues(financeRegistry, initial), 'user/money', {
+          kind: 'raw',
+          raw: 'original raw',
+        }),
+      );
+      return (
+        <>
+          <button
+            type="button"
+            onClick={() => setContext({ ...context, disabledExtensions: ['finance'] })}
+          >
+            actual mask
+          </button>
+          <button
+            type="button"
+            onClick={() => setEntity({ ...initial, aspects: ['orbis/task', 'orbis/assignment'] })}
+          >
+            actual aspects
+          </button>
+          <button
+            type="button"
+            onClick={() =>
+              setRegistry({
+                ...financeRegistry,
+                properties: financeRegistry.properties.map((p) =>
+                  p.id === 'user/money' ? { ...p, type: { kind: 'number' } } : p,
+                ),
+              })
+            }
+          >
+            actual registry
+          </button>
+          <output data-testid="observed">
+            {JSON.stringify({ fields: draft?.fields, aspects: draft?.latestEntity.aspects })}
+          </output>
+          <PropertiesTab
+            entity={{ ...record, props: { ...record.props }, aspects: [...record.aspects] }}
+            registry={{ ...reg }}
+            context={{ ...ctx }}
+            draft={draft}
+            onDraftChange={(next) => {
+              observations++;
+              if (observations > 8) throw new Error('bounded semantic observation loop');
+              setDraft(next);
+            }}
+            onSubmit={() => {}}
+            onCancel={() => {}}
+            onSpecial={() => {}}
+          />
+        </>
+      );
+    }
+    renderWithProviders(<SemanticHost />);
+    expect(observations).toBe(0);
+    fireEvent.click(screen.getByText('actual mask'));
+    await waitFor(() => expect(observations).toBe(1));
+    expect(screen.getByTestId('observed')).toHaveTextContent('Расширение выключено');
+    fireEvent.click(screen.getByText('actual aspects'));
+    await waitFor(() => expect(observations).toBe(2));
+    expect(screen.getByTestId('observed')).toHaveTextContent('orbis/assignment');
+    fireEvent.click(screen.getByText('actual registry'));
+    await waitFor(() => expect(observations).toBe(3));
+    expect(screen.getByTestId('observed')).toHaveTextContent('"metadataChanged":true');
+    expect(screen.getByTestId('observed')).toHaveTextContent('original raw');
+  });
+});
+
+it('review picker keeps APP_NAV on the named existing navigation route', () => {
+  const nav = registry.properties.find((p) => p.id === 'orbis/app_nav');
+  if (!nav) throw new Error('navigation fixture');
+  const reg = { ...registry, properties: [nav] };
+  const special = vi.fn();
+  const submit = vi.fn();
+  renderWithProviders(
+    <PropertiesTab
+      entity={{ ...entity, props: {} }}
+      registry={reg}
+      context={context}
+      draft={null}
+      onDraftChange={() => {}}
+      onSubmit={submit}
+      onCancel={() => {}}
+      onSpecial={special}
+    />,
+  );
+  fireEvent.click(screen.getByText('Добавить свободное свойство'));
+  expect(
+    screen.getByRole('button', { name: `Добавить поле: ${lookupOf(reg).label(nav.id)}` }),
+  ).toBeDisabled();
+  fireEvent.click(
+    screen.getByRole('button', { name: `Навигация: ${lookupOf(reg).label(nav.id)}` }),
+  );
+  expect(special).toHaveBeenCalledExactlyOnceWith('navigation');
+  expect(submit).not.toHaveBeenCalled();
 });

@@ -9,7 +9,7 @@ import {
   assignmentPatch,
   useAssignmentGrants,
 } from '../assignment-form';
-import { editField, startDraft } from './draft';
+import { acceptRemote, editField, keepLocal, observeDraft, startDraft } from './draft';
 import {
   checkedPatch,
   contextReason,
@@ -69,6 +69,22 @@ export function AspectsTab(form: PanelFormProps) {
       result = editField(result, id, { kind: 'value', value });
     for (const id of command.patch.unset ?? []) result = editField(result, id, { kind: 'unset' });
     return result;
+  }
+  const assignmentIds = ['orbis/executor', 'orbis/grant', 'orbis/may_close'];
+  const assignmentCandidate =
+    draft?.editor.kind === 'assignment' && draft.entityId === entity.id
+      ? observeDraft(assignmentDraft(assignment), entity, registry, context)
+      : undefined;
+  const assignmentConflict = assignmentIds.some((id) => assignmentCandidate?.fields[id]?.conflict);
+  function resolveAssignment(choice: 'keep' | 'accept') {
+    if (!assignmentCandidate || submissionLocked(form.submission)) return;
+    let next = assignmentCandidate;
+    // Keep acknowledges remote baselines only; metadata fingerprints and access stay intact.
+    // Accept resets the complete generated group, without independent property writes.
+    for (const id of assignmentIds)
+      next = choice === 'keep' ? keepLocal(next, id) : acceptRemote(next, id);
+    onDraftChange(next);
+    setErrors(undefined);
   }
   function save() {
     if (!draft || submissionLocked(form.submission)) return;
@@ -207,17 +223,35 @@ export function AspectsTab(form: PanelFormProps) {
       {selected && (
         <>
           <h3 className="text-sm font-medium">{lookup.label(selected.id)}</h3>
-          {selected.properties
-            .slice()
-            .sort((a, b) => a.rank - b.rank || a.propertyId.localeCompare(b.propertyId))
-            .map((prop) => (
-              <FieldRow
-                key={prop.propertyId}
-                form={form}
-                id={prop.propertyId}
-                required={prop.required}
-              />
-            ))}
+          {[
+            ...new Set([
+              ...selected.properties.map((prop) => prop.propertyId),
+              ...Object.keys(draft?.entityId === entity.id ? draft.fields : {}),
+            ]),
+          ]
+            .sort(
+              (a, b) =>
+                (selected.properties.find((prop) => prop.propertyId === a)?.rank ??
+                  lookup.property(a)?.rank ??
+                  Infinity) -
+                  (selected.properties.find((prop) => prop.propertyId === b)?.rank ??
+                    lookup.property(b)?.rank ??
+                    Infinity) || a.localeCompare(b),
+            )
+            .map((id) => {
+              const declaration = selected.properties.find((prop) => prop.propertyId === id);
+              return (
+                <div key={id} className="flex flex-col gap-1">
+                  {!declaration && (
+                    <p className="text-sm text-text-muted">
+                      Поле больше не объявлено выбранным аспектом. Ввод сохранён; определение
+                      аспекта изменилось.
+                    </p>
+                  )}
+                  <FieldRow form={form} id={id} required={declaration?.required ?? false} />
+                </div>
+              );
+            })}
           <FormFooter form={form} errors={errors} onSave={save} />
         </>
       )}
@@ -228,6 +262,33 @@ export function AspectsTab(form: PanelFormProps) {
             onChange={(next) => onDraftChange(assignmentDraft(next))}
             disabled={Boolean(contextReason(context)) || submissionLocked(form.submission)}
           />
+          {assignmentConflict && (
+            <div className="flex flex-col gap-2 text-sm">
+              <p>Назначение изменилось. Сейчас в записи:</p>
+              <dl>
+                {assignmentIds.map((id) => (
+                  <div key={id}>
+                    <dt>{lookup.label(id)}</dt>
+                    <dd>{valueText(entity.props[id])}</dd>
+                  </div>
+                ))}
+              </dl>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  disabled={submissionLocked(form.submission)}
+                  onClick={() => resolveAssignment('keep')}
+                >
+                  Оставить мой ввод назначения
+                </Button>
+                <Button
+                  disabled={submissionLocked(form.submission)}
+                  onClick={() => resolveAssignment('accept')}
+                >
+                  Принять новое назначение
+                </Button>
+              </div>
+            </div>
+          )}
           <p className="text-sm">
             {lookup.label('orbis/assignee')}: {valueText(entity.props['orbis/assignee'])}. Имя
             человека в этом редакторе доступно только для чтения.

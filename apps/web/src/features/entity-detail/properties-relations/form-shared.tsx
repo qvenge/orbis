@@ -77,6 +77,36 @@ export function valueText(value: unknown): string {
   if (typeof value === 'string') return value === '' ? 'Пустая строка' : value;
   return JSON.stringify(value) ?? String(value);
 }
+// JSON observation equality is not normalization: presence, null/false and array order stay distinct.
+function sameValue(left: unknown, right: unknown): boolean {
+  if (Object.is(left, right)) return true;
+  if (Array.isArray(left) || Array.isArray(right))
+    return (
+      Array.isArray(left) &&
+      Array.isArray(right) &&
+      left.length === right.length &&
+      left.every((value, index) => sameValue(value, right[index]))
+    );
+  if (left === null || right === null || typeof left !== 'object' || typeof right !== 'object')
+    return false;
+  const a = left as Record<string, unknown>;
+  const b = right as Record<string, unknown>;
+  const keys = Object.keys(a);
+  return (
+    keys.length === Object.keys(b).length &&
+    keys.every((key) => Object.hasOwn(b, key) && sameValue(a[key], b[key]))
+  );
+}
+function sameRegistry(left: EffectiveRegistry, right: EffectiveRegistry): boolean {
+  return (
+    left === right ||
+    (left.version === right.version &&
+      left.properties === right.properties &&
+      left.aspects === right.aspects &&
+      left.roles === right.roles &&
+      left.contracts === right.contracts)
+  );
+}
 export function useObserveForm({
   draft,
   entity,
@@ -88,8 +118,11 @@ export function useObserveForm({
     if (!draft || draft.entityId !== entity.id) return;
     const previous = draft.observedContext;
     if (
-      draft.latestEntity === entity &&
-      draft.latestRegistry === registry &&
+      (draft.latestEntity === entity ||
+        (draft.latestEntity.id === entity.id &&
+          sameValue(draft.latestEntity.props, entity.props) &&
+          sameValue(draft.latestEntity.aspects, entity.aspects))) &&
+      sameRegistry(draft.latestRegistry, registry) &&
       previous.readOnly === context.readOnly &&
       previous.archived === context.archived &&
       previous.disabledExtensions.join('\0') === context.disabledExtensions.join('\0')
@@ -178,10 +211,16 @@ export function FieldRow({
       {state?.conflict && (
         <div className="flex flex-col gap-2 text-sm">
           <p>Значение изменилось. Сейчас: {valueText(entity.props[id])}</p>
-          <Button onClick={() => draft && onDraftChange(acceptRemote(draft, id))}>
+          <Button
+            disabled={submissionLocked(form.submission)}
+            onClick={() => draft && onDraftChange(acceptRemote(draft, id))}
+          >
             Принять новое: {lookup.label(id)}
           </Button>
-          <Button onClick={() => draft && onDraftChange(keepLocal(draft, id))}>
+          <Button
+            disabled={submissionLocked(form.submission)}
+            onClick={() => draft && onDraftChange(keepLocal(draft, id))}
+          >
             Оставить мой ввод: {lookup.label(id)}
           </Button>
         </div>
@@ -297,14 +336,24 @@ export function FormFooter({
               {submission?.reconciliation === 'differs' && (
                 <>
                   <p>Сейчас в записи</p>
-                  <dl>
-                    {touched.map((id) => (
-                      <div key={id}>
-                        <dt>{lookupOf(form.registry).label(id)}</dt>
-                        <dd>{valueText(form.entity.props[id])}</dd>
-                      </div>
-                    ))}
-                  </dl>
+                  {submission?.command.kind === 'attach' && (
+                    <p>
+                      {lookupOf(form.registry).label(submission.command.aspectId)}:{' '}
+                      {form.entity.aspects.includes(submission.command.aspectId)
+                        ? 'аспект присутствует'
+                        : 'аспект отсутствует'}
+                    </p>
+                  )}
+                  {touched.length > 0 && (
+                    <dl>
+                      {touched.map((id) => (
+                        <div key={id}>
+                          <dt>{lookupOf(form.registry).label(id)}</dt>
+                          <dd>{valueText(form.entity.props[id])}</dd>
+                        </div>
+                      ))}
+                    </dl>
+                  )}
                   <p>Проверьте ввод и сохраните явно ещё раз.</p>
                 </>
               )}
