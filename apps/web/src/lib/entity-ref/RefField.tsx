@@ -73,9 +73,9 @@ const REF_SORT: QueryAst['sortBy'] = [{ field: 'orbis/title', dir: 'asc' }];
 export function refQueryAst(
   target: QueryAst | QueryAst[] | undefined,
   search: string,
-): QueryAst | null {
-  if (target === undefined) return null;
-  const targets = Array.isArray(target) ? target : [target];
+  limit = REF_OPTIONS_LIMIT,
+): QueryAst {
+  const targets = target === undefined ? [] : Array.isArray(target) ? target : [target];
   // Цель без единого предиката — это «любая сущность владельца», и это законно: `filter`
   // канона nullable именно затем (§А5-7).
   const anyEntity = targets.length === 0 || targets.some((t) => t.filter === null);
@@ -88,10 +88,10 @@ export function refQueryAst(
   const term = search.trim();
   const filter: QueryFilterNode | null =
     term === '' ? scope : scope === null ? { search: term } : { and: [scope, { search: term }] };
-  return { filter, sortBy: REF_SORT, limit: REF_OPTIONS_LIMIT };
+  return { filter, sortBy: REF_SORT, limit };
 }
 
-/** Цель свойства из его объявления; не `ref` или без цели — цели нет. */
+/** Цель свойства из его объявления; undefined у ref означает любую доступную запись. */
 export function refTargetOf(def: PropertyDefinition): QueryAst | QueryAst[] | undefined {
   return def.type.kind === 'ref' ? def.type.target : undefined;
 }
@@ -119,20 +119,20 @@ export function useRefOptions(
   def: PropertyDefinition | undefined,
   search = '',
 ): { options: QueryEntity[]; isPending: boolean; isError: boolean } {
-  const ast = def === undefined ? null : refQueryAst(refTargetOf(def), search);
+  const enabled = def?.type.kind === 'ref';
+  const ast = refQueryAst(def === undefined ? undefined : refTargetOf(def), search);
   const q = trpc.entity.query.useQuery(
-    // `ast` здесь не `null`: запрос выключен, пока цели нет, а `enabled:false` до вызова
-    // процедуры не доходит вовсе.
-    { ast: ast ?? { filter: null } },
-    { enabled: ast !== null },
+    // Запрос выключен без ref definition; target undefined у ref означает любую запись.
+    { ast },
+    { enabled, trpc: { abortOnUnmount: true } },
   );
   return {
     // Array.isArray — та же защита от неожиданной формы ответа, что была у прежних пяти копий.
     options: Array.isArray(q.data) ? q.data : [],
-    // Отключённый запрос (цели нет) у TanStack Query тоже в статусе pending — но показывать
+    // Отключённый запрос (нет ref definition) у TanStack Query тоже в статусе pending — но показывать
     // там нечего, поэтому загрузкой считается только включённый.
-    isPending: ast !== null && q.isPending && !q.isError,
-    isError: ast !== null && q.isError,
+    isPending: enabled && q.isPending && !q.isError,
+    isError: enabled && q.isError,
   };
 }
 

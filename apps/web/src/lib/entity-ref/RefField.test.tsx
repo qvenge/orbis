@@ -253,3 +253,16 @@ test('useRefTitle: название из ТОЙ ЖЕ выдачи, что у п�
   // ОДИН запрос на всех троих: ключ кеша — цель свойства, и второго источника названий нет.
   expect(asked).toHaveLength(1);
 });
+
+test('ref без target ищет любые доступные неархивные записи', async () => {
+  const loose: PropertyDefinition = { ...FINANCE_CATEGORY, type: { kind: 'ref' } };
+  const { calls } = renderWithProviders(
+    <RefField def={loose} value="" onChange={() => {}} />,
+    (path) =>
+      path === 'entity.query' ? [wireEntity({ id: CAT_FOOD, title: 'Любая запись' })] : {},
+  );
+  await screen.findByRole('option', { name: 'Любая запись' });
+  expect(calls.find((c) => c.path === 'entity.query')?.input).toMatchObject({
+    ast: { filter: null, limit: 200 },
+  });
+});

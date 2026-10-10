@@ -299,7 +299,7 @@ test('roleAccess: только ручные роли и доступный conte
   });
   expect(
     roleAccess({ ...mention, module: 'finance' }, { ...context, disabledExtensions: ['finance'] }),
-  ).toMatchObject({ canCreate: false, canDelete: false });
+  ).toMatchObject({ canCreate: true, canDelete: true });
 });
 
 test('сохранённые obsolete/null значения остаются строками с исходным определением', () => {
@@ -389,4 +389,13 @@ test.each([
     propertyAccess({ ...def, module: 'finance' }, { ...context, disabledExtensions: ['finance'] })
       .editor,
   ).toBe('unavailable');
+});
+
+test('manual ядровая роль доступна при выключенном расширении аспекта конца', () => {
+  const mention = BUILTIN_REGISTRY.roles.find((r) => r.id === 'mention');
+  if (!mention) throw new Error('mention fixture missing');
+  expect(roleAccess(mention, { ...context, disabledExtensions: ['finance'] })).toEqual({
+    canCreate: true,
+    canDelete: true,
+  });
 });

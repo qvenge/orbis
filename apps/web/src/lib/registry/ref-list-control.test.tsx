@@ -72,10 +72,10 @@ function Harness({ initial, onChange }: { initial: string[]; onChange: (v: unkno
 
 const titles = () => screen.getAllByTestId('ref-title').map((t) => t.textContent);
 
-test('вид «ref-list» — только у «Навигации» приложения; прочие списки ссылок — только показ', () => {
+test('вид «ref-list» — только у «Навигации» приложения; generic списки ссылок — ref-many', () => {
   expect(controlKindOf(def(APP_NAV))).toBe('ref-list');
-  expect(controlKindOf(def('orbis/template_wins_over'))).toBe('readonly');
-  expect(controlKindOf(def('orbis/app_opens_over'))).toBe('readonly');
+  expect(controlKindOf(def('orbis/template_wins_over'))).toBe('ref-many');
+  expect(controlKindOf(def('orbis/app_opens_over'))).toBe('ref-many');
   expect(controlKindOf(def('orbis/app_home'))).toBe('ref');
 });
 

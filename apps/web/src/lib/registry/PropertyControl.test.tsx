@@ -59,10 +59,10 @@ test('флаг writer (срез 1б, РП-3) — только чтение: кл
   expect(writeModeOf(def('orbis/supply_text'))).toBe('system');
   expect(writeModeOf(def('orbis/app_disabled'))).toBe('system');
   // Прочие свойства приложения правятся как обычно. «Навигация» — «упорядоченный список ссылок»
-  // (задача 21, §9.3), прочие `ref` списком — только показ, как в 1а.
+  // (задача 21, §9.3), прочие `ref` списком сохраняют legacy показ и получают opt-in ref-many.
   expect(writeModeOf(def('orbis/app_nav_form'))).toBe('editable');
   expect(controlKindOf(def('orbis/app_nav'))).toBe('ref-list');
-  expect(controlKindOf(def('orbis/app_opens_over'))).toBe('readonly');
+  expect(controlKindOf(def('orbis/app_opens_over'))).toBe('ref-many');
   expect(controlKindOf(def('orbis/app_extensions'))).toBe('select-many');
 });
 
@@ -219,11 +219,11 @@ test('показ значения идёт по ТИПУ: подпись вар�
 /** Реестр — встроенный (`registryReply`); чипы ссылок `entity.get` не роутятся — им хватает id. */
 const withRegistry = (path: string) => registryReply(path) ?? {};
 
-test('контрол списков ссылок: registry_ref аспектов many — чипы аспектов, ref many — только чтение', () => {
+test('контрол списков ссылок: registry_ref аспектов many — чипы аспектов, ref many — отдельный draft список', () => {
   expect(controlKindOf(def('orbis/template_for'))).toBe('aspects-many');
-  // «Главнее, чем» правится только плашкой спора шаблонов (задача 14): одиночный пикер `RefField`
-  // затёр бы список первым же выбором.
-  expect(controlKindOf(def('orbis/template_wins_over'))).toBe('readonly');
+  // Generic draft использует RefManyControl; legacy карточка остаётся readonly.
+  // Одиночный RefField не используется для массива.
+  expect(controlKindOf(def('orbis/template_wins_over'))).toBe('ref-many');
   // Одиночный `ref` — по-прежнему пикер, одиночный `registry_ref` — по-прежнему показ.
   expect(controlKindOf(def('orbis/finance_category'))).toBe('ref');
   expect(controlKindOf(def('orbis/rule_scope'))).toBe('readonly');

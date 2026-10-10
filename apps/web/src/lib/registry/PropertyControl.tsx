@@ -44,6 +44,10 @@ const RefListField = lazy(() =>
   import('./RefListControl').then((m) => ({ default: m.RefListField })),
 );
 
+const RefManyControl = lazy(() =>
+  import('./RefManyControl').then((m) => ({ default: m.RefManyControl })),
+);
+
 const ScalarListControl = lazy(() =>
   import('./ScalarListControl').then((m) => ({ default: m.ScalarListControl })),
 );
@@ -85,7 +89,7 @@ export function PropertyControl({
     declaredKind === 'number-list' ||
     declaredKind === 'decimal-list';
   // Legacy list cards remain read-only; only the new draft forms load list editors.
-  const kind = scalarList && !draft ? 'readonly' : declaredKind;
+  const kind = (scalarList || declaredKind === 'ref-many') && !draft ? 'readonly' : declaredKind;
   const value = draft
     ? draft.state.kind === 'value'
       ? draft.state.value
@@ -147,6 +151,20 @@ export function PropertyControl({
    * `orbis/parent_project` и `orbis/root_project` считает правило (`model_writable: false`),
    * и пикер у них означал бы обещание правки, которую сервер отвергнет.
    */
+  if (draft && kind === 'ref-many') {
+    const ids = Array.isArray(value)
+      ? value.filter((id): id is string => typeof id === 'string')
+      : [];
+    return (
+      <Suspense fallback={null}>
+        <RefManyControl
+          def={def}
+          value={ids}
+          onChange={(ids) => draft.onChange({ kind: 'value', value: ids })}
+        />
+      </Suspense>
+    );
+  }
   if (draft && scalarList) {
     const items =
       draft.state.kind === 'list'

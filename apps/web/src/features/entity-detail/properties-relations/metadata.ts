@@ -143,6 +143,7 @@ export function aspectAccess(def: AspectDefinition | undefined, context: Context
   return { canAttach: route === 'generic', canDetach: route === 'generic', route };
 }
 
+// Role write authority follows created_by; the executor does not gate roles by module mask.
 export function roleAccess(
   def: RelationRoleDefinition | undefined,
   context: Context,
@@ -151,11 +152,9 @@ export function roleAccess(
     contextReason(context) ??
     (!def
       ? 'Определение роли неизвестно'
-      : !isExtensionEnabled(def.module, context.disabledExtensions)
-        ? 'Расширение выключено'
-        : def.constraints.created_by === 'system'
-          ? 'Роль пишет специальный механизм'
-          : undefined);
+      : def.constraints.created_by === 'system'
+        ? 'Роль пишет специальный механизм'
+        : undefined);
   return reason
     ? { canCreate: false, canDelete: false, reason }
     : { canCreate: true, canDelete: true };
