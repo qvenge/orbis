@@ -1,8 +1,11 @@
 import type { EntityUpdateBatchInput } from '@orbis/shared';
 import { useCallback } from 'react';
-import { invalidateGraph } from '../../lib/invalidate';
+import { runGraphCommand } from '../../lib/graph-command';
+import { invalidateGraphCommand } from '../../lib/invalidate';
+import { useGraphUndo } from '../../lib/useGraphUndo';
 import { trpc } from '../../trpc';
 import { useToast } from '../../ui/toast-store';
+import type { CommandOutcome } from '../entity-detail/properties-relations/types';
 
 /** Одна операция пачки — `entity_update` в форме роутера или `entity_version_pin` в форме тула. */
 export type UpdateBatchOperation = EntityUpdateBatchInput['operations'][number];
@@ -30,52 +33,43 @@ export type RunUpdateBatch = (
   options?: UpdateBatchOptions,
 ) => Promise<boolean>;
 
-/**
- * Пачка правок страниц 1а (спека §4.3, §8.4, РП-9): все операции — ОДНИМ вызовом
- * `entity.updateBatch`, то есть одним журналом и одним Undo. Две мутации подряд дали бы две
- * записи журнала, и «Отменить» откатило бы половину жеста: тело сменилось бы обратно, а аспект
- * «страница» остался. Обслуживает меню ⋮ и плашку спора шаблонов — одна копия механизма
- * «пачка → тост „Отменить“ → Undo → перечитывание» (финальное ревью, C1-I4).
- *
- * После записи и после Undo — `invalidateGraph`: правка меняет и запись, и список шаблонов, и
- * данные блоков страницы. Экран перечитывает всё это сам, второй копии «что теперь показано» здесь
- * нет. Отказ тоже перечитывает: чаще всего он значит, что экран устарел (запись правили мимо него,
- * `STALE_VERSION`), и повтор с тем же снимком упал бы так же.
- *
- * Undo — клиентом, а не хуком мутации: к нажатию «Отменить» меню и его диалог могут быть уже
- * размонтированы (запись стала страницей — у меню другие пункты, спор решён — плашки нет).
- *
- * Промис сообщает исход (`true` — пачка записана) и НЕ отвергается: отказ человек узнаёт тостом,
- * а вызывающему исход нужен для своего состояния (плашка спора закрывается только записанной).
- */
-export function useUpdateBatch(): RunUpdateBatch {
+/** One transport implementation, with outcomes suitable for a controlled form. */
+export function useDetailedUpdateBatch(): (
+  operations: UpdateBatchOperation[],
+  options?: UpdateBatchOptions,
+) => Promise<CommandOutcome> {
   const utils = trpc.useUtils();
+  return useCallback(
+    async (operations, options = {}) => {
+      const outcome = await runGraphCommand(() =>
+        utils.client.entity.updateBatch.mutate({
+          operations,
+          ...(options.action !== undefined && { label: options.action }),
+        }),
+      );
+      invalidateGraphCommand(utils);
+      return outcome;
+    },
+    [utils],
+  );
+}
+
+/** Legacy callers keep boolean completion and their existing generic/custom toast text. */
+export function useUpdateBatch(): RunUpdateBatch {
+  const run = useDetailedUpdateBatch();
+  const undo = useGraphUndo();
   const { show } = useToast();
   return useCallback(
     async (operations, doneTitle, options = {}) => {
-      let actionId: string;
-      try {
-        ({ actionId } = await utils.client.entity.updateBatch.mutate({
-          operations,
-          ...(options.action !== undefined && { label: options.action }),
-        }));
-      } catch {
+      const outcome = await run(operations, options);
+      if (outcome.kind !== 'confirmed') {
         show(options.failed ?? BATCH_FAILED, 'danger');
-        invalidateGraph(utils);
         return false;
       }
-      invalidateGraph(utils);
-      show(doneTitle, 'default', {
-        label: 'Отменить',
-        onSelect: () => {
-          void utils.client.ai.undo
-            .mutate({ actionId })
-            .then(() => invalidateGraph(utils))
-            .catch(() => show(options.undoFailed ?? UNDO_FAILED, 'danger'));
-        },
-      });
+      if (outcome.actionId) undo(outcome.actionId, doneTitle, options.undoFailed ?? UNDO_FAILED);
+      else show(doneTitle);
       return true;
     },
-    [utils, show],
+    [run, undo, show],
   );
 }

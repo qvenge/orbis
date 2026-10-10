@@ -81,3 +81,11 @@ export function invalidateGraph(utils: ReturnType<typeof trpc.useUtils>): void {
 export function invalidateBudget(utils: ReturnType<typeof trpc.useUtils>): Promise<void> {
   return utils.budget.invalidate();
 }
+
+/** One freshness path for confirmed, rejected or uncertain commands and Undo. */
+export function invalidateGraphCommand(utils: ReturnType<typeof trpc.useUtils>): void {
+  invalidateGraph(utils);
+  void invalidateBudget(utils);
+  void utils.entity.resolveRefs.invalidate();
+  void utils.relation.listFor.invalidate();
+}
