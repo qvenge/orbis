@@ -363,3 +363,30 @@ test('special assignment уважает gates флагов и mask до выбо
       .editor,
   ).toBe('unavailable');
 });
+
+test.each([
+  'orbis/executor',
+  'orbis/grant',
+  'orbis/may_close',
+  'orbis/assignee',
+])('deprecated назначение %s остаётся только в согласованной форме', (id) => {
+  const base = BUILTIN_REGISTRY.properties.find((p) => p.id === id);
+  if (!base) throw new Error('assignment fixture отсутствует');
+  const def = { ...base, status: 'deprecated' as const };
+  expect(propertyAccess(def, context)).toMatchObject({
+    canSet: false,
+    canUnset: false,
+    editor: 'assignment',
+  });
+  expect(propertyAccess(def, { ...context, readOnly: true }).editor).toBe('unavailable');
+  expect(propertyAccess(def, { ...context, archived: true }).editor).toBe('unavailable');
+  expect(propertyAccess({ ...def, flags: { model_writable: false } }, context)).toMatchObject({
+    canSet: false,
+    canUnset: false,
+    editor: 'unavailable',
+  });
+  expect(
+    propertyAccess({ ...def, module: 'finance' }, { ...context, disabledExtensions: ['finance'] })
+      .editor,
+  ).toBe('unavailable');
+});

@@ -88,19 +88,20 @@ export function propertyAccess(def: PropertyDefinition | undefined, context: Con
     );
   if (def.storage !== 'props') return blocked('Поле записи правится отдельно');
   if (def.mergedInto !== null) return blocked(`Свойство объединено с ${def.mergedInto}`);
-  if (def.status === 'deprecated')
-    return {
-      canSet: false,
-      canUnset: true,
-      editor: 'unavailable',
-      reason: 'Свойство устарело; сохранённое значение можно снять',
-    };
+  // Status never grants an independent clear of the coherent assignment group.
   if (assignmentProperties.has(def.id))
     return {
       canSet: false,
       canUnset: false,
       editor: 'assignment',
       reason: 'Назначение правится общей формой',
+    };
+  if (def.status === 'deprecated')
+    return {
+      canSet: false,
+      canUnset: true,
+      editor: 'unavailable',
+      reason: 'Свойство устарело; сохранённое значение можно снять',
     };
   if (def.id === APP_NAV) return { canSet: true, canUnset: true, editor: 'navigation' };
   // The new panel supports these list editors in addition to existing scalar controls.
