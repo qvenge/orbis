@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { type ReactNode, useState } from 'react';
 import { LazyDetailContent } from './LazyDetailContent';
 import type { WireEntity } from './record-host';
 
@@ -11,10 +11,24 @@ const load = () => {
   });
   return modulePromise.then((module) => module.VersionsCard);
 };
+function Placeholder({ children }: { children: ReactNode }) {
+  return (
+    <section aria-label="Версии" data-testid="versions-card" className="flex flex-col gap-2">
+      <p className="text-2xs font-medium uppercase tracking-wide text-text-muted">Версии</p>
+      {children}
+    </section>
+  );
+}
 export function VersionsCardSlot(props: Props) {
   const [activated, setActivated] = useState(props.active);
   if (props.active && !activated) setActivated(true);
-  if (!activated) return null;
+  // Keep the existing card's place while inactive without loading its producer or queries.
+  if (!activated)
+    return (
+      <Placeholder>
+        <p className="text-sm text-text-muted">…</p>
+      </Placeholder>
+    );
   return (
     <LazyDetailContent
       load={load}
@@ -23,6 +37,7 @@ export function VersionsCardSlot(props: Props) {
       loading="Загрузка версий…"
       error="Версии не загрузились"
       retry="Повторить загрузку версий"
+      fallback={(content) => <Placeholder>{content}</Placeholder>}
     />
   );
 }

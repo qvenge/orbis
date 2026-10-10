@@ -36,7 +36,9 @@ it('versions activate only once, retain confirmation while inactive and reset it
       : {},
   );
   expect(calls.some((call) => call.path === 'version.list')).toBe(false);
-  expect(screen.queryByTestId('versions-card')).toBeNull();
+  expect(screen.getByTestId('versions-card')).toHaveTextContent('Версии');
+  expect(screen.getByTestId('versions-card')).toHaveTextContent('…');
+  expect(screen.queryByText('Загрузка версий…')).toBeNull();
   fireEvent.click(screen.getByText('active'));
   fireEvent.click(await screen.findByRole('button', { name: 'Восстановить' }));
   expect(await screen.findByRole('dialog', { name: 'Восстановить это тело?' })).toBeVisible();
