@@ -1,6 +1,6 @@
 import { PAGE_ASPECT } from '@orbis/shared';
 import { type Address, buildAddress, currentEntry } from '@orbis/shared/nav';
-import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ScreenMenuProvider } from '../../app/frame/ScreenMenu';
 import { NotFoundScreen } from '../../app/NotFoundScreen';
 import { ScreenHeader } from '../../app/ScreenHeader';
@@ -26,10 +26,17 @@ import { useSupplyRecords } from '../page/useSupplyRecords';
 import type { DetailMenuProps } from './DetailMenu';
 import { loadDetailMenu } from './DetailMenuSlot';
 import { type BodyGate, BodyScreenProvider, bodyKindOf } from './EntityBody';
+import { PinVersionDialogSlot } from './PinVersionDialogSlot';
+import {
+  type PanelHostAction,
+  type PanelTarget,
+  PropertiesRelationsSlot,
+  runLazyPanelHost,
+} from './PropertiesRelationsSlot';
 import { ProposalOverlay } from './ProposalOverlay';
+import type { LatestPanelHost } from './properties-relations/panel-host';
 import { ROUTINE_ASPECT } from './RoutineStatusBlock';
 import { useEntityDetail } from './useEntityDetail';
-import { PinVersionDialog } from './VersionsCard';
 
 const TASK = 'orbis/task';
 const ASSIGNMENT = 'orbis/assignment';
@@ -99,7 +106,7 @@ export function DetailScreen({
   // сырым текстом без единого жеста человека.
   const [asMarkdown, setAsMarkdown] = useState(false);
   // Диалог «Закрепить версию» (С11): жест приходит из меню ⋮, а меню — в шапке, снаружи
-  // вкладок, поэтому и флаг живёт здесь. Монтируется диалог только открытым (см. VersionsCard).
+  // вкладок, поэтому и флаг живёт здесь. Монтируется диалог только открытым (см. PinVersionDialog).
   const [pinVersion, setPinVersion] = useState(false);
   /**
    * Какие вкладки шаблона открыты — ЕДИНСТВЕННЫМ местом, у экрана (`TabMemoryProvider`), а не у
@@ -167,6 +174,22 @@ export function DetailScreen({
    * Реф, а не состояние: жест меню читает его в момент нажатия, перерисовки он не заводит.
    */
   const bodyGate = useRef<BodyGate | null>(null);
+  // A panel gesture freezes its address independently of subsequent route/projection changes.
+  const [panelTarget, setPanelTarget] = useState<PanelTarget | null>(null);
+  const [previewTarget, setPreviewTarget] = useState<{
+    pageId: string;
+    target: PanelTarget | null;
+  } | null>(null);
+  const onPreviewTarget = useCallback((pageId: string, target: PanelTarget | null) => {
+    if (pageId !== prevIdRef.current) return;
+    setPreviewTarget((previous) =>
+      previous?.pageId === pageId &&
+      previous.target?.entityId === target?.entityId &&
+      previous.target?.readOnly === target?.readOnly
+        ? previous
+        : { pageId, target },
+    );
+  }, []);
   /**
    * Развёрнут ли слой предложения (Ш1.3) — и, значит, спрятана ли область вкладок.
    *
@@ -225,6 +248,63 @@ export function DetailScreen({
    * выражено признаком цели ниже — подметание уйдёт, когда станет известно, что подметать.
    */
   const loaded = get.data?.entity;
+  const pageActions = useRef<{
+    id: string | undefined;
+    makePage: () => void;
+    stopPage: () => void;
+  } | null>(null);
+  const available = new Set<PanelHostAction>(['openBody']);
+  const restricted = mode !== null;
+  if (loaded && !restricted) {
+    if (loaded.archived) available.add('restore');
+    else {
+      available.add(loaded.aspects.includes(PAGE_ASPECT) ? 'stopPage' : 'makePage');
+      if (loaded.aspects.includes('orbis/app')) available.add('configureApp');
+    }
+  }
+  const latestHostRef = useRef<LatestPanelHost | null>(null);
+  latestHostRef.current = {
+    entity: loaded?.id === entityId ? loaded : undefined,
+    available,
+    restricted,
+    setMode: () => setMode(null),
+    setHostView: () => setOpenVia(HOST_VIEW),
+    restore: () => setArchived(false),
+    makePage: () => {
+      if (pageActions.current?.id === loaded?.id) pageActions.current?.makePage();
+    },
+    stopPage: () => {
+      if (pageActions.current?.id === loaded?.id) pageActions.current?.stopPage();
+    },
+    onClose: () => setPanelTarget(null),
+  };
+  const runPanelHost = useCallback(
+    (action: PanelHostAction, target: PanelTarget) => {
+      const frozen = { ...target };
+      void runLazyPanelHost(action, frozen, () => latestHostRef.current as LatestPanelHost).catch(
+        () => show('Не удалось открыть действие — повторите попытку', 'danger'),
+      );
+    },
+    [show],
+  );
+  const panelSlot = (
+    <PropertiesRelationsSlot
+      target={panelTarget}
+      host={{
+        screenEntityId: entityId,
+        available,
+        run: runPanelHost,
+        pageContext: {
+          entity: latestHostRef.current.entity,
+          bodyGate,
+          publish: (actions) => {
+            pageActions.current = actions;
+          },
+        },
+      }}
+      onClose={() => setPanelTarget(null)}
+    />
+  );
   /**
    * Запись стала страницей или перестала ею быть (меню ⋮, Undo, агент) — разовый вид прежнего
    * рода больше не про неё. «Открыть через шаблон хоста», переживший «Изменить вид только этой
@@ -318,7 +398,13 @@ export function DetailScreen({
   // скелетон: isLoading уже false, а data не приедет никогда. Проверка — ровно по коду:
   // сеть и 500 «не найдено» не означают, и подменять их этим экраном значило бы врать
   // (такие ошибки остаются на прежнем поведении — это отдельный разговор, не §1.3).
-  if (get.isError && get.error.data?.code === 'NOT_FOUND') return <NotFoundScreen />;
+  if (get.isError && get.error.data?.code === 'NOT_FOUND')
+    return (
+      <>
+        <NotFoundScreen />
+        {panelSlot}
+      </>
+    );
 
   // Шапка с меню «⋯» — ПЕРВЫМ ребёнком одного и того же провайдера меню и в кадре загрузки, и на
   // записи: React сохраняет её узел, и «⋯», нажатое до ответа записи, остаётся открытым (Л-1) —
@@ -326,6 +412,7 @@ export function DetailScreen({
   if (get.isLoading || !get.data) {
     return (
       <ScreenMenuProvider items={loadDetailMenu} props={PENDING_MENU}>
+        {panelSlot}
         <ScreenHeader title="…" />
         <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 p-3">
           <Skeleton className="h-7 w-48" />
@@ -350,7 +437,18 @@ export function DetailScreen({
   // про шаблон (№87). Своя страница в настройке — та же запись экрана, её пункты законны.
   const configuringId =
     mode?.kind === 'configure' && mode.targetId !== entity.id ? mode.targetId : null;
+  const previewing =
+    mode?.kind === 'preview' || (isTemplate && !asRecord && mode?.kind !== 'configure');
+  const chosenTarget = previewing
+    ? previewTarget?.pageId === entity.id
+      ? previewTarget.target
+      : null
+    : { entityId: entity.id, readOnly: false };
   const menuProps: DetailMenuProps = {
+    ...(configuringId === null &&
+      (chosenTarget
+        ? { onOpenProperties: () => setPanelTarget({ ...chosenTarget }) }
+        : { propertiesUnavailableReason: 'дождитесь записи предпросмотра' })),
     onArchive: () => setArchived(!entity.archived),
     onCopyLink: () => void copyLink(configuringId ?? entityId),
     onPinVersion: () => setPinVersion(true),
@@ -412,6 +510,7 @@ export function DetailScreen({
 
   return (
     <ScreenMenuProvider items={loadDetailMenu} props={menuProps}>
+      {panelSlot}
       <ScreenHeader title={entity.title} />
       {lead}
       <TabMemoryProvider value={tabs}>
@@ -432,7 +531,11 @@ export function DetailScreen({
           открывают его из меню, а меню одно на все вкладки. Монтируется только открытым —
           набранная и брошенная подпись не переживает закрытие. */}
           {pinVersion && (
-            <PinVersionDialog entityId={entity.id} onClose={() => setPinVersion(false)} />
+            <PinVersionDialogSlot
+              key={entity.id}
+              entityId={entity.id}
+              onClose={() => setPinVersion(false)}
+            />
           )}
           {/* Запасной путь копирования — ВНЕ табов: ссылку просят из меню, а меню одно на все
           табы, и прятать ответ на вкладке «Запись» значило бы иногда не отвечать вовсе. */}
@@ -520,6 +623,7 @@ export function DetailScreen({
                 {isTemplate || mode?.kind === 'preview' ? (
                   <TemplatePreview
                     page={get.data}
+                    onPreviewTarget={onPreviewTarget}
                     {...(mode?.kind === 'preview' && { onClose: () => setMode(null) })}
                   />
                 ) : (

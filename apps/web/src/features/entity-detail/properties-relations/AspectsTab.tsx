@@ -20,6 +20,7 @@ import {
   submissionLocked,
   useFormErrors,
   useObserveForm,
+  useResetForm,
   valueText,
 } from './form-shared';
 import { aspectAccess } from './metadata';
@@ -30,6 +31,10 @@ export function AspectsTab(form: PanelFormProps) {
   const [search, setSearch] = useState('');
   const [detach, setDetach] = useState<string>();
   const [errors, setErrors] = useFormErrors(draft?.editor ?? detach);
+  useResetForm(form, () => {
+    setDetach(undefined);
+    setErrors(undefined);
+  });
   const lookup = lookupOf(registry);
   const attached = entity.aspects
     .slice()
@@ -147,23 +152,34 @@ export function AspectsTab(form: PanelFormProps) {
             )}
             {access.reason && <p className="text-sm text-text-muted">{access.reason}</p>}
             {access.canDetach && (
-              <Button disabled={submissionLocked(form.submission)} onClick={() => setDetach(id)}>
+              <Button
+                disabled={submissionLocked(form.submission)}
+                onClick={() =>
+                  form.onRequestAction ? form.onRequestAction(() => setDetach(id)) : setDetach(id)
+                }
+              >
                 Снять: {lookup.label(id)}
               </Button>
             )}
             {access.route !== 'generic' && access.route !== 'readonly' && (
               <Button
-                disabled={submissionLocked(form.submission)}
+                disabled={
+                  submissionLocked(form.submission) ||
+                  Boolean(form.specialReason?.(access.route as 'assignment' | 'page' | 'app'))
+                }
                 onClick={() => form.onSpecial(access.route as 'assignment' | 'page' | 'app')}
               >
                 Открыть редактор: {lookup.label(id)}
               </Button>
             )}
+            {access.route !== 'generic' &&
+              access.route !== 'readonly' &&
+              form.specialReason?.(access.route) && <p>{form.specialReason(access.route)}</p>}
           </div>
         );
       })}
       {detach && (
-        <div className="flex flex-col gap-2">
+        <FormFooter form={form} errors={errors} onSave={() => {}} hideActions>
           <p>Значения свойств сохранятся. Связанные вычисления и правила могут измениться</p>
           <Button
             disabled={submissionLocked(form.submission)}
@@ -178,8 +194,16 @@ export function AspectsTab(form: PanelFormProps) {
           >
             Подтвердить снятие
           </Button>
-          <Button onClick={() => setDetach(undefined)}>Не снимать</Button>
-        </div>
+          <Button
+            disabled={form.submission?.result === 'pending'}
+            onClick={() => {
+              setDetach(undefined);
+              form.onCancel();
+            }}
+          >
+            Не снимать
+          </Button>
+        </FormFooter>
       )}
       {contextReason(context) && (
         <p className="text-sm text-text-muted">{contextReason(context)}</p>
@@ -200,7 +224,11 @@ export function AspectsTab(form: PanelFormProps) {
               <div key={def.id}>
                 <Button
                   className="min-h-11"
-                  disabled={access.route === 'readonly' || submissionLocked(form.submission)}
+                  disabled={
+                    access.route === 'readonly' ||
+                    submissionLocked(form.submission) ||
+                    (access.route !== 'generic' && Boolean(form.specialReason?.(access.route)))
+                  }
                   onClick={() => {
                     if (access.route === 'assignment')
                       onDraftChange(startDraft(entity, registry, { kind: 'assignment' }, context));
@@ -215,6 +243,9 @@ export function AspectsTab(form: PanelFormProps) {
                   Добавить: {lookup.label(def.id)}
                 </Button>
                 {moduleReason(def.module, context) && <p>{moduleReason(def.module, context)}</p>}
+                {access.route !== 'generic' &&
+                  access.route !== 'readonly' &&
+                  form.specialReason?.(access.route) && <p>{form.specialReason(access.route)}</p>}
               </div>
             );
           })}
@@ -317,7 +348,7 @@ export function AspectsTab(form: PanelFormProps) {
           <FormFooter form={form} errors={errors} onSave={save} />
         </>
       )}
-      {!draft && (errors || form.submission) && (
+      {!draft && !detach && (errors || form.submission) && (
         <FormFooter form={form} errors={errors} onSave={() => {}} hideActions />
       )}
     </section>

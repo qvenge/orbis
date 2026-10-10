@@ -10,7 +10,30 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { gzipSync } from 'node:zlib';
-import { checkBudgets, closureOf, parseBudgetArgs } from './check-lazy-chunks.ts';
+import {
+  checkBudgets,
+  closureOf,
+  featurePrecacheEntries,
+  parseBudgetArgs,
+} from './check-lazy-chunks.ts';
+
+test('feature-only PWA chunks must not be installed by precache; runtime route is not a precache entry', () => {
+  expect(
+    featurePrecacheEntries(
+      'precacheAndRoute([{url:"assets/PropertiesRelationsPanel-ab.js"},{"url":"assets/ScalarListControl-cd.js"},{url:"assets/RefManyControl-ef.js"},{url:"assets/panel-host-gh.js"},{url:"assets/index-x.js"}])',
+    ),
+  ).toEqual([
+    'assets/PropertiesRelationsPanel-ab.js',
+    'assets/ScalarListControl-cd.js',
+    'assets/RefManyControl-ef.js',
+    'assets/panel-host-gh.js',
+  ]);
+  expect(
+    featurePrecacheEntries(
+      'registerRoute(/assets\\/(?:PropertiesRelationsPanel|ScalarListControl|RefManyControl|panel-host)-[^/]+\\.js$/,new CacheFirst({cacheName:"properties-relations-assets"}));precacheAndRoute([{url:"assets/index-x.js"}]);',
+    ),
+  ).toEqual([]);
+});
 
 const dirs: string[] = [];
 

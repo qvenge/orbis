@@ -4043,7 +4043,10 @@ describe('ADE: версии', () => {
     // путать их нельзя.
     fireEvent.click(screen.getByRole('menuitem', { name: 'Закрепить версию' }));
 
-    const dialog = await screen.findByRole('dialog');
+    // The gesture loads the dialog leaf; wait for its field rather than its loading shell.
+    const field = await screen.findByLabelText('Подпись');
+    const dialog = screen.getByRole('dialog');
+    expect(field).toHaveFocus();
     // Подпись обязательна: снимок без неё в списке не отличить от соседнего по дате.
     expect(within(dialog).getByRole('button', { name: 'Закрепить' })).toBeDisabled();
     await userEvent.type(within(dialog).getByLabelText('Подпись'), 'до правки агентом');

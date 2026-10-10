@@ -17,6 +17,24 @@ export default defineConfig({
         navigateFallback: '/index.html', // app-shell для офлайна
         // png/ico — иконки манифеста: без них установленное PWA стартует офлайн без иконок.
         globPatterns: ['**/*.{js,css,html,svg,woff2,png,ico}'],
+        // Feature sheets/controls are fetched on demand, not during SW installation.
+        globIgnores: [
+          '**/PropertiesRelationsPanel-*.js',
+          '**/ScalarListControl-*.js',
+          '**/RefManyControl-*.js',
+          '**/panel-host-*.js',
+        ],
+        runtimeCaching: [
+          {
+            urlPattern:
+              /\/assets\/(?:PropertiesRelationsPanel|ScalarListControl|RefManyControl|panel-host)-[^/]+\.js$/,
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'properties-relations-assets',
+              expiration: { maxEntries: 40, maxAgeSeconds: 30 * 24 * 60 * 60 },
+            },
+          },
+        ],
       },
     }),
   ],

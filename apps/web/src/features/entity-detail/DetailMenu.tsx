@@ -59,6 +59,7 @@ import { REVERT, useSupplyAction } from '../supply/useSupply';
 import { settleBody } from './body-gate';
 import type { BodyGateRef } from './EntityBody';
 import type { WireEntity } from './record-host';
+import { usePageIdentityActions } from './usePageIdentityActions';
 
 /**
  * Вид экрана для пунктов страниц 1а (спека §8.4): у записи — чем она показана и какие шаблоны ей
@@ -169,6 +170,8 @@ export function DetailMenu(props: DetailMenuProps & ScreenMenuContentProps) {
 }
 
 interface RecordMenuProps {
+  onOpenProperties?: () => void;
+  propertiesUnavailableReason?: string;
   onArchive: () => void;
   onCopyLink: () => void;
   /** Закрепить ВЕРСИЮ ТЕЛА (С11). */
@@ -215,6 +218,8 @@ type MenuDialog =
   | null;
 
 function RecordMenu({
+  onOpenProperties,
+  propertiesUnavailableReason,
   onArchive,
   onCopyLink,
   onPinVersion,
@@ -232,6 +237,7 @@ function RecordMenu({
   frameMenu,
 }: RecordMenuProps & ScreenMenuContentProps & { frameMenu: ReturnType<typeof useFrameMenu> }) {
   const runBatch = useUpdateBatch();
+  const pageActions = usePageIdentityActions(entity, bodyGate);
   const runSupply = useSupplyAction();
   const writeNav = useNavWrite();
   const { apps, frame } = frameMenu;
@@ -291,6 +297,17 @@ function RecordMenu({
 
   function commonItems(v: Exclude<DetailMenuView, { kind: 'configuring' }>): DropdownMenuItem[] {
     return [
+      ...(onOpenProperties
+        ? [{ label: 'Свойства и связи', onSelect: onOpenProperties }]
+        : propertiesUnavailableReason
+          ? [
+              {
+                label: `Свойства и связи — ${propertiesUnavailableReason}`,
+                disabled: true,
+                onSelect: () => {},
+              },
+            ]
+          : []),
       {
         label: archiveLabel,
         icon: archived ? (
@@ -511,14 +528,7 @@ function RecordMenu({
     return {
       label: MAKE_PAGE,
       icon: <FilePlus2 size={16} aria-hidden />,
-      onSelect: () => {
-        if (!bodySettled()) return;
-        void runBatch(
-          [{ tool: 'entity_update', input: { id: entity.id, aspects: { attach: [PAGE_ASPECT] } } }],
-          'Запись стала страницей',
-          { action: MAKE_PAGE },
-        );
-      },
+      onSelect: pageActions.makePage,
     };
   }
 
@@ -599,19 +609,7 @@ function RecordMenu({
     return {
       label: STOP_PAGE,
       icon: <Undo2 size={16} aria-hidden />,
-      onSelect: () => {
-        if (!bodySettled()) return;
-        void runBatch(
-          [
-            {
-              tool: 'entity_update',
-              input: { id: entity.id, aspects: { detach: [PAGE_ASPECT] } },
-            },
-          ],
-          'Запись больше не страница',
-          { action: STOP_PAGE },
-        );
-      },
+      onSelect: pageActions.stopPage,
     };
   }
 

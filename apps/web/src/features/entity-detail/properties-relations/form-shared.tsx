@@ -4,7 +4,8 @@ import {
   OWNER_LOCALE,
   type PropertyDefinition,
 } from '@orbis/shared';
-import { type ReactNode, useEffect, useRef, useState } from 'react';
+import { createContext, type ReactNode, useContext, useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import type { DraftValue } from '../../../lib/registry/draft-value';
 import { type EffectiveRegistry, lookupOf } from '../../../lib/registry/labels';
 import { PropertyControl } from '../../../lib/registry/PropertyControl';
@@ -39,6 +40,10 @@ export type PanelFormProps = {
   onSubmit: (command: PanelCommand) => void;
   onCancel: () => void;
   onSpecial: (editor: SpecialEditor) => void;
+  specialReason?: (editor: SpecialEditor) => string | undefined;
+  onRequestAction?: (action: () => void) => void;
+  /** Shell explicitly clears local confirmations/picker state before another guarded action. */
+  registerReset?: (reset: () => void) => () => void;
   submission?: FormSubmission;
   onReconcile?: (command: PanelCommand) => void;
   onAcceptCurrent?: () => void;
@@ -48,6 +53,9 @@ export function submissionLocked(submission?: FormSubmission): boolean {
     submission?.result === 'pending' ||
     (submission?.result.kind === 'unknown' && submission.reconciliation !== 'differs')
   );
+}
+export function useResetForm(form: PanelFormProps, reset: () => void) {
+  useEffect(() => form.registerReset?.(reset), [form.registerReset, reset]);
 }
 /** Errors belong to a controlled editor identity; reopening never inherits old validation. */
 export function useFormErrors(editor: PanelDraft['editor'] | string | undefined) {
@@ -234,12 +242,17 @@ export function FieldRow({
         </Button>
       )}
       {access.editor === 'navigation' && (
-        <Button
-          disabled={submissionLocked(form.submission)}
-          onClick={() => form.onSpecial('navigation')}
-        >
-          Навигация: {lookup.label(id)}
-        </Button>
+        <>
+          <Button
+            disabled={
+              submissionLocked(form.submission) || Boolean(form.specialReason?.('navigation'))
+            }
+            onClick={() => form.onSpecial('navigation')}
+          >
+            Навигация: {lookup.label(id)}
+          </Button>
+          {form.specialReason?.('navigation') && <p>{form.specialReason('navigation')}</p>}
+        </>
       )}
       {editing && (
         <div className="flex flex-wrap gap-2">
@@ -267,6 +280,9 @@ function publicMessage(message: string, registry: EffectiveRegistry): string {
   const lookup = lookupOf(registry);
   return message.replace(/[A-Za-z0-9_][A-Za-z0-9_/-]*/g, (token) => lookup.label(token));
 }
+const FooterTarget = createContext<HTMLElement | null>(null);
+/** Only the visible tab receives a portal target; hidden editors retain inline controls. */
+export const FormFooterTarget = FooterTarget.Provider;
 export function FormFooter({
   form,
   errors,
@@ -280,14 +296,22 @@ export function FormFooter({
   children?: ReactNode;
   hideActions?: boolean;
 }) {
+  const target = useContext(FooterTarget);
   const alert = useRef<HTMLParagraphElement>(null);
+  const validationAlert = useRef<HTMLParagraphElement>(null);
+  const validation = JSON.stringify(errors ?? {});
+  useEffect(() => {
+    const node = validationAlert.current;
+    if (validation !== '{}' && node?.closest('[hidden]') === null) node.focus();
+  }, [validation]);
   const result = form.submission?.result;
   const rejected =
     result && result !== 'pending' && result.kind === 'rejected'
       ? publicMessage(result.message, form.registry)
       : undefined;
   useEffect(() => {
-    if (form.submission && rejected) alert.current?.focus();
+    const node = alert.current;
+    if (form.submission && rejected && node?.closest('[hidden]') === null) node.focus();
   }, [rejected, form.submission]);
   const submission = form.submission;
   const unknown = result && result !== 'pending' && result.kind === 'unknown';
@@ -300,12 +324,18 @@ export function FormFooter({
           ]),
         ]
       : [];
-  return (
+  const content = (
     <div className="flex flex-col gap-3">
       {children}
       {errors &&
-        Object.entries(errors).map(([id, message]) => (
-          <p key={id} role="alert" className="text-danger text-sm">
+        Object.entries(errors).map(([id, message], index) => (
+          <p
+            key={id}
+            ref={index === 0 ? validationAlert : undefined}
+            tabIndex={-1}
+            role="alert"
+            className="text-danger text-sm"
+          >
             {id === '$editor' ? '' : `${lookupOf(form.registry).label(id)}: `}
             {message}
           </p>
@@ -383,6 +413,7 @@ export function FormFooter({
       )}
     </div>
   );
+  return target ? createPortal(content, target) : content;
 }
 export function checkedPatch(form: PanelFormProps, draft: PanelDraft) {
   if (draft.entityId !== form.entity.id)

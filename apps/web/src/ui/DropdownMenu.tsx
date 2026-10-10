@@ -15,6 +15,7 @@ export type DropdownMenuItem = {
   key?: string;
   label: string;
   icon?: ReactNode;
+  disabled?: boolean;
   onSelect: () => void;
 };
 
@@ -115,6 +116,7 @@ function menuItem(item: DropdownMenuItem) {
     <RDM.Item
       key={item.key ?? item.label}
       onSelect={item.onSelect}
+      disabled={item.disabled}
       // data-highlighted Radix ставит и на наведение мышью, и на переход
       // стрелками — подсветка одна на оба способа.
       className="flex cursor-pointer select-none items-center gap-2 rounded-control px-2 py-1.5 text-sm text-text outline-hidden transition data-[highlighted]:bg-surface-2 data-[highlighted]:text-text"

@@ -2,9 +2,9 @@ import { ownCardOrder } from '@orbis/shared';
 import { EXTENSION_CARDS, type OwnCard } from '../../app/extension-registry';
 import { useOpenRecord } from '../../app/useOpenRecord';
 import { AspectSection, AspectSections } from './AspectSection';
-import { AssignmentCard } from './AssignmentCard';
+import { AssignmentCardSlot } from './AssignmentCardSlot';
 import { ROUTINE_ASPECT, RoutineStatusBlock } from './RoutineStatusBlock';
-import { RunFeed } from './RunFeed';
+import { RunFeedSlot } from './RunFeedSlot';
 import { RunsList } from './RunsList';
 import { useRecordHost, type WireEntity } from './record-host';
 import { TicketWaitingBlock } from './TicketWaitingBlock';
@@ -47,7 +47,7 @@ function AssignmentOwnCard() {
   const { runs, lastRun } = useTicketRuns(entity.id, isTicket);
   return (
     <div className={CARD_CLASS}>
-      <AssignmentCard entity={entity} />
+      <AssignmentCardSlot key={entity.id} entity={entity} />
       {/* key по id — экран монтируется БЕЗ key (router.tsx): набранный, но не отправленный
           ответ переехал бы на соседний тикет. */}
       {isTicket && (
@@ -78,7 +78,7 @@ function AgentRunCard() {
   const { entity } = useRecordHost();
   // key — лента держит своё состояние (открытое подтверждение отката), и переезжать на
   // соседний прогон оно не должно.
-  return <RunFeed key={`run-${entity.id}`} entity={entity} />;
+  return <RunFeedSlot key={`run-${entity.id}`} entity={entity} />;
 }
 
 const hasAspect =

@@ -18,6 +18,7 @@ import {
   submissionLocked,
   useFormErrors,
   useObserveForm,
+  useResetForm,
 } from './form-shared';
 import { roleAccess } from './metadata';
 import type { Relation, RelationKey } from './types';
@@ -62,6 +63,10 @@ export function RelationsTab(props: RelationsTabProps) {
   const [errors, setErrors] = useFormErrors(
     confirm ? `${entity.id}:${confirm.edge.id}` : draft?.editor,
   );
+  useResetForm(form, () => {
+    setConfirmation(undefined);
+    setErrors(undefined);
+  });
   const lookup = lookupOf(registry);
   const role = editor ? lookup.role(editor.roleId) : undefined;
   const manual = registry.roles
@@ -190,8 +195,9 @@ export function RelationsTab(props: RelationsTabProps) {
     props.submission?.result.kind === 'unknown' &&
     props.submission.reconciliation === 'differs' &&
     submittedKey;
-  const footer = (hideActions = false) => (
+  const footer = (hideActions = false, actions?: React.ReactNode) => (
     <FormFooter form={form} errors={errors} onSave={save} hideActions={hideActions}>
+      {actions}
       {feedback && (
         <div data-testid="submitted-relation">
           <p>
@@ -209,13 +215,17 @@ export function RelationsTab(props: RelationsTabProps) {
   const confirmationUI = confirm && (
     <div className="flex flex-col gap-2">
       <p>{pair(keyOf(confirm.edge))}</p>
-      <Button disabled={locked} onClick={save}>
-        Подтвердить снятие
-      </Button>
-      <Button disabled={props.submission?.result === 'pending'} onClick={form.onCancel}>
-        Отмена
-      </Button>
-      {footer(true)}
+      {footer(
+        true,
+        <>
+          <Button disabled={locked} onClick={save}>
+            Подтвердить снятие
+          </Button>
+          <Button disabled={props.submission?.result === 'pending'} onClick={form.onCancel}>
+            Отмена
+          </Button>
+        </>,
+      )}
     </div>
   );
   return (

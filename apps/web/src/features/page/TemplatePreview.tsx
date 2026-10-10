@@ -1,13 +1,14 @@
 import { PAGE_ASPECT } from '@orbis/shared';
 import type { QueryAst } from '@orbis/shared/query';
 import { isHostTemplateRecord } from '@orbis/shared/supply';
-import { useId, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import { aspectLabel } from '../../lib/registry/labels';
 import { useRegistry } from '../../lib/registry/useRegistry';
 import { type RouterOutputs, trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
 import { Card } from '../../ui/Card';
 import { Skeleton } from '../../ui/Skeleton';
+import type { PanelTarget } from '../entity-detail/PropertiesRelationsSlot';
 import { detailGetInput } from '../entity-detail/useEntityDetail';
 import { SupplyPlaqueSlot } from '../supply/SupplyPlaqueSlot';
 import { PageView } from './PageView';
@@ -51,10 +52,12 @@ export function previewCandidatesAst(forAspects: readonly string[]): QueryAst {
 export function TemplatePreview({
   page,
   onClose,
+  onPreviewTarget,
 }: {
   page: EntityGetReply;
   /** Закрыть предпросмотр черновика; у шаблона предпросмотр — его обычный показ, закрывать нечего. */
   onClose?: () => void;
+  onPreviewTarget?: (pageId: string, target: PanelTarget | null) => void;
 }) {
   const { entity } = page;
   const forAspects = templateForOf(entity.props);
@@ -69,6 +72,11 @@ export function TemplatePreview({
   // Пока подходящие едут, выбирать не из чего: страница сама на себе мелькнула бы и сменилась
   // записью. Отказ списка — не ожидание: показ идёт на самой странице.
   const waiting = candidates.data === undefined && !candidates.isError;
+  useEffect(() => {
+    if (waiting || chosen === entity.id)
+      onPreviewTarget?.(entity.id, !waiting ? { entityId: entity.id, readOnly: false } : null);
+    return () => onPreviewTarget?.(entity.id, null);
+  }, [entity.id, chosen, waiting, onPreviewTarget]);
   const labels = forAspects.map((id) => aspectLabel(reg, id));
   // Шаблон хоста (срез 1б §9.2) набора не имеет — он вид всех записей без своего шаблона, и
   // «Шаблон для: —» назвало бы его черновиком. Подходящая ему запись — любая (набор пуст).
@@ -127,7 +135,7 @@ export function TemplatePreview({
       ) : chosen === entity.id ? (
         <PageView reply={page} />
       ) : (
-        <PreviewOn recordId={chosen} template={entity} />
+        <PreviewOn recordId={chosen} template={entity} onPreviewTarget={onPreviewTarget} />
       )}
     </div>
   );
@@ -137,11 +145,18 @@ export function TemplatePreview({
 function PreviewOn({
   recordId,
   template,
+  onPreviewTarget,
 }: {
   recordId: string;
   template: Pick<EntityGetReply['entity'], 'id' | 'body'>;
+  onPreviewTarget?: (pageId: string, target: PanelTarget | null) => void;
 }) {
   const get = trpc.entity.get.useQuery(detailGetInput(recordId));
+  const ready = !get.isError && get.data?.entity.id === recordId;
+  useEffect(() => {
+    onPreviewTarget?.(template.id, ready ? { entityId: recordId, readOnly: true } : null);
+    return () => onPreviewTarget?.(template.id, null);
+  }, [template.id, recordId, ready, onPreviewTarget]);
   if (get.isError) {
     return (
       <p role="alert" className="px-4 pt-5 text-danger text-sm md:px-6">

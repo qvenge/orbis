@@ -12,6 +12,7 @@ import {
   submissionLocked,
   useFormErrors,
   useObserveForm,
+  useResetForm,
 } from './form-shared';
 import { aspectAccess, freePropertyDefinitions, propertyAccess, propertyRows } from './metadata';
 
@@ -21,6 +22,10 @@ export function PropertiesTab(form: PanelFormProps) {
   const [search, setSearch] = useState('');
   const [selected, setSelected] = useState<string[]>([]);
   const [errors, setErrors] = useFormErrors(draft?.editor);
+  useResetForm(form, () => {
+    setSelected([]);
+    setErrors(undefined);
+  });
   const lookup = lookupOf(registry);
   const shown = propertyRows(entity, registry);
   const existing = new Set(shown.map((row) => row.id));
@@ -128,7 +133,7 @@ export function PropertiesTab(form: PanelFormProps) {
                   )}
                   {special && (
                     <Button
-                      disabled={specialBlocked || busy}
+                      disabled={specialBlocked || busy || Boolean(form.specialReason?.(special))}
                       onClick={() => form.onSpecial(special)}
                     >
                       {special === 'assignment' ? 'Назначение' : 'Навигация'}:{' '}
@@ -138,6 +143,7 @@ export function PropertiesTab(form: PanelFormProps) {
                   {specialBlocked && assignmentAccess.reason && (
                     <p className="text-sm text-text-muted">{assignmentAccess.reason}</p>
                   )}
+                  {special && form.specialReason?.(special) && <p>{form.specialReason(special)}</p>}
                 </div>
               );
             })}

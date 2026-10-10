@@ -10,7 +10,7 @@ import { useRecordHost } from './record-host';
 import { Subtasks } from './Subtasks';
 import { TagsBlock } from './TagsBlock';
 import { useRecordEdits } from './useEntityDetail';
-import { VersionsCard } from './VersionsCard';
+import { VersionsCardSlot } from './VersionsCardSlot';
 
 /**
  * Примитивы обвязки записи по имени блока (спека страниц 1а §5.3, §7.3). Каждый показывает
@@ -105,7 +105,9 @@ export function BacklinksBlock() {
  */
 export function VersionsBlock() {
   const { entity, openTab } = useRecordHost();
-  return <VersionsCard key={`versions-${entity.id}`} entity={entity} active={openTab !== null} />;
+  return (
+    <VersionsCardSlot key={`versions-${entity.id}`} entity={entity} active={openTab !== null} />
+  );
 }
 
 /**

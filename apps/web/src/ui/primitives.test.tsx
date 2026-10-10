@@ -14,6 +14,30 @@ import { Skeleton } from './Skeleton';
 import { Spinner } from './Spinner';
 import { Tabs } from './Tabs';
 
+test('Sheet wide chooses one width set and default width remains unchanged', () => {
+  const result = render(
+    <Sheet
+      open
+      title="Wide"
+      size="wide"
+      side="right"
+      onOpenChange={() => {}}
+      contentClassName="flex flex-col overflow-hidden"
+    >
+      content
+    </Sheet>,
+  );
+  expect(screen.getByRole('dialog')).toHaveClass('w-full', 'sm:w-[min(36rem,100vw)]');
+  expect(screen.getByRole('dialog')).not.toHaveClass('w-[min(85vw,20rem)]');
+  result.rerender(
+    <Sheet open title="Default" onOpenChange={() => {}}>
+      content
+    </Sheet>,
+  );
+  expect(screen.getByRole('dialog')).toHaveClass('w-[min(85vw,20rem)]');
+  expect(screen.getByRole('dialog')).not.toHaveClass('w-full');
+});
+
 test('Input прокидывает value/aria и type=text по умолчанию', () => {
   render(<Input aria-label="поле" value="x" onChange={() => {}} />);
   const el = screen.getByLabelText('поле') as HTMLInputElement;

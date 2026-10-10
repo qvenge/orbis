@@ -124,6 +124,13 @@ const LAZY_DETAIL_MODULES = [
   'OpenPlaqueList',
   'AppsBlock',
   'RefListControl',
+  'PropertiesRelationsPanel',
+  'ScalarListControl',
+  'RefManyControl',
+  'RunFeed',
+  'AssignmentCard',
+  'VersionsCard',
+  'PinVersionDialog',
   'SupplyPlaque',
   // Задача 23: плашка выключенного расширения с «Включить» — переключатель с тостом и отменой нужен
   // только записи с выключенным расширением (точка лени — `entity-detail/AspectSection.tsx`).
@@ -188,6 +195,19 @@ const LAZY_FRAME_MODULES = [
  * нет, но ребро остаётся: он появится с первым же новым местом показа блока.
  */
 const FORBIDDEN_EDGES: readonly { from: string; to: string; hint: string }[] = [
+  ...[
+    'PropertiesRelationsPanel',
+    'ScalarListControl',
+    'RefManyControl',
+    'RunFeed',
+    'AssignmentCard',
+    'VersionsCard',
+    'PinVersionDialog',
+  ].map((to) => ({
+    from: 'DetailScreen',
+    to,
+    hint: 'Формы и редкие карточки должны загружаться только после соответствующего жеста.',
+  })),
   {
     from: 'DetailScreen',
     to: 'doc',
@@ -234,6 +254,16 @@ const FORBIDDEN_EDGES: readonly { from: string; to: string; hint: string }[] = [
 /** Файлы чанка по имени модуля: имя модуля, дефис, хэш сборки (то же правило, что у проверки наличия). */
 export function chunkFilesIn(files: readonly string[], name: string): string[] {
   return files.filter((f) => new RegExp(`^${name}-[\\w-]+\\.js$`).test(f));
+}
+/** SW installation must not fetch new feature-only modules before the first panel gesture. */
+export function featurePrecacheEntries(source: string): string[] {
+  return [...source.matchAll(/(?:["']?url["']?)\s*:\s*["']([^"']+)["']/g)]
+    .map((match) => match[1])
+    .filter((url) =>
+      /(?:^|\/)assets\/(?:PropertiesRelationsPanel|ScalarListControl|RefManyControl|panel-host)-[^/]+\.js$/.test(
+        url,
+      ),
+    );
 }
 
 /**
@@ -548,6 +578,13 @@ function main(argv: readonly string[]): void {
   }
 
   // --- Пороги веса: после наличия и состава — чанк, которого нет, мерить бессмысленно ---------
+  const featurePrecache = featurePrecacheEntries(readFileSync('apps/web/dist/sw.js', 'utf8'));
+  if (featurePrecache.length > 0) {
+    console.error(
+      `check-lazy-chunks: SW precache загружает новые ленивые модули до жеста: ${featurePrecache.join(', ')}`,
+    );
+    process.exit(1);
+  }
   const weight = checkBudgets(ASSETS_DIR, budgets);
   if (weight.code !== 0) {
     console.error(weight.lines.join('\n'));
