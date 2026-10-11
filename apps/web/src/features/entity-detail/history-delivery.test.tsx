@@ -269,6 +269,10 @@ for (const landing of ['foreign', 'journal', 'journal-same'] as const)
         editor: Editor;
       }
     ).editor;
+    // Mount queues Tiptap's initial focus in RAF. Finish that gesture before moving to
+    // title: a late body focus would legitimately blur/save its populated title draft.
+    // journal-same has no autosave wait to settle that frame as the other landings do.
+    await waitFor(() => expect(ed.view.dom).toHaveFocus());
     act(() => {
       ed.commands.insertContentAt(1, 'NEW');
       if (landing === 'journal-same') {
