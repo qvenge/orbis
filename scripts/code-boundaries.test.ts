@@ -90,9 +90,21 @@ const BANNED = [
 ] as const;
 const WORD_ALLOWLIST: Record<string, Allowed> = {
   'apps/web/src/features/entity-detail/VersionsCard.tsx': {
-    count: 4,
+    count: 1,
     reason:
-      '«Закрепить версию» — закрепление ВЕРСИИ тела (Ш1, `entity_version_pin`), другое понятие, не навигация (§1 снимает «Закрепить» как глагол навигации, §9.3): тост «Версия закреплена», заголовок диалога, кнопка «Закрепить», пустое состояние с названием пункта меню',
+      'пустое состояние с «Закрепить версию» — закрепление ВЕРСИИ тела (Ш1, `entity_version_pin`), другое понятие, не навигация (§1 снимает глагол навигации, §9.3); диалог и тост извлечены в PinVersionDialog',
+    removedBy: 'решение владельца (эррата §1)',
+  },
+  'apps/web/src/features/entity-detail/PinVersionDialog.tsx': {
+    count: 3,
+    reason:
+      'извлечённый из VersionsCard диалог закрепления ВЕРСИИ тела (`entity_version_pin`): прежние тост «Версия закреплена», заголовок «Закрепить версию» и кнопка «Закрепить», не навигация (§9.3)',
+    removedBy: 'решение владельца (эррата §1)',
+  },
+  'apps/web/src/features/entity-detail/PinVersionDialogSlot.tsx': {
+    count: 1,
+    reason:
+      'aria-label «Загрузка закрепления версии» адресует ленивую загрузку той же формы ВЕРСИИ тела (`entity_version_pin`), не навигацию',
     removedBy: 'решение владельца (эррата §1)',
   },
   'apps/web/src/features/entity-detail/DetailMenu.tsx': {
@@ -134,6 +146,14 @@ const MODULE_NAMES: Record<string, string> = {
     'модуль JS: сброс кеша ленивого чанка экрана записи для тестов (`app/router.tsx`)',
   resetRecordsBlockModuleForTests:
     'модуль JS: сброс кеша ленивого чанка блока «Записи» для тестов (`browser/RecordsBlockSlot.tsx`)',
+  modulePromise:
+    'модуль JS: промис ленивых чанков панели свойств/связей и карточек Assignment/RunFeed/Versions/PinVersionDialog в их Slot, не расширение',
+  resetAssignmentCardModuleForTests:
+    'модуль JS: сброс кеша ленивой карточки назначения для тестов (`AssignmentCardSlot.tsx`)',
+  resetPropertiesPanelModuleForTests:
+    'модуль JS: сброс кеша ленивой панели свойств/связей для тестов (`PropertiesRelationsSlot.tsx`)',
+  resetRunFeedModuleForTests:
+    'модуль JS: сброс кеша ленивой карточки прогонов для тестов (`RunFeedSlot.tsx`)',
 };
 
 /**

@@ -5,9 +5,9 @@ import { startDraft } from './draft';
 import {
   checkedPatch,
   contextReason,
+  extensionReason,
   FieldRow,
   FormFooter,
-  moduleReason,
   type PanelFormProps,
   submissionLocked,
   useFormErrors,
@@ -137,8 +137,10 @@ export function PropertiesTab(form: PanelFormProps) {
                     Добавить поле: {lookup.label(def.id)}
                   </Button>
                   {access.reason && <p className="text-sm text-text-muted">{access.reason}</p>}
-                  {moduleReason(def.module, context) && (
-                    <p className="text-sm text-text-muted">{moduleReason(def.module, context)}</p>
+                  {extensionReason(def.module, context) && (
+                    <p className="text-sm text-text-muted">
+                      {extensionReason(def.module, context)}
+                    </p>
                   )}
                   {special && (
                     <Button

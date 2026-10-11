@@ -73,7 +73,7 @@ export function useFormErrors(editor: PanelDraft['editor'] | string | undefined)
 export function contextReason(context: Context): string | undefined {
   return context.readOnly ? 'Только чтение' : context.archived ? 'Запись в архиве' : undefined;
 }
-export function moduleReason(
+export function extensionReason(
   module: PropertyDefinition['module'],
   context: Context,
 ): string | undefined {
@@ -208,8 +208,8 @@ export function FieldRow({
           </p>
         )}
       </fieldset>
-      {moduleReason(def?.module ?? null, context) && (
-        <p className="text-sm text-text-muted">{moduleReason(def?.module ?? null, context)}</p>
+      {extensionReason(def?.module ?? null, context) && (
+        <p className="text-sm text-text-muted">{extensionReason(def?.module ?? null, context)}</p>
       )}
       {reason && <p className="text-sm text-text-muted">{reason}</p>}
       {required && !access.canSet && access.editor !== 'assignment' && (

@@ -13,9 +13,9 @@ import { acceptRemote, editField, keepLocal, observeDraft, startDraft } from './
 import {
   checkedPatch,
   contextReason,
+  extensionReason,
   FieldRow,
   FormFooter,
-  moduleReason,
   type PanelFormProps,
   submissionLocked,
   useFormErrors,
@@ -145,9 +145,9 @@ export function AspectsTab(form: PanelFormProps) {
         return (
           <div key={id} className="flex flex-col gap-2 rounded-control border border-line p-3">
             <p className="text-sm font-medium">{lookup.label(id)}</p>
-            {moduleReason(def?.module ?? null, context) && (
+            {extensionReason(def?.module ?? null, context) && (
               <p className="text-sm text-text-muted">
-                {moduleReason(def?.module ?? null, context)}
+                {extensionReason(def?.module ?? null, context)}
               </p>
             )}
             {access.reason && <p className="text-sm text-text-muted">{access.reason}</p>}
@@ -244,7 +244,9 @@ export function AspectsTab(form: PanelFormProps) {
                 >
                   Добавить: {lookup.label(def.id)}
                 </Button>
-                {moduleReason(def.module, context) && <p>{moduleReason(def.module, context)}</p>}
+                {extensionReason(def.module, context) && (
+                  <p>{extensionReason(def.module, context)}</p>
+                )}
                 {access.route !== 'generic' &&
                   access.route !== 'readonly' &&
                   form.specialReason?.(access.route) && <p>{form.specialReason(access.route)}</p>}
