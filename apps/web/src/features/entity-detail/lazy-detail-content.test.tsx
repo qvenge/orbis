@@ -40,7 +40,8 @@ it('versions activate only once, retain confirmation while inactive and reset it
   expect(screen.getByTestId('versions-card')).toHaveTextContent('…');
   expect(screen.queryByText('Загрузка версий…')).toBeNull();
   fireEvent.click(screen.getByText('active'));
-  fireEvent.click(await screen.findByRole('button', { name: 'Восстановить' }));
+  // Wait for the cold producer import; subsequent latch/count/key checks remain unchanged.
+  fireEvent.click(await screen.findByRole('button', { name: 'Восстановить' }, { timeout: 3000 }));
   expect(await screen.findByRole('dialog', { name: 'Восстановить это тело?' })).toBeVisible();
   fireEvent.click(screen.getByText('active'));
   expect(screen.getByRole('dialog', { name: 'Восстановить это тело?' })).toBeVisible();

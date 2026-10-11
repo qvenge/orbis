@@ -4076,8 +4076,11 @@ describe('ADE: версии', () => {
     expect(calls.filter((c) => c.path === 'version.list')).toEqual([]);
 
     await openDetails();
-    const card = await screen.findByTestId('versions-card');
-    await waitFor(() => expect(within(card).getAllByRole('listitem')).toHaveLength(2));
+    // The lazy slot first publishes the existing lightweight landmark, then its producer.
+    await waitFor(() =>
+      expect(within(screen.getByTestId('versions-card')).getAllByRole('listitem')).toHaveLength(2),
+    );
+    const card = screen.getByTestId('versions-card');
     const rows = within(card).getAllByRole('listitem');
     expect(rows[0]).toHaveTextContent('до правки агентом');
     // Дата — машиночитаемым `time`: текст её собирает Intl в зоне владельца, и сверять его
@@ -4094,8 +4097,10 @@ describe('ADE: версии', () => {
   test('«Восстановить» → подтверждение → version.restore({versionId, expectedUpdatedAt}) и перечитывание графа', async () => {
     const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, versionsHandler());
     await openDetails();
-    const card = await screen.findByTestId('versions-card');
-    await waitFor(() => expect(within(card).getAllByRole('listitem')).toHaveLength(2));
+    await waitFor(() =>
+      expect(within(screen.getByTestId('versions-card')).getAllByRole('listitem')).toHaveLength(2),
+    );
+    const card = screen.getByTestId('versions-card');
     const row = within(card).getAllByRole('listitem')[0] as HTMLElement;
     await userEvent.click(within(row).getByRole('button', { name: 'Восстановить' }));
 
@@ -4133,8 +4138,10 @@ describe('ADE: версии', () => {
       }),
     );
     await openDetails();
-    const card = await screen.findByTestId('versions-card');
-    await waitFor(() => expect(within(card).getAllByRole('listitem')).toHaveLength(2));
+    await waitFor(() =>
+      expect(within(screen.getByTestId('versions-card')).getAllByRole('listitem')).toHaveLength(2),
+    );
+    const card = screen.getByTestId('versions-card');
     const row = within(card).getAllByRole('listitem')[0] as HTMLElement;
     await userEvent.click(within(row).getByRole('button', { name: 'Восстановить' }));
     await userEvent.click(
@@ -4160,8 +4167,12 @@ describe('ADE: версии', () => {
   test('версий нет: «Версий нет» и подсказка, откуда их берут', async () => {
     renderWithProviders(<DetailScreen entityId="e1" />, versionsHandler({ versions: [] }));
     await openDetails();
-    const card = await screen.findByTestId('versions-card');
-    expect(await within(card).findByText(/Версий нет/)).toBeInTheDocument();
+    await waitFor(() =>
+      expect(
+        within(screen.getByTestId('versions-card')).getByText(/Версий нет/),
+      ).toBeInTheDocument(),
+    );
+    const card = screen.getByTestId('versions-card');
     // Пустая секция обязана сказать, чем её наполнить: пункт меню найти неоткуда.
     expect(card).toHaveTextContent('Закрепить версию');
     expect(within(card).queryByRole('button', { name: 'Восстановить' })).toBeNull();

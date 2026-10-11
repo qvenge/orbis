@@ -61,7 +61,8 @@ it.each([
             ? { ok: true, actionId: '00000000-0000-4000-8000-000000000123' }
             : [],
   );
-  fireEvent.click(await screen.findByRole('tab', { name: 'Свойства' }));
+  // Cold-load the real Panel before exercising the separately controlled leaf failure.
+  fireEvent.click(await screen.findByRole('tab', { name: 'Свойства' }, { timeout: 3000 }));
   fireEvent.click(screen.getByRole('button', { name: 'Редактировать свойства' }));
   fireEvent.change(screen.getByLabelText('Поле теста'), {
     target: { value: 'raw survives leaf failure' },

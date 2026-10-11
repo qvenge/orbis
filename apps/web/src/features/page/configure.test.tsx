@@ -40,6 +40,7 @@ import {
 } from '../entity-detail/structure-fixtures';
 import { detailGetInput } from '../entity-detail/useEntityDetail';
 import { readDraft } from '../entity-editor/draft-storage';
+import { SAVE_DEBOUNCE_MS } from '../entity-editor/useBodySave';
 import { previewCandidatesAst } from './TemplatePreview';
 import { PAGE_TEMPLATES_QUERY } from './usePageTemplates';
 
@@ -648,6 +649,18 @@ describe('несохранённая правка настройки не мол
 });
 
 describe('уход с настройки без связи (рулинг R-5)', () => {
+  function insertOfflineTail(field: HTMLElement & { editor: Editor }, tail: string): void {
+    let at = -1;
+    field.editor.state.doc.descendants((node, pos) => {
+      if (at === -1 && node.isText && node.text?.startsWith('левая часть') === true) {
+        at = pos + node.text.length;
+      }
+    });
+    act(() => {
+      field.editor.commands.insertContentAt(at, tail);
+    });
+  }
+
   async function editUnsentOffline(view: HTMLElement, tail: string): Promise<void> {
     // Редактор ещё не встал — касание текста его поднимает; встал — правка сразу.
     if (within(view).queryByTestId('body-editor')?.querySelector('[contenteditable]') == null) {
@@ -658,15 +671,7 @@ describe('уход с настройки без связи (рулинг R-5)', 
       if (node === null) throw new Error('редактор не встал');
       return node as HTMLElement & { editor: Editor };
     });
-    let at = -1;
-    field.editor.state.doc.descendants((node, pos) => {
-      if (at === -1 && node.isText && node.text?.startsWith('левая часть') === true) {
-        at = pos + node.text.length;
-      }
-    });
-    act(() => {
-      field.editor.commands.insertContentAt(at, tail);
-    });
+    insertOfflineTail(field, tail);
   }
 
   /** Сервер правки тела по номеру вызова: ответ i-го `entity.update` решает `answer(i)`. */
@@ -751,8 +756,22 @@ describe('уход с настройки без связи (рулинг R-5)', 
     await waitFor(() => expect(updates()).toHaveLength(1));
     expect(await within(view).findByTestId('save-indicator')).toHaveTextContent('Не сохранено');
     // Связь вернулась: новая правка уходит своим таймером паузы и повисает в полёте.
-    await editUnsentOffline(view, ' ЕЩЁ');
-    await waitFor(() => expect(updates()).toHaveLength(2), { timeout: 5000 });
+    // Advance the real pause deterministically; the network response remains held below.
+    const field = within(view).getByTestId('body-editor').querySelector('[contenteditable]') as
+      | (HTMLElement & { editor: Editor })
+      | null;
+    expect(field).not.toBeNull();
+    if (!field) throw new Error('редактор не встал');
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      insertOfflineTail(field, ' ЕЩЁ');
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(SAVE_DEBOUNCE_MS);
+      });
+      expect(updates()).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
     // Пока досыл летит, набрано ещё: неотправленное — поверх полёта, и черновик на диске — оно же
     // (оптимистичный патч полёта уже в кэше, так что без новой правки неотправленного не было бы
     // вовсе и полёт держал бы уход сам по себе).
