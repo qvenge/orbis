@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
+import { flushSync } from 'react-dom';
 import { expect, test, vi } from 'vitest';
 import { Dialog } from './Dialog';
 import { Sheet } from './Sheet';
@@ -40,7 +41,11 @@ test('Escape в самой плашке закрывает только её', (
 });
 
 test('modal Sheet permits a real Undo pointer click without outside dismissal or raw loss', async () => {
-  const onSelect = vi.fn();
+  let toastId = '';
+  // Browser discrete events can commit the removal before Radix's document click handler.
+  const onSelect = vi.fn(() => {
+    flushSync(() => useToastStore.getState().dismiss(toastId));
+  });
   const onOpenChange = vi.fn();
   render(
     <>
@@ -53,17 +58,28 @@ test('modal Sheet permits a real Undo pointer click without outside dismissal or
   const field = screen.getByLabelText('Черновик');
   field.focus();
   expect(document.body.style.pointerEvents).toBe('none');
-  act(() =>
-    useToastStore.getState().show('Снята связь', 'default', {
+  act(() => {
+    toastId = useToastStore.getState().show('Снята связь', 'default', {
       label: 'Отменить',
       onSelect,
-    }),
-  );
+    });
+  });
   // userEvent checks actual inherited pointer-events; fireEvent bypasses hit-testing.
   await userEvent.click(screen.getByText('Отменить'));
+  // Current Radix defers outside-dismiss until the click task; the toast has unmounted then.
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
   expect(onSelect).toHaveBeenCalledTimes(1);
   expect(onOpenChange).not.toHaveBeenCalled();
   expect(screen.getByRole('dialog')).toBeInTheDocument();
   expect(field).toHaveValue('сырой текст');
   expect(field).toHaveFocus();
+  const backdrop = document.querySelector('.bg-overlay');
+  if (!(backdrop instanceof HTMLElement)) throw new Error('Sheet backdrop missing');
+  await userEvent.click(backdrop);
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+  expect(onOpenChange).toHaveBeenCalledExactlyOnceWith(false);
 });

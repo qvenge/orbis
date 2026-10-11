@@ -32,8 +32,12 @@ export function Sheet({
           onCloseAutoFocus={onCloseAutoFocus}
           onInteractOutside={(event) => {
             const target = event.detail.originalEvent.target;
-            // A notification action belongs to the still-open sheet, not its backdrop.
-            if (target instanceof Element && target.closest('[data-toast-viewport]'))
+            // Radix defers this event until click. Its original notification item may
+            // already be detached from the viewport, but keeps its own marker.
+            if (
+              target instanceof Element &&
+              target.closest('[data-toast-viewport], [data-toast-item]')
+            )
               event.preventDefault();
           }}
           className={`fixed top-0 ${pos} z-50 ${size === 'wide' ? 'h-dvh w-full sm:w-[min(36rem,100vw)]' : 'h-full w-[min(85vw,20rem)]'} border-line bg-surface p-4 shadow-pop ${contentClassName}`}

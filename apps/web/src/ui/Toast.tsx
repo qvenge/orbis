@@ -21,6 +21,7 @@ export function Toaster() {
       {toasts.map((t) => (
         <li
           key={t.id}
+          data-toast-item=""
           tabIndex={0}
           className={`rounded-control border border-line p-3 text-sm shadow-pop ${t.tone === 'danger' ? 'bg-danger text-danger-foreground' : 'bg-surface-2 text-text'}`}
           onKeyDown={(e) => {
