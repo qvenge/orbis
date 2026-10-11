@@ -30,6 +30,12 @@ export function Sheet({
           aria-label={title}
           aria-describedby={undefined}
           onCloseAutoFocus={onCloseAutoFocus}
+          onInteractOutside={(event) => {
+            const target = event.detail.originalEvent.target;
+            // A notification action belongs to the still-open sheet, not its backdrop.
+            if (target instanceof Element && target.closest('[data-toast-viewport]'))
+              event.preventDefault();
+          }}
           className={`fixed top-0 ${pos} z-50 ${size === 'wide' ? 'h-dvh w-full sm:w-[min(36rem,100vw)]' : 'h-full w-[min(85vw,20rem)]'} border-line bg-surface p-4 shadow-pop ${contentClassName}`}
         >
           <RD.Title className="sr-only">{title}</RD.Title>

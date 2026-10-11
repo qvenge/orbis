@@ -11,7 +11,13 @@ export function Toaster() {
     for (const id of swipes.current.keys()) if (!ids.has(id)) swipes.current.delete(id);
   }, [toasts]);
   return (
-    <ol aria-live="polite" className="fixed bottom-4 right-4 z-[60] flex w-80 flex-col gap-2">
+    <ol
+      aria-live="polite"
+      data-toast-viewport=""
+      // Radix modal layers disable body pointer events; notifications remain actionable.
+      style={{ pointerEvents: 'auto' }}
+      className="fixed bottom-4 right-4 z-[60] flex w-80 flex-col gap-2"
+    >
       {toasts.map((t) => (
         <li
           key={t.id}

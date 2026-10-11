@@ -270,7 +270,7 @@ it('late confirmed A command retains its original Undo and never fills forced B 
   await screen.findByText('Запись B');
   await properties();
   const actionId = '00000000-0000-4000-8000-000000000088';
-  release({ ok: true, actionId });
+  release({ ok: true, actionId, consequences: false });
   await waitFor(() =>
     expect(
       useToastStore.getState().toasts.some((toast) => toast.title === 'Сохранены свойства'),

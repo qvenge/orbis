@@ -386,4 +386,3 @@ Core-проекции (`title`, время создания и т. п.) не о�
 | `apps/server/src/registry/validate-props.ts`, `ref.ts` | Типы, required/deprecated, проверка target и зеркала свойств |
 | `packages/shared/src/registry/property-type.ts`, `types.ts`, `builtin-roles.ts` | Поля определений, роли, признаки служебности и права на запись |
 | `packages/shared/src/contracts/tools.ts` | Схемы entity_update и операций рёбер |
-
