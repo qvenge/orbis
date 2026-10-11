@@ -603,21 +603,22 @@ test('имена маркеров — договор: на них ссылают
  * ограничение плана Б-1 и чек-лист деплоя: «`v5.ts` и `routine-v3.ts` заморожены»), а
  * исполняет его allowlist гейта: без пина второе место молча расходилось бы с первым.
  */
-test('заморожены обе линейки до живых v8 и routine-v4, и v7 с routine-v3 в их числе', () => {
+test('заморожены обе линейки до живых v9 и routine-v5, и v8 с routine-v4 в их числе', () => {
   const frozen = new Set(
     ALLOWLIST.map((e) => e.path).filter((p) => p.startsWith('apps/server/src/llm/prompts/')),
   );
   // v6 заморожен срезом 1а вместе с заведением v7 (индекс аспектов вместо инструкций); v7 —
-  // срезом 1б вместе с заведением v8 (строки о целях — во фрагменте Целей, спека §8.2).
-  for (const name of ['v5', 'v6', 'v7', 'routine-v3']) {
+  // срезом 1б вместе с заведением v8 (строки о целях — во фрагменте Целей, спека §8.2); v8 и
+  // routine-v4 — срезом 1в вместе с v9/routine-v5 (снимок до языка «когда», спека 1в §3.8, §6.4).
+  for (const name of ['v5', 'v6', 'v7', 'v8', 'routine-v3', 'routine-v4']) {
     expect([name, frozen.has(`apps/server/src/llm/prompts/${name}.ts`)]).toEqual([name, true]);
     expect([name, frozen.has(`apps/server/src/llm/prompts/${name}.fixture.txt`)]).toEqual([
       name,
       true,
     ]);
   }
-  // …а живые линейки НЕ заморожены: v8 и routine-v4 правятся вместе с фикстурами (построчно).
-  for (const name of ['v8', 'routine-v4']) {
+  // …а живые линейки НЕ заморожены: v9 и routine-v5 правятся вместе с фикстурами (построчно).
+  for (const name of ['v9', 'routine-v5']) {
     expect([name, frozen.has(`apps/server/src/llm/prompts/${name}.ts`)]).toEqual([name, false]);
     expect([name, frozen.has(`apps/server/src/llm/prompts/${name}.fixture.txt`)]).toEqual([
       name,

@@ -16,6 +16,7 @@ import {
   attachAspectInput,
   BATCH_CAP_DEFAULT,
   type BatchExecuteInput,
+  type BlockSum,
   batchExecuteInput,
   budgetStatusInput,
   type EntityUpdatePreconditionItem,
@@ -28,6 +29,7 @@ import {
   extensionName,
   extensionOfTool,
   type GraphId,
+  globalThreadId,
   isActionToolName,
   newId,
   pendingMessageId,
@@ -40,6 +42,7 @@ import {
   ruleDefinitionSchema,
   type SurfaceName,
   subscriptionDefinitionSchema,
+  type UndoTextChangedDetails,
 } from '@orbis/shared';
 import { exprNodeSchema, printExpr } from '@orbis/shared/expr';
 import {
@@ -76,9 +79,10 @@ import { appendMessage, appendMessageIdempotent } from '../chat/messages';
 import { ensureEntityThread } from '../chat/threads';
 import { chatMessages, entities } from '../db/schema';
 import { type Tx, withIdentity } from '../db/with-identity';
-import { IMPORT_CSV_KEY, ROUTINES_MAX_KEY, resolveEntitlement } from '../entitlements';
+import { ROUTINES_MAX_KEY, resolveEntitlement } from '../entitlements';
 import { readEntity } from '../entity-read';
 import { ExecError } from '../errors';
+import { undoRefusalText } from '../executor/body-chain';
 import { execute } from '../executor/executor';
 import { nearestPropertyKey, resolvePropertyRef } from '../executor/props';
 import type { ActionRecord, JournalSink, JournalWrite, WireEntity } from '../executor/types';
@@ -109,8 +113,10 @@ import {
   type CompileCtx,
   compileCountAst,
   compileQueryAst,
-  compileSumAst,
+  compileSumByCurrencyAst,
+  sumsOf,
 } from '../query/compile-ast';
+import { ownerTimeZone } from '../query/context';
 import { parseQueryText, parseRegistryOf } from '../query/parse-text';
 import { queryWithMaterialization } from '../recurring/with-materialization';
 import { effectiveRegistry, parseRegistryOfSnapshot } from '../registry/cache';
@@ -145,7 +151,6 @@ import {
   AGENT_VERB_NAMES,
   buildToolDefs,
   type Card,
-  importCsvStartInput,
   type OrbisToolDef,
   routineToolAllowed,
   type ThreadPostInput,
@@ -700,13 +705,14 @@ function captureSink(inner: JournalSink): { sink: JournalSink; entries: JournalW
         await inner.write(tx, entry);
         entries.push(entry);
       },
-      findByAuditId: (tx, id) => inner.findByAuditId(tx, id),
+      writeUndo: (tx, entry) => inner.writeUndo(tx, entry),
+      findBatchWrite: (tx, graph, batchId) => inner.findBatchWrite(tx, graph, batchId),
     },
   };
 }
 
 // ---------------------------------------------------------------------------
-// Чтения: entity_get / import_csv_start — под RLS; ветвлений политики нет:
+// Чтения: entity_get / property_catalog — под RLS; ветвлений политики нет:
 // ряд «read → execute» таблицы §7.10 (закреплён юнит-тестом классификатора)
 // ---------------------------------------------------------------------------
 
@@ -723,7 +729,14 @@ async function runRead(
   // (хук материализации §5.4 / конвейер §2.8 исполняются вне pre-tx)
   if (name === 'entity_get') {
     const parsed = parseEnvelope(entityGetInput, input, 'entity_get');
-    return { status: 'ok', result: await readEntity(tx, ctx.identity.graph, parsed) };
+    // Умолчание тула прежнее (Д-16): описание обещает body+relations, хотя entity.get теперь лёгкий.
+    return {
+      status: 'ok',
+      result: await readEntity(tx, ctx.identity.graph, {
+        ...parsed,
+        include: parsed.include ?? ['body', 'relations'],
+      }),
+    };
   }
   if (name === 'property_catalog') {
     // Каталог читается из СНИМКА реестра — того же, по которому собран список тулов и по
@@ -743,43 +756,7 @@ async function runRead(
       }),
     };
   }
-  if (name === 'import_csv_start') {
-    parseEnvelope(importCsvStartInput, input, 'import_csv_start');
-    return importCsvStart(ctx);
-  }
   throw new Error(`runRead: нет обработчика read-тула «${name}»`); // недостижимо: kind задаёт реестр
-}
-
-/**
- * import_csv_start (Task C4c, 03-budget §3.4): вход в импорт из чата. Тул-аффорданс —
- * единственный эффект: карточка import_review, с которой владелец откроет экран
- * импорта. Ничего не читает и не пишет (файл выписки живёт в браузере и разбирается
- * локально, §3.4 шаг 1; модуль import/ отсюда намеренно не вызывается — роутер
- * import.* зовёт только владелец, C2). Форма карточки обязана дословно совпадать
- * с web-типом ImportReviewData (chat/cards/types.ts) — типы намеренно не общие.
- */
-function importCsvStart(ctx: ToolCallCtx): ToolDispatchResult {
-  // Гейт §8 — тот же ключ 'import.csv', что у процедур роутера импорта
-  // (по образцу gateImportCsv из import/review.ts): отказ резолвера → LIMIT, не карточка.
-  // Резолвер — из инъецируемого шва ctx (как у роутера), иначе денайл непокрываем.
-  // Субъект тарифа — АККАУНТ (Р-КГ-6, спека §3.4), не граф.
-  const decision = (ctx.entitlements ?? resolveEntitlement)(ctx.identity.actor, IMPORT_CSV_KEY);
-  if (!decision.allowed) {
-    throw new ExecError('LIMIT', `лимит «${IMPORT_CSV_KEY}» исчерпан`, {
-      key: IMPORT_CSV_KEY,
-      limit: decision.limit,
-    });
-  }
-  return {
-    status: 'ok',
-    // result — для модели: что произошло и почему продолжать нечего
-    result: {
-      note:
-        'карточка входа в импорт показана — пользователь откроет экран импорта и выберет ' +
-        'файл локально в браузере; сам импорт через чат не выполняется, не повторяй вызов',
-    },
-    card: { kind: 'import_review' },
-  };
 }
 
 /**
@@ -805,6 +782,11 @@ function importCsvStart(ctx: ToolCallCtx): ToolDispatchResult {
  *
  * «Отменять нечего» — штатный ok-ответ модели, а не error_card в ленту: для владельца это
  * не сбой, а ответ на вопрос.
+ *
+ * «Текст изменён после этого действия» (правило §8.6) — отказ `UNDO_TEXT_CHANGED` БЕЗ продолжения (Р-17): решение
+ * заменить текст, набранный позже, — только у человека. Отказ несёт место, где человек может отменить действие с
+ * продолжением (К-46: карточка в треде, вкладка, меню записи или «карточки нет»), и модель отвечает по нему. Это
+ * error_card в ленте, и справедливо: откат не случился.
  */
 async function runUndoLast(
   ctx: ToolCallCtx,
@@ -822,7 +804,8 @@ async function runUndoLast(
   // ОТКАТ — ТОТ ЖЕ «РЕЗОЛВЛЕННЫЙ НАБОР ШАГОВ», ЧТО И ДЕЙСТВИЕ (В-8, Р-31): обратные операции известны
   // ДО исполнения (`action.inverse` журнала), значит их можно свернуть в факты той же функцией, что и
   // шаги действия, и спросить уровень у таблицы §7.10. Прежде ветка шла мимо политики целиком.
-  const peeked = await peekLastUndoable(ctx.db, ctx.identity);
+  // «Сейчас» вызова — для даты в подписи несегодняшнего сеанса правки текста (§8.5)
+  const peeked = await peekLastUndoable(ctx.db, ctx.identity, (ctx.clock ?? (() => new Date()))());
   if (peeked === undefined) {
     return {
       status: 'ok',
@@ -889,8 +872,19 @@ async function runUndoLast(
   // применением в журнал могло лечь новое действие (владелец правит с другого экрана), и `undoLast`
   // снял бы уже его — мимо уровня, посчитанного для другого inverse: ровно та дыра, ради которой
   // проба и заведена.
-  const r = await undoAction(ctx.db, { identity: ctx.identity, actionId: peeked.action.id });
+  // Путь — `chat`: «отмени последнее» словами в разговоре (РП-11). Продолжения «Всё равно отменить» у этого пути нет
+  // (Р-17): отказ правила §8.6 несёт место, где его может нажать человек (`undoContinuationOf`, К-46)
+  const r = await undoAction(ctx.db, {
+    identity: ctx.identity,
+    actionId: peeked.action.id,
+    path: 'chat',
+    continuation: peeked.continuation,
+  });
   if (r.ok) {
+    // Отмена закрепила текущий текст версией (страховка сеанса правки текста «перед возвратом к ЧЧ:ММ», §7.5 п. 3):
+    // подтверждение называет версию и место (§8.6 «Черновик и подтверждение») — для этого пути подтверждение и есть
+    // ответ модели, иначе владелец не узнал бы, где набранный им текст
+    const pinned = r.pinnedVersions.map((p) => p.label);
     return {
       status: 'ok',
       result: {
@@ -898,9 +892,33 @@ async function runUndoLast(
         actionId: peeked.action.id,
         type: peeked.action.type,
         ...(peeked.action.entity_id !== null && { entityId: peeked.action.entity_id }),
+        // У сеанса правки текста — «правка текста «…» 14:02–14:18» (§8.5, `peekLastUndoable`): модель называет отрезок
         title: peeked.title,
-        note: 'действие отменено; сообщи пользователю, что именно откачено',
+        ...(pinned.length > 0 && { pinnedVersions: pinned }),
+        note:
+          pinned.length > 0
+            ? `действие отменено; текст до отмены сохранён версией ${pinned.map((l) => `«${l}»`).join(', ')} ` +
+              '(Детали → Версии) — сообщи пользователю, что именно откачено и где теперь его текст'
+            : 'действие отменено; сообщи пользователю, что именно откачено',
       },
+    };
+  }
+  if (r.error.code === 'UNDO_TEXT_CHANGED') {
+    // Отказ правила §8.6 (Р-17, К-46): модель не заменяет текст сама — флага «всё равно» у тула нет, закрепление версий
+    // остаётся поверхностью владельца. Сообщение — заметка модели и строка карточки ошибки в ленте разом, поэтому оно
+    // для человека: какие записи, кто и когда сменил текст, где отменить действие самому (`undoRefusalText`)
+    const details = r.error.details as UndoTextChangedDetails;
+    const timeZone = await withIdentity(ctx.db, ctx.identity, (tx) =>
+      ownerTimeZone(tx, ctx.identity.graph),
+    );
+    const text = undoRefusalText(details, peeked.entry, {
+      globalThreadId: globalThreadId(ctx.identity.graph),
+      timeZone,
+      now: (ctx.clock ?? (() => new Date()))(),
+    });
+    return {
+      status: 'error',
+      error: { code: 'UNDO_TEXT_CHANGED', message: `Не отменено: ${text}`, details },
     };
   }
   return { status: 'error', error: r.error };
@@ -969,6 +987,7 @@ async function undoSummary(
  * невидимо до первой своей строки). Неизвестное имя нормализация оставляет как есть —
  * отказ по-прежнему называет компилятор.
  */
+// ОБХОДЧИК-Q: entity-query-tool
 async function runEntityQuery(ctx: ToolCallCtx, input: unknown): Promise<ToolDispatchResult> {
   assertQueryTreeDepth(input);
   const parsed = parseEnvelope(entityQueryInput, input, 'entity_query');
@@ -981,7 +1000,7 @@ async function runEntityQuery(ctx: ToolCallCtx, input: unknown): Promise<ToolDis
         ? parseQueryText(parsed.query as string, cctx)
         : normalizeQueryAst(parsed.ast, parseRegistryOf(cctx)),
     run: async (tx, ast, cctx) => {
-      const compiled = compileQueryAst(ast, cctx);
+      const compiled = compileQueryAst(ast, cctx, { fields: parsed.fields ?? 'none' });
       const rows = await tx.execute(compiled);
       const entities = [...rows].map((r) => toWireEntityFromSql(r as Record<string, unknown>));
       const card: Card = {
@@ -1049,16 +1068,19 @@ async function runUserQuery(ctx: ToolCallCtx, input: unknown): Promise<ToolDispa
           card: aggregateCard(ast, count, { op: 'count', value: String(count) }),
         };
       }
-      // aggregate === 'sum'; field проверен выше
+      // aggregate === 'sum'; field проверен выше. По валютам (спека 1в §3.6, В-5): модель получает
+      // суммы раздельно — сложить рубли с долларами ей не из чего, — карточка печатает их как плитка.
       const field = parsed.field as string;
-      const compiled = compileSumAst(ast, sumProperty(field, cctx), cctx);
-      const rows = await tx.execute(compiled);
-      const count = Number(rows[0]?.count);
-      const value = (rows[0]?.sum as string | null) ?? '0'; // пустая выборка: sum NULL → '0'
+      const compiled = compileSumByCurrencyAst(ast, sumProperty(field, cctx), cctx);
+      const rows = [...(await tx.execute(compiled))] as Record<string, unknown>[];
+      const { count, sums } = sumsOf(rows, cctx.ownerCurrency);
+      // `value` — прежнее поле карточки: сумма первой валюты по правилу провода (пусто — '0'); его
+      // читает история чата, у новых карточек рядом лежат `sums`.
+      const value = sums[0]?.sum ?? '0';
       return {
         status: 'ok',
-        result: value,
-        card: aggregateCard(ast, count, { op: 'sum', value }),
+        result: { sums },
+        card: aggregateCard(ast, count, { op: 'sum', value, sums }),
       };
     },
   });
@@ -1066,7 +1088,7 @@ async function runUserQuery(ctx: ToolCallCtx, input: unknown): Promise<ToolDispa
 
 /**
  * Имя поля агрегата → id свойства. Не резолвится — структурная VALIDATION с именем, которое
- * прислала модель: у `compileSumAst` на руках был бы только несуществующий id, и отказ
+ * прислала модель: у `compileSumByCurrencyAst` на руках был бы только несуществующий id, и отказ
  * назвал бы его вместо того, что написал вызывающий.
  *
  * Аспекты САМОГО ЗАПРОСА в резолве больше не участвуют, и это следствие сноса старой формы:
@@ -1087,7 +1109,7 @@ function sumProperty(field: string, cctx: CompileCtx): string {
 function aggregateCard(
   ast: QueryAst,
   count: number,
-  aggregate: { op: 'sum' | 'count'; value: string },
+  aggregate: { op: 'sum' | 'count'; value: string; sums?: BlockSum[] },
 ): Card {
   return {
     kind: 'query_result',
@@ -1378,6 +1400,16 @@ async function runMutation(
   // execute | preview — действие исполняется (§7.10: предпросмотр информационный, не
   // блокирующий); для preview перехватываем JournalWrite — diff строится из inverse (§7.8)
   const capture = level === 'preview' ? captureSink(sink) : undefined;
+  // entity_card (02 §2.3) — для create/update/attach; relation-мутации и пачка карточку этого
+  // типа не несут (их карточки — confirmation/error)
+  const isEntityMutation =
+    def.name === 'entity_create' || def.name === 'entity_update' || def.aspectId !== undefined;
+  // «Карточка в ответе» (спека скорости §11.3, К-36): на уровне execute в разговоре ниже рождается
+  // entity_card с undoActionId, и её несёт ответ ассистента — строка журнала второй карточкой в
+  // треде не рисуется (на действие ровно одна, §13.1). Предпросмотр и пачка карточкой действия не
+  // являются: там носитель — строка журнала. Сбой цикла после действия — ответ-ошибка с теми же
+  // карточками (`ai/send-message.ts`, К-44), иначе действие осталось бы без «Отменить».
+  const cardInReply = level === 'execute' && ctx.source === 'chat' && isEntityMutation;
   const r = await execute(
     ctx.db,
     {
@@ -1385,6 +1417,7 @@ async function runMutation(
       actorKind: ctx.actorKind,
       source: ctx.source,
       threadId: ctx.threadId,
+      cardInReply,
       // undefined у чатовых и UI-путей — executor такой ключ в action не пишет
       actorGrantId: ctx.grant?.id,
       // То же и для прогона (V1.5): по run_id действия прогона находит откат (rollback.ts)
@@ -1482,11 +1515,7 @@ async function runMutation(
     };
   }
 
-  // уровень execute — немедленное исполнение, карточка и журнал постфактум (§7.10):
-  // entity_card (02 §2.3) — для create/update/attach; relation-мутации карточку
-  // этого типа не несут (их карточки появятся вместе с confirmation/error, Task 6/9)
-  const isEntityMutation =
-    def.name === 'entity_create' || def.name === 'entity_update' || def.aspectId !== undefined;
+  // уровень execute — немедленное исполнение, карточка и журнал постфактум (§7.10)
   const card = isEntityMutation
     ? entityCard(
         result as WireEntity,
@@ -1510,7 +1539,6 @@ async function runMutation(
  * письменного списка поверхностей здесь нет.
  */
 const SURFACE_LABEL: Record<string, string> = {
-  'core/agenda': 'Повестка',
   'finance/budget-overview': 'Бюджет',
 } satisfies Record<SurfaceName, string>;
 
@@ -1586,7 +1614,7 @@ const SURFACE_LABEL: Record<string, string> = {
  *
  * ИЗВЕСТНОЕ РАСХОЖДЕНИЕ, НАЗВАННОЕ ВСЛУХ: заголовок ДЕЙСТВИЯ в журнале (§7.8, `registryPlan`
  * в `executor/executor.ts`) у правки свойства говорит `«<id>»`, а не подпись. Владелец видит
- * его в audit-строке рядом с этой карточкой. Расхождение не чинится здесь: заголовок журнала
+ * его в строке журнала рядом с этой карточкой. Расхождение не чинится здесь: заголовок журнала
  * — территория Задачи 15, и правка его тянет за собой снимок в исполнителе; остаток записан
  * в отчёт.
  */
@@ -1660,7 +1688,7 @@ export function registryOperationSummary(
       return `Снятие привязки аспекта «${aspectName(payload.aspect)}» к контракту «${contractName(payload.contract)}»`;
     case 'subscription_set':
       // У подписки подписи нет вовсе (`subscription_definitions` — id, surface, definition), и
-      // называется она ПОВЕРХНОСТЬЮ: владелец узнаёт «Повестку», а не `orbis/agenda`. Ответ на
+      // называется она ПОВЕРХНОСТЬЮ: владелец узнаёт «Бюджет», а не `orbis/budget-overview`. Ответ на
       // «где я это увижу» и есть то, что ему нужно перед нажатием «Принять».
       return `Настройка подписки «${surfaceName(payload)}»`;
     case 'subscription_remove':
@@ -1848,14 +1876,19 @@ async function deferRoutineUnit(
 }
 
 /**
- * Намерение операции — она сама БЕЗ CAS-снимка (`precondition`, `expectedUpdatedAt`): личность
- * единицы действия (Р-К-68). Снимок описывает, ЧТО БЫЛО у цели в момент постановки, а не что
- * единица сделает; включи его в ключ — и ретрай по цели, которую владелец успел тронуть, родил бы
- * вторую карточку того же намерения рядом с первой, заведомо устаревшей.
+ * Намерение операции — она сама БЕЗ снимка замков (`precondition`, ревизия тела `expectedBodyRevision`,
+ * заголовок `expectedTitle`): личность единицы действия (Р-К-68). Снимок описывает, ЧТО БЫЛО у цели в
+ * момент постановки, а не что единица сделает; включи его в ключ — и ретрай по цели, которую владелец
+ * успел тронуть, родил бы вторую карточку того же намерения рядом с первой, заведомо устаревшей.
  */
 function intentOf(operations: readonly ExecOperation[]): ExecOperation[] {
   return operations.map(({ tool, input }) => {
-    const { precondition: _precondition, expectedUpdatedAt: _expected, ...rest } = input;
+    const {
+      precondition: _precondition,
+      expectedBodyRevision: _revision,
+      expectedTitle: _title,
+      ...rest
+    } = input;
     return { tool, input: rest };
   });
 }
@@ -1867,7 +1900,7 @@ function intentOf(operations: readonly ExecOperation[]): ExecOperation[] {
  * Механика — ТА ЖЕ, что у предложения рутины, и теми же двумя функциями: `loadTargets`
  * читает цели под RLS (отсутствующая — NOT_FOUND здесь, а не на кнопке владельца),
  * `buildUpdate` собирает `entity_update` со снятыми предусловиями (`in:[текущее]` /
- * `absent:true`; для тела — `expectedUpdatedAt` НАСТОЯЩЕГО снимка, модельный отбрасывается).
+ * `absent:true`; для тела — ревизия тела НАСТОЯЩЕГО снимка, модельная отбрасывается).
  * Второй реализации той же пары в сервере нет намеренно: разъехавшись, она дала бы
  * предложению и отложке РАЗНЫЕ предусловия на одном и том же патче.
  *
@@ -2521,8 +2554,9 @@ function carriesRoutineAspect(tool: string, input: unknown): boolean {
 
 /**
  * Гейт §8 «сколько рутин можно завести» (V1.15). Стоит в диспатче, а не в стадии 4
- * executor'а, по той же причине, что и гейт import.csv: резолвер §8 инжектируется
- * контекстом вызова (`ctx.entitlements`), а модульный gateEntitlements executor'а — нет.
+ * executor'а: резолвер §8 инжектируется контекстом вызова (`ctx.entitlements`), а модульный
+ * gateEntitlements executor'а — нет. (Второй такой гейт, import.csv у снятого в 1в
+ * `import_csv_start`, ушёл вместе с тулом; у роутера импорта свой — `gateImportCsv`.)
  * Цена этого решения принята планом (Р-13): создание рутины рукой владельца из UI идёт
  * роутерами мимо dispatch и лимитом не считается — лимит адресован пути модели.
  *

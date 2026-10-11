@@ -209,6 +209,7 @@ function RunBatch({
   const paused = overview.data?.nextBucketAt === null;
 
   const decideAll = trpc.routine.decideAll.useMutation({
+    meta: { undoStack: 'skip' },
     onSuccess: (items) => {
       setSummary(items);
       // Решение двигает граф (применённые правки) и снимает флажок с аспекта прогона —

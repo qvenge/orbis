@@ -14,6 +14,7 @@
  * не должно.
  */
 import type { QueryAst, QueryBound, QueryFilterNode, QueryPropValue } from './ast';
+import { fieldRefKey } from './ast';
 
 export const SCOPE_NOT_STATIC = 'SCOPE_NOT_STATIC';
 
@@ -30,6 +31,24 @@ export class ScopeNotStaticError extends Error {
 
 function isToken(value: QueryBound | undefined): boolean {
   return typeof value === 'object' && value !== null && 'token' in value;
+}
+
+/**
+ * Ссылка на параметр страницы в значении (1в §3.8): множество зависело бы от переключателя на
+ * странице. До этого места ссылку не пускает базовая схема (`queryAstSchema`), а сторож стоит и
+ * здесь — он структурный и зовётся на дереве, пришедшем любым путём.
+ */
+function paramRef(value: QueryPropValue): string | null {
+  const bounds =
+    typeof value === 'object' && value !== null && !Array.isArray(value)
+      ? 'param' in value || 'token' in value
+        ? [value]
+        : [(value as { from?: QueryBound }).from, (value as { to?: QueryBound }).to]
+      : [];
+  for (const b of bounds) {
+    if (typeof b === 'object' && b !== null && 'param' in b) return b.param;
+  }
+  return null;
 }
 
 /** Есть ли относительное время в значении предиката — включая обе границы `range`. */
@@ -56,11 +75,19 @@ function walk(node: QueryFilterNode): void {
     walk(node.not);
     return;
   }
+  // Адрес контракта (1в §3.1) статичен так же, как свойство: множество задаёт значение, а не
+  // «сегодня». Нестатичен только токен в значении — и у адреса, и у свойства.
   if ('prop' in node) {
+    const param = paramRef(node.value);
+    if (param !== null) {
+      throw new ScopeNotStaticError(
+        `ссылка '$${param}' на параметр страницы у поля '${fieldRefKey(node.prop)}' — множество зависело бы от переключателя страницы`,
+      );
+    }
     const token = hasDateToken(node.value);
     if (token !== null) {
       throw new ScopeNotStaticError(
-        `относительное время '${token}' у свойства '${node.prop}' — множество менялось бы каждый день`,
+        `относительное время '${token}' у поля '${fieldRefKey(node.prop)}' — множество менялось бы каждый день`,
       );
     }
     return;
@@ -81,11 +108,14 @@ function walk(node: QueryFilterNode): void {
  * Реестра не спрашивает намеренно: гейт структурный, и его обязаны проходить одинаково
  * сид (без БД), исполнитель (в транзакции) и конструктор в браузере.
  */
+// ОБХОДЧИК-Q: static
 export function assertStaticQuery(ast: QueryAst): void {
   // Настройки показа блока данных (§5.4) — тоже проекция: множеству ни плитка, ни колонки,
   // ни «прятать пустое» ничего не добавляют, а молча принятые они выглядели бы как смысл.
   for (const key of [
     'sortBy',
+    // Группировка (1в §5.2) — проекция блока страницы: множеству дни ничего не добавляют.
+    'group',
     'limit',
     'display',
     'title',

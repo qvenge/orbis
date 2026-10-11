@@ -25,6 +25,7 @@ import {
   SECOND_OWN_CARDS_MESSAGE,
   secondCardMessage,
   templateBrokenReason,
+  undeclaredParamMessage,
 } from './placement';
 import { DOC_EXTENSIONS } from './schema';
 
@@ -263,6 +264,96 @@ describe('bodyIssues — второй блок карточек (SECOND_BLOCK, 1
 
   test('второй {{body}} — по-прежнему SECOND_BODY', () => {
     expect(issues('{{body}}\n{{body}}\n', 'template').map((i) => i.code)).toEqual(['SECOND_BODY']);
+  });
+});
+
+describe('параметр страницы {{param}} (спека 1в §5.1)', () => {
+  const PARAM = '{{param: period, type=period, default=next_7d, options=next_7d|next_14d}}\n';
+
+  test('строка матрицы param: заметка ✗, страница ✓, шаблон ✓', () => {
+    const kinds: BodyKind[] = ['note', 'page', 'template'];
+    expect(kinds.map((k) => blockAllowedIn('param', k))).toEqual([false, true, true]);
+    expect(kindsAllowing('param')).toEqual(['page', 'template']);
+  });
+
+  test('в заметке — BLOCK_MISPLACED с MISPLACED_HINT; на странице и в шаблоне — без проблем', () => {
+    expect(issues(`текст\n${PARAM}`, 'note')).toEqual([
+      {
+        code: 'BLOCK_MISPLACED',
+        message: 'Блок {{param: period}} не показывается в заметке.',
+        hint: MISPLACED_HINT,
+        path: [1],
+      },
+    ]);
+    expect(issues(`текст\n${PARAM}`, 'page')).toEqual([]);
+    expect(issues(`текст\n${PARAM}`, 'template')).toEqual([]);
+  });
+
+  test('второй параметр с тем же именем — SECOND_BLOCK; разные имена — без проблем', () => {
+    const found = issues(`${PARAM}${PARAM}`, 'page');
+    expect(found).toMatchObject([{ code: 'SECOND_BLOCK', path: [1] }]);
+    expect(found[0]?.message).toContain('period');
+    const two =
+      '{{param: a, type=period, default=today, options=today}}\n' +
+      '{{param: b, type=period, default=today, options=today}}\n';
+    expect(issues(two, 'page')).toEqual([]);
+  });
+
+  test('блок с $period на странице — ни QUERY_INVALID, ни PAGE_ONLY; литерал даты в другом блоке — ABSOLUTE_DATE только у него', () => {
+    const body = `${PARAM}{{query: aspect=orbis/task, orbis/due_date=$period}}\n${ABS_QUERY}`;
+    for (const kind of ['page', 'template'] as const) {
+      expect(issues(body, kind)).toMatchObject([{ code: 'ABSOLUTE_DATE', path: [2] }]);
+    }
+  });
+
+  test('блок с $period в заметке — QUERY_INVALID с подсказкой «только в блоках страниц и шаблонов»', () => {
+    const found = issues('{{query: aspect=orbis/task, orbis/due_date=$period}}\n', 'note');
+    expect(found).toMatchObject([{ code: 'QUERY_INVALID', path: [0] }]);
+    expect(found[0]?.message).toContain('только в блоках страниц и шаблонов');
+  });
+
+  // Перенос гейта задачи 4 (M-4): ошибка блока параметра и ссылка на необъявленное имя — проблемы
+  // тела, иначе шаблон с неисправным `{{param}}` попадал бы в выбор (`templateBrokenReason`).
+  const BAD_DEFAULT = '{{param: period, type=period, default=today, options=next_7d|next_14d}}\n';
+
+  test('ошибка блока параметра на странице и в шаблоне — PARAM_INVALID с текстом ошибки; в заметке — только место', () => {
+    for (const kind of ['page', 'template'] as const) {
+      expect(issues(`текст\n${BAD_DEFAULT}`, kind)).toEqual([
+        {
+          code: 'PARAM_INVALID',
+          message: "Блок {{param}}: умолчание — один из вариантов, не 'today'.",
+          path: [1],
+        },
+      ]);
+    }
+    expect(issues(BAD_DEFAULT, 'note')).toMatchObject([{ code: 'BLOCK_MISPLACED', path: [0] }]);
+  });
+
+  test('ссылка на необъявленное имя — PARAM_INVALID у блока данных; объявление ниже блока — законно', () => {
+    const block = '{{query: aspect=orbis/task, orbis/due_date=$x}}\n';
+    expect(issues(`${PARAM}${block}`, 'page')).toEqual([
+      { code: 'PARAM_INVALID', message: undeclaredParamMessage('x', 'page'), path: [1] },
+    ]);
+    expect(undeclaredParamMessage('x', 'page')).toBe('параметр «x» не объявлен на странице');
+    expect(undeclaredParamMessage('x', 'template')).toBe('параметр «x» не объявлен в шаблоне');
+    expect(issues(`${block.replace('$x', '$period')}${PARAM}`, 'template')).toEqual([]);
+    // Параметр с ошибкой блока объявления не даёт: ссылка на него — тоже «не объявлен».
+    expect(issues(`${BAD_DEFAULT}${block.replace('$x', '$period')}`, 'page')).toMatchObject([
+      { code: 'PARAM_INVALID', path: [0] },
+      { code: 'PARAM_INVALID', message: undeclaredParamMessage('period', 'page'), path: [1] },
+    ]);
+  });
+
+  test('шаблон с неверным умолчанием параметра или необъявленной ссылкой к выбору не предлагается', () => {
+    expect(templateBrokenReason(`{{title}}\n${BAD_DEFAULT}`, REG)).toBe(
+      "Блок {{param}}: умолчание — один из вариантов, не 'today'.",
+    );
+    expect(
+      templateBrokenReason('{{title}}\n{{query: aspect=orbis/task, orbis/due_date=$x}}\n', REG),
+    ).toBe(undeclaredParamMessage('x', 'template'));
+    expect(
+      templateBrokenReason(`${PARAM}{{query: aspect=orbis/task, orbis/due_date=$period}}\n`, REG),
+    ).toBeNull();
   });
 });
 
@@ -523,10 +614,16 @@ describe('листовость модуля', () => {
   // `../contracts/block-messages` — строки отказов без единого импорта (фикс-раунд 1 задачи 11:
   // `EMPTY_QUERY_MESSAGE` переехал туда ради веса начальной загрузки web); его листовость —
   // отдельным тестом ниже, иначе разрешение было бы дырой в стороже.
+  // `../query/tokens` — словарь токенов дат (1в §3.4, РП-17) для подсказки абсолютной даты: лист
+  // канона (`ast.ts` и `date.ts`), который `parse-ast` и так тянет.
+  // `../query/page-only` — обход ссылок на параметры (1в §5.1): файл без рантайм-импортов, его и
+  // так тянет схема канона (`ast.ts`).
   const ALLOWED = [
     './page-grammar',
+    '../query/page-only',
     '../query/parse-ast',
     '../query/dates',
+    '../query/tokens',
     '../contracts/block-messages',
   ];
 

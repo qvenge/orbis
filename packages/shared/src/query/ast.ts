@@ -29,14 +29,16 @@
  * ПОВЕДЕНИЕ, которое реформа обязалась не менять, — без адреса проверить это негде.
  */
 import { z } from 'zod';
+import { PARAM_NAME_RE, QUERY_DATE_TOKENS, type QueryDateToken } from './lexicon';
+import { pageOnlyFeatureIn } from './page-only';
 
 /**
- * Относительное время запроса. Ровно четыре токена — те же, что у сегодняшней грамматики
- * (`grammar.ts:18`): их разворачивает компилятор по таймзоне владельца, и потому запрос
- * с токеном НЕ статичен (см. `static.ts`).
+ * Относительное время запроса (`QUERY_DATE_TOKENS`, `QueryDateToken`) и форма имени параметра
+ * (`PARAM_NAME_RE`) — определены в листе `lexicon.ts` (их читает и препроход тела, которому этот
+ * файл с zod недоступен), здесь — реэкспорт под именем канона: потребители берут их отсюда, как
+ * до 1в.
  */
-export const QUERY_DATE_TOKENS = ['today', 'overdue', 'next_7d', 'after_7d'] as const;
-export type QueryDateToken = (typeof QUERY_DATE_TOKENS)[number];
+export { PARAM_NAME_RE, QUERY_DATE_TOKENS, type QueryDateToken } from './lexicon';
 
 /** Операторы предиката свойства — закрытый набор §А5-7. */
 export const QUERY_PROP_OPS = ['eq', 'ne', 'gt', 'lt', 'range', 'in', 'contains'] as const;
@@ -67,22 +69,66 @@ export type QueryDisplayMode = (typeof QUERY_DISPLAY_MODES)[number];
 /**
  * Функции агрегата плитки (§5.4). Имена те же, что у внешнего `aggregate` источника
  * прогресса цели (`orbis/progress_source`, §11.3), и смысл тот же: `count` — число строк
- * выборки, `sum` — сумма числового свойства, `latest` — значение у последней по
- * `updated_at` строки. Своего словаря плитке не заводится — это была бы вторая правда о
- * том, что значит «последнее».
+ * выборки, `sum` — сумма числового свойства (у плитки — по валютам, спека 1в §3.6), `latest` —
+ * значение ПЕРВОЙ строки в порядке блока (`sortBy`), без `sortBy` — последней по правке
+ * (`updated_at`), спека 1в §3.7, §16. Своего словаря плитке не заводится — это была бы вторая
+ * правда о том, что значит «последнее»: одна правда — компилятор `compileLatestAst` сервера, общий
+ * у плитки и цели.
  */
 export const QUERY_AGGREGATE_FNS = ['count', 'sum', 'latest'] as const;
 export type QueryAggregateFn = (typeof QUERY_AGGREGATE_FNS)[number];
 
 /**
+ * АДРЕС КОНТРАКТА (спека 1в §3.1–§3.2): со `slot` — адрес слота (`orbis/when.deadline` —
+ * значения свойств, которые привязали к слоту аспекты, стоящие на записи), без `slot` — значение
+ * контракта (`orbis/when` — «даты» записи по правилу контракта, `registry/contract-value.ts`).
+ * `contract` — id контракта (§А5-2: в дереве лежат id; ключ резолвит разбор или нормализация).
+ *
+ * ПОЧЕМУ ОБЪЕДИНЕНИЕ ТИПОВ ПОЛЯ, А НЕ НОВЫЙ КЛЮЧ УЗЛА (Д-1 плана 1в). Узлы фильтра разбираются
+ * цепочками `'x' in node` с тихим хвостом, и новый вид узла TypeScript замечает только там, где
+ * есть исчерпывающий разбор (компиляция, печать); обходчики, читающие дерево по ключам
+ * (`rewriteAst`, `propertyNamesInAst`, `queryRefsFromDoc`), пропустили бы узел `{addr: …}`
+ * молча. Адрес же ложится В ТО ЖЕ ПОЛЕ `prop`/`field`, и каждый обходчик, читавший его
+ * строкой, получает ошибку типа — дефект виден при сборке, а не в выдаче. Обходчики, читающие
+ * сырое JSON, названы перечнем со сторожем (`scripts/query-walkers.test.ts`).
+ */
+export interface QueryContractAddress {
+  contract: string;
+  slot?: string;
+}
+
+/**
+ * Поле запроса: id свойства (как до 1в) или адрес контракта. `prop` у предиката, `field` у
+ * `sortBy`, `aggregate` и `group`. `columns[].field` — только строка: заголовок
+ * колонки — подпись свойства, у адреса её нет (§3.1).
+ */
+export type QueryFieldRef = string | QueryContractAddress;
+
+/** Адрес ли поле — объект, а не строка id свойства. Вход — недоверенный: проверка структурная. */
+export function isContractAddress(f: unknown): f is QueryContractAddress {
+  return typeof f === 'object' && f !== null && !Array.isArray(f) && 'contract' in f;
+}
+
+/**
+ * Ключ поля одной строкой: id свойства как есть, адрес — `контракт.слот` или `контракт`. Для
+ * ключей React, значений `<select>`, сравнения полей и сообщений; печать запроса зовёт то же
+ * правило, подставив КЛЮЧ контракта вместо id (`print.ts`).
+ */
+export function fieldRefKey(f: QueryFieldRef): string {
+  if (typeof f === 'string') return f;
+  return f.slot === undefined ? f.contract : `${f.contract}.${f.slot}`;
+}
+
+/**
  * Агрегат плитки. Адрес свойства лежит под ключом `field` НАМЕРЕННО: по этому имени дерево
  * уже обходят индекс адресов тела (`queryRefsFromDoc`, `doc/convert.ts`) и переписывание
  * при слиянии свойств (`rewriteAst`, `apps/server/src/registry/ops.ts`) — новое имя ключа
- * выпало бы из обоих молча.
+ * выпало бы из обоих молча. С 1в поле — `QueryFieldRef`: сумма по адресу слота
+ * (`sum:orbis/money-movement.amount`, закладка Бюджета).
  */
-export type QueryAggregate = { fn: 'count' } | { fn: 'sum' | 'latest'; field: string };
+export type QueryAggregate = { fn: 'count' } | { fn: 'sum' | 'latest'; field: QueryFieldRef };
 
-/** Колонка таблицы блока данных — адрес свойства под тем же ключом `field` (см. выше). */
+/** Колонка таблицы блока данных — адрес СВОЙСТВА под тем же ключом `field` (см. выше). */
 export interface QueryColumn {
   field: string;
 }
@@ -150,13 +196,28 @@ export type QueryScalar = string | number | boolean;
 export interface QueryTokenValue {
   token: QueryDateToken;
 }
-export type QueryBound = QueryScalar | QueryTokenValue;
+/**
+ * Ссылка на параметр страницы `$<имя>` (спека 1в §5.1, РП-6) — на месте значения-границы, там же,
+ * где токен. Значение подставляет СЕРВЕР до окна материализации и компиляции (`substituteParams`,
+ * `apps/server/src/query/params.ts`) из входа пачки `entity.blocks`; до компиляции ссылка не
+ * доезжает. Законна только в блоках страниц и шаблонов (§3.8): базовая схема `queryAstSchema` её
+ * отвергает, принимает — `pageQueryAstSchema`.
+ */
+export interface QueryParamValue {
+  param: string;
+}
+export type QueryBound = QueryScalar | QueryTokenValue | QueryParamValue;
 /** Границы `range` ВКЛЮЧАЮЩИЕ с обеих сторон; хотя бы одна обязана присутствовать. */
 export interface QueryRangeValue {
   from?: QueryBound;
   to?: QueryBound;
 }
-export type QueryPropValue = QueryScalar | QueryTokenValue | QueryScalar[] | QueryRangeValue;
+export type QueryPropValue =
+  | QueryScalar
+  | QueryTokenValue
+  | QueryParamValue
+  | QueryScalar[]
+  | QueryRangeValue;
 
 /**
  * Реляционный предикат §А5-7. Форма СВЯЗАНА с `kind`, и связь эта нормативная, а не
@@ -226,7 +287,7 @@ export type QueryFilterNode =
   | { and: QueryFilterNode[] }
   | { or: QueryFilterNode[] }
   | { not: QueryFilterNode }
-  | { prop: string; op: QueryPropOp; value: QueryPropValue }
+  | { prop: QueryFieldRef; op: QueryPropOp; value: QueryPropValue }
   | { has: string }
   | { aspect: string }
   | { tag: string }
@@ -235,15 +296,36 @@ export type QueryFilterNode =
   | { archived: 'true' | 'any' }
   | { class: { contract: string; set: string } };
 
+/**
+ * ГРУППИРОВКА ПО ДНЯМ (спека 1в §5.2) — ключ проекции `group=day:<адрес даты>`: поле — свойство
+ * `date`/`timestamp`, адрес слота с датой или значение «когда». День записи — день её ключа (§3.3:
+ * ранняя из дат, удовлетворяющих положительным условиям блока на том же адресе) в поясе владельца;
+ * раскладку по дням считает сервер (`layoutDayGroups`, `pages/day-groups.ts`). Единица в 1в одна —
+ * `day`; поле `by` оставлено, чтобы «неделя» (§14) была новым значением, а не новым ключом корня.
+ *
+ * Только блоки страниц и шаблонов (§3.8): базовая схема `queryAstSchema` отвергает ключ с
+ * `PAGE_ONLY_HINT`, JSON Schema тула его не знает вовсе. Формы показа — `list`/`compact` (или без
+ * `display`): таблица и плитка групп не рисуют.
+ */
+export interface QueryGroup {
+  by: 'day';
+  field: QueryFieldRef;
+}
+
 export interface QuerySortField {
-  /** id свойства (§А5-7) — доменного или core-проекции §А1-3 (`orbis/updated_at`). */
-  field: string;
+  /**
+   * id свойства (§А5-7) — доменного или core-проекции §А1-3 (`orbis/updated_at`), — либо адрес
+   * контракта (1в §3.1, §3.3: ключ записи по значению «когда» — ранняя из её дат).
+   */
+  field: QueryFieldRef;
   dir: 'asc' | 'desc';
 }
 
 export interface QueryAst {
   filter: QueryFilterNode | null;
   sortBy?: QuerySortField[];
+  /** Группировка по дням (§5.2) — только в блоках страниц и шаблонов. */
+  group?: QueryGroup;
   limit?: number;
   display?: QueryDisplayMode;
   title?: string;
@@ -264,6 +346,21 @@ export interface QueryAst {
 const idSchema = z.string().min(1);
 
 /**
+ * Форма имени слота в адресе — ТА ЖЕ, что `SLOT_KEY_RE` у контракта (`registry/property-type.ts`).
+ * Копия, а не импорт: этот файл — лист пакета (шапка), и ребро в реестр замкнуло бы цикл
+ * инициализации zod-схем. Совпадение пиннит `ast.test.ts`. Существование слота проверяют разбор
+ * и компилятор по реестру; схема держит только форму — вход `ast:` тула идёт мимо разбора.
+ */
+export const ADDRESS_SLOT_RE = /^[a-z][a-z0-9_]*$/;
+
+const addressSchema = z
+  .object({ contract: idSchema, slot: z.string().regex(ADDRESS_SLOT_RE, 'имя слота').optional() })
+  .strict();
+
+/** Поле запроса: id свойства или адрес контракта (1в §3.1). У `columns` — только `idSchema`. */
+const fieldRefSchema = z.union([idSchema, addressSchema]);
+
+/**
  * `of` — «uuid | this» ДОСЛОВНО по §А5-7, и сужение живёт в схеме, а не только в парсере:
  * вход `ast:` тула (§А5-4) идёт мимо разбора, и `of: 'banana'` доехал бы до компилятора,
  * где Postgres ответил бы ошибкой каста `22P02` вместо структурного отказа с именем поля.
@@ -277,7 +374,13 @@ const relTargetSchema = z.string().regex(REL_TARGET_RE, 'ожидается UUID
 
 const scalarSchema = z.union([z.string(), z.number(), z.boolean()]);
 const tokenSchema = z.object({ token: z.enum(QUERY_DATE_TOKENS) }).strict();
-const boundSchema = z.union([scalarSchema, tokenSchema]);
+/**
+ * Ссылка на параметр — В СТРУКТУРНОЙ схеме, общей у обеих схем дерева: отвергает её не форма, а
+ * место (уточнение `queryAstSchema` ниже). Так отказ вне страницы называет причину подсказкой
+ * «только в блоках страниц и шаблонов», а не безликим «Invalid input» union'а.
+ */
+const paramSchema = z.object({ param: z.string().regex(PARAM_NAME_RE, 'имя параметра') }).strict();
+const boundSchema = z.union([scalarSchema, tokenSchema, paramSchema]);
 const rangeSchema = z
   .object({ from: boundSchema.optional(), to: boundSchema.optional() })
   .strict()
@@ -292,10 +395,14 @@ const rangeSchema = z
  * и разошлись бы уже в компиляторе — там, где чинить дороже всего.
  */
 const propNodeSchema = z.union([
-  z.object({ prop: idSchema, op: z.enum(['eq', 'ne', 'gt', 'lt']), value: boundSchema }).strict(),
-  z.object({ prop: idSchema, op: z.literal('in'), value: z.array(scalarSchema).min(1) }).strict(),
-  z.object({ prop: idSchema, op: z.literal('contains'), value: scalarSchema }).strict(),
-  z.object({ prop: idSchema, op: z.literal('range'), value: rangeSchema }).strict(),
+  z
+    .object({ prop: fieldRefSchema, op: z.enum(['eq', 'ne', 'gt', 'lt']), value: boundSchema })
+    .strict(),
+  z
+    .object({ prop: fieldRefSchema, op: z.literal('in'), value: z.array(scalarSchema).min(1) })
+    .strict(),
+  z.object({ prop: fieldRefSchema, op: z.literal('contains'), value: scalarSchema }).strict(),
+  z.object({ prop: fieldRefSchema, op: z.literal('range'), value: rangeSchema }).strict(),
 ]);
 
 /**
@@ -426,41 +533,53 @@ export const queryFilterNodeSchema: z.ZodType<QueryFilterNode, z.ZodTypeDef, unk
 );
 
 export const querySortFieldSchema = z
-  .object({ field: idSchema, dir: z.enum(['asc', 'desc']) })
+  .object({ field: fieldRefSchema, dir: z.enum(['asc', 'desc']) })
   .strict();
 
 /** Дискриминированный союз по `fn`: у `count` поля нет, у `sum`/`latest` оно обязательно. */
 export const queryAggregateSchema = z.discriminatedUnion('fn', [
   z.object({ fn: z.literal('count') }).strict(),
-  z.object({ fn: z.enum(['sum', 'latest']), field: idSchema }).strict(),
+  z.object({ fn: z.enum(['sum', 'latest']), field: fieldRefSchema }).strict(),
 ]);
 
 export const queryColumnSchema = z.object({ field: idSchema }).strict();
 
+/** Группа — строгая: единица `day` (1в), поле — id свойства или адрес. Вид поля судит разбор/сервер. */
+export const queryGroupSchema = z.object({ by: z.literal('day'), field: fieldRefSchema }).strict();
+
 /**
  * Согласованность проекции блока данных (§5.4): `aggregate` ⇔ `display: 'tile'`,
- * `columns` ⇒ `display: 'table'`.
+ * `columns` ⇒ `display: 'table'`, `group` ⇒ `display` ∈ {нет, `list`, `compact`} (1в §5.2).
  *
  * Правило живёт в СХЕМЕ, а не только в разборе, по той же причине, что связь `rel` с
  * `kind` (докблок `QueryRelPredicate`): вход `ast:` тула, значение `orbis/progress_source`
  * и атрибут query-блока тела идут МИМО парсера, и плитка без агрегата сохранилась бы, а
  * читатель (рендер блока данных) получил бы форму, которую язык запрещает. Та же тройка
  * условий записана в JSON Schema (`ast-json-schema.ts`, `PROJECTION_RULES`), и совпадение
- * вердиктов пиннит `ast.test.ts`. Сообщения — те же слова, что у отказов разбора
+ * вердиктов пиннит `ast.test.ts`; четвёртого (`group`) там нет — тул группы не знает вовсе (§3.8). Сообщения — те же слова, что у отказов разбора
  * (`parse-ast.ts`, пост-проверка проекции), чтобы владелец и модель читали одно правило.
  */
 export const PROJECTION_RULE_MESSAGES = {
   aggregateNeedsTile: 'aggregate — только у display=tile',
   tileNeedsAggregate: 'display=tile требует aggregate=count | sum:<свойство> | latest:<свойство>',
   columnsNeedTable: 'columns — только у display=table',
+  groupNeedsRows: 'group — только у строк: display=list или compact',
 } as const;
 
-export const queryAstSchema: z.ZodType<QueryAst, z.ZodTypeDef, unknown> = z
+/**
+ * Подсказка отказа `$`-ссылки и группировки вне страницы (спека 1в §3.8, РП-5) — одна строка на
+ * уточнение схемы, отказ разбора `PAGE_ONLY` (`parse-ast.ts`) и плашку места в web.
+ */
+export const PAGE_ONLY_HINT = '$-ссылка и group работают только в блоках страниц и шаблонов';
+
+/** Структурная схема дерева — общая у обеих (ниже): форма и согласованность проекции. */
+const queryAstShapeSchema = z
   .object({
     // `filter` ОБЯЗАТЕЛЕН и nullable, а не optional: «фильтра нет» — это решение автора
     // запроса (весь корпус), и оно должно быть записано, а не выведено из отсутствия ключа.
     filter: queryFilterNodeSchema.nullable(),
     sortBy: z.array(querySortFieldSchema).min(1).optional(),
+    group: queryGroupSchema.optional(),
     limit: z.number().int().min(1).optional(),
     display: z.enum(QUERY_DISPLAY_MODES).optional(),
     title: z.string().min(1).optional(),
@@ -482,4 +601,35 @@ export const queryAstSchema: z.ZodType<QueryAst, z.ZodTypeDef, unknown> = z
     if (ast.columns !== undefined && ast.display !== 'table') {
       issue('columns', PROJECTION_RULE_MESSAGES.columnsNeedTable);
     }
+    if (ast.group !== undefined && (ast.display === 'table' || ast.display === 'tile')) {
+      issue('group', PROJECTION_RULE_MESSAGES.groupNeedsRows);
+    }
   });
+
+/**
+ * ДВЕ СХЕМЫ ИЗ ОДНОЙ ФОРМЫ (РП-5). `queryAstSchema` — все входы дерева, кроме тела страницы: вход
+ * `ast:` тула и роутера, `orbis/progress_source`, `scope`, `ref.target`, `over` действия. `$`-ссылка
+ * и группировка (`group`) там отказ с `PAGE_ONLY_HINT`: ни значения параметра, ни страницы, на
+ * которой он объявлен, у этих входов нет, и принятая ссылка стала бы тихим «ничего не выбрано» или
+ * ошибкой компиляции на каждом чтении. `pageQueryAstSchema` — атрибут query-блока тела
+ * (`doc/bind-query.ts`) и виджет web: там ссылку подставит сервер из входа пачки.
+ *
+ * Уточнение, а не вторая форма: форма одна (`queryAstShapeSchema`), и схемы не разъедутся на новом
+ * узле. Сторож статичности (`static.ts`) и JSON Schema тула (`ast-json-schema.ts`, ссылки нет вовсе)
+ * держат то же правило со своих сторон.
+ */
+// ОБХОДЧИК-Q: schema
+export const queryAstSchema: z.ZodType<QueryAst, z.ZodTypeDef, unknown> =
+  queryAstShapeSchema.superRefine((ast, ctx) => {
+    const feature = pageOnlyFeatureIn(ast);
+    if (feature !== null) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [feature === 'param' ? 'filter' : 'group'],
+        message: PAGE_ONLY_HINT,
+      });
+    }
+  });
+
+/** Дерево блока данных тела страницы или шаблона: `$`-ссылка законна (см. `queryAstSchema`). */
+export const pageQueryAstSchema: z.ZodType<QueryAst, z.ZodTypeDef, unknown> = queryAstShapeSchema;

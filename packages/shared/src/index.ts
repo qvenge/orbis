@@ -1,11 +1,18 @@
 export * from './aspect-registry';
 export * from './constants';
-export * from './contracts/agenda';
 export * from './contracts/agent-loop';
 export * from './contracts/apps';
 export * from './contracts/blocks';
 export * from './contracts/budget';
+// Структурный отказ на проводе (`data.orbis`, спека скорости §8.2) — только типы.
+export * from './contracts/errors';
+export * from './contracts/fields';
 export * from './contracts/import';
+// Сводка действия журнала в треде (спека скорости §11.3) — только типы.
+export * from './contracts/journal';
+// Полевые замеры ступени 0 (спека скорости §3.2): схема пачки `perf.report` — её разбирает сервер, её собирает web.
+export * from './contracts/perf';
+export * from './contracts/settings';
 export * from './contracts/tools';
 // date.ts — почти весь внутренний модуль (fromParts/partsFromEpochDays/…); наружу выходит
 // сдвиг даты (у сервера была своя копия в recurring/materialize.ts, третьей копии быть не
@@ -37,6 +44,8 @@ export * from './nav/address';
 export * from './nav/links';
 // Выбор шаблона записи (срез 1а §4.2–4.3): модуль без зависимостей, корню не тяжёл.
 export * from './pages/choose-template';
+// Раскладка группировки по дням (1в §5.2) — её зовёт сервер; web получает готовые группы.
+export * from './pages/day-groups';
 // Правило открытия записи с приложением в адресе (срез 1б §5): чистые функции над уже прочитанными
 // записями; зависимости — `choose-template` и константы поставки, которые корень уже несёт (`nav/address`).
 export * from './pages/open-rule';

@@ -1,15 +1,16 @@
 // packages/shared/src/contracts/tools.ts
 // Envelope-схемы тулов — wire-контракт §9.2 (нотация `*`/`?`), общий для tRPC/AI/MCP.
-// expectedUpdatedAt в entity_update — решение 4 плана 1a: §9.2 поле не показывает,
-// но §5.2 требует optimistic-check по updated_at при правке body; поле опционально
-// в envelope, обязательность при body enforce'ит executor.
+// expectedBodyRevision в entity_update — замок ТЕКСТА (спека скорости §8.1–§8.2): ревизия тела, от которой
+// начата правка. Поле опционально в envelope, обязательность при body/bodyDoc держит executor.
 import { z } from 'zod';
+import { ROLE_SUBITEM } from '../constants';
 // Канон Q-AST — прямым путём к модулю, а не через баррель: конфликт имени `QueryAst` со
 // старой грамматикой снят вместе с ней (21b), и корневой баррель канон отдаёт, — но импорт
 // одного модуля не тянет за собой весь пакет.
 import { queryAstSchema } from '../query/ast';
 // Кап пачки — константа ДЕЙСТВИЙ (Р-11): лист пакета, обратного ребра к контрактам у неё нет.
 import { BATCH_CAP_DEFAULT } from '../registry/action-type';
+import { entityFieldsSchema } from './fields';
 
 /**
  * ВНУТРЕННЯЯ форма правки значений (§А1-1, РП-3): плоский патч по свойствам плюс
@@ -73,7 +74,9 @@ export const entityCreateInput = z
 export const entityUpdateInput = z
   .object({
     id: z.string().uuid(),
-    expectedUpdatedAt: z.string().datetime().optional(), // §5.2; обязателен при body — executor
+    // Замок ТЕКСТА (§8.1, D3 уточнён): ревизия тела, от которой клиент начал правку; обязательна при body/bodyDoc —
+    // проверяет executor под FOR UPDATE. Правка статуса, свойства, тега ревизию не двигает и замок не краснит.
+    expectedBodyRevision: z.number().int().positive().optional(),
     title: z.string().min(1).optional(),
     emoji: z.string().nullable().optional(),
     body: z.string().optional(),
@@ -127,11 +130,31 @@ const BODY_XOR_BODY_DOC_ISSUE = {
  * оставленный union принимал бы форму, которой никто не шлёт. Наблюдаемое следствие
  * названо прямо: карта в теле запроса теперь получает структурный отказ разбора
  * (`BAD_REQUEST`), а не молча раскладывается по свойствам.
+ *
+ * `autosave: true` — признак автосохранения редактора (спека скорости §8.5, РП-18): правки текста владельца
+ * складываются в сеанс — одну запись журнала, пока паузы набора короче 10 минут. Признак, а не значение механизма:
+ * механизм — ось гейтов прав. Форму входа с признаком (только тело) проверяет исполнитель (`text-session.ts`) —
+ * отказ `VALIDATION`, как у прочих структурных правил правки. В контракте тула его нет: сеанс — только у редактора.
  */
-export const entityUpdateUiInput = entityUpdateInput
-  .extend({ bodyDoc: bodyDocSchema.optional() })
+const entityUpdateUiFields = entityUpdateInput.extend({
+  bodyDoc: bodyDocSchema.optional(),
+  // Замок заголовка владельца (§8.2): тул агента остаётся без этого поля.
+  expectedTitle: z.string().optional(),
+});
+export const entityUpdateUiInput = entityUpdateUiFields
+  .extend({ autosave: z.literal(true).optional() })
   .refine(bodyXorBodyDoc, BODY_XOR_BODY_DOC_ISSUE);
 export type EntityUpdateUiInput = z.infer<typeof entityUpdateUiInput>;
+
+/**
+ * Элемент `entity_update` пачки `entity.updateBatch` — та же UI-форма БЕЗ признака автосохранения: пачка — жест, а
+ * жесты журналируются каждый своей записью и сеанс закрывают (§8.5, К-14). Принять признак здесь значило бы обещать
+ * клиенту сеанс, которого у пачки не бывает.
+ */
+export const entityUpdateBatchItemInput = entityUpdateUiFields.refine(
+  bodyXorBodyDoc,
+  BODY_XOR_BODY_DOC_ISSUE,
+);
 
 /**
  * Пункт CAS-предусловия правки (§А7-3): условие на одно СВОЙСТВО, при котором правка
@@ -204,8 +227,8 @@ export interface PreconditionMismatch {
  * видит на кнопке «Принять» вместо применения.
  *
  * Тело стоит здесь ФЛАГОМ, а не пунктом списка (РП-10). У тела нет предусловия по значению:
- * его CAS — `expectedUpdatedAt` строки, и executor отвечает на расхождение `STALE_VERSION`,
- * а не `CONFLICT/precondition_failed`. Прежде это подделывалось пунктом с пустым именем
+ * его замок — ревизия тела (`expectedBodyRevision`, спека скорости §8.1), и executor отвечает на
+ * расхождение `STALE_VERSION`, а не `CONFLICT/precondition_failed`. Прежде это подделывалось пунктом с пустым именем
  * аспекта (`{aspect:'', field:'body'}`) — вторым, несовместимым с первым способом сказать
  * «тут не свойство»: у пункта не было ни ожидаемого значения (ехали отметки `updated_at`,
  * которые владельцу ничего не говорят), ни адреса в пространстве свойств. Флаг называет то
@@ -240,6 +263,12 @@ export const BODY_NOTE_PROPERTY = 'orbis/body';
  */
 export const entityCreateUiInput = entityCreateInput.strict();
 export type EntityCreateUiInput = z.infer<typeof entityCreateUiInput>;
+
+/** Родитель → новая запись (§7.2): одна роль ограничивает операцию потребителями «＋» и подзадачами. */
+export const entityCreateLink = z
+  .object({ parentId: z.string().uuid(), role: z.literal(ROLE_SUBITEM) })
+  .strict();
+export type EntityCreateLink = z.infer<typeof entityCreateLink>;
 
 /**
  * Надмножество entity_create для executor'а. Совпадает сегодня с UI-входом побайтово и
@@ -348,7 +377,11 @@ export const batchExecuteInput = z
  * завели бы второй канон.
  */
 export const entityQueryInput = z
-  .object({ query: z.string().min(1).optional(), ast: queryAstSchema.optional() })
+  .object({
+    query: z.string().min(1).optional(),
+    ast: queryAstSchema.optional(),
+    fields: entityFieldsSchema.optional(),
+  })
   .strict()
   .refine(
     (v) => (v.query === undefined) !== (v.ast === undefined),

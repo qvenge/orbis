@@ -5,8 +5,6 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import type { GraphId } from '@orbis/shared';
 import {
-  AGENDA_DEF,
-  type AgendaSubscription,
   addDays,
   BUDGET_DEF,
   BUILTIN_RULES_BY_CARRIER,
@@ -19,7 +17,8 @@ import {
   ruleDefinitionSchema,
   type SubscriptionDefinition,
 } from '@orbis/shared';
-import { parseQueryAst, toParseRegistry } from '@orbis/shared/query';
+import type { ExprNode } from '@orbis/shared/expr';
+import { PAGE_ONLY_HINT, parseQueryAst, toParseRegistry } from '@orbis/shared/query';
 import { sql } from 'drizzle-orm';
 import { OWN_ACTION_DECL as DECL } from '../../test/fixtures/action-seed';
 import {
@@ -33,32 +32,38 @@ import {
   seedCustomRole,
   truncateAll,
 } from '../../test/helpers';
+import { journalOf } from '../../test/journal-helpers';
+import { budgetOverview } from '../budget/aggregates';
 import { entities } from '../db/schema';
 import type { Tx } from '../db/with-identity';
 import { withIdentity } from '../db/with-identity';
 import { ExecError } from '../errors';
 import { execute } from '../executor/executor';
-import { makeChatJournalSink } from '../executor/journal';
+import { makeJournalSink } from '../executor/journal';
 import { envelopeIdentityOf } from '../executor/normalize';
 import type { ExecuteRequest, ExecuteResult } from '../executor/types';
 import { undoAction } from '../executor/undo';
+import { compileContractPredicate } from '../expr/compile';
 import { approvePending } from '../policy/pending';
+import { queryContext } from '../query/context';
 import { appRouter } from '../router';
 import { seedOwnerGraph, seedSmartListId } from '../seed/onboarding';
 import { SEED_SMART_LISTS } from '../seed/smart-lists';
-import { agendaListOf, agendaSubscriptionOf } from '../subscriptions/agenda';
+import { supplyRecordId } from '../supply/records';
 import { dispatchTool, type ToolDispatchResult } from '../tools/dispatch';
 import { buildToolRegistry } from '../tools/registry';
 import { createCallerFactory } from '../trpc';
 import { effectiveRegistry } from './cache';
 import type { SubscriptionRow } from './load';
 import {
+  assertScopeShape,
   collectPropertyHolders,
   deprecateOwnAction,
   disableSystemRuleDelta,
   execErrorOfImplementsIssue,
   lockOwnerRegistry,
   mergeProperty,
+  propertyNamesInAst,
   readActionRow,
   readContractDelta,
   readOwnAspect,
@@ -68,6 +73,7 @@ import {
   removeOwnSubscription,
   restoreAspectRow,
   rewriteAst,
+  rewriteQueryTextKeys,
   setAspectDelta,
   setContractDelta,
   setOwnAction,
@@ -81,7 +87,7 @@ import { readRegistryVersions } from './version';
 requireEnv();
 
 const { db, client } = appDb();
-const sink = makeChatJournalSink();
+const sink = makeJournalSink();
 const owner = mintGraph();
 
 beforeAll(async () => {
@@ -111,12 +117,19 @@ function run(
   );
 }
 
-function ok(r: ExecuteResult): { actionId: string; results: unknown[] } {
+function ok(r: ExecuteResult | import('../executor/undo').UndoOutcomeServer): {
+  actionId: string;
+  results: unknown[];
+} {
   if (!r.ok) throw new Error(`ожидался успех, пришёл ${r.error.code}: ${r.error.message}`);
   return { actionId: r.actionId, results: r.results };
 }
 
-function err(r: ExecuteResult): { code: string; message: string; details?: unknown } {
+function err(r: ExecuteResult | import('../executor/undo').UndoOutcomeServer): {
+  code: string;
+  message: string;
+  details?: unknown;
+} {
   if (r.ok) throw new Error('ожидался отказ, пришёл успех');
   return r.error;
 }
@@ -493,6 +506,42 @@ describe('гейты записи определения — четвёртый 
     // Гейт обязан стоять НА ПУТИ ЗАПИСИ, а не рядом: строки в базе после отказа нет.
     expect(e.code).toBe('SCOPE_NOT_STATIC');
     expect(await propertyRow('user/moving-scope')).toBeUndefined();
+  });
+
+  test('$-ссылка в scope и в ref.target — структурный отказ с подсказкой «только в блоках страниц» (1в §3.8)', async () => {
+    const withParam = {
+      filter: {
+        and: [
+          { aspect: 'orbis/task' },
+          { prop: 'orbis/due_date', op: 'eq', value: { param: 'period' } },
+        ],
+      },
+    };
+    const scope = err(
+      await run('property_create', {
+        key: 'user/param-scope',
+        label: { ru: 'Параметр в области' },
+        description: { ru: '$ вне страницы' },
+        type: { kind: 'number' },
+        status: 'active',
+        scope: withParam,
+      }),
+    );
+    expect(scope.code).toBe('VALIDATION');
+    expect(JSON.stringify(scope)).toContain(PAGE_ONLY_HINT);
+    expect(await propertyRowByKey(owner, 'user/param-scope')).toBeUndefined();
+    const target = err(
+      await run('property_create', {
+        key: 'user/param-ref',
+        label: { ru: 'Параметр в цели' },
+        description: { ru: '$ вне страницы' },
+        type: { kind: 'ref', target: withParam },
+        status: 'active',
+      }),
+    );
+    expect(target.code).toBe('VALIDATION');
+    expect(JSON.stringify(target)).toContain(PAGE_ONLY_HINT);
+    expect(await propertyRowByKey(owner, 'user/param-ref')).toBeUndefined();
   });
 
   test('scope формы «свойство=значение» — отказ SCOPE_SHAPE (№24: только aspect=/tags=)', async () => {
@@ -1200,10 +1249,9 @@ describe('дельты контракта и подписки (§Б5-1/2)', () =
   test('дельта на цель, которой нет в реестре, — NOT_FOUND', async () => {
     for (const call of [
       (tx: Tx) => setContractDelta(tx, o, 'orbis/net-takogo', { setsDelta: {} }),
-      // Не `orbis/agenda`: с задачи 6 она засеяна, и дельта на неё ЗАКОННА — путь «дельта
-      // подписки доехала до движка» меряет приёмка §С8-21 (`routers/agenda-acceptance.test.ts`).
+      // Не `orbis/budget-overview`: она засеяна, и дельта на неё ЗАКОННА.
       (tx: Tx) =>
-        setSubscriptionDelta(tx, o, 'orbis/net-takoy-podpiski', { definition: AGENDA_DEF }),
+        setSubscriptionDelta(tx, o, 'orbis/net-takoy-podpiski', { definition: BUDGET_DEF }),
     ]) {
       expect(((await inTx(call).catch((x) => x)) as ExecError).code).toBe('NOT_FOUND');
     }
@@ -1219,12 +1267,13 @@ describe('дельты контракта и подписки (§Б5-1/2)', () =
 
 describe('своя строка подписки: setOwnSubscription / removeOwnSubscription (§Б5-1)', () => {
   const subOwner = mintGraph();
-  const AGENDA = BUILTIN_SUBSCRIPTION_DEFS.find((s) => s.id === 'orbis/agenda');
+  // Образец — Бюджет: подписки Повестки с 1в нет (§6.5).
+  const BUDGET = BUILTIN_SUBSCRIPTION_DEFS.find((s) => s.id === 'orbis/budget-overview');
   const row = (over: Partial<SubscriptionRow> = {}): SubscriptionRow => ({
-    id: 'user/my-agenda',
+    id: 'user/my-budget',
     graphId: subOwner,
-    surface: 'core/agenda',
-    definition: AGENDA?.definition as SubscriptionDefinition,
+    surface: 'finance/budget-overview',
+    definition: BUDGET?.definition as SubscriptionDefinition,
     module: null,
     rank: 1000,
     ...over,
@@ -1238,19 +1287,19 @@ describe('своя строка подписки: setOwnSubscription / removeOwn
     const after = await inTx((tx) => readRegistryVersions(tx, subOwner));
     expect(after.ownerVersion).toBe(before.ownerVersion + 1);
     const reg = await inTx((tx) => effectiveRegistry(tx, subOwner));
-    expect(reg.subscriptions.get('user/my-agenda')?.surface).toBe('core/agenda');
+    expect(reg.subscriptions.get('user/my-budget')?.surface).toBe('finance/budget-overview');
     // Читатель адресует ту же строку и находит СВОЮ, а не системную.
-    expect((await inTx((tx) => readSubscriptionRow(tx, subOwner, 'user/my-agenda')))?.graphId).toBe(
+    expect((await inTx((tx) => readSubscriptionRow(tx, subOwner, 'user/my-budget')))?.graphId).toBe(
       subOwner,
     );
     expect(
-      (await inTx((tx) => readSubscriptionRow(tx, subOwner, 'orbis/agenda')))?.graphId,
+      (await inTx((tx) => readSubscriptionRow(tx, subOwner, 'orbis/budget-overview')))?.graphId,
     ).toBeNull();
   });
 
   test('чужой namespace — отказ SUBSCRIPTION_NAMESPACE, строки не появилось', async () => {
     const e = await inTx((tx) =>
-      setOwnSubscription(tx, subOwner, row({ id: 'orbis/agenda-2' })),
+      setOwnSubscription(tx, subOwner, row({ id: 'orbis/budget-2' })),
     ).then(
       () => null,
       (x: ExecError) => x,
@@ -1259,16 +1308,16 @@ describe('своя строка подписки: setOwnSubscription / removeOwn
       'VALIDATION',
       'SUBSCRIPTION_NAMESPACE',
     ]);
-    expect(await inTx((tx) => readSubscriptionRow(tx, subOwner, 'orbis/agenda-2'))).toBeNull();
+    expect(await inTx((tx) => readSubscriptionRow(tx, subOwner, 'orbis/budget-2'))).toBeNull();
   });
 
   test('снятие удаляет строку и тоже двигает версию', async () => {
     const before = await inTx((tx) => readRegistryVersions(tx, subOwner));
-    await inTx((tx) => removeOwnSubscription(tx, subOwner, 'user/my-agenda'));
+    await inTx((tx) => removeOwnSubscription(tx, subOwner, 'user/my-budget'));
     expect((await inTx((tx) => readRegistryVersions(tx, subOwner))).ownerVersion).toBe(
       before.ownerVersion + 1,
     );
-    expect(await inTx((tx) => readSubscriptionRow(tx, subOwner, 'user/my-agenda'))).toBeNull();
+    expect(await inTx((tx) => readSubscriptionRow(tx, subOwner, 'user/my-budget'))).toBeNull();
   });
 });
 
@@ -1486,10 +1535,12 @@ describe('реестр действий владельца (§Б6-1, §С3)', ()
     ).toEqual(['VALIDATION', 'EXPR_TOO_DEEP']);
   });
 
-  // R-7 (фикс гейта задачи 5): словарь поверхностей стережёт ЗАПИСЬ — снятая в 1б голова `planner/`
-  // своим действием больше не заводится, хотя строка с ней, уже лежащая в базе, снимок не роняет
-  // (`registry/load.test.ts`).
-  test('action_set с offered_by на снятой голове поверхности (planner/agenda) — отказ записи; core/agenda — законна', async () => {
+  // R-7 (фикс гейта задачи 5): запись стережёт форма имени (`SURFACE_RE`) и словарь поверхностей — снятая
+  // в 1б голова `planner/` своим действием больше не заводится, хотя строка с ней, уже лежащая в базе,
+  // снимок не роняет (`registry/load.test.ts`). С 1в так же и `core/agenda` (§6.5: «их запись станет
+  // отказом»): голова `core` законна по форме, но поверхности Повестки в словаре нет; уже лежащие
+  // действия владельца на ней считает `migrate-1v --report` (задача 13).
+  test('action_set с offered_by на снятой поверхности (planner/agenda, core/agenda) — отказ записи; поверхность словаря — законна', async () => {
     const owner = await freshGraph();
     const runAs = (tool: string, input: unknown) =>
       execute(db, {
@@ -1498,13 +1549,15 @@ describe('реестр действий владельца (§Б6-1, §С3)', ()
         source: 'ui',
         operations: [{ tool, input }],
       });
-    const refused = err(
-      await runAs('action_set', { ...DECL, offered_by: [{ surface: 'planner/agenda' }] }),
-    );
-    expect(refused.code).toBe('VALIDATION');
+    for (const surface of ['planner/agenda', 'core/agenda']) {
+      const refused = err(await runAs('action_set', { ...DECL, offered_by: [{ surface }] }));
+      expect([surface, refused.code]).toEqual([surface, 'VALIDATION']);
+    }
     const reg = await withIdentity(db, personal(owner), (tx) => effectiveRegistry(tx, owner));
     expect(reg.actions.has('user/close-month')).toBe(false); // запись не случилась
-    ok(await runAs('action_set', { ...DECL, offered_by: [{ surface: 'core/agenda' }] }));
+    ok(
+      await runAs('action_set', { ...DECL, offered_by: [{ surface: 'finance/budget-overview' }] }),
+    );
   });
 
   test('заголовок журнала снятия — ПОДПИСЬ действия, а не ключ (фикс-раунд 1, m-3)', async () => {
@@ -1522,12 +1575,10 @@ describe('реестр действий владельца (§Б6-1, §С3)', ()
       );
     ok(await runAs('action_set', DECL));
     const removed = ok(await runAs('action_remove', { action: 'user/close-month' }));
-    const rows = (await withIdentity(db, personal(owner), (tx) =>
-      tx.execute(sql`SELECT metadata FROM chat_messages
-                      WHERE metadata @> ${JSON.stringify({ actions: [{ id: removed.actionId }] })}::jsonb`),
-    )) as unknown as Array<{ metadata: { cards?: Array<{ title?: string }> } }>;
     // «Отмени последнее» показывает владельцу то, что он узнаёт, — подпись, а не адрес.
-    expect(rows[0]?.metadata.cards?.[0]?.title).toBe('Действие «Закрыть месяц» снято');
+    expect((await journalOf(owner, removed.actionId))?.title).toBe(
+      'Действие «Закрыть месяц» снято',
+    );
   });
 
   test('перезаведение СНЯТОГО действия и откат: строка возвращается снятой и с прежними шагами', async () => {
@@ -1572,7 +1623,15 @@ describe('реестр действий владельца (§Б6-1, §С3)', ()
 
 describe('subscription_set / subscription_remove / contract_sets_delta_* через исполнителя (§Б5-2, §Б1-1)', () => {
   const toolOwner = mintGraph();
-  const AGENDA_SUB = BUILTIN_SUBSCRIPTION_DEFS.find((s) => s.id === 'orbis/agenda')?.definition;
+  // Образец — Бюджет (1в §6.5: подписки Повестки больше нет); Финансы у графа `mintGraph` включены —
+  // строки настроек нет, маска пуста.
+  const BUDGET_SUB = BUILTIN_SUBSCRIPTION_DEFS.find((s) => s.id === 'orbis/budget-overview')
+    ?.definition as BudgetSubscription;
+  const SURFACE = 'finance/budget-overview';
+  const withWarnAt = (warn_at: string): BudgetSubscription => ({
+    ...BUDGET_SUB,
+    alerts: { ...BUDGET_SUB.alerts, warn_at },
+  });
   function runAs(tool: string, input: unknown): Promise<ExecuteResult> {
     return execute(
       db,
@@ -1587,26 +1646,22 @@ describe('subscription_set / subscription_remove / contract_sets_delta_* чер�
   }
   const regOf = () =>
     withIdentity(db, personal(toolOwner), (tx) => effectiveRegistry(tx, toolOwner));
+  const warnAtOf = async () =>
+    ((await regOf()).subscriptions.get('orbis/budget-overview')?.definition as BudgetSubscription)
+      .alerts.warn_at;
 
   test('subscription_set по orbis/… кладёт ДЕЛЬТУ, а не строку; снимок несёт новую декларацию', async () => {
-    const tweaked = {
-      ...(AGENDA_SUB as AgendaSubscription),
-      show: { ...(AGENDA_SUB as AgendaSubscription).show, limit: 50 },
-    };
     ok(
       await runAs('subscription_set', {
-        id: 'orbis/agenda',
-        surface: 'core/agenda',
-        definition: tweaked,
+        id: 'orbis/budget-overview',
+        surface: SURFACE,
+        definition: withWarnAt('0.5'),
       }),
     );
-    const reg = await regOf();
-    expect(
-      (reg.subscriptions.get('orbis/agenda')?.definition as AgendaSubscription).show.limit,
-    ).toBe(50);
+    expect(await warnAtOf()).toBe('0.5');
     // Системная строка не тронута: перекрытие живёт дельтой.
     const raw = await withIdentity(db, personal(toolOwner), (tx) =>
-      readSubscriptionRow(tx, toolOwner, 'orbis/agenda'),
+      readSubscriptionRow(tx, toolOwner, 'orbis/budget-overview'),
     );
     expect(raw?.graphId).toBeNull();
   });
@@ -1614,9 +1669,9 @@ describe('subscription_set / subscription_remove / contract_sets_delta_* чер�
   test('своя подписка на ЗАНЯТУЮ поверхность отвергается: её не прочитает ни один движок', async () => {
     const e = err(
       await runAs('subscription_set', {
-        id: 'user/my-agenda',
-        surface: 'core/agenda',
-        definition: AGENDA_SUB,
+        id: 'user/my-budget',
+        surface: SURFACE,
+        definition: BUDGET_SUB,
       }),
     );
     expect((e.details as { reason?: string }).reason).toBe('SURFACE_TAKEN');
@@ -1625,33 +1680,21 @@ describe('subscription_set / subscription_remove / contract_sets_delta_* чер�
   test('undo возвращает ПРЕЖНЮЮ декларацию, а не снимает настройку', async () => {
     const second = ok(
       await runAs('subscription_set', {
-        id: 'orbis/agenda',
-        surface: 'core/agenda',
-        definition: {
-          ...(AGENDA_SUB as AgendaSubscription),
-          show: { ...(AGENDA_SUB as AgendaSubscription).show, limit: 7 },
-        },
+        id: 'orbis/budget-overview',
+        surface: SURFACE,
+        definition: withWarnAt('0.7'),
       }),
     );
-    expect(
-      ((await regOf()).subscriptions.get('orbis/agenda')?.definition as AgendaSubscription).show
-        .limit,
-    ).toBe(7);
+    expect(await warnAtOf()).toBe('0.7');
     expect(
       (await undoAction(db, { identity: personal(toolOwner), actionId: second.actionId })).ok,
     ).toBe(true);
-    expect(
-      ((await regOf()).subscriptions.get('orbis/agenda')?.definition as AgendaSubscription).show
-        .limit,
-    ).toBe(50);
+    expect(await warnAtOf()).toBe('0.5');
   });
 
   test('subscription_remove снимает дельту — поверхность возвращается к системной декларации', async () => {
-    ok(await runAs('subscription_remove', { id: 'orbis/agenda' }));
-    expect(
-      ((await regOf()).subscriptions.get('orbis/agenda')?.definition as AgendaSubscription).show
-        .limit,
-    ).toBe((AGENDA_SUB as AgendaSubscription).show.limit);
+    ok(await runAs('subscription_remove', { id: 'orbis/budget-overview' }));
+    expect(await warnAtOf()).toBe(BUDGET_SUB.alerts.warn_at);
   });
 
   /**
@@ -1672,44 +1715,49 @@ describe('subscription_set / subscription_remove / contract_sets_delta_* чер�
     const propId = (created.results[0] as { property: string }).property;
     expect(propId).not.toBe('user/effort');
 
-    const base = AGENDA_SUB as AgendaSubscription;
+    const planned = BUDGET_SUB.lists.planned;
+    if (planned?.where === undefined) throw new Error('в сиде Бюджета нет where у planned');
     ok(
       await runAs('subscription_set', {
-        id: 'orbis/agenda',
-        surface: 'core/agenda',
+        id: 'orbis/budget-overview',
+        surface: SURFACE,
         definition: {
-          ...base,
-          overdue: {
-            ...base.overdue,
-            where: {
-              op: 'and',
-              args: [
-                base.overdue.where,
-                { op: '>', args: [{ prop: 'user/effort' }, { const: 3 }] },
-              ],
+          ...BUDGET_SUB,
+          lists: {
+            ...BUDGET_SUB.lists,
+            planned: {
+              ...planned,
+              where: {
+                op: 'and',
+                args: [planned.where, { op: '>', args: [{ prop: 'user/effort' }, { const: 3 }] }],
+              },
             },
           },
         },
       }),
     );
     const where = (
-      (await regOf()).subscriptions.get('orbis/agenda')?.definition as AgendaSubscription
-    ).overdue.where as unknown as { args: [unknown, { args: [{ prop: string }, unknown] }] };
+      (await regOf()).subscriptions.get('orbis/budget-overview')?.definition as BudgetSubscription
+    ).lists.planned?.where as unknown as { args: [unknown, { args: [{ prop: string }, unknown] }] };
     // Вторая половина утверждения несущая: она ловит половинчатый фикс, который нормализует ВХОД
     // проверки, а в базу кладёт ключ (тогда падал бы уже читатель — `compile.ts`, `EXPR_SHAPE`).
     expect(where.args[1].args[0].prop).toBe(propId);
-    ok(await runAs('subscription_remove', { id: 'orbis/agenda' }));
+    ok(await runAs('subscription_remove', { id: 'orbis/budget-overview' }));
   });
 
-  test('поверхность в конверте обязана совпасть с поверхностью системной строки', async () => {
+  test('поверхность снятой Повестки (core/agenda) в конверте — отказ входа, дельта не пишется', async () => {
+    // С 1в поверхность в словаре одна (§6.5), и расхождение «конверт против системной строки»
+    // (`SUBSCRIPTION_SURFACE_MISMATCH`) другой законной поверхностью не собрать: чужое имя отвергает
+    // форма входа раньше, и настройка Бюджета не подменяется.
     const e = err(
       await runAs('subscription_set', {
-        id: 'orbis/agenda',
-        surface: 'finance/budget-overview',
-        definition: AGENDA_SUB,
+        id: 'orbis/budget-overview',
+        surface: 'core/agenda',
+        definition: withWarnAt('0.3'),
       }),
     );
-    expect((e.details as { reason?: string }).reason).toBe('SUBSCRIPTION_SURFACE_MISMATCH');
+    expect(e.code).toBe('VALIDATION');
+    expect(await warnAtOf()).toBe(BUDGET_SUB.alerts.warn_at);
   });
 
   test('contract_sets_delta_set: свой набор виден снимком; встроенное имя — DELTA_SET_BUILTIN; undo', async () => {
@@ -1797,21 +1845,44 @@ describe('subscription_set / subscription_remove / contract_sets_delta_* чер�
   });
 });
 
+/**
+ * Декларация Бюджета, чей список `planned` дополнительно читает СВОЙ набор владельца `my_open`
+ * контракта `orbis/completable` — держатель набора для проверок `SET_IN_USE` (образец движка с 1в —
+ * Бюджет, §6.5). Остальная декларация — как у `base`.
+ */
+function readsOwnSet(base: BudgetSubscription): BudgetSubscription {
+  const planned = base.lists.planned;
+  if (planned?.where === undefined) throw new Error('в декларации Бюджета нет where у planned');
+  return {
+    ...base,
+    lists: {
+      ...base.lists,
+      planned: {
+        ...planned,
+        where: {
+          op: 'and',
+          args: [
+            planned.where,
+            {
+              op: 'in',
+              args: [{ class: { contract: 'orbis/completable' } }, { const: 'my_open' }],
+            },
+          ],
+        },
+      },
+    },
+  };
+}
+
 describe('наборы под живой подпиской: SET_IN_USE и один вердикт на два пути записи (Ф-Б1-55б/в)', () => {
   const useOwner = mintGraph();
-  const AGENDA_SUB = BUILTIN_SUBSCRIPTION_DEFS.find((s) => s.id === 'orbis/agenda')
-    ?.definition as AgendaSubscription;
-  /** Та же Повестка, но «незакрытое» названо СВОИМ набором владельца, а не встроенным `open`. */
-  const readsMyOpen = (): AgendaSubscription => ({
-    ...AGENDA_SUB,
-    overdue: {
-      ...AGENDA_SUB.overdue,
-      where: {
-        op: 'in',
-        args: [{ class: { contract: 'orbis/completable' } }, { const: 'my_open' }],
-      },
-    } as AgendaSubscription['overdue'],
-  });
+  /**
+   * Бюджет, чей список `planned` дополнительно читает СВОЙ набор владельца `my_open` (образец движка —
+   * Бюджет с 1в, §6.5; до 1в — «незакрытое» Повестки). Контракт набора — `orbis/completable`, а не
+   * контракт движения: ссылка на чужой контракт в `where` законна (`planned` так же читает
+   * `orbis/recurrence:templates`), а наборы движения держит четвёртая форма ссылки ниже.
+   */
+  const readsMyOpen = (): BudgetSubscription => readsOwnSet(BUDGET_DEF);
   const runAs = (tool: string, input: unknown): Promise<ExecuteResult> =>
     execute(
       db,
@@ -1825,7 +1896,7 @@ describe('наборы под живой подпиской: SET_IN_USE и од�
     );
   const regOf = () => withIdentity(db, personal(useOwner), (tx) => effectiveRegistry(tx, useOwner));
 
-  test('снятие набора, который читает подписка, — отказ SET_IN_USE; Повестка остаётся читаемой', async () => {
+  test('снятие набора, который читает подписка, — отказ SET_IN_USE; Бюджет остаётся читаемым', async () => {
     ok(
       await runAs('contract_sets_delta_set', {
         contract: 'orbis/completable',
@@ -1834,8 +1905,8 @@ describe('наборы под живой подпиской: SET_IN_USE и од�
     );
     ok(
       await runAs('subscription_set', {
-        id: 'orbis/agenda',
-        surface: 'core/agenda',
+        id: 'orbis/budget-overview',
+        surface: 'finance/budget-overview',
         definition: readsMyOpen(),
       }),
     );
@@ -1845,17 +1916,13 @@ describe('наборы под живой подпиской: SET_IN_USE и од�
       'SET_IN_USE',
     ]);
     // Отказ НАЗЫВАЕТ подписку — иначе владелец искал бы держателя набора вручную.
-    expect((e.details as { subscriptions?: string[] }).subscriptions).toEqual(['orbis/agenda']);
-    // Набор на месте, и Повестка ЧИТАЕТСЯ: ровно то, что снятие уничтожило бы молча.
+    expect((e.details as { subscriptions?: string[] }).subscriptions).toEqual([
+      'orbis/budget-overview',
+    ]);
+    // Набор на месте, и Бюджет ЧИТАЕТСЯ движком: ровно то, что снятие уничтожило бы молча.
     expect((await regOf()).contracts.get('orbis/completable')?.sets?.my_open).toEqual(['active']);
-    const reg = await regOf();
-    await withIdentity(db, personal(useOwner), (tx) =>
-      agendaListOf(tx, useOwner, agendaSubscriptionOf(reg), {
-        today: '2026-09-09',
-        timeZone: 'Europe/Moscow',
-        days: 8,
-      }),
-    );
+    const overview = await budgetOverview(db, personal(useOwner), '2026-09');
+    expect(overview.planned).toEqual([]);
   });
 
   test('замена дельты БЕЗ используемого набора — тот же отказ: дельта пишется целиком', async () => {
@@ -1870,7 +1937,7 @@ describe('наборы под живой подпиской: SET_IN_USE и од�
   });
 
   test('проба НЕ вырождена: без держателя тот же набор снимается свободно', async () => {
-    ok(await runAs('subscription_remove', { id: 'orbis/agenda' }));
+    ok(await runAs('subscription_remove', { id: 'orbis/budget-overview' }));
     ok(await runAs('contract_sets_delta_remove', { contract: 'orbis/completable' }));
     expect((await regOf()).contracts.get('orbis/completable')?.sets?.my_open).toBeUndefined();
   });
@@ -1885,8 +1952,8 @@ describe('наборы под живой подпиской: SET_IN_USE и од�
     // Путь дельты системной подписки — снимок с дельтами, набор виден.
     ok(
       await runAs('subscription_set', {
-        id: 'orbis/agenda',
-        surface: 'core/agenda',
+        id: 'orbis/budget-overview',
+        surface: 'finance/budget-overview',
         definition: readsMyOpen(),
       }),
     );
@@ -1894,46 +1961,43 @@ describe('наборы под живой подпиской: SET_IN_USE и од�
     // валидатор смотрел в сырые строки, где набора владельца нет).
     await withIdentity(db, personal(useOwner), (tx) =>
       setOwnSubscription(tx, useOwner, {
-        id: 'user/my-agenda',
+        id: 'user/my-budget',
         graphId: useOwner,
-        surface: 'core/agenda',
+        surface: 'finance/budget-overview',
         definition: readsMyOpen(),
-        module: null,
+        module: 'finance',
         rank: 1000,
       }),
     );
     expect(
       (
         await withIdentity(db, personal(useOwner), (tx) =>
-          readSubscriptionRow(tx, useOwner, 'user/my-agenda'),
+          readSubscriptionRow(tx, useOwner, 'user/my-budget'),
         )
       )?.graphId,
     ).toBe(useOwner);
     // …и своя строка тоже держит набор: снятие теперь называет ОБЕ подписки.
     const e = err(await runAs('contract_sets_delta_remove', { contract: 'orbis/completable' }));
     expect((e.details as { subscriptions?: string[] }).subscriptions?.sort()).toEqual([
-      'orbis/agenda',
-      'user/my-agenda',
+      'orbis/budget-overview',
+      'user/my-budget',
     ]);
   });
 });
 
 describe('зависимость от набора считается ПО ПРИЧИНЕ, а не по факту поломки (Ф-Б1-55б, уточнение)', () => {
   const twoStepOwner = mintGraph();
-  const AGENDA_SUB = BUILTIN_SUBSCRIPTION_DEFS.find((s) => s.id === 'orbis/agenda')
-    ?.definition as AgendaSubscription;
-  /** Повестка, которая читает СВОЙ набор владельца и предпочитает СВОЙ аспект в `show`. */
-  const readsMyOpen = (): AgendaSubscription => ({
-    ...AGENDA_SUB,
-    show: { ...AGENDA_SUB.show, prefer: ['user/gig'] },
-    overdue: {
-      ...AGENDA_SUB.overdue,
-      where: {
-        op: 'in',
-        args: [{ class: { contract: 'orbis/completable' } }, { const: 'my_open' }],
+  /** Бюджет, который читает СВОЙ набор владельца и предпочитает СВОЙ аспект в источнике движений. */
+  const readsMyOpen = (): BudgetSubscription => {
+    const base = readsOwnSet(BUDGET_DEF);
+    return {
+      ...base,
+      sources: {
+        ...base.sources,
+        movement: { ...base.sources.movement, prefer: ['user/gig'] },
       },
-    } as AgendaSubscription['overdue'],
-  });
+    };
+  };
   const runAs = (tool: string, input: unknown): Promise<ExecuteResult> =>
     execute(
       db,
@@ -1951,20 +2015,39 @@ describe('зависимость от набора считается ПО ПР�
   test('ДВА ШАГА: подписку сломала ЧУЖАЯ причина — набор всё равно не снимается (SET_IN_USE)', async () => {
     // Дыра прежнего критерия «сломано после − сломано до» жила ровно здесь: первый шаг делал
     // подписку нечитаемой ДРУГОЙ причиной (`SUBSCRIPTION_PREFER_UNBOUND`), разность становилась
-    // пустой — и набор снимался «ок». Повестка при этом ещё читалась и гасла ПОЗЖЕ: в момент,
+    // пустой — и набор снимался «ок». Подписка при этом ещё читалась и гасла ПОЗЖЕ: в момент,
     // когда владелец чинил первую причину и обнаруживал `UNKNOWN_SET` вместо починки.
     ok(
       await runAs('aspect_create', {
         key: 'user/gig',
-        label: { ru: 'Выступление' },
+        label: { ru: 'Гонорар' },
         description: { ru: 'x' },
-        properties: [{ propertyId: 'orbis/start_at', required: true }],
+        properties: [
+          { propertyId: 'orbis/amount', required: true },
+          { propertyId: 'orbis/direction', required: true },
+          { propertyId: 'orbis/finance_category', required: true },
+          { propertyId: 'orbis/occurred_on', required: true },
+        ],
       }),
     );
     ok(
       await runAs('aspect_implements_set', {
         aspect: 'user/gig',
-        implements: [{ contract: 'orbis/when', bind: { moment: 'orbis/start_at' }, value_map: [] }],
+        implements: [
+          {
+            contract: 'orbis/money-movement',
+            bind: {
+              amount: 'orbis/amount',
+              direction: 'orbis/direction',
+              category: 'orbis/finance_category',
+              date: 'orbis/occurred_on',
+            },
+            value_map: [
+              { slot: 'direction', variant: 'expense', class: 'outflow' },
+              { slot: 'direction', variant: 'income', class: 'inflow' },
+            ],
+          },
+        ],
       }),
     );
     ok(
@@ -1975,14 +2058,19 @@ describe('зависимость от набора считается ПО ПР�
     );
     ok(
       await runAs('subscription_set', {
-        id: 'orbis/agenda',
-        surface: 'core/agenda',
+        id: 'orbis/budget-overview',
+        surface: 'finance/budget-overview',
         definition: readsMyOpen(),
       }),
     );
     // ШАГ 1: привязка снята — подписка стала нечитаемой ПО ДРУГОЙ ПРИЧИНЕ (остаток 19: этот
-    // тул зависимых не смотрит). Повестка на этом шаге ещё жива.
-    ok(await runAs('aspect_implements_remove', { aspect: 'user/gig', contract: 'orbis/when' }));
+    // тул зависимых не смотрит).
+    ok(
+      await runAs('aspect_implements_remove', {
+        aspect: 'user/gig',
+        contract: 'orbis/money-movement',
+      }),
+    );
     // ШАГ 2: снятие набора — ОТКАЗ, потому что декларация НАЗЫВАЕТ `my_open` (критерий «по
     // причине»), а не потому, что подписка стала ломаться именно сейчас.
     const e = err(await runAs('contract_sets_delta_remove', { contract: 'orbis/completable' }));
@@ -1990,14 +2078,36 @@ describe('зависимость от набора считается ПО ПР�
       'VALIDATION',
       'SET_IN_USE',
     ]);
-    expect((e.details as { subscriptions?: string[] }).subscriptions).toEqual(['orbis/agenda']);
+    expect((e.details as { subscriptions?: string[] }).subscriptions).toEqual([
+      'orbis/budget-overview',
+    ]);
     expect((await regOf()).contracts.get('orbis/completable')?.sets?.my_open).toEqual(['active']);
+  });
+
+  test('негативный контроль: сломанная подписка НЕ запирает наборы ЧУЖОГО контракта', async () => {
+    // Подписка по-прежнему нечитаема (`prefer` без привязки), и её `planned.where` называет
+    // `orbis/recurrence:templates` — но набор `templates` ВСТРОЕННЫЙ и правку переживает,
+    // а отказ `PREFER_UNBOUND` этого контракта не называет. Значит наборы `orbis/recurrence`
+    // владельцу открыты: «набор используется» про набор, который ни при чём, было бы враньём.
+    ok(
+      await runAs('contract_sets_delta_set', {
+        contract: 'orbis/recurrence',
+        setsDelta: { my_dated: ['instance'] },
+      }),
+    );
+    ok(await runAs('contract_sets_delta_remove', { contract: 'orbis/recurrence' }));
+    expect((await regOf()).contracts.get('orbis/recurrence')?.sets?.my_dated).toBeUndefined();
   });
 
   test('ЧЕТВЁРТАЯ форма ссылки: lists.<n>.counted_set без соседнего контракта — тоже SET_IN_USE', async () => {
     // Имя набора здесь стоит БЕЗ `contract` в узле (`over: 'movement'`), контракт лежит этажом
     // выше — в `sources.movement`. Обход, читавший только соседние ключи, эту ссылку не видел:
     // набор снимался «ок», а `orbis/budget-overview` умирала `SUBSCRIPTION_UNKNOWN_SET`.
+    //
+    // Начало — с СИСТЕМНОЙ декларации: дельта двухшагового теста выше сломана `PREFER_UNBOUND` по
+    // контракту движений, и её отказ этот контракт НАЗЫВАЕТ — наборы движений она запирает по праву
+    // (критерий «по причине»). Здесь проверяется другая форма ссылки, и держатель должен быть один.
+    ok(await runAs('subscription_remove', { id: 'orbis/budget-overview' }));
     ok(
       await runAs('contract_sets_delta_set', {
         contract: 'orbis/money-movement',
@@ -2032,21 +2142,6 @@ describe('зависимость от набора считается ПО ПР�
     ok(await runAs('subscription_remove', { id: 'orbis/budget-overview' }));
     ok(await runAs('contract_sets_delta_remove', { contract: 'orbis/money-movement' }));
     expect((await regOf()).contracts.get('orbis/money-movement')?.sets?.my_plans).toBeUndefined();
-  });
-
-  test('негативный контроль: сломанная подписка НЕ запирает наборы ЧУЖОГО контракта', async () => {
-    // Подписка по-прежнему нечитаема (`prefer` без привязки), и её `hide` называет
-    // `orbis/recurrence:templates` — но набор `templates` ВСТРОЕННЫЙ и правку переживает,
-    // а отказ `PREFER_UNBOUND` этого контракта не называет. Значит наборы `orbis/recurrence`
-    // владельцу открыты: «набор используется» про набор, который ни при чём, было бы враньём.
-    ok(
-      await runAs('contract_sets_delta_set', {
-        contract: 'orbis/recurrence',
-        setsDelta: { my_dated: ['instance'] },
-      }),
-    );
-    ok(await runAs('contract_sets_delta_remove', { contract: 'orbis/recurrence' }));
-    expect((await regOf()).contracts.get('orbis/recurrence')?.sets?.my_dated).toBeUndefined();
   });
 });
 
@@ -2589,8 +2684,7 @@ describe('property_merge (§А10-2, приёмка §С8-5)', () => {
     // причинам. Первая: `readBodyDoc` — общий вход чтения тела, и ветка «документа нет,
     // собери из markdown» — его штатное правило разрешения Р1, а не наша добавка; убрать её
     // можно было бы, только заменив общий вход на своё чтение. Вторая: писатель, который
-    // заполнит индекс без документа, появится — `db/backfill-body-doc.ts` станет таким в тот
-    // день, когда получит реестр, — и слияние обязано пережить его без потери тела.
+    // заполнит индекс без документа, может появиться, — слияние обязано пережить его без потери тела.
     //
     // Состояние подсаживается АДМИН-DSN намеренно: воспроизвести его штатным путём нельзя,
     // а «названная цена» без проверки — это чтение кода вместо теста.
@@ -3852,9 +3946,13 @@ describe('collectPropertyHolders: род `body` — по индексу query_re
     const bodies = new Map(
       holders.filter((h) => h.kind === 'body').map((h) => [h.id, h.properties]),
     );
+    // id — записи поставки (`supplyRecordId`): у прежних списков — id сева, у Повестки (1в) — свой.
+    // Повестка свойств не называет вовсе (срез 1в §6.1): её блоки спрашивают значение «когда» и наборы
+    // контрактов, а не свойства, — держателем свойства она не бывает, и слиянию переписывать в ней нечего.
     for (const list of SEED_SMART_LISTS) {
-      const id = seedSmartListId(seedUser, list.slug);
-      expect([list.slug, bodies.has(id)]).toEqual([list.slug, true]);
+      const id = supplyRecordId(seedUser, list.slug);
+      const holds = list.slug !== 'agenda';
+      expect([list.slug, bodies.has(id)]).toEqual([list.slug, holds]);
     }
     // …и это перечень АДРЕСОВ, а не «функция вернула массив»: у «Рутин» обязаны быть все
     // четыре свойства, которыми её блоки фильтруют и сортируют.
@@ -3924,7 +4022,7 @@ describe('collectPropertyHolders: род `bind` — привязки аспек�
       ['user/call', ['user/at', 'user/due']],
     ]);
     await withIdentity(db, personal(owner), (tx) =>
-      mergeProperty(tx, owner, { source: 'user/at', into: 'user/at2' }),
+      mergeProperty(tx, owner, { source: 'user/at', into: 'user/at2' }, null),
     );
     const reg = await withIdentity(db, personal(owner), (tx) => effectiveRegistry(tx, owner));
     expect(reg.aspects.get('user/call')?.implements[0]?.bind).toEqual({
@@ -4203,12 +4301,13 @@ describe('карта классов и пользовательский набо
   // Шаги ОТЛОЖЕННЫЕ (`() =>`), а не готовые промисы: `runS` стартует запрос уже при сборке
   // массива, и `attach_orbis_task` уходил бы в базу одновременно с `entity_create` той же
   // сущности — гонка, дающая `NOT_FOUND` на ровном месте. Порядок здесь — часть сценария.
-  // Срок ВЧЕРАШНИЙ у обеих задач: секция «просроченное» у Agenda отбирается предикатом
-  // `class(orbis/completable) in 'open'` — вторым, ВЫРАЖЕНЧЕСКИМ бэкендом классов, и без даты
-  // в прошлом он остался бы недостижим (§Б5-6).
-  const AGENDA_TZ = 'Europe/Moscow';
-  const agendaToday = new Intl.DateTimeFormat('en-CA', { timeZone: AGENDA_TZ }).format(new Date());
-  const yesterday = addDays(agendaToday, -1);
+  // Срок ВЧЕРАШНИЙ у обеих задач — наследие пина до 1в: секция «просроченное» подписки Повестки
+  // отбирала записи предикатом `class(orbis/completable) in 'open'` выраженческого бэкенда, и без
+  // даты в прошлом он был недостижим (§Б5-6). Даты оставлены: «Просрочено» тела Повестки их читает.
+  const TODAY_MSK = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Moscow' }).format(
+    new Date(),
+  );
+  const yesterday = addDays(TODAY_MSK, -1);
   const task = (id: string, title: string, status: string) => [
     () => runS('entity_create', { id, title, tags: [] }),
     () =>
@@ -4263,12 +4362,13 @@ describe('карта классов и пользовательский набо
     expect(idsOf(await q('class=orbis/completable:dropped'))).toEqual([dropped]);
   });
 
-  test('тот же класс видят чекбокс строки и Agenda — два ОСТАЛЬНЫХ читателя членства', async () => {
+  test('тот же класс видят чекбокс строки и выраженческий бэкенд — два ОСТАЛЬНЫХ читателя членства', async () => {
     // Приёмка §С8-19 закрывается не одним фильтром: `class=` — это SQL-бэкенд компилятора,
-    // чекбокс строки читает членство ИНДЕКСОМ привязок (`rowProjectionOf`, §Б5-6), а Agenda —
-    // ВЫРАЖЕНЧЕСКИМ бэкендом (`compileExprPredicate` над `class(...) in 'open'`). Вариант,
-    // доехавший в один из трёх, но не в остальные, и есть «запись, которую находят через
-    // один аспект и теряют через другой».
+    // чекбокс строки читает членство ИНДЕКСОМ привязок (`rowProjectionOf`, §Б5-6), а предикаты
+    // деклараций — ВЫРАЖЕНЧЕСКИМ бэкендом (`compileContractPredicate` над `class(...) in 'open'`).
+    // Вариант, доехавший в один из трёх, но не в остальные, и есть «запись, которую находят через
+    // один аспект и теряют через другой». До 1в третьим читателем был движок подписки Повестки;
+    // он снят (§6.5), и бэкенд зовётся напрямую — тем же вызовом, каким его зовёт движок Бюджета.
     const reg = await withIdentity(db, personal(setOwner), (tx) => effectiveRegistry(tx, setOwner));
     const projectionOf = (status: string) =>
       rowProjectionOf({ aspects: ['orbis/task'], props: { 'orbis/task_status': status } }, reg)
@@ -4276,19 +4376,21 @@ describe('карта классов и пользовательский набо
     expect(projectionOf('in_review')).toEqual({ cls: 'active', closed: false });
     expect(projectionOf('cancelled')).toEqual({ cls: 'cancelled', closed: true });
 
-    const agenda = await withIdentity(db, personal(setOwner), (tx) =>
-      agendaListOf(tx, setOwner, agendaSubscriptionOf(reg), {
-        today: agendaToday,
-        timeZone: AGENDA_TZ,
-        days: 8,
-      }),
-    );
-    const overdue = agenda.rows
-      .filter((r) => r.section === 'overdue')
-      .map((r) => r.entity.id)
-      .sort();
-    // `in_review` просрочен и НЕЗАКРЫТ — он в секции; `cancelled` закрыт и в неё не идёт.
-    expect(overdue).toEqual([inReview]);
+    const open = await withIdentity(db, personal(setOwner), async (tx) => {
+      const cctx = await queryContext(tx, setOwner, null);
+      const where: ExprNode = {
+        op: 'in',
+        args: [{ class: { contract: 'orbis/completable' } }, { const: 'open' }],
+      };
+      const rows = (await tx.execute(sql`SELECT e.id FROM entities e
+        WHERE e.graph_id = ${setOwner}::uuid AND e.id IN (${inReview}::uuid, ${dropped}::uuid)
+          AND ${compileContractPredicate('orbis/completable', where, cctx, sql.raw('e'))}`)) as unknown as {
+        id: string;
+      }[];
+      return rows.map((r) => r.id).sort();
+    });
+    // `in_review` НЕЗАКРЫТ — он в наборе `open`; `cancelled` закрыт и в него не идёт.
+    expect(open).toEqual([inReview]);
   });
 
   test('вариант без отнесения — VARIANT_UNMAPPED ДО записи, реестр цел', async () => {
@@ -5378,7 +5480,7 @@ describe('шестой род держателя: property_merge перепис�
     );
     const holders = await withIdentity(db, personal(g), (tx) => collectPropertyHolders(tx, g));
     expect(holders.find((h) => h.kind === 'rule')?.properties).toEqual([source]);
-    await withIdentity(db, personal(g), (tx) => mergeProperty(tx, g, { source, into }));
+    await withIdentity(db, personal(g), (tx) => mergeProperty(tx, g, { source, into }, null));
     expect((await regOf(g)).aspects.get(OWN)?.rules[0]?.when).toEqual({
       op: 'in',
       args: [{ const: into }, { ctx: '$touched' }],
@@ -6257,5 +6359,69 @@ describe('фикс-раунд 4 задачи 16: откат одного пра�
     await undo(g, settings.actionId);
     expect(await rowOf(g)).toBeNull();
     expect(await deltaRows(g)).toBe(0);
+  });
+});
+
+describe('обходчики реестра и адрес контракта (спека 1в §3.1, РП-3)', () => {
+  const addr = { contract: 'orbis/when', slot: 'deadline' };
+  const tree = {
+    filter: {
+      and: [
+        { prop: addr, op: 'eq', value: { token: 'today' } },
+        { prop: 'orbis/due_date', op: 'eq', value: { token: 'today' } },
+      ],
+    },
+    sortBy: [{ field: { contract: 'orbis/when' }, dir: 'asc' }],
+  };
+
+  test('rewriteAst: объект адреса не трогается, свойство рядом — переписывается', () => {
+    expect(rewriteAst(tree, new Set(['orbis/due_date', 'orbis/when']), 'user/x')).toEqual({
+      ...tree,
+      filter: {
+        and: [
+          { prop: addr, op: 'eq', value: { token: 'today' } },
+          { prop: 'user/x', op: 'eq', value: { token: 'today' } },
+        ],
+      },
+    });
+  });
+
+  test('propertyNamesInAst: адрес — не имя свойства', () => {
+    const names = new Set<string>();
+    propertyNamesInAst(tree, names);
+    expect([...names]).toEqual(['orbis/due_date']);
+  });
+
+  test('группа (1в §5.2): field строкой — имя свойства (переписывается, виден перечню), адрес — нет', () => {
+    const grouped = { filter: null, group: { by: 'day', field: 'orbis/due_date' } };
+    expect(rewriteAst(grouped, new Set(['orbis/due_date']), 'user/x')).toEqual({
+      filter: null,
+      group: { by: 'day', field: 'user/x' },
+    });
+    const names = new Set<string>();
+    propertyNamesInAst(grouped, names);
+    propertyNamesInAst({ filter: null, group: { by: 'day', field: addr } }, names);
+    expect([...names]).toEqual(['orbis/due_date']);
+  });
+
+  test('rewriteQueryTextKeys: ключ перед точкой — контракт адреса, не свойство', () => {
+    // `orbis/recurrence` — и ключ свойства, и ключ контракта: слияние свойства контракт не трогает.
+    expect(
+      rewriteQueryTextKeys(
+        'orbis/recurrence.template_marker=true, has=orbis/recurrence',
+        new Set(['orbis/recurrence']),
+        'user/rec',
+      ),
+    ).toBe('orbis/recurrence.template_marker=true, has=user/rec');
+  });
+
+  test('assertScopeShape: адрес в scope — отказ SCOPE_SHAPE', () => {
+    let reason: unknown = null;
+    try {
+      assertScopeShape({ prop: addr, op: 'eq', value: '2026-07-17' });
+    } catch (e) {
+      reason = (e as { details?: { reason?: unknown } }).details?.reason;
+    }
+    expect(reason).toBe('SCOPE_SHAPE');
   });
 });

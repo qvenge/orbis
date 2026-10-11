@@ -43,6 +43,7 @@ it.each([false, true])('unsent body blocks page identity; blocked=%s', (blocked)
     <Actions
       gate={{
         hasUnsent: () => true,
+        expectedRevision: () => 1,
         blocked: () => blocked,
         flush,
         offline: () => false,

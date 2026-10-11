@@ -13,41 +13,10 @@ import { SLOT_KEY_RE } from './property-type';
 
 /**
  * Позиция языка E. Алиас, а не прямое имя схемы: по нему грепом видны ВСЕ места декларации, где
- * стоит выражение, — а их десять в двух ветках (четыре у Agenda, шесть у Budget), и перечень нужен
- * и валидатору, и диффу Ш1.
+ * стоит выражение, — а их шесть у Budget (ветка Повестки с её четырьмя снята срезом 1в, §6.5), и
+ * перечень нужен и валидатору, и диффу Ш1.
  */
 const exprRef = exprNodeSchema;
-
-export const agendaSubscriptionSchema = z
-  .object({
-    engine: z.literal('agenda'),
-    params: z.array(z.enum(['window_from', 'window_to'])).default(['window_from', 'window_to']),
-    show: z
-      .object({
-        contract: z.literal('orbis/when'),
-        slot: z.literal('moment'),
-        window: z.object({ from: exprRef, to: exprRef }).strict(),
-        prefer: z.array(z.string()).default([]),
-        sortBy: z.enum(['asc', 'desc']).default('asc'),
-        limit: z.number().int().min(1).default(200),
-      })
-      .strict(),
-    overdue: z
-      .object({
-        contract: z.literal('orbis/when'),
-        slots: z.tuple([z.literal('deadline'), z.literal('moment')]),
-        before: exprRef,
-        where: exprRef,
-        prefer: z.array(z.string()).default([]),
-        limit: z.number().int().min(1).default(200),
-      })
-      .strict(),
-    // `isRecurringTemplate` (`useAgenda.ts:93-95`) — декларацией: набор контракта, а не код клиента.
-    hide: z
-      .object({ contract: z.literal('orbis/recurrence'), set: z.literal('templates') })
-      .strict(),
-  })
-  .strict();
 
 export const budgetSubscriptionSchema = z
   .object({
@@ -56,8 +25,8 @@ export const budgetSubscriptionSchema = z
     params: z.array(z.enum(['period_start', 'period_end', 'horizon_end'])),
     sources: z
       .object({
-        // §С8-21: чей аспект считать, когда контракт реализуют два, — решает ДЕКЛАРАЦИЯ; образец —
-        // `show.prefer` Повестки. Порядок перечня и есть приоритет ЗНАЧЕНИЯ слота (Ф-Б2-25): его читают
+        // §С8-21: чей аспект считать, когда контракт реализуют два, — решает ДЕКЛАРАЦИЯ (образцом был
+        // `show.prefer` подписки Повестки, снятой срезом 1в). Порядок перечня и есть приоритет ЗНАЧЕНИЯ слота (Ф-Б2-25): его читают
         // SQL-ведомости (суммы, кэш `spent`, окна списков), JS-чтение (строки списков, лимит и валюта
         // карточки) и хук записи (по какой привязке выбирать конверт). Пустой — выбора нет: JS-чтение
         // записи с двумя привязками (карточка конверта, строка списка) отказывает `SLOT_AMBIGUOUS`
@@ -175,15 +144,19 @@ export const budgetSubscriptionSchema = z
   })
   .strict();
 
+/**
+ * Союз по `engine` — сейчас из одной ветки. Вариант `agenda` снят срезом 1в (§6.5): Повестка — запись
+ * поставки из блоков, и строка с `engine: 'agenda'` схемой отвергается (встроенную снимает миграция
+ * 0023, строки владельца считает `migrate-1v --report`). Союз оставлен союзом: дискриминант — место, куда
+ * встаёт следующий движок, и сообщение об отказе называет `engine`, а не весь объект.
+ */
 export const subscriptionDefinitionSchema = z.discriminatedUnion('engine', [
-  agendaSubscriptionSchema,
   budgetSubscriptionSchema,
 ]);
 export type SubscriptionDefinition = z.infer<typeof subscriptionDefinitionSchema>;
-export type AgendaSubscription = z.infer<typeof agendaSubscriptionSchema>;
 export type BudgetSubscription = z.infer<typeof budgetSubscriptionSchema>;
 
-/** Встроенная подписка в коде — сторона «после» сида (её список наполняют задачи 6 и 9). */
+/** Встроенная подписка в коде — сторона «после» сида. */
 export interface BuiltinSubscriptionDef {
   id: string;
   surface: SurfaceName;

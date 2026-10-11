@@ -6,6 +6,7 @@
 // произвольные периоды (§2.9) не участвуют ни как источник, ни как преемник-блокер;
 // needsSetup — «первый месяц без истории» (§3.5); мутация rollover — идемпотентна по
 // batchId, атомарна (INVARIANT всего batch), Undo сносит все конверты одним action.
+
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import type { GraphId } from '@orbis/shared';
 import { newId, ROLE_CATEGORY_PARENT, RULE_ENVELOPE_UNIQUE, RULE_ROLLOVER } from '@orbis/shared';
@@ -19,8 +20,10 @@ import {
   truncateAll,
   withRule,
 } from '../../test/helpers';
+import { actionsOf } from '../../test/journal-helpers';
+import { expectJournalRef } from '../../test/journal-ref-helpers';
 import { execute } from '../executor/executor';
-import { makeChatJournalSink } from '../executor/journal';
+import { makeJournalSink } from '../executor/journal';
 import type { ExecuteRequest, WireEntity } from '../executor/types';
 import { undoAction } from '../executor/undo';
 import { appRouter } from '../router';
@@ -30,7 +33,7 @@ import { rolloverPreview } from './aggregates';
 requireEnv();
 
 const { db, client } = appDb();
-const sink = makeChatJournalSink();
+const sink = makeJournalSink();
 const createCaller = createCallerFactory(appRouter);
 
 beforeAll(async () => {
@@ -177,13 +180,9 @@ async function budgetParents(txnId: string): Promise<string[]> {
   return rows.map((r) => r.source_id as string);
 }
 
-/** Число audit-сообщений, несущих action с этим id (атомарность: ровно один на batch). */
-async function actionMessageCount(actionId: string): Promise<number> {
-  const probe = JSON.stringify({ actions: [{ id: actionId }] });
-  const rows = await adminRows(
-    sql`SELECT count(*)::int AS n FROM chat_messages WHERE metadata @> ${probe}::jsonb`,
-  );
-  return rows[0]?.n as number;
+/** Число записей журнала с этим id действия (атомарность: ровно один на batch). */
+async function actionMessageCount(user: GraphId, actionId: string): Promise<number> {
+  return (await actionsOf(user)).filter((a) => a.id === actionId).length;
 }
 
 describe('budget.rolloverPreview (03-budget §2.6, §3.5)', () => {
@@ -441,6 +440,7 @@ describe('budget.rollover (03-budget §3.5): атомарное создание
         { categoryId: catFun, limit: '10000.00', carryover: '0' },
       ],
     });
+    await expectJournalRef(user, r, true);
     expect(r.idempotentReplay).toBe(false);
     expect(r.actionId).toBe(batchId);
     expect(r.envelopeIds).toHaveLength(2);
@@ -460,7 +460,7 @@ describe('budget.rollover (03-budget §3.5): атомарное создание
     expect(foodEnv?.props['orbis/carryover']).toBe('1200.00');
 
     // Один action на весь batch (атомарность журнала) и авто-перехват A4-хуком
-    expect(await actionMessageCount(batchId)).toBe(1);
+    expect(await actionMessageCount(user, batchId)).toBe(1);
     expect(await budgetParents(txnId)).toEqual([foodEnv?.id as string]);
 
     // Преемники созданы → кандидатов больше нет; история есть → needsSetup=false
@@ -484,13 +484,14 @@ describe('budget.rollover (03-budget §3.5): атомарное создание
     expect(first.idempotentReplay).toBe(false);
 
     const second = await ownerCaller(user).budget.rollover(input);
+    await expectJournalRef(user, second);
     expect(second.idempotentReplay).toBe(true);
     expect(second.envelopeIds).toEqual(first.envelopeIds);
     expect(second.actionId).toBe(batchId);
 
     const envs = await envelopesOf(user);
     expect(envs.filter((e) => e.props['orbis/period_start'] === targetStart)).toHaveLength(1);
-    expect(await actionMessageCount(batchId)).toBe(1);
+    expect(await actionMessageCount(user, batchId)).toBe(1);
   });
 
   test('дубль категории во входе → INVARIANT, ни один конверт не создан (атомарность)', async () => {

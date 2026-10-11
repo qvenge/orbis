@@ -5,6 +5,8 @@ import { Button } from '../../ui/Button';
 import { Input } from '../../ui/Input';
 import { Spinner } from '../../ui/Spinner';
 import { useToast } from '../../ui/toast-store';
+import { journalRefOf } from '../undo/journal-ref';
+import { offerUndoLazy } from '../undo/undo-lazy';
 
 type Settings = RouterOutputs['user']['getSettings'];
 
@@ -18,19 +20,65 @@ export function GeneralForm({ settings }: { settings: Settings }) {
   const utils = trpc.useUtils();
   const { show } = useToast();
   const update = trpc.user.updateSettings.useMutation({
-    onSuccess: () => {
+    onMutate: (patch) => {
+      const labels = {
+        timezone: 'Таймзона',
+        defaultCurrency: 'Валюта',
+        weekStartDay: 'Начало недели',
+      };
+      const keys = Object.keys(patch) as (keyof typeof labels)[];
+      return {
+        offer: keys.length > 1 || keys.some((key) => key !== 'weekStartDay'),
+        title: keys
+          .map(
+            (key) =>
+              `${labels[key]}: ${
+                key === 'weekStartDay'
+                  ? settings[key] === 'monday'
+                    ? 'Понедельник'
+                    : 'Воскресенье'
+                  : settings[key]
+              } → ${
+                key === 'weekStartDay'
+                  ? patch[key] === 'monday'
+                    ? 'Понедельник'
+                    : 'Воскресенье'
+                  : patch[key]
+              }`,
+          )
+          .join(', '),
+      };
+    },
+    onSuccess: (data, _patch, intent) => {
       void utils.user.getSettings.invalidate();
-      show('Сохранено');
+      const ref = journalRefOf(data);
+      if (ref && (intent?.offer || ref.consequences))
+        offerUndoLazy({
+          title: intent?.title ?? 'Настройки изменены',
+          actionId: ref.actionId,
+          entityIds: [],
+        });
+      else show('Сохранено');
     },
     onError: () => show('Не удалось сохранить настройки', 'danger'),
   });
   const [timezone, setTimezone] = useState(settings.timezone);
   const [defaultCurrency, setDefaultCurrency] = useState(settings.defaultCurrency);
   const [weekStartDay, setWeekStartDay] = useState(settings.weekStartDay);
+  const [accepted, setAccepted] = useState(settings);
+  if (accepted !== settings) {
+    // Принятое перечитывание меняет лишь поля без живой правки владельца.
+    if (timezone === accepted.timezone) setTimezone(settings.timezone);
+    if (defaultCurrency === accepted.defaultCurrency) setDefaultCurrency(settings.defaultCurrency);
+    if (weekStartDay === accepted.weekStartDay) setWeekStartDay(settings.weekStartDay);
+    setAccepted(settings);
+  }
+
   const [themePref, setThemePref] = useThemePref();
   const tzId = useId();
   const curId = useId();
   const wsdId = useId();
+  const wsdHintId = useId();
 
   function submit(e: FormEvent) {
     e.preventDefault();
@@ -39,6 +87,11 @@ export function GeneralForm({ settings }: { settings: Settings }) {
     if (timezone !== settings.timezone) patch.timezone = timezone;
     if (defaultCurrency !== settings.defaultCurrency) patch.defaultCurrency = defaultCurrency;
     if (weekStartDay !== settings.weekStartDay) patch.weekStartDay = weekStartDay;
+    // Тема уже сохранена локально; неизменённые серверные поля не создают пустое действие.
+    if (Object.keys(patch).length === 0) {
+      show('Сохранено');
+      return;
+    }
     update.mutate(patch);
   }
 
@@ -68,6 +121,7 @@ export function GeneralForm({ settings }: { settings: Settings }) {
         <select
           id={wsdId}
           aria-label="Начало недели"
+          aria-describedby={wsdHintId}
           value={weekStartDay}
           onChange={(e) => setWeekStartDay(e.target.value as typeof weekStartDay)}
           className="rounded-control border border-line bg-surface px-3 py-2"
@@ -75,6 +129,11 @@ export function GeneralForm({ settings }: { settings: Settings }) {
           <option value="monday">Понедельник</option>
           <option value="sunday">Воскресенье</option>
         </select>
+        {/* Неделя токена «эта неделя» — константа «понедельник» (срез 1в, вопрос владельцу В-1,
+            `WEEK_START` в `query/context.ts`): настройка молча не действовала бы (Minor-2 ревью Fable). */}
+        <span id={wsdHintId} className="text-xs text-text-muted">
+          На «эту неделю» в запросах пока не влияет — неделя считается с понедельника.
+        </span>
       </label>
       {/* Тема — только клиентская настройка (localStorage), в серверный patch НЕ попадает. */}
       <fieldset className="flex flex-col gap-1 text-sm">

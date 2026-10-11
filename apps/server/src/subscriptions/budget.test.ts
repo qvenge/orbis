@@ -312,7 +312,15 @@ async function engineOn<T>(
       tx,
       reg,
       def,
-      cctx: { graphId: user, today, timeZone: DEFAULT_TIMEZONE, reg, thisEntityId: null },
+      cctx: {
+        graphId: user,
+        today,
+        timeZone: DEFAULT_TIMEZONE,
+        weekStart: 'monday',
+        ownerCurrency: 'RUB',
+        reg,
+        thisEntityId: null,
+      },
     });
   });
 }

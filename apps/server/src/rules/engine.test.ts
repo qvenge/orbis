@@ -31,7 +31,7 @@ import { entities } from '../db/schema';
 import { type Tx, withIdentity } from '../db/with-identity';
 import { ExecError } from '../errors';
 import { execute, targetEntityIdsOf, uniqueRuleKeysOf } from '../executor/executor';
-import { makeChatJournalSink } from '../executor/journal';
+import { makeJournalSink } from '../executor/journal';
 import type { ExecuteOk, ExecuteResult, JournalSink, WireEntity } from '../executor/types';
 import { undoAction } from '../executor/undo';
 import { effectiveRegistry } from '../registry/cache';
@@ -101,14 +101,22 @@ async function worldWith(...specs: CustomAspectSpec[]): Promise<World> {
   return { graph, run, mk, categoryId };
 }
 
-function entityOf(r: ExecuteResult): WireEntity {
+function entityOf(
+  r:
+    | ExecuteResult
+    | (Omit<Extract<ExecuteResult, { ok: true }>, 'consequences'> & { consequences?: never }),
+): WireEntity {
   if (!r.ok)
     throw new Error(`ожидался успех исполнителя, пришёл отказ: ${JSON.stringify(r.error)}`);
   return r.results[0] as WireEntity;
 }
 
 /** Отказ исполнителя в форме «код + invariant + причина» — одна строка на сравнение. */
-function refusalOf(r: ExecuteResult): string {
+function refusalOf(
+  r:
+    | ExecuteResult
+    | (Omit<Extract<ExecuteResult, { ok: true }>, 'consequences'> & { consequences?: never }),
+): string {
   if (r.ok) return 'ok';
   const d = (r.error.details ?? {}) as { invariant?: string; reason?: string };
   return `${r.error.code}/${d.invariant ?? d.reason ?? '-'}`;
@@ -217,11 +225,13 @@ describe('режим отката — по ЭКЗЕМПЛЯРУ правила, 
     when: { op: '=', args: [{ prop: GATE_PROPS.finState }, { const: 'void' }] },
     params: { property: GATE_PROPS.finWhen },
   });
-  async function undoOfUnset(undo: 'check' | 'skip'): Promise<ExecuteResult> {
+  async function undoOfUnset(
+    undo: 'check' | 'skip',
+  ): Promise<ExecuteResult | import('../executor/undo').UndoOutcomeServer> {
     const w = await worldWith(GATE_FIN_ASPECT);
     const row = entityOf(await w.mk({ [GATE_PROPS.finState]: 'void', [GATE_PROPS.finWhen]: AT }));
     await seedCustomAspect(w.graph, { ...GATE_FIN_ASPECT, rules: [forbidVoidMoment(undo)] });
-    const sink = makeChatJournalSink(); // undo ищет действие в журнале — NOOP_SINK ему не годится
+    const sink = makeJournalSink(); // undo ищет действие в журнале — NOOP_SINK ему не годится
     const unset = await w.run('entity_update', { id: row.id, unset: [GATE_PROPS.finWhen] }, sink);
     expect(refusalOf(unset)).toBe('ok'); // после снятия правило не нарушено
     return undoAction(db, { identity: personal(w.graph), actionId: (unset as ExecuteOk).actionId });
@@ -797,7 +807,7 @@ describe('правка без свойств — только C-правила, 
     const body = await w.run('entity_update', {
       id: row.id,
       body: 'Заметка к трате',
-      expectedUpdatedAt: row.updatedAt,
+      expectedBodyRevision: row.bodyRevision,
     });
     expect(refusalOf(body)).toBe('ok');
     expect(refusalOf(await w.run('entity_update', { id: row.id, emoji: '💸' }))).toBe('ok');
@@ -1504,7 +1514,7 @@ describe('unique_among: края шаблона (задача 12)', () => {
  */
 describe('waiting_for живёт только в ожидании (В-П-8 (в), две строки на orbis/task)', () => {
   let graph: GraphId;
-  const sink = makeChatJournalSink();
+  const sink = makeJournalSink();
   beforeAll(async () => {
     graph = await freshGraph();
   });

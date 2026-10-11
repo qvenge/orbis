@@ -14,15 +14,18 @@ import type { BlockRow } from './types';
 
 const CELL = 'px-2 py-1 text-left align-top';
 
-/** Название — кнопкой, как строка `compact`: таблица на странице — тоже вход в свои записи. */
-function TitleCell({ row }: { row: BlockRow }) {
+/**
+ * Название — кнопкой, как строка `compact`: таблица на странице — тоже вход в свои записи.
+ * Закрытая (`closedIds` сервера, п. 42) — зачёркнута.
+ */
+function TitleCell({ row, closed }: { row: BlockRow; closed: ReadonlySet<string> }) {
   const openEntity = useOpenRecord();
   return (
     <td className={CELL}>
       <button
         type="button"
         onClick={() => openEntity(row.id)}
-        className="cursor-pointer text-left hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
+        className={`cursor-pointer text-left hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 ${closed.has(row.id) ? 'text-text-muted line-through' : ''}`}
       >
         {row.title}
       </button>
@@ -35,7 +38,15 @@ function TitleCell({ row }: { row: BlockRow }) {
  * отметки, что рисует `EntityRow`, только каждая в своей колонке. Колонка появляется, только если
  * хоть у одной строки есть её элемент: пустой столбец прочерков — шум, а не таблица.
  */
-function FactsTable({ rows, registry }: { rows: readonly BlockRow[]; registry: RegistryView }) {
+function FactsTable({
+  rows,
+  registry,
+  closed,
+}: {
+  rows: readonly BlockRow[];
+  registry: RegistryView;
+  closed: ReadonlySet<string>;
+}) {
   const reg = rowRegistryOf(registry.data);
   const facts = rows.map((e) => ({ e, row: rowProjectionOf(e, reg) }));
   const hasDate = facts.some((f) => f.row.date !== null);
@@ -54,7 +65,7 @@ function FactsTable({ rows, registry }: { rows: readonly BlockRow[]; registry: R
       <tbody className="divide-y divide-line">
         {facts.map(({ e, row }) => (
           <tr key={e.id} data-testid="qb-item">
-            <TitleCell row={e} />
+            <TitleCell row={e} closed={closed} />
             {hasDate && (
               <td className={CELL}>{row.date ? formatDay(row.date.value) : EMPTY_TEXT}</td>
             )}
@@ -158,13 +169,15 @@ function ColumnCell({
 export function TableForm({
   rows,
   columns,
+  closed,
 }: {
   rows: readonly BlockRow[];
   columns: readonly QueryColumn[] | undefined;
+  closed: ReadonlySet<string>;
 }) {
   const registry = useRegistry();
   const tz = trpc.user.getSettings.useQuery().data?.timezone;
-  if (columns === undefined) return <FactsTable rows={rows} registry={registry} />;
+  if (columns === undefined) return <FactsTable rows={rows} registry={registry} closed={closed} />;
   const titled = columns.some((c) => c.field === TITLE_FIELD);
   return (
     <table className="w-full text-sm">
@@ -181,10 +194,10 @@ export function TableForm({
       <tbody className="divide-y divide-line">
         {rows.map((e) => (
           <tr key={e.id} data-testid="qb-item">
-            {!titled && <TitleCell row={e} />}
+            {!titled && <TitleCell row={e} closed={closed} />}
             {columns.map((c) =>
               c.field === TITLE_FIELD ? (
-                <TitleCell key={c.field} row={e} />
+                <TitleCell key={c.field} row={e} closed={closed} />
               ) : (
                 <ColumnCell key={c.field} field={c.field} row={e} registry={registry} tz={tz} />
               ),

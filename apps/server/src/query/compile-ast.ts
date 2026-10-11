@@ -1,3 +1,4 @@
+import type { EntityFields } from '@orbis/shared';
 // apps/server/src/query/compile-ast.ts
 // Компилятор канонического Q-AST (§А5-7) в PostgreSQL по НОВОЙ форме хранения:
 // плоские `props` по id свойства, список `aspects[]`, роль ребра `relations.role` (§А1-1,
@@ -37,10 +38,12 @@
 // вовсе, — на этом стоит клиентский фильтр «Факт» (`planned=!true`) и отрицание по
 // спискам. `COALESCE(<X>, false)` читается как «предикат ТОЧНО выполнен», и его отрицание
 // — «не выполнен или неизвестен», то есть ровно правило §6.1. Одно место на всё дерево:
-// у оператора `ne` СВОЕЙ SQL-ФОРМЫ нет — ветка `case 'ne'` в `scalarPropCond` есть, но она
+// у оператора `ne` СВОЕЙ SQL-ФОРМЫ нет — ветка `case 'ne'` в `exprCond` есть, но она
 // собирает предикат равенства и оборачивает его тем же `negated`.
 import {
   type AspectDefinition,
+  type BlockSum,
+  bindingIndexOf,
   type GraphId,
   hasValidCalendar,
   type PropertyDefinition,
@@ -50,16 +53,22 @@ import {
 // были заняты СТАРОЙ грамматикой до Задачи 21b; с её сносом канон въехал и в корневой
 // баррель `@orbis/shared` (см. его докблок), и оба входа отдают одни и те же имена.
 import {
+  isContractAddress,
   QUERY_DEPTH_CAP,
   type QueryAst,
   type QueryBound,
   type QueryDateToken,
+  type QueryFieldRef,
   type QueryFilterNode,
   type QueryPropOp,
   type QueryRangeValue,
   type QueryRelPredicate,
   type QueryScalar,
   type QuerySortField,
+  TOKEN_EDGE_MESSAGE,
+  type TokenForm,
+  tokenEdges,
+  type WeekStart,
 } from '@orbis/shared/query';
 import { type SQL, sql } from 'drizzle-orm';
 import { ExecError } from '../errors';
@@ -71,6 +80,18 @@ import { ExecError } from '../errors';
 import { compileClassMembership } from '../expr/compile';
 import type { RegistrySnapshot } from '../registry/load';
 import { literalFormViolation } from '../registry/validate-props';
+// Адрес контракта (спека 1в §3.1–§3.3) — SQL по привязкам аспектов записи. Импорт взаимный, как
+// у `expr/compile.ts`: тот файл берёт отсюда общие шаги условия (`exprCond`, `negated`, `lit`),
+// и обе стороны читают импортированное только внутри функций.
+import {
+  addressCond,
+  addressNumericSql,
+  addressSortKey,
+  closedMembershipSql,
+  groupDatesSql,
+  groupKeySql,
+  whenLateralJoins,
+} from './contract-sql';
 
 /**
  * Контекст компиляции. Имена полей — из плана (на них ссылаются Задачи 9b, 10a/10b, 11, 13c).
@@ -93,9 +114,41 @@ export interface CompileCtx {
   today: string;
   /** IANA-таймзона владельца — по ней date-токены читают timestamp-свойства. */
   timeZone: string;
+  /**
+   * Начало недели для токена `this_week` (спека 1в §3.4). Обязательное, а не с умолчанием: контекст
+   * собирают несколько мест, и забытое поле обязано быть ошибкой типов, а не молчаливым понедельником.
+   * Боевое значение ставит `queryContext` (константа «понедельник», вопрос владельцу В-1).
+   */
+  weekStart: WeekStart;
+  /**
+   * Валюта владельца (`user_settings.defaultCurrency`) — валюта денежной записи БЕЗ своей валюты
+   * (правило контракта «движения денег», спека 1в §3.6). Обязательное по той же причине, что
+   * `weekStart`; ставят сборщики контекста одной выборкой настроек (`ownerQuerySettings`).
+   */
+  ownerCurrency: string;
   reg: RegistrySnapshot;
   /** Сущность-хозяин query-блока (для `of: 'this'`); null/отсутствие — контекста нет. */
   thisEntityId?: string | null;
+  /**
+   * Даты «когда» одним `LATERAL` на строку (R-21, `contract-sql.ts`, `whenLateralJoins`): карта
+   * «контракт → псевдоним и источник», её наполняет `whenDatesSql` при компиляции SELECT'а. Ставит только
+   * сборщик SELECT'а (`whenLateralCtx`) — тот, кто потом допишет соединения в FROM; без карты даты
+   * читаются самодостаточным подзапросом.
+   */
+  whenLateral?: Map<string, { alias: string; source: SQL }>;
+}
+
+/** Контекст сборщика SELECT'а по `entities e`: даты «когда» соберутся в `LATERAL` его FROM (R-21). */
+function whenLateralCtx(ctx: CompileCtx): CompileCtx {
+  return { ...ctx, whenLateral: new Map() };
+}
+
+/**
+ * FROM сборщика — ПОСЛЕ компиляции всех частей запроса: соединения дат знает только уже собранный
+ * WHERE/ORDER BY/колонки (порядок вычисления шаблона JS — слева направо, поэтому FROM — переменной).
+ */
+function entitiesFrom(c: CompileCtx): SQL {
+  return sql`entities e${whenLateralJoins(c)}`;
 }
 
 /** Дефолтный кап выдачи, когда `limit` не задан (§6.1, как у `compile.ts:60`). */
@@ -110,8 +163,19 @@ const DEFAULT_LIMIT = 500;
  * секции), но та же проекция строки. Своя копия списка разошлась бы с `toWireEntityFromSql`
  * на первой же новой колонке, и разъезд был бы виден не отказом, а пустым полем у клиента.
  */
-export const ENTITY_SELECT_COLUMNS =
-  'id, graph_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived';
+const COLUMNS_BEFORE_BODY = 'id, graph_id, title, emoji';
+const COLUMNS_AFTER_BODY =
+  'body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived';
+/** Лёгкая строка списка (§9): тело выбирается лишь явно; старый порядок колонок full сохранён. */
+export const ENTITY_SELECT_COLUMNS = `${COLUMNS_BEFORE_BODY}, ${COLUMNS_AFTER_BODY}`;
+/** lax берёт доступные узлы: strict падает на документе короче восьми узлов. */
+export const BODY_HEAD_SQL =
+  "jsonb_path_query_array(body_doc, 'lax $.doc.content[0 to 7]') AS body_head";
+export function entitySelectColumns(fields: EntityFields): string {
+  if (fields === 'full') return `${COLUMNS_BEFORE_BODY}, body, ${COLUMNS_AFTER_BODY}`;
+  if (fields === 'start') return `${ENTITY_SELECT_COLUMNS}, ${BODY_HEAD_SQL}`;
+  return ENTITY_SELECT_COLUMNS;
+}
 
 /** UUID сущности — та же форма, что у `REL_TARGET_PATTERN` канона (§А5-7). */
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -313,6 +377,22 @@ function isToken(value: unknown): value is { token: QueryDateToken } {
 }
 
 /**
+ * Граница без ссылки на параметр страницы (1в §5.1). Ссылка до компилятора доезжать не должна:
+ * пачка блоков подставляет значения раньше (`substituteParams`), прочие входы отвергают `$` схемой
+ * и разбором. Доехавшая — отказ `UNKNOWN_PARAM` с именем, а не SQL-параметр `[object Object]`.
+ */
+function substituted<T>(bound: T | { param: string }): T {
+  if (typeof bound === 'object' && bound !== null && 'param' in bound) {
+    return fail(
+      'UNKNOWN_PARAM',
+      `параметр «${bound.param}» не подставлен: значение приходит только с блоком страницы`,
+      { name: bound.param },
+    );
+  }
+  return bound as T;
+}
+
+/**
  * Гейт значения предиката: ВИД и ФОРМА литерала — по схеме значения свойства (§А7-1).
  *
  * Проверка нужна ровно потому, что вход `ast:` тула (§А5-4) идёт МИМО парсера и с Задачи 9b
@@ -418,51 +498,41 @@ function dateExpr(ref: PropRef, ctx: CompileCtx): SQL {
 }
 
 /**
- * Календарная дата значения свойства в таймзоне владельца — та же формула, по которой
- * сравниваются date-токены грамматики (`dateExpr` выше).
+ * ДВА КРАЯ ТОКЕНА (спека 1в §3.4) — одно правило для всех восьми токенов: край, который читает
+ * форма (`edgeOf`), — календарный день из `tokenEdges` по «сегодня» и началу недели контекста; он
+ * едет ПАРАМЕТРОМ `$::date`. Края нет — отказ `TOKEN_EDGE` тем же текстом, что у разбора: дерево,
+ * пришедшее мимо разбора (вход `ast` роутера и тула, `over` действия, источник прогресса цели),
+ * обязано отказать так же, как текст.
  *
- * Экспортируется ради ОДНОГО потребителя — движка подписки Agenda: ему нужен не предикат, а
- * сама дата, под `BETWEEN` окна, под `LEAST` двух слотов и под `ORDER BY` секции. Копия рядом
- * разошлась бы с запросами на первом же слоте `moment`, реализованном date-свойством
- * (§Б1-2 `any_of[timestamp, date]`).
+ * Правило одного «якоря» (до 1в: `<next_7d` — «< сегодня+7») снято: `<T` — раньше НАЧАЛА `T`, `>T` —
+ * позже КОНЦА, и у всех токенов одинаково. Перепись сохранённых деревьев — `tokenBoundaryForms`.
  */
-export function propertyLocalDateExpr(propertyId: string, ctx: CompileCtx): SQL {
-  return dateExpr(propRef(propertyId, ctx), ctx);
-}
-
-/**
- * Условие относительного времени (§6.1, нормативная таблица) — форма ровно та же, что у
- * старого компилятора: `next_7d` включает обе границы, `after_7d` строго дальше.
- */
-function tokenCond(ref: PropRef, token: QueryDateToken, ctx: CompileCtx): SQL {
-  const d = dateExpr(ref, ctx);
-  switch (token) {
-    case 'today':
-      return sql`${d} = ${ctx.today}::date`;
-    case 'overdue':
-      return sql`${d} < ${ctx.today}::date`;
-    case 'next_7d':
-      return sql`${d} BETWEEN ${ctx.today}::date AND ${ctx.today}::date + 7`;
-    case 'after_7d':
-      return sql`${d} > ${ctx.today}::date + 7`;
+function tokenEdgeParam(
+  e: CondExpr,
+  token: QueryDateToken,
+  form: Exclude<TokenForm, 'eq'>,
+  ctx: CompileCtx,
+): SQL {
+  const edges = tokenEdges(token, ctx.today, ctx.weekStart);
+  const day = form === 'lt' || form === 'gte' ? edges.start : edges.end;
+  if (day === null) {
+    return fail('TOKEN_EDGE', TOKEN_EDGE_MESSAGE(token, form), { property: e.name, token, form });
   }
+  return sql`${day}::date`;
 }
 
 /**
- * Токен В РОЛИ ГРАНИЦЫ (`>`, `<`, `range`) — это ДЕНЬ, вокруг которого токен определён:
- * `today`/`overdue` — сегодня, `next_7d`/`after_7d` — сегодня+7. Направление задаёт сам
- * оператор, поэтому у границы смысл один и от направления не зависит: `"срок"<=today` —
- * «не позже сегодня», `"срок">=today` — «не раньше сегодня».
+ * `=T` над готовой календарной датой `d`: `[начало; конец]`, открытый край — одностороннее сравнение
+ * (`=overdue` — «не позже вчера», `=after_7d` — «не раньше сегодня+8»).
  *
- * Правило названо здесь потому, что канон его не даёт: §А5-7 разрешает токен в любой
- * границе `range`, а §6.1 описывает токены как готовые УСЛОВИЯ (`today` = «= сегодня»).
- * Растащить эти два смысла молча — значит получить `"срок"<=next_7d`, который у одного
- * читателя «не позже конца недели», а у другого «не позже сегодня».
+ * Над ДНЁМ, а не над свойством (1в): тот же шаг читают даты значения «когда» и значения слота
+ * (`contract-sql.ts`) — вторая копия таблицы токенов разошлась бы с этой.
  */
-function tokenAnchor(token: QueryDateToken, ctx: CompileCtx): SQL {
-  return token === 'next_7d' || token === 'after_7d'
-    ? sql`${ctx.today}::date + 7`
-    : sql`${ctx.today}::date`;
+export function dayTokenCond(d: SQL, token: QueryDateToken, ctx: CompileCtx): SQL {
+  const { start, end } = tokenEdges(token, ctx.today, ctx.weekStart);
+  if (start !== null && end !== null) return sql`${d} BETWEEN ${start}::date AND ${end}::date`;
+  if (start !== null) return sql`${d} >= ${start}::date`;
+  return sql`${d} <= ${end}::date`;
 }
 
 // ─────────────────────────── Предикаты свойства ───────────────────────────
@@ -489,10 +559,15 @@ export function negated(cond: SQL): SQL {
   return sql`NOT COALESCE(${cond}, false)`;
 }
 
-function propCond(propertyId: string, op: QueryPropOp, value: unknown, ctx: CompileCtx): SQL {
-  const ref = propRef(propertyId, ctx);
+/**
+ * Предикат поля: свойство или адрес контракта (1в §3.1–§3.3). Адрес уходит в `contract-sql.ts`
+ * целиком — у него свой набор значений (по привязкам аспектов записи) и свой квантор.
+ */
+function propCond(field: QueryFieldRef, op: QueryPropOp, value: unknown, ctx: CompileCtx): SQL {
+  if (isContractAddress(field)) return addressCond({ prop: field, op, value }, ctx);
+  const ref = propRef(field, ctx);
   if (ref.list) return listPropCond(ref, op, value);
-  return scalarPropCond(ref, op, value, ctx);
+  return exprCond(propertyExpr(ref, ctx), op, value as unknown, ctx);
 }
 
 /**
@@ -531,26 +606,94 @@ function listPropCond(ref: PropRef, op: QueryPropOp, value: unknown): SQL {
   }
 }
 
-function scalarPropCond(ref: PropRef, op: QueryPropOp, value: unknown, ctx: CompileCtx): SQL {
+/**
+ * ВЫРАЖЕНИЕ, НАД КОТОРЫМ СТРОИТСЯ УСЛОВИЕ — общий шаг «условие над выражением» (1в, задача 1).
+ *
+ * До 1в условие строилось только над свойством (`props->>'<id>'` под кастом по kind). С 1в то же
+ * условие строится над значением слота и над датой значения «когда» (`contract-sql.ts`): операторы,
+ * токены, границы `range` и отрицание обязаны значить одно и то же у всех трёх, и копия этой
+ * развилки у адреса разошлась бы с ней на первой правке §6.1. Поэтому развилка одна (`exprCond`),
+ * а различия — здесь: как получить сравнимое значение, его календарный день и литерал под кастом.
+ */
+export interface CondExpr {
+  /** Имя в отказах: id свойства или ключ адреса. */
+  name: string;
+  /** Как отказ называет свойство или адрес (М-2 ревью A): `свойства 'x'` / `адреса 'x'` — родительный падеж. */
+  of: string;
+  /** Календарный день значения; не дата — отказ `TYPE` (гейт времени). */
+  day(): SQL;
+  /**
+   * Сравнимое значение под литералы условия `samples` (у слота с моментом — день или момент по
+   * форме литерала). Литералы одного условия (`range`, `in`) — одного вида: левая сторона у условия
+   * одна, и день рядом с моментом — отказ `TYPE` (перенос гейта задачи 1, Minor-1).
+   */
+  comparable(samples: readonly QueryScalar[]): SQL;
+  /** Литерал правой стороны: форма проверена, каст — по виду значения. */
+  param(value: QueryScalar): SQL;
+  /** Литерал-граница рядом с токеном: календарный день. */
+  dayParam(value: QueryScalar): SQL;
+  /**
+   * Форма сравнения литерала (у слота с моментом — `day` или `at`). Нет — форма у всех литералов одна.
+   * Читает её только `in`: «хоть одно из» сравнивает каждый литерал в его форме (перенос ревью задачи 2).
+   */
+  formOf?(value: QueryScalar): string;
+}
+
+/** Выражение свойства — ровно те функции, из которых условие собиралось до 1в (эталон SQL прежний). */
+function propertyExpr(ref: PropRef, ctx: CompileCtx): CondExpr {
+  return {
+    name: ref.def.id,
+    of: `свойства '${ref.def.id}'`,
+    day: () => dateExpr(ref, ctx),
+    comparable: () => comparable(ref),
+    param: (v) => scalarParam(ref.def, v),
+    dayParam: (b) => {
+      // Литеральная граница РЯДОМ с токеном: слева стоит календарная дата, значит и справа
+      // обязана быть она. Тип литерала сверяется по реестру тем же гейтом, что и у обычных
+      // сравнений, — иначе `{from: 5, to: {token:'today'}}` уехало бы в `5::date`.
+      assertScalarType(ref.def, b);
+      return sql`${b}::date`;
+    },
+  };
+}
+
+/**
+ * Условие над выражением по оператору узла. `ne` и `{not:{eq}}` — ОДНА семантика намеренно:
+ * §6.1 знает единственное «не равно» (решение 10: значения нет — проходит), а канон даёт для
+ * него две формы — оператор и узел `not`. Разведи их по смыслу — и `p!=v` начало бы означать не
+ * то же, что `p=!v`, при том что различие нигде не описано.
+ */
+export function exprCond(e: CondExpr, op: QueryPropOp, value: unknown, ctx: CompileCtx): SQL {
   switch (op) {
     case 'eq':
-      return boundCond(ref, '=', value as QueryBound, ctx);
+      return boundCond(e, '=', value as QueryBound, ctx);
     case 'ne':
-      // `ne` и `{not:{eq}}` — ОДНА семантика намеренно. §6.1 знает единственное «не равно»
-      // (решение 10: значения нет — проходит), а канон даёт для него две формы: оператор и
-      // узел `not`. Разведи их по смыслу — и `p!=v` начало бы означать не то же, что `p=!v`,
-      // при том что различие нигде не описано.
-      return negated(boundCond(ref, '=', value as QueryBound, ctx));
+      return negated(boundCond(e, '=', value as QueryBound, ctx));
     case 'gt':
-      return boundCond(ref, '>', value as QueryBound, ctx);
+      return boundCond(e, '>', value as QueryBound, ctx);
     case 'lt':
-      return boundCond(ref, '<', value as QueryBound, ctx);
+      return boundCond(e, '<', value as QueryBound, ctx);
     case 'range':
-      return rangeCond(ref, value as QueryRangeValue, ctx);
+      return rangeCond(e, value as QueryRangeValue, ctx);
     case 'in': {
+      // «Хоть одно из» — то же, чем текст `a|b` является после разбора (`or` из `eq`): каждый литерал
+      // сравнивается в СВОЕЙ форме. У слота с моментом день и момент рядом законны (день — по дню,
+      // момент — по моменту), а одна левая сторона на весь список отказала бы дереву в том, что его же
+      // текст выражает (перенос ревью задачи 2). Литералы одной формы — одна форма `IN (…)`, как до 1в.
       const values = value as QueryScalar[];
-      const params = values.map((v) => scalarParam(ref.def, v));
-      return sql`${comparable(ref)} IN (${sql.join(params, sql`, `)})`;
+      const byForm = new Map<string, QueryScalar[]>();
+      for (const v of values) {
+        const form = e.formOf?.(v) ?? '';
+        byForm.set(form, [...(byForm.get(form) ?? []), v]);
+      }
+      const parts = [...byForm.values()].map(
+        (group) =>
+          sql`${e.comparable(group)} IN (${sql.join(
+            group.map((v) => e.param(v)),
+            sql`, `,
+          )})`,
+      );
+      return parts.length === 1 ? (parts[0] as SQL) : sql`(${sql.join(parts, sql` OR `)})`;
     }
     case 'contains':
       // Зеркало долга п. 1: `contains` на скаляре печатается тем же `p=v`, что и `eq`, и
@@ -558,20 +701,23 @@ function scalarPropCond(ref: PropRef, op: QueryPropOp, value: unknown, ctx: Comp
       // Подстрока в языке уже есть и называется `search=`.
       return fail(
         'TYPE',
-        `оператор 'contains' не определён для скалярного свойства '${ref.def.id}': ` +
+        `оператор 'contains' не определён для скалярного ${e.of}: ` +
           `вхождение элемента бывает у списка, а поиск подстроки — это search=`,
-        { property: ref.def.id, op },
+        { property: e.name, op },
       );
   }
 }
 
-/** Сравнение со скаляром ИЛИ с относительным временем (§6.1). */
-function boundCond(ref: PropRef, op: '=' | '>' | '<', bound: QueryBound, ctx: CompileCtx): SQL {
+/** Сравнение со скаляром ИЛИ с токеном: `<T` — раньше начала, `>T` — позже конца (§3.4). */
+function boundCond(e: CondExpr, op: '=' | '>' | '<', raw: QueryBound, ctx: CompileCtx): SQL {
+  const bound = substituted(raw);
   if (isToken(bound)) {
-    if (op === '=') return tokenCond(ref, bound.token, ctx);
-    return sql`${dateExpr(ref, ctx)} ${sql.raw(op)} ${tokenAnchor(bound.token, ctx)}`;
+    // День — ПЕРВЫМ: не дата — отказ вида (`TYPE`) важнее отказа края.
+    const day = e.day();
+    if (op === '=') return dayTokenCond(day, bound.token, ctx);
+    return sql`${day} ${sql.raw(op)} ${tokenEdgeParam(e, bound.token, op === '<' ? 'lt' : 'gt', ctx)}`;
   }
-  return sql`${comparable(ref)} ${sql.raw(op)} ${scalarParam(ref.def, bound)}`;
+  return sql`${e.comparable([bound])} ${sql.raw(op)} ${e.param(bound)}`;
 }
 
 /**
@@ -579,30 +725,28 @@ function boundCond(ref: PropRef, op: '=' | '>' | '<', bound: QueryBound, ctx: Co
  * канона нет, одна граница просто отсутствует.
  *
  * Если хотя бы одна граница — токен, сравнение идёт по КАЛЕНДАРНОЙ ДАТЕ (обе стороны),
- * иначе — по типу свойства. Смешивать нельзя: `timestamptz` слева и `date` справа сравнимы,
- * но означали бы не то, что просил автор запроса (полночь вместо всего дня).
+ * иначе — по типу значения. Смешивать нельзя: `timestamptz` слева и `date` справа сравнимы,
+ * но означали бы не то, что просил автор запроса (полночь вместо всего дня). Токен-граница читает
+ * свой край (§3.4): `from` — начало, `to` — конец.
  */
-function rangeCond(ref: PropRef, value: QueryRangeValue, ctx: CompileCtx): SQL {
-  const { from, to } = value;
+function rangeCond(e: CondExpr, value: QueryRangeValue, ctx: CompileCtx): SQL {
+  const from = value.from === undefined ? undefined : substituted(value.from);
+  const to = value.to === undefined ? undefined : substituted(value.to);
   if (from === undefined && to === undefined) {
-    return fail('SYNTAX', `range без границ у свойства '${ref.def.id}'`, { property: ref.def.id });
+    return fail('SYNTAX', `range без границ у ${e.of}`, { property: e.name });
   }
   const byDate = isToken(from) || isToken(to);
-  const left = byDate ? dateExpr(ref, ctx) : comparable(ref);
-  const side = (b: QueryBound): SQL => {
-    if (isToken(b)) return tokenAnchor(b.token, ctx);
-    if (!byDate) return scalarParam(ref.def, b);
-    // Литеральная граница РЯДОМ с токеном: слева стоит календарная дата, значит и справа
-    // обязана быть она. Тип литерала сверяется по реестру тем же гейтом, что и у обычных
-    // сравнений, — иначе `{from: 5, to: {token:'today'}}` уехало бы в `5::date`.
-    assertScalarType(ref.def, b);
-    return sql`${b}::date`;
+  const literals = [from, to].filter((b): b is QueryScalar => b !== undefined && !isToken(b));
+  const left = byDate ? e.day() : e.comparable(literals);
+  const side = (b: Exclude<QueryBound, { param: string }>, form: 'gte' | 'lte'): SQL => {
+    if (isToken(b)) return tokenEdgeParam(e, b.token, form, ctx);
+    return byDate ? e.dayParam(b) : e.param(b);
   };
   if (from !== undefined && to !== undefined) {
-    return sql`${left} BETWEEN ${side(from)} AND ${side(to)}`;
+    return sql`${left} BETWEEN ${side(from, 'gte')} AND ${side(to, 'lte')}`;
   }
-  if (from !== undefined) return sql`${left} >= ${side(from)}`;
-  return sql`${left} <= ${side(to as QueryBound)}`;
+  if (from !== undefined) return sql`${left} >= ${side(from, 'gte')}`;
+  return sql`${left} <= ${side(to as Exclude<QueryBound, { param: string }>, 'lte')}`;
 }
 
 // ─────────────────────────── Реляционные предикаты ───────────────────────────
@@ -784,7 +928,8 @@ function decidesArchived(ast: QueryAst, ctx: CompileCtx): boolean {
   let found = false;
   walkNodes(ast.filter, (n) => {
     if ('archived' in n) found = true;
-    if (!('prop' in n)) return;
+    // Адрес контракта (1в) — не свойство: об архивности он не высказывается.
+    if (!('prop' in n) || typeof n.prop !== 'string') return;
     const def = ctx.reg.properties.get(n.prop);
     if (def?.storage === 'core' && CORE_COLUMN[def.id] === ARCHIVED_COLUMN) found = true;
   });
@@ -829,7 +974,9 @@ function namesServiceAspect(ast: QueryAst, ctx: CompileCtx, service: readonly st
   let named = false;
   walkNodes(ast.filter, (n) => {
     if ('aspect' in n && serviceSet.has(n.aspect)) named = true;
-    const propertyId = 'prop' in n ? n.prop : 'has' in n ? n.has : null;
+    // Адрес контракта (1в) носителей-свойств не называет: служебность по нему не выводится.
+    const propertyId =
+      'prop' in n ? (typeof n.prop === 'string' ? n.prop : null) : 'has' in n ? n.has : null;
     if (propertyId === null) return;
     const owners = carriers.get(propertyId) ?? [];
     if (owners.length > 0 && owners.every((id) => serviceSet.has(id))) named = true;
@@ -863,9 +1010,18 @@ export function compileWhere(ast: QueryAst, ctx: CompileCtx): SQL {
 
 // ─────────────────────────── ORDER BY ───────────────────────────
 
-function sortItem(field: QuerySortField, ctx: CompileCtx): SQL {
-  const ref = propRef(field.field, ctx);
+function sortItem(
+  field: QuerySortField,
+  positive: readonly QueryFilterNode[],
+  ctx: CompileCtx,
+): SQL {
   const dir = sql.raw(field.dir === 'desc' ? 'DESC' : 'ASC');
+  if (isContractAddress(field.field)) {
+    // Ключ адреса (1в §3.3, РП-21): ранняя из дат, удовлетворяющих условиям блока на том же
+    // адресе; у слота не-даты — значение привязки с меньшим рангом. Без значения — в конце.
+    return sql`${addressSortKey(field.field, positive, ctx)} ${dir} NULLS LAST`;
+  }
+  const ref = propRef(field.field, ctx);
   if (ref.list) {
     return fail(
       'TYPE',
@@ -887,78 +1043,260 @@ function sortItem(field: QuerySortField, ctx: CompileCtx): SQL {
   return sql`${comparable(ref)} ${dir} NULLS LAST`;
 }
 
-function compileOrderBy(ast: QueryAst, ctx: CompileCtx): SQL | null {
-  if (!ast.sortBy || ast.sortBy.length === 0) return null;
-  return sql.join(
-    ast.sortBy.map((s) => sortItem(s, ctx)),
-    sql`, `,
-  );
+/**
+ * Положительные условия блока — кандидаты в ключ сортировки по адресу (1в §3.3): дети верхнего
+ * `and` (или сам фильтр). Что из них относится к адресу сортировки, решает `addressSortKey`.
+ *
+ * Экспорт — ради ПЕРИОДА группы блока (`groupPeriod`, `routers/entity-blocks.ts`): ключ группы
+ * (`groupKeySql` ниже) и период обязаны видеть один и тот же набор условий, и вторая копия в роутере
+ * разошлась бы с этой на первой правке (например, учёт вложенного `and` в ключе без учёта в периоде).
+ */
+export function topLevelConds(ast: QueryAst): readonly QueryFilterNode[] {
+  if (ast.filter === null) return [];
+  return 'and' in ast.filter ? ast.filter.and : [ast.filter];
+}
+
+/**
+ * УСТОЙЧИВЫЙ ПОРЯДОК (спека 1в §3.5, РП-8): `e.id` — ПОСЛЕДНИЙ ключ сортировки каждой выборки канона,
+ * без `sortBy` — единственный. Без него строки с равными ключами (и вся выдача без `sortBy`) шли в
+ * порядке, которого Postgres не обещает: под `limit` менялся даже НАБОР строк блока, а «последнее» по
+ * порядку блока (§3.7) зависело бы от плана запроса.
+ */
+function compileOrderBy(ast: QueryAst, ctx: CompileCtx): SQL {
+  const positive = topLevelConds(ast);
+  const keys = (ast.sortBy ?? []).map((s) => sortItem(s, positive, ctx));
+  return sql.join([...keys, sql`e.id ASC`], sql`, `);
 }
 
 // ─────────────────────────── Точки входа ───────────────────────────
 
 /** Полный SELECT: WHERE + ORDER BY + LIMIT (кап 500 без `limit`). */
-export function compileQueryAst(ast: QueryAst, ctx: CompileCtx): SQL {
-  let q = sql`SELECT ${sql.raw(ENTITY_SELECT_COLUMNS)} FROM entities e WHERE ${compileWhere(ast, ctx)}`;
+// ОБХОДЧИК-Q: compile
+export function compileQueryAst(
+  ast: QueryAst,
+  ctx: CompileCtx,
+  opts: { fields?: EntityFields } = {},
+): SQL {
+  const c = whenLateralCtx(ctx);
+  const where = compileWhere(ast, c);
+  const order = compileOrderBy(ast, c);
+  return sql`SELECT ${sql.raw(entitySelectColumns(opts.fields ?? 'none'))} FROM ${entitiesFrom(c)} WHERE ${where} ORDER BY ${order} LIMIT ${ast.limit ?? DEFAULT_LIMIT}`;
+}
+
+/**
+ * СТРОКИ БЛОКА ДАННЫХ СТРАНИЦЫ (`entity.blocks`, спека 1в РП-11, РП-12) — тот же SELECT, что у
+ * `compileQueryAst`, плюс колонки для провода блока:
+ *  - `__closed` — запись в наборе `closed` «завершаемости» (Б-2 №78 п. 42): строка web набор,
+ *    заданный предикатом, не вычисляет, и зачёркивание расходилось бы с фильтром — признак считает
+ *    сервер тем же выражением, что правило значения «даты» (`closedMembershipSql`);
+ *  - при `group=day:<поле>` (§5.2) — `__key_at` (ключ записи, `groupKeySql`) и `__when_dates` (даты
+ *    «когда» для выбора даты в дне, `groupDatesSql`); порядок начинается ключом (`NULLS LAST` —
+ *    «Без даты» в конце), дальше `sortBy` блока и `e.id` (§3.5);
+ *  - `__total` — число ВСЕХ строк блока до `LIMIT` (`count(*) OVER ()`): «ещё N» переполненного блока
+ *    считается тем же проходом и в том же снимке, что и сами строки. Отдельный `compileCountAst`
+ *    повторял бы весь отбор вторым statement — у Повестки (задача 10 1в, `agenda:page`) это треть
+ *    времени пачки: предикаты значения «когда» дороги на строке, и платить их дважды незачем.
+ *
+ * Отдельная точка входа, а не колонка `compileQueryAst`: у `entity.query`, тулов и рутин провода блока
+ * нет, и лишняя колонка стоила бы им членства в наборе на каждой строке и эталона SQL (§3.5).
+ */
+export function compileBlockRowsAst(
+  ast: QueryAst,
+  outer: CompileCtx,
+  opts: { fields?: EntityFields } = {},
+): SQL {
+  const ctx = whenLateralCtx(outer);
+  const columns = sql`${sql.raw(entitySelectColumns(opts.fields ?? 'none'))}, COALESCE(${closedMembershipSql(ctx)}, false) AS __closed, count(*) OVER () AS __total`;
+  const where = compileWhere(ast, ctx);
   const order = compileOrderBy(ast, ctx);
-  if (order) q = sql`${q} ORDER BY ${order}`;
-  return sql`${q} LIMIT ${ast.limit ?? DEFAULT_LIMIT}`;
+  const limit = ast.limit ?? DEFAULT_LIMIT;
+  if (ast.group === undefined) {
+    return sql`SELECT ${columns} FROM ${entitiesFrom(ctx)} WHERE ${where} ORDER BY ${order} LIMIT ${limit}`;
+  }
+  const key = groupKeySql(ast.group.field, topLevelConds(ast), ctx);
+  const dates = groupDatesSql(ast.group.field, ctx);
+  return sql`SELECT ${columns}, ${key} AS __key_at, ${dates} AS __when_dates FROM ${entitiesFrom(ctx)} WHERE ${where} ORDER BY __key_at ASC NULLS LAST, ${order} LIMIT ${limit}`;
 }
 
 /** COUNT(*) для бейджей (02 §3.2): те же условия, но без `limit`/`sortBy`/капа. */
 export function compileCountAst(ast: QueryAst, ctx: CompileCtx): SQL {
-  return sql`SELECT count(*) FROM entities e WHERE ${compileWhere(ast, ctx)}`;
+  const c = whenLateralCtx(ctx);
+  const where = compileWhere(ast, c);
+  return sql`SELECT count(*) FROM ${entitiesFrom(c)} WHERE ${where}`;
 }
 
 /**
- * Числовое свойство агрегата: `sum`/`latest` осмысленны только над числом. Отказ здесь
+ * Числовое поле агрегата: `sum`/`latest` осмысленны только над числом. Отказ здесь
  * отличается от отказа по запросу (`reason: 'FIELD'`): цель §11.3 обязана различать
  * «сломано поле» и «сломан запрос» — у неё на это разные ярлыки fail-soft.
+ *
+ * `value` — сравнимое числовое значение, `present` — «значение есть» (у свойства — сырой текст
+ * `props->>`, как до 1в). Адрес слота (1в §3.1) — значение привязки с меньшим рангом
+ * (`addressNumericSql`); значение контракта — отказ (даты не суммируются).
  */
-function numericRef(propertyId: string, ctx: CompileCtx, op: 'sum' | 'latest'): PropRef {
-  const ref = propRef(propertyId, ctx);
+function numericRef(
+  field: QueryFieldRef,
+  ctx: CompileCtx,
+  op: 'sum' | 'latest',
+): { value: SQL; present: SQL } {
+  if (isContractAddress(field)) {
+    const value = addressNumericSql(field, ctx, op);
+    return { value, present: value };
+  }
+  const ref = propRef(field, ctx);
   const kind = ref.def.type.kind;
   if (ref.list || ref.core || (kind !== 'number' && kind !== 'decimal')) {
-    return fail('FIELD', `${op} по свойству '${propertyId}' невозможен: тип ${kind} не числовой`, {
-      property: propertyId,
+    return fail('FIELD', `${op} по свойству '${field}' невозможен: тип ${kind} не числовой`, {
+      property: field,
     });
   }
-  return ref;
+  return { value: comparable(ref), present: ref.text };
 }
 
 /**
- * Агрегация `user_query` (§9.2) и `aggregate: "sum"` целей (§11.3): count + sum одним
- * SELECT по той же выборке, что `compileQueryAst`, но БЕЗ limit. Сумма считается
- * `numeric` и отдаётся текстом — точность decimal-строк не теряется во float (§3.3).
+ * Сумма ОДНИМ ЧИСЛОМ — `aggregate: "sum"` прогресса цели (§11.3): count + sum одним SELECT по той же
+ * выборке, что `compileQueryAst`, но БЕЗ limit. Сумма считается `numeric` и отдаётся текстом —
+ * точность decimal-строк не теряется во float (§3.3).
  *
- * `currencyPropertyId` — только у плитки суммы блока страницы (срез 1а, РП-20): третья колонка
- * `currencies` — различные непустые значения валюты у суммированных записей, тем же проходом.
- * Сумма по записям в разных валютах бессмысленна, и плитка обязана это показать, а не сложить
- * рубли с долларами. Прежние вызывающие (`user_query`, цели) параметра не передают — их SQL
- * побайтно прежний; держит это точный пин строки в `compile-ast.test.ts` («sum без свойства
- * валюты…»). Эталон `test/golden/query-sql.json` агрегатов не покрывает и гарантией не служит.
+ * Одним числом — только у цели (В-5): она сравнивает сумму с ОДНИМ числом цели, и раздельные валюты
+ * ей сравнивать не с чем (остаток — срезу Бюджета). Плитка страницы и `user_query` считают по валютам
+ * — `compileSumByCurrencyAst`. SQL этой формы пиннит точная строка в `compile-ast.test.ts`.
  */
-export function compileSumAst(
+export function compileSumAst(ast: QueryAst, field: QueryFieldRef, ctx: CompileCtx): SQL {
+  const c = whenLateralCtx(ctx);
+  const ref = numericRef(field, c, 'sum');
+  const where = compileWhere(ast, c);
+  return sql`SELECT count(*) AS count, sum(${ref.value})::text AS sum FROM ${entitiesFrom(c)} WHERE ${where}`;
+}
+
+/** Контракт «движения денег»: его слот `amount` делает свойство денежным (спека 1в §3.6). */
+const MONEY_CONTRACT = 'orbis/money-movement';
+
+/**
+ * ВАЛЮТА ДЕНЕЖНОЙ ЗАПИСИ (спека 1в §3.6, РП-7) — выражение над строкой `e` или `null`, если поле ни у
+ * одной привязки не денежное (сумма тогда — числом, без валюты).
+ *
+ * Денежно поле, которое аспект, СТОЯЩИЙ НА ЗАПИСИ, привязал к слоту `amount` «движения денег»; у адреса
+ * слота `orbis/money-movement.amount` — все такие привязки. Валюта — слот `currency` ТОЙ ЖЕ привязки
+ * (свойство или константа `fixed`), нет значения — валюта владельца (`ownerCurrency`). Привязки — в
+ * порядке ранга аспекта (`bindingIndexOf`), первая стоящая на записи решает: то же правило, что у
+ * колонки таблицы (`rowMoneyCurrencyOf`, `@orbis/shared`). Запись без такой привязки (то же свойство
+ * без аспекта) — `NULL`: число, не деньги.
+ *
+ * У адреса слота ветка требует ещё и значения суммы у привязки: значение адреса — первая привязка С
+ * ЗНАЧЕНИЕМ (`addressNumericSql`), и валюта обязана быть её, а не соседней пустой.
+ */
+export function moneyCurrencyExpr(field: QueryFieldRef, cctx: CompileCtx): SQL | null {
+  const address = isContractAddress(field);
+  if (address && (field.contract !== MONEY_CONTRACT || field.slot !== 'amount')) return null;
+  const hits = bindingIndexOf(cctx.reg)
+    .byContract(MONEY_CONTRACT)
+    .filter((b) => b.bind.amount !== undefined && (address || b.bind.amount === field));
+  if (hits.length === 0) return null;
+  const whens = hits.map((b) => {
+    const bound = b.bind.currency;
+    const fixed = b.fixed.currency;
+    const own =
+      bound !== undefined
+        ? sql`NULLIF(props->>${lit(bound)}, '')`
+        : typeof fixed === 'string' && fixed !== ''
+          ? sql`${fixed}::text`
+          : sql`NULL::text`;
+    const on = sql`aspects @> ARRAY[${lit(b.aspectId)}]`;
+    const when = address ? sql`${on} AND props ? ${lit(b.bind.amount as string)}` : on;
+    return sql`WHEN ${when} THEN COALESCE(${own}, ${cctx.ownerCurrency})`;
+  });
+  return sql`CASE ${sql.join(whens, sql` `)} ELSE NULL END`;
+}
+
+/**
+ * СУММА ПО ВАЛЮТАМ (спека 1в §3.6) — плитка страницы и `user_query` агента: строка на валюту
+ * `(currency, sum, count, total)`. `count` — записей со значением в этой валюте, `total` — всех записей
+ * выборки в группе (их сумма — счёт выборки, как у прежней плитки). Порядок строк — в JS
+ * (`sumsOf`): правило провода знает валюту владельца, а SQL-сортировка знала бы только алфавит.
+ * Не денежное поле — одна группа с валютой `NULL`.
+ */
+export function compileSumByCurrencyAst(
   ast: QueryAst,
+  field: QueryFieldRef,
+  outer: CompileCtx,
+): SQL {
+  const cctx = whenLateralCtx(outer);
+  const ref = numericRef(field, cctx, 'sum');
+  const currency = moneyCurrencyExpr(field, cctx) ?? sql`NULL::text`;
+  const where = compileWhere(ast, cctx);
+  return sql`SELECT ${currency} AS currency, sum(${ref.value})::text AS sum, count(${ref.present})::int AS count, count(*)::int AS total FROM ${entitiesFrom(cctx)} WHERE ${where} GROUP BY 1`;
+}
+
+/**
+ * Строки `compileSumByCurrencyAst` → провод: группы без значения отброшены (сумма без слагаемых — не
+ * «0 без валюты»), порядок — валюта владельца, прочие по алфавиту, не денежные (`null`) последними.
+ * `count` — счёт всей выборки.
+ */
+export function sumsOf(
+  rows: readonly Record<string, unknown>[],
+  ownerCurrency: string,
+): { count: number; sums: BlockSum[] } {
+  const rank = (c: string | null) => (c === ownerCurrency ? 0 : c === null ? 2 : 1);
+  const sums = rows
+    .filter((r) => Number(r.count) > 0)
+    .map((r) => ({
+      currency: (r.currency as string | null) ?? null,
+      sum: (r.sum as string | null) ?? '0',
+      count: Number(r.count),
+    }))
+    .sort(
+      (a, b) =>
+        rank(a.currency) - rank(b.currency) ||
+        (a.currency ?? '').localeCompare(b.currency ?? '', 'en'),
+    );
+  return { count: rows.reduce((n, r) => n + Number(r.total ?? 0), 0), sums };
+}
+
+/**
+ * «ПОСЛЕДНЕЕ» (спека 1в §3.7): значение числового поля у ПЕРВОЙ записи в порядке блока (`sortBy`,
+ * устойчивый — с `id` последним ключом); без `sortBy` — как до 1в, последняя правка (максимум
+ * `updated_at`, ничья — `id DESC`). Строки без значения в кандидаты не попадают: правка соседней записи
+ * не должна обнулять «последнее измерение». Вторая колонка — валюта той же записи (`moneyCurrencyExpr`;
+ * не денежное — `NULL`).
+ *
+ * Компилятор ОДИН на плитку страницы и прогресс цели (`goals/progress.ts`): `sortBy` источника цели
+ * читается тем же правилом (цели с `sortBy` — в перепись §3.4).
+ */
+export function compileLatestAst(ast: QueryAst, field: QueryFieldRef, outer: CompileCtx): SQL {
+  const ctx = whenLateralCtx(outer);
+  const ref = numericRef(field, ctx, 'latest');
+  const currency = moneyCurrencyExpr(field, ctx) ?? sql`NULL::text`;
+  const order =
+    ast.sortBy !== undefined && ast.sortBy.length > 0
+      ? compileOrderBy(ast, ctx)
+      : sql`updated_at DESC, id DESC`;
+  const where = compileWhere(ast, ctx);
+  return sql`SELECT ${ref.value}::text AS value, ${currency} AS currency FROM ${entitiesFrom(ctx)} WHERE ${where} AND ${ref.present} IS NOT NULL ORDER BY ${order} LIMIT 1`;
+}
+
+/**
+ * Выражения значения СВОЙСТВА для контрактного SQL (`contract-sql.ts`, 1в): вид по реестру,
+ * сравнимое значение, календарный день и момент в поясе владельца. Ленивые — как `comparable`:
+ * у json каста нет, и отказ обязан прийти только тому, кто значение действительно сравнивает.
+ * Момент у `date` — местная полночь: так дата-факт аспекта владельца встаёт в ленту рядом с
+ * моментами (§4.2 спеки 1в, «дата-факт»).
+ */
+export function propertyValueExprs(
   propertyId: string,
   ctx: CompileCtx,
-  currencyPropertyId?: string,
-): SQL {
-  const ref = numericRef(propertyId, ctx, 'sum');
-  if (currencyPropertyId === undefined) {
-    return sql`SELECT count(*) AS count, sum(${comparable(ref)})::text AS sum FROM entities e WHERE ${compileWhere(ast, ctx)}`;
-  }
-  const currency = propRef(currencyPropertyId, ctx).text;
-  return sql`SELECT count(*) AS count, sum(${comparable(ref)})::text AS sum, coalesce(array_agg(DISTINCT ${currency} ORDER BY ${currency}) FILTER (WHERE ${currency} IS NOT NULL), '{}') AS currencies FROM entities e WHERE ${compileWhere(ast, ctx)}`;
-}
-
-/**
- * `latest` целей (§11.3): значение числового свойства у ПОСЛЕДНЕЙ сущности той же выборки.
- * «Последняя» = максимум `updated_at` (единственный индексированный core-порядок), ничья
- * снимается `id DESC`. Строки без значения в кандидаты не попадают: правка соседней записи
- * не должна обнулять «последнее измерение» цели.
- */
-export function compileLatestAst(ast: QueryAst, propertyId: string, ctx: CompileCtx): SQL {
-  const ref = numericRef(propertyId, ctx, 'latest');
-  return sql`SELECT ${comparable(ref)}::text AS value FROM entities e WHERE ${compileWhere(ast, ctx)} AND ${ref.text} IS NOT NULL ORDER BY updated_at DESC, id DESC LIMIT 1`;
+): { kind: PropertyType['kind']; value(): SQL; day(): SQL; at(): SQL } {
+  const ref = propRef(propertyId, ctx);
+  const kind = ref.def.type.kind;
+  return {
+    kind,
+    value: () => comparable(ref),
+    day: () => dateExpr(ref, ctx),
+    at: () => {
+      assertTemporal(ref);
+      if (kind === 'date')
+        return sql`((${ref.text})::date)::timestamp AT TIME ZONE ${ctx.timeZone}`;
+      return ref.core ? ref.text : sql`(${ref.text})::timestamptz`;
+    },
+  };
 }

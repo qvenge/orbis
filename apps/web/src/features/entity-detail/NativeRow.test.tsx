@@ -4,9 +4,10 @@ import {
   effectiveLabel,
   OWNER_LOCALE,
 } from '@orbis/shared';
-import { screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { expect, test } from 'vitest';
+import { useState } from 'react';
+import { expect, test, vi } from 'vitest';
 import type { MockHandler } from '../../test/harness';
 import { renderWithProviders, trpcError, wireEntity } from '../../test/harness';
 import { BUILTIN_REGISTRY, registryReply } from '../../test/registry';
@@ -59,6 +60,149 @@ const row = (
 const CAT_FOOD = 'a3d6d4b2-7f3a-4a1f-9c1e-2d5b8f0a1c77';
 // Ссылка в категорию, которой в списке нет — запасной вариант «показать uuid».
 const CAT_GHOST = 'd1f0c8e5-4b2a-4d6e-8f01-9a7c3b5e2d44';
+
+test('замок заголовка фиксируется первой буквой и не берётся заново на blur', async () => {
+  const save = vi.fn();
+  let changeTitle: (title: string) => void = () => {};
+  function Host() {
+    const [title, setTitle] = useState('Видимое');
+    changeTitle = setTitle;
+    return <NativeRow entity={row({}, [], { title })} onToggleTask={() => {}} onSaveTitle={save} />;
+  }
+  renderWithProviders(<Host />, registryHandler);
+  const field = screen.getByLabelText('Заголовок');
+  fireEvent.focus(field);
+  fireEvent.change(field, { target: { value: 'Моё' } });
+  act(() => changeTitle('Чужое'));
+  expect(field).toHaveValue('Моё');
+  fireEvent.blur(field);
+  expect(save).toHaveBeenCalledWith('Моё', 'Видимое');
+});
+
+test('рефетч чистого поля после фокуса до первой буквы становится видимой основой', () => {
+  const save = vi.fn();
+  let changeTitle: (title: string) => void = () => {};
+  function Host() {
+    const [title, setTitle] = useState('Прежде');
+    changeTitle = setTitle;
+    return <NativeRow entity={row({}, [], { title })} onToggleTask={() => {}} onSaveTitle={save} />;
+  }
+  renderWithProviders(<Host />, registryHandler);
+  const field = screen.getByLabelText('Заголовок');
+  fireEvent.focus(field);
+  act(() => changeTitle('Уже видно'));
+  expect(field).toHaveValue('Уже видно');
+  fireEvent.change(field, { target: { value: 'Моё' } });
+  fireEvent.blur(field);
+  expect(save).toHaveBeenCalledWith('Моё', 'Уже видно');
+});
+
+test('возврат ввода к серверному значению на blur оставляет поле чистым для чужого рефетча', () => {
+  const save = vi.fn();
+  let changeTitle: (title: string) => void = () => {};
+  function Host() {
+    const [title, setTitle] = useState('Прежде');
+    changeTitle = setTitle;
+    return <NativeRow entity={row({}, [], { title })} onToggleTask={() => {}} onSaveTitle={save} />;
+  }
+  renderWithProviders(<Host />, registryHandler);
+  const field = screen.getByLabelText('Заголовок');
+  fireEvent.focus(field);
+  fireEvent.change(field, { target: { value: 'Временное' } });
+  fireEvent.change(field, { target: { value: 'Прежде' } });
+  fireEvent.blur(field);
+  expect(save).not.toHaveBeenCalled();
+  act(() => changeTitle('Чужое'));
+  expect(field).toHaveValue('Чужое');
+});
+
+test('отказ заголовка вызывает onStale и сохраняет набранное; иной отказ его не вызывает', async () => {
+  const stale = vi.fn();
+  const titleError = trpcError('CONFLICT', 'Заголовок изменён', {
+    code: 'CONFLICT',
+    details: {
+      reason: 'precondition_failed',
+      mismatches: [{ property: 'orbis/title', expected: ['Прежде'], actual: 'Чужое' }],
+    },
+  });
+  for (const [error, calls] of [
+    [titleError, 1],
+    [trpcError('CONFLICT', 'Тело', { code: 'STALE_VERSION' }), 1],
+  ] as const) {
+    const rejected = Promise.reject(error);
+    void rejected.catch(() => {});
+    const { unmount } = renderWithProviders(
+      <NativeRow
+        entity={row({}, [], { title: 'Прежде' })}
+        onToggleTask={() => {}}
+        onSaveTitle={() => rejected}
+        onStale={stale}
+      />,
+      registryHandler,
+    );
+    const field = screen.getByLabelText('Заголовок');
+    fireEvent.change(field, { target: { value: 'Набранное' } });
+    await act(async () => {
+      fireEvent.blur(field);
+      await rejected.catch(() => {});
+    });
+    expect(stale).toHaveBeenCalledTimes(calls);
+    expect(field).toHaveValue('Набранное');
+    unmount();
+  }
+});
+
+test('принятое новое поле не вызывает onStale позднего сохранения старого редактора', async () => {
+  const stale = vi.fn();
+  let rejectSave: (error: unknown) => void = () => {};
+  const pendingSave = new Promise((_, reject) => {
+    rejectSave = reject;
+  });
+  const titleError = trpcError('CONFLICT', 'Заголовок изменён', {
+    code: 'CONFLICT',
+    details: { reason: 'precondition_failed', mismatches: [{ property: 'orbis/title' }] },
+  });
+  const save = vi.fn((title: string) =>
+    title === 'Черновик' ? pendingSave : Promise.reject(titleError),
+  );
+  function Host() {
+    const [accepted, setAccepted] = useState(false);
+    return (
+      <>
+        <NativeRow
+          key={String(accepted)}
+          entity={row({}, [], { title: accepted ? 'Новое агентское' : 'Прежде' })}
+          onToggleTask={() => {}}
+          onSaveTitle={save}
+          onStale={stale}
+        />
+        <button type="button" onClick={() => setAccepted(true)}>
+          Обновить
+        </button>
+      </>
+    );
+  }
+  renderWithProviders(<Host />, registryHandler, { strict: true });
+  const user = userEvent.setup();
+  const field = screen.getByLabelText('Заголовок');
+  await user.click(field);
+  fireEvent.change(field, { target: { value: 'Черновик' } });
+  await user.click(screen.getByRole('button', { name: 'Обновить' }));
+  expect(save).toHaveBeenCalledWith('Черновик', 'Прежде');
+  expect(screen.getByLabelText('Заголовок')).toHaveValue('Новое агентское');
+  await act(async () => {
+    rejectSave(titleError);
+    await pendingSave.catch(() => {});
+  });
+  expect(stale).not.toHaveBeenCalled();
+  expect(screen.getByLabelText('Заголовок')).toHaveValue('Новое агентское');
+  await user.click(screen.getByLabelText('Заголовок'));
+  fireEvent.change(screen.getByLabelText('Заголовок'), { target: { value: 'Новая правка' } });
+  await user.tab();
+  await waitFor(() => expect(stale).toHaveBeenCalledTimes(1));
+  expect(save).toHaveBeenLastCalledWith('Новая правка', 'Новое агентское');
+  expect(screen.getByLabelText('Заголовок')).toHaveValue('Новая правка');
+});
 
 test('financial: сумма с минусом и тоном danger', async () => {
   renderWithProviders(
@@ -634,4 +778,59 @@ test('M14: у платежа со сроком чекбокс, дата и су�
   expect(await screen.findByRole('checkbox')).toBeInTheDocument();
   expect(screen.getByText('10 сент.')).toBeInTheDocument();
   expect(screen.getByTestId('native-amount')).toHaveTextContent('−1 200.00');
+});
+
+/**
+ * «Весь день» — слот `all_day` контракта «когда» (1в §4.3, Б-2 №100), а не сырое `orbis/all_day`:
+ * аспект владельца со своим булевым свойством получает бейдж, а значение, пережившее снятие
+ * расписания (Р9), бейджа не даёт.
+ */
+const tripAspect = (): AspectDefinition => {
+  const task = BUILTIN_REGISTRY.aspects.find((a) => a.id === 'orbis/task');
+  if (task === undefined) throw new Error('встроенного аспекта задачи нет');
+  return {
+    ...task,
+    id: 'user/trip',
+    key: 'user/trip',
+    rank: 99,
+    properties: [],
+    implements: [
+      {
+        contract: 'orbis/when',
+        bind: { moment: 'user/trip_day', all_day: 'user/allday' },
+        fixed: {},
+        value_map: [],
+      },
+    ],
+  };
+};
+const withTripAspect: MockHandler = (path) =>
+  path === 'registry.effective'
+    ? { ...BUILTIN_REGISTRY, aspects: [...BUILTIN_REGISTRY.aspects, tripAspect()] }
+    : {};
+
+test('«весь день» — бейдж у записи аспекта владельца со своим свойством (слот all_day)', async () => {
+  renderWithProviders(
+    <NativeRow
+      entity={row({ 'user/trip_day': '2026-10-01', 'user/allday': true }, ['user/trip'])}
+      onToggleTask={() => {}}
+    />,
+    withTripAspect,
+  );
+  expect(await screen.findByText('весь день')).toBeInTheDocument();
+});
+
+test('«весь день»: orbis/all_day без аспекта расписания (снят, Р9) — бейджа нет', async () => {
+  // Ждать РЕЕСТРА, а не заголовка: заголовок есть с первого кадра, а при пустом снимке бейджа нет
+  // по построению — проверка «нет» была бы зелёной при любой реализации. Срок задачи — элемент
+  // строки из привязки реестра (`orbis/when`, слот `deadline`): он виден — снимок доехал.
+  renderWithProviders(
+    <NativeRow
+      entity={row({ 'orbis/all_day': true, 'orbis/due_date': '2026-07-18' }, ['orbis/task'])}
+      onToggleTask={() => {}}
+    />,
+    registryHandler,
+  );
+  expect(await screen.findByText('18 июл.')).toBeInTheDocument();
+  expect(screen.queryByText('весь день')).toBeNull();
 });

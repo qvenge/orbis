@@ -2,6 +2,7 @@
 // Тесты роутера version (§9.1, С11): закрепление версии тела, выдача снимков и откат.
 // Роутер — только трансляция: pin/restore идут через executor (единственный путь мутаций,
 // 00-arch §4), list читает под RLS. Против живой БД, caller как в бою (createCallerFactory).
+
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import type { GraphId } from '@orbis/shared';
 import { newId } from '@orbis/shared';
@@ -17,6 +18,9 @@ import {
   requireEnv,
   truncateAll,
 } from '../../test/helpers';
+import { actionsOf } from '../../test/journal-helpers';
+import { expectJournalRef } from '../../test/journal-ref-helpers';
+import { withIdentity } from '../db/with-identity';
 import { appRouter } from '../router';
 import { createCallerFactory } from '../trpc';
 
@@ -39,6 +43,12 @@ async function trpcError(p: Promise<unknown>): Promise<TRPCError> {
     throw e;
   }
   throw new Error('ожидался TRPCError, вызов успешен');
+}
+
+/** Ревизия тела из ответа чтения — у чтения одной записи она есть всегда (§8.1). */
+function rev(e: { bodyRevision?: number }): number {
+  if (e.bodyRevision === undefined) throw new Error('в ответе чтения нет bodyRevision');
+  return e.bodyRevision;
 }
 
 /** Узел документа в объёме, который нужен здешним ассертам (wire-форма даёт его как unknown). */
@@ -82,6 +92,7 @@ describe('version.pin / version.list / version.restore (С11)', () => {
     await a.relation.create({ source_id: id, target_id: neighbour, role: 'mention' });
 
     const v = await a.version.pin({ entityId: id, label: 'до правки' });
+    await expectJournalRef(owner, v, false);
     expect(v.hasDoc).toBe(true);
     expect(v.entityId).toBe(id);
     expect(v.actorKind).toBe('owner');
@@ -93,7 +104,7 @@ describe('version.pin / version.list / version.restore (С11)', () => {
     const e1 = await a.entity.get({ id, include: ['body', 'bodyDoc'] });
     await a.entity.update({
       id,
-      expectedUpdatedAt: e1.entity.updatedAt,
+      expectedBodyRevision: rev(e1.entity),
       body: '# Совсем другое',
       props: {
         'orbis/task_status': 'waiting',
@@ -105,8 +116,9 @@ describe('version.pin / version.list / version.restore (С11)', () => {
 
     const restored = await a.version.restore({
       versionId: v.id,
-      expectedUpdatedAt: e2.entity.updatedAt,
+      expectedBodyRevision: rev(e2.entity),
     });
+    await expectJournalRef(owner, restored, false);
     expect(restored.body).toBe(canonicalizeBody('# Раз\n\n- два\n').body);
     // Инвариант 8: откат трогает ТОЛЬКО тело — аспекты остаются текущими (С11),
     expect(restored.props['orbis/task_status']).toBe('waiting');
@@ -116,7 +128,7 @@ describe('version.pin / version.list / version.restore (С11)', () => {
     expect(after.relations?.map((r) => r.targetId)).toEqual([neighbour]);
   });
 
-  test('restore со стухшим expectedUpdatedAt → CONFLICT (409), тело не изменилось', async () => {
+  test('restore со стухшей ревизией тела → CONFLICT (409) STALE_VERSION, тело не изменилось, страховки нет', async () => {
     const id = newId();
     await a.entity.create({
       input: { id, title: 'Гонка', tags: [], body: 'снимок' },
@@ -124,18 +136,108 @@ describe('version.pin / version.list / version.restore (С11)', () => {
     });
     const v = await a.version.pin({ entityId: id, label: 'снимок' });
 
-    const e1 = await a.entity.get({ id });
-    await a.entity.update({ id, expectedUpdatedAt: e1.entity.updatedAt, body: 'правка соседа' });
-    const e2 = await a.entity.get({ id });
+    const e1 = await a.entity.get({ id, include: ['body'] });
+    await a.entity.update({
+      id,
+      expectedBodyRevision: rev(e1.entity),
+      body: 'правка соседа',
+    });
+    const e2 = await a.entity.get({ id, include: ['body'] });
 
-    // Стухший штамп: тело правил кто-то ещё после того, как экран прочитал сущность (§5.2)
+    // Стухшая ревизия: тело правил кто-то ещё после того, как экран прочитал сущность (§8.1)
     const err = await trpcError(
-      a.version.restore({ versionId: v.id, expectedUpdatedAt: e1.entity.updatedAt }),
+      a.version.restore({ versionId: v.id, expectedBodyRevision: rev(e1.entity) }),
     );
     expect(err.code).toBe('CONFLICT');
-    expect((await a.entity.get({ id })).entity.body).toBe(e2.entity.body);
-    // Отказ — на гейте тела, а не на снимке: версия по-прежнему на месте
+    expect((err.cause as unknown as { code: string }).code).toBe('STALE_VERSION');
+    expect((await a.entity.get({ id, include: ['body'] })).entity.body ?? '').toBe(
+      e2.entity.body ?? '',
+    );
+    // Отказ — на гейте тела, а не на снимке: версия по-прежнему на месте, а страховка не закреплена — пачка
+    // откатилась целиком
     expect((await a.version.list({ entityId: id })).map((x) => x.id)).toEqual([v.id]);
+  });
+
+  test('restore — ОДНО действие: закрепление текущего текста первой операцией, затем правка тела; отмена возвращает текст и снимает страховку (§8.2, В-4)', async () => {
+    const g = await freshGraph();
+    const c = callerFor(g);
+    const id = newId();
+    await c.entity.create({
+      input: { id, title: 'Черновик', tags: [], body: 'первая редакция' },
+      source: 'quick_capture',
+    });
+    const v = await c.version.pin({ entityId: id, label: 'первая' });
+    const e1 = await c.entity.get({ id, include: ['body'] });
+    await c.entity.update({
+      id,
+      expectedBodyRevision: rev(e1.entity),
+      body: 'вторая редакция',
+    });
+    const e2 = await c.entity.get({ id, include: ['body'] });
+    const before = (await actionsOf(g)).length;
+
+    const restored = await c.version.restore({
+      versionId: v.id,
+      expectedBodyRevision: rev(e2.entity),
+    });
+    expect(restored.body).toBe('первая редакция');
+    expect(restored.bodyRevision).toBe(rev(e2.entity) + 1);
+
+    // Одна запись журнала типа «пачка»: первая операция — закрепление текущего текста, вторая — правка тела
+    const actions = await actionsOf(g);
+    expect(actions.length).toBe(before + 1);
+    const entry = actions[actions.length - 1];
+    if (entry === undefined) throw new Error('нет записи восстановления');
+    expect(entry.type).toBe('batch');
+    expect(entry.title).toBe('Восстановлена версия «первая»');
+    expect(entry.operations.map((op) => op.op)).toEqual(['entity_version_pin', 'entity_update']);
+    expect(entry.operations[0]?.payload.label).toBe('перед восстановлением: первая');
+    const insurance = (await c.version.list({ entityId: id })).find(
+      (x) => x.label === 'перед восстановлением: первая',
+    );
+    expect(insurance).toBeDefined();
+    expect(
+      (
+        await withIdentity(db, personal(g), (tx) =>
+          tx.execute(sql`SELECT body FROM entity_versions WHERE id = ${insurance?.id ?? ''}::uuid`),
+        )
+      )[0]?.body,
+    ).toBe('вторая редакция');
+
+    // Отмена восстановления: текст — тот, что был до него, страховочная версия удалена, закрепление «первая» — на месте
+    await c.ai.undo({ actionId: entry.id });
+    expect((await c.entity.get({ id, include: ['body'] })).entity.body).toBe('вторая редакция');
+    expect((await c.version.list({ entityId: id })).map((x) => x.id)).toEqual([v.id]);
+  });
+
+  test('подпись страховки в потолке 200 и без одиночного суррогата: эмодзи на границе среза не режется пополам (M-4 гейта)', async () => {
+    const g = await freshGraph();
+    const c = callerFor(g);
+    const id = newId();
+    await c.entity.create({
+      input: { id, title: 'Длинная подпись', tags: [], body: 'текст' },
+      source: 'quick_capture',
+    });
+    // Приставка «перед восстановлением: » — 23 единицы UTF-16; эмодзи встаёт на 198–199, и наивный срез до 199 оставил
+    // бы его первую половину
+    const label = `${'а'.repeat(175)}😀${'б'.repeat(10)}`;
+    const v = await c.version.pin({ entityId: id, label });
+    const e1 = await c.entity.get({ id, include: ['body'] });
+    await c.entity.update({ id, expectedBodyRevision: rev(e1.entity), body: 'другой текст' });
+    const e2 = await c.entity.get({ id, include: ['body'] });
+    await c.version.restore({ versionId: v.id, expectedBodyRevision: rev(e2.entity) });
+
+    const insurance = (await c.version.list({ entityId: id })).find((x) =>
+      x.label.startsWith('перед восстановлением: '),
+    );
+    if (insurance === undefined) throw new Error('страховки нет');
+    expect(insurance.label.length).toBeLessThanOrEqual(200);
+    expect(insurance.label.endsWith('а…')).toBe(true);
+    expect(
+      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(
+        insurance.label,
+      ),
+    ).toBe(false);
   });
 
   test('снимок сущности без body_doc (легаси-строка) хранит только body; restore идёт строкой', async () => {
@@ -158,13 +260,13 @@ describe('version.pin / version.list / version.restore (С11)', () => {
     expect(v.hasDoc).toBe(false); // документ берётся «как лежит»: NULL не конвертируем
     expect((await a.version.list({ entityId: id }))[0]?.hasDoc).toBe(false);
 
-    const before = await a.entity.get({ id });
-    await a.entity.update({ id, expectedUpdatedAt: before.entity.updatedAt, body: 'затёрли' });
-    const e2 = await a.entity.get({ id });
+    const before = await a.entity.get({ id, include: ['body'] });
+    await a.entity.update({ id, expectedBodyRevision: rev(before.entity), body: 'затёрли' });
+    const e2 = await a.entity.get({ id, include: ['body'] });
 
     const restored = await a.version.restore({
       versionId: v.id,
-      expectedUpdatedAt: e2.entity.updatedAt,
+      expectedBodyRevision: rev(e2.entity),
     });
     // Тело восстановлено строкой и приведено к канону тем же конвейером, что запись редактора
     expect(restored.body).toBe(canonicalizeBody(legacy).body);
@@ -211,12 +313,12 @@ describe('version.pin / version.list / version.restore (С11)', () => {
     const v = await a.version.pin({ entityId: id, label: 'до выкатки' });
     expect(v.hasDoc).toBe(true);
 
-    const before = await a.entity.get({ id });
-    await a.entity.update({ id, expectedUpdatedAt: before.entity.updatedAt, body: 'затёрли' });
-    const e2 = await a.entity.get({ id });
+    const before = await a.entity.get({ id, include: ['body'] });
+    await a.entity.update({ id, expectedBodyRevision: rev(before.entity), body: 'затёрли' });
+    const e2 = await a.entity.get({ id, include: ['body'] });
     const restored = await a.version.restore({
       versionId: v.id,
-      expectedUpdatedAt: e2.entity.updatedAt,
+      expectedBodyRevision: rev(e2.entity),
     });
 
     // Восстановление пошло ДОКУМЕНТОМ: блок вернулся блоком, а не строкой из проекции…
@@ -266,12 +368,12 @@ describe('version.pin / version.list / version.restore (С11)', () => {
       await adminClient.end();
     }
     const v = await a.version.pin({ entityId: id, label: 'до выкатки v3' });
-    const before = await a.entity.get({ id });
-    await a.entity.update({ id, expectedUpdatedAt: before.entity.updatedAt, body: 'затёрли' });
-    const e2 = await a.entity.get({ id });
+    const before = await a.entity.get({ id, include: ['body'] });
+    await a.entity.update({ id, expectedBodyRevision: rev(before.entity), body: 'затёрли' });
+    const e2 = await a.entity.get({ id, include: ['body'] });
     const restored = await a.version.restore({
       versionId: v.id,
-      expectedUpdatedAt: e2.entity.updatedAt,
+      expectedBodyRevision: rev(e2.entity),
     });
     expect(restored.body).toBe('снимок v2\n\n{{query:aspect=orbis/task}}');
 
@@ -306,7 +408,7 @@ describe('version.pin / version.list / version.restore (С11)', () => {
       source: 'quick_capture',
     });
     const v = await a.version.pin({ entityId: id, label: 'моя' });
-    const mine = await a.entity.get({ id });
+    const mine = await a.entity.get({ id, include: ['body'] });
 
     expect(await b.version.list({ entityId: id })).toEqual([]);
     expect(
@@ -316,7 +418,7 @@ describe('version.pin / version.list / version.restore (С11)', () => {
     expect(
       (
         await trpcError(
-          b.version.restore({ versionId: v.id, expectedUpdatedAt: mine.entity.updatedAt }),
+          b.version.restore({ versionId: v.id, expectedBodyRevision: rev(mine.entity) }),
         )
       ).code,
     ).toBe('NOT_FOUND');

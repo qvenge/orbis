@@ -21,18 +21,13 @@ import {
   seedRefTargetRows,
   truncateAll,
 } from '../../test/helpers';
+import { journalOf } from '../../test/journal-helpers';
 import { entities } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
-import { makeChatJournalSink } from '../executor/journal';
+import { makeJournalSink } from '../executor/journal';
+import type { JournalEntry } from '../executor/journal-read';
 import { dropStaleCarryover, envelopeIdentityOf } from '../executor/normalize';
-import type {
-  ActionRecord,
-  ExecuteErr,
-  ExecuteOk,
-  ExecuteRequest,
-  ExecuteResult,
-  WireEntity,
-} from '../executor/types';
+import type { ExecuteErr, ExecuteRequest, ExecuteResult, WireEntity } from '../executor/types';
 import { undoAction } from '../executor/undo';
 import { effectiveRegistry } from '../registry/cache';
 import type { RegistrySnapshot } from '../registry/load';
@@ -43,7 +38,7 @@ import { propOfSlot, SLOT_CATEGORY, SLOT_CURRENCY, SLOT_DATE } from './contour';
 requireEnv();
 
 const { db, client } = appDb();
-const sink = makeChatJournalSink();
+const sink = makeJournalSink();
 
 beforeAll(async () => {
   await truncateAll();
@@ -68,12 +63,20 @@ function req(
   };
 }
 
-function ok(r: ExecuteResult): ExecuteOk {
+function ok<
+  T extends
+    | ExecuteResult
+    | (Omit<Extract<ExecuteResult, { ok: true }>, 'consequences'> & { consequences?: never }),
+>(r: T): Extract<T, { ok: true }> {
   if (!r.ok) throw new Error(`ожидался успех, получено: ${JSON.stringify(r.error)}`);
-  return r;
+  return r as Extract<T, { ok: true }>;
 }
 
-function err(r: ExecuteResult): ExecuteErr {
+function err(
+  r:
+    | ExecuteResult
+    | (Omit<Extract<ExecuteResult, { ok: true }>, 'consequences'> & { consequences?: never }),
+): ExecuteErr {
   if (r.ok) throw new Error('ожидался структурированный отказ, получен успех');
   return r;
 }
@@ -140,14 +143,9 @@ async function budgetParents(txnId: string): Promise<string[]> {
   return rows.map((r) => r.source_id as string);
 }
 
-/** Action из журнала по id (metadata.actions[0] audit-сообщения). */
-async function actionById(actionId: string): Promise<ActionRecord> {
-  const probe = JSON.stringify({ actions: [{ id: actionId }] });
-  const rows = await adminRows(
-    sql`SELECT metadata FROM chat_messages WHERE metadata @> ${probe}::jsonb LIMIT 1`,
-  );
-  const md = rows[0]?.metadata as { actions?: ActionRecord[] } | undefined;
-  const action = md?.actions?.find((a) => a.id === actionId);
+/** Действие из журнала графа по id (API журнала, помощник `journalOf`). */
+async function actionById(user: GraphId, actionId: string): Promise<JournalEntry> {
+  const action = await journalOf(user, actionId);
   if (!action) throw new Error(`action ${actionId} не найден в журнале`);
   return action;
 }
@@ -336,7 +334,7 @@ describe('авто-привязка: entity_create транзакции (§2.3)'
     });
     // relation parent (конверт → транзакция) создана тем же action
     expect(await budgetParents(txn.id)).toEqual([envId]);
-    const action = await actionById(actionId);
+    const action = await actionById(user, actionId);
     expect(action.operations.length).toBe(2);
     expect(action.operations.map((o) => o.op)).toEqual(['entity_create', 'relation_create']);
 
@@ -354,7 +352,7 @@ describe('авто-привязка: entity_create транзакции (§2.3)'
       aspects: ['orbis/financial'],
     });
     expect(await budgetParents(txn.id)).toEqual([]);
-    expect((await actionById(actionId)).operations.length).toBe(1);
+    expect((await actionById(user, actionId)).operations.length).toBe(1);
   });
 
   test('5. planned=true привязывается так же (spent — забота A6)', async () => {
@@ -389,7 +387,7 @@ describe('авто-привязка: entity_create транзакции (§2.3)'
       aspects: ['orbis/schedule', 'orbis/financial'],
     });
     expect(await budgetParents(tpl.id)).toEqual([]);
-    expect((await actionById(actionId)).operations.length).toBe(1);
+    expect((await actionById(user, actionId)).operations.length).toBe(1);
   });
 
   test('правка даты транзакции повторно запускает выбор конверта (delete старой + create новой)', async () => {
@@ -418,7 +416,7 @@ describe('авто-привязка: entity_create транзакции (§2.3)'
     );
     expect(await budgetParents(txn.id)).toEqual([envAug.id]);
     // порядок ops: сначала delete старой связи, затем create новой — в одном action
-    const action = await actionById(upd.actionId);
+    const action = await actionById(user, upd.actionId);
     expect(action.operations.map((o) => o.op)).toEqual([
       'entity_update',
       'relation_delete',
@@ -470,7 +468,7 @@ describe('авто-привязка: entity_create транзакции (§2.3)'
     expect(await budgetParents(txnId)).toEqual([envelopeId]);
     // results — только запрошенные операции; журнал несёт и дописанную привязку
     expect(r.results.length).toBe(2);
-    const action = await actionById(batchId);
+    const action = await actionById(userB, batchId);
     expect(action.operations.map((o) => o.op)).toEqual([
       'entity_create',
       'entity_create',
@@ -531,7 +529,7 @@ describe('ребиндинг при создании/правке/архивац
       aspects: ['orbis/budget'],
     });
     expect(await budgetParents(txn.id)).toEqual([narrow.id]);
-    const action = await actionById(narrowAction);
+    const action = await actionById(user, narrowAction);
     expect(action.operations.map((o) => o.op)).toEqual([
       'entity_create',
       'relation_delete',
@@ -659,7 +657,7 @@ describe('ребиндинг при создании/правке/архивац
       await execute(db, req(userA, 'entity_update', { id: narrowA.id, archived: true }), { sink }),
     );
     expect(await budgetParents(txnA.id)).toEqual([monthlyA.id]);
-    expect((await actionById(archiveA.actionId)).operations.map((o) => o.op)).toEqual([
+    expect((await actionById(userA, archiveA.actionId)).operations.map((o) => o.op)).toEqual([
       'entity_update',
       'relation_delete',
       'relation_create',
@@ -669,7 +667,7 @@ describe('ребиндинг при создании/правке/архивац
       await execute(db, req(userB, 'entity_update', { id: narrowB.id, archived: true }), { sink }),
     );
     expect(await budgetParents(txnB.id)).toEqual([monthlyB.id]);
-    expect((await actionById(archiveB.actionId)).operations.map((o) => o.op)).toEqual([
+    expect((await actionById(userB, archiveB.actionId)).operations.map((o) => o.op)).toEqual([
       'entity_update',
       'relation_delete',
       'relation_create',
@@ -1113,7 +1111,7 @@ describe('конверсия транзакции в recurring-шаблон сн
     );
     expect(await budgetParents(txnId)).toEqual([]);
     // снятие привязки — в том же action (Undo откатывает конверсию целиком)
-    const action = await actionById(r.actionId);
+    const action = await actionById(user, r.actionId);
     expect(action.operations.map((o) => o.op)).toEqual([
       'attach_orbis_schedule',
       'relation_delete',
@@ -1164,7 +1162,7 @@ describe('detach orbis/financial снимает привязку к конвер
     );
     expect(await budgetParents(txn.id)).toEqual([]);
     // Снятие — в том же action: Undo возвращает и аспект, и связь одной отменой
-    const action = await actionById(r.actionId);
+    const action = await actionById(user, r.actionId);
     expect(action.operations.map((o) => o.op)).toEqual(['entity_update', 'relation_delete']);
   });
 
@@ -1214,7 +1212,7 @@ describe('detach orbis/financial снимает привязку к конвер
         { sink },
       ),
     );
-    const action = await actionById(r.actionId);
+    const action = await actionById(user, r.actionId);
     expect(action.operations.map((o) => o.op)).toEqual(['entity_update']);
   });
 });

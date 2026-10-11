@@ -1,6 +1,6 @@
 // apps/server/src/executor/undo.test.ts
 // Интеграционные тесты Task 11: Undo §7.8 — отмена НЕ правит журнал (новое
-// undo-сообщение в тот же тред), inverse через внутренний режим executor'а
+// запись отмены — строка журнала в треде отменённого), inverse через внутренний режим executor'а
 // (LWW-откат body без optimistic-check, восстановление ЗАТРОНУТЫХ СВОЙСТВ — §А7-4),
 // повторная отмена, undoLast со сканом с конца, undo связей и batch.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
@@ -8,6 +8,7 @@ import type { GraphId } from '@orbis/shared';
 import { materializeBatchId, newId, recurringInstanceId } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import {
+  accountOf,
   adminDb,
   appDb,
   executeWithFixtureCategories as execute,
@@ -17,22 +18,19 @@ import {
   requireEnv,
   truncateAll,
 } from '../../test/helpers';
+import { actionsOf, journalOf, undoRecordOf, wholeJournalOf } from '../../test/journal-helpers';
+import { ensureEntityThread } from '../chat/threads';
+import { withIdentity } from '../db/with-identity';
 import { materializeInstances } from '../recurring/materialize';
-import { makeChatJournalSink } from './journal';
-import type {
-  ActionRecord,
-  ExecuteErr,
-  ExecuteOk,
-  ExecuteRequest,
-  ExecuteResult,
-  WireEntity,
-} from './types';
+import { makeJournalSink } from './journal';
+import type { JournalEntry } from './journal-read';
+import type { ExecuteErr, ExecuteRequest, ExecuteResult, WireEntity } from './types';
 import { undoAction, undoLast } from './undo';
 
 requireEnv();
 
 const { db, client } = appDb();
-const sink = makeChatJournalSink();
+const sink = makeJournalSink();
 
 beforeAll(async () => {
   await truncateAll();
@@ -42,12 +40,20 @@ afterAll(async () => {
   await client.end();
 });
 
-function ok(r: ExecuteResult): ExecuteOk {
+function ok<
+  T extends
+    | ExecuteResult
+    | (Omit<Extract<ExecuteResult, { ok: true }>, 'consequences'> & { consequences?: never }),
+>(r: T): Extract<T, { ok: true }> {
   if (!r.ok) throw new Error(`ожидался успех, получено: ${JSON.stringify(r.error)}`);
-  return r;
+  return r as Extract<T, { ok: true }>;
 }
 
-function err(r: ExecuteResult): ExecuteErr {
+function err(
+  r:
+    | ExecuteResult
+    | (Omit<Extract<ExecuteResult, { ok: true }>, 'consequences'> & { consequences?: never }),
+): ExecuteErr {
   if (r.ok) throw new Error('ожидался структурированный отказ, получен успех');
   return r;
 }
@@ -91,42 +97,20 @@ async function propsOf(id: string): Promise<Record<string, unknown>> {
 }
 
 /** Запись журнала по id действия — по ней читается ФОРМА operations/inverse (§А7-4). */
-async function actionById(user: GraphId, actionId: string): Promise<ActionRecord> {
-  const probe = JSON.stringify({ actions: [{ id: actionId }] });
-  const rows = await adminRows(
-    sql`SELECT m.metadata FROM chat_messages m
-        JOIN chat_threads t ON t.id = m.thread_id
-        WHERE t.graph_id = ${user} AND m.metadata @> ${probe}::jsonb
-        LIMIT 1`,
-  );
-  const action = (rows[0]?.metadata as { actions?: ActionRecord[] } | undefined)?.actions?.find(
-    (a) => a.id === actionId,
-  );
+async function actionById(user: GraphId, actionId: string): Promise<JournalEntry> {
+  const action = await journalOf(user, actionId);
   if (!action) throw new Error(`действие ${actionId} не найдено в журнале`);
   return action;
 }
 
-/** Число undo-сообщений с данным action_id у владельца (по containment §7.8). */
+/** Число записей отмены действия у владельца — повторная отмена второй записи не пишет (§7.8). */
 async function undoMessageCount(user: GraphId, actionId: string): Promise<number> {
-  const probe = JSON.stringify({ type: 'undo', undoes: actionId });
-  const rows = await adminRows(
-    sql`SELECT count(*)::int AS n FROM chat_messages m
-        JOIN chat_threads t ON t.id = m.thread_id
-        WHERE t.graph_id = ${user} AND m.metadata @> ${probe}::jsonb`,
-  );
-  return rows[0]?.n as number;
+  return (await wholeJournalOf(user)).filter((e) => e.undoes === actionId).length;
 }
 
-/** Число сообщений владельца, содержащих action (журнал действий). */
+/** Число действий в журнале владельца (записи отмены — не действия). */
 async function actionMessageCount(user: GraphId): Promise<number> {
-  const rows = await adminRows(
-    sql`SELECT count(*)::int AS n FROM chat_messages m
-        JOIN chat_threads t ON t.id = m.thread_id
-        WHERE t.graph_id = ${user}
-          AND m.metadata @> '{"actions": []}'::jsonb
-          AND jsonb_array_length(m.metadata->'actions') > 0`,
-  );
-  return rows[0]?.n as number;
+  return (await actionsOf(user)).length;
 }
 
 async function relCount(sourceId: string, targetId: string, role: string): Promise<number> {
@@ -142,7 +126,7 @@ describe('undoAction: создание → архивация (§7.8)', () => {
   let actionId = '';
   let entityId = '';
 
-  test('undo entity_create архивирует сущность и пишет undo-сообщение; нового action не порождает', async () => {
+  test('undo entity_create архивирует сущность и пишет запись отмены; нового action не порождает', async () => {
     const r = ok(
       await execute(db, req(user, 'entity_create', { title: 'Отменяемая', tags: [] }), { sink }),
     );
@@ -151,7 +135,8 @@ describe('undoAction: создание → архивация (§7.8)', () => {
     const actionsBefore = await actionMessageCount(user);
 
     const u = ok(await undoAction(db, { identity: personal(user), actionId }));
-    expect(u.actionId).toBe(actionId); // вернулся id отменённого действия
+    // Ответ отмены — `UndoResult` (задача 10 плана А): id ЗАПИСИ ОТМЕНЫ, отменённое — в `undone`
+    expect(u.actionId).toBe((await undoRecordOf(user, actionId))?.id as string);
 
     const row = await entityRow(entityId);
     expect(row.archived).toBe(true); // создание → архивация (жёсткого удаления нет)
@@ -164,7 +149,7 @@ describe('undoAction: создание → архивация (§7.8)', () => {
     const again = err(await undoAction(db, { identity: personal(user), actionId }));
     expect(again.error.code).toBe('VALIDATION');
     expect(again.error.message).toContain('уже отменено');
-    expect(await undoMessageCount(user, actionId)).toBe(1); // второго undo-сообщения нет
+    expect(await undoMessageCount(user, actionId)).toBe(1); // второй записи отмены нет
   });
 
   test('чужой action под userB → NOT_FOUND (RLS скоупит журнал владельцем)', async () => {
@@ -222,7 +207,7 @@ describe('undoAction: entity_update — LWW-откат по СВОЙСТВУ (§
             id: e.id,
             title: 'Новый',
             body: 'v2',
-            expectedUpdatedAt: e.updatedAt,
+            expectedBodyRevision: e.bodyRevision,
             props: { 'orbis/task_status': 'done', 'orbis/priority': 'high' },
             aspects: { attach: ['orbis/task'] },
           },
@@ -281,7 +266,7 @@ describe('undoAction: entity_update — LWW-откат по СВОЙСТВУ (§
     );
 
     const u = ok(await undoAction(db, { identity: personal(user), actionId: undoTarget }));
-    expect(u.actionId).toBe(undoTarget);
+    expect(u.actionId).toBe((await undoRecordOf(user, undoTarget))?.id as string);
 
     const row = await entityRow(e.id);
     expect(row.title).toBe('Старый');
@@ -525,7 +510,7 @@ describe('undoAction: связи и batch (§7.8)', () => {
     expect(r.actionId).toBe(batchId);
 
     const u = ok(await undoAction(db, { identity: personal(user), actionId: batchId }));
-    expect(u.actionId).toBe(batchId);
+    expect(u.actionId).toBe((await undoRecordOf(user, batchId))?.id as string);
     expect(await relCount(sId, tId, 'mention')).toBe(0);
     expect((await entityRow(sId)).archived).toBe(true);
     expect((await entityRow(tId)).archived).toBe(true);
@@ -564,7 +549,7 @@ describe('undoLast: скан журнала с конца (§7.8)', () => {
     );
     const e2 = r2.results[0] as WireEntity;
 
-    // последнее действие отменяем явно — его undo-сообщение станет последним сообщением
+    // последнее действие отменяем явно — его запись отмены станет последней строкой журнала
     ok(await undoAction(db, { identity: personal(user), actionId: r2.actionId }));
     expect((await entityRow(e2.id)).archived).toBe(true);
 
@@ -630,5 +615,138 @@ describe('undoLast: скан журнала с конца (§7.8)', () => {
       }),
     );
     expect((await entityRow(instanceId)).archived).toBe(true);
+  });
+});
+
+// Запись отмены — строка журнала (спека скорости §11.2, РП-11, К-45): актор — кто отменил (владелец), источник — путь
+// отмены, тред — тред отменённого, операции — применённый inverse (аудит), своего inverse нет (отмена неотменяема).
+describe('запись отмены — строка журнала type undo (РП-11, К-45)', () => {
+  test('отмена → строка type undo: undoes, источник — путь (ui у кнопки), актор — владелец, тред отменённого, inverse []', async () => {
+    const user = await freshGraph();
+    const created = ok(
+      await execute(db, req(user, 'entity_create', { title: 'Носитель', tags: [] }), { sink }),
+    );
+    const e = created.results[0] as WireEntity;
+    const thread = await withIdentity(db, personal(user), (tx) =>
+      ensureEntityThread(tx, user, e.id),
+    );
+    // Правка — в треде записи: тред записи отмены обязан быть ТРЕДОМ ОТМЕНЁННОГО, а не глобальным
+    const upd = ok(
+      await execute(
+        db,
+        req(user, 'entity_update', { id: e.id, title: 'Правка' }, { threadId: thread }),
+        {
+          sink,
+        },
+      ),
+    );
+    const undone = await actionById(user, upd.actionId);
+    ok(await undoAction(db, { identity: personal(user), actionId: upd.actionId }));
+
+    const rec = await undoRecordOf(user, upd.actionId);
+    if (rec === undefined) throw new Error('записи отмены нет');
+    expect(rec.type).toBe('undo');
+    expect(rec.undoes).toBe(upd.actionId);
+    expect(rec.source).toBe('ui'); // путь по умолчанию — кнопка владельца (`ai.undo`)
+    expect(rec.actorKind).toBe('owner');
+    expect(rec.actorUserId).toBe(accountOf(user));
+    expect(rec.mechanism).toBe('user');
+    expect(rec.threadId).toBe(thread);
+    expect(rec.title).toBe(`Отменено: ${undone.title}`);
+    expect(rec.cardTool).toBe('undo');
+    // Операции — применённый inverse (аудит), свой inverse пуст: отмена неотменяема (§0.2 п. 7)
+    expect(rec.operations).toEqual(undone.inverse);
+    expect(rec.inverse).toEqual([]);
+    expect(rec.entityIds).toEqual(undone.entityIds);
+    // Запись отмены — не действие (К-22): журнал действий не вырос
+    expect((await actionsOf(user)).map((a) => a.id)).toEqual([created.actionId, upd.actionId]);
+  });
+
+  test('путь отмены — полем записи: «отмени последнее» из чата пишет source chat, исполнение при этом — system', async () => {
+    const user = await freshGraph();
+    const created = ok(
+      await execute(db, req(user, 'entity_create', { title: 'Из чата отменю', tags: [] }), {
+        sink,
+      }),
+    );
+    ok(
+      await undoAction(db, { identity: personal(user), actionId: created.actionId, path: 'chat' }),
+    );
+    expect((await undoRecordOf(user, created.actionId))?.source).toBe('chat');
+  });
+
+  test('id записи отмены заведён ДО применения: исполнитель пишет строку ровно с InternalUndoMode.undoRecordId', async () => {
+    const user = await freshGraph();
+    const created = ok(
+      await execute(db, req(user, 'entity_create', { title: 'Отменю руками', tags: [] }), { sink }),
+    );
+    const undoing = await actionById(user, created.actionId);
+    const undoRecordId = newId();
+    let applied = false;
+    ok(
+      await execute(
+        db,
+        {
+          identity: personal(user),
+          actorKind: 'owner',
+          source: 'system',
+          operations: undoing.inverse.map((iv) => ({ tool: iv.op, input: iv.payload })),
+        },
+        {
+          sink,
+          internalUndo: {
+            undoRecordId,
+            undoing,
+            path: 'ui',
+            force: false,
+            pinned: new Set(),
+            continuation: { kind: 'none' },
+            async onApplied() {
+              applied = true;
+            },
+          },
+        },
+      ),
+    );
+    expect(applied).toBe(true);
+    expect((await undoRecordOf(user, created.actionId))?.id).toBe(undoRecordId);
+  });
+
+  // Перепроверка «уже отменено» в транзакции применения (`onApplied`) ловит последовательный повтор и дождавшегося
+  // конкурента; уникальность (graph_id, undoes) — последний рубеж, и отказ по ней — тот же VALIDATION, а не сырой 23505.
+  test('повторная отмена мимо перепроверки → VALIDATION already_undone по уникальности (graph_id, undoes), вторая строка не легла', async () => {
+    const user = await freshGraph();
+    const created = ok(
+      await execute(db, req(user, 'entity_create', { title: 'Дважды', tags: [] }), { sink }),
+    );
+    const undoing = await actionById(user, created.actionId);
+    const run = () =>
+      execute(
+        db,
+        {
+          identity: personal(user),
+          actorKind: 'owner',
+          source: 'system',
+          operations: undoing.inverse.map((iv) => ({ tool: iv.op, input: iv.payload })),
+        },
+        {
+          sink,
+          // Перепроверки нет намеренно: так выглядит гонка, в которой обе транзакции прошли её до чужого коммита
+          internalUndo: {
+            undoRecordId: newId(),
+            undoing,
+            path: 'ui',
+            force: false,
+            pinned: new Set(),
+            continuation: { kind: 'none' },
+            onApplied: async () => {},
+          },
+        },
+      );
+    ok(await run());
+    const again = err(await run());
+    expect(again.error.code).toBe('VALIDATION');
+    expect(again.error.details).toEqual({ actionId: created.actionId, reason: 'already_undone' });
+    expect(await undoMessageCount(user, created.actionId)).toBe(1);
   });
 });

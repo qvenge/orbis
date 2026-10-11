@@ -30,6 +30,12 @@ import { ensureGlobalThread } from '../chat/threads';
 import type { Db } from '../db/client';
 import { entities } from '../db/schema';
 import { type Tx, withIdentity } from '../db/with-identity';
+import {
+  financialUpdatesSince,
+  findAction,
+  JOURNAL_SCAN_LIMIT,
+  type JournalEntry,
+} from '../executor/journal-read';
 import type { ActionRecord } from '../executor/types';
 import type { Identity } from '../identity';
 import {
@@ -133,7 +139,7 @@ function categoryInInput(input: Record<string, unknown>): string | undefined {
  * (в inverse она приезжает списком `unset`, а не значением). Это то же поведение, что и
  * до реформы, и оно верное — «поставили категорию впервые» исправлением не является.
  */
-function extractRecategorizations(action: ActionRecord): Recategorization[] {
+function extractRecategorizations(action: EscalationAction): Recategorization[] {
   const before = new Map<string, string>();
   for (const op of action.inverse) {
     if (op.op !== 'entity_update') continue;
@@ -155,95 +161,38 @@ function extractRecategorizations(action: ActionRecord): Recategorization[] {
 }
 
 /**
- * Осознанный потолок выборки скана (K18 / урок C6). Скан отвечает на вопрос «есть ли
- * ЕЩЁ хоть одно такое же исправление», а не считает их все, поэтому усечение сверху
- * может только НЕ предложить правило и никогда не предложит лишнего; наружу счётчик
- * не уходит, молчаливо обрезанного числа пользователь не видит. 200 подходящих
- * audit-сообщений за 30 дней — заведомо выше живого потока ручных рекатегоризаций.
+ * Потолок выборки скана (K18 / урок C6) живёт у API журнала вместе с самим сканом; здесь — реэкспорт ради
+ * теста эскалации, который меряет усечение.
  */
-export const JOURNAL_SCAN_LIMIT = 200;
+export { JOURNAL_SCAN_LIMIT };
 
 /**
- * Audit-сообщения журнала владельца за 30 дней, чей action ПЕРЕНОСИЛ что-то в одну из
- * названных категорий. Containment по GIN (chat_messages_metadata_gin) сужает выборку.
- * Отменённые действия исключаются тем же NOT EXISTS, что и в findLastUndoable (undo.ts):
- * «исправил → отменил → исправил» не должно считаться двумя исправлениями.
+ * Что эскалация читает из записи журнала: id (исключить текущее действие) и обе половины правки. Структурный
+ * тип, а не `ActionRecord`: действие приходит и записью API журнала (`JournalEntry`), и прежней формой.
+ */
+type EscalationAction = Pick<ActionRecord, 'id' | 'operations' | 'inverse'>;
+
+/**
+ * Записи журнала владельца за 30 дней, чьё действие ПЕРЕНОСИЛО что-то в одну из названных
+ * категорий — `journal-read.financialUpdatesSince` (РП-9). Отменённые действия и записи
+ * отмены туда не попадают: «исправил → отменил → исправил» не должно считаться двумя
+ * исправлениями.
  *
- * ПРОБА ИДЁТ ПО ЗНАЧЕНИЮ, а не по наличию ключа, и выбора здесь не было. До §А7-4 категория
- * лежала полем внутри аспект-ключа, и `{aspects: {orbis/financial: {}}}` означало «есть
- * такой ключ, а внутри что угодно»: пустой объект содержится в любом объекте. Плоское
- * свойство — строка, и `{props: {orbis/finance_category: {}}}` не содержится в ней НИКОГДА
- * (объект не содержится в скаляре), а `{props: {}}` затянул бы под пробу любую правку любого
- * свойства и вытеснил бы полезные записи потолком выборки. Значение известно и без журнала:
- * `considerOne` считает только исправления с ТОЙ ЖЕ парой категорий, что у текущего действия,
- * поэтому список `to` — ровно то, что скану и нужно. Заодно проба стала УЖЕ прежней: правка
- * суммы или контрагента под неё больше не попадает вовсе.
- *
- * `op:'entity_update'` ОБЯЗАТЕЛЕН по-прежнему. Без него под пробу попадает любой batch, в
- * котором финансовая сущность СОЗДАВАЛАСЬ с этой категорией: журнал entity_create несёт всё
- * состояние в payload (executor.ts prepareEntityCreate), то есть каждый CSV-импорт (до 300
- * строк + metadata.results) читался и разбирался целиком ради нуля полезных строк —
- * extractRecategorizations отбрасывает все op ≠ entity_update. И это происходило синхронно
- * внутри entity.update владельца.
- *
- * ORDER BY + LIMIT: потолок ограничивает объём разбираемого JSONB и размер результата,
- * а не сам обход GIN; после сужения пробы каждая найденная строка потенциально полезна,
- * поэтому обход по ней не расточителен. Порядок задан явно, чтобы усечение брало
- * СВЕЖИЕ действия, а не произвольные.
+ * Проба — ПО ЗНАЧЕНИЮ категории и по `op:'entity_update'` (почему именно так — докблок
+ * `financialUpdatesSince`). Значение известно и без журнала: `considerOne` считает только
+ * исправления с ТОЙ ЖЕ парой категорий, что у текущего действия, поэтому список `to` — ровно
+ * то, что скану и нужно. Окно — 30 дней от «сейчас» (§7.8).
  *
  * Экспортируется ради теста: проба — самая хрупкая часть эскалации, и «лишние
  * прочитанные строки» никак иначе не наблюдаемы.
  */
 export async function scanFinancialUpdates(
   tx: Tx,
+  graph: GraphId,
   toCategoryIds: readonly string[],
-): Promise<ActionRecord[]> {
-  const targets = [...new Set(toCategoryIds)];
-  if (targets.length === 0) return [];
-  const probe = (type: string, category: string): string =>
-    JSON.stringify({
-      actions: [
-        {
-          type,
-          operations: [
-            { op: 'entity_update', payload: { props: { [FINANCE_CATEGORY]: category } } },
-          ],
-        },
-      ],
-    });
-  // Дизъюнкция ЛИТЕРАЛЬНЫХ containment-предикатов, а не подзапрос по массиву проб: индексом
-  // (`jsonb_path_ops`) берётся только `metadata @> <константа>`, и коррелированный
-  // `EXISTS (… unnest …)` тихо увёл бы скан в seq scan — тесты этого не увидели бы вовсе.
-  const matches = sql.join(
-    targets.flatMap((category) => [
-      sql`m.metadata @> ${probe('entity_updated', category)}::jsonb`,
-      sql`m.metadata @> ${probe('batch', category)}::jsonb`,
-      // §Б6-4: действие — третья форма записи той же правки. Без этой строки смена категории
-      // действием не попадала бы в скан перекатегоризации МОЛЧА (О4 опровержения
-      // `verify-b2-actions`): дизъюнкция литеральных проб исчерпывающая, и новый тип в неё не
-      // попадает сам.
-      sql`m.metadata @> ${probe('action', category)}::jsonb`,
-    ]),
-    sql` OR `,
-  );
-  const rows = await tx.execute(
-    sql`SELECT m.metadata FROM chat_messages m
-        WHERE m.created_at > now() - make_interval(days => ${WINDOW_DAYS})
-          AND (${matches})
-          AND NOT EXISTS (
-            SELECT 1 FROM chat_messages u
-            WHERE u.metadata @> jsonb_build_object(
-              'type', 'undo', 'undoes', m.metadata->'actions'->0->>'id')
-          )
-        ORDER BY m.created_at DESC
-        LIMIT ${JOURNAL_SCAN_LIMIT}`,
-  );
-  const out: ActionRecord[] = [];
-  for (const row of rows) {
-    const action = (row.metadata as { actions?: ActionRecord[] }).actions?.[0];
-    if (action) out.push(action);
-  }
-  return out;
+): Promise<JournalEntry[]> {
+  const since = new Date(Date.now() - WINDOW_DAYS * 24 * 60 * 60 * 1000);
+  return financialUpdatesSince(tx, graph, since, [...toCategoryIds]);
 }
 
 /**
@@ -257,11 +206,12 @@ export async function scanFinancialUpdates(
  */
 async function journalRecategorizations(
   tx: Tx,
-  action: ActionRecord,
+  graph: GraphId,
+  action: EscalationAction,
   toCategoryIds: readonly string[],
 ): Promise<Recategorization[]> {
   const out: Recategorization[] = [];
-  for (const found of await scanFinancialUpdates(tx, toCategoryIds)) {
+  for (const found of await scanFinancialUpdates(tx, graph, toCategoryIds)) {
     if (found.id === action.id) continue;
     out.push(...extractRecategorizations(found));
   }
@@ -526,7 +476,7 @@ async function considerOne(
 export async function maybeSuggestRule(deps: {
   db: Db;
   identity: Identity;
-  action: ActionRecord;
+  action: EscalationAction;
 }): Promise<SuggestRuleResult> {
   const recats = extractRecategorizations(deps.action);
   if (recats.length === 0) return { suggested: false, reason: 'not_recategorization' };
@@ -548,7 +498,7 @@ export async function maybeSuggestRule(deps: {
     };
     const targets = recats.map((rc) => rc.to);
     const loadJournal = async (): Promise<Recategorization[]> => {
-      journal ??= await journalRecategorizations(tx, deps.action, targets);
+      journal ??= await journalRecategorizations(tx, deps.identity.graph, deps.action, targets);
       return journal;
     };
     let last: SuggestRuleResult = { suggested: false, reason: 'not_recategorization' };
@@ -558,16 +508,6 @@ export async function maybeSuggestRule(deps: {
     }
     return last;
   });
-}
-
-/** Записанный action по id — containment по GIN, как в undo.ts. */
-async function findAction(tx: Tx, actionId: string): Promise<ActionRecord | undefined> {
-  const probe = JSON.stringify({ actions: [{ id: actionId }] });
-  const rows = await tx.execute(
-    sql`SELECT metadata FROM chat_messages WHERE metadata @> ${probe}::jsonb LIMIT 1`,
-  );
-  const md = rows[0]?.metadata as { actions?: ActionRecord[] } | undefined;
-  return md?.actions?.find((a) => a.id === actionId);
 }
 
 /** Операция мутации в форме, в которой её видит executor: имя тула + его input. */
@@ -607,7 +547,9 @@ export async function escalateAfterMutation(
 ): Promise<void> {
   if (!touchesCategoryRef(args.operations)) return;
   try {
-    const action = await withIdentity(db, args.identity, (tx) => findAction(tx, args.actionId));
+    const action = await withIdentity(db, args.identity, (tx) =>
+      findAction(tx, args.identity.graph, args.actionId),
+    );
     if (action) await maybeSuggestRule({ db, identity: args.identity, action });
   } catch (e) {
     console.error('[ai.escalation] предложение правила не записано:', e);

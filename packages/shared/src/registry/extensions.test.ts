@@ -11,6 +11,7 @@ import {
   HOST_OWN_CARDS,
   isExtensionEnabled,
   ownCardOrder,
+  SURFACE_ENGINE,
   SURFACE_RE,
   SURFACES,
   SWITCHABLE_EXTENSION_IDS,
@@ -22,8 +23,12 @@ describe('словарь расширений и поверхностей (сп�
   test('четыре расширения: planner и memory — ядро, ade разделён на «Проекты» и «Разработку»', () => {
     expect([...EXTENSION_IDS]).toEqual(['finance', 'goals', 'projects', 'dev']);
   });
-  test('поверхности — только те, у которых есть движок подписки (Р-К-10); повестка — ядро', () => {
-    expect([...SURFACES]).toEqual(['core/agenda', 'finance/budget-overview']);
+  test('поверхности — только те, у которых есть движок подписки (Р-К-10); Повестки среди них нет (1в §6.5)', () => {
+    // Повестка с 1в — запись поставки из блоков: движка подписки у неё нет, и имя без исполнителя
+    // было бы обещанием, которое некому сдержать. `SURFACE_RE` голову `core` по-прежнему принимает
+    // (форма имени законна), запись подписки стережёт этот словарь.
+    expect([...SURFACES]).toEqual(['finance/budget-overview']);
+    expect(SURFACE_ENGINE).toEqual({ 'finance/budget-overview': 'budget' });
   });
   test('каждое имя проходит форму «расширение/поверхность»; головы прежнего словаря — нет', () => {
     for (const s of SURFACES) expect(SURFACE_RE.test(s)).toBe(true);
@@ -79,8 +84,15 @@ describe('манифест расширения (§4.1): состав вне р�
   test('Финансы: три тула, одна поверхность, три промпт-фрагмента, читает два контракта', () => {
     const fin = EXTENSION_MANIFESTS.finance;
     // `budget_rollover` — инструмент РАСШИРЕНИЯ (задача 10 Б-2, §Б6-5 ревизии 4): выключены
-    // Финансы — нет и переноса остатков.
-    expect([...fin.tools].sort()).toEqual(['budget_rollover', 'budget_status', 'import_csv_start']);
+    // Финансы — нет и переноса остатков. `subscription_set` — с 1в (§6.5, R-22): единственная
+    // поверхность подписки — Бюджета, и без Финансов тул отвечает `MODULE_DISABLED`, а не «неизвестным».
+    // `import_csv_start` снят до среза Бюджета (1в §7.4): интерфейса импорта нет — и в описании
+    // расширения импорта выписок тоже нет.
+    expect([...fin.tools].sort()).toEqual(['budget_rollover', 'budget_status', 'subscription_set']);
+    expect(fin.description).toEqual({
+      ru: 'Расходы и доходы, категории и конверты бюджета',
+      en: 'Expenses and income, categories and budget envelopes',
+    });
     expect(fin.surfaces).toEqual(['finance/budget-overview']);
     expect(fin.promptFragments.map((f) => f.id)).toEqual([
       'finance/amounts',

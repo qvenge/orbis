@@ -55,6 +55,8 @@ function ctxOf(over: Partial<CompileCtx> = {}): CompileCtx {
     graphId: parseGraphId('00000000-0000-7000-8000-0000000000a1'),
     today: '2026-07-03',
     timeZone: 'Europe/Moscow',
+    weekStart: 'monday',
+    ownerCurrency: 'RUB',
     reg: snapshot(),
     thisEntityId: '00000000-0000-7000-8000-0000000000f1',
     ...over,

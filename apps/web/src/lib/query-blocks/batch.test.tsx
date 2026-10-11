@@ -17,6 +17,7 @@ import {
 import { registryReply } from '../../test/registry';
 import { trpc } from '../../trpc';
 import { invalidateGraph } from '../invalidate';
+import { useBlockData } from './batch';
 import { ThisEntityProvider } from './this-entity';
 
 // Единый механизм данных блоков (спека страниц 1а §6.3): блок просит «результат моего запроса
@@ -335,3 +336,48 @@ test('F6: негодный this у блока — плашка ТОЛЬКО у �
   expect(await screen.findByText('A')).toBeInTheDocument();
   expect(batches(calls).flatMap(blockTexts)).toEqual(['tags=a']);
 });
+
+// Параметр страницы (спека 1в §5.1): значения едут полем элемента пачки, текст — с `$` (подстановка
+// на сервере). Значение — часть ключа: другое значение — новая просьба, а прежние строки держатся до
+// ответа (тот же запрос с другим значением — не чужие данные, а их следующее состояние).
+function ParamProbe() {
+  const [period, setPeriod] = useState('next_7d');
+  const q = useBlockData('tags=a', { params: { period } });
+  const rows = q.data?.ok && q.data.kind === 'rows' ? q.data.rows : [];
+  return (
+    <>
+      <button type="button" onClick={() => setPeriod('next_14d')}>
+        14
+      </button>
+      <span data-testid="probe">{rows.map((r) => r.title).join(',') || 'пусто'}</span>
+    </>
+  );
+}
+
+test('params: значения — полем элемента; другое значение — новая просьба; пустые — без поля', async () => {
+  const { calls } = renderWithProviders(
+    <>
+      <ParamProbe />
+      <Probe text="tags=b" params={{}} />
+    </>,
+    handler({
+      'tags=a': (b) => [ent(`A-${(b as { params?: { period?: string } }).params?.period}`)],
+      'tags=b': [ent('B')],
+    }),
+  );
+  await waitFor(() => expect(screen.getByTestId('probe')).toHaveTextContent('A-next_7d'));
+  const first = (batches(calls)[0]?.input as { blocks: Record<string, unknown>[] }).blocks;
+  expect(first.map((b) => [b.text, b.params])).toEqual([
+    ['tags=a', { period: 'next_7d' }],
+    ['tags=b', undefined],
+  ]);
+  expect(first[1]).not.toHaveProperty('params');
+  fireEvent.click(screen.getByRole('button', { name: '14' }));
+  await waitFor(() => expect(screen.getByTestId('probe')).toHaveTextContent('A-next_14d'));
+  expect(batches(calls)).toHaveLength(2);
+});
+
+function Probe({ text, params }: { text: string; params: Record<string, string> }) {
+  const q = useBlockData(text, { params });
+  return <span>{q.data?.ok ? 'есть' : ''}</span>;
+}

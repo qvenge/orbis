@@ -35,7 +35,7 @@ import { ensureGlobalThread } from '../chat/threads';
 import { userSettings } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { execute } from '../executor/executor';
-import { makeChatJournalSink } from '../executor/journal';
+import { makeJournalSink } from '../executor/journal';
 import type { ExecuteResult } from '../executor/types';
 import { undoAction } from '../executor/undo';
 import { buildContext } from '../llm/context';
@@ -58,7 +58,7 @@ requireEnv();
 const { db, client } = appDb();
 const { seedRoutine, seedRoutineRun } = agentLoopHelpers(db);
 // Боевой синк журнала: Undo (пункт 8) адресует действие журнала, без синка его бы не было.
-const sink = makeChatJournalSink();
+const sink = makeJournalSink();
 const createCaller = createCallerFactory(appRouter);
 
 const TZ = 'Europe/Moscow';
@@ -821,10 +821,11 @@ test('все четыре выключены: JSON видимых тулов т�
     expect(def).toBeDefined();
     expect(extensionIdsIn(JSON.stringify(def))).toContain(x.id);
   }
-  // `subscription_set` жив и не предлагает поверхностей выключенного расширения.
-  const sub = ch.chat.find((d) => d.name === 'subscription_set');
-  expect(sub).toBeDefined();
-  expect(JSON.stringify(sub)).toContain('core/agenda');
+  // `subscription_set` не предлагается вовсе: поверхность ядра Повестки снята (1в §6.5), и
+  // настраивать нечего; тул с пустым `enum` был бы вызовом, который нечем сделать.
+  for (const defs of Object.values(ch)) {
+    expect(defs.find((d) => d.name === 'subscription_set')).toBeUndefined();
+  }
 });
 
 test('N-1: правило, которое свойство выключенного расширения лишь ЧИТАЕТ, заводится; пишущее — отказ (registry)', async () => {
@@ -1070,10 +1071,11 @@ describe('выключенные Финансы: обходы маски (С1б-
     expect(JSON.stringify(subOn)).toContain(surface); // сторож не вырожден: при включённых — есть
     await setEnabled(g, 'finance', false);
     const off = await channels(g);
+    // Поверхность Бюджета — единственная с 1в (§6.5): без неё тул не предлагается вовсе, а не
+    // несёт пустой `enum`.
     for (const defs of Object.values(off)) {
-      const sub = defs.find((d) => d.name === 'subscription_set');
-      expect(sub).toBeDefined();
-      expect(JSON.stringify(sub)).not.toContain(surface);
+      expect(defs.find((d) => d.name === 'subscription_set')).toBeUndefined();
+      expect(JSON.stringify(defs)).not.toContain(surface);
     }
     const definition = BUILTIN_SUBSCRIPTION_DEFS.find(
       (x) => x.id === 'orbis/budget-overview',

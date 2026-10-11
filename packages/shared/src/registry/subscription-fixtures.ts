@@ -1,45 +1,18 @@
 /**
- * ЭТАЛОННЫЕ ДЕКЛАРАЦИИ ПОДПИСОК (§Б5-6 Agenda, §Б5-4 Budget) — НОРМАТИВ, а не снимок вывода: каждое поле
- * написано от спеки, а не срисовано с сида. Их читают форма (`subscription-type.test.ts`), валидатор
+ * ЭТАЛОННАЯ ДЕКЛАРАЦИЯ ПОДПИСКИ (§Б5-4 Budget) — НОРМАТИВ, а не снимок вывода: каждое поле написано от
+ * спеки, а не срисовано с сида. Её читают форма (`subscription-type.test.ts`), валидатор
  * (`subscriptions/registry.test.ts`) и дельты (`registry/deltas.test.ts`) — один эталон на трёх, потому что
  * три копии «законной декларации» разъехались бы на первом же новом поле, и разъезд увидел бы не тест, а
- * владелец. `AGENDA_DEF` — ОН ЖЕ ВСТРОЕННЫЙ СИД (Ф-Б1-27): `BUILTIN_SUBSCRIPTION_DEFS` ссылается на этот
+ * владелец. `BUDGET_DEF` — ОН ЖЕ ВСТРОЕННЫЙ СИД (Ф-Б1-27): `BUILTIN_SUBSCRIPTION_DEFS` ссылается на этот
  * литерал, а не несёт копию, поэтому правка здесь требует пересева (`bun run db:prepare`) и уезжает
- * владельцу. С задачи 9 то же верно и для `BUDGET_DEF`: он — сид `orbis/budget-overview`.
+ * владельцу. Эталон Повестки (`AGENDA_DEF`) снят срезом 1в вместе с движком (§6.5).
  *
- * ПОЛЯ С УМОЛЧАНИЕМ ПИШУТСЯ ЯВНО (`params`, `prefer`, `sortBy`, `limit`, `alive`, `materialize`), и это не
- * дублирование схемы: объявленный тип фикстуры — РАЗОБРАННАЯ форма (`AgendaSubscription` = выход
- * `agendaSubscriptionSchema`), в которой этих полей нет только у входа. Эталон, которому нужен `parse`,
- * чтобы стать собой, перестал бы годиться на роль литерала для трёх сьютов сразу.
+ * ПОЛЯ С УМОЛЧАНИЕМ ПИШУТСЯ ЯВНО (`prefer`, `alive`, `materialize`), и это не дублирование схемы:
+ * объявленный тип фикстуры — РАЗОБРАННАЯ форма (`BudgetSubscription` = выход `budgetSubscriptionSchema`), в
+ * которой этих полей нет только у входа. Эталон, которому нужен `parse`, чтобы стать собой, перестал бы
+ * годиться на роль литерала для трёх сьютов сразу.
  */
-import type { AgendaSubscription, BudgetSubscription } from './subscription-type';
-
-/**
- * Повестка (§Б5-6): окно ближайших дней по слоту `moment` плюс просроченное по двум датам.
- * `where` секции просроченного — членство в наборе `open` контракта завершаемости, а не перечисление
- * классов: состав «незакрытого» объявлен контрактом один раз (Р-И-11).
- */
-export const AGENDA_DEF: AgendaSubscription = {
-  engine: 'agenda',
-  params: ['window_from', 'window_to'],
-  show: {
-    contract: 'orbis/when',
-    slot: 'moment',
-    window: { from: { ctx: '$today' }, to: { param: 'window_to' } },
-    prefer: [],
-    sortBy: 'asc',
-    limit: 200,
-  },
-  overdue: {
-    contract: 'orbis/when',
-    slots: ['deadline', 'moment'],
-    before: { ctx: '$today' },
-    where: { op: 'in', args: [{ class: { contract: 'orbis/completable' } }, { const: 'open' }] },
-    prefer: [],
-    limit: 200,
-  },
-  hide: { contract: 'orbis/recurrence', set: 'templates' },
-};
+import type { BudgetSubscription } from './subscription-type';
 
 /**
  * Правый операнд `in` — ИМЯ НАБОРА контракта (Р-И-11), а не перечисление классов: у встроенных

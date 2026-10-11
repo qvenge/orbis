@@ -12,6 +12,7 @@ import {
   APP_NAV,
   APP_NAV_FORM,
   type BlockResult,
+  type EntityBlocksResult,
   entityBlocksInput,
   HOME_PROPERTY,
   PAGE_ASPECT,
@@ -25,7 +26,10 @@ import { APPS_QUERY } from '../../features/apps/useApps';
 import { SUPPLY_RECORDS_QUERY } from '../../features/page/useSupplyRecords';
 import { resetNavForTests, useNav } from '../../state/navigation';
 import {
+  BLOCKS_TIME_ZONE,
+  BLOCKS_TODAY,
   type MockHandler,
+  mockEntityUpdateResult,
   trpcError,
   type WireEntityFixture,
   wireEntity,
@@ -38,7 +42,7 @@ export const SHELL = id(1);
 export const HOME = id(2);
 export const RECORDS = id(3);
 export const DAILY = id(4);
-export const UPCOMING = id(5);
+export const AGENDA = id(5);
 export const ALL_TASKS = id(6);
 export const YEAR = id(7);
 export const ROUTINES = id(8);
@@ -63,7 +67,7 @@ const supplyPage = (rid: string, key: string, title: string, emoji: string, body
     props: { [SUPPLY_KEY]: key },
   });
 
-export const NAV_IDS = [RECORDS, DAILY, UPCOMING, ALL_TASKS, YEAR, ROUTINES] as const;
+export const NAV_IDS = [RECORDS, DAILY, AGENDA, ALL_TASKS, YEAR, ROUTINES] as const;
 
 export const SHELL_ROW = wireEntity({
   id: SHELL,
@@ -94,7 +98,7 @@ export const PAGES: readonly WireEntityFixture[] = [
   supplyPage(HOME, 'home', 'Домой', '🏠', bodyOf('home')),
   supplyPage(RECORDS, 'records', 'Записи', '🗂️', bodyOf('records')),
   supplyPage(DAILY, 'daily-planning', 'Daily Planning', '☀️', 'Утро.'),
-  supplyPage(UPCOMING, 'upcoming', 'Upcoming', '📅', 'Неделя.'),
+  supplyPage(AGENDA, 'agenda', 'Повестка', '📅', 'Неделя.'),
   supplyPage(ALL_TASKS, 'all-tasks', 'All Tasks', '✅', 'Все задачи.'),
   supplyPage(YEAR, 'horizon-year', 'Год', '🗓️', 'Год.'),
   supplyPage(ROUTINES, 'routines', 'Рутины', '🔁', 'Рутины.'),
@@ -148,7 +152,7 @@ export function frameWorld(over: Partial<FrameWorld> = {}): FrameWorld {
   return {
     supply,
     all: over.all ?? [...supply, ...RECORDS_WORLD],
-    badges: over.badges ?? { [UPCOMING]: 3, [ALL_TASKS]: 120 },
+    badges: over.badges ?? { [AGENDA]: 3, [ALL_TASKS]: 120 },
     threads: over.threads ?? { [NOTE_THREAD]: NOTE, [GLOBAL_THREAD]: null },
     recordsList: over.recordsList ?? [RECORDS_WORLD[0] as WireEntityFixture],
     chat: over.chat ?? [],
@@ -182,6 +186,12 @@ export function frameHandler(world: FrameWorld = frameWorld()): MockHandler {
           registryVersion: BUILTIN_REGISTRY.version,
         };
       }
+      case 'entity.update': {
+        const patch = input as { id: string; archived?: boolean };
+        const row = byId.get(patch.id);
+        if (row === undefined) throw trpcError('NOT_FOUND');
+        return mockEntityUpdateResult({ ...row, archived: patch.archived ?? row.archived });
+      }
       case 'entity.query': {
         const q = (input as { query?: string }).query ?? '';
         if (q === SUPPLY_RECORDS_QUERY) return world.supply;
@@ -200,7 +210,8 @@ export function frameHandler(world: FrameWorld = frameWorld()): MockHandler {
         return {
           results: Object.fromEntries(
             blocks.map((b): [string, BlockResult] => {
-              if ('text' in b) return [b.key, { ok: true, kind: 'rows', rows: [], more: 0 }];
+              if ('text' in b)
+                return [b.key, { ok: true, kind: 'rows', rows: [], more: 0, closedIds: [] }];
               const n = world.badges[b.badgeOf];
               return [
                 b.key,
@@ -210,7 +221,9 @@ export function frameHandler(world: FrameWorld = frameWorld()): MockHandler {
               ];
             }),
           ),
-        };
+          today: BLOCKS_TODAY,
+          timeZone: BLOCKS_TIME_ZONE,
+        } satisfies EntityBlocksResult;
       }
       case 'chat.threadEntity':
         return { entityId: world.threads[(input as { threadId: string }).threadId] ?? null };

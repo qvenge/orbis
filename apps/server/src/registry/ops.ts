@@ -89,6 +89,7 @@ import { ExecError } from '../errors';
 // Цикла нет: `executor/props` читает из `registry/{cache,load}` и в `registry/ops` не заходит.
 // Резолвер адреса свойства — ОДИН на исполнитель и на реестр: второй экземпляр правила «своя
 // строка перекрывает встроенную» разъехался бы с первым ровно там, где владелец завёл свою.
+import { bodyActionBefore } from '../executor/body-stamp';
 import { resolvePropertyRef } from '../executor/props';
 // Цикла нет: `rules/carriers` берёт из реестра только `rules.ts` и тип снимка.
 import { assertEngineCarriersKept } from '../rules/carriers';
@@ -214,9 +215,11 @@ function assertRegistryQuery(where: string, ast: unknown): void {
  * (`registry/deltas.ts`) — он ищет в дереве узел `aspect` и на всём остальном отвечает
  * «не называет». То есть `scope` вида `orbis/task_status=done` УЖЕ сегодня означал бы
  * «свойство показывается по условию, которого ни один читатель реестра не проверяет».
- * Запрет снимается вместе с читателем, умеющим считать произвольное множество.
+ * Запрет снимается вместе с читателем, умеющим считать произвольное множество. Адрес контракта
+ * (1в, `{prop: {contract, slot}}`) — такой же узел `prop` и получает тот же отказ `SCOPE_SHAPE`.
  */
-function assertScopeShape(node: QueryFilterNode | null): void {
+// ОБХОДЧИК-Q: scope-shape
+export function assertScopeShape(node: QueryFilterNode | null): void {
   if (node === null) return;
   const stack: QueryFilterNode[] = [node];
   while (stack.length > 0) {
@@ -861,14 +864,9 @@ export async function updateProperty(
  *    включая написанный владельцем `title=`, считалось ссылкой) и не видел адресацию
  *    закавыченной подписью (§А5-3а). ЦЕНА, названная вслух: перечень ровно настолько полон,
  *    насколько полна колонка, — писатель тела, её не заполняющий, делает свою запись
- *    невидимой и для слияния, и для пробы §А10-3. Писателей ЧЕТВЕРО, и колонку пишут ТРИ:
- *    исполнитель (`executor/body-fields.ts`), сид (`seed/onboarding.ts`) и само слияние
- *    вместе с откатом (ниже в этом файле). Четвёртый — разовая конверсия корпуса
- *    `db/backfill-body-doc.ts` — НЕ пишет её и блоки не привязывает: реестра у неё нет, она
- *    идёт админ-DSN по всем владельцам сразу. Строка, сконвертированная ею, для перечня
- *    невидима до первого сохранения тела через исполнителя; расхождение известное
- *    (`backfill-body-doc.test.ts` его пиннит) и снимается пересевом Задачи 23, после
- *    которого строк без документа не остаётся вовсе;
+ *    невидимой и для слияния, и для пробы §А10-3. Писателей тела ТРИ, и каждый пишет колонку:
+ *    исполнитель (`executor/body-fields.ts`), сид через executor и само слияние
+ *    вместе с откатом (ниже в этом файле);
  *  - `delta` — строка `registry_deltas` (§А3-2). Дерева не несёт вовсе, но адресует
  *    свойства шестью полями: `properties.add[].propertyId`, `properties.hide[]`,
  *    `properties.relaxRequired[]`, КЛЮЧИ `properties.rank{}`, КЛЮЧИ `selectOptions{}`
@@ -947,9 +945,11 @@ const PROGRESS_SOURCE = 'orbis/progress_source';
 /**
  * Все имена свойств, названные деревом: `prop`, `has`, `sortBy`. Контракты и наборы (`class`,
  * `rel.sourceNotIn`, Б-1) сюда не входят: слияние переписывает СВОЙСТВА, а контракт слиянию
- * не подлежит.
+ * не подлежит. Адрес контракта в `prop`/`field` (1в) — объект, а не строка: имени свойства он не
+ * несёт, и его ключи (`contract`, `slot`) в список не попадают.
  */
-function propertyNamesInAst(value: unknown, out: Set<string>): void {
+// ОБХОДЧИК-Q: property-names
+export function propertyNamesInAst(value: unknown, out: Set<string>): void {
   const stack: unknown[] = [value];
   while (stack.length > 0) {
     const node = stack.pop();
@@ -983,14 +983,20 @@ const KEY_TOKEN_RE = /[a-z][a-z0-9-]*\/[a-z][a-z0-9_-]*/g;
  * Предел назван: значение, которому кавычки не понадобились, от имени поля неотличимо. Цена
  * ошибки здесь мала — блок и так не разбирается, — а альтернатива (не переписывать текст
  * вовсе) оставляла бы висячее имя поглощённого свойства.
+ *
+ * Ключ, за которым идёт ТОЧКА, — не свойство, а контракт адреса слота (спека 1в §3.1:
+ * `orbis/recurrence.template_marker`): ключ контракта вправе совпасть с ключом свойства
+ * (`orbis/recurrence` — и то и другое), и слияние свойства не должно переписывать контракт.
  */
-function rewriteQueryTextKeys(text: string, from: ReadonlySet<string>, to: string): string {
+// ОБХОДЧИК-Q: rewrite-text-keys
+export function rewriteQueryTextKeys(text: string, from: ReadonlySet<string>, to: string): string {
   const masked = maskQuotedValues(text);
   let out = '';
   let cut = 0;
   for (const m of masked.matchAll(KEY_TOKEN_RE)) {
     const at = m.index as number;
     if (!from.has(m[0])) continue;
+    if (masked[at + m[0].length] === '.') continue;
     out += text.slice(cut, at) + to;
     cut = at + m[0].length;
   }
@@ -1058,9 +1064,9 @@ export async function collectPropertyHolders(tx: Tx, graphId: GraphId): Promise<
     if (names.length > 0) out.push({ kind: 'body', id: r.id as string, properties: [...names] });
   }
 
-  // Дельты — четвёртый род. Читаются ВСЕ цели, а не только `aspect`: строка вида
-  // `property`/`contract` в срезе А появиться не может (тулов нет), но обход, отбирающий
-  // по `target_kind`, промолчал бы о ней ровно тогда, когда она всё-таки появится.
+  // Дельты — четвёртый род. Читаются ВСЕ цели, включая дельты наборов контрактов,
+  // создаваемые `contract_sets_delta_set`: отбор по одному `target_kind` пропустил бы
+  // ссылки на свойства в дельтах остальных видов.
   const deltaRows = (await tx.execute(sql`
     SELECT id, delta FROM registry_deltas WHERE graph_id = ${graphId}::uuid`)) as unknown as RawRow[];
   for (const r of deltaRows) {
@@ -1281,12 +1287,12 @@ export interface MergeInverse {
   /** Записи с переписанным `orbis/progress_source`: прежнее значение. */
   progress: Array<{ entityId: string; value: unknown }>;
   /**
-   * Записи с переписанным телом: прежние `body`, `body_doc` и ОБА индекса имён целиком.
+   * Записи с переписанным телом: прежние `body`, `body_doc` и ОБА индекса имён целиком. Только держатели, чью ревизию
+   * тела слияние сдвинуло (рулинг R-21): откат не пишет тело, которого слияние не меняло.
    *
    * Индексы лежат в inverse СНИМКОМ, а не пересчитываются на откате из восстановленного
    * документа. Пересчёт дал бы «правильное» значение вместо ПРЕЖНЕГО, а это разные вещи:
-   * `body_refs` денормализован и по корпусу местами расходится с телом (`db/backfill-body-doc.ts`
-   * переписывает текст и сам индекс не пересчитывает — задокументировано его тестом), и
+   * `body_refs` денормализован: расхождение с телом по корпусу — след до-плановых писателей, и
    * откат, «чинящий» такую строку, перестал бы быть байт-в-байт.
    */
   bodies: Array<{
@@ -1295,9 +1301,20 @@ export interface MergeInverse {
     bodyDoc: unknown;
     bodyRefs?: string[];
     queryRefs?: string[];
+    /**
+     * «Действие тела до» держателя (спека скорости §8.6 «Цепочка»: у слияния — для каждого держателя, рядом с его
+     * прежним телом): `body_action_id` ДО слияния, снятый тем же `SELECT … FOR UPDATE`, что и тело. Откат его не
+     * пишет — колонку ставит триггер из действия записи отмены. НЕОБЯЗАТЕЛЬНОЕ по доводу `mirrors`: журнал
+     * append-only, и слияния, записанные до колонок тела (0026), ключа не несут.
+     */
+    bodyActionBefore?: string | null;
   }>;
   /** Строки `registry_deltas` с переписанными адресами: прежняя дельта целиком. */
-  deltas: Array<{ id: string; delta: unknown }>;
+  deltas: Array<{
+    id: string;
+    delta: unknown;
+    target?: { kind: RegistryDeltaTargetKind; id: string };
+  }>;
   /**
    * Зеркала-рёбра (§А6-2), чью подпись `meta.property` слияние перевело на цель.
    *
@@ -1320,7 +1337,12 @@ export interface MergeInverse {
    * `rules` ЦЕЛИКОМ — откат присваивает абсолютное значение. Поле НЕОБЯЗАТЕЛЬНОЕ по доводу `mirrors`:
    * журнал append-only, и слияния, записанные до шестого рода, ключа не несут.
    */
-  rules?: Array<{ carrier: 'aspect' | 'property' | 'role'; id: string; rules: unknown }>;
+  rules?: Array<{
+    carrier: 'aspect' | 'property' | 'role';
+    id: string;
+    key?: string;
+    rules: unknown;
+  }>;
 }
 
 export interface MergeResult {
@@ -1328,6 +1350,12 @@ export interface MergeResult {
   rewrittenQueries: number;
   /** Полезная нагрузка ОДНОГО inverse на всю операцию (§А10-2) — её кладёт в журнал executor. */
   inverse: MergeInverse;
+  /**
+   * «Действие тела до» для записи журнала (§8.6): держатели, чьё тело слияние РЕАЛЬНО сменило (ревизия `RETURNING`
+   * выросла), → `body_action_id` до слияния. Держатель, чей документ переписывание оставило прежним, сюда не входит:
+   * «изменила тело» = «триггер сменил тело».
+   */
+  bodyBefore: Record<string, string | null>;
 }
 
 /** Конфликт значений: у записи заполнены оба свойства, и значения разные. */
@@ -1531,7 +1559,11 @@ function uuidArray(ids: readonly string[]): SQL {
  * Экспорт — ради пина: держателей с E-правилами у слияния пока нет (правила на строках реестра —
  * держатель задачи 16), и без прямого теста ветка `$touched` ждала бы первого потребителя
  * непроверенной.
+ *
+ * Адрес контракта в `prop`/`field` (1в) — объект: условие «строка из `from`» его не задевает, а
+ * рекурсия внутрь находит ключи `contract`/`slot`, которых переписывание не трогает.
  */
+// ОБХОДЧИК-Q: rewrite-ast
 export function rewriteAst(value: unknown, from: ReadonlySet<string>, to: string): unknown {
   if (Array.isArray(value)) return value.map((v) => rewriteAst(v, from, to));
   if (typeof value !== 'object' || value === null) return value;
@@ -1563,6 +1595,11 @@ export async function mergeProperty(
   tx: Tx,
   graphId: GraphId,
   input: { source: string; into: string },
+  /**
+   * Действие, объявленное транзакцией (`ExecCtx.bodyAction`, спека скорости §8.1): «действие тела до» держателя, чьё
+   * тело эта же транзакция уже меняла, — не ссылка на само действие (`bodyActionBefore`). Вне executor'а — `null`.
+   */
+  bodyAction: string | null,
 ): Promise<MergeResult> {
   const reg = await currentRegistry(tx, graphId);
   const { source, into } = resolveMergePair(reg, input);
@@ -1663,6 +1700,7 @@ export async function mergeProperty(
   const registry: MergeInverse['registry'] = [];
   const progress: MergeInverse['progress'] = [];
   const bodies: MergeInverse['bodies'] = [];
+  const bodyBefore: Record<string, string | null> = {};
   const deltas: MergeInverse['deltas'] = [];
   const binds: NonNullable<MergeInverse['binds']> = [];
   const ruleRows: NonNullable<MergeInverse['rules']> = [];
@@ -1701,12 +1739,16 @@ export async function mergeProperty(
     }
     if (holder.kind === 'delta') {
       const rows = (await tx.execute(sql`
-        SELECT delta FROM registry_deltas
+        SELECT delta, target_kind, target_id FROM registry_deltas
         WHERE graph_id = ${graphId}::uuid AND id = ${holder.id}::uuid FOR UPDATE
       `)) as unknown as RawRow[];
       const row = rows[0];
       if (row === undefined) continue;
-      deltas.push({ id: holder.id, delta: row.delta });
+      deltas.push({
+        id: holder.id,
+        delta: row.delta,
+        target: { kind: row.target_kind as RegistryDeltaTargetKind, id: String(row.target_id) },
+      });
       await tx.execute(sql`
         UPDATE registry_deltas SET delta = ${JSON.stringify(
           rewriteDelta(row.delta, names, astTarget),
@@ -1719,12 +1761,12 @@ export async function mergeProperty(
       // канон, движок ищет свойство по id (докблок `rewriteRuleAddresses`).
       const carrier = holder.carrier ?? 'aspect';
       const rows = (await tx.execute(sql`
-        SELECT rules FROM ${RULE_TABLE[carrier]}
+        SELECT rules, key FROM ${RULE_TABLE[carrier]}
          WHERE graph_id = ${graphId}::uuid AND id = ${holder.id} FOR UPDATE`)) as unknown as RawRow[];
       const row = rows[0];
       if (row === undefined) continue;
       const before = (row.rules ?? []) as RuleDefinition[];
-      ruleRows.push({ carrier, id: holder.id, rules: before });
+      ruleRows.push({ carrier, id: holder.id, key: String(row.key), rules: before });
       const next = before.map((r) => rewriteRuleAddresses(r, names, astTarget));
       await tx.execute(sql`
         UPDATE ${RULE_TABLE[carrier]} SET rules = ${JSON.stringify(next)}::jsonb
@@ -1752,20 +1794,22 @@ export async function mergeProperty(
          WHERE graph_id = ${graphId}::uuid AND id = ${holder.id}`);
       continue;
     }
+    // Колонки тела (0026) — ТЕМ ЖЕ чтением под замком, что и тело: «действие тела до» держателя обязано быть значением
+    // именно того тела, которое слияние переписывает (§8.6), а не снятым отдельным запросом.
     const rows = (await tx.execute(sql`
-      SELECT body, body_doc, body_refs, query_refs FROM entities
+      SELECT body, body_doc, body_refs, query_refs, body_action_id::text AS body_action_id, body_revision
+        FROM entities
        WHERE id = ${holder.id}::uuid FOR UPDATE
     `)) as unknown as RawRow[];
     const row = rows[0];
     if (row === undefined) continue;
     const body = String(row.body ?? '');
-    bodies.push({
-      entityId: holder.id,
-      body,
-      bodyDoc: row.body_doc ?? null,
-      bodyRefs: (row.body_refs ?? []) as string[],
-      queryRefs: (row.query_refs ?? []) as string[],
-    });
+    // «До» — значение колонки ДО транзакции (М-2 гейта): держатель, созданный или поправленный раньше в той же пачке,
+    // несёт в колонке само объявленное действие, и ссылка на него замкнула бы раскрутку цепочки на себя.
+    const actionBefore = bodyActionBefore(
+      (row.body_action_id ?? null) as string | null,
+      bodyAction,
+    );
     // ПРАВДА ТЕЛА — ДОКУМЕНТ (§А11-1), и переписывается он первым; `body` пересобирается из
     // него печатью, а не вторым регэкспом по markdown. Два независимых переписывания одной
     // вещи разъезжаются молча — ровно это и случилось: атрибут блока сменил имя, регэксп по
@@ -1782,8 +1826,7 @@ export async function mergeProperty(
     // заполняют только те, кто тем же UPDATE пишет и `body_doc`. Ветка оставлена как
     // страховка и ПОКРЫТА тестом с искусственным состоянием (`ops.test.ts`, «строка с
     // индексом, но БЕЗ документа») — иначе цена выше проверялась бы чтением кода. Писатель,
-    // заполняющий индекс без документа, появится в тот день, когда `db/backfill-body-doc.ts`
-    // получит реестр.
+    // заполняющий индекс без документа, обязан сохранить эту страховку.
     const nextDoc = bindQueryBlocks(
       rewriteBodyDoc(
         readBodyDoc(row.body_doc ?? null, body, parseReg),
@@ -1793,14 +1836,35 @@ export async function mergeProperty(
       ),
       parseReg,
     );
-    await tx.execute(sql`
+    // Колонки тела ставит триггер из действия, объявленного транзакцией executor'а (§8.1): сырой SQL здесь их не пишет.
+    // «Сменила» — ревизия после записи выросла: переписывание, оставившее документ прежним, «до» не заводит.
+    const nextBody = serializeBody(nextDoc);
+    const written = (await tx.execute(sql`
       UPDATE entities
-         SET body = ${serializeBody(nextDoc)},
+         SET body = ${nextBody},
              body_doc = ${JSON.stringify(nextDoc)}::jsonb,
              body_refs = ${textArray(bodyRefsFromDoc(nextDoc))},
              query_refs = ${textArray(queryRefsFromDoc(nextDoc))},
              updated_at = now()
-       WHERE id = ${holder.id}::uuid`);
+       WHERE id = ${holder.id}::uuid
+         AND (body IS DISTINCT FROM ${nextBody}
+              OR body_doc IS DISTINCT FROM ${JSON.stringify(nextDoc)}::jsonb)
+      RETURNING id::text AS id, body_revision`)) as unknown as RawRow[];
+    const after = written[0];
+    // Данные отмены держателя — ТОЛЬКО если слияние сменило его тело (рулинг R-21): откат, пишущий тело, которого
+    // слияние не меняло, стёр бы текст, набранный в держателе после слияния, мимо правила отмены текста (§8.6 касается
+    // записей с ключом «действия тела до» — ровно этих). Держатель без смены в откате не участвует вовсе.
+    if (after !== undefined && Number(after.body_revision) > Number(row.body_revision)) {
+      bodyBefore[after.id as string] = actionBefore;
+      bodies.push({
+        entityId: holder.id,
+        body,
+        bodyDoc: row.body_doc ?? null,
+        bodyRefs: (row.body_refs ?? []) as string[],
+        queryRefs: (row.query_refs ?? []) as string[],
+        bodyActionBefore: actionBefore,
+      });
+    }
   }
 
   // Компактация цепочки (§А10-2): указатели на поглощённое переводятся на новую цель тем же
@@ -1865,6 +1929,7 @@ export async function mergeProperty(
       binds,
       rules: ruleRows,
     },
+    bodyBefore,
   };
 }
 
@@ -1934,7 +1999,16 @@ function rewriteBodyDoc(
  * отмену там, где она как раз и нужна. Цена — потерянная поздняя правка; она предпочтена
  * неотменяемому слиянию тысячи записей.
  */
-export async function undoMerge(tx: Tx, graphId: GraphId, iv: MergeInverse): Promise<void> {
+export async function undoMerge(
+  tx: Tx,
+  graphId: GraphId,
+  iv: MergeInverse,
+  /** Действие записи отмены, объявленное транзакцией — то же правило «до», что у слияния (`mergeProperty`). */
+  bodyAction: string | null,
+): Promise<{ bodyBefore: Record<string, string | null> }> {
+  // «Действие тела до» для ЗАПИСИ ОТМЕНЫ (§8.6 «Цепочка»): отмена тоже меняет тела держателей, и раскрутка цепочки
+  // через неё читает колонку ДО неё. Колонку пишет триггер из действия записи отмены — здесь только снимается «до».
+  const bodyBefore: Record<string, string | null> = {};
   // `iv.deltas` разбирается ЗАЩИТНО по той же причине, что `ref_sources_marked` в
   // `executor/undo.ts`: журнал append-only, и в нём лежат записи, сделанные до появления
   // четвёртого рода держателей. Отсутствие ключа означает «дельт не переписывали», а не
@@ -1984,14 +2058,30 @@ export async function undoMerge(tx: Tx, graphId: GraphId, iv: MergeInverse): Pro
     const fallbackDoc = restored ?? parseBody(b.body);
     const bodyRefs = Array.isArray(b.bodyRefs) ? b.bodyRefs : bodyRefsFromDoc(fallbackDoc);
     const queryRefs = Array.isArray(b.queryRefs) ? b.queryRefs : queryRefsFromDoc(fallbackDoc);
-    await tx.execute(sql`
+    const prior = (await tx.execute(sql`
+      SELECT body_action_id::text AS body_action_id, body_revision FROM entities
+       WHERE id = ${b.entityId}::uuid FOR UPDATE`)) as unknown as RawRow[];
+    const written = (await tx.execute(sql`
       UPDATE entities
          SET body = ${b.body},
              body_doc = ${restored === null ? null : JSON.stringify(restored)}::jsonb,
              body_refs = ${textArray(bodyRefs)},
              query_refs = ${textArray(queryRefs)},
              updated_at = now()
-       WHERE id = ${b.entityId}::uuid`);
+       WHERE id = ${b.entityId}::uuid
+      RETURNING id::text AS id, body_revision`)) as unknown as RawRow[];
+    const was = prior[0];
+    const after = written[0];
+    if (
+      was !== undefined &&
+      after !== undefined &&
+      Number(after.body_revision) > Number(was.body_revision)
+    ) {
+      bodyBefore[after.id as string] = bodyActionBefore(
+        (was.body_action_id ?? null) as string | null,
+        bodyAction,
+      );
+    }
   }
   for (const d of deltaRows) {
     await tx.execute(sql`
@@ -2034,6 +2124,7 @@ export async function undoMerge(tx: Tx, graphId: GraphId, iv: MergeInverse): Pro
        SET merged_into = ${iv.sourceRow.mergedInto}, status = ${iv.sourceRow.status}
      WHERE graph_id = ${graphId}::uuid AND id = ${iv.source}`);
   await bumpOwnerRegistryVersion(tx, graphId);
+  return { bodyBefore };
 }
 
 // ---------------------------------------------------------------------------
@@ -2138,7 +2229,7 @@ export async function setAspectDelta(
   );
   // ПОЛНОТА ОТНЕСЕНИЯ ВАРИАНТОВ (§Б2-2) — ДО записи, тем же доводом, что и проба применимости
   // ниже: `applyDeltas` вариант примет молча, и запись со свежим статусом выпала бы из всех
-  // наборов контракта — из чекбокса строки, из `class=`, из Agenda — без следа причины.
+  // наборов контракта — из чекбокса строки, из `class=`, из блоков Повестки — без следа причины.
   // `rows` — это `RegistryDictionaries` (properties/aspects/contracts), ровно тот словарь,
   // который ждёт проверка.
   const target = rows.aspects.get(aspectId) as AspectDefinition;
@@ -2374,8 +2465,9 @@ function setRefsOf(
  * ПОДПИСКИ, ЗАВИСЯЩИЕ ОТ НАБОРОВ ЭТОГО КОНТРАКТА (Ф-Б1-55б) — fail-closed на ЗАПИСИ.
  *
  * Набор контракта — не только «свой ярлык»: на него ссылаются декларации подписок. Сняв дельту
- * наборов либо заменив её целиком, владелец уносит имя ИЗ-ПОД живой подписки — и `agendaListOf`
- * падает `UNKNOWN_SET` на КАЖДОМ чтении: тул отчитался успехом, а Повестка заперта до `undo`.
+ * наборов либо заменив её целиком, владелец уносит имя ИЗ-ПОД живой подписки — и движок подписки
+ * (до 1в — Повестки, с 1в — Бюджета) падает `UNKNOWN_SET` на КАЖДОМ чтении: тул отчитался успехом, а
+ * поверхность заперта до `undo`.
  * Смысл подписки проверяется на записи ПОДПИСКИ (Р-И-7) — значит и на записи того, из чего
  * подписка собрана.
  *

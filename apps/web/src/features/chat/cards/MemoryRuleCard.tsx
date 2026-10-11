@@ -61,6 +61,7 @@ export function MemoryRuleCard({
   const inFlight = useRef(false);
 
   const create = trpc.entity.create.useMutation({
+    meta: { undoStack: 'skip' },
     onSuccess: () => {
       setResolved('remembered');
       // Экран «Память AI» и Browser читают entity.query — новое правило должно

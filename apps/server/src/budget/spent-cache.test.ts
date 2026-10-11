@@ -17,7 +17,7 @@ import {
 } from '../../test/helpers';
 import { withIdentity } from '../db/with-identity';
 import { touchesBudgetContour } from '../executor/executor';
-import { makeChatJournalSink } from '../executor/journal';
+import { makeJournalSink } from '../executor/journal';
 import type { ExecuteOk, ExecuteRequest, ExecuteResult, WireEntity } from '../executor/types';
 import { undoAction } from '../executor/undo';
 import { DEFAULT_TIMEZONE } from '../query/context';
@@ -37,7 +37,7 @@ import {
 requireEnv();
 const { db, client } = appDb();
 /** Без журнала `undoAction` не найдёт action (образец `binding.test.ts`). */
-const sink = makeChatJournalSink();
+const sink = makeJournalSink();
 beforeAll(async () => {
   await truncateAll();
 });
@@ -512,6 +512,8 @@ describe('вклад одного движения — из декларации
         graphId: user,
         today: '2026-07-10',
         timeZone: DEFAULT_TIMEZONE,
+        weekStart: 'monday' as const,
+        ownerCurrency: 'RUB',
         reg,
         thisEntityId: null,
       };

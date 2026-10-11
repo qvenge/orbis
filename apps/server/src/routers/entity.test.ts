@@ -4,13 +4,17 @@
 // результат → wire, ошибки executor'а → TRPCError (§9.1, §5.2, §6.4).
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import type { GraphId } from '@orbis/shared';
-import { entitySchema, entityThreadId, globalThreadId } from '@orbis/shared';
-import { QUERY_TREE_DEPTH_CAP } from '@orbis/shared/query';
+import { entitySchema, entityThreadId, entityUpdateInput, globalThreadId } from '@orbis/shared';
+import { PAGE_ONLY_HINT, QUERY_TREE_DEPTH_CAP } from '@orbis/shared/query';
 import { TRPCError } from '@trpc/server';
+import { fetchRequestHandler } from '@trpc/server/adapters/fetch';
 import { sql } from 'drizzle-orm';
 import { adminDb, appDb, freshGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
-import type { ActionRecord } from '../executor/types';
+import { actionsOf, journalOf } from '../../test/journal-helpers';
+import { execute } from '../executor/executor';
+import { makeJournalSink } from '../executor/journal';
 import { appRouter } from '../router';
+import { dispatchTool } from '../tools/dispatch';
 import { createCallerFactory } from '../trpc';
 
 requireEnv();
@@ -63,14 +67,15 @@ describe('entity.create / entity.get (§9.2)', () => {
     expect(created.tags).toEqual(['task']); // нормализация executor'а, не роутера
     expect(created.createdAt.endsWith('Z')).toBe(true);
     // actionId — аддитивное поле поверх wire-сущности (Undo из UI-форм, 03-budget §3.6)
-    const { actionId, ...createdEntity } = created;
+    const { actionId, consequences, ...createdEntity } = created;
+    expect(typeof consequences).toBe('boolean');
     expect(typeof actionId).toBe('string');
 
-    const got = await caller.entity.get({ id: created.id });
+    const got = await caller.entity.get({ id: created.id, include: ['body', 'relations'] });
     expect(got.entity).toEqual(createdEntity);
     expect(got.entity.props['orbis/task_status']).toBe('inbox');
     expect(got.entity.aspects).toEqual(['orbis/task']);
-    // include default — body+relations; backlinks/thread не запрошены (§9.2)
+    // include body+relations явно; backlinks/thread не запрошены (§9.2)
     expect(got.relations).toEqual([]);
     expect(got.backlinks).toBeUndefined();
     expect(got.thread).toBeUndefined();
@@ -129,7 +134,7 @@ describe('entity.create / entity.get (§9.2)', () => {
 
     // Undo по actionId откатывает создание (инверсия — архивация, §7.8)
     const r = await caller.ai.undo({ actionId: created.actionId as string });
-    expect(r.ok).toBe(true);
+    expect(r.undone.id).toBe(created.actionId as string);
     const got = await caller.entity.get({ id });
     expect(got.entity.archived).toBe(true);
   });
@@ -180,51 +185,257 @@ describe('entity.create / entity.get (§9.2)', () => {
       await adminClient.end();
     }
   });
+
+  // Д-7: тред в entity.get отдавался целиком и без фильтра — маркеры «думает» и журнал с телами уходили клиенту и агентам.
+  // Теперь это та же выдача, что chat.listMessages (`journal/thread-page.ts`): страница 50, без маркеров, карточки журнала
+  // треда — без тел действия.
+  test('get include=thread: страница 50 новых первыми тем же читателем, что listMessages; маркер «думает» скрыт; журнал — без тел', async () => {
+    const user = await freshGraph();
+    const caller = callerFor(user);
+    const e = await caller.entity.create({
+      input: { title: 'Длинный тред', tags: [] },
+      source: 'ui',
+    });
+    const { threadId } = await caller.chat.ensureThread({ entityId: e.id });
+    const base = Date.UTC(2026, 8, 1, 9, 0, 0);
+    const { db: admin, client: adminClient } = adminDb();
+    try {
+      for (let i = 0; i < 55; i += 1) {
+        await admin.execute(
+          sql`INSERT INTO chat_messages (id, thread_id, role, content, created_at)
+              VALUES (gen_random_uuid(), ${threadId}::uuid, 'user', ${`сообщение ${i}`},
+                      ${new Date(base + i * 1000).toISOString()}::timestamptz)`,
+        );
+      }
+      await admin.execute(
+        sql`INSERT INTO chat_messages (id, thread_id, role, content, metadata, created_at)
+            VALUES (gen_random_uuid(), ${threadId}::uuid, 'system', '', '{"type":"processing"}'::jsonb,
+                    ${new Date(base + 60_000).toISOString()}::timestamptz)`,
+      );
+    } finally {
+      await adminClient.end();
+    }
+    // Правка из разговора в треде записи — карточка журнала этого треда (время — сейчас, новее всех сообщений)
+    const upd = await execute(
+      db,
+      {
+        identity: personal(user),
+        actorKind: 'ai',
+        source: 'chat',
+        threadId,
+        operations: [{ tool: 'entity_update', input: { id: e.id, title: 'Длинный тред 2' } }],
+      },
+      { sink: makeJournalSink() },
+    );
+    expect(upd.ok).toBe(true);
+
+    const got = await caller.entity.get({ id: e.id, include: ['thread'] });
+    const messages = got.thread?.messages ?? [];
+    expect(messages.length).toBe(50);
+    expect(messages.some((m) => m.metadata.type === 'processing')).toBe(false);
+    expect(messages[0]?.role).toBe('system'); // карточка правки — самая новая
+    expect(JSON.stringify(messages[0]?.metadata)).not.toContain('"operations"');
+    expect(messages[1]?.content).toBe('сообщение 54');
+    expect(messages[49]?.content).toBe('сообщение 6');
+  });
 });
 
-describe('entity.update: optimistic-check §5.2 (перенесённый контракт optimistic-check)', () => {
-  test('stale expectedUpdatedAt → CONFLICT; повтор со свежим — успех; tags — LWW без проверки', async () => {
+/**
+ * Процедура через HTTP-обработчик, как в бою: `data.orbis` кладёт `errorFormatter`, а caller (`createCallerFactory`)
+ * отдаёт ошибку ДО форматирования формы — проверять провод им нельзя (та же причина, что в `trpc.test.ts`).
+ */
+async function postMutation(
+  user: GraphId,
+  path: string,
+  input: unknown,
+): Promise<{ status: number; body: { error?: { data?: Record<string, unknown> } } }> {
+  const res = await fetchRequestHandler({
+    endpoint: '/trpc',
+    req: new Request(`http://localhost/trpc/${path}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(input),
+    }),
+    router: appRouter,
+    createContext: () => ({
+      identity: personal(user),
+      actorKind: 'owner' as const,
+      db,
+      clientVersion: null,
+    }),
+  });
+  return {
+    status: res.status,
+    body: (await res.json()) as { error?: { data?: Record<string, unknown> } },
+  };
+}
+
+describe('замок заголовка владельца через интерфейс (§8.2)', () => {
+  test('MCP переименовывает без замка; устаревший expectedTitle от UI даёт структурный отказ, совпавший — успех', async () => {
+    const user = await freshGraph();
+    const caller = callerFor(user);
+    const created = await caller.entity.create({
+      input: { title: 'прежнее', tags: [] },
+      source: 'ui',
+    });
+    const agent = await dispatchTool(
+      { db, identity: personal(user), actorKind: 'agent', source: 'mcp', explicitCommand: false },
+      'entity_update',
+      { id: created.id, title: 'агентское' },
+    );
+    expect(agent.status).toBe('ok');
+    expect(entityUpdateInput.shape).not.toHaveProperty('expectedTitle');
+    expect(
+      entityUpdateInput.safeParse({ id: created.id, title: 'x', expectedTitle: 'агентское' })
+        .success,
+    ).toBe(false);
+    const res = await postMutation(user, 'entity.update', {
+      id: created.id,
+      title: 'новое',
+      expectedTitle: 'прежнее',
+    });
+    expect(res.status).toBe(409);
+    expect(res.body.error?.data?.orbis).toEqual({
+      code: 'CONFLICT',
+      details: {
+        reason: 'precondition_failed',
+        mismatches: [{ property: 'orbis/title', expected: ['прежнее'], actual: 'агентское' }],
+      },
+    });
+    expect((await caller.entity.get({ id: created.id })).entity.title).toBe('агентское');
+    const ok = await postMutation(user, 'entity.update', {
+      id: created.id,
+      title: 'новое',
+      expectedTitle: 'агентское',
+    });
+    expect(ok.status).toBe(200);
+    expect((await caller.entity.get({ id: created.id })).entity.title).toBe('новое');
+  });
+
+  test('пачка переводит expectedTitle каждого элемента: отказ атомарен, совпавший замок проходит', async () => {
+    const user = await freshGraph();
+    const caller = callerFor(user);
+    const a = await caller.entity.create({ input: { title: 'А', tags: [] }, source: 'ui' });
+    const b = await caller.entity.create({ input: { title: 'Б', tags: [] }, source: 'ui' });
+    const res = await postMutation(user, 'entity.updateBatch', {
+      operations: [
+        { tool: 'entity_update', input: { id: a.id, title: 'А2', expectedTitle: 'А' } },
+        { tool: 'entity_update', input: { id: b.id, title: 'Б2', expectedTitle: 'прежнее' } },
+      ],
+    });
+    expect(res.status).toBe(409);
+    expect(res.body.error?.data?.orbis).toEqual({
+      code: 'CONFLICT',
+      details: {
+        reason: 'precondition_failed',
+        mismatches: [{ property: 'orbis/title', expected: ['прежнее'], actual: 'Б' }],
+      },
+    });
+    expect((await caller.entity.get({ id: a.id })).entity.title).toBe('А');
+    const ok = await postMutation(user, 'entity.updateBatch', {
+      operations: [{ tool: 'entity_update', input: { id: b.id, title: 'Б2', expectedTitle: 'Б' } }],
+    });
+    expect(ok.status).toBe(200);
+    expect((await caller.entity.get({ id: b.id })).entity.title).toBe('Б2');
+  });
+});
+
+describe('entity.update: замок текста по ревизии тела (спека скорости §8.1–§8.2)', () => {
+  test('стухшая ревизия → CONFLICT; повтор с ревизией из ответа — успех; tags — LWW без проверки', async () => {
     const user = await freshGraph();
     const caller = callerFor(user);
     const created = await caller.entity.create({
       input: { title: 'Документ', tags: [], body: 'v1' },
       source: 'fast_path',
     });
+    expect(created.bodyRevision).toBe(1);
 
-    // Конкурентная правка body сдвигает updated_at
+    // Конкурентная правка тела сдвигает ревизию
     const fresh = await caller.entity.update({
       id: created.id,
       body: 'v2',
-      expectedUpdatedAt: created.updatedAt,
+      expectedBodyRevision: created.bodyRevision,
     });
-    expect(fresh.body).toBe('v2');
+    expect([fresh.body, fresh.bodyRevision]).toEqual(['v2', 2]);
 
-    // Правка с устаревшей версией — 409 CONFLICT, исходная ошибка в cause
+    // Правка со стухшей ревизией — 409 CONFLICT, исходная ошибка в cause
     const e = await trpcError(
-      caller.entity.update({ id: created.id, body: 'v3', expectedUpdatedAt: created.updatedAt }),
+      caller.entity.update({
+        id: created.id,
+        body: 'v3',
+        expectedBodyRevision: created.bodyRevision,
+      }),
     );
     expect(e.code).toBe('CONFLICT');
     expect((e.cause as unknown as { code: string }).code).toBe('STALE_VERSION');
 
-    // Повтор со свежим updated_at — успех
+    // Повтор с ревизией из ответа — успех
     const v3 = await caller.entity.update({
       id: created.id,
       body: 'v3',
-      expectedUpdatedAt: fresh.updatedAt,
+      expectedBodyRevision: fresh.bodyRevision,
     });
     expect(v3.body).toBe('v3');
 
-    // tags — LWW: без expectedUpdatedAt применяется поверх любых версий
+    // tags — LWW: без ревизии применяется поверх любых версий
     const tagged = await caller.entity.update({ id: created.id, tags: ['Приоритет'] });
     expect(tagged.tags).toEqual(['приоритет']);
     expect(tagged.body).toBe('v3'); // body не тронут
 
-    // body без expectedUpdatedAt — VALIDATION → BAD_REQUEST (§5.2)
+    // body без ревизии — VALIDATION → BAD_REQUEST (§8.1)
     const noCheck = await trpcError(caller.entity.update({ id: created.id, body: 'v4' }));
     expect(noCheck.code).toBe('BAD_REQUEST');
+
+    // Прежнее поле провода — отказ разбора: переходного слоя нет (§8.2)
+    const legacy = await trpcError(
+      caller.entity.update({
+        id: created.id,
+        body: 'v4',
+        expectedUpdatedAt: tagged.updatedAt,
+      } as unknown as Parameters<typeof caller.entity.update>[0]),
+    );
+    expect(legacy.code).toBe('BAD_REQUEST');
   });
 
-  test('audit-сообщение update атрибутировано source=ui (прямое действие владельца в UI, не fast_path)', async () => {
+  test('провод: 409 несёт data.orbis = {code: STALE_VERSION, details: {id, expected, current}} — и ни слова тела (РП-5)', async () => {
+    const user = await freshGraph();
+    const caller = callerFor(user);
+    const secret = 'ТЕКСТ-ЗАПИСИ-НЕ-ДЛЯ-ПРОВОДА';
+    const created = await caller.entity.create({
+      input: { title: 'Провод', tags: [], body: secret },
+      source: 'ui',
+    });
+    await caller.entity.update({ id: created.id, body: `${secret} 2`, expectedBodyRevision: 1 });
+
+    const res = await postMutation(user, 'entity.update', {
+      id: created.id,
+      body: `${secret} 3`,
+      expectedBodyRevision: 1,
+    });
+    expect(res.status).toBe(409);
+    const data = res.body.error?.data ?? {};
+    expect(data.code).toBe('CONFLICT');
+    expect(data.orbis).toEqual({
+      code: 'STALE_VERSION',
+      details: { id: created.id, expected: 1, current: 2 },
+    });
+    expect(JSON.stringify(res.body)).not.toContain(secret);
+
+    // VALIDATION в закрытом списке с задачи 10 (повторная отмена) — но несёт ТОЛЬКО причину: id записи не уходит
+    const bad = await postMutation(user, 'entity.update', { id: created.id, body: 'x' });
+    expect(bad.status).toBe(400);
+    expect(bad.body.error?.data?.orbis).toEqual({ code: 'VALIDATION', details: {} });
+
+    // Отказ вне закрытого списка кодов поля orbis не несёт: канал — только для перечисленных отказов
+    const missing = await postMutation(user, 'entity.update', {
+      id: crypto.randomUUID(),
+      title: 'нет такой',
+    });
+    expect(missing.status).toBe(404);
+    expect(missing.body.error?.data?.orbis).toBeUndefined();
+  });
+
+  test('запись журнала update атрибутирована source=ui (прямое действие владельца в UI, не fast_path)', async () => {
     const user = await freshGraph();
     const caller = callerFor(user);
     const created = await caller.entity.create({
@@ -233,24 +444,52 @@ describe('entity.update: optimistic-check §5.2 (перенесённый кон
     });
     await caller.entity.update({ id: created.id, title: 'Атрибуция 2' });
 
-    // audit обоих действий — в глобальном треде владельца (роутер не шлёт threadId, §7.8)
-    const { db: admin, client: adminClient } = adminDb();
-    try {
-      const rows = await admin.execute(
-        sql`SELECT metadata FROM chat_messages
-            WHERE thread_id = ${globalThreadId(user)} ORDER BY created_at, id`,
-      );
-      const actionOf = (r: (typeof rows)[number]) =>
-        (r.metadata as { actions?: ActionRecord[] }).actions?.[0];
-      const updateMsg = [...rows].find((r) => actionOf(r)?.type === 'entity_updated');
-      const action = updateMsg ? actionOf(updateMsg) : undefined;
-      expect(action?.source).toBe('ui');
-      // create по-прежнему несёт клиентский source (fast_path), не 'ui'
-      const createMsg = [...rows].find((r) => actionOf(r)?.type === 'entity_created');
-      expect((createMsg ? actionOf(createMsg) : undefined)?.source).toBe('fast_path');
-    } finally {
-      await adminClient.end();
-    }
+    const journal = await actionsOf(user);
+    const action = journal.find((e) => e.type === 'entity_updated');
+    expect(action?.source).toBe('ui');
+    // Правка владельца в интерфейсе — без треда (Р-12); быстрый ввод без threadId — глобальный тред
+    expect(action?.threadId).toBeNull();
+    // create по-прежнему несёт клиентский source (fast_path), не 'ui'
+    const create = journal.find((e) => e.type === 'entity_created');
+    expect(create?.source).toBe('fast_path');
+    expect(create?.threadId).toBe(globalThreadId(user));
+  });
+
+  // РП-13: быстрый ввод ложится в тред ввода — карточка, которую клиент положил в этот тред оптимистично, после
+  // перечитывания треда приходит с сервера туда же. Тред — только у быстрого ввода: правке в интерфейсе треда не
+  // положено (Р-12), и принимать его молча значило бы делать вид, что он что-то значит.
+  test('threadId во входе create: fast_path → запись журнала в этом треде; ui с threadId → VALIDATION; чужой тред → NOT_FOUND', async () => {
+    const user = await freshGraph();
+    const caller = callerFor(user);
+    const host = await caller.entity.create({ input: { title: 'Хост', tags: [] }, source: 'ui' });
+    const { threadId } = await caller.chat.ensureThread({ entityId: host.id });
+    const fast = await caller.entity.create({
+      input: { title: 'В тред ввода', tags: [] },
+      source: 'fast_path',
+      threadId,
+    });
+    if (fast.actionId === undefined) throw new Error('нет actionId');
+    expect((await journalOf(user, fast.actionId))?.threadId).toBe(threadId);
+
+    const wrongSource = await trpcError(
+      caller.entity.create({ input: { title: 'Не туда', tags: [] }, source: 'ui', threadId }),
+    );
+    expect(wrongSource.code).toBe('BAD_REQUEST');
+    expect((wrongSource.cause as unknown as { code: string }).code).toBe('VALIDATION');
+
+    // Чужой тред под RLS не виден — тот же отказ, что у несуществующего; записи нет
+    const other = await freshGraph();
+    const foreign = await callerFor(other).chat.ensureThread({});
+    const before = (await actionsOf(user)).length;
+    const hidden = await trpcError(
+      caller.entity.create({
+        input: { title: 'В чужой тред', tags: [] },
+        source: 'fast_path',
+        threadId: foreign.threadId,
+      }),
+    );
+    expect(hidden.code).toBe('NOT_FOUND');
+    expect((await actionsOf(user)).length).toBe(before);
   });
 });
 
@@ -354,6 +593,38 @@ describe('entity.query / entity.count (§6.3–6.4)', () => {
       caller.entity.query({ ast: { filter: { aspect: 'orbis/task' }, display: 'tile' } }),
     );
     expect(bad.code).toBe('BAD_REQUEST');
+  });
+
+  test('$-ссылка вне страницы — отказ с подсказкой и деревом, и текстом (1в §3.8)', async () => {
+    const caller = callerFor(await freshGraph());
+    const byAst = await trpcError(
+      caller.entity.query({
+        ast: { filter: { prop: 'orbis/due_date', op: 'eq', value: { param: 'period' } } } as never,
+      }),
+    );
+    expect(byAst.code).toBe('BAD_REQUEST');
+    expect(byAst.message).toContain(PAGE_ONLY_HINT);
+    const byText = await trpcError(
+      caller.entity.query({ query: 'aspect=orbis/task, orbis/due_date=$period' }),
+    );
+    expect(byText.code).toBe('BAD_REQUEST');
+    expect(byText.message).toContain(PAGE_ONLY_HINT);
+  });
+
+  test('group вне страницы — отказ с подсказкой и деревом, и текстом (1в §3.8, задача 6)', async () => {
+    const caller = callerFor(await freshGraph());
+    const byAst = await trpcError(
+      caller.entity.query({
+        ast: { filter: null, group: { by: 'day', field: { contract: 'orbis/when' } } } as never,
+      }),
+    );
+    expect(byAst.code).toBe('BAD_REQUEST');
+    expect(byAst.message).toContain(PAGE_ONLY_HINT);
+    const byText = await trpcError(
+      caller.entity.query({ query: 'aspect=orbis/task, group=day:orbis/due_date' }),
+    );
+    expect(byText.code).toBe('BAD_REQUEST');
+    expect(byText.message).toContain(PAGE_ONLY_HINT);
   });
 
   test('РОВНО одно из двух: и текст, и дерево — отказ; ни одного — тоже', async () => {

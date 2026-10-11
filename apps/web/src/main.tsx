@@ -6,8 +6,10 @@ import { App } from './App';
 import { AuthProvider, getCurrentToken } from './auth/AuthProvider';
 import { ConsentScreen } from './features/oauth/ConsentScreen';
 import { OnboardingGate } from './features/onboarding/OnboardingGate';
+import { UndoBinder } from './features/undo/undo-binding';
 import { QueryBatchProvider } from './lib/query-blocks/batch';
 import { initTheme } from './lib/theme';
+import { perfBuffer } from './perf/collector';
 import { registerRetrySend } from './state/retry';
 import { makeRetrySend } from './state/retry-send';
 import { makeTrpcClient, makeVanillaClient, queryClient, trpc } from './trpc';
@@ -15,6 +17,11 @@ import { Toaster } from './ui/Toast';
 import './styles/globals.css';
 
 initTheme();
+// Полевые замеры (спека скорости §3.2) — ленивым чанком: входной чанк входит в эагерное замыкание экрана записи, и там
+// только склейка — метки и буфер (гейт задачи 3, I-1). Потерь нет: замеры до загрузки чанка ждут в буфере, наблюдатели
+// Resource Timing и Web Vitals подписываются с `buffered`. Буфер — аргументом (`PerfBuffer`). Отказ загрузки (сеть) — без
+// замеров, приложение живёт.
+void import('./perf/boot').then((m) => m.startPerf(perfBuffer)).catch(() => {});
 
 const rootElement = document.getElementById('root');
 if (!rootElement) throw new Error('Root element #root not found');
@@ -48,6 +55,7 @@ createRoot(rootElement).render(
               </OnboardingGate>
             )}
             {/* Тосты доступны и до прохождения онбординга, поэтому вне гейта. */}
+            <UndoBinder />
             <Toaster />
           </AuthProvider>
         </QueryBatchProvider>

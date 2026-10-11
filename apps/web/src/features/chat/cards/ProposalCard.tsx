@@ -194,6 +194,7 @@ export function ProposalCard({
   const [replacedReason, setReplacedReason] = useState<ReplacedReason | null>(null);
 
   const decide = trpc.routine.decideProposal.useMutation({
+    meta: { undoStack: 'skip' },
     onSuccess: (result) => {
       /**
        * Граф двигает ЛЮБОЕ решение, а не только принятое, — и это не перестраховка.

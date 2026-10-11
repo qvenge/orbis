@@ -1,4 +1,5 @@
 import { ownCardOrder } from '@orbis/shared';
+import { lazy } from 'react';
 import { EXTENSION_CARDS, type OwnCard } from '../../app/extension-registry';
 import { useOpenRecord } from '../../app/useOpenRecord';
 import { AspectSection, AspectSections } from './AspectSection';
@@ -27,6 +28,9 @@ const TASK = 'orbis/task';
 const ASSIGNMENT = 'orbis/assignment';
 
 const CARD_CLASS = 'flex flex-col gap-6';
+
+// Лента нужна только прогону: её код не утяжеляет первый кадр обычной записи (R-29).
+const _RunFeed = lazy(() => import('./RunFeed').then((m) => ({ default: m.RunFeed })));
 
 /**
  * Назначение: карточка исполнителя, а у тикета (задача С назначением) — ещё ожидание человека и

@@ -1,16 +1,51 @@
-import { useState } from 'react';
+import { rowAllDayOf } from '@orbis/shared';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from 'react';
 import { useRefTitle } from '../../lib/entity-ref/RefField';
 import { formatMoney, type MoneyTone } from '../../lib/format';
+import { isTitleStale } from '../../lib/orbis-error';
 import { displayText } from '../../lib/registry/format';
 import { classLabel, fieldLabel } from '../../lib/registry/labels';
-import { useRowCategoryRef, useRowProjection, useRowStatusProperty } from '../../lib/registry/row';
+import {
+  rowRegistryOf,
+  useRowCategoryRef,
+  useRowProjection,
+  useRowStatusProperty,
+} from '../../lib/registry/row';
 import { useRegistry } from '../../lib/registry/useRegistry';
 import type { RouterOutputs } from '../../trpc';
 import { Badge } from '../../ui/Badge';
 import { Checkbox } from '../../ui/Checkbox';
 import { formatDay } from '../browser/EntityRow';
 import { useCategoryTitle } from '../budget/categories';
+import {
+  bindStepOwner,
+  discardRedo,
+  observeFailedTitleBasis,
+  pushStep,
+  redoStep,
+  resetSteps,
+  stepsGeneration,
+  undoStep,
+} from '../entity-editor/arrows-stack';
+import { mountRecord } from '../entity-editor/editor-cache';
+import {
+  acceptTitleSend,
+  markTitleSent,
+  observeTitleValue,
+  recordTitleChange,
+  redoTitle,
+  rejectTitleSend,
+  undoTitle,
+} from '../entity-editor/title-history';
 import { useExtensionEnabled } from '../settings/extension-mask';
+import { isUndoEpoch, subscribeUndoEpoch, undoEpoch } from '../undo/undo-epoch';
 import { useHostReadOnly } from './record-host';
 
 type Entity = RouterOutputs['entity']['query'][number];
@@ -42,8 +77,8 @@ const TOGGLABLE_STATUS_PROPERTY = 'orbis/task_status';
 const TOGGLE_BLOCKED_TITLE = 'переключение доступно только задачам';
 
 /**
- * Заголовок строки: статичный текст без onSaveTitle (списки транзакций CategoryScreen) и
- * inline-редактор с ним (Detail, DF п.3). Правка title обязана существовать: 02-core-os
+ * Заголовок строки: статичный текст без onSaveTitle и inline-редактор с ним (Detail, DF п.3);
+ * боевой вызыватель сегодня один — экран записи, и он правку передаёт. Правка title обязана существовать: 02-core-os
  * §2.7 — «правка памяти = правка обычной сущности (title, поля аспекта, body)».
  * Отдельного экрана не заводим — тот же inline-паттерн, что у body и полей аспектов.
  *
@@ -54,51 +89,165 @@ const TOGGLE_BLOCKED_TITLE = 'переключение доступно толь
  * оставленный механизм был бы веткой без единственного вызывателя.
  */
 function Title({
+  entityId,
   value,
   onSave,
+  onStale,
   className = '',
 }: {
+  entityId: string;
   value: string;
-  onSave?: (title: string) => void;
+  onSave?: TitleSave;
+  onStale?: () => void;
   className?: string;
 }) {
+  const epoch = useSyncExternalStore(subscribeUndoEpoch, undoEpoch, undoEpoch);
   if (onSave === undefined) {
     return <span className={`flex-1 ${TITLE_CLASS} ${className}`}>{value}</span>;
   }
-  return <TitleEditor value={value} onSave={onSave} className={className} />;
+  return (
+    <TitleEditor
+      key={`${entityId}:${epoch}`}
+      entityId={entityId}
+      value={value}
+      onSave={onSave}
+      onStale={onStale}
+      className={className}
+    />
+  );
 }
 
+type TitleSave = (title: string, expectedTitle: string) => unknown;
+
 function TitleEditor({
+  entityId,
   value,
   onSave,
+  onStale,
   className,
 }: {
+  entityId: string;
   value: string;
-  onSave: (title: string) => void;
+  onSave: TitleSave;
+  onStale?: () => void;
   className: string;
 }) {
   const [draft, setDraft] = useState(value);
   const [serverValue, setServerValue] = useState(value);
+  const lockRef = useRef<string | null>(null);
+  const savingRef = useRef(false);
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
+  const mountedRef = useRef(true);
 
   // Тот же приём, что у редактора тела (BodyEditor) и AspectField (D6c п.3): внешнее
   // значение подхватываем, но ТОЛЬКО если черновик не трогали — иначе текст, который
   // владелец печатает прямо сейчас, затирался бы рефетчем после чужой мутации.
   if (value !== serverValue) {
     setServerValue(value);
-    if (draft === serverValue) setDraft(value);
+    // Оптимистичный title совпадает с draft, но отказ ещё может вернуть прежнее value:
+    // основа ввода держит набранное и через optimistic→rollback→чужое перечитывание.
+    if (lockRef.current === null && draft === serverValue) setDraft(value);
   }
 
+  const latest = useRef({ onSave, onStale, serverValue });
+  latest.current = { onSave, onStale, serverValue };
+  const intent = useRef({ epoch: undoEpoch(), generation: stepsGeneration() }).current;
+  const saveSequence = useRef(0);
+  const current = useCallback(
+    (mounted = mountedRef.current) =>
+      mounted && isUndoEpoch(intent.epoch) && intent.generation === stepsGeneration(),
+    [intent],
+  );
+  const commit = async (v: string, expected: string) => {
+    if (!current()) return;
+    const sequence = ++saveSequence.current;
+    const token = markTitleSent(entityId, v);
+    savingRef.current = true;
+    try {
+      await latest.current.onSave(v, expected);
+      if (current(true) && sequence === saveSequence.current) acceptTitleSend(entityId, token);
+      if (current() && sequence === saveSequence.current)
+        lockRef.current = draftRef.current === v ? null : v;
+    } catch (err) {
+      if (current(true) && rejectTitleSend(entityId, token)) observeFailedTitleBasis(entityId);
+      if (current() && sequence === saveSequence.current && isTitleStale(err))
+        latest.current.onStale?.();
+    } finally {
+      if (current() && sequence === saveSequence.current) savingRef.current = false;
+    }
+  };
+  const commitRef = useRef(commit);
+  commitRef.current = commit;
+  useLayoutEffect(() => {
+    mountedRef.current = true;
+    const release = mountRecord(entityId);
+    const apply = (v: string | null) => {
+      if (v === null || !current()) return false;
+      draftRef.current = v;
+      setDraft(v);
+      lockRef.current = null;
+      void commitRef.current(v, latest.current.serverValue);
+      return true;
+    };
+    const unbind = bindStepOwner(entityId, 'title', {
+      undo: () => apply(undoTitle(entityId, draftRef.current)),
+      redo: () => apply(redoTitle(entityId, draftRef.current)),
+      reset: () => {},
+      observe: () => {
+        if (current() && observeTitleValue(entityId, latest.current.serverValue))
+          resetSteps(entityId);
+      },
+    });
+    return () => {
+      mountedRef.current = false;
+      unbind();
+      release();
+    };
+  }, [entityId, current]);
+  useLayoutEffect(() => {
+    if (current() && observeTitleValue(entityId, value)) resetSteps(entityId);
+  }, [value, entityId, current]);
   return (
     <input
       aria-label="Заголовок"
       data-testid="title-edit"
+      data-step-record={entityId}
       value={draft}
-      onChange={(e) => setDraft(e.target.value)}
+      onFocus={() => {
+        // Грязный черновик после отказа не видел нового title: рефокус CAS не обходит (R-28).
+        if (draft === value && !savingRef.current) lockRef.current = null;
+      }}
+      onChange={(e) => {
+        lockRef.current ??= serverValue;
+        if (!current()) return;
+        const next = e.target.value;
+        if (recordTitleChange(entityId, draftRef.current, next)) pushStep(entityId, 'title');
+        else discardRedo(entityId);
+        draftRef.current = next;
+        setDraft(next);
+      }}
       // Пустой заголовок сущности не бывает (entityUpdateInput: title.min(1)) — вместо
       // заведомо отказного запроса возвращаем серверное значение.
+      onKeyDown={(e) => {
+        if (!(e.ctrlKey || e.metaKey) || e.altKey || !current()) return;
+        const k = e.key.toLowerCase(),
+          nonLatin = !/^[a-z]$/.test(k);
+        const z = k === 'z' || k === 'я' || (nonLatin && e.code === 'KeyZ'),
+          y = k === 'y' || k === 'н' || (nonLatin && e.code === 'KeyY');
+        if (!z && !y) return;
+        e.preventDefault();
+        if (z && !e.shiftKey) undoStep(entityId);
+        else redoStep(entityId);
+      }}
       onBlur={() => {
-        if (draft.trim() === '') setDraft(value);
-        else if (draft !== value) onSave(draft);
+        if (!current()) return;
+        if (draft.trim() === '') {
+          lockRef.current = null;
+          setDraft(value);
+          resetSteps(entityId);
+        } else if (draft !== value) void commit(draft, lockRef.current ?? serverValue);
+        else if (!savingRef.current) lockRef.current = null;
       }}
       className={`min-w-0 flex-1 rounded-md bg-transparent px-1 ${TITLE_CLASS} outline-none transition hover:bg-surface-2/60 focus-visible:bg-surface-2/70 focus-visible:ring-2 focus-visible:ring-accent/30 ${className}`}
     />
@@ -120,13 +269,17 @@ function TitleEditor({
  * безусловным (та же причина, что у `CategoryBadge`).
  */
 function MemoryRow({
+  entityId,
   title,
   props,
   onSaveTitle,
+  onStale,
 }: {
+  entityId: string;
   title: string;
   props: Record<string, unknown>;
-  onSaveTitle?: (title: string) => void;
+  onSaveTitle?: TitleSave;
+  onStale?: () => void;
 }) {
   const registry = useRegistry();
   const kind = props['orbis/memory_kind'];
@@ -143,7 +296,7 @@ function MemoryRow({
   const isRule = kind === 'rule';
   return (
     <div className="flex items-center gap-2" data-testid="native-memory">
-      <Title value={title} onSave={onSaveTitle} />
+      <Title entityId={entityId} value={title} onSave={onSaveTitle} onStale={onStale} />
       {isRule && typeof pattern === 'string' && pattern !== '' && (
         <span data-testid="memory-rule-pattern" className="truncate text-sm text-text-secondary">
           {pattern}
@@ -187,16 +340,19 @@ function CategoryBadge({ categoryRef }: { categoryRef: string }) {
  * В-2) и `keyFields` шапки (§А9-2 — их показывают записи, у которых не сработал ни один элемент).
  *
  * onSaveTitle — опционален: с ним заголовок становится inline-редактором (Detail), без него
- * остаётся текстом (строки транзакций CategoryScreen).
+ * остаётся текстом (так строку рисуют тесты; вызыватель списка без правки — строки транзакций
+ * экрана категории — удалён срезом 1в §8.1).
  */
 export function NativeRow({
   entity,
   onToggleTask,
   onSaveTitle,
+  onStale,
 }: {
   entity: Entity;
   onToggleTask: (done: boolean) => void;
-  onSaveTitle?: (title: string) => void;
+  onSaveTitle?: TitleSave;
+  onStale?: () => void;
 }) {
   const props = entity.props;
   const aspects = new Set(entity.aspects);
@@ -218,7 +374,15 @@ export function NativeRow({
   // Память — своя строка (В7): её смысл (образец сопоставления и цель) живёт в свойствах, а не в
   // контрактах; в таблицу M14 запись памяти не входит.
   if (aspects.has('orbis/memory'))
-    return <MemoryRow title={entity.title} props={props} onSaveTitle={saveTitle} />;
+    return (
+      <MemoryRow
+        entityId={entity.id}
+        title={entity.title}
+        props={props}
+        onSaveTitle={saveTitle}
+        onStale={onStale}
+      />
+    );
 
   const closed = row.checkbox?.closed === true;
   const togglable =
@@ -254,8 +418,10 @@ export function NativeRow({
         />
       )}
       <Title
+        entityId={entity.id}
         value={entity.title}
         onSave={saveTitle}
+        onStale={onStale}
         className={closed ? 'text-text-muted line-through' : ''}
       />
       {row.date !== null && (
@@ -282,8 +448,9 @@ export function NativeRow({
           <Badge key={`${b.contract}:${b.cls}`}>{classLabel(registry, b.contract, b.cls)}</Badge>
         ),
       )}
-      {/* raw_value вне M14: «весь день» — свойство записи, контракта «признак суток» в v1 нет */}
-      {props['orbis/all_day'] === true && <Badge>весь день</Badge>}
+      {/* «весь день» — слот `all_day` контракта «когда» (1в §4.3): у аспекта владельца своё
+          свойство, а значение, пережившее снятие расписания (Р9), бейджа не даёт */}
+      {rowAllDayOf(entity, rowRegistryOf(registry.data)) && <Badge>весь день</Badge>}
       {catRef !== null && <CategoryBadge categoryRef={catRef} />}
       {fields.length > 0 && (
         <dl className="flex gap-2 text-xs text-text-secondary">

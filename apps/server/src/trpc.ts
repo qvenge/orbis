@@ -3,6 +3,7 @@ import { initTRPC, TRPCError } from '@trpc/server';
 // import type — стирается: type-граф trpc остаётся чист от runtime-модулей AI-слоя
 import type { AiDeps } from './ai/send-message';
 import type { Db } from './db/client';
+import { orbisErrorData } from './errors';
 import type { Identity } from './identity';
 import type { GrantRef } from './oauth/grants';
 
@@ -46,9 +47,17 @@ export type Context = {
 // БД/рантайма не отдают клиенту сырой message (SQL-текст drizzle и т.п.) и stack.
 // Структурированные наши ошибки (cause { code, ... } из execErrorToTRPC) — безопасны,
 // их message сохраняется как есть.
+//
+// Канал структурного отказа (спека скорости §8.2, РП-5 плана А): не-INTERNAL отказ исполнителя из закрытого списка
+// кодов несёт `data.orbis = {code, details}` — клиенту нужны ревизии замка текста (а задачам 10, 12 — продолжение
+// отмены и расхождение заголовка), а `cause` по HTTP не сериализуется. Выбор полей — `orbisErrorData`
+// (`errors.ts`): тела и тексты записей туда не попадают. Ключ `orbis` есть у всех ветвей (у прочих — пустой, JSON
+// его не пишет): форма ошибки на клиенте выводится из этого форматтера, и союз без ключа прятал бы поле от типов.
 const t = initTRPC.context<Context>().create({
   errorFormatter({ shape, error }) {
-    if (shape.data.code !== 'INTERNAL_SERVER_ERROR') return shape;
+    if (shape.data.code !== 'INTERNAL_SERVER_ERROR') {
+      return { ...shape, data: { ...shape.data, orbis: orbisErrorData(error.cause) } };
+    }
     // Дискриминатор fail-closed (fix round): наш StructuredError — plain object,
     // НЕ Error. `!(cause instanceof Error)` обязателен: системные ошибки
     // (ECONNREFUSED/UND_ERR_* из fetch/undici) — это Error со СТРОКОВЫМ code,
@@ -67,7 +76,7 @@ const t = initTRPC.context<Context>().create({
       !(cause instanceof Error) &&
       typeof (cause as { code?: unknown }).code === 'string'
     ) {
-      return shape;
+      return { ...shape, data: { ...shape.data, orbis: undefined } };
     }
     // Сырой Error: оригинал — в серверный лог (с path процедуры), клиенту —
     // нейтральный текст без stack
@@ -75,7 +84,7 @@ const t = initTRPC.context<Context>().create({
     return {
       ...shape,
       message: 'внутренняя ошибка сервера',
-      data: { ...shape.data, stack: undefined },
+      data: { ...shape.data, stack: undefined, orbis: undefined },
     };
   },
 });

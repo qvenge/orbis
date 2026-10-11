@@ -2,18 +2,19 @@
 // Роутер ai (§9.1): LLM-диалог (sendMessage — tool-цикл Task 9), журнал действий —
 // Undo (§7.8) и pending-подтверждения (§7.10, Task 6). Обёртки над undoAction/undoLast
 // и approvePending/rejectPending: их структурированные результаты мапятся как у мутаций
-// (ошибки → TRPCError); undo-сообщение пишет сам undo-путь тем же tx (internalUndo),
-// JournalSink ему не нужен — undo не порождает нового action (undo неотменяем).
+// (ошибки → TRPCError); запись отмены пишет сам undo-путь тем же tx (internalUndo, путь `ui` —
+// кнопка владельца) — undo не порождает нового action (undo неотменяем).
 // approve/reject и sendMessage — ownerOnly (§9.3): подтверждение — решение владельца
 // аккаунта; внутренний чат — владельческая поверхность: действия sendMessage
 // атрибутируются актором 'ai' (§7.8), что верно только для чата владельца —
 // PAT-агент работает своим транспортом (MCP, Task 10) с честной атрибуцией 'agent'.
+import type { UndoResult } from '@orbis/shared';
 import { z } from 'zod';
 import { declineRuleSuggestion, RULE_PATTERN_MAX } from '../ai/escalation';
 import { defaultAiDeps, type SendMessageResult, sendMessage } from '../ai/send-message';
 import { ExecError, execErrorToTRPC } from '../errors';
-import type { ExecuteOk } from '../executor/types';
-import { undoAction, undoLast } from '../executor/undo';
+
+import { type UndoLastResult, undoAction, undoLast } from '../executor/undo';
 import { approvePending, rejectPending } from '../policy/pending';
 import { ownerOnlyProcedure, router } from '../trpc';
 
@@ -49,40 +50,72 @@ export const aiRouter = router({
       }
     }),
 
-  /** Отмена конкретного действия по id из журнала (§7.8). */
+  /**
+   * Отмена конкретного действия по id из журнала (§7.8) — плашка, Ctrl/Cmd+Z, карточка действия в треде, «Вернуть текст
+   * как на …» (путь `ui`). Правило §8.6: текст изменён после отменяемой правки — `CONFLICT` с `data.orbis.code =
+   * 'UNDO_TEXT_CHANGED'` и местом продолжения `here`; продолжение «Всё равно отменить» — тот же запрос с `force: true`
+   * (Р-15). Повторная отмена — `BAD_REQUEST`, `data.orbis.details.reason = 'already_undone'`. Ответ — `UndoResult`:
+   * id записи отмены, что отменено, закреплённые версии (подтверждение называет их владельцу).
+   */
   undo: ownerOnlyProcedure
-    .input(z.object({ actionId: z.string().uuid() }).strict())
-    .mutation(async ({ ctx, input }): Promise<ExecuteOk> => {
+    .input(z.object({ actionId: z.string().uuid(), force: z.literal(true).optional() }).strict())
+    .mutation(async ({ ctx, input }): Promise<UndoResult> => {
       const r = await undoAction(ctx.db, {
         identity: ctx.identity,
         actionId: input.actionId,
+        path: 'ui',
+        force: input.force === true,
+        continuation: { kind: 'here' },
+      });
+      if (!r.ok) throw execErrorToTRPC(r.error);
+      return {
+        actionId: r.actionId,
+        undone: r.undone,
+        pinnedVersions: r.pinnedVersions,
+        bodyRevisions: r.bodyRevisions,
+      };
+    }),
+
+  /**
+   * «Отмени последнее» (§7.8): inverse первого неотменённого действия с конца журнала. Кнопка владельца (путь `ui`);
+   * своего продолжения у «отмени последнее» нет — отказ правила §8.6 называет место `here`: продолжение с того же
+   * экрана — точечная отмена `ai.undo({actionId: details.action.id, force: true})` (отказ называет, что отменялось).
+   * «Отмени последнее» СЛОВАМИ в чате — другой путь (тул `undo_last`): continuationOf выбирает карточку, вкладку или
+   * «карточки нет»; у сменённого сеанса — none (R-23/R-27). menu оставлен в типе ради совместимости, но не производится.
+   * Решение заменить текст — только у человека.
+   */
+  undoLast: ownerOnlyProcedure.mutation(
+    async ({ ctx }): Promise<Extract<UndoLastResult, { ok: true }>> => {
+      const r = await undoLast(ctx.db, {
+        identity: ctx.identity,
+        path: 'ui',
+        continuation: { kind: 'here' },
       });
       if (!r.ok) throw execErrorToTRPC(r.error);
       return r;
-    }),
-
-  /** «Отмени последнее» (§7.8): inverse первого неотменённого действия с конца журнала. */
-  undoLast: ownerOnlyProcedure.mutation(async ({ ctx }): Promise<ExecuteOk> => {
-    const r = await undoLast(ctx.db, { identity: ctx.identity });
-    if (!r.ok) throw execErrorToTRPC(r.error);
-    return r;
-  }),
+    },
+  ),
 
   /**
    * Одобрение pending-подтверждения (§7.10): исполняет сохранённый payload полным
    * конвейером executor'а (ревалидация текущего состояния), без обращения к LLM;
-   * повторный approve — идемпотентный replay по PK audit-сообщения (§7.8).
+   * повторный approve — идемпотентный replay по ключу записи журнала пачки (§7.8).
    */
   approve: ownerOnlyProcedure
     .input(pendingIdInput)
-    .mutation(async ({ ctx, input }): Promise<ExecuteOk> => {
-      const r = await approvePending(ctx.db, {
-        identity: ctx.identity,
-        pendingId: input.pendingId,
-      });
-      if (!r.ok) throw execErrorToTRPC(r.error);
-      return r;
-    }),
+    .mutation(
+      async ({
+        ctx,
+        input,
+      }): Promise<Exclude<Awaited<ReturnType<typeof approvePending>>, { ok: false }>> => {
+        const r = await approvePending(ctx.db, {
+          identity: ctx.identity,
+          pendingId: input.pendingId,
+        });
+        if (!r.ok) throw execErrorToTRPC(r.error);
+        return r;
+      },
+    ),
 
   /**
    * Отклонение pending-подтверждения (§7.10): reject-сообщение в тред карточки.

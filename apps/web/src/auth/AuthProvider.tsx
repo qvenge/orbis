@@ -1,5 +1,8 @@
 import { createContext, type ReactNode, useContext, useEffect, useState } from 'react';
+import { stepsGeneration } from '../features/entity-editor/arrows-stack';
 import { setDraftScope } from '../features/entity-editor/draft-storage';
+import { destroyAllEditors } from '../features/entity-editor/editor-cache';
+import { resetUndoSession, setUndoOwner } from '../features/undo/undo-epoch';
 import { RELOADING_LABEL, useFreshReload } from '../pwa/useFreshReload';
 import { setRetryScope } from '../state/retry';
 import { onClientOutdated, onUnauthorized } from './events';
@@ -28,13 +31,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // Скоуп retry-буфера — по владельцу сессии, до рендера дерева (эффекты детей идут
   // раньше эффектов родителя, а useRetryFlush в App дренирует очередь на монтировании).
   // Иначе на общем браузере следующий аккаунт дослал бы чужие записи в свой workspace.
+  setUndoOwner(session.userId);
   setRetryScope(session.userId);
   // Скоуп черновиков — по тому же аккаунту сессии и по той же причине (общий браузер).
   setDraftScope(session.userId ?? '');
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: каждый owner transition уничтожает только прежнее поколение после unmount детей
+  useEffect(() => {
+    const generation = stepsGeneration();
+    return () => destroyAllEditors(generation);
+  }, [session.userId]);
+
   useEffect(() => {
     onClientOutdated(() => setOutdated(true));
     onUnauthorized(() => {
+      resetUndoSession();
       void auth.signOut();
     });
   }, []);

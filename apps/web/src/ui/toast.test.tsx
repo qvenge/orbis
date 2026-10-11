@@ -93,3 +93,85 @@ test('тост с действием живёт дольше и стоит, по
   act(() => vi.advanceTimersByTime(1));
   expect(useToastStore.getState().toasts).toHaveLength(0);
 });
+
+test('плашка с действием — одна ячейка, извещения копятся', () => {
+  const s = useToastStore.getState();
+  s.show('Первое', 'default', { label: 'Отменить', onSelect() {} });
+  s.show('Сохранено');
+  s.show('Второе', 'default', { label: 'Отменить', onSelect() {} });
+  expect(useToastStore.getState().toasts.map((t) => t.title)).toEqual(['Сохранено', 'Второе']);
+});
+test('скрытая вкладка и фокус держат независимые паузы с остатком', () => {
+  render(<Toaster />);
+  act(() => {
+    useToastStore.getState().show('Закрыто', 'default', { label: 'Отменить', onSelect() {} });
+  });
+  const toast = screen.getByText('Закрыто').closest('li') as HTMLElement;
+  act(() => vi.advanceTimersByTime(3000));
+  fireEvent.focus(toast);
+  Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' });
+  act(() => document.dispatchEvent(new Event('visibilitychange')));
+  fireEvent.blur(toast);
+  act(() => vi.advanceTimersByTime(30000));
+  expect(useToastStore.getState().toasts).toHaveLength(1);
+  Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'visible' });
+  act(() => document.dispatchEvent(new Event('visibilitychange')));
+  act(() => vi.advanceTimersByTime(6999));
+  expect(useToastStore.getState().toasts).toHaveLength(1);
+  act(() => vi.advanceTimersByTime(1));
+  expect(useToastStore.getState().toasts).toHaveLength(0);
+  Reflect.deleteProperty(document, 'visibilityState');
+});
+test('описание и Tab доступны, старые компоненты удалены', async () => {
+  render(<Toaster />);
+  act(() => {
+    useToastStore
+      .getState()
+      .show('Версия', 'default', { label: 'Отменить', onSelect() {} }, 'Страховка');
+  });
+  expect(screen.getByText('Версия').closest('li')?.tabIndex).toBe(0);
+  expect(screen.getByText('Страховка')).toBeInTheDocument();
+  expect(Object.keys(await import('./Toast'))).toEqual(['Toaster']);
+});
+
+test('несколько причин паузы не снимают друг друга', () => {
+  const s = useToastStore.getState();
+  const id = s.show('Второе', 'default', { label: 'Отменить', onSelect() {} });
+  s.pause(id, 'touch');
+  s.pause(id, 'hover');
+  s.resume(id, 'touch');
+  vi.advanceTimersByTime(30000);
+  expect(useToastStore.getState().toasts).toHaveLength(1);
+  s.resume(id, 'hover');
+  vi.advanceTimersByTime(10000);
+  expect(useToastStore.getState().toasts).toHaveLength(0);
+});
+
+test('палец ставит таймер на паузу; смахивание вправо закрывает, вертикальный жест сохраняет плашку', () => {
+  render(<Toaster />);
+  const pointer = (kind: string, x: number, y: number) => {
+    const event = new Event(kind, { bubbles: true });
+    for (const [key, value] of Object.entries({
+      pointerType: 'touch',
+      pointerId: 1,
+      clientX: x,
+      clientY: y,
+    }))
+      Object.defineProperty(event, key, { value });
+    return event;
+  };
+  act(() =>
+    useToastStore.getState().show('Первое', 'default', { label: 'Отменить', onSelect() {} }),
+  );
+  const first = screen.getByText('Первое').closest('li')!;
+  fireEvent(first, pointer('pointerdown', 0, 0));
+  act(() => vi.advanceTimersByTime(20_000));
+  expect(first).toBeInTheDocument();
+  fireEvent(first, pointer('pointerup', 80, 0));
+  expect(screen.queryByText('Первое')).toBeNull();
+  act(() => useToastStore.getState().show('Второе'));
+  const second = screen.getByText('Второе').closest('li')!;
+  fireEvent(second, pointer('pointerdown', 0, 0));
+  fireEvent(second, pointer('pointerup', 80, 80));
+  expect(second).toBeInTheDocument();
+});

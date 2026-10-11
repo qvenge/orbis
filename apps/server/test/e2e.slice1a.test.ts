@@ -12,8 +12,8 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import type { GraphId } from '@orbis/shared';
 import { addDays, entitySchema, globalThreadId, newId } from '@orbis/shared';
+import { paramDeclsOf, parsePageText } from '@orbis/shared/doc/page-grammar';
 import { TRPCError } from '@trpc/server';
-import type { ActionRecord } from '../src/executor/types';
 import { DEFAULT_TIMEZONE, todayInTimeZone } from '../src/query/context';
 import { appRouter } from '../src/router';
 import { SEED_CATEGORIES } from '../src/seed/categories';
@@ -22,6 +22,7 @@ import { supplyRecordId } from '../src/supply/records';
 import { createCallerFactory } from '../src/trpc';
 import { enableFinanceForTest } from './finance-on';
 import { appDb, mintGraph, personal, requireEnv, truncateAll } from './helpers';
+import { actionsOf, undoRecordOf, wholeJournalOf } from './journal-helpers';
 
 /**
  * «Сегодня» глазами СЕРВЕРА: та же функция и та же зона по умолчанию, которыми date-токены
@@ -61,7 +62,6 @@ const shellId = (graph: GraphId): string => supplyRecordId(graph, 'host-shell');
 const SHELL_EDGES = 1 + 6;
 
 /** Метаданные audit-/undo-сообщения журнала (§4.6/§7.8). */
-type JournalMeta = { actions?: ActionRecord[]; type?: string; undoes?: string };
 
 describe('e2e слайс 1a: день из 02 §5 (два пользователя)', () => {
   // Общий state сценария — заполняется по шагам, читается последующими.
@@ -116,7 +116,7 @@ describe('e2e слайс 1a: день из 02 §5 (два пользовател
   });
 
   // ── Шаг 2: эмуляция fast-path-результата (расход «обед 340») ───────────────
-  test('шаг 2: ввод «обед 340» + entity.create расхода → audit-сообщение с action и inverse', async () => {
+  test('шаг 2: ввод «обед 340» + entity.create расхода → запись журнала с action и inverse', async () => {
     // id «Еды» — из результата сидирования (query по тегу+FTS), НЕ хардкод uuid
     const found = await a.entity.query({ query: 'tags=category, search=Еда' });
     expect(found.length).toBe(1);
@@ -152,11 +152,10 @@ describe('e2e слайс 1a: день из 02 §5 (два пользовател
     // decimal хранится строкой без искажений IEEE-754 (§13.6)
     expect(obed.props['orbis/amount']).toBe('340.00');
 
-    // В глобальном треде появилось audit-сообщение с action создания и его inverse (§7.8)
-    const msgs = await a.chat.listMessages({ threadId: globalA });
-    const audit = msgs.find((m) => (m.metadata as JournalMeta).actions?.[0]?.entity_id === obedId);
-    if (!audit) throw new Error('ожидалось audit-сообщение создания «Обед»');
-    const action = (audit.metadata as JournalMeta).actions?.[0];
+    // В журнале появилось действие создания с его inverse (§7.8), в глобальном треде
+    const action = (await actionsOf(userA)).find((e) => e.entityId === obedId);
+    if (!action) throw new Error('ожидалась запись журнала о создании «Обед»');
+    expect(action.threadId).toBe(globalA);
     expect(action?.type).toBe('entity_created');
     expect(action?.operations[0]?.op).toBe('entity_create');
     // inverse создания — архивация (§7.8: жёсткого удаления нет)
@@ -166,6 +165,7 @@ describe('e2e слайс 1a: день из 02 §5 (два пользовател
     });
 
     // Пользовательская реплика «обед 340» тоже в треде (не audit)
+    const msgs = await a.chat.listMessages({ threadId: globalA });
     expect(msgs.some((m) => m.role === 'user' && m.content === 'обед 340')).toBe(true);
   });
 
@@ -248,13 +248,32 @@ describe('e2e слайс 1a: день из 02 §5 (два пользовател
     laterId = later.id;
 
     // Шесть списков с 1б — страницы поставки (§9.4); прочие страницы поставки блоков запроса не несут.
-    const lists = await a.entity.query({ query: 'aspect=orbis/page' });
+    // Тест читает тела страниц поставки, поэтому просит full (§9); пины блоков остаются прежними.
+    const lists = await a.entity.query({ query: 'aspect=orbis/page', fields: 'full' });
     expect(lists.length).toBeGreaterThanOrEqual(6);
-    const blocks = lists.flatMap((e) =>
-      [...(e.body ?? '').matchAll(/\{\{query:([\s\S]*?)\}\}/g)].map((m) => (m[1] as string).trim()),
-    );
+    // Параметры страницы (срез 1в §5.1) — значения по умолчанию из объявлений того же тела: так блок
+    // исполняет экран, пока владелец не тронул переключатель.
+    const pageBlocks = lists.flatMap((e) => {
+      const params = Object.fromEntries(
+        [...paramDeclsOf(parsePageText(e.body ?? ''))].map(([name, d]) => [name, d.default]),
+      );
+      return [...(e.body ?? '').matchAll(/\{\{query:([\s\S]*?)\}\}/g)].map((m) => ({
+        text: (m[1] as string).trim(),
+        params,
+      }));
+    });
+    // `$`-ссылка и `group=` — только в блоках страниц (1в §3.8): такие блоки (Повестка) исполняет пачка
+    // страницы `entity.blocks`, а `entity.query` им честно отказывает.
+    const pageOnly = (text: string) => text.includes('$') || text.includes('group=');
+    const blocks = pageBlocks.filter((b) => !pageOnly(b.text)).map((b) => b.text);
     // Страховка от «регулярка перестала находить»: пустой список прошёл бы цикл молча.
     expect(blocks.length).toBeGreaterThanOrEqual(9);
+    const onPage = pageBlocks.filter((b) => pageOnly(b.text));
+    expect(onPage.length).toBeGreaterThanOrEqual(2);
+    for (const b of onPage) {
+      const { results } = await a.entity.blocks({ blocks: [{ key: 'b', ...b }] });
+      expect([b.text, results.b?.ok]).toEqual([b.text, true]);
+    }
     for (const block of blocks) {
       // Отказ обязан быть видимым в отчёте вместе с самим текстом блока: без него
       // «не прошло» приходится искать, перебирая тела руками.
@@ -278,13 +297,16 @@ describe('e2e слайс 1a: день из 02 §5 (два пользовател
     // И бейдж сайдбара считает то же самое: у count своя ветка компиляции.
     expect((await a.entity.count({ query: today })).count).toBe(1);
 
-    // Обратная сторона того же факта: задача со сроком через месяц стоит в «Позже» и
-    // отсутствует в «Сегодня». Без этой пары ассерт выше краснел бы только на «пусто», а
-    // на «отобрал всё подряд» оставался бы зелёным.
+    // Обратная сторона того же факта: задача со сроком через месяц стоит в «Дальше» Повестки (1в §6.1;
+    // до 1в — «Позже» Upcoming) и отсутствует в «Сегодня». Без этой пары ассерт выше краснел бы только
+    // на «пусто», а на «отобрал всё подряд» оставался бы зелёным.
     expect(todayRows.map((r) => r.id)).not.toContain(laterId);
-    const later7 = blocks.find((b) => b.includes('due_date=after_7d'));
-    if (later7 === undefined) throw new Error('в телах нет блока «Позже»');
-    expect((await a.entity.query({ query: later7 })).map((r) => r.id)).toEqual([laterId]);
+    const further = onPage.find((b) => b.text.includes('title=Дальше'));
+    if (further === undefined) throw new Error('в телах нет блока «Дальше»');
+    const { results } = await a.entity.blocks({ blocks: [{ key: 'b', ...further }] });
+    const got = results.b;
+    if (!got?.ok || got.kind !== 'rows') throw new Error(`«Дальше»: ${JSON.stringify(got)}`);
+    expect(got.rows.map((r) => r.id)).toEqual([laterId]);
   });
 
   // ── Шаг 5: update→done, undo, повторный undo → ошибка ──────────────────────
@@ -297,13 +319,11 @@ describe('e2e слайс 1a: день из 02 §5 (два пользовател
     expect(done.props['orbis/task_status']).toBe('done');
     expect(typeof done.props['orbis/completed_at']).toBe('string');
 
-    // actionId действия-обновления — из audit-сообщения глобального треда (§7.8)
-    const before = await a.chat.listMessages({ threadId: globalA });
-    const updateMsg = before.find((m) => {
-      const act = (m.metadata as JournalMeta).actions?.[0];
-      return act?.type === 'entity_updated' && act.entity_id === sneakersId;
-    });
-    updateActionId = (updateMsg?.metadata as JournalMeta).actions?.[0]?.id ?? '';
+    // actionId действия-обновления — из журнала (§7.8)
+    const updateAction = (await actionsOf(userA)).find(
+      (e) => e.type === 'entity_updated' && e.entityId === sneakersId,
+    );
+    updateActionId = updateAction?.id ?? '';
     expect(updateActionId).not.toBe('');
 
     // undoLast гасит именно это (последнее) действие
@@ -316,15 +336,11 @@ describe('e2e слайс 1a: день из 02 §5 (два пользовател
     expect(reverted.entity.props['orbis/task_status']).toBe('inbox');
     expect(reverted.entity.props['orbis/completed_at']).toBeUndefined();
 
-    // Undo добавил в тред undo-сообщение {type:'undo', undoes}
-    const after = await a.chat.listMessages({ threadId: globalA });
-    expect(
-      after.some(
-        (m) =>
-          (m.metadata as JournalMeta).type === 'undo' &&
-          (m.metadata as JournalMeta).undoes === updateActionId,
-      ),
-    ).toBe(true);
+    // Undo добавил запись отмены (§7.8); тред у неё — тред отменённого, а у правки владельца в интерфейсе треда нет
+    // (Р-12, спека скорости §11.3): запись есть, в тредах она не показывается
+    const undoRecord = await undoRecordOf(userA, updateActionId);
+    expect(undoRecord?.undoes).toBe(updateActionId);
+    expect(undoRecord?.threadId).toBeNull();
 
     // Повторный undo того же action → BAD_REQUEST «уже отменено» (§7.8)
     const again = await trpcError(a.ai.undo({ actionId: updateActionId }));
@@ -376,11 +392,12 @@ describe('e2e слайс 1a: день из 02 §5 (два пользовател
   });
 
   // ── Шаг 7: экспорт содержит ВЕСЬ граф A (сущности, связи, сообщения, настройки) ─
-  test('шаг 7: exportData(A) — 28 записей, 3 связи дня (dependency + два зеркала ref) и ссылки оболочки хоста, 1 тред, 8 сообщений (вкл. audit и undo)', async () => {
+  test('шаг 7: exportData(A) — 28 записей, 3 связи дня (dependency + два зеркала ref) и ссылки оболочки хоста, 1 тред, 1 сообщение, журнал — 6 действий и 1 отмена', async () => {
     const exp = await a.user.exportData();
     expect(exp.format).toBe('orbis-export');
-    // v2 (§С5): сущности новой формы плюс строки реестров ВЛАДЕЛЬЦА (Задача 13c).
-    expect(exp.version).toBe(2);
+    // v3 (спека скорости §11): журнал — своим ключом `journal`; v2 (§С5) — сущности новой формы плюс строки
+    // реестров ВЛАДЕЛЬЦА (Задача 13c).
+    expect(exp.version).toBe(3);
 
     // 24 сида + «Обед» + «купить кроссовки» + «Продлить страховку» (контроль шага 4b) +
     // «Дождаться зарплаты» = 28
@@ -414,22 +431,17 @@ describe('e2e слайс 1a: день из 02 §5 (два пользовател
       expect((edge.meta as { property?: string }).property).toBe('orbis/finance_category');
     }
 
-    // Один тред (глобальный) и 8 сообщений: 1 user + 7 системных
+    // Один тред (глобальный) и одно сообщение — реплика владельца: журнал в сообщениях больше не лежит (§11)
     expect(exp.chatThreads.length).toBe(1);
     expect(exp.chatThreads[0]?.entityId).toBeNull();
-    expect(exp.chatMessages.length).toBe(8);
-    // Пользовательская реплика присутствует
-    expect(exp.chatMessages.some((m) => m.role === 'user' && m.content === 'обед 340')).toBe(true);
-    // audit-сообщений с непустым action — 6 (create×4, update×1, relation×1)
-    const auditCount = exp.chatMessages.filter(
-      (m) => ((m.metadata as JournalMeta).actions ?? []).length > 0,
-    ).length;
-    expect(auditCount).toBe(6);
-    // ровно одно undo-сообщение
-    const undoCount = exp.chatMessages.filter(
-      (m) => (m.metadata as JournalMeta).type === 'undo',
-    ).length;
-    expect(undoCount).toBe(1);
+    expect(exp.chatMessages.map((m) => [m.role, m.content])).toEqual([['user', 'обед 340']]);
+    // Журнал — ключом `journal`: 6 действий (create×4, update×1, relation×1) и ровно одна запись отмены. Это
+    // проверка ФОРМАТА экспорта, а не чтение журнала: ниже то же самое через помощники API журнала.
+    expect(exp.journal.filter((e) => e.type !== 'undo').length).toBe(6);
+    expect(exp.journal.filter((e) => e.type === 'undo').length).toBe(1);
+    // Журнал графа — то же самое (помощники API журнала)
+    expect((await actionsOf(userA)).length).toBe(6);
+    expect((await wholeJournalOf(userA)).filter((e) => e.type === 'undo').length).toBe(1);
 
     // Настройки в дампе; кастомных аспектов нет (встроенные §9.4 не экспортируются)
     expect(exp.userSettings?.timezone).toBe('Europe/Moscow');

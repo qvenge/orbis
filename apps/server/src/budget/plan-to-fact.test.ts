@@ -9,6 +9,7 @@
 // Тело переехало в декларацию `finance/plan-to-fact` (§Б6-1); здесь проверяется РУЧКА — вход,
 // идемпотентность и код отказа, который экран читает (Р-23). Эквивалентность коду доказывает
 // `src/actions/golden.test.ts` (§С8-27).
+
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import type { GraphId } from '@orbis/shared';
 import { newId, recurringInstanceId } from '@orbis/shared';
@@ -22,7 +23,9 @@ import {
   requireEnv,
   truncateAll,
 } from '../../test/helpers';
-import { makeChatJournalSink } from '../executor/journal';
+import { actionsOf } from '../../test/journal-helpers';
+import { expectJournalRef } from '../../test/journal-ref-helpers';
+import { makeJournalSink } from '../executor/journal';
 import type { ExecuteRequest, WireEntity } from '../executor/types';
 import { undoAction } from '../executor/undo';
 import { materializeInstances } from '../recurring/materialize';
@@ -32,7 +35,7 @@ import { createCallerFactory } from '../trpc';
 requireEnv();
 
 const { db, client } = appDb();
-const sink = makeChatJournalSink();
+const sink = makeJournalSink();
 const createCaller = createCallerFactory(appRouter);
 
 beforeAll(async () => {
@@ -152,13 +155,9 @@ async function spentOf(envelopeId: string): Promise<string> {
   return rows[0]?.spent as string;
 }
 
-/** Число audit-сообщений, несущих action с этим id (идемпотентность: ровно один). */
-async function actionMessageCount(actionId: string): Promise<number> {
-  const probe = JSON.stringify({ actions: [{ id: actionId }] });
-  const rows = await adminRows(
-    sql`SELECT count(*)::int AS n FROM chat_messages WHERE metadata @> ${probe}::jsonb`,
-  );
-  return rows[0]?.n as number;
+/** Число записей журнала с этим id действия (идемпотентность: ровно один). */
+async function actionMessageCount(user: GraphId, actionId: string): Promise<number> {
+  return (await actionsOf(user)).filter((a) => a.id === actionId).length;
 }
 
 describe('budget.confirmPurchase (03-budget §2.7): перевод planned→fact', () => {
@@ -179,6 +178,7 @@ describe('budget.confirmPurchase (03-budget §2.7): перевод planned→fac
       occurredOn: ACTUAL_ON,
       batchId,
     });
+    await expectJournalRef(user, r, true);
     expect(r.idempotentReplay).toBe(false);
     expect(r.actionId).toBe(batchId);
 
@@ -195,7 +195,7 @@ describe('budget.confirmPurchase (03-budget §2.7): перевод planned→fac
     expect(await spentOf(julyEnv)).toBe('0');
 
     // ровно один action на весь batch (§7.8)
-    expect(await actionMessageCount(batchId)).toBe(1);
+    expect(await actionMessageCount(user, batchId)).toBe(1);
   });
 
   test('Undo восстанавливает planned=true, прежний occurred_on и прежнюю привязку целиком (§7.6)', async () => {
@@ -236,12 +236,13 @@ describe('budget.confirmPurchase (03-budget §2.7): перевод planned→fac
     expect(first.idempotentReplay).toBe(false);
 
     const second = await ownerCaller(user).budget.confirmPurchase(input);
+    await expectJournalRef(user, second, true);
     expect(second.idempotentReplay).toBe(true);
     expect(second.actionId).toBe(batchId);
 
     expect((await propsOf(purchase))['orbis/planned']).toBe(false);
     expect(await budgetParents(purchase)).toEqual([augEnv]);
-    expect(await actionMessageCount(batchId)).toBe(1);
+    expect(await actionMessageCount(user, batchId)).toBe(1);
   });
 
   test('уже-факт → INVARIANT (переводить нечего)', async () => {

@@ -61,7 +61,7 @@ describe('parseAddress: таблица ссылок §7.1', () => {
     [`/budget/category/${ID}`, { kind: 'reserved', key: 'budget' }],
     ['/a/budget', { kind: 'reserved', key: 'budget' }],
     [`/a/budget/r/${ID}`, { kind: 'reserved', key: 'budget' }],
-    ['/agenda', { kind: 'reserved', key: 'agenda' }],
+    ['/agenda', { kind: 'legacy-supply', key: 'agenda' }],
     // Один хвостовой слэш прощается (его дописывают браузеры и почтовые клиенты).
     [`/r/${ID}/`, { kind: 'record', app: HOST, id: ID }],
     [`/a/${APP}/`, { kind: 'home', app: { kind: 'app', ref: APP } }],
@@ -71,7 +71,7 @@ describe('parseAddress: таблица ссылок §7.1', () => {
     ['/browser/', { kind: 'legacy-supply', key: 'records' }],
     ['/budget/', { kind: 'reserved', key: 'budget' }],
     ['/a/budget/', { kind: 'reserved', key: 'budget' }],
-    ['/agenda/', { kind: 'reserved', key: 'agenda' }],
+    ['/agenda/', { kind: 'legacy-supply', key: 'agenda' }],
     // Отказы: догадка хуже отказа, вызывающий сам решает, что показать.
     [`/r/${ID}//`, null],
     ['//', null],

@@ -47,6 +47,7 @@ import {
   TPL_PROJ,
   UTRO,
 } from './apps-world';
+import { OpenPlaqueList } from './OpenPlaqueList';
 
 installCrashTrap();
 
@@ -264,13 +265,30 @@ test('(в) /a/<выключенное> — домашняя: хост и пла�
   await waitFor(() => expect(frameIcon()).toHaveTextContent('🪐'));
 });
 
-test('(в) /a/budget/r/<id> — хост и «Бюджет придёт со следующим срезом»', async () => {
+test('(в) /a/budget/r/<id> — хост и «Бюджет придёт отдельным срезом»', async () => {
   resetFrame(`/a/budget/r/${PLAIN}`);
   renderApp();
   expect(await screen.findByTestId('reserved-screen')).toHaveTextContent(
-    'Бюджет придёт со следующим срезом',
+    'Бюджет придёт отдельным срезом',
   );
   await waitFor(() => expect(frameIcon()).toHaveTextContent('🪐'));
+});
+
+test('(в) плашка правила открытия `reserved` — «Бюджет придёт отдельным срезом», без кнопки (1в §7.4)', async () => {
+  // Второе место того же текста — чанк плашек (`OpenPlaqueList`), не экран `/budget`: правило
+  // открытия кладёт `reserved` для `/a/budget` (shared `open-rule.ts`). Рисуется напрямую — в `<App/>`
+  // адрес `/a/budget` раньше перехватывает оверлей `ReservedScreen`, и текст плашки остался бы без пина.
+  renderWithProviders(
+    <OpenPlaqueList
+      plaques={[{ kind: 'reserved', key: 'budget' }]}
+      apps={{ apps: [], byId: new Map(), hostShell: null, status: 'ok' }}
+      record={null}
+    />,
+    () => ({}),
+  );
+  const plaque = screen.getByTestId('open-plaque');
+  expect(plaque).toHaveTextContent('Бюджет придёт отдельным срезом');
+  expect(within(plaque).queryByRole('button')).toBeNull();
 });
 
 test('(в) R-25: /a/<выключенное>/r/<задача> при одном месте P — экран в P и плашка выключенного', async () => {

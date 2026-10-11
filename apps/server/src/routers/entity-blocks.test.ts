@@ -155,7 +155,7 @@ async function seedWorld(user: GraphId): Promise<{ projectId: string; childIds: 
 }
 
 describe('entity.blocks — пачка данных блоков (§6.3)', () => {
-  test('три блока — один вызов, три результата: строки с «ещё N», дети проекта, сумма с валютами', async () => {
+  test('три блока — один вызов, три результата: строки с «ещё N», дети проекта, сумма по валютам', async () => {
     const user = await freshGraph();
     const { projectId, childIds } = await seedWorld(user);
     const { results } = await callerFor(user).entity.blocks({
@@ -179,7 +179,12 @@ describe('entity.blocks — пачка данных блоков (§6.3)', () =>
     expect(children.more).toBe(0);
 
     const spent = asKind(results.spent, 'sum');
-    expect(spent).toEqual({ ok: true, kind: 'sum', sum: '350.50', count: 2, currencies: ['RUB'] });
+    expect(spent).toEqual({
+      ok: true,
+      kind: 'sum',
+      count: 2,
+      sums: [{ currency: 'RUB', sum: '350.50', count: 2 }],
+    });
   });
 
   test('limit блока важнее limit текста: «ещё N» раскрывается подъёмом limit', async () => {
@@ -199,7 +204,7 @@ describe('entity.blocks — пачка данных блоков (§6.3)', () =>
     expect(all.more).toBe(0);
   });
 
-  test('плитки count и latest; сумма по пустой выборке — «0» без валют', async () => {
+  test('плитки count и latest; сумма по пустой выборке — ни одной суммы', async () => {
     const user = await freshGraph();
     await seedWorld(user);
     const { results } = await callerFor(user).entity.blocks({
@@ -217,11 +222,11 @@ describe('entity.blocks — пачка данных блоков (§6.3)', () =>
     });
     expect(results.n).toEqual({ ok: true, kind: 'count', count: 7 });
     // Последняя по updated_at — вторая созданная запись.
-    expect(results.last).toEqual({ ok: true, kind: 'latest', value: '250.50' });
-    expect(results.none).toEqual({ ok: true, kind: 'sum', sum: '0', count: 0, currencies: [] });
+    expect(results.last).toEqual({ ok: true, kind: 'latest', value: '250.50', currency: 'RUB' });
+    expect(results.none).toEqual({ ok: true, kind: 'sum', count: 0, sums: [] });
   });
 
-  test('валюты суммы — различные непустые значения суммированных записей; запись без валюты их не пополняет', async () => {
+  test('сумма по валютам раздельно; запись без валюты — в валюте владельца (дефект 1а: терялась, спека 1в §3.6)', async () => {
     const user = await freshGraph();
     await seedWorld(user);
     const category = await ensureCategory(user);
@@ -251,9 +256,11 @@ describe('entity.blocks — пачка данных блоков (§6.3)', () =>
     expect(results.mixed).toEqual({
       ok: true,
       kind: 'sum',
-      sum: '352.50',
       count: 4,
-      currencies: ['RUB', 'USD'],
+      sums: [
+        { currency: 'RUB', sum: '351.50', count: 3 },
+        { currency: 'USD', sum: '1.00', count: 1 },
+      ],
     });
   });
 
@@ -498,7 +505,32 @@ describe('entity.blocks — пачка данных блоков (§6.3)', () =>
     const { results } = await callerFor(stranger).entity.blocks({
       blocks: [{ key: 'peek', text: 'children_of=this', thisEntityId: projectId }],
     });
-    expect(results.peek).toEqual({ ok: true, kind: 'rows', rows: [], more: 0 });
+    expect(results.peek).toEqual({ ok: true, kind: 'rows', rows: [], more: 0, closedIds: [] });
+  });
+});
+
+describe('entity.blocks — группировка по дням (спека 1в §5.2, задача 6)', () => {
+  test('верх ответа — today и пояс владельца пачки; блок с group — вид groups, отказ группы — отказ блока', async () => {
+    const user = await freshGraph();
+    const res = await callerFor(user).entity.blocks({
+      blocks: [
+        { key: 'feed', text: 'aspect=orbis/task, group=day:orbis/due_date, display=list' },
+        { key: 'bad', text: 'group=day:orbis/title' },
+        { key: 'table', text: 'group=day:orbis/due_date, display=table' },
+      ],
+    });
+    // Строки настроек нет — запасной пояс; «сегодня» — в нём (как у компиляции блоков).
+    expect(res.timeZone).toBe(DEFAULT_TIMEZONE);
+    expect(res.today).toBe(todayInTimeZone(DEFAULT_TIMEZONE));
+    expect(res.results.feed).toEqual({
+      ok: true,
+      kind: 'groups',
+      groups: [],
+      more: 0,
+      closedIds: [],
+    });
+    expect(res.results.bad).toMatchObject({ ok: false, error: { code: 'TYPE' } });
+    expect(res.results.table).toMatchObject({ ok: false, error: { code: 'SYNTAX' } });
   });
 });
 
@@ -580,5 +612,114 @@ describe('entity.blocks — бейдж раздела `badgeOf` (срез 1б §
       b2: { ok: true, kind: 'none' },
     });
     expect(counting.transactions()).toBe(1);
+  });
+});
+
+describe('entity.blocks — параметр страницы (спека 1в §5.1, РП-6)', () => {
+  /** Две задачи: срок через 2 и через 10 дней — `next_7d` видит одну, `next_14d` — обе. */
+  async function seedDue(user: GraphId): Promise<void> {
+    const today = todayInTimeZone(DEFAULT_TIMEZONE);
+    for (const days of [2, 10]) {
+      await callerFor(user).entity.create({
+        input: {
+          title: `Срок +${days}`,
+          tags: [],
+          props: { 'orbis/task_status': 'planned', 'orbis/due_date': addDays(today, days) },
+          aspects: ['orbis/task'],
+        },
+        source: 'ui',
+      });
+    }
+  }
+
+  const ROWS = 'aspect=orbis/task, orbis/due_date=$period';
+  const TILE = 'aspect=orbis/task, orbis/due_date=$period, display=tile, aggregate=count';
+  const DECL = '{{param: period, type=period, default=next_7d, options=next_7d|next_14d}}';
+
+  async function pageWithBody(user: GraphId, body: string): Promise<string> {
+    const created = await callerFor(user).entity.create({
+      input: { title: 'Раздел', tags: [], body, aspects: ['orbis/page'] },
+      source: 'ui',
+    });
+    return created.id;
+  }
+
+  test('два блока с $period и одним значением next_14d — одна пачка, оба посчитаны от next_14d', async () => {
+    const user = await freshGraph();
+    await seedDue(user);
+    const counting = countingDb();
+    const params = { period: 'next_14d' };
+    const { results } = await callerFor(user, counting.db).entity.blocks({
+      blocks: [
+        { key: 'rows', text: ROWS, params },
+        { key: 'tile', text: TILE, params },
+      ],
+    });
+    expect(asKind(results.rows, 'rows').rows).toHaveLength(2);
+    expect(results.tile).toEqual({ ok: true, kind: 'count', count: 2 });
+    // То же с next_7d — одна: значение действительно подставлено, а не проигнорировано.
+    const week = await callerFor(user).entity.blocks({
+      blocks: [{ key: 'tile', text: TILE, params: { period: 'next_7d' } }],
+    });
+    expect(week.results.tile).toEqual({ ok: true, kind: 'count', count: 1 });
+    // Одна пачка: два блока с параметром стоят столько же транзакций, сколько один.
+    const one = countingDb();
+    await callerFor(user, one.db).entity.blocks({ blocks: [{ key: 'tile', text: TILE, params }] });
+    expect(counting.transactions()).toBe(one.transactions());
+  });
+
+  test('блок с $period без значения — отказ блока UNKNOWN_PARAM; плохое значение — PARAM_VALUE; соседи живы', async () => {
+    const user = await freshGraph();
+    await seedDue(user);
+    const { results } = await callerFor(user).entity.blocks({
+      blocks: [
+        { key: 'none', text: TILE },
+        { key: 'bad', text: TILE, params: { period: 'soon' } },
+        { key: 'plain', text: 'aspect=orbis/task, display=tile, aggregate=count' },
+      ],
+    });
+    expect(asError(results.none)).toMatchObject({
+      code: 'UNKNOWN_PARAM',
+      message: 'параметр «period» не объявлен на странице',
+    });
+    expect(asError(results.bad).code).toBe('PARAM_VALUE');
+    expect(results.plain).toEqual({ ok: true, kind: 'count', count: 2 });
+  });
+
+  test('params — поле элемента пачки: больше 16 ключей — отказ схемы пачки', async () => {
+    const user = await freshGraph();
+    const many = Object.fromEntries(Array.from({ length: 17 }, (_, i) => [`p${i}`, 'today']));
+    const e = await trpcError(
+      callerFor(user).entity.blocks({ blocks: [{ key: 'x', text: TILE, params: many }] }),
+    );
+    expect(e.code).toBe('BAD_REQUEST');
+  });
+
+  test('бейдж: первый блок данных с $period считается по умолчанию {{param}} того же тела (параметр — выше блока)', async () => {
+    const user = await freshGraph();
+    await seedDue(user);
+    const section = await pageWithBody(user, `${DECL}\n\n{{query:${ROWS}}}\n`);
+    const { results } = await callerFor(user).entity.blocks({
+      blocks: [{ key: 'badge', badgeOf: section }],
+    });
+    expect(results.badge).toEqual({ ok: true, kind: 'count', count: 1 });
+  });
+
+  test('бейдж: параметр с ошибкой блока или без объявления — отказ бейджа UNKNOWN_PARAM', async () => {
+    const user = await freshGraph();
+    await seedDue(user);
+    const broken = await pageWithBody(
+      user,
+      `{{param: period, type=period, default=today, options=next_7d}}\n\n{{query:${ROWS}}}\n`,
+    );
+    const undeclared = await pageWithBody(user, `{{query:${ROWS}}}\n`);
+    const { results } = await callerFor(user).entity.blocks({
+      blocks: [
+        { key: 'broken', badgeOf: broken },
+        { key: 'undeclared', badgeOf: undeclared },
+      ],
+    });
+    expect(asError(results.broken).code).toBe('UNKNOWN_PARAM');
+    expect(asError(results.undeclared).code).toBe('UNKNOWN_PARAM');
   });
 });

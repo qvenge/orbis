@@ -23,6 +23,7 @@
     "@biomejs/biome": "2.5.2",
     "ajv": "^8",
     "bun-types": "1.2.7",
+    "playwright-core": "^1.63.0",
     "typescript": "^5.7.0"
   }
 }

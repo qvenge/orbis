@@ -45,7 +45,17 @@ export const QUERY_BLOCK_KEY = 'query-block';
 type BlockItem = EntityBlockTextItem | EntityBlockBadgeItem;
 /** Просьба без ключа пачки: ключ раздаёт сброс очереди, он живёт один вызов. */
 type BlockAsk = Omit<EntityBlockTextItem, 'key'> | Omit<EntityBlockBadgeItem, 'key'>;
-type Pending = { ask: BlockAsk; resolve: (r: BlockResult) => void; reject: (e: unknown) => void };
+/**
+ * Ответ блока в кеше. Группы по дням (спека 1в §5.2) несут «сегодня» и пояс ПАЧКИ (верх ответа
+ * `EntityBlocksResult`): подписи дней и колонка времени считаются в поясе ответа, а не браузера.
+ * Прочие виды — как пришли: верх пачки им не нужен.
+ */
+export type BlockData =
+  | Exclude<BlockResult, { kind: 'groups' | 'rows' }>
+  // Строки — с поясом ответа: форма `list` печатает дату строки в нём, а не в поясе браузера (М-2 ревью C).
+  | (Extract<BlockResult, { kind: 'rows' }> & { timeZone: string })
+  | (Extract<BlockResult, { kind: 'groups' }> & { today: string; timeZone: string });
+type Pending = { ask: BlockAsk; resolve: (r: BlockData) => void; reject: (e: unknown) => void };
 
 /**
  * Отказ ОДНОГО блока: код и позиция едут до плашки. Наследник `Error`, чтобы `useQuery` вёл его
@@ -74,7 +84,7 @@ const blockAskSchema = entityBlockTextItem.omit({ key: true });
 /** Отказ всей пачки (сеть, авторизация, сбой сервера) — одним текстом, без английского транспорта. */
 const TRANSPORT_MESSAGE = 'сервер недоступен — данные блока не получены';
 
-type Batcher = { ask: (ask: BlockAsk) => Promise<BlockResult> };
+type Batcher = { ask: (ask: BlockAsk) => Promise<BlockData> };
 const BatchContext = createContext<Batcher | null>(null);
 
 /**
@@ -97,8 +107,8 @@ const LIVE_CLIENTS = new Map<QueryClient, number>();
 
 /**
  * Протушить данные ВСЕХ блоков (префикс `[QUERY_BLOCK_KEY]`). Зовёт `invalidateGraph`: данные
- * блоков — ещё один взгляд на граф рядом с `entity.query/get/count` и `agenda.list`, и протухают
- * они вместе с ними.
+ * блоков — ещё один взгляд на граф рядом с `entity.query/get/count`, и протухают они вместе с
+ * ними.
  *
  * Клиент кеша берётся у смонтированных провайдеров, а не синглтон `trpc.ts`: `invalidateGraph`
  * получает только `utils` tRPC, у которых клиента react-query наружу нет, а тестовая обвязка
@@ -134,7 +144,9 @@ export function QueryBatchProvider({ children }: { children: ReactNode }) {
     const send = async (chunk: Pending[]) => {
       const blocks: BlockItem[] = chunk.map((p, i) => ({ ...p.ask, key: String(i) }));
       try {
-        const { results } = await clientRef.current.entity.blocks.mutate({ blocks });
+        const { results, today, timeZone } = await clientRef.current.entity.blocks.mutate({
+          blocks,
+        });
         chunk.forEach((p, i) => {
           const r = results[String(i)];
           if (r === undefined) {
@@ -145,7 +157,13 @@ export function QueryBatchProvider({ children }: { children: ReactNode }) {
               }),
             );
           } else if (r.ok) {
-            p.resolve(r);
+            p.resolve(
+              r.kind === 'groups'
+                ? { ...r, today, timeZone }
+                : r.kind === 'rows'
+                  ? { ...r, timeZone }
+                  : r,
+            );
           } else {
             p.reject(new BlockDataError(r.error));
           }
@@ -176,7 +194,7 @@ export function QueryBatchProvider({ children }: { children: ReactNode }) {
 
     return {
       ask: (ask) =>
-        new Promise<BlockResult>((resolve, reject) => {
+        new Promise<BlockData>((resolve, reject) => {
           queue.push({ ask, resolve, reject });
           if (!scheduled) {
             scheduled = true;
@@ -201,20 +219,27 @@ export function QueryBatchProvider({ children }: { children: ReactNode }) {
  * `this` — часть ключа: один и тот же текст с `children_of=this` у двух записей — два разных
  * запроса, и без него второй блок получил бы строки первого из кеша.
  *
- * Прежние данные держатся ТОЛЬКО при смене `limit` («ещё N»: без них раскрываемый список мигал
- * бы загрузкой на месте уже показанных строк). Сменился текст или `this` — это другой запрос, и
- * чужие строки под ним были бы неправдой (тот же довод, что у `useTicketRuns`).
+ * `params` — значения параметров страницы, на которые ссылается текст (`$<имя>`, спека 1в §5.1):
+ * едут полем элемента, подстановка — на сервере. Они — часть ключа (другое значение — другой
+ * запрос); объектом, а не своей строкой пар: хеш ключа react-query сортирует ключи объекта сам, и
+ * порядок ключей ничего не значит. Пустые значения — без поля и с тем же ключом, что без них.
+ *
+ * Прежние данные держатся при смене `limit` («ещё N»: без них раскрываемый список мигал бы
+ * загрузкой на месте уже показанных строк) и значений параметров (переключатель на странице: строки
+ * прежнего периода видны до ответа, а не «Загрузка…»). Сменился текст или `this` — это другой
+ * запрос, и чужие строки под ним были бы неправдой (тот же довод, что у `useTicketRuns`).
  */
 export function useBlockData(
   text: string,
-  opts: { limit?: number } = {},
-): UseQueryResult<BlockResult> {
+  opts: { limit?: number; params?: Readonly<Record<string, string>> } = {},
+): UseQueryResult<BlockData> {
   const batcher = useBlockBatcher('useBlockData');
   const thisEntityId = useThisEntityId();
   const trimmed = text.trim();
-  const limit = opts.limit;
+  const { limit } = opts;
+  const params = opts.params && Object.keys(opts.params).length > 0 ? opts.params : null;
   return useQuery({
-    queryKey: [QUERY_BLOCK_KEY, trimmed, thisEntityId ?? null, limit ?? null],
+    queryKey: [QUERY_BLOCK_KEY, trimmed, thisEntityId ?? null, limit ?? null, params],
     queryFn: () => {
       if (trimmed === '') {
         return Promise.reject(new BlockDataError({ code: 'EMPTY', message: EMPTY_QUERY_MESSAGE }));
@@ -223,6 +248,7 @@ export function useBlockData(
         text: trimmed,
         ...(thisEntityId !== null && { thisEntityId }),
         ...(limit !== undefined && { limit }),
+        ...(params && { params }),
       };
       const checked = blockAskSchema.safeParse(ask);
       if (!checked.success) {

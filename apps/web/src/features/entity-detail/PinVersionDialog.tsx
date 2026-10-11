@@ -1,15 +1,28 @@
-import { useId, useRef, useState } from 'react';
+// Закреплённые версии тела (С11, приёмка 12): «сохрани как есть, чтобы было куда вернуться».
+//
+// Страховка ВЛАДЕЛЬЦА перед тем, как отдать запись агенту, а не рабочий материал исполнителя:
+// закрепляет и восстанавливает только человек (роутер version — ownerOnly), агент версий не
+// видит вовсе. Отсюда и два места на экране: закрепляют из меню ⋮ (оно одно на все вкладки,
+// и жест этот делают, глядя на тело), а восстанавливают из списка на «Деталях».
+//
+// Восстанавливается ТОЛЬКО тело — аспекты, связи и заголовок в снимок не входят (инвариант 8
+// среза). Об этом сказано в подтверждении: «восстановить версию» без оговорки читается как
+// «вернуть запись целиком», и человек нажимал бы её, ожидая большего, чем случится.
+import { useEffect, useId, useRef, useState, useSyncExternalStore } from 'react';
 import { trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
 import { Dialog } from '../../ui/Dialog';
 import { Input } from '../../ui/Input';
-import { useToast } from '../../ui/toast-store';
+import { flushBodyOf } from '../entity-editor/body-flush';
+import { journalRefOf } from '../undo/journal-ref';
+import { isUndoEpoch, subscribeUndoEpoch, undoEpoch } from '../undo/undo-epoch';
+import { offerUndoLazy } from '../undo/undo-lazy';
 
 /** Потолок подписи — тот же, что в схеме операции executor'а: длиннее сервер не примет. */
 const LABEL_MAX = 200;
 
 /**
- * Диалог закрепления. Загружается после жеста меню, а монтируется экраном: жест приходит из
+ * Диалог закрепления. Живёт здесь, рядом со списком, а монтируется экраном: жест приходит из
  * меню ⋮, которое висит в шапке, снаружи вкладок.
  *
  * Монтируется ТОЛЬКО открытым (`open` без состояния): набранная и брошенная подпись не
@@ -19,18 +32,38 @@ const LABEL_MAX = 200;
  */
 export function PinVersionDialog({ entityId, onClose }: { entityId: string; onClose: () => void }) {
   const utils = trpc.useUtils();
-  const { show } = useToast();
   const [label, setLabel] = useState('');
   const fieldId = useId();
   const field = useRef<HTMLInputElement>(null);
 
+  const epoch = useSyncExternalStore(subscribeUndoEpoch, undoEpoch, undoEpoch);
+  const alive = useRef(true);
+  const currentId = useRef(entityId);
+  currentId.current = entityId;
+  useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+    };
+  }, []);
+  const pending = useRef<{ epoch: number; id: string } | null>(null);
+  type Intent = { epoch: number; id: string };
+  const [waiting, setWaiting] = useState<Intent | null>(null);
+  const [error, setError] = useState<{ intent: Intent; message: string } | null>(null);
+  const pinIntent = useRef<Intent>({ epoch, id: entityId });
+  const current = (intent: { epoch: number; id: string }) =>
+    isUndoEpoch(intent.epoch) && alive.current && currentId.current === intent.id;
   const pin = trpc.version.pin.useMutation({
-    onSuccess: () => {
+    meta: { undoStack: 'self' },
+    onMutate: (vars) => ({ epoch: pinIntent.current.epoch, id: vars.entityId }),
+    onSuccess: (data, _vars, intent) => {
+      if (!intent || !current(intent)) return;
       // Инвалидируется ТОЛЬКО список версий, без invalidateGraph: закрепление пишет строку
       // снимка и саму запись не двигает вовсе (executor.prepareVersionPin — INSERT в
       // entity_versions, entities не тронут), то есть протух ровно этот список.
       void utils.version.list.invalidate({ entityId });
-      show('Версия закреплена');
+      const ref = journalRefOf(data);
+      if (ref) offerUndoLazy({ title: 'Версия закреплена', actionId: ref.actionId, entityIds: [] });
       onClose();
     },
   });
@@ -38,6 +71,39 @@ export function PinVersionDialog({ entityId, onClose }: { entityId: string; onCl
   // По краям подпись из одних пробелов сервер примет (min(1) её длину считает честной), а в
   // списке она будет пустой строкой — режем здесь, до отправки.
   const trimmed = label.trim();
+  const submit = async () => {
+    if (
+      !trimmed ||
+      (pending.current && current(pending.current)) ||
+      (pin.isPending && current(pinIntent.current))
+    )
+      return;
+    const intent = { epoch: undoEpoch(), id: entityId };
+    pending.current = intent;
+    setWaiting(intent);
+    setError(null);
+    try {
+      const flushed = await flushBodyOf(intent.id);
+      if (!current(intent)) return;
+      if (flushed === 'blocked' || flushed === 'offline') {
+        setError({
+          intent,
+          message:
+            flushed === 'blocked'
+              ? 'Текст записи не сохранён — сначала закончите правку или разрешите конфликт текста'
+              : 'Нет связи: набранный текст ещё не на сервере — снимок версии не отправлен',
+        });
+        return;
+      }
+      pinIntent.current = intent;
+      pin.mutate({ entityId: intent.id, label: trimmed });
+    } finally {
+      if (pending.current === intent) {
+        pending.current = null;
+        if (current(intent)) setWaiting(null);
+      }
+    }
+  };
 
   return (
     <Dialog
@@ -59,7 +125,7 @@ export function PinVersionDialog({ entityId, onClose }: { entityId: string; onCl
         className="flex flex-col gap-3 pt-2"
         onSubmit={(e) => {
           e.preventDefault();
-          if (trimmed !== '') pin.mutate({ entityId, label: trimmed });
+          void submit();
         }}
       >
         <p className="text-sm text-text-secondary">
@@ -78,9 +144,9 @@ export function PinVersionDialog({ entityId, onClose }: { entityId: string; onCl
             onChange={(e) => setLabel(e.target.value)}
           />
         </div>
-        {pin.isError && (
+        {((error && current(error.intent)) || (current(pinIntent.current) && pin.isError)) && (
           <p role="alert" className="text-danger text-sm">
-            {pin.error.message}
+            {error && current(error.intent) ? error.message : pin.error?.message}
           </p>
         )}
         <div className="flex flex-wrap justify-end gap-2">
@@ -89,7 +155,15 @@ export function PinVersionDialog({ entityId, onClose }: { entityId: string; onCl
           </Button>
           {/* Пустая подпись — гарантированный отказ сервера (min(1)): не отправляем вовсе, и
               видно это до нажатия. */}
-          <Button type="submit" size="sm" disabled={trimmed === '' || pin.isPending}>
+          <Button
+            type="submit"
+            size="sm"
+            disabled={
+              trimmed === '' ||
+              (waiting !== null && current(waiting)) ||
+              (pin.isPending && current(pinIntent.current))
+            }
+          >
             Закрепить
           </Button>
         </div>

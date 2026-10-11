@@ -73,3 +73,66 @@ test('фикстуры, помеченные статическими, прох�
   expect(AST_FIXTURES.filter((f) => f.static).length).toBeGreaterThanOrEqual(2);
   expect(AST_FIXTURES.filter((f) => !f.static).length).toBeGreaterThanOrEqual(5);
 });
+
+test('1в: адрес слота и значение контракта статичны с литералом, с токеном — отказ', () => {
+  expect(() =>
+    assertStaticQuery({
+      filter: { prop: { contract: 'orbis/when' }, op: 'eq', value: '2026-07-17' },
+    }),
+  ).not.toThrow();
+  expect(() =>
+    assertStaticQuery({
+      filter: { prop: { contract: 'orbis/when', slot: 'deadline' }, op: 'eq', value: '2026-07-17' },
+    }),
+  ).not.toThrow();
+  expect(
+    reject({
+      filter: {
+        prop: { contract: 'orbis/when', slot: 'deadline' },
+        op: 'eq',
+        value: { token: 'today' },
+      },
+    }),
+  ).toBe(SCOPE_NOT_STATIC);
+  // Сообщение называет адрес ключом, а не `[object Object]`.
+  try {
+    assertStaticQuery({
+      filter: { prop: { contract: 'orbis/when' }, op: 'range', value: { to: { token: 'today' } } },
+    });
+    throw new Error('ожидался отказ');
+  } catch (e) {
+    expect((e as ScopeNotStaticError).reason).toContain("'orbis/when'");
+  }
+});
+
+test('1в §3.8: группировка — проекция страницы, у множества отказ (static держит group)', () => {
+  expect(reject({ filter: null, group: { by: 'day', field: { contract: 'orbis/when' } } })).toBe(
+    SCOPE_NOT_STATIC,
+  );
+});
+
+test('1в §3.8: ссылка на параметр страницы `$p` — отказ у самого сторожа (М-1 ревью A)', () => {
+  // До сторожа ссылку отвергает базовая схема, но сторож структурный — зовётся на дереве любого пути.
+  const cases: Array<Parameters<typeof assertStaticQuery>[0]> = [
+    { filter: { prop: 'orbis/due_date', op: 'eq', value: { param: 'p' } } },
+    { filter: { prop: { contract: 'orbis/when' }, op: 'gt', value: { param: 'p' } } },
+    { filter: { prop: 'orbis/due_date', op: 'range', value: { from: { param: 'p' } } } },
+    { filter: { prop: 'orbis/due_date', op: 'range', value: { to: { param: 'p' } } } },
+    {
+      filter: {
+        and: [
+          { aspect: 'orbis/task' },
+          { not: { prop: { contract: 'orbis/when' }, op: 'eq', value: { param: 'p' } } },
+        ],
+      },
+    },
+  ];
+  for (const ast of cases) {
+    expect(reject(ast)).toBe(SCOPE_NOT_STATIC);
+    try {
+      assertStaticQuery(ast);
+    } catch (e) {
+      expect((e as ScopeNotStaticError).reason).toContain("'$p'");
+    }
+  }
+});

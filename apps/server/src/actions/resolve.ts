@@ -28,6 +28,7 @@ import { ExecError } from '../errors';
 import { type ExprEvalScope, evalExpr } from '../expr/eval';
 import { BULK_THRESHOLD, factsFromOperations } from '../policy/confirmation';
 import { type CompileCtx, compileWhere } from '../query/compile-ast';
+import { WEEK_START } from '../query/context';
 import { actionHash, paramLiteralType } from '../registry/actions';
 import type { RegistrySnapshot } from '../registry/load';
 import { literalFormViolation } from '../registry/validate-props';
@@ -381,10 +382,14 @@ async function queryTargets(
     );
   }
   if (decl.over === null) return [];
+  // Зона и валюта владельца — одной выборкой настроек (`actionDateArgs` → `ownerQuerySettings`): `over`
+  // суммы не считает, но контекст компилятора один, и поле обязано быть правдой, а не заглушкой.
   const cctx: CompileCtx = {
     graphId,
     today: args.today,
     timeZone: args.timeZone,
+    weekStart: WEEK_START,
+    ownerCurrency: args.ownerCurrency,
     reg,
     thisEntityId: null,
   };

@@ -1,4 +1,5 @@
-// apps/server/test/surfaces.ts — снимок ВЫДАЧИ четырёх поверхностей (§С8-20).
+// apps/server/test/surfaces.ts — снимок ВЫДАЧИ трёх поверхностей (§С8-20; четвёртая, Повестка, снята
+// срезом 1в вместе с движком подписки — §6.5: её держит гейт §С8-18 блоками тела, `gate-c8-18.test.ts`).
 //
 // «Сегодня» ПРИБИТО, мир — в абсолютных датах: все читатели берут `today` параметром
 // (`budgetOverviewOf(tx,…,{month,today})`, `CompileCtx.today`), поэтому эталон не зависит от дня
@@ -8,7 +9,7 @@
 // Снимок идёт МИМО tRPC-ручек: `budgetOverview` гоняет `preparePeriod`
 // (`:634` — postDue + материализация), `entity.query` (`routers/entity.ts:317`) —
 // `queryWithMaterialization`; оба ПИШУТ в граф, а материализованные инстансы приезжали бы со
-// случайными uuid. Здесь четыре поверхности считаются на ОДНОЙ `withIdentity`-tx тем же
+// случайными uuid. Здесь поверхности считаются на ОДНОЙ `withIdentity`-tx тем же
 // компилятором и тем же движком подписки, что и ручки, — с прибитым `today` и без записи.
 
 import type { GraphId } from '@orbis/shared';
@@ -31,7 +32,6 @@ import { type CompileCtx, compileQueryAst } from '../src/query/compile-ast';
 import { queryContext } from '../src/query/context';
 import { parseQueryText } from '../src/query/parse-text';
 import { appRouter } from '../src/router';
-import { agendaListOf, agendaSubscriptionOf } from '../src/subscriptions/agenda';
 import { BUDGET_SUBSCRIPTION_ID, budgetOverviewOf } from '../src/subscriptions/budget';
 import { builtinSubscription } from '../src/subscriptions/registry';
 import { createCallerFactory } from '../src/trpc';
@@ -48,7 +48,7 @@ export const SURFACE_STATES = ['baseline', 'module-off', 'custom-aspect', 'relab
 export type SurfaceState = (typeof SURFACE_STATES)[number];
 
 /**
- * Имена снимков (Р-К-10). Первые два ПРИЕЗЖАЮТ ИЗ `SURFACES` (`registry/extensions.ts`), а не повторены
+ * Имена снимков (Р-К-10). Первое ПРИЕЗЖАЕТ ИЗ `SURFACES` (`registry/extensions.ts`), а не повторено
  * литералом: по `SURFACES` отказывает `SURFACE_UNKNOWN`, и разъезд двух списков означал бы снимок
  * поверхности, которую валидатор уже не признаёт, — молча и до первого пересева. `core/*` подписками
  * не описаны (правило строки — константа `M14_ROW_ELEMENTS`, Р-К-1), поэтому дописаны здесь.
@@ -207,8 +207,8 @@ function ops(graphId: GraphId): { tool: string; input: Record<string, unknown> }
     plain('event-today', 'Событие сегодня', ['orbis/schedule'], {
       'orbis/start_at': '2026-07-03T10:00:00+03:00',
     }),
-    // Шаблон recurring: в выборку окна попадает и снимается ДЕКЛАРАЦИЕЙ `hide` подписки
-    // (задача 6); прежде его снимал клиентский фильтр (`useAgenda.ts:93-95`).
+    // Шаблон recurring: строка мира снимка (`core/row`, `core/exclude-blocked`); до 1в его снимала
+    // из окна Повестки декларация `hide` подписки, с 1в — `!class=orbis/recurrence:templates` тела.
     plain('tpl-weekly', 'Еженедельная встреча', ['orbis/schedule'], {
       'orbis/start_at': '2026-07-03T08:00:00+03:00',
       'orbis/recurrence': { freq: 'weekly', interval: 1 },
@@ -262,14 +262,7 @@ export async function seedSurfaceWorld(
   if (opts?.gateAspects === true) await seedGateSurfaceRows(graphId);
 }
 
-export interface AgendaSurfaceRow {
-  section: 'window' | 'overdue';
-  id: string;
-  title: string;
-  at: string;
-}
 export interface SurfacePayloads {
-  'core/agenda': AgendaSurfaceRow[];
   'finance/budget-overview': BudgetOverview;
   /** §1.9: `Record<entity id, RowProjection>` — тип общий (`@orbis/shared`), двойника больше нет. */
   'core/row': Record<string, RowProjection>;
@@ -284,56 +277,6 @@ export interface SurfaceSnapshot {
 async function queryEntities(tx: Tx, cctx: CompileCtx, text: string): Promise<WireEntity[]> {
   const rows = await tx.execute(compileQueryAst(parseQueryText(text, cctx), cctx));
   return [...rows].map((r) => toWireEntityFromSql(r as Record<string, unknown>));
-}
-
-/**
- * Локальный день момента — близнец `localDay` движка (`subscriptions/agenda.ts`, задача 6).
- *
- * ПЕРВОЙ СТРОКОЙ — охранник date-значения: слот `moment`, привязанный к date-свойству, отдаёт
- * уже день (`'2026-07-02'`), и прогон такого значения через `new Date()` читал бы его как
- * полночь UTC и уводил дату на сутки назад в зонах западнее UTC.
- */
-function localDay(iso: string, timeZone: string): string | null {
-  if (/^\d{4}-\d{2}-\d{2}$/.test(iso)) return iso;
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return null;
-  return new Intl.DateTimeFormat('en-CA', {
-    timeZone,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).format(d);
-}
-
-/** То же окно, что у клиента (`AGENDA_DAYS` 0b): состав снимка не должен ехать не по делу. */
-const AGENDA_SURFACE_DAYS = 8;
-
-/**
- * Поверхность повестки — ДВИЖОК ПОДПИСКИ (задача 6). Временная серверная копия клиентских
- * правил 0b (`useAgenda.ts:93-95`, `:142-166`, `:207-235`) снята здесь (шаг 7, Р-К-27):
- * пока снимок считал Agenda копией, «снимок после» описывал старую машинерию и гейт §С8-18
- * по этой поверхности ничего не доказывал.
- *
- * `at` окна ПРИВОДИТСЯ К ДНЮ. Движок для `window` отдаёт значение слота `moment` как есть
- * (`'2026-07-03T10:00:00+03:00'`), а эталон 0b хранит локальный день (`'2026-07-03'`). Снимок
- * хранит ДЕНЬ окна ради сравнимости с эталоном 0b: сменись форма поля — `baseline` пришлось бы
- * пересдать, а вместе с ним умерла бы сама проверка «веха I выдачу на неизменившемся мире не
- * изменила». Секцию `overdue` движок уже отдаёт днём (минимум `deadline` и локального дня
- * `moment`, §Б5-6) — берётся как есть.
- */
-async function agendaSurface(tx: Tx, cctx: CompileCtx): Promise<AgendaSurfaceRow[]> {
-  const def = agendaSubscriptionOf(cctx.reg);
-  const res = await agendaListOf(tx, cctx.graphId, def, {
-    today: cctx.today,
-    timeZone: cctx.timeZone,
-    days: AGENDA_SURFACE_DAYS,
-  });
-  return res.rows.map((r) => ({
-    section: r.section,
-    id: r.entity.id,
-    title: r.entity.title,
-    at: r.section === 'window' ? (localDay(r.at, cctx.timeZone) ?? r.at) : r.at,
-  }));
 }
 
 /**
@@ -410,7 +353,6 @@ export async function snapshotSurfaces(
       'excludeBlocked=true, sortBy=orbis/title:asc, limit=200',
     );
     return {
-      'core/agenda': await agendaSurface(tx, cctx),
       // Считает ДВИЖОК ПОДПИСКИ (задача 9): эталон при переводе не пересдавался — на
       // детерминированном мире декларация даёт байт-в-байт то же, что давала прежняя реализация
       // кодом, и это и есть «ноль расхождений» §С8-15 на снимке; снимок читает то, что читает прод.
@@ -431,8 +373,8 @@ export async function snapshotSurfaces(
   // id мира — uuidv5 от имени ВЛАДЕЛЬЦА, и тот же состав у состояния с другим владельцем
   // (задача 18) лёг бы в другом порядке — с baseline байт-в-байт не сошлось бы никогда.
   // Коллация БД тут тоже ни при чём: `sortBy=orbis/title` на кириллице зависит от локали
-  // кластера. Состав — предмет §С8-20; порядок, значимый владельцу, живёт в Agenda и держится
-  // датами.
+  // кластера. Состав — предмет §С8-20; порядок, значимый владельцу, живёт в блоках Повестки и
+  // держится датами.
   surfaces['core/exclude-blocked'].sort();
   return { state, surfaces };
 }
@@ -440,8 +382,8 @@ export async function snapshotSurfaces(
 /** Модуль состояния 2 — единственный, у которого в Б-1 есть подписка (§Б8-2, §С8-22). */
 export const SURFACE_OFF_MODULE = 'finance';
 /**
- * Аспект состояния 4 — САМЫЙ читаемый: `orbis/task` участвует в чекбоксе и бейдже строки M14, в
- * обеих секциях Agenda и в наборе `closed`. Если бы подпись куда-то текла, она текла бы отсюда.
+ * Аспект состояния 4 — САМЫЙ читаемый: `orbis/task` участвует в чекбоксе и бейдже строки M14 и в
+ * наборе `closed`. Если бы подпись куда-то текла, она текла бы отсюда.
  */
 export const SURFACE_RELABEL_ASPECT = 'orbis/task';
 /**

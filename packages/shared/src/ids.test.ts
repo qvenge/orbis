@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
+import * as ids from './ids';
 import {
   answerMessageId,
-  batchAuditMessageId,
   bodyDraftNoteId,
   entityThreadId,
   globalThreadId,
@@ -128,13 +128,16 @@ describe('детерминированные ID (01 §5.4, §4.5, §7.8)', () =>
     expect(globalThreadId(owner)).toBe(globalThreadId(owner));
     expect(entityThreadId(owner, entity)).toBe(entityThreadId(owner, entity));
     expect(globalThreadId(owner)).not.toBe(entityThreadId(owner, entity));
-    expect(batchAuditMessageId(owner, entity)).not.toBe(entityThreadId(owner, entity));
   });
-  test('rejectMessageId (§7.10) детерминирован, lowercase-нормализован и не пересекается с batch-audit', () => {
+  // Сообщение отказа — своё детерминированное пространство ключей: его PK не совпадает ни с PK карточки-запроса
+  // (`pendingId`), ни с ключом записи журнала исполненной единицы (тоже `pendingId` — спека скорости §11.2). Что
+  // карточка-запрос и запись её исполнения приходят в треде разными id, держит выдача треда (производный id элемента
+  // журнала, рулинг R-12, `journal/thread-page.test.ts`), а не эта формула.
+  test('rejectMessageId (§7.10) детерминирован, lowercase-нормализован и отличен от самого pendingId', () => {
     const owner = '00000000-0000-4000-8000-00000000000a';
     const pending = '00000000-0000-7000-8000-0000000000b2';
     expect(rejectMessageId(owner, pending)).toBe(rejectMessageId(owner.toUpperCase(), pending));
-    expect(rejectMessageId(owner, pending)).not.toBe(batchAuditMessageId(owner, pending));
+    expect(rejectMessageId(owner, pending)).not.toBe(pending);
   });
   test('processingMessageId детерминирован, lowercase-нормализован, отличен от исходного id', () => {
     const userMsg = '00000000-0000-7000-8000-0000000000c3';
@@ -215,4 +218,16 @@ describe('детерминированные ID (01 §5.4, §4.5, §7.8)', () =>
   test('константа namespace дословно из PRD', () => {
     expect(ORBIS_NAMESPACE).toBe('cb339e97-82d7-4d16-91c6-942d42df7054');
   });
+});
+
+test('createLinkBatchId: детерминизм, регистронезависимость, разделение графов и записей', () => {
+  expect(typeof ids.createLinkBatchId).toBe('function');
+  const graph = '019DED47-D100-717A-8307-A5B7A5BE722F';
+  const entity = 'E7D0BFA4-F62A-59C1-B560-1C17CB32E89F';
+  const id = ids.createLinkBatchId(graph, entity);
+  expect(id).toBe(ids.createLinkBatchId(graph.toLowerCase(), entity.toLowerCase()));
+  expect(id).toBe(ids.createLinkBatchId(graph, entity));
+  expect(id).not.toBe(ids.createLinkBatchId(entity, entity));
+  expect(id).not.toBe(ids.createLinkBatchId(graph, graph));
+  expect(id).not.toBe(entity.toLowerCase());
 });

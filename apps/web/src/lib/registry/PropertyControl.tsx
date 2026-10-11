@@ -26,11 +26,11 @@ import {
   type ControlKind,
   controlKindOf,
   controlText,
-  FIELD_CLASS,
   parseControlValue,
   writeModeOf,
 } from './controls';
 import type { DraftValue } from './draft-value';
+import { FIELD_CLASS } from './field-class';
 import { displayText, EMPTY_TEXT } from './format';
 import { LazyListControl, loadRefManyControl, loadScalarListControl } from './LazyListControl';
 import { aspectLabel } from './labels';

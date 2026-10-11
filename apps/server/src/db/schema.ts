@@ -4,12 +4,14 @@ import {
   boolean,
   check,
   date,
+  foreignKey,
   index,
   integer,
   jsonb,
   numeric,
   pgTable,
   primaryKey,
+  real,
   smallint,
   text,
   timestamp,
@@ -18,11 +20,13 @@ import {
   uuid,
 } from 'drizzle-orm/pg-core';
 
-// Схема 21 таблицы: одиннадцать исходных (docs/prd/01-architecture.md §4 — восемь §4.1–§4.8,
+// Схема 24 таблиц: одиннадцать исходных (docs/prd/01-architecture.md §4 — восемь §4.1–§4.8,
 // две таблицы доступа внешних агентов §4.13–§4.14 D34 в конце файла, entity_versions
 // ADE-среза 1), восемь таблиц реформы свойств (§С6 спеки «Реформа свойств»): пять реестров,
-// таблица дельт, однострочная таблица версии system-реестра и кэш `spent` конверта (§Б5-5) —
-// и две таблицы среза «Г — единица владения» (D44): `graphs` и `graph_members` в самом конце файла.
+// таблица дельт, однострочная таблица версии system-реестра и кэш `spent` конверта (§Б5-5),
+// две таблицы среза «Г — единица владения» (D44): `graphs` и `graph_members` в самом конце файла, —
+// полевые замеры `perf_samples` (спека скорости §3.2) сразу за `user_settings`: не граф, ключ — аккаунт, —
+// и журнал действий `action_journal` с боковой `action_journal_entities` (спека скорости §11.2) за `chat_messages`.
 // RLS-политики и сид аспектов — Слайс 1; здесь только структура, defaults, индексы, FK.
 // graph_id — ключ владения и изоляции (D44): строка принадлежит ГРАФУ. У личного графа id равен id
 // аккаунта Supabase по построению (CHECK таблицы graphs, срез Г-2). FK на auth-схему не объявляем —
@@ -46,33 +50,8 @@ export const entities = pgTable('entities', {
    */
   bodyDoc: jsonb('body_doc'),
   /**
-   * ИСХОДНОЕ тело до разовой конверсии — страховка обратимости, а не рабочая колонка.
-   *
-   * Заполняется ТЕМ ЖЕ UPDATE, что и конверсия (`backfill-body-doc`), и только когда пусто;
-   * ничем не читается в рантайме. Заведена потому, что класс тихой потери на первом разборе
-   * ДОКАЗАН (рваная строка таблицы, картинка в ячейке, ссылка с пустым текстом — каждая
-   * уничтожала авторский текст мимо всех счётчиков), а гарантии «канон не теряет ничего на
-   * любом входе» быть не может: это доказательство корректности чужого парсера.
-   *
-   * Почему колонка, а не только дамп: из `pg_dump` всей схемы достать ОДНУ запись спустя месяц
-   * можно лишь подняв его в отдельную базу, а владелец узнаёт о потере не в день переноса —
-   * он открывает старую заметку через недели. Здесь же восстановление одной записи это один
-   * UPDATE. Плюс дамп — месяцы хранения полной копии личных заметок в открытом виде, то есть
-   * решение про приватность; колонка живёт под той же RLS, что и сама запись.
-   *
-   * ВОССТАНОВЛЕНИЕ одной записи (запускать локально, тело в транскрипт не выносить):
-   *
-   *   -- посмотреть расхождение
-   *   SELECT body, body_before_doc FROM entities WHERE id = '<id>';
-   *   -- вернуть исходное тело; body_doc пересоберётся лениво при первом чтении
-   *   UPDATE entities SET body = body_before_doc, body_doc = NULL
-   *   WHERE id = '<id>' AND body_before_doc IS NOT NULL;
-   *
-   * СНИМАТЬ КОЛОНКУ МОЖНО И НУЖНО — миграцией `0012_drop_body_before_doc.sql`, которая лежит
-   * рядом ГОТОВОЙ, но НЕ зарегистрирована в `meta/_journal.json`. Это не забывчивость: снятие
-   * решает владелец, когда перенос признан удачным, — до тех пор текст, который человек из
-   * заметки УДАЛИЛ, продолжает лежать в базе, и это осознанный размен «обратимость против
-   * права быть забытым». Чтобы снять: дописать запись в журнал и накатить.
+   * Страховка разовой конверсии тел (перенос выполнен 02.09.2026, скрипт снят планом А скорости, РП-23).
+   * Рантайм её не читает; снятие — 0012_drop_body_before_doc.sql по слову владельца (остаток).
    */
   bodyBeforeDoc: text('body_before_doc'),
   tags: text('tags').array().notNull().default(sql`'{}'`),
@@ -90,8 +69,7 @@ export const entities = pgTable('entities', {
    * находят тела, ссылающиеся на свойство, не обходя корпус (`registry/ops.ts`).
    *
    * Пишется РЯДОМ С `body_refs` во всех пяти точках записи тела (`executor/executor.ts`) —
-   * колонка денормализована, и любой писатель тела мимо executor'а оставит её устаревшей
-   * (та же дыра, что у `body_refs`: `db/backfill-body-doc.test.ts` называет её вслух).
+   * колонка денормализована, и любой писатель тела мимо executor'а оставит её устаревшей.
    *
    * Собирается ТОЛЬКО с дерева (`queryRefsFromDoc`): у неразобранного блока дерева нет, а его
    * текст имён реестра не содержит по построению.
@@ -100,6 +78,22 @@ export const entities = pgTable('entities', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   archived: boolean('archived').notNull().default(false),
+  /**
+   * Ревизия тела, «действие текущего тела» и время изменения тела (спека скорости §8.1, 0026). Пишет их ТОЛЬКО
+   * триггер `entities_body_stamp` — при создании и при каждой смене `body`/`body_doc` (`IS DISTINCT FROM`), у любого
+   * писателя, включая сырой SQL слияния свойства: писателей тела не меньше шести, и забытый писатель молча ломал бы
+   * замок текста и цепочку отмены. Код колонки не пишет (кроме засева прод-операцией переноса журнала, РП-2).
+   *
+   * `body_action_id` — id записи журнала, чьё действие поставило текущее тело (или записи отмены); берётся из настройки
+   * транзакции `orbis.body_action`, которую executor объявляет один раз на свою транзакцию. Пусто — писатель вне
+   * executor'а (ops-скрипт) или транзакция без журнала (сев). Внешнего ключа на журнал нет (К-34): строка журнала
+   * пишется ПОСЛЕ правки той же транзакцией.
+   */
+  bodyRevision: integer('body_revision').notNull().default(1),
+  bodyActionId: uuid('body_action_id'),
+  bodyChangedAt: timestamp('body_changed_at', { withTimezone: true, precision: 3 })
+    .notNull()
+    .defaultNow(),
 });
 
 // §4.2 relations
@@ -212,6 +206,32 @@ export const userSettings = pgTable('user_settings', {
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
+/**
+ * Полевые замеры (спека скорости §3.2): НЕ граф и НЕ журнал — содержимого нет (ни текстов, ни заголовков, ни id записей).
+ * Ключ владения — АККАУНТ (`auth.uid()`), не граф: замер — про устройство и сеть человека, а не про данные графа.
+ * Хранение 30 дней — задача `pg_cron` в самой базе (0024).
+ */
+export const perfSamples = pgTable(
+  'perf_samples',
+  {
+    id: bigint('id', { mode: 'number' }).primaryKey().generatedAlwaysAsIdentity(),
+    accountId: uuid('account_id').notNull().default(sql`auth.uid()`),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    metric: text('metric').notNull(),
+    screen: text('screen'),
+    kind: text('kind'),
+    procedure: text('procedure'),
+    durMs: real('dur_ms').notNull(),
+    serverMs: real('server_ms'),
+    dbMs: real('db_ms'),
+    device: text('device').notNull(),
+    net: text('net'),
+    appVersion: text('app_version').notNull(),
+    cached: boolean('cached'),
+  },
+  (t) => [index('perf_samples_account_created').on(t.accountId, t.createdAt)],
+);
+
 // §4.5 chat_threads — NULL entity_id = глобальный тред; инвариант — два partial unique index
 export const chatThreads = pgTable(
   'chat_threads',
@@ -249,6 +269,90 @@ export const chatMessages = pgTable('chat_messages', {
   // ровно тот случай, ради которого курсор вводили, — пропадали на границе страниц.
   createdAt: timestamp('created_at', { withTimezone: true, precision: 3 }).notNull().defaultNow(),
 });
+
+// Журнал действий (спека скорости §11.2, миграция 0025): отдельная таблица вместо системных сообщений чата.
+// Строка — действие целиком (весь `ActionRecord`, РП-7) либо запись отмены (`type = 'undo'`, `undoes`). Только
+// дописывается: политики — SELECT и INSERT. Ключ `(graph_id, id)`: id действия, у пачки — её `batch_id`.
+// Имена полей — camelCase колонок; политики, гранты и CHECK формы отмены — в рукописном SQL миграции.
+export const actionJournal = pgTable(
+  'action_journal',
+  {
+    graphId: uuid('graph_id')
+      .notNull()
+      .references(() => graphs.id, { onDelete: 'cascade' }),
+    id: uuid('id').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true, precision: 3 }).notNull().defaultNow(),
+    type: text('type').notNull(),
+    entityId: uuid('entity_id'),
+    actorUserId: uuid('actor_user_id').notNull(),
+    actorKind: text('actor_kind').notNull(),
+    source: text('source').notNull(),
+    mechanism: text('mechanism').notNull(),
+    actorGrantId: uuid('actor_grant_id'),
+    runId: uuid('run_id'),
+    actionId: text('action_id'),
+    module: text('module'),
+    editedFrom: uuid('edited_from'),
+    threadId: uuid('thread_id').references(() => chatThreads.id, { onDelete: 'set null' }),
+    title: text('title').notNull(),
+    cardTool: text('card_tool').notNull(),
+    entityIds: uuid('entity_ids').array().notNull().default(sql`'{}'`),
+    operations: jsonb('operations').notNull(),
+    inverse: jsonb('inverse').notNull(),
+    results: jsonb('results'),
+    textSession: boolean('text_session').notNull().default(false),
+    bodyBefore: jsonb('body_before'),
+    undoes: uuid('undoes'),
+    pinnedVersionIds: uuid('pinned_version_ids').array().notNull().default(sql`'{}'`),
+    cardInReply: boolean('card_in_reply').notNull().default(false),
+  },
+  (t) => [
+    primaryKey({ name: 'action_journal_pkey', columns: [t.graphId, t.id] }),
+    check('action_journal_undo_shape', sql`(${t.type} = 'undo') = (${t.undoes} IS NOT NULL)`),
+    uniqueIndex('action_journal_undoes_uniq')
+      .on(t.graphId, t.undoes)
+      .where(sql`${t.undoes} IS NOT NULL`),
+    index('action_journal_graph_time').on(
+      t.graphId,
+      t.createdAt.desc().nullsFirst(),
+      t.id.desc().nullsFirst(),
+    ),
+    index('action_journal_thread_time')
+      .on(t.graphId, t.threadId, t.createdAt.desc().nullsFirst(), t.id.desc().nullsFirst())
+      .where(sql`${t.threadId} IS NOT NULL`),
+    index('action_journal_run').on(t.graphId, t.runId).where(sql`${t.runId} IS NOT NULL`),
+    index('action_journal_type_time').on(t.graphId, t.type, t.createdAt.desc().nullsFirst()),
+  ],
+);
+
+// Боковая таблица проб «по затронутой записи» (РП-8): под RLS `uuid[] @>`/`&&` не leakproof и индекс не берут,
+// равенство uuid — leakproof, поэтому пробы R-18, окна конфликтов отката и будущего журнала записи идут btree сюда.
+// Пишет её тот же синк журнала той же транзакцией; `created_at` — копия времени строки журнала.
+export const actionJournalEntities = pgTable(
+  'action_journal_entities',
+  {
+    graphId: uuid('graph_id').notNull(),
+    actionId: uuid('action_id').notNull(),
+    entityId: uuid('entity_id').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true, precision: 3 }).notNull(),
+  },
+  (t) => [
+    primaryKey({
+      name: 'action_journal_entities_pkey',
+      columns: [t.graphId, t.actionId, t.entityId],
+    }),
+    foreignKey({
+      name: 'action_journal_entities_action_fk',
+      columns: [t.graphId, t.actionId],
+      foreignColumns: [actionJournal.graphId, actionJournal.id],
+    }).onDelete('cascade'),
+    index('action_journal_entities_probe').on(
+      t.graphId,
+      t.entityId,
+      t.createdAt.desc().nullsFirst(),
+    ),
+  ],
+);
 
 // §4.7 ai_usage — метеринг LLM на ГРАФ/день/модель (расход — на граф, D44); PK (graph_id, date, model)
 export const aiUsage = pgTable(

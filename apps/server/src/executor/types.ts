@@ -1,8 +1,10 @@
 // apps/server/src/executor/types.ts
 // Точные сигнатуры executor'а (контракт Task 9; на них встают Task 10–15 и весь 1b).
-import type { AccountId, GraphId } from '@orbis/shared';
+import type { AccountId, BodyActionInfo, GraphId, UndoContinuation } from '@orbis/shared';
 import type { Tx } from '../db/with-identity';
 import type { Identity } from '../identity';
+import { ExecError } from './errors';
+import type { JournalEntry } from './journal-read';
 
 export type ActorKind = 'owner' | 'ai' | 'agent';
 // 'ui' — прямое действие владельца в UI (entity.update / relation.*), отличимое в
@@ -68,7 +70,18 @@ export interface ExecuteRequest {
   source: MutationSource;
   /** Механизм записи (§А4-4); нет → 'user'. По нему смотрят гейты флагов свойств (§А2-5). */
   mechanism?: MutationMechanism;
-  threadId?: string; // тред для audit-сообщения; нет → глобальный тред владельца
+  /**
+   * Тред строки журнала — тот, где действие произошло (разговор, ввод, прогон). Решает синк по источнику
+   * (`journalThreadOf`, спека скорости §11.3): правкам владельца в интерфейсе и системным записям тред не положен
+   * вовсе (Р-12), остальным без переданного — глобальный тред графа.
+   */
+  threadId?: string;
+  /**
+   * Карточку этого действия несёт ответ ассистента (§11.3, К-36): ставит диспатч разговора, когда рождает
+   * `entity_card` с `undoActionId` на уровне `execute`. Выдача треда такую строку журнала не рисует — иначе у
+   * действия было бы две карточки с двумя «Отменить». Нет → строка журнала — сама носитель карточки.
+   */
+  cardInReply?: boolean;
   operations: Array<{ tool: string; input: unknown }>; // 1 элемент = одиночный вызов
   batchId?: string; // обязателен при operations.length > 1
   clock?: () => Date; // инъекция времени (тесты); default () => new Date()
@@ -101,13 +114,29 @@ export interface ExecuteRequest {
    * журнала не меняет: это пачка, а не действие реестра.
    */
   batchLabel?: string;
+  /**
+   * Автосохранение редактора владельца (спека скорости §8.5, РП-18): правка текста идёт СЕАНСОМ — продолжает запись
+   * журнала прошлого автосохранения или открывает новую (`text-session.ts`). Ставит только роутер `entity.update` по
+   * признаку `autosave` входа. Отдельное поле, а не значение `mechanism`: механизм — ось гейтов прав (`props.ts`,
+   * `relations.ts`, `invariants.ts`), и новое его значение пришлось бы вписывать в каждое их множество. Допустимо
+   * только у одиночной правки одного тела владельцем — иначе `VALIDATION` (`assertTextSessionRequest`).
+   */
+  textSession?: boolean;
 }
 
 export interface ExecuteOk {
   ok: true;
+  /** id записи журнала действия; у продолжения сеанса правки текста — id записи сеанса (§8.2, §8.5). */
   actionId: string;
+  /** Правка дописала эффекты сверх явного входа (§8.2); считает исполнитель в транзакции записи. */
+  consequences: boolean;
   results: unknown[]; // по одному на операцию (wire-формы сущностей/relations)
   idempotentReplay: boolean; // true: повтор — ничего не применялось
+  /**
+   * Действующее действие текущего тела записи после одиночной правки (§8.2 «ответы с записью») — только по просьбе
+   * `ExecutorDeps.reportBodyAction`; посчитано в транзакции правки (рулинг R-22).
+   */
+  bodyAction?: BodyActionInfo | null;
 }
 
 export interface ExecuteErr {
@@ -134,10 +163,13 @@ export interface WireEntity {
   graphId: string;
   title: string;
   emoji: string | null;
-  body: string;
+  /** Тело — по выбору полей (§9): лёгкие списки и bare entity.get его не несут; мутации несут всегда. */
+  body?: string;
+  /** Начало текста (fields: start); null — у записи текста нет. */
+  bodyStart?: string | null;
   /**
-   * Структурная форма тела. Едет ТОЛЬКО по include('bodyDoc') — см. Р6 дизайна: wire-форма
-   * несёт body всегда, и второй экземпляр тела в каждом ответе удвоил бы вес любого списка.
+   * Структурная форма тела. Едет ТОЛЬКО по include('bodyDoc') — см. Р6 дизайна: тело и документ
+   * выбираются независимо; второй экземпляр тела в каждом ответе удвоил бы вес списка.
    * Отсюда и опциональность ключа: `undefined` = «не запрашивали», а не «документа нет».
    */
   bodyDoc?: { v: number; doc: Record<string, unknown> } | null;
@@ -152,7 +184,22 @@ export interface WireEntity {
   createdAt: string;
   updatedAt: string;
   archived: boolean;
+  /**
+   * Ревизия тела и время его изменения (спека скорости §8.1, колонки 0026 — их ставит триггер). Есть у чтения одной
+   * записи и в ответах мутаций (`toWireEntityWithRevision`, полная строка `RETURNING`); строки списков их не несут —
+   * отсюда опциональность ключа: `undefined` = «не выбирали», а не «ревизии нет». Действие текущего тела наружу не
+   * едет: это id записи журнала, и отвечать о нём будет чтение журнала (`entity.get.bodyAction`, задача 10).
+   */
+  bodyRevision?: number;
+  bodyChangedAt?: string;
 }
+
+/**
+ * Одна запись — чтение записи и ответ мутации (`toWireEntityWithRevision`): ревизия тела и время его изменения есть
+ * всегда. Отдельным типом, чтобы потребители замка текста (клиент сохранения тела, «вернуть версию», задача 8 плана А)
+ * брали ревизию из ответа без проверки на отсутствие, которой у этих ответов не бывает.
+ */
+export type WireEntityWithRevision = WireEntity & { bodyRevision: number; bodyChangedAt: string };
 
 /**
  * Wire-форма строки provenance (01-arch §4.8, 03-budget §3.4.1): результат внутренних
@@ -200,10 +247,10 @@ export interface WireRelation {
 }
 
 // ---------------------------------------------------------------------------
-// JournalSink — ВРЕМЕННЫЙ интерфейс стадий 6–7 (Task 9/10).
-// Executor вычисляет inverse-операции (§7.8) и данные карточки и зовёт sink.write(...)
-// В ТОМ ЖЕ tx. Боевой синк в chat_messages подключает Task 11, передавая свою
-// реализацию в execute(..., { sink }) — БЕЗ правки executor.ts.
+// JournalSink — писатель журнала стадий 6–7 (§7.8, спека скорости §11.2).
+// Executor вычисляет inverse-операции и данные карточки и зовёт sink.write(...) В ТОМ ЖЕ tx; внутренний режим
+// отмены — sink.writeUndo(...). Боевой синк (`makeJournalSink`, строка `action_journal`) передаётся явно в
+// execute(..., { sink }); по умолчанию — NOOP (журнал не пишется).
 // ---------------------------------------------------------------------------
 
 export interface ActionOperation {
@@ -291,6 +338,8 @@ export interface ActionRecord {
     // совпадает с именем операции: у переключателя нет пары «завёл/снял», обратное к нему —
     // он же с прежним значением, и второй тип действия называл бы то же самое дважды.
     | 'module_set'
+    // Настройки владельца (§10.2): entity_id null; обратное — прежние значения тронутых полей.
+    | 'settings_set'
     | 'batch'
     // action — действие §Б6-4: резолвленная пачка с автором-приложением (`action_id`,
     // `module`). `entity_id: null` по тому же доводу, что у batch: у группы шагов одной
@@ -307,7 +356,7 @@ export interface ActionRecord {
    * `Identity.actor` до `AccountId | GraphId`» три сайта записи журнала не красила вовсе.
    * Колонка БД при этом остаётся голым `uuid` (Р-КГ-5: бренды на колонки не навешиваются) —
    * брендирован ТИП ЗАПИСИ, то есть то, что собирает исполнитель, а не то, что лежит в базе;
-   * чтение обратно из jsonb (`findByAuditId`) проходит границу и брендируется парсером.
+   * чтение обратно из строки журнала (`journal-read.ts`) проходит границу и брендируется парсером.
    */
   actor_user_id: AccountId;
   actor_kind: ActorKind;
@@ -323,11 +372,10 @@ export interface ActionRecord {
    * Грант и прогон агента (С2) — вторая половина атрибуции: actor_kind говорит «агент»,
    * эта пара — КАКОЙ агент и в каком прогоне.
    *
-   * Опциональны ПО ОТСУТСТВИЮ КЛЮЧА, а не по null, и это не стилистика: действия прогона
-   * ищутся контейнмент-пробой `metadata @> {"actions":[{"run_id": …}]}` — единственным
-   * предикатом, который берёт jsonb-индекс. Запись `"run_id": null` у каждого действия
-   * владельца сделала бы такую пробу ложно-положительной для проб с null и удвоила бы
-   * пустыми ключами вес всего журнала. Отсюда и условная сборка в executor.ts.
+   * Опциональны ПО ОТСУТСТВИЮ КЛЮЧА, а не по null: у действия владельца этой атрибуции
+   * нет. Условная сборка в executor.ts сохраняет форму ActionRecord; запись журнала
+   * переносит поля в nullable-колонки action_journal. runActions читает колонку run_id
+   * с индексом action_journal_run и исключает записи отмены; metadata.actions не читается.
    */
   actor_grant_id?: string;
   run_id?: string;
@@ -346,6 +394,18 @@ export interface ActionRecord {
   edited_from?: string;
   operations: ActionOperation[];
   inverse: ActionOperation[]; // в обратном порядке исполнения (§7.8)
+  /**
+   * Признак сеанса правки текста (спека скорости §8.5) и «действие тела до» каждой записи, чьё тело действие
+   * изменило (§8.6: `{<id записи>: <id действия> | null}`). Колонки журнала (`text_session`, `body_before`, 0025).
+   * `body_before` заполняет executor (задача 7): ключ — запись, чью ревизию тела действие РЕАЛЬНО сдвинуло (триггер
+   * `entities_body_stamp`), значение — её `body_action_id` ДО действия; у слияния свойства — по каждому держателю.
+   * Ни одной такой записи — ПУСТОЙ объект (рулинг R-21): ключа нет только у записей, перенесённых до плана А (синк
+   * пишет NULL), и правило отмены текста по этому их и узнаёт. Данные отмены пишут тело ровно этих записей.
+   * `text_session` — запись сеанса правки текста (задача 9, `text-session.ts`): только у автосохранения редактора
+   * владельца, у прочих ключа нет (синк пишет `false`).
+   */
+  text_session?: boolean;
+  body_before?: Record<string, string | null>;
 }
 
 /** Данные карточки действия для чата (§7.8); полный рендер — территория Task 11+/UI. */
@@ -356,33 +416,53 @@ export interface ActionCard {
 }
 
 export interface JournalWrite {
-  /**
-   * Явный PK audit-сообщения. Batch (§7.8) передаёт детерминированный
-   * batchAuditMessageId(graphId, batchId) — уникальность этого id и делает повтор
-   * batch проверяемым. Отсутствует → id выбирает реализация синка.
-   */
-  id?: string;
-  /** Граф сообщения журнала — ТЕКУЩИЙ граф записи, не актор (D44): тред принадлежит графу. */
+  /** Граф записи журнала — ТЕКУЩИЙ граф записи, не актор (D44): журнал и тред принадлежат графу. */
   graphId: GraphId;
-  threadId?: string; // нет → глобальный тред текущего графа (резолвит боевой синк, Task 11)
+  /** Тред, переданный вызывающим; окончательный тред строки выбирает синк по источнику (`journalThreadOf`). */
+  threadId?: string;
+  /** Действие; id строки журнала = `action.id` (у пачки — её batch_id, §11.2). */
   action: ActionRecord;
   card: ActionCard;
   /** Результаты операций batch — источник ответа идемпотентного повтора (§7.8). */
   results?: unknown[];
+  /** Признак исходного действия для точного повтора; хранится рядом с результатами в существующем JSONB. */
+  consequences?: boolean;
+  /** Карточку действия несёт ответ ассистента (§11.3, К-36) — выдача треда вторую не показывает. */
+  cardInReply?: boolean;
 }
 
 /**
- * Конфликт PK audit-сообщения: запись с таким id уже существует (batch применён
- * конкурентом/ранее). Семантика PG 23505: боевой синк (Task 11) обязан замапить
- * unique_violation по PK chat_messages на этот класс — executor по нему откатывает
- * tx и возвращает сохранённый результат (§7.8).
+ * Запись отмены (спека скорости §11.2, РП-11, К-45) — отдельная строка журнала `type:'undo'`, а не новое действие:
+ * отмена неотменяема (§0.2 п. 7). Актор — кто отменил, источник — ПУТЬ отмены (`ui` у кнопок, `chat` у «отмени
+ * последнее» и карточки отката, `system` у прод-операций), тред — тред отменённого; операции — применённый inverse
+ * (аудит), своего inverse нет. id заведён ДО применения (`applyUndo`) — ответ и продолжения на нём стоят (задача 10).
+ */
+export interface UndoWrite {
+  graphId: GraphId;
+  undoRecordId: string;
+  undoing: JournalEntry;
+  path: UndoPath;
+  actorUserId: AccountId;
+  operations: ActionOperation[];
+  pinnedVersionIds: string[];
+  /** «Действие тела до» по записям, чьё тело отмена сменила (§8.6) — тем же сбором, что у действий; нет — `{}`. */
+  bodyBefore: Record<string, string | null>;
+}
+
+/** Путь отмены — поле записи отмены (РП-11); исполнение отмены при этом всегда `source:'system'` (инварианты). */
+export type UndoPath = 'ui' | 'chat' | 'system';
+
+/**
+ * Конфликт ключа журнала: запись с таким id уже существует в графе (пачка применена конкурентом или ранее).
+ * Семантика PG 23505 по `action_journal_pkey`: боевой синк мапит его на этот класс — executor по нему откатывает tx
+ * и возвращает сохранённый результат пачки (§7.8) либо, если запись под ключом — не пачка (РП-12), отказ CONFLICT.
  */
 export class AuditIdConflictError extends Error {
   readonly code = '23505';
   readonly auditId: string;
 
   constructor(auditId: string) {
-    super(`audit-сообщение ${auditId} уже существует (повтор batch, §7.8)`);
+    super(`запись журнала ${auditId} уже существует (повтор пачки, §7.8)`);
     this.name = 'AuditIdConflictError';
     this.auditId = auditId;
   }
@@ -390,32 +470,61 @@ export class AuditIdConflictError extends Error {
 
 export interface JournalSink {
   /**
-   * Запись стадий 6–7 В ТОМ ЖЕ tx. Контракт: если entry.id задан и запись с таким id
-   * уже существует — реализация ОБЯЗАНА бросить AuditIdConflictError (ничего не записав).
+   * Запись стадий 6–7 В ТОМ ЖЕ tx. Контракт: если запись с id `entry.action.id` уже есть в графе — реализация
+   * ОБЯЗАНА бросить AuditIdConflictError (ничего не записав).
    */
   write(tx: Tx, entry: JournalWrite): Promise<void>;
-  /** Поиск audit-записи по детерминированному id — идемпотентность batch (§7.8). */
-  findByAuditId(tx: Tx, id: string): Promise<JournalWrite | undefined>;
+  /**
+   * Запись отмены В ТОМ ЖЕ tx, что применённый inverse. Повторная отмена того же действия — ExecError VALIDATION
+   * `already_undone` (уникальность `(graph_id, undoes)`), а не сырой 23505.
+   */
+  writeUndo(tx: Tx, entry: UndoWrite): Promise<void>;
+  /**
+   * Сохранённая запись ПАЧКИ по её batch_id — идемпотентность batch (§7.8). Имя ≠ `journal-read.findBatch`: это путь
+   * писателя (повтор отвечает формой записи), а не чтение журнала читателями. Запись под ключом, которая пачкой не
+   * является (РП-12), — `undefined`.
+   */
+  findBatchWrite(tx: Tx, graph: GraphId, batchId: string): Promise<JournalWrite | undefined>;
 }
 
 /**
- * In-memory реализация для тестов (стадии 6–7 наблюдаемы без chat_messages):
- * честная уникальность по id с той же семантикой, что PK БД (23505 → AuditIdConflictError).
- * ВАЖНО: гонку конкурентных одинаковых batch'ей полноценно закрывает только реальный
- * PK chat_messages (Task 11) — in-memory хранилище не транзакционно.
+ * In-memory реализация для тестов (стадии 6–7 наблюдаемы без базы): честная уникальность по id действия и по
+ * отменяемому действию с той же семантикой, что ключи таблицы журнала. ВАЖНО: гонку конкурентных одинаковых пачек
+ * полноценно закрывает только настоящий PK `action_journal` — in-memory хранилище не транзакционно.
  */
 export class InMemoryJournalSink implements JournalSink {
   readonly entries: JournalWrite[] = [];
+  readonly undos: UndoWrite[] = [];
 
   async write(_tx: Tx, entry: JournalWrite): Promise<void> {
-    if (entry.id !== undefined && this.entries.some((e) => e.id === entry.id)) {
-      throw new AuditIdConflictError(entry.id);
+    const id = entry.action.id;
+    if (this.entries.some((e) => e.graphId === entry.graphId && e.action.id === id)) {
+      throw new AuditIdConflictError(id);
     }
     this.entries.push(entry);
   }
 
-  async findByAuditId(_tx: Tx, id: string): Promise<JournalWrite | undefined> {
-    return this.entries.find((e) => e.id === id);
+  async writeUndo(_tx: Tx, entry: UndoWrite): Promise<void> {
+    if (this.undos.some((u) => u.graphId === entry.graphId && u.undoing.id === entry.undoing.id)) {
+      throw new ExecError('VALIDATION', 'действие уже отменено', {
+        actionId: entry.undoing.id,
+        reason: 'already_undone',
+      });
+    }
+    this.undos.push(entry);
+  }
+
+  async findBatchWrite(
+    _tx: Tx,
+    graph: GraphId,
+    batchId: string,
+  ): Promise<JournalWrite | undefined> {
+    return this.entries.find(
+      (e) =>
+        e.graphId === graph &&
+        e.action.id === batchId &&
+        (e.action.type === 'batch' || e.action.type === 'action'),
+    );
   }
 }
 
@@ -427,7 +536,7 @@ export class InMemoryJournalSink implements JournalSink {
  * Обоснование (§7.8): Undo восстанавливает зафиксированное в журнале прежнее
  * состояние ПОВЕРХ текущего — это осознанный LWW-откат, а не пользовательская
  * правка, поэтому в этом режиме:
- * - body-патчи применяются БЕЗ требования expectedUpdatedAt (§5.2);
+ * - body-патчи применяются БЕЗ требования expectedBodyRevision (замок текста, спека скорости §8.1);
  * - доменные нормализации §3.2 не запускаются: они «поправили» бы зафиксированное
  *   состояние и развели бы граф с журналом;
  * - гейт прав записи §А2-5 не спрашивается. С единицей отката «свойство» (§А7-4)
@@ -435,7 +544,7 @@ export class InMemoryJournalSink implements JournalSink {
  *   Дыры это не открывает: откатывается СВОЁ ЖЕ законно записанное состояние, и
  *   отказ здесь означал бы, что законную запись нельзя отменить;
  * - relation_create принимает meta восстанавливаемой связи;
- * - вместо записи action вызывается writeUndoMessage: undo не порождает нового
+ * - вместо записи action пишется запись отмены (`sink.writeUndo`): undo не порождает нового
  *   action (undo неотменяем).
  *
  * Чего в этом списке БОЛЬШЕ НЕТ: замены аспект-ключа целиком. До §А7-4 inverse нёс
@@ -444,8 +553,31 @@ export class InMemoryJournalSink implements JournalSink {
  * входа у отката общий со всеми остальными путями.
  */
 export interface InternalUndoMode {
-  /** Пишет undo-сообщение {type:'undo', undoes} В ТОМ ЖЕ tx после применения операций. */
-  writeUndoMessage(tx: Tx): Promise<void>;
+  /** id записи отмены — заведён ДО применения (`applyUndo`, РП-11). */
+  undoRecordId: string;
+  /** Отменяемое действие — запись журнала (её inverse исполняется, её тред и записи наследует запись отмены). */
+  undoing: JournalEntry;
+  /** Путь отмены — поле `source` записи отмены (РП-11). */
+  path: UndoPath;
+  /**
+   * Продолжение «Всё равно отменить» (§8.6, Р-15): отмена проходит правило текста, только если КАЖДАЯ провалившая
+   * проверку запись закреплена версией первой операцией этой же записи отмены (`pinned`). Без продолжения любой провал
+   * останавливает всё действие — закрепление страховки сеанса продолжением не является.
+   */
+  force: boolean;
+  /**
+   * Записи, чей текущий текст закрепляется версией ПЕРВЫМИ операциями этой записи отмены (`applyUndo`): страховка
+   * сеанса правки текста (К-20, всегда) и записи, провалившие предпроверку продолжения (К-30). Порядок операций
+   * запроса — закрепления, затем inverse; по одному закреплению на запись.
+   */
+  pinned: ReadonlySet<string>;
+  /** Место продолжения, которое отказ правила называет клиенту (`UndoTextChangedDetails.continuation`). */
+  continuation: UndoContinuation;
+  /**
+   * Вызывается ПОСЛЕ применения inverse В ТОМ ЖЕ tx, до записи отмены: перепроверка «уже отменено» под замками строк
+   * и снятие пометок ссылок (`unmarkRefSources`) — всё, что `undo.ts` делает по восстановленному графу.
+   */
+  onApplied(tx: Tx): Promise<void>;
 }
 
 /** Зависимости execute; Task 11 передаёт боевой синк здесь. */
@@ -459,9 +591,17 @@ export interface ExecutorDeps {
    * `withIdentity` (set_config + SET LOCAL ROLE), и проверяемое требование — порядок
    * относительно ЧТЕНИЙ, а не буквальная позиция (см. док `acquirePendingLock`). Единственный потребитель — сериализация pending-подтверждений §7.10
    * (policy/pending, fix round Task 6): advisory-lock по pendingId + перепроверка
-   * «не отклонён» В ТОМ ЖЕ tx, где пишется audit-сообщение, — иначе approve и reject
+   * «не отклонён» В ТОМ ЖЕ tx, где пишется запись журнала, — иначе approve и reject
    * образуют write-skew (оба проходят свои проверки до чужого коммита). Санкционировано
    * координатором как минимальное расширение; других потребителей не заводить без нужды.
    */
   beforeStages?: (tx: Tx) => Promise<void>;
+  /**
+   * Ответ одиночной правки записи (`entity_update`) несёт действующее действие текущего тела (`ExecuteOk.bodyAction`,
+   * спека скорости §8.2, рулинг R-22): исполнитель считает его в СВОЕЙ транзакции по строке `RETURNING` — у правки,
+   * сменившей тело, без запроса, у прочих — одним запросом (раскрутка — только когда колонка указывает на запись
+   * отмены). Ставит роутер `entity.update`: отдельная читающая транзакция после коммита стоила бы каждому
+   * автосохранению лишних обходов.
+   */
+  reportBodyAction?: boolean;
 }

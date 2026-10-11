@@ -8,7 +8,12 @@
  */
 import { expect, test } from 'bun:test';
 import { propertyDefinitionSchema } from '../registry/property-type';
-import { queryAstSchema } from './ast';
+import {
+  PAGE_ONLY_HINT,
+  PROJECTION_RULE_MESSAGES,
+  pageQueryAstSchema,
+  queryAstSchema,
+} from './ast';
 import {
   AST_FIXTURES,
   FIXTURE_PARSE_REGISTRY,
@@ -729,5 +734,421 @@ test('§5.4: разобранное дерево проекции проходи
     'display=tile, aggregate=count',
   ]) {
     expect(queryAstSchema.safeParse(ok(text)).success, text).toBe(true);
+  }
+});
+
+// ─────────────── Язык контрактов (спека 1в §3.1–§3.3): адрес слота и значение ───────────────
+
+test('1в §3.1: адрес слота `<контракт>.<слот>` — поле объединением типов, контракт — id', () => {
+  expect(ok('orbis/when.deadline=today').filter).toEqual({
+    prop: { contract: 'orbis/when', slot: 'deadline' },
+    op: 'eq',
+    value: { token: 'today' },
+  });
+  // Упорядоченный вид слота: `>` с токеном — как у свойства-даты.
+  expect(ok('orbis/when.deadline>today').filter).toEqual({
+    prop: { contract: 'orbis/when', slot: 'deadline' },
+    op: 'gt',
+    value: { token: 'today' },
+  });
+  // Слот `date` — литерал момента отвергается с позицией, как у свойства `date`.
+  const e = err('orbis/when.deadline=2026-07-17T09:00');
+  expect(e.code).toBe('TYPE');
+  expect(e.position).toBe('orbis/when.deadline='.length);
+  // Любой контракт со слотами (закладка Бюджета): decimal-слот — число-строка, `>` — `gt`.
+  expect(ok('orbis/money-movement.amount>1000').filter).toEqual({
+    prop: { contract: 'orbis/money-movement', slot: 'amount' },
+    op: 'gt',
+    value: '1000',
+  });
+});
+
+test('1в §3.2: значение контракта `orbis/when` — адрес без слота; литерал дня принят', () => {
+  expect(ok('orbis/when=overdue').filter).toEqual({
+    prop: { contract: 'orbis/when' },
+    op: 'eq',
+    value: { token: 'overdue' },
+  });
+  expect(ok('orbis/when=2026-07-17').filter).toEqual({
+    prop: { contract: 'orbis/when' },
+    op: 'eq',
+    value: '2026-07-17',
+  });
+  expect(ok('orbis/when=2026-07-16..2026-07-18').filter).toEqual({
+    prop: { contract: 'orbis/when' },
+    op: 'range',
+    value: { from: '2026-07-16', to: '2026-07-18' },
+  });
+  expect(ok('!orbis/when=next_7d').filter).toEqual({
+    not: { prop: { contract: 'orbis/when' }, op: 'eq', value: { token: 'next_7d' } },
+  });
+  expect(ok('orbis/when!=next_7d').filter).toEqual({
+    prop: { contract: 'orbis/when' },
+    op: 'ne',
+    value: { token: 'next_7d' },
+  });
+  // Значение «даты» сравнивается ПО ДНЯМ: момент в литерале — не та форма.
+  expect(err('orbis/when=2026-07-17T09:00:00Z').code).toBe('TYPE');
+});
+
+test('1в: неизвестный слот — UNKNOWN_SLOT с позицией слота; контракт без значения — NO_CONTRACT_VALUE', () => {
+  const slot = err('orbis/when.nope=today');
+  expect(slot.code).toBe('UNKNOWN_SLOT');
+  expect(slot.position).toBe('orbis/when.'.length);
+  expect(slot.message).toContain('nope');
+  const value = err('orbis/completable=open');
+  expect(value.code).toBe('NO_CONTRACT_VALUE');
+  expect(value.position).toBe(0);
+  expect(value.message).toContain(
+    'у контракта нет значения — адресуйте слот: orbis/completable.status',
+  );
+  // Не контракт и не свойство — прежний отказ.
+  expect(err('orbis/nope.deadline=today').code).toBe('UNKNOWN_FIELD');
+});
+
+test('1в §3.1: свойство резолвится ПЕРВЫМ — `orbis/recurrence` остаётся свойством', () => {
+  // Ключ контракта «повторяемость» совпадает с ключом свойства; значения контракт не объявляет,
+  // и имя обязано остаться свойством (сторож ключей — `registry/builtin.test.ts`).
+  expect(ok('has=orbis/recurrence').filter).toEqual({ has: 'orbis/recurrence' });
+  expect(err('orbis/recurrence=x').code).toBe('TYPE');
+  expect(err('orbis/recurrence=x').message).toContain("свойству 'orbis/recurrence'");
+});
+
+test('1в §3.1: адрес в sortBy и aggregate принят; в columns — отказ', () => {
+  expect(ok('sortBy=orbis/when:asc').sortBy).toEqual([
+    { field: { contract: 'orbis/when' }, dir: 'asc' },
+  ]);
+  expect(ok('sortBy=orbis/when.deadline:desc|orbis/priority:asc').sortBy).toEqual([
+    { field: { contract: 'orbis/when', slot: 'deadline' }, dir: 'desc' },
+    { field: 'orbis/priority', dir: 'asc' },
+  ]);
+  expect(ok('display=tile, aggregate=sum:orbis/money-movement.amount').aggregate).toEqual({
+    fn: 'sum',
+    field: { contract: 'orbis/money-movement', slot: 'amount' },
+  });
+  const dates = err('display=tile, aggregate=sum:orbis/when');
+  expect(dates.code).toBe('TYPE');
+  expect(dates.message).toContain('даты не суммируются');
+  // Слот не числового вида — та же проверка, что у свойства.
+  expect(err('display=tile, aggregate=sum:orbis/when.deadline').code).toBe('TYPE');
+  const columns = err('display=table, columns=orbis/when.deadline');
+  expect(columns.code).toBe('TYPE');
+  expect(columns.message).toContain('в columns — только свойства');
+  expect(err('display=table, columns=orbis/when').code).toBe('TYPE');
+});
+
+test('1в: дерево с адресом проходит собственную схему канона', () => {
+  for (const text of [
+    'orbis/when.deadline=today',
+    'orbis/when=overdue, class=orbis/completable:open, sortBy=orbis/when:asc',
+    'aspect=orbis/financial, display=tile, aggregate=sum:orbis/money-movement.amount',
+  ]) {
+    expect(queryAstSchema.safeParse(ok(text)).success, text).toBe(true);
+  }
+});
+
+// ─────────────── Токены дат и два края (спека 1в §3.4) ───────────────
+
+test('1в §3.4: сравнение с несуществующим краем — TOKEN_EDGE с позицией токена и подсказкой', () => {
+  const cases: ReadonlyArray<[string, string, string]> = [
+    // У `overdue` нет начала: `<` и `>=` (from) читают начало.
+    ['orbis/due_date<overdue', 'orbis/due_date<', 'нет начала'],
+    ['orbis/due_date>=overdue', 'orbis/due_date>=', 'нет начала'],
+    ['orbis/due_date=overdue..today', 'orbis/due_date=', 'нет начала'],
+    // У `after_7d` нет конца: `>` и `<=` (to) читают конец.
+    ['orbis/due_date>after_7d', 'orbis/due_date>', 'нет конца'],
+    ['orbis/due_date<=after_7d', 'orbis/due_date<=', 'нет конца'],
+    ['orbis/due_date=today..after_7d', 'orbis/due_date=today..', 'нет конца'],
+    // Значение «когда» — то же правило краёв.
+    ['orbis/when<overdue', 'orbis/when<', 'нет начала'],
+    ['orbis/when.moment>after_7d', 'orbis/when.moment>', 'нет конца'],
+  ];
+  for (const [text, before, edge] of cases) {
+    const e = err(text);
+    expect(e.code, text).toBe('TOKEN_EDGE');
+    expect(e.position, text).toBe(before.length);
+    expect(e.message, text).toContain(edge);
+    expect(e.message, text).toContain('годятся');
+  }
+});
+
+test('1в §3.4: формы с существующим краем разбираются', () => {
+  for (const text of [
+    'orbis/due_date>overdue',
+    'orbis/due_date<=overdue',
+    'orbis/due_date=overdue',
+    'orbis/due_date!=overdue',
+    'orbis/due_date<after_7d',
+    'orbis/due_date>=after_7d',
+    'orbis/due_date=after_7d',
+    'orbis/due_date=overdue|after_7d',
+    'orbis/due_date=today..next_14d',
+  ]) {
+    expect(parseQueryAst(text, REG).ok, text).toBe(true);
+  }
+});
+
+test('1в §3.4: четыре новых токена — у date, timestamp, значения «когда» и слота', () => {
+  for (const token of ['this_week', 'next_14d', 'this_month', 'last_month'] as const) {
+    expect(ok(`orbis/due_date=${token}`).filter).toEqual({
+      prop: 'orbis/due_date',
+      op: 'eq',
+      value: { token },
+    });
+    expect(ok(`orbis/start_at<${token}`).filter).toEqual({
+      prop: 'orbis/start_at',
+      op: 'lt',
+      value: { token },
+    });
+    expect(ok(`orbis/when=${token}`).filter).toEqual({
+      prop: { contract: 'orbis/when' },
+      op: 'eq',
+      value: { token },
+    });
+    expect(ok(`orbis/when.moment>=${token}`).filter).toEqual({
+      prop: { contract: 'orbis/when', slot: 'moment' },
+      op: 'range',
+      value: { from: { token } },
+    });
+    // Не дата — прежний отказ вида.
+    expect(err(`orbis/priority=${token}`).code).toBe('TYPE');
+  }
+});
+
+test('1в (перенос гейта 1, Minor-1): края диапазона у адреса — одного вида, как у свойства timestamp', () => {
+  // Эталон — свойство `timestamp`: день рядом с моментом он не принимает вовсе.
+  expect(err('orbis/start_at=2026-07-16..2026-07-17T12:00:00+07:00').code).toBe('TYPE');
+  // Слот `moment` (timestamp|date): день и момент в одном диапазоне — отказ, а не сравнение дня
+  // с моментом.
+  const mixed = err('orbis/when.moment=2026-07-16..2026-07-17T12:00:00+07:00');
+  expect(mixed.code).toBe('TYPE');
+  expect(mixed.position).toBe('orbis/when.moment='.length);
+  expect(mixed.message).toContain('одного вида');
+  expect(err('orbis/when.moment=2026-07-16T09:00:00+07:00..2026-07-17').code).toBe('TYPE');
+  // Оба дня или оба момента — законно; токен рядом с литералом — законно (сравнение по дню).
+  expect(ok('orbis/when.moment=2026-07-16..2026-07-17').filter).toEqual({
+    prop: { contract: 'orbis/when', slot: 'moment' },
+    op: 'range',
+    value: { from: '2026-07-16', to: '2026-07-17' },
+  });
+  expect(
+    parseQueryAst('orbis/when.moment=2026-07-16T09:00:00+07:00..2026-07-17T12:00:00+07:00', REG).ok,
+  ).toBe(true);
+  expect(parseQueryAst('orbis/when.moment=today..2026-07-17T12:00:00+07:00', REG).ok).toBe(true);
+});
+
+test('1в (М-2 финального ревью A): отказ у адреса называет «адрес слота» / «значение контракта», у свойства — как было', () => {
+  const order = err('orbis/completable.status>x');
+  expect(order.code).toBe('TYPE');
+  expect(order.message).toContain(
+    "к адресам с линейным порядком; адрес слота 'orbis/completable.status'",
+  );
+  expect(order.message).not.toContain('свойств');
+  const range = err('orbis/completable.status=a..b');
+  expect(range.message).toContain("адрес слота 'orbis/completable.status'");
+  expect(range.message).not.toContain('свойств');
+  const token = err('orbis/money-movement.amount=today');
+  expect(token.message).toContain(
+    "только к адресам типа date/timestamp; адрес слота 'orbis/money-movement.amount'",
+  );
+  expect(token.message).not.toContain('свойств');
+  const literal = err('orbis/when.deadline=2026-07-17T09:00');
+  expect(literal.message).toContain("адрес слота 'orbis/when.deadline' ожидает дату");
+  const value = err('orbis/when=2026-07-17T09:00:00Z');
+  expect(value.message).toContain("значение контракта 'orbis/when' ожидает дату");
+  const group = parseQueryAst('group=day:orbis/money-movement.amount', REG, { place: 'page' });
+  expect(group.ok ? null : group.error.message).toContain(
+    "group=day: адрес слота 'orbis/money-movement.amount' — не дата",
+  );
+  // Слова «поле» у адреса нет ни в одном из отказов выше.
+  for (const m of [order, range, token, literal, value].map((e) => e.message)) {
+    expect(m).not.toMatch(/(^|[^а-яё])пол(е|я|ю|ям|ей)([^а-яё]|$)/i);
+  }
+  // Свойство — прежние слова.
+  expect(err('orbis/due_date=банан').message).toContain("свойство 'orbis/due_date' ожидает");
+  expect(err('orbis/priority>high').message).toContain('применим к свойствам с линейным порядком');
+  expect(err('orbis/priority=today').message).toContain('применимо только к свойствам типа');
+});
+
+// ─────────────────────────── Параметр страницы (1в §5.1, РП-5, РП-6) ───────────────────────────
+
+const PAGE = { place: 'page' } as const;
+
+test('1в §5.1: `$<имя>` на месте значения-границы — только с местом page; дерево несёт {param}', () => {
+  const eq = parseQueryAst('orbis/when=$period', REG, PAGE);
+  expect(eq.ok && eq.ast.filter).toEqual({
+    prop: { contract: 'orbis/when' },
+    op: 'eq',
+    value: { param: 'period' },
+  });
+  // Там же, где токен: сравнения, односторонняя граница, диапазон, свойство даты.
+  const forms = parseQueryAst(
+    'orbis/due_date>$a, orbis/due_date<=$b, orbis/start_at=$c..today, orbis/when.deadline!=$d',
+    REG,
+    PAGE,
+  );
+  expect(forms.ok && forms.ast.filter).toEqual({
+    and: [
+      { prop: 'orbis/due_date', op: 'gt', value: { param: 'a' } },
+      { prop: 'orbis/due_date', op: 'range', value: { to: { param: 'b' } } },
+      {
+        prop: 'orbis/start_at',
+        op: 'range',
+        value: { from: { param: 'c' }, to: { token: 'today' } },
+      },
+      { prop: { contract: 'orbis/when', slot: 'deadline' }, op: 'ne', value: { param: 'd' } },
+    ],
+  });
+});
+
+test('1в §5.1 (M-2 гейта 4): `$` + имя длиннее 64 — не ссылка; схема дерева такое имя отвергает', () => {
+  const long = 'a'.repeat(65);
+  const r = parseQueryAst(`orbis/due_date=$${long}`, REG, PAGE);
+  // Не ссылка: разбор читает `$aaa…` литералом (и у даты отвергает его как не-дату), а не `{param}`.
+  expect(r.ok ? JSON.stringify(r.ast) : r.error.code).not.toContain('param');
+  if (!r.ok) expect(r.error.code).not.toBe('PAGE_ONLY');
+  expect(
+    pageQueryAstSchema.safeParse({
+      filter: { prop: 'orbis/due_date', op: 'eq', value: { param: long } },
+    }).success,
+  ).toBe(false);
+  expect(
+    pageQueryAstSchema.safeParse({
+      filter: { prop: 'orbis/due_date', op: 'eq', value: { param: 'a'.repeat(64) } },
+    }).success,
+  ).toBe(true);
+});
+
+test('1в §3.8: без места `$` — отказ PAGE_ONLY с подсказкой и позицией ссылки', () => {
+  const e = parseQueryAst('aspect=orbis/task, orbis/when=$period', REG);
+  expect(e.ok).toBe(false);
+  if (e.ok) return;
+  expect(e.error.code).toBe('PAGE_ONLY');
+  expect(e.error.message).toContain(PAGE_ONLY_HINT);
+  expect(e.error.position).toBe('aspect=orbis/task, orbis/when='.length);
+});
+
+test('1в §5.1: `$x` у поля не-даты — TYPE «параметр типа period — только у дат»', () => {
+  const e = parseQueryAst('orbis/title=$x', REG, PAGE);
+  expect(e.ok ? 'разобралось' : e.error.code).toBe('TYPE');
+  if (!e.ok) expect(e.error.message).toContain('параметр типа period — только у дат');
+});
+
+test('1в §5.1: литерал в кавычках "$x" — строка, печать берёт его в кавычки, обратный разбор — литерал', () => {
+  for (const opts of [undefined, PAGE]) {
+    const r = parseQueryAst('orbis/title="$x"', REG, opts);
+    expect(r.ok && r.ast.filter).toEqual({ prop: 'orbis/title', op: 'eq', value: '$x' });
+    if (!r.ok) continue;
+    const printed = printQueryAst(r.ast, REG, 'key');
+    expect(printed).toBe('orbis/title="$x"');
+    const back = parseQueryAst(printed, REG, opts);
+    expect(back.ok && back.ast).toEqual(r.ast);
+  }
+});
+
+test('1в §5.1: печать ссылки — `$имя`, обратный разбор с местом page — то же дерево', () => {
+  const r = parseQueryAst('orbis/when=$period, orbis/due_date=$a..$b', REG, PAGE);
+  if (!r.ok) throw new Error(r.error.message);
+  const printed = printQueryAst(r.ast, REG, 'key');
+  expect(printed).toBe('orbis/when=$period, orbis/due_date=$a..$b');
+  const back = parseQueryAst(printed, REG, PAGE);
+  expect(back.ok && back.ast).toEqual(r.ast);
+});
+
+test('1в §5.1: ссылка с неверным именем — не ссылка: `$пери-од` у даты — отказ TYPE литерала', () => {
+  expect(err('orbis/due_date=$пери-од').code).toBe('TYPE');
+});
+
+// ─────────────────────────── Группировка по дням (1в §5.2, §3.8, задача 6) ───────────────────────────
+
+test('1в §5.2: group=day:<адрес даты> с местом page — {by:day, field}: значение «когда», свойство, адрес слота', () => {
+  const when = parseQueryAst('orbis/when=next_7d, group=day:orbis/when, display=list', REG, PAGE);
+  expect(when.ok && when.ast).toEqual({
+    filter: { prop: { contract: 'orbis/when' }, op: 'eq', value: { token: 'next_7d' } },
+    group: { by: 'day', field: { contract: 'orbis/when' } },
+    display: 'list',
+  });
+  const prop = parseQueryAst('group=day:orbis/due_date', REG, PAGE);
+  expect(prop.ok && prop.ast.group).toEqual({ by: 'day', field: 'orbis/due_date' });
+  const slot = parseQueryAst('group=day:orbis/when.deadline, display=compact', REG, PAGE);
+  expect(slot.ok && slot.ast.group).toEqual({
+    by: 'day',
+    field: { contract: 'orbis/when', slot: 'deadline' },
+  });
+  // Момент тоже дата дня: timestamp-свойство группируется по дню в поясе владельца.
+  const moment = parseQueryAst('group=day:orbis/start_at', REG, PAGE);
+  expect(moment.ok && moment.ast.group).toEqual({ by: 'day', field: 'orbis/start_at' });
+});
+
+test('1в §5.2: group по не-дате — TYPE с позицией поля; иная единица, чем day, — SYNTAX', () => {
+  const title = parseQueryAst('group=day:orbis/title', REG, PAGE);
+  expect(title.ok ? 'разобралось' : title.error.code).toBe('TYPE');
+  if (!title.ok) expect(title.error.position).toBe('group=day:'.length);
+  const week = parseQueryAst('group=week:orbis/when', REG, PAGE);
+  expect(week.ok ? 'разобралось' : week.error.code).toBe('SYNTAX');
+  if (!week.ok) expect(week.error.message).toContain('в 1в — только day');
+  for (const text of ['group=orbis/when', 'group=day:', 'group']) {
+    const r = parseQueryAst(text, REG, PAGE);
+    expect(r.ok ? 'разобралось' : r.error.code, text).toBe('SYNTAX');
+  }
+});
+
+test('1в §5.2: group с display=table или tile — отказ словами PROJECTION_RULE_MESSAGES.groupNeedsRows', () => {
+  for (const text of [
+    'group=day:orbis/when, display=table',
+    'display=tile, aggregate=count, group=day:orbis/when',
+  ]) {
+    const r = parseQueryAst(text, REG, PAGE);
+    expect(r.ok ? 'разобралось' : r.error.code, text).toBe('SYNTAX');
+    if (!r.ok) expect(r.error.message).toBe(PROJECTION_RULE_MESSAGES.groupNeedsRows);
+  }
+  // Схема канона держит то же правило — вход мимо разбора (атрибут блока тела).
+  const bad = pageQueryAstSchema.safeParse({
+    filter: null,
+    group: { by: 'day', field: { contract: 'orbis/when' } },
+    display: 'table',
+  });
+  expect(bad.success).toBe(false);
+  if (!bad.success) {
+    expect(bad.error.issues.map((i) => i.message)).toContain(
+      PROJECTION_RULE_MESSAGES.groupNeedsRows,
+    );
+  }
+});
+
+test('1в §3.8: group без места — PAGE_ONLY с подсказкой; `!group` — не отрицается; повтор — SYNTAX', () => {
+  const e = parseQueryAst('aspect=orbis/task, group=day:orbis/when', REG);
+  expect(e.ok ? 'разобралось' : e.error.code).toBe('PAGE_ONLY');
+  if (!e.ok) {
+    expect(e.error.message).toContain(PAGE_ONLY_HINT);
+    expect(e.error.position).toBe('aspect=orbis/task, '.length);
+  }
+  const neg = parseQueryAst('!group=day:orbis/when', REG, PAGE);
+  expect(neg.ok ? 'разобралось' : neg.error.message).toContain("'group' не отрицается");
+  const twice = parseQueryAst('group=day:orbis/when, group=day:orbis/due_date', REG, PAGE);
+  expect(twice.ok ? 'разобралось' : twice.error.message).toContain("повторный параметр 'group'");
+  // Голое имя — слово грамматики, а не поле (как sortBy, display).
+  expect(err('group=today').code).not.toBe('UNKNOWN_FIELD');
+});
+
+test('1в §3.8 (перенос Н-2 задачи 4): group у корня дерева — базовая схема отвергает С ПОДСКАЗКОЙ, схема страниц принимает', () => {
+  const tree = { filter: null, group: { by: 'day', field: { contract: 'orbis/when' } } };
+  const base = queryAstSchema.safeParse(tree);
+  expect(base.success).toBe(false);
+  if (!base.success) {
+    expect(base.error.issues.map((i) => i.message)).toContain(PAGE_ONLY_HINT);
+    expect(base.error.issues.map((i) => i.message).join(' ')).not.toContain('Unrecognized key');
+  }
+  expect(pageQueryAstSchema.safeParse(tree).success).toBe(true);
+  // Форма группы строгая: единица — только day, поле обязательно.
+  for (const group of [
+    { by: 'week', field: 'orbis/due_date' },
+    { by: 'day' },
+    { by: 'day', field: 'orbis/due_date', extra: 1 },
+  ]) {
+    expect(
+      pageQueryAstSchema.safeParse({ filter: null, group }).success,
+      JSON.stringify(group),
+    ).toBe(false);
   }
 });

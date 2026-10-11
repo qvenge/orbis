@@ -3,10 +3,13 @@
 import { describe, expect, test } from 'bun:test';
 import { newId } from '@orbis/shared';
 import { bindQueryBlocks, canonicalizeBody, parseBody, serializeBody } from '@orbis/shared/doc';
+import { parsePageText } from '@orbis/shared/doc/page-grammar';
+import { parseQueryAst } from '@orbis/shared/query';
 import { FIXTURE_PARSE_REGISTRY } from '@orbis/shared/query/fixtures';
 import type { JSONContent } from '@tiptap/core';
 import { projectBodyTemplate } from './project-body';
 import {
+  AGENDA_BODY,
   ALL_TASKS_BODY,
   DAILY_PLANNING_BODY,
   HORIZON_LIFE_BODY,
@@ -17,7 +20,10 @@ import {
 
 const SEEDS: Array<[string, string]> = [
   ['Daily Planning', DAILY_PLANNING_BODY],
-  ['Upcoming', UPCOMING_BODY],
+  ['Повестка', AGENDA_BODY],
+  // Эталон 1б снятого ключа (срез 1в §6.3): поставкой не несётся, но лежит печатью в записях 1б, и
+  // «Вернуть как было» кладёт его в тело — канон обязан держать и его.
+  ['Upcoming (снята с поставки)', UPCOMING_BODY],
   ['All Tasks', ALL_TASKS_BODY],
   ['Горизонт «Год»', HORIZON_YEAR_BODY],
   ['Горизонт «Жизнь»', HORIZON_LIFE_BODY],
@@ -72,4 +78,43 @@ describe('сиды — канонические и в key-форме', () => {
       }
     });
   }
+});
+
+describe('тело Повестки (срез 1в §6.1)', () => {
+  test('разбор тела — ровно текст, параметр и три блока данных', () => {
+    // Пустые строки между блоками — тоже узлы текста (markdown дословно); по смыслу их нет.
+    const nodes = parsePageText(AGENDA_BODY).filter(
+      (n) => n.kind !== 'text' || n.text.trim() !== '',
+    );
+    expect(nodes.map((n) => n.kind)).toEqual(['text', 'param', 'query', 'query', 'query']);
+    expect(nodes[0]).toEqual({
+      kind: 'text',
+      text: expect.stringContaining('Всё, что во времени: встречи, сроки и сделанное — по дням.'),
+    });
+  });
+
+  test('параметр горизонта: период, по умолчанию 7 дней, варианты — только от сегодня', () => {
+    const param = parsePageText(AGENDA_BODY).find((n) => n.kind === 'param');
+    if (param?.kind !== 'param') throw new Error('в теле Повестки нет параметра');
+    expect(param.problem).toBeNull();
+    // `this_week` Повестке не предлагается (§3.3, §6.1): «Просрочено» и лента пересеклись бы.
+    expect(param.decl).toEqual({
+      name: 'period',
+      type: 'period',
+      default: 'next_7d',
+      options: ['next_7d', 'next_14d'],
+      title: 'Горизонт',
+    });
+  });
+
+  test('каждый блок данных разбирается как блок страницы ({place: "page"}), без места — отказ по $', () => {
+    const queries = parsePageText(AGENDA_BODY).flatMap((n) => (n.kind === 'query' ? [n.text] : []));
+    expect(queries).toHaveLength(3);
+    for (const q of queries) {
+      const r = parseQueryAst(q, FIXTURE_PARSE_REGISTRY, { place: 'page' });
+      expect([q, r.ok]).toEqual([q, true]);
+    }
+    // `$period` — только в блоках страниц (§3.8): вне страницы лента и «Дальше» не разбираются.
+    expect(parseQueryAst(queries[1] as string, FIXTURE_PARSE_REGISTRY).ok).toBe(false);
+  });
 });

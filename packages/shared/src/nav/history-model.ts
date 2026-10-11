@@ -129,10 +129,30 @@ export type NavEffect =
 
 export const NAV_STORAGE_KEY = 'orbis:nav:v2';
 
+/**
+ * Префикс ключа состояния экрана со значением параметра страницы (спека 1в §5.1): `param:<имя>` →
+ * токен. Прочие ключи `view` (вкладка шаблона, «открыть через X», контекст чата) — разовое
+ * состояние места; только значения параметров у раздела переживают перезапуск (РП-15).
+ */
+export const PARAM_VIEW_PREFIX = 'param:';
+
 export interface NavPersisted {
   v: 2;
   activeApp: AppKey;
-  apps: Record<AppKey, { activeSection: SectionKey; last: Record<SectionKey, Address> }>;
+  apps: Record<
+    AppKey,
+    {
+      activeSection: SectionKey;
+      last: Record<SectionKey, Address>;
+      /**
+       * Значения параметров последнего места раздела (1в §5.1, РП-15): только ключи `param:*`; раздела
+       * без них в карте нет, приложения без них — нет и ключа. Карта — рядом с `last`, а не одна на
+       * всё сохранение: раздел `home` есть у каждого приложения, и общая карта смешала бы их.
+       * Клиент до 1в читает у приложения только `activeSection` и `last` — лишний ключ он не видит.
+       */
+      views?: Record<SectionKey, Record<string, string>>;
+    }
+  >;
 }
 
 const HOST_HOME: Address = { kind: 'home', app: { kind: 'host' } };
@@ -513,26 +533,48 @@ export function initialModel(home: Address): NavModel {
  * Последнее место раздела — верх стопки, но не экран хоста: он лишь лежит поверх раздела, и после
  * перезапуска раздел должен открыться своим местом, а не чатом без «‹» назад.
  */
-function lastPlace(stack: readonly StackEntry[]): Address | undefined {
+function lastPlace(stack: readonly StackEntry[]): StackEntry | undefined {
   for (let i = stack.length - 1; i >= 0; i--) {
     const e = stack[i] as StackEntry;
-    if (e.address.kind !== 'host-screen') return e.address;
+    if (e.address.kind !== 'host-screen') return e;
   }
-  return stack[stack.length - 1]?.address;
+  return stack[stack.length - 1];
+}
+
+/** Значения параметров из состояния экрана — только ключи `param:*` со строковым значением. */
+function paramView(view: unknown): Record<string, string> | null {
+  if (!isObj(view)) return null;
+  const kept = Object.entries(view).filter(
+    (e): e is [string, string] => e[0].startsWith(PARAM_VIEW_PREFIX) && typeof e[1] === 'string',
+  );
+  return kept.length > 0 ? Object.fromEntries(kept) : null;
 }
 
 /**
  * Что переживает перезапуск (§7.3): активное приложение, активный раздел каждого приложения и
- * последнее место каждого раздела. Глубина стопок, источники межприложенческих переходов и
- * состояние экранов — нет.
+ * последнее место каждого раздела; с 1в — и значения параметров страницы этого места (§5.1, РП-15),
+ * картой `views`. Глубина стопок, источники межприложенческих переходов и прочее состояние экранов
+ * (вкладка, «открыть через X», контекст чата) — нет.
  */
 export function persistOf(model: NavModel): NavPersisted {
   const apps = Object.entries(model.apps).map(([app, nav]) => {
-    const last = Object.entries(nav.stacks).flatMap(([section, stack]) => {
+    const last: [SectionKey, Address][] = [];
+    const views: [SectionKey, Record<string, string>][] = [];
+    for (const [section, stack] of Object.entries(nav.stacks)) {
       const place = lastPlace(stack);
-      return place ? [[section, place] as const] : [];
-    });
-    return [app, { activeSection: nav.activeSection, last: Object.fromEntries(last) }] as const;
+      if (!place) continue;
+      last.push([section, place.address]);
+      const params = paramView(place.view);
+      if (params) views.push([section, params]);
+    }
+    return [
+      app,
+      {
+        activeSection: nav.activeSection,
+        last: Object.fromEntries(last),
+        ...(views.length > 0 && { views: Object.fromEntries(views) }),
+      },
+    ] as const;
   });
   return { v: 2, activeApp: model.activeApp, apps: Object.fromEntries(apps) };
 }
@@ -584,6 +626,10 @@ function addressOf(x: unknown): Address | null {
  * `initialModel`): старое `orbis:nav:v1` (`{state:{activeTab,…}}`) не читается и не переносится
  * (§7.3), битое место не угадывается. Обязательна активная стопка активного приложения — иначе
  * модель нарушила бы свой инвариант; хоста может не быть (см. инварианты в шапке).
+ *
+ * Значения параметров (`views`, 1в §5.1) ложатся в `view` восстановленного места. Битая карта
+ * навигацию НЕ роняет: значение параметра — удобство, его потеря даёт умолчание страницы, а потеря
+ * всей навигации — старт с домашней. Берутся только ключи `param:*` со строкой.
  */
 export function restoreFrom(raw: unknown): NavModel | null {
   if (!isObj(raw) || raw.v !== 2 || typeof raw.activeApp !== 'string' || !isObj(raw.apps))
@@ -592,10 +638,12 @@ export function restoreFrom(raw: unknown): NavModel | null {
   for (const [app, nav] of Object.entries(raw.apps)) {
     if (!isObj(nav) || typeof nav.activeSection !== 'string' || !isObj(nav.last)) return null;
     const stacks: [SectionKey, StackEntry[]][] = [];
+    const views = isObj(nav.views) ? nav.views : {};
     for (const [section, place] of Object.entries(nav.last)) {
       const address = addressOf(place);
       if (address === null) return null;
-      stacks.push([section, [{ address }]]);
+      const view = Object.hasOwn(views, section) ? paramView(views[section]) : null;
+      stacks.push([section, [view ? { address, view } : { address }]]);
     }
     apps.push([app, { activeSection: nav.activeSection, stacks: Object.fromEntries(stacks) }]);
   }

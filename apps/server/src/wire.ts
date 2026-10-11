@@ -2,12 +2,15 @@
 // ЕДИНСТВЕННОЕ место преобразования Drizzle-строк в wire-формы (бриф Task 12):
 // core-таймстампы наружу — всегда Date.toISOString() → UTC с суффиксом 'Z', не '+00:00'
 // (решение 12 плана; zod .datetime() в shared-схемах офсет не принимает).
-// БД хранит микросекунды, но драйвер парсит timestamptz в Date (мс), поэтому сравнение
-// expectedUpdatedAt (клиент видел wire-форму) с row.updatedAt.toISOString() симметрично.
-import type { GrantScope, PropertyDefinition } from '@orbis/shared';
+// БД хранит микросекунды, но драйвер парсит timestamptz в Date (мс), поэтому сравнение штампа,
+// который клиент видел в wire-форме (предусловие `orbis/updated_at`), с row.updatedAt.toISOString()
+// симметрично.
+
+import type { GrantScope, PropertyDefinition, UndoConflictEntry } from '@orbis/shared';
+import { bodyStartOf } from '@orbis/shared/doc/body-start';
 import type { ChatRole, WireChatMessage } from './chat/messages';
 import type { chatMessages, chatThreads, entities, relations, userSettings } from './db/schema';
-import type { WireEntity, WireRelation } from './executor/types';
+import type { WireEntity, WireEntityWithRevision, WireRelation } from './executor/types';
 import type { GrantSummary } from './oauth/grants';
 
 type EntityRow = typeof entities.$inferSelect;
@@ -18,15 +21,29 @@ type UserSettingsRow = typeof userSettings.$inferSelect;
 
 /**
  * `includeBodyDoc` — явный opt-in (Р6): без него ключа `bodyDoc` в ответе НЕТ вовсе, а не
- * `null`. Документ весит столько же, сколько тело, и в списках сущностей он не нужен.
+ * `null`. Тело независимо выбирается includeBody (§9); мутации по умолчанию несут тело.
  */
-export function toWireEntity(row: EntityRow, includeBodyDoc = false): WireEntity {
+export function toWireEntity(
+  row: EntityRow,
+  includeBodyDoc?: boolean,
+  includeBody?: true,
+): WireEntity & { body: string };
+export function toWireEntity(
+  row: EntityRow,
+  includeBodyDoc: boolean,
+  includeBody: boolean,
+): WireEntity;
+export function toWireEntity(
+  row: EntityRow,
+  includeBodyDoc = false,
+  includeBody = true,
+): WireEntity {
   return {
     id: row.id,
     graphId: row.graphId,
     title: row.title,
     emoji: row.emoji,
-    body: row.body,
+    ...(includeBody ? { body: row.body } : {}),
     ...(includeBodyDoc ? { bodyDoc: (row.bodyDoc ?? null) as WireEntity['bodyDoc'] } : {}),
     bodyRefs: row.bodyRefs,
     tags: row.tags,
@@ -36,6 +53,38 @@ export function toWireEntity(row: EntityRow, includeBodyDoc = false): WireEntity
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
     archived: row.archived,
+  };
+}
+
+/**
+ * ОДНА запись — чтение записи (`entity.get`, `readEntity`) и ответ мутации (полная строка `RETURNING`): wire-форма
+ * плюс ревизия тела и время его изменения (спека скорости §8.1, колонки 0026). По ним клиент начинает правку текста и
+ * узнаёт, что тело сменилось (замок текста — задача 8).
+ *
+ * Отдельной функцией, а не всегда в `toWireEntity`, потому что полные строки drizzle ходят и в СПИСКИ: ведомости и
+ * списки карточки Бюджета, снимки поверхностей, дамп владельца. Списку ревизия не нужна (правку текста начинают с
+ * чтения записи), а время изменения тела — машинная отметка, которой в снимках поверхностей быть не должно
+ * (консервативность §С1-3 п. 9). Строки списков компилятора (`toWireEntityFromSql`) этих колонок не выбирают вовсе.
+ */
+export function toWireEntityWithRevision(
+  row: EntityRow,
+  includeBodyDoc?: boolean,
+  includeBody?: true,
+): WireEntityWithRevision & { body: string };
+export function toWireEntityWithRevision(
+  row: EntityRow,
+  includeBodyDoc: boolean,
+  includeBody: boolean,
+): WireEntityWithRevision;
+export function toWireEntityWithRevision(
+  row: EntityRow,
+  includeBodyDoc = false,
+  includeBody = true,
+): WireEntityWithRevision {
+  return {
+    ...toWireEntity(row, includeBodyDoc, includeBody),
+    bodyRevision: row.bodyRevision,
+    bodyChangedAt: row.bodyChangedAt.toISOString(),
   };
 }
 
@@ -62,7 +111,8 @@ export interface LlmEntity {
   id: string;
   title: string;
   emoji: string | null;
-  body: string | null;
+  body?: string;
+  bodyStart?: string | null;
   bodyRefs: string[];
   tags: string[];
   props: Record<string, unknown>;
@@ -70,6 +120,12 @@ export interface LlmEntity {
   createdAt: string;
   updatedAt: string;
   archived: boolean;
+  /**
+   * Ревизия тела (спека скорости §8.1) — замок правки текста: модель передаёт её в `entity_update` как
+   * `expectedBodyRevision`. Есть у чтения одной записи и в ответах мутаций; у строк списков её нет — правку текста
+   * начинают с `entity_get` (`toWireEntityWithRevision`).
+   */
+  bodyRevision?: number;
 }
 
 export function toLlmEntity(
@@ -84,7 +140,8 @@ export function toLlmEntity(
     id: row.id,
     title: row.title,
     emoji: row.emoji,
-    body: row.body,
+    ...(row.body !== undefined ? { body: row.body } : {}),
+    ...(row.bodyStart !== undefined ? { bodyStart: row.bodyStart } : {}),
     bodyRefs: row.bodyRefs,
     tags: row.tags,
     props,
@@ -92,6 +149,7 @@ export function toLlmEntity(
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
     archived: row.archived,
+    ...(row.bodyRevision !== undefined && { bodyRevision: row.bodyRevision }),
   };
 }
 
@@ -114,25 +172,32 @@ function toDate(value: unknown): Date {
  */
 export function toWireEntityFromSql(row: Record<string, unknown>): WireEntity {
   return {
-    ...toWireEntity({
-      id: row.id,
-      graphId: row.graph_id,
-      title: row.title,
-      emoji: row.emoji,
-      body: row.body,
-      bodyRefs: row.body_refs,
-      tags: row.tags,
-      // Только НОВАЯ правда (§А1-1): списочное чтение обязано нести ровно тот же состав,
-      // что и одиночное. Пока этих колонок здесь не было, списочные пути отдавали пустую
-      // новую форму при том, что одиночное чтение отдавало правду, — и ни один тест этого
-      // не пиннил.
-      props: row.props,
-      aspects: row.aspects,
-      queryRefs: row.query_refs,
-      createdAt: toDate(row.created_at),
-      updatedAt: toDate(row.updated_at),
-      archived: row.archived,
-    } as EntityRow),
+    ...toWireEntity(
+      {
+        id: row.id,
+        graphId: row.graph_id,
+        title: row.title,
+        emoji: row.emoji,
+        body: row.body,
+        bodyRefs: row.body_refs,
+        tags: row.tags,
+        // Только НОВАЯ правда (§А1-1): списочное чтение обязано нести ровно тот же состав,
+        // что и одиночное. Пока этих колонок здесь не было, списочные пути отдавали пустую
+        // новую форму при том, что одиночное чтение отдавало правду, — и ни один тест этого
+        // не пиннил.
+        props: row.props,
+        aspects: row.aspects,
+        queryRefs: row.query_refs,
+        createdAt: toDate(row.created_at),
+        updatedAt: toDate(row.updated_at),
+        archived: row.archived,
+      } as EntityRow,
+      false,
+      'body' in row,
+    ),
+    ...('body_head' in row
+      ? { bodyStart: bodyStartOf(Array.isArray(row.body_head) ? row.body_head : []) }
+      : {}),
   };
 }
 
@@ -157,6 +222,15 @@ export function toWireChatMessage(row: ChatMessageRow): WireChatMessage {
     metadata: row.metadata as Record<string, unknown>,
     createdAt: row.createdAt.toISOString(),
   };
+}
+
+/** Клиенту вход pending не нужен (§9); предлагаемый текст карточки остаётся для решения. */
+export function toClientChatMessage(row: ChatMessageRow): WireChatMessage {
+  const m = toWireChatMessage(row);
+  const pending = m.metadata.pending;
+  if (pending === null || typeof pending !== 'object' || !('input' in pending)) return m;
+  const { input: _input, ...rest } = pending as Record<string, unknown>;
+  return { ...m, metadata: { ...m.metadata, pending: rest } };
 }
 
 /** Wire-форма треда (§4.5): entityId NULL — глобальный тред владельца. */
@@ -202,8 +276,9 @@ export function registryVersionOf(v: { systemVersion: number; ownerVersion: numb
 
 /**
  * Элемент колонки `pinnedEntities` (§4.4 до 1б): запись + порядок. Закреплённых в сайдбаре больше нет
- * (срез 1б §9.3: их место заняла навигация оболочки хоста). По смыслу колонку читает только перевод
- * данных `migrate-1b` — навигацией оболочки становятся именно они; провод настроек отдаёт её как есть,
+ * (срез 1б §9.3: их место заняла навигация оболочки хоста). Колонку читал только перевод данных 1б
+ * `migrate-1b` (навигацией оболочки стали именно они; исполнен в проде 28.09, снят срезом 1в, РП-13);
+ * провод настроек отдаёт её как есть,
  * web её не читает (§8.6: поле перестаёт использоваться, колонка уходит позже).
  */
 export interface PinnedEntity {
@@ -299,10 +374,17 @@ export function toWireAgentGrant(row: GrantSummary): WireAgentGrant {
  */
 export interface RollbackConflict {
   entityId: string;
-  actionId: string;
-  /** Когда действие легло в журнал (ISO, как все таймстампы wire-форм). */
+  /**
+   * Действие, давшее помешавшее изменение. `null` — текст записи сменил писатель без журнала (ops-скрипт, сев) или
+   * цепочку тела оборвал перенос: его видит только проверка цепочки тела (§8.6), действия в журнале у него нет.
+   */
+  actionId: string | null;
+  /** Когда действие легло в журнал (у текста — когда он сменился; ISO, как все таймстампы wire-форм). */
   at: string;
-  /** Источник действия (§7.8): по нему экран отличает правку человека от чужого агента. */
+  /**
+   * Источник действия (§7.8): по нему экран отличает правку человека от чужого агента. `outside` — изменение вне
+   * приложения (`actionId: null`).
+   */
   source: string;
 }
 
@@ -324,5 +406,15 @@ export type WireRollbackResult =
       ok: false;
       reason: 'partial';
       undone: string[];
-      failed: { actionId: string; error: { code: string; message: string } };
+      /**
+       * На чём встала серия. `reason: 'text_changed'` — отказ правила отмены текста (§8.6): правка, легшая между
+       * предпроверкой и серией, остановила её; `entries` — записи, чей текст изменён (заголовок, актор, время).
+       * Дискриминант исхода (`reason: 'partial'`) занят, поэтому причина остановки — поле отказавшего действия.
+       */
+      failed: {
+        actionId: string;
+        error: { code: string; message: string };
+        reason?: 'text_changed';
+        entries?: UndoConflictEntry[];
+      };
     };

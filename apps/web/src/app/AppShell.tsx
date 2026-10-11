@@ -2,6 +2,7 @@ import { type ComponentType, lazy, Suspense, useState } from 'react';
 import { PropertiesRelationsOwner } from '../features/entity-detail/PropertiesRelationsOwner';
 import { useSearchDialog } from '../features/search/search-dialog-store';
 import { useSearchHotkey } from '../features/search/useSearchHotkey';
+import { useUndoHotkey } from '../features/undo/useUndoHotkey';
 import { Button } from '../ui/Button';
 import { ChunkErrorBoundary, ReloadButton } from './ChunkErrorBoundary';
 import { HostButtons } from './frame/HostButtons';
@@ -112,6 +113,7 @@ function DesktopSlot() {
  */
 export function AppShell() {
   useSearchHotkey();
+  useUndoHotkey();
   const desktop = useIsDesktop();
   const searchOpen = useSearchDialog((s) => s.open);
   return (

@@ -1,15 +1,21 @@
 import { BLOCK_ROWS_CAP, type BlockResult } from '@orbis/shared';
-import { bodyIssues, EMPTY_QUERY_MESSAGE } from '@orbis/shared/doc/placement';
-import { absoluteDateIn, type QueryAst } from '@orbis/shared/query';
+import {
+  bodyIssues,
+  EMPTY_QUERY_MESSAGE,
+  undeclaredParamMessage,
+} from '@orbis/shared/doc/placement';
+import { absoluteDateIn, paramNamesIn, type QueryAst } from '@orbis/shared/query';
 import { type ReactNode, useMemo, useState } from 'react';
-import { BlockDataError, useBlockData } from '../../../lib/query-blocks/batch';
-import { useBodyKind } from '../../../lib/query-blocks/body-kind';
+import { type BlockData, BlockDataError, useBlockData } from '../../../lib/query-blocks/batch';
+import { placeOf, useBodyKind } from '../../../lib/query-blocks/body-kind';
 import { parseBlock } from '../../../lib/query-blocks/parse';
 import { useThisEntityId } from '../../../lib/query-blocks/this-entity';
 import { useFieldCatalog } from '../../../lib/query-blocks/useFieldCatalog';
 import { Card } from '../../../ui/Card';
+import { usePageParams } from '../params';
 import { BlockPlaque, ConfigureButton, REGISTRY_FAILED_MESSAGE } from './BlockPlaque';
 import { CompactForm } from './CompactForm';
+import { DayGroupsSlot } from './DayGroupsSlot';
 import { ListForm } from './ListForm';
 import { MoreRows } from './MoreRows';
 import { TableForm } from './TableForm';
@@ -80,6 +86,9 @@ function isEmptyResult(r: BlockResult): boolean {
     // Ответ бейджа раздела (срез 1б §9.3) — блоку страницы не приходит; «нет числа» и есть пусто.
     case 'none':
       return true;
+    // Группы по дням (1в §5.2): пусто, если ни в одной группе нет строк (пустые дни — не строки).
+    case 'groups':
+      return r.more === 0 && r.groups.every((g) => g.rows.length === 0);
   }
 }
 
@@ -91,17 +100,27 @@ function isEmptyResult(r: BlockResult): boolean {
 function LoadedBlock({
   text,
   ast,
+  params,
   heading,
   onConfigure,
 }: {
   text: string;
   ast: QueryAst;
+  /** Значения параметров страницы, на которые ссылается блок (`$<имя>`); подставит сервер. */
+  params: Readonly<Record<string, string>>;
   heading: string | undefined;
   onConfigure?: () => void;
 }) {
-  // «ещё N» поднимает `limit` ЭТОГО блока — новый ключ, просьба пачкой из одного.
-  const [limit, setLimit] = useState<number | undefined>(undefined);
-  const data = useBlockData(text, { limit });
+  // «ещё N» поднимает `limit` ЭТОГО блока — новый ключ, просьба пачкой из одного. Поднятый `limit`
+  // помнит, при каких значениях параметров его подняли (М-1 ревью C): другой горизонт — другой запрос, и
+  // раскрытое «ещё N» прежнего к нему не относится. Сброс — здесь, а не пересозданием блока по `key`:
+  // пересозданный блок потерял бы прежние строки на время запроса (`placeholderData` живёт в наблюдателе),
+  // и переключатель мигал бы «Загрузкой…».
+  const paramsKey = JSON.stringify(Object.entries(params).sort(([a], [b]) => (a < b ? -1 : 1)));
+  const [raised, setRaised] = useState<{ paramsKey: string; limit: number } | null>(null);
+  const limit = raised !== null && raised.paramsKey === paramsKey ? raised.limit : undefined;
+  const setLimit = (next: number) => setRaised({ paramsKey, limit: next });
+  const data = useBlockData(text, { limit, params });
 
   // §6.5: ошибка блока — плашка с причиной; пустоты вместо ошибки не бывает.
   if (data.isError) {
@@ -147,6 +166,23 @@ function LoadedBlock({
           <RowsBody result={result} ast={ast} pending={data.isPlaceholderData} onMore={setLimit} />
         </BlockFrame>
       );
+    case 'groups': {
+      // Лента по дням (1в §5.2) — ленивым чанком (`DayGroupsSlot`); карточка та же, что у строк.
+      // Счётчик — строки всех групп и «ещё N» (пустые дни — не строки); «ещё N» — после последней
+      // группы, общим хвостом со строками.
+      const shown = result.groups.reduce((n, g) => n + g.rows.length, 0);
+      return (
+        <BlockFrame heading={heading} count={shown + result.more} {...configure}>
+          <DayGroupsSlot result={result} display={ast.display === 'list' ? 'list' : 'compact'} />
+          <MoreTail
+            shown={shown}
+            more={result.more}
+            pending={data.isPlaceholderData}
+            onMore={setLimit}
+          />
+        </BlockFrame>
+      );
+    }
     default:
       // Вид ответа, которого этот клиент не знает (сервер новее) — плашка, а не пустая карточка:
       // §6.5, пустоты вместо ошибки не бывает.
@@ -168,36 +204,51 @@ function RowsBody({
   pending,
   onMore,
 }: {
-  result: Extract<BlockResult, { kind: 'rows' }>;
+  result: Extract<BlockData, { kind: 'rows' }>;
   ast: QueryAst;
   pending: boolean;
   onMore: (limit: number) => void;
 }) {
-  const total = result.rows.length + result.more;
   const display = ast.display ?? 'compact';
-  const atCap = result.rows.length >= BLOCK_ROWS_CAP;
+  // «Закрыто» — признак сервера (`closedIds`, п. 42), одним множеством на все формы.
+  const closed = new Set(result.closedIds);
   return (
     <>
       {display === 'list' ? (
-        <ListForm rows={result.rows} />
+        <ListForm rows={result.rows} closed={closed} timeZone={result.timeZone} />
       ) : display === 'table' ? (
-        <TableForm rows={result.rows} columns={ast.columns} />
+        <TableForm rows={result.rows} columns={ast.columns} closed={closed} />
       ) : (
-        <CompactForm rows={result.rows} />
+        <CompactForm rows={result.rows} closed={closed} />
       )}
-      {result.more > 0 &&
-        (atCap ? (
-          <p data-testid="qb-cap" className="text-text-muted text-xs">
-            показаны первые {BLOCK_ROWS_CAP}
-          </p>
-        ) : (
-          <MoreRows
-            more={result.more}
-            pending={pending}
-            onMore={() => onMore(Math.min(total, BLOCK_ROWS_CAP))}
-          />
-        ))}
+      <MoreTail shown={result.rows.length} more={result.more} pending={pending} onMore={onMore} />
     </>
+  );
+}
+
+/** «ещё N» строк или ленты по дням — либо подпись потолка, когда раскрывать уже нечем. */
+function MoreTail({
+  shown,
+  more,
+  pending,
+  onMore,
+}: {
+  shown: number;
+  more: number;
+  pending: boolean;
+  onMore: (limit: number) => void;
+}) {
+  if (more === 0) return null;
+  return shown >= BLOCK_ROWS_CAP ? (
+    <p data-testid="qb-cap" className="text-text-muted text-xs">
+      показаны первые {BLOCK_ROWS_CAP}
+    </p>
+  ) : (
+    <MoreRows
+      more={more}
+      pending={pending}
+      onMore={() => onMore(Math.min(shown + more, BLOCK_ROWS_CAP))}
+    />
   );
 }
 
@@ -214,7 +265,12 @@ function RowsBody({
  *  3. отказ разбора — плашка с позицией;
  *  4. вне заметки — абсолютная дата в запросе — плашка с подсказкой токенов (§5.6, С1а-9):
  *     формулировка из `bodyIssues`, одна на плашку тела и плашку блока;
- *  5. иначе — данные.
+ *  5. ссылка `$<имя>` на параметр, которого страница не объявляет, — плашка до запроса (1в §5.1);
+ *  6. иначе — данные: значения параметров — только тех имён, на которые ссылается блок (ключ кеша
+ *     не зависит от чужих параметров), подстановка — на сервере (текст уходит с `$`).
+ *
+ * Разбор — с местом по роду тела (`placeOf`, 1в §3.8): на странице и в шаблоне `$` законна, в
+ * заметке — отказ `PAGE_ONLY` плашкой п. 3.
  *
  * `title` — явный заголовок снаружи (перекрывает `title=` блока); им пользуется обёртка
  * `QueryBlock`, сохранившая прежнюю сигнатуру.
@@ -231,10 +287,11 @@ export function DataBlock({
   const { registry, failed } = useFieldCatalog();
   const kind = useBodyKind();
   const thisId = useThisEntityId();
+  const { values } = usePageParams();
   const empty = text.trim() === '';
   const parsed = useMemo(
-    () => (empty || registry === null ? null : parseBlock(text, registry.parse)),
-    [empty, registry, text],
+    () => (empty || registry === null ? null : parseBlock(text, registry.parse, placeOf(kind))),
+    [empty, registry, text, kind],
   );
   const dateIssue = useMemo(() => {
     if (kind === 'note' || registry === null || parsed === null || !parsed.ok) return null;
@@ -271,13 +328,28 @@ export function DataBlock({
       />
     );
   }
+  const names = paramNamesIn(parsed.ast);
+  const missing = names.find((n) => !Object.hasOwn(values, n));
+  if (missing !== undefined) {
+    return (
+      <BlockPlaque
+        message={`Ошибка запроса: ${undeclaredParamMessage(missing, kind)}`}
+        {...configure}
+      />
+    );
+  }
+  // `fromEntries`, а не присваивание по ключу: законное имя `__proto__` ушло бы в прототип.
+  const params = Object.fromEntries(names.map((n) => [n, values[n] as string]));
   return (
     // key по тексту И записи `this`: другой запрос — другой блок, и раскрытое «ещё N» старого к нему
     // не относится; тот же шаблон на соседней записи (экран монтируется без key) — тоже другой блок.
+    // Значений параметров в key нет намеренно: смена горизонта блок не пересоздаёт (прежние строки
+    // видны до ответа), а «ещё N» сбрасывает сам `LoadedBlock` — поднятый `limit` помнит свои значения.
     <LoadedBlock
       key={`${text.trim()}:${thisId ?? ''}`}
       text={text}
       ast={parsed.ast}
+      params={params}
       heading={title ?? parsed.ast.title}
       {...configure}
     />

@@ -24,7 +24,7 @@
 // Провайдер берётся ЯВНО openai-шный, а не фабрикой `makeLLMProvider`: приёмка называет
 // OpenAI поимённо (у владельца он прод-провайдер), и прогон, случайно ушедший в Anthropic
 // из-за `ORBIS_LLM_PROVIDER`, закрыл бы гейт, не проверив ничего.
-import { queryAstJsonSchema, queryAstSchema } from '@orbis/shared/query';
+import { QUERY_DATE_TOKENS, queryAstJsonSchema, queryAstSchema } from '@orbis/shared/query';
 import { AGENDA_QUERY_TEXTS } from '@orbis/shared/query/fixtures';
 import Ajv from 'ajv';
 import { OpenAIProvider } from '../apps/server/src/llm/openai';
@@ -74,7 +74,7 @@ const SYSTEM = [
   'Ты — ассистент Orbis. На любой запрос о записях владельца вызывай тул entity_query.',
   'Отвечай ТОЛЬКО вызовом тула, без текста.',
   'Свойства адресуются namespaced-ключами: orbis/task_status, orbis/due_date, orbis/start_at.',
-  'Относительное время записывается как {"token":"today"|"overdue"|"next_7d"|"after_7d"}.',
+  `Относительное время записывается как {"token":${QUERY_DATE_TOKENS.map((t) => `"${t}"`).join('|')}}.`,
 ].join(' ');
 
 const provider = new OpenAIProvider({ apiKey });

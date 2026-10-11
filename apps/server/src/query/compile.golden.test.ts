@@ -34,6 +34,7 @@ import {
   BUILTIN_CONTRACT_DEFS,
   BUILTIN_PROPERTY_META,
   BUILTIN_RELATION_ROLE_META,
+  type EntityFields,
 } from '@orbis/shared';
 import {
   parseQueryAst,
@@ -71,6 +72,8 @@ const CTX: CompileCtx = {
   graphId: parseGraphId('00000000-0000-7000-8000-0000000000a1'),
   today: '2026-07-03',
   timeZone: 'Europe/Moscow',
+  weekStart: 'monday',
+  ownerCurrency: 'RUB',
   reg: REG,
   thisEntityId: '00000000-0000-7000-8000-0000000000f1',
 };
@@ -80,6 +83,7 @@ interface Golden {
   /** Текст key-формы; null — дерево плоской грамматикой v1 не выражается (§А5-3д). */
   query: string | null;
   ast: QueryAst;
+  fields?: EntityFields;
   sql: string;
   params: unknown[];
   /** Опционально: эталон `compileCountAst` для той же строки (бейджи 02 §3.2). */
@@ -104,10 +108,29 @@ describe('golden: текст → Q-AST (парсер по реестру, §А5-
 describe('golden: Q-AST → SQL (новый компилятор, §А5-7)', () => {
   for (const g of GOLDENS) {
     test(g.name, () => {
-      const q = dialect.sqlToQuery(compileQueryAst(g.ast, CTX));
+      const q = dialect.sqlToQuery(
+        compileQueryAst(g.ast, CTX, g.fields === undefined ? {} : { fields: g.fields }),
+      );
       expect(flat(q.sql)).toBe(g.sql);
       expect(q.params).toEqual(g.params);
     });
+  }
+});
+
+// Устойчивый порядок (спека 1в §3.5, РП-8): `id` — последний ключ сортировки каждой выборки канона,
+// без `sortBy` — единственный. Без него строки с равными ключами (и вся выдача без `sortBy`) шли в
+// порядке, который Postgres не обещает, и под `limit` менялся даже НАБОР строк. Сверка — по самому
+// эталону: правило записано в нём, и компилятор, потерявший ключ, разойдётся с эталоном выше.
+test('каждый эталон кончается ключом e.id: с sortBy — последним, без — единственным (§3.5)', () => {
+  for (const g of GOLDENS) {
+    const order = g.sql.slice(g.sql.lastIndexOf(' ORDER BY ') + ' ORDER BY '.length);
+    if (g.ast.sortBy !== undefined && g.ast.sortBy.length > 0) {
+      expect(order).toMatch(/, e\.id ASC LIMIT \$\d+$/);
+    } else {
+      expect(order).toMatch(/^e\.id ASC LIMIT \$\d+$/);
+    }
+    // Счёт (бейдж) порядка не несёт вовсе.
+    if (g.countSql !== undefined) expect(g.countSql).not.toContain('ORDER BY');
   }
 });
 

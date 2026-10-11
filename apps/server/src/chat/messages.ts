@@ -1,7 +1,8 @@
 // apps/server/src/chat/messages.ts
 // §4.6: chat_messages append-only — только INSERT, updated_at в таблице отсутствует,
-// metadata неизменяема после записи. Отмена действия — не правка журнала, а НОВОЕ
-// системное сообщение {type:'undo', undoes} (§7.8) — тоже через appendMessage.
+// metadata неизменяема после записи. Журнал действий сообщений не пишет: он — своя таблица
+// `action_journal` (спека скорости §11), и в тред попадает объединением на чтении
+// (`journal/thread-page.ts`).
 import { eq, type SQL, sql } from 'drizzle-orm';
 import { chatMessages } from '../db/schema';
 import type { Tx } from '../db/with-identity';
@@ -10,6 +11,18 @@ import { ExecError } from '../errors';
 import { toWireChatMessage } from '../wire';
 
 export type ChatRole = 'user' | 'assistant' | 'system';
+
+/**
+ * TTL маркера processing: моложе — первый прогон считается живым (ретраю отвечаем
+ * { status: 'processing' }), старше — прогон умер без снятия маркера (краш процесса),
+ * цикл перезапускается. Штатные исходы снимают маркер сами: успех — той же tx, что
+ * пишет ответ; сбой — в catch (немедленный ретрай после ошибки легитимен, §7.9).
+ *
+ * Здесь, у разговора, а не в `ai/send-message.ts`: срок читает и выдача треда
+ * (`journal-read.threadFeed`, рулинг R-13) — действие разговора без ответа старше срока
+ * значит оборванный ход, и его карточка обязана появиться строкой журнала.
+ */
+export const PROCESSING_TTL_MS = 10 * 60_000;
 
 /** Wire-форма сообщения: createdAt — всегда Date.toISOString() (решение 12 плана). */
 export interface WireChatMessage {
@@ -30,33 +43,48 @@ export interface AppendMessageInput {
 }
 
 /**
- * Append-only вставка; RLS отклоняет чужой тред политикой БД (§4.10, §13 п.5).
- * Занятый id пробрасывает сырой 23505 НАМЕРЕННО: на нём стоит контракт боевого
- * JournalSink (23505 по PK → AuditIdConflictError → replay batch, §7.8).
- * Клиентскому пути нужен appendMessageIdempotent.
+ * Есть ли карточка-запрос подтверждения (§7.10) с этим id: карточка лежит сообщением с id = pendingId и ключом
+ * `metadata.pending`. Одобренная единица исполняется пачкой с тем же ключом (`approvePending`, `batchId = pendingId`) —
+ * так место продолжения отмены (`executor/body-chain.ts`, `undoContinuationOf`) отличает её от правки во вкладке.
+ * Выборка по ключу сообщения (индекс берётся и под RLS).
  */
+export async function isPendingCardMessage(tx: Tx, id: string): Promise<boolean> {
+  const rows = await tx
+    .select({ id: chatMessages.id })
+    .from(chatMessages)
+    .where(
+      sql`${chatMessages.id} = ${id}::uuid AND (${chatMessages.metadata} -> 'pending') IS NOT NULL`,
+    )
+    .limit(1);
+  return rows.length > 0;
+}
+
 /**
- * SQL-предикаты «инфраструктурная system-строка невидима»: единый фрагмент для
- * chat.listMessages (клиент) и historyMessages LLM-контекста (§7.1) — фильтры обязаны
- * оставаться зеркальными, и оба применяются В SQL до limit rolling-окна (иначе плотный
- * системный шум вытеснял бы живой диалог из окна модели). Журнал §7.8 не трогаем —
- * только отображение. Скрывается:
- * - processing-маркер ai.sendMessage (§7.9): живой давал бы пустой system-пузырь в окне
- *   рефетча, маркер краша висел бы навсегда; IS NOT DISTINCT FROM — NULL-безопасно
- *   (у audit/undo-строк ключа type нет, обычное `=` выкинуло бы их вместе с маркерами);
- * - audit СИСТЕМНЫХ действий (source='system' — материализация recurring-инстансов
- *   §5.4): «batch: операций — N» на каждый пересчёт агенды — шум. @>-containment по
- *   массиву actions; COALESCE — NULL-безопасно (урок A1): у user/undo/pending-строк
- *   ключа actions нет → NULL @> … = NULL, без COALESCE они терялись бы.
- *   Audit chat/fast_path/mcp/ui — видим.
+ * SQL-предикаты «инфраструктурная system-строка невидима» — фрагмент выборки сообщений
+ * выдачи треда (`journal/thread-page.ts`: chat.listMessages, тред entity.get, историю
+ * LLM-контекста §7.1) — в SQL до limit rolling-окна (иначе плотный служебный шум вытеснял
+ * бы живой диалог из окна модели). Скрывается processing-маркер ai.sendMessage (§7.9): живой
+ * давал бы пустой system-пузырь в окне рефетча, маркер краша висел бы навсегда;
+ * IS NOT DISTINCT FROM — NULL-безопасно (у прочих system-строк ключа type нет, обычное `=`
+ * выкинуло бы их вместе с маркерами).
+ *
+ * Условия по прежнему журналу в сообщениях (`metadata.actions` системной материализации) здесь
+ * больше нет: журнал пишется своей таблицей (спека скорости §11), и системные записи скрывает её
+ * выборка (`journal-read.threadFeed`), а прежние сообщения журнала переносит в таблицу и сносит
+ * прод-операция плана А (задача 21) — держать фильтр по форме, которой в сообщениях не будет,
+ * значило бы платить за него на каждой выдаче треда.
  */
 export function excludeInfraSystemRows(): SQL[] {
   return [
     sql`NOT (${chatMessages.role} = 'system' AND ${chatMessages.metadata} ->> 'type' IS NOT DISTINCT FROM 'processing')`,
-    sql`NOT (${chatMessages.role} = 'system' AND COALESCE(${chatMessages.metadata} -> 'actions' @> '[{"source": "system"}]'::jsonb, false))`,
   ];
 }
 
+/**
+ * Append-only вставка; RLS отклоняет чужой тред политикой БД (§4.10, §13 п.5).
+ * Занятый id пробрасывается сырым 23505: молча принять его за повтор здесь нельзя —
+ * клиентскому пути, которому повтор штатен, нужен appendMessageIdempotent.
+ */
 export async function appendMessage(tx: Tx, msg: AppendMessageInput): Promise<WireChatMessage> {
   const rows = await tx
     .insert(chatMessages)

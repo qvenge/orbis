@@ -115,6 +115,7 @@ export function RevertShellDialog({ row, onClose }: { row: WireEntity; onClose: 
               void run({
                 kind: 'revert',
                 key: HOST_SHELL_KEY,
+                title: row.title,
                 expectedUpdatedAt: row.updatedAt,
               }).then((ok) => {
                 setBusy(false);

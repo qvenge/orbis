@@ -12,7 +12,7 @@
  * Рекурсия — через `$ref: '#/$defs/node'`. `$defs` в draft-07 формально не ключевое слово,
  * но ссылка на него — обычный JSON-указатель и резолвится везде; имя выбрано по §А5-4.
  */
-import { QUERY_DATE_TOKENS, QUERY_DISPLAY_MODES, REL_TARGET_PATTERN } from './ast';
+import { ADDRESS_SLOT_RE, QUERY_DATE_TOKENS, QUERY_DISPLAY_MODES, REL_TARGET_PATTERN } from './ast';
 
 const SCALAR = { type: ['string', 'number', 'boolean'] } as const;
 const TOKEN = {
@@ -29,6 +29,20 @@ function node(properties: Record<string, unknown>, required: string[]): Record<s
 }
 
 const PROP_ID = { type: 'string', minLength: 1 } as const;
+/**
+ * Адрес контракта (1в §3.1–§3.2): `{contract}` — значение, `{contract, slot}` — слот. Паттерн
+ * слота — тот же `ADDRESS_SLOT_RE`, что у zod (класс RE2, без просмотров: схема едет провайдеру).
+ */
+const ADDRESS = node(
+  { contract: PROP_ID, slot: { type: 'string', pattern: ADDRESS_SLOT_RE.source } },
+  ['contract'],
+);
+/**
+ * Поле запроса — id свойства или адрес (`QueryFieldRef`). `oneOf` однозначен по построению:
+ * строка и объект не пересекаются. Стоит в `prop`, `sortBy[].field`, `aggregate.field`; у
+ * `columns[].field` — только `PROP_ID` (§3.1: заголовок колонки — подпись свойства).
+ */
+const FIELD_REF = { oneOf: [PROP_ID, ADDRESS] } as const;
 /** `of?: uuid|"this"` §А5-7 — паттерн один на zod и на эту схему (см. `REL_TARGET_PATTERN`). */
 const REL_TARGET = { type: 'string', pattern: REL_TARGET_PATTERN } as const;
 
@@ -70,6 +84,7 @@ const PROJECTION_RULES = [
   { anyOf: [{ not: has('columns') }, displayIs('table')] },
 ];
 
+// ОБХОДЧИК-Q: json-schema
 export const queryAstJsonSchema: Record<string, unknown> = {
   $schema: 'http://json-schema.org/draft-07/schema#',
   title: 'Orbis Q-AST',
@@ -81,7 +96,7 @@ export const queryAstJsonSchema: Record<string, unknown> = {
     sortBy: {
       type: 'array',
       minItems: 1,
-      items: node({ field: PROP_ID, dir: { enum: ['asc', 'desc'] } }, ['field', 'dir']),
+      items: node({ field: FIELD_REF, dir: { enum: ['asc', 'desc'] } }, ['field', 'dir']),
     },
     limit: { type: 'integer', minimum: 1 },
     display: { enum: [...QUERY_DISPLAY_MODES] },
@@ -90,7 +105,7 @@ export const queryAstJsonSchema: Record<string, unknown> = {
     aggregate: {
       anyOf: [
         node({ fn: { const: 'count' } }, ['fn']),
-        node({ fn: { enum: ['sum', 'latest'] }, field: PROP_ID }, ['fn', 'field']),
+        node({ fn: { enum: ['sum', 'latest'] }, field: FIELD_REF }, ['fn', 'field']),
       ],
     },
     columns: { type: 'array', minItems: 1, items: node({ field: PROP_ID }, ['field']) },
@@ -106,23 +121,27 @@ export const queryAstJsonSchema: Record<string, unknown> = {
         node({ or: { type: 'array', minItems: 1, items: { $ref: '#/$defs/node' } } }, ['or']),
         node({ not: { $ref: '#/$defs/node' } }, ['not']),
         // Предикат свойства — по ветке на форму значения (см. докблок propNodeSchema).
-        node({ prop: PROP_ID, op: { enum: ['eq', 'ne', 'gt', 'lt'] }, value: BOUND }, [
+        node({ prop: FIELD_REF, op: { enum: ['eq', 'ne', 'gt', 'lt'] }, value: BOUND }, [
           'prop',
           'op',
           'value',
         ]),
         node(
           {
-            prop: PROP_ID,
+            prop: FIELD_REF,
             op: { const: 'in' },
             value: { type: 'array', minItems: 1, items: SCALAR },
           },
           ['prop', 'op', 'value'],
         ),
-        node({ prop: PROP_ID, op: { const: 'contains' }, value: SCALAR }, ['prop', 'op', 'value']),
+        node({ prop: FIELD_REF, op: { const: 'contains' }, value: SCALAR }, [
+          'prop',
+          'op',
+          'value',
+        ]),
         node(
           {
-            prop: PROP_ID,
+            prop: FIELD_REF,
             op: { const: 'range' },
             value: {
               type: 'object',

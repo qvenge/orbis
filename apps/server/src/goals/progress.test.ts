@@ -302,6 +302,46 @@ describe('computeGoalProgress: агрегаты §11.3', () => {
     expect(empty.unsupported).toBeUndefined();
   });
 
+  test('aggregate=latest с sortBy в запросе источника — первая строка порядка, а не последняя правка (спека 1в §3.7)', async () => {
+    // Компилятор «последнего» общий с плиткой страницы: `sortBy` источника задаёт порядок, и
+    // «последнее» — его первая строка. Правка самой ранней по дате записи делает её последней по
+    // updated_at — без правила 1в цель показала бы её.
+    const user = await freshGraph();
+    const caller = callerFor(user);
+    const categoryRef = await ensureCategory(user);
+    const add = (title: string, amount: string, occurredOn: string) =>
+      caller.entity.create({
+        input: { title, ...income(categoryRef, amount, ['weigh'], occurredOn) },
+        source: 'ui',
+      });
+    const early = await add('Замер 1', '82.5', '2026-07-01');
+    await add('Замер 3', '80.5', '2026-07-03');
+    await add('Замер 2', '81.0', '2026-07-02');
+    await caller.entity.update({ id: early.id, title: 'Замер 1 (уточнён)' });
+
+    const sorted = await progressOf(user, {
+      progress_source: {
+        query: 'aspect=orbis/financial, tags=weigh, sortBy=orbis/occurred_on:desc',
+        aggregate: 'latest',
+        field: 'orbis/amount',
+      },
+      target_value: '100',
+    });
+    expect(sorted.current).toBe('80.5');
+    expect(sorted.unsupported).toBeUndefined();
+
+    // Без sortBy — как до 1в: последняя правка.
+    const byEdit = await progressOf(user, {
+      progress_source: {
+        query: 'aspect=orbis/financial, tags=weigh',
+        aggregate: 'latest',
+        field: 'orbis/amount',
+      },
+      target_value: '100',
+    });
+    expect(byEdit.current).toBe('82.5');
+  });
+
   test('пустая выборка даёт 0, а не ошибку (§6.4: пустота ≠ ошибка)', async () => {
     const user = await freshGraph();
     const p = await progressOf(user, {
@@ -841,8 +881,13 @@ describe('entity.get: прогресс приезжает с целью и то�
       // он и решает, годится ли снимок. Это и есть обещанное «упадёт заметно»: цена реестра
       // на горячем кеше — ОДИН точечный SELECT вместо четырёх проходов по таблицам.
       // У обычной сущности число не изменилось: снимка она и раньше не грузила.
-      expect(plainQueries.length).toBe(7);
-      expect(goalQueries.length).toBe(11);
+      //
+      // Стало 8 и 12 (спека скорости §8.2, план А задача 10): ответ несёт действующее действие текущего тела
+      // (`bodyAction`) — ОДИН запрос у обеих, проба `bodyColumnProbe` (колонки тела и живое действие колонки одним
+      // соединением). Раскрутка цепочки (`effectiveBodyAction`, до трёх запросов на шаг) идёт только когда колонка
+      // указывает на запись отмены или отменённое действие — у обычной записи её нет.
+      expect(plainQueries.length).toBe(8);
+      expect(goalQueries.length).toBe(12);
     } finally {
       await counted.end();
     }
@@ -1198,4 +1243,32 @@ describe('неканоническая форма дерева источник�
       );
     });
   }
+});
+
+describe('цель и язык контрактов (спека 1в §3.1, РП-3)', () => {
+  test('адрес в дереве query — компилятор; ключ адреса в field — invalid_field', async () => {
+    const user = await freshGraph();
+    const ast: QueryAst = {
+      filter: { prop: { contract: 'orbis/when' }, op: 'eq', value: { token: 'today' } },
+    };
+    const counted = await withIdentity(db, personal(user), async (tx) =>
+      computeGoalProgress(tx, await queryContext(tx, user, null), {
+        progressSource: { query: ast, aggregate: 'count' },
+        targetValue: '10',
+      }),
+    );
+    expect(counted.unsupported).toBeUndefined();
+    expect(counted.current).toBe('0');
+    const field = await withIdentity(db, personal(user), async (tx) =>
+      computeGoalProgress(tx, await queryContext(tx, user, null), {
+        progressSource: {
+          query: { filter: { aspect: 'orbis/financial' } },
+          aggregate: 'sum',
+          field: 'orbis/money-movement.amount',
+        },
+        targetValue: '10',
+      }),
+    );
+    expect(field.unsupported).toBe('invalid_field');
+  });
 });

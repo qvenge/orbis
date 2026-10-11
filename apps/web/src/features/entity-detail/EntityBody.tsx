@@ -14,6 +14,7 @@ import {
   type MutableRefObject,
   type ReactNode,
   Suspense,
+  useCallback,
   useContext,
   useEffect,
   useRef,
@@ -24,10 +25,13 @@ import { invalidateGraph } from '../../lib/invalidate';
 import { BodyKindProvider } from '../../lib/query-blocks/body-kind';
 import { type RouterOutputs, trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
+import { registerBodyFlush } from '../entity-editor/body-flush';
 import { EditorShell } from '../entity-editor/EditorShell';
 import { SaveIndicator } from '../entity-editor/SaveIndicator';
 import { sameDoc } from '../entity-editor/strip-ids';
 import { type BodyDoc, type BodySave, useBodySave } from '../entity-editor/useBodySave';
+import { isUndoEpoch, undoEpoch } from '../undo/undo-epoch';
+import { shownBodyRevision } from './record-host';
 
 type Entity = RouterOutputs['entity']['get']['entity'];
 
@@ -77,7 +81,7 @@ export function bodyKindOf(entity: Pick<Entity, 'aspects' | 'props'>): BodyKind 
  */
 export type BodyGate = Pick<
   BodySave,
-  'hasUnsent' | 'flush' | 'blocked' | 'offline' | 'keptOffline'
+  'hasUnsent' | 'flush' | 'blocked' | 'offline' | 'keptOffline' | 'expectedRevision'
 >;
 export type BodyGateRef = MutableRefObject<BodyGate | null>;
 
@@ -91,6 +95,8 @@ export type BodyGateRef = MutableRefObject<BodyGate | null>;
  * уронить сразу, чем получить кнопку, которая молча ничего не делает.
  */
 export interface BodyScreenValue {
+  /** Наличие title в текущем шаблоне выбирает единственное место стрелок. */
+  arrows?: { titleShown: boolean; onTitleShown: (shown: boolean) => void };
   asMarkdown: boolean;
   onCloseMarkdown: () => void;
   /**
@@ -128,6 +134,10 @@ export function useBodyGate(): BodyGateRef | null {
   return useContext(BodyScreenContext)?.bodyGate ?? null;
 }
 
+export function useBodyArrows(): BodyScreenValue['arrows'] {
+  return useContext(BodyScreenContext)?.arrows;
+}
+
 export function useBodyScreen(): BodyScreenValue {
   const value = useContext(BodyScreenContext);
   if (value === null) throw new Error('Тело записи вне BodyScreenProvider');
@@ -142,6 +152,7 @@ export function useBodyScreen(): BodyScreenValue {
  * `key={entity.id}`, и вся память о правке (отложенный документ, таймер паузы, предложенный
  * черновик, показанный текст) исчезает вместе с записью, а не переезжает на соседнюю.
  */
+// Экран просит тело всегда (DETAIL_INCLUDE); отсутствие на общем WireEntity обрабатываем пустой строкой.
 export function EntityBody({
   entity,
   asMarkdown,
@@ -161,17 +172,41 @@ export function EntityBody({
   onRefresh: () => void;
   bodyGate: BodyGateRef;
 }) {
-  const save = useBodySave(entity.id, entity);
-  const { hasUnsent, flush, blocked, offline, keptOffline } = save;
+  const markdownDirty = useRef(false);
+  const rewriteLocked = useRef(false);
+  const markdownRewriteRevision = useRef<number | undefined>(undefined);
+  const markdownReseat = useRef(0);
+  const rewriteToken = useRef(0);
+  const rewriteAlive = useRef(true);
+  useEffect(() => {
+    rewriteAlive.current = true;
+    return () => {
+      rewriteAlive.current = false;
+    };
+  }, []);
+  const save = useBodySave(entity.id, { ...entity, bodyRevision: shownBodyRevision(entity) });
+  const epoch = undoEpoch();
+  const previousEpoch = useRef(epoch);
+  const ownerChanged = previousEpoch.current !== epoch;
+  if (ownerChanged) {
+    previousEpoch.current = epoch;
+    markdownDirty.current = false;
+    rewriteLocked.current = false;
+    markdownRewriteRevision.current = undefined;
+    rewriteToken.current += 1;
+    markdownReseat.current += 1;
+  }
+
+  const { hasUnsent, flush, blocked, offline, keptOffline, expectedRevision } = save;
   // Регистрация — эффектом: снимается при размонтировании ТОЛЬКО своя запись, иначе уходящее
   // тело стёрло бы уже вставшее на его место (смена записи — новый экземпляр по key).
   useEffect(() => {
-    const gate: BodyGate = { hasUnsent, flush, blocked, offline, keptOffline };
+    const gate: BodyGate = { hasUnsent, flush, blocked, offline, keptOffline, expectedRevision };
     bodyGate.current = gate;
     return () => {
       if (bodyGate.current === gate) bodyGate.current = null;
     };
-  }, [bodyGate, hasUnsent, flush, blocked, offline, keptOffline]);
+  }, [bodyGate, hasUnsent, flush, blocked, offline, keptOffline, expectedRevision]);
   const utils = trpc.useUtils();
   /**
    * Отказ «сохранить в заметку» — В САМОМ БАННЕРЕ, а не тостом.
@@ -216,6 +251,18 @@ export function EntityBody({
    * размена, но это именно размен, и он записан здесь, а не подразумевается.
    */
   const [localDoc, setLocalDoc] = useState<BodyDoc | null>(null);
+  /** Счётчик принудительной посадки серверного документа в редактор — его двигает «Обновить» (`BodyEditor.reseat`). */
+  const [reseat, setReseat] = useState(0);
+  if (ownerChanged) {
+    setLocalDoc(null);
+    setReseat((value) => value + 1);
+  }
+  useEffect(() => {
+    if (save.rewritePending) {
+      setLocalDoc(null);
+      setReseat((n) => n + 1);
+    }
+  }, [save.rewritePending]);
   const serverDoc = asBodyDoc(entity.bodyDoc);
   // Кэш догнал — местная копия больше не нужна, и держать её нельзя: она заслоняла бы правку,
   // приехавшую с другого устройства. Сравнение по СМЫСЛУ: свой же сохранённый документ вернётся
@@ -259,6 +306,7 @@ export function EntityBody({
    * между нажатиями не перерисовывается вовсе.
    */
   const shownDocRef = useRef<BodyDoc | null>(null);
+  if (ownerChanged) shownDocRef.current = null;
 
   function onEditorChange(next: BodyDoc) {
     shownDocRef.current = next;
@@ -269,6 +317,7 @@ export function EntityBody({
 
   /** Правка из тумблера — наоборот, ДОЛЖНА сесть в редактор: он её ещё не видел. */
   function onMarkdownChange(next: BodyDoc) {
+    if (rewriteLocked.current) return;
     // Здесь запоминаем САМИ, а не ждём `onAccept`: редактор сейчас размонтирован (экран рисует
     // одно из двух) и встанет уже С ЭТИМ документом в `content` — подмены, а значит и извещения,
     // не случится вовсе.
@@ -309,8 +358,10 @@ export function EntityBody({
    */
   const prevMarkdownRef = useRef(asMarkdown);
   const openedWithRef = useRef<Entity['bodyDoc']>(entity.bodyDoc);
+  if (ownerChanged) openedWithRef.current = entity.bodyDoc;
   if (prevMarkdownRef.current !== asMarkdown) {
     prevMarkdownRef.current = asMarkdown;
+    if (!asMarkdown) markdownDirty.current = false;
     const shown = shownDocRef.current;
     if (asMarkdown) {
       openedWithRef.current = entity.bodyDoc;
@@ -323,8 +374,41 @@ export function EntityBody({
     }
   }
 
+  // Returned revision относится к собственной переписи. Сажаем её документ в ОБА режима
+  // до снятия readOnly, не обновляем сырой буфер от произвольного refetch.
+  const rewritten = markdownRewriteRevision.current;
+  if (rewritten !== undefined && shownBodyRevision(entity) >= rewritten && serverDoc !== null) {
+    markdownRewriteRevision.current = undefined;
+    shownDocRef.current = serverDoc;
+    openedWithRef.current = entity.bodyDoc;
+    markdownReseat.current += 1;
+    rewriteLocked.current = false;
+    if (localDoc !== null) setLocalDoc(null);
+  }
+  const settledBody = useCallback(async () => {
+    if (markdownDirty.current) return 'blocked' as const;
+    const result = await save.flushSettled();
+    return markdownDirty.current ? ('blocked' as const) : result;
+  }, [save.flushSettled]);
+  const beginRewrite = useCallback(() => {
+    const epoch = undoEpoch();
+    rewriteLocked.current = true;
+    const token = ++rewriteToken.current;
+    const finish = save.beginRewrite();
+    return (revision?: number) => {
+      if (!isUndoEpoch(epoch) || !rewriteAlive.current || token !== rewriteToken.current) return;
+      markdownRewriteRevision.current = revision;
+      if (revision === undefined) rewriteLocked.current = false;
+      finish(revision);
+    };
+  }, [save.beginRewrite]);
+
   // Локальная копия ради сужения типа: внутри колбэка кнопки TS `save.pendingDraft` уже не
   // сужает — поле объекта могло бы смениться между рендером и нажатием.
+  useEffect(
+    () => registerBodyFlush(entity.id, settledBody, save.revisionForRewrite, beginRewrite),
+    [entity.id, settledBody, save.revisionForRewrite, beginRewrite],
+  );
   const draft = save.pendingDraft;
 
   /**
@@ -342,6 +426,14 @@ export function EntityBody({
           перечитать запись, оставив на экране прежнюю тревогу, — обман. Флаги заголовка и
           чекбокса (`TitleBlock`) и свойств (секции аспектов) сюда не выведены: 409 у этих
           правок не бывает (см. `checksVersion` в useEntityDetail). */}
+      {save.rewritePending && (
+        <div role="status" className="flex items-center gap-2 text-sm">
+          <span>Текст изменяется — ждём обновления записи</span>
+          <Button size="sm" variant="outline" onClick={onRefresh}>
+            Обновить текст
+          </Button>
+        </div>
+      )}
       {(screenConflict || save.conflict) && (
         <div
           role="alert"
@@ -352,8 +444,14 @@ export function EntityBody({
             variant="outline"
             size="sm"
             onClick={() => {
+              save.offerConflictDraft();
               onRefresh();
               save.dismissConflict();
+              // Выход из конфликта в открытом экране (рулинг R-17): редактор СРАЗУ сажает серверный текст — даже тот
+              // же объект, что уже в кэше, — и его ревизия становится основой; местная копия больше не заслоняет базу.
+              // Последний набор предложен отдельным черновиком: «Оставить моё / Отбросить» сразу доступны.
+              setLocalDoc(null);
+              setReseat((n) => n + 1);
             }}
           >
             Обновить
@@ -447,6 +545,12 @@ export function EntityBody({
               и уходит в тумблер. То есть обе ветки дают одно и то же: показанное. */}
           <MarkdownToggle
             doc={shownDocRef.current ?? doc}
+            readOnly={save.rewritePending}
+            isReadOnly={() => rewriteLocked.current}
+            reseat={markdownReseat.current}
+            onDirty={(dirty) => {
+              markdownDirty.current = dirty;
+            }}
             onChange={onMarkdownChange}
             onClose={onCloseMarkdown}
           />
@@ -456,11 +560,17 @@ export function EntityBody({
         // блок законен, и снаружи род шаблона сюда не протекает.
         <BodyKindProvider kind={bodyKindOf(entity)}>
           <EditorShell
+            entityId={entity.id}
+            readOnly={save.rewritePending}
             doc={doc}
-            markdown={entity.body}
+            markdown={entity.body ?? ''}
             onChange={onEditorChange}
+            reseat={reseat}
             onAccept={(accepted) => {
               shownDocRef.current = accepted;
+              // Редактор показывает документ КЭША — основа следующей правки теперь его ревизия (рулинг R-17). Местная
+              // копия (черновик, тумблер) ревизию кэша не несёт: её основу ставит сам жест.
+              if (localDoc === null) save.onShown(shownBodyRevision(entity));
             }}
           />
         </BodyKindProvider>
@@ -479,7 +589,7 @@ export function EntityBody({
 export function ReadOnlyEntityBody({ entity }: { entity: Entity }) {
   return (
     <BodyKindProvider kind={bodyKindOf(entity)}>
-      <EditorShell doc={null} markdown={entity.body} onChange={() => {}} readOnly />
+      <EditorShell doc={null} markdown={entity.body ?? ''} onChange={() => {}} readOnly />
     </BodyKindProvider>
   );
 }

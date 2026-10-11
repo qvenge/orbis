@@ -154,7 +154,8 @@ const SIMILARITY_WORD_RE = /[\p{L}\p{N}]+/gu;
  * единица-заголовок (спека §5.9: «контейнеры и их части — единицы») — см. `layoutHeading`.
  *
  * Единицы (всё остальное): `paragraph`, `heading`, `codeBlock`, `rawBlock`, `queryBlock`,
- * `recordBlock`, `aspectCard`, `ownCards`, `hostBlock` (1б), `horizontalRule`, `listItem`, `taskItem`,
+ * `recordBlock`, `aspectCard`, `ownCards`, `hostBlock` (1б), `paramBlock` (1в — параметр страницы
+ * одной единицей: смена умолчания или вариантов — одна правка), `horizontalRule`, `listItem`, `taskItem`,
  * `tableRow`. Список
  * ЗАКРЫТЫМ не делается намеренно: нода-новичок схемы должна приезжать единицей сама собой, а
  * не исчезать из диффа молча.
@@ -276,6 +277,8 @@ function collectText(node: JSONContent | undefined, out: string[], breakText: st
   }
   if (node.type === 'ownCards') out.push(`{{cards: own}}`);
   if (node.type === 'hostBlock' && typeof attrs.name === 'string') out.push(`{{${attrs.name}}}`);
+  // Параметр страницы (1в): печать атома — сам текст маркера (`nodes/param-block.ts`).
+  if (node.type === 'paramBlock' && typeof attrs.text === 'string') out.push(attrs.text);
   if (breakText !== '' && node.type === 'hardBreak') out.push(breakText);
   for (const child of node.content ?? []) collectText(child, out, breakText);
 }

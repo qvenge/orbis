@@ -171,9 +171,15 @@ function openRecord(
     }
     if (path === 'entity.updateBatch') {
       applyBatch(world, input);
-      return { actionId: ACTION_ID, results: [] };
+      return { actionId: ACTION_ID, consequences: false, results: [] };
     }
-    if (path === 'ai.undo') return { ok: true, actionId: ACTION_ID, results: [] };
+    if (path === 'ai.undo')
+      return {
+        actionId: ACTION_ID,
+        undone: { id: ACTION_ID, title: 'Правка' },
+        pinnedVersions: [],
+        bodyRevisions: [],
+      };
     return blocks(path, input) ?? screenHandler(path, input);
   };
   return renderWithProviders(
@@ -347,7 +353,7 @@ describe('выбор шаблона (§4.2)', () => {
             return [crashing];
           if (path === 'entity.updateBatch') {
             batches.push((input as { operations: unknown }).operations);
-            return { actionId: ACTION_ID, results: [] };
+            return { actionId: ACTION_ID, consequences: false, results: [] };
           }
           return undefined;
         },
@@ -369,7 +375,8 @@ describe('выбор шаблона (§4.2)', () => {
         tool: 'entity_update',
         input: {
           id: f.entity.id,
-          expectedUpdatedAt: f.entity.updatedAt,
+          // Ревизия тела записи экрана (§8.1): у фикстуры её нет — экран шлёт 0, и настоящий сервер отказал бы разбором.
+          expectedBodyRevision: f.entity.bodyRevision ?? 0,
           body: plan.body,
           aspects: { attach: [PAGE_ASPECT] },
         },

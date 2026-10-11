@@ -8,6 +8,7 @@ import type { GraphId } from '@orbis/shared';
 import { globalThreadId, memoryRuleSuggestionId, newId } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import {
+  accountOf,
   adminDb,
   appDb,
   executeWithFixtureCategories as execute,
@@ -16,18 +17,14 @@ import {
   requireEnv,
   truncateAll,
 } from '../../test/helpers';
+import { journalOf } from '../../test/journal-helpers';
 import { appendMessage } from '../chat/messages';
 import { ensureGlobalThread } from '../chat/threads';
-import { chatMessages } from '../db/schema';
+import { actionJournal, chatMessages } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
-import { makeChatJournalSink } from '../executor/journal';
-import type {
-  ActionRecord,
-  ExecuteOk,
-  ExecuteRequest,
-  ExecuteResult,
-  WireEntity,
-} from '../executor/types';
+import { makeJournalSink } from '../executor/journal';
+import type { JournalEntry } from '../executor/journal-read';
+import type { ExecuteOk, ExecuteRequest, ExecuteResult, WireEntity } from '../executor/types';
 import { appRouter } from '../router';
 import { dispatchTool, type ToolCallCtx } from '../tools/dispatch';
 import type { Card } from '../tools/registry';
@@ -42,7 +39,7 @@ import {
 requireEnv();
 
 const { db, client } = appDb();
-const sink = makeChatJournalSink();
+const sink = makeJournalSink();
 
 beforeAll(async () => {
   await truncateAll();
@@ -175,14 +172,9 @@ async function cardsOf(user: GraphId, kind: string): Promise<Card[]> {
     .filter((c) => c.kind === kind);
 }
 
-/** Action из журнала по id (metadata.actions[0] audit-сообщения). */
-async function actionById(actionId: string): Promise<ActionRecord> {
-  const probe = JSON.stringify({ actions: [{ id: actionId }] });
-  const rows = await adminRows(
-    sql`SELECT metadata FROM chat_messages WHERE metadata @> ${probe}::jsonb LIMIT 1`,
-  );
-  const md = rows[0]?.metadata as { actions?: ActionRecord[] } | undefined;
-  const action = md?.actions?.find((a) => a.id === actionId);
+/** Действие из журнала графа по id (API журнала, помощник `journalOf`). */
+async function actionById(user: GraphId, actionId: string): Promise<JournalEntry> {
+  const action = await journalOf(user, actionId);
   if (!action) throw new Error(`action ${actionId} не найден в журнале`);
   return action;
 }
@@ -202,8 +194,8 @@ async function categoryRefOf(txnId: string): Promise<string | undefined> {
  * ключ существования у containment'а нет, а ключ `props` без значения затянул бы под
  * пробу любую правку любого свойства. `to` — те категории, в которые переносили.
  */
-async function scanActions(user: GraphId, to: readonly string[]): Promise<ActionRecord[]> {
-  return withIdentity(db, personal(user), (tx) => scanFinancialUpdates(tx, to));
+async function scanActions(user: GraphId, to: readonly string[]): Promise<JournalEntry[]> {
+  return withIdentity(db, personal(user), (tx) => scanFinancialUpdates(tx, user, to));
 }
 
 /** Владелец с двумя категориями: «Еда» (from) и «Развлечения» (to). */
@@ -438,7 +430,7 @@ describe('эскалация повторных исправлений кате�
     const action = ok(
       await recategorizeAs(viaAction, { id: 'finance/recategorize', module: 'finance' }),
     );
-    expect((await actionById(action.actionId)).type).toBe('action');
+    expect((await actionById(user, action.actionId)).type).toBe('action');
     // Та же операция под двумя типами — то же число совпадений: скан видит обе строки.
     expect((await scanActions(user, [fun])).map((a) => a.id).sort()).toEqual(
       [batch.actionId, action.actionId].sort(),
@@ -500,7 +492,7 @@ describe('эскалация повторных исправлений кате�
       await maybeSuggestRule({
         db,
         identity: personal(user),
-        action: await actionById(r.actionId),
+        action: await actionById(user, r.actionId),
       }),
     ).toEqual({ suggested: false, reason: 'not_recategorization' });
   });
@@ -510,7 +502,11 @@ describe('эскалация повторных исправлений кате�
     await recategorize(user, await createTxn(user, 'SBOL 1234', food), fun);
     const actionId = await recategorizeRaw(user, await createTxn(user, 'SBOL 5678', food), fun);
     expect(
-      await maybeSuggestRule({ db, identity: personal(user), action: await actionById(actionId) }),
+      await maybeSuggestRule({
+        db,
+        identity: personal(user),
+        action: await actionById(user, actionId),
+      }),
     ).toEqual({ suggested: false, reason: 'empty_pattern' });
     expect(await cardsOf(user, 'memory_rule_suggestion')).toEqual([]);
   });
@@ -609,7 +605,7 @@ describe('эскалация повторных исправлений кате�
       await maybeSuggestRule({
         db,
         identity: personal(user),
-        action: await actionById(amount.actionId),
+        action: await actionById(user, amount.actionId),
       }),
     ).toEqual({ suggested: false, reason: 'not_recategorization' });
   });
@@ -617,44 +613,40 @@ describe('эскалация повторных исправлений кате�
   test('14. скан журнала ограничен потолком выборки и берёт свежие действия', async () => {
     const { user, food, fun } = await freshOwner();
     const extra = 3;
-    // Форма audit-строки повторена руками: гнать 200+ рекатегоризаций через executor
-    // ради проверки потолка незачем, а под пробу строка обязана попадать
+    // Строка журнала повторена руками: гнать 200+ рекатегоризаций через executor ради проверки потолка
+    // незачем, а под пробу строка обязана попадать. Время — явное, чтобы «свежие» было проверяемо.
     const made = Array.from({ length: JOURNAL_SCAN_LIMIT + extra }, (_, i) => {
       const actionId = newId();
       return {
         actionId,
         row: {
-          id: newId(),
+          graphId: user,
+          id: actionId,
+          type: 'entity_updated',
+          entityId: fun,
+          actorUserId: accountOf(user),
+          actorKind: 'owner',
+          source: 'ui',
+          mechanism: 'user',
           threadId: globalThreadId(user),
-          role: 'system',
-          content: `псевдо-audit ${i}`,
-          metadata: {
-            actions: [
-              {
-                id: actionId,
-                type: 'entity_updated',
-                operations: [
-                  {
-                    op: 'entity_update',
-                    payload: { id: fun, props: { 'orbis/finance_category': fun } },
-                  },
-                ],
-                inverse: [
-                  {
-                    op: 'entity_update',
-                    payload: { id: fun, props: { 'orbis/finance_category': food } },
-                  },
-                ],
-              },
-            ],
-          },
+          title: `псевдо-правка ${i}`,
+          cardTool: 'entity_update',
+          operations: [
+            { op: 'entity_update', payload: { id: fun, props: { 'orbis/finance_category': fun } } },
+          ],
+          inverse: [
+            {
+              op: 'entity_update',
+              payload: { id: fun, props: { 'orbis/finance_category': food } },
+            },
+          ],
           createdAt: new Date(Date.now() - i * 60_000), // i=0 — самое свежее
         },
       };
     });
     await withIdentity(db, personal(user), async (tx) => {
       await ensureGlobalThread(tx, user);
-      await tx.insert(chatMessages).values(made.map((m) => m.row));
+      await tx.insert(actionJournal).values(made.map((m) => m.row));
     });
 
     const scanned = (await scanActions(user, [fun])).map((a) => a.id).sort();
@@ -676,7 +668,11 @@ describe('эскалация повторных исправлений кате�
     // Исправление ОДНО: если бы подавление проверялось после скана, ответом было бы
     // not_repeated — то есть журнал читался бы там, где ответ уже известен
     expect(
-      await maybeSuggestRule({ db, identity: personal(user), action: await actionById(actionId) }),
+      await maybeSuggestRule({
+        db,
+        identity: personal(user),
+        action: await actionById(user, actionId),
+      }),
     ).toEqual({ suggested: false, reason: 'already_suggested' });
   });
 
@@ -896,7 +892,11 @@ describe('эскалация повторных исправлений кате�
     await recategorizeRaw(user, await createTxn(user, 'ПЯТЕРОЧКА 999', food), fun);
     const actionId = await recategorizeRaw(user, await createTxn(user, 'ПЯТЕРОЧКА 843', food), fun);
     expect(
-      await maybeSuggestRule({ db, identity: personal(user), action: await actionById(actionId) }),
+      await maybeSuggestRule({
+        db,
+        identity: personal(user),
+        action: await actionById(user, actionId),
+      }),
     ).toEqual({ suggested: false, reason: 'already_suggested' });
     // новой карточки не появилось: по «пятерочка» осталась ровно одна — засеянная
     const offers = await cardsOf(user, 'memory_rule_suggestion');
@@ -1028,7 +1028,7 @@ describe('эскалация: уборочная фаза', () => {
       await maybeSuggestRule({
         db,
         identity: personal(user),
-        action: await actionById(r.actionId),
+        action: await actionById(user, r.actionId),
       });
       expect(spy.mock.calls.length).toBe(1);
     } finally {

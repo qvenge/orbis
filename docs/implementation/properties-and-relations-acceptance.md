@@ -2,7 +2,19 @@
 
 Дата: 2026-10-11. Проверяемая ветка: `codex/properties-and-relations`; база Task 10: `d97723a4b8f0ebd46dc7f61f3d5441cdc6a1681a`. Проверенный product HEAD: `c127ec149f49b54fbbc26f21d0afed1abd7e64a3`; ordinary full web/acceptance checkpoint: `b838fe98`. Исходный HEAD полного aggregate: `fa65d758` (WB-PF-01/02); `2ef98b43` восстановил query-free каркас скрытой карточки версий. Итоговый docs commit — commit, вводящий этот документ. Спецификация: [2026-10-10-properties-and-relations-design.md](../superpowers/specs/2026-10-10-properties-and-relations-design.md).
 
-Состояние: **реализовано в ветке, выпуск не подтверждён**. Automated gates и финальная локальная браузерная приёмка закрыты с точной историей ниже. PR, merge и deploy не выполнялись. Проверка мобильного viewport не подтверждает клавиатуру на физическом телефоне.
+Состояние: **реализовано в ветке, выпуск не подтверждён**. Исходные automated gates и локальная браузерная приёмка закрыты с точной историей ниже; после интеграции актуального main ожидаются CI и новая ручная приёмка. PR, merge в main и deploy не выполнялись. Проверка мобильного viewport не подтверждает клавиатуру на физическом телефоне.
+
+## Интеграция с актуальным main перед выпуском
+
+После завершения исходной приёмки пользователь разрешил выпуск. В изолированную feature-ветку влит текущий deployed `origin/main` `6fa20edd9e149b68b081ca225ad45649a51c936a` без rebase/force. История исходной приёмки ниже относится к прежней базе; она не заменяет gates объединённой версии. Push main и deploy этим интеграционным commit не выполняются.
+
+Сохранены актуальные JournalRef `{ actionId, consequences }`, action_journal и облегчённое чтение записи с bodyRevision. Панель использует текущий shared Undo с global stack, досылом тела, замками переписывания и явным продолжением UNDO_TEXT_CHANGED. Подтверждённые vanilla-команды самостоятельно регистрируются в общем Undo после проверки JournalRef; transport без валидного receipt не создаёт Undo. Ответы и delayed host imports прежней сессии не меняют панель/плашки/stack. Смена владельца очищает прежнюю панель; смена responsive frame той же сессии сохраняет raw/pending/unknown. True-server cache timestamp сохранён при optimistic и rollback updates. Из текущего producer извлечён PinVersionDialog с исходными revision/flush/epoch/id guards; скрытые версии по-прежнему не читаются.
+
+Локальная проверка объединённого кода: 441 web tests / 31 files PASS, 46 server tests / 4 files PASS; дополнительные current journal/Undo/host seams — 56 PASS / 3 files и owner/session/responsive — 8 PASS. Affected host/body/history/lazy run дал 471 PASS и пять failures нового upstream detail suite из-за заменяемого DOM; точные live-container assertions закрыли все пять без повышения deadline. All three typechecks, lint, 211 scripts и actual legacy gate PASS. Полный локальный aggregate не запускался: обязательный полный shared/server/web/scripts/perf/legacy/build/lazy gate выполняется CI на точном frozen feature SHA. **CI и новая ручная интеграционная приёмка ещё ожидаются; выпуск не подтверждён.**
+
+Настоящие миграции, bootstrap, seed и 185 pgTAP прошли штатным db:prepare в новом одноразовом CI-equivalent контейнере `supabase/postgres:17.6.1.140`, только loopback 55439, database postgres. Прежняя выделенная база 54322 и production не менялись. Новых миграций поверх текущего main feature не добавляет; исторические production migrations не повторяются.
+
+Production build и текущий неизменный CI lazy/PWA gate PASS: DetailScreen **23 264 B gzip <=34 889**, eager closure **317 082 B gzip-9 <=325 750**, 33 files. Порог 325 750 взят из актуального upstream R93, не поднят интеграцией. Сохранены все current source/static/text guards и feature SW precache guard. Исходные замеры 325 238 ниже остаются историческим свидетельством прежней базы.
 
 ## Исполняемая граница приёмки
 

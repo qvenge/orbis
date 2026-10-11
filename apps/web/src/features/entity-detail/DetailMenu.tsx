@@ -1,4 +1,5 @@
 import {
+  type BodyActionInfo,
   contendersOf,
   HOME_PROPERTY,
   openPlacesOf,
@@ -11,8 +12,8 @@ import {
 import {
   HOST_SHELL_KEY,
   isHostTemplateRecord,
-  SUPPLY_KEYS,
-  type SupplyKey,
+  SUPPLY_KEY_VALUES,
+  type SupplyKeyValue,
 } from '@orbis/shared/supply';
 import {
   AppWindow,
@@ -58,7 +59,8 @@ import { type UpdateBatchOperation, useUpdateBatch } from '../page/useUpdateBatc
 import { REVERT, useSupplyAction } from '../supply/useSupply';
 import { settleBody } from './body-gate';
 import type { BodyGateRef } from './EntityBody';
-import type { WireEntity } from './record-host';
+import { useRevertTextItem } from './RevertTextItem';
+import { shownBodyRevision, type WireEntity } from './record-host';
 import { usePageIdentityActions } from './usePageIdentityActions';
 
 /**
@@ -172,6 +174,8 @@ export function DetailMenu(props: DetailMenuProps & ScreenMenuContentProps) {
 interface RecordMenuProps {
   onOpenProperties?: () => void;
   propertiesUnavailableReason?: string;
+  /** Действующий сеанс текущего тела считает сервер, независимо от памяти стрелок. */
+  bodyAction: BodyActionInfo | null;
   onArchive: () => void;
   onCopyLink: () => void;
   /** Закрепить ВЕРСИЮ ТЕЛА (С11). */
@@ -198,18 +202,18 @@ const TEMPLATE_FOR = 'Сделать шаблоном для…';
 /**
  * Открытый диалог меню: вопрос случая 3 «Изменить вид» или «Сделать шаблоном для…».
  *
- * Диалог ПОМНИТ, про какую запись и какую её версию его открыли: `entityId`, `updatedAt` и план,
- * построенный из тела этой версии, — снимок на момент жеста, а не живой проп. Меню монтируется без
- * key (`DetailMenuSlot`) и переживает переход на соседнюю запись: читай диалог проп `entity` при
- * нажатии кнопки, он записал бы план одной записи в другую. И сверка `expectedUpdatedAt` обязана
- * идти по той версии, из тела которой построен план: версия, прочитанная позже (рефетч при
- * открытом диалоге), пропустила бы правку мимо экрана, и шаблон затёр бы её молча.
+ * Диалог ПОМНИТ, про какую запись и какую ревизию её тела его открыли: `entityId`, `bodyRevision` и
+ * план, построенный из тела этой ревизии, — снимок на момент жеста, а не живой проп. Меню монтируется
+ * без key (`DetailMenuSlot`) и переживает переход на соседнюю запись: читай диалог проп `entity` при
+ * нажатии кнопки, он записал бы план одной записи в другую. И замок текста обязан сверять ту
+ * ревизию, из тела которой построен план: ревизия, прочитанная позже (рефетч при открытом диалоге),
+ * пропустила бы правку мимо экрана, и шаблон затёр бы её молча.
  */
 type MenuDialog =
   | {
       kind: 'change-view';
       entityId: string;
-      updatedAt: string;
+      bodyRevision: number;
       plan: Extract<ChangeViewPlan, { case: 3 }>;
     }
   | { kind: 'template-for'; entityId: string; value: unknown; homeFor: string | null }
@@ -220,6 +224,7 @@ type MenuDialog =
 function RecordMenu({
   onOpenProperties,
   propertiesUnavailableReason,
+  bodyAction,
   onArchive,
   onCopyLink,
   onPinVersion,
@@ -236,6 +241,7 @@ function RecordMenu({
   hostItems,
   frameMenu,
 }: RecordMenuProps & ScreenMenuContentProps & { frameMenu: ReturnType<typeof useFrameMenu> }) {
+  const revertText = useRevertTextItem(entity.id, bodyAction);
   const runBatch = useUpdateBatch();
   const pageActions = usePageIdentityActions(entity, bodyGate);
   const runSupply = useSupplyAction();
@@ -255,10 +261,10 @@ function RecordMenu({
    * при «Сохранить версией» ей предшествует закрепление тела. Порядок значим: версия снимает текст
    * до замены.
    *
-   * `expectedUpdatedAt` — версия записи, ИЗ ТЕЛА КОТОРОЙ построен `body` (§5.2): в случаях 1–2 это
-   * версия на момент нажатия пункта, в случае 3 — снимок в состоянии диалога, а не проп на момент
-   * кнопки. Правка тела мимо экрана после этого чтения даёт серверу другую версию, и пачка
-   * отвергается целиком (`STALE_VERSION`) — шаблон не затирает её молча.
+   * `expectedBodyRevision` — ревизия тела, ИЗ КОТОРОГО построен `body` (замок текста, спека скорости
+   * §8.1): в случаях 1–2 это ревизия на момент нажатия пункта, в случае 3 — снимок в состоянии
+   * диалога, а не проп на момент кнопки. Правка тела мимо экрана после этого чтения даёт серверу
+   * другую ревизию, и пачка отвергается целиком (`STALE_VERSION`) — шаблон не затирает её молча.
    */
   /**
    * Можно ли переписать запись пачкой прямо сейчас (С1а-8 «текст не теряется»; финальное ревью,
@@ -271,9 +277,9 @@ function RecordMenu({
    */
   const bodySettled = (): boolean => settleBody(bodyGate.current, show);
 
-  const becomePage = (id: string, updatedAt: string, body: string): UpdateBatchOperation => ({
+  const becomePage = (id: string, bodyRevision: number, body: string): UpdateBatchOperation => ({
     tool: 'entity_update',
-    input: { id, expectedUpdatedAt: updatedAt, body, aspects: { attach: [PAGE_ASPECT] } },
+    input: { id, expectedBodyRevision: bodyRevision, body, aspects: { attach: [PAGE_ASPECT] } },
   });
 
   const copyLinkItem: DropdownMenuItem = {
@@ -324,6 +330,7 @@ function RecordMenu({
         icon: <History size={16} aria-hidden />,
         onSelect: onPinVersion,
       },
+      ...(revertText === null ? [] : [revertText]),
       // Пункт появляется, только когда есть что править (см. проп): предлагать действие,
       // которое молча ничего не делает, хуже, чем не предлагать его вовсе.
       ...(onToggleMarkdown === undefined
@@ -347,19 +354,22 @@ function RecordMenu({
    * изменена и печать эталона в ней лежит (`canRevert`); запись, выведенная из поставки (снят аспект,
    * R-17), — уже не запись поставки, пункта нет. Как и прочие переписывающие жесты, ждёт досыла тела:
    * возврат поверх неотправленного текста потерял бы его мимо версий.
+   *
+   * Ключ — любой допустимый, и снятый с поставки тоже (1в §6.3: правленая Upcoming 1б): возврат идёт к
+   * печати эталона В ЗАПИСИ, эталон кода ему не нужен.
    */
   function revertItems(): DropdownMenuItem[] {
     const key = entity.props[SUPPLY_KEY];
     // Оболочка хоста возвращается только через диалог исчезающих разделов (раздел «Приложение»).
     if (!canRevert(entity) || key === HOST_SHELL_KEY) return [];
-    if (!(SUPPLY_KEYS as readonly unknown[]).includes(key)) return [];
+    if (!(SUPPLY_KEY_VALUES as readonly unknown[]).includes(key)) return [];
     return [
       {
         label: REVERT,
         icon: <RotateCcw size={16} aria-hidden />,
         onSelect: () => {
           if (!bodySettled()) return;
-          void runSupply({ kind: 'revert', key: key as SupplyKey });
+          void runSupply({ kind: 'revert', key: key as SupplyKeyValue, title: entity.title });
         },
       },
     ];
@@ -534,13 +544,19 @@ function RecordMenu({
 
   function changeView(templateText: string) {
     if (!bodySettled()) return;
-    const plan = changeViewPlan(templateText, entity.body);
+    // Экран просит тело всегда (DETAIL_INCLUDE).
+    const plan = changeViewPlan(templateText, entity.body ?? '');
     // Случай 3 — вопрос владельцу: молча ни убрать текст, ни дописать его нельзя (С1а-8).
     if (plan.case === 3) {
-      setDialog({ kind: 'change-view', entityId: entity.id, updatedAt: entity.updatedAt, plan });
+      setDialog({
+        kind: 'change-view',
+        entityId: entity.id,
+        bodyRevision: shownBodyRevision(entity),
+        plan,
+      });
     } else {
       void runBatch(
-        [becomePage(entity.id, entity.updatedAt, plan.body)],
+        [becomePage(entity.id, shownBodyRevision(entity), plan.body)],
         'Вид записи теперь свой',
         {
           action: CHANGE_VIEW,
@@ -641,7 +657,7 @@ function RecordMenu({
                   tool: 'entity_version_pin',
                   input: { entity_id: dialog.entityId, label: TEXT_BEFORE_VIEW_CHANGE },
                 },
-                becomePage(dialog.entityId, dialog.updatedAt, dialog.plan.hideAsVersion),
+                becomePage(dialog.entityId, dialog.bodyRevision, dialog.plan.hideAsVersion),
               ],
               'Вид записи теперь свой, текст — в версии',
               { action: CHANGE_VIEW },
@@ -651,7 +667,7 @@ function RecordMenu({
             setDialog(null);
             if (!bodySettled()) return;
             void runBatch(
-              [becomePage(dialog.entityId, dialog.updatedAt, dialog.plan.showBelow)],
+              [becomePage(dialog.entityId, dialog.bodyRevision, dialog.plan.showBelow)],
               'Вид записи теперь свой',
               { action: CHANGE_VIEW },
             );

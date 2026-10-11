@@ -18,7 +18,8 @@
 Три workspace-пакета Bun-монорепо:
 
 ```
-apps/web        — PWA (React): экраны (Browser, Budget, Agenda, чат),
+apps/web        — PWA (React): экраны хоста (чат, поиск, настройки;
+                  «Записи», Повестка и прочие места — страницы из блоков),
                   переиспользуемый чат-компонент (используется и для
                   глобального треда, и для треда сущности, PRD 01 §7.3),
                   клиентский fast-path-парсер (PRD 01 §7.5, детерминированный,
@@ -57,9 +58,20 @@ apps/web        — PWA (React): экраны (Browser, Budget, Agenda, чат),
                   ⌘K — features/search; настройки «Приложения и расширения»,
                   маска расширений web — features/settings (extension-mask);
                   блок-экран «Записи» — features/browser (RecordsBlock,
-                  своя точка лени RecordsBlockSlot); экраны Бюджета,
-                  Повестки и импорта — каталог legacy-1v, исключённый из
-                  сборки и проверок до их среза
+                  своя точка лени RecordsBlockSlot);
+                  срез 1в [D47]: параметр страницы — features/page/params.tsx
+                  (значения параметров экрана: история, у раздела — после
+                  перезапуска), переключатель — page/blocks/ParamSwitch
+                  (ленивый чанк, точка лени ParamSwitchSlot), лента по
+                  дням — page/blocks/DayGroups (ленивый чанк, точка лени
+                  DayGroupsSlot; подписи дня и времени в поясе ответа —
+                  page/blocks/day-format.ts, единственный импортёр — лента);
+                  экраны Бюджета, Повестки и импорта (каталог legacy-1v),
+                  features/agenda и модули без живого импортёра удалены
+                  срезом 1в — до среза «Бюджет» ручки import.* без
+                  потребителя в web, из budget.* web зовёт две:
+                  confirmPurchase (PlannedToFactCard) и
+                  envelopeForCategory (EntityCard)
 
 apps/server     — Hono + @hono/trpc-server: tRPC-роутеры entity/relation/
                   aspect/user/ai/chat/agentRun/version/routine (PRD 01 §9.1),
@@ -99,8 +111,21 @@ apps/server     — Hono + @hono/trpc-server: tRPC-роутеры entity/relatio
                   приложения — routers/apps.ts (app.setDisabled, app.archive),
                   механизм поставки — supply/{hash,records,mechanism} и
                   routers/supply.ts (supply.*), заведение графа — единственная
-                  запись онбординга — seed/setup-graph.ts, разовый перевод
-                  данных 1б — db/migrate-1b.ts (ops.ts migrate-1b)
+                  запись онбординга — seed/setup-graph.ts (разовый перевод
+                  данных 1б db/migrate-1b.ts исполнен 28.09.2026 и снят
+                  срезом 1в);
+                  срез 1в [D47]: язык контрактов в SQL — query/contract-sql
+                  (адрес слота и значение «когда» по привязкам аспектов
+                  записи, даты «когда» одним LATERAL на запись), подстановка
+                  параметров страницы — query/params (substituteParams, до
+                  окна материализации), раскладка по дням и признак
+                  «закрыто» — routers/entity-blocks (layoutDayGroups из
+                  shared, closedIds), прод-операция 1в — db/migrate-1v.ts
+                  (ops.ts migrate-1v: --report до миграции 0023, --apply
+                  одной пачкой system, --undo, --rehearsal), миграция данных
+                  0023_agenda_subscription_drop; движок подписки Повестки
+                  subscriptions/agenda и ручка routers/agenda (agenda.list)
+                  удалены
 
 packages/shared — Zod-схемы wire-контрактов (вход/выход tRPC-процедур,
                   общие типы клиента и сервера, PRD 01 §9.1), канон запроса —
@@ -126,12 +151,38 @@ packages/shared — Zod-схемы wire-контрактов (вход/выхо�
                   recordIdOfUrl; history-model: navReduce, launchModeOf);
                   эталоны поставки — листовой сабпат supply (etalons, lists;
                   печати — supply/print, supplyStatusOf); контракты
-                  приложений — contracts/apps (PRD 01 §3.19, §3.20, §9.5)
+                  приложений — contracts/apps (PRD 01 §3.19, §3.20, §9.5);
+                  срез 1в [D47]: адрес контракта и ссылка на параметр в
+                  Q-AST — query/ast (QueryFieldRef, QueryContractAddress,
+                  QueryParamValue; pageQueryAstSchema), лексика языка —
+                  query/lexicon (QUERY_DATE_TOKENS), токены и два края —
+                  query/tokens (tokenEdges, QUERY_DATE_TOKEN_LABELS,
+                  tokenBoundaryForms), «только в страницах» — query/page-only
+                  (pageOnlyFeatureIn), правило значения контракта —
+                  registry/contract-value (contractValueRuleOf,
+                  addressKindOf), раскладка по дням — pages/day-groups
+                  (layoutDayGroups), провод entity.blocks с params, groups,
+                  sums, closedIds, today, timeZone — contracts/blocks
+                  (PRD 01 §6.5, §9.1)
 ```
 
 **Примечание о размещении fast-path-парсера.** PRD 01 §7.5 называет его буквально «клиентским парсером» и требует офлайн-работы без сети — это возможно только при выполнении в `apps/web`. `apps/server` не содержит второй копии текстового парсера: он получает от клиента уже структурированный `entity_create` (через retry-буфер или напрямую) и валидирует его тем же executor-конвейером, что и любую другую мутацию (§2). `packages/shared` не хранит правил распознавания fast-path-паттернов — только контракты (Zod-схемы) полезной нагрузки, которую парсер формирует.
 
 **Примечание о размещении экрана согласия OAuth.** Authorization server живёт в `apps/server`, но страница, на которой владелец жмёт «Разрешить», — в `apps/web`, и серверного роута под `GET /oauth/authorize` нет вовсе: запрос доходит до SPA-fallback, страницу распознаёт клиент. Причина не в удобстве: сессию владельца держит веб-клиент (Supabase-токен в `localStorage`), и серверный HTML её не увидел бы — ему понадобилась бы собственная кука и второй способ логина. Сама выдача кода при этом остаётся серверной (tRPC-процедуры согласия), то есть граница «UI решает, сервер выдаёт» не размывается. Путь страницы записан один раз в `packages/shared` и читается обеими сторонами — метаданные AS и SPA обязаны называть один адрес.
+
+### Модули плана А (реализованы в ветке; прод — задача 24)
+
+| Область | Фактические модули и контракт |
+|---|---|
+| Серверный журнал | `executor/journal.ts` — sink; `journal-read.ts` — единое чтение; `body-chain.ts` — раскрутка действия тела; `text-session.ts` — сеанс/подпись; `journal-ref.ts` — ссылки ответов |
+| Тред и перенос | `journal/thread-page.ts` — две выборки и общий курсор; `journal/transfer.ts` — канонические SELECT/перенос legacy; `db/migrate-speed-a.ts` — report/apply/засев/снятие старых предложений, временная операция |
+| Разговоры | `chat/processing.ts`, `chat/messages.ts` — единственный путь записи сообщений; граф ими не пишется |
+| Замеры | server `perf/server-timing.ts`, `perf/rate-limit.ts`, `routers/perf.ts`, `db/perf-report.ts`; web `perf/{boot,collector,transport,vitals,marks}.ts`; `scripts/lab/{scenario,run,summary}.ts` |
+| Отмена web | `features/undo/{undo-action,undo-stack,undo-toast,undo-epoch,mutation-epoch,body-provenance,undo-binding,journal-ref,useUndoHotkey}.ts` (хуки/реальный суффикс — по файлам); native Toaster и lazy вход `undo-lazy.ts` |
+| Заголовок и тело | `features/entity-editor/{editor-cache,arrows-stack,title-history,arrows-keys,body-flush}.ts`; `EntityBody`, `NativeRow`, `DetailScreen` — интеграция. Пять LRU экземпляров, bounded общий/native стек, CAS заголовка по показанному основанию |
+| Сторожа | `scripts/write-paths.test.ts` + точные исключения; `scripts/lab/selectors.test.ts` держит actual scenario и реальные производители web; `records.test.ts` исполняет закрытую функцию сценария с заменой IO |
+
+Сняты `db/backfill-body-doc.ts` и `makeChatJournalSink`; форма старых body-предложений не мигрирует в новую ревизию. `audit-bodies` и `0012_drop_body_before_doc.sql` остаются отдельными остатками с решением владельца.
 
 ### §1.1 Правила направления зависимостей
 
@@ -154,9 +205,10 @@ flowchart LR
 8. tRPC-роутеры и MCP-адаптер не реализуют бизнес-правила сами — они транслируют вход во входной формат executor'а и возвращают его результат.
 9. Экран записи не тянет схему документа [D45]: `DetailScreen` и его эагерные файлы (шаблон хоста, рендерер, первый кадр тела) импортируют из `@orbis/shared` только листовые сабпаты `doc/page-grammar`, `doc/placement`, `doc/types`, но не баррель `@orbis/shared/doc` (схема tiptap нужна лишь ленивому редактору). Держат это `scripts/check-lazy-chunks.ts` (ребро `DetailScreen ↛ doc` по dist и ленивость чанка `DetailMenu`) и `save.test.tsx` (поимённый список эагерных файлов).
 10. Маркеры тела `{{…}}` распознаёт одна копия правил — `packages/shared/src/doc/page-grammar.ts` [D45]. Первый кадр, рендерер, бейдж раздела и обёртка блока запроса читают её; свой регэксп маркера в другом месте — дефект (сторож `scripts/grammar-copies.test.ts` со списком законных мест и причинами).
-11. Код ядра web не импортирует каталоги расширений [D46]: `apps/web/src/extensions/*`, `features/budget/`, `features/import/` видит только реестр карточек `app/extension-registry.tsx` и названные отступления спеки 1б §15 (сторож `scripts/code-boundaries.test.ts`, точный счёт рёбер с причиной и адресом снятия; там же сторожа словаря интерфейса и слова «module» в именах кода). Каталог `legacy-1v` исключён из сборки, линтера и сторожей.
-12. Вес экрана записи держат два порога CI [D46]: файл чанка `DetailScreen` — ≤ 34 889 Б gzip (спека 1б, РП-25), его эагерное замыкание (сам чанк и все статически импортируемые чанки, включая входной) — ≤ 325 238 Б gzip -9 (рулинг R-36): `bun scripts/check-lazy-chunks.ts --max-gzip DetailScreen=34889 --max-closure-gzip DetailScreen=325238`. Новое на экране записи и в рамке — ленивыми чанками; эагерно — только склейка.
+11. Код ядра web не импортирует каталоги расширений [D46]: `apps/web/src/extensions/*`, `features/budget/`, `features/import/` видит только реестр карточек `app/extension-registry.tsx` и названные отступления спеки 1б §15 (сторож `scripts/code-boundaries.test.ts`, точный счёт рёбер с причиной и адресом снятия; там же сторожа словаря интерфейса и слова «module» в именах кода). Исключённых каталогов у сторожей с 1в нет: `legacy-1v` удалён вместе с исключениями (сторож `scripts/no-legacy-1v.test.ts`) [D47].
+12. Вес экрана записи держат два порога CI [D46]: файл чанка `DetailScreen` — ≤ 34 889 Б gzip (спека 1б, РП-25), его эагерное замыкание (сам чанк и все статически импортируемые чанки, включая входной) — ≤ 325 750 Б gzip -9 (текущий рулинг плана А R-93, подтверждение владельца до задачи 24): `bun scripts/check-lazy-chunks.ts --max-gzip DetailScreen=34889 --max-closure-gzip DetailScreen=325750`. Исторический предел до плана А — 325 238 Б (R-36). Новое на экране записи и в рамке — ленивыми чанками; эагерно — только склейка. Срез 1в [D47] поднимал порог замыкания дважды (решение владельца R-9 → 327 800 Б, рулинг R-15 → 329 400 Б) и вернул его к 325 238 Б рулингом R-20, когда вынос словаря встроенных свойств из первого кадра (`BUILTIN_PROPERTY_META` помечен `@__PURE__`, схема `orbis/progress_source` — функцией) снял ≈ 6,8 КБ; маркер словаря в `check-lazy-chunks` держит именно эту регрессию. На HEAD ветки 1в (задача 14): файл 34 038 Б, замыкание 322 270 Б (19 файлов).
 13. Адрес, история и эталоны поставки — листовые сабпаты `@orbis/shared/nav` и `@orbis/shared/supply` [D46]: web берёт их из эагерного кода рамки и экрана записи, поэтому они не импортируют барреля пакета (сторожа листовости — тесты `nav` и `supply/etalons.test.ts`); печати поставки — отдельный сабпат `@orbis/shared/supply/print`.
+14. Обходчики дерева запроса [D47]: каждое место, читающее Q-AST по ключам или разбирающее его, помечено строкой `// ОБХОДЧИК-Q: <имя>`; перечень из 36 имён и сверку «пометка ↔ строка перечня» держит `scripts/query-walkers.test.ts` (PRD 01 §6.5). Новое поле или узел канона — строка в перечне и пометка в той же задаче. `$`-ссылка и `group` — только в блоках страниц и шаблонов: базовую схему `queryAstSchema` держат все прочие входы.
 
 ---
 
@@ -194,7 +246,7 @@ flowchart TD
 - **Retry-буфер** стоит на стороне `apps/web` перед tRPC и участвует только в пути fast-path-create (Chat fast-path, §7.5) — офлайн-правки существующих сущностей и LLM-путь через него не идут (PRD 01 §5.3, §7.9). Quick-capture (PRD 02 §3.7) в буфер не заходит: это отдельный не-чатовый путь без AI и без fast-path-грамматики, идущий в tRPC напрямую — контракт буфера (PRD 01 §5.3) охватывает только fast-path-create.
 - **Ветвление по политике подтверждений** относится только к путям LLM tool-call и MCP-агента; fast-path/quick-capture — прямая, детерминированная команда пользователя, политика §7.10 к ней не применяется. На диаграмме это показано на уровне потока; внутри самого семистадийного конвейера (§9.2) классификация уровня фактически происходит после стадий 1–2 (структурная валидация) и до стадии 5 (apply) — здесь показан только факт наличия этой проверки для LLM/MCP-путей.
 - **Executor 7 стадий** (§9.2): validate envelope → validate props → load state → validate all before first write → apply in transaction → inverse ops + cards → audit. Вторая стадия проверяет значения по **типам свойств из реестра** (PRD 01 §4.16), а не по схемам из кода [D43]; число и порядок стадий реформа не меняет. Все семь стадий выполняются в `apps/server`, вне зависимости от источника мутации. Правила каталога врезаны в тот же конвейер: T-шаблоны (`on_enter_class`, `default`) применяются перед второй стадией, C-шаблоны (`requires_when`, `forbidden_when`, `unique_among`) — на четвёртой, вместе с доменными инвариантами, которые они заменили (срез Б-2).
-- **Журнал actions + Postgres — одна транзакция**: карточка чата и запись в `chat_messages.metadata.actions` появляются только после успешного `apply` (§7.8).
+- **Журнал actions + Postgres — одна транзакция**: строка `action_journal` и боковой индекс появляются после успешного apply; карточка ответа/реплика пишется модулем разговоров, а карточка журнала строится на чтении (§7.8).
 - **Инвалидация server-state-кэша** — заключительный шаг на клиенте: TanStack Query перечитывает данные с сервера после успешной мутации (§5.1); сервер не хранит и не обязан знать состояние клиентского кэша.
 
 ---
@@ -205,7 +257,7 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    Browser["Browser / Budget / Agenda\n(views, apps/web)"]
+    Browser["«Записи», конструктор запросов\n(apps/web)"]
     BodyQuery["блоки данных {{query:...}} в теле\n(пачкой entity.blocks, D45)"]
     Badges["бейджи закреплённых\n(entity.count, apps/web)"]
     AIEntityQuery["тул entity_query + user_query\n(внутренний чат, apps/server)"]
@@ -229,9 +281,9 @@ flowchart TD
 
 **Что на диаграмме изменила реформа.** Во-первых, разбор текста перестал быть общим входом: канон — дерево, и половина точек вызова строит его без всякого текста (форма query-блока, прогресс цели, множество целей ссылочного свойства, AST-вход тула). Текстовый разбор остался входом там, где запрос **пишет человек**, и это узел «разбор текста в дерево», а не «парсер грамматики» на пути у всех.
 
-Во-вторых, потребителей стало семь, и три из них на прежней диаграмме отсутствовали: **бейджи закреплённых сущностей** (`entity.count` — тот же вход, другой ответ), **агрегаты** `user_query` (сумма и счёт) и **проверка значения ссылочного свойства** — новая точка среза А: тип `ref` несёт множество целей запросом, и запись значения вне множества получает отказ с причиной (PRD 01 §4.16, §6.3). Прежний узел «Фильтры views» свёрнут обратно в один: Browser, Budget и Agenda ходят одной и той же процедурой, и разными их делает только состояние UI, а не путь в движок.
+Во-вторых, потребителей стало семь, и три из них на прежней диаграмме отсутствовали: **бейджи закреплённых сущностей** (`entity.count` — тот же вход, другой ответ), **агрегаты** `user_query` (сумма и счёт) и **проверка значения ссылочного свойства** — новая точка среза А: тип `ref` несёт множество целей запросом, и запись значения вне множества получает отказ с причиной (PRD 01 §4.16, §6.3). Прежний узел «Фильтры views» свёрнут обратно в один: Browser, Budget и Agenda ходили одной и той же процедурой, и разными их делало только состояние UI, а не путь в движок (с 1б Browser — блок «Записи», с 1в экранов Budget и Agenda нет).
 
-В-третьих, из перечня будущих потребителей убраны **авто-чекины привычек**: аспекта `orbis/habit` в системе нет, и потребителем он не был никогда. **Подписки поверхностей** из перечня «будущих» ушли: срез Б-1 их исполнил — `orbis/agenda` и `orbis/budget-overview` компилируются движками подписок в тот же SQL, у деклараций есть валидатор и тулы владельца (PRD 01 §6.3, §11). Будущей точкой вызова осталась одна: **область показа свойства** (`scope`: значение хранится и читается графом зависимостей, в SQL не компилируется). **Правила каталога** срез Б-2 исполнил (PRD 01 §6.3), но точкой вызова компилятора они не стали: условие правила — дерево языка выражений, его считает интерпретатор на записи.
+В-третьих, из перечня будущих потребителей убраны **авто-чекины привычек**: аспекта `orbis/habit` в системе нет, и потребителем он не был никогда. **Подписки поверхностей** из перечня «будущих» ушли: срез Б-1 их исполнил — `orbis/agenda` и `orbis/budget-overview` компилировались движками подписок в тот же SQL, у деклараций есть валидатор и тулы владельца (PRD 01 §6.3, §11); с 1в подписка одна — `orbis/budget-overview`, Повестка — блоки страницы. Будущей точкой вызова осталась одна: **область показа свойства** (`scope`: значение хранится и читается графом зависимостей, в SQL не компилируется). **Правила каталога** срез Б-2 исполнил (PRD 01 §6.3), но точкой вызова компилятора они не стали: условие правила — дерево языка выражений, его считает интерпретатор на записи.
 
 **Что на диаграмме изменил срез страниц 1а** [D45]. Блоки данных тела больше не ходят за данными по одному: клиентский собиратель (`lib/query-blocks/batch`) складывает блоки окна в одну пачку `entity.blocks` — до 30 блоков по тексту запроса, ключ блока — нормализованный текст, поэтому первый кадр и редактор делят кеш и не спрашивают дважды. Сервер разбирает каждый текст по реестру владельца, компилирует тем же компилятором, материализует повторы по объединению окон (своей транзакцией, как `entity.query`) и исполняет пачку в одной транзакции с SAVEPOINT на блок — ошибка блока остаётся его плашкой. Точкой вызова это не новая: пачка — тот же модуль, что процедура запроса. Бейджи закреплённых считал отдельный `entity.count` — второй путь данных; **срез 1б его снял** [D46]: бейдж раздела навигации — элемент той же пачки `entity.blocks` (`{badgeOf: <id страницы>}`, число первого блока данных её тела), все бейджи листа разделов — одним вызовом.
 
@@ -376,59 +428,63 @@ sequenceDiagram
 
 Обязательные элементы присутствуют: `entity_query(updated_at > cursor)` с аутентификацией по Bearer-токену гранта (браузерный вход или PAT — §9.3, D34), изменённые задачи, `entity_get(include:["thread"])`, инструкции владельца из треда, `entity_update(status)` + заметка в тред, прохождение через executor и запись в журнал с актором-агентом; курсор хранится у самого агента, не на сервере Orbis (§9.3).
 
-### §4.4 Optimistic-check body
-
-Контракт: PRD 01 §5.2 (конкурентность, optimistic-check по `updated_at`).
+### §4.4 Optimistic-check body и запись журнала
 
 ```mermaid
 sequenceDiagram
-    actor TabA as Вкладка A
-    actor TabB as Вкладка B
-    participant TRPC as apps/server: tRPC entity.update/get (§9.1)
+    actor A as Вкладка A
+    actor B as Вкладка B
+    participant API as tRPC / executor
     participant DB as PostgreSQL
-
-    TabA->>TRPC: entity.get(id)
-    TRPC->>DB: SELECT
-    DB-->>TRPC: updated_at = t0
-    TRPC-->>TabA: сущность (updated_at = t0)
-
-    TabB->>TRPC: entity.get(id)
-    TRPC->>DB: SELECT
-    DB-->>TRPC: updated_at = t0
-    TRPC-->>TabB: сущность (updated_at = t0)
-
-    TabA->>TRPC: entity.update(body, updated_at = t0)
-    TRPC->>DB: optimistic-check: серверный updated_at == t0?
-    DB-->>TRPC: совпадает — применить, новый updated_at = t1
-    TRPC-->>TabA: успех (updated_at = t1)
-
-    TabB->>TRPC: entity.update(body, updated_at = t0)
-    TRPC->>DB: optimistic-check: серверный updated_at == t0?
-    DB-->>TRPC: не совпадает (сейчас t1)
-    TRPC-->>TabB: 409, структурированная ошибка "устаревшая версия"
-
-    TabB->>TRPC: entity.get(id) — перезагрузка сущности
-    TRPC->>DB: SELECT
-    DB-->>TRPC: updated_at = t1
-    TRPC-->>TabB: сущность (updated_at = t1)
-
-    TabB->>TRPC: entity.update(body, updated_at = t1) — повтор правки
-    TRPC->>DB: optimistic-check: серверный updated_at == t1?
-    DB-->>TRPC: совпадает — применить, новый updated_at = t2
-    TRPC-->>TabB: успех (updated_at = t2)
+    A->>API: entity.get(body)
+    API-->>A: bodyDoc, bodyRevision=R
+    B->>API: entity.get(body)
+    API-->>B: bodyDoc, bodyRevision=R
+    A->>API: entity.update(bodyDoc, expectedBodyRevision=R, autosave=true)
+    API->>DB: identity + set_config(orbis.body_action, S, true)
+    API->>DB: lock, проверить R, UPDATE body/body_doc
+    DB->>DB: entities_body_stamp: revision=R+1, action=S
+    API->>DB: INSERT action_journal + action_journal_entities
+    DB-->>API: COMMIT (граф и журнал атомарны)
+    API-->>A: entity + JournalRef(actionId=S, consequences)
+    B->>API: entity.update(bodyDoc, expectedBodyRevision=R)
+    API-->>B: STALE_VERSION + data.orbis (без текста)
+    B->>API: entity.get(body) — показать свежую основу
+    API-->>B: bodyDoc, bodyRevision=R+1
+    B->>API: «Оставить моё», expectedBodyRevision=R+1
+    API-->>B: подтверждённый документ и новая ревизия
 ```
 
-Обязательная последовательность присутствует: обе вкладки читают `updated_at = t0`, первая правит успешно (`t1`), вторая получает 409 «устаревшая версия», перезагружает сущность и повторяет правку успешно.
+Продолжение того же сеанса переобъявляет S и физически сохраняет текст без новой строки журнала. Undo заранее получает id U, проверяет всю цепочку тела, при разрешённом force первым делом закрепляет текущие тексты, объявляет U, применяет inverse и дописывает `type=undo, undoes=S`. При конфликте отказывает целиком; старый редактор после успешной отмены остаётся заблокирован до причинно подтверждённого документа. Другой пользователь/epoch не наследует старую доставку или стек.
 
----
+Уточнения финальной фикс-волны плана А (R107–R119): закрепление версии сначала ждёт досыла показанного текста; недоступный досыл или конфликт оставляет причину без отправки снимка. Свободные значения и несколько изменённых настроек получают Undo с прежними значениями; ссылка использует уже загруженную подпись или прежний адрес. Исходный owner/epoch проверяется после ожидания перед новой очередью, карточкой и повтором запроса. Уже отправленная серверная мутация обратно не отзывается. Текущий отказ сохранения из-за чужого тела сбрасывает общую и native историю, сохраняя собственный текст и локальный черновик; старый owner/запись или более новый intent такой сброс не наследуют.
+
+Предпроверка отката прогона отдельно учитывает именованные типизированные держатели обратной операции слияния — значения, тела, реестровые строки, привязки, правила, дельты и другие именованные секции MergeInverse. Это проекция для rollback, а не расширение общего перечня попутных записей журнала, feed/entity_ids или бокового индекса. Новая обратная запись дельты может сохранять тип и адрес цели; обратная запись правил — ключ носителя рядом с каноническим id. Необязательные поля снимаются тем же locked SELECT и сохраняют чтение старого журнала; strict parser отвергает неправильную новую форму. Если старая дельта не имеет адреса, либо старый собственный носитель правила свойства не имеет ключа, неоднозначная поздняя правка/слияние безопасно останавливает откат до первой Undo. Цена — возможный лишний отказ даже при несвязанной поздней правке реестра. Полнота сопоставления произвольных исторических строк роли, заведённых вне поддерживаемых писателей, не доказана. Внутренние маркеры не публикуются; конфликт называет исходный канонический носитель без повторов. Прямая отмена одного действия сохраняет прежнее правило LWW.
+
+Слияние свойства пишет держатель тела только при фактическом отличии body или body_doc по сравнению PostgreSQL. Если оба прежние, оно не трогает body_refs/query_refs, updated_at и не заводит снимок inverse/«действие тела до» для этого держателя. Поэтому существующие ложные ссылки и использования могут остаться до обычной правки тела; очистка исторического корпуса этим правилом не выполняется. При изменившемся тексте/документе и материализации прежнего NULL документа сохраняется общий снимок текста и индексов.
+
+Оба существующих входа общего чата — мобильный экран и боковая панель — загружают ChatPanel отдельным модулем (R118). Шапка, контекст и закрытие боковой панели остаются доступны во время существующего кадра ожидания. Ошибка загрузки использует прежнюю границу с перезагрузкой; повторное открытие не обещает повторной загрузки отвергнутого React.lazy промиса. Оба действующих лимита сборки сохраняются. Дополнительного nonglobal fastpath интерфейса нет: R109 сохраняет необязательный исходный threadId в очереди и обоих повторных запросах; старые элементы без него совместимы.
+
+```mermaid
+sequenceDiagram
+    participant UI as Лента web
+    participant TP as journal/threadPage
+    participant DB as PostgreSQL
+    UI->>TP: graph, thread, before=ISO|id, limit
+    TP->>DB: threadMessages (без infra rows), limit
+    TP->>DB: threadFeed журнала, тот же курсор/limit
+    TP->>DB: отметки undone/closed по id карточек страницы
+    TP->>TP: общий порядок DESC(time,id), первые limit
+    TP-->>UI: реплики + JournalCardMeta без тел операций
+```
 
 ## §5. ER-схема
 
-**Двадцать одна таблица** — состав и колонки скопированы из PRD 01 §4 без добавлений и без пропусков; версионных или репликационных служебных полей на сущностях нет, владение — `graph_id` (PRD 01 §4.10, 04-decision-log D44). Восемь исходных пришли с Task 1; `oauth_clients` и `agent_grants` (PRD 01 §4.13–§4.14) — со слайсом 4b: состояние доступа внешних агентов, без которого не бывает ни одноразового кода, ни отзыва (04-decision-log D34); `entity_versions` (PRD 01 §4.15) — с ADE-срезом 1: закреплённые владельцем версии тела (04-decision-log D37); `envelope_spent_cache` (PRD 01 §3.5, §Б5-5) — материализация `spent` по конверту, приехала со срезом Б-1 (миграция `0018`); **`graphs` и `graph_members`** (PRD 01 §4.10) — со срезом Г: сами графы и гранты аккаунтов на них (04-decision-log D44, миграция `0020`). Сплошной истории правок здесь нет и не появится — снимок делает человек.
+**Двадцать четыре таблицы** — состав и колонки скопированы из PRD 01 §4 без добавлений и без пропусков; ревизия тела служит замком текста, репликационных служебных полей на сущностях нет, владение — `graph_id` (PRD 01 §4.10, 04-decision-log D44). Восемь исходных пришли с Task 1; `oauth_clients` и `agent_grants` (PRD 01 §4.13–§4.14) — со слайсом 4b: состояние доступа внешних агентов, без которого не бывает ни одноразового кода, ни отзыва (04-decision-log D34); `entity_versions` (PRD 01 §4.15) — с ADE-срезом 1: закреплённые владельцем версии тела (04-decision-log D37); `envelope_spent_cache` (PRD 01 §3.5, §Б5-5) — материализация `spent` по конверту, приехала со срезом Б-1 (миграция `0018`); **`graphs` и `graph_members`** (PRD 01 §4.10) — со срезом Г: сами графы и гранты аккаунтов на них (04-decision-log D44, миграция `0020`). Сплошной истории правок здесь нет: снимок делает человек либо страховка конкретного восстановления/отмены. План А добавляет perf_samples, action_journal и action_journal_entities (0024–0025).
 
 **Семь последних пришли с реформой свойств** (PRD 01 §4.16, 04-decision-log D43): шесть реестров структуры — `property_definitions`, `relation_role_definitions`, `contract_definitions`, `subscription_definitions`, `action_definitions` и переделанный `aspect_definitions` — плюс журнал персональных правок `registry_deltas` и однострочная таблица версии system-реестра `registry_system`. Три из шести (`contract_definitions`, `subscription_definitions`, `action_definitions`) в срезе А были **созданы пустыми**; контракты и подписки засеяны срезом Б-1 (6 и 2), действия — срезом Б-2 (2), там же седьмой контракт — `orbis/delegable`. Пустых реестров структуры больше нет. Правила каталога отдельной таблицы не получили: они живут колонкой `rules` в строках своих носителей (миграция `0022`).
 
-Реформа при этом не только добавила: у `entities` **сняты** `meta` и старая jsonb-карта аспектов, у `relations` — `relation_type`, у `aspect_definitions` — колонка `schema` (JSON Schema стала генерируемой производной набора свойств). Ниже — состояние **после** миграции `0022`.
+Реформа при этом не только добавила: у `entities` **сняты** `meta` и старая jsonb-карта аспектов, у `relations` — `relation_type`, у `aspect_definitions` — колонка `schema` (JSON Schema стала генерируемой производной набора свойств). Ниже — состояние **после** миграций плана А `0024`–`0026`; нового состояния ленты плана Б здесь нет.
 
 ```mermaid
 erDiagram
@@ -439,6 +495,9 @@ erDiagram
         text emoji
         text body
         jsonb body_doc
+        int body_revision
+        uuid body_action_id
+        timestamptz body_changed_at
         text body_before_doc
         text_array body_refs
         text_array query_refs
@@ -620,6 +679,59 @@ erDiagram
         timestamptz created_at
     }
 
+    action_journal {
+        uuid graph_id PK,FK
+        uuid id PK
+        timestamptz created_at
+        text type
+        uuid entity_id
+        uuid actor_user_id
+        text actor_kind
+        text source
+        text mechanism
+        uuid actor_grant_id
+        uuid run_id
+        text action_id
+        text module
+        uuid edited_from
+        uuid thread_id FK
+        text title
+        text card_tool
+        uuid_array entity_ids
+        jsonb operations
+        jsonb inverse
+        jsonb results
+        boolean text_session
+        jsonb body_before
+        uuid undoes
+        uuid_array pinned_version_ids
+        boolean card_in_reply
+    }
+
+    action_journal_entities {
+        uuid graph_id PK,FK
+        uuid action_id PK,FK
+        uuid entity_id PK
+        timestamptz created_at
+    }
+
+    perf_samples {
+        bigint id PK
+        uuid account_id
+        timestamptz created_at
+        text metric
+        text screen
+        text kind
+        text procedure
+        real dur_ms
+        real server_ms
+        real db_ms
+        text device
+        text net
+        text app_version
+        boolean cached
+    }
+
     ai_usage {
         uuid graph_id PK
         date date PK
@@ -701,6 +813,9 @@ erDiagram
     entities ||--o{ entity_origins : "entity_id"
     entities ||--o{ entity_versions : "entity_id (ON DELETE cascade)"
     entities |o--o| chat_threads : "entity_id (nullable, глобальный тред = NULL)"
+    graphs ||--o{ action_journal : "graph_id CASCADE"
+    action_journal ||--o{ action_journal_entities : "graph_id + action_id CASCADE"
+    chat_threads o|--o{ action_journal : "thread_id SET NULL"
     chat_threads ||--o{ chat_messages : "thread_id"
     oauth_clients |o--o{ agent_grants : "client_id (nullable, у PAT — NULL)"
     graphs ||--o{ entities : "graph_id"
@@ -732,11 +847,13 @@ erDiagram
 - `ai_usage` — составной первичный ключ `(graph_id, date, model)`, без собственного суррогатного `id` (PRD 01 §4.7); расход пишется **на граф**, а тариф — на аккаунт (D44).
 - `chat_threads.entity_id` — nullable: `NULL` означает глобальный тред ГРАФА (мессенджер-модель), не связанный ни с одной сущностью; связь `entities |o--o| chat_threads` на диаграмме относится только к тредам сущностей — не более одного треда на сущность (PRD 01 §4.5).
 - Типы `text_array` на диаграмме соответствуют Postgres `text[]` (ограничение синтаксиса Mermaid ER на символы в имени типа); `date`, `jsonb`, `bigint`, `boolean`, `timestamptz` — типы колонок как в PRD 01 §4.
-- Владение — `graph_id` на каждой таблице, где оно применимо (кроме `relations` и `chat_messages`, чьё владение резолвится транзитивно через связанные `entities`/`chat_threads`, `registry_system`, у которой владельца нет по построению — она одна на базу, — и `oauth_clients`, у которой графа нет вовсе: регистрация клиента происходит до согласия — RLS-политика PRD 01 §4.10). У шести реестров определений `graph_id` **nullable**, и это несёт смысл: `NULL` — встроенная строка, приехавшая сидом из кода и читаемая всеми (и читаемая **без текущего графа**, иначе стартовая проверка дрейфа объявила бы дрейф); не-`NULL` — строка графа. У `registry_deltas` он `NOT NULL` — дельта без графа бессмысленна. Сам `graph_id` — FK на `graphs.id` (`ON DELETE NO ACTION`, миграция `0020`), а владелец графа лежит записью в `graphs.owner_kind` / `owner_ref`: человек или организация (D44). Таблицы `graphs` и `graph_members` **переживают пересев мира** (`reset-world`) — сносится содержимое графов, а не сами графы и гранты.
+- Владение — `graph_id` на каждой таблице, где оно применимо (кроме аккаунтной `perf_samples`, `relations` и `chat_messages`, чьё владение резолвится транзитивно через связанные `entities`/`chat_threads`, `registry_system`, у которой владельца нет по построению — она одна на базу, — и `oauth_clients`, у которой графа нет вовсе: регистрация клиента происходит до согласия — RLS-политика PRD 01 §4.10). У шести реестров определений `graph_id` **nullable**, и это несёт смысл: `NULL` — встроенная строка, приехавшая сидом из кода и читаемая всеми (и читаемая **без текущего графа**, иначе стартовая проверка дрейфа объявила бы дрейф); не-`NULL` — строка графа. У `registry_deltas` он `NOT NULL` — дельта без графа бессмысленна. Сам `graph_id` — FK на `graphs.id` (`ON DELETE NO ACTION`, миграция `0020`), а владелец графа лежит записью в `graphs.owner_kind` / `owner_ref`: человек или организация (D44). Таблицы `graphs` и `graph_members` **переживают пересев мира** (`reset-world`) — сносится содержимое графов, а не сами графы и гранты.
 - `entity_versions` — снимок **тела** сущности, а не самой сущности: `body` (markdown-проекция) хранится всегда, `body_doc` — только если документ у записи на момент снимка уже был. `ON DELETE cascade` намеренный: снимок без своей записи ничего не значит. Владение прямое, по `graph_id`, как у `entity_origins`; на записи RLS дополнительно требует, чтобы сама сущность лежала в том же графе (PRD 01 §4.10, §4.15).
 - `agent_grants` и `oauth_clients` в графе сущностей не участвуют: они не связаны с `entities` ни одной ссылкой и не подлежат Undo — это состояние доступа, а не пользовательские данные. Хеши токенов (`code_hash`, `access_hash`, `refresh_hash`, `prev_refresh_hash`) — единственная форма, в которой токен попадает в базу; сырых значений схема не хранит нигде (PRD 01 §4.14).
 
 ---
+
+План А: у тела триггерные revision/action/time; у action нет FK из `body_action_id`, потому что журнал пишется после графа в той же транзакции. Таблицы журнала и замеров дописываются, RLS и гранты допускают приложению только SELECT/INSERT. `perf_samples` принадлежит аккаунту; остальные новые строки — графу. Полные DDL и текущие исключения операции — в `handoff-plan-b.md` леджера.
 
 ## §6. Граница детализации
 

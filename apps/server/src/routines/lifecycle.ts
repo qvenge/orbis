@@ -1,3 +1,4 @@
+import type { JournalRef } from '@orbis/shared';
 // apps/server/src/routines/lifecycle.ts
 // Жизненный цикл рутины вокруг прогона: что делает НОВЫЙ прогон с наследством прошлых
 // (V1.8) и когда рутина сама себя останавливает (V1.12).
@@ -63,7 +64,8 @@ import {
 } from '../entitlements';
 import { ExecError, type ExecErrorCode, type StructuredError } from '../errors';
 import { execute } from '../executor/executor';
-import { makeChatJournalSink } from '../executor/journal';
+import { makeJournalSink } from '../executor/journal';
+import { journalRef } from '../executor/journal-ref';
 import type { ActorKind, JournalSink, MutationSource } from '../executor/types';
 import type { Identity } from '../identity';
 import type { LLMProvider } from '../llm/types';
@@ -113,7 +115,7 @@ import { namedAspects } from './propose';
 const UNSET_ROW_VALUE = '—';
 
 /** Боевой синк — один инстанс на модуль (состояния не хранит), как в dispatch.ts. */
-const defaultSink = makeChatJournalSink();
+const defaultSink = makeJournalSink();
 
 /**
  * Минимум, которым пишется бухгалтерия прогона и решения владельца по нему: БД, часы,
@@ -213,7 +215,7 @@ interface PatchActor {
 const ACCOUNTING_ACTOR: PatchActor = { kind: 'ai', source: 'system' };
 
 /** Исход патча: структурированная ошибка целиком — её текст едет владельцу на экран. */
-type PatchResult = { ok: true } | { ok: false; error: StructuredError };
+type PatchResult = ({ ok: true } & JournalRef) | { ok: false; error: StructuredError };
 
 /**
  * Патч свойств прогона/рутины одним execute (§А1-1).
@@ -269,7 +271,7 @@ async function patchRun(
   // Не бросаем: гашение и пауза — гигиена вокруг работы, и провалившаяся гигиена не повод
   // не сделать (или отменить) саму работу. Владельческие вызывающие решают сами — им
   // отдаётся структурированная ошибка целиком.
-  return r.ok ? { ok: true } : { ok: false, error: r.error };
+  return r.ok ? { ok: true, ...journalRef(r) } : { ok: false, error: r.error };
 }
 
 /**
@@ -742,7 +744,7 @@ function skip(reason: Extract<StartOutcome, { started: false }>['reason']): Star
  * Почему batch, а не два вызова: прогон без связи с рутиной — сирота, которого не видит
  * ни история, ни стоп-кран, ни экран; атомарность даёт executor. Почему детерминированный
  * batchId (Р-1): replay-семантика одиночного entity_create в batch не действует — занятый
- * id там всегда CONFLICT/id_conflict; а по PK audit-сообщения тот же batch у второго
+ * id там всегда CONFLICT/id_conflict; а по ключу записи журнала тот же batch у второго
  * вызывающего становится `idempotentReplay`. Оба исхода читаются одинаково: «проиграл,
  * модель не гоню» — и два тика в одну минуту (два инстанса на деплое) сходятся к одному
  * прогону и одному вызову модели.
@@ -1113,7 +1115,7 @@ type RunProposal = ContractRunProposal;
 export async function answerRoutineCheckpoint(
   deps: RoutineWriteDeps,
   args: { identity: Identity; runId: string; answer: string },
-): Promise<{ runId: string }> {
+): Promise<{ runId: string } & JournalRef> {
   const row = await withIdentity(deps.db, args.identity, (tx) => runById(tx, args.runId));
   // Чужой, несуществующий и ТИКЕТНЫЙ прогон здесь неразличимы намеренно: у тикетного своя
   // процедура (agentRun.answerCheckpoint), и отвечать на него отсюда — не «нельзя», а
@@ -1140,7 +1142,7 @@ export async function answerRoutineCheckpoint(
     actor: { kind: 'owner', source: 'ui', runId: args.runId },
   });
   if (!patched.ok) throw toExecError(patched.error);
-  return { runId: args.runId };
+  return { runId: args.runId, actionId: patched.actionId, consequences: patched.consequences };
 }
 
 /**
@@ -1257,6 +1259,7 @@ export type DecideProposalResult =
   | {
       status: 'applied';
       actionId: string;
+      consequences: boolean;
       /**
        * Применено предложение, рождённое правкой владельца: здесь id ИСХОДНОГО, которое
        * эта правка погасила. Экран исходной карточки по нему понимает, что применено не
@@ -1970,6 +1973,9 @@ const STATUS_BY_REJECT_REASON: Record<RejectReason, ProposalStatus> = {
   superseded: 'superseded',
   stale: 'stale',
   edited: 'superseded',
+  // Недостижимо: так закрывается только карточка отката (`undo_of`), у предложения рутины её нет. Ближайшее честное —
+  // «отклонено»: предложение не исполнено, и не новым прогоном
+  undo_refused: 'rejected',
 };
 
 /**
@@ -2022,7 +2028,7 @@ async function approveProposal(
     const editedFrom = proposal.edited_from;
     const done: DecideProposalResult = {
       status: 'applied',
-      actionId: applied.actionId,
+      ...journalRefOfApproval(applied),
       ...(editedFrom !== undefined && { editedFrom }),
     };
     // Возобновление шагов 3–4 (двойной тап по «Принять»): батч исполнен идемпотентно, тем
@@ -2173,7 +2179,7 @@ async function settleProposal(
  * изменилось, вот что именно» — это ответ экрану, который он рисует списком расхождений.
  */
 export type DecideDeferredResult =
-  | { status: 'applied'; actionId: string }
+  | ({ status: 'applied' } & JournalRef)
   /** Предусловия единицы (ОЧ.13) разошлись с графом; карточка при этом уже погашена. */
   | { status: 'stale'; mismatches: PreconditionMismatch[]; bodyChanged: boolean }
   | { status: 'rejected' }
@@ -2256,7 +2262,10 @@ export async function decideDeferredUnit(
  * приезжает СПИСКОМ, и без `pendingId` экран не знал бы, какой карточке принадлежит
  * «устарело» и какие расхождения под ней рисовать.
  */
-export type DecideAllItem = { pendingId: string } & DecideDeferredResult;
+export type DecideAllItem = { pendingId: string } & (
+  | Exclude<DecideDeferredResult, { status: 'applied' }>
+  | { status: 'applied'; actionId: string }
+);
 
 /**
  * «Принять все» (ОЧ.11, приёмка 6): владелец разбирает пачку одним нажатием.
@@ -2310,7 +2319,12 @@ export async function decideAllDeferred(
       pendingId: unit.pendingId,
       decision: 'approve',
     });
-    summary.push({ pendingId: unit.pendingId, ...decided });
+    // Сводка N независимых решений не представляет одно действие для плашки/стека (К-41).
+    summary.push(
+      decided.status === 'applied'
+        ? { pendingId: unit.pendingId, status: decided.status, actionId: decided.actionId }
+        : { pendingId: unit.pendingId, ...decided },
+    );
   }
   return summary;
 }
@@ -2322,7 +2336,7 @@ async function approveUnit(
 ): Promise<DecideDeferredResult> {
   const { identity, pendingId } = args;
   const applied = await approvePending(deps.db, { identity, pendingId, clock: deps.clock });
-  if (applied.ok) return { status: 'applied', actionId: applied.actionId };
+  if (applied.ok) return { status: 'applied', ...journalRefOfApproval(applied) };
 
   const divergence = divergenceOf(applied.error);
   if (divergence === null) {
@@ -2576,15 +2590,16 @@ function preconditionMismatches(error: StructuredError): PreconditionMismatch[] 
  * Видов ровно два, и они взаимоисключающие, потому что отказ у операции один:
  *  - предусловия по СВОЙСТВАМ не выполнены — `CONFLICT/precondition_failed`, список
  *    `mismatches`;
- *  - разошлось ТЕЛО — `STALE_VERSION`. У тела нет предусловия по значению: его CAS это
- *    `expectedUpdatedAt` строки, снятый при составлении (propose.ts buildUpdate). Прежде это
+ *  - разошлось ТЕЛО — `STALE_VERSION`. У тела нет предусловия по значению: его замок это
+ *    ревизия тела строки (`expectedBodyRevision`, спека скорости §8.1), снятая при составлении
+ *    (propose.ts buildUpdate). Прежде это
  *    подделывалось пунктом `{aspect:'', field:'body'}` — вторым способом сказать «здесь не
  *    свойство», у которого не было ни адреса в пространстве свойств, ни осмысленного
  *    `expected` (ехали отметки `updated_at`, владельцу они не говорят ничего). Теперь это
  *    ФЛАГ, а `mismatches` остаётся списком расхождений по свойствам.
  *
  * Для владельца оба вида — одно и то же «устарело»: запись менялась после того, как рутина
- * её видела (тело — или что угодно ещё: `updated_at` бампит любая правка).
+ * её видела (тело — по ревизии тела, свойства — по своим предусловиям).
  */
 function divergenceOf(error: StructuredError): ProposalDivergence | null {
   const mismatches = preconditionMismatches(error);
@@ -2900,4 +2915,13 @@ function preconditionValues(precondition: unknown): Map<string, { value: unknown
     }
   }
   return out;
+}
+
+/** Предложения рутины — действия; запись отмены не может попасть в их ответ как новая правка. */
+function journalRefOfApproval(
+  result: Exclude<Awaited<ReturnType<typeof approvePending>>, { ok: false }>,
+): JournalRef {
+  if (typeof result.consequences !== 'boolean')
+    throw new Error('предложение рутины исполнило отмену вместо действия');
+  return { actionId: result.actionId, consequences: result.consequences };
 }

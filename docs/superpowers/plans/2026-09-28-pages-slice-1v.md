@@ -213,7 +213,7 @@
 - **Контракт клиента поднимается один раз** — `0.4.0` → `0.5.0` (`MIN_COMPATIBLE_CLIENT_VERSION`
   `packages/shared/src/constants.ts:11`, `APP_VERSION` `apps/web/src/app/version.ts:4`) в задаче 3: он покрывает все новые формы
   ответа `entity.blocks` и новый узел документа (рулинг R-12 1б). `DOC_SCHEMA_VERSION` (3) **не** поднимается.
-- **Вес экрана записи.** Пороги: файл чанка `DetailScreen` — 34 889 Б gzip; эагерное замыкание — 325 238 Б gzip -9 (R-36 1б);
+- **Вес экрана записи.** Пороги: файл чанка `DetailScreen` — 34 889 Б gzip; эагерное замыкание — 325 238 Б gzip -9 (R-36 1б; подъёмы 1в R-9 → 327 800 и R-15 → 329 400 сняты R-20 после выноса словаря встроенных свойств из первого кадра задачей 8: 322 418 Б);
   превышение — стоп и разбор, не подъём порога. Новое на экране записи (блок параметра, лента по дням) — ленивыми чанками рядом
   с блоком данных, эагерно только склейка; новые эагерные файлы — в список `save.test.tsx`. Сборка:
   `cd $W && bun run --filter @orbis/web build > $T/<имя>-build.log 2>&1` и `bun scripts/check-lazy-chunks.ts` с порогами CI.
@@ -314,6 +314,7 @@
 | `web-text-editor` | `apps/web/src/features/query-builder/QueryTextEditor.tsx` (живой разбор) | — | место из рода тела | то же | 5 |
 | `web-ref-query` | `apps/web/src/lib/entity-ref/RefField.tsx` (`refQueryAst`) | дерево цели проезжает как есть | базовая схема цели — отказ на сервере | то же | 1 |
 | `web-query-widget` | `apps/web/src/features/entity-editor/nodes/QueryWidget.tsx` (`astOf`) | — | `pageQueryAstSchema` | то же | 5 |
+| `web-tile-form` | `apps/web/src/features/page/blocks/TileForm.tsx` (`tileValue`) | `latest` над адресом — значение без поиска свойства по строке (не падает); валюта — задача 3 | — | — | 1, 3 |
 
 ## Карта файлов
 

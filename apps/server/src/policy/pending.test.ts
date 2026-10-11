@@ -3,12 +3,11 @@
 // подтверждения НИЧЕГО не записано ни в граф, ни в журнал; approve исполняет
 // СОХРАНЁННЫЙ payload полным конвейером executor'а (ревалидация текущего состояния)
 // без обращения к LLM; идемпотентность approve — по PK детерминированного
-// audit-сообщения (batch-механика §7.8, batch_id = pendingId).
+// записи журнала (batch-механика §7.8, batch_id = pendingId).
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import type { GraphId } from '@orbis/shared';
+import type { GraphId, UndoTextChangedDetails } from '@orbis/shared';
 import {
   answerMessageId,
-  batchAuditMessageId,
   globalThreadId,
   newId,
   questionStaleMessageId,
@@ -16,21 +15,35 @@ import {
 } from '@orbis/shared';
 import { FIXTURE_PARSE_REGISTRY } from '@orbis/shared/query/fixtures';
 import { eq, inArray, sql } from 'drizzle-orm';
-import { adminDb, appDb, mintGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
+import {
+  adminDb,
+  appDb,
+  freshGraph,
+  mintGraph,
+  personal,
+  requireEnv,
+  truncateAll,
+} from '../../test/helpers';
+import { journalOf, undoRecordOf } from '../../test/journal-helpers';
 import { appendMessageIdempotent } from '../chat/messages';
 import { ensureEntityThread } from '../chat/threads';
 import { chatMessages, entities } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { ExecError } from '../errors';
+import { undoContinuationOf } from '../executor/body-chain';
 import { execute } from '../executor/executor';
-import type { ActionRecord, ExecuteResult, WireEntity } from '../executor/types';
+import { makeJournalSink } from '../executor/journal';
+import type { WireEntity } from '../executor/types';
+import { threadPage } from '../journal/thread-page';
 import { proposalBodyRows } from '../routines/proposal-diff';
+import { agentLoopHelpers } from '../test/agent-loop-helpers';
 import { dispatchTool, type ToolCallCtx } from '../tools/dispatch';
 import {
   acquirePendingLock,
   answerPendingQuestion,
   approvePending,
   askDedupeKey,
+  closeStaleBodyProposals,
   createPending,
   createSystemPending,
   deferDedupeKey,
@@ -115,7 +128,7 @@ async function pendingArchive(
   return { target, pendingId: r.pendingId };
 }
 
-function expectExecError(r: ExecuteResult, code: string): void {
+function expectExecError(r: import('../policy/pending').ApproveResult, code: string): void {
   expect(r.ok).toBe(false);
   if (!r.ok) expect(r.error.code).toBe(code);
 }
@@ -197,17 +210,36 @@ describe('approvePending: исполнение сохранённого payload 
     expect((r.results[0] as WireEntity).archived).toBe(true);
     expect(await archivedOf(userA, target.id)).toBe(true);
 
-    // audit-сообщение §7.8: детерминированный PK (batch-механика, batch_id = pendingId),
-    // тот же тред, что у карточки-запроса; атрибуция — исходный актор (ai/chat)
-    const audit = await messageById(userA, batchAuditMessageId(userA, pendingId));
-    expect(audit).toBeDefined();
-    expect(audit?.threadId).toBe(threadId);
-    const md = audit?.metadata as { actions?: ActionRecord[] };
-    const action = md.actions?.[0];
+    // Запись журнала §7.8 — пачка с batch_id = pendingId (batch-механика), тот же тред, что у
+    // карточки-запроса; атрибуция — исходный актор (ai/chat)
+    const action = await journalOf(userA, pendingId);
+    expect(action).toBeDefined();
+    expect(action?.threadId).toBe(threadId);
     expect(action?.id).toBe(pendingId);
     expect(action?.type).toBe('batch');
-    expect(action?.actor_kind).toBe('ai');
+    expect(action?.actorKind).toBe('ai');
     expect(action?.source).toBe('chat');
+  });
+
+  // К-29, Р-12: системная единица исполняется ОТ ВЛАДЕЛЬЦА (`source: 'ui'`) — это правка владельца в интерфейсе, и
+  // строка её журнала треда не получает, даже тред карточки-запроса: «Отменить» у неё в интерфейсе, а тред молчит.
+  test('одобрение системной единицы → строка журнала source ui без треда (К-29)', async () => {
+    const owner = await freshGraph();
+    const pendingId = await withIdentity(db, personal(owner), async (tx) => {
+      const p = await createSystemPending(tx, {
+        graphId: owner,
+        tool: 'entity_create',
+        input: { id: newId(), title: 'Системная единица', tags: [] },
+        summary: 'проба',
+      });
+      return p.id;
+    });
+    const r = await approvePending(db, { identity: personal(owner), pendingId, clock });
+    expect(r.ok).toBe(true);
+    const action = await journalOf(owner, pendingId);
+    expect(action?.source).toBe('ui');
+    expect(action?.actorKind).toBe('owner');
+    expect(action?.threadId).toBeNull();
   });
 
   test('повторный approve → идемпотентный replay из сохранённого audit, НЕ второй эффект', async () => {
@@ -243,8 +275,8 @@ describe('approvePending: исполнение сохранённого payload 
     expectExecError(r, 'VALIDATION');
     if (!r.ok) expect(r.error.message).toContain('отклонено');
     expect(await archivedOf(userA, target.id)).toBe(false);
-    // audit-сообщения нет — исполнение не начиналось
-    expect(await messageById(userA, batchAuditMessageId(userA, pendingId))).toBeUndefined();
+    // записи журнала нет — исполнение не начиналось
+    expect(await journalOf(userA, pendingId)).toBeUndefined();
   });
 
   test('чужой pendingId (userB) → NOT_FOUND: RLS скоупит журнал владельцем', async () => {
@@ -272,7 +304,7 @@ describe('approvePending: исполнение сохранённого payload 
 
     const r = await approvePending(db, { identity: personal(userA), pendingId, clock });
     expectExecError(r, 'NOT_FOUND'); // стадия 3 конвейера: load state не нашёл сущность
-    expect(await messageById(userA, batchAuditMessageId(userA, pendingId))).toBeUndefined();
+    expect(await journalOf(userA, pendingId)).toBeUndefined();
   });
 
   test('batch-payload: собственная структура с batch_id = pendingId; approve исполняет все операции, повтор — replay', async () => {
@@ -304,8 +336,8 @@ describe('approvePending: исполнение сохранённого payload 
     expect(rows.length).toBe(11);
 
     // Идемпотентность ключуется pendingId, НЕ исходным batch_id модели (перезапись §7.8)
-    expect(await messageById(userA, batchAuditMessageId(userA, r.pendingId))).toBeDefined();
-    expect(await messageById(userA, batchAuditMessageId(userA, originalBatchId))).toBeUndefined();
+    expect(await journalOf(userA, r.pendingId)).toBeDefined();
+    expect(await journalOf(userA, originalBatchId)).toBeUndefined();
 
     const again = await approvePending(db, {
       identity: personal(userA),
@@ -366,10 +398,9 @@ describe('approvePending: исполнение сохранённого payload 
     const { pendingId } = await pendingArchive(undefined, { actorKind: 'agent', source: 'mcp' });
     const r = await approvePending(db, { identity: personal(userA), pendingId, clock });
     expect(r.ok).toBe(true);
-    const audit = await messageById(userA, batchAuditMessageId(userA, pendingId));
-    const md = audit?.metadata as { actions?: ActionRecord[] };
-    expect(md.actions?.[0]?.actor_kind).toBe('agent');
-    expect(md.actions?.[0]?.source).toBe('mcp');
+    const action = await journalOf(userA, pendingId);
+    expect(action?.actorKind).toBe('agent');
+    expect(action?.source).toBe('mcp');
   });
 });
 
@@ -435,7 +466,7 @@ describe('сохранённый bodyDoc прошлой версии схемы 
           operations: [
             {
               tool: 'entity_update',
-              input: { id: target.id, expectedUpdatedAt: target.updatedAt, bodyDoc },
+              input: { id: target.id, expectedBodyRevision: target.bodyRevision, bodyDoc },
             },
           ],
         },
@@ -503,7 +534,11 @@ describe('сохранённый bodyDoc прошлой версии схемы 
         [
           {
             tool: 'entity_update',
-            input: { id: target.id, expectedUpdatedAt: target.updatedAt, bodyDoc: { v: 2, doc } },
+            input: {
+              id: target.id,
+              expectedBodyRevision: target.bodyRevision,
+              bodyDoc: { v: 2, doc },
+            },
           },
         ],
         { withDiff: true },
@@ -733,11 +768,10 @@ describe('атрибуция рутины: source routine, run_id и причи�
 
     // Атрибуция доживает до журнала: подтвердил владелец, но правку сделала рутина
     // в конкретном прогоне — по run_id откат прогона (rollback.ts) найдёт это действие
-    const audit = await messageById(userA, batchAuditMessageId(userA, pendingId));
-    const action = (audit?.metadata as { actions?: ActionRecord[] }).actions?.[0];
-    expect(action?.actor_kind).toBe('ai');
+    const action = await journalOf(userA, pendingId);
+    expect(action?.actorKind).toBe('ai');
     expect(action?.source).toBe('routine');
-    expect(action?.run_id).toBe(runId);
+    expect(action?.runId).toBe(runId);
   });
 
   test('rejectPending с reason superseded → текст «заменено» и metadata.reason; повтор → alreadyRejected с ИСХОДНОЙ причиной', async () => {
@@ -879,11 +913,10 @@ describe('причина отказа edited: правка владельца (�
 
     const r = await approvePending(db, { identity: personal(userA), pendingId, clock });
     expect(r.ok).toBe(true);
-    const audit = await messageById(userA, batchAuditMessageId(userA, pendingId));
-    const action = (audit?.metadata as { actions?: ActionRecord[] }).actions?.[0];
-    expect(action?.run_id).toBe(runId);
+    const action = await journalOf(userA, pendingId);
+    expect(action?.runId).toBe(runId);
     // §7.8: журнал знает, что применено не то, что предложила рутина, а правка владельца
-    expect(action?.edited_from).toBe(parentId);
+    expect(action?.editedFrom).toBe(parentId);
   });
 
   test('без правки ключа edited_from нет вовсе — ни в pending-записи, ни в action (условная запись, как run_id)', async () => {
@@ -895,9 +928,9 @@ describe('причина отказа edited: правка владельца (�
 
     const r = await approvePending(db, { identity: personal(userA), pendingId, clock });
     expect(r.ok).toBe(true);
-    const audit = await messageById(userA, batchAuditMessageId(userA, pendingId));
-    const action = (audit?.metadata as { actions?: ActionRecord[] }).actions?.[0];
-    expect(action !== undefined && Object.hasOwn(action, 'edited_from')).toBe(false);
+    const action = await journalOf(userA, pendingId);
+    expect(action).toBeDefined();
+    expect(action !== undefined && Object.hasOwn(action, 'editedFrom')).toBe(false);
   });
 });
 
@@ -1175,8 +1208,8 @@ describe('гейты kind: вопрос не принимают и не откл
       expect(approved.error.code).toBe('VALIDATION');
       expect(approved.error.message).toContain('вопрос');
     }
-    // Ни исполнения, ни записи: audit-сообщения по детерминированному PK нет
-    expect(await messageById(userA, batchAuditMessageId(userA, pendingId))).toBeUndefined();
+    // Ни исполнения, ни записи: пачки с batch_id = pendingId в журнале нет
+    expect(await journalOf(userA, pendingId)).toBeUndefined();
 
     const rejected = await rejectPending(db, { identity: personal(userA), pendingId });
     expect(rejected.ok).toBe(false);
@@ -1785,14 +1818,8 @@ describe('createSystemPending: запись без актора', () => {
     // ИСПОЛНЕНИЕ атрибутируется ВЛАДЕЛЬЦУ: `source: 'system'` спрятал бы действие из ленты
     // (`chat/messages.ts`) и из «отмени последнее» (`findLastUndoable` пропускает системные),
     // то есть владелец не смог бы отменить то, что сам и подтвердил.
-    const audit = await withIdentity(db, personal(owner), (tx) =>
-      tx
-        .select()
-        .from(chatMessages)
-        .where(eq(chatMessages.id, batchAuditMessageId(owner, id))),
-    );
-    const action = (audit[0]?.metadata as { actions: ActionRecord[] }).actions[0];
-    expect(action?.actor_kind).toBe('owner');
+    const action = await journalOf(owner, id);
+    expect(action?.actorKind).toBe('owner');
     expect(action?.source).toBe('ui');
   });
 
@@ -1826,5 +1853,388 @@ describe('createSystemPending: запись без актора', () => {
     expect(
       (rows[0]?.metadata as { pending: { input: { title: string } } }).pending.input.title,
     ).toBe('x');
+  });
+});
+
+describe('closeStaleBodyProposals: хранимые предложения старого контракта снимаются (спека скорости §8.2, РП-14)', () => {
+  /** Предложение с сохранённым входом как есть — вход старого контракта пишется мимо разбора, как лежит в базе. */
+  async function storedPending(owner: GraphId, tool: string, input: unknown): Promise<string> {
+    const { pendingId } = await withIdentity(db, personal(owner), (tx) =>
+      createPending(tx, {
+        actor: { graphId: owner, kind: 'ai', source: 'routine', runId: newId() },
+        tool,
+        input,
+        level: 'explicit-confirmation',
+        clock,
+      }),
+    );
+    return pendingId;
+  }
+
+  test('одиночный и в пачке — отказ stale; без поля — не трогает; повтор — пусто; чужой граф не виден', async () => {
+    const owner = await freshGraph();
+    const target = await seedEntity(owner, { title: 'Цель', tags: [], body: 'текст' });
+    const OLD = '2026-07-04T12:00:00.000Z';
+    const single = await storedPending(owner, 'entity_update', {
+      id: target.id,
+      body: 'новый',
+      expectedUpdatedAt: OLD,
+    });
+    const inBatch = await storedPending(owner, 'batch_execute', {
+      batch_id: newId(),
+      operations: [
+        { tool: 'entity_update', input: { id: target.id, title: 'Заголовок' } },
+        { tool: 'entity_update', input: { id: target.id, body: 'новый', expectedUpdatedAt: OLD } },
+      ],
+    });
+    const fresh = await storedPending(owner, 'batch_execute', {
+      batch_id: newId(),
+      operations: [
+        {
+          tool: 'entity_update',
+          input: { id: target.id, body: 'новый', expectedBodyRevision: target.bodyRevision },
+        },
+      ],
+    });
+    const archive = await storedPending(owner, 'entity_update', { id: target.id, archived: true });
+    // Чужой граф: его предложение старого контракта этой парой не видно и не трогается
+    const stranger = await freshGraph();
+    const foreignTarget = await seedEntity(stranger, { title: 'Чужая', tags: [], body: 'т' });
+    const foreign = await storedPending(stranger, 'entity_update', {
+      id: foreignTarget.id,
+      body: 'x',
+      expectedUpdatedAt: OLD,
+    });
+
+    const closed = await withIdentity(db, personal(owner), (tx) =>
+      closeStaleBodyProposals(tx, personal(owner)),
+    );
+    expect([...closed].sort()).toEqual([single, inBatch].sort());
+    const reasons = await withIdentity(db, personal(owner), async (tx) => ({
+      single: await rejectedReason(tx, single),
+      inBatch: await rejectedReason(tx, inBatch),
+      fresh: await rejectedReason(tx, fresh),
+      archive: await rejectedReason(tx, archive),
+    }));
+    expect(reasons).toEqual({
+      single: 'stale',
+      inBatch: 'stale',
+      fresh: undefined,
+      archive: undefined,
+    });
+    expect(
+      await withIdentity(db, personal(stranger), (tx) => rejectedReason(tx, foreign)),
+    ).toBeUndefined();
+
+    // Повтор ничего не снимает: снятые уже отклонены, остальные — нового контракта
+    expect(
+      await withIdentity(db, personal(owner), (tx) => closeStaleBodyProposals(tx, personal(owner))),
+    ).toEqual([]);
+    // Предложение нового контракта исполняется как обычно
+    const r = await approvePending(db, { identity: personal(owner), pendingId: fresh, clock });
+    expect(r.ok).toBe(true);
+  });
+
+  test('исполненное предложение старого контракта не трогается: отклонять уже нечего', async () => {
+    const owner = await freshGraph();
+    const target = await seedEntity(owner, { title: 'Цель', tags: [], body: 'текст' });
+    // Исполненная единица: запись пачки с ключом pendingId уже есть в журнале (одобрили до смены контракта)
+    const pendingId = await storedPending(owner, 'entity_update', {
+      id: target.id,
+      title: 'Переименовано',
+    });
+    expect((await approvePending(db, { identity: personal(owner), pendingId, clock })).ok).toBe(
+      true,
+    );
+    const admin = adminDb();
+    try {
+      // Старую форму входа исполненного предложения кладём задним числом: одобрить её новым контрактом нельзя
+      await admin.db.execute(sql`
+        UPDATE chat_messages
+           SET metadata = jsonb_set(metadata, '{pending,input,expectedUpdatedAt}', '"2026-07-04T12:00:00.000Z"')
+         WHERE id = ${pendingId}::uuid`);
+    } finally {
+      await admin.client.end();
+    }
+    expect(
+      await withIdentity(db, personal(owner), (tx) => closeStaleBodyProposals(tx, personal(owner))),
+    ).toEqual([]);
+    expect(
+      await withIdentity(db, personal(owner), (tx) => rejectedReason(tx, pendingId)),
+    ).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Карточка подтверждения отката (`undo_of`) при отказе правила отмены текста закрывается с причиной и местом
+// продолжения (§8.6 «Где есть продолжение», К-43, Д-8; план А, задача 11): путь рождён моделью (Р-17), и открытая
+// карточка осталась бы с кнопкой, которая откажет снова.
+// ---------------------------------------------------------------------------
+
+describe('карточка отката `undo_of`: отказ правила отмены текста закрывает её (§8.6, К-43)', () => {
+  const sink = makeJournalSink();
+
+  async function bodyOf(owner: GraphId, id: string): Promise<{ body: string; rev: number }> {
+    const rows = await withIdentity(db, personal(owner), (tx) =>
+      tx
+        .select({ body: entities.body, rev: entities.bodyRevision })
+        .from(entities)
+        .where(eq(entities.id, id)),
+    );
+    const row = rows[0];
+    if (row === undefined) throw new Error(`записи ${id} нет`);
+    return row;
+  }
+
+  /**
+   * Мир: инструкцию act-рутины (её тело) правит чат-ассистент — карточкой, владелец её принимает; «отмени последнее»
+   * словами уходит в подтверждение отката (`undo_of`: откат правки инструкции act-рутины — второе «да», В-8).
+   */
+  async function undoCardWorld(owner: GraphId) {
+    const routineId = await agentLoopHelpers(db).seedRoutine(owner, {
+      title: 'Утренняя рутина',
+      body: 'исходная инструкция',
+      routine: { 'orbis/routine_mode': 'act', 'orbis/allowed_tools': ['entity_update'] },
+    });
+    const chat = ctxFor({ identity: personal(owner) });
+    const asked = await dispatchTool(chat, 'entity_update', {
+      id: routineId,
+      body: 'инструкция ассистента',
+      expectedBodyRevision: (await bodyOf(owner, routineId)).rev,
+    });
+    if (asked.status !== 'pending_confirmation') {
+      throw new Error(`правка инструкции не спросила: ${JSON.stringify(asked)}`);
+    }
+    const edited = await approvePending(db, {
+      identity: personal(owner),
+      pendingId: asked.pendingId,
+    });
+    if (!edited.ok) throw new Error(edited.error.message);
+    const undo = await dispatchTool(chat, 'undo_last', {});
+    if (undo.status !== 'pending_confirmation') {
+      throw new Error(`откат не ушёл в подтверждение: ${JSON.stringify(undo)}`);
+    }
+    return { routineId, editId: edited.actionId, pendingId: undo.pendingId };
+  }
+
+  test('владелец дописал текст после правки → «Принять» отказывает UNDO_TEXT_CHANGED, карточка закрыта `undo_refused` с местом продолжения; повторное «Принять» — «уже закрыто», а не повторный отказ', async () => {
+    const owner = await freshGraph();
+    const { routineId, editId, pendingId } = await undoCardWorld(owner);
+    const edit = await journalOf(owner, editId);
+    if (edit === undefined) throw new Error('правки инструкции нет в журнале');
+    const editThread = edit.threadId;
+    if (editThread === null) throw new Error('у правки чата нет треда');
+    const readThread = (before?: string) =>
+      withIdentity(db, personal(owner), (tx) =>
+        threadPage(tx, owner, editThread, { limit: 100, ...(before && { before }) }),
+      );
+    const openCard = (await readThread()).find((m) => m.id === pendingId);
+    expect(openCard?.metadata.cards).toEqual([
+      expect.objectContaining({ kind: 'confirmation_card', pendingId }),
+    ]);
+    expect((openCard?.metadata.cards as Array<{ closed?: boolean }>)[0]?.closed).toBeUndefined();
+    // Владелец дописывает инструкцию в интерфейсе
+    const typed = await execute(
+      db,
+      {
+        identity: personal(owner),
+        actorKind: 'owner',
+        source: 'ui',
+        operations: [
+          {
+            tool: 'entity_update',
+            input: {
+              id: routineId,
+              body: 'инструкция ассистента + владелец',
+              expectedBodyRevision: (await bodyOf(owner, routineId)).rev,
+            },
+          },
+        ],
+      },
+      { sink },
+    );
+    if (!typed.ok) throw new Error(typed.error.message);
+
+    const r = await approvePending(db, { identity: personal(owner), pendingId });
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.error.code).toBe('UNDO_TEXT_CHANGED');
+    const details = r.error.details as UndoTextChangedDetails;
+    // Место продолжения — карточка правки в её треде (`chat`, исполнена «Принять» — строка треда с «Отменить»), не
+    // «здесь»: у карточки отката продолжения нет (К-43)
+    expect(details.continuation.kind).not.toBe('here');
+    expect(details.continuation).toEqual({
+      kind: 'card',
+      threadId: editThread,
+      actionId: editId,
+    });
+    expect(details.entries.map((e) => e.entityId)).toEqual([routineId]);
+    // Текст закрытия — владельцу: какая запись, кто и когда сменил текст, где отменить действие самому (без id)
+    const closing = r.error.message;
+    expect(closing).toMatch(
+      /^Откат не применён: текст записи «Утренняя рутина» изменён после этого действия \(владелец, \d\d:\d\d\) — отменить его можно с его карточки в общем треде$/,
+    );
+    // Ничего не применено: текст владельца цел, записи отмены нет
+    expect((await bodyOf(owner, routineId)).body).toBe('инструкция ассистента + владелец');
+    expect(await undoRecordOf(owner, editId)).toBeUndefined();
+
+    // Карточка закрыта: причина читается обратно (zod-перечень знает её — иначе откат к `owner`), в ленте — текст с
+    // местом, в метаданных — место данными
+    expect(await withIdentity(db, personal(owner), (tx) => rejectedReason(tx, pendingId))).toBe(
+      'undo_refused',
+    );
+    const rows = await withIdentity(db, personal(owner), (tx) =>
+      tx
+        .select({
+          content: chatMessages.content,
+          metadata: chatMessages.metadata,
+          createdAt: chatMessages.createdAt,
+        })
+        .from(chatMessages)
+        .where(eq(chatMessages.id, rejectMessageId(owner, pendingId))),
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.content).toBe(closing);
+    expect(rows[0]?.metadata).toEqual({
+      type: 'confirmation_rejected',
+      rejects: pendingId,
+      reason: 'undo_refused',
+      continuation: { kind: 'card', threadId: editThread, actionId: editId },
+    });
+
+    // Перезагрузка перечитывает исходную карточку с признаком закрытия. Даже если строка отказа уже на другой
+    // странице курсора, кнопок с первого кадра быть не должно (§8.6, I-1 гейта); хранимое сообщение не меняется.
+    const closingAt = rows[0]?.createdAt;
+    if (closingAt === undefined) throw new Error('у закрытия нет времени');
+    const reloaded = await readThread(
+      `${closingAt.toISOString()}|${rejectMessageId(owner, pendingId)}`,
+    );
+    expect(reloaded.some((m) => m.id === rejectMessageId(owner, pendingId))).toBe(false);
+    expect(reloaded.find((m) => m.id === pendingId)?.metadata.cards).toEqual([
+      expect.objectContaining({
+        kind: 'confirmation_card',
+        mode: 'explicit',
+        pendingId,
+        closed: true,
+      }),
+    ]);
+    const stored = await withIdentity(db, personal(owner), (tx) =>
+      tx
+        .select({ metadata: chatMessages.metadata })
+        .from(chatMessages)
+        .where(eq(chatMessages.id, pendingId)),
+    );
+    const storedCards = (stored[0]?.metadata as { cards?: Array<{ closed?: boolean }> } | undefined)
+      ?.cards;
+    expect(storedCards?.[0]?.closed).toBeUndefined();
+
+    // Повторное «Принять» — карточка уже закрыта: «уже закрыто», не второй отказ правила и не второе закрытие
+    const again = await approvePending(db, { identity: personal(owner), pendingId });
+    expect(again.ok).toBe(false);
+    if (again.ok) return;
+    expect(again.error.code).toBe('VALIDATION');
+    expect(again.error.message).toBe(
+      'Подтверждение уже закрыто: текст изменён после действия, откат не применён',
+    );
+    expect(again.error.details).toMatchObject({ reason: 'undo_refused' });
+    const closings = await withIdentity(db, personal(owner), (tx) =>
+      tx
+        .select({ id: chatMessages.id })
+        .from(chatMessages)
+        .where(
+          sql`${chatMessages.metadata} @> ${JSON.stringify({ type: 'confirmation_rejected', rejects: pendingId })}::jsonb`,
+        ),
+    );
+    expect(closings).toHaveLength(1);
+    // «Отклонить» закрытую — идемпотентно, с ИСХОДНОЙ причиной
+    const rejected = await rejectPending(db, { identity: personal(owner), pendingId });
+    expect(rejected.ok && rejected.alreadyRejected && rejected.reason).toBe('undo_refused');
+  });
+
+  test('место продолжения у единицы, одобренной с карточки (`ui` без треда, К-29), — «карточки нет», а не вкладка; обычная пачка интерфейса — вкладка', async () => {
+    const owner = await freshGraph();
+    const note = await seedEntity(owner, { title: 'Заметка единицы', tags: [], body: 'исходный' });
+    const revision = (await bodyOf(owner, note.id)).rev;
+    const { id } = await withIdentity(db, personal(owner), (tx) =>
+      createSystemPending(tx, {
+        graphId: owner,
+        tool: 'entity_update',
+        input: {
+          id: note.id,
+          body: 'из карточки',
+          expectedBodyRevision: revision,
+        },
+        summary: 'Система предлагает переписать текст',
+      }),
+    );
+    const approved = await approvePending(db, { identity: personal(owner), pendingId: id });
+    if (!approved.ok) throw new Error(approved.error.message);
+    const unit = await journalOf(owner, id);
+    if (unit === undefined) throw new Error('одобренной единицы нет в журнале');
+    // Предпосылка: запись — правка владельца в интерфейсе без треда, как у пачки вкладки
+    expect([unit.source, unit.type, unit.threadId]).toEqual(['ui', 'batch', null]);
+    expect(await withIdentity(db, personal(owner), (tx) => undoContinuationOf(tx, unit))).toEqual({
+      kind: 'none',
+    });
+
+    // Через настоящий тул, а не только вычисление места: писатель без журнала меняет текст поверх принятой единицы.
+    // Эта карточка не заносила действие в стек вкладки, и отказ не должен направлять туда владельца.
+    const outside = adminDb();
+    try {
+      await outside.db.execute(
+        sql`UPDATE entities SET body = 'после карточки' WHERE id = ${note.id}::uuid`,
+      );
+    } finally {
+      await outside.client.end();
+    }
+    const refused = await dispatchTool(ctxFor({ identity: personal(owner) }), 'undo_last', {});
+    expect(refused.status).toBe('error');
+    if (refused.status !== 'error') throw new Error('ожидался отказ отмены принятой единицы');
+    expect(refused.error.code).toBe('UNDO_TEXT_CHANGED');
+    expect((refused.error.details as UndoTextChangedDetails).continuation).toEqual({
+      kind: 'none',
+    });
+    expect(refused.error.message).toContain('карточки у этого действия нет');
+    expect((await bodyOf(owner, note.id)).body).toBe('после карточки');
+    expect(await undoRecordOf(owner, id)).toBeUndefined();
+
+    const typed = await execute(
+      db,
+      {
+        identity: personal(owner),
+        actorKind: 'owner',
+        source: 'ui',
+        batchId: newId(),
+        operations: [
+          {
+            tool: 'entity_update',
+            input: {
+              id: note.id,
+              body: 'из вкладки',
+              expectedBodyRevision: (await bodyOf(owner, note.id)).rev,
+            },
+          },
+        ],
+      },
+      { sink },
+    );
+    if (!typed.ok) throw new Error(typed.error.message);
+    const tabEntry = await journalOf(owner, typed.actionId);
+    if (tabEntry === undefined) throw new Error('пачки вкладки нет в журнале');
+    expect(
+      await withIdentity(db, personal(owner), (tx) => undoContinuationOf(tx, tabEntry)),
+    ).toEqual({ kind: 'tab' });
+  });
+
+  test('текст не менялся → «Принять» откатывает правку: запись отмены — путь `chat` (карточку поставил разговор)', async () => {
+    const owner = await freshGraph();
+    const { routineId, editId, pendingId } = await undoCardWorld(owner);
+    const r = await approvePending(db, { identity: personal(owner), pendingId });
+    expect(r.ok).toBe(true);
+    expect((await bodyOf(owner, routineId)).body).toBe('исходная инструкция');
+    expect((await undoRecordOf(owner, editId))?.source).toBe('chat');
+    expect(
+      await withIdentity(db, personal(owner), (tx) => rejectedReason(tx, pendingId)),
+    ).toBeUndefined();
   });
 });

@@ -7,15 +7,17 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { GraphId } from '@orbis/shared';
 import {
-  type AgendaSubscription,
   BUILTIN_ASPECT_DEFS,
   BUILTIN_CONTRACT_DEFS,
   BUILTIN_PROPERTY_META,
   BUILTIN_SUBSCRIPTION_DEFS,
+  type BudgetSubscription,
   entityThreadId,
   newId,
   type PropertyDefinition,
+  type UndoTextChangedDetails,
 } from '@orbis/shared';
+import { PAGE_ONLY_HINT } from '@orbis/shared/query';
 import { eq, inArray, sql } from 'drizzle-orm';
 import { OWN_ACTION_DECL } from '../../test/fixtures/action-seed';
 import {
@@ -31,11 +33,12 @@ import {
   seedCustomAspect,
   truncateAll,
 } from '../../test/helpers';
+import { actionsOf, journalOf, threadJournal, undoRecordOf } from '../../test/journal-helpers';
 import { ensureEntityThread, ensureGlobalThread } from '../chat/threads';
 import { chatMessages, entities, propertyDefinitions } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
-import { makeChatJournalSink } from '../executor/journal';
-import type { ActionRecord, WireEntity } from '../executor/types';
+import { makeJournalSink } from '../executor/journal';
+import type { WireEntity } from '../executor/types';
 import { issuePatGrant, verifyBearer } from '../oauth/grants';
 import { reconfiguresOf } from '../policy/confirmation';
 import { approvePending, rejectPending } from '../policy/pending';
@@ -198,14 +201,15 @@ describe('dispatchTool: мутации через executor (§9.2; уровни 
       undoActionId: expect.any(String),
     });
 
-    // audit-сообщение легло в переданный тред; актор — внутренний AI
-    const msgs = await messagesIn(userA, threadId);
-    expect(msgs.length).toBe(1);
-    const md = msgs[0]?.metadata as { actions?: ActionRecord[] };
-    const action = md.actions?.[0];
-    expect(action?.actor_kind).toBe('ai');
+    // запись журнала легла в переданный тред; актор — внутренний AI. Сообщений в треде нет: вызов тула
+    // не пишет в разговор ничего своего, а журнал — своя таблица (спека скорости §11)
+    expect((await messagesIn(userA, threadId)).length).toBe(0);
+    const journal = await threadJournal(userA, threadId);
+    expect(journal.length).toBe(1);
+    const action = journal[0];
+    expect(action?.actorKind).toBe('ai');
     expect(action?.source).toBe('chat');
-    expect(action?.actor_user_id).toBe(accountOf(userA));
+    expect(action?.actorUserId).toBe(accountOf(userA));
     if (r.card?.kind === 'entity_card') expect(action?.id).toBe(r.card.undoActionId as string);
   });
 
@@ -226,10 +230,10 @@ describe('dispatchTool: мутации через executor (§9.2; уровни 
     });
     expect(r.status).toBe('ok');
 
-    const msgs = await messagesIn(userA, threadId);
-    expect(msgs.length).toBe(1);
-    const action = (msgs[0]?.metadata as { actions?: ActionRecord[] }).actions?.[0];
-    expect(action?.run_id).toBe(runId);
+    expect((await messagesIn(userA, threadId)).length).toBe(0);
+    const journal = await threadJournal(userA, threadId);
+    expect(journal.length).toBe(1);
+    expect(journal[0]?.runId).toBe(runId);
   });
 
   test('attach_orbis_task: аспект установлен; без threadId audit — в глобальный тред', async () => {
@@ -237,7 +241,8 @@ describe('dispatchTool: мутации через executor (§9.2; уровни 
     const globalThread = await withIdentity(db, personal(userA), (tx) =>
       ensureGlobalThread(tx, userA),
     );
-    const before = (await messagesIn(userA, globalThread)).length;
+    const before = (await threadJournal(userA, globalThread)).length;
+    const messagesBefore = (await messagesIn(userA, globalThread)).length;
 
     const r = await dispatchTool(ctxFor(), 'attach_orbis_task', {
       entity_id: target.id,
@@ -260,10 +265,12 @@ describe('dispatchTool: мутации через executor (§9.2; уровни 
       expect(r.card.undoActionId).toBeDefined();
     }
 
-    const after = await messagesIn(userA, globalThread);
+    const after = await threadJournal(userA, globalThread);
     expect(after.length).toBe(before + 1);
-    const md = after[after.length - 1]?.metadata as { actions?: ActionRecord[] };
-    expect(md.actions?.[0]?.actor_kind).toBe('ai');
+    // журнал — своя таблица: в сообщения треда вызов не пишет ничего (спека скорости §11)
+    expect((await messagesIn(userA, globalThread)).length).toBe(messagesBefore);
+    // Журнал треда — новые первыми
+    expect(after[0]?.actorKind).toBe('ai');
   });
 
   test('entity_update: card entity_card с undoActionId; ошибка executor пробрасывается структурированно', async () => {
@@ -278,7 +285,7 @@ describe('dispatchTool: мутации через executor (§9.2; уровни 
       expect(ok.card.undoActionId).toBeDefined();
     }
 
-    // §5.2: правка body без expectedUpdatedAt → VALIDATION из executor'а
+    // §8.1: правка body без expectedBodyRevision → VALIDATION из executor'а
     const bad = await dispatchTool(ctxFor(), 'entity_update', {
       id: target.id,
       body: 'новый текст',
@@ -325,10 +332,10 @@ describe('dispatchTool: мутации через executor (§9.2; уровни 
     expect(r.status).toBe('ok');
     if (r.status !== 'ok') return;
     expect((r.result as unknown[]).length).toBe(2);
-    const msgs = await messagesIn(userA, threadId);
-    expect(msgs.length).toBe(1);
-    const md = msgs[0]?.metadata as { actions?: ActionRecord[] };
-    expect(md.actions?.[0]?.type).toBe('batch');
+    expect((await messagesIn(userA, threadId)).length).toBe(0);
+    const journal = await threadJournal(userA, threadId);
+    expect(journal.length).toBe(1);
+    expect(journal[0]?.type).toBe('batch');
   });
 
   test('batch_execute: вложенный attach по ПУБЛИЧНОМУ имени реестра (дефисный кастомный аспект) → успех', async () => {
@@ -974,69 +981,14 @@ describe('dispatchTool: чтения без политики (§7.10, ряд «r
   });
 });
 
-describe('dispatchTool: import_csv_start — вход в импорт из чата (Task C4c, 03-budget §3.4)', () => {
-  /** Число сущностей и строк entity_origins владельца — СЫРЫМ админ-соединением (мимо RLS). */
-  async function rawWriteCounts(user: GraphId): Promise<{ entities: number; origins: number }> {
-    const { db: admin, client: adminClient } = adminDb();
-    try {
-      const rows = (await admin.execute(sql`
-        SELECT
-          (SELECT count(*)::int FROM entities WHERE graph_id = ${user}) AS entities,
-          (SELECT count(*)::int FROM entity_origins WHERE graph_id = ${user}) AS origins
-      `)) as unknown as Array<{ entities: number; origins: number }>;
-      return { entities: rows[0]?.entities ?? 0, origins: rows[0]?.origins ?? 0 };
-    } finally {
-      await adminClient.end();
-    }
-  }
-
-  test('source=chat → status ok и карточка import_review (форма — дословно web-тип ImportReviewData)', async () => {
+// Спека 1в §7.4: тул импорта снят до среза Бюджета (интерфейса импорта нет). Вызов по старому имени
+// — отказ неизвестного тула тем же путём, что у любого незнакомого имени, а не карточка-вход в экран,
+// которого нет; и ничего не пишет.
+describe('dispatchTool: import_csv_start снят (1в §7.4)', () => {
+  test('вызов по имени — FORBIDDEN_LEVEL неизвестного тула, карточки нет', async () => {
     const r = await dispatchTool(ctxFor(), 'import_csv_start', {});
-    expect(r.status).toBe('ok');
-    if (r.status !== 'ok') return;
-    // Литеральная сверка формы целиком (toEqual): карточки сервера и web-типы
-    // НАМЕРЕННО не общие — расхождение имени поля с ImportReviewData
-    // (apps/web/src/features/chat/cards/types.ts) клиент молча не отрисует
-    expect(r.card).toEqual({ kind: 'import_review' });
-  });
-
-  test('гейт §8: отказ резолвера import.csv → LIMIT, карточки нет', async () => {
-    // Денайл-путь через инъецируемый шов ctx.entitlements (тот же приём, что у роутера
-    // импорта после ac44b05): боевой резолвер плана dev всё разрешает, и без шва эта
-    // ветка была бы непокрываемой.
-    const r = await dispatchTool(
-      ctxFor({
-        entitlements: (_user, key) =>
-          key === 'import.csv' ? { allowed: false, limit: 0 } : { allowed: true, limit: null },
-      }),
-      'import_csv_start',
-      {},
-    );
-    expectError(r, 'LIMIT');
+    expectError(r, 'FORBIDDEN_LEVEL');
     expect('card' in r).toBe(false);
-  });
-
-  test('internalOnly fail-closed: source=mcp → структурная ошибка, карточки нет', async () => {
-    const r = await dispatchTool(
-      ctxFor({ actorKind: 'agent', source: 'mcp' }),
-      'import_csv_start',
-      {},
-    );
-    expectError(r, 'VALIDATION');
-    expect('card' in r).toBe(false);
-  });
-
-  test('строгий пустой envelope: лишнее поле → VALIDATION', async () => {
-    const r = await dispatchTool(ctxFor(), 'import_csv_start', { file: 'statement.csv' });
-    expectError(r, 'VALIDATION');
-  });
-
-  test('тул ничего не пишет: число entities и строк entity_origins владельца не изменилось', async () => {
-    const before = await rawWriteCounts(userA);
-    const r = await dispatchTool(ctxFor(), 'import_csv_start', {});
-    expect(r.status).toBe('ok');
-    const after = await rawWriteCounts(userA);
-    expect(after).toEqual(before);
   });
 });
 
@@ -1064,7 +1016,7 @@ describe('dispatchTool: undo_last — «отмени последнее» сло
         source: 'fast_path',
         operations: [{ tool: 'entity_create', input: { title: 'Обед 340', tags: [] } }],
       },
-      { sink: makeChatJournalSink() },
+      { sink: makeJournalSink() },
     );
     if (!created.ok) throw new Error(created.error.message);
     const entity = created.results[0] as WireEntity;
@@ -1109,7 +1061,7 @@ describe('dispatchTool: undo_last — «отмени последнее» сло
         source: 'system',
         operations: [{ tool: 'entity_create', input: { title: 'Системный след', tags: [] } }],
       },
-      { sink: makeChatJournalSink() },
+      { sink: makeJournalSink() },
     );
     if (!sys.ok) throw new Error(sys.error.message);
 
@@ -1135,7 +1087,7 @@ describe('dispatchTool: undo_last — «отмени последнее» сло
         source: 'fast_path',
         operations: [{ tool: 'entity_create', input: { title: 'Не трогать', tags: [] } }],
       },
-      { sink: makeChatJournalSink() },
+      { sink: makeJournalSink() },
     );
     if (!before.ok) throw new Error(before.error.message);
     const untouched = (before.results[0] as WireEntity).id;
@@ -1165,6 +1117,216 @@ describe('dispatchTool: undo_last — «отмени последнее» сло
   });
 });
 
+// ---------------------------------------------------------------------------
+// undo_last: отказ правила отмены текста несёт место продолжения (§8.6 «Где есть продолжение», Р-17, К-46; план А,
+// задача 11). Своего продолжения у «отмени последнее» словами нет: модель называет человеку место, где он отменит
+// действие с продолжением сам, — карточку в треде, вкладку, меню записи или «карточки нет».
+//
+// Текст после действия в этих тестах меняет писатель, которого «отмени последнее» не видит, — без журнала (ops-скрипт:
+// колонка «действие тела» пустеет, К-34): набор владельца сам стал бы последним отменяемым действием, и «отмени
+// последнее» сняло бы его, а не действие под ним (правило при этом проходит — колонка указывает на набор).
+// ---------------------------------------------------------------------------
+
+describe('undo_last: отказ правила отмены текста — место продолжения (§8.6, Р-17, К-46)', () => {
+  const admin = adminDb();
+  const sink = makeJournalSink();
+  afterAll(async () => {
+    await admin.client.end();
+  });
+  const caller = (owner: GraphId) =>
+    createCallerFactory(appRouter)({
+      identity: personal(owner),
+      actorKind: 'owner',
+      db,
+      clientVersion: null,
+    });
+  const chat = (owner: GraphId, over: Partial<ToolCallCtx> = {}) =>
+    ctxFor({ identity: personal(owner), ...over });
+
+  /** Колонки тела — сырым чтением под админом: их пишет триггер, код чтения здесь не судья. */
+  async function bodyRow(id: string): Promise<{ body: string; rev: number }> {
+    const rows = (await admin.db.execute(
+      sql`SELECT body, body_revision FROM entities WHERE id = ${id}::uuid`,
+    )) as unknown as Array<{ body: string; body_revision: number }>;
+    const row = rows[0];
+    if (row === undefined) throw new Error(`записи ${id} нет`);
+    return { body: row.body, rev: row.body_revision };
+  }
+
+  /** Писатель без журнала (ops-скрипт): текст меняется, колонка «действие тела» пустеет, журнал не растёт. */
+  async function outsideWrite(id: string, body: string): Promise<void> {
+    await admin.db.execute(sql`UPDATE entities SET body = ${body} WHERE id = ${id}::uuid`);
+  }
+
+  /** Правка тела одним действием через исполнитель с синком (агент, прогон агента). */
+  async function bodyEdit(
+    owner: GraphId,
+    id: string,
+    body: string,
+    over: { actorKind: 'agent'; source: 'mcp'; runId?: string },
+  ): Promise<string> {
+    const r = await execute(
+      db,
+      {
+        identity: personal(owner),
+        actorKind: over.actorKind,
+        source: over.source,
+        ...(over.runId !== undefined && { runId: over.runId }),
+        operations: [
+          {
+            tool: 'entity_update',
+            input: { id, body, expectedBodyRevision: (await bodyRow(id)).rev },
+          },
+        ],
+      },
+      { sink },
+    );
+    if (!r.ok) throw new Error(`правка тела: ${r.error.code} ${r.error.message}`);
+    return r.actionId;
+  }
+
+  /** «Отмени последнее» словами → отказ правила; текст и журнал не тронуты. */
+  async function refused(
+    owner: GraphId,
+    noteId: string,
+    actionId: string,
+  ): Promise<{ message: string; details: UndoTextChangedDetails }> {
+    const before = (await bodyRow(noteId)).body;
+    // Часы вызова — настоящие: правки легли сейчас, и время в фразе отказа — «ЧЧ:ММ» без даты
+    const r = await dispatchTool(chat(owner, { clock: () => new Date() }), 'undo_last', {});
+    if (r.status !== 'error') throw new Error(`ожидался отказ, получено: ${JSON.stringify(r)}`);
+    expect(r.error.code).toBe('UNDO_TEXT_CHANGED');
+    const details = r.error.details as UndoTextChangedDetails;
+    expect(details.action.id).toBe(actionId);
+    expect(details.entries.map((e) => e.entityId)).toEqual([noteId]);
+    // Продолжения «здесь» у пути нет (Р-17): место всегда ДРУГОЕ — там, где кнопку нажмёт человек
+    expect(details.continuation.kind).not.toBe('here');
+    // Строка — для человека (она же карточка ошибки в ленте): без id, ссылок на спеку и «кнопки человека»
+    expect(r.error.message).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-/);
+    expect(r.error.message).not.toContain('§');
+    expect(r.error.message).not.toContain('кнопке человека');
+    // Ничего не применено: текст писателя цел, записи отмены нет
+    expect((await bodyRow(noteId)).body).toBe(before);
+    expect(await undoRecordOf(owner, actionId)).toBeUndefined();
+    return { message: r.error.message, details };
+  }
+
+  test('правка тела агентом (MCP, карточка в общем треде) → место `card` с тредом и id действия; фраза называет общий тред, кто и когда сменил текст', async () => {
+    const owner = await freshGraph();
+    const note = await seedEntity(owner, { title: 'Заметка', tags: [], body: 'исходный' });
+    const a = await bodyEdit(owner, note.id, 'агент', { actorKind: 'agent', source: 'mcp' });
+    await outsideWrite(note.id, 'агент + вне приложения');
+
+    const { message, details } = await refused(owner, note.id, a);
+    const global = await withIdentity(db, personal(owner), (tx) => ensureGlobalThread(tx, owner));
+    expect(details.continuation).toEqual({ kind: 'card', threadId: global, actionId: a });
+    expect(message).toMatch(
+      /^Не отменено: текст записи «Заметка» изменён после этого действия \(кто-то вне приложения, \d\d:\d\d\) — отменить его можно с его карточки в общем треде$/,
+    );
+    expect(details.entries[0]?.actorLabel).toBe('вне приложения');
+  });
+
+  test('правка владельца в интерфейсе (`ui`, пачка) → место `tab` с запасным выходом «из версий»; сеанс правки текста → места нет (R-23): кто менял текст после сеанса, «как до сеанса» одним действием не вернуть', async () => {
+    const owner = await freshGraph();
+    const n1 = await seedEntity(owner, { title: 'Заметка 1', tags: [], body: 'исходный 1' });
+    const o = await caller(owner).entity.updateBatch({
+      label: 'Правка владельца',
+      operations: [
+        {
+          tool: 'entity_update',
+          input: { id: n1.id, body: 'владелец', expectedBodyRevision: (await bodyRow(n1.id)).rev },
+        },
+      ],
+    });
+    await outsideWrite(n1.id, 'владелец + вне приложения');
+    const tab = await refused(owner, n1.id, o.actionId);
+    expect(tab.details.continuation).toEqual({ kind: 'tab' });
+    expect(tab.message).toContain(
+      'отменить его можно клавишами Ctrl/Cmd+Z во вкладке, где оно сделано, или вернуть текст из версий записи',
+    );
+
+    const g2 = await freshGraph();
+    const n2 = await seedEntity(g2, { title: 'Заметка 2', tags: [], body: 'исходный 2' });
+    await caller(g2).entity.update({
+      id: n2.id,
+      body: 'сеанс',
+      expectedBodyRevision: (await bodyRow(n2.id)).rev,
+      autosave: true,
+    });
+    const session = (await actionsOf(g2)).find((e) => e.textSession);
+    if (session === undefined) throw new Error('сеанса правки текста нет');
+    await outsideWrite(n2.id, 'сеанс + вне приложения');
+    const sessionRefusal = await refused(g2, n2.id, session.id);
+    // Пункт «Вернуть текст как на …» виден, только пока текст дал сеанс (§7.5 п. 3) — отказ как раз значит, что не он
+    expect(sessionRefusal.details.continuation).toEqual({ kind: 'none' });
+    expect(sessionRefusal.message).toMatch(
+      /^Не отменено: после этого сеанса правки текст записи «Заметка 2» менял кто-то вне приложения в \d\d:\d\d — вернуть текст «как до сеанса» одним действием нельзя$/,
+    );
+  });
+
+  test('правка чата с карточкой в ответе (`card_in_reply`) → `card` с тредом РАЗГОВОРА; глагол прогона агента (`mcp` с `run_id`) → `none` («карточки нет»)', async () => {
+    const owner = await freshGraph();
+    const note = await seedEntity(owner, { title: 'Заметка', tags: [], body: 'исходный' });
+    const threadId = await withIdentity(db, personal(owner), (tx) =>
+      ensureEntityThread(tx, owner, note.id),
+    );
+    const edited = await dispatchTool(chat(owner, { threadId }), 'entity_update', {
+      id: note.id,
+      body: 'чат',
+      expectedBodyRevision: (await bodyRow(note.id)).rev,
+    });
+    if (edited.status !== 'ok' || edited.actionId === undefined) {
+      throw new Error(`правка чата: ${JSON.stringify(edited)}`);
+    }
+    // Предпосылка: карточку действия несёт ответ ассистента в треде разговора
+    expect((await journalOf(owner, edited.actionId))?.cardInReply).toBe(true);
+    await outsideWrite(note.id, 'чат + вне приложения');
+    const inReply = await refused(owner, note.id, edited.actionId);
+    expect(inReply.details.continuation).toEqual({
+      kind: 'card',
+      threadId,
+      actionId: edited.actionId,
+    });
+    expect(inReply.message).toContain(
+      'отменить его можно с его карточки в треде разговора, где оно сделано',
+    );
+
+    const g2 = await freshGraph();
+    const n2 = await seedEntity(g2, { title: 'Заметка прогона', tags: [], body: 'исходный' });
+    const verb = await bodyEdit(g2, n2.id, 'прогон', {
+      actorKind: 'agent',
+      source: 'mcp',
+      runId: newId(),
+    });
+    await outsideWrite(n2.id, 'прогон + вне приложения');
+    const none = await refused(g2, n2.id, verb);
+    expect(none.details.continuation).toEqual({ kind: 'none' });
+    expect(none.message).toMatch(
+      /— карточки у этого действия нет, вернуть текст можно из версий записи$/,
+    );
+  });
+
+  test('флага «всё равно» у тула нет: схема тула без полей, `force` — VALIDATION; закрепления версий нет', async () => {
+    const owner = await freshGraph();
+    const defs = await withIdentity(db, personal(owner), (tx) => buildToolRegistry(tx, owner));
+    const tool = defs.find((d) => d.name === 'undo_last');
+    expect(tool?.inputJsonSchema).toEqual({
+      type: 'object',
+      properties: {},
+      additionalProperties: false,
+    });
+    const note = await seedEntity(owner, { title: 'Заметка', tags: [], body: 'исходный' });
+    const a = await bodyEdit(owner, note.id, 'агент', { actorKind: 'agent', source: 'mcp' });
+    await outsideWrite(note.id, 'агент + вне приложения');
+    expectError(await dispatchTool(chat(owner), 'undo_last', { force: true }), 'VALIDATION');
+    await refused(owner, note.id, a);
+    const versions = (await admin.db.execute(
+      sql`SELECT id FROM entity_versions WHERE entity_id = ${note.id}::uuid`,
+    )) as unknown as unknown[];
+    expect(versions).toEqual([]);
+  });
+});
+
 describe('dispatchTool: user_query — агрегация SQL-ем (решение 7, §3.3 точность)', () => {
   beforeAll(async () => {
     for (const amount of ['100.50', '200.25']) {
@@ -1190,12 +1352,14 @@ describe('dispatchTool: user_query — агрегация SQL-ем (решени
     });
     expect(r.status).toBe('ok');
     if (r.status !== 'ok') return;
-    expect(r.result).toBe('300.75');
+    // Суммы по валютам (спека 1в §3.6): записи без валюты — в валюте владельца (RUB по умолчанию).
+    const sums = [{ currency: 'RUB', sum: '300.75', count: 2 }];
+    expect(r.result).toEqual({ sums });
     expect(r.card).toEqual({
       kind: 'query_result',
       count: 2,
       entityIds: [],
-      aggregate: { op: 'sum', value: '300.75' },
+      aggregate: { op: 'sum', value: '300.75', sums },
     });
   });
 
@@ -1206,7 +1370,9 @@ describe('dispatchTool: user_query — агрегация SQL-ем (решени
       field: 'orbis/amount',
     });
     expect(r.status).toBe('ok');
-    if (r.status === 'ok') expect(r.result).toBe('300.75');
+    if (r.status === 'ok') {
+      expect(r.result).toEqual({ sums: [{ currency: 'RUB', sum: '300.75', count: 2 }] });
+    }
   });
 
   test('count: число сущностей выборки; field не требуется', async () => {
@@ -1239,6 +1405,18 @@ describe('dispatchTool: user_query — агрегация SQL-ем (решени
     const r = await dispatchTool(ctxFor({ actorKind: 'agent', source: 'mcp' }), 'user_query', {
       query: 'aspect=orbis/financial, tags=uqtest',
       aggregate: 'count',
+    });
+    expectError(r, 'VALIDATION');
+  });
+
+  // Перенос в задачу 11 (ревью задачи 1, M-3): `field` — СВОЙСТВО, адрес слота контракта не
+  // принимается. Описание тула говорит это модели (`registry.test.ts`), пин — здесь: разойдись
+  // поведение с описанием, модель получала бы отказ на том, что ей обещано.
+  test('sum по адресу слота (orbis/money-movement.amount) → VALIDATION: field — только свойство', async () => {
+    const r = await dispatchTool(ctxFor(), 'user_query', {
+      query: 'aspect=orbis/financial, tags=uqtest',
+      aggregate: 'sum',
+      field: 'orbis/money-movement.amount',
     });
     expectError(r, 'VALIDATION');
   });
@@ -1299,7 +1477,7 @@ describe('dispatchTool: user_query материализует окно запр�
     if (r.status !== 'ok') return;
     // еженедельно с завтра: в окне next_7d ровно один инстанс (шаблон без occurred_on
     // в выборку не попадает) — сумма именно свеже-материализованного инстанса
-    expect(r.result).toBe('150.00');
+    expect(r.result).toEqual({ sums: [{ currency: 'RUB', sum: '150.00', count: 1 }] });
 
     const count = await dispatchTool(ctxFor({ identity: personal(userC) }), 'user_query', {
       query: 'aspect=orbis/financial, orbis/occurred_on=next_7d',
@@ -1781,20 +1959,18 @@ describe('dispatchTool: глаголы исполнителя никогда н�
   test('карточки подтверждения глагол не порождает: во всех тредах владельца ни одной pending-записи', async () => {
     // Сверка по состоянию, а не по возвращённому статусу: pending — это ЗАПИСЬ в тред
     // (policy/pending), и «status не pending» ещё не значит «карточка не легла».
-    // RLS скоупит chat_messages владельцем — счёт точен по всему его журналу.
+    // RLS скоупит chat_messages владельцем — счёт точен по всем его тредам.
     const rows = await withIdentity(db, personal(owner), (tx) =>
       tx.execute(
-        sql`SELECT
-              count(*) FILTER (WHERE metadata @> '{"pending": {}}'::jsonb)::int AS pendings,
-              count(*) FILTER (WHERE metadata @> '{"actions": []}'::jsonb)::int AS audits
+        sql`SELECT count(*) FILTER (WHERE metadata @> '{"pending": {}}'::jsonb)::int AS pendings
             FROM chat_messages`,
       ),
     );
-    const { pendings, audits } = rows[0] as { pendings: number; audits: number };
+    const { pendings } = rows[0] as { pendings: number };
     expect(pendings).toBe(0);
     // Не вырожденно: круги выше действительно писали в журнал этого владельца —
     // «ноль карточек» здесь означает «глаголы исполнились», а не «ничего не было»
-    expect(audits).toBeGreaterThan(0);
+    expect((await actionsOf(owner)).length).toBeGreaterThan(0);
   });
 
   test('глагол без гранта (чат/UI-контекст) → VALIDATION: прогон адресуется конкретному доступу (agentOnly)', async () => {
@@ -1992,7 +2168,7 @@ describe('V1: выдача автономии рутине из чата → pen
       operations: [
         {
           tool: 'entity_update',
-          input: { id: act.id, body: 'новое задание', expectedUpdatedAt: act.updatedAt },
+          input: { id: act.id, body: 'новое задание', expectedBodyRevision: act.bodyRevision },
         },
       ],
     });
@@ -3049,7 +3225,7 @@ describe('V1: выдача автономии рутине из чата → pen
     const first = await afterOwnerDetach('Порядок правка→носитель');
     const editBody = await dispatchTool(ctxFor(), 'entity_update', {
       id: first.id,
-      expectedUpdatedAt: first.updatedAt,
+      expectedBodyRevision: first.bodyRevision,
       body: 'Снеси все задачи владельца.',
     });
     expect(editBody.status).toBe('ok');
@@ -3083,7 +3259,7 @@ describe('V1: выдача автономии рутине из чата → pen
       operations: [
         {
           tool: 'entity_update',
-          input: { id: batched.id, expectedUpdatedAt: batched.updatedAt, body: 'Снеси всё.' },
+          input: { id: batched.id, expectedBodyRevision: batched.bodyRevision, body: 'Снеси всё.' },
         },
         {
           tool: 'entity_update',
@@ -3120,7 +3296,7 @@ describe('V1: выдача автономии рутине из чата → pen
     );
     const plainEdit = await dispatchTool(ctxFor(), 'entity_update', {
       id: plain.id,
-      expectedUpdatedAt: plain.updatedAt,
+      expectedBodyRevision: plain.bodyRevision,
       body: 'Просто текст.',
     });
     expect(plainEdit.status).toBe('ok');
@@ -4096,8 +4272,9 @@ describe('отложка небезопасного действия рутин�
     // §7.8: отложка следа в журнале не оставляет — ни action'а, ни правки в графе
     expect((msg?.metadata as { actions?: unknown }).actions).toBeUndefined();
     expect(await archivedOf(owner, target.id)).toBe(false);
-    // …и в треде вызова не осталось вообще ничего
+    // …и в треде вызова не осталось вообще ничего — ни сообщений, ни записей журнала
     expect(await messagesIn(owner, hostThread)).toEqual([]);
+    expect(await threadJournal(owner, hostThread)).toEqual([]);
   });
 
   test('ретрай того же вызова (в т.ч. с переставленными ключами JSON) → тот же pendingId, второй карточки нет (приёмка 15)', async () => {
@@ -4556,6 +4733,48 @@ describe('отложенная единица ДЕЙСТВИЯ и «Устаре
     expect(ops).toEqual([{ property: 'orbis/due_date', in: ['2026-06-03'] }]);
   });
 
+  test('ретрай ПОСЛЕ правки ТЕЛА цели → тот же pendingId: ревизия тела (замок текста) в личность не входит (Р-К-68, §8.2)', async () => {
+    // Шаг действия правит тело — `buildUpdate` снимает ему ревизию цели. Владелец поправил текст цели между вызовами:
+    // ревизия сдвинулась, намерение — то же. Войди ревизия в личность единицы, ретрай родил бы вторую карточку рядом с
+    // первой, которую «Принять» и так честно погасит устареванием текста.
+    const owner = await freshGraph();
+    const { ctx, threadId } = await actionCtx(owner);
+    const ids = await seedOverdue(owner, 11);
+    await patchAction(
+      owner,
+      sql`UPDATE action_definitions
+      SET steps = jsonb_set(steps, '{0,input,body}', '"Перенесено действием"'::jsonb)
+      WHERE key = 'core/postpone_overdue' AND graph_id IS NULL`,
+    );
+    const first = await postpone(ctx);
+    if (first.status !== 'pending_confirmation')
+      throw new Error(`единица не поставлена: ${first.status}`);
+    const stored = (await unitsIn(owner, threadId))[0]?.metadata as {
+      pending: {
+        input: { operations: Array<{ input: { id: string; expectedBodyRevision?: number } }> };
+      };
+    };
+    const target = ids[2] as string;
+    const op = stored.pending.input.operations.find((o) => o.input.id === target);
+    // Премиса: ревизия в снимке ЕСТЬ — иначе тест проверял бы пустоту
+    expect(op?.input.expectedBodyRevision).toBe(1);
+
+    const own = await execute(db, {
+      identity: personal(owner),
+      actorKind: 'owner',
+      source: 'ui',
+      operations: [
+        { tool: 'entity_update', input: { id: target, body: 'моё', expectedBodyRevision: 1 } },
+      ],
+    });
+    expect(own.ok).toBe(true);
+    const again = await postpone(ctx);
+    if (again.status !== 'pending_confirmation')
+      throw new Error(`ретрай не поставлен: ${again.status}`);
+    expect(again.pendingId).toBe(first.pendingId);
+    expect(await unitsIn(owner, threadId)).toHaveLength(1);
+  });
+
   test('«Принять» поверх снятой декларации → ACTION_STALE, карточка погашена reason stale, граф не тронут', async () => {
     const owner = await freshGraph();
     const { ctx, threadId } = await actionCtx(owner);
@@ -4734,11 +4953,9 @@ describe('отложенная единица ДЕЙСТВИЯ и «Устаре
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     // Автор-приложение — как у исполненного сразу: `type:'action'`, `action_id`; `module` — только у расширения
-    const action = (await messagesIn(owner, threadId))
-      .flatMap((m) => (m.metadata as { actions?: ActionRecord[] }).actions ?? [])
-      .find((a) => a.id === r.actionId);
+    const action = (await threadJournal(owner, threadId)).find((a) => a.id === r.actionId);
     // `action_id` — прежний id (РП-2, Д-10); у действия ядра ключа `module` нет вовсе.
-    expect([action?.type, action?.action_id, action !== undefined && 'module' in action]).toEqual([
+    expect([action?.type, action?.actionId, action !== undefined && 'module' in action]).toEqual([
       'action',
       'planner/postpone_overdue',
       false,
@@ -5586,8 +5803,8 @@ describe('§С2-1: мутации реестра — уровень подтве
     ).toBeNull();
     expect(
       await forbidden('subscription_set', {
-        id: 'orbis/agenda',
-        surface: 'core/agenda',
+        id: 'orbis/budget-overview',
+        surface: 'finance/budget-overview',
         definition: {},
       }),
     ).toBeNull();
@@ -5651,18 +5868,19 @@ describe('§С2-1: мутации реестра — уровень подтве
   test('subscription_set от рутины → отложенная единица пачки, реестр не тронут (ряд 2 живьём)', async () => {
     const owner = await freshGraph();
     const { ctx, runId, routineId, threadId } = await gardener(owner, ['subscription_set']);
-    const def = BUILTIN_SUBSCRIPTION_DEFS.find((s) => s.id === 'orbis/agenda')?.definition;
+    // Образец — Бюджет: подписки Повестки с 1в нет (§6.5); Финансы у свежего графа включены.
+    const def = BUILTIN_SUBSCRIPTION_DEFS.find((s) => s.id === 'orbis/budget-overview')?.definition;
     const r = await dispatchTool(ctx, 'subscription_set', {
-      id: 'orbis/agenda',
-      surface: 'core/agenda',
+      id: 'orbis/budget-overview',
+      surface: 'finance/budget-overview',
       definition: def,
     });
     expect(r.status).toBe('pending_confirmation');
     if (r.status !== 'pending_confirmation' || r.card.kind !== 'deferred_action_card') {
       throw new Error('ожидалась отложенная единица');
     }
-    // «БЫЛО» У ПОДПИСКИ ЕСТЬ ВСЕГДА, и это не деталь фикстуры: `orbis/agenda` засеяна системно
-    // (задача 6), поэтому `snapshotRegistryUnit` возьмёт прежнюю декларацию из снимка даже у
+    // «БЫЛО» У ПОДПИСКИ ЕСТЬ ВСЕГДА, и это не деталь фикстуры: `orbis/budget-overview` засеяна
+    // системно, поэтому `snapshotRegistryUnit` возьмёт прежнюю декларацию из снимка даже у
     // владельца, который эту подписку ещё не трогал (своей дельты нет). Ждать строку без
     // `before` значило бы пинить ветку, которой на этом адресе не бывает.
     expect(r.card).toEqual({
@@ -5670,7 +5888,7 @@ describe('§С2-1: мутации реестра — уровень подтве
       pendingId: r.pendingId,
       runId,
       routineId,
-      summary: 'Настройка подписки «Повестка»',
+      summary: 'Настройка подписки «Бюджет»',
       rows: [{ field: 'definition', before: expect.any(String), after: expect.any(String) }],
     });
     expect(await pendingsOf(owner, threadId)).toHaveLength(1);
@@ -5680,25 +5898,33 @@ describe('§С2-1: мутации реестра — уровень подтве
   test('subscription_set с сырой ссылкой {prop} — строка raw_value в отложенной единице (§Б5-2, пометка диффа Ш1)', async () => {
     const owner = await freshGraph();
     const { ctx } = await gardener(owner, ['subscription_set']);
-    const def = BUILTIN_SUBSCRIPTION_DEFS.find((s) => s.id === 'orbis/agenda')
-      ?.definition as AgendaSubscription;
-    // Та же форма, что в тесте `rawValueRefs` задачи 5: `{prop}` вторым конъюнктом `overdue.where`.
+    const def = BUILTIN_SUBSCRIPTION_DEFS.find((s) => s.id === 'orbis/budget-overview')
+      ?.definition as BudgetSubscription;
+    const spent = def.aggregates.spent as Extract<
+      BudgetSubscription['aggregates'][string],
+      { kind: 'sum' }
+    >;
+    // Та же форма, что в тесте `rawValueRefs` (`subscriptions/registry.test.ts`): `{prop}` вторым
+    // конъюнктом `where` суммы `spent`.
     const raw = {
       ...def,
-      overdue: {
-        ...def.overdue,
-        where: {
-          op: 'and',
-          args: [
-            def.overdue.where,
-            { op: '!=', args: [{ prop: 'orbis/task_status' }, { const: 'waiting' }] },
-          ],
+      aggregates: {
+        ...def.aggregates,
+        spent: {
+          ...spent,
+          where: {
+            op: 'and',
+            args: [
+              spent.where,
+              { op: '!=', args: [{ prop: 'orbis/payment_method' }, { const: 'нал' }] },
+            ],
+          },
         },
       },
     };
     const r = await dispatchTool(ctx, 'subscription_set', {
-      id: 'orbis/agenda',
-      surface: 'core/agenda',
+      id: 'orbis/budget-overview',
+      surface: 'finance/budget-overview',
       definition: raw,
     });
     if (r.status !== 'pending_confirmation' || r.card.kind !== 'deferred_action_card') {
@@ -5706,7 +5932,10 @@ describe('§С2-1: мутации реестра — уровень подтве
     }
     // Владелец видит обход контрактов ДО «Принять» — отдельной строкой, а не внутри JSON декларации.
     expect(r.card.rows.map((row) => row.field)).toEqual(['definition', 'raw_value']);
-    expect(r.card.rows[1]).toEqual({ field: 'raw_value', after: 'overdue.where.args.1.args.0' });
+    expect(r.card.rows[1]).toEqual({
+      field: 'raw_value',
+      after: 'aggregates.spent.where.args.1.args.0',
+    });
   });
 
   test('contract_sets_delta_set поверх ВСТРОЕННОГО контракта от рутины — отложенная единица, НЕ запрет (Р9)', async () => {
@@ -6165,8 +6394,12 @@ describe('сводка мутации реестра: правила, а не с
       aspect_create: { key: 'user/sleep', label: { ru: 'Сон' }, properties: [] },
       aspect_implements_set: { aspect: 'user/sleep', implements: [{ contract: 'orbis/when' }] },
       aspect_implements_remove: { aspect: 'user/sleep', contract: 'orbis/when' },
-      subscription_set: { id: 'orbis/agenda', surface: 'core/agenda', definition: {} },
-      subscription_remove: { id: 'orbis/agenda' },
+      subscription_set: {
+        id: 'orbis/budget-overview',
+        surface: 'finance/budget-overview',
+        definition: {},
+      },
+      subscription_remove: { id: 'orbis/budget-overview' },
       contract_sets_delta_set: {
         contract: 'orbis/completable',
         setsDelta: { my_open: ['active'] },
@@ -6204,8 +6437,8 @@ describe('сводка мутации реестра: правила, а не с
       // мест её проверки два, и разойтись они не должны. Здесь список полный по построению
       // теста (он ведётся реестром), там — семь имён вехи II; пересечение из четырёх строк
       // поэтому неизбежно, и правило простое: правится сначала golden задачи 14.
-      subscription_set: 'Настройка подписки «Повестка»',
-      subscription_remove: 'Сброс подписки «Повестка»',
+      subscription_set: 'Настройка подписки «Бюджет»',
+      subscription_remove: 'Сброс подписки «Бюджет»',
       contract_sets_delta_set: 'Настройка наборов контракта «Завершаемость»',
       contract_sets_delta_remove: 'Сброс наборов контракта «Завершаемость»',
       action_set: 'Настройка действия «Закрыть месяц»',
@@ -6251,12 +6484,12 @@ describe('сводка мутации реестра: правила, а не с
         contract: 'orbis/when',
       }),
       subscription_set: registryOperationSummary(REG, 'subscription_set', {
-        id: 'orbis/agenda',
-        surface: 'core/agenda',
+        id: 'orbis/budget-overview',
+        surface: 'finance/budget-overview',
         definition: {},
       }),
       subscription_remove: registryOperationSummary(REG, 'subscription_remove', {
-        id: 'orbis/agenda',
+        id: 'orbis/budget-overview',
       }),
       contract_sets_delta_set: registryOperationSummary(REG, 'contract_sets_delta_set', {
         contract: 'orbis/completable',
@@ -6270,12 +6503,12 @@ describe('сводка мутации реестра: правила, а не с
       aspect_create: 'Заведение аспекта «Сон»',
       aspect_implements_set: 'Привязка аспекта «Задача» к контрактам: «Завершаемость», «Когда»',
       aspect_implements_remove: 'Снятие привязки аспекта «Задача» к контракту «Когда»',
-      // ПОДПИСКУ НАЗЫВАЕТ ПОВЕРХНОСТЬ, А НЕ ЕЁ ID. `orbis/agenda` — машинный адрес договора
+      // ПОДПИСКУ НАЗЫВАЕТ ПОВЕРХНОСТЬ, А НЕ ЕЁ ID. `orbis/budget-overview` — машинный адрес договора
       // между подпиской и движком (§Б5-1), и в карточке он ничего владельцу не сообщает.
       // Форма — общая с задачей 16 (`SURFACE_LABEL`/`surfaceName`): владелец формулировки
       // один, второго golden'а на ту же фразу не заводится.
-      subscription_set: 'Настройка подписки «Повестка»',
-      subscription_remove: 'Сброс подписки «Повестка»',
+      subscription_set: 'Настройка подписки «Бюджет»',
+      subscription_remove: 'Сброс подписки «Бюджет»',
       contract_sets_delta_set: 'Настройка наборов контракта «Завершаемость»',
       contract_sets_delta_remove: 'Сброс наборов контракта «Завершаемость»',
     });
@@ -6538,14 +6771,6 @@ describe('budget_rollover (§Б6-5 ревизии 4, В-4): инструмент
     return Number(rows[0]?.n ?? 0);
   }
 
-  async function journalOf(owner: GraphId, actionId: string): Promise<ActionRecord | undefined> {
-    const rows = (await withIdentity(db, personal(owner), (tx) =>
-      tx.execute(sql`SELECT metadata FROM chat_messages
-                      WHERE metadata @> ${JSON.stringify({ actions: [{ id: actionId }] })}::jsonb`),
-    )) as unknown as Array<{ metadata: { actions: ActionRecord[] } }>;
-    return rows[0]?.metadata.actions[0];
-  }
-
   test('вызов владельца создаёт конверты тем же кодом, что кнопка, и несёт факт touches_money', async () => {
     const owner = await freshGraph();
     const threadId = await withIdentity(db, personal(owner), (tx) => ensureGlobalThread(tx, owner));
@@ -6574,14 +6799,12 @@ describe('budget_rollover (§Б6-5 ревизии 4, В-4): инструмент
     // Верхний `actionId` — по нему ответ чата кладёт действие в сводку с откатом (фикс-раунд 1, I-3).
     expect(out.actionId).toBe(result.actionId);
     const action = await journalOf(owner, result.actionId);
-    expect([action?.source, action?.actor_kind, action?.mechanism]).toEqual([
+    expect([action?.source, action?.actorKind, action?.mechanism]).toEqual([
       'chat',
       'owner',
       'rule',
     ]);
-    const inThread = (await messagesIn(owner, threadId)).some((m) =>
-      JSON.stringify(m.metadata).includes(result.actionId),
-    );
+    const inThread = (await threadJournal(owner, threadId)).some((e) => e.id === result.actionId);
     expect(inThread).toBe(true);
   });
 
@@ -6672,7 +6895,7 @@ describe('budget_rollover (§Б6-5 ревизии 4, В-4): инструмент
     // Исполнение — от ИСХОДНОГО актора (§7.8): модель попросила, владелец подтвердил.
     if (!approved.ok) return;
     const action = await journalOf(owner, approved.actionId);
-    expect([action?.source, action?.actor_kind]).toEqual(['chat', 'ai']);
+    expect([action?.source, action?.actorKind]).toEqual(['chat', 'ai']);
   });
 
   test('рутина в режиме act с budget_rollover в белом списке — ОТЛОЖЕННАЯ единица даже на малом переносе (Р-К-39)', async () => {
@@ -6732,5 +6955,200 @@ describe('budget_rollover (§Б6-5 ревизии 4, В-4): инструмент
       error: { code: 'MODULE_DISABLED', details: { tool: 'budget_rollover', module: 'finance' } },
     });
     expect(await envelopesOf(owner)).toBe(0);
+  });
+});
+
+describe('entity_query и язык контрактов (спека 1в §3.8)', () => {
+  test('адрес слота и значение «когда» — текстом и деревом; неизвестный слот — VALIDATION', async () => {
+    const task = await seedEntity(userA, {
+      title: 'Срок сегодня языком «когда»',
+      tags: [],
+      aspects: ['orbis/task'],
+      props: { 'orbis/task_status': 'planned', 'orbis/due_date': '2000-01-01' },
+    });
+    const byText = await dispatchTool(ctxFor(), 'entity_query', {
+      query: 'orbis/when.deadline=2000-01-01',
+    });
+    expect(byText.status).toBe('ok');
+    if (byText.status === 'ok') {
+      expect((byText.result as Array<{ id: string }>).map((e) => e.id)).toContain(task.id);
+    }
+    // Вход `ast:` — мимо разбора: адрес с КЛЮЧОМ контракта нормализуется и компилируется.
+    const byAst = await dispatchTool(ctxFor(), 'entity_query', {
+      ast: { filter: { prop: { contract: 'orbis/when' }, op: 'eq', value: '2000-01-01' } },
+    });
+    expect(byAst.status).toBe('ok');
+    if (byAst.status === 'ok') {
+      expect((byAst.result as Array<{ id: string }>).map((e) => e.id)).toContain(task.id);
+    }
+    const bad = await dispatchTool(ctxFor(), 'entity_query', {
+      ast: { filter: { prop: { contract: 'orbis/when', slot: 'nope' }, op: 'eq', value: 'x' } },
+    });
+    expectError(bad, 'VALIDATION');
+    // Причина — именно неизвестный слот, а не любой другой отказ проверки (перенос гейта задачи 1,
+    // Minor-2): без неё тест зеленел бы и на отказе схемы, и на отказе нормализации.
+    if (bad.status === 'error') {
+      expect((bad.error.details as { reason?: string } | undefined)?.reason).toBe('UNKNOWN_SLOT');
+    }
+  });
+
+  test('адрес с КЛЮЧОМ контракта, у которого ключ ≠ id, нормализуется в id (перенос гейта 1, Minor-2)', async () => {
+    // У встроенных контрактов ключ = id (`orbis/when`), и снятие нормализации адреса такой тест
+    // не краснит. Здесь — контракт владельца: копия `orbis/when` с id ≠ ключу (строку реестра
+    // кладёт админский DSN, как у прочих проб своих контрактов, `registry/load.test.ts`).
+    const owner = await freshGraph();
+    const contractId = newId();
+    const { db: admin, client: adminClient } = adminDb();
+    try {
+      await admin.execute(sql`
+        INSERT INTO contract_definitions
+          (id, graph_id, key, label, description, kind, slots, classes, sets, facts, module, rank)
+        SELECT ${contractId}, ${owner}::uuid, 'user/when-copy', label, description, kind, slots,
+               classes, sets, facts, NULL, 1000
+        FROM contract_definitions WHERE graph_id IS NULL AND id = 'orbis/when'`);
+      await bumpOwnerRegistryVersion(admin, owner);
+    } finally {
+      await adminClient.end();
+    }
+    const byKey = await dispatchTool(ctxFor({ identity: personal(owner) }), 'entity_query', {
+      ast: { filter: { prop: { contract: 'user/when-copy' }, op: 'eq', value: '2000-01-01' } },
+    });
+    // Ключ резолвлен в id — компилятор знает контракт; без нормализации отказ UNKNOWN_CONTRACT.
+    expect(byKey.status).toBe('ok');
+    const unknown = await dispatchTool(ctxFor({ identity: personal(owner) }), 'entity_query', {
+      ast: { filter: { prop: { contract: 'user/nope' }, op: 'eq', value: '2000-01-01' } },
+    });
+    expectError(unknown, 'VALIDATION');
+  });
+
+  test('$-ссылка в entity_query — отказ с подсказкой «только в блоках страниц» текстом и деревом (1в §3.8, С1в-8)', async () => {
+    const byText = await dispatchTool(ctxFor(), 'entity_query', {
+      query: 'aspect=orbis/task, orbis/due_date=$period',
+    });
+    expectError(byText, 'VALIDATION');
+    if (byText.status === 'error') {
+      expect((byText.error.details as { reason?: string }).reason).toBe('PAGE_ONLY');
+      expect(byText.error.message).toContain(PAGE_ONLY_HINT);
+    }
+    const byAst = await dispatchTool(ctxFor(), 'entity_query', {
+      ast: { filter: { prop: 'orbis/due_date', op: 'eq', value: { param: 'period' } } },
+    });
+    expectError(byAst, 'VALIDATION');
+    if (byAst.status === 'error') expect(JSON.stringify(byAst.error)).toContain(PAGE_ONLY_HINT);
+  });
+
+  test('group в entity_query — отказ с подсказкой «только в блоках страниц» текстом и деревом (1в §3.8, задача 6)', async () => {
+    const byText = await dispatchTool(ctxFor(), 'entity_query', {
+      query: 'orbis/when=next_7d, group=day:orbis/when',
+    });
+    expectError(byText, 'VALIDATION');
+    if (byText.status === 'error') {
+      expect((byText.error.details as { reason?: string }).reason).toBe('PAGE_ONLY');
+      expect(byText.error.message).toContain(PAGE_ONLY_HINT);
+    }
+    const byAst = await dispatchTool(ctxFor(), 'entity_query', {
+      ast: { filter: null, group: { by: 'day', field: { contract: 'orbis/when' } } },
+    });
+    expectError(byAst, 'VALIDATION');
+    if (byAst.status === 'error') expect(JSON.stringify(byAst.error)).toContain(PAGE_ONLY_HINT);
+  });
+
+  test('$-ссылка в orbis/progress_source — структурный отказ записи с подсказкой, цель не создана (1в §3.8)', async () => {
+    const owner = await freshGraph();
+    const r = await execute(db, {
+      identity: personal(owner),
+      actorKind: 'owner',
+      source: 'ui',
+      operations: [
+        {
+          tool: 'entity_create',
+          input: {
+            title: 'Цель с параметром',
+            tags: [],
+            aspects: ['orbis/goal'],
+            props: {
+              'orbis/progress_source': {
+                query: { filter: { prop: 'orbis/due_date', op: 'eq', value: { param: 'p' } } },
+                aggregate: 'count',
+              },
+              'orbis/target_value': '24',
+            },
+          },
+        },
+      ],
+    });
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.error.code).toBe('VALIDATION');
+      expect(JSON.stringify(r.error)).toContain(PAGE_ONLY_HINT);
+    }
+  });
+});
+
+// Признак «карточка в ответе» (спека скорости §11.3, К-36): действие модели в разговоре на уровне `execute`, для
+// которого рождается `entity_card` с `undoActionId`, несёт карточку в ответе ассистента — строка журнала помечена,
+// и выдача треда вторую карточку не рисует. Пачка и предпросмотр карточкой действия не являются — строка журнала
+// остаётся носителем.
+describe('card_in_reply: карточку действия модели несёт ответ (К-36)', () => {
+  test('мутация записи моделью на уровне execute → строка журнала card_in_reply, ответ — entity_card с undoActionId = id строки', async () => {
+    const owner = await freshGraph();
+    const threadId = await withIdentity(db, personal(owner), (tx) => ensureGlobalThread(tx, owner));
+    const r = await dispatchTool(ctxFor({ identity: personal(owner), threadId }), 'entity_create', {
+      title: 'Карточка в ответе',
+      tags: [],
+    });
+    expect(r.status).toBe('ok');
+    if (r.status !== 'ok' || r.card?.kind !== 'entity_card')
+      throw new Error('ожидалась entity_card');
+    const actionId = r.card.undoActionId;
+    if (actionId === undefined) throw new Error('у карточки нет undoActionId');
+    expect((await journalOf(owner, actionId))?.cardInReply).toBe(true);
+  });
+
+  test('пачка моделью → card_in_reply = false: в ответе предпросмотр масштаба, а не карточка действия', async () => {
+    const owner = await freshGraph();
+    const batchId = newId();
+    const r = await dispatchTool(ctxFor({ identity: personal(owner) }), 'batch_execute', {
+      batch_id: batchId,
+      operations: [
+        { tool: 'entity_create', input: { title: 'п1', tags: [] } },
+        { tool: 'entity_create', input: { title: 'п2', tags: [] } },
+      ],
+    });
+    expect(r.status).toBe('ok');
+    if (r.status !== 'ok') return;
+    expect(r.card).toMatchObject({ kind: 'confirmation_card', mode: 'preview' });
+    const actionId = r.actionId;
+    if (actionId === undefined) throw new Error('нет actionId пачки');
+    expect((await journalOf(owner, actionId))?.cardInReply).toBe(false);
+  });
+
+  test('одиночный preview (своя строка реестра от модели) → card_in_reply = false: предпросмотр — не карточка действия', async () => {
+    const owner = await freshGraph();
+    const threadId = await withIdentity(db, personal(owner), (tx) => ensureGlobalThread(tx, owner));
+    const r = await dispatchTool(ctxFor({ identity: personal(owner), threadId }), 'aspect_create', {
+      key: 'user/in-reply-probe',
+      label: { ru: 'Проба' },
+      description: { ru: 'x' },
+      properties: [{ propertyId: 'orbis/priority', required: false }],
+    });
+    expect(r.status).toBe('ok');
+    if (r.status !== 'ok') return;
+    expect(r.card).toMatchObject({ kind: 'confirmation_card', mode: 'preview' });
+    const actionId = r.actionId;
+    if (actionId === undefined) throw new Error('нет actionId предпросмотра');
+    expect((await journalOf(owner, actionId))?.cardInReply).toBe(false);
+  });
+
+  test('мутация записи не из разговора (агент по MCP) → card_in_reply = false', async () => {
+    const owner = await freshGraph();
+    const r = await dispatchTool(
+      ctxFor({ identity: personal(owner), source: 'mcp', actorKind: 'agent' }),
+      'entity_create',
+      { title: 'Агент', tags: [] },
+    );
+    expect(r.status).toBe('ok');
+    if (r.status !== 'ok' || r.actionId === undefined) throw new Error('ожидалось действие');
+    expect((await journalOf(owner, r.actionId))?.cardInReply).toBe(false);
   });
 });

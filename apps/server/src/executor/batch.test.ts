@@ -1,10 +1,10 @@
 // apps/server/src/executor/batch.test.ts
 // Интеграционные тесты Task 10: batch_execute (§7.8, §9.2, §13.4) — атомарность,
-// идемпотентность по PK audit-сообщения batchAuditMessageId, «виртуальное» состояние
+// идемпотентность по ключу записи журнала (graph_id, batch_id), «виртуальное» состояние
 // (create операции N виден проверкам операции N+1), значимый порядок операций,
 // запрет вложенного batch, перенос budget-parent батчем «удалить + создать».
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { batchAuditMessageId, newId } from '@orbis/shared';
+import { newId } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import {
   adminDb,
@@ -234,7 +234,7 @@ describe('batch_execute: атомарность (§7.8, §13.4)', () => {
 });
 
 describe('batch_execute: успех, виртуальное состояние и идемпотентность (§7.8, §9.2)', () => {
-  test('3. create+create+attach+relation: один action id=batch_id, audit с PK batchAuditMessageId, inverse в обратном порядке; relation видит созданные тем же batch сущности', async () => {
+  test('3. create+create+attach+relation: один action id=batch_id (ключ записи журнала), inverse в обратном порядке; relation видит созданные тем же batch сущности', async () => {
     const envId = newId();
     const txnId = newId();
     const batchId = newId();
@@ -270,8 +270,8 @@ describe('batch_execute: успех, виртуальное состояние �
     // стадии 6–7: ОДИН action на весь batch
     expect(sink.entries.length).toBe(1);
     const entry = first(sink.entries);
-    expect(entry.id).toBe(batchAuditMessageId(userA, batchId)); // детерминированный PK (§7.8)
-    expect(entry.action.id).toBe(batchId);
+    expect(entry.graphId).toBe(userA);
+    expect(entry.action.id).toBe(batchId); // ключ записи журнала — (граф, batch_id) (§7.8, §11.2)
     expect(entry.action.type).toBe('batch');
     expect(entry.action.operations.length).toBe(4);
     expect(entry.action.inverse.length).toBe(4);
@@ -305,7 +305,7 @@ describe('batch_execute: успех, виртуальное состояние �
     );
     expect(r.actionId).toBe(batchId);
     expect(await entityCount(id)).toBe(1);
-    expect(first(sink.entries).id).toBe(batchAuditMessageId(userA, batchId));
+    expect(first(sink.entries).action.id).toBe(batchId);
   });
 
   test('5. перенос budget-parent батчем «удалить старую + создать новую» (§4.2): ровно одна живая связь', async () => {

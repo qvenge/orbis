@@ -23,6 +23,7 @@ import {
 import { BUILTIN_REGISTRY } from '../../test/registry';
 import { resetDetailScreenModuleForTests } from '../router';
 import {
+  AGENDA,
   ALL_TASKS,
   BREAD,
   DAILY,
@@ -37,7 +38,6 @@ import {
   resetFrame,
   SHELL_ROW,
   stubLaunchMode,
-  UPCOMING,
   unstubLaunchMode,
   YEAR,
 } from './frame-fixtures';
@@ -130,9 +130,9 @@ describe('(а) присутствие хоста и кнопки хоста на
   });
 
   test('страница', async () => {
-    resetFrame(`/r/${UPCOMING}`);
+    resetFrame(`/r/${AGENDA}`);
     renderApp();
-    await heading('Upcoming');
+    await heading('Повестка');
     expectFrame({ back: true });
   });
 
@@ -214,7 +214,7 @@ describe('(б) лист разделов формы «список из заго
     await heading('Домой');
     const before = calls.length;
     fireEvent.click(screen.getByTestId('nav-switch'));
-    await waitFor(() => expect(screen.getByTestId(`nav-badge-${UPCOMING}`)).toHaveTextContent('3'));
+    await waitFor(() => expect(screen.getByTestId(`nav-badge-${AGENDA}`)).toHaveTextContent('3'));
     expect(screen.getByTestId(`nav-badge-${ALL_TASKS}`)).toHaveTextContent('99+');
     // Нет числа (`kind:'none'`) — нет бейджа.
     expect(screen.queryByTestId(`nav-badge-${YEAR}`)).toBeNull();
@@ -227,21 +227,21 @@ describe('(б) лист разделов формы «список из заго
     expect(after.filter((c) => c.path === 'entity.get')).toEqual([]);
   });
 
-  test('раздел, открытый вглубь, показывает «где остановились» — «Upcoming · Купить хлеб»', async () => {
+  test('раздел, открытый вглубь, показывает «где остановились» — «Повестка · Купить хлеб»', async () => {
     resetFrame('/');
     renderApp();
     await heading('Домой');
     fireEvent.click(screen.getByTestId('nav-switch'));
-    fireEvent.click(await screen.findByTestId(`nav-section-${UPCOMING}`));
-    await heading('Upcoming');
+    fireEvent.click(await screen.findByTestId(`nav-section-${AGENDA}`));
+    await heading('Повестка');
     act(() => useNav.getState().openRecord(BREAD));
     await heading('Купить хлеб');
     fireEvent.click(screen.getByTestId('nav-switch'));
     fireEvent.click(await screen.findByTestId(`nav-section-${RECORDS}`));
     await heading('Записи');
     fireEvent.click(screen.getByTestId('nav-switch'));
-    const row = await screen.findByTestId(`nav-section-${UPCOMING}`);
-    await waitFor(() => expect(row).toHaveTextContent('Upcoming · Купить хлеб'));
+    const row = await screen.findByTestId(`nav-section-${AGENDA}`);
+    await waitFor(() => expect(row).toHaveTextContent('Повестка · Купить хлеб'));
     // У раздела на корне — только заголовок.
     expect(screen.getByTestId(`nav-section-${RECORDS}`)).not.toHaveTextContent('·');
   });
@@ -384,14 +384,14 @@ describe('(д) одно меню «⋯»: «Этот экран» и «Хост�
 // записи — подзадача (`features/chat/chat-context-ui.test.tsx`), а без контекста — на странице. Пин
 // «быстрый ввод открывается и пишет без интерпретации» остаётся здесь — на странице раздела.
 test('(е) «＋» открывает быстрый ввод; на странице — без контекста (root)', async () => {
-  resetFrame(`/r/${UPCOMING}`);
+  resetFrame(`/r/${AGENDA}`);
   const { calls } = renderWithProviders(<App />, (path, input, type) => {
     if (path === 'entity.create') {
       return wireEntity({ id: (input as { input: { id: string } }).input.id, title: 'Молоко' });
     }
     return frameHandler()(path, input, type);
   });
-  await heading('Upcoming');
+  await heading('Повестка');
   fireEvent.click(
     within(screen.getByTestId('host-buttons')).getByRole('button', { name: 'Новая запись' }),
   );
@@ -411,9 +411,9 @@ test('(е) «＋» открывает быстрый ввод; на страни
 
 // Смоук 1б: всплывашка «＋» не закрывалась ни Escape, ни нажатием мимо и висела над новым местом.
 test('(е) «＋» закрывается Escape (фокус — на ＋), нажатием мимо и сменой места; нажатие внутри — не закрывает', async () => {
-  resetFrame(`/r/${UPCOMING}`);
+  resetFrame(`/r/${AGENDA}`);
   renderApp();
-  await heading('Upcoming');
+  await heading('Повестка');
   const plus = within(screen.getByTestId('host-buttons')).getByRole('button', {
     name: 'Новая запись',
   });
@@ -437,7 +437,7 @@ test('(е) «＋» закрывается Escape (фокус — на ＋), на
 
   // Нажатие мимо — закрыта.
   await open();
-  fireEvent.pointerDown(screen.getByRole('heading', { level: 1, name: 'Upcoming' }));
+  fireEvent.pointerDown(screen.getByRole('heading', { level: 1, name: 'Повестка' }));
   expect(screen.queryByTestId('host-capture')).toBeNull();
 
   // Повторный ＋ по-прежнему переключатель: нажатие на него не «мимо».

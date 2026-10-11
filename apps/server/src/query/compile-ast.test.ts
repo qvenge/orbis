@@ -23,13 +23,16 @@ import { ExecError } from '../errors';
 import { parseGraphId } from '../identity';
 import type { RegistrySnapshot } from '../registry/load';
 import {
+  BODY_HEAD_SQL,
   type CompileCtx,
   compileCountAst,
   compileLatestAst,
   compileQueryAst,
   compileSumAst,
+  compileSumByCurrencyAst,
   ENTITY_SELECT_COLUMNS,
-  propertyLocalDateExpr,
+  entitySelectColumns,
+  moneyCurrencyExpr,
 } from './compile-ast';
 
 const dialect = new PgDialect();
@@ -53,6 +56,8 @@ function ctxOf(over: Partial<CompileCtx> = {}): CompileCtx {
     graphId: parseGraphId('00000000-0000-7000-8000-0000000000a1'),
     today: '2026-07-03',
     timeZone: 'Europe/Moscow',
+    weekStart: 'monday',
+    ownerCurrency: 'RUB',
     reg: snapshot(),
     thisEntityId: '00000000-0000-7000-8000-0000000000f1',
     ...over,
@@ -511,7 +516,7 @@ describe('гейт времени: токен и граница по дате �
 
   test('на date/timestamp те же формы компилируются — гейт не запрещает законное', () => {
     expect(sqlOf({ prop: 'orbis/due_date', op: 'eq', value: { token: 'today' } })).toContain(
-      `(props->>'orbis/due_date')::date = $2::date`,
+      `(props->>'orbis/due_date')::date BETWEEN $2::date AND $3::date`,
     );
     expect(sqlOf({ prop: 'orbis/start_at', op: 'gt', value: { token: 'today' } })).toContain(
       'AT TIME ZONE $2',
@@ -523,22 +528,93 @@ describe('гейт времени: токен и граница по дате �
   });
 });
 
-describe('токен в роли ГРАНИЦЫ: якорь — день, вокруг которого токен определён', () => {
-  // Канон разрешает токен в любой границе `range`, а §6.1 описывает токены как готовые
-  // УСЛОВИЯ. Правило разведения названо в докблоке `tokenAnchor` и пиннится здесь: без пина
-  // `>=next_7d` мог бы молча означать «не раньше сегодня» у одного читателя и «не раньше чем
-  // через неделю» у другого.
-  test('today/overdue дают сегодня, next_7d/after_7d — сегодня+7', () => {
-    const bound = (from: 'today' | 'overdue' | 'next_7d' | 'after_7d') =>
-      sqlOf({ prop: 'orbis/due_date', op: 'range', value: { from: { token: from } } });
-    expect(bound('today')).toContain(`(props->>'orbis/due_date')::date >= $2::date`);
-    expect(bound('overdue')).toContain(`(props->>'orbis/due_date')::date >= $2::date`);
-    expect(bound('next_7d')).toContain(`(props->>'orbis/due_date')::date >= $2::date + 7`);
-    expect(bound('after_7d')).toContain(`(props->>'orbis/due_date')::date >= $2::date + 7`);
-    // А тот же токен в роли РАВЕНСТВА остаётся условием §6.1, а не якорем.
-    expect(sqlOf({ prop: 'orbis/due_date', op: 'eq', value: { token: 'next_7d' } })).toContain(
-      `(props->>'orbis/due_date')::date BETWEEN $2::date AND $3::date + 7`,
-    );
+describe('токен в роли ГРАНИЦЫ: два края (спека 1в §3.4)', () => {
+  // Правило одно для всех восьми токенов: `=T` — [начало; конец], `<T` — раньше начала, `>=T` —
+  // не раньше начала, `>T` — позже конца, `<=T` — не позже конца. Края — ДНИ, посчитанные
+  // `tokenEdges` по «сегодня» контекста (2026-07-03, пятница), и едут параметрами.
+  const q = (filter: QueryFilterNode, ctx: CompileCtx = CTX) => {
+    const out = dialect.sqlToQuery(compileQueryAst({ filter }, ctx));
+    return { sql: out.sql.replaceAll(/\s+/g, ' '), params: out.params };
+  };
+  const due = `(props->>'orbis/due_date')::date`;
+  const node = (op: 'eq' | 'lt' | 'gt', token: string): QueryFilterNode =>
+    ({ prop: 'orbis/due_date', op, value: { token } }) as QueryFilterNode;
+  const range = (edge: 'from' | 'to', token: string): QueryFilterNode =>
+    ({ prop: 'orbis/due_date', op: 'range', value: { [edge]: { token } } }) as QueryFilterNode;
+
+  test('`<` и `>=` (from) читают НАЧАЛО: next_7d — сегодня, after_7d — сегодня+8', () => {
+    expect(q(node('lt', 'next_7d'))).toMatchObject({
+      sql: expect.stringContaining(`${due} < $2::date`),
+      params: ['orbis/agent-run', '2026-07-03', 500],
+    });
+    expect(q(range('from', 'next_7d')).params).toEqual(['orbis/agent-run', '2026-07-03', 500]);
+    expect(q(range('from', 'after_7d'))).toMatchObject({
+      sql: expect.stringContaining(`${due} >= $2::date`),
+      params: ['orbis/agent-run', '2026-07-11', 500],
+    });
+    expect(q(node('lt', 'after_7d')).params).toEqual(['orbis/agent-run', '2026-07-11', 500]);
+  });
+
+  test('`>` и `<=` (to) читают КОНЕЦ: next_7d — сегодня+7, overdue — вчера', () => {
+    expect(q(node('gt', 'next_7d'))).toMatchObject({
+      sql: expect.stringContaining(`${due} > $2::date`),
+      params: ['orbis/agent-run', '2026-07-10', 500],
+    });
+    expect(q(range('to', 'overdue'))).toMatchObject({
+      sql: expect.stringContaining(`${due} <= $2::date`),
+      params: ['orbis/agent-run', '2026-07-02', 500],
+    });
+    expect(q(node('gt', 'overdue')).params).toEqual(['orbis/agent-run', '2026-07-02', 500]);
+  });
+
+  test('`=` — оба края; открытый край — одностороннее сравнение', () => {
+    expect(q(node('eq', 'next_7d'))).toMatchObject({
+      sql: expect.stringContaining(`${due} BETWEEN $2::date AND $3::date`),
+      params: ['orbis/agent-run', '2026-07-03', '2026-07-10', 500],
+    });
+    expect(q(node('eq', 'overdue'))).toMatchObject({
+      sql: expect.stringContaining(`${due} <= $2::date`),
+      params: ['orbis/agent-run', '2026-07-02', 500],
+    });
+    expect(q(node('eq', 'after_7d'))).toMatchObject({
+      sql: expect.stringContaining(`${due} >= $2::date`),
+      params: ['orbis/agent-run', '2026-07-11', 500],
+    });
+    expect(q(node('eq', 'last_month')).params).toEqual([
+      'orbis/agent-run',
+      '2026-06-01',
+      '2026-06-30',
+      500,
+    ]);
+  });
+
+  test('начало недели — из контекста компиляции (В-1): понедельник и воскресенье', () => {
+    expect(q(node('eq', 'this_week')).params).toEqual([
+      'orbis/agent-run',
+      '2026-06-29',
+      '2026-07-05',
+      500,
+    ]);
+    expect(q(node('eq', 'this_week'), ctxOf({ weekStart: 'sunday' })).params).toEqual([
+      'orbis/agent-run',
+      '2026-06-28',
+      '2026-07-04',
+      500,
+    ]);
+  });
+
+  test('несуществующий край — отказ TOKEN_EDGE, а не молчаливый край', () => {
+    for (const filter of [
+      node('lt', 'overdue'),
+      range('from', 'overdue'),
+      node('gt', 'after_7d'),
+      range('to', 'after_7d'),
+    ]) {
+      const r = refusal(() => sqlOf(filter));
+      expect(r.code, JSON.stringify(filter)).toBe('VALIDATION');
+      expect(r.reason, JSON.stringify(filter)).toBe('TOKEN_EDGE');
+      expect(r.message, JSON.stringify(filter)).toContain('у токена');
+    }
   });
 
   test('смешанная граница: литерал рядом с токеном сравнивается тоже по дате', () => {
@@ -552,6 +628,114 @@ describe('токен в роли ГРАНИЦЫ: якорь — день, вок
     ).toContain(
       `((props->>'orbis/start_at')::timestamptz AT TIME ZONE $2)::date BETWEEN $3::date AND $4::date`,
     );
+  });
+});
+
+describe('адрес слота с моментом: литералы одного условия — одного вида (перенос гейта 1, Minor-1)', () => {
+  const moment = { contract: 'orbis/when', slot: 'moment' };
+  test('день рядом с моментом в range — отказ TYPE, а не «день BETWEEN date AND timestamptz»', () => {
+    for (const filter of [
+      { prop: moment, op: 'range', value: { from: '2026-07-16', to: '2026-07-17T12:00:00+07:00' } },
+      { prop: moment, op: 'range', value: { from: '2026-07-16T09:00:00+07:00', to: '2026-07-17' } },
+    ] as QueryFilterNode[]) {
+      const r = refusal(() => sqlOf(filter));
+      expect(r.reason, JSON.stringify(filter)).toBe('TYPE');
+      expect(r.message, JSON.stringify(filter)).toContain('одного вида');
+    }
+  });
+
+  // Перенос ревью задачи 2: у `in` левой стороны одной на все литералы нет — это «хоть одно из», и
+  // каждый литерал сравнивается в своей форме, как у текста `a|b` (разбор даёт `or` из `eq`). Отказ
+  // `TYPE` здесь был бы разночтением дерева и текста одного и того же запроса.
+  test('in с днём и моментом — поэлементно: день по дню, момент по моменту', () => {
+    const got = dialect.sqlToQuery(
+      compileQueryAst(
+        {
+          filter: {
+            prop: moment,
+            op: 'in',
+            value: ['2026-07-16', '2026-07-17T09:00:00+07:00'],
+          } as QueryFilterNode,
+        },
+        CTX,
+      ),
+    );
+    const flat = got.sql.replaceAll(/\s+/g, ' ');
+    expect(flat).toMatch(/\(sv\.day IN \(\$\d+::date\) OR sv\.at IN \(\$\d+::timestamptz\)\)/);
+    expect(got.params).toContain('2026-07-16');
+    expect(got.params).toContain('2026-07-17T09:00:00+07:00');
+    // Одного вида — одна форма `IN (…)`, как до переноса.
+    expect(
+      sqlOf({ prop: moment, op: 'in', value: ['2026-07-16', '2026-07-17'] } as QueryFilterNode),
+    ).toMatch(/sv\.day IN \(\$\d+::date, \$\d+::date\)/);
+  });
+
+  test('оба дня — по дню, оба момента — по моменту', () => {
+    expect(
+      sqlOf({
+        prop: moment,
+        op: 'range',
+        value: { from: '2026-07-16', to: '2026-07-17' },
+      } as QueryFilterNode),
+    ).toContain('sv.day BETWEEN $');
+    expect(
+      sqlOf({
+        prop: moment,
+        op: 'range',
+        value: { from: '2026-07-16T09:00:00+07:00', to: '2026-07-17T12:00:00+07:00' },
+      } as QueryFilterNode),
+    ).toContain('sv.at BETWEEN $');
+  });
+
+  test('дерево мимо разбора: контракт без значения — NO_CONTRACT_VALUE со слотами, как у разбора (Minor-1 ревью Fable)', () => {
+    const r = refusal(() =>
+      sqlOf({
+        prop: { contract: 'orbis/completable' },
+        op: 'eq',
+        value: 'open',
+      } as QueryFilterNode),
+    );
+    expect(r.reason).toBe('NO_CONTRACT_VALUE');
+    // Тот же текст, что у разбора (`parse-ast.test.ts`): подсказка — слоты, а не имя контракта.
+    expect(r.message).toContain(
+      'у контракта нет значения — адресуйте слот: orbis/completable.status',
+    );
+  });
+
+  test('отказ у адреса называет «адрес слота» (М-2 финального ревью A; прежде — перенос ревью 1, M-1)', () => {
+    const r = refusal(() =>
+      sqlOf({
+        prop: { contract: 'orbis/money-movement', slot: 'amount' },
+        op: 'eq',
+        value: { token: 'today' },
+      } as QueryFilterNode),
+    );
+    expect(r.reason).toBe('TYPE');
+    expect(r.message).toContain(
+      "только к адресам с датой (date/timestamp); адрес слота 'orbis/money-movement.amount'",
+    );
+    expect(r.message).not.toMatch(/(^|[^а-яё])пол(е|я|ю|ям|ей)([^а-яё]|$)/i);
+    expect(r.message).not.toContain('свойств');
+  });
+});
+
+// Перенос ревью задачи 2: край `overdue` у значения «когда» (К-2: условие, предфильтр и ключ
+// сортировки) читается из ОДНОЙ таблицы краёв (`tokenEdges`: конец — вчера), а не записан рядом
+// руками как «< сегодня». Вторая копия правила краёв разошлась бы с таблицей на первой её правке.
+describe('overdue значения «когда» — край из таблицы краёв (перенос ревью 2)', () => {
+  test('условие, предфильтр и ключ сортировки читают конец overdue (вчера), а не «сегодня»', () => {
+    const got = dialect.sqlToQuery(
+      compileQueryAst(
+        {
+          filter: { prop: { contract: 'orbis/when' }, op: 'eq', value: { token: 'overdue' } },
+          sortBy: [{ field: { contract: 'orbis/when' }, dir: 'asc' }],
+        } as QueryAst,
+        CTX,
+      ),
+    );
+    // CTX.today = 2026-07-03: края overdue — [—; 2026-07-02].
+    expect(got.params).toContain('2026-07-02');
+    expect(got.params).not.toContain('2026-07-03');
   });
 });
 
@@ -582,17 +766,26 @@ describe('агрегаты: тип свойства решает, можно л�
     expect(latest).toContain(`props->>'orbis/amount' IS NOT NULL`);
   });
 
-  test('sum без свойства валюты — SQL прежних вызывающих (user_query, цели) дословно; с валютой — третья колонка', () => {
-    // Пин ТОЧНЫЙ, а не `toContain`: параметр валюты заведён ради плитки страницы (РП-20), и
-    // эталон `test/golden/query-sql.json` агрегатов не покрывает — без этой строки валюта,
-    // подставленная всем вызывающим по умолчанию, прошла бы незамеченной.
+  test('sum одним числом — SQL прогресса цели дословно (В-5); по валютам — отдельный компилятор', () => {
+    // Пин ТОЧНЫЙ, а не `toContain`: сумма одним числом осталась ОДНОМУ вызывающему — прогрессу цели
+    // (В-5: цель сравнивает сумму с одним числом). Плитка и `user_query` считают по валютам
+    // (`compileSumByCurrencyAst`), и валюта, протёкшая сюда, прошла бы незамеченной: эталон
+    // `test/golden/query-sql.json` агрегатов не покрывает.
     const legacy = dialect.sqlToQuery(compileSumAst(ast, 'orbis/amount', CTX));
     expect(legacy.sql).toBe(
       "SELECT count(*) AS count, sum((props->>'orbis/amount')::numeric)::text AS sum FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND aspects @> ARRAY['orbis/financial']",
     );
-    const tile = dialect.sqlToQuery(compileSumAst(ast, 'orbis/amount', CTX, 'orbis/currency')).sql;
-    expect(tile).toContain(
-      `coalesce(array_agg(DISTINCT props->>'orbis/currency' ORDER BY props->>'orbis/currency') FILTER (WHERE props->>'orbis/currency' IS NOT NULL), '{}') AS currencies`,
+    const byCurrency = dialect.sqlToQuery(compileSumByCurrencyAst(ast, 'orbis/amount', CTX));
+    // Валюта — по привязке «движения денег» аспекта НА ЗАПИСИ; нет значения — валюта владельца.
+    expect(byCurrency.sql).toContain(
+      `CASE WHEN aspects @> ARRAY['orbis/financial'] THEN COALESCE(NULLIF(props->>'orbis/currency', ''), $1) ELSE NULL END`,
+    );
+    expect(byCurrency.params[0]).toBe('RUB');
+    expect(byCurrency.sql).toMatch(/ GROUP BY 1$/);
+    // Не денежное свойство — валюты нет вовсе (а не валюта владельца).
+    expect(moneyCurrencyExpr('orbis/counterparty', CTX)).toBeNull();
+    expect(rawSql(compileSumByCurrencyAst(ast, 'orbis/step_count', ctxOf()))).toContain(
+      'NULL::text AS currency',
     );
   });
 
@@ -626,7 +819,6 @@ describe('экспорты для движков подписок (§Б5-6)', ()
       'graph_id',
       'title',
       'emoji',
-      'body',
       'body_refs',
       'tags',
       'props',
@@ -636,11 +828,58 @@ describe('экспорты для движков подписок (§Б5-6)', ()
       'updated_at',
       'archived',
     ]);
+    expect(entitySelectColumns('full')).toBe(
+      'id, graph_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived',
+    );
+    expect(entitySelectColumns('start')).toBe(`${ENTITY_SELECT_COLUMNS}, ${BODY_HEAD_SQL}`);
+    expect(BODY_HEAD_SQL).toBe(
+      "jsonb_path_query_array(body_doc, 'lax $.doc.content[0 to 7]') AS body_head",
+    );
   });
-  test('propertyLocalDateExpr: date — как есть, timestamp — в таймзоне владельца', () => {
-    const ctx = ctxOf({ timeZone: 'Europe/Moscow' });
-    expect(rawSql(propertyLocalDateExpr('orbis/due_date', ctx))).not.toContain('AT TIME ZONE');
-    expect(rawSql(propertyLocalDateExpr('orbis/start_at', ctx))).toContain('AT TIME ZONE');
-    expect(() => propertyLocalDateExpr('orbis/task_status', ctx)).toThrow(/date\/timestamp/);
+});
+
+/**
+ * ФОРМА SQL ЗНАЧЕНИЯ «КОГДА» (M-2 финального ревью B2b). Время языка контрактов держит только локальный
+ * `perf/graph.test.ts` (в CI его нет), паритет форм (`when.dataset.test.ts`) сверяет выдачу, а не путь;
+ * эталона `query-sql.json` с `orbis/when` нет — его SQL (≈2 КБ) по правилу файла выводится руками, и
+ * снять его с компилятора нельзя. Поэтому здесь пиннится ФОРМА — ровно два решения перфа, которые иначе
+ * CI не заметил бы: даты «когда» считаются одним `LEFT JOIN LATERAL` на запись (R-21), а не
+ * коррелированными подзапросами у каждого читателя, и положительная форма идёт с предфильтром по сырым
+ * свойствам (`valuePrefilter`) ДО `EXISTS` по датам.
+ */
+describe('форма SQL значения «когда»: LATERAL и предфильтр (M-2 финального ревью B2b)', () => {
+  const text = dialect
+    .sqlToQuery(
+      compileQueryAst(
+        {
+          filter: { prop: { contract: 'orbis/when' }, op: 'eq', value: { token: 'next_7d' } },
+          sortBy: [{ field: { contract: 'orbis/when' }, dir: 'asc' }],
+        },
+        CTX,
+      ),
+    )
+    .sql.replaceAll(/\s+/g, ' ');
+  const where = text.slice(text.indexOf(' WHERE true '), text.indexOf(' ORDER BY '));
+  const orderBy = text.slice(text.indexOf(' ORDER BY '));
+
+  test('даты — один LEFT JOIN LATERAL в FROM; условие и ключ читают его массив, VALUES в них нет', () => {
+    const lateral =
+      'LEFT JOIN LATERAL (SELECT array_agg(ROW(d.slot, d.at, d.day, d.aspect)) AS wd FROM';
+    expect(text.split(lateral)).toHaveLength(2);
+    expect(text.indexOf(lateral)).toBeLessThan(text.indexOf(' WHERE true '));
+    expect(where).not.toContain('(VALUES');
+    expect(orderBy).not.toContain('(VALUES');
+    expect(where).toContain('FROM unnest(__wd0.wd)');
+    expect(orderBy).toContain('FROM unnest(__wd0.wd)');
+  });
+
+  test('положительная форма — предфильтр по сырым свойствам слотов с ролью, затем EXISTS по датам', () => {
+    const exists = where.indexOf('EXISTS (SELECT 1 FROM (SELECT u.slot');
+    expect(exists).toBeGreaterThan(0);
+    const pre = where.slice(0, exists);
+    for (const property of ['orbis/completed_at', 'orbis/due_date', 'orbis/start_at']) {
+      expect([property, pre.includes(`props->>'${property}'`)]).toEqual([property, true]);
+    }
+    expect(pre).toMatch(/BETWEEN \$\d+::date AND \$\d+::date\) AND $/);
   });
 });

@@ -119,7 +119,7 @@ describe('one translation for each panel command', () => {
       roles: BUILTIN_REGISTRY.roles.map((r) => ({ ...r, label: { ru: 'Моя связь' } })),
     };
     const { calls } = renderWithProviders(<ReadyProbe command={command} />, (p) =>
-      p === 'registry.effective' ? metadata : { actionId },
+      p === 'registry.effective' ? metadata : { actionId, consequences: false },
     );
     await waitFor(() =>
       expect(screen.getByTestId('registry-ready')).toHaveTextContent(metadata.version),
@@ -135,7 +135,9 @@ describe('one translation for each panel command', () => {
       createRelation: 'Добавлена связь „Моя связь“',
       deleteRelation: 'Снята связь „Моя связь“',
     };
-    expect(useToastStore.getState().toasts.at(-1)?.title).toBe(titles[command.kind]);
+    await waitFor(() =>
+      expect(useToastStore.getState().toasts.at(-1)?.title).toBe(titles[command.kind]),
+    );
     expect(useToastStore.getState().toasts.at(-1)?.action?.label).toBe('Отменить');
   });
   test('empty values patch returns confirmed without a write/action ID/Undo', async () => {
@@ -166,7 +168,7 @@ describe('one translation for each panel command', () => {
     fireEvent.click(screen.getByText('Записать'));
     await waitFor(() => expect(screen.getByTestId('outcome')).toHaveTextContent('rejected'));
     expect(mutationCount(calls)).toBe(1);
-    await act(async () => finish?.({ actionId }));
+    await act(async () => finish?.({ actionId, consequences: false }));
     await waitFor(() => expect(screen.getByTestId('outcome')).toHaveTextContent('confirmed'));
   });
   test('completion after unmount still announces and refreshes the original command', async () => {
@@ -182,7 +184,7 @@ describe('one translation for each panel command', () => {
     );
     fireEvent.click(screen.getByText('Записать'));
     unmount();
-    await act(async () => finish?.({ actionId }));
+    await act(async () => finish?.({ actionId, consequences: false }));
     expect(calls.find((c) => c.path === 'relation.create')?.input).toEqual(key);
     expect(useToastStore.getState().toasts.at(-1)?.action?.label).toBe('Отменить');
   });
@@ -396,11 +398,16 @@ test('create and Undo refresh all live graph views including shared refs and bud
     (p, input) => {
       if (p === 'relation.create') {
         generation = 1;
-        return { actionId };
+        return { actionId, consequences: false };
       }
       if (p === 'ai.undo') {
         generation = 0;
-        return { ok: true, actionId };
+        return {
+          actionId: 'undo-receipt',
+          undone: { id: actionId, title: 'Связь' },
+          pinnedVersions: [],
+          bodyRevisions: [],
+        };
       }
       const title = `Снимок ${generation}`;
       if (p === 'entity.get')
@@ -438,6 +445,9 @@ test('create and Undo refresh all live graph views including shared refs and bud
     expect(JSON.parse(screen.getByTestId('freshness').textContent ?? '{}')).toMatchObject(
       expected(1),
     ),
+  );
+  await waitFor(() =>
+    expect(useToastStore.getState().toasts.at(-1)?.action?.label).toBe('Отменить'),
   );
   act(() => useToastStore.getState().toasts.at(-1)?.action?.onSelect());
   await waitFor(() =>
@@ -501,7 +511,7 @@ test('inactive get and batched ref keys become stale without a new network read 
         ? fixture()
         : p === 'entity.resolveRefs'
           ? []
-          : (registryReply(p) ?? { actionId }),
+          : (registryReply(p) ?? { actionId, consequences: false }),
     { queries: { staleTime: Infinity } },
   );
   fireEvent.click(screen.getByText('Прогреть закрытые'));
@@ -565,7 +575,7 @@ test('an unresolved command does not block a different new editor gesture', asyn
   };
   const { calls } = renderWithProviders(<SwitchingProbe commands={[first, second]} />, (p) => {
     if (p === 'relation.create') throw new TypeError('offline');
-    return registryReply(p) ?? { actionId };
+    return registryReply(p) ?? { actionId, consequences: false };
   });
   fireEvent.click(screen.getByText('Записать'));
   await waitFor(() => expect(screen.getByTestId('outcome')).toHaveTextContent('unknown'));

@@ -1,5 +1,5 @@
 import { type BodyDoc, parseBody, serializeBody } from '@orbis/shared/doc';
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { Button } from '../../ui/Button';
 
 /**
@@ -44,10 +44,18 @@ export function MarkdownToggle({
   doc,
   onChange,
   onClose,
+  readOnly = false,
+  isReadOnly,
+  reseat = 0,
+  onDirty,
 }: {
   doc: BodyDoc;
   onChange: (doc: BodyDoc) => void;
   onClose: () => void;
+  readOnly?: boolean;
+  isReadOnly?: () => boolean;
+  reseat?: number;
+  onDirty?: (dirty: boolean) => void;
 }) {
   // Мемо, а не голый вызов: сериализация зовётся при КАЖДОМ рендере, то есть на каждое нажатие
   // клавиши в поле, и стоит ~1 мс на теле из сорока блоков (замерено) — платить эту миллисекунду
@@ -71,9 +79,19 @@ export function MarkdownToggle({
   // приходящим `doc` (автосохранение Задачи 13 отдаёт новый объект документа на каждый круг
   // записи, и живое обновление стирало бы набранный текст под руками).
   const [text, setText] = useState(initial);
+  const openedText = useRef(initial);
+  const seated = useRef(reseat);
   // ОДНО состояние на подтверждение и предупреждение, а не два: они всегда поднимаются и
   // гаснут вместе, и разъехаться им можно было бы только по ошибке.
   const [awaitingRawConfirm, setAwaitingRawConfirm] = useState(false);
+  // Только причинная посадка собственной отмены/restore; обычный cache не стирает буфер.
+  if (seated.current !== reseat) {
+    seated.current = reseat;
+    openedText.current = initial;
+    setText(initial);
+    setAwaitingRawConfirm(false);
+  }
+  const locked = () => readOnly || isReadOnly?.() === true;
 
   /**
    * ЕДИНСТВЕННАЯ дверь наружу: плашка гаснет вместе с уходом, каким бы путём он ни случился.
@@ -86,10 +104,12 @@ export function MarkdownToggle({
    */
   function close() {
     setAwaitingRawConfirm(false);
+    onDirty?.(false);
     onClose();
   }
 
   function apply() {
+    if (locked()) return;
     // Без изменений — без записи: лишняя мутация подняла бы updated_at ни за что.
     if (text === initial) {
       close();
@@ -133,8 +153,11 @@ export function MarkdownToggle({
         data-testid="markdown-source"
         aria-label="Тело записи как markdown"
         value={text}
+        readOnly={readOnly}
         spellCheck={false}
         onChange={(e) => {
+          if (locked()) return;
+          onDirty?.(e.target.value !== openedText.current);
           setText(e.target.value);
           // Подтверждение и предупреждение относятся к ПРЕЖНЕМУ тексту: новый разбирается
           // заново, и переносить на него согласие «сохранить как есть» нельзя.
@@ -144,6 +167,11 @@ export function MarkdownToggle({
         // погашенным контуром пришедшего табуляцией фокуса не видно вовсе.
         className="min-h-64 w-full resize-none rounded-lg bg-transparent px-2 py-1.5 font-mono text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30"
       />
+      {text !== openedText.current && (
+        <p role="status" className="text-sm text-text-secondary">
+          В разметке есть несохранённые изменения — примените их или нажмите «Отмена»
+        </p>
+      )}
       {awaitingRawConfirm && (
         // text-alert, а НЕ text-warning: --color-warning объявлен цветом заливки бара и на
         // белом листе даёт 3.18:1 (документировано в NativeRow.tsx:92, extensions/goals/GoalCard.tsx:65-66).
@@ -155,7 +183,7 @@ export function MarkdownToggle({
         <Button variant="ghost" size="sm" onClick={close}>
           Отмена
         </Button>
-        <Button size="sm" onClick={apply}>
+        <Button size="sm" disabled={readOnly} onClick={apply}>
           Применить
         </Button>
       </div>

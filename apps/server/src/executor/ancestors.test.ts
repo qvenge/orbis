@@ -21,15 +21,16 @@ import {
   truncateAll,
   withRule,
 } from '../../test/helpers';
+import { journalOf } from '../../test/journal-helpers';
 import { entities } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { effectiveRegistry } from '../registry/cache';
 import { nearestAncestorRuleOf } from '../rules/carriers';
 import { recomputeProjectAncestors } from './ancestors';
-import { makeChatJournalSink } from './journal';
+import { makeJournalSink } from './journal';
+import type { JournalEntry } from './journal-read';
 import type {
   ActionOperation,
-  ActionRecord,
   ExecuteOk,
   ExecuteRequest,
   ExecuteResult,
@@ -52,9 +53,13 @@ afterAll(async () => {
   await client.end();
 });
 
-function ok(r: ExecuteResult): ExecuteOk {
+function ok<
+  T extends
+    | ExecuteResult
+    | (Omit<Extract<ExecuteResult, { ok: true }>, 'consequences'> & { consequences?: never }),
+>(r: T): Extract<T, { ok: true }> {
   if (!r.ok) throw new Error(`ожидался успех, получено: ${JSON.stringify(r.error)}`);
-  return r;
+  return r as Extract<T, { ok: true }>;
 }
 
 function req(owner: GraphId, tool: string, input: unknown, over: Partial<ExecuteRequest> = {}) {
@@ -121,17 +126,9 @@ async function ancestorsOf(
   });
 }
 
-/** Запись действия из БОЕВОГО журнала — там же её видит undo. */
-async function actionFromJournal(owner: GraphId, actionId: string): Promise<ActionRecord> {
-  const rows = await withIdentity(db, personal(owner), (tx) =>
-    tx.execute(
-      sql`SELECT metadata FROM chat_messages
-           WHERE metadata @> ${JSON.stringify({ actions: [{ id: actionId }] })}::jsonb
-           LIMIT 1`,
-    ),
-  );
-  const meta = (rows as unknown as Array<{ metadata: { actions: ActionRecord[] } }>)[0]?.metadata;
-  const action = meta?.actions.find((a) => a.id === actionId);
+/** Запись действия из БОЕВОГО журнала — там же её видит undo (API журнала, помощник `journalOf`). */
+async function actionFromJournal(owner: GraphId, actionId: string): Promise<JournalEntry> {
+  const action = await journalOf(owner, actionId);
   if (action === undefined) throw new Error(`действие ${actionId} не найдено в журнале`);
   return action;
 }
@@ -324,7 +321,7 @@ test('undo relation_create иерархического ребра: parent_proje
   const task = await createEntity(owner, { title: 'Задача отката' });
   // Боевой синк, а не InMemory: undo ищет действие в журнале БД, и на памяти теста
   // проверялся бы не откат, а его отсутствие (NOT_FOUND).
-  const created = await relate(owner, p.id, task.id, 'subitem', {}, makeChatJournalSink());
+  const created = await relate(owner, p.id, task.id, 'subitem', {}, makeJournalSink());
   expect(await ancestorsOf(owner, task.id)).toEqual({ parent: p.id, root: p.id });
 
   // Строка пересчёта записана, а обратной операции у неё НЕТ: откат пересчитывает заново

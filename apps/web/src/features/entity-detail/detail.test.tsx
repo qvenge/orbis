@@ -1,5 +1,10 @@
 import { DAILY_PLANNING_BODY } from '@orbis/server/src/seed/smart-lists';
-import { bodyDraftNoteId, PAGE_ASPECT } from '@orbis/shared';
+import {
+  type BlockResult,
+  bodyDraftNoteId,
+  type EntityBlocksResult,
+  PAGE_ASPECT,
+} from '@orbis/shared';
 import { type BodyDoc, parseBody, serializeBody } from '@orbis/shared/doc';
 import { parsePageText } from '@orbis/shared/doc/page-grammar';
 import { onlineManager } from '@tanstack/react-query';
@@ -7,30 +12,45 @@ import { act, fireEvent, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event';
 import { useEffect, useState } from 'react';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
+import { AuthProvider } from '../../auth/AuthProvider';
+import { auth, useSession } from '../../auth/supabase';
 import { useRegistry } from '../../lib/registry/useRegistry';
 import { useNav } from '../../state/navigation';
 import {
+  BLOCKS_TIME_ZONE,
+  BLOCKS_TODAY,
   blocksReply,
   blockTexts,
   installCrashTrap,
   isRecordScreenListCall,
   type MockHandler,
+  mockEntityUpdateResult,
   renderWithProviders,
+  staleBodyError,
   trpcError,
   wireEntity,
 } from '../../test/harness';
 import { navAt, recordAddress, topAddress } from '../../test/nav';
 import { registryReply } from '../../test/registry';
-import { trpc } from '../../trpc';
+import { type RouterOutputs, trpc } from '../../trpc';
 import { Toaster } from '../../ui/Toast';
 import { useChatThread } from '../chat/useChatThread';
 import { resetEnsuredThreads } from '../chat/useEnsuredThread';
-import { setDraftScope } from '../entity-editor/draft-storage';
+import { readDraft, setDraftScope } from '../entity-editor/draft-storage';
 import { AspectSections } from './AspectSection';
+import { BODY_SAVING } from './body-gate';
 import { resetDetailMenuModuleForTests } from './DetailMenuSlot';
 import { DetailScreen } from './DetailScreen';
 import { RoutineStatusBlock } from './RoutineStatusBlock';
+import { Subtasks } from './Subtasks';
 import { detailGetInput } from './useEntityDetail';
+
+// Сессия — стабом: экран записи сам сессию не читает, а сюжеты «412 и 401 посреди набора» ниже монтируют НАСТОЯЩИЙ
+// AuthProvider (экран «Обновить», выход по 401, скоуп черновиков) — без сети Supabase.
+vi.mock('../../auth/supabase', () => ({
+  auth: { signOut: vi.fn(), signInWithPassword: vi.fn() },
+  useSession: vi.fn(),
+}));
 
 // Экран монтирует редактор, NodeView'ы виджетов и меню в портале — обработчики событий, из
 // которых брошенное jsdom гасит: ассерты остаются зелёными, а прогон падает кодом 1.
@@ -69,12 +89,18 @@ const DRAFT_KEY = `orbis:body-draft:${DRAFT_ACCOUNT}:e1`;
  * идёт на настоящих часах. Фиксированная дата из прошлого делала бы эти тесты зелёными ровно до
  * того дня, когда она уйдёт за срок, — и дальше красными без единой правки кода.
  */
-function seedDraft(doc: BodyDoc, baseUpdatedAt: string, rejected = false): void {
+function seedDraft(doc: BodyDoc, baseRevision: number, rejected = false): void {
   localStorage.setItem(
     DRAFT_KEY,
-    JSON.stringify({ doc, baseUpdatedAt, savedAt: new Date().toISOString(), rejected }),
+    JSON.stringify({ doc, baseRevision, savedAt: new Date().toISOString(), rejected }),
   );
 }
+
+/**
+ * Ревизия тела, на которой черновик набран ДО чужой правки текста: старше ревизии записи (`entity.bodyRevision`),
+ * поэтому черновик не досылается сам, а предлагается выбором.
+ */
+const STALE_REVISION = 1;
 
 // Форма ответа — фабрикой производителя (`wireEntity`), а не рукописным объектом: старая
 // карта аспектов в ней ПРОЕКЦИЯ `props`+`aspects`, и разъехаться двум формам негде.
@@ -86,6 +112,9 @@ const entity = wireEntity({
   // даже для записей без колонки (readBodyDoc). Без него экран не поднял бы редактор НИКОГДА —
   // и половина файла была бы зелена по причине, которой в проде не существует.
   bodyDoc: parseBody('тело'),
+  // Ревизия тела — замок текста (спека скорости §8.1): её несёт каждый ответ `entity.get`, и с неё
+  // экран начинает правку тела. Не 1 — чтобы не совпасть ни с каким умолчанием.
+  bodyRevision: 3,
   tags: ['work'],
   props: { 'orbis/task_status': 'inbox', 'orbis/priority': 'high' },
   aspects: ['orbis/task'],
@@ -125,6 +154,8 @@ const EDITOR_READY = { timeout: 10_000 };
 
 /** Поднимает редактор касанием тела: ленивый чанк + первая сборка схемы ProseMirror. */
 async function openEditor(): Promise<void> {
+  // Task20 возвращает кешированный экземпляр сразу, без повторного превью.
+  if (screen.queryByTestId('body-editor')) return;
   fireEvent.click(await screen.findByTestId('editor-preview'));
   await screen.findByTestId('body-editor', undefined, EDITOR_READY);
 }
@@ -215,10 +246,10 @@ test('чекбокс шлёт только смену статуса: штамп
     if (path === 'entity.get')
       return { entity, relations: [], thread: { threadId: 'th1', messages: [] } };
     if (path === 'entity.update')
-      return {
+      return mockEntityUpdateResult({
         ...entity,
         props: { 'orbis/task_status': 'done', 'orbis/completed_at': 'now' },
-      };
+      });
     return registryReply(path) ?? {};
   });
   // Этап 3: title теперь и в ScreenHeader (h1), и в NativeRow — целимся в шапку.
@@ -242,7 +273,7 @@ test('снятие галочки у закрытой задачи — снят�
   const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
     if (path === 'entity.get')
       return { entity: closed, relations: [], thread: { threadId: 'th1', messages: [] } };
-    if (path === 'entity.update') return { ...entity };
+    if (path === 'entity.update') return mockEntityUpdateResult({ ...entity });
     return registryReply(path) ?? {};
   });
   await waitFor(() => expect(screen.getByRole('heading', { name: 'Задача' })).toBeInTheDocument());
@@ -282,11 +313,11 @@ test('снятие галочки: пока правка летит, чекбо�
 });
 
 /*
- * Прежняя проверка «inline body-правка шлёт expectedUpdatedAt = точная строка updatedAt» ушла
- * вместе с самим путём: тело больше не сохраняется по blur из textarea, а уезжает
- * автосохранением по паузе — и `expectedUpdatedAt` там сложнее, чем «строка из кэша» (из двух
- * известных берётся поздняя). Проверяет это save.test.tsx («мутация уходит с bodyDoc и точным
- * expectedUpdatedAt из кэша» и «второе сохранение подряд берёт updatedAt из ответа сервера»).
+ * Прежняя проверка «inline body-правка шлёт точную метку записи» ушла вместе с самим путём: тело
+ * больше не сохраняется по blur из textarea, а уезжает автосохранением по паузе — и ревизия тела
+ * там сложнее, чем «число из кэша» (из двух известных берётся большая). Проверяет это
+ * save.test.tsx («мутация уходит с {id, bodyDoc, expectedBodyRevision: <ревизия кэша>, autosave: true}» и
+ * «второе сохранение подряд берёт ревизию из ответа сервера»).
  */
 
 // Чужая правка, приехавшая под НЕтронутый редактор, обязана попасть на экран: иначе человек
@@ -305,7 +336,7 @@ test('нетронутый редактор подхватывает правк�
         thread: { threadId: 'th1', messages: [] },
       };
     }
-    if (path === 'entity.update') return entity;
+    if (path === 'entity.update') return mockEntityUpdateResult(entity);
     return registryReply(path) ?? {};
   });
   await openEditor();
@@ -319,6 +350,53 @@ test('нетронутый редактор подхватывает правк�
     EDITOR_READY,
   );
 });
+
+test('редактор посадил чужую правку тела — набор поверх неё уходит с ЕЁ ревизией, без ложного конфликта (R-17)', async () => {
+  // Основа правки — ревизия ПОКАЗАННОГО текста: редактор принял чужой документ (`onAccept`) — значит человек печатает
+  // поверх него, и сохранение обязано уйти с его ревизией. Иначе после каждой подхваченной чужой правки сохранение
+  // ловило бы 409 на ровном месте.
+  let getCalls = 0;
+  const outside = {
+    ...entity,
+    body: 'извне',
+    bodyDoc: parseBody('извне'),
+    bodyRevision: 5,
+    updatedAt: 'B',
+  };
+  const updates: Array<{ bodyDoc?: unknown; expectedBodyRevision?: number }> = [];
+  renderWithProviders(<DetailScreen entityId="e1" />, (path, input) => {
+    if (path === 'entity.get') {
+      getCalls += 1;
+      return {
+        entity: getCalls === 1 ? entity : outside,
+        relations: [],
+        thread: { threadId: 'th1', messages: [] },
+      };
+    }
+    if (path === 'entity.update') {
+      updates.push(input as { bodyDoc?: unknown; expectedBodyRevision?: number });
+      return mockEntityUpdateResult(outside);
+    }
+    return registryReply(path) ?? {};
+  });
+  await openEditor();
+  await expectEditorText('тело');
+  // Чекбокс → перечитывание приносит чужое тело; в редакторе не печатали — он его сажает
+  fireEvent.click(screen.getByRole('checkbox', { name: /готово/i }));
+  await waitFor(
+    () => expect(screen.getByTestId('body-editor')).toHaveTextContent('извне'),
+    EDITOR_READY,
+  );
+
+  const field = screen.getByTestId('body-editor').querySelector('[contenteditable]') as HTMLElement;
+  await userEvent.click(field);
+  await userEvent.type(field, ' и моё');
+  await waitFor(
+    () => expect(updates.filter((u) => u.bodyDoc !== undefined)).toHaveLength(1),
+    EDITOR_READY,
+  );
+  expect(updates.find((u) => u.bodyDoc !== undefined)?.expectedBodyRevision).toBe(5);
+}, 30_000);
 
 test('набранное в редакторе переживает чужую правку, приехавшую под курсором', async () => {
   // Другая сторона той же границы: подмена содержимого идёт ТОЛЬКО когда редактор не в фокусе,
@@ -343,7 +421,7 @@ test('набранное в редакторе переживает чужую �
         thread: { threadId: 'th1', messages: [] },
       };
     }
-    if (path === 'entity.update') return entity;
+    if (path === 'entity.update') return mockEntityUpdateResult(entity);
     return registryReply(path) ?? {};
   });
   const field = await editorField();
@@ -368,7 +446,7 @@ test('409 правки тела: откат кэша к прежнему body + 
   // Правку тела в базу теперь отправляет «оставить моё» у баннера черновика — это единственный
   // путь, который шлёт мутацию НЕМЕДЛЕННО, без паузы набора, и потому годится для проверки
   // общей обвязки (откат оптимистичного патча + плашка конфликта) без подмены таймеров.
-  seedDraft(parseBody('конфликтное'), 'СТАРАЯ-МЕТКА');
+  seedDraft(parseBody('конфликтное'), STALE_REVISION);
   let getCalls = 0;
   renderWithProviders(
     <>
@@ -385,7 +463,7 @@ test('409 правки тела: откат кэша к прежнему body + 
         // setData(ctx.prev), а не рефетча. Уберёшь откат — здесь останется 'конфликтное'.
         return new Promise(() => {});
       }
-      if (path === 'entity.update') throw trpcError('CONFLICT');
+      if (path === 'entity.update') throw staleBodyError();
       return registryReply(path) ?? {};
     },
   );
@@ -436,19 +514,8 @@ test('подзадачи: подпункт рождается ЗАДАЧЕЙ; с
     }
     if (path === 'entity.create') {
       const { input: created } = input as { input: { id: string; title: string } };
+      childId = created.id;
       return { ...entity, id: created.id, title: created.title };
-    }
-    if (path === 'relation.create') {
-      childId = (input as { target_id: string }).target_id;
-      return {
-        id: 'r1',
-        sourceId: 'e1',
-        targetId: childId,
-        role: 'subitem',
-        meta: {},
-        createdAt: '2026-07-05T00:00:00.000Z',
-        updatedAt: '2026-07-05T00:00:00.000Z',
-      };
     }
     return registryReply(path) ?? {};
   });
@@ -478,6 +545,12 @@ test('подзадачи: подпункт рождается ЗАДАЧЕЙ; с
   };
   expect(createInput.input.aspects).toEqual(['orbis/task']);
   expect(createInput.input.props).toEqual({ 'orbis/task_status': 'inbox' });
+  expect(createInput).toMatchObject({
+    source: 'quick_capture',
+    link: { parentId: 'e1', role: 'subitem' },
+  });
+  expect(calls.filter((call) => call.path === 'entity.create')).toHaveLength(1);
+  expect(calls.filter((call) => call.path === 'relation.create')).toHaveLength(0);
 
   expect(await screen.findByTestId('subtask')).toBeInTheDocument();
   expect(await screen.findByRole('button', { name: 'Купить молоко' })).toBeInTheDocument();
@@ -510,18 +583,6 @@ test('создание подзадачи инвалидирует entity.query 
         const { input: created } = input as { input: { id: string; title: string } };
         return { ...entity, id: created.id, title: created.title };
       }
-      if (path === 'relation.create') {
-        const { target_id } = input as { target_id: string };
-        return {
-          id: 'r1',
-          sourceId: 'e1',
-          targetId: target_id,
-          role: 'subitem',
-          meta: {},
-          createdAt: '2026-07-05T00:00:00.000Z',
-          updatedAt: '2026-07-05T00:00:00.000Z',
-        };
-      }
       if (path === 'entity.query') return [];
       return registryReply(path) ?? {};
     },
@@ -541,70 +602,88 @@ test('создание подзадачи инвалидирует entity.query 
   await waitFor(() => expect(probes().length).toBeGreaterThan(1));
   // Роль связи — `subitem` (§А4-3): по ней же секция и отбирает детей, поэтому чужая роль
   // означала бы «подзадача создана, но в списке её нет»
-  expect(calls.find((c) => c.path === 'relation.create')?.input).toMatchObject({
-    source_id: 'e1',
-    role: 'subitem',
+  expect(calls.find((c) => c.path === 'entity.create')?.input).toMatchObject({
+    link: { parentId: 'e1', role: 'subitem' },
   });
+  expect(calls.filter((call) => call.path === 'relation.create')).toHaveLength(0);
 });
 
-// Частичный отказ: entity.create прошёл, relation.create упал. Задача СОЗДАНА, и списки
-// обязаны её увидеть — иначе она не видна до истечения staleTime (60 с у Повестки), а
-// тост «Не удалось сохранить» уверяет владельца, что ничего не создалось, и он жмёт ещё
-// раз, плодя сироту (бэклог фазы D, ревью фикс-волны).
-test('подзадача создана, а связь упала: списки инвалидируются, тост говорит правду', async () => {
+test('атомарный отказ подзадачи: тост, сохранённый черновик и тот же id при повторе', async () => {
+  let attempts = 0;
   const { calls } = renderWithProviders(
     <>
-      <DetailScreen entityId="e1" />
-      <ListProbe />
+      <Subtasks parentId="e1" relations={[]} />
       <Toaster />
     </>,
     (path, input) => {
-      if (path === 'entity.get') {
-        const { id } = input as { id: string };
-        if (id !== 'e1') return { entity: { ...entity, id, title: 'Купить молоко' } };
-        return { entity, relations: [], thread: { threadId: 'th1', messages: [] } };
-      }
       if (path === 'entity.create') {
-        const { input: created } = input as { input: { id: string; title: string } };
+        if (++attempts === 1) throw trpcError('NOT_FOUND');
+        const created = (input as { input: { id: string; title: string } }).input;
         return { ...entity, id: created.id, title: created.title };
       }
-      if (path === 'relation.create') throw trpcError('INTERNAL_SERVER_ERROR');
-      if (path === 'entity.query') return [];
       return registryReply(path) ?? {};
     },
   );
-  await screen.findByRole('heading', { name: 'Задача' }); // экран отрисован; тело здесь ни при чём
-  const probes = () =>
-    calls.filter(
-      (c) =>
-        c.path === 'entity.query' && (c.input as { query: string }).query === SUBTASK_PROBE.query,
-    );
-  await waitFor(() => expect(probes()).toHaveLength(1));
-
   const field = screen.getByLabelText('Новая подзадача');
   fireEvent.change(field, { target: { value: 'Купить молоко' } });
   fireEvent.keyDown(field, { key: 'Enter' });
+  expect(await screen.findByText('Не удалось сохранить')).toBeInTheDocument();
+  expect(field).toHaveValue('Купить молоко');
+  fireEvent.keyDown(field, { key: 'Enter' });
+  await waitFor(() => expect(field).toHaveValue(''));
+  const creates = calls.filter((call) => call.path === 'entity.create');
+  expect(creates).toHaveLength(2);
+  expect(creates[1]?.input).toEqual(creates[0]?.input);
+  expect(creates[1]?.input).toMatchObject({ link: { parentId: 'e1', role: 'subitem' } });
+  expect(calls.filter((call) => call.path === 'relation.create')).toHaveLength(0);
+});
 
-  // Списки перечитываются: сущность в графе есть, и её обязано быть видно сразу.
-  await waitFor(() => expect(probes().length).toBeGreaterThan(1));
-  // Текст тоста не врёт про потерю записи: создана, но не привязана.
-  expect(
-    await screen.findByText(/создана, но не привязана — найдёте её в списке задач/i),
-  ).toBeInTheDocument();
+function SubtasksSwitch() {
+  const [parentId, setParentId] = useState('e1');
+  return (
+    <>
+      <Subtasks parentId={parentId} relations={[]} />
+      <button type="button" onClick={() => setParentId('e2')}>
+        Другой родитель
+      </button>
+      <Toaster />
+    </>
+  );
+}
+
+test('подзадача: тот же текст после отказа и смены родителя получает новый id', async () => {
+  const { calls } = renderWithProviders(<SubtasksSwitch />, (path) => {
+    if (path === 'entity.create') throw trpcError('NOT_FOUND');
+    return registryReply(path) ?? {};
+  });
+  const field = screen.getByLabelText('Новая подзадача');
+  fireEvent.change(field, { target: { value: 'Купить молоко' } });
+  fireEvent.keyDown(field, { key: 'Enter' });
+  await screen.findByText('Не удалось сохранить');
+  fireEvent.click(screen.getByRole('button', { name: 'Другой родитель' }));
+  fireEvent.keyDown(field, { key: 'Enter' });
+  await waitFor(() =>
+    expect(calls.filter((call) => call.path === 'entity.create')).toHaveLength(2),
+  );
+  const creates = calls
+    .filter((call) => call.path === 'entity.create')
+    .map((call) => call.input as { input: { id: string }; link: { parentId: string } });
+  expect(creates[1]?.input.id).not.toBe(creates[0]?.input.id);
+  expect(creates[1]?.link).toEqual({ parentId: 'e2', role: 'subitem' });
 });
 
 // --- inline-правка заголовка (DF п.3) --------------------------------------------------
 // 02-core-os §2.7: «правка памяти = правка обычной сущности (title, поля аспекта, body)»,
 // а вся машиночитаемая часть memory-правила живёт именно в title (K19.4) — до этого
 // правки title в web не было ни в одной точке, и экран «Память AI» обещал невозможное.
-// Контракт тот же, что у body и полей аспектов: optimistic + expectedUpdatedAt, внешнее
-// значение подхватывается только на нетронутом черновике.
+// Контракт — optimistic-патч, подхват внешнего значения только на нетронутом черновике и замок на начало ввода.
 
 test('inline правка заголовка уходит в entity.update с новым title', async () => {
   const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
     if (path === 'entity.get')
       return { entity, relations: [], thread: { threadId: 'th1', messages: [] } };
-    if (path === 'entity.update') return { ...entity, title: 'кофе → Транспорт' };
+    if (path === 'entity.update')
+      return mockEntityUpdateResult({ ...entity, title: 'кофе → Транспорт' });
     return registryReply(path) ?? {};
   });
   const field = await screen.findByLabelText('Заголовок');
@@ -615,11 +694,7 @@ test('inline правка заголовка уходит в entity.update с н
     const c = calls.find(
       (x) => x.path === 'entity.update' && (x.input as { title?: string }).title !== undefined,
     );
-    expect(c?.input).toEqual({
-      id: 'e1',
-      title: 'кофе → Транспорт',
-      expectedUpdatedAt: '2026-07-05T10:00:00.000Z',
-    });
+    expect(c?.input).toEqual({ id: 'e1', title: 'кофе → Транспорт', expectedTitle: 'Задача' });
   });
 });
 
@@ -642,7 +717,7 @@ function externalTitleChange(): { handler: MockHandler; getCalls: () => number }
           thread: { threadId: 'th1', messages: [] },
         };
       }
-      if (path === 'entity.update') return renamed;
+      if (path === 'entity.update') return mockEntityUpdateResult(renamed);
       return registryReply(path) ?? {};
     },
   };
@@ -671,6 +746,463 @@ test('нетронутый заголовок подхватывает пере�
   );
 });
 
+test('отказ замка заголовка сохраняет ввод; рефокус не обходит замок; «Обновить» задаёт новую основу', async () => {
+  let current = entity;
+  const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, (path, input) => {
+    if (path === 'entity.get')
+      return { entity: current, relations: [], thread: { threadId: 'th1', messages: [] } };
+    if (path === 'entity.update') {
+      const vars = input as { title?: string; expectedTitle?: string };
+      if (vars.title !== undefined) {
+        current = { ...entity, title: 'Агентское' };
+        if (vars.expectedTitle !== current.title)
+          throw trpcError('CONFLICT', 'Отказ заголовка', {
+            code: 'CONFLICT',
+            details: {
+              reason: 'precondition_failed',
+              mismatches: [{ property: 'orbis/title', expected: ['Задача'], actual: 'Агентское' }],
+            },
+          });
+        current = { ...current, title: vars.title };
+      }
+      return mockEntityUpdateResult(current);
+    }
+    return registryReply(path) ?? {};
+  });
+  const field = await screen.findByLabelText('Заголовок');
+  fireEvent.focus(field);
+  fireEvent.change(field, { target: { value: 'Набранное' } });
+  fireEvent.blur(field);
+  await screen.findByText('Заголовок изменён в другом месте — обновите');
+  expect(field).toHaveValue('Набранное');
+  expect(screen.queryByText('Изменено в другом месте')).not.toBeInTheDocument();
+  fireEvent.focus(field);
+  fireEvent.change(field, { target: { value: 'Набранное ещё' } });
+  fireEvent.blur(field);
+  await waitFor(() => expect(calls.filter((c) => c.path === 'entity.update')).toHaveLength(2));
+  expect(
+    calls
+      .filter((c) => c.path === 'entity.update')
+      .map((c) => (c.input as { expectedTitle: string }).expectedTitle),
+  ).toEqual(['Задача', 'Задача']);
+  await waitFor(() => expect(calls.filter((c) => c.path === 'entity.get')).toHaveLength(3));
+  expect(field).toHaveValue('Набранное ещё');
+  const readsBeforeRefresh = calls.filter((c) => c.path === 'entity.get').length;
+  fireEvent.click(screen.getByRole('button', { name: 'Обновить' }));
+  await waitFor(() =>
+    expect(calls.filter((c) => c.path === 'entity.get').length).toBeGreaterThan(readsBeforeRefresh),
+  );
+  await waitFor(() => expect(screen.getByLabelText('Заголовок')).toHaveValue('Агентское'));
+  expect(screen.queryByText('Заголовок изменён в другом месте — обновите')).not.toBeInTheDocument();
+  const refreshed = screen.getByLabelText('Заголовок');
+  fireEvent.focus(refreshed);
+  fireEvent.change(refreshed, { target: { value: 'Новая правка' } });
+  fireEvent.blur(refreshed);
+  await waitFor(() =>
+    expect(calls.filter((c) => c.path === 'entity.update').at(-1)?.input).toEqual({
+      id: 'e1',
+      title: 'Новая правка',
+      expectedTitle: 'Агентское',
+    }),
+  );
+});
+
+test('отказ тела 409 при сохранении заголовка не зажигает баннер заголовка', async () => {
+  const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
+    if (path === 'entity.get')
+      return { entity, relations: [], thread: { threadId: 'th1', messages: [] } };
+    if (path === 'entity.update') throw staleBodyError();
+    return registryReply(path) ?? {};
+  });
+  const field = await screen.findByLabelText('Заголовок');
+  fireEvent.change(field, { target: { value: 'Мой заголовок' } });
+  fireEvent.blur(field);
+  await waitFor(() => expect(calls.some((c) => c.path === 'entity.update')).toBe(true));
+  // Дожидаемся перечитывания после оседания ошибки, прежде чем проверять отсутствие баннера.
+  await waitFor(() => expect(calls.filter((c) => c.path === 'entity.get')).toHaveLength(2));
+  expect(screen.queryByText('Заголовок изменён в другом месте — обновите')).not.toBeInTheDocument();
+});
+
+test('позднее обновление заголовка прежней записи не стирает ввод и баннер соседней', async () => {
+  let changeId: (id: string) => void = () => {};
+  let release: (reply: unknown) => void = () => {};
+  const pending = new Promise((resolve) => {
+    release = resolve;
+  });
+  let firstReads = 0;
+  let secondReads = 0;
+  function Host() {
+    const [id, setId] = useState('e1');
+    // На кэшированную соседнюю запись экран переходит без размонтирования TitleBlock.
+    const cached = trpc.entity.get.useQuery(detailGetInput('e2'));
+    changeId = setId;
+    return (
+      <>
+        <span data-testid="cached-title">{cached.data?.entity.title}</span>
+        <DetailScreen entityId={id} />
+      </>
+    );
+  }
+  const reply = (id: string) => ({
+    entity: { ...entity, id, title: id === 'e1' ? 'Первая' : 'Соседняя' },
+    relations: [],
+    thread: null,
+  });
+  renderWithProviders(<Host />, (path, input) => {
+    const id = (input as { id?: string })?.id;
+    if (path === 'entity.get') {
+      if (id === 'e1' && ++firstReads > 2) return pending;
+      if (id === 'e2') secondReads += 1;
+      return reply(id ?? 'e1');
+    }
+    if (path === 'entity.update')
+      throw trpcError('CONFLICT', 'Чужое имя', {
+        code: 'CONFLICT',
+        details: {
+          reason: 'precondition_failed',
+          mismatches: [{ property: 'orbis/title' }],
+        },
+      });
+    return registryReply(path) ?? {};
+  });
+  let field = await screen.findByLabelText('Заголовок');
+  fireEvent.change(field, { target: { value: 'Черновик первой' } });
+  fireEvent.blur(field);
+  await screen.findByText('Заголовок изменён в другом месте — обновите');
+  await waitFor(() => expect(firstReads).toBe(2));
+  fireEvent.click(screen.getByRole('button', { name: 'Обновить' }));
+  await waitFor(() => expect(firstReads).toBe(3));
+  await waitFor(() => expect(screen.getByTestId('cached-title')).toHaveTextContent('Соседняя'));
+  act(() => changeId('e2'));
+  await waitFor(() => expect(screen.getByLabelText('Заголовок')).toHaveValue('Соседняя'));
+  field = screen.getByLabelText('Заголовок');
+  const readsBeforeSecondSave = secondReads;
+  fireEvent.change(field, { target: { value: 'Черновик соседней' } });
+  fireEvent.blur(field);
+  await screen.findByText('Заголовок изменён в другом месте — обновите');
+  await waitFor(() => expect(secondReads).toBeGreaterThan(readsBeforeSecondSave));
+  await act(async () => {
+    release(reply('e1'));
+    await pending;
+  });
+  expect(screen.getByLabelText('Заголовок')).toHaveValue('Черновик соседней');
+  expect(screen.getByText('Заголовок изменён в другом месте — обновите')).toBeInTheDocument();
+});
+
+test.each([
+  { readFails: false, keyboard: false },
+  { readFails: true, keyboard: false },
+  { readFails: false, keyboard: true },
+  { readFails: true, keyboard: true },
+])('принятое обновление заголовка переживает поздний отказ blur; чтение отказывает=$readFails, Enter=$keyboard', async ({
+  readFails,
+  keyboard,
+}) => {
+  const initial = { ...entity, title: 'Прежде' };
+  let current = initial;
+  let saves = 0;
+  let reads = 0;
+  let rejectSave: (error: unknown) => void = () => {};
+  const pendingSave = new Promise<never>((_, reject) => {
+    rejectSave = reject;
+  });
+  const stale = () =>
+    trpcError('CONFLICT', 'Чужой заголовок', {
+      code: 'CONFLICT',
+      details: {
+        reason: 'precondition_failed',
+        mismatches: [{ property: 'orbis/title' }],
+      },
+    });
+  function TitleProbe() {
+    const get = trpc.entity.get.useQuery(detailGetInput('e1'));
+    return (
+      <output aria-label="Заголовок в кэше" data-read-status={get.fetchStatus}>
+        {get.data?.entity.title}
+      </output>
+    );
+  }
+  const { calls } = renderWithProviders(
+    <>
+      <DetailScreen entityId="e1" />
+      <TitleProbe />
+    </>,
+    (path) => {
+      if (path === 'entity.get') {
+        reads += 1;
+        if (readFails && reads === 4) throw trpcError('INTERNAL_SERVER_ERROR', 'Чтение недоступно');
+        return { entity: current, relations: [], thread: null };
+      }
+      if (path === 'entity.update') {
+        saves += 1;
+        if (saves === 1) {
+          current = { ...initial, title: 'Агентское' };
+          throw stale();
+        }
+        return mockEntityUpdateResult(pendingSave);
+      }
+      return registryReply(path) ?? {};
+    },
+  );
+  const field = await screen.findByLabelText('Заголовок');
+  fireEvent.change(field, { target: { value: 'Черновик' } });
+  fireEvent.blur(field);
+  await screen.findByText('Заголовок изменён в другом месте — обновите');
+  await waitFor(() =>
+    expect(screen.getByLabelText('Заголовок в кэше')).toHaveTextContent('Агентское'),
+  );
+  expect(field).toHaveValue('Черновик');
+  current = { ...initial, title: 'Новое агентское' };
+  const user = userEvent.setup();
+  await user.click(field);
+  // Настоящий переход фокуса отправляет старый draft на blur перед кликом refresh.
+  if (keyboard) {
+    await user.tab();
+    await waitFor(() => expect(saves).toBe(2));
+    expect(screen.getByRole('button', { name: 'Обновить' })).toHaveFocus();
+    await user.keyboard('{Enter}');
+  } else await user.click(screen.getByRole('button', { name: 'Обновить' }));
+  await waitFor(() => expect(saves).toBe(2));
+  expect(calls.filter((c) => c.path === 'entity.update').at(-1)?.input).toEqual({
+    id: 'e1',
+    title: 'Черновик',
+    expectedTitle: 'Прежде',
+  });
+  await waitFor(() => expect(screen.getByLabelText('Заголовок')).toHaveValue('Новое агентское'));
+  expect(screen.getByLabelText('Заголовок в кэше')).toHaveTextContent('Новое агентское');
+  expect(screen.queryByText('Заголовок изменён в другом месте — обновите')).not.toBeInTheDocument();
+  await act(async () => {
+    rejectSave(stale());
+    await pendingSave.catch(() => {});
+  });
+  await waitFor(() => expect(reads).toBe(4));
+  await waitFor(() =>
+    expect(screen.getByLabelText('Заголовок в кэше')).toHaveAttribute('data-read-status', 'idle'),
+  );
+  expect(screen.getByLabelText('Заголовок')).toHaveValue('Новое агентское');
+  expect(screen.getByLabelText('Заголовок в кэше')).toHaveTextContent('Новое агентское');
+  expect(screen.queryByText('Заголовок изменён в другом месте — обновите')).not.toBeInTheDocument();
+});
+
+test('принятое обновление одного клиента не скрывает актуальный title-отказ другого', async () => {
+  const initial = { ...entity, title: 'Прежде' };
+  const stale = () =>
+    trpcError('CONFLICT', 'Чужой заголовок', {
+      code: 'CONFLICT',
+      details: { reason: 'precondition_failed', mismatches: [{ property: 'orbis/title' }] },
+    });
+  const first = renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
+    if (path === 'entity.get') return { entity: initial, relations: [], thread: null };
+    if (path === 'entity.update') throw stale();
+    return registryReply(path) ?? {};
+  });
+  const firstScreen = within(first.container);
+  const firstField = await firstScreen.findByLabelText('Заголовок');
+  fireEvent.change(firstField, { target: { value: 'Первый draft' } });
+  fireEvent.blur(firstField);
+  await firstScreen.findByText('Заголовок изменён в другом месте — обновите');
+  await waitFor(() => expect(first.calls.filter((c) => c.path === 'entity.get')).toHaveLength(2));
+  let rejectSave: (error: unknown) => void = () => {};
+  const pendingSave = new Promise<never>((_, reject) => {
+    rejectSave = reject;
+  });
+  const second = renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
+    if (path === 'entity.get') return { entity: initial, relations: [], thread: null };
+    if (path === 'entity.update') return mockEntityUpdateResult(pendingSave);
+    return registryReply(path) ?? {};
+  });
+  const secondScreen = within(second.container);
+  const secondField = await secondScreen.findByLabelText('Заголовок');
+  fireEvent.change(secondField, { target: { value: 'Второй draft' } });
+  fireEvent.blur(secondField);
+  await waitFor(() => expect(second.calls.some((c) => c.path === 'entity.update')).toBe(true));
+  await userEvent.click(firstScreen.getByRole('button', { name: 'Обновить' }));
+  await waitFor(() => expect(firstScreen.getByLabelText('Заголовок')).toHaveValue('Прежде'));
+  expect(
+    firstScreen.queryByText('Заголовок изменён в другом месте — обновите'),
+  ).not.toBeInTheDocument();
+  await act(async () => {
+    rejectSave(stale());
+    await pendingSave.catch(() => {});
+  });
+  await secondScreen.findByText('Заголовок изменён в другом месте — обновите');
+  expect(secondScreen.getByLabelText('Заголовок')).toHaveValue('Второй draft');
+});
+
+test('принятое обновление после холодного перехода не откатывает title-save старого экземпляра', async () => {
+  let changeId: (id: string) => void = () => {};
+  let rejectSave: (error: unknown) => void = () => {};
+  const pendingSave = new Promise<never>((_, reject) => {
+    rejectSave = reject;
+  });
+  const pendingNeighbor = new Promise(() => {});
+  const initial = { ...entity, title: 'Прежде' };
+  let current = initial;
+  let saves = 0;
+  let reads = 0;
+  let failReads = false;
+  const stale = () =>
+    trpcError('CONFLICT', 'Чужой заголовок', {
+      code: 'CONFLICT',
+      details: { reason: 'precondition_failed', mismatches: [{ property: 'orbis/title' }] },
+    });
+  function Host() {
+    const [id, setId] = useState('e1');
+    changeId = setId;
+    const get = trpc.entity.get.useQuery(detailGetInput('e1'));
+    return (
+      <>
+        <DetailScreen entityId={id} />
+        <output aria-label="Заголовок в кэше" data-read-status={get.fetchStatus}>
+          {get.data?.entity.title}
+        </output>
+      </>
+    );
+  }
+  renderWithProviders(<Host />, (path, input) => {
+    if (path === 'entity.get') {
+      if ((input as { id: string }).id === 'e2') return pendingNeighbor;
+      reads += 1;
+      if (failReads) throw trpcError('INTERNAL_SERVER_ERROR', 'Чтение недоступно');
+      return { entity: current, relations: [], thread: null };
+    }
+    if (path === 'entity.update') {
+      saves += 1;
+      if (saves === 2) return mockEntityUpdateResult(pendingSave);
+      current = { ...initial, title: saves === 1 ? 'Агентское' : 'Новое агентское' };
+      throw stale();
+    }
+    return registryReply(path) ?? {};
+  });
+  const user = userEvent.setup();
+  let field = await screen.findByLabelText('Заголовок');
+  fireEvent.change(field, { target: { value: 'Черновик' } });
+  fireEvent.blur(field);
+  await screen.findByText('Заголовок изменён в другом месте — обновите');
+  await waitFor(() =>
+    expect(screen.getByLabelText('Заголовок в кэше')).toHaveTextContent('Агентское'),
+  );
+  await user.click(field);
+  await user.tab();
+  await waitFor(() => expect(saves).toBe(2));
+  act(() => changeId('e2'));
+  // Холодный сосед снимает TitleBlock; новый экземпляр возникает при возврате на e1.
+  await waitFor(() => expect(screen.queryByLabelText('Заголовок')).not.toBeInTheDocument());
+  act(() => changeId('e1'));
+  field = await screen.findByLabelText('Заголовок');
+  await user.click(field);
+  fireEvent.change(field, { target: { value: 'Новый черновик' } });
+  await user.tab();
+  await screen.findByText('Заголовок изменён в другом месте — обновите');
+  await waitFor(() =>
+    expect(screen.getByLabelText('Заголовок в кэше')).toHaveTextContent('Новое агентское'),
+  );
+  await user.click(field);
+  await user.click(screen.getByRole('button', { name: 'Обновить' }));
+  await waitFor(() => expect(screen.getByLabelText('Заголовок')).toHaveValue('Новое агентское'));
+  await waitFor(() =>
+    expect(
+      screen.queryByText('Заголовок изменён в другом месте — обновите'),
+    ).not.toBeInTheDocument(),
+  );
+  const readsBeforeLateSave = reads;
+  failReads = true;
+  await act(async () => {
+    rejectSave(stale());
+    await pendingSave.catch(() => {});
+  });
+  await waitFor(() => expect(reads).toBeGreaterThan(readsBeforeLateSave));
+  await waitFor(() =>
+    expect(screen.getByLabelText('Заголовок в кэше')).toHaveAttribute('data-read-status', 'idle'),
+  );
+  expect(screen.getByLabelText('Заголовок')).toHaveValue('Новое агентское');
+  expect(screen.getByLabelText('Заголовок в кэше')).toHaveTextContent('Новое агентское');
+  expect(screen.queryByText('Заголовок изменён в другом месте — обновите')).not.toBeInTheDocument();
+});
+
+test.each([
+  { label: 'новый ввод при том же id', roundTrip: false, readFails: false },
+  { label: 'возврат e1→e2→e1 на тёплом кэше', roundTrip: true, readFails: false },
+  { label: 'отказ чтения', roundTrip: false, readFails: true },
+])('незавершённое обновление заголовка сохраняет новый draft: $label', async ({
+  roundTrip,
+  readFails,
+}) => {
+  let changeId: (id: string) => void = () => {};
+  let release: (reply: unknown) => void = () => {};
+  let reject: (error: unknown) => void = () => {};
+  const pending = new Promise((resolve, fail) => {
+    release = resolve;
+    reject = fail;
+  });
+  let reads = 0;
+  function Host() {
+    const [id, setId] = useState('e1');
+    const cached = trpc.entity.get.useQuery(detailGetInput('e2'));
+    changeId = setId;
+    return (
+      <>
+        <span data-testid="cached-title">{cached.data?.entity.title}</span>
+        <DetailScreen entityId={id} />
+      </>
+    );
+  }
+  const reply = (id: string, title = id === 'e1' ? 'Первая' : 'Соседняя') => ({
+    entity: { ...entity, id, title },
+    relations: [],
+    thread: null,
+  });
+  const { calls } = renderWithProviders(<Host />, (path, input) => {
+    const id = (input as { id?: string })?.id;
+    if (path === 'entity.get') {
+      if (id === 'e1' && ++reads > 2) return pending;
+      return reply(id ?? 'e1');
+    }
+    if (path === 'entity.update')
+      throw trpcError('CONFLICT', 'Чужое имя', {
+        code: 'CONFLICT',
+        details: {
+          reason: 'precondition_failed',
+          mismatches: [{ property: 'orbis/title' }],
+        },
+      });
+    return registryReply(path) ?? {};
+  });
+  let field = await screen.findByLabelText('Заголовок');
+  fireEvent.change(field, { target: { value: 'Первый draft' } });
+  fireEvent.blur(field);
+  await screen.findByText('Заголовок изменён в другом месте — обновите');
+  await waitFor(() => expect(reads).toBe(2));
+  fireEvent.click(screen.getByRole('button', { name: 'Обновить' }));
+  await waitFor(() => expect(reads).toBe(3));
+  if (roundTrip) {
+    await waitFor(() => expect(screen.getByTestId('cached-title')).toHaveTextContent('Соседняя'));
+    act(() => changeId('e2'));
+    await waitFor(() => expect(screen.getByLabelText('Заголовок')).toHaveValue('Соседняя'));
+    act(() => changeId('e1'));
+    await waitFor(() => expect(screen.getByLabelText('Заголовок')).toHaveValue('Первая'));
+  }
+  field = screen.getByLabelText('Заголовок');
+  fireEvent.focus(field);
+  fireEvent.change(field, { target: { value: 'Новый draft во время чтения' } });
+  // До ответа не уводим фокус: blur отправил бы мутацию и отменил проверяемый fetch.
+  await act(async () => {
+    if (readFails) reject(trpcError('INTERNAL_SERVER_ERROR', 'Чтение недоступно'));
+    else release(reply('e1', 'Агентское'));
+    await pending.catch(() => {});
+  });
+  expect(screen.getByLabelText('Заголовок')).toHaveValue('Новый draft во время чтения');
+  if (!roundTrip)
+    expect(screen.getByText('Заголовок изменён в другом месте — обновите')).toBeInTheDocument();
+  fireEvent.blur(screen.getByLabelText('Заголовок'));
+  await waitFor(() => expect(calls.filter((c) => c.path === 'entity.update')).toHaveLength(2));
+  expect(calls.filter((c) => c.path === 'entity.update').at(-1)?.input).toEqual({
+    id: 'e1',
+    title: 'Новый draft во время чтения',
+    expectedTitle: 'Первая',
+  });
+});
+
 // --- поле аспекта и внешние изменения значения (D6c п.3) -------------------------------
 // Смоук D6b: после перевода задачи в «Готово» чекбоксом поле «статус» продолжало
 // показывать inbox — AspectField держал значение в useState(initial) без синхронизации.
@@ -696,7 +1228,7 @@ function externalStatusChange(): { handler: MockHandler; getCalls: () => number 
           thread: { threadId: 'th1', messages: [] },
         };
       }
-      if (path === 'entity.update') return done;
+      if (path === 'entity.update') return mockEntityUpdateResult(done);
       return registryReply(path) ?? {};
     },
   };
@@ -753,7 +1285,7 @@ const finHandler = (path: string) => {
   if (path === 'entity.get')
     return { entity: finEntity, relations: [], thread: { threadId: 'th1', messages: [] } };
   if (path === 'entity.query') return [category(CAT_FOOD, 'Еда'), category(CAT_FUN, 'Развлечения')];
-  if (path === 'entity.update') return finEntity;
+  if (path === 'entity.update') return mockEntityUpdateResult(finEntity);
   return registryReply(path) ?? {};
 };
 
@@ -788,7 +1320,6 @@ test('financial: выбор категории шлёт entity.update с нов�
     // и пара «аспект + поле» выбрать между ними не могла.
     expect(c?.input).toEqual({
       id: 'e1',
-      expectedUpdatedAt: '2026-07-05T10:00:00.000Z',
       props: { 'orbis/finance_category': CAT_FUN },
     });
   });
@@ -796,7 +1327,7 @@ test('financial: выбор категории шлёт entity.update с нов�
 
 // D5c п.4: упавший запрос списка и живая ссылка на исчезнувшую категорию — РАЗНЫЕ беды.
 // Общий текст на отказе сети врал бы про целую транзакцию, что связь с категорией потеряна
-// (приём RolloverScreen: ветка isError отдельно от пустоты). Слова у общего пикера
+// (приём прежнего экрана переноса остатков: ветка isError отдельно от пустоты). Слова у общего пикера
 // (`RefField`) НЕЙТРАЛЬНЫЕ — контрол один на все ссылочные свойства, и склонять подпись
 // свойства по падежам («Без Рутина прогона») он не умеет; различимость трёх состояний,
 // ради которой правило и написано, сохранена дословно.
@@ -866,7 +1397,7 @@ test('financial: рефетч списка упал, но список уже е
       if (queries === 1) return [category(CAT_FOOD, 'Еда'), category(CAT_FUN, 'Развлечения')];
       throw trpcError('INTERNAL_SERVER_ERROR');
     }
-    if (path === 'entity.update') return orphan;
+    if (path === 'entity.update') return mockEntityUpdateResult(orphan);
     return registryReply(path) ?? {};
   });
   const select = await screen.findByLabelText('Категория');
@@ -927,7 +1458,7 @@ test('нефинансовая сущность: контрол по типу с
   const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
     if (path === 'entity.get')
       return { entity, relations: [], thread: { threadId: 'th1', messages: [] } };
-    if (path === 'entity.update') return entity;
+    if (path === 'entity.update') return mockEntityUpdateResult(entity);
     return registryReply(path) ?? {};
   });
   // Тип свойства решает контрол: у `orbis/task_status` он `select` (варианты закрыты
@@ -992,14 +1523,14 @@ function CardsUntilHidden({ entity: target }: { entity: typeof taskedFin }) {
 test('правка Финансов гасит агрегаты, даже если экран размонтирован до ответа сервера', async () => {
   // Ответ сервера держим за нитку: правка обязана уйти, экран — исчезнуть, и только потом
   // мутация оседает. На поштучном `onSuccess` инвалидации в этот момент уже не случается.
-  let settle: (value: unknown) => void = () => {};
-  const pending = new Promise((resolve) => {
+  let settle: (value: Partial<RouterOutputs['entity']['update']>) => void = () => {};
+  const pending = new Promise<Partial<RouterOutputs['entity']['update']>>((resolve) => {
     settle = resolve;
   });
   const { calls } = renderWithProviders(<CardsUntilHidden entity={taskedFin} />, (path) => {
     if (path === 'budget.alertCount') return 0;
     if (path === 'entity.query') return [category(CAT_FOOD, 'Еда')];
-    if (path === 'entity.update') return pending;
+    if (path === 'entity.update') return mockEntityUpdateResult(pending);
     return registryReply(path) ?? {};
   });
   const budgetReads = () => calls.filter((c) => c.path === 'budget.alertCount').length;
@@ -1037,14 +1568,14 @@ test('правка Финансов гасит агрегаты, даже есл
  * тот же сюжет, что у правки суммы, и колбэк уровня вызова здесь не позвали бы вовсе.
  */
 test('снятие аспекта Финансов гасит агрегаты, даже если экран размонтирован до ответа', async () => {
-  let settle: (value: unknown) => void = () => {};
-  const pending = new Promise((resolve) => {
+  let settle: (value: Partial<RouterOutputs['entity']['update']>) => void = () => {};
+  const pending = new Promise<Partial<RouterOutputs['entity']['update']>>((resolve) => {
     settle = resolve;
   });
   const { calls } = renderWithProviders(<CardsUntilHidden entity={taskedFin} />, (path) => {
     if (path === 'budget.alertCount') return 0;
     if (path === 'entity.query') return [category(CAT_FOOD, 'Еда')];
-    if (path === 'entity.update') return pending;
+    if (path === 'entity.update') return mockEntityUpdateResult(pending);
     return registryReply(path) ?? {};
   });
   const budgetReads = () => calls.filter((c) => c.path === 'budget.alertCount').length;
@@ -1079,7 +1610,7 @@ test('правка суммы (стандартное свойство ядра 
     (path) => {
       if (path === 'budget.alertCount') return 0;
       if (path === 'entity.query') return [category(CAT_FOOD, 'Еда')];
-      if (path === 'entity.update') return taskedFin;
+      if (path === 'entity.update') return mockEntityUpdateResult(taskedFin);
       return registryReply(path) ?? {};
     },
   );
@@ -1265,7 +1796,7 @@ async function openDetailMenu(): Promise<void> {
 const menuHandler: MockHandler = (path) => {
   if (path === 'entity.get')
     return { entity, relations: [], thread: { threadId: 'th1', messages: [] } };
-  if (path === 'entity.update') return entity;
+  if (path === 'entity.update') return mockEntityUpdateResult(entity);
   return registryReply(path) ?? {};
 };
 
@@ -1308,7 +1839,7 @@ test('меню ⋮: «Скопировать ссылку» кладёт абс�
 
   await waitFor(() => expect(writeText).toHaveBeenCalledWith(LINK_E1));
   // Успех не молчит: без подтверждения непонятно, легло ли что-нибудь в буфер.
-  expect(await screen.findByText('Ссылка скопирована')).toBeInTheDocument();
+  await waitFor(() => expect(screen.getByText('Ссылка скопирована')).toBeInTheDocument());
 });
 
 test('меню ⋮: отказ буфера показывает ссылку текстом, а не молчит', async () => {
@@ -1364,7 +1895,7 @@ const twoEntitiesHandler: MockHandler = (path, input) => {
       thread: null,
     };
   }
-  if (path === 'entity.update') return entity;
+  if (path === 'entity.update') return mockEntityUpdateResult(entity);
   return registryReply(path) ?? {};
 };
 
@@ -1446,7 +1977,7 @@ test('меню ⋮: у архивной сущности пункт зовётс
   const archived = { ...entity, archived: true };
   const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
     if (path === 'entity.get') return { entity: archived, relations: [], thread: null };
-    if (path === 'entity.update') return archived;
+    if (path === 'entity.update') return mockEntityUpdateResult(archived);
     return registryReply(path) ?? {};
   });
   await openDetailMenu();
@@ -1464,13 +1995,13 @@ test('conflict-баннер: клик «Обновить» → refetch entity.ge
   // стоит под `body !== undefined || bodyDoc !== undefined`, executor.ts). У тела своя обвязка
   // внутри useBodySave, и баннер экрана обязан слушать оба источника: иначе он не зажигался бы
   // никогда, а «Обновить» гасило бы чужую тревогу.
-  seedDraft(parseBody('конфликтное'), 'СТАРАЯ-МЕТКА');
+  seedDraft(parseBody('конфликтное'), STALE_REVISION);
   const calls: string[] = [];
   renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
     calls.push(path);
     if (path === 'entity.get')
       return { entity, relations: [], thread: { threadId: 'th1', messages: [] } };
-    if (path === 'entity.update') throw trpcError('CONFLICT');
+    if (path === 'entity.update') throw staleBodyError();
     return registryReply(path) ?? {};
   });
   fireEvent.click(await screen.findByRole('button', { name: 'Оставить моё' }));
@@ -1506,7 +2037,8 @@ const bodyHandler =
         relations: [],
         thread: null,
       };
-    if (path === 'entity.update') return { ...entity, updatedAt: '2026-07-05T11:00:00.000Z' };
+    if (path === 'entity.update')
+      return mockEntityUpdateResult({ ...entity, updatedAt: '2026-07-05T11:00:00.000Z' });
     const reg = registryReply(path);
     if (reg !== undefined) return reg;
     // Каждому блоку тела — одна и та же строка: тестам тела важно, что блок ЖИВОЙ, а не какой.
@@ -1514,12 +2046,20 @@ const bodyHandler =
       const { blocks } = input as { blocks: { key: string }[] };
       return {
         results: Object.fromEntries(
-          blocks.map((b) => [
+          blocks.map((b): [string, BlockResult] => [
             b.key,
-            { ok: true, kind: 'rows', rows: [found('Разобрать Inbox')], more: 0 },
+            {
+              ok: true,
+              kind: 'rows',
+              rows: [found('Разобрать Inbox')] as never,
+              more: 0,
+              closedIds: [],
+            },
           ]),
         ),
-      };
+        today: BLOCKS_TODAY,
+        timeZone: BLOCKS_TIME_ZONE,
+      } satisfies EntityBlocksResult;
     }
     return registryReply(path) ?? {};
   };
@@ -1695,7 +2235,7 @@ test('клик по виджету query-блока редактор не под
 // единственный путь, отправляющий её НЕМЕДЛЕННО, без паузы набора.
 //
 // Сюжеты от этого стали ТОЧНЕЕ, а не слабее. 409 приносит только правка тела (сервер сверяет
-// версию под гейтом `body !== undefined || bodyDoc !== undefined`, executor.ts), и у неё своя
+// ревизию тела под гейтом `body !== undefined || bodyDoc !== undefined`, executor.ts), и у неё своя
 // обвязка `useEntityUpdate` — внутри `useBodySave`, отдельная от той, через которую идут
 // заголовок, чекбокс и архивация. Проверяется теперь ровно то, что видит человек: зажжённая
 // плашка не гаснет от чужого успеха, чем бы тот ни был.
@@ -1707,8 +2247,8 @@ function bodyConflictHandler(seen: unknown[]): MockHandler {
       return { entity, relations: [], thread: { threadId: 'th1', messages: [] } };
     if (path === 'entity.update') {
       seen.push(input);
-      if ((input as { bodyDoc?: unknown }).bodyDoc !== undefined) throw trpcError('CONFLICT');
-      return entity;
+      if ((input as { bodyDoc?: unknown }).bodyDoc !== undefined) throw staleBodyError();
+      return mockEntityUpdateResult(entity);
     }
     return registryReply(path) ?? {};
   };
@@ -1718,7 +2258,7 @@ test('409 правки тела не гаснет от успеха чекбок
   // Чекбокс 409 не получит никогда — сервер его версию не сверяет. Погаси его успех плашку,
   // человек не узнал бы о расхождении вовсе: единственное сообщение о нём ушло бы с экрана
   // само, а расхождение осталось бы.
-  seedDraft(parseBody('правка тела'), 'СТАРАЯ-МЕТКА');
+  seedDraft(parseBody('правка тела'), STALE_REVISION);
   const seen: unknown[] = [];
   const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, bodyConflictHandler(seen));
 
@@ -1737,12 +2277,12 @@ test('409 правки тела не гаснет от успеха чекбок
   expect(screen.getByText(/Изменено в другом месте — обновите/)).toBeInTheDocument();
 });
 
-test('409 правки тела не гаснет от переименования с ТОЙ ЖЕ меткой (Н-3)', async () => {
-  // Самый коварный случай: `saveTitle` метку ШЛЁТ, и она совпадает с меткой правки тела —
-  // кэшный updatedAt за время полёта не двигается (applyPatch его не трогает, перечитывание
-  // идёт только в onSettled). Совпадение меток не значит ничего: у правки без тела сервер
-  // версию не сверяет, и 409 она не принесёт — а значит и промолчать за неё нельзя.
-  seedDraft(parseBody('правка тела'), 'СТАРАЯ-МЕТКА');
+test('409 правки тела не гаснет от переименования, ушедшего следом (Н-3)', async () => {
+  // Правка заголовка ревизии тела не несёт вовсе — у правки без тела сервер замок текста не
+  // сверяет, и 409 она не принесёт, а значит и промолчать за неё нельзя. Промолчи обвязка по
+  // «совпадению ревизий» (оба `undefined` у правок без тела) — единственное сообщение о
+  // расхождении ушло бы с экрана.
+  seedDraft(parseBody('правка тела'), STALE_REVISION);
   const seen: unknown[] = [];
   const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, bodyConflictHandler(seen));
 
@@ -1757,11 +2297,11 @@ test('409 правки тела не гаснет от переименован�
     expect(calls.filter((c) => c.path === 'entity.get').length).toBeGreaterThan(getsBefore),
   );
 
-  // Страж вакуумности: метки у обеих правок ДЕЙСТВИТЕЛЬНО одинаковы — иначе тест проверял бы
-  // расхождение меток, а не признак «сверяет ли сервер версию у этой правки».
-  const metka = (i: number) => (seen[i] as { expectedUpdatedAt?: string }).expectedUpdatedAt;
-  expect(metka(0)).toBe(entity.updatedAt);
-  expect(metka(1)).toBe(entity.updatedAt);
+  // Стражи вакуумности: правка тела ушла с ревизией записи, переименование — без замка вовсе.
+  expect((seen[0] as { expectedBodyRevision?: number }).expectedBodyRevision).toBe(
+    entity.bodyRevision,
+  );
+  expect(seen[1]).toEqual({ id: 'e1', title: 'новое имя', expectedTitle: 'Задача' });
 
   expect(screen.getByText(/Изменено в другом месте — обновите/)).toBeInTheDocument();
 });
@@ -1816,7 +2356,7 @@ const richHandler: MockHandler = (path, input) => {
     };
   }
   if (path === 'entity.resolveRefs') return [];
-  if (path === 'entity.update') return entity;
+  if (path === 'entity.update') return mockEntityUpdateResult(entity);
   // Реестр НАСТОЯЩИЙ: по нему подписаны и секции аспектов, и строки свойств (§А9-2).
   return registryReply(path) ?? {};
 };
@@ -2433,7 +2973,7 @@ test('«Отмена» в тумблере не возвращает текст,
   renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
     if (path === 'entity.get')
       return { entity: serve.outside ? outside : entity, relations: [], thread: null };
-    if (path === 'entity.update') throw trpcError('CONFLICT');
+    if (path === 'entity.update') throw staleBodyError();
     return registryReply(path) ?? {};
   });
   const field = await editorField();
@@ -2482,7 +3022,7 @@ test('«Оставить моё» из режима разметки не отк
   // экране текст до него, местная копия заслоняет базу, а первое нажатие уезжает поверх
   // черновика. Кнопка обещала заменить текст записи, «Отмена» обещала не менять ничего —
   // и вместе они сделали третье (ре-ревью раунда 4, Д1).
-  seedDraft(parseBody('черновик прошлой сессии'), 'СТАРАЯ-МЕТКА');
+  seedDraft(parseBody('черновик прошлой сессии'), STALE_REVISION);
   renderWithProviders(<DetailScreen entityId="e1" />, bodyHandler('тело'));
   const field = await editorField();
   await userEvent.click(field);
@@ -2516,7 +3056,7 @@ test('«Обновить» из режима разметки не заслон�
   renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
     if (path === 'entity.get')
       return { entity: serve.outside ? outside : entity, relations: [], thread: null };
-    if (path === 'entity.update') throw trpcError('CONFLICT');
+    if (path === 'entity.update') throw staleBodyError();
     return registryReply(path) ?? {};
   });
   const field = await editorField();
@@ -2564,7 +3104,7 @@ test('ничего не трогали: приехавшее тело не за�
   renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
     if (path === 'entity.get')
       return { entity: serve.outside ? outside : entity, relations: [], thread: null };
-    if (path === 'entity.update') return entity;
+    if (path === 'entity.update') return mockEntityUpdateResult(entity);
     return registryReply(path) ?? {};
   });
   await openEditor(); // редактор поднят, но НИ ОДНОГО нажатия в нём не было
@@ -2632,7 +3172,7 @@ test('ВТОРОЙ заход в разметку после отказанно�
   renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
     if (path === 'entity.get')
       return { entity: serve.outside ? outside : entity, relations: [], thread: null };
-    if (path === 'entity.update') throw trpcError('CONFLICT');
+    if (path === 'entity.update') throw staleBodyError();
     return registryReply(path) ?? {};
   });
   const field = await editorField();
@@ -2727,11 +3267,11 @@ test('плашки и индикатор тела живут ВНЕ вкладо
   // Проверяем ПОЛОЖЕНИЕ В ДЕРЕВЕ, а не видимость: класс `data-[state=inactive]:hidden` в jsdom
   // ничего не прячет (стилей нет), и `toBeVisible()` был бы зелен при любой раскладке. Ровно
   // тот же приём, что у `ManualLinkNotice`, вынесенной из вкладок раньше и по той же причине.
-  seedDraft(parseBody('черновик прошлой сессии'), 'СТАРАЯ-МЕТКА');
+  seedDraft(parseBody('черновик прошлой сессии'), STALE_REVISION);
   renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
     if (path === 'entity.get')
       return { entity, relations: [], thread: { threadId: 'th1', messages: [] } };
-    if (path === 'entity.update') throw trpcError('CONFLICT');
+    if (path === 'entity.update') throw staleBodyError();
     return registryReply(path) ?? {};
   });
 
@@ -2769,7 +3309,7 @@ test('когда сказать нечего, полоса плашек ПУСТ
 
   // Положительный контроль: появись чему быть — полоса перестаёт быть пустой, и правило её
   // показывает. Без него проверка была бы зелена и у полосы, в которую ничего не попадает.
-  seedDraft(parseBody('черновик прошлой сессии'), 'СТАРАЯ-МЕТКА');
+  seedDraft(parseBody('черновик прошлой сессии'), STALE_REVISION);
   renderWithProviders(<DetailScreen entityId="e1" />, bodyHandler('тело'));
   await waitFor(() =>
     expect(screen.getAllByTestId('body-notices').some((n) => !n.matches(':empty'))).toBe(true),
@@ -2781,7 +3321,7 @@ test('когда сказать нечего, полоса плашек ПУСТ
 test('баннер черновика говорит, что «оставить моё» ЗАМЕНИТ текущий текст', async () => {
   // Кнопка, которая молча заменяет текст записи, обязана сказать об этом до нажатия: человек,
   // не знающий этого, жмёт её как безобидную («ну посмотрю, что там было»).
-  seedDraft(parseBody('черновик прошлой сессии'), 'СТАРАЯ-МЕТКА');
+  seedDraft(parseBody('черновик прошлой сессии'), STALE_REVISION);
   renderWithProviders(<DetailScreen entityId="e1" />, bodyHandler('тело'));
 
   const banner = await screen.findByTestId('draft-banner');
@@ -2794,7 +3334,7 @@ test('«оставить моё» сажает предложенный доку
   // Диск держит ОДИН черновик на запись, и после отправки предложенный текст живёт только в
   // памяти хука — последней копией. Не покажи его редактор, первое же нажатие клавиши вернуло
   // бы в базу то, что на экране, то есть прежний текст.
-  seedDraft(parseBody('черновик прошлой сессии'), 'СТАРАЯ-МЕТКА');
+  seedDraft(parseBody('черновик прошлой сессии'), STALE_REVISION);
   const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, bodyHandler('тело'));
   await openEditor();
   await expectEditorText('тело');
@@ -2818,7 +3358,7 @@ test('«оставить моё» сажает предложенный доку
 });
 
 test('«отбросить» стирает черновик и НЕ трогает текст записи', async () => {
-  seedDraft(parseBody('черновик прошлой сессии'), 'СТАРАЯ-МЕТКА');
+  seedDraft(parseBody('черновик прошлой сессии'), STALE_REVISION);
   const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, bodyHandler('тело'));
   fireEvent.click(await screen.findByRole('button', { name: 'Отбросить' }));
 
@@ -2840,7 +3380,7 @@ test('«отбросить» стирает черновик и НЕ трога�
 const foreignDraft = (text: string): BodyDoc => ({ v: 999, doc: parseBody(text).doc });
 
 test('черновик чужой версии предлагают ДРУГИМИ кнопками — отправить его нельзя', async () => {
-  seedDraft(foreignDraft('черновик из будущего'), 'СТАРАЯ-МЕТКА');
+  seedDraft(foreignDraft('черновик из будущего'), STALE_REVISION);
   renderWithProviders(<DetailScreen entityId="e1" />, bodyHandler('тело'));
 
   const banner = await screen.findByTestId('draft-banner');
@@ -2859,7 +3399,7 @@ test('черновик чужой версии предлагают ДРУГИМ
 });
 
 test('«сохранить в заметку» уносит текст плоским body и снимает черновик с диска', async () => {
-  seedDraft(foreignDraft('## Итоги\n\nчерновик из будущего'), 'СТАРАЯ-МЕТКА');
+  seedDraft(foreignDraft('## Итоги\n\nчерновик из будущего'), STALE_REVISION);
   const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, bodyHandler('тело'));
 
   fireEvent.click(await screen.findByRole('button', { name: 'Сохранить в заметку' }));
@@ -2883,7 +3423,7 @@ test('id заметки детерминирован черновиком: по�
   // Ответ на УСПЕШНЫЙ запрос теряется (сеть моргнула, вкладку закрыли) — клиент видит отказ,
   // человек жмёт кнопку второй раз. Со случайным id в графе появилась бы вторая заметка с тем
   // же текстом; с детерминированным повтор попадает в идемпотентный replay сервера.
-  seedDraft(foreignDraft('черновик из будущего'), 'СТАРАЯ-МЕТКА');
+  seedDraft(foreignDraft('черновик из будущего'), STALE_REVISION);
   const { savedAt } = JSON.parse(localStorage.getItem(DRAFT_KEY) as string) as { savedAt: string };
   const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
     if (path === 'entity.create') throw trpcError('INTERNAL_SERVER_ERROR', 'ответ потерялся');
@@ -2906,7 +3446,7 @@ test('id заметки детерминирован черновиком: по�
 test('заметка не сохранилась — черновик остаётся на диске, и человек видит отказ', async () => {
   // Единственное жёсткое требование спеки: текст не теряется ни в одной ветке. Сними черновик
   // до ответа сервера — и отказ мутации оставил бы человека без текста вообще.
-  seedDraft(foreignDraft('черновик из будущего'), 'СТАРАЯ-МЕТКА');
+  seedDraft(foreignDraft('черновик из будущего'), STALE_REVISION);
   renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
     if (path === 'entity.create') throw trpcError('INTERNAL_SERVER_ERROR', 'сервер не смог');
     return bodyHandler('тело')(path, undefined);
@@ -2942,7 +3482,7 @@ test('в заметку доезжает ПИСАНЫЙ текст: содерж
         ],
       },
     },
-    'СТАРАЯ-МЕТКА',
+    STALE_REVISION,
   );
   const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, bodyHandler('тело'));
 
@@ -2960,7 +3500,7 @@ test('в заметку доезжает ПИСАНЫЙ текст: содерж
 });
 
 test('«открыть серверное тело» убирает баннер, но черновик с диска НЕ стирает', async () => {
-  seedDraft(foreignDraft('черновик из будущего'), 'СТАРАЯ-МЕТКА');
+  seedDraft(foreignDraft('черновик из будущего'), STALE_REVISION);
   const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, bodyHandler('тело'));
 
   fireEvent.click(await screen.findByRole('button', { name: 'Открыть серверное тело' }));
@@ -3051,7 +3591,8 @@ test('смена записи размонтирует тело и досыла�
           thread: null,
         };
       }
-      if (path === 'entity.update') return { ...entity, updatedAt: '2026-07-05T11:00:00.000Z' };
+      if (path === 'entity.update')
+        return mockEntityUpdateResult({ ...entity, updatedAt: '2026-07-05T11:00:00.000Z' });
       return registryReply(path) ?? {};
     },
   );
@@ -3148,7 +3689,7 @@ function adeHandler(opts: { entity?: unknown; runs?: unknown[] } = {}): MockHand
     if (path === 'oauth.listGrants') return [GRANT];
     if (path === 'agentRun.sweep') return { swept: 0 };
     if (path === 'agentRun.answerCheckpoint') return { ticket: target, run: RUN };
-    if (path === 'entity.update') return target;
+    if (path === 'entity.update') return mockEntityUpdateResult(target);
     return registryReply(path) ?? {};
   };
 }
@@ -3714,6 +4255,42 @@ function runHandler(opts: { run?: unknown; rollback?: unknown } = {}): MockHandl
 }
 
 describe('ADE: прогон', () => {
+  test('ленивая лента: переход между прогонами сбрасывает подтверждение и результат, откат адресован видимому прогону', async () => {
+    let changeRun: (id: string) => void = () => {};
+    function Host() {
+      const [id, setId] = useState('r1');
+      changeRun = setId;
+      return <DetailScreen entityId={id} />;
+    }
+    const { calls } = renderWithProviders(<Host />, (path, input) => {
+      if (path === 'entity.get' && (input as { id: string }).id === 'r2')
+        return {
+          entity: { ...RUN_ENTITY, id: 'r2', title: 'Второй прогон' },
+          relations: [],
+          thread: null,
+        };
+      return runHandler()(path, input);
+    });
+    let feed = await screen.findByTestId('run-feed');
+    fireEvent.click(within(feed).getByRole('button', { name: 'Откатить прогон в Orbis' }));
+    await screen.findByRole('dialog');
+    act(() => changeRun('r2'));
+    await waitFor(() => expect(screen.getByLabelText('Заголовок')).toHaveValue('Второй прогон'));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    feed = await screen.findByTestId('run-feed');
+    fireEvent.click(within(feed).getByRole('button', { name: 'Откатить прогон в Orbis' }));
+    fireEvent.click(
+      within(await screen.findByRole('dialog')).getByRole('button', { name: 'Откатить' }),
+    );
+    await screen.findByTestId('rollback-result');
+    expect(calls.filter((c) => c.path === 'agentRun.rollback').map((c) => c.input)).toEqual([
+      { runId: 'r2' },
+    ]);
+    act(() => changeRun('r1'));
+    await waitFor(() => expect(screen.getByLabelText('Заголовок')).toHaveValue(RUN_ENTITY.title));
+    expect(screen.queryByTestId('rollback-result')).not.toBeInTheDocument();
+  });
+
   test('лента шагов по возрастанию seq; «внешнее» только у своего шага; исход, отчёт, грант, расход и ссылка на сессию', async () => {
     const { calls } = renderWithProviders(<DetailScreen entityId="r1" />, runHandler());
     const feed = await screen.findByTestId('run-feed');
@@ -3802,7 +4379,7 @@ describe('ADE: прогон', () => {
     );
   });
 
-  test('конфликт: список чужих правок и «Ничего не откачено»', async () => {
+  test('конфликт внутри цепочки grant-прогона: список правок и честная причина без совета недоступных карточек', async () => {
     const { calls } = renderWithProviders(
       <DetailScreen entityId="r1" />,
       runHandler({
@@ -3829,6 +4406,10 @@ describe('ADE: прогон', () => {
     const result = await screen.findByTestId('rollback-result');
     // Инвариант 7: конфликт значит, что граф НЕ тронут вовсе, — и сказать это надо словами.
     expect(result).toHaveTextContent('Ничего не откачено');
+    expect(result).toHaveTextContent('эти записи менялись помимо прогона');
+    // Claim/step/finish — бухгалтерия MCP-прогона без индивидуальной отмены (§11.3).
+    expect(result).not.toHaveTextContent(/карточ|тред|отдельные действия/i);
+    expect(result).not.toHaveTextContent('после прогона');
     // Задетая запись названа ЗАГОЛОВКОМ: по uuid человек не решит, чем он готов пожертвовать.
     expect(await within(result).findByText('Починить парсер')).toBeInTheDocument();
     // Источник правки — по-русски: «ui» не отвечает владельцу, своей это было рукой или чужой.
@@ -3861,6 +4442,59 @@ describe('ADE: прогон', () => {
     // Часть отката уже в графе — молчать об этом нельзя: состояние графа теперь смешанное.
     expect(result).toHaveTextContent('1');
     expect(result).toHaveTextContent('запись изменена');
+  });
+
+  test('правило отмены текста (§8.6): конфликт цепочки тела без действия — «вне приложения»; остановка серии правкой текста — текст сервера о прогоне', async () => {
+    const outside = renderWithProviders(
+      <DetailScreen entityId="r1" />,
+      runHandler({
+        rollback: {
+          ok: false,
+          reason: 'conflict',
+          conflicts: [
+            { entityId: 't1', actionId: null, at: '2026-08-17T11:00:00.000Z', source: 'outside' },
+          ],
+        },
+      }),
+    );
+    let feed = await screen.findByTestId('run-feed');
+    await userEvent.click(within(feed).getByRole('button', { name: 'Откатить прогон в Orbis' }));
+    await userEvent.click(
+      within(await screen.findByRole('dialog')).getByRole('button', { name: 'Откатить' }),
+    );
+    let result = await screen.findByTestId('rollback-result');
+    // Текст сменил писатель без журнала (ops-скрипт): действия нет, источник — словами, а не кодом `outside`
+    expect(result).toHaveTextContent('Ничего не откачено');
+    expect(result).toHaveTextContent('вне приложения');
+    expect(result).not.toHaveTextContent('outside');
+    outside.unmount();
+
+    const message =
+      'Текст изменён после прогона: «Починить парсер» — откат остановлен, текст не тронут';
+    renderWithProviders(
+      <DetailScreen entityId="r1" />,
+      runHandler({
+        rollback: {
+          ok: false,
+          reason: 'partial',
+          undone: ['a2'],
+          failed: {
+            actionId: 'a1',
+            error: { code: 'UNDO_TEXT_CHANGED', message },
+            reason: 'text_changed',
+            entries: [],
+          },
+        },
+      }),
+    );
+    feed = await screen.findByTestId('run-feed');
+    await userEvent.click(within(feed).getByRole('button', { name: 'Откатить прогон в Orbis' }));
+    await userEvent.click(
+      within(await screen.findByRole('dialog')).getByRole('button', { name: 'Откатить' }),
+    );
+    result = await screen.findByTestId('rollback-result');
+    expect(result).toHaveTextContent('Откачено действий: 1');
+    expect(result).toHaveTextContent(message);
   });
 
   test('идущий прогон: откат недоступен', async () => {
@@ -3954,6 +4588,8 @@ function versionsHandler(
     if (path === 'version.list') return opts.versions ?? VERSIONS;
     if (path === 'version.pin')
       return {
+        actionId: 'pin3',
+        consequences: false,
         id: 'v3',
         entityId: 'e1',
         label: (input as { label: string }).label,
@@ -3961,7 +4597,10 @@ function versionsHandler(
         actorKind: 'owner',
         createdAt: '2026-08-17T12:00:00.000Z',
       };
-    if (path === 'version.restore') return (opts.restore ?? (() => entity))();
+    if (path === 'version.restore')
+      return opts.restore
+        ? opts.restore()
+        : { ...entity, actionId: 'restore1', consequences: true };
     return registryReply(path) ?? {};
   };
 }
@@ -4094,7 +4733,7 @@ describe('ADE: версии', () => {
     expect(calls.filter((c) => c.path === 'version.list')).toHaveLength(1);
   });
 
-  test('«Восстановить» → подтверждение → version.restore({versionId, expectedUpdatedAt}) и перечитывание графа', async () => {
+  test('«Восстановить» → подтверждение → version.restore({versionId, expectedBodyRevision}) и перечитывание графа', async () => {
     const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, versionsHandler());
     await openDetails();
     await waitFor(() =>
@@ -4116,9 +4755,9 @@ describe('ADE: версии', () => {
     await waitFor(() =>
       expect(calls.find((c) => c.path === 'version.restore')?.input).toEqual({
         versionId: 'v1',
-        // Метка версии — из ОТКРЫТОЙ записи: сервер сверит её и откажет, если тело правили,
+        // Ревизия тела — из ОТКРЫТОЙ записи: сервер сверит её и откажет, если текст правили,
         // пока экран смотрел на список.
-        expectedUpdatedAt: entity.updatedAt,
+        expectedBodyRevision: entity.bodyRevision,
       }),
     );
     // Тело записи изменилось — граф перечитывается целиком (Р17).
@@ -4128,12 +4767,118 @@ describe('ADE: версии', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
   });
 
+  test('«Восстановить» ждёт досыл и сразу восстанавливает с подтверждённой ревизией', async () => {
+    // Иначе страховка «перед восстановлением …» закрепила бы текст БЕЗ набранного, а сам набор уехал бы после
+    // восстановления со старой ревизией в 409 «с самим собой».
+    const server = { revision: 3, title: entity.title };
+    const updates: unknown[] = [];
+    const versions = versionsHandler();
+    const { calls } = renderWithProviders(
+      <>
+        <DetailScreen entityId="e1" />
+        <Toaster />
+      </>,
+      (path, input) => {
+        if (path === 'entity.get')
+          return {
+            entity: { ...entity, title: server.title, bodyRevision: server.revision },
+            relations: [],
+            thread: null,
+          };
+        if (path === 'entity.update') {
+          updates.push(input);
+          server.revision += 1;
+          // Метка для причинного барьера ниже: перечитывание после сохранения видно по заголовку
+          server.title = 'Задача, текст сохранён';
+          return mockEntityUpdateResult({
+            ...entity,
+            title: server.title,
+            bodyRevision: server.revision,
+          });
+        }
+        return versions(path, input);
+      },
+    );
+    const field = await editorField();
+    await userEvent.click(field);
+    await userEvent.type(field, ' и хвост');
+    await expectEditorHas('и хвост');
+
+    await openDetails();
+    await waitFor(() =>
+      expect(within(screen.getByTestId('versions-card')).getAllByRole('listitem')).toHaveLength(2),
+    );
+    const card = screen.getByTestId('versions-card');
+    const row = within(card).getAllByRole('listitem')[0] as HTMLElement;
+    await userEvent.click(within(row).getByRole('button', { name: 'Восстановить' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Восстановить' }));
+
+    await waitFor(() => expect(updates).toHaveLength(1));
+    expect(JSON.stringify((updates[0] as { bodyDoc?: unknown }).bodyDoc)).toContain('и хвост');
+    await waitFor(() =>
+      expect(calls.find((c) => c.path === 'version.restore')?.input).toEqual({
+        versionId: 'v1',
+        expectedBodyRevision: 4,
+      }),
+    );
+  }, 30_000);
+
+  test('повтор «Восстановить» ДО перечитывания после своего досыла — ревизия своего сохранения, не отставшего кэша (M-A)', async () => {
+    // Перечитывание после досыла ещё не пришло (зависает): кэш держит ревизию ДО досыла. Возьми восстановление её —
+    // ушло бы в 409 «с собственным сохранением». Ревизию даёт тело экрана — подтверждённую своим сохранением.
+    let reads = 0;
+    const updates: unknown[] = [];
+    const versions = versionsHandler();
+    const { calls } = renderWithProviders(
+      <>
+        <DetailScreen entityId="e1" />
+        <Toaster />
+      </>,
+      (path, input) => {
+        if (path === 'entity.get') {
+          reads += 1;
+          if (reads > 1 && updates.length > 0) return new Promise(() => {});
+          return { entity, relations: [], thread: null };
+        }
+        if (path === 'entity.update') {
+          updates.push(input);
+          return mockEntityUpdateResult({
+            ...entity,
+            bodyRevision: (entity.bodyRevision as number) + 1,
+          });
+        }
+        return versions(path, input);
+      },
+    );
+    const field = await editorField();
+    await userEvent.click(field);
+    await userEvent.type(field, ' и хвост');
+    await expectEditorHas('и хвост');
+
+    await openDetails();
+    await waitFor(() =>
+      expect(within(screen.getByTestId('versions-card')).getAllByRole('listitem')).toHaveLength(2),
+    );
+    const card = screen.getByTestId('versions-card');
+    const row = within(card).getAllByRole('listitem')[0] as HTMLElement;
+    await userEvent.click(within(row).getByRole('button', { name: 'Восстановить' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Восстановить' }));
+    await waitFor(() =>
+      expect(calls.find((c) => c.path === 'version.restore')?.input).toEqual({
+        versionId: 'v1',
+        expectedBodyRevision: (entity.bodyRevision as number) + 1,
+      }),
+    );
+  }, 30_000);
+
   test('409 при восстановлении: инлайн «Документ изменился в другом месте» и «Обновить»', async () => {
     const { calls } = renderWithProviders(
       <DetailScreen entityId="e1" />,
       versionsHandler({
         restore: () => {
-          throw trpcError('CONFLICT');
+          throw staleBodyError();
         },
       }),
     );
@@ -4314,7 +5059,7 @@ function routineHandler(
     if (path === 'entity.update') {
       const patch = (input as { props?: Record<string, unknown> }).props?.['orbis/routine_stage'];
       if (typeof patch === 'string') stage = patch;
-      return current();
+      return mockEntityUpdateResult(current());
     }
     // Часовой пояс владельца — тот же шов, что у ленты прогона и истории: без него время
     // печаталось бы в зоне машины, и проверка даты зависела бы от того, где идёт прогон.
@@ -4591,6 +5336,7 @@ function routineRunHandler(
     decideAll?: unknown;
     /** Обзор рутины: блок пачки читает его РАДИ ПАУЗЫ (`nextBucketAt === null`). */
     overview?: unknown;
+    rollback?: unknown;
   } = {},
 ): MockHandler {
   const run = routineRunEntity(opts.props ?? ROUTINE_RUN_CHECKPOINT, opts.archived ?? false);
@@ -4612,7 +5358,8 @@ function routineRunHandler(
     if (path === 'routine.decideProposal')
       return opts.decide ?? { status: 'applied', actionId: 'a1' };
     if (path === 'routine.answerCheckpoint') return { runId: 'rr1' };
-    if (path === 'agentRun.rollback') return { ok: true, undone: ['a1'], note: ROLLBACK_NOTE };
+    if (path === 'agentRun.rollback')
+      return opts.rollback ?? { ok: true, undone: ['a1'], note: ROLLBACK_NOTE };
     // D42: пачка решений. Пустой список — обычный ответ (прогон, который ничего не откладывал
     // и ни о чём не спрашивал), поэтому он же и умолчание.
     if (path === 'routine.runUnits') return opts.units ?? [];
@@ -4635,6 +5382,44 @@ function routineRunHandler(
 }
 
 describe('V1: прогон рутины', () => {
+  test('конфликт внутри цепочки рутинного прогона: честная причина и карточки треда прогона как выход', async () => {
+    const { calls } = renderWithProviders(
+      <DetailScreen entityId="rr1" />,
+      routineRunHandler({
+        props: {
+          ...ROUTINE_RUN_CHECKPOINT,
+          'orbis/run_outcome': 'finished',
+          'orbis/run_checkpoint': undefined,
+          'orbis/run_finished_at': '2026-08-18T04:02:00.000Z',
+        },
+        rollback: {
+          ok: false,
+          reason: 'conflict',
+          conflicts: [
+            { entityId: 'e2', actionId: 'a9', at: '2026-08-18T04:01:00.000Z', source: 'ui' },
+          ],
+        },
+      }),
+    );
+    const feed = await screen.findByTestId('run-feed');
+    await userEvent.click(within(feed).getByRole('button', { name: 'Откатить прогон в Orbis' }));
+    await userEvent.click(
+      within(await screen.findByRole('dialog')).getByRole('button', { name: 'Откатить' }),
+    );
+
+    const result = await screen.findByTestId('rollback-result');
+    expect(result).toHaveTextContent('Ничего не откачено');
+    expect(result).toHaveTextContent('эти записи менялись помимо прогона');
+    expect(result).toHaveTextContent(
+      /отдельные действия можно отменить с карточек в треде прогона/i,
+    );
+    expect(result).not.toHaveTextContent('после прогона');
+    expect(await within(result).findByText('Купить билеты')).toBeInTheDocument();
+    expect(result).toHaveTextContent('с экрана');
+    expect(calls.some((c) => c.path === 'oauth.listGrants')).toBe(false);
+    expect(calls.find((c) => c.path === 'agentRun.rollback')?.input).toEqual({ runId: 'rr1' });
+  });
+
   test('прогон с routine_id и outcome checkpoint: блок вопроса с полем ответа; «Ответить» зовёт routine.answerCheckpoint; шапка — рутина и слот, исполнителя нет (приёмка 5)', async () => {
     const { calls } = renderWithProviders(<DetailScreen entityId="rr1" />, routineRunHandler());
     const feed = await screen.findByTestId('run-feed');
@@ -5341,7 +6126,7 @@ function overlayHandler(
     if (path === 'routine.proposalsForEntity') return opts.proposals ?? [proposalFor()];
     if (path === 'routine.decideProposal')
       return opts.decide ?? { status: 'applied', actionId: 'a1' };
-    if (path === 'entity.update') return entity;
+    if (path === 'entity.update') return mockEntityUpdateResult(entity);
     if (path === 'chat.listMessages') return [];
     // Реестр НАСТОЯЩИЙ: по нему подписаны и строки плашки, и инпуты правки (§А9-2).
     return registryReply(path) ?? {};
@@ -6082,3 +6867,1066 @@ describe('режим правки тела в слое', () => {
     expect(edits.fields).toEqual([{ index: 0, field: 'orbis/task_status', value: 'in_progress' }]);
   }, 30_000);
 });
+
+// --- 412 и 401 посреди набора: черновик переживает экран «Обновить» и выход (спека скорости §0.3 п. 6, §13.2,
+// §6.4 «черновики остаются») ---------------------------------------------------------------------------------------
+//
+// План А меняет контракт правки тела без переходного слоя, и вкладка, открытая через деплой, получает 412 на первом же
+// сохранении. Ровно в этот момент на экране недосохранённый текст: дерево записи снимается экраном «Обновить» (или
+// экраном входа по 401), и текст обязан пережить и это, и следующее открытие записи — уже новым клиентом.
+
+describe('412 и 401 посреди набора', () => {
+  const AUTHED = { token: 'jwt', userId: DRAFT_ACCOUNT, status: 'authed' } as const;
+  const ANON = { token: null, userId: null, status: 'anon' } as const;
+  type SessionValue = typeof AUTHED | typeof ANON;
+  /** Сессия стенда — состоянием React, чтобы выход и повторный вход перерисовывали AuthProvider. */
+  const session: { value: SessionValue; set: (v: SessionValue) => void } = {
+    value: AUTHED,
+    set: () => {},
+  };
+  function useTestSession(): SessionValue {
+    const [value, setValue] = useState<SessionValue>(session.value);
+    session.set = (v) => {
+      session.value = v;
+      setValue(v);
+    };
+    return value;
+  }
+
+  beforeEach(() => {
+    session.value = AUTHED;
+    vi.mocked(useSession).mockImplementation(useTestSession as typeof useSession);
+    // Выход по 401 — как в бою: сессия пропадает, AuthProvider рисует экран входа
+    vi.mocked(auth.signOut).mockImplementation(async () => {
+      session.set(ANON);
+      return { error: null };
+    });
+  });
+
+  /** Ответ сервера: чтение — запись, правка тела — отказ `code`, пока `refuse` поднят. */
+  function refusingHandler(code: string, box: { refuse: boolean }, seen: unknown[]): MockHandler {
+    return (path, input) => {
+      if (path === 'entity.get')
+        return { entity, relations: [], thread: { threadId: 'th1', messages: [] } };
+      if (path === 'entity.update') {
+        seen.push(input);
+        if (box.refuse) throw trpcError(code);
+        return mockEntityUpdateResult(entity);
+      }
+      return registryReply(path) ?? {};
+    };
+  }
+
+  /** Набрать хвост в теле — редактор поднимается касанием, как у человека. */
+  async function typeTail(): Promise<void> {
+    const field = await editorField();
+    await userEvent.click(field);
+    await userEvent.type(field, ' и хвост');
+    await expectEditorHas('и хвост');
+  }
+
+  const draftText = () => JSON.stringify(readDraft('e1')?.doc ?? null);
+
+  test('412 CLIENT_OUTDATED посреди набора → экран «Обновить», черновик на диске цел; новый рендер записи досылает его сам', async () => {
+    const box = { refuse: true };
+    const seen: unknown[] = [];
+    const first = renderWithProviders(
+      <AuthProvider>
+        <DetailScreen entityId="e1" />
+      </AuthProvider>,
+      refusingHandler('PRECONDITION_FAILED', box, seen),
+      { authErrors: true },
+    );
+    await typeTail();
+    // Пауза набора истекла, сохранение ушло и получило 412 — дерево записи снято экраном «Обновить»
+    await screen.findByTestId('update-required', undefined, EDITOR_READY);
+    expect(screen.queryByTestId('body-editor')).toBeNull();
+    expect(seen.length).toBeGreaterThan(0);
+    first.unmount();
+
+    // Черновик на диске — новой формы, с ревизией, поверх которой набирали, и с набранным текстом
+    expect(readDraft('e1')?.baseRevision).toBe(entity.bodyRevision);
+    expect(readDraft('e1')?.rejected).toBe(false);
+    expect(draftText()).toContain('и хвост');
+
+    // «Обновить» — новый клиент открывает ту же запись: текст на сервере не менялся (ревизия та же) — досыл сам
+    box.refuse = false;
+    const after: unknown[] = [];
+    renderWithProviders(
+      <DetailScreen entityId="e1" />,
+      refusingHandler('PRECONDITION_FAILED', box, after),
+    );
+    await waitFor(() => expect(after).toHaveLength(1), EDITOR_READY);
+    expect(after[0]).toMatchObject({ id: 'e1', expectedBodyRevision: entity.bodyRevision });
+    expect(JSON.stringify((after[0] as { bodyDoc: unknown }).bodyDoc)).toContain('и хвост');
+    await waitFor(() => expect(readDraft('e1')).toBeNull());
+  });
+
+  test('Task18: actual401 unmount сохраняет latest suffix после отправки только oldowner', async () => {
+    let fail!: (error: unknown) => void;
+    const seen: unknown[] = [];
+    renderWithProviders(
+      <AuthProvider>
+        <DetailScreen entityId="e1" />
+      </AuthProvider>,
+      (path, input) => {
+        if (path === 'entity.get')
+          return { entity, relations: [], thread: { threadId: 'th1', messages: [] } };
+        if (path === 'entity.update') {
+          seen.push(input);
+          return new Promise((_resolve, reject) => {
+            fail = reject;
+          });
+        }
+        return registryReply(path) ?? {};
+      },
+      { authErrors: true },
+    );
+    await typeTail();
+    await waitFor(() => expect(seen).toHaveLength(1), EDITOR_READY);
+    await userEvent.type(
+      screen.getByTestId('body-editor').querySelector('[contenteditable]') as HTMLElement,
+      ' ещё',
+    );
+    await expectEditorHas('и хвост', 'ещё');
+    await act(async () => fail(trpcError('UNAUTHORIZED')));
+    await screen.findByTestId('login-screen', undefined, EDITOR_READY);
+    const draft = JSON.parse(localStorage.getItem(DRAFT_KEY) ?? 'null');
+    expect(JSON.stringify(draft?.doc)).toContain('и хвост ещё');
+    expect(draft?.baseRevision).toBe(entity.bodyRevision);
+    expect(readDraft('e1')).toBeNull();
+    expect(localStorage.getItem('orbis:body-draft::e1')).toBeNull();
+    expect(seen).toHaveLength(1);
+  });
+
+  test('401 посреди набора → выход, черновик на диске цел; повторный вход тем же аккаунтом — черновик на месте и досылается', async () => {
+    const box = { refuse: true };
+    const seen: unknown[] = [];
+    renderWithProviders(
+      <AuthProvider>
+        <DetailScreen entityId="e1" />
+      </AuthProvider>,
+      refusingHandler('UNAUTHORIZED', box, seen),
+      { authErrors: true },
+    );
+    await typeTail();
+    // 401 → выход: экран входа вместо записи
+    await screen.findByTestId('login-screen', undefined, EDITOR_READY);
+    expect(screen.queryByTestId('body-editor')).toBeNull();
+    const ownerDraft = JSON.parse(localStorage.getItem(DRAFT_KEY) ?? 'null');
+    expect(JSON.stringify(ownerDraft?.doc)).toContain('и хвост');
+    expect(ownerDraft?.baseRevision).toBe(entity.bodyRevision);
+    expect(readDraft('e1')).toBeNull();
+    expect(localStorage.getItem('orbis:body-draft::e1')).toBeNull();
+    const sentBefore = seen.length;
+
+    // Повторный вход ТЕМ ЖЕ аккаунтом: скоуп черновиков тот же — `setDraftScope` его не стёр и не спрятал, и запись,
+    // открытая снова, находит черновик и досылает его с ревизией, поверх которой набирали (текст на сервере тот же)
+    box.refuse = false;
+    await act(async () => {
+      session.set(AUTHED);
+    });
+    await waitFor(() => expect(seen.length).toBe(sentBefore + 1), EDITOR_READY);
+    const resent = seen[sentBefore] as { expectedBodyRevision?: number; bodyDoc?: unknown };
+    expect(resent.expectedBodyRevision).toBe(entity.bodyRevision);
+    expect(JSON.stringify(resent.bodyDoc)).toContain('и хвост');
+  });
+
+  test('после выхода по 401 текст записи правили в другом месте — новый рендер предлагает черновик баннером, в сеть не идёт', async () => {
+    const box = { refuse: true };
+    const seen: unknown[] = [];
+    const first = renderWithProviders(
+      <AuthProvider>
+        <DetailScreen entityId="e1" />
+      </AuthProvider>,
+      refusingHandler('UNAUTHORIZED', box, seen),
+      { authErrors: true },
+    );
+    await typeTail();
+    await screen.findByTestId('login-screen', undefined, EDITOR_READY);
+    first.unmount();
+
+    // Тело записи с тех пор сменили: ревизия выросла — автодосыла нет, выбор человеку
+    const moved = { ...entity, body: 'чужое', bodyDoc: parseBody('чужое'), bodyRevision: 4 };
+    const after: unknown[] = [];
+    session.value = AUTHED;
+    renderWithProviders(
+      <AuthProvider>
+        <DetailScreen entityId="e1" />
+      </AuthProvider>,
+      (path, input) => {
+        if (path === 'entity.get')
+          return { entity: moved, relations: [], thread: { threadId: 'th1', messages: [] } };
+        if (path === 'entity.update') {
+          after.push(input);
+          return mockEntityUpdateResult(moved);
+        }
+        return registryReply(path) ?? {};
+      },
+    );
+    await screen.findByTestId('draft-banner');
+    expect(after).toEqual([]);
+    expect(draftText()).toContain('и хвост');
+  });
+
+  test('черновик вкладки 0.5.x (старой формы, К-26): штамп совпал — новый клиент досылает с текущей ревизией; не совпал — баннер', async () => {
+    // Вкладка до плана А писала черновик со штампом записи, а не ревизией. Её 412 оставляет такой черновик на диске.
+    localStorage.setItem(
+      DRAFT_KEY,
+      JSON.stringify({
+        doc: parseBody('тело и набранное старой вкладкой'),
+        baseUpdatedAt: entity.updatedAt,
+        savedAt: new Date().toISOString(),
+        rejected: false,
+      }),
+    );
+    const seen: unknown[] = [];
+    const first = renderWithProviders(<DetailScreen entityId="e1" />, (path, input) => {
+      if (path === 'entity.get')
+        return { entity, relations: [], thread: { threadId: 'th1', messages: [] } };
+      if (path === 'entity.update') {
+        seen.push(input);
+        return mockEntityUpdateResult(entity);
+      }
+      return registryReply(path) ?? {};
+    });
+    await waitFor(() => expect(seen).toHaveLength(1), EDITOR_READY);
+    expect(seen[0]).toMatchObject({ id: 'e1', expectedBodyRevision: entity.bodyRevision });
+    first.unmount();
+
+    localStorage.setItem(
+      DRAFT_KEY,
+      JSON.stringify({
+        doc: parseBody('тело и набранное старой вкладкой'),
+        baseUpdatedAt: '2026-07-01T00:00:00.000Z',
+        savedAt: new Date().toISOString(),
+        rejected: false,
+      }),
+    );
+    const again: unknown[] = [];
+    renderWithProviders(<DetailScreen entityId="e1" />, (path, input) => {
+      if (path === 'entity.get')
+        return { entity, relations: [], thread: { threadId: 'th1', messages: [] } };
+      if (path === 'entity.update') {
+        again.push(input);
+        return mockEntityUpdateResult(entity);
+      }
+      return registryReply(path) ?? {};
+    });
+    await screen.findByTestId('draft-banner');
+    expect(again).toEqual([]);
+    expect(readDraft('e1')?.baseUpdatedAt).toBe('2026-07-01T00:00:00.000Z');
+  });
+});
+
+test('ответ STALE_VERSION читается из data.orbis: 409 без него плашку тела не зажигает, с ним — зажигает', async () => {
+  // Экран узнаёт конфликт текста по структурному коду отказа (РП-5), а не по транспортному 409.
+  seedDraft(parseBody('конфликтное'), STALE_REVISION);
+  const box = { orbis: false };
+  renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
+    if (path === 'entity.get')
+      return { entity, relations: [], thread: { threadId: 'th1', messages: [] } };
+    if (path === 'entity.update') throw box.orbis ? staleBodyError() : trpcError('CONFLICT');
+    return registryReply(path) ?? {};
+  });
+  fireEvent.click(await screen.findByRole('button', { name: 'Оставить моё' }));
+  await waitFor(() => expect(screen.getByText('Не сохранено')).toBeInTheDocument());
+  expect(screen.queryByText(/Изменено в другом месте — обновите/)).toBeNull();
+
+  box.orbis = true;
+  await act(async () => {
+    window.dispatchEvent(new Event('pagehide'));
+  });
+  expect(await screen.findByText(/Изменено в другом месте — обновите/)).toBeInTheDocument();
+});
+
+test('агент правит текст, пока владелец печатает: следующее сохранение идёт с прежней основой → STALE_VERSION, плашка, черновик цел (R-17)', async () => {
+  // Спека §8.3: основа правки — ревизия тела на начало набора, собственные правки её не двигают. Перечитывание после
+  // своего сохранения приносит в кэш текст и ревизию агента, а редактор в фокусе после набора их не сажает — на экране
+  // по-прежнему набранное. Основа, взятая из кэша, подставила бы замку ревизию агента, и следующая буква затёрла бы
+  // его текст молча.
+  const server = {
+    revision: entity.bodyRevision as number,
+    title: entity.title,
+    doc: entity.bodyDoc,
+    body: entity.body,
+  };
+  let agent = true;
+  const updates: Array<{ expectedBodyRevision?: number; bodyDoc?: unknown }> = [];
+  const shown = () => ({
+    ...entity,
+    title: server.title,
+    body: server.body,
+    bodyDoc: server.doc,
+    bodyRevision: server.revision,
+  });
+  renderWithProviders(<DetailScreen entityId="e1" />, (path, input) => {
+    if (path === 'entity.get')
+      return { entity: shown(), relations: [], thread: { threadId: 'th1', messages: [] } };
+    if (path === 'entity.update') {
+      const inp = input as { expectedBodyRevision?: number; bodyDoc?: typeof entity.bodyDoc };
+      updates.push(inp);
+      if (inp.bodyDoc === undefined) return mockEntityUpdateResult(shown());
+      if (inp.expectedBodyRevision !== server.revision)
+        throw staleBodyError({ expected: inp.expectedBodyRevision, current: server.revision });
+      server.revision += 1;
+      server.doc = inp.bodyDoc;
+      const saved = shown();
+      // Агент правит текст сразу за сохранением владельца — перечитывание после него принесёт уже его текст
+      if (agent) {
+        agent = false;
+        server.revision += 1;
+        server.title = 'Правлено агентом';
+        server.body = 'текст агента';
+        server.doc = parseBody('текст агента');
+      }
+      return mockEntityUpdateResult(saved);
+    }
+    return registryReply(path) ?? {};
+  });
+  const field = await editorField();
+  await userEvent.click(field);
+  await userEvent.type(field, ' и хвост');
+  await waitFor(() => expect(updates).toHaveLength(1), EDITOR_READY);
+  // Причинный барьер: заголовок агента на экране — значит перечитывание с его ревизией уже в кэше
+  await screen.findByRole('heading', { name: 'Правлено агентом' }, EDITOR_READY);
+  expect(screen.getByTestId('body-editor')).toHaveTextContent('и хвост'); // редактор текст агента не посадил
+
+  await userEvent.type(field, ' ещё');
+  expect(
+    await screen.findByText(/Изменено в другом месте — обновите/, undefined, EDITOR_READY),
+  ).toBeInTheDocument();
+  // Основа — ревизия своего сохранения, а не агента из кэша: текст агента цел, набранное — на экране и на диске
+  expect(updates[1]?.expectedBodyRevision).toBe((entity.bodyRevision as number) + 1);
+  expect(server.body).toBe('текст агента');
+  expect(screen.getByTestId('body-editor')).toHaveTextContent('ещё');
+  expect(JSON.stringify(readDraft('e1')?.doc)).toContain('ещё');
+}, 30_000);
+
+test('«Обновить» на плашке конфликта сажает текст агента в редактор, даже тем же объектом кэша; следующая буква сохраняется без конфликта (R-17, I-2)', async () => {
+  // Продолжение сюжета «агент правит текст, пока владелец печатает»: после отказа `STALE_VERSION` перечитывание уже
+  // положило текст агента в кэш, и «Обновить» приносит ТОТ ЖЕ объект — эффект приезда по `doc` не прогнался бы.
+  // Посадку делает явный сигнал: в редакторе текст агента, его ревизия — основа, набор поверх уходит без 409.
+  // Набранное до «Обновить» остаётся черновиком на диске — как «Обновить» и было устроено.
+  const server = {
+    revision: entity.bodyRevision as number,
+    title: entity.title,
+    doc: entity.bodyDoc,
+    body: entity.body,
+  };
+  let agent = true;
+  const updates: Array<{ expectedBodyRevision?: number; bodyDoc?: unknown }> = [];
+  const shown = () => ({
+    ...entity,
+    title: server.title,
+    body: server.body,
+    bodyDoc: server.doc,
+    bodyRevision: server.revision,
+  });
+  renderWithProviders(<DetailScreen entityId="e1" />, (path, input) => {
+    if (path === 'entity.get')
+      return { entity: shown(), relations: [], thread: { threadId: 'th1', messages: [] } };
+    if (path === 'entity.update') {
+      const inp = input as { expectedBodyRevision?: number; bodyDoc?: typeof entity.bodyDoc };
+      updates.push(inp);
+      if (inp.bodyDoc === undefined) return mockEntityUpdateResult(shown());
+      if (inp.expectedBodyRevision !== server.revision)
+        throw staleBodyError({ expected: inp.expectedBodyRevision, current: server.revision });
+      server.revision += 1;
+      server.doc = inp.bodyDoc;
+      const saved = shown();
+      if (agent) {
+        agent = false;
+        server.revision += 1;
+        server.title = 'Правлено агентом';
+        server.body = 'текст агента';
+        server.doc = parseBody('текст агента');
+      }
+      return mockEntityUpdateResult(saved);
+    }
+    return registryReply(path) ?? {};
+  });
+  const field = await editorField();
+  await userEvent.click(field);
+  await userEvent.type(field, ' и хвост');
+  await waitFor(() => expect(updates).toHaveLength(1), EDITOR_READY);
+  await screen.findByRole('heading', { name: 'Правлено агентом' }, EDITOR_READY);
+  await userEvent.type(field, ' ещё');
+  const refresh = await screen.findByRole('button', { name: 'Обновить' }, EDITOR_READY);
+  const agentRevision = server.revision;
+
+  // Фокус НЕ уводим: посадка по «Обновить» — явный жест, страж набранного её не держит
+  fireEvent.click(refresh);
+  await expectEditorText('текст агента');
+  expect(screen.getByTestId('body-editor')).not.toHaveTextContent('ещё');
+  expect(screen.queryByText(/Изменено в другом месте — обновите/)).toBeNull();
+  expect(JSON.stringify(readDraft('e1')?.doc)).toContain('ещё'); // набранное до «Обновить» — черновиком
+
+  const again = screen.getByTestId('body-editor').querySelector('[contenteditable]') as HTMLElement;
+  await userEvent.click(again);
+  await userEvent.type(again, ' и моё');
+  await waitFor(() => expect(updates).toHaveLength(3), EDITOR_READY);
+  expect(updates[2]?.expectedBodyRevision).toBe(agentRevision);
+  expect(server.revision).toBe(agentRevision + 1); // сервер принял
+  expect(screen.queryByText(/Изменено в другом месте — обновите/)).toBeNull();
+}, 30_000);
+
+test('R19: Refresh предлагает последний набор, Keep mine сохраняет поверх показанного агента', async () => {
+  // Продолжение сюжета «агент правит текст, пока владелец печатает»: после отказа `STALE_VERSION` перечитывание уже
+  // положило текст агента в кэш, и «Обновить» приносит ТОТ ЖЕ объект — эффект приезда по `doc` не прогнался бы.
+  // Посадку делает явный сигнал: в редакторе текст агента, его ревизия — основа, набор поверх уходит без 409.
+  // Набранное до «Обновить» остаётся черновиком на диске — как «Обновить» и было устроено.
+  const server = {
+    revision: entity.bodyRevision as number,
+    title: entity.title,
+    doc: entity.bodyDoc,
+    body: entity.body,
+  };
+  let agent = true;
+  const updates: Array<{ expectedBodyRevision?: number; bodyDoc?: unknown }> = [];
+  const shown = () => ({
+    ...entity,
+    title: server.title,
+    body: server.body,
+    bodyDoc: server.doc,
+    bodyRevision: server.revision,
+  });
+  renderWithProviders(<DetailScreen entityId="e1" />, (path, input) => {
+    if (path === 'entity.get')
+      return { entity: shown(), relations: [], thread: { threadId: 'th1', messages: [] } };
+    if (path === 'entity.update') {
+      const inp = input as { expectedBodyRevision?: number; bodyDoc?: typeof entity.bodyDoc };
+      updates.push(inp);
+      if (inp.bodyDoc === undefined) return mockEntityUpdateResult(shown());
+      if (inp.expectedBodyRevision !== server.revision)
+        throw staleBodyError({ expected: inp.expectedBodyRevision, current: server.revision });
+      server.revision += 1;
+      server.doc = inp.bodyDoc;
+      const saved = shown();
+      if (agent) {
+        agent = false;
+        server.revision += 1;
+        server.title = 'Правлено агентом';
+        server.body = 'текст агента';
+        server.doc = parseBody('текст агента');
+      }
+      return mockEntityUpdateResult(saved);
+    }
+    return registryReply(path) ?? {};
+  });
+  const field = await editorField();
+  await userEvent.click(field);
+  await userEvent.type(field, ' и хвост');
+  await waitFor(() => expect(updates).toHaveLength(1), EDITOR_READY);
+  await screen.findByRole('heading', { name: 'Правлено агентом' }, EDITOR_READY);
+  await userEvent.type(field, ' ещё');
+  const refresh = await screen.findByRole('button', { name: 'Обновить' }, EDITOR_READY);
+  const agentRevision = server.revision;
+
+  // Фокус НЕ уводим: посадка по «Обновить» — явный жест, страж набранного её не держит
+  await userEvent.type(field, ' последние слова');
+  fireEvent.click(refresh);
+  await expectEditorText('текст агента');
+  expect(screen.getByTestId('body-editor')).not.toHaveTextContent('ещё');
+  expect(screen.queryByText(/Изменено в другом месте — обновите/)).toBeNull();
+  expect(JSON.stringify(readDraft('e1')?.doc)).toContain('ещё'); // набранное до «Обновить» — черновиком
+
+  fireEvent.click(await screen.findByRole('button', { name: 'Оставить моё' }));
+  await expectEditorHas('последние слова');
+  await waitFor(() => expect(updates).toHaveLength(3), EDITOR_READY);
+  expect(updates[2]?.expectedBodyRevision).toBe(agentRevision);
+  expect(JSON.stringify(updates[2]?.bodyDoc)).toContain('последние слова');
+}, 30_000);
+
+test('свободная decimal Сумма 340 → 430 показывает прежнее значение и Отменить на реальном контроле', async () => {
+  renderWithProviders(
+    <>
+      <DetailScreen entityId="e1" />
+      <Toaster />
+    </>,
+    (path) => {
+      if (path === 'entity.update')
+        return { ...mockEntityUpdateResult(finEntity), actionId: 'amount1', consequences: false };
+      return finHandler(path);
+    },
+  );
+  const field = await screen.findByLabelText('Сумма');
+  fireEvent.change(field, { target: { value: '430' } });
+  fireEvent.blur(field);
+  expect(await screen.findByText(/Сумма 340.* → 430/)).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Отменить' })).toBeInTheDocument();
+});
+
+test('own undo удерживает старый редактор до нового тела при задержанном refetch; следующая буква сохраняется', async () => {
+  const { runUndo } = await import('../undo/undo-action');
+  let undoReply: ((v: unknown) => void) | undefined;
+  let readReply: ((v: unknown) => void) | undefined;
+  let undone = false;
+  const fresh = {
+    ...entity,
+    bodyRevision: (entity.bodyRevision as number) + 1,
+    body: 'до правки',
+    bodyDoc: parseBody('до правки'),
+  };
+  const { calls } = renderWithProviders(
+    <>
+      <DetailScreen entityId="e1" />
+      <button type="button" onClick={() => void runUndo('a1', { entityIds: ['e1'] })}>
+        Отмена через общий путь
+      </button>
+    </>,
+    (path, input) => {
+      if (path === 'entity.get')
+        return undone
+          ? new Promise((resolve) => {
+              readReply = resolve;
+            })
+          : { entity, relations: [], thread: null };
+      if (path === 'ai.undo')
+        return new Promise((resolve) => {
+          undoReply = resolve;
+        });
+      if (path === 'entity.update')
+        return { ...mockEntityUpdateResult(fresh), bodyRevision: fresh.bodyRevision + 1 };
+      return registryReply(path) ?? {};
+    },
+  );
+  await editorField();
+  fireEvent.click(screen.getByRole('button', { name: 'Отмена через общий путь' }));
+  await waitFor(() => expect(undoReply).toBeDefined());
+  // Между досылом и ответом запрещён набор в старое тело, который посадка результата потеряла бы.
+  expect(document.querySelector('[contenteditable="true"]')).toBeNull();
+  undone = true;
+  await act(async () =>
+    undoReply?.({
+      actionId: 'u1',
+      undone: { id: 'a1', title: 'Правка' },
+      pinnedVersions: [],
+      bodyRevisions: [{ entityId: 'e1', bodyRevision: fresh.bodyRevision }],
+    }),
+  );
+  await waitFor(() => expect(readReply).toBeDefined());
+  expect(screen.getByText('Текст изменяется — ждём обновления записи')).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Обновить текст' })).toBeInTheDocument();
+  expect(document.querySelector('[contenteditable="true"]')).toBeNull();
+  await act(async () => readReply?.({ entity: fresh, relations: [], thread: null }));
+  const field = await editorField();
+  await expectEditorHas('до правки');
+  const { flushBodyOf } = await import('../entity-editor/body-flush');
+  await expect(flushBodyOf('e1')).resolves.toBe('nothing');
+  expect(calls.filter((c) => c.path === 'entity.update')).toHaveLength(0);
+  await userEvent.click(field);
+  await userEvent.type(field, ' ещё');
+  await waitFor(
+    () => expect(calls.some((c) => c.path === 'entity.update')).toBe(true),
+    EDITOR_READY,
+  );
+  expect(calls.find((c) => c.path === 'entity.update')?.input).toMatchObject({
+    expectedBodyRevision: fresh.bodyRevision,
+  });
+}, 30_000);
+
+test('R43: empty→nonempty→replaced empty сохраняет ответ, новая запись снимает память; запрос ровно у wrapper', async () => {
+  let live: unknown[] = [];
+  function Tree() {
+    const [id, set] = useState('e1');
+    const utils = trpc.useUtils();
+    return (
+      <>
+        <DetailScreen entityId={id} />
+        <button
+          type="button"
+          onClick={() => void utils.routine.proposalsForEntity.invalidate({ entityId: id })}
+        >
+          Проверить предложения
+        </button>
+        <button type="button" onClick={() => set('e2')}>
+          Другая запись
+        </button>
+      </>
+    );
+  }
+  const { calls } = renderWithProviders(<Tree />, (path, input) => {
+    if (path === 'routine.proposalsForEntity')
+      return (input as { entityId: string }).entityId === 'e1' ? live : [];
+    if (path === 'routine.decideProposal') {
+      live = [];
+      return { status: 'replaced', livePendingId: null, liveStatus: 'applied', reason: 'answered' };
+    }
+    if (path === 'entity.get' && (input as { id: string }).id === 'e2')
+      return { entity: { ...entity, id: 'e2', title: 'Соседняя' }, relations: [], thread: null };
+    return overlayHandler({ proposals: [] })(path, input);
+  });
+  await editorField();
+  expect(screen.queryByTestId('proposal-overlay')).toBeNull();
+  expect(calls.filter((c) => c.path === 'routine.proposalsForEntity')).toHaveLength(1);
+  live = [proposalFor()];
+  fireEvent.click(screen.getByRole('button', { name: 'Проверить предложения' }));
+  const plate = await screen.findByTestId('proposal-plate');
+  togglePlate(plate);
+  fireEvent.click(within(plate).getByRole('button', { name: 'Принять' }));
+  expect(await screen.findByTestId('proposal-replaced-answer')).toBeInTheDocument();
+  await waitFor(() => expect(screen.queryByTestId('proposal-plate')).toBeNull());
+  expect(screen.getByTestId('proposal-replaced-answer')).toBeInTheDocument();
+  expect(calls.filter((c) => c.path === 'routine.proposalsForEntity')).toHaveLength(3);
+  fireEvent.click(screen.getByRole('button', { name: 'Другая запись' }));
+  await screen.findByRole('heading', { name: 'Соседняя' });
+  expect(screen.queryByTestId('proposal-replaced-answer')).toBeNull();
+});
+
+test('общий undo во время optimistic autosave сохраняет неподтверждённый черновик при transport failure', async () => {
+  const { runUndo } = await import('../undo/undo-action');
+  let rejectSave: ((e: unknown) => void) | undefined;
+  const { calls } = renderWithProviders(
+    <>
+      <DetailScreen entityId="e1" />
+      <BodyProbe />
+    </>,
+    (path) => {
+      if (path === 'entity.get') return { entity, relations: [], thread: null };
+      if (path === 'entity.update')
+        return new Promise((_resolve, reject) => {
+          rejectSave = reject;
+        });
+      return registryReply(path) ?? {};
+    },
+  );
+  const field = await editorField();
+  await userEvent.click(field);
+  await userEvent.type(field, ' неподтверждённые слова');
+  await waitFor(() => expect(rejectSave).toBeDefined(), EDITOR_READY);
+  expect(screen.getByTestId('body-probe')).toHaveTextContent('неподтверждённые слова');
+  expect(JSON.stringify(readDraft('e1')?.doc)).toContain('неподтверждённые слова');
+  let outcome: ReturnType<typeof runUndo> | undefined;
+  await act(async () => {
+    outcome = runUndo('a1', { entityIds: ['e1'] });
+  });
+  expect(JSON.stringify(readDraft('e1')?.doc)).toContain('неподтверждённые слова');
+  await act(async () => rejectSave?.(new Error('Соединение прервано')));
+  await expect(outcome).resolves.toMatchObject({
+    kind: 'failed',
+    message: 'Нет связи: набранный текст ещё не на сервере — отмена не отправлена',
+  });
+  expect(JSON.stringify(readDraft('e1')?.doc)).toContain('неподтверждённые слова');
+  expect(calls.filter((c) => c.path === 'ai.undo')).toHaveLength(0);
+  expect(calls.filter((c) => c.path === 'entity.update')).toHaveLength(1);
+}, 30_000);
+
+test('restore во время optimistic autosave сохраняет черновик при transport failure и не отправляет восстановление', async () => {
+  let rejectSave: ((e: unknown) => void) | undefined;
+  const versions = versionsHandler();
+  const { calls } = renderWithProviders(
+    <>
+      <DetailScreen entityId="e1" />
+      <Toaster />
+      <BodyProbe />
+    </>,
+    (path, input) => {
+      if (path === 'entity.update')
+        return new Promise((_resolve, reject) => {
+          rejectSave = reject;
+        });
+      return versions(path, input);
+    },
+  );
+  const field = await editorField();
+  await userEvent.click(field);
+  await userEvent.type(field, ' неподтверждённый restore');
+  await waitFor(() => expect(rejectSave).toBeDefined(), EDITOR_READY);
+  expect(screen.getByTestId('body-probe')).toHaveTextContent('неподтверждённый restore');
+  await openDetails();
+  await waitFor(() =>
+    expect(within(screen.getByTestId('versions-card')).getAllByRole('listitem')).toHaveLength(2),
+  );
+  const card = screen.getByTestId('versions-card');
+  const row = within(card).getAllByRole('listitem')[0] as HTMLElement;
+  await userEvent.click(within(row).getByRole('button', { name: 'Восстановить' }));
+  const dialog = await screen.findByRole('dialog');
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Восстановить' }));
+  expect(JSON.stringify(readDraft('e1')?.doc)).toContain('неподтверждённый restore');
+  await act(async () => rejectSave?.(new Error('Соединение прервано')));
+  await screen.findByText(/Нет связи.*восстановление не отправлено/);
+  expect(JSON.stringify(readDraft('e1')?.doc)).toContain('неподтверждённый restore');
+  expect(calls.filter((c) => c.path === 'version.restore')).toHaveLength(0);
+  expect(calls.filter((c) => c.path === 'entity.update')).toHaveLength(1);
+}, 30_000);
+
+test('общий undo ждёт successful optimistic autosave и не досылает тот же документ повторно', async () => {
+  const { runUndo } = await import('../undo/undo-action');
+  let resolveSave: ((v: unknown) => void) | undefined;
+  let savedDoc: unknown;
+  const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, (path, input) => {
+    if (path === 'entity.get') return { entity, relations: [], thread: null };
+    if (path === 'entity.update') {
+      savedDoc = (input as { bodyDoc: unknown }).bodyDoc;
+      return new Promise((resolve) => {
+        resolveSave = resolve;
+      });
+    }
+    if (path === 'ai.undo')
+      return {
+        actionId: 'u1',
+        undone: { id: 'a1', title: 'Правка' },
+        pinnedVersions: [],
+        bodyRevisions: [],
+      };
+    return registryReply(path) ?? {};
+  });
+  const field = await editorField();
+  await userEvent.click(field);
+  await userEvent.type(field, ' подтверждённые слова');
+  await waitFor(() => expect(resolveSave).toBeDefined(), EDITOR_READY);
+  let outcome: ReturnType<typeof runUndo> | undefined;
+  await act(async () => {
+    outcome = runUndo('a1', { entityIds: ['e1'] });
+  });
+  expect(calls.filter((c) => c.path === 'ai.undo')).toHaveLength(0);
+  expect(JSON.stringify(readDraft('e1')?.doc)).toContain('подтверждённые слова');
+  await act(async () =>
+    resolveSave?.({
+      ...mockEntityUpdateResult(entity),
+      bodyDoc: savedDoc,
+      bodyRevision: (entity.bodyRevision as number) + 1,
+    }),
+  );
+  await expect(outcome).resolves.toMatchObject({ kind: 'undone' });
+  expect(calls.filter((c) => c.path === 'entity.update')).toHaveLength(1);
+  expect(calls.filter((c) => c.path === 'ai.undo')).toHaveLength(1);
+  expect(readDraft('e1')).toBeNull();
+}, 30_000);
+
+test('fix1: clean markdown участвует в rewrite gate и принимает тело undo перед следующей Apply', async () => {
+  const { runUndo } = await import('../undo/undo-action');
+  let undoReply: ((v: unknown) => void) | undefined;
+  let readReply: ((v: unknown) => void) | undefined;
+  let undone = false;
+  const fresh = {
+    ...entity,
+    bodyRevision: (entity.bodyRevision as number) + 1,
+    body: 'новое тело после отмены',
+    bodyDoc: parseBody('новое тело после отмены'),
+  };
+  const { calls } = renderWithProviders(
+    <>
+      <DetailScreen entityId="e1" />
+      <button type="button" onClick={() => void runUndo('a1', { entityIds: ['e1'] })}>
+        Общая отмена
+      </button>
+    </>,
+    (path, input) => {
+      if (path === 'entity.get')
+        return undone
+          ? new Promise((resolve) => {
+              readReply = resolve;
+            })
+          : { entity, relations: [], thread: null };
+      if (path === 'ai.undo')
+        return new Promise((resolve) => {
+          undoReply = resolve;
+        });
+      if (path === 'entity.update')
+        return {
+          ...mockEntityUpdateResult(fresh),
+          bodyDoc: (input as { bodyDoc: unknown }).bodyDoc,
+        };
+      return registryReply(path) ?? {};
+    },
+  );
+  await editorField();
+  await openDetailMenu();
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Править как markdown' }));
+  const area = await screen.findByTestId('markdown-source');
+  fireEvent.click(screen.getByRole('button', { name: 'Общая отмена' }));
+  await waitFor(() => expect(undoReply).toBeDefined());
+  expect(area).toHaveAttribute('readonly');
+  expect(screen.getByRole('button', { name: 'Применить' })).toBeDisabled();
+  undone = true;
+  await act(async () =>
+    undoReply?.({
+      actionId: 'u1',
+      undone: { id: 'a1', title: 'Правка' },
+      pinnedVersions: [],
+      bodyRevisions: [{ entityId: 'e1', bodyRevision: fresh.bodyRevision }],
+    }),
+  );
+  await waitFor(() => expect(readReply).toBeDefined());
+  expect(area).toHaveAttribute('readonly');
+  fireEvent.click(screen.getByRole('button', { name: 'Применить' }));
+  expect(calls.filter((c) => c.path === 'entity.update')).toHaveLength(0);
+  await act(async () => readReply?.({ entity: fresh, relations: [], thread: null }));
+  await waitFor(() =>
+    expect(screen.getByTestId('markdown-source')).toHaveValue('новое тело после отмены'),
+  );
+  fireEvent.change(screen.getByTestId('markdown-source'), {
+    target: { value: 'новое тело после отмены ещё' },
+  });
+  fireEvent.click(screen.getByRole('button', { name: 'Применить' }));
+  await waitFor(
+    () => expect(calls.filter((c) => c.path === 'entity.update')).toHaveLength(1),
+    EDITOR_READY,
+  );
+  expect(calls.find((c) => c.path === 'entity.update')?.input).toMatchObject({
+    expectedBodyRevision: fresh.bodyRevision,
+  });
+  expect(JSON.stringify(calls.find((c) => c.path === 'entity.update')?.input)).toContain(
+    'новое тело после отмены ещё',
+  );
+}, 30_000);
+
+test('fix1: dirty markdown удерживает undo без autosave и сохраняет сырой буфер до Apply', async () => {
+  const { runUndo } = await import('../undo/undo-action');
+  const { calls } = renderWithProviders(
+    <DetailScreen entityId="e1" />,
+    bodyHandler('исходное тело'),
+  );
+  await editorField();
+  await openDetailMenu();
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Править как markdown' }));
+  const area = await screen.findByTestId('markdown-source');
+  fireEvent.change(area, { target: { value: 'исходное тело\n\n![новая картинка](image.png)' } });
+  await expect(runUndo('a1', { entityIds: ['e1'] })).resolves.toMatchObject({ kind: 'failed' });
+  expect(area).toHaveValue('исходное тело\n\n![новая картинка](image.png)');
+  expect(calls.filter((c) => c.path === 'ai.undo' || c.path === 'entity.update')).toHaveLength(0);
+  fireEvent.click(screen.getByRole('button', { name: 'Применить' }));
+  expect(screen.getByRole('alert')).toHaveTextContent('Часть разметки не разобрана');
+  expect(calls.filter((c) => c.path === 'entity.update')).toHaveLength(0);
+}, 30_000);
+
+test('fix1: committed undo при failed read удерживает markdown; Refresh сажает новое тело', async () => {
+  const { runUndo } = await import('../undo/undo-action');
+  let readFails = false;
+  let undone = false;
+  const fresh = {
+    ...entity,
+    bodyRevision: (entity.bodyRevision as number) + 1,
+    body: 'после отмены',
+    bodyDoc: parseBody('после отмены'),
+  };
+  const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
+    if (path === 'entity.get') {
+      if (readFails) throw trpcError('INTERNAL_SERVER_ERROR', 'Чтение недоступно');
+      return { entity: undone ? fresh : entity, relations: [], thread: null };
+    }
+    if (path === 'ai.undo') {
+      undone = true;
+      readFails = true;
+      return {
+        actionId: 'u1',
+        undone: { id: 'a1', title: 'Правка' },
+        pinnedVersions: [],
+        bodyRevisions: [{ entityId: 'e1', bodyRevision: fresh.bodyRevision }],
+      };
+    }
+    return registryReply(path) ?? {};
+  });
+  await editorField();
+  await openDetailMenu();
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Править как markdown' }));
+  await screen.findByTestId('markdown-source');
+  let outcome: Awaited<ReturnType<typeof runUndo>> | undefined;
+  await act(async () => {
+    outcome = await runUndo('a1', { entityIds: ['e1'] });
+  });
+  expect(outcome?.kind).toBe('undone');
+  await screen.findByRole('button', { name: 'Обновить текст' });
+  expect(screen.getByTestId('markdown-source')).toHaveAttribute('readonly');
+  fireEvent.change(screen.getByTestId('markdown-source'), { target: { value: 'поздние слова' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Применить' }));
+  expect(calls.filter((c) => c.path === 'entity.update')).toHaveLength(0);
+  readFails = false;
+  fireEvent.click(screen.getByRole('button', { name: 'Обновить текст' }));
+  await waitFor(() => expect(screen.getByTestId('markdown-source')).toHaveValue('после отмены'));
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Применить' })).toBeEnabled());
+}, 30_000);
+
+test('fix1: clean markdown ждёт restore и показывает returned full body; dirty буфер блокирует restore', async () => {
+  let restoreReply: ((v: unknown) => void) | undefined;
+  const versions = versionsHandler();
+  let restored = false;
+  const fresh = {
+    ...entity,
+    bodyRevision: (entity.bodyRevision as number) + 1,
+    body: 'восстановленное тело',
+    bodyDoc: parseBody('восстановленное тело'),
+    actionId: 'restore1',
+    consequences: true,
+  };
+  const { calls } = renderWithProviders(
+    <>
+      <DetailScreen entityId="e1" />
+      <Toaster />
+    </>,
+    (path, input) => {
+      if (path === 'entity.get' && restored) return { entity: fresh, relations: [], thread: null };
+      return path === 'version.restore'
+        ? new Promise((resolve) => {
+            restoreReply = (v) => {
+              restored = true;
+              resolve(v);
+            };
+          })
+        : versions(path, input);
+    },
+  );
+  await editorField();
+  await openDetailMenu();
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Править как markdown' }));
+  const area = await screen.findByTestId('markdown-source');
+  fireEvent.change(area, { target: { value: 'мой сырой буфер' } });
+  await openDetails();
+  await waitFor(() =>
+    expect(within(screen.getByTestId('versions-card')).getAllByRole('listitem')).toHaveLength(2),
+  );
+  const card = screen.getByTestId('versions-card');
+  const restoreButton = within(
+    (await within(card).findAllByRole('listitem'))[0] as HTMLElement,
+  ).getByRole('button', { name: 'Восстановить' });
+  fireEvent.click(restoreButton);
+  fireEvent.click(
+    within(await screen.findByRole('dialog')).getByRole('button', { name: 'Восстановить' }),
+  );
+  await screen.findByText(/сначала закончите правку.*восстанавливайте/);
+  expect(calls.filter((c) => c.path === 'version.restore')).toHaveLength(0);
+  expect(area).toHaveValue('мой сырой буфер');
+  fireEvent.change(area, { target: { value: serializeBody(parseBody(entity.body ?? '')) } });
+  fireEvent.click(restoreButton);
+  fireEvent.click(
+    within(await screen.findByRole('dialog')).getByRole('button', { name: 'Восстановить' }),
+  );
+  await waitFor(() => expect(restoreReply).toBeDefined());
+  expect(area).toHaveAttribute('readonly');
+  fireEvent.change(area, { target: { value: 'late old body' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Применить', hidden: true }));
+  expect(calls.filter((c) => c.path === 'entity.update')).toHaveLength(0);
+  await act(async () => restoreReply?.(fresh));
+  await waitFor(() => expect(area).toHaveValue('восстановленное тело'));
+  await waitFor(() => expect(area).not.toHaveAttribute('readonly'));
+}, 30_000);
+
+test('fix1: markdown набранный пока flush ждёт autosave блокирует undo после flush без потери сырого буфера', async () => {
+  const { runUndo } = await import('../undo/undo-action');
+  let resolveSave: ((v: unknown) => void) | undefined;
+  let savedDoc: unknown;
+  const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, (path, input) => {
+    if (path === 'entity.get') return { entity, relations: [], thread: null };
+    if (path === 'entity.update') {
+      savedDoc = (input as { bodyDoc: unknown }).bodyDoc;
+      return new Promise((resolve) => {
+        resolveSave = resolve;
+      });
+    }
+    return registryReply(path) ?? {};
+  });
+  const field = await editorField();
+  await userEvent.click(field);
+  await userEvent.type(field, ' слова до разметки');
+  await waitFor(() => expect(resolveSave).toBeDefined(), EDITOR_READY);
+  await openDetailMenu();
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Править как markdown' }));
+  const area = await screen.findByTestId('markdown-source');
+  let outcome: ReturnType<typeof runUndo> | undefined;
+  await act(async () => {
+    outcome = runUndo('a1', { entityIds: ['e1'] });
+  });
+  fireEvent.change(area, { target: { value: 'поздний сырой markdown ![картинка](image.png)' } });
+  await act(async () =>
+    resolveSave?.({
+      ...mockEntityUpdateResult(entity),
+      bodyDoc: savedDoc,
+      bodyRevision: (entity.bodyRevision as number) + 1,
+    }),
+  );
+  await expect(outcome).resolves.toMatchObject({ kind: 'failed' });
+  expect(area).toHaveValue('поздний сырой markdown ![картинка](image.png)');
+  expect(calls.filter((c) => c.path === 'ai.undo')).toHaveLength(0);
+  expect(calls.filter((c) => c.path === 'entity.update')).toHaveLength(1);
+}, 30_000);
+
+test('Task18: stable AuthProvider ownerchange сбрасывает markdown ownership и old undo не освобождает новый gate', async () => {
+  const { runUndo } = await import('../undo/undo-action');
+  vi.mocked(useSession).mockReturnValue({ token: 'jwt1', userId: 't18-old', status: 'authed' });
+  const replies: Array<(value: unknown) => void> = [];
+  let fresh = false;
+  const next = {
+    ...entity,
+    bodyRevision: (entity.bodyRevision as number) + 1,
+    body: 'Новый владелец',
+    bodyDoc: parseBody('Новый владелец'),
+  };
+  const stable = (
+    <>
+      <DetailScreen entityId="e1" />
+      <button type="button" onClick={() => void runUndo('a', { entityIds: ['e1'] })}>
+        Отмена owner
+      </button>
+    </>
+  );
+  function Host() {
+    const [, refresh] = useState(0);
+    return (
+      <>
+        <button type="button" onClick={() => refresh((value) => value + 1)}>
+          Сменить owner
+        </button>
+        <AuthProvider>{stable}</AuthProvider>
+      </>
+    );
+  }
+  const { calls } = renderWithProviders(<Host />, (path) => {
+    if (path === 'entity.get')
+      return { entity: fresh ? next : entity, relations: [], thread: null };
+    if (path === 'ai.undo')
+      return new Promise((resolve) => {
+        replies.push(resolve);
+      });
+    return registryReply(path) ?? {};
+  });
+  await editorField();
+  await openDetailMenu();
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Править как markdown' }));
+  let area = await screen.findByTestId('markdown-source');
+  fireEvent.change(area, { target: { value: 'Старый сырой буфер ![x](image.png)' } });
+  vi.mocked(useSession).mockReturnValue({ token: 'jwt2', userId: 't18-new', status: 'authed' });
+  fireEvent.click(screen.getByText('Сменить owner'));
+  await waitFor(() =>
+    expect(screen.getByTestId('markdown-source')).not.toHaveValue(
+      'Старый сырой буфер ![x](image.png)',
+    ),
+  );
+  expect(calls.filter((c) => c.path === 'entity.update')).toHaveLength(0);
+  fireEvent.click(screen.getByText('Отмена owner'));
+  await waitFor(() => expect(replies).toHaveLength(1));
+  area = screen.getByTestId('markdown-source');
+  expect(area).toHaveAttribute('readonly');
+  vi.mocked(useSession).mockReturnValue({ token: 'jwt3', userId: 't18-third', status: 'authed' });
+  fireEvent.click(screen.getByText('Сменить owner'));
+  await waitFor(() => expect(area).not.toHaveAttribute('readonly'));
+  fireEvent.click(screen.getByText('Отмена owner'));
+  await waitFor(() => expect(replies).toHaveLength(2));
+  expect(area).toHaveAttribute('readonly');
+  await act(async () =>
+    replies[0]?.({
+      actionId: 'old-undo',
+      undone: { id: 'a', title: 'Старое' },
+      pinnedVersions: [],
+      bodyRevisions: [{ entityId: 'e1', bodyRevision: 99 }],
+    }),
+  );
+  expect(area).toHaveAttribute('readonly');
+  fresh = true;
+  await act(async () =>
+    replies[1]?.({
+      actionId: 'new-undo',
+      undone: { id: 'a', title: 'Новое' },
+      pinnedVersions: [],
+      bodyRevisions: [{ entityId: 'e1', bodyRevision: next.bodyRevision }],
+    }),
+  );
+  await waitFor(() => expect(area).toHaveValue('Новый владелец'));
+  expect(area).not.toHaveAttribute('readonly');
+  fireEvent.change(area, { target: { value: 'Новый владелец ещё' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Применить' }));
+  await waitFor(() => expect(calls.filter((c) => c.path === 'entity.update')).toHaveLength(1), {
+    timeout: 3000,
+  });
+}, 10000);

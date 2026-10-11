@@ -6,10 +6,10 @@
 // операции тем же tx: SQL видит фактическое состояние (включая операции того же batch),
 // а дописанные операции входят в тот же action журнала → Undo откатывает целиком.
 import type { GraphId } from '@orbis/shared';
-import { eq, type SQL, sql } from 'drizzle-orm';
-import { userSettings } from '../db/schema';
+import { type SQL, sql } from 'drizzle-orm';
 import type { Tx } from '../db/with-identity';
 import type { WireEntity } from '../executor/types';
+import { ownerCurrency } from '../query/context';
 import {
   type BudgetContour,
   bindingFor,
@@ -24,16 +24,14 @@ import {
   templateSql,
 } from './contour';
 
-/** Дефолт схемы user_settings.defaultCurrency — фолбэк, пока строки настроек нет. */
-const FALLBACK_CURRENCY = 'RUB';
-
-/** Дефолтная валюта владельца ($defCur селектора §2.3) — user_settings.defaultCurrency. */
+/**
+ * Дефолтная валюта владельца ($defCur селектора §2.3) — user_settings.defaultCurrency, без строки
+ * настроек — умолчание схемы. Читает ОБЩАЯ выборка настроек контекста компиляции
+ * (`ownerQuerySettings`): та же валюта ставится записям без валюты в сумме плитки (спека 1в §3.6), и
+ * второе чтение со своим умолчанием разошлось бы с ней.
+ */
 export async function defaultCurrencyOf(tx: Tx, graphId: GraphId): Promise<string> {
-  const rows = await tx
-    .select({ currency: userSettings.defaultCurrency })
-    .from(userSettings)
-    .where(eq(userSettings.graphId, graphId));
-  return rows[0]?.currency ?? FALLBACK_CURRENCY;
+  return ownerCurrency(tx, graphId);
 }
 
 /** Комбинация селектора §2.3: категория + валюта транзакции + её дата. */

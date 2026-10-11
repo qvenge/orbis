@@ -2,7 +2,7 @@
 // с порогами подсветки, ост./~₽-день (§2.4, «—/день» при dailyPace=null в active),
 // фазы upcoming/active/closed (§2.9), carryover-бейдж (§2.6). Все суммы — готовые
 // decimal-строки сервера; пороги сравниваются ТОЧНО (BigInt), без IEEE-754.
-// Тап → push экрана категории (§3.2, сам экран — Task B3).
+// Тап открывает запись категории: экрана категории нет (докблок компонента ниже).
 import type { EnvelopeStatus } from '@orbis/shared';
 import { useOpenRecord } from '../../app/useOpenRecord';
 import { CURRENCY_SYMBOL, formatAmount } from '../../lib/format';
@@ -67,8 +67,8 @@ function signedAmount(dec: string): string {
 
 /**
  * Вся фазо- и порого-зависимая логика отображения статуса конверта — ОБЩАЯ для
- * компактной карточки Overview (§3.1) и развёрнутой карточки экрана категории
- * (§3.2, CategoryScreen): пороги/цвет бара, «начнётся/завершён/—/день», carryover.
+ * компактной карточки конверта (§3.1) и остатка конверта в карточке чата (`chat/cards/EntityCard`):
+ * пороги/цвет бара, «начнётся/завершён/—/день», carryover.
  */
 export interface EnvelopeViewModel {
   level: EnvelopeLevel;
@@ -121,8 +121,10 @@ export function envelopeView(status: EnvelopeStatus): EnvelopeViewModel {
 }
 
 /**
- * Карточка конверта. Экрана категории в интерфейсе больше нет (срез 1б §8.6: экраны Бюджета — в
- * `legacy-1v/` до 1в), поэтому нажатие открывает саму запись категории в рамке экрана.
+ * Карточка конверта. Экрана категории нет (срез 1б §8.6 увёл экраны Бюджета из интерфейса, 1в §8.1
+ * удалил их код; Бюджет придёт отдельным срезом), поэтому нажатие открывает саму запись категории в
+ * рамке экрана. Живого вызывателя у компонента сегодня нет: модуль живёт ради `envelopeView`
+ * (карточка чата), правило §8.1 помодульное — судьбу компонента решает срез Бюджета.
  */
 export function EnvelopeCard({ status }: { status: EnvelopeStatus }) {
   const { category, phase } = status;

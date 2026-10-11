@@ -1,11 +1,19 @@
+import type { JournalRef } from '@orbis/shared';
 // apps/server/src/routers/entity.ts
 // Роутер entity (§9.1): ТОЛЬКО трансляция — вход → executor/компилятор, результат → wire,
 // коды executor'а → TRPCError. Бизнес-логики здесь нет: мутации идут единственным путём
 // через execute (§9.2), чтения — под withIdentity (RLS, §4.10).
 import {
+  type BodyActionInfo,
+  createLinkBatchId,
   type EntityBlocksResult,
+  type EntityCreateLink,
+  type EntityCreateUiInput,
+  type EntityUpdateUiInput,
   entityBlocksInput,
+  entityCreateLink,
   entityCreateUiInput,
+  entityFieldsSchema,
   entityGetUiInput,
   entityResolveRefsInput,
   entitySuggestInput,
@@ -23,17 +31,20 @@ import {
   queryTreeExceedsDepth,
 } from '@orbis/shared/query';
 import { TRPCError } from '@trpc/server';
-import { inArray, sql } from 'drizzle-orm';
+import { eq, inArray, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { escalateAfterMutation } from '../ai/escalation';
 import type { Db } from '../db/client';
-import { entities } from '../db/schema';
+import { chatThreads, entities } from '../db/schema';
 import { type Tx, withIdentity } from '../db/with-identity';
 import { type EntityReadResult, readEntity } from '../entity-read';
 import { ExecError, execErrorToTRPC } from '../errors';
+import { bodyActionOf } from '../executor/body-chain';
 import { execute } from '../executor/executor';
-import { makeChatJournalSink } from '../executor/journal';
-import type { WireEntity } from '../executor/types';
+import { makeJournalSink } from '../executor/journal';
+import { bodyColumnProbe } from '../executor/journal-read';
+import { journalRef } from '../executor/journal-ref';
+import type { WireEntityWithRevision } from '../executor/types';
 import { type GoalProgress, goalProgressFor } from '../goals/progress';
 import type { Identity } from '../identity';
 import { type CompileCtx, compileCountAst, compileQueryAst } from '../query/compile-ast';
@@ -45,9 +56,16 @@ import { ownerOnlyProcedure, protectedProcedure, router } from '../trpc';
 import { registryVersionOf, toWireEntityFromSql } from '../wire';
 import { runBlocks } from './entity-blocks';
 
-// Боевой синк — один инстанс на модуль: makeChatJournalSink состояния не хранит,
+// Боевой синк — один инстанс на модуль: makeJournalSink состояния не хранит,
 // а тред/сообщение он пишет тем же tx, что executor (§7.8).
-const sink = makeChatJournalSink();
+const sink = makeJournalSink();
+
+/** Видимый заголовок владельца сверяет executor готовым предусловием под FOR UPDATE (§8.2, К-35). */
+function withTitleLock({ expectedTitle, ...fields }: Omit<EntityUpdateUiInput, 'autosave'>) {
+  return expectedTitle === undefined
+    ? fields
+    : { ...fields, precondition: [{ property: 'orbis/title', in: [expectedTitle] }] };
+}
 
 /**
  * Разбор и компиляция запроса: структурный отказ → BAD_REQUEST со структурой в `cause` (§6.4).
@@ -80,7 +98,7 @@ function parseOrThrow(query: string, cctx: CompileCtx): QueryAst {
 function compileAstOrThrow(
   ast: QueryAst,
   cctx: CompileCtx,
-  compile: typeof compileQueryAst | typeof compileCountAst,
+  compile: (ast: QueryAst, ctx: CompileCtx) => ReturnType<typeof compileQueryAst>,
 ) {
   try {
     return compile(ast, cctx);
@@ -134,8 +152,8 @@ function runQueryWithMaterialization<T>(
  * после схемы, не выполнилась бы никогда. `z.preprocess` — единственное место конвейера
  * tRPC, которое работает раньше схемы.
  */
-const querySignature = z.preprocess(
-  (raw) => {
+function withTreeDepthGuard<T extends z.ZodTypeAny>(schema: T) {
+  return z.preprocess((raw) => {
     const ast =
       typeof raw === 'object' && raw !== null ? (raw as { ast?: unknown }).ast : undefined;
     // Меряется ДЕРЕВО, а не конверт: число в отказе обязано быть тем же, что считает код.
@@ -148,13 +166,27 @@ const querySignature = z.preprocess(
       });
     }
     return raw;
-  },
+  }, schema);
+}
+const queryShape = {
+  query: z.string().min(1).optional(),
+  ast: queryAstSchema.optional(),
+  thisEntityId: z.string().uuid().optional(),
+};
+const queryRefinement = (v: { query?: string; ast?: unknown }) =>
+  (v.query === undefined) !== (v.ast === undefined);
+const querySignature = withTreeDepthGuard(
   z
-    .object({
-      query: z.string().min(1).optional(),
-      ast: queryAstSchema.optional(),
-      thisEntityId: z.string().uuid().optional(),
-    })
+    .object(queryShape)
+    .strict()
+    .refine(
+      queryRefinement,
+      'entity.query принимает ровно одно: текст запроса (query) ИЛИ готовое дерево (ast)',
+    ),
+);
+const queryListSignature = withTreeDepthGuard(
+  z
+    .object({ ...queryShape, fields: entityFieldsSchema.optional() })
     .strict()
     .refine(
       (v) => (v.query === undefined) !== (v.ast === undefined),
@@ -225,50 +257,169 @@ function escapeLike(value: string): string {
   return value.toLowerCase().replace(/[\\%_]/g, '\\$&');
 }
 
+/**
+ * Тред быстрого ввода виден владельцу (РП-13): проверка под RLS первой инструкцией транзакции исполнителя. Внешний
+ * ключ строки журнала на тред её не заменяет — проверка ключа идёт мимо RLS и приняла бы тред чужого графа, и
+ * запись легла бы в свой граф со ссылкой на чужой тред. Чужой и несуществующий неразличимы — один NOT_FOUND.
+ */
+function threadVisible(threadId: string): (tx: Tx) => Promise<void> {
+  return async (tx) => {
+    const rows = await tx
+      .select({ id: chatThreads.id })
+      .from(chatThreads)
+      .where(eq(chatThreads.id, threadId));
+    if (rows.length === 0) throw new ExecError('NOT_FOUND', 'тред не найден', { threadId });
+  };
+}
+
+/**
+ * Действующее действие текущего тела записи (§8.2 «ответы с записью», §8.6, К-37) — поле роутера, а не `readEntity`
+ * (Д-16): форма `readEntity` — общий контракт с диспатчем тулов модели, а данные сеанса нужны экрану записи (пункт
+ * «Вернуть текст как на …»). Колонки тела и живое действие колонки — одной пробой журнала (`bodyColumnProbe`); наружу
+ * id действия тела сырым не едет, только раскрученным.
+ */
+async function currentBodyAction(
+  tx: Tx,
+  who: Identity,
+  entityId: string,
+): Promise<BodyActionInfo | null> {
+  const probe = await bodyColumnProbe(tx, who.graph, entityId);
+  return probe === undefined ? null : bodyActionOf(tx, who, probe, probe.live);
+}
+
+/**
+ * «Создать и привязать» (§7.2, РП-21) — одна транзакция, запись журнала и отмена.
+ * Порядок значим: связь видит созданную перед ней запись; inverse сначала снимает связь, затем архивирует запись.
+ * Повтор по клиентскому id возвращает сохранённый ответ пачки, включая исходный JournalRef.
+ */
+async function createAndLink(
+  ctx: { db: Db; identity: Identity },
+  input: EntityCreateUiInput,
+  source: 'fast_path' | 'quick_capture' | 'ui',
+  link: EntityCreateLink,
+  threadId?: string,
+): Promise<WireEntityWithRevision & { body: string } & JournalRef> {
+  if (input.id === undefined) {
+    throw execErrorToTRPC(
+      new ExecError(
+        'VALIDATION',
+        'привязка при создании требует id записи от клиента — иначе повтор не найдёт пачку',
+      ),
+    );
+  }
+  const result = await execute(
+    ctx.db,
+    {
+      identity: ctx.identity,
+      actorKind: 'owner',
+      source,
+      ...(threadId !== undefined && { threadId }),
+      batchId: createLinkBatchId(ctx.identity.graph, input.id),
+      batchLabel: `Создано и привязано: ${input.title}`,
+      operations: [
+        { tool: 'entity_create', input },
+        {
+          tool: 'relation_create',
+          input: { source_id: link.parentId, target_id: input.id, role: link.role },
+        },
+      ],
+    },
+    { sink, ...(threadId !== undefined && { beforeStages: threadVisible(threadId) }) },
+  );
+  if (!result.ok) throw execErrorToTRPC(result.error);
+  return {
+    ...(result.results[0] as WireEntityWithRevision & { body: string }),
+    ...journalRef(result),
+  };
+}
+
 export const entityRouter = router({
   // Источник клиентского create ограничен fast_path/quick_capture/ui (§7.5, 02 §5;
   // 'ui' — прямое действие владельца в форме, например создание конверта 03 §3.1);
   // 'chat'/'mcp'/'system' недостижимы через этот роутер по построению.
+  // `link` исполняет создание и привязку одной пачкой (§7.2), с клиентским id для повтора после потерянного ответа.
+  //
+  // `threadId` — тред ввода быстрого пути (спека скорости §11.3, РП-13): карточка, которую клиент положил в тред
+  // оптимистично, приходит с сервера туда же. У правки в интерфейсе и быстрой записи треда нет (Р-12) — переданный
+  // им тред был бы молча проигнорирован синком, поэтому он отказ, а не шум.
   create: ownerOnlyProcedure
     .input(
       z.object({
         input: entityCreateUiInput,
+        link: entityCreateLink.optional(),
         source: z.enum(['fast_path', 'quick_capture', 'ui']),
+        threadId: z.string().uuid().optional(),
       }),
     )
-    .mutation(async ({ ctx, input }): Promise<WireEntity & { actionId?: string }> => {
-      const r = await execute(
-        ctx.db,
-        {
-          identity: ctx.identity,
-          actorKind: 'owner',
-          source: input.source,
-          operations: [{ tool: 'entity_create', input: input.input }],
-        },
-        { sink },
-      );
-      if (!r.ok) throw execErrorToTRPC(r.error);
-      // actionId — для Undo прямо из UI-формы (03-budget §3.6, quick-add): аддитивное
-      // поле поверх wire-сущности, потребители `.id` не задеты. При идемпотентном
-      // replay (§5.3) журнал не писался — actionId под этим id не существует, не отдаём.
-      const entity = r.results[0] as WireEntity;
-      return r.idempotentReplay ? entity : { ...entity, actionId: r.actionId };
-    }),
+    .mutation(
+      async ({
+        ctx,
+        input,
+      }): Promise<WireEntityWithRevision & { body: string } & Partial<JournalRef>> => {
+        if (input.threadId !== undefined && input.source !== 'fast_path') {
+          throw execErrorToTRPC(
+            new ExecError(
+              'VALIDATION',
+              'тред передаётся только быстрым вводом (source: fast_path)',
+              {
+                source: input.source,
+              },
+            ),
+          );
+        }
+        if (input.link !== undefined) {
+          return createAndLink(ctx, input.input, input.source, input.link, input.threadId);
+        }
+        const r = await execute(
+          ctx.db,
+          {
+            identity: ctx.identity,
+            actorKind: 'owner',
+            source: input.source,
+            ...(input.threadId !== undefined && { threadId: input.threadId }),
+            operations: [{ tool: 'entity_create', input: input.input }],
+          },
+          {
+            sink,
+            ...(input.threadId !== undefined && { beforeStages: threadVisible(input.threadId) }),
+          },
+        );
+        if (!r.ok) throw execErrorToTRPC(r.error);
+        // actionId — для Undo прямо из UI-формы (03-budget §3.6, quick-add): аддитивное
+        // поле поверх wire-сущности, потребители `.id` не задеты. При идемпотентном
+        // replay (§5.3) журнал не писался — actionId под этим id не существует, не отдаём.
+        const entity = r.results[0] as WireEntityWithRevision & { body: string };
+        return r.idempotentReplay ? entity : { ...entity, ...journalRef(r) };
+      },
+    ),
 
   // UI-вариант схемы: у владельца из редактора есть структурная форма тела, у тула модели —
   // нет. Тело процедуры от этого не меняется: путь записи один — executor.
-  update: ownerOnlyProcedure
-    .input(entityUpdateUiInput)
-    .mutation(async ({ ctx, input }): Promise<WireEntity> => {
+  //
+  // `autosave` — признак автосохранения редактора (§8.5, РП-18): уходит в запрос как `textSession`, а не во вход
+  // операции (вход исполнителя его не знает). Форму автосохранения (только тело) сверяет исполнитель — `VALIDATION`.
+  update: ownerOnlyProcedure.input(entityUpdateUiInput).mutation(
+    async ({
+      ctx,
+      input,
+    }): Promise<
+      WireEntityWithRevision & { body: string } & JournalRef & {
+          bodyAction: BodyActionInfo | null;
+        }
+    > => {
+      const { autosave, ...uiFields } = input;
+      const fields = withTitleLock(uiFields);
       const r = await execute(
         ctx.db,
         {
           identity: ctx.identity,
           actorKind: 'owner',
           source: 'ui', // прямое действие владельца в UI (не chat/mcp/system)
-          operations: [{ tool: 'entity_update', input }],
+          ...(autosave === true && { textSession: true }),
+          operations: [{ tool: 'entity_update', input: fields }],
         },
-        { sink },
+        // Действующее действие тела ответа считает исполнитель в транзакции правки (R-22), см. ниже
+        { sink, reportBodyAction: true },
       );
       if (!r.ok) throw execErrorToTRPC(r.error);
       // Эскалация повторных исправлений категории (§7.8, решение K7): пост-коммит
@@ -277,16 +428,26 @@ export const entityRouter = router({
       await escalateAfterMutation(ctx.db, {
         identity: ctx.identity,
         actionId: r.actionId,
-        operations: [{ tool: 'entity_update', input }],
+        operations: [{ tool: 'entity_update', input: fields }],
       });
-      return r.results[0] as WireEntity;
-    }),
+      // Ответ правки — полная строка `RETURNING` с ревизией тела (`toWireEntityWithRevision`): с неё клиент начинает
+      // следующую правку текста (§8.1). И действующее действие тела (§8.2 «ответы с записью»): экран после своей
+      // правки запись не перечитывает, а пункт «Вернуть текст как на …» стоит на нём. Считает его исполнитель в
+      // транзакции правки (`reportBodyAction`, R-22) — отдельная читающая транзакция стоила бы каждому
+      // автосохранению лишних обходов.
+      return {
+        ...(r.results[0] as WireEntityWithRevision & { body: string }),
+        bodyAction: r.bodyAction ?? null,
+        ...journalRef(r),
+      };
+    },
+  ),
 
   /**
    * Пачка правок одним Undo (срез 1а, спека §4.3 и §8.4): `entity_update` и
    * `entity_version_pin` одним `execute` с `batchId` — исполнитель пишет ОДИН action с
    * id = batchId и общим inverse, и `ai.undo({actionId})` откатывает пачку целиком. Одиночный
-   * `update` выше `actionId` не отдаёт, а N его вызовов дали бы N действий и N Undo.
+   * `update` отдаёт id своего действия, а N его вызовов дали бы N действий и N Undo.
    *
    * Операции уходят в исполнитель без перекладки: вход — форма тулов (`entity_id` у
    * закрепления). Порядок значим — закрепление первым снимает тело ДО замены (§8.4). `label` —
@@ -300,7 +461,10 @@ export const entityRouter = router({
    */
   updateBatch: ownerOnlyProcedure
     .input(entityUpdateBatchInput)
-    .mutation(async ({ ctx, input }): Promise<{ actionId: string; results: unknown[] }> => {
+    .mutation(async ({ ctx, input }): Promise<JournalRef & { results: unknown[] }> => {
+      const operations = input.operations.map((op) =>
+        op.tool === 'entity_update' ? { ...op, input: withTitleLock(op.input) } : op,
+      );
       const r = await execute(
         ctx.db,
         {
@@ -308,7 +472,7 @@ export const entityRouter = router({
           actorKind: 'owner',
           source: 'ui',
           batchId: newId(),
-          operations: input.operations,
+          operations,
           ...(input.label !== undefined && { batchLabel: input.label }),
         },
         { sink },
@@ -319,61 +483,69 @@ export const entityRouter = router({
       await escalateAfterMutation(ctx.db, {
         identity: ctx.identity,
         actionId: r.actionId,
-        operations: input.operations,
+        operations,
       });
-      return { actionId: r.actionId, results: r.results };
+      return { ...journalRef(r), results: r.results };
     }),
 
   // §9.2 entity_get: include-логика вынесена в общий хелпер entity-read.ts —
   // его же переиспользует диспатч тулов LLM/MCP (tools/dispatch.ts, 1b Task 4).
-  get: protectedProcedure
-    .input(entityGetUiInput)
-    .query(
-      async ({
-        ctx,
-        input,
-      }): Promise<EntityReadResult & { goalProgress?: GoalProgress; registryVersion: string }> => {
-        try {
-          return await withIdentity(ctx.db, ctx.identity, async (tx) => {
-            const result = await readEntity(tx, ctx.identity.graph, input);
-            // Прогресс цели (§11.3) — АДДИТИВНОЕ поле поверх формы readEntity, и добавляется
-            // оно здесь, а не в самом readEntity: та форма — общий контракт с
-            // LLM/MCP-диспатчем (tools/dispatch.ts), и всё, что в неё положено, уезжает в
-            // контекст модели. Прогресс — материал прогресс-бара, модели он не нужен.
-            // Прецедент аддитивного поля с явной аннотацией — actionId у create выше.
-            // Той же tx: расчёт читает граф под уже установленной identity (RLS), своей
-            // транзакции не открывает. Обычная сущность в него не заходит вовсе.
-            const goalProgress = await goalProgressFor(tx, ctx.identity.graph, result.entity);
-            /**
-             * Версия реестра (§А10-1) — второе аддитивное поле, и по тому же правилу: в
-             * `readEntity` её класть нельзя (контракт с диспатчем тулов, модели она не
-             * нужна). Едет она ЗДЕСЬ, а не отдельной ручкой, потому что клиенту нужен не
-             * опрос версии, а ПОВОД перечитать реестр: `entity.get` уходит после каждой
-             * правки графа (invalidateGraph), то есть ровно тогда, когда снимок мог
-             * устареть, — и клиентский кеш реестра инвалидируется несовпадением этой
-             * строки с той, под которой он сложен (`['registry', version]`, §А9-2).
-             *
-             * Отдельный запрос `readRegistryVersions`, а не полный `effectiveRegistry`: ради
-             * одного числа тянуть 90 свойств, 16 аспектов и 11 ролей на каждое открытие
-             * записи дороже самой записи. Цена — один точечный SELECT в той же tx.
-             */
-            const registryVersion = registryVersionOf(
-              await readRegistryVersions(tx, ctx.identity.graph),
-            );
-            return goalProgress === undefined
-              ? { ...result, registryVersion }
-              : { ...result, goalProgress, registryVersion };
-          });
-        } catch (e) {
-          if (e instanceof ExecError) throw execErrorToTRPC(e);
-          throw e;
-        }
-      },
-    ),
+  get: protectedProcedure.input(entityGetUiInput).query(
+    async ({
+      ctx,
+      input,
+    }): Promise<
+      EntityReadResult & {
+        goalProgress?: GoalProgress;
+        registryVersion: string;
+        bodyAction: BodyActionInfo | null;
+      }
+    > => {
+      try {
+        return await withIdentity(ctx.db, ctx.identity, async (tx) => {
+          const result = await readEntity(tx, ctx.identity.graph, input);
+          // Прогресс цели (§11.3) — АДДИТИВНОЕ поле поверх формы readEntity, и добавляется
+          // оно здесь, а не в самом readEntity: та форма — общий контракт с
+          // LLM/MCP-диспатчем (tools/dispatch.ts), и всё, что в неё положено, уезжает в
+          // контекст модели. Прогресс — материал прогресс-бара, модели он не нужен.
+          // Прецедент аддитивного поля с явной аннотацией — actionId у create выше.
+          // Той же tx: расчёт читает граф под уже установленной identity (RLS), своей
+          // транзакции не открывает. Обычная сущность в него не заходит вовсе.
+          const goalProgress = await goalProgressFor(tx, ctx.identity.graph, result.entity);
+          /**
+           * Версия реестра (§А10-1) — второе аддитивное поле, и по тому же правилу: в
+           * `readEntity` её класть нельзя (контракт с диспатчем тулов, модели она не
+           * нужна). Едет она ЗДЕСЬ, а не отдельной ручкой, потому что клиенту нужен не
+           * опрос версии, а ПОВОД перечитать реестр: `entity.get` уходит после каждой
+           * правки графа (invalidateGraph), то есть ровно тогда, когда снимок мог
+           * устареть, — и клиентский кеш реестра инвалидируется несовпадением этой
+           * строки с той, под которой он сложен (`['registry', version]`, §А9-2).
+           *
+           * Отдельный запрос `readRegistryVersions`, а не полный `effectiveRegistry`: ради
+           * одного числа тянуть 90 свойств, 16 аспектов и 11 ролей на каждое открытие
+           * записи дороже самой записи. Цена — один точечный SELECT в той же tx.
+           */
+          const registryVersion = registryVersionOf(
+            await readRegistryVersions(tx, ctx.identity.graph),
+          );
+          // Третье аддитивное поле — действующее действие тела (§8.2, К-37; данные сеанса — поле роутера, Д-16)
+          const bodyAction = await currentBodyAction(tx, ctx.identity, result.entity.id);
+          return goalProgress === undefined
+            ? { ...result, registryVersion, bodyAction }
+            : { ...result, goalProgress, registryVersion, bodyAction };
+        });
+      } catch (e) {
+        if (e instanceof ExecError) throw execErrorToTRPC(e);
+        throw e;
+      }
+    },
+  ),
 
-  query: protectedProcedure.input(querySignature).query(({ ctx, input }) =>
+  query: protectedProcedure.input(queryListSignature).query(({ ctx, input }) =>
     runQueryWithMaterialization(ctx.db, ctx.identity, input, async (tx, ast, cctx) => {
-      const compiled = compileAstOrThrow(ast, cctx, compileQueryAst);
+      const compiled = compileAstOrThrow(ast, cctx, (a, c) =>
+        compileQueryAst(a, c, { fields: input.fields ?? 'none' }),
+      );
       const rows = await tx.execute(compiled);
       return [...rows].map((r) => toWireEntityFromSql(r as Record<string, unknown>));
     }),

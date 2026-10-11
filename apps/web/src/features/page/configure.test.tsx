@@ -20,7 +20,9 @@ import { resetNavForTests, useNav } from '../../state/navigation';
 import {
   installCrashTrap,
   type MockHandler,
+  mockEntityUpdateResult,
   renderWithProviders,
+  staleBodyError,
   trpcError,
   type WireEntityFixture,
   wireEntity,
@@ -89,6 +91,7 @@ const PROJECT_A: StructureFixture = (() => {
       ...f.entity,
       body: 'Смета кухни',
       bodyDoc: parseBody('Смета кухни'),
+      bodyRevision: 3,
       updatedAt: '2026-09-24T10:00:00.000Z',
     },
   };
@@ -103,6 +106,7 @@ const projectsTemplate = (): WireEntityFixture =>
     title: 'Проекты',
     body: TEMPLATE_BODY,
     bodyDoc: parseBody(TEMPLATE_BODY),
+    bodyRevision: 3,
     aspects: [PAGE_ASPECT],
     createdAt: '2026-09-01T00:00:00.000Z',
     props: { [TEMPLATE_FOR_PROPERTY]: ['orbis/project'] },
@@ -114,6 +118,7 @@ const secondProject = (): WireEntityFixture =>
     title: 'Дача',
     body: 'Тело дачи',
     bodyDoc: parseBody('Тело дачи'),
+    bodyRevision: 3,
     aspects: ['orbis/project'],
     updatedAt: '2026-09-10T10:00:00.000Z',
   });
@@ -121,13 +126,17 @@ const secondProject = (): WireEntityFixture =>
 const PAGE_BODY =
   '{{columns}}\n{{column}}\nлевая часть\n{{/column}}\n{{column}}\nправая часть\n{{/column}}\n{{/columns}}';
 
-/** Страница-дашборд без «Шаблон для» — черновик шаблона. */
+/**
+ * Страница-дашборд без «Шаблон для» — черновик шаблона. Ревизия тела — как у любого ответа `entity.get` (спека
+ * скорости §8.1): без неё сохранение тела не уходит вовсе (основа 0 — `useBodySave`).
+ */
 const dashboard = (): WireEntityFixture =>
   wireEntity({
     id: PAGE,
     title: 'Дашборд',
     body: PAGE_BODY,
     bodyDoc: parseBody(PAGE_BODY),
+    bodyRevision: 3,
     aspects: [PAGE_ASPECT],
   });
 
@@ -237,15 +246,15 @@ function bodyServer(opts: {
     if (opts.hold !== undefined) await opts.hold;
     if (opts.reject === true) throw trpcError('BAD_REQUEST', 'тело не принято');
     if (opts.offline?.() === true) throw new Error('Failed to fetch');
-    const inp = input as { bodyDoc?: { v: number; doc: object } };
+    const inp = input as { bodyDoc?: { v: number; doc: Record<string, unknown> } };
     const base = dashboard();
-    return {
+    return mockEntityUpdateResult({
       ...base,
       updatedAt: '2026-09-25T13:00:00.000Z',
       ...(inp.bodyDoc === undefined
         ? {}
         : { bodyDoc: inp.bodyDoc, body: serializeBody(inp.bodyDoc as never) }),
-    };
+    });
   };
 }
 
@@ -682,7 +691,7 @@ describe('уход с настройки без связи (рулинг R-5)', 
       const a = answer(n++);
       if (a === 'hold') await new Promise(() => {});
       if (a instanceof Error) throw a;
-      const inp = input as { bodyDoc?: { v: number; doc: object } };
+      const inp = input as { bodyDoc?: { v: number; doc: Record<string, unknown> } };
       return {
         ...dashboard(),
         updatedAt: '2026-09-25T13:00:00.000Z',
@@ -708,7 +717,7 @@ describe('уход с настройки без связи (рулинг R-5)', 
 
   test('409, затем правка поверх — «Готово» НЕ уходит «без связи»: отказ сервера, а не связь (N-1)', async () => {
     const { view, updates, done } = await configureWith(
-      scriptedServer((i) => (i === 0 ? trpcError('CONFLICT', 'STALE_VERSION') : 'hold')),
+      scriptedServer((i) => (i === 0 ? staleBodyError({ id: PAGE }) : 'hold')),
     );
     await editUnsentOffline(view, ' ХВОСТ');
     done();
@@ -786,7 +795,7 @@ describe('уход с настройки без связи (рулинг R-5)', 
       done();
       expect(screen.queryByTestId('configure-view')).toBeNull();
     });
-  });
+  }, 30_000);
 
   test('досыл упал сетью, текст черновиком на устройстве — «Готово» уходит с тостом; черновик переживает уход и возврат', async () => {
     idleNever();

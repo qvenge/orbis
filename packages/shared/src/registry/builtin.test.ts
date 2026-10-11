@@ -29,6 +29,7 @@ import {
   TASK_STATUSES,
 } from '../contracts/agent-loop';
 import { exprNodeSchema } from '../expr/ast';
+import { queryAstJsonSchema } from '../query/ast-json-schema';
 import { assertStaticQuery } from '../query/static';
 import { HOST_SHELL_KEY } from '../supply/etalons';
 import { checkImplements } from './bindings';
@@ -37,6 +38,7 @@ import { BUILTIN_CONTRACT_DEFS, CONTRACT_IDS, SENSITIVITY_FACTS } from './builti
 import { BUILTIN_PROPERTY_META, CORE_PROPERTY_IDS } from './builtin-properties';
 import { BUILTIN_RELATION_ROLE_META } from './builtin-roles';
 import { contractSetKind, isPredicateSet } from './contract-type';
+import { contractValueRuleOf } from './contract-value';
 import { EXTENSION_IDS, EXTENSION_MANIFESTS } from './extensions';
 import { aspectDefinitionSchema, writableFromTool } from './property-type';
 
@@ -175,7 +177,12 @@ const A8: Record<AspectId, readonly Row[]> = {
  */
 const B2: Partial<Record<AspectId, readonly unknown[]>> = {
   'orbis/schedule': [
-    { contract: 'orbis/when', bind: { moment: 'orbis/start_at' }, value_map: [], fixed: {} },
+    {
+      contract: 'orbis/when',
+      bind: { moment: 'orbis/start_at', end: 'orbis/end_at', all_day: 'orbis/all_day' },
+      value_map: [],
+      fixed: {},
+    },
     {
       contract: 'orbis/recurrence',
       bind: { template_marker: 'orbis/recurrence' },
@@ -200,7 +207,12 @@ const B2: Partial<Record<AspectId, readonly unknown[]>> = {
         { slot: 'status', variant: 'cancelled', class: 'cancelled' },
       ],
     },
-    { contract: 'orbis/when', bind: { deadline: 'orbis/due_date' }, value_map: [], fixed: {} },
+    {
+      contract: 'orbis/when',
+      bind: { deadline: 'orbis/due_date', done: 'orbis/completed_at' },
+      value_map: [],
+      fixed: {},
+    },
     {
       contract: 'orbis/delegable',
       bind: { status: 'orbis/task_status', waiting_for: 'orbis/waiting_for' },
@@ -483,17 +495,20 @@ test('select-варианты: ASCII key, порядок rank — снимок, 
     // (`budget` зарезервирован до 1в и в варианты не входит, спека §3.4).
     'orbis/app_nav_form': ['header-list', 'home-hub'],
     'orbis/app_extensions': ['finance', 'goals', 'projects', 'dev'],
+    // Срез 1в (§6.3, РП-10): Повестка на месте Upcoming; снятый с поставки `upcoming` — последним
+    // вариантом (записи 1б с ним живут, эталона у него нет).
     'orbis/supply_key': [
       'host-template',
       'host-shell',
       'home',
       'records',
       'daily-planning',
-      'upcoming',
+      'agenda',
       'all-tasks',
       'horizon-year',
       'horizon-life',
       'routines',
+      'upcoming',
     ],
   };
 
@@ -795,7 +810,9 @@ function slotSig(id: string): string[] {
   const def = BUILTIN_CONTRACT_DEFS.find((c) => c.id === id);
   return (def?.slots ?? []).map((s) => {
     const k = s.type.kind === 'any_of' ? `any_of(${s.type.kinds.join('|')})` : s.type.kind;
-    return `${s.name}:${k}:${s.required ? 'req' : 'opt'}${s.status ? ':status' : ''}`;
+    // Роль в значении (§3.2 спеки 1в) — суффиксом: слот без роли в значение не входит.
+    const role = s.value_role === undefined ? '' : `:${s.value_role}`;
+    return `${s.name}:${k}:${s.required ? 'req' : 'opt'}${s.status ? ':status' : ''}${role}`;
   });
 }
 const cById = new Map(BUILTIN_CONTRACT_DEFS.map((c) => [c.id, c]));
@@ -848,9 +865,30 @@ test('orbis/delegable: классы однозначны, cancelled вне со�
   expect(del?.value_map.map((m) => m.variant)).not.toContain('cancelled');
 });
 
+test('контракт с объявленным значением не совпадает ключом ни с одним свойством (§3.1 спеки 1в)', () => {
+  // Разбор `orbis/when=…` сперва ищет СВОЙСТВО с таким ключом (РП-2): совпади ключ контракта со
+  // значением с ключом свойства — адрес значения стал бы недостижим из текста, и никто бы этого
+  // не заметил. Сегодня ключ делит со свойством только `orbis/recurrence`, а значения он не объявляет.
+  const withValue = BUILTIN_CONTRACT_DEFS.filter((c) => contractValueRuleOf(c) !== null);
+  expect(withValue.map((c) => c.key)).toEqual(['orbis/when']);
+  const propertyKeys = new Set(BUILTIN_PROPERTY_META.map((p) => p.key));
+  expect(withValue.filter((c) => propertyKeys.has(c.key)).map((c) => c.key)).toEqual([]);
+  // Сторож не пустой: пересечение контракта и свойства в поставке ЕСТЬ — просто без значения.
+  const recurrence = BUILTIN_CONTRACT_DEFS.find((c) => c.key === 'orbis/recurrence');
+  expect(propertyKeys.has('orbis/recurrence')).toBe(true);
+  expect(recurrence !== undefined && contractValueRuleOf(recurrence)).toBe(null);
+});
+
 test('слоты, классы и наборы — дословно §Б1-2', () => {
   expect(slotSig('orbis/completable')).toEqual(['status:select:req:status']);
-  expect(slotSig('orbis/when')).toEqual(['moment:any_of(timestamp|date):opt', 'deadline:date:opt']);
+  // §4.1 спеки 1в: три новых слота; роли «план/факт» — значение «даты» (§3.2).
+  expect(slotSig('orbis/when')).toEqual([
+    'moment:any_of(timestamp|date):opt:plan',
+    'deadline:date:opt:plan',
+    'done:any_of(timestamp|date):opt:fact',
+    'end:any_of(timestamp|date):opt',
+    'all_day:boolean:opt',
+  ]);
   expect(slotSig('orbis/recurrence')).toEqual([
     'template_marker:any_of(boolean|json):opt:status',
     'origin_role:relation_role:opt',
@@ -1070,7 +1108,7 @@ const A8_TYPES: Record<string, string> = {
   'orbis/app_disabled': 'boolean|core',
   // «Дом» не указывает на оболочку хоста — фильтром цели (Д-20), а не правилом E.
   'orbis/home': `ref{target:${APP_NOT_HOST_SHELL}}|core`,
-  'orbis/supply_key': 'select{options:10}|core',
+  'orbis/supply_key': 'select{options:11}|core', // десять эталонов и снятый upcoming (1в §6.3)
   'orbis/supply_hash': 'text|core',
   'orbis/supply_text': 'text|core',
   'orbis/supply_declined': 'text|core',
@@ -1252,4 +1290,54 @@ test('цель «Дома» и «Открывать вместо» — стат�
     expect(() => assertStaticQuery(target)).not.toThrow();
     expect(JSON.stringify(type.target)).toBe(APP_NOT_HOST_SHELL);
   }
+});
+
+/**
+ * R-19 среза 1в: схема значения `orbis/progress_source` собирается функцией (вызов с аннотацией
+ * чистоты, чтобы web выбросил словарь вместе с каноном), а не литералом модуля.
+ *
+ * Сам маркер аннотации в этом докблоке НЕ пишется намеренно: транспилятор bun читает его в
+ * комментарии прямо перед вызовом `test(…)` как аннотацию и выбрасывает регистрацию теста —
+ * тест молча исчезал из прогона (замерено: 24 теста вместо 25, ни pass, ни fail). Строка сида обязана остаться
+ * байт-в-байт прежней — поэтому сравнение ТЕКСТОМ JSON (порядок ключей входит), а ожидание
+ * выписано в форме прежнего литерала: тело канона без `$schema`/`$defs` в обеих ветках `query`,
+ * `$defs` канона — в корне.
+ */
+test('строка orbis/progress_source: схема значения — прежний литерал байт-в-байт (R-19)', () => {
+  const { $schema: _dialect, $defs, ...body } = queryAstJsonSchema;
+  const query = {
+    anyOf: [
+      body,
+      {
+        type: 'object',
+        properties: { text: { type: 'string', minLength: 1 } },
+        required: ['text'],
+        additionalProperties: false,
+      },
+    ],
+  };
+  const expected = {
+    anyOf: [
+      {
+        type: 'object',
+        properties: { query, aggregate: { const: 'count' } },
+        required: ['query', 'aggregate'],
+        additionalProperties: false,
+      },
+      {
+        type: 'object',
+        properties: {
+          query,
+          aggregate: { type: 'string', enum: ['sum', 'latest'] },
+          field: { type: 'string', minLength: 1 },
+        },
+        required: ['query', 'aggregate', 'field'],
+        additionalProperties: false,
+      },
+    ],
+    $defs,
+  };
+  const type = BUILTIN_PROPERTY_META.find((p) => p.id === 'orbis/progress_source')?.type;
+  if (type?.kind !== 'json') throw new Error('orbis/progress_source перестал быть json');
+  expect(JSON.stringify(type.schema)).toBe(JSON.stringify(expected));
 });

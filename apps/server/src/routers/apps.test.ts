@@ -3,6 +3,7 @@
 // пачка (`entity_update` приложения + `module_set` отмеченных расширений), один Undo; оболочку
 // хоста выключить и заархивировать нельзя; правка «Состава» маску не меняет (С1б-11).
 // Против живой БД через createCallerFactory, как в бою.
+
 import { afterAll, beforeAll, expect, test } from 'bun:test';
 import {
   APP_ASPECT,
@@ -15,10 +16,12 @@ import {
 import { TRPCError } from '@trpc/server';
 import { sql } from 'drizzle-orm';
 import { appDb, freshGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
+import { actionsOf } from '../../test/journal-helpers';
+import { expectJournalRef } from '../../test/journal-ref-helpers';
 import { withIdentity } from '../db/with-identity';
 import { execute } from '../executor/executor';
-import { makeChatJournalSink } from '../executor/journal';
-import type { ActionRecord, ExecuteResult, WireEntity } from '../executor/types';
+import { makeJournalSink } from '../executor/journal';
+import type { ExecuteResult, WireEntity } from '../executor/types';
 import { disabledExtensionsOf } from '../registry/extensions';
 import { appRouter } from '../router';
 import { dispatchTool } from '../tools/dispatch';
@@ -28,7 +31,7 @@ requireEnv();
 
 const { db, client } = appDb();
 const createCaller = createCallerFactory(appRouter);
-const sink = makeChatJournalSink();
+const sink = makeJournalSink();
 
 beforeAll(async () => {
   await truncateAll();
@@ -118,14 +121,9 @@ async function rowOf(
   return { disabled: row.disabled ?? undefined, archived: row.archived };
 }
 
-async function actionsOf(graph: GraphId, actionId: string): Promise<ActionRecord[]> {
-  const probe = JSON.stringify({ actions: [{ id: actionId }] });
-  const rows = await withIdentity(db, personal(graph), (tx) =>
-    tx.execute(sql`SELECT metadata FROM chat_messages WHERE metadata @> ${probe}::jsonb`),
-  );
-  return rows.flatMap((r) =>
-    ((r.metadata as { actions?: ActionRecord[] }).actions ?? []).filter((a) => a.id === actionId),
-  );
+/** Действия журнала с этим id — «одним action»: ровно одно. */
+async function actionsWithId(graph: GraphId, actionId: string) {
+  return (await actionsOf(graph)).filter((a) => a.id === actionId);
 }
 
 test('setDisabled(A, true, [goals]) — «Выключено» и маска одним action; ai.undo возвращает оба', async () => {
@@ -139,7 +137,8 @@ test('setDisabled(A, true, [goals]) — «Выключено» и маска о�
   expect((await rowOf(graph, a)).disabled).toBe(true);
   expect(await mask(graph)).toEqual(['goals']);
 
-  const actions = await actionsOf(graph, r.actionId);
+  await expectJournalRef(graph, r, false);
+  const actions = await actionsWithId(graph, r.actionId);
   expect(actions).toHaveLength(1);
   expect(actions[0]?.operations.map((o) => o.op)).toEqual(['entity_update', 'module_set']);
 
@@ -211,7 +210,8 @@ test('archive(A, [goals]) — A в архиве и расширение выкл
   const r = await callerFor(graph).app.archive({ appId: a, disableExtensions: ['goals'] });
   expect((await rowOf(graph, a)).archived).toBe(true);
   expect(await mask(graph)).toEqual(['goals']);
-  const actions = await actionsOf(graph, r.actionId);
+  await expectJournalRef(graph, r, false);
+  const actions = await actionsWithId(graph, r.actionId);
   expect(actions).toHaveLength(1);
 
   await callerFor(graph).ai.undo({ actionId: r.actionId });

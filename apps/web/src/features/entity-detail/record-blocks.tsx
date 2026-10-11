@@ -1,14 +1,19 @@
 import type { RecordBlockName } from '@orbis/shared/doc/page-grammar';
-import type { ComponentType } from 'react';
+import { type ComponentType, useCallback, useLayoutEffect, useRef, useState } from 'react';
 import { ThisEntityProvider } from '../../lib/query-blocks/this-entity';
+import { resetSteps, stepsGeneration } from '../entity-editor/arrows-stack';
+import { mountRecord } from '../entity-editor/editor-cache';
+import { observeTitleValue } from '../entity-editor/title-history';
+import { isUndoEpoch, undoEpoch } from '../undo/undo-epoch';
 import { Backlinks } from './Backlinks';
 import { Blockers } from './Blockers';
-import { EntityBody, ReadOnlyEntityBody, useBodyScreen } from './EntityBody';
+import { EntityBody, ReadOnlyEntityBody, useBodyArrows, useBodyScreen } from './EntityBody';
 import { EntityThreadTab } from './EntityThreadTab';
 import { NativeRow } from './NativeRow';
 import { useRecordHost } from './record-host';
 import { Subtasks } from './Subtasks';
 import { TagsBlock } from './TagsBlock';
+import { UndoArrowsSlot } from './UndoArrowsSlot';
 import { useRecordEdits } from './useEntityDetail';
 import { VersionsCardSlot } from './VersionsCardSlot';
 
@@ -25,30 +30,74 @@ import { VersionsCardSlot } from './VersionsCardSlot';
  * её карточка `orbis/financial`, которую шаблон вправе поставить в другую вкладку (Ф-1а-18).
  */
 export function TitleBlock() {
-  const { entity, extensionHooks } = useRecordHost();
-  // Флаг `conflict` этого экземпляра никуда не выведен — и не может зажечься: заголовок и
-  // чекбокс сервер проводит по LWW, версию он сверяет только у правок тела (`executor.ts`, гейт
-  // §5.2 под `body || bodyDoc`), так что 409 у них не бывает. Откат при прочих отказах — в
-  // самой обвязке (`useEntityUpdate`).
-  const { toggleTask, saveTitle } = useRecordEdits(entity.id, entity);
+  const { entity, extensionHooks, readOnly } = useRecordHost();
+  const arrows = useBodyArrows(),
+    onTitleShown = arrows?.onTitleShown;
+  useLayoutEffect(() => {
+    onTitleShown?.(true);
+    return () => onTitleShown?.(false);
+  }, [onTitleShown]);
+  const { toggleTask, saveTitle, titleStale, refreshTitle, dismissTitleStale } = useRecordEdits(
+    entity.id,
+    entity,
+  );
+  const [titleRefresh, setTitleRefresh] = useState(0);
+  const refresh = useRef({ id: entity.id, generation: 0 });
+  // Возврат к тому же id не возвращает право старому ответу стереть новый черновик.
+  if (refresh.current.id !== entity.id) {
+    refresh.current.id = entity.id;
+    refresh.current.generation += 1;
+  }
   return (
     // Notion-style шапка страницы: крупная emoji-иконка над заголовком. Нет emoji — ничего не
     // рендерим (без плейсхолдера); в самой шапке экрана — только title.
-    <div className="flex flex-col gap-3">
+    <div
+      className="flex flex-col gap-3"
+      onChange={() => {
+        // Ввод во время чтения важнее ответа: поле и отказ остаются до нового «Обновить».
+        refresh.current.generation += 1;
+      }}
+    >
       {entity.emoji && (
         <span aria-hidden className="text-4xl leading-none">
           {entity.emoji}
         </span>
       )}
-      <NativeRow
-        entity={entity}
-        onToggleTask={(done) => {
-          toggleTask(done);
-          // Данные сущности ДО перевода: planned ещё true — карточка на переходе в done
-          if (done) extensionHooks.onTaskDone(entity);
-        }}
-        onSaveTitle={saveTitle}
-      />
+      <div className="flex items-start gap-2">
+        <div className="min-w-0 flex-1">
+          <NativeRow
+            key={`${entity.id}:${titleRefresh}`}
+            entity={entity}
+            onToggleTask={(done) => {
+              toggleTask(done);
+              // Данные сущности ДО перевода: planned ещё true — карточка на переходе в done
+              if (done) extensionHooks.onTaskDone(entity);
+            }}
+            onSaveTitle={saveTitle}
+          />
+        </div>
+        {arrows !== undefined && !readOnly && <UndoArrowsSlot entityId={entity.id} />}
+      </div>
+      {titleStale && (
+        <p role="alert" className="text-sm text-danger">
+          Заголовок изменён в другом месте — обновите{' '}
+          <button
+            type="button"
+            onClick={() => {
+              const generation = ++refresh.current.generation;
+              void refreshTitle()
+                .then(() => {
+                  if (refresh.current.generation !== generation) return;
+                  dismissTitleStale();
+                  setTitleRefresh((n) => n + 1);
+                })
+                .catch(() => {});
+            }}
+          >
+            Обновить
+          </button>
+        </p>
+      )}
     </div>
   );
 }
@@ -71,9 +120,31 @@ export function TitleBlock() {
  */
 export function BodyBlock() {
   const { entity, readOnly } = useRecordHost();
-  const screen = useBodyScreen();
+  const { arrows, ...screen } = useBodyScreen();
+  const intent = useRef({ epoch: undoEpoch(), generation: stepsGeneration() }).current;
+  const titleShown = arrows?.titleShown;
+  const current = useCallback(
+    () =>
+      !readOnly &&
+      titleShown === false &&
+      isUndoEpoch(intent.epoch) &&
+      intent.generation === stepsGeneration(),
+    [readOnly, titleShown, intent],
+  );
+  // Даже без заголовка и до ленивого редактора наблюдение принадлежит тому же LRU записи.
+  useLayoutEffect(() => {
+    if (current()) return mountRecord(entity.id);
+  }, [entity.id, current]);
+  useLayoutEffect(() => {
+    if (current() && observeTitleValue(entity.id, entity.title)) resetSteps(entity.id);
+  }, [entity.id, entity.title, current]);
   return (
     <ThisEntityProvider id={entity.id}>
+      {!readOnly && arrows !== undefined && !arrows.titleShown && (
+        <div className="flex justify-end">
+          <UndoArrowsSlot entityId={entity.id} />
+        </div>
+      )}
       {readOnly ? (
         <ReadOnlyEntityBody entity={entity} />
       ) : (

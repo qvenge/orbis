@@ -1,5 +1,4 @@
 import type { BodyKind } from '@orbis/shared/doc/placement';
-import type { AnyExtension } from '@tiptap/core';
 import type { Editor } from '@tiptap/react';
 import {
   type RefObject,
@@ -13,10 +12,11 @@ import {
 import { useBodyKind } from '../../../lib/query-blocks/body-kind';
 import { trpc } from '../../../trpc';
 import { useToast } from '../../../ui/toast-store';
+import { isUndoEpoch, undoEpoch } from '../../undo/undo-epoch';
 import { AspectChooser } from '../nodes/AspectChooser';
 import { filterSlashItems } from './items';
 import { type MenuRow, SlashMenu, type SlashMenuHandle } from './SlashMenu';
-import { closeSuggest, type SuggestSnapshot, suggestionExtensions } from './suggestion';
+import { closeSuggest, type SuggestHandlers, type SuggestSnapshot } from './suggestion';
 
 /**
  * Идентификаторы служебных строк `@`-меню. С id сущности не столкнутся: те — uuid.
@@ -29,7 +29,7 @@ const FAILED_ROW = 'suggest-failed';
 
 export type EditorSuggest = {
   /** Расширения для useEditor — стабильный массив, схему редактора не меняют. */
-  extensions: AnyExtension[];
+  handlers: SuggestHandlers;
   active: SuggestSnapshot | null;
   /**
    * ЖИВОЙ снимок: он обновляется на каждую букву, тогда как `active` — снимок кадра рендера.
@@ -57,25 +57,24 @@ export function useEditorSuggest(): EditorSuggest {
   const activeRef = useRef<SuggestSnapshot | null>(null);
   const handleRef = useRef<SlashMenuHandle | null>(null);
 
-  const extensions = useMemo(
-    () =>
-      suggestionExtensions({
-        onOpen: (s) => {
-          activeRef.current = s;
-          setActive(s);
-        },
-        // Сверки «а мой ли это вход?» здесь НЕТ, и это замерено, а не забыто. Два меню
-        // одновременно открытыми не бывают: `/` не срабатывает после буквы, `@` — тоже
-        // (allowedPrefixes у suggestion — пробел или начало строки), а пункт «Ссылка на
-        // сущность» набирает `@` ОТДЕЛЬНОЙ транзакцией после той, что сняла `/ссыл`, —
-        // выход `/` приходит раньше входа `@`. Мутационная проверка это подтвердила:
-        // вариант со сверкой вида неотличим от этого ни одним тестом файла.
-        onClose: () => {
-          setActive(null);
-          activeRef.current = null;
-        },
-        onKeyDown: (_kind, event) => handleRef.current?.onKeyDown(event) ?? false,
-      }),
+  const handlers = useMemo<SuggestHandlers>(
+    () => ({
+      onOpen: (s) => {
+        activeRef.current = s;
+        setActive(s);
+      },
+      // Сверки «а мой ли это вход?» здесь НЕТ, и это замерено, а не забыто. Два меню
+      // одновременно открытыми не бывают: `/` не срабатывает после буквы, `@` — тоже
+      // (allowedPrefixes у suggestion — пробел или начало строки), а пункт «Ссылка на
+      // сущность» набирает `@` ОТДЕЛЬНОЙ транзакцией после той, что сняла `/ссыл`, —
+      // выход `/` приходит раньше входа `@`. Мутационная проверка это подтвердила:
+      // вариант со сверкой вида неотличим от этого ни одним тестом файла.
+      onClose: () => {
+        setActive(null);
+        activeRef.current = null;
+      },
+      onKeyDown: (_kind, event) => handleRef.current?.onKeyDown(event) ?? false,
+    }),
     [],
   );
 
@@ -88,7 +87,7 @@ export function useEditorSuggest(): EditorSuggest {
     if (cur !== null && !cur.view.isDestroyed) closeSuggest(cur.view, cur.kind);
   }, []);
 
-  return { extensions, active, live: activeRef, handleRef, close, kind };
+  return { handlers, active, live: activeRef, handleRef, close, kind };
 }
 
 /**
@@ -247,13 +246,16 @@ export function SuggestMenu({
     if (id === CREATE_ROW) {
       // Второй Enter по той же строке — второй Enter, а не вторая сущность.
       if (create.isPending) return;
+      const epoch = undoEpoch();
       try {
         const created = await create.mutateAsync({
           input: { title: term, tags: [] },
           source: 'ui', // прямое действие владельца в интерфейсе (§7.5)
         });
+        if (!isUndoEpoch(epoch)) return;
         insertRef(created.id, term);
       } catch {
+        if (!isUndoEpoch(epoch)) return;
         // Отказ ГРОМКИЙ, и набранное остаётся текстом: молча проглоченное создание — та же
         // потеря мысли, только без следа.
         show('Не удалось создать запись', 'danger');

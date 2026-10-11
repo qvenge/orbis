@@ -42,6 +42,7 @@ import { useRetryBuffer } from '../state/retry';
 import {
   installCrashTrap,
   type MockHandler,
+  mockEntityUpdateResult,
   mockLink,
   renderWithProviders,
   trpcError,
@@ -164,7 +165,7 @@ interface World {
   entity: WireEntityFixture;
   templates?: WireEntityFixture[];
   /** Ответ `entity.update`: по умолчанию — успех. */
-  onUpdate?: (input: unknown) => unknown;
+  onUpdate?: (input: unknown) => Partial<import('../trpc').RouterOutputs['entity']['update']>;
 }
 
 function screenHandler(world: World): MockHandler {
@@ -189,7 +190,7 @@ function screenHandler(world: World): MockHandler {
         if (q === PAGE_TEMPLATES_QUERY) return world.templates ?? [];
         return [taxi];
       case 'entity.update':
-        return world.onUpdate?.(input) ?? { entity: world.entity };
+        return mockEntityUpdateResult(world.onUpdate?.(input) ?? world.entity);
       case 'user.setModuleEnabled': {
         const { module, enabled } = input as { module: string; enabled: boolean };
         world.mask = enabled ? world.mask.filter((m) => m !== module) : [...world.mask, module];

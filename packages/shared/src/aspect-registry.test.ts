@@ -321,16 +321,17 @@ test('registryDriftIds: плоский список для /health называ�
   rows.properties = rows.properties.filter((r) => r.id !== 'orbis/task_status');
   // Строка-обрубок с ЗАСЕЯННЫМ id — это расхождение колонок, а не «лишняя»: id подписки в
   // коде есть, и вердикт обязан назвать столбцы, иначе владелец не узнает, что пересеять.
-  rows.subscriptions = [{ id: 'orbis/agenda' }];
+  // Вторая строка — прежняя встроенная Повестка: ровно так выглядит база, где пересев прошёл, а
+  // миграция 0023 — нет (сид строки не удаляет, 1в §6.5), и вердикт обязан назвать её «лишней».
+  rows.subscriptions = [{ id: 'orbis/budget-overview' }, { id: 'orbis/agenda' }];
   rows.actions = [...rows.actions, { id: 'orbis/close' }];
   expect(registryDriftIds(diffBuiltinRegistries(rows))).toEqual([
+    // «нет», а не расхождение колонок: вердикт обязан отличать «строку не засеяли» от «засеяли не
+    // тем», иначе владелец пересеет не то.
     'properties:orbis/task_status нет',
-    // Вторая встроенная подписка (задача 9) в подменённых строках отсутствует ЦЕЛИКОМ — и это
-    // «нет», а не расхождение колонок: вердикт обязан отличать «строку не засеяли» от
-    // «засеяли не тем», иначе владелец пересеет не то.
-    'subscriptions:orbis/budget-overview нет',
-    // `module` в списке нет: у Повестки с 1б он NULL (ядро), и у обрубка без колонки — тоже.
-    'subscriptions:orbis/agenda definition+rank+surface',
+    // `module` в списке есть: у Бюджета он `finance`, а у обрубка без колонки — NULL.
+    'subscriptions:orbis/budget-overview definition+module+rank+surface',
+    'subscriptions:orbis/agenda лишний',
     'actions:orbis/close лишний',
   ]);
 });

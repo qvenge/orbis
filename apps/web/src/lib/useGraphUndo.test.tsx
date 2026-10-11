@@ -1,16 +1,35 @@
 import { act, fireEvent, screen, waitFor } from '@testing-library/react';
 import { useState } from 'react';
-import { afterEach, expect, test } from 'vitest';
+import { afterEach, beforeEach, expect, test } from 'vitest';
 import { useDetailedUpdateBatch, useUpdateBatch } from '../features/page/useUpdateBatch';
+import { resetUndoSession } from '../features/undo/undo-epoch';
 import { renderWithProviders, trpcError, wireEntity } from '../test/harness';
 import { trpc } from '../trpc';
 import { useToastStore } from '../ui/toast-store';
 import { useGraphUndo } from './useGraphUndo';
 
 const actionId = '00000000-0000-4000-8000-000000000100';
+const undoResult = {
+  actionId: 'undo-receipt',
+  undone: { id: actionId, title: 'Записано' },
+  pinnedVersions: [],
+  bodyRevisions: [],
+};
+beforeEach(() => resetUndoSession());
 afterEach(() => {
   for (const toast of useToastStore.getState().toasts) useToastStore.getState().dismiss(toast.id);
 });
+function UndoHost() {
+  const [visible, setVisible] = useState(true);
+  return (
+    <>
+      {visible && <UndoProbe />}
+      <button type="button" onClick={() => setVisible(false)}>
+        Закрыть форму
+      </button>
+    </>
+  );
+}
 function UndoProbe() {
   const undo = useGraphUndo();
   return (
@@ -20,28 +39,34 @@ function UndoProbe() {
   );
 }
 test('confirmed action exposes Undo, whose vanilla write survives unmount', async () => {
-  const { calls, unmount } = renderWithProviders(<UndoProbe />, (path) =>
-    path === 'ai.undo' ? { ok: true, actionId } : {},
+  const { calls } = renderWithProviders(<UndoHost />, (path) =>
+    path === 'ai.undo' ? undoResult : {},
   );
   fireEvent.click(screen.getByText('Тост'));
+  await waitFor(() =>
+    expect(useToastStore.getState().toasts.at(-1)?.action?.label).toBe('Отменить'),
+  );
   const toast = useToastStore.getState().toasts.at(-1);
   expect(toast?.title).toBe('Записано');
   expect(toast?.action?.label).toBe('Отменить');
-  unmount();
+  fireEvent.click(screen.getByText('Закрыть форму'));
   act(() => toast?.action?.onSelect());
   await waitFor(() => expect(calls.filter((c) => c.path === 'ai.undo')).toHaveLength(1));
   expect(calls.find((c) => c.path === 'ai.undo')?.input).toEqual({ actionId });
 });
 test.each([
-  ['CONFLICT', 'Новое изменение не позволяет отмену', 'Новое изменение не позволяет отмену'],
-  ['INTERNAL_SERVER_ERROR', 'SQL private details', 'Не удалось подтвердить отмену'],
-  ['SERVICE_UNAVAILABLE', 'unavailable', 'Не удалось подтвердить отмену'],
+  ['CONFLICT', 'Новое изменение не позволяет отмену', 'Не удалось отменить изменения'],
+  ['INTERNAL_SERVER_ERROR', 'SQL private details', 'Не удалось отменить изменения'],
+  ['SERVICE_UNAVAILABLE', 'unavailable', 'Не удалось отменить изменения'],
 ])('Undo %s shows its safe outcome without automatic retry', async (code, message, expected) => {
   const { calls } = renderWithProviders(<UndoProbe />, (path) => {
     if (path === 'ai.undo') throw trpcError(code, message);
     return {};
   });
   fireEvent.click(screen.getByText('Тост'));
+  await waitFor(() =>
+    expect(useToastStore.getState().toasts.at(-1)?.action?.label).toBe('Отменить'),
+  );
   act(() => useToastStore.getState().toasts.at(-1)?.action?.onSelect());
   await waitFor(() => expect(useToastStore.getState().toasts.at(-1)?.title).toBe(expected));
   expect(calls.filter((c) => c.path === 'ai.undo')).toHaveLength(1);
@@ -57,13 +82,16 @@ test('double Undo selection during flight is a single mutation', async () => {
       : {},
   );
   fireEvent.click(screen.getByText('Тост'));
+  await waitFor(() =>
+    expect(useToastStore.getState().toasts.at(-1)?.action?.label).toBe('Отменить'),
+  );
   const select = useToastStore.getState().toasts.at(-1)?.action?.onSelect;
   act(() => {
     select?.();
     select?.();
   });
   await waitFor(() => expect(calls.filter((c) => c.path === 'ai.undo')).toHaveLength(1));
-  await act(async () => finish?.({ ok: true, actionId }));
+  await act(async () => finish?.(undoResult));
 });
 function BatchProbe({ detailed = false }: { detailed?: boolean }) {
   const run = useUpdateBatch();
@@ -99,7 +127,7 @@ function BatchProbe({ detailed = false }: { detailed?: boolean }) {
 }
 test('legacy boolean wrapper uses one detailed path, action label and the prior success toast', async () => {
   const { calls } = renderWithProviders(<BatchProbe />, (path) =>
-    path === 'entity.updateBatch' ? { actionId } : {},
+    path === 'entity.updateBatch' ? { actionId, consequences: false } : {},
   );
   fireEvent.click(screen.getByText('Записать'));
   await waitFor(() => expect(screen.getByText('true')).toBeInTheDocument());
@@ -107,7 +135,7 @@ test('legacy boolean wrapper uses one detailed path, action label and the prior 
   expect(calls.find((c) => c.path === 'entity.updateBatch')?.input).toMatchObject({
     label: 'Жест',
   });
-  expect(useToastStore.getState().toasts.at(-1)?.title).toBe('Готово');
+  await waitFor(() => expect(useToastStore.getState().toasts.at(-1)?.title).toBe('Готово'));
   expect(useToastStore.getState().toasts.at(-1)?.action?.label).toBe('Отменить');
 });
 test('legacy boolean refusal keeps its custom generic failure toast and false outcome', async () => {
@@ -122,12 +150,15 @@ test('legacy boolean refusal keeps its custom generic failure toast and false ou
 });
 test('legacy custom Undo failure title is preserved', async () => {
   renderWithProviders(<BatchProbe />, (path) => {
-    if (path === 'entity.updateBatch') return { actionId };
+    if (path === 'entity.updateBatch') return { actionId, consequences: false };
     if (path === 'ai.undo') throw trpcError('CONFLICT', 'Публичная причина');
     return {};
   });
   fireEvent.click(screen.getByText('Записать'));
   await waitFor(() => expect(screen.getByText('true')).toBeInTheDocument());
+  await waitFor(() =>
+    expect(useToastStore.getState().toasts.at(-1)?.action?.label).toBe('Отменить'),
+  );
   act(() => useToastStore.getState().toasts.at(-1)?.action?.onSelect());
   await waitFor(() => expect(useToastStore.getState().toasts.at(-1)?.title).toBe('Старая отмена'));
 });
@@ -144,12 +175,11 @@ test('detailed path returns rejection for the form without a generic toast', asy
   );
   expect(useToastStore.getState().toasts).toEqual([]);
 });
-test('legacy confirmed response without action ID shows no Undo', async () => {
+test('current boolean no-journal response is successful and has no success toast or Undo', async () => {
   renderWithProviders(<BatchProbe />, (path) => (path === 'entity.updateBatch' ? {} : {}));
   fireEvent.click(screen.getByText('Записать'));
   await waitFor(() => expect(screen.getByText('true')).toBeInTheDocument());
-  expect(useToastStore.getState().toasts.at(-1)?.title).toBe('Готово');
-  expect(useToastStore.getState().toasts.at(-1)?.action).toBeUndefined();
+  expect(useToastStore.getState().toasts).toEqual([]);
 });
 
 function RefreshedRead() {
@@ -179,6 +209,9 @@ test.each([
   );
   await waitFor(() => expect(screen.getByTestId('current-read')).toHaveTextContent('До'));
   fireEvent.click(screen.getByText('Тост'));
+  await waitFor(() =>
+    expect(useToastStore.getState().toasts.at(-1)?.action?.label).toBe('Отменить'),
+  );
   act(() => useToastStore.getState().toasts.at(-1)?.action?.onSelect());
   await waitFor(() => expect(screen.getByTestId('current-read')).toHaveTextContent('После отказа'));
 });

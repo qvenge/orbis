@@ -1,9 +1,9 @@
 // Листовой модуль: его рисует первый кадр тела (эагерный, `EditorShell`) и рендерер показа, а
 // оттуда нельзя дотянуться до барреля `@orbis/shared/doc` (сторожа `check-lazy-chunks.ts` и
 // `save.test.tsx`). Только листовые сабпаты и React.
-import type { HostBlockName, RecordBlockName } from '@orbis/shared/doc/page-grammar';
+import type { HostBlockName, PageParamDecl, RecordBlockName } from '@orbis/shared/doc/page-grammar';
 import { aspectOfCardText } from '@orbis/shared/doc/placement';
-import { effectiveLabel, type ParseRegistry } from '@orbis/shared/query';
+import { effectiveLabel, type ParseRegistry, QUERY_DATE_TOKEN_LABELS } from '@orbis/shared/query';
 import type { ReactNode } from 'react';
 
 /**
@@ -46,6 +46,14 @@ export const HOST_BLOCK_TITLES: Readonly<Record<HostBlockName, string>> = {
 /** Подписи заглушек 1б — теми же квадратными скобками, что у блоков обвязки: место, а не данные. */
 export const ownCardsStubLabel = (): string => `[${OWN_CARDS_TITLE}]`;
 export const hostStubLabel = (name: HostBlockName): string => `[${HOST_BLOCK_TITLES[name]}]`;
+
+/**
+ * Подпись заглушки параметра страницы (1в §5.1) в настройке — «[Параметр «Горизонт»: 7 дней | 14
+ * дней]»: переключатель рисует только показ, а в настройке видно, ЧТО он переключает. Подписи
+ * вариантов — из словаря токенов (§3.4), как у самого переключателя.
+ */
+export const paramStubLabel = (decl: PageParamDecl): string =>
+  `[Параметр «${decl.title ?? decl.name}»: ${decl.options.map((t) => QUERY_DATE_TOKEN_LABELS[t]).join(' | ')}]`;
 
 /** Колонки нумеруются с единицы — так их считает человек, а не массив. */
 export const columnFrameLabel = (index: number): string => `Колонка ${index + 1}`;

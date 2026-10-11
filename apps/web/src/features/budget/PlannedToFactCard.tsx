@@ -16,6 +16,7 @@ import { Button } from '../../ui/Button';
 import { Card } from '../../ui/Card';
 import { Input } from '../../ui/Input';
 import { Spinner } from '../../ui/Spinner';
+import { isUndoEpoch, undoEpoch } from '../undo/undo-epoch';
 import type { PlanToFactPrompt } from './usePlanToFactPrompt';
 
 const TONE_CLASS: Record<MoneyTone, string> = { danger: 'text-danger', positive: 'text-success' };
@@ -50,10 +51,12 @@ export function PlannedToFactCard({
 
   async function submit() {
     if (confirm.isPending || !DATE_RE.test(date)) return;
+    const epoch = undoEpoch();
     setError(null);
     try {
       await confirm.mutateAsync({ entityId: prompt.entityId, occurredOn: date, batchId });
     } catch (err) {
+      if (!isUndoEpoch(epoch)) return;
       // CONFLICT — batchId непригоден (чужая запись): успех НЕ фабрикуем (урок B4-фикса),
       // ошибка + свежий id; прочие сбои сохраняют batchId — честный повтор = replay-успех.
       if (err instanceof TRPCClientError && err.data?.code === 'CONFLICT') {
@@ -64,7 +67,9 @@ export function PlannedToFactCard({
       }
       return;
     }
+    if (!isUndoEpoch(epoch)) return;
     await invalidateBudget(utils);
+    if (!isUndoEpoch(epoch)) return;
     invalidateGraph(utils);
     onClose();
   }

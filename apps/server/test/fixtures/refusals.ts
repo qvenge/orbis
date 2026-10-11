@@ -15,7 +15,7 @@
 //  7 · декларация · SUBSCRIPTION_RAW_REF        · assertSubscription → assertNoAspectRefs / assertNoRawValues
 //  8 · декларация · VARIANT_UNMAPPED            · execute aspect_delta_set → setAspectDelta → checkClassMap
 //  9 · декларация · BIND_TYPE                   · execute aspect_implements_set → assertImplements
-// 10 · данные     · SLOT_AMBIGUOUS              · движок Agenda (rowOf) → resolveSlotOnEntity
+// 10 · данные     · SLOT_AMBIGUOUS              · движок Бюджета (budget.overview) → bindingForEntity
 // 11 · декларация · UNIQUE_ON_MANY              · assertRule → assertReferences (ступень 6)
 // 12 · декларация · SCOPE_NOT_STATIC            · execute property_create → assertRegistryQuery → assertStaticQuery
 // 13 · данные     · ROLE_SYSTEM_ONLY            · execute relation_create → assertRoleConstraints
@@ -31,7 +31,6 @@
 // Таблица сверяется с данными тестом (`refusals.test.ts`, «сводная таблица докблока…»): номер, жанр и
 // коды каждой строки обязаны совпасть с `REFUSAL_ROWS`. Дверь — прозой, её держат прогоны строк.
 import {
-  AGENDA_DEF,
   addDays,
   BUDGET_DEF,
   BUILTIN_ACTION_DEFS,
@@ -61,7 +60,14 @@ import { assertRule } from '../../src/registry/rules';
 import { appRouter } from '../../src/router';
 import { assertSubscription } from '../../src/subscriptions/registry';
 import { createCallerFactory } from '../../src/trpc';
-import { appDb, freshGraph, personal, seedCustomAspect, truncateAll } from '../helpers';
+import {
+  appDb,
+  type CustomAspectSpec,
+  freshGraph,
+  personal,
+  seedCustomAspect,
+  truncateAll,
+} from '../helpers';
 import {
   ACTION_BRANCH,
   ACTION_NESTED,
@@ -74,7 +80,6 @@ import {
   SENSITIVITY_UNDERDECLARED_ATTACH,
   UNSET_BY_EXPR_UNDERDECLARED,
 } from './action-seed';
-import { GATE_PLAIN_ASPECT, GATE_PLAIN_KEY, GATE_PROPS } from './gate-aspects';
 
 export type RefusalGenre = 'declaration' | 'data';
 export interface RefusalSpoil {
@@ -101,14 +106,17 @@ interface RefusalWorld {
   moduleOwner: GraphId; // строка 21: выключенный модуль испортил бы соседей
   moduleCategoryId: string;
   moduleNoteId: string;
-  ambiguousId: string; // две привязки слота `moment` (строка 10)
+  ambiguousId: string; // конверт с двумя привязками контракта конверта (строка 10)
+  ambiguousCategoryId: string; // своя категория строки 10: хук привязки трат её не трогает
+  monthStart: string;
+  monthEnd: string;
+  nextMonthStart: string;
+  nextMonthEnd: string;
   envelopeId: string;
   txnId: string; // пара под системную роль (строка 13)
   taskId: string;
   projectId: string; // запись вычисляемого свойства (строка 2)
   today: string;
-  tomorrowAt: string;
-  yesterdayAt: string;
 }
 let W: RefusalWorld | undefined;
 const world = (): RefusalWorld => {
@@ -132,11 +140,11 @@ const builtinSnapshot = (): RegistrySnapshot => ({
 /** Строка подписки вокруг декларации — образец `subscriptions/registry.test.ts:70-80`. */
 const subRow = (definition: unknown, over: Partial<SubscriptionRow> = {}): SubscriptionRow =>
   ({
-    id: 'orbis/agenda',
+    id: 'orbis/budget-overview',
     graphId: null,
-    surface: 'core/agenda',
+    surface: 'finance/budget-overview',
     definition,
-    module: null,
+    module: 'finance',
     rank: 1,
     ...over,
   }) as SubscriptionRow;
@@ -273,11 +281,25 @@ const ROW_6: RefusalRow = {
 
 // ───────────────── строки 4, 5, 7, 16, 17: валидатор декларации подписки ─────────────────
 
+// Образец декларации — Бюджет: подписки Повестки с 1в нет (§6.5), и строки, которые держала её
+// декларация, перевыражены на `BUDGET_DEF` с тем же смыслом порчи.
 const SEED = () => ({ reg: builtinSnapshot(), systemSeed: true });
-const agendaWith = (o: Record<string, unknown>) => ({ ...AGENDA_DEF, ...o });
-const overdueWith = (o: Record<string, unknown>) =>
-  agendaWith({ overdue: { ...AGENDA_DEF.overdue, ...o } });
-const budgetRow = (d: unknown) => subRow(d, { surface: 'finance/budget-overview' });
+const budgetRow = (d: unknown) => subRow(d);
+/** Сумма `spent` Бюджета — позиция `where`, в которую строки подкладывают предикаты. */
+const SPENT = BUDGET_DEF.aggregates.spent as Extract<
+  (typeof BUDGET_DEF.aggregates)[string],
+  { kind: 'sum' }
+>;
+const spentWhere = (where: unknown) =>
+  budgetWith({ aggregates: { ...BUDGET_DEF.aggregates, spent: { ...SPENT, where } } });
+const budgetWith = (o: Record<string, unknown>) => ({ ...BUDGET_DEF, ...o });
+const COMING_UP = BUDGET_DEF.lists.coming_up as NonNullable<typeof BUDGET_DEF.lists.coming_up>;
+const COMING_WINDOW = COMING_UP.window as NonNullable<typeof COMING_UP.window>;
+/** Окно списка `coming_up` с подменённой границей. */
+const windowWith = (o: Record<string, unknown>) =>
+  budgetWith({
+    lists: { ...BUDGET_DEF.lists, coming_up: { ...COMING_UP, window: { ...COMING_WINDOW, ...o } } },
+  });
 const aggregatesWith = (o: Record<string, unknown>) => ({
   ...BUDGET_DEF,
   aggregates: { ...BUDGET_DEF.aggregates, ...o },
@@ -314,39 +336,15 @@ const ROW_5: RefusalRow = {
   codes: [EXPR_TYPE, EXPR_NOT_TOTAL],
   genre: 'declaration',
   positive: async () => {
-    assertSubscription(subRow(AGENDA_DEF), SEED());
+    assertSubscription(subRow(BUDGET_DEF), SEED());
   },
   refuse: async () =>
-    codeOfSync(() =>
-      assertSubscription(
-        subRow(
-          agendaWith({
-            show: {
-              ...AGENDA_DEF.show,
-              window: { ...AGENDA_DEF.show.window, to: { const: true } },
-            },
-          }),
-        ),
-        SEED(),
-      ),
-    ),
+    codeOfSync(() => assertSubscription(subRow(windowWith({ to: { const: true } })), SEED())),
   spoils: [
     {
       name: 'вторая граница окна булевым выражением',
       run: async () =>
-        codeOfSync(() =>
-          assertSubscription(
-            subRow(
-              agendaWith({
-                show: {
-                  ...AGENDA_DEF.show,
-                  window: { ...AGENDA_DEF.show.window, from: { const: true } },
-                },
-              }),
-            ),
-            SEED(),
-          ),
-        ),
+        codeOfSync(() => assertSubscription(subRow(windowWith({ from: { const: true } })), SEED())),
     },
     // Арифметика над необязательным `agg_via` — EXPR_NOT_TOTAL (`expr/fixtures.ts:190-198`).
     {
@@ -381,10 +379,17 @@ const ROW_7: RefusalRow = {
   codes: ['SUBSCRIPTION_RAW_REF'],
   genre: 'declaration',
   // ВТОРАЯ половина утверждения §Б5-2: ссылка на аспект законна ровно в `prefer`, и позитив обязан
-  // называть именно её, а не голый `AGENDA_DEF` — иначе строка молчала бы о половине правила.
+  // называть именно её, а не голый `BUDGET_DEF` — иначе строка молчала бы о половине правила.
   positive: async () => {
     assertSubscription(
-      subRow(agendaWith({ show: { ...AGENDA_DEF.show, prefer: ['orbis/schedule'] } })),
+      subRow(
+        budgetWith({
+          sources: {
+            ...BUDGET_DEF.sources,
+            movement: { ...BUDGET_DEF.sources.movement, prefer: ['orbis/financial'] },
+          },
+        }),
+      ),
       SEED(),
     );
   },
@@ -392,8 +397,9 @@ const ROW_7: RefusalRow = {
     codeOfSync(() =>
       assertSubscription(
         subRow(
-          overdueWith({
-            where: { op: '=', args: [{ const: 'orbis/task' }, { const: 'orbis/task' }] },
+          spentWhere({
+            op: '=',
+            args: [{ const: 'orbis/financial' }, { const: 'orbis/financial' }],
           }),
         ),
         SEED(),
@@ -406,17 +412,12 @@ const ROW_7: RefusalRow = {
         codeOfSync(() =>
           assertSubscription(
             subRow(
-              overdueWith({
-                where: {
-                  op: 'and',
-                  args: [
-                    {
-                      op: 'in',
-                      args: [{ class: { contract: 'orbis/completable' } }, { const: ['active'] }],
-                    },
-                    { op: '!=', args: [{ prop: 'orbis/task_status' }, { const: 'waiting' }] },
-                  ],
-                },
+              spentWhere({
+                op: 'and',
+                args: [
+                  SPENT.where,
+                  { op: '!=', args: [{ prop: 'orbis/payment_method' }, { const: 'нал' }] },
+                ],
               }),
             ),
             SEED(),
@@ -428,14 +429,7 @@ const ROW_7: RefusalRow = {
       run: async () =>
         codeOfSync(() =>
           assertSubscription(
-            subRow(
-              overdueWith({
-                where: {
-                  op: 'and',
-                  args: [AGENDA_DEF.overdue.where, { has: 'orbis/task_status' }],
-                },
-              }),
-            ),
+            subRow(spentWhere({ op: 'and', args: [SPENT.where, { has: 'orbis/payment_method' }] })),
             SEED(),
           ),
         ),
@@ -448,28 +442,18 @@ const ROW_16: RefusalRow = {
   codes: [SECOND_LANGUAGE],
   genre: 'declaration',
   positive: async () => {
-    assertSubscription(subRow(AGENDA_DEF), SEED());
+    assertSubscription(subRow(BUDGET_DEF), SEED());
   },
   refuse: async () =>
     codeOfSync(() =>
-      assertSubscription(subRow(overdueWith({ where: 'class(completable) in open' })), SEED()),
+      assertSubscription(subRow(spentWhere('class(money-movement) in outflow')), SEED()),
     ),
   spoils: [
     {
       name: 'текст в границе окна — та же вторая грамматика другой позицией',
       run: async () =>
         codeOfSync(() =>
-          assertSubscription(
-            subRow(
-              agendaWith({
-                show: {
-                  ...AGENDA_DEF.show,
-                  window: { ...AGENDA_DEF.show.window, to: 'сегодня + 8 дней' },
-                },
-              }),
-            ),
-            SEED(),
-          ),
+          assertSubscription(subRow(windowWith({ to: 'сегодня + 30 дней' })), SEED()),
         ),
     },
   ],
@@ -480,16 +464,24 @@ const ROW_17: RefusalRow = {
   codes: ['SURFACE_UNKNOWN'],
   genre: 'declaration',
   positive: async () => {
-    assertSubscription(subRow(AGENDA_DEF), SEED());
+    assertSubscription(subRow(BUDGET_DEF), SEED());
   },
   refuse: async () =>
-    codeOfSync(() => assertSubscription(subRow(AGENDA_DEF, { surface: 'core/row' }), SEED())),
+    codeOfSync(() => assertSubscription(subRow(BUDGET_DEF, { surface: 'core/row' }), SEED())),
   spoils: [
     {
       name: 'опечатка имени поверхности — отказ, а не «похожая»',
       run: async () =>
         codeOfSync(() =>
-          assertSubscription(subRow(AGENDA_DEF, { surface: 'planner/agendas' }), SEED()),
+          assertSubscription(subRow(BUDGET_DEF, { surface: 'finance/budget-overviews' }), SEED()),
+        ),
+    },
+    // Снятая поверхность Повестки (1в §6.5): голова `core` законна, словарь её больше не знает.
+    {
+      name: 'снятая поверхность Повестки — отказ словаря, а не «ядро примет»',
+      run: async () =>
+        codeOfSync(() =>
+          assertSubscription(subRow(BUDGET_DEF, { surface: 'core/agenda' }), SEED()),
         ),
     },
   ],
@@ -829,47 +821,113 @@ const ROW_21: RefusalRow = {
   ],
 };
 
-// ───────────────────── строка 10: SLOT_AMBIGUOUS движком Повестки ─────────────────────
-// Конфликт слота живёт У СУЩНОСТИ, а не в декларации (докблок `subscriptions/registry.ts:742-755`):
-// `GATE_PLAIN_ASPECT` реализует `orbis/when.moment` через свой момент, `orbis/schedule` — через
-// `orbis/start_at`; обе на одной записи ВНУТРИ окна дают отказ движка.
+// ───────────────────── строка 10: SLOT_AMBIGUOUS движком Бюджета ─────────────────────
+// Конфликт привязки живёт У ЗАПИСИ, а не в декларации: два аспекта записи, реализующих один контракт,
+// законны по отдельности, а движок без `prefer` не вправе выбрать молча (§С8-21, `bindingForEntity`).
+// До 1в строку держал движок Повестки (`orbis/when.moment`); он снят (§6.5), и та же проверка идёт
+// дверью Бюджета: конверт с `orbis/budget` и двойником-конвертом владельца ВНУТРИ месяца обзора даёт
+// отказ карточки, движение с `orbis/financial` и двойником-движением в плане — отказ строки списка.
 
-const agendaOf = (owner: GraphId) =>
+/** Двойники встроенных аспектов — тот же контракт теми же свойствами (`carries`), ранг ниже встроенного. */
+const TWIN_ENVELOPE_KEY = 'user/twin-envelope';
+const TWIN_MONEY_KEY = 'user/twin-money';
+const TWIN_ENVELOPE: CustomAspectSpec = {
+  key: TWIN_ENVELOPE_KEY,
+  label: { ru: 'Конверт-двойник' },
+  module: 'finance',
+  rank: 900,
+  properties: [],
+  carries: ['orbis/finance_category', 'orbis/limit', 'orbis/period_start', 'orbis/period_end'],
+  implements: [
+    {
+      contract: 'orbis/envelope',
+      bind: {
+        category: 'orbis/finance_category',
+        limit: 'orbis/limit',
+        period_start: 'orbis/period_start',
+        period_end: 'orbis/period_end',
+      },
+      value_map: [],
+      fixed: {},
+    },
+  ],
+};
+const TWIN_MONEY: CustomAspectSpec = {
+  key: TWIN_MONEY_KEY,
+  label: { ru: 'Движение-двойник' },
+  module: 'finance',
+  rank: 900,
+  properties: [],
+  carries: ['orbis/amount', 'orbis/direction', 'orbis/finance_category', 'orbis/occurred_on'],
+  implements: [
+    {
+      contract: 'orbis/money-movement',
+      bind: {
+        amount: 'orbis/amount',
+        direction: 'orbis/direction',
+        category: 'orbis/finance_category',
+        date: 'orbis/occurred_on',
+      },
+      value_map: [
+        { slot: 'direction', variant: 'expense', class: 'outflow' },
+        { slot: 'direction', variant: 'income', class: 'inflow' },
+      ],
+      fixed: {},
+    },
+  ],
+};
+
+/** Обзор бюджета текущего месяца — тем же путём, что экран Финансов (ручка `budget.overview`). */
+const budgetOf = (owner: GraphId) =>
   createCallerFactory(appRouter)({
     identity: personal(owner),
     actorKind: 'owner',
     db: world().db,
     clientVersion: null,
-  }).agenda.list({ days: 8 });
+  }).budget.overview({ month: world().monthStart.slice(0, 7) });
+/** Период конверта-двойника: в месяце обзора (`inside`) или за ним (следующий месяц). */
+const moveAmbiguous = (inside: boolean) =>
+  run(world().owner, 'entity_update', {
+    id: world().ambiguousId,
+    props: inside
+      ? { 'orbis/period_start': world().monthStart, 'orbis/period_end': world().monthEnd }
+      : { 'orbis/period_start': world().nextMonthStart, 'orbis/period_end': world().nextMonthEnd },
+  });
 const ROW_10: RefusalRow = {
   row: 10,
   codes: ['SLOT_AMBIGUOUS'],
   genre: 'data',
   positive: async () => {
-    await agendaOf(world().owner); // конфликтная запись ещё ЗА окном
+    await budgetOf(world().owner); // конфликтный конверт ещё ЗА месяцем обзора
   },
   refuse: async () => {
-    await run(world().owner, 'entity_update', {
-      id: world().ambiguousId,
-      props: { [GATE_PROPS.plainAt]: world().tomorrowAt },
-    });
+    okOfResult(await moveAmbiguous(true));
     return codeOfAsync(async () => {
-      await agendaOf(world().owner);
+      await budgetOf(world().owner);
     });
   },
   spoils: [
     {
-      name: 'конфликт в секции просроченного — тот же отказ другой секцией',
+      name: 'конфликт у движения в плане — тот же отказ другой половиной (строка списка)',
       run: async () => {
-        await run(world().owner, 'entity_update', {
-          id: world().ambiguousId,
-          props: {
-            [GATE_PROPS.plainAt]: world().yesterdayAt,
-            'orbis/start_at': world().yesterdayAt,
-          },
-        });
+        // Конверт уходит из месяца: отказ обязан прийти от движения, а не остаться от карточки.
+        okOfResult(await moveAmbiguous(false));
+        okOfResult(
+          await run(world().owner, 'entity_create', {
+            title: 'План-двойник корпуса',
+            tags: [],
+            aspects: ['orbis/financial', TWIN_MONEY_KEY],
+            props: {
+              'orbis/amount': '120.00',
+              'orbis/direction': 'expense',
+              'orbis/finance_category': world().ambiguousCategoryId,
+              'orbis/occurred_on': addDays(world().today, 3),
+              'orbis/planned': true,
+            },
+          }),
+        );
         return codeOfAsync(async () => {
-          await agendaOf(world().owner);
+          await budgetOf(world().owner);
         });
       },
     },
@@ -879,37 +937,32 @@ const ROW_10: RefusalRow = {
 /**
  * Строка 10 — ПОЛНАЯ форма отказа (§1.1, шаг 6 задачи 17): код один не отличил бы «движок отказал» от
  * «движок отказал, не назвав привязок», а без `aspects` владельцу нечем выбрать `prefer`, без
- * `subscription` — нечего править. Зовётся ПОСЛЕ строк: запись возвращается в окно (обе привязки на
- * завтра) — секция окна, слот `orbis/when.moment`. Возвращает details отказа и то, что обязано в них
- * лежать: вердикт объявлен здесь же, данными, как у строк.
+ * `subscription` — нечего править, без `entityId` — не найти запись. Имени слота у Бюджета нет по
+ * построению: привязка выбирается на контракт целиком (`bindingForEntity`). Зовётся ПОСЛЕ строк:
+ * конверт возвращается в месяц обзора — карточка считается раньше списков, и отказ приходит от неё.
+ * Возвращает details отказа и то, что обязано в них лежать: вердикт объявлен здесь же, данными.
  */
 export async function slotAmbiguityDetails(): Promise<{ got: unknown; want: unknown }> {
-  // Правка проверяется: молча не прошедшая, она оставила бы запись «вчера» от порчи строки 10, и отказ
-  // пришёл бы из секции просроченного — пин позеленел бы не на той секции, что обещает докблок.
-  okOfResult(
-    await run(world().owner, 'entity_update', {
-      id: world().ambiguousId,
-      props: { [GATE_PROPS.plainAt]: world().tomorrowAt, 'orbis/start_at': world().tomorrowAt },
-    }),
-  );
+  // Правка проверяется: молча не прошедшая, она оставила бы конверт за месяцем от порчи строки 10, и
+  // отказ пришёл бы от движения — пин позеленел бы не на той половине, что обещает докблок.
+  okOfResult(await moveAmbiguous(true));
   let got: unknown;
   try {
-    await agendaOf(world().owner);
+    await budgetOf(world().owner);
   } catch (e) {
     const err = e instanceof ExecError ? e : (e as { cause?: unknown } | null)?.cause;
     if (!(err instanceof ExecError) || err.code !== 'SLOT_AMBIGUOUS') throw e;
     got = err.details;
   }
   if (got === undefined)
-    throw new Error('отказа Повестки не было — запись строки 10 вышла из конфликта');
+    throw new Error('отказа Бюджета не было — конверт строки 10 вышел из конфликта');
   return {
     got,
     want: {
-      subscription: 'orbis/agenda',
-      contract: 'orbis/when',
-      slot: 'moment',
+      subscription: 'orbis/budget-overview',
+      contract: 'orbis/envelope',
       entityId: world().ambiguousId,
-      aspects: [GATE_PLAIN_KEY, 'orbis/schedule'].sort(),
+      aspects: ['orbis/budget', TWIN_ENVELOPE_KEY],
     },
   };
 }
@@ -1266,8 +1319,11 @@ export const REFUSAL_ROWS: readonly RefusalRow[] = [
 
 // ─────────────────────────────── сев мира корпуса ───────────────────────────────
 
-/** Момент с фиксированным смещением Europe/Moscow (дефолт `user_settings.timezone`). */
-const at = (day: string, time: string) => `${day}T${time}:00+03:00`;
+/** Последний день месяца `YYYY-MM`. */
+const lastDayOf = (month: string): string => {
+  const [y, m] = month.split('-').map(Number) as [number, number];
+  return `${month}-${String(new Date(Date.UTC(y, m, 0)).getUTCDate()).padStart(2, '0')}`;
+};
 
 export async function prepareRefusals(): Promise<void> {
   await truncateAll();
@@ -1275,13 +1331,14 @@ export async function prepareRefusals(): Promise<void> {
   // Личности заводятся ПОСЛЕ зачистки: `truncateAll` сносит графы, не заминченные процессом.
   const owner = await freshGraph();
   const moduleOwner = await freshGraph();
-  await seedCustomAspect(owner, GATE_PLAIN_ASPECT);
+  // Строка 10: двойники встроенных аспектов Финансов (Финансы у графа `freshGraph` включены).
+  await seedCustomAspect(owner, TWIN_ENVELOPE);
+  await seedCustomAspect(owner, TWIN_MONEY);
 
   const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Moscow' }).format(new Date());
   const month = today.slice(0, 7);
-  const [y, m] = month.split('-').map(Number) as [number, number];
-  const periodEnd = `${month}-${String(new Date(Date.UTC(y, m, 0)).getUTCDate()).padStart(2, '0')}`;
-  const far = addDays(today, 30);
+  const periodEnd = lastDayOf(month);
+  const nextMonth = addDays(periodEnd, 1).slice(0, 7);
 
   /** Сев идёт МИМО `world()`: мира ещё нет — его и собирает эта функция. */
   const seed = async (who: GraphId, tool: string, input: unknown): Promise<ExecuteOk> => {
@@ -1346,16 +1403,21 @@ export async function prepareRefusals(): Promise<void> {
     aspects: ['orbis/task'],
     props: { 'orbis/task_status': 'planned' },
   });
-  // §С8-21: два `moment` на одной записи — своя привязка гейта и `orbis/schedule`. Момент за
-  // окном (сегодня + 30) НАМЕРЕННО: позитив строки 10 обязан пройти ДО того, как `refuse`
-  // втянет запись в окно правкой.
+  // §С8-21: две привязки контракта конверта на одной записи — `orbis/budget` и двойник владельца.
+  // Период — СЛЕДУЮЩИЙ месяц НАМЕРЕННО: позитив строки 10 обязан пройти ДО того, как `refuse` втянет
+  // конверт в месяц обзора правкой. Категория своя: хук привязки трат к ней не ходит.
+  const ambiguousCategoryId = await entity(owner, {
+    title: 'Категория строки 10',
+    aspects: ['orbis/category'],
+  });
   const ambiguousId = await entity(owner, {
-    title: 'Дело корпуса и событие',
-    aspects: [GATE_PLAIN_KEY, 'orbis/schedule'],
+    title: 'Конверт-двойник корпуса',
+    aspects: ['orbis/budget', TWIN_ENVELOPE_KEY],
     props: {
-      [GATE_PROPS.plainState]: 'open',
-      [GATE_PROPS.plainAt]: at(far, '09:00'),
-      'orbis/start_at': at(far, '09:00'),
+      'orbis/finance_category': ambiguousCategoryId,
+      'orbis/limit': '1000.00',
+      'orbis/period_start': `${nextMonth}-01`,
+      'orbis/period_end': lastDayOf(nextMonth),
     },
   });
 
@@ -1380,13 +1442,16 @@ export async function prepareRefusals(): Promise<void> {
     moduleCategoryId,
     moduleNoteId,
     ambiguousId,
+    ambiguousCategoryId,
+    monthStart: `${month}-01`,
+    monthEnd: periodEnd,
+    nextMonthStart: `${nextMonth}-01`,
+    nextMonthEnd: lastDayOf(nextMonth),
     envelopeId,
     txnId,
     taskId,
     projectId,
     today,
-    tomorrowAt: at(addDays(today, 1), '10:00'),
-    yesterdayAt: at(addDays(today, -1), '10:00'),
   };
 }
 export async function closeRefusals(): Promise<void> {

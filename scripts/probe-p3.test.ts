@@ -25,7 +25,7 @@ import {
 import { ASPECT_INDEX_HEADING, aspectIndexLines } from '../apps/server/src/llm/aspect-index.ts';
 import type { RegistrySnapshot } from '../apps/server/src/registry/load.ts';
 import { buildToolDefs } from '../apps/server/src/tools/registry.ts';
-import { replay, type Trace } from './probe-p3/runner.ts';
+import { replay, StubExecutor, type Trace } from './probe-p3/runner.ts';
 import { DIAGNOSTIC_SCENARIOS, SCENARIOS } from './probe-p3/scenarios.ts';
 import {
   catalogSection,
@@ -399,5 +399,21 @@ describe('стенд пишет своего владельца — только
     expect(isLocalDatabaseUrl('postgresql://u:p@db.abc.supabase.co:5432/postgres')).toBe(false);
     expect(isLocalDatabaseUrl(undefined)).toBe(false);
     expect(isLocalDatabaseUrl('не адрес')).toBe(false);
+  });
+});
+
+describe('язык контрактов (спека 1в) на стенде — форма вне пробы', () => {
+  test('адрес контракта в запросе — отказ VALIDATION «форма вне пробы», а не вся выдача', () => {
+    const stub = new StubExecutor(REG, seedWorld(OVERDUE_TASKS));
+    for (const query of ['orbis/when=today', 'orbis/when.deadline=overdue']) {
+      const r = stub.call('entity_query', { query });
+      expect(r.status, query).toBe('error');
+      if (r.status === 'error') {
+        expect(r.error.code).toBe('VALIDATION');
+        expect(r.error.message).toContain('форма вне пробы');
+      }
+    }
+    // Свойство — как раньше: стенд его моделирует.
+    expect(stub.call('entity_query', { query: 'orbis/task_status=planned' }).status).toBe('ok');
   });
 });

@@ -8,7 +8,8 @@
 import { z } from 'zod';
 import type { Entity } from '../schemas/entity';
 import { BLOCK_ITEM_MESSAGES, BLOCK_TEXT_MAX } from './block-messages';
-import { entityCreateUiInput, entityUpdateUiInput } from './tools';
+import { entityFieldsSchema } from './fields';
+import { entityCreateUiInput, entityUpdateBatchItemInput } from './tools';
 
 export * from './block-messages';
 
@@ -23,6 +24,12 @@ export const BLOCKS_BATCH_CAP = 30;
  */
 export const BLOCK_ROWS_CAP = 500;
 
+/**
+ * Потолок значений параметров у одного блока (спека 1в §5.1): блок ссылается на параметры своей
+ * страницы, и их — единицы; потолок только отсекает мусорный вход, на смысл не влияет.
+ */
+export const BLOCK_PARAMS_CAP = 16;
+
 /** Потолок пачки правок: выбор шаблона и смена вида пишут единицы операций, не десятки. */
 export const UPDATE_BATCH_CAP = 20;
 
@@ -34,12 +41,23 @@ export const entityBlockTextItem = z
   .object({
     key: z.string().min(1).max(200),
     text: z.string().min(1).max(BLOCK_TEXT_MAX, BLOCK_ITEM_MESSAGES.textTooLong),
+    fields: entityFieldsSchema.optional(),
     thisEntityId: z.string().uuid(BLOCK_ITEM_MESSAGES.thisNotId).optional(),
     limit: z
       .number()
       .int(BLOCK_ITEM_MESSAGES.limitRange)
       .min(1, BLOCK_ITEM_MESSAGES.limitRange)
       .max(BLOCK_ROWS_CAP, BLOCK_ITEM_MESSAGES.limitRange)
+      .optional(),
+    /**
+     * Значения параметров страницы, на которые ссылается блок (`$<имя>`, спека 1в §5.1, РП-6): имя →
+     * токен даты. Форма здесь — только «строки, не больше потолка»: ЗНАЧЕНИЕ проверяет сервер ПО
+     * БЛОКУ (`substituteParams`) — плохое значение или отсутствующее имя роняют один блок, а не
+     * пачку, как любая ошибка блока (изоляция §6.3 1а).
+     */
+    params: z
+      .record(z.string().min(1).max(64), z.string().max(64))
+      .refine((p) => Object.keys(p).length <= BLOCK_PARAMS_CAP, BLOCK_ITEM_MESSAGES.paramsTooMany)
       .optional(),
   })
   .strict();
@@ -105,25 +123,96 @@ export interface BlockError {
 }
 
 /**
+ * Сумма одной валюты плитки (спека 1в §3.6, РП-7). `currency: null` — строки не денежные (свойство не
+ * привязано слотом `amount` «движения денег» аспекта на записи: калории, часы): их сумма — число без
+ * символа. `sum` — текстом (`numeric` без потери точности decimal-строк), `count` — записей с
+ * значением в этой валюте.
+ */
+export interface BlockSum {
+  currency: string | null;
+  sum: string;
+  count: number;
+}
+
+/**
+ * Дата, поставившая запись в день группы (спека 1в §5.2), — данные колонки времени; подписи («09:00»,
+ * «14:00–15:30», «09:00 → 30.09», «весь день», «срок», «сделано 16:05») рисует web в поясе ответа.
+ *
+ * `slot` — какая дата значения «когда» выбрана по приоритету `done > moment > deadline`; `null` —
+ * группировка по свойству или по адресу слота (одна дата, без приоритета). `value` — ISO момента или
+ * `YYYY-MM-DD` даты — как значение лежит в свойстве. `end` — конец события той же привязки (только у
+ * `moment`; в другой день — тоже задан). `allDay` — момент без времени суток: «весь день» привязки
+ * или `moment`, привязанный датой; у `slot: null` — значение-дата.
+ *
+ * `untimed` — строка «без времени» (§5.2): «весь день», срок, дата без часов (и у `done`-даты, где
+ * `allDay` — `false`). ОДНА ПРАВДА: по нему сервер ставит строку первой в дне (`layoutDayGroups`), по
+ * нему же web подписывает колонку («весь день», «срок», «сделано» без часов) — своя проверка значения в
+ * web разошлась бы с порядком и напечатала бы «сделано 00:00». Признак, а не общая функция: функция в
+ * web легла бы в эагерный баррель shared (+42 Б первого кадра записи, замерено в задаче 7).
+ */
+export interface BlockRowAt {
+  slot: 'done' | 'moment' | 'deadline' | null;
+  value: string;
+  end: string | null;
+  allDay: boolean;
+  untimed: boolean;
+}
+
+/** Строка группы: запись и её дата в дне (`null` — в группе «Без даты»). */
+/** Строка списка (§9): тело выбирается явно; схема полной записи и экспорт сохраняют прежний контракт. */
+export type BlockEntity = Omit<Entity, 'body'> & { body?: string; bodyStart?: string | null };
+export interface BlockGroupRow {
+  entity: BlockEntity;
+  at: BlockRowAt | null;
+}
+
+/**
+ * День группы в поясе владельца (`YYYY-MM-DD`); `day: null` — «Без даты», всегда последней. Пустой день
+ * (`rows: []`) — «свободно»: приходит, только если период блока не длиннее 31 дня (§5.2).
+ */
+export interface BlockDayGroup {
+  day: string | null;
+  rows: BlockGroupRow[];
+}
+
+/**
  * Ответ по одному блоку. Вид — по проекции запроса: `display=tile` → агрегат плитки
- * (`count` | `sum` | `latest`), иначе строки.
+ * (`count` | `sum` | `latest`), `group=day:<адрес>` → группы по дням, иначе строки.
  *
  * Строки — wire-форма сущности (`Entity`, схема `schemas/entity`): её же отдаёт `entity.query`.
- * `more` — сколько строк выборки не поместилось в `limit` (0 — всё показано).
+ * `more` — сколько строк выборки не поместилось в `limit` (0 — всё показано). `closedIds` — записи
+ * выдачи в наборе `closed` «завершаемости» по СЕРВЕРУ (Б-2 №78 п. 42, РП-12): строка web не вычисляет
+ * набор, заданный предикатом, и зачёркивание расходилось бы с фильтром. Поле заведено с подъёмом
+ * версии клиента `0.5.0`, чтобы провод менялся один раз.
  *
- * `sum` — текстом (`numeric` без потери точности decimal-строк); `currencies` — различные
- * непустые значения `orbis/currency` у суммированных записей: плитка суммы по записям в
- * разных валютах не имеет смысла, и клиент обязан это увидеть, а не сложить рубли с долларами.
+ * `groups` — группировка по дням (§5.2): группы в порядке дней, «Без даты» последней; внутри дня —
+ * сначала строки без времени, затем по времени. `more` — «ещё N» в конце последней группы; при
+ * обрезке лимитом свободных дней после последней строки нет (их пустота не доказана).
+ *
+ * `sum` — суммы ПО ВАЛЮТАМ раздельно (§3.6): рубли с долларами не складываются. Порядок — валюта
+ * владельца, прочие по алфавиту, не денежные (`null`) последними; пустая выборка — `sums: []`.
+ * `count` — записей выборки. `latest` — значение первой записи в порядке блока (без `sortBy` —
+ * последней правки) и её валюта (`null` — не денежное, §3.7).
  */
 export type BlockResult =
-  | { ok: true; kind: 'rows'; rows: Entity[]; more: number }
+  | { ok: true; kind: 'rows'; rows: BlockEntity[]; more: number; closedIds: string[] }
+  | { ok: true; kind: 'groups'; groups: BlockDayGroup[]; more: number; closedIds: string[] }
   | { ok: true; kind: 'count'; count: number }
-  | { ok: true; kind: 'sum'; sum: string; count: number; currencies: string[] }
-  | { ok: true; kind: 'latest'; value: string | null }
+  | { ok: true; kind: 'sum'; count: number; sums: BlockSum[] }
+  | { ok: true; kind: 'latest'; value: string | null; currency: string | null }
   // Бейдж страницы без блоков данных: числа нет, и это не отказ — раздел рисуется без бейджа.
   | { ok: true; kind: 'none' }
   | { ok: false; error: BlockError };
-export type EntityBlocksResult = { results: Record<string, BlockResult> };
+/**
+ * Ответ пачки. `today` и `timeZone` — «сегодня» и пояс владельца, по которым сервер разрешил токены и
+ * разложил группы (§5.2): клиент подписывает дни («Сегодня · …», «Завтра · …») и время строк в поясе
+ * ОТВЕТА, а не браузера — иначе владелец в поездке видел бы ленту чужого дня.
+ */
+export type EntityBlocksResult = {
+  results: Record<string, BlockResult>;
+  today: string;
+  timeZone: string;
+};
 
 /**
  * Вход `entity.updateBatch`: белый список из трёх операций исполнителя.
@@ -148,7 +237,7 @@ export const entityUpdateBatchInput = z
       .array(
         z.discriminatedUnion('tool', [
           z.object({ tool: z.literal('entity_create'), input: entityCreateUiInput }),
-          z.object({ tool: z.literal('entity_update'), input: entityUpdateUiInput }),
+          z.object({ tool: z.literal('entity_update'), input: entityUpdateBatchItemInput }),
           z.object({
             tool: z.literal('entity_version_pin'),
             input: z

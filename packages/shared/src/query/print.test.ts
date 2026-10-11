@@ -527,3 +527,67 @@ test('§5.4: id-инвариант проекции — в дереве id, в k
   expect(backCols.ok, labelCols).toBe(true);
   if (backCols.ok) expect(backCols.ast).toEqual(r.ast);
 });
+
+test('1в §3.1: адрес печатается КЛЮЧОМ контракта в обеих формах и разбирается обратно', () => {
+  const cases: { text: string; label: string }[] = [
+    { text: 'orbis/when.deadline=today', label: 'orbis/when.deadline=today' },
+    { text: 'orbis/when=overdue', label: 'orbis/when=overdue' },
+    {
+      text: 'orbis/when>=2026-07-15, orbis/when<=2026-07-22',
+      label: 'orbis/when>=2026-07-15, orbis/when<=2026-07-22',
+    },
+    { text: 'orbis/when=2026-07-16..2026-07-18', label: 'orbis/when=2026-07-16..2026-07-18' },
+    // `!поле=v` печатается канонической формой `поле=!v` — как у свойства (то же дерево `not(eq)`).
+    { text: 'orbis/when=!next_7d', label: 'orbis/when=!next_7d' },
+    { text: 'orbis/when!=next_7d', label: 'orbis/when!=next_7d' },
+    { text: 'orbis/when=today|overdue', label: 'orbis/when=today|overdue' },
+    { text: 'user/reviewable.state=published', label: 'user/reviewable.state=published' },
+    {
+      text: 'orbis/when>=2026-07-16, sortBy=orbis/when:asc|orbis/priority:desc',
+      label: 'orbis/when>=2026-07-16, sortBy=orbis/when:asc|"Приоритет":desc',
+    },
+    {
+      text: 'aspect=orbis/financial, display=tile, aggregate=latest:orbis/money-movement.amount',
+      label:
+        'aspect="Финансовая операция", display=tile, aggregate=latest:orbis/money-movement.amount',
+    },
+  ];
+  for (const { text, label } of cases) {
+    const parsed = parseQueryAst(text, REG);
+    if (!parsed.ok) throw new Error(`${text}: ${parsed.error.message}`);
+    expect(printQueryAst(parsed.ast, REG, 'key'), text).toBe(text);
+    const printedLabel = printQueryAst(parsed.ast, REG, 'label');
+    expect(printedLabel, text).toBe(label);
+    const back = parseQueryAst(printedLabel, REG);
+    expect(back.ok && back.ast, text).toEqual(parsed.ast);
+  }
+});
+
+test('1в: адрес с контрактом вне реестра печатается собой — печать тотальна', () => {
+  expect(
+    printQueryAst(
+      { filter: { prop: { contract: 'user/gone', slot: 'x' }, op: 'eq', value: 'a' } },
+      REG,
+      'label',
+    ),
+  ).toBe('user/gone.x=a');
+});
+
+test('1в §5.2: group печатается `group=day:<адрес>` сразу после sortBy; круг «печать → разбор (page)» — то же дерево', () => {
+  const page = { place: 'page' } as const;
+  for (const text of [
+    'orbis/when=next_7d, !class=orbis/recurrence:templates, sortBy=orbis/priority:desc, group=day:orbis/when, limit=20, display=list',
+    'group=day:orbis/when.deadline, display=compact',
+    'aspect=orbis/task, group=day:orbis/due_date',
+  ]) {
+    const r = parseQueryAst(text, REG, page);
+    if (!r.ok) throw new Error(`${text}: ${r.error.message}`);
+    const printed = printQueryAst(r.ast, REG, 'key');
+    expect(printed).toBe(text);
+    const back = parseQueryAst(printed, REG, page);
+    expect(back.ok && back.ast).toEqual(r.ast);
+  }
+  // Поле группы — id в дереве, key в key-печати (§А5-2): свойство владельца печатается ключом.
+  const tree = { filter: null, group: { by: 'day' as const, field: 'orbis/due_date' } };
+  expect(printQueryAst(tree, REG, 'key')).toBe('group=day:orbis/due_date');
+});

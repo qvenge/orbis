@@ -15,16 +15,19 @@ const AMOUNT_TONE_CLASS: Record<MoneyTone, string> = {
 
 // Дата ('2026-07-18' или полный ISO) → '18 июл.'; битое значение возвращаем как есть.
 // Date-only парсится как полночь UTC — форматируем в UTC, иначе в западных таймзонах
-// срок уехал бы на день назад. Полный ISO — в локальной зоне.
-export function formatDay(value: string): string {
+// срок уехал бы на день назад. Полный ISO — в поясе `timeZone` (пояс ответа блока), без него — в
+// локальной зоне; зона, которой `Intl` не знает, — тоже локальная, без исключения.
+export function formatDay(value: string, timeZone?: string): string {
   const d = new Date(value);
   if (Number.isNaN(d.getTime())) return value;
-  const dateOnly = /^\d{4}-\d{2}-\d{2}$/.test(value);
-  return new Intl.DateTimeFormat('ru-RU', {
-    day: 'numeric',
-    month: 'short',
-    ...(dateOnly ? { timeZone: 'UTC' } : {}),
-  }).format(d);
+  const zone = /^\d{4}-\d{2}-\d{2}$/.test(value) ? 'UTC' : timeZone;
+  const fmt = (tz?: string) =>
+    new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'short', timeZone: tz }).format(d);
+  try {
+    return fmt(zone);
+  } catch {
+    return fmt();
+  }
 }
 
 /**
@@ -35,14 +38,34 @@ export function formatDay(value: string): string {
  * Род элементов — по КОНТРАКТАМ (M14, §Б5-6): строка не знает ни одного имени аспекта.
  * `showDate={false}` гасит ровно дату — для списков, где дату строки подписывает сам
  * список (§4.2); сумма не гасится никогда, её печатать больше некому.
+ *
+ * `dateLabel` — готовая подпись даты строки (лента по дням печатает её в поясе ОТВЕТА, 1в §5.2); без
+ * неё — `formatDay` значения: момент — в поясе `timeZone` (форма `list` блока передаёт пояс ответа),
+ * без него — в поясе браузера.
+ *
+ * `closed` — признак «закрыто» от СЕРВЕРА (`closedIds` ответа блока, 1в §5.2, п. 42): набор
+ * `closed`, заданный предикатом, строка не вычисляет, и зачёркивание по проекции расходилось бы с
+ * фильтром. Задан — поверх проекции (и `true`, и `false`); не задан — по проекции.
  */
-export function EntityRow({ entity, showDate = true }: { entity: Entity; showDate?: boolean }) {
+export function EntityRow({
+  entity,
+  showDate = true,
+  dateLabel,
+  closed: closedBy,
+  timeZone,
+}: {
+  entity: Entity;
+  showDate?: boolean;
+  dateLabel?: string;
+  closed?: boolean;
+  timeZone?: string | undefined;
+}) {
   const props = entity.props;
   const registry = useRegistry();
   // Элементы строки — из привязок реестра, а не из веток по аспектам (§Б5-6). Пока снимок
   // едет, проекция пуста: строка печатает заголовок и дорисовывает элементы первым ответом.
   const row = useRowProjection(entity);
-  const closed = row.checkbox?.closed === true;
+  const closed = closedBy ?? row.checkbox?.closed === true;
 
   /**
    * ПРАВИЛО ПАМЯТИ ПОКАЗЫВАЕТСЯ ИЗ СВОЙСТВ (В7) — та же граница, что у слоя памяти промпта
@@ -54,10 +77,10 @@ export function EntityRow({ entity, showDate = true }: { entity: Entity; showDat
    * — показывал бы сохранённый заголовок, то есть имя категории, которое могло устареть
    * после её переименования. Смысл В7 в том, что подпись ПРОИЗВОДНАЯ, а не копия.
    *
-   * Вызывателей у этого компонента ТРИ (греп `<EntityRow`): `browser/EntityList`,
-   * `settings/MemoryScreen`, `agenda/AgendaScreen`. Правило одинаково во всех трёх; в
-   * Повестку запись памяти просто не попадает — она отбирает по аспектам расписания и
-   * задачи, — но исключением это не является и в перечне стоять обязано.
+   * Вызывателей у этого компонента ЧЕТЫРЕ (греп `<EntityRow` по боевому коду web):
+   * `browser/EntityList`, `settings/MemoryScreen`, `page/blocks/ListForm` (блок `display=list`) и
+   * `page/blocks/DayGroups` (лента по дням 1в §5.2). Правило одинаково во всех: блок страницы
+   * может выбрать и записи памяти.
    *
    * ЧЕГО ЭТО НЕ ПОКРЫВАЕТ, названо вслух: `entity-detail/NativeRow` (экран записи)
    * показывает сохранённый заголовок как есть — там он РЕДАКТИРУЕТСЯ, и поле обязано
@@ -116,7 +139,9 @@ export function EntityRow({ entity, showDate = true }: { entity: Entity; showDat
       </span>
       {ruleTargetResolved && <span className="text-xs text-text-muted">{ruleTargetTitle}</span>}
       {showDate && row.date !== null && (
-        <span className="text-xs text-text-muted">{formatDay(row.date.value)}</span>
+        <span className="text-xs text-text-muted">
+          {dateLabel ?? formatDay(row.date.value, timeZone)}
+        </span>
       )}
       {money !== null && (
         <span className={`text-xs font-medium tabular-nums ${AMOUNT_TONE_CLASS[money.tone]}`}>

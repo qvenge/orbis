@@ -15,7 +15,6 @@ import {
   BUILTIN_CONTRACT_DEFS,
   BUILTIN_PROPERTY_META,
   BUILTIN_RELATION_ROLE_META,
-  globalThreadId,
   HOME_PROPERTY,
   newId,
   PAGE_ASPECT,
@@ -27,7 +26,8 @@ import { PgDialect } from 'drizzle-orm/pg-core';
 import { adminDb, appDb, freshGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
 import { withIdentity } from '../db/with-identity';
 import { execute } from '../executor/executor';
-import { makeChatJournalSink } from '../executor/journal';
+import { makeJournalSink } from '../executor/journal';
+import { exportJournal, findAction } from '../executor/journal-read';
 import type { ExecuteRequest, ExecuteResult, JournalSink, WireEntity } from '../executor/types';
 import { undoAction } from '../executor/undo';
 import { parseGraphId } from '../identity';
@@ -60,6 +60,8 @@ const GOLDEN_CTX: CompileCtx = {
   graphId: parseGraphId('00000000-0000-7000-8000-0000000000a1'),
   today: '2026-08-27',
   timeZone: 'Europe/Moscow',
+  weekStart: 'monday',
+  ownerCurrency: 'RUB',
   reg: GOLDEN_REG,
   thisEntityId: null,
 };
@@ -641,7 +643,7 @@ test('ref: два ссылочных свойства на одну цель —
 
 test('ref: undo правки категории возвращает и свойство, и зеркало-ребро', async () => {
   const user = await freshGraph();
-  const sink = makeChatJournalSink();
+  const sink = makeJournalSink();
   const food = await createCategory(user, 'Еда');
   const fun = await createCategory(user, 'Развлечения');
   const txn = await createTxn(user, 'Обед', food);
@@ -670,7 +672,7 @@ test('ref: undo правки категории возвращает и свой
 
 test('ref: undo архивации цели снимает needs-review — и только у тех, кого пометила эта операция (Р-11-1)', async () => {
   const user = await freshGraph();
-  const sink = makeChatJournalSink();
+  const sink = makeJournalSink();
   const food = await createCategory(user, 'Еда');
   const fun = await createCategory(user, 'Развлечения');
   const onlyFood = await createTxn(user, 'Обед', food);
@@ -975,7 +977,7 @@ test('ref × merge: слияние переписывает подпись зе�
   // самопочинки навсегда — `syncRefMirror` снимает устаревшие только по подписям из
   // `changed`, а поглощённого id в `props` больше нет.
   const user = await freshGraph();
-  const sink = makeChatJournalSink();
+  const sink = makeJournalSink();
   const c1 = await createCategory(user, 'Еда');
   const c2 = await createCategory(user, 'Развлечения');
   const a = await ownRefProperty(user, 'user/client', 'Клиент');
@@ -1022,7 +1024,7 @@ test('ref × merge: слияние переписывает подпись зе�
 
 test('ref × merge: undo слияния возвращает подпись зеркала поглощённому свойству', async () => {
   const user = await freshGraph();
-  const sink = makeChatJournalSink();
+  const sink = makeJournalSink();
   const c = await createCategory(user, 'Еда');
   const a = await ownRefProperty(user, 'user/client', 'Клиент');
   const b = await ownRefProperty(user, 'user/customer', 'Покупатель');
@@ -1056,7 +1058,7 @@ test('ref × merge: undo слияния возвращает подпись зе
 
 test('ref: архив страницы-раздела — приложение БЕЗ needs-review, обычная запись со ссылкой на ту же страницу — с тегом', async () => {
   const user = await freshGraph();
-  const sink = makeChatJournalSink();
+  const sink = makeJournalSink();
   const section = okEntity(
     await execute(
       db,
@@ -1144,7 +1146,7 @@ test('ref: архив страницы-раздела — приложение �
 
 test('ref: запись помечена архивом цели, потом стала приложением — откат архива тег снимает (R-15 п. 1)', async () => {
   const user = await freshGraph();
-  const sink = makeChatJournalSink();
+  const sink = makeJournalSink();
   const home = okEntity(
     await execute(
       db,
@@ -1234,19 +1236,20 @@ test('ПС-04: rollback после apply', async () => {
   const before = await api.entity.get({ id: source.id, include: ['body', 'relations'] });
   const targetBefore = await api.entity.get({ id: target.id, include: ['body', 'relations'] });
   const journal = () =>
-    withIdentity(db, personal(graph), async (tx) => {
-      const rows =
-        await tx.execute(sql`SELECT metadata->'actions'->0->>'id' AS id FROM chat_messages
-      WHERE thread_id = ${globalThreadId(graph)} AND metadata->'actions'->0->>'id' IS NOT NULL ORDER BY id`);
-      return [...rows].map((r) => r.id as string);
-    });
+    withIdentity(db, personal(graph), async (tx) =>
+      (await exportJournal(tx, graph))
+        .filter((entry) => entry.type !== 'undo')
+        .map((entry) => entry.id)
+        .sort(),
+    );
   const actions = await journal();
-  const realSink = makeChatJournalSink();
+  const realSink = makeJournalSink();
   let applied:
     | { props: unknown; aspects: unknown; mirrors: number; journalWritten: boolean }
     | undefined;
   const failingSink: JournalSink = {
-    findByAuditId: (tx, id) => realSink.findByAuditId(tx, id),
+    findBatchWrite: (tx, graphId, id) => realSink.findBatchWrite(tx, graphId, id),
+    writeUndo: (tx, entry) => realSink.writeUndo(tx, entry),
     write: async (tx, entry) => {
       await realSink.write(tx, entry);
       const rows = await tx.execute(
@@ -1255,14 +1258,12 @@ test('ПС-04: rollback после apply', async () => {
       const refs = await tx.execute(
         sql`SELECT id FROM relations WHERE source_id = ${source.id}::uuid AND target_id = ${target.id}::uuid AND role = 'ref'`,
       );
-      const journalRows = await tx.execute(
-        sql`SELECT id FROM chat_messages WHERE thread_id = ${globalThreadId(graph)} AND metadata->'actions'->0->>'id' = ${entry.action.id}`,
-      );
+      const journalEntry = await findAction(tx, graph, entry.action.id);
       applied = {
         props: rows[0]?.props,
         aspects: rows[0]?.aspects,
         mirrors: refs.length,
-        journalWritten: journalRows.length === 1,
+        journalWritten: journalEntry !== undefined,
       };
       throw new Error('journal failure');
     },

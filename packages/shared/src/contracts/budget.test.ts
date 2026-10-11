@@ -1,6 +1,6 @@
 // Wire-контракты Budget: сужение, которое реформа обязана удержать (Р-10a-1, Z4-117 §С1-4).
 import { describe, expect, test } from 'bun:test';
-import { BUILTIN_PROPERTY_META } from '../registry/builtin-properties';
+import { BUILTIN_PROPERTY_META, DIRECTION_OPTIONS } from '../registry/builtin-properties';
 import { budgetOverviewSchema } from './budget';
 
 /** Минимальный валидный Overview: всё, кроме `comingUp`, тесту безразлично. */
@@ -30,6 +30,9 @@ describe('budgetOverviewSchema.comingUp.direction — варианты ИЗ РЕ
   test('принимает ровно варианты `orbis/direction` и отвергает всё прочее', () => {
     const type = BUILTIN_PROPERTY_META.find((p) => p.id === 'orbis/direction')?.type;
     if (type?.kind !== 'select') throw new Error('orbis/direction перестал быть select');
+    // Схема берёт варианты из `DIRECTION_OPTIONS` (R-19 1в: без поиска по словарю при загрузке
+    // модуля) — это то же значение, которым объявлено свойство реестра, а не вторая копия.
+    expect(type.options).toEqual([...DIRECTION_OPTIONS]);
     const keys = type.options.map((o) => o.key);
     // Не вырожденно: вариантов больше одного, иначе enum ничего не сужал бы.
     expect(keys.length).toBeGreaterThan(1);

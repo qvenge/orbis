@@ -11,11 +11,8 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import type { GraphId } from '@orbis/shared';
 import { globalThreadId, newId, type RunStepResult } from '@orbis/shared';
-import { eq } from 'drizzle-orm';
 import { appDb, mintGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
-import { chatMessages } from '../db/schema';
-import { withIdentity } from '../db/with-identity';
-import type { ActionRecord } from '../executor/types';
+import { threadJournal } from '../../test/journal-helpers';
 import { appRouter } from '../router';
 import { type AnyRecord, agentLoopHelpers, iso, T0 } from '../test/agent-loop-helpers';
 import { dispatchTool } from '../tools/dispatch';
@@ -36,15 +33,9 @@ function okResult<T>(r: Awaited<ReturnType<typeof dispatchTool>>): T {
   return r.result as T;
 }
 
-/** Сообщения ГЛОБАЛЬНОГО треда владельца: туда ложится audit глаголов (треда у них нет). */
-async function globalMessages(owner: GraphId) {
-  return withIdentity(db, personal(owner), (tx) =>
-    tx
-      .select()
-      .from(chatMessages)
-      .where(eq(chatMessages.threadId, globalThreadId(owner)))
-      .orderBy(chatMessages.createdAt, chatMessages.id),
-  );
+/** Журнал ГЛОБАЛЬНОГО треда владельца: туда ложатся записи глаголов (треда у них нет). */
+async function globalJournal(owner: GraphId) {
+  return threadJournal(owner, globalThreadId(owner));
 }
 
 beforeAll(async () => {
@@ -115,13 +106,12 @@ describe('«отмени последнее» гасит шаг агента (п
   test('audit-запись шага в глобальном треде адресована агенту, его гранту и прогону (§7.8, С2)', async () => {
     // Отмена возможна ровно потому, что шаг — обычная запись журнала; и она же
     // показывает владельцу, ЧЕЙ доступ шагнул: без actor_grant_id гасить было бы вслепую
-    const msgs = await globalMessages(owner);
-    const actions = msgs.flatMap((m) => (m.metadata as { actions?: ActionRecord[] }).actions ?? []);
-    const step = actions.find((a) => a.id === secondStepId);
+    const journal = await globalJournal(owner);
+    const step = journal.find((a) => a.type !== 'undo' && a.id === secondStepId);
     expect(step).toBeDefined();
-    expect(step?.actor_kind).toBe('agent');
-    expect(step?.actor_grant_id).toBe(grantId);
-    expect(step?.run_id).toBe(runId);
+    expect(step?.actorKind).toBe('agent');
+    expect(step?.actorGrantId).toBe(grantId);
+    expect(step?.runId).toBe(runId);
     expect(step?.source).toBe('mcp');
     expect(step?.inverse.length).toBeGreaterThan(0); // без inverse отменять нечего
   });
@@ -152,20 +142,13 @@ describe('«отмени последнее» гасит шаг агента (п
     expect(after['orbis/run_outcome']).toBe('running');
   });
 
-  test('журнал append-only: отмена не правит запись шага, а дописывает undo-сообщение (§4.6)', async () => {
-    const msgs = await globalMessages(owner);
-    const stepMessage = msgs.find((m) =>
-      ((m.metadata as { actions?: ActionRecord[] }).actions ?? []).some(
-        (a) => a.id === secondStepId,
-      ),
-    );
-    expect(stepMessage).toBeDefined(); // запись шага на месте, а не стёрта
-    const undoMessage = msgs.find(
-      (m) => (m.metadata as { type?: string; undoes?: string }).undoes === secondStepId,
-    );
-    expect(undoMessage).toBeDefined();
-    expect((undoMessage?.metadata as { type?: string }).type).toBe('undo');
-    expect(undoMessage?.role).toBe('system');
+  test('журнал append-only: отмена не правит запись шага, а дописывает запись отмены (§4.6)', async () => {
+    const journal = await globalJournal(owner);
+    const stepRecord = journal.find((e) => e.type !== 'undo' && e.id === secondStepId);
+    expect(stepRecord).toBeDefined(); // запись шага на месте, а не стёрта
+    const undoRecord = journal.find((e) => e.undoes === secondStepId);
+    expect(undoRecord).toBeDefined();
+    expect(undoRecord?.type).toBe('undo');
   });
 
   test('следующий orbis_run_step продолжает прогон с восстановленного счётчика (seq 2 снова свободен)', async () => {

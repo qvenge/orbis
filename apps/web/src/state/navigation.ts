@@ -36,6 +36,7 @@ import {
   type SectionKey,
 } from '@orbis/shared/nav';
 import { create } from 'zustand';
+import { markNavigationStart, type NavTarget } from '../perf/marks';
 import { mayLeave } from './leave-guard';
 
 export type { AppKey, SectionKey };
@@ -45,14 +46,14 @@ export const HOST_HOME: Address = { kind: 'home', app: { kind: 'host' } };
 
 /**
  * Экран поверх модели, у которого нет адреса «приложение + запись»: старые ссылки, которым нужен шаг
- * сверх разбора (запись треда ищет сервер, «Записи» — запись поставки), и зарезервированные ключи
- * (`/budget…`, `/agenda` — плашка до 1в, спека §7.1, §8.6). `path` — ссылка, по которой пришли: её
- * показывает адресная строка, пока экран на месте. Любой переход снимает его.
+ * сверх разбора (запись треда ищет сервер, «Записи» и «Повестка» — записи поставки, 1в §6.2), и
+ * зарезервированный ключ (`/budget…` — плашка, спека 1б §7.1, §8.6). `path` — ссылка, по которой
+ * пришли: её показывает адресная строка, пока экран на месте. Любой переход снимает его.
  */
 export type NavOverlay =
-  | { kind: 'reserved'; key: 'budget' | 'agenda'; path: string }
+  | { kind: 'reserved'; key: 'budget'; path: string }
   | { kind: 'legacy-thread'; threadId: string; path: string }
-  | { kind: 'legacy-supply'; key: 'records'; path: string };
+  | { kind: 'legacy-supply'; key: 'records' | 'agenda'; path: string };
 
 /**
  * Порт истории браузера — его ставит `app/history.ts`. Стор эффект только передаёт: как его
@@ -145,10 +146,34 @@ function persist(model: NavModel): void {
   }
 }
 
+/** Цель места — для метки перехода: запись, домашняя или (`null`) экран хоста, у которого готовности записи нет. */
+function navTargetOf(model: NavModel): NavTarget | null {
+  const a = currentEntry(model).address;
+  if (a.kind === 'record') return { kind: 'record', id: a.id };
+  return a.kind === 'home' ? { kind: 'home' } : null;
+}
+
+/** Ключ цели: запись — по id (рамка приложения экран записи не меняет), прочее — по адресу. */
+function targetKeyOf(model: NavModel): string {
+  const a = currentEntry(model).address;
+  return a.kind === 'record' ? `record ${a.id}` : buildAddress(a);
+}
+
+/**
+ * Метка начала перехода (спека скорости §3.1; гейт задачи 3, I-4) — здесь, в одной точке всех переходов: ссылка,
+ * раздел, плитка, меню, «‹» и системный «назад» (`setNavState` из `popstate`). Ставится, только когда цель СМЕНИЛАСЬ:
+ * `popstate` после нашего же «‹» приносит то же место, и повторная метка сдвинула бы начало замера.
+ */
+function notePlaceChange(prev: NavModel, next: NavModel): void {
+  if (targetKeyOf(prev) !== targetKeyOf(next)) markNavigationStart(navTargetOf(next));
+}
+
 /** Действие → модель и эффект; стража спрашивает вызывающий. */
 function run(action: NavAction): void {
   const s = useNav.getState();
   const r = navReduce(s.model, action, s.mode);
+  // Уточнение места того же экрана (`replace`, РП-21) и состояние экрана (`view`) — не переход.
+  if (action.type !== 'replace' && action.type !== 'view') notePlaceChange(s.model, r.model);
   useNav.setState({ model: r.model, overlay: null });
   persist(r.model);
   port?.apply(r.effect);
@@ -226,7 +251,7 @@ export function useShowBack(): boolean {
 
 /**
  * Ключ МЕСТА на экране: приложение, раздел, глубина в стопке и адрес верха. Одна запись в двух
- * местах (разделы «Домой» и «Upcoming», или та же запись глубже в стопке) — разные места, и
+ * местах (разделы «Домой» и «Повестка», или та же запись глубже в стопке) — разные места, и
  * состояние экрана одного (разовый вид «открыть через X») не должно переезжать в другое (§7.1).
  * Состояние экрана (`view`) в ключ не входит: его правка — то же место.
  */
@@ -250,6 +275,7 @@ export function setNavState(next: {
   overlay: NavOverlay | null;
   mode?: LaunchMode;
 }): void {
+  notePlaceChange(useNav.getState().model, next.model);
   useNav.setState({
     model: next.model,
     overlay: next.overlay,

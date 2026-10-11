@@ -47,6 +47,39 @@ export function formatMoneyWithCurrency(amount: string, currency: string | null)
   return `${number} ${CURRENCY_SYMBOL[currency] ?? currency}`;
 }
 
+/** Сколько ВАЛЮТ сумма печатает одной строкой (спека 1в §3.6); больше — плашка «разные валюты». */
+export const SUMS_INLINE_MAX = 3;
+
+/**
+ * Суммы по валютам (провод `BlockSum[]`, спека 1в §3.6) — ОДНА функция на плитку страницы и
+ * карточку `user_query` в чате: одна валюта — «12 000 ₽», две–три — «12 000 ₽ · 50 $» в порядке
+ * провода (валюта владельца, прочие по алфавиту, не денежное — последним, числом без символа).
+ * Порог считает ВАЛЮТЫ: не денежная сумма (`currency: null`) валютой не является и к ним не
+ * прибавляется. Валют больше трёх — не склейка, а число валют (и не денежное число рядом) и плашка
+ * `note` с их перечнем: строка из четырёх сумм читалась бы как одна. Пустые суммы — «0».
+ */
+export function formatSums(sums: readonly { currency: string | null; sum: string }[]): {
+  text: string;
+  note: string | null;
+} {
+  if (sums.length === 0) return { text: '0', note: null };
+  const currencies = sums.flatMap((s) => (s.currency === null ? [] : [s.currency]));
+  if (currencies.length <= SUMS_INLINE_MAX) {
+    return {
+      text: sums.map((s) => formatMoneyWithCurrency(s.sum, s.currency)).join(' · '),
+      note: null,
+    };
+  }
+  const n = currencies.length;
+  const plain = sums
+    .filter((s) => s.currency === null)
+    .map((s) => formatMoneyWithCurrency(s.sum, null));
+  return {
+    text: [`${n} ${plural(n, 'валюта', 'валюты', 'валют')}`, ...plain].join(' · '),
+    note: `разные валюты: ${currencies.join(', ')}`,
+  };
+}
+
 // tz необязателен: зона приезжает из user.getSettings, и до её загрузки звать было бы
 // нечем. undefined Intl понимает как «зона рантайма» — ветки на это заводить не нужно.
 export function formatDate(iso: string, tz?: string): string {
@@ -87,3 +120,5 @@ export function plural(n: number, one: string, few: string, many: string): strin
   if (last >= 2 && last <= 4) return few;
   return many;
 }
+
+export { formatClock } from './format-clock';

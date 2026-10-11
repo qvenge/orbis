@@ -2,15 +2,25 @@ import type { BodyDoc } from '@orbis/shared/doc'; // ТОЛЬКО type — фа�
 // Листовые сабпаты, не баррель: препроход и матрица мест без tiptap и marked (вес первого кадра).
 import { type PageNode, parsePageText } from '@orbis/shared/doc/page-grammar';
 import { type BodyKind, bodyIssues, type PlacementIssue } from '@orbis/shared/doc/placement';
-import { lazy, type MouseEvent, type ReactNode, Suspense, useEffect, useState } from 'react';
+import {
+  lazy,
+  type MouseEvent,
+  type ReactNode,
+  Suspense,
+  useEffect,
+  useMemo,
+  useState,
+} from 'react';
 import { useOpenRecord } from '../../app/useOpenRecord';
 import { Markdown } from '../../lib/markdown/Markdown';
 import { useBodyKind } from '../../lib/query-blocks/body-kind';
 import { QueryBlock } from '../../lib/query-blocks/QueryBlock';
 import { useFieldCatalog } from '../../lib/query-blocks/useFieldCatalog';
 import { BlockPlaque, issueTone } from '../page/blocks/BlockPlaque';
+import { PageParamsProvider } from '../page/params';
 import { NO_REGISTRY } from '../page/render-plan';
 import { BODY_BOX_CLASS, BODY_PLACEHOLDER } from './body-box';
+import { hasLiveEditor } from './editor-cache';
 import {
   cardAspectTitle,
   cardStubLabel,
@@ -19,6 +29,7 @@ import {
   LayoutFrameBox,
   LayoutStack,
   ownCardsStubLabel,
+  paramStubLabel,
   recordStubLabel,
   StubBox,
   tabFrameLabel,
@@ -230,6 +241,17 @@ function firstFrameNode(
           <StubBox label={hostStubLabel(node.name)} />
         </div>
       );
+    // Параметр страницы (1в §5.1) — подписанной заглушкой, как его NodeView в редакторе: переключатель
+    // рисует только показ. Узел без объявления сюда не доходит — ошибка блока (`PARAM_INVALID`),
+    // «второй» и неуместный — плашками выше.
+    case 'param':
+      return (
+        node.decl && (
+          <div key={key} data-query-widget="">
+            <StubBox label={paramStubLabel(node.decl)} />
+          </div>
+        )
+      );
     case 'broken':
       // `broken` всегда несёт проблему (`bodyIssues`) и сюда не доходит; ветка — ради полноты
       // разбора: пустоты вместо узла не бывает.
@@ -275,12 +297,15 @@ export function isBodyGesture(target: HTMLElement | null): boolean {
  * (предпросмотр шаблона на чужой записи, спека страниц 1а §9.3). Чанк схемы при этом не тянется.
  */
 export function EditorShell({
+  entityId,
   doc,
   markdown,
   onChange,
   onAccept,
+  reseat,
   readOnly = false,
 }: {
+  entityId?: string;
   doc: BodyDoc | null;
   markdown: string;
   onChange: (doc: BodyDoc) => void;
@@ -290,9 +315,13 @@ export function EditorShell({
    * рядом второго потребителя показанного документа, режим разметки.
    */
   onAccept?: (doc: BodyDoc) => void;
+  /** Счётчик принудительной посадки документа — проносится редактору как есть (`BodyEditor.reseat`). */
+  reseat?: number;
   readOnly?: boolean;
 }) {
-  const [mount, setMount] = useState<Mount | null>(null);
+  const [mount, setMount] = useState<Mount | null>(() =>
+    entityId !== undefined && hasLiveEditor(entityId) ? BY_IDLE : null,
+  );
   useEffect(() => {
     if (readOnly) return;
     // `m ?? BY_IDLE`, а не голое присваивание: простой наступает и ПОСЛЕ того, как редактор
@@ -335,7 +364,7 @@ export function EditorShell({
   const kind = useBodyKind();
   // Ключ узла — его порядок в тексте тела: узлы первого кадра не переставляются, только
   // пересобираются из текста целиком.
-  const nodes = parsePageText(markdown);
+  const nodes = useMemo(() => parsePageText(markdown), [markdown]);
   const frame = firstFrameNodes(nodes, kind, secondBlocksOf(nodes, kind));
   // Оба ослабления a11y — одной строкой ниже: у многострочного `//`-комментария биом читает
   // как подавление только ПОСЛЕДНЮЮ строку, и первое правило осталось бы неподавленным.
@@ -353,7 +382,10 @@ export function EditorShell({
     >
       {/* Приглашение к вводу там, где вводить нельзя, звало бы в никуда. */}
       {frame.length === 0 && !readOnly && <p className="text-text-muted">{BODY_PLACEHOLDER}</p>}
-      {frame}
+      {/* Параметры страницы (1в §5.1): в настройке — умолчания объявлений тела, без состояния
+          экрана; блоки с `$` просят данные с ними, а не отказ. Редактор ставит свой провайдер —
+          по живому документу (`QueryWidget`). */}
+      <PageParamsProvider nodes={nodes}>{frame}</PageParamsProvider>
     </div>
   );
   // `doc === null` перекрывает даже поднятое намерение: жест «хочу редактор» законен, а вот
@@ -361,7 +393,14 @@ export function EditorShell({
   if (readOnly || mount === null || doc === null) return preview;
   return (
     <Suspense fallback={preview}>
-      <BodyEditor doc={doc} onChange={onChange} onAccept={onAccept} focusAt={mount.focusAt} />
+      <BodyEditor
+        entityId={entityId}
+        doc={doc}
+        onChange={onChange}
+        onAccept={onAccept}
+        focusAt={mount.focusAt}
+        reseat={reseat}
+      />
     </Suspense>
   );
 }

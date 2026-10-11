@@ -4,6 +4,7 @@
 // (createCallerFactory), глаголы исполнителя — через dispatchTool с worker-контекстом:
 // иначе «ответ владельца» проверялся бы на руками вылепленном прогоне, а не на том,
 // который оставляет настоящий агент.
+
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import type { ClaimTaskResult, GraphId, MyQueueResult } from '@orbis/shared';
 import { TRPCError } from '@trpc/server';
@@ -15,7 +16,9 @@ import {
   requireEnv,
   truncateAll,
 } from '../../test/helpers';
-import type { ActionRecord } from '../executor/types';
+import { actionsOf } from '../../test/journal-helpers';
+import { expectJournalRef } from '../../test/journal-ref-helpers';
+import type { JournalEntry } from '../executor/journal-read';
 import { appRouter } from '../router';
 import { type AnyRecord, agentLoopHelpers } from '../test/agent-loop-helpers';
 import { dispatchTool } from '../tools/dispatch';
@@ -24,7 +27,7 @@ import { createCallerFactory } from '../trpc';
 requireEnv();
 
 const { db, client } = appDb();
-const { actionsOf, link, propsOf, seedEntity, worker, workerGrant } = agentLoopHelpers(db);
+const { link, propsOf, seedEntity, worker, workerGrant } = agentLoopHelpers(db);
 const createCaller = createCallerFactory(appRouter);
 
 const MINUTE = 60_000;
@@ -50,8 +53,8 @@ async function trpcError(p: Promise<unknown>): Promise<TRPCError> {
 }
 
 /** Действия журнала, записанные против прогона (обратная ссылка run_id, Задача 6). */
-async function actionsOfRun(owner: GraphId, runId: string): Promise<ActionRecord[]> {
-  return (await actionsOf(owner)).filter((a) => a.run_id === runId);
+async function actionsOfRun(owner: GraphId, runId: string): Promise<JournalEntry[]> {
+  return (await actionsOf(owner)).filter((a) => a.runId === runId);
 }
 
 beforeAll(async () => {
@@ -115,6 +118,7 @@ describe('agentRun.answerCheckpoint (С3, приёмка 8)', () => {
     const answer = 'Бери zod — он уже в зависимостях.';
     const out = await a.agentRun.answerCheckpoint({ ticketId, runId, answer });
 
+    await expectJournalRef(owner, out, true);
     // Тикет вернулся в работу человека: хвост ожидания снят, а не оставлен рядом с planned
     expect(out.ticket.id).toBe(ticketId);
     // Значения — плоско по id свойства (§А1-1): `waiting_for` снят вместе со статусом.
@@ -132,8 +136,8 @@ describe('agentRun.answerCheckpoint (С3, приёмка 8)', () => {
     // Один action на обе правки — иначе «Отменить» гасило бы половину ответа
     const uiActions = (await actionsOfRun(owner, runId)).filter((x) => x.source === 'ui');
     expect(uiActions).toHaveLength(1);
-    const act = uiActions[0] as ActionRecord;
-    expect(act.actor_kind).toBe('owner');
+    const act = uiActions[0] as JournalEntry;
+    expect(act.actorKind).toBe('owner');
     expect(act.type).toBe('batch');
 
     // …и это проверяется движением, а не счётом: одно «отмени последнее» снимает обе правки
@@ -334,11 +338,11 @@ describe('agentRun.sweep (С6)', () => {
     // Атрибуция: с экрана подметает владелец, из очереди — агент; source у обоих
     // системный (обслуживание инварианта 6, а не решение актора — «отмени последнее»
     // такие записи пропускает)
-    const screenAction = (await actionsOfRun(viaScreen, screen.runId))[0] as ActionRecord;
-    expect(screenAction.actor_kind).toBe('owner');
+    const screenAction = (await actionsOfRun(viaScreen, screen.runId))[0] as JournalEntry;
+    expect(screenAction.actorKind).toBe('owner');
     expect(screenAction.source).toBe('system');
-    const queueAction = (await actionsOfRun(viaQueue, queue.runId))[0] as ActionRecord;
-    expect(queueAction.actor_kind).toBe('agent');
+    const queueAction = (await actionsOfRun(viaQueue, queue.runId))[0] as JournalEntry;
+    expect(queueAction.actorKind).toBe('agent');
     expect(queueAction.source).toBe('system');
   });
 

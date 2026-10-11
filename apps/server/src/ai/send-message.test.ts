@@ -18,12 +18,14 @@ import {
   requireEnv,
   truncateAll,
 } from '../../test/helpers';
+import { actionsOf, journalOf, undoRecordOf } from '../../test/journal-helpers';
 import { ensureGlobalThread } from '../chat/threads';
 import { aiUsage, chatMessages, entities } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
-import type { ActionRecord, WireEntity } from '../executor/types';
+import type { WireEntity } from '../executor/types';
+import { threadPage } from '../journal/thread-page';
 import { CONTINUATIONS_BLOCK, PROMPT_BODY } from '../llm/context';
-import { SYSTEM_PROMPT_V8, TOOL_RESULT_MARKER } from '../llm/prompts/v8';
+import { SYSTEM_PROMPT_V9, TOOL_RESULT_MARKER } from '../llm/prompts/v9';
 import { ScriptedProvider } from '../llm/scripted';
 import type { LLMMessage, LLMProvider, LLMRequest, LLMResponse } from '../llm/types';
 import { appRouter } from '../router';
@@ -170,7 +172,7 @@ async function usageRows(user: GraphId) {
 // ---------------------------------------------------------------------------
 
 describe('ai.sendMessage (а): «создай задачу» — цикл из tool_use + end_turn', () => {
-  test('сущность в БД, audit-сообщение, entity_card, метеринг суммой двух шагов', async () => {
+  test('сущность в БД, запись журнала, entity_card, метеринг суммой двух шагов', async () => {
     const user = await freshGraph();
     const threadId = await globalThread(user);
     const scripted = new ScriptedProvider([
@@ -212,15 +214,26 @@ describe('ai.sendMessage (а): «создай задачу» — цикл из t
     ]);
     expect(r.pending).toEqual([]);
 
-    // Хронология треда: user → audit executor'а (актор ai, source chat) → assistant
-    const msgs = await threadMessages(user, threadId);
-    expect(msgs.map((m) => m.role)).toEqual(['user', 'system', 'assistant']);
+    // Хронология треда, как её видит клиент (выдача треда — сообщения и карточки журнала, спека скорости §11.3):
+    // user → assistant. Карточку действия несёт ответ (признак «карточка в ответе», К-36) — второй строкой журнала
+    // тред её не рисует: на действие ровно одна карточка (§13.1)
+    const msgs = (
+      await withIdentity(db, personal(user), (tx) => threadPage(tx, user, threadId, { limit: 50 }))
+    ).reverse();
+    expect(msgs.map((m) => m.role)).toEqual(['user', 'assistant']);
+    expect((await threadMessages(user, threadId)).map((m) => m.role)).toEqual([
+      'user',
+      'assistant',
+    ]);
     expect(msgs[0]?.id).toBe(msgId);
-    const action = (msgs[1]?.metadata as { actions?: ActionRecord[] }).actions?.[0];
-    expect(action?.actor_kind).toBe('ai');
+    // Запись журнала действия — в этом треде, актор ai, источник chat, помечена «карточка в ответе» (API журнала)
+    const action = await journalOf(user, card.undoActionId as string);
+    expect(action?.threadId).toBe(threadId);
+    expect(action?.actorKind).toBe('ai');
     expect(action?.source).toBe('chat');
+    expect(action?.cardInReply).toBe(true);
     expect(action?.id).toBe(card.undoActionId as string);
-    expect(msgs[2]?.id).toBe(r.assistantMessage.id);
+    expect(msgs[1]?.id).toBe(r.assistantMessage.id);
 
     // Метеринг §4.7: одна строка (owner, день UTC, model), суммы обоих шагов
     const usage = await usageRows(user);
@@ -237,12 +250,12 @@ describe('ai.sendMessage (а): «создай задачу» — цикл из t
     expect(scripted.requests).toHaveLength(2);
     for (const req of scripted.requests) {
       // Промпт едет в канал ДВУМЯ кусками (§Б7-6-2: блок продолжений замыкает канал),
-      // поэтому `startsWith(SYSTEM_PROMPT_V8)` ложно по построению — пин переписан на
+      // поэтому `startsWith(SYSTEM_PROMPT_V9)` ложно по построению — пин переписан на
       // «начинается телом промпта, содержит обе части, кончается блоком продолжений»
       expect(req.system.startsWith(PROMPT_BODY)).toBe(true);
       expect(req.system).toContain(CONTINUATIONS_BLOCK);
       expect(req.system.trimEnd().endsWith(CONTINUATIONS_BLOCK.trimEnd())).toBe(true);
-      expect(PROMPT_BODY + CONTINUATIONS_BLOCK).toBe(SYSTEM_PROMPT_V8);
+      expect(PROMPT_BODY + CONTINUATIONS_BLOCK).toBe(SYSTEM_PROMPT_V9);
       expect(req.messages.every((m) => m.role === 'user' || m.role === 'assistant')).toBe(true);
       const toolNames = req.tools.map((t) => t.name);
       expect(toolNames).toContain('entity_create');
@@ -529,6 +542,110 @@ describe('ai.sendMessage (г): сбой провайдера — деграда�
   });
 });
 
+// Спека скорости §11.2, рулинг R-14: карточка действия разговора — в ответе ассистента (К-36), своей строки журнала у
+// неё нет. После отмены и перечитывания треда она обязана показать «отменено», а не снова предлагать «Отменить».
+describe('ai.sendMessage: отмена действия из ответа видна после перечитывания треда (R-14)', () => {
+  test('чат-действие → отмена → выдача треда: карточка ответа несёт undone; другая карточка того же ответа — нет', async () => {
+    const user = await freshGraph();
+    const threadId = await globalThread(user);
+    const scripted = new ScriptedProvider([
+      toolUse([
+        { name: 'entity_create', input: { title: 'Отменю', tags: [] } },
+        { name: 'entity_create', input: { title: 'Оставлю', tags: [] } },
+      ]),
+      endTurn('Создал две'),
+    ]);
+    const caller = callerWith(user, scripted);
+    const r = answered(
+      await caller.ai.sendMessage({ id: newId(), threadId, content: 'создай две задачи' }),
+    );
+    const [first, second] = cardsOf(r.assistantMessage);
+    if (first?.kind !== 'entity_card' || second?.kind !== 'entity_card') {
+      throw new Error('ожидались две entity_card');
+    }
+    const read = async () =>
+      (
+        await withIdentity(db, personal(user), (tx) =>
+          threadPage(tx, user, threadId, { limit: 50 }),
+        )
+      ).find((m) => m.id === r.assistantMessage.id);
+    // До отмены признака нет вовсе — провод прежний
+    expect(cardsOf((await read()) as { metadata: Record<string, unknown> })).toEqual([
+      first,
+      second,
+    ]);
+    await caller.ai.undo({ actionId: first.undoActionId as string });
+    const after = cardsOf((await read()) as { metadata: Record<string, unknown> });
+    expect(after).toEqual([{ ...first, undone: true }, second]);
+  });
+});
+
+// Спека скорости §13.1 «Журнал», К-44: цикл упал ПОСЛЕ исполненного действия — карточка с «Отменить» у владельца
+// есть. Строка журнала действия разговора помечена «карточка в ответе» и в треде не рисуется, поэтому ответ-ошибка
+// несёт собранные карточки сам; повтор того же сообщения отдаёт его, а не гонит цикл второй раз.
+describe('ai.sendMessage: сбой цикла после исполненного действия — ответ-ошибка с карточками (К-44)', () => {
+  test('провайдер падает после entity_create → в треде ответ с карточкой, replyTo и кодом; повтор — replayed без новой строки журнала', async () => {
+    const user = await freshGraph();
+    const threadId = await globalThread(user);
+    // Первый шаг — вызов тула, второй — бросок (скрипт исчерпан → LLM_UNAVAILABLE)
+    const scripted = new ScriptedProvider([
+      toolUse([{ name: 'entity_create', input: { title: 'До сбоя', tags: [] } }]),
+    ]);
+    const msgId = newId();
+    const err = await trpcError(
+      callerWith(user, scripted).ai.sendMessage({ id: msgId, threadId, content: 'создай и упади' }),
+    );
+    expect((err.cause as { code?: string }).code).toBe('LLM_UNAVAILABLE');
+
+    const shown = await withIdentity(db, personal(user), (tx) =>
+      threadPage(tx, user, threadId, { limit: 50 }),
+    );
+    const reply = shown.find((m) => m.role === 'assistant');
+    if (reply === undefined) throw new Error('ответа-ошибки в треде нет');
+    expect(reply.metadata.replyTo).toBe(msgId);
+    expect(reply.metadata.error).toBe('LLM_UNAVAILABLE');
+    const card = cardsOf(reply)[0];
+    if (card?.kind !== 'entity_card') throw new Error('в ответе-ошибке нет карточки записи');
+    expect(card.title).toBe('До сбоя');
+    const actionId = card.undoActionId;
+    if (actionId === undefined) throw new Error('у карточки нет «Отменить»');
+    expect((await journalOf(user, actionId))?.cardInReply).toBe(true);
+    // На действие — ровно одна карточка в треде: в ответе-ошибке, строки журнала нет
+    expect(shown.filter((m) => m.role === 'system')).toEqual([]);
+    // Маркер «думает» снят той же транзакцией
+    expect(shown.some((m) => m.metadata.type === 'processing')).toBe(false);
+
+    // Повтор того же сообщения — ответ уже есть: replay без провайдера, действие не повторяется
+    const before = (await actionsOf(user)).length;
+    const retry = new ScriptedProvider([]);
+    const again = answered(
+      await callerWith(user, retry).ai.sendMessage({
+        id: msgId,
+        threadId,
+        content: 'создай и упади',
+      }),
+    );
+    expect(again.replayed).toBe(true);
+    expect(again.assistantMessage.id).toBe(reply.id);
+    expect(retry.requests).toHaveLength(0);
+    expect((await actionsOf(user)).length).toBe(before);
+  });
+
+  test('сбой без исполненных действий — ответа-ошибки нет: повтор гонит цикл заново (§7.9)', async () => {
+    const user = await freshGraph();
+    const threadId = await globalThread(user);
+    const msgId = newId();
+    await trpcError(
+      callerWith(user, new ScriptedProvider([])).ai.sendMessage({
+        id: msgId,
+        threadId,
+        content: 'просто упади',
+      }),
+    );
+    expect((await threadMessages(user, threadId)).map((m) => m.role)).toEqual(['user']);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // (д) Entitlements-гейт §8
 // ---------------------------------------------------------------------------
@@ -652,7 +769,8 @@ describe('ai.sendMessage (ж): user_query sum по decimal', () => {
 
     const payload = toolResultPayload(lastOf(scripted.requests[1]), 'user_query');
     expect(payload.status).toBe('ok');
-    expect(payload.result).toBe('30.30'); // точная строка суммы
+    // Точная строка суммы, по валютам (спека 1в §3.6): без валюты — валюта владельца.
+    expect(payload.result).toEqual({ sums: [{ currency: 'RUB', sum: '30.30', count: 2 }] });
     expect(cardsOf(r.assistantMessage)[0]).toMatchObject({
       kind: 'query_result',
       aggregate: { op: 'sum', value: '30.30' },
@@ -1094,4 +1212,25 @@ describe('ai.sendMessage: реестр тулов чата не содержит
     // «Отмени последнее» словами (хвост V1, Д-1) — internalOnly-тул именно чата
     expect(toolNames).toContain('undo_last');
   });
+});
+
+// Настоящий tool-цикл вправе отменить действие владельца; прямой settings_set для AI закрыт.
+test('«отмени последнее» настроек проходит ai.sendMessage → agent loop → undo_last без подтверждения', async () => {
+  const graph = await freshGraph();
+  const provider = new ScriptedProvider([
+    toolUse([{ name: 'undo_last', input: {} }]),
+    endTurn('Настройки возвращены.'),
+  ]);
+  const caller = callerWith(graph, provider);
+  await caller.user.seedOnboarding();
+  const before = await caller.user.getSettings();
+  const edited = await caller.user.updateSettings({ timezone: 'Asia/Almaty' });
+  const threadId = await globalThread(graph);
+  const r = answered(
+    await caller.ai.sendMessage({ id: newId(), threadId, content: 'отмени последнее' }),
+  );
+  expect(r.pending).toEqual([]);
+  expect(r.actions).toEqual([]);
+  expect((await caller.user.getSettings()).timezone).toBe(before.timezone);
+  expect(await undoRecordOf(graph, edited.actionId)).toBeDefined();
 });

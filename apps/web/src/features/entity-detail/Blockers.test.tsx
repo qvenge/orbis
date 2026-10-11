@@ -10,6 +10,7 @@ import {
 import { navAt } from '../../test/nav';
 import { registryReply } from '../../test/registry';
 import { trpc } from '../../trpc';
+import { peekUndoable } from '../undo/undo-stack';
 import { DetailScreen } from './DetailScreen';
 
 // Task D5: секции 7 «Блокировки» (02-core-os §3.5.7) и 8 «Связанное (backlinks)» (§3.5.8)
@@ -159,8 +160,8 @@ afterEach(() => {
 // вдобавок за прогрев (импорт модулей, первый рендер DetailScreen), а в полном корневом
 // прогоне 48 web-файлов идут параллельно с 653 серверными тестами против локальной БД:
 // ядра заняты, и дефолтная 1 с у findBy означает уже не «данные не доехали», а голодание
-// по CPU. Таймауты щедрее дефолтов — тот же приём, что у пагинации в
-// TransactionsScreen/CategoryScreen; точечный прогон от этого не медленнее, потому что
+// по CPU. Таймауты щедрее дефолтов — тот же приём, что у пагинации прежних экранов Бюджета;
+// точечный прогон от этого не медленнее, потому что
 // ожидания завершаются по факту, а не по таймеру.
 const SIDES_LOADED = { timeout: 10_000 };
 
@@ -205,7 +206,10 @@ test('пустые списки блокировок и пустой backlinks �
 });
 
 test('добавление блокировки: поиск через entity.suggest по неполному слову → relation.create blocks', async () => {
-  const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, handler({}));
+  const { calls } = renderWithProviders(
+    <DetailScreen entityId="e1" />,
+    handler({ onRelationCreate: () => ({ actionId: 'blocking', consequences: false }) }),
+  );
   await screen.findByRole('heading', { name: 'Задача' }); // экран отрисован
 
   fireEvent.click(screen.getByRole('button', { name: 'Добавить блокировку' }));
@@ -226,6 +230,13 @@ test('добавление блокировки: поиск через entity.su
       source_id: 'e1',
       target_id: 'x1',
       role: 'dependency',
+    }),
+  );
+  await waitFor(() =>
+    expect(peekUndoable()).toEqual({
+      actionId: 'blocking',
+      title: 'блокировка «x1…»',
+      entityIds: [],
     }),
   );
 });

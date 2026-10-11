@@ -14,7 +14,8 @@
  *    с вердиктом нового разбора на каждый: рабочее задание Задачам 9b/10c/21;
  *  - `AGENDA_QUERY_TEXTS` — КОРПУС ОБРАТИМОСТИ ПЕЧАТИ на трёх нетривиальных запросах: они
  *    обязаны разбираться и печататься обратно байт-в-байт (`print.test.ts`); боевыми они
- *    быть перестали — Повестка перешла на подписку `agenda.list` (§А5-5);
+ *    быть перестали — Повестка ушла на подписку `agenda.list` (§А5-5), а с 1в она — запись
+ *    поставки из блоков (`AGENDA_BODY`, §6.5), и подписки у неё тоже нет;
  *  - `INEXPRESSIBLE_QUERY_TEXTS` — тексты за границей языка и опечатки: каждая обязана дать
  *    ОТКАЗ С КОДОМ, а не пустой список (§А5-3ж, приёмка §С8-3);
  *  - `FIXTURE_PARSE_REGISTRY` — реестр разбора без БД.
@@ -284,7 +285,8 @@ export interface AstFixture {
 /**
  * Три key-формы запросов Повестки — КОРПУС обратимости печати (`print.test.ts`) и проба
  * схемы провайдера (`scripts/probe-openai-schema.ts`). Боевыми они больше НЕ являются:
- * вкладка спрашивает подпиской `agenda.list` (§А5-5), собственного текста запроса у неё нет.
+ * Повестка с 1в — запись поставки, три блока её тела (`AGENDA_BODY`) пишутся токенами «когда», а
+ * подписка `agenda.list` снята (§6.5).
  * Живут здесь потому, что каждый из трёх нетривиален по-своему — два `aspect=` в одном
  * тексте, `|`-альтернатива токенов и `&`-цепочка отрицаний, — и терять такой корпус ради
  * того, что у него не осталось боевого читателя, было бы разменом проверки на уборку.
@@ -660,6 +662,78 @@ export const AST_FIXTURES: readonly AstFixture[] = [
     printRejects: 'SYNTAX',
     static: true,
   },
+  // ─── Язык контрактов (спека 1в §3.1–§3.3): адрес слота и значение контракта ───
+  // Адрес — объект в поле `prop`/`field`, контракт в нём — id (§А5-2); печать — ключ контракта
+  // через точку в ОБЕИХ формах (у контракта label-формы нет, докблок `resolveContract`).
+  {
+    name: 'адрес слота с токеном (1в §3.1)',
+    ast: {
+      filter: {
+        prop: { contract: 'orbis/when', slot: 'deadline' },
+        op: 'eq',
+        value: { token: 'today' },
+      },
+    },
+    keyText: 'orbis/when.deadline=today',
+    static: false,
+  },
+  {
+    name: 'адрес слота любого контракта со слотами — decimal-сравнение (1в §3.1)',
+    ast: {
+      filter: {
+        prop: { contract: 'orbis/money-movement', slot: 'amount' },
+        op: 'gt',
+        value: '1000',
+      },
+    },
+    keyText: 'orbis/money-movement.amount>1000',
+    static: true,
+  },
+  {
+    name: 'значение контракта — литерал дня: статично (1в §3.2)',
+    ast: { filter: { prop: { contract: 'orbis/when' }, op: 'eq', value: '2026-07-17' } },
+    keyText: 'orbis/when=2026-07-17',
+    static: true,
+  },
+  {
+    name: 'просроченное значением «когда» и сортировка по значению (1в §3.3)',
+    ast: {
+      filter: {
+        and: [
+          { prop: { contract: 'orbis/when' }, op: 'eq', value: { token: 'overdue' } },
+          { class: { contract: 'orbis/completable', set: 'open' } },
+        ],
+      },
+      sortBy: [{ field: { contract: 'orbis/when' }, dir: 'asc' }],
+    },
+    keyText: 'orbis/when=overdue, class=orbis/completable:open, sortBy=orbis/when:asc',
+    static: false,
+  },
+  {
+    name: 'сумма по адресу слота на плитке (1в §3.1, закладка Бюджета)',
+    ast: {
+      filter: { aspect: 'orbis/financial' },
+      display: 'tile',
+      aggregate: { fn: 'sum', field: { contract: 'orbis/money-movement', slot: 'amount' } },
+    },
+    keyText: 'aspect=orbis/financial, display=tile, aggregate=sum:orbis/money-movement.amount',
+    static: false,
+  },
+  {
+    // Контракт владельца: key ≠ id. Без него «в дереве id, в тексте ключ» держалось бы на
+    // совпадении у встроенных, и подмена `.id` → `.key` в разборе адреса прошла бы зелёной.
+    // Слот `select`: вариантов у слота нет (они у привязанного свойства), значение — строка.
+    name: 'адрес слота контракта владельца: в дереве id, в тексте ключ (1в §3.1, §А5-2)',
+    ast: {
+      filter: {
+        prop: { contract: FIXTURE_USER_CONTRACT_ID, slot: 'state' },
+        op: 'eq',
+        value: 'published',
+      },
+    },
+    keyText: 'user/reviewable.state=published',
+    static: true,
+  },
 ];
 
 /** Текст → код отказа: невыразимое и опечатки (§А5-3ж, §С8-3 «ошибка разбора, не пустота»). */
@@ -677,6 +751,14 @@ export const INEXPRESSIBLE_QUERY_TEXTS: readonly { text: string; code: QueryPars
   { text: 'orbis/recurrence=x', code: 'TYPE' },
   { text: 'class=orbis/completable:done', code: 'UNKNOWN_SET' },
   { text: 'class=orbis/completeable:closed', code: 'UNKNOWN_CONTRACT' },
+  // Язык контрактов (спека 1в §3.1–§3.2): адрес слота, которого у контракта нет, и значение
+  // контракта, который его не объявляет.
+  { text: 'orbis/when.nope=today', code: 'UNKNOWN_SLOT' },
+  { text: 'orbis/completable=open', code: 'NO_CONTRACT_VALUE' },
+  // Токены дат (спека 1в §3.4): сравнение с краем, которого у токена нет (`overdue` без начала).
+  { text: 'orbis/due_date<overdue', code: 'TOKEN_EDGE' },
+  // Параметр страницы (спека 1в §3.8): `$`-ссылка в тексте без места страницы.
+  { text: 'orbis/due_date=$period', code: 'PAGE_ONLY' },
   { text: 'archived>1', code: 'RESERVED' },
   // Слово грамматики в позиции ИМЕНИ СВОЙСТВА — второй путь к тому же коду (§А5-3а/В11).
   { text: 'sortBy=limit:asc', code: 'RESERVED' },

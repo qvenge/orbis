@@ -23,6 +23,10 @@ import type { JSONContent } from '@tiptap/core';
  * незнакомом узле подставил бы пустой документ, и сохранение v3 прошло бы гейт): его закрывает
  * контракт версии клиента — `MIN_COMPATIBLE_CLIENT_VERSION` 0.4.0 отказывает вкладке 0.3.x 412 на
  * любом запросе (рулинг R-12).
+ *
+ * Срез 1в (задача 4, спека §5.1 «Формат») добавил атом `paramBlock` тем же путём и по тому же доводу:
+ * версия схемы не поднимается, вкладку старого клиента закрывает подъём контракта клиента до 0.5.0
+ * (задача 3 — один подъём на все формы провода и новый узел документа).
  */
 export const DOC_SCHEMA_VERSION = 3;
 
@@ -63,6 +67,7 @@ export const KNOWN_NODE_TYPES: ReadonlySet<string> = new Set([
   'orderedList',
   'ownCards',
   'paragraph',
+  'paramBlock',
   'queryBlock',
   'rawBlock',
   'recordBlock',

@@ -108,9 +108,14 @@ function renderApp(opts: {
       case 'supply.accept':
       case 'supply.decline':
       case 'supply.revert':
-        return { actionId: ACT };
+        return { actionId: ACT, consequences: false };
       case 'ai.undo':
-        return { ok: true, actionId: ACT };
+        return {
+          actionId: ACT,
+          undone: { id: ACT, title: 'Правка' },
+          pinnedVersions: [],
+          bodyRevisions: [],
+        };
       case 'entity.resolveRefs':
         if (
           opts.refsFailWith !== undefined &&
@@ -151,6 +156,7 @@ test('(д) «Рутины» с обновлением: плашка с [Срав
     within(plaque).getByRole('button', { name: 'Принять — прежняя версия сохранится' }),
   );
   await waitFor(() => expect(callsOf('supply.accept')).toEqual([{ key: 'routines' }]));
+  await vi.dynamicImportSettled();
   const toast = useToastStore.getState().toasts.find((t) => t.title.includes('Обновление принято'));
   expect(toast?.action?.label).toBe('Отменить');
 });
@@ -426,4 +432,55 @@ test('M-1: «⋯ → Приложения и расширения» открыв
   await waitFor(() =>
     expect(screen.getByRole('tab', { name: 'Общие' })).toHaveAttribute('aria-selected', 'true'),
   );
+});
+
+// ─── Срез 1в §6.3: снятый с поставки ключ upcoming (Фокус ревью п. 5) ─────────────────────────────
+
+/** Upcoming 1б, правленая владельцем: ключ снят с поставки, эталона кода нет — печать эталона в записи. */
+const UPCOMING_ROW = wireEntity({
+  id: id(11),
+  title: 'Моя неделя',
+  emoji: '🗓️',
+  aspects: [PAGE_ASPECT, SUPPLY_ASPECT],
+  body: 'Моё.',
+  props: {
+    [SUPPLY_KEY]: 'upcoming',
+    [SUPPLY_TEXT]: printPageRecord({
+      title: 'Upcoming',
+      emoji: '🗓️',
+      body: 'Горизонт планирования: неделя и дальше.',
+    }),
+  },
+});
+
+test('1в §6.3: у правленой Upcoming «⋯» рисуется — «Изменено вами», «Вернуть как было» → supply.revert, тост без эталона кода', async () => {
+  resetFrame(`/r/${UPCOMING_ROW.id}`);
+  const { callsOf } = renderApp({ rows: [SHELL_ROW, ...PAGES, UPCOMING_ROW, ...RECORDS_WORLD] });
+  await heading('Моя неделя');
+  await openMenu();
+  const own = screen.getByRole('group', { name: 'Этот экран' });
+  expect(within(own).getByTestId('menu-note')).toHaveTextContent('Изменено вами');
+  fireEvent.click(within(own).getByRole('menuitem', { name: 'Вернуть как было' }));
+  await waitFor(() => expect(callsOf('supply.revert')).toEqual([{ key: 'upcoming' }]));
+  // Подпись тоста — по записи, а не по эталону кода: у снятого ключа эталона нет, и `etalonOf` уронил бы
+  // обработчик уже ПОСЛЕ записи — владелец не увидел бы ни тоста, ни «Отменить».
+  await waitFor(() =>
+    expect(useToastStore.getState().toasts.map((t) => t.title)).toContain(
+      'Возвращено как было: «Моя неделя»',
+    ),
+  );
+});
+
+test('1в §6.3: с записи Upcoming «⋯ → Приложения и расширения» открывает настройки без падения', async () => {
+  resetFrame(`/r/${UPCOMING_ROW.id}`);
+  renderApp({ rows: [SHELL_ROW, ...PAGES, UPCOMING_ROW, ...RECORDS_WORLD] });
+  await heading('Моя неделя');
+  await openMenu();
+  fireEvent.click(
+    within(screen.getByRole('group', { name: 'Хост' })).getByRole('menuitem', {
+      name: 'Приложения и расширения',
+    }),
+  );
+  await heading('Настройки');
+  expect(await screen.findByRole('region', { name: 'Расширения' })).toBeInTheDocument();
 });

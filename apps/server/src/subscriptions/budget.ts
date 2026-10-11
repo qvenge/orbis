@@ -70,7 +70,7 @@ import { ExecError } from '../errors';
 import { compileClassMembership, compileContractPredicate } from '../expr/compile';
 import { type ExprEvalScope, evalExpr } from '../expr/eval';
 import { CORE_COLUMN, type CompileCtx, castedExpr } from '../query/compile-ast';
-import { ownerTimeZone } from '../query/context';
+import { ownerQuerySettings, WEEK_START } from '../query/context';
 import { disabledExtensionsOf } from '../registry/extensions';
 import type { RegistrySnapshot } from '../registry/load';
 import { toWireEntity } from '../wire';
@@ -103,9 +103,10 @@ export interface BudgetArgs {
 /**
  * Аргументы ведомостей ВНУТРИ движка. Валюта по умолчанию — НЕ поле `BudgetArgs`: его форму реестр
  * закрепил как `{month, today}`, и внешние читатели зовут движок ровно так. Валюту читает
- * `budgetOverviewOf` (`defaultCurrencyOf`) и передаёт вглубь этим типом; в `CompileCtx` поля под неё
- * нет и заводить его нельзя — контекст компиляции общий с Q, а валюта владельца к разбору запроса
- * отношения не имеет.
+ * `runLedgers` (`ownerQuerySettings` — одна выборка с поясом) и передаёт вглубь этим типом. С 1в она
+ * есть и в `CompileCtx` (`ownerCurrency`: сумма плитки по валютам, спека 1в §3.6) — то же значение
+ * того же чтения; поле здесь остаётся, потому что ведомости читают его не компилятором Q, а своими
+ * вычислителями декларации.
  *
  * `defaults` — карта умолчаний ЧТЕНИЯ из реестра (Р-К-29): движок обязан передать её в ОБА
  * вычислителя декларации (`envelopeLedgers`, `runList`), иначе `planned = false` в SQL отвечал бы
@@ -116,7 +117,7 @@ export interface LedgerArgs extends BudgetArgs {
   defaults: ReadonlyMap<string, ExprScalar>;
   /**
    * Зона владельца — Р-33; в Б-1 компилятор ведомостей стоял на `DEFAULT_TIMEZONE`, то есть считал
-   * дни чужой зоной. Читает `runLedgers` (`ownerTimeZone`) и кладёт ОДНО значение и в `cctx.timeZone`
+   * дни чужой зоной. Читает `runLedgers` (`ownerQuerySettings`) и кладёт ОДНО значение и в `cctx.timeZone`
    * (SQL-бэкенд, `AT TIME ZONE`), и сюда — в оба конструктора области интерпретатора: две зоны у
    * одной ведомости развели бы день момента в SQL и в TS (паритет — `expr/parity.test.ts`).
    */
@@ -696,17 +697,22 @@ export async function spentContributionOf(
  * выбора в декларации — `SLOT_AMBIGUOUS` (§С8-21): молчаливый выбор первого дал бы владельцу лимит
  * из аспекта, о котором он не думал.
  *
- * `prefer` — перечень секции подписки (`sources.movement.prefer` / `sources.envelope.prefer`), тот
- * же порядок-приоритет, что у `resolveSlotOnEntity` Повестки (`subscriptions/registry.ts`): первый
- * совпавший, а не «самый ранний по rank»; аспект из перечня, которого у записи нет, выбора не
- * делает. Экспорт — ради пина остатка 40 (Р-24): рубеж, который никто не проверил, — это рубеж,
+ * `prefer` — перечень секции подписки (`sources.movement.prefer` / `sources.envelope.prefer`), и его
+ * порядок — приоритет: первый совпавший, а не «самый ранний по rank»; аспект из перечня, которого у
+ * записи нет, выбора не делает. Экспорт — ради пина остатка 40 (Р-24): рубеж, который никто не проверил, — это рубеж,
  * которого нет.
+ *
+ * `entityId` — в `details` отказа (§1.1): владельцу, которому нужен `prefer`, отказ обязан назвать и
+ * ЗАПИСЬ, на которой встретились две привязки. С 1в это единственная дверь `SLOT_AMBIGUOUS` (движок
+ * подписки Повестки со своим `resolveSlotOnEntity` снят, §6.5), и её отказ — полной формы. Имени слота
+ * в нём нет по построению: привязка выбирается на КОНТРАКТ целиком, а не на слот.
  */
 export function bindingForEntity(
   cctx: CompileCtx,
   contract: string,
   aspects: readonly string[],
   prefer: readonly string[],
+  entityId?: string,
 ): ResolvedBinding | undefined {
   const found = bindingsOf(cctx.reg)
     .byContract(contract)
@@ -722,6 +728,7 @@ export function bindingForEntity(
       {
         subscription: BUDGET_SUBSCRIPTION_ID,
         contract,
+        ...(entityId !== undefined && { entityId }),
         aspects: found.map((b) => b.aspectId),
       },
     );
@@ -1092,7 +1099,7 @@ function wireEnvelope(e: RawEnvelope, cats: Map<string, CategoryInfo>): Envelope
 /** Величины строки списка — из СЛОТОВ контракта; `direction` переводится в слово провода классом. */
 function wireMovement(cctx: CompileCtx, def: BudgetSubscription, row: EntityRow) {
   const mv = def.sources.movement.contract;
-  const b = bindingForEntity(cctx, mv, row.aspects, def.sources.movement.prefer);
+  const b = bindingForEntity(cctx, mv, row.aspects, def.sources.movement.prefer, row.id);
   const props = row.props as Record<string, unknown>;
   const slot = (n: string, fallback = '') => String(slotValueOf(b, props, n) ?? fallback);
   const cls = classKeyOf(cctx, mv, 'direction', slot('direction') || null);
@@ -1111,7 +1118,7 @@ function wirePlanned(
   cats: Map<string, CategoryInfo>,
 ) {
   const mv = def.sources.movement.contract;
-  const b = bindingForEntity(cctx, mv, row.aspects, def.sources.movement.prefer);
+  const b = bindingForEntity(cctx, mv, row.aspects, def.sources.movement.prefer, row.id);
   const props = row.props as Record<string, unknown>;
   const ref = String(slotValueOf(b, props, 'category') ?? '');
   return {
@@ -1183,17 +1190,20 @@ async function runLedgers(
   reg: RegistrySnapshot,
   narrow: LedgerNarrowing = {},
 ): Promise<LedgerRun> {
-  const timeZone = await ownerTimeZone(tx, graphId);
+  const settings = await ownerQuerySettings(tx, graphId);
+  const timeZone = settings.timeZone;
   const cctx: CompileCtx = {
     graphId,
     today: args.today,
     timeZone,
+    weekStart: WEEK_START,
+    ownerCurrency: settings.currency,
     reg,
     thisEntityId: null,
   };
   const la: LedgerArgs = {
     ...args,
-    defaultCurrency: await defaultCurrencyOf(tx, graphId),
+    defaultCurrency: settings.currency,
     defaults: propertyDefaultsOf(reg),
     timeZone,
   };
@@ -1240,7 +1250,13 @@ async function runLedgers(
   // Ведомости конверта: сначала СВОИ (на них порог, `on_raw`), затем rollup дерева.
   const raws: RawEnvelope[] = rows.map((row) => {
     const props = propsForEval(row);
-    const binding = bindingForEntity(cctx, envContract, row.aspects, def.sources.envelope.prefer);
+    const binding = bindingForEntity(
+      cctx,
+      envContract,
+      row.aspects,
+      def.sources.envelope.prefer,
+      row.id,
+    );
     const seed: Record<string, ExprScalar> = {};
     for (const [name, agg] of Object.entries(def.aggregates)) {
       if (agg.kind === 'sum' && agg.scope === 'envelope') {
@@ -1366,7 +1382,7 @@ async function runList(
               : row.title
             : String(
                 slotValueOf(
-                  bindingForEntity(cctx, mv, row.aspects, def.sources.movement.prefer),
+                  bindingForEntity(cctx, mv, row.aspects, def.sources.movement.prefer, row.id),
                   row.props as Record<string, unknown>,
                   part.slot,
                 ) ?? '',
@@ -1445,6 +1461,7 @@ export async function budgetOverviewOf(
         def.sources.movement.contract,
         row.aspects,
         def.sources.movement.prefer,
+        row.id,
       ),
       row.props as Record<string, unknown>,
       'category',

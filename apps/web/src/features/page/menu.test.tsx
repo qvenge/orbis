@@ -12,6 +12,7 @@ import { parseBody, serializeBody } from '@orbis/shared/doc';
 import { buildAddress, currentEntry } from '@orbis/shared/nav';
 import { focusManager } from '@tanstack/react-query';
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { closeHistory, redoDepth, undoDepth } from '@tiptap/pm/history';
 import type { Editor } from '@tiptap/react';
 import { useState } from 'react';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
@@ -21,6 +22,7 @@ import {
   installCrashTrap,
   type MockHandler,
   renderWithProviders,
+  staleBodyError,
   trpcError,
   type WireEntityFixture,
   wireEntity,
@@ -40,6 +42,7 @@ import {
   structureHandler,
 } from '../entity-detail/structure-fixtures';
 import { type DetailStructure, snapshotDetailStructure } from '../entity-detail/structure-snapshot';
+import { canRedoStep, canUndoStep } from '../entity-editor/arrows-stack';
 import { readDraft } from '../entity-editor/draft-storage';
 import { CHANGE_VIEW_QUESTION, HIDE_AS_VERSION_HINT } from './ChangeViewDialog';
 import { changeViewPlan, TEXT_BEFORE_VIEW_CHANGE } from './change-view';
@@ -131,7 +134,7 @@ type Op =
       tool: 'entity_update';
       input: {
         id: string;
-        expectedUpdatedAt?: string;
+        expectedBodyRevision?: number;
         body?: string;
         props?: Record<string, unknown>;
         unset?: string[];
@@ -152,19 +155,35 @@ const copy = (e: WireEntityFixture): WireEntityFixture => ({
   aspects: [...e.aspects],
 });
 
+/**
+ * Ревизия тела записи мира: у фикстур её нет (форма общая со строками списков), а сервер отдаёт её в каждом чтении
+ * записи — мир заводит её сам, с первой.
+ */
+const revisionOf = (e: WireEntityFixture): number => e.bodyRevision ?? 1;
+
 function makeWorld(rows: WireEntityFixture[]): World {
-  return { rows: new Map(rows.map((r) => [r.id, copy(r)])), pins: [], beforeBatch: null };
+  return {
+    rows: new Map(rows.map((r) => [r.id, { ...copy(r), bodyRevision: revisionOf(r) }])),
+    pins: [],
+    beforeBatch: null,
+  };
 }
 
 /**
  * Пачка как её исполнил бы сервер: тело, аспекты, значения, снятия — и новая версия строки. Сверка
- * `expectedUpdatedAt` (§5.2) — до любой записи: разошлась хоть у одной правки — отвергнута вся пачка.
+ * замка текста `expectedBodyRevision` (спека скорости §8.1) — до любой записи: разошлась хоть у одной
+ * правки — отвергнута вся пачка.
  */
 function applyBatch(world: World, operations: Op[]) {
   for (const op of operations) {
-    if (op.tool !== 'entity_update' || op.input.expectedUpdatedAt === undefined) continue;
-    if (world.rows.get(op.input.id)?.updatedAt !== op.input.expectedUpdatedAt)
-      throw trpcError('CONFLICT', 'STALE_VERSION');
+    if (op.tool !== 'entity_update' || op.input.expectedBodyRevision === undefined) continue;
+    const row = world.rows.get(op.input.id);
+    if (row?.bodyRevision !== op.input.expectedBodyRevision)
+      throw staleBodyError({
+        id: op.input.id,
+        expected: op.input.expectedBodyRevision,
+        current: row?.bodyRevision,
+      });
   }
   world.beforeBatch = new Map([...world.rows].map(([id, r]) => [id, copy(r)]));
   for (const op of operations) {
@@ -179,6 +198,7 @@ function applyBatch(world: World, operations: Op[]) {
     if (op.input.body !== undefined) {
       row.body = op.input.body;
       row.bodyDoc = parseBody(op.input.body);
+      row.bodyRevision = revisionOf(row) + 1;
     }
     const attach = op.input.aspects?.attach ?? [];
     const detach = op.input.aspects?.detach ?? [];
@@ -206,12 +226,17 @@ function worldHandler(f: StructureFixture, world: World): MockHandler {
     if (isTemplatesList(path, input)) return templatesOf(world);
     if (path === 'entity.updateBatch') {
       applyBatch(world, (input as { operations: Op[] }).operations);
-      return { actionId: ACTION_ID, results: [] };
+      return { actionId: ACTION_ID, consequences: false, results: [] };
     }
     if (path === 'ai.undo') {
       if (world.beforeBatch !== null) world.rows = world.beforeBatch;
       world.beforeBatch = null;
-      return { ok: true, actionId: ACTION_ID, results: [] };
+      return {
+        actionId: ACTION_ID,
+        undone: { id: ACTION_ID, title: 'Правка' },
+        pinnedVersions: [],
+        bodyRevisions: [],
+      };
     }
     if (path === 'entity.get') {
       const row = world.rows.get((input as { id: string }).id);
@@ -349,9 +374,9 @@ function bodyBecameText(before: DetailStructure, planCase: 1 | 2): DetailStructu
   };
 }
 
-const becomePageOp = (id: string, updatedAt: string, body: string): Op => ({
+const becomePageOp = (id: string, bodyRevision: number, body: string): Op => ({
   tool: 'entity_update',
-  input: { id, expectedUpdatedAt: updatedAt, body, aspects: { attach: [PAGE_ASPECT] } },
+  input: { id, expectedBodyRevision: bodyRevision, body, aspects: { attach: [PAGE_ASPECT] } },
 });
 
 // --- Запись -------------------------------------------------------------------------------------
@@ -376,6 +401,7 @@ describe('«Сделать страницей»', () => {
     await openMenu();
     expect(menuLabels()).not.toContain('Сделать страницей');
     fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('menu')).toBeNull());
 
     fireEvent.click(await screen.findByRole('button', { name: 'Отменить' }));
     await waitFor(() =>
@@ -403,7 +429,7 @@ describe('«Изменить вид только этой записи» (С1а-
 
     await screen.findByTestId('page-view');
     expect(batches()).toEqual([
-      [becomePageOp(f.entity.id, f.entity.updatedAt, plan.case === 2 ? plan.body : '')],
+      [becomePageOp(f.entity.id, revisionOf(f.entity), plan.case === 2 ? plan.body : '')],
     ]);
     await waitFor(() => expect(renderedTexts()).toContain(f.entity.body));
     const after = await settle(container, calls);
@@ -421,7 +447,13 @@ describe('«Изменить вид только этой записи» (С1а-
     await choose('Изменить вид только этой записи');
     await screen.findByTestId('page-view');
     expect(batches()).toEqual([
-      [becomePageOp(f.entity.id, f.entity.updatedAt, HOST_TEMPLATE_TEXT.replace('{{body}}\n', ''))],
+      [
+        becomePageOp(
+          f.entity.id,
+          revisionOf(f.entity),
+          HOST_TEMPLATE_TEXT.replace('{{body}}\n', ''),
+        ),
+      ],
     ]);
     const after = await settle(container, calls);
     expect(after).toEqual(bodyBecameText(before, 1));
@@ -447,7 +479,13 @@ describe('«Изменить вид только этой записи» (С1а-
     test('случай 2: карточка задачи до и после, карточки «Страница» нет (РП-25)', async () => {
       const { f, batches } = await changeView('Заметка к задаче');
       expect(batches()).toEqual([
-        [becomePageOp(f.entity.id, f.entity.updatedAt, '{{title}}\nЗаметка к задаче\n{{cards}}\n')],
+        [
+          becomePageOp(
+            f.entity.id,
+            revisionOf(f.entity),
+            '{{title}}\nЗаметка к задаче\n{{cards}}\n',
+          ),
+        ],
       ]);
       await waitFor(() => expect(renderedTexts().join('')).toContain('Заметка к задаче'));
       await waitFor(() => expect(screen.getByTestId('aspect-orbis/task')).toBeInTheDocument());
@@ -457,7 +495,7 @@ describe('«Изменить вид только этой записи» (С1а-
     test('случай 1: пустое тело — карточка задачи до и после', async () => {
       const { f, batches } = await changeView('');
       expect(batches()).toEqual([
-        [becomePageOp(f.entity.id, f.entity.updatedAt, '{{title}}\n{{cards}}\n')],
+        [becomePageOp(f.entity.id, revisionOf(f.entity), '{{title}}\n{{cards}}\n')],
       ]);
       await waitFor(() => expect(screen.getByTestId('aspect-orbis/task')).toBeInTheDocument());
       expect(screen.queryByTestId(`aspect-${PAGE_ASPECT}`)).toBeNull();
@@ -516,7 +554,7 @@ describe('«Изменить вид только этой записи» (С1а-
             tool: 'entity_version_pin',
             input: { entity_id: f.entity.id, label: TEXT_BEFORE_VIEW_CHANGE },
           },
-          becomePageOp(f.entity.id, f.entity.updatedAt, plan.hideAsVersion),
+          becomePageOp(f.entity.id, revisionOf(f.entity), plan.hideAsVersion),
         ],
       ]);
       // Версия сняла ПРЕЖНИЙ текст: закрепление стоит в пачке первым.
@@ -531,7 +569,9 @@ describe('«Изменить вид только этой записи» (С1а-
       const { dialog, batches } = await ask();
       fireEvent.click(within(dialog).getByRole('button', { name: 'Показать внизу страницы' }));
       await screen.findByTestId('page-view');
-      expect(batches()).toEqual([[becomePageOp(f.entity.id, f.entity.updatedAt, plan.showBelow)]]);
+      expect(batches()).toEqual([
+        [becomePageOp(f.entity.id, revisionOf(f.entity), plan.showBelow)],
+      ]);
       await waitFor(() => expect(renderedTexts()).toContain(f.entity.body));
     });
   });
@@ -903,6 +943,7 @@ describe('диалоги меню держат снимок записи, на �
     row.title = 'Проект, правленный мимо экрана';
     row.body = 'Текст, дописанный с телефона';
     row.bodyDoc = parseBody(row.body);
+    row.bodyRevision = revisionOf(row) + 1;
     row.updatedAt = '2026-09-25T11:00:00.000Z';
     act(() => {
       focusManager.setFocused(false);
@@ -914,9 +955,9 @@ describe('диалоги меню держат снимок записи, на �
     const dialog = screen.getByRole('dialog');
     fireEvent.click(within(dialog).getByRole('button', { name: 'Показать внизу страницы' }));
     await waitFor(() => expect(batches()).toHaveLength(1));
-    // Версия — та, из тела которой построен план, а не приехавшая позже.
+    // Ревизия — та, из тела которой построен план, а не приехавшая позже.
     expect(batches()[0]?.[0]).toMatchObject({
-      input: { expectedUpdatedAt: f.entity.updatedAt },
+      input: { expectedBodyRevision: revisionOf(f.entity) },
     });
     expect(await screen.findByText(BATCH_FAILED)).toBeInTheDocument();
     expect(world.rows.get(f.entity.id)?.body).toBe('Текст, дописанный с телефона');
@@ -941,7 +982,7 @@ describe('текст записи сломал бы шаблон — вопро�
     if (plan.case !== 3) throw new Error('ожидался случай 3');
     fireEvent.click(within(dialog).getByRole('button', { name: 'Показать внизу страницы' }));
     await waitFor(() => expect(batches()).toHaveLength(1));
-    expect(batches()).toEqual([[becomePageOp(f.entity.id, f.entity.updatedAt, plan.showBelow)]]);
+    expect(batches()).toEqual([[becomePageOp(f.entity.id, revisionOf(f.entity), plan.showBelow)]]);
   });
 });
 
@@ -1007,17 +1048,22 @@ describe('жест меню при неотправленной правке т�
       const inp = input as {
         id: string;
         bodyDoc?: { v: number; doc: object };
-        expectedUpdatedAt?: string;
+        expectedBodyRevision?: number;
       };
       const row = world.rows.get(inp.id);
       if (row === undefined) throw new Error('нет записи');
-      if (inp.bodyDoc !== undefined && inp.expectedUpdatedAt !== row.updatedAt) {
+      if (inp.bodyDoc !== undefined && inp.expectedBodyRevision !== row.bodyRevision) {
         log.push('update:STALE');
-        throw trpcError('CONFLICT', 'STALE_VERSION');
+        throw staleBodyError({
+          id: inp.id,
+          expected: inp.expectedBodyRevision,
+          current: row.bodyRevision,
+        });
       }
       if (inp.bodyDoc !== undefined) {
         row.bodyDoc = inp.bodyDoc as never;
         row.body = serializeBody(inp.bodyDoc as never);
+        row.bodyRevision = revisionOf(row) + 1;
       }
       row.updatedAt = '2026-09-25T13:00:00.000Z';
       log.push('update:OK');
@@ -1137,6 +1183,7 @@ describe('жест меню при неотправленной правке т�
     const row = r.world.rows.get(f.entity.id);
     if (row === undefined) throw new Error('нет записи');
     row.updatedAt = '2026-09-24T00:00:00.000Z';
+    row.bodyRevision = revisionOf(row) + 1;
     row.body = 'ЧУЖОЕ';
     row.bodyDoc = parseBody('ЧУЖОЕ');
     await editUnsent('МОЁ ');
@@ -1155,16 +1202,12 @@ describe('жест меню при неотправленной правке т�
     expect(sent()).toBe(before);
     expect(r.batches()).toEqual([]);
 
-    // «Обновить» снимает плашку — к ней больше не отослать: жест снова пробует досыл (честное
-    // «Сохраняем текст…»), а упади он опять 409 — плашка вернётся вместе с запретом.
+    // R19: Refresh предлагает отдельный черновик, а не пытается молча дослать его старой ревизией.
     fireEvent.click(await screen.findByRole('button', { name: 'Обновить' }));
-    await waitFor(() => expect(screen.queryByRole('button', { name: 'Обновить' })).toBeNull());
-    useToastStore.setState({ toasts: [] });
+    expect(await screen.findByRole('button', { name: 'Оставить моё' })).toBeInTheDocument();
     await choose('Сделать страницей');
-    expect(await screen.findByText(BODY_SAVING)).toBeInTheDocument();
-    await waitFor(() => expect(sent()).toBe(before + 1));
-    expect(await screen.findByRole('button', { name: 'Обновить' })).toBeInTheDocument();
-    expect(r.batches()).toEqual([]);
+    await waitFor(() => expect(r.batches()).toHaveLength(1));
+    expect(sent()).toBe(before);
   });
 
   test('«Сделать страницей»: пачки нет, тост, текст досылается без 409', async () => {
@@ -1244,3 +1287,42 @@ describe('меню при настройке чужого шаблона — п�
     expect(topAddress()).toEqual(recordAddress(TPL_A));
   });
 });
+
+for (const bodyGesture of [false, true])
+  test(`Task20 populated histories actual page menu ${bodyGesture ? 'body batch resets' : 'aspect-only make-page preserves'}`, async () => {
+    const f = fixture('note-plain');
+    const r = open(f);
+    fireEvent.click(await screen.findByTestId('editor-preview'));
+    const node = await waitFor(
+      () => {
+        const node = screen.getByTestId('body-editor').querySelector('.ProseMirror');
+        if (!node) throw new Error('native editor pending');
+        return node as HTMLElement & { editor: Editor };
+      },
+      { timeout: 5000 },
+    );
+    const ed = node.editor;
+    act(() => {
+      ed.commands.insertContentAt(1, 'XYZ');
+      ed.view.dispatch(closeHistory(ed.state.tr));
+      ed.commands.deleteRange({ from: 1, to: 4 });
+    });
+    fireEvent.change(screen.getByTestId('title-edit'), { target: { value: 'Новое имя' } });
+    expect(canUndoStep(f.entity.id)).toBe(true);
+    expect(undoDepth(ed.state)).toBe(2);
+    await choose(bodyGesture ? 'Изменить вид только этой записи' : 'Сделать страницей');
+    await waitFor(() => expect(r.batches()).toHaveLength(1));
+    const op = r.batches()[0]?.find((op) => op.tool === 'entity_update');
+    if (op?.tool !== 'entity_update') throw new Error('actual page update missing');
+    if (bodyGesture) {
+      expect(op.input.body).toBeDefined();
+      await waitFor(() => expect(canUndoStep(f.entity.id)).toBe(false));
+      expect(canRedoStep(f.entity.id)).toBe(false);
+      expect(undoDepth(ed.state)).toBe(0);
+      expect(redoDepth(ed.state)).toBe(0);
+    } else {
+      expect(op.input.body).toBeUndefined();
+      expect(canUndoStep(f.entity.id)).toBe(true);
+      expect(undoDepth(ed.state)).toBe(2);
+    }
+  });

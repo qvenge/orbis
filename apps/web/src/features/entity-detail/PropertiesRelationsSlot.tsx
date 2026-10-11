@@ -1,4 +1,5 @@
 import { Component, lazy, type ReactNode, Suspense, useState } from 'react';
+import { isUndoEpoch, undoEpoch } from '../undo/undo-epoch';
 import type { BodyGateRef } from './EntityBody';
 import type { LatestPanelHost } from './properties-relations/panel-host';
 import type { WireEntity } from './record-host';
@@ -14,15 +15,18 @@ export async function runLazyPanelHost(
 ) {
   if (hostFlights.has(readLatest)) return;
   hostFlights.add(readLatest);
+  const epoch = undoEpoch();
   const frozen = { ...target };
   let executing: LatestPanelHost | undefined;
   try {
     const module = await loader();
+    if (!isUndoEpoch(epoch)) return;
     const latest = readLatest();
     if (executingHosts.has(latest)) return;
     executing = latest;
     executingHosts.add(latest);
-    const dispatch = () => module.dispatchPanelHost(action, frozen, readLatest);
+    const dispatch = () =>
+      isUndoEpoch(epoch) ? module.dispatchPanelHost(action, frozen, readLatest) : Promise.resolve();
     await (execute ? execute(dispatch) : dispatch());
   } finally {
     if (executing) executingHosts.delete(executing);

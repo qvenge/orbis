@@ -6,40 +6,19 @@
 import { describe, expect, test } from 'bun:test';
 import { BUILTIN_CONTRACT_DEFS } from './builtin-contracts';
 import { BUDGET_OVERVIEW_SUBSCRIPTION, BUILTIN_SUBSCRIPTION_DEFS } from './builtin-subscriptions';
-import { AGENDA_DEF, BUDGET_DEF } from './subscription-fixtures';
+import { BUDGET_DEF } from './subscription-fixtures';
 import { type BudgetSubscription, subscriptionDefinitionSchema } from './subscription-type';
 
 describe('встроенные подписки §Б5-4', () => {
-  test('две подписки среза: agenda и budget-overview, обе проходят строгую схему', () => {
-    expect(BUILTIN_SUBSCRIPTION_DEFS.map((s) => s.id)).toEqual([
-      'orbis/agenda',
-      'orbis/budget-overview',
+  test('встроенная подписка ОДНА — orbis/budget-overview (Повестка ушла в тело записи, спека 1в §6.5)', () => {
+    // Повестка с 1в — запись поставки из блоков: настроить её значит править тело, а не подписку.
+    // Вторая встроенная строка вернула бы движок, которого нет, и загрузчик реестра упал бы на ней.
+    expect(BUILTIN_SUBSCRIPTION_DEFS.map((s) => [s.id, s.surface])).toEqual([
+      ['orbis/budget-overview', 'finance/budget-overview'],
     ]);
-    // Повестка — ядро с 1б (спека §8.1, РП-2): выключению не подлежит.
-    expect(BUILTIN_SUBSCRIPTION_DEFS[0]?.surface).toBe('core/agenda');
-    expect(BUILTIN_SUBSCRIPTION_DEFS[0]?.module).toBe(null);
     for (const s of BUILTIN_SUBSCRIPTION_DEFS) {
       expect(() => subscriptionDefinitionSchema.parse(s.definition)).not.toThrow();
     }
-  });
-  test('ссылки — на контракты и наборы, не на свойства; окно — параметрами (§Б5-2, Р-К-4)', () => {
-    const def = subscriptionDefinitionSchema.parse(BUILTIN_SUBSCRIPTION_DEFS[0]?.definition);
-    if (def.engine !== 'agenda') throw new Error('движок не agenda');
-    expect(def.show.contract).toBe('orbis/when');
-    expect(def.show.slot).toBe('moment');
-    expect(def.overdue.slots).toEqual(['deadline', 'moment']);
-    expect(def.hide).toEqual({ contract: 'orbis/recurrence', set: 'templates' });
-    // Сырых ссылок на свойства в СИСТЕМНОМ сиде нет вовсе; prefer пуст (рамка §4-3)
-    expect(JSON.stringify(def)).not.toContain('"prop"');
-    expect([def.show.prefer, def.overdue.prefer]).toEqual([[], []]);
-    expect(def.params).toEqual(['window_from', 'window_to']);
-    expect(def.show.window).toEqual({ from: { ctx: '$today' }, to: { param: 'window_to' } });
-  });
-  test('каноническая Agenda ОДНА: сид — тот же литерал, что норматив (Ф-Б1-27)', () => {
-    // Не «глубоко равен», а ТОТ ЖЕ объект: копия разошлась бы с нормативом молча, и тест на
-    // равенство пришлось бы поддерживать вручную при каждом новом поле декларации.
-    expect(BUILTIN_SUBSCRIPTION_DEFS[0]?.definition).toBe(AGENDA_DEF);
-    expect(BUILTIN_SUBSCRIPTION_DEFS[0]?.definition).toEqual(AGENDA_DEF);
   });
 });
 
@@ -47,12 +26,12 @@ describe('подписка Budget §Б5-4: форма декларации', () 
   const row = BUILTIN_SUBSCRIPTION_DEFS.find((d) => d.id === 'orbis/budget-overview');
   const def = row?.definition as BudgetSubscription | undefined;
 
-  test('вторая встроенная подписка: поверхность finance/budget-overview, модуль finance', () => {
+  test('встроенная подписка Бюджета: поверхность finance/budget-overview, модуль finance', () => {
     // Именованная запись и элемент массива — ОДИН объект, а не копия.
     expect(row).toBe(BUDGET_OVERVIEW_SUBSCRIPTION);
     expect(row?.surface).toBe('finance/budget-overview');
     expect(row?.module).toBe('finance');
-    expect(BUILTIN_SUBSCRIPTION_DEFS).toHaveLength(2); // agenda (задача 6) + budget
+    expect(BUILTIN_SUBSCRIPTION_DEFS).toHaveLength(1); // Повестка ушла (1в §6.5)
   });
 
   test('декларация проходит строгую схему подписки', () => {

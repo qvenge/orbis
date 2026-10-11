@@ -1,4 +1,5 @@
 import type { BodyKind } from '@orbis/shared/doc/placement';
+import type { ParseOptions } from '@orbis/shared/query';
 import { createContext, type ReactNode, useContext } from 'react';
 
 /**
@@ -22,4 +23,17 @@ export function BodyKindProvider({ kind, children }: { kind: BodyKind; children:
  */
 export function useBodyKind(): BodyKind {
   return useContext(BodyKindContext);
+}
+
+const PAGE_PLACE: ParseOptions = { place: 'page' };
+const NO_PLACE: ParseOptions = {};
+
+/**
+ * Место разбора текста запроса по роду тела (спека 1в §3.8, РП-5): на странице и в шаблоне ссылка
+ * `$<имя>` законна, в заметке — отказ `PAGE_ONLY` с подсказкой. Одно правило на все разборы web
+ * (блок данных, конструктор, строковый редактор) — то же, что у проблем тела (`placement.ts`).
+ * Объекты — модульные константы: они стоят в зависимостях `useMemo` разбора.
+ */
+export function placeOf(kind: BodyKind): ParseOptions {
+  return kind === 'note' ? NO_PLACE : PAGE_PLACE;
 }

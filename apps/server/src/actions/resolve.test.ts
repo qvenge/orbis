@@ -23,7 +23,7 @@ requireEnv();
 
 const { db, client } = appDb();
 const TODAY = '2026-09-16';
-const ARGS = { today: TODAY, timeZone: 'Europe/Moscow' };
+const ARGS = { today: TODAY, timeZone: 'Europe/Moscow', ownerCurrency: 'RUB' };
 const CATEGORY = newId();
 
 let owner: GraphId;

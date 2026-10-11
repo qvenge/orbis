@@ -4,6 +4,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { BUILTIN_ASPECT_DEFS, type GraphId, type MyQueueResult } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import { adminDb, appDb, freshGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
+import { actionsOf } from '../../test/journal-helpers';
 import { withIdentity } from '../db/with-identity';
 import { execute } from '../executor/executor';
 import { listRunUnits } from '../policy/pending';
@@ -17,17 +18,8 @@ requireEnv();
 
 const { db, client } = appDb();
 const MINUTE = 60_000;
-const {
-  actionsOf,
-  link,
-  propsOf,
-  routineCtx,
-  seedEntity,
-  seedRoutine,
-  seedRoutineRun,
-  worker,
-  workerGrant,
-} = agentLoopHelpers(db);
+const { link, propsOf, routineCtx, seedEntity, seedRoutine, seedRoutineRun, worker, workerGrant } =
+  agentLoopHelpers(db);
 
 function minutesBefore(n: number): string {
   return iso(new Date(T0.getTime() - n * MINUTE));
@@ -135,7 +127,7 @@ describe('sweepStaleRuns (С6, инвариант 6)', () => {
     const actions = await actionsOf(owner);
     const sweepActions = actions.filter((a) => a.source === 'system');
     expect(sweepActions).toHaveLength(2);
-    expect(new Set(sweepActions.map((a) => a.run_id))).toEqual(new Set([clean.runId, dirty.runId]));
+    expect(new Set(sweepActions.map((a) => a.runId))).toEqual(new Set([clean.runId, dirty.runId]));
     expect(sweepActions.every((a) => a.type === 'batch')).toBe(true);
   });
 
@@ -461,7 +453,7 @@ describe('sweepStaleRuns: пачка переживает смерть проц�
 
     // Писатель флажка — система (§9.6): будь он `ui`, «отмени последнее» после «Принять»
     // снимало бы флажок вместо действия владельца
-    const action = (await actionsOf(owner)).find((a) => a.run_id === runId);
+    const action = (await actionsOf(owner)).find((a) => a.runId === runId);
     expect(action?.source).toBe('system');
   });
 });

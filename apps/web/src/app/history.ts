@@ -101,9 +101,11 @@ function isNavModel(x: unknown): x is NavModel {
 function isOverlay(x: unknown): x is NavOverlay | null {
   if (x === null) return true;
   if (!isObj(x) || typeof x.path !== 'string') return false;
-  if (x.kind === 'reserved') return x.key === 'budget' || x.key === 'agenda';
+  // `/agenda` с 1в — не плашка, а запись поставки (§6.2): сохранённый в истории вкладки резерв `agenda`
+  // прежнего клиента — чужая форма, как любая другая.
+  if (x.kind === 'reserved') return x.key === 'budget';
   if (x.kind === 'legacy-thread') return typeof x.threadId === 'string';
-  if (x.kind === 'legacy-supply') return x.key === 'records';
+  if (x.kind === 'legacy-supply') return x.key === 'records' || x.key === 'agenda';
   return false;
 }
 

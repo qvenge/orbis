@@ -11,6 +11,7 @@ import { navAt } from '../../../test/nav';
 import { BUILTIN_REGISTRY, registryReply } from '../../../test/registry';
 import { trpc } from '../../../trpc';
 import { previewCandidatesAst } from '../../page/TemplatePreview';
+import { resetUndoSession } from '../../undo/undo-epoch';
 import { resetDetailMenuModuleForTests } from '../DetailMenuSlot';
 import { DetailScreen } from '../DetailScreen';
 import { PropertiesRelationsSlot, runLazyPanelHost } from '../PropertiesRelationsSlot';
@@ -237,6 +238,32 @@ it.each([
     expect(host.stopPage).not.toHaveBeenCalled();
     expect(host.setHostView).not.toHaveBeenCalled();
   }
+});
+it.each([
+  'makePage',
+  'openBody',
+] as const)('delayed %s dispatcher from an old session cannot execute on a same-id new host', async (action) => {
+  const host = latest();
+  let release: () => void = () => {};
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const pending = runLazyPanelHost(
+    action,
+    { entityId: id, readOnly: false },
+    () => host,
+    async () => {
+      await gate;
+      return import('./panel-host');
+    },
+  );
+  resetUndoSession();
+  release();
+  await pending;
+  expect(host.makePage).not.toHaveBeenCalled();
+  expect(host.setMode).not.toHaveBeenCalled();
+  expect(host.setHostView).not.toHaveBeenCalled();
+  expect(host.onClose).not.toHaveBeenCalled();
 });
 it('delayed dispatcher reads after import; A to B and context changes cannot use captured A handlers', async () => {
   let release: () => void = () => {};

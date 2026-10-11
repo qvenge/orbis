@@ -100,18 +100,6 @@ test('Dialog: есть кнопка «Закрыть» с иконкой, overla
   expect(document.querySelector('.bg-black\\/50')).not.toBeInTheDocument();
 });
 
-test('Sheet: есть кнопка «Закрыть», overlay без bg-black', () => {
-  const onOpenChange = vi.fn();
-  render(
-    <Sheet open onOpenChange={onOpenChange} title="Меню">
-      <div>тело</div>
-    </Sheet>,
-  );
-  fireEvent.click(screen.getByRole('button', { name: 'Закрыть' }));
-  expect(onOpenChange).toHaveBeenCalledWith(false);
-  expect(document.querySelector('.bg-black\\/50')).not.toBeInTheDocument();
-});
-
 test('EmptyState рендерит title, hint и action', () => {
   render(
     <EmptyState

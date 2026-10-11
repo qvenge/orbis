@@ -1,13 +1,8 @@
-import { TEMPLATE_FOR_PROPERTY } from '@orbis/shared';
 import { aspectLabel } from '../../lib/registry/labels';
 import { useRegistry } from '../../lib/registry/useRegistry';
 import { Card } from '../../ui/Card';
 
-/** Значение «Шаблон для» — список id аспектов; иное (не массив, не строки) — пусто. */
-export function templateForOf(props: Readonly<Record<string, unknown>>): string[] {
-  const value = props[TEMPLATE_FOR_PROPERTY];
-  return Array.isArray(value) ? value.filter((x): x is string => typeof x === 'string') : [];
-}
+export { templateForOf } from './template-for';
 
 /** Подписи аспектов набора в кавычках: «„Проект“», «„Проект“ и „Задача“», «„A“, „B“ и „C“». */
 export function quotedAspects(labels: readonly string[]): string {

@@ -25,7 +25,6 @@ import {
   type BudgetOverview,
   type BudgetStatusResult,
   type BudgetSubscription,
-  batchAuditMessageId,
   type CategoryTrendPoint,
   type EnvelopeStatus,
   type GraphId,
@@ -39,7 +38,8 @@ import { userSettings } from '../db/schema';
 import { type Tx, withIdentity } from '../db/with-identity';
 import { ExecError, type ExecErrorCode } from '../errors';
 import { execute } from '../executor/executor';
-import { makeChatJournalSink } from '../executor/journal';
+import { makeJournalSink } from '../executor/journal';
+import { findBatch } from '../executor/journal-read';
 import type {
   ActorKind,
   ExecuteRequest,
@@ -270,9 +270,9 @@ export async function categoryTrend(
 // нового периода одним batch_execute
 // ---------------------------------------------------------------------------
 
-// Синк один на модуль (как post-due.ts): состояния не хранит, audit-сообщение batch
+// Синк один на модуль (как post-due.ts): состояния не хранит, запись журнала пачки
 // пишется тем же tx, что операции executor'а (§7.8).
-const rolloverSink = makeChatJournalSink();
+const rolloverSink = makeJournalSink();
 
 /**
  * Округление ВВЕРХ до кратного 100 — эвристика suggestedLimit для категории с тратами
@@ -559,7 +559,7 @@ export async function rolloverCreate(
   },
   /**
    * Шов сериализации «Принять» (`approvePending`): замок единицы и перепроверка «не отклонена» —
-   * В ТОЙ ЖЕ транзакции, что audit-сообщение, как у пачки (`ExecutorDeps.beforeStages`). Без него
+   * В ТОЙ ЖЕ транзакции, что запись журнала, как у пачки (`ExecutorDeps.beforeStages`). Без него
    * конкурентные «Принять» и «Отклонить» проходили бы свои проверки до чужого коммита (write-skew).
    */
   beforeStages?: ExecutorDeps['beforeStages'],
@@ -577,12 +577,11 @@ export async function rolloverCreate(
   }
 
   const { start, end } = monthRange(input.month);
-  const auditId = batchAuditMessageId(who.graph, input.batchId);
   const categoryIds = input.rows.map((r) => r.categoryId);
 
   // Фаза чтения: replay-детект, defaultCurrency, титулы, пречек преемников
   const { defCur, catMap } = await withIdentity(db, who, async (tx) => {
-    const replay = (await rolloverSink.findByAuditId(tx, auditId)) !== undefined;
+    const replay = (await findBatch(tx, who.graph, input.batchId)) !== undefined;
     const currency = await defaultCurrencyOf(tx, who.graph);
     // Р-13: параметры перехода — СТРОКА каталога на аспекте `orbis/budget`, а не поле подписки.
     // Снимок читается тут же, в фазе чтения той же tx: второй источник декларации разошёлся бы с тем
@@ -659,6 +658,7 @@ export async function rolloverCreate(
   }
   return {
     actionId: r.actionId,
+    consequences: r.consequences,
     // results batch — только запрошенные операции (§9.2): по конверту на row
     envelopeIds: (r.results as WireEntity[]).map((e) => e.id),
     idempotentReplay: r.idempotentReplay,

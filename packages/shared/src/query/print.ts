@@ -10,8 +10,8 @@
  * одним и тем же текстом. Порядок детей `and`/`or` печать НЕ переставляет — он часть
  * дерева: сортировка сделала бы `parse(print(a)) ≡ a` неверным для любого дерева, собранного
  * формой не в алфавитном порядке. Проекция печатается фиксированным хвостом
- * (`sortBy`, `limit`, `display`, `columns`, `aggregate`, `hide_empty`, `title` — порядок РП-4
- * среза страниц), потому что она — не предикаты и порядка не несёт.
+ * (`sortBy`, `group`, `limit`, `display`, `columns`, `aggregate`, `hide_empty`, `title` — порядок
+ * РП-4 среза страниц и 1в §5.2), потому что она — не предикаты и порядка не несёт.
  *
  * Печать ТОТАЛЬНА, а грамматика v1 — плоская (§А5-3д). Дерево, которое плоским текстом не
  * выражается (OR между разными свойствами, вложенные группы), печатается СКОБКАМИ, и такой
@@ -20,12 +20,13 @@
  */
 import type {
   QueryAst,
+  QueryFieldRef,
   QueryFilterNode,
   QueryPropValue,
   QueryRelPredicate,
   QueryScalar,
 } from './ast';
-import { QUERY_DATE_TOKENS } from './ast';
+import { fieldRefKey, QUERY_DATE_TOKENS } from './ast';
 import { effectiveLabel, isExcludeBlockedSugar, type ParseRegistry } from './parse-ast';
 
 export type QueryPrintForm = 'key' | 'label';
@@ -61,15 +62,18 @@ const DATE_TOKEN_WORDS: ReadonlySet<string> = new Set(QUERY_DATE_TOKENS);
 const QUOTE_TRIGGER_RE = /[\s,=|&<>!"\\()}]/;
 
 /**
- * Кавычки нужны ещё в трёх случаях, где неквотированный текст вернулся бы ДРУГИМ AST:
+ * Кавычки нужны ещё в четырёх случаях, где неквотированный текст вернулся бы ДРУГИМ AST:
  * `..` разобрался бы диапазоном; пустая строка — «пустое значение»; слово относительного
- * времени (`today`) стало бы токеном, а не литералом.
+ * времени (`today`) стало бы токеном, а не литералом; ведущий `$` (1в §5.1) — ссылкой на параметр
+ * страницы. У `$` кавычки ставятся на ЛЮБОЙ литерал с ним в начале, а не только на `$<имя>`:
+ * правило проще формы имени, и разойтись с `PARAM_NAME_RE` ему нечем.
  */
 function needsQuote(value: string): boolean {
   if (value === '') return true;
   if (value !== value.trim()) return true;
   if (value.includes('..')) return true;
   if (DATE_TOKEN_WORDS.has(value)) return true;
+  if (value.startsWith('$')) return true;
   return QUOTE_TRIGGER_RE.test(value);
 }
 
@@ -85,10 +89,11 @@ function escapeQuotes(value: string): string {
  * Значение → текст запроса: кавычки ставятся ровно там, где без них разбор вернул бы ДРУГОЕ
  * дерево (см. `needsQuote`).
  *
- * Экспортирована ради строителей текста в `apps/web` (`browser/query.ts`, `budget/txQuery.ts`):
- * они собирают запрос из ввода владельца — тега и строки поиска — и отдают его ТЕКСТОМ, а не
- * деревом (форма их вызова — `entity.query({query})`), то есть печатают мимо `printQueryAst`. Своя копия правила квотирования
- * там уже была и уже разошлась с грамматикой: `quoteValue` (`txQuery.ts`) не знала про пробел,
+ * Экспортирована ради строителей текста в `apps/web` (`browser/query.ts`; строитель ленты
+ * транзакций Бюджета удалён срезом 1в §8.1): они собирают запрос из ввода владельца — тега и строки
+ * поиска — и отдают его ТЕКСТОМ, а не деревом (форма их вызова — `entity.query({query})`), то есть
+ * печатают мимо `printQueryAst`. Своя копия правила квотирования
+ * там уже была и уже разошлась с грамматикой: `quoteValue` ленты транзакций не знала про пробел,
  * а `buildFilterQuery` не квотировала вовсе — два боевых текста описи (`SYNTAX`) родились
  * именно так. Одно правило на печать и на сборку — второму разъехаться уже не с чем.
  */
@@ -103,6 +108,11 @@ function quoteAlways(value: string): string {
 
 interface Names {
   prop(id: string): string;
+  /**
+   * Поле запроса (1в): свойство — как `prop`, адрес контракта — `контракт.слот`/`контракт` КЛЮЧОМ
+   * контракта в обеих формах (у контракта label-формы нет — см. `contract` ниже).
+   */
+  field(ref: QueryFieldRef): string;
   aspect(id: string): string;
   role(id: string): string;
   contract(id: string): string;
@@ -138,6 +148,10 @@ function names(reg: ParseRegistry, form: QueryPrintForm): Names {
     // это `SYNTAX: лишние символы после закрывающей кавычки`, то есть `parse(print(a)) ≡ a`
     // ломается ровно на этом узле. Нерезолвенный id печатается собой — печать тотальна.
     contract: (id) => reg.contracts.get(id)?.key ?? id,
+    field: (ref) =>
+      typeof ref === 'string'
+        ? pick(reg.properties.get(ref), ref)
+        : fieldRefKey({ ...ref, contract: reg.contracts.get(ref.contract)?.key ?? ref.contract }),
     // Реестр нужен и здесь: сахар — это КОНКРЕТНЫЕ id роли и свойства, а в дереве лежат id,
     // не ключи. Через `Names` (а не пятым параметром `printNode`), потому что это ровно тот
     // же класс знания — «как назвать/опознать запись реестра».
@@ -150,16 +164,20 @@ function printScalar(value: QueryScalar): string {
   return String(value);
 }
 
+/** Граница: токен — словом, ссылка на параметр — `$<имя>` (1в §5.1), литерал — по правилу кавычек. */
 function printBound(value: unknown): string {
   if (typeof value === 'object' && value !== null && 'token' in value) {
     return String((value as { token: string }).token);
+  }
+  if (typeof value === 'object' && value !== null && 'param' in value) {
+    return `$${String((value as { param: string }).param)}`;
   }
   return printScalar(value as QueryScalar);
 }
 
 /** Предикат свойства-«равенства», из которых складываются |- и &-списки. */
 interface EqLeaf {
-  prop: string;
+  prop: QueryFieldRef;
   op: 'eq' | 'contains';
   value: QueryPropValue;
 }
@@ -176,7 +194,10 @@ function asSamePropList(nodes: readonly QueryFilterNode[]): EqLeaf[] | null {
   for (const node of nodes) {
     const leaf = asEqLeaf(node);
     if (!leaf) return null;
-    if (leaves.length > 0 && (leaves[0] as EqLeaf).prop !== leaf.prop) return null;
+    // Поле сравнивается КЛЮЧОМ: адрес — объект, и `!==` по ссылке развёл бы два равных адреса.
+    if (leaves.length > 0 && fieldRefKey((leaves[0] as EqLeaf).prop) !== fieldRefKey(leaf.prop)) {
+      return null;
+    }
     leaves.push(leaf);
   }
   return leaves.length > 0 ? leaves : null;
@@ -214,7 +235,7 @@ function printNode(node: QueryFilterNode, n: Names): string {
   if ('or' in node) {
     const list = asSamePropList(node.or);
     if (list) {
-      return `${n.prop((list[0] as EqLeaf).prop)}=${list.map((l) => printBound(l.value)).join('|')}`;
+      return `${n.field((list[0] as EqLeaf).prop)}=${list.map((l) => printBound(l.value)).join('|')}`;
     }
     const tags = asTagList(node.or);
     if (tags) return printTagList(tags);
@@ -233,11 +254,11 @@ function printNode(node: QueryFilterNode, n: Names): string {
     if ('or' in inner) {
       const list = asSamePropList(inner.or);
       if (list) {
-        return `${n.prop((list[0] as EqLeaf).prop)}=${list.map((l) => `!${printBound(l.value)}`).join('&')}`;
+        return `${n.field((list[0] as EqLeaf).prop)}=${list.map((l) => `!${printBound(l.value)}`).join('&')}`;
       }
     }
     const leaf = asEqLeaf(inner);
-    if (leaf) return `${n.prop(leaf.prop)}=!${printBound(leaf.value)}`;
+    if (leaf) return `${n.field(leaf.prop)}=!${printBound(leaf.value)}`;
     // `excludeTags=a|b` парсер даёт как `not(or(tag…))`, и своей ветки этому случаю НЕ
     // нужно: общий хвост ниже печатает `!` + свод из ветки `or`, то есть ровно `!tags=a|b`.
     // Отдельная ветка здесь была — и оказалась мёртвой: мутация «снять её» не меняла ни
@@ -249,7 +270,7 @@ function printNode(node: QueryFilterNode, n: Names): string {
     return `!${printNode(inner, n)}`;
   }
   if ('prop' in node) {
-    const name = n.prop(node.prop);
+    const name = n.field(node.prop);
     switch (node.op) {
       case 'eq':
       case 'contains':
@@ -302,6 +323,7 @@ function printNode(node: QueryFilterNode, n: Names): string {
 }
 
 /** Печатает Q-AST в текст грамматики §А5-3: `key` — канон, `label` — для человека. */
+// ОБХОДЧИК-Q: print
 export function printQueryAst(ast: QueryAst, reg: ParseRegistry, form: QueryPrintForm): string {
   const n = names(reg, form);
   const parts: string[] = [];
@@ -312,8 +334,11 @@ export function printQueryAst(ast: QueryAst, reg: ParseRegistry, form: QueryPrin
     else parts.push(printNode(ast.filter, n));
   }
   if (ast.sortBy) {
-    parts.push(`sortBy=${ast.sortBy.map((s) => `${n.prop(s.field)}:${s.dir}`).join('|')}`);
+    parts.push(`sortBy=${ast.sortBy.map((s) => `${n.field(s.field)}:${s.dir}`).join('|')}`);
   }
+  // Группировка (1в §5.2) — сразу за `sortBy`: обе говорят о порядке строк, и ключ группы — тот же
+  // ключ записи, что у сортировки по адресу (§3.3).
+  if (ast.group !== undefined) parts.push(`group=day:${n.field(ast.group.field)}`);
   if (ast.limit !== undefined) parts.push(`limit=${ast.limit}`);
   if (ast.display !== undefined) parts.push(`display=${ast.display}`);
   // Настройки показа блока данных (§5.4) — между `display` и `title`, порядок РП-4: сначала
@@ -323,7 +348,9 @@ export function printQueryAst(ast: QueryAst, reg: ParseRegistry, form: QueryPrin
   }
   if (ast.aggregate !== undefined) {
     const agg = ast.aggregate;
-    parts.push(agg.fn === 'count' ? 'aggregate=count' : `aggregate=${agg.fn}:${n.prop(agg.field)}`);
+    parts.push(
+      agg.fn === 'count' ? 'aggregate=count' : `aggregate=${agg.fn}:${n.field(agg.field)}`,
+    );
   }
   if (ast.hideEmpty === true) parts.push('hide_empty');
   if (ast.title !== undefined) parts.push(`title=${quoteQueryValue(ast.title)}`);

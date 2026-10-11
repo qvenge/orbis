@@ -17,7 +17,10 @@ import { effectiveLabel, type LocalizedText, type SelectOption } from './types';
 // `finance`), поэтому переезда данных нет. `finance` не переименовывается: его хранят маска и журнал.
 export const EXTENSION_IDS = ['finance', 'goals', 'projects', 'dev'] as const;
 export type ExtensionId = (typeof EXTENSION_IDS)[number];
-export const SURFACES = ['core/agenda', 'finance/budget-overview'] as const;
+// Повестки (`core/agenda`) здесь нет с 1в (§6.5): она — запись поставки из блоков, движка подписки у
+// неё нет. `SURFACE_RE` голову `core` по-прежнему принимает — форма имени законна (чтение — свободный
+// текст), а запись действия и подписки стережёт этот словарь (R-7 1б).
+export const SURFACES = ['finance/budget-overview'] as const;
 export type SurfaceName = (typeof SURFACES)[number];
 /** Форма имени: `core` — ядро (расширения нет), остальные головы — id расширения. */
 export const SURFACE_RE = /^(core|finance|goals|projects|dev)\/[a-z][a-z0-9-]*$/;
@@ -29,16 +32,15 @@ export function surfaceExtensionOf(surface: string): ExtensionId | null {
 
 /**
  * КАКОЙ ДВИЖОК ОБСЛУЖИВАЕТ ПОВЕРХНОСТЬ. Таблица нужна потому, что дискриминант декларации — `engine`,
- * а адрес показа — `surface`, и без сверки декларация Budget, объявленная на повестку, проходила бы
- * все проверки формы: движок повестки получил бы чужую форму уже на исполнении, то есть у владельца,
- * а не у автора декларации.
+ * а адрес показа — `surface`, и без сверки декларация чужого движка, объявленная на поверхность
+ * Бюджета, проходила бы все проверки формы: движок получил бы чужую форму уже на исполнении, то есть у
+ * владельца, а не у автора декларации.
  *
  * Имена движков написаны здесь литералами, а не импортом из `subscription-type.ts`: стрелка между
  * файлами односторонняя (форма подписки читает словарь поверхностей), и обратная замкнула бы цикл.
  * `satisfies` держит таблицу ПОЛНОЙ: новая поверхность без движка не скомпилируется.
  */
 export const SURFACE_ENGINE = {
-  'core/agenda': 'agenda',
   'finance/budget-overview': 'budget',
 } as const satisfies Readonly<Record<SurfaceName, string>>;
 
@@ -128,10 +130,19 @@ export const EXTENSION_MANIFESTS: Readonly<Record<ExtensionId, ExtensionManifest
     nameGenitive: { ru: 'Финансов', en: 'Finance' },
     icon: '💰',
     description: {
-      ru: 'Расходы и доходы, категории, конверты бюджета и импорт выписок',
-      en: 'Expenses and income, categories, budget envelopes and statement import',
+      // Без «импорта выписок» (спека 1в §7.4): тул импорта снят до среза Бюджета, и расширение не
+      // обещает того, что владелец не сможет довести.
+      ru: 'Расходы и доходы, категории и конверты бюджета',
+      en: 'Expenses and income, categories and budget envelopes',
     },
-    tools: ['budget_status', 'budget_rollover', 'import_csv_start'],
+    // `subscription_set` — тул Финансов с 1в (§6.5, R-22): единственная поверхность подписки —
+    // `finance/budget-overview`, и без Финансов настраивать нечего. Маска реестра тулов, отказ
+    // `MODULE_DISABLED` скрытого тула (`hiddenToolExtension`) и обезоруженность рутины
+    // (`isDisarmedByMask`) читают расширение отсюда — одна правда на три пути. Появится поверхность
+    // ядра — тул вернётся в ядро этой же строкой. `import_csv_start` снят до среза Бюджета (1в §7.4):
+    // интерфейса импорта нет; снятие только отсюда сделало бы его тулом ядра, поэтому он снят и из
+    // реестра тулов.
+    tools: ['budget_status', 'budget_rollover', 'subscription_set'],
     promptFragments: FINANCE_FRAGMENTS,
     surfaces: ['finance/budget-overview'],
     // Контракты языка (Р-7): Финансы их реализуют своими аспектами и читают в движке бюджета,

@@ -2,7 +2,7 @@
 // Структурированные ошибки конвейера (§9.2: код + сообщение + details) — поднято из
 // executor/errors.ts (минорный долг Task 11): ExecError используют и не-executor-модули
 // (chat/threads.ts), которым зависимость от executor/ не положена.
-// Коды: VALIDATION (стадии 1–2), NOT_FOUND, STALE_VERSION (§5.2), INVARIANT (§4.2/§3.3,
+// Коды: VALIDATION (стадии 1–2), NOT_FOUND, STALE_VERSION (замок текста, спека скорости §8.1), INVARIANT (§4.2/§3.3,
 // для цикла blocks в details — path, Task 10), FORBIDDEN_LEVEL (§7.10 «forbidden»: гейт
 // скоупа гранта и периметр записи worker'а — tools/dispatch.ts, а также незнакомый тул),
 // LIMIT (entitlements §8), CONFLICT (details.reason различает ДВА пути, потребитель не
@@ -31,6 +31,7 @@ import {
   EXPR_NOT_TOTAL,
   EXPR_RECURSION,
   EXPR_TYPE,
+  type OrbisErrorData,
   PATTERN_NOT_REGULAR,
   SECOND_LANGUAGE,
 } from '@orbis/shared';
@@ -117,9 +118,15 @@ export type ExecErrorCode =
   | typeof DEREF_IN_CONSTRAINT
   // --- Срез 1б: страницы и приложения ---
   /** Спека 1б §8.6, Э-18: граф старой формы (списки без аспекта «поставка», оболочки хоста нет) —
-   *  вход его не заводит и ничего не пишет; переводит его прод-процедура `migrate-1b` (задача 13).
+   *  вход его не заводит и ничего не пишет; перевода нет — мир пересевается `reset-world` (ранбук), данные
+   *  графа сносятся (перевод 1б `migrate-1b` исполнен в проде 28.09 и снят срезом 1в, РП-13).
    *  Бросает `setupGraph` (задача 12). */
-  | 'GRAPH_NEEDS_MIGRATION';
+  | 'GRAPH_NEEDS_MIGRATION'
+  // --- Спека скорости (план А) ---
+  /** §8.6, Р-15: отмена, пишущая тело, остановлена — текст записи изменён после отменяемой правки (действующее
+   *  действие текущего тела — не она). Отказ ВСЕГО действия (К-21). `details: UndoTextChangedDetails` — перечень
+   *  записей и место продолжения «Всё равно отменить». Бросает `assertUndoTextRule` (`executor/body-chain.ts`). */
+  | 'UNDO_TEXT_CHANGED';
 
 export class ExecError extends Error {
   readonly code: ExecErrorCode;
@@ -142,7 +149,8 @@ export interface StructuredError {
 
 /**
  * Маппинг кодов executor → TRPCError (бриф Task 12): STALE_VERSION → CONFLICT —
- * это 409 из §5.2 (диаграмма 00-арх §4.4). Исходная структурированная ошибка — в cause.
+ * это 409 замка текста (спека скорости §8.1; прежде — §5.2, диаграмма 00-арх §4.4). Исходная структурированная
+ * ошибка — в cause, её безопасные поля — в `data.orbis` (`orbisErrorData` ниже).
  */
 const TRPC_CODE_BY_EXEC: Record<ExecErrorCode, TRPCError['code']> = {
   VALIDATION: 'BAD_REQUEST',
@@ -202,13 +210,62 @@ const TRPC_CODE_BY_EXEC: Record<ExecErrorCode, TRPCError['code']> = {
   [DEREF_IN_CONSTRAINT]: 'BAD_REQUEST',
   // --- Срез 1б ---
   // 409 — как у REGISTRY_CONFLICT: состояние графа разошлось с тем, на которое рассчитан код, и снимает
-  // это не другой ввод, а перевод данных (`migrate-1b`). НЕ 412: `PRECONDITION_FAILED` на проводе занят
+  // это не другой ввод, а пересев мира (`reset-world`, ранбук). НЕ 412: `PRECONDITION_FAILED` на проводе занят
   // «клиент устарел» — web-линк на любой такой ответ показывает экран обновления, а `cause` по HTTP не
   // сериализуется (R-19). У `seedOnboarding` другого CONFLICT нет — по нему web и ветвится.
   GRAPH_NEEDS_MIGRATION: 'CONFLICT',
+  // --- Спека скорости ---
+  // 409 — как у STALE_VERSION: состояние текста разошлось с тем, на которое рассчитана отмена, и решает человек
+  // (продолжение «Всё равно отменить» — тем же запросом с признаком `force`), а не другой ввод.
+  UNDO_TEXT_CHANGED: 'CONFLICT',
 };
 
 export function execErrorToTRPC(error: StructuredError): TRPCError {
   const code = TRPC_CODE_BY_EXEC[error.code as ExecErrorCode] ?? 'INTERNAL_SERVER_ERROR';
   return new TRPCError({ code, message: error.message, cause: error });
+}
+
+/** Только перечисленные поля — и только те, что в отказе есть: отсутствующее поле не превращается в `undefined`. */
+function pick(d: Record<string, unknown>, keys: readonly string[]): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const key of keys) if (Object.hasOwn(d, key)) out[key] = d[key];
+  return out;
+}
+
+/** Причина отказа, годная для провода: код из латиницы, цифр и подчёркиваний — не текст. */
+const REASON_CODE = /^[a-z][a-z0-9_]*$/i;
+
+// Какие поля отказа уходят клиенту (data.orbis, РП-5 плана А). Закрытый список: код → выбор полей. Тексты записей не
+// уходят никогда — только id, ревизии, актор, время, место продолжения, расхождения предусловия.
+const ORBIS_ERROR_FIELDS: Partial<
+  Record<ExecErrorCode, (d: Record<string, unknown>) => Record<string, unknown>>
+> = {
+  STALE_VERSION: (d) => pick(d, ['id', 'expected', 'current']),
+  // Заголовок сверяется существующим CAS; остальные причины CONFLICT не раскрывают деталей.
+  CONFLICT: (d) => (d.reason === 'precondition_failed' ? pick(d, ['reason', 'mismatches']) : {}),
+  // Отказ правила отмены текста (§8.6): что отменялось (id и заголовок действия), перечень записей (id, заголовок записи,
+  // актор, время) и место продолжения — клиент рисует по ним кнопку «Всё равно отменить».
+  UNDO_TEXT_CHANGED: (d) => pick(d, ['action', 'entries', 'continuation']),
+  // Отказ проверки — только причина, и только КОДОМ (`already_undone` у повторной отмены): у части отказов `reason` —
+  // свободный текст с куском документа (`bodyDocError` — сообщение ProseMirror с началом содержимого узла), а канал
+  // текстов записей не несёт никогда (РП-5; гейт задачи 10, M-1).
+  VALIDATION: (d) =>
+    typeof d.reason === 'string' && REASON_CODE.test(d.reason) ? { reason: d.reason } : {},
+};
+
+/**
+ * Структурные поля отказа для провода (`data.orbis`, спека скорости §8.2): код и безопасный выбор деталей — для кодов
+ * из `ORBIS_ERROR_FIELDS`, иначе `undefined` (поля на проводе нет). `cause` — то, что tRPC держит в `TRPCError.cause`:
+ * `ExecError` или наш `StructuredError`, который tRPC оборачивает в Error со скопированными полями
+ * (`getCauseFromUnknown`), — поэтому читается форма `{code, details}`, а не класс. Сторонняя ошибка со строковым `code`
+ * (ECONNREFUSED и т. п.) закрытого списка не проходит.
+ */
+export function orbisErrorData(cause: unknown): OrbisErrorData | undefined {
+  if (typeof cause !== 'object' || cause === null) return undefined;
+  const { code, details } = cause as { code?: unknown; details?: unknown };
+  if (typeof code !== 'string' || !Object.hasOwn(ORBIS_ERROR_FIELDS, code)) return undefined;
+  const select = ORBIS_ERROR_FIELDS[code as ExecErrorCode];
+  if (select === undefined) return undefined;
+  if (typeof details !== 'object' || details === null || Array.isArray(details)) return { code };
+  return { code, details: select(details as Record<string, unknown>) };
 }

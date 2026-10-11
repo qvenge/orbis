@@ -3,6 +3,14 @@ import { trpcError } from '../test/harness';
 import { runGraphCommand } from './graph-command';
 
 describe('one graph write, classified by the HTTP tRPC result', () => {
+  test.each([
+    false,
+    true,
+  ])('confirmed current JournalRef preserves consequences=%s', async (consequences) => {
+    expect(
+      await runGraphCommand(async () => ({ actionId: 'current-journal', consequences })),
+    ).toEqual({ kind: 'confirmed', actionId: 'current-journal', consequences });
+  });
   test('confirmed write returns the actual action ID', async () => {
     const write = vi.fn().mockResolvedValue({ actionId: 'action-id' });
     expect(await runGraphCommand(write)).toEqual({ kind: 'confirmed', actionId: 'action-id' });

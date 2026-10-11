@@ -4,6 +4,7 @@
 // Против живой БД, caller как в бою (createCallerFactory с инжектированным ai —
 // провайдер/часы, лекало send-message.test.ts), предложение рождается НАСТОЯЩИМ
 // прогоном через `runNow`: собранный руками pending проверял бы фикстуру, а не путь.
+
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { manualBucket, newId, pendingMessageId, routineRunId } from '@orbis/shared';
 import { parseBody, readBodyDoc, serializeBody } from '@orbis/shared/doc';
@@ -12,6 +13,8 @@ import { FIXTURE_PARSE_REGISTRY } from '@orbis/shared/query/fixtures';
 import { TRPCError } from '@trpc/server';
 import { eq, sql } from 'drizzle-orm';
 import { appDb, mintGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
+import { actionsOf } from '../../test/journal-helpers';
+import { expectJournalRef } from '../../test/journal-ref-helpers';
 import { routineById, runsOfParent } from '../agent-loop/queries';
 import { ROUTINE_ROLLBACK_NOTE, rollbackRun } from '../agent-loop/rollback';
 import { ensureEntityThread } from '../chat/threads';
@@ -42,8 +45,7 @@ requireEnv();
 
 const { db, client } = appDb();
 const owner = mintGraph();
-const { actionsOf, propsOf, routineCtx, seedEntity, seedRoutine, seedRoutineRun } =
-  agentLoopHelpers(db);
+const { propsOf, routineCtx, seedEntity, seedRoutine, seedRoutineRun } = agentLoopHelpers(db);
 const createCaller = createCallerFactory(appRouter);
 
 const MODEL = 'scripted-model';
@@ -202,6 +204,28 @@ async function ownerSets(taskId: string, status: string): Promise<void> {
     ],
   });
   if (!r.ok) throw new Error(`ownerSets: ${r.error.code} ${r.error.message}`);
+}
+
+/**
+ * Владелец переписал ТЕКСТ цели своей рукой — по ревизии тела, прочитанной тут же. Замок текста предложения — ревизия
+ * тела (спека скорости §8.1): его двигает только смена тела, правка статуса (`ownerSets`) его не трогает.
+ */
+async function ownerRewrites(taskId: string, body: string): Promise<void> {
+  const rows = await withIdentity(db, personal(owner), (tx) =>
+    tx.execute(sql`SELECT body_revision FROM entities WHERE id = ${taskId}::uuid`),
+  );
+  const r = await execute(db, {
+    identity: personal(owner),
+    actorKind: 'owner',
+    source: 'ui',
+    operations: [
+      {
+        tool: 'entity_update',
+        input: { id: taskId, body, expectedBodyRevision: Number(rows[0]?.body_revision) },
+      },
+    ],
+  });
+  if (!r.ok) throw new Error(`ownerRewrites: ${r.error.code} ${r.error.message}`);
 }
 
 /**
@@ -670,7 +694,7 @@ describe('routine.runNow', () => {
 describe('routine.answerCheckpoint', () => {
   test('вопрос → ответ: outcome answered с reply; действие владельца source ui и с run_id; откат прогона не снимает ответ и не считает его конфликтом (инвариант 7)', async () => {
     // Вопрос задаёт НАСТОЯЩИЙ прогон: откат читает журнал, а сид фикстурой идёт мимо
-    // синка (без audit-сообщений откатывать было бы нечего, и проверка стала бы пустой)
+    // синка (без записей журнала откатывать было бы нечего, и проверка стала бы пустой)
     const routineId = await seedRoutine(owner, { title: 'Рутина: вопрос' });
     const runId = routineRunId(routineId, MANUAL_BUCKET, 1);
     const provider = new ScriptedProvider([
@@ -688,14 +712,15 @@ describe('routine.answerCheckpoint', () => {
       runId,
       answer: 'Да, перенеси на 10:00',
     });
-    expect(answered).toEqual({ runId });
+    expect(answered).toMatchObject({ runId });
+    await expectJournalRef(owner, answered, false);
 
     const aspect = await runAspect(runId);
     expect(aspect['orbis/run_outcome']).toBe('answered');
     expect(aspect['orbis/run_reply']?.text).toBe('Да, перенеси на 10:00');
 
     const answerActions = (await actionsOf(owner)).filter(
-      (a) => a.run_id === runId && a.source === 'ui',
+      (a) => a.runId === runId && a.source === 'ui',
     );
     expect(answerActions).toHaveLength(1);
 
@@ -758,6 +783,7 @@ describe('routine.proposal / decideProposal', () => {
     });
     expect(applied.status).toBe('applied');
     if (applied.status !== 'applied') throw new Error('не applied');
+    await expectJournalRef(owner, applied, false);
     expect(typeof applied.actionId).toBe('string');
     expect(await taskStatus(taskId)).toBe('planned');
 
@@ -830,8 +856,8 @@ describe('routine.proposal / decideProposal', () => {
     const pendingId = closed['orbis/run_proposal']?.pending_id;
     if (pendingId === undefined) throw new Error('прогон закрыт без предложения');
 
-    // Владелец тронул НЕ тело, а статус — updated_at бампит любая правка сущности
-    await ownerSets(taskId, 'planned');
+    // Владелец переписал тело сам — ревизия тела сдвинулась, замок текста предложения не держится
+    await ownerRewrites(taskId, 'Своё описание');
 
     const decided = await callerLater().routine.decideProposal({
       runId,
@@ -1087,8 +1113,8 @@ describe('routine.proposal / decideProposal', () => {
     // В-1: журнал §7.8 знает и чья это работа, и что она — правка владельца
     const action = (await actionsOf(owner)).find((a) => a.id === editedId);
     expect(action?.source).toBe('routine');
-    expect(action?.run_id).toBe(runId);
-    expect(action?.edited_from).toBe(pendingId);
+    expect(action?.runId).toBe(runId);
+    expect(action?.editedFrom).toBe(pendingId);
   });
 
   test('строка предложения о связи подписана РОЛЬЮ ИЗ РЕЕСТРА, а не её id (Ч10-С3)', async () => {
@@ -1198,6 +1224,7 @@ describe('routine.proposal / decideProposal', () => {
     });
     expect(again).toEqual({
       status: 'applied',
+      consequences: false,
       actionId: first.actionId,
       editedFrom: pendingId,
     });
@@ -1216,7 +1243,7 @@ describe('routine.proposal / decideProposal', () => {
       decision: 'approve',
       edits: {},
     });
-    expect(applied).toEqual({ status: 'applied', actionId: pendingId });
+    expect(applied).toEqual({ status: 'applied', actionId: pendingId, consequences: false });
     expect(await pendingCount(runId)).toBe(1); // второго предложения нет
     expect(await taskStatus(taskId)).toBe('planned');
     expect(await rejectReason(pendingId)).toBeUndefined();
@@ -1475,8 +1502,11 @@ describe('routine.proposal: дифф тела предложения', () => {
       'Старый текст',
       'Новый текст',
     );
-    // Владелец тронул запись сам — updated_at бампит любая её правка
+    // Правка статуса цели тела не трогает (замок текста — ревизия тела, спека скорости §8.1): дифф рисуется
     await ownerSets(taskId, 'planned');
+    expect((await bodyRowOf(runId)).bodyDiff).toMatchObject({ units: expect.any(Array) });
+    // Владелец переписал тело сам — ревизия сдвинулась
+    await ownerRewrites(taskId, 'Свой текст');
 
     const row = await bodyRowOf(runId);
     expect(row.bodyDiff).toEqual({ skipped: 'body_changed' });
@@ -1520,7 +1550,7 @@ describe('routine.proposal: дифф тела предложения', () => {
 
     // ПОРЯДОК проверок: устаревание сильнее потолка. Тело и сверх потолка, и тронуто —
     // владельцу говорят про устаревание, потому что «Принять» откажет именно по нему
-    await ownerSets(heavy.taskId, 'planned');
+    await ownerRewrites(heavy.taskId, `${heavyBody()}\n\nещё строка`);
     expect((await bodyRowOf(heavy.runId)).bodyDiff).toEqual({ skipped: 'body_changed' });
   });
 
@@ -2305,7 +2335,7 @@ async function unitMessages(pendingId: string): Promise<Array<Record<string, unk
 async function flagPatches(runId: string) {
   return (await actionsOf(owner)).filter(
     (a) =>
-      a.run_id === runId &&
+      a.runId === runId &&
       a.operations.some(
         (op) =>
           (op.payload.props as Record<string, unknown> | undefined)?.['orbis/undecided'] === false,
@@ -2324,18 +2354,17 @@ describe('routine.decideDeferred: отложенное действие (D42 §6
     const { pendingId, targetId } = await deferUnit(routineId, runId, 'Прошлогодний отчёт');
 
     const applied = await callerLater().routine.decideDeferred({ pendingId, decision: 'approve' });
+    await expectJournalRef(owner, applied, false);
     expect(applied.status).toBe('applied');
     if (applied.status !== 'applied') throw new Error('не applied');
     expect(await isArchived(targetId)).toBe(true);
 
     // Атрибуция — работа ПРОГОНА (§9.5): по паре source+run_id её находят журнал, Undo и
     // откат прогона, и без неё «Принять» осталось бы работой ниоткуда
-    const own = (await actionsOf(owner)).filter(
-      (a) => a.run_id === runId && a.source === 'routine',
-    );
+    const own = (await actionsOf(owner)).filter((a) => a.runId === runId && a.source === 'routine');
     expect(own.length).toBe(1);
     expect(own[0]?.id).toBe(applied.actionId);
-    expect(own[0]?.actor_kind).toBe('ai');
+    expect(own[0]?.actorKind).toBe('ai');
 
     const rolled = await rollbackRun(db, { identity: personal(owner), runId });
     expect(rolled.ok).toBe(true);
@@ -2375,7 +2404,7 @@ describe('routine.decideDeferred: отложенное действие (D42 §6
     expect(second).toEqual(first);
     expect(await isArchived(targetId)).toBe(true);
     expect(
-      (await actionsOf(owner)).filter((a) => a.run_id === runId && a.source === 'routine'),
+      (await actionsOf(owner)).filter((a) => a.runId === runId && a.source === 'routine'),
     ).toHaveLength(1);
   });
 
@@ -2650,7 +2679,7 @@ describe('бухгалтерия флажка пачки (§9.6, приёмка 
     const flag = await flagPatches(runId);
     expect(flag.length).toBe(1);
     expect(flag[0]?.source).toBe('system');
-    expect(flag[0]?.actor_kind).toBe('ai');
+    expect(flag[0]?.actorKind).toBe('ai');
 
     const undone = await undoLast(db, { identity: personal(owner) });
     expect(undone.ok).toBe(true);
@@ -2767,6 +2796,9 @@ describe('routine.decideAll', () => {
     await ownerSets(stale.targetId, 'in_progress');
 
     const summary = await callerLater().routine.decideAll({ runId });
+    expect(summary).not.toHaveProperty('actionId');
+    expect(summary).not.toHaveProperty('consequences');
+    expect(summary.every((item) => !('consequences' in item))).toBe(true);
 
     // Порядок сводки = порядок пачки (`created_at, id` — контракт listRunUnits): экран
     // рисует её тем же списком, что и карточки, а два нажатия обходят единицы одинаково
@@ -2795,7 +2827,7 @@ describe('routine.decideAll', () => {
     // Повтор кнопки: открытых действий не осталось — сводка пуста, журнал не вырос
     expect(await callerLater().routine.decideAll({ runId })).toEqual([]);
     expect(
-      (await actionsOf(owner)).filter((a) => a.run_id === runId && a.source === 'routine'),
+      (await actionsOf(owner)).filter((a) => a.runId === runId && a.source === 'routine'),
     ).toHaveLength(2);
   }, 20_000);
 
@@ -2866,7 +2898,7 @@ describe('routine.decideAll', () => {
     expect(await isArchived(a.targetId)).toBe(true);
     expect(await isArchived(b.targetId)).toBe(true);
     expect(
-      (await actionsOf(owner)).filter((x) => x.run_id === runId && x.source === 'routine'),
+      (await actionsOf(owner)).filter((x) => x.runId === runId && x.source === 'routine'),
     ).toHaveLength(2);
   }, 20_000);
 });

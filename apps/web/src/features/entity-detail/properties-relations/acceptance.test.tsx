@@ -110,7 +110,7 @@ it('public menu executes all five panel commands against mutable patch-only tran
           };
           for (const id of patch.unset ?? []) delete current.props[id];
         }
-        return { ok: true, actionId };
+        return { ok: true, actionId, consequences: false };
       }
       if (path === 'relation.create' || path === 'relation.delete') {
         const actionId = receipt();
@@ -134,14 +134,19 @@ it('public menu executes all five panel commands against mutable patch-only tran
                 edge.targetId === key.target_id
               ),
           );
-        return { ok: true, actionId };
+        return { ok: true, actionId, consequences: false };
       }
       if (path === 'ai.undo') {
         const snapshot = snapshots.get((input as { actionId: string }).actionId);
         if (!snapshot) throw new Error('unknown action receipt');
         current = structuredClone(snapshot.record);
         edges = structuredClone(snapshot.edges);
-        return { ok: true };
+        return {
+          actionId: 'undo-receipt',
+          undone: { id: (input as { actionId: string }).actionId, title: 'Связь' },
+          pinnedVersions: [],
+          bodyRevisions: [],
+        };
       }
       return {};
     },

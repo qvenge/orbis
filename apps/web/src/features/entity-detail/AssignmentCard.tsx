@@ -57,7 +57,6 @@ export function AssignmentCard({ entity }: { entity: Entity }) {
     const command = assignmentPatch(entity.id, draft);
     mutation.mutate({
       id: entity.id,
-      expectedUpdatedAt: entity.updatedAt,
       ...command.patch,
       aspects: { attach: [command.aspectId] },
     });
@@ -115,7 +114,6 @@ export function AssignmentCard({ entity }: { entity: Entity }) {
                 onClick={() =>
                   mutation.mutate({
                     id: entity.id,
-                    expectedUpdatedAt: entity.updatedAt,
                     // `detach` снимает АСПЕКТ (§А1-1) — задача остаётся задачей, но ничьей.
                     // Значений снятие не трогает (Р9): исполнитель, которого сняли, остаётся
                     // фактом владельца и виден в секции «Свойства».

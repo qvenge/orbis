@@ -9,6 +9,7 @@ import { mayLeave } from '../../../state/leave-guard';
 import { renderWithProviders, trpcError } from '../../../test/harness';
 import { navAt } from '../../../test/nav';
 import { registryReply } from '../../../test/registry';
+import { resetUndoSession } from '../../undo/undo-epoch';
 import { entity, registry } from './test-fixtures';
 
 let desktop = false;
@@ -32,6 +33,66 @@ beforeEach(async () => {
 afterEach(() => {
   vi.unstubAllGlobals();
   listeners.clear();
+});
+it.each([
+  'values',
+  'host',
+] as const)('same-mounted session reset discards prior %s panel and ignores its late write', async (kind) => {
+  desktop = false;
+  let release: (value: unknown) => void = () => {};
+  let releaseNext: (value: unknown) => void = () => {};
+  let writeCount = 0;
+  const { calls } = renderWithProviders(<AppShell />, (path, _input, type) =>
+    path === 'registry.effective'
+      ? registry
+      : path === 'entity.get'
+        ? { entity, relations: [], thread: null, registryVersion: registry.version }
+        : type === 'mutation'
+          ? new Promise((resolve) => {
+              if (writeCount++ === 0) release = resolve;
+              else releaseNext = resolve;
+            })
+          : (registryReply(path) ?? []),
+  );
+  await screen.findByText(entity.title);
+  fireEvent.click(await screen.findByTestId('screen-menu'));
+  fireEvent.click(await screen.findByRole('menuitem', { name: 'Свойства и связи' }));
+  const dialog = await screen.findByRole('dialog', { name: 'Свойства и связи' });
+  if (kind === 'host') {
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Сделать страницей' }));
+  } else {
+    fireEvent.click(within(dialog).getByRole('tab', { name: 'Свойства' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Редактировать свойства' }));
+    fireEvent.change(within(dialog).getByLabelText('Поле теста'), {
+      target: { value: 'prior owner raw' },
+    });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Сохранить' }));
+  }
+  await waitFor(() => expect(calls.filter((c) => c.path === 'entity.updateBatch')).toHaveLength(1));
+  await act(async () => resetUndoSession());
+  expect(screen.queryByRole('dialog', { name: 'Свойства и связи' })).toBeNull();
+  fireEvent.click(await screen.findByTestId('screen-menu'));
+  fireEvent.click(await screen.findByRole('menuitem', { name: 'Свойства и связи' }));
+  const next = await screen.findByRole('dialog', { name: 'Свойства и связи' });
+  expect(within(next).getByRole('button', { name: 'Сделать страницей' })).toBeEnabled();
+  if (kind === 'host') {
+    fireEvent.click(within(next).getByRole('button', { name: 'Сделать страницей' }));
+    await waitFor(() =>
+      expect(calls.filter((c) => c.path === 'entity.updateBatch')).toHaveLength(2),
+    );
+  }
+  await act(async () => release({ actionId: 'prior-owner-action', consequences: false }));
+  expect(next).toBeInTheDocument();
+  if (kind === 'host') {
+    expect(within(next).getByRole('button', { name: 'Сделать страницей' })).toBeDisabled();
+    fireEvent.click(within(next).getByRole('button', { name: 'Закрыть' }));
+    expect(next).toBeInTheDocument();
+    await act(async () => releaseNext({ actionId: 'current-owner-action', consequences: false }));
+  }
+  expect(within(next).getByRole('button', { name: 'Сделать страницей' })).toBeEnabled();
+  expect(calls.filter((c) => c.path === 'entity.updateBatch')).toHaveLength(
+    kind === 'host' ? 2 : 1,
+  );
 });
 it.each([
   false,

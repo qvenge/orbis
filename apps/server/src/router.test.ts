@@ -56,7 +56,7 @@ test('клиент 0.2.x (до формата тела v3) получает CLIE
   }
 });
 
-test('клиент 0.3.x (до страниц 1б) получает CLIENT_OUTDATED, 0.4.0 проходит (R-12)', async () => {
+test('клиент 0.3.x (до страниц 1б) получает CLIENT_OUTDATED (R-12)', async () => {
   // Вкладка 1а, открытая через деплой 1б, не знает узлов `ownCards`/`hostBlock`: tiptap подставил
   // бы пустой документ, и первая буква затёрла бы тело. Версия схемы документа та же (3), поэтому
   // старую вкладку останавливает только этот гейт — на чтении так же, как на записи.
@@ -69,8 +69,64 @@ test('клиент 0.3.x (до страниц 1б) получает CLIENT_OUTDA
     expect((err as TRPCError).code).toBe('PRECONDITION_FAILED');
     expect(((err as TRPCError).cause as { code?: string }).code).toBe('CLIENT_OUTDATED');
   }
-  const fresh = appRouter.createCaller({ ...ctx, clientVersion: '0.4.0' });
+});
+
+test('клиент 0.4.x (до среза 1в) получает CLIENT_OUTDATED на entity.blocks и entity.get, текущий минимум проходит гейт', async () => {
+  // Срез 1в меняет провод `entity.blocks` (сумма по валютам, «последнее» с валютой, `closedIds` у
+  // строк) и заводит узел `{{param}}` тела при той же версии схемы документа (R-12 1б, спека §5.1
+  // «Формат»). Вкладка 1б читала бы `sum.sums` как отсутствующее поле и рисовала пустую плитку —
+  // её останавливает гейт версии клиента, на чтении так же, как на записи.
+  const id = '00000000-0000-7000-8000-0000000000f1';
+  const blocks = { blocks: [{ key: 'a', text: 'aspect=orbis/task' }] };
+  for (const v of ['0.4.0', '0.4.9']) {
+    const caller = appRouter.createCaller({ ...ctx, clientVersion: v });
+    for (const call of [() => caller.entity.blocks(blocks), () => caller.entity.get({ id })]) {
+      const err = await call().then(
+        () => null,
+        (e: unknown) => e,
+      );
+      expect((err as TRPCError).code).toBe('PRECONDITION_FAILED');
+      expect(((err as TRPCError).cause as { code?: string }).code).toBe('CLIENT_OUTDATED');
+    }
+  }
+  // Текущий минимум гейт версии проходит: дальше его останавливает авторизация (identity нет), а не версия.
+  const fresh = appRouter.createCaller({ ...ctx, clientVersion: MIN_COMPATIBLE_CLIENT_VERSION });
   expect(await fresh.ping()).toEqual({ ok: true });
+  for (const call of [() => fresh.entity.blocks(blocks), () => fresh.entity.get({ id })]) {
+    const err = await call().then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect((err as TRPCError).code).toBe('UNAUTHORIZED');
+  }
+});
+
+test('клиент 0.5.x (до плана А скорости) получает CLIENT_OUTDATED на entity.update и entity.get, 0.6.0 проходит гейт', async () => {
+  // План А меняет вход правки тела без переходного слоя (спека скорости §8.2, РП-28): `expectedBodyRevision`
+  // вместо `expectedUpdatedAt`. Вкладка 0.5.x слала бы прежнее поле, и каждое её сохранение текста отказывало бы
+  // разбором — её останавливает гейт версии клиента, на чтении так же, как на записи.
+  const id = '00000000-0000-7000-8000-0000000000f2';
+  for (const v of ['0.5.0', '0.5.9']) {
+    const caller = appRouter.createCaller({ ...ctx, clientVersion: v });
+    for (const call of [
+      () => caller.entity.update({ id, title: 'x' }),
+      () => caller.entity.get({ id }),
+    ]) {
+      const err = await call().then(
+        () => null,
+        (e: unknown) => e,
+      );
+      expect((err as TRPCError).code).toBe('PRECONDITION_FAILED');
+      expect(((err as TRPCError).cause as { code?: string }).code).toBe('CLIENT_OUTDATED');
+    }
+  }
+  expect(MIN_COMPATIBLE_CLIENT_VERSION).toBe('0.6.0');
+  const fresh = appRouter.createCaller({ ...ctx, clientVersion: '0.6.0' });
+  const err = await fresh.entity.get({ id }).then(
+    () => null,
+    (e: unknown) => e,
+  );
+  expect((err as TRPCError).code).toBe('UNAUTHORIZED');
 });
 
 test('устаревший клиент получает отказ версии раньше auth-проверки', async () => {
@@ -180,8 +236,8 @@ test('равная/новая версия, отсутствие и мусорн
   // эквивалентно отсутствию заголовка: пред-проверка формата не блокирует запрос
   const passing = [
     MIN_COMPATIBLE_CLIENT_VERSION,
-    '0.4.1',
-    '0.4.0',
+    '0.6.1',
+    '0.6.0',
     '1.0.0',
     null,
     '',
@@ -193,4 +249,11 @@ test('равная/новая версия, отсутствие и мусорн
     const caller = appRouter.createCaller({ ...ctx, clientVersion: v });
     expect(await caller.ping()).toEqual({ ok: true });
   }
+});
+
+test('ручки agenda.list нет (спека 1в §6.5): Повестка — запись поставки из блоков, не подписка', () => {
+  // Настроить Повестку значит править её тело; вторая дорога к тем же строкам — отдельная ручка —
+  // разошлась бы с телом на первой правке владельца.
+  expect(Object.keys(appRouter._def.record)).not.toContain('agenda');
+  expect(Object.keys(appRouter._def.procedures)).not.toContain('agenda.list');
 });

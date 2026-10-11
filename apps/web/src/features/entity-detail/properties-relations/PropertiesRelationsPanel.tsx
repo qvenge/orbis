@@ -9,6 +9,7 @@ import { Dialog } from '../../../ui/Dialog';
 import { Sheet } from '../../../ui/Sheet';
 import { useToast } from '../../../ui/toast-store';
 import { useDisabledExtensions } from '../../settings/extension-mask';
+import { isUndoEpoch, undoEpoch } from '../../undo/undo-epoch';
 import type { PanelHostAction, PanelHostActions, PanelTarget } from '../PropertiesRelationsSlot';
 import { detailGetInput } from '../useEntityDetail';
 import { usePageIdentityActions } from '../usePageIdentityActions';
@@ -178,9 +179,11 @@ export function PropertiesRelationsPanel({
       return;
     const attempt = submissionAttempt.current;
     const read = ++reconciliationRead.current;
+    const session = undoEpoch();
     const result = await commandRef.current?.reconcile(structuredClone(command));
     if (
       !mounted.current ||
+      !isUndoEpoch(session) ||
       ticket !== epochRef.current ||
       attempt !== submissionAttempt.current ||
       read !== reconciliationRead.current ||
@@ -335,11 +338,12 @@ export function PropertiesRelationsPanel({
     const snapshot = structuredClone(command);
     submissionAttempt.current += 1;
     const ticket = epochRef.current;
+    const session = undoEpoch();
     const next: FormSubmission = { command: snapshot, result: 'pending' };
     state.current.submission = next;
     setSubmission(next);
     const result = await commandRef.current.run(snapshot);
-    if (!mounted.current || ticket !== epochRef.current) return;
+    if (!isUndoEpoch(session) || !mounted.current || ticket !== epochRef.current) return;
     const finished = { command: snapshot, result };
     state.current.submission = finished;
     setSubmission(finished);

@@ -412,7 +412,30 @@
       "journal": {
         "undo": {
           "type": "undo",
-          "undoes": "@batch:postpone"
+          "undoes": "@batch:postpone",
+          "source": "ui",
+          "actor_kind": "owner",
+          "actor_user_id": "<actor_user_id>",
+          "mechanism": "user",
+          "entity_id": null,
+          "entity_ids": ["@task-2", "@task-3", "@task-1"],
+          "title": "Отменено: Действие «Отложить просроченные»",
+          "card_tool": "undo",
+          "operations": [
+            {
+              "op": "entity_update",
+              "payload": { "id": "@task-1", "props": { "orbis/due_date": "2026-06-01" } }
+            },
+            {
+              "op": "entity_update",
+              "payload": { "id": "@task-3", "props": { "orbis/due_date": "2026-06-03" } }
+            },
+            {
+              "op": "entity_update",
+              "payload": { "id": "@task-2", "props": { "orbis/due_date": "2026-06-02" } }
+            }
+          ],
+          "inverse": []
         }
       }
     }

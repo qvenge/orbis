@@ -148,6 +148,34 @@
       "when": 1790106081535,
       "tag": "0022_rules_actions",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1790680990543,
+      "tag": "0023_agenda_subscription_drop",
+      "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1790737115410,
+      "tag": "0024_perf_samples",
+      "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1790754551426,
+      "tag": "0025_action_journal",
+      "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1790767973713,
+      "tag": "0026_body_revision",
+      "breakpoints": true
     }
   ]
 }

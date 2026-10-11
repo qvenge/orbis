@@ -2,6 +2,7 @@ import { DOC_EXTENSIONS } from '@orbis/shared/doc';
 import type { AnyExtension } from '@tiptap/core';
 import UniqueID from '@tiptap/extension-unique-id';
 import { Placeholder } from '@tiptap/extensions';
+import { ArrowsKeys } from './arrows-keys';
 import { BODY_PLACEHOLDER } from './body-box';
 import { LayoutGuard } from './layout-guard';
 import { MoveBlock } from './move-block';
@@ -12,6 +13,7 @@ import {
   AspectCardWithView,
   HostBlockWithView,
   OwnCardsWithView,
+  ParamBlockWithView,
   RecordBlockWithView,
 } from './nodes/RecordBlockStub';
 import { UNIQUE_ID_TYPES } from './strip-ids';
@@ -56,6 +58,7 @@ const WITH_VIEW: ReadonlySet<string> = new Set([
   'aspectCard',
   'ownCards',
   'hostBlock',
+  'paramBlock',
 ]);
 
 export const EDITOR_EXTENSIONS: AnyExtension[] = [
@@ -78,6 +81,8 @@ export const EDITOR_EXTENSIONS: AnyExtension[] = [
   // плашкой рендерера).
   OwnCardsWithView,
   HostBlockWithView,
+  // Срез 1в (§5.1): параметр страницы — подписанной заглушкой; переключатель рисует только показ.
+  ParamBlockWithView,
   // Блочные id сегодня не читает никто. Ставятся с первого дня потому, что на них ляжет будущий
   // блочный контракт агента (`body_replace_block(id, md)`): добавить их позже — мигрировать все
   // документы, добавить сейчас — один параметр расширения. В markdown-проекцию id не печатаются.
@@ -116,4 +121,5 @@ export const EDITOR_EXTENSIONS: AnyExtension[] = [
   // Страницы 1а §5.2: страж глубины контейнеров на любом входе — вставке, перетаскивании (см.
   // layout-guard.ts); место держит схема (группа `pageBlock`, 1б). Плагинный, схему не трогает.
   LayoutGuard,
+  ArrowsKeys,
 ];

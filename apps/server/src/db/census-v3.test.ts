@@ -341,8 +341,12 @@ test('строки своих карточек и блоков хоста (1б) 
     { body: 'до\n{{records}}', bodyDoc: v2Doc(para('до'), para('{{records}}')) },
     // Незнакомая форма — текст, не маркер (§5.7 1а).
     { body: '{{cards: mine}}\n{{app}}', bodyDoc: null },
+    // Параметр страницы (1в §5.1) — маркер, как блок хоста; с ошибкой блока — тоже узел `param`.
+    { body: 'до\n{{param: p, type=period, default=today, options=today}}', bodyDoc: null },
+    { body: '{{param: p, type=month}}', bodyDoc: null },
+    { body: '{{param:}}', bodyDoc: null },
   ]);
   const r = await censusV3(corpus.io);
-  expect(r.ids.becomeBlocksNoDoc).toEqual(['id-00000', 'id-00001']);
+  expect(r.ids.becomeBlocksNoDoc).toEqual(['id-00000', 'id-00001', 'id-00004', 'id-00005']);
   expect(r.ids.markerInBodyWithDoc).toEqual(['id-00002']);
 });

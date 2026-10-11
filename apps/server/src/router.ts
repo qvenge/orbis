@@ -6,7 +6,6 @@
 // мёртвой — а на её мнимой живости держалось объяснение, почему колонка `schema` не видит
 // дельт. Реестр аспектов отдаёт `registry.effective`: там три словаря, версия снимка и
 // эффективные определения (система ⊕ строки владельца ⊕ дельты).
-import { agendaRouter } from './routers/agenda';
 import { agentRunRouter } from './routers/agent-run';
 import { aiRouter } from './routers/ai';
 import { appsRouter } from './routers/apps';
@@ -16,6 +15,7 @@ import { entityRouter } from './routers/entity';
 // `import` — зарезервированное слово JS: ключ роутера так назвать можно, переменную нет
 import { importRouter } from './routers/import';
 import { oauthRouter } from './routers/oauth';
+import { perfRouter } from './routers/perf';
 import { registryRouter } from './routers/registry';
 import { relationRouter } from './routers/relation';
 import { routineRouter } from './routers/routine';
@@ -39,8 +39,8 @@ export const appRouter = router({
   // строит подписи, формы и каталог полей — вместо рукописных словарей в коде.
   registry: registryRouter,
   budget: budgetRouter,
-  // Поверхность «Повестка» одной подпиской (§А5-5): три запроса вкладки сведены в один
-  agenda: agendaRouter,
+  // Ручки `agenda` здесь НЕТ с 1в (§6.5): Повестка — запись поставки из блоков, её строки отдаёт
+  // пачка `entity.blocks`, и вторая дорога к тем же строкам разошлась бы с телом записи.
   import: importRouter,
   // Закреплённые версии тела (С11): страховка владельца перед работой агента
   version: versionRouter,
@@ -56,6 +56,8 @@ export const appRouter = router({
   app: appsRouter,
   // Записи поставки (срез 1б §9.1): обновления — только предложениями, каждое действие — владельца
   supply: supplyRouter,
+  // Полевые замеры ступени 0 (спека скорости §3.2)
+  perf: perfRouter,
 });
 
 export type AppRouter = typeof appRouter;

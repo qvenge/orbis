@@ -10,6 +10,7 @@ import {
   APP_NAV_FORM,
   type GraphId,
   newId,
+  PAGE_ASPECT,
   SUPPLY_ASPECT,
   SUPPLY_DECLINED,
   SUPPLY_HASH,
@@ -23,6 +24,7 @@ import {
   SUPPLY_KEYS,
   type SupplyEtalon,
   type SupplyKey,
+  UPCOMING_BODY,
 } from '@orbis/shared/supply';
 import {
   APP_PRINT_PROPS,
@@ -32,11 +34,12 @@ import {
   supplyStatusOf,
 } from '@orbis/shared/supply/print';
 import { sql } from 'drizzle-orm';
-import { appDb, freshGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
+import { adminDb, appDb, freshGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
+import { actionsOf } from '../../test/journal-helpers';
 import { withIdentity } from '../db/with-identity';
 import { ExecError } from '../errors';
 import { execute } from '../executor/executor';
-import { makeChatJournalSink } from '../executor/journal';
+import { makeJournalSink } from '../executor/journal';
 import { undoAction } from '../executor/undo';
 import { effectiveRegistry } from '../registry/cache';
 import { dispatchTool } from '../tools/dispatch';
@@ -54,7 +57,7 @@ import { canonicalPageText, supplyCreateOps, supplyRecordId } from './records';
 requireEnv();
 
 const { db, client } = appDb();
-const sink = makeChatJournalSink();
+const sink = makeJournalSink();
 
 beforeAll(async () => {
   await truncateAll();
@@ -118,12 +121,13 @@ interface Row {
   props: Record<string, unknown>;
   archived: boolean;
   updatedAt: string;
+  bodyRevision: number;
 }
 
 async function rowOf(graph: GraphId, id: string): Promise<Row> {
   const rows = await withIdentity(db, personal(graph), (tx) =>
     tx.execute(
-      sql`SELECT title, emoji, body, aspects, props, archived, updated_at FROM entities WHERE id = ${id}::uuid`,
+      sql`SELECT title, emoji, body, aspects, props, archived, updated_at, body_revision FROM entities WHERE id = ${id}::uuid`,
     ),
   );
   const r = rows[0] as
@@ -135,6 +139,7 @@ async function rowOf(graph: GraphId, id: string): Promise<Row> {
         props: Record<string, unknown>;
         archived: boolean;
         updated_at: Date | string;
+        body_revision: number;
       }
     | undefined;
   if (r === undefined) throw new Error(`запись ${id} не найдена`);
@@ -146,6 +151,7 @@ async function rowOf(graph: GraphId, id: string): Promise<Row> {
     props: r.props,
     archived: r.archived,
     updatedAt: new Date(r.updated_at).toISOString(),
+    bodyRevision: r.body_revision,
   };
 }
 
@@ -168,7 +174,7 @@ async function ownerEdit(graph: GraphId, input: Record<string, unknown>): Promis
 
 async function editBody(graph: GraphId, id: string, body: string): Promise<void> {
   const row = await rowOf(graph, id);
-  await ownerEdit(graph, { id, body, expectedUpdatedAt: row.updatedAt });
+  await ownerEdit(graph, { id, body, expectedBodyRevision: row.bodyRevision });
 }
 
 async function versionsOf(graph: GraphId, id: string): Promise<{ label: string; body: string }[]> {
@@ -180,15 +186,9 @@ async function versionsOf(graph: GraphId, id: string): Promise<{ label: string; 
   return rows.map((r) => ({ label: r.label as string, body: r.body as string }));
 }
 
-/** Записи журнала с этим action: по одной на действие, заголовок карточки — подпись. */
+/** Записи журнала с этим action: по одной на действие, заголовок записи — подпись (API журнала). */
 async function journalOf(graph: GraphId, actionId: string): Promise<{ title: string }[]> {
-  const probe = JSON.stringify({ actions: [{ id: actionId }] });
-  const rows = await withIdentity(db, personal(graph), (tx) =>
-    tx.execute(
-      sql`SELECT metadata -> 'cards' -> 0 ->> 'title' AS title FROM chat_messages WHERE metadata @> ${probe}::jsonb`,
-    ),
-  );
-  return rows.map((r) => ({ title: r.title as string }));
+  return (await actionsOf(graph)).filter((a) => a.id === actionId).map((a) => ({ title: a.title }));
 }
 
 async function execErrorOf(p: Promise<unknown>): Promise<ExecError> {
@@ -253,7 +253,7 @@ describe('(а) запись поставки после создания', () =>
       [APP_NAV]: [
         'records',
         'daily-planning',
-        'upcoming',
+        'agenda',
         'all-tasks',
         'horizon-year',
         'routines',
@@ -513,6 +513,15 @@ describe('(е) «вернуть как было»', () => {
   });
 });
 
+/** Пункт «обновление оболочки»: в графе появилась запись ключа её навигации (Fable I-1 задачи 9 1в). */
+const SHELL_GAINED = (graph: GraphId) => ({
+  key: 'host-shell' as const,
+  kind: 'update' as const,
+  recordId: supplyRecordId(graph, 'host-shell'),
+  edited: false,
+  declined: false,
+});
+
 describe('(ж) новая запись поставки', () => {
   test('нет записи ключа → {kind:new}; «добавить» создаёт её «как в поставке»', async () => {
     const graph = await freshGraph();
@@ -528,7 +537,9 @@ describe('(ж) новая запись поставки', () => {
     expect(statusOf(row)).toBe('etalon');
     expect(row.props[SUPPLY_HASH]).toBe(etalonHash(etalonOf('records')));
     expect(await journalOf(graph, actionId)).toEqual([{ title: 'Добавить из поставки: «Записи»' }]);
-    expect(await updatesOf(ctxOf(graph))).toEqual([]);
+    // Оболочка заводилась без «Записей» — после «Добавить» её раздел приходит предложением обновить
+    // оболочку (Fable I-1 задачи 9 среза 1в: ключ навигации получил запись), а не молча и не никогда.
+    expect(await updatesOf(ctxOf(graph))).toEqual([SHELL_GAINED(graph)]);
   });
 
   test('архивная запись ключа → ничего не предлагается, и «добавить» — отказ', async () => {
@@ -652,7 +663,9 @@ describe('R-18: Undo «добавить» — как будто не добав�
       ),
     );
     expect(count[0]?.n).toBe(1);
-    expect(await updatesOf(ctxOf(graph))).toEqual([]);
+    // Оболочка заводилась без «Записей» — после «Добавить» её раздел приходит предложением обновить
+    // оболочку (Fable I-1 задачи 9 среза 1в: ключ навигации получил запись), а не молча и не никогда.
+    expect(await updatesOf(ctxOf(graph))).toEqual([SHELL_GAINED(graph)]);
   });
 
   test('два круга: добавить → Undo → добавить (из архива) → Undo → снова new, третий «добавить» — та же запись', async () => {
@@ -673,7 +686,9 @@ describe('R-18: Undo «добавить» — как будто не добав�
     }
     await addSupplyRecord(ctxOf(graph), 'records');
     expect((await rowOf(graph, id)).archived).toBe(false);
-    expect(await updatesOf(ctxOf(graph))).toEqual([]);
+    // Оболочка заводилась без «Записей» — после «Добавить» её раздел приходит предложением обновить
+    // оболочку (Fable I-1 задачи 9 среза 1в: ключ навигации получил запись), а не молча и не никогда.
+    expect(await updatesOf(ctxOf(graph))).toEqual([SHELL_GAINED(graph)]);
   });
 
   test('архив владельцем после «добавить» — ничего не предлагается, «добавить» — отказ', async () => {
@@ -739,6 +754,85 @@ describe('Fable M-1: «принять» оболочки не перекрыва
     );
     expect(err.code).toBe('CONFLICT');
     expect((await rowOf(graph, shell)).props[APP_NAV]).toEqual(later);
+  });
+});
+
+/**
+ * Тело страницы сменилось, а штамп записи — нет: сырой SQL под админом (триггер 0026 двигает ревизию тела, `updated_at`
+ * остаётся). Боевые писатели тела двигают оба замка сразу; так каждый из двух замков поставки проверяется отдельно.
+ */
+async function bodyOnlyChange(id: string, body: string): Promise<void> {
+  const admin = adminDb();
+  try {
+    await admin.db.execute(sql`UPDATE entities SET body = ${body} WHERE id = ${id}::uuid`);
+  } finally {
+    await admin.client.end();
+  }
+}
+
+describe('К-9: у правки страницы поставкой — оба замка, ревизия тела и штамп записи (спека скорости §8.2)', () => {
+  test('«принять» страницы: правка свойства между показом и принятием → CONFLICT precondition_failed; ничего не записано', async () => {
+    const graph = await freshGraph();
+    await seedSupply(graph);
+    const id = supplyRecordId(graph, 'home');
+    const next = withEtalon(SUPPLY_ETALONS, 'home', { text: HOME_V2 });
+    const err = await execErrorOf(
+      acceptUpdate(ctxOf(graph), 'home', next, {
+        afterRead: () => ownerEdit(graph, { id, tags: ['моё'] }),
+      }),
+    );
+    expect(err.code).toBe('CONFLICT');
+    expect((err.details as { reason?: string }).reason).toBe('precondition_failed');
+    const row = await rowOf(graph, id);
+    expect(row.props[SUPPLY_HASH]).toBe(etalonHash(etalonOf('home')));
+    expect(await versionsOf(graph, id)).toEqual([]);
+  });
+
+  test('«принять» страницы: тело сменилось между показом и принятием → STALE_VERSION; тело цело', async () => {
+    const graph = await freshGraph();
+    await seedSupply(graph);
+    const id = supplyRecordId(graph, 'home');
+    const next = withEtalon(SUPPLY_ETALONS, 'home', { text: HOME_V2 });
+    const err = await execErrorOf(
+      acceptUpdate(ctxOf(graph), 'home', next, {
+        afterRead: () => bodyOnlyChange(id, 'Моё приветствие'),
+      }),
+    );
+    expect(err.code).toBe('STALE_VERSION');
+    expect((await rowOf(graph, id)).body).toBe('Моё приветствие');
+    expect(await versionsOf(graph, id)).toEqual([]);
+  });
+
+  test('«вернуть как было» без смены тела: предусловие orbis/updated_at всё равно есть — правка свойства → CONFLICT', async () => {
+    const graph = await freshGraph();
+    await seedSupply(graph);
+    const id = supplyRecordId(graph, 'agenda');
+    // Правлен только заголовок: тело равно печати эталона, пачка тело не трогает — замка текста в ней нет
+    await ownerEdit(graph, { id, title: 'Моя неделя' });
+    expect(statusOf(await rowOf(graph, id))).toBe('edited');
+    const err = await execErrorOf(
+      revertToEtalon(ctxOf(graph), 'agenda', undefined, {
+        afterRead: () => ownerEdit(graph, { id, tags: ['моё'] }),
+      }),
+    );
+    expect(err.code).toBe('CONFLICT');
+    expect((err.details as { reason?: string }).reason).toBe('precondition_failed');
+    expect((await rowOf(graph, id)).title).toBe('Моя неделя');
+  });
+
+  test('«вернуть как было» со сменой тела: тело сменилось между показом и возвратом → STALE_VERSION', async () => {
+    const graph = await freshGraph();
+    await seedSupply(graph);
+    const id = supplyRecordId(graph, 'agenda');
+    await editBody(graph, id, 'Моё\n\n{{query:aspect=orbis/task, title=Все}}');
+    const err = await execErrorOf(
+      revertToEtalon(ctxOf(graph), 'agenda', undefined, {
+        afterRead: () => bodyOnlyChange(id, 'ещё моё'),
+      }),
+    );
+    expect(err.code).toBe('STALE_VERSION');
+    expect((await rowOf(graph, id)).body).toBe('ещё моё');
+    expect(await versionsOf(graph, id)).toEqual([]);
   });
 });
 
@@ -886,11 +980,11 @@ describe('Opus m-2: Undo каждого действия возвращает в
   test('«вернуть как было» страницы → Undo: заголовок и тело владельца, версия снята', async () => {
     const graph = await freshGraph();
     await seedSupply(graph);
-    const id = supplyRecordId(graph, 'upcoming');
+    const id = supplyRecordId(graph, 'agenda');
     await editBody(graph, id, 'Моё\n\n{{query:aspect=orbis/task, title=Все}}');
     await ownerEdit(graph, { id, title: 'Моя неделя' });
     const edited = await rowOf(graph, id);
-    const { actionId } = await revertToEtalon(ctxOf(graph), 'upcoming');
+    const { actionId } = await revertToEtalon(ctxOf(graph), 'agenda');
     await undo(graph, actionId);
     const back = await rowOf(graph, id);
     expect({ title: back.title, emoji: back.emoji, body: back.body }).toEqual({
@@ -910,5 +1004,298 @@ describe('Opus m-2: Undo каждого действия возвращает в
     const { actionId } = await addSupplyRecord(ctxOf(graph), 'home');
     await undo(graph, actionId);
     expect((await rowOf(graph, supplyRecordId(graph, 'home'))).archived).toBe(true);
+  });
+});
+
+// ─────────────────────────── Срез 1в: снятый ключ поставки (§6.3, РП-10, Д-13) ───────────────────────────
+
+/**
+ * Запись Upcoming ТАКОЙ, какой её оставил сев 1б: страница с аспектом «поставка», ключ `upcoming`, эталон
+ * 1б (`UPCOMING_BODY`) печатью в записи, id прежнего сева. Эталона кода у ключа больше нет — записать
+ * её можно только механизмом `supply` напрямую, как это сделал сев 1б.
+ */
+async function seedRetiredUpcoming(graph: GraphId): Promise<string> {
+  const id = supplyRecordId(graph, 'upcoming');
+  const title = 'Upcoming';
+  const emoji = '🗓️';
+  const r = await execute(
+    db,
+    {
+      identity: personal(graph),
+      actorKind: 'owner',
+      source: 'ui',
+      mechanism: 'supply',
+      batchId: newId(),
+      operations: [
+        {
+          tool: 'entity_create',
+          input: {
+            id,
+            title,
+            emoji,
+            tags: [],
+            body: UPCOMING_BODY,
+            aspects: [PAGE_ASPECT, SUPPLY_ASPECT],
+            props: {
+              [SUPPLY_KEY]: 'upcoming',
+              [SUPPLY_HASH]: etalonHash({
+                key: 'upcoming' as unknown as SupplyKey,
+                kind: 'page',
+                title,
+                emoji,
+                text: UPCOMING_BODY,
+              }),
+              [SUPPLY_TEXT]: printPageRecord({
+                title,
+                emoji,
+                body: await canonical(graph, UPCOMING_BODY),
+              }),
+            },
+          },
+        },
+      ],
+    },
+    { sink },
+  );
+  if (!r.ok) throw new Error(`запись Upcoming 1б: ${JSON.stringify(r.error)}`);
+  return id;
+}
+
+describe('снятый с поставки ключ upcoming (1в §6.3)', () => {
+  test('«Обновления» его не предлагают — ни обновлением, ни новой записью', async () => {
+    const graph = await freshGraph();
+    await seedSupply(graph);
+    await seedRetiredUpcoming(graph);
+    expect(await updatesOf(ctxOf(graph))).toEqual([]);
+    // Правленая — тоже: эталона, от которого считать обновление, у снятого ключа нет.
+    await ownerEdit(graph, { id: supplyRecordId(graph, 'upcoming'), title: 'Моя неделя' });
+    expect(await updatesOf(ctxOf(graph))).toEqual([]);
+  });
+
+  test('«вернуть как было» у правленой: род — из записи, тело и заголовок — из supply_text', async () => {
+    const graph = await freshGraph();
+    await seedSupply(graph);
+    const id = await seedRetiredUpcoming(graph);
+    await editBody(graph, id, 'Моя неделя\n\n{{query:aspect=orbis/task, title=Все}}');
+    await ownerEdit(graph, { id, title: 'Неделя' });
+    const edited = await rowOf(graph, id);
+    expect(statusOf(edited)).toBe('edited');
+
+    const { actionId } = await revertToEtalon(ctxOf(graph), 'upcoming');
+    const after = await rowOf(graph, id);
+    expect({ title: after.title, emoji: after.emoji, body: after.body }).toEqual(
+      parsePagePrint(edited.props[SUPPLY_TEXT] as string),
+    );
+    expect(after.body).toBe(await canonical(graph, UPCOMING_BODY));
+    expect(statusOf(after)).toBe('etalon');
+    // Эталон записи (ключ, отпечаток, текст) возврат не трогает.
+    expect(after.props).toEqual(edited.props);
+    expect(await versionsOf(graph, id)).toEqual([{ label: 'Прежняя версия', body: edited.body }]);
+    expect(await journalOf(graph, actionId)).toEqual([{ title: 'Вернуть как было: «Неделя»' }]);
+  });
+
+  test('«вернуть как было» у неправленой — «и так как в поставке», не «эталона нет»', async () => {
+    const graph = await freshGraph();
+    await seedSupply(graph);
+    await seedRetiredUpcoming(graph);
+    const err = await execErrorOf(revertToEtalon(ctxOf(graph), 'upcoming'));
+    expect([err.code, err.message]).toEqual(['VALIDATION', 'запись и так как в поставке']);
+  });
+
+  test('«добавить», «принять», «оставить своё» снятого ключа — отказ', async () => {
+    const graph = await freshGraph();
+    await seedSupply(graph);
+    const id = await seedRetiredUpcoming(graph);
+    await ownerEdit(graph, { id, title: 'Неделя' });
+    const upcoming = 'upcoming' as unknown as SupplyKey;
+    for (const call of [
+      () => acceptUpdate(ctxOf(graph), upcoming),
+      () => declineUpdate(ctxOf(graph), upcoming),
+    ]) {
+      const e = await execErrorOf(call());
+      expect([e.code, e.message]).toEqual([
+        'VALIDATION',
+        'эталона поставки с ключом «upcoming» нет',
+      ]);
+    }
+    // «Добавить» живую запись не создаёт второй — отказ раньше, чем дело дойдёт до эталона.
+    expect((await execErrorOf(addSupplyRecord(ctxOf(graph), upcoming))).code).toBe('VALIDATION');
+  });
+});
+
+describe('М-8 остатков 1б: признак отката «добавить» не гаснет от чужого отменённого действия', () => {
+  test('«Добавить: Повестка» → Undo → правка владельца архивной записи → Undo правки → снова new; «добавить» возвращает ту же', async () => {
+    const graph = await freshGraph();
+    await seedSupply(
+      graph,
+      SUPPLY_KEYS.filter((k) => k !== 'agenda'),
+    );
+    const id = supplyRecordId(graph, 'agenda');
+    const added = await addSupplyRecord(ctxOf(graph), 'agenda');
+    expect(await journalOf(graph, added.actionId)).toEqual([
+      { title: 'Добавить из поставки: «Повестка»' },
+    ]);
+    await undo(graph, added.actionId);
+    expect((await rowOf(graph, id)).archived).toBe(true);
+
+    // Владелец правит архивную запись и отменяет правку: последнее НЕотменённое действие над ней —
+    // всё то же отменённое «добавить». Без пропуска отменённых признак гас бы, и поставка молча
+    // перестала бы предлагать Повестку.
+    const edit = await execute(
+      db,
+      {
+        identity: personal(graph),
+        actorKind: 'owner',
+        source: 'ui',
+        operations: [{ tool: 'entity_update', input: { id, title: 'Моя повестка' } }],
+      },
+      { sink },
+    );
+    if (!edit.ok) throw new Error(`правка владельца: ${JSON.stringify(edit.error)}`);
+    await undo(graph, edit.actionId);
+    expect((await rowOf(graph, id)).title).toBe('Повестка');
+
+    expect(await updatesOf(ctxOf(graph))).toEqual([
+      { key: 'agenda', kind: 'new', recordId: null, edited: false, declined: false },
+    ]);
+    const again = await addSupplyRecord(ctxOf(graph), 'agenda');
+    expect((await rowOf(graph, id)).archived).toBe(false);
+    expect(await journalOf(graph, again.actionId)).toEqual([
+      { title: 'Добавить из поставки: «Повестка»' },
+    ]);
+    const count = await withIdentity(db, personal(graph), (tx) =>
+      tx.execute(
+        sql`SELECT count(*)::int AS n FROM entities WHERE props @> ${JSON.stringify({ [SUPPLY_KEY]: 'agenda' })}::jsonb`,
+      ),
+    );
+    expect(count[0]?.n).toBe(1);
+  });
+
+  test('правка владельца архивной записи НЕ отменена — это его действие, предложения нет', async () => {
+    const graph = await freshGraph();
+    await seedSupply(
+      graph,
+      SUPPLY_KEYS.filter((k) => k !== 'agenda'),
+    );
+    const id = supplyRecordId(graph, 'agenda');
+    const added = await addSupplyRecord(ctxOf(graph), 'agenda');
+    await undo(graph, added.actionId);
+    await ownerEdit(graph, { id, title: 'Моя повестка' });
+    expect(await updatesOf(ctxOf(graph))).toEqual([]);
+  });
+});
+
+// ─────────── Fable I-1 задачи 9: граф 1б, «Принять все» до и после «Добавить: Повестка» ───────────
+
+/** Эталоны релиза 1б: Upcoming в навигации хоста и своей страницей, Повестки нет. */
+const ETALONS_1B: SupplyEtalon[] = [
+  ...SUPPLY_ETALONS.filter((e) => e.key !== 'agenda').map(
+    (e): SupplyEtalon =>
+      e.kind === 'app'
+        ? {
+            ...e,
+            nav: [
+              'records',
+              'daily-planning',
+              'upcoming',
+              'all-tasks',
+              'horizon-year',
+              'routines',
+            ] as unknown as SupplyKey[],
+          }
+        : e,
+  ),
+  {
+    key: 'upcoming' as unknown as SupplyKey,
+    kind: 'page',
+    title: 'Upcoming',
+    emoji: '🗓️',
+    text: UPCOMING_BODY,
+  },
+];
+
+const NAV_1V = ['records', 'daily-planning', 'agenda', 'all-tasks', 'horizon-year', 'routines'];
+
+async function navKeysOf(graph: GraphId): Promise<string[]> {
+  const shell = await rowOf(graph, supplyRecordId(graph, 'host-shell'));
+  const byId = new Map(
+    [...SUPPLY_KEYS, 'upcoming' as const].map((k) => [supplyRecordId(graph, k), k as string]),
+  );
+  return ((shell.props[APP_NAV] as string[] | undefined) ?? []).map((id) => byId.get(id) ?? id);
+}
+
+describe('Fable I-1: граф 1б — Повестка в навигации хоста при любом порядке нажатий', () => {
+  test('«Принять все» → «Добавить: Повестка» → «Обновления» снова предлагают оболочку → Повестка третьей', async () => {
+    const graph = await freshGraph();
+    await seedSupply(
+      graph,
+      ETALONS_1B.map((e) => e.key),
+      ETALONS_1B,
+    );
+    const first = await updatesOf(ctxOf(graph));
+    expect(first).toContainEqual(
+      expect.objectContaining({ key: 'host-shell', kind: 'update', edited: false }),
+    );
+    expect(first).toContainEqual(expect.objectContaining({ key: 'agenda', kind: 'new' }));
+
+    await acceptAll(ctxOf(graph));
+    // Повестки ещё нет — навигация эталона 1в без неё (и без Upcoming: её в эталоне больше нет).
+    expect(await navKeysOf(graph)).toEqual(NAV_1V.filter((k) => k !== 'agenda'));
+    expect(statusOf(await rowOf(graph, supplyRecordId(graph, 'host-shell')))).toBe('etalon');
+
+    await addSupplyRecord(ctxOf(graph), 'agenda');
+    // Отпечаток оболочки уже 1в, но в графе появилась запись её ключа — обновление снова есть.
+    expect(await updatesOf(ctxOf(graph))).toEqual([
+      {
+        key: 'host-shell',
+        kind: 'update',
+        recordId: supplyRecordId(graph, 'host-shell'),
+        edited: false,
+        declined: false,
+      },
+    ]);
+    await acceptAll(ctxOf(graph));
+    expect(await navKeysOf(graph)).toEqual(NAV_1V);
+    expect(statusOf(await rowOf(graph, supplyRecordId(graph, 'host-shell')))).toBe('etalon');
+    expect(await updatesOf(ctxOf(graph))).toEqual([]);
+  });
+
+  test('«Добавить: Повестка» → «Принять все» → Повестка третьей, больше ничего не предлагается', async () => {
+    const graph = await freshGraph();
+    await seedSupply(
+      graph,
+      ETALONS_1B.map((e) => e.key),
+      ETALONS_1B,
+    );
+    await addSupplyRecord(ctxOf(graph), 'agenda');
+    await acceptAll(ctxOf(graph));
+    expect(await navKeysOf(graph)).toEqual(NAV_1V);
+    expect(await updatesOf(ctxOf(graph))).toEqual([]);
+  });
+
+  test('раздел в архиве (решение владельца) обновления оболочки НЕ порождает; «принять» без пункта — отказ', async () => {
+    const graph = await freshGraph();
+    await seedSupply(graph);
+    await ownerEdit(graph, { id: supplyRecordId(graph, 'all-tasks'), archived: true });
+    expect(await updatesOf(ctxOf(graph))).toEqual([]);
+    const e = await execErrorOf(acceptUpdate(ctxOf(graph), 'host-shell'));
+    expect([e.code, e.message]).toEqual([
+      'VALIDATION',
+      'обновления нет: запись уже с этим эталоном',
+    ]);
+  });
+
+  test('«Оставить своё» у пункта «появилась запись» — пункт уходит до следующего эталона', async () => {
+    const graph = await freshGraph();
+    await seedSupply(
+      graph,
+      ETALONS_1B.map((e) => e.key),
+      ETALONS_1B,
+    );
+    await acceptAll(ctxOf(graph));
+    await addSupplyRecord(ctxOf(graph), 'agenda');
+    await declineUpdate(ctxOf(graph), 'host-shell');
+    expect(await updatesOf(ctxOf(graph))).toEqual([]);
+    expect(await navKeysOf(graph)).toEqual(NAV_1V.filter((k) => k !== 'agenda'));
   });
 });

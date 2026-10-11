@@ -10,6 +10,7 @@
  */
 
 import { useState } from 'react';
+import { placeOf, useBodyKind } from '../../lib/query-blocks/body-kind';
 import { useFieldCatalog } from '../../lib/query-blocks/useFieldCatalog';
 import { Dialog } from '../../ui/Dialog';
 import { parseForForm } from './model';
@@ -26,6 +27,7 @@ export function QueryBlockEditor({
   onCancel: () => void;
 }) {
   const { registry } = useFieldCatalog();
+  const place = placeOf(useBodyKind());
   // Не null — открыт строковый редактор с этим текстом (переход «редактировать как текст»).
   const [text, setText] = useState<string | null>(null);
 
@@ -47,7 +49,7 @@ export function QueryBlockEditor({
 
   // Форма управляет только тем блоком, который она умеет напечатать обратно: и разбор, и
   // печать проверяются ДО открытия — иначе первое же сохранение потеряло бы конструкцию.
-  if (text === null && parseForForm(initial, registry) !== null) {
+  if (text === null && parseForForm(initial, registry, place) !== null) {
     return (
       <QueryBuilderForm
         initial={initial}

@@ -114,6 +114,52 @@ test('успешный ai.sendMessage инвалидирует budget-кэш (б
   await waitFor(() => expect(qc.getQueryState(budgetKey)?.isInvalidated).toBe(true));
 });
 
+// К-44: ход мог упасть ПОСЛЕ исполненных действий — граф и бюджет уже изменились. Кэши графа гаснут, а тред — нет:
+// его перечитывание смыло бы локальную error_card с «Повторить».
+test('сбой ai.sendMessage: кэши графа и бюджета инвалидируются, тред не перечитывается, error_card с «Повторить» на месте', async () => {
+  const qc = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+  let listCalls = 0;
+  const client = trpc.createClient({
+    links: [
+      mockLink((path) => {
+        if (path === 'chat.listMessages') {
+          listCalls += 1;
+          return [];
+        }
+        if (path === 'ai.sendMessage') throw new Error('LLM_UNAVAILABLE');
+        throw new Error(`unexpected ${path}`);
+      }),
+    ],
+  });
+  const Wrap = ({ children }: { children: ReactNode }) => (
+    <trpc.Provider client={client} queryClient={qc}>
+      <QueryClientProvider client={qc}>{children}</QueryClientProvider>
+    </trpc.Provider>
+  );
+  const graphKey = getQueryKey(trpc.entity.query, { query: 'aspect=orbis/task' }, 'query');
+  const budgetKey = getQueryKey(trpc.budget.overview, { month: '2026-07' }, 'query');
+  qc.setQueryData(graphKey, []);
+  qc.setQueryData(budgetKey, null);
+  const { result } = renderHook(
+    () => ({ send: useSendMessage('t1'), thread: useChatThread('t1') }),
+    {
+      wrapper: Wrap,
+    },
+  );
+  await waitFor(() => expect(result.current.thread.isLoading).toBe(false));
+  const listed = listCalls;
+  act(() => result.current.send.sendMessage('создай и упади'));
+  await waitFor(() => expect(qc.getQueryState(graphKey)?.isInvalidated).toBe(true));
+  expect(qc.getQueryState(budgetKey)?.isInvalidated).toBe(true);
+  const cards = result.current.thread.messages.flatMap(
+    (m) => (m.metadata as { cards?: Array<{ kind: string }> }).cards ?? [],
+  );
+  expect(cards.some((c) => c.kind === 'error_card')).toBe(true);
+  expect(listCalls).toBe(listed);
+});
+
 test('{ status: processing } → рефетч треда с backoff, без локального аппенда ответа', async () => {
   // Конкурентный ретрай: ответ пишет другой прогон — клиент перечитывает тред позже
   let listCalls = 0;

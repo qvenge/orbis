@@ -19,6 +19,7 @@ import { canonicalizeBody, parseBody } from '@orbis/shared/doc';
 import { TRPCError } from '@trpc/server';
 import { eq, sql } from 'drizzle-orm';
 import { adminDb, appDb, freshGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
+import { actionsOf, journalOf } from '../../test/journal-helpers';
 import { entityVersions } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { appRouter } from '../router';
@@ -113,18 +114,13 @@ async function cardsOf(user: GraphId, kind: string): Promise<Card[]> {
   }
 }
 
-/** Заголовок записи журнала этой пачки — текст audit-сообщения в глобальном треде владельца. */
+/**
+ * Заголовок записи журнала этой пачки (API журнала). Жест интерфейса — правка владельца: треда у записи нет (Р-12,
+ * спека скорости §11.3), и это проверяется здесь же, чтобы заголовок не прочитался у чужой записи.
+ */
 async function auditTitle(user: GraphId, actionId: string): Promise<string | undefined> {
-  const { db: admin, client: adminClient } = adminDb();
-  try {
-    const rows = await admin.execute(
-      sql`SELECT content FROM chat_messages WHERE thread_id = ${globalThreadId(user)}
-          AND metadata->'actions'->0->>'id' = ${actionId}`,
-    );
-    return [...rows].map((r) => r.content as string)[0];
-  } finally {
-    await adminClient.end();
-  }
+  const entry = await journalOf(user, actionId);
+  return entry?.threadId === null ? entry.title : undefined;
 }
 
 describe('entity.updateBatch — пачка правок, один Undo (§4.3, §8.4)', () => {
@@ -149,7 +145,7 @@ describe('entity.updateBatch — пачка правок, один Undo (§4.3, 
     expect(await auditTitle(user, plain.actionId)).toBe('batch: операций — 1');
   });
 
-  test('устаревший expectedUpdatedAt во ВТОРОЙ операции — CONFLICT, закрепление версии первой не легло (B-M3)', async () => {
+  test('устаревшая ревизия тела во ВТОРОЙ операции — CONFLICT, закрепление версии первой не легло (B-M3)', async () => {
     const user = await freshGraph();
     const caller = callerFor(user);
     const x = await caller.entity.create({
@@ -157,8 +153,13 @@ describe('entity.updateBatch — пачка правок, один Undo (§4.3, 
       source: 'ui',
     });
     const seen = await caller.entity.get({ id: x.id, include: ['body'] });
-    // Правка мимо экрана после чтения: версия, из которой строился план, устарела.
-    await caller.entity.update({ id: x.id, title: 'Правлено с телефона' });
+    // Правка ТЕКСТА мимо экрана после чтения: ревизия, из тела которой строился план, устарела. Правка заголовка
+    // замка текста не двигает (спека скорости §8.1) — план по ней остался бы верен.
+    const mid = await caller.entity.update({
+      id: x.id,
+      body: 'Правлено с телефона',
+      expectedBodyRevision: seen.entity.bodyRevision,
+    });
 
     const err = await trpcError(
       caller.entity.updateBatch({
@@ -171,7 +172,7 @@ describe('entity.updateBatch — пачка правок, один Undo (§4.3, 
             tool: 'entity_update',
             input: {
               id: x.id,
-              expectedUpdatedAt: seen.entity.updatedAt,
+              expectedBodyRevision: seen.entity.bodyRevision,
               bodyDoc: pageDoc('Новое тело'),
               aspects: { attach: [PAGE_ASPECT] },
             },
@@ -180,9 +181,10 @@ describe('entity.updateBatch — пачка правок, один Undo (§4.3, 
       }),
     );
     expect(err.code).toBe('CONFLICT');
+    expect((err.cause as unknown as { code: string }).code).toBe('STALE_VERSION');
     expect(await caller.version.list({ entityId: x.id })).toEqual([]);
     const after = await caller.entity.get({ id: x.id, include: ['body'] });
-    expect(after.entity.body).toBe(seen.entity.body);
+    expect(after.entity.body).toBe(mid.body);
     expect(after.entity.aspects).not.toContain(PAGE_ASPECT);
   });
 
@@ -235,7 +237,7 @@ describe('entity.updateBatch — пачка правок, один Undo (§4.3, 
           tool: 'entity_update',
           input: {
             id: x.id,
-            expectedUpdatedAt: before.entity.updatedAt,
+            expectedBodyRevision: before.entity.bodyRevision,
             bodyDoc: pageDoc('# Страница\n\nНовое тело'),
             aspects: { attach: [PAGE_ASPECT] },
           },
@@ -253,7 +255,7 @@ describe('entity.updateBatch — пачка правок, один Undo (§4.3, 
 
     await caller.ai.undo({ actionId: r.actionId });
     const undone = await caller.entity.get({ id: x.id, include: ['body'] });
-    expect(undone.entity.body).toBe(before.entity.body);
+    expect(undone.entity.body ?? '').toBe(before.entity.body ?? '');
     expect(undone.entity.aspects).not.toContain(PAGE_ASPECT);
     expect(await caller.version.list({ entityId: x.id })).toEqual([]);
   });
@@ -434,17 +436,7 @@ test('ПС-03/04: attach и поля одной операцией', async () =>
   const defaultRule = ruleDefinitionSchema.parse(RULE_TASK_STATUS_DEFAULT);
   if (defaultRule.template !== 'default' || !('const' in defaultRule.params.value))
     throw new Error('ожидалось правило default с const');
-  const journal = async () => {
-    const { db: admin, client: adminClient } = adminDb();
-    try {
-      const rows =
-        await admin.execute(sql`SELECT metadata->'actions'->0->>'id' AS id FROM chat_messages
-        WHERE thread_id = ${globalThreadId(graph)} AND metadata->'actions'->0->>'id' IS NOT NULL ORDER BY id`);
-      return [...rows].map((r) => r.id as string);
-    } finally {
-      await adminClient.end();
-    }
-  };
+  const journal = async () => (await actionsOf(graph)).map((action) => action.id).sort();
   const actions = await journal();
   // Незатронутый task_status отсутствует в patch: default применяет только сервер.
   const made = await caller.entity.updateBatch({
@@ -462,18 +454,20 @@ test('ПС-03/04: attach и поля одной операцией', async () =>
   expect((await journal()).filter((id) => !actions.includes(id))).toEqual([made.actionId]);
   const after = await caller.entity.get({ id: source.id, include: ['body'] });
   expect(after.entity.id).toBe(source.id);
-  expect(after.entity.body).toBe(before.entity.body);
+  expect(before.entity.body).toBeDefined();
+  expect(after.entity.body).toBe(before.entity.body!);
   expect(after.entity.aspects).toContain('orbis/task');
   expect(after.entity.props['orbis/due_date']).toBe('2026-10-20');
   expect(after.entity.props['orbis/task_status']).toBe(defaultRule.params.value.const);
   expect((made.results[0] as { props: Record<string, unknown> }).props['orbis/task_status']).toBe(
     defaultRule.params.value.const,
   );
+  if (!made.actionId) throw new Error('пачка не вернула actionId');
   await caller.ai.undo({ actionId: made.actionId });
   const undone = await caller.entity.get({ id: source.id, include: ['body', 'relations'] });
   expect(undone.entity.aspects).toEqual(before.entity.aspects);
   expect(undone.entity.props).toEqual(before.entity.props);
-  expect(undone.entity.body).toBe(before.entity.body);
+  expect(undone.entity.body).toBe(before.entity.body!);
   const journalBeforeInvalid = await journal();
   await expect(
     caller.entity.updateBatch({

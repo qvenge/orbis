@@ -1,10 +1,15 @@
 [
   {
     "name": "entity_query",
-    "description": "Поиск/фильтрация сущностей грамматикой запросов Orbis (§А5-3) или готовым деревом (ast). Возвращает список сущностей (core-поля + tags + aspects). Имена свойств и аспектов — namespaced key со слэшем. Примеры: «aspect=orbis/task, search=отчёт»; «aspect=orbis/task, class=orbis/completable:open, sortBy=orbis/updated_at:desc, limit=20» (class=<контракт>:<набор> — членство по контракту: работает для любого аспекта, объявившего его реализацию); «aspect=orbis/note, tags=идеи» (отбор по тегу: ключ tags — во множественном числе).",
+    "description": "Поиск/фильтрация сущностей грамматикой запросов Orbis (§А5-3) или готовым деревом (ast). Возвращает лёгкие строки (core-поля + tags + aspects, без текста); текст — fields: 'full' или entity_get. Имена свойств и аспектов — namespaced key со слэшем. Примеры: «aspect=orbis/task, search=отчёт»; «aspect=orbis/task, class=orbis/completable:open, sortBy=orbis/updated_at:desc, limit=20» (class=<контракт>:<набор> — членство по контракту: работает для любого аспекта, объявившего его реализацию); «aspect=orbis/note, tags=идеи» (отбор по тегу: ключ tags — во множественном числе). «Что у меня на этой неделе»: «orbis/when=this_week, !class=orbis/recurrence:templates» — orbis/when это даты «когда» записи из любого расширения (встречи, сроки, сделанное). О планах спрашивай незакрытое (!class=orbis/completable:closed): сделанное тоже стоит во времени — временем закрытия. Просроченное — «orbis/when=overdue, class=orbis/completable:open». Интервал — одним условием (=T или a..b), не двумя сравнениями. Адрес слота — «<контракт>.<слот>»: orbis/when.deadline, orbis/money-movement.amount.",
     "inputJsonSchema": {
       "type": "object",
       "properties": {
+        "fields": {
+          "type": "string",
+          "enum": ["none", "start", "full"],
+          "description": "none (по умолчанию) — без текста; start — начало текста до 160 символов; full — текст целиком"
+        },
         "query": {
           "type": "string",
           "minLength": 1,
@@ -31,8 +36,27 @@
                 "type": "object",
                 "properties": {
                   "field": {
-                    "type": "string",
-                    "minLength": 1
+                    "oneOf": [
+                      {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "contract": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "slot": {
+                            "type": "string",
+                            "pattern": "^[a-z][a-z0-9_]*$"
+                          }
+                        },
+                        "required": ["contract"],
+                        "additionalProperties": false
+                      }
+                    ]
                   },
                   "dir": {
                     "enum": ["asc", "desc"]
@@ -72,8 +96,27 @@
                       "enum": ["sum", "latest"]
                     },
                     "field": {
-                      "type": "string",
-                      "minLength": 1
+                      "oneOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "contract": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "slot": {
+                              "type": "string",
+                              "pattern": "^[a-z][a-z0-9_]*$"
+                            }
+                          },
+                          "required": ["contract"],
+                          "additionalProperties": false
+                        }
+                      ]
                     }
                   },
                   "required": ["fn", "field"],
@@ -211,8 +254,27 @@
               "type": "object",
               "properties": {
                 "prop": {
-                  "type": "string",
-                  "minLength": 1
+                  "oneOf": [
+                    {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "contract": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "slot": {
+                          "type": "string",
+                          "pattern": "^[a-z][a-z0-9_]*$"
+                        }
+                      },
+                      "required": ["contract"],
+                      "additionalProperties": false
+                    }
+                  ]
                 },
                 "op": {
                   "enum": ["eq", "ne", "gt", "lt"]
@@ -226,7 +288,16 @@
                       "type": "object",
                       "properties": {
                         "token": {
-                          "enum": ["today", "overdue", "next_7d", "after_7d"]
+                          "enum": [
+                            "today",
+                            "overdue",
+                            "next_7d",
+                            "after_7d",
+                            "this_week",
+                            "next_14d",
+                            "this_month",
+                            "last_month"
+                          ]
                         }
                       },
                       "required": ["token"],
@@ -242,8 +313,27 @@
               "type": "object",
               "properties": {
                 "prop": {
-                  "type": "string",
-                  "minLength": 1
+                  "oneOf": [
+                    {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "contract": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "slot": {
+                          "type": "string",
+                          "pattern": "^[a-z][a-z0-9_]*$"
+                        }
+                      },
+                      "required": ["contract"],
+                      "additionalProperties": false
+                    }
+                  ]
                 },
                 "op": {
                   "const": "in"
@@ -263,8 +353,27 @@
               "type": "object",
               "properties": {
                 "prop": {
-                  "type": "string",
-                  "minLength": 1
+                  "oneOf": [
+                    {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "contract": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "slot": {
+                          "type": "string",
+                          "pattern": "^[a-z][a-z0-9_]*$"
+                        }
+                      },
+                      "required": ["contract"],
+                      "additionalProperties": false
+                    }
+                  ]
                 },
                 "op": {
                   "const": "contains"
@@ -280,8 +389,27 @@
               "type": "object",
               "properties": {
                 "prop": {
-                  "type": "string",
-                  "minLength": 1
+                  "oneOf": [
+                    {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "contract": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "slot": {
+                          "type": "string",
+                          "pattern": "^[a-z][a-z0-9_]*$"
+                        }
+                      },
+                      "required": ["contract"],
+                      "additionalProperties": false
+                    }
+                  ]
                 },
                 "op": {
                   "const": "range"
@@ -298,7 +426,16 @@
                           "type": "object",
                           "properties": {
                             "token": {
-                              "enum": ["today", "overdue", "next_7d", "after_7d"]
+                              "enum": [
+                                "today",
+                                "overdue",
+                                "next_7d",
+                                "after_7d",
+                                "this_week",
+                                "next_14d",
+                                "this_month",
+                                "last_month"
+                              ]
                             }
                           },
                           "required": ["token"],
@@ -315,7 +452,16 @@
                           "type": "object",
                           "properties": {
                             "token": {
-                              "enum": ["today", "overdue", "next_7d", "after_7d"]
+                              "enum": [
+                                "today",
+                                "overdue",
+                                "next_7d",
+                                "after_7d",
+                                "this_week",
+                                "next_14d",
+                                "this_month",
+                                "last_month"
+                              ]
                             }
                           },
                           "required": ["token"],
@@ -581,7 +727,7 @@
   },
   {
     "name": "entity_update",
-    "description": "Частичное обновление сущности: передаются только изменяемые поля. props ставит значения, unset снимает их, aspects.attach/detach меняет интерпретацию.",
+    "description": "Частичное обновление сущности: передаются только изменяемые поля. props ставит значения, unset снимает их, aspects.attach/detach меняет интерпретацию. Правка body требует expectedBodyRevision — ревизию тела из entity_get: если текст изменили после чтения, правка отказывает STALE_VERSION, и её повторяют по перечитанной записи. Правка без body ревизии не требует.",
     "inputJsonSchema": {
       "type": "object",
       "properties": {
@@ -589,10 +735,10 @@
           "type": "string",
           "format": "uuid"
         },
-        "expectedUpdatedAt": {
-          "type": "string",
-          "format": "date-time",
-          "description": "updated_at сущности, которую видел клиент; обязателен при правке body (§5.2)"
+        "expectedBodyRevision": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "ревизия тела записи, которую вы видели (entity_get → bodyRevision); обязательна при правке body: если текст успели изменить, правка отказывает STALE_VERSION — перечитайте запись и повторите"
         },
         "title": {
           "type": "string",
@@ -753,7 +899,7 @@
   },
   {
     "name": "user_query",
-    "description": "Вопрос-агрегация по выборке («сколько задач закрыто за месяц»): sum/count поверх запроса грамматики §6.",
+    "description": "Вопрос-агрегация по выборке («сколько задач закрыто за месяц»): sum/count поверх запроса грамматики §6. Сумма приходит по валютам: {sums} — по строке на валюту, не складывай их между собой.",
     "inputJsonSchema": {
       "type": "object",
       "properties": {
@@ -768,7 +914,7 @@
         },
         "field": {
           "type": "string",
-          "description": "обязателен при aggregate=sum: key числового свойства (orbis/effort_min); id тоже принимается"
+          "description": "обязателен при aggregate=sum: key числового свойства (orbis/effort_min); id тоже принимается, адрес слота контракта («<контракт>.<слот>») не принимается"
         }
       },
       "required": ["query", "aggregate"],
@@ -876,17 +1022,8 @@
     }
   },
   {
-    "name": "import_csv_start",
-    "description": "Вход в импорт банковской выписки (CSV): показывает пользователю карточку, с которой он откроет экран импорта. Вызывай, когда пользователь просит импортировать выписку/CSV из банка («импортируй выписку»). Сам тул НИЧЕГО не импортирует и файла не видит — выписка выбирается и разбирается локально в браузере пользователя.",
-    "inputJsonSchema": {
-      "type": "object",
-      "properties": {},
-      "additionalProperties": false
-    }
-  },
-  {
     "name": "undo_last",
-    "description": "Отменить ПОСЛЕДНЕЕ действие в графе (Undo §7.8): «отмени последнее», «отмени», «верни как было», «убери, что только что сделал». Откатывает последнее видимое действие журнала пользователя — своё или пользователя, — независимо от того, в этом ли треде оно случилось. Вызывай ТОЛЬКО по явной просьбе пользователя отменить последнее; не чини правкой то, что нужно отменить, и не зови повторно ради «ещё раз отменить», не переспросив. Ответ: что именно отменено (actionId, тип, заголовок) либо «отменять нечего».",
+    "description": "Отменить ПОСЛЕДНЕЕ действие в графе (Undo §7.8): «отмени последнее», «отмени», «верни как было», «убери, что только что сделал». Откатывает последнее видимое действие журнала пользователя — своё или пользователя, — независимо от того, в этом ли треде оно случилось. Вызывай ТОЛЬКО по явной просьбе пользователя отменить последнее; не чини правкой то, что нужно отменить, и не зови повторно ради «ещё раз отменить», не переспросив. Ответ: что именно отменено (actionId, тип, заголовок), «отменять нечего» либо отказ «текст изменён». При отказе назови фактическое место из error.details.continuation: card — карточка или строка журнала с «Отменить» в указанном треде; tab — Ctrl/Cmd+Z или плашка во вкладке, где сделано; none — продолжения нет (в том числе у сеанса правки текста). Сам undo_last продолжение не исполняет.",
     "inputJsonSchema": {
       "type": "object",
       "properties": {},
@@ -1022,8 +1159,27 @@
                 "type": "object",
                 "properties": {
                   "field": {
-                    "type": "string",
-                    "minLength": 1
+                    "oneOf": [
+                      {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "contract": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "slot": {
+                            "type": "string",
+                            "pattern": "^[a-z][a-z0-9_]*$"
+                          }
+                        },
+                        "required": ["contract"],
+                        "additionalProperties": false
+                      }
+                    ]
                   },
                   "dir": {
                     "enum": ["asc", "desc"]
@@ -1063,8 +1219,27 @@
                       "enum": ["sum", "latest"]
                     },
                     "field": {
-                      "type": "string",
-                      "minLength": 1
+                      "oneOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "contract": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "slot": {
+                              "type": "string",
+                              "pattern": "^[a-z][a-z0-9_]*$"
+                            }
+                          },
+                          "required": ["contract"],
+                          "additionalProperties": false
+                        }
+                      ]
                     }
                   },
                   "required": ["fn", "field"],
@@ -1200,8 +1375,27 @@
                   "type": "object",
                   "properties": {
                     "prop": {
-                      "type": "string",
-                      "minLength": 1
+                      "oneOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "contract": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "slot": {
+                              "type": "string",
+                              "pattern": "^[a-z][a-z0-9_]*$"
+                            }
+                          },
+                          "required": ["contract"],
+                          "additionalProperties": false
+                        }
+                      ]
                     },
                     "op": {
                       "enum": ["eq", "ne", "gt", "lt"]
@@ -1215,7 +1409,16 @@
                           "type": "object",
                           "properties": {
                             "token": {
-                              "enum": ["today", "overdue", "next_7d", "after_7d"]
+                              "enum": [
+                                "today",
+                                "overdue",
+                                "next_7d",
+                                "after_7d",
+                                "this_week",
+                                "next_14d",
+                                "this_month",
+                                "last_month"
+                              ]
                             }
                           },
                           "required": ["token"],
@@ -1231,8 +1434,27 @@
                   "type": "object",
                   "properties": {
                     "prop": {
-                      "type": "string",
-                      "minLength": 1
+                      "oneOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "contract": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "slot": {
+                              "type": "string",
+                              "pattern": "^[a-z][a-z0-9_]*$"
+                            }
+                          },
+                          "required": ["contract"],
+                          "additionalProperties": false
+                        }
+                      ]
                     },
                     "op": {
                       "const": "in"
@@ -1252,8 +1474,27 @@
                   "type": "object",
                   "properties": {
                     "prop": {
-                      "type": "string",
-                      "minLength": 1
+                      "oneOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "contract": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "slot": {
+                              "type": "string",
+                              "pattern": "^[a-z][a-z0-9_]*$"
+                            }
+                          },
+                          "required": ["contract"],
+                          "additionalProperties": false
+                        }
+                      ]
                     },
                     "op": {
                       "const": "contains"
@@ -1269,8 +1510,27 @@
                   "type": "object",
                   "properties": {
                     "prop": {
-                      "type": "string",
-                      "minLength": 1
+                      "oneOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "contract": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "slot": {
+                              "type": "string",
+                              "pattern": "^[a-z][a-z0-9_]*$"
+                            }
+                          },
+                          "required": ["contract"],
+                          "additionalProperties": false
+                        }
+                      ]
                     },
                     "op": {
                       "const": "range"
@@ -1287,7 +1547,16 @@
                               "type": "object",
                               "properties": {
                                 "token": {
-                                  "enum": ["today", "overdue", "next_7d", "after_7d"]
+                                  "enum": [
+                                    "today",
+                                    "overdue",
+                                    "next_7d",
+                                    "after_7d",
+                                    "this_week",
+                                    "next_14d",
+                                    "this_month",
+                                    "last_month"
+                                  ]
                                 }
                               },
                               "required": ["token"],
@@ -1304,7 +1573,16 @@
                               "type": "object",
                               "properties": {
                                 "token": {
-                                  "enum": ["today", "overdue", "next_7d", "after_7d"]
+                                  "enum": [
+                                    "today",
+                                    "overdue",
+                                    "next_7d",
+                                    "after_7d",
+                                    "this_week",
+                                    "next_14d",
+                                    "this_month",
+                                    "last_month"
+                                  ]
                                 }
                               },
                               "required": ["token"],
@@ -1542,8 +1820,27 @@
                 "type": "object",
                 "properties": {
                   "field": {
-                    "type": "string",
-                    "minLength": 1
+                    "oneOf": [
+                      {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "contract": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "slot": {
+                            "type": "string",
+                            "pattern": "^[a-z][a-z0-9_]*$"
+                          }
+                        },
+                        "required": ["contract"],
+                        "additionalProperties": false
+                      }
+                    ]
                   },
                   "dir": {
                     "enum": ["asc", "desc"]
@@ -1583,8 +1880,27 @@
                       "enum": ["sum", "latest"]
                     },
                     "field": {
-                      "type": "string",
-                      "minLength": 1
+                      "oneOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "contract": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "slot": {
+                              "type": "string",
+                              "pattern": "^[a-z][a-z0-9_]*$"
+                            }
+                          },
+                          "required": ["contract"],
+                          "additionalProperties": false
+                        }
+                      ]
                     }
                   },
                   "required": ["fn", "field"],
@@ -1720,8 +2036,27 @@
                   "type": "object",
                   "properties": {
                     "prop": {
-                      "type": "string",
-                      "minLength": 1
+                      "oneOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "contract": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "slot": {
+                              "type": "string",
+                              "pattern": "^[a-z][a-z0-9_]*$"
+                            }
+                          },
+                          "required": ["contract"],
+                          "additionalProperties": false
+                        }
+                      ]
                     },
                     "op": {
                       "enum": ["eq", "ne", "gt", "lt"]
@@ -1735,7 +2070,16 @@
                           "type": "object",
                           "properties": {
                             "token": {
-                              "enum": ["today", "overdue", "next_7d", "after_7d"]
+                              "enum": [
+                                "today",
+                                "overdue",
+                                "next_7d",
+                                "after_7d",
+                                "this_week",
+                                "next_14d",
+                                "this_month",
+                                "last_month"
+                              ]
                             }
                           },
                           "required": ["token"],
@@ -1751,8 +2095,27 @@
                   "type": "object",
                   "properties": {
                     "prop": {
-                      "type": "string",
-                      "minLength": 1
+                      "oneOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "contract": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "slot": {
+                              "type": "string",
+                              "pattern": "^[a-z][a-z0-9_]*$"
+                            }
+                          },
+                          "required": ["contract"],
+                          "additionalProperties": false
+                        }
+                      ]
                     },
                     "op": {
                       "const": "in"
@@ -1772,8 +2135,27 @@
                   "type": "object",
                   "properties": {
                     "prop": {
-                      "type": "string",
-                      "minLength": 1
+                      "oneOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "contract": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "slot": {
+                              "type": "string",
+                              "pattern": "^[a-z][a-z0-9_]*$"
+                            }
+                          },
+                          "required": ["contract"],
+                          "additionalProperties": false
+                        }
+                      ]
                     },
                     "op": {
                       "const": "contains"
@@ -1789,8 +2171,27 @@
                   "type": "object",
                   "properties": {
                     "prop": {
-                      "type": "string",
-                      "minLength": 1
+                      "oneOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "contract": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "slot": {
+                              "type": "string",
+                              "pattern": "^[a-z][a-z0-9_]*$"
+                            }
+                          },
+                          "required": ["contract"],
+                          "additionalProperties": false
+                        }
+                      ]
                     },
                     "op": {
                       "const": "range"
@@ -1807,7 +2208,16 @@
                               "type": "object",
                               "properties": {
                                 "token": {
-                                  "enum": ["today", "overdue", "next_7d", "after_7d"]
+                                  "enum": [
+                                    "today",
+                                    "overdue",
+                                    "next_7d",
+                                    "after_7d",
+                                    "this_week",
+                                    "next_14d",
+                                    "this_month",
+                                    "last_month"
+                                  ]
                                 }
                               },
                               "required": ["token"],
@@ -1824,7 +2234,16 @@
                               "type": "object",
                               "properties": {
                                 "token": {
-                                  "enum": ["today", "overdue", "next_7d", "after_7d"]
+                                  "enum": [
+                                    "today",
+                                    "overdue",
+                                    "next_7d",
+                                    "after_7d",
+                                    "this_week",
+                                    "next_14d",
+                                    "this_month",
+                                    "last_month"
+                                  ]
                                 }
                               },
                               "required": ["token"],
@@ -2386,7 +2805,7 @@
   },
   {
     "name": "subscription_set",
-    "description": "Настроить подписку поверхности — чем наполняются Повестка и Бюджет: какие контракты, наборы классов и окна они читают. Адрес orbis/… кладёт настройку поверх системной декларации, адрес user/… заводит свою подписку. Декларация проверяется целиком до записи: неизвестная поверхность, чужой движок, строка вместо выражения и ссылка на id аспекта — отказ.",
+    "description": "Настроить подписку поверхности — чем наполняется Бюджет: какие контракты, наборы классов и окна он читает. Адрес orbis/… кладёт настройку поверх системной декларации, адрес user/… заводит свою подписку. Декларация проверяется целиком до записи: неизвестная поверхность, чужой движок, строка вместо выражения и ссылка на id аспекта — отказ.",
     "inputJsonSchema": {
       "type": "object",
       "properties": {
@@ -2396,16 +2815,16 @@
         },
         "surface": {
           "type": "string",
-          "enum": ["core/agenda", "finance/budget-overview"],
-          "description": "поверхность-потребитель: core/agenda — Повестка, finance/budget-overview — Бюджет"
+          "enum": ["finance/budget-overview"],
+          "description": "поверхность-потребитель: finance/budget-overview — Бюджет"
         },
         "definition": {
           "type": "object",
-          "description": "декларация подписки: {\"engine\":\"agenda\", show:{…}, overdue:{…}, hide:{…}} либо {\"engine\":\"budget\", sources:{…}, phases:{…}, aggregates:{…}, alerts:{…}, …}. Ссылаться можно на контракты, их слоты и ИМЕНОВАННЫЕ НАБОРЫ, не на id аспектов и не на сырые значения свойств (исключения — prefer и предикат в hide/where). Выражения — только деревьями языка E: строка в позиции выражения отвергается.",
+          "description": "декларация подписки: {\"engine\":\"budget\", sources:{…}, phases:{…}, aggregates:{…}, alerts:{…}, …}. Ссылаться можно на контракты, их слоты и ИМЕНОВАННЫЕ НАБОРЫ, не на id аспектов и не на сырые значения свойств (исключения — prefer и предикат в where). Выражения — только деревьями языка E: строка в позиции выражения отвергается.",
           "properties": {
             "engine": {
               "type": "string",
-              "enum": ["agenda", "budget"]
+              "enum": ["budget"]
             }
           },
           "required": ["engine"]
@@ -3996,8 +4415,27 @@
                           "enum": ["eq", "ne", "gt", "lt"]
                         },
                         "prop": {
-                          "type": "string",
-                          "minLength": 1
+                          "oneOf": [
+                            {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            {
+                              "type": "object",
+                              "required": ["contract"],
+                              "properties": {
+                                "slot": {
+                                  "type": "string",
+                                  "pattern": "^[a-z][a-z0-9_]*$"
+                                },
+                                "contract": {
+                                  "type": "string",
+                                  "minLength": 1
+                                }
+                              },
+                              "additionalProperties": false
+                            }
+                          ]
                         },
                         "value": {
                           "anyOf": [
@@ -4009,7 +4447,16 @@
                               "required": ["token"],
                               "properties": {
                                 "token": {
-                                  "enum": ["today", "overdue", "next_7d", "after_7d"]
+                                  "enum": [
+                                    "today",
+                                    "overdue",
+                                    "next_7d",
+                                    "after_7d",
+                                    "this_week",
+                                    "next_14d",
+                                    "this_month",
+                                    "last_month"
+                                  ]
                                 }
                               },
                               "additionalProperties": false
@@ -4027,8 +4474,27 @@
                           "const": "in"
                         },
                         "prop": {
-                          "type": "string",
-                          "minLength": 1
+                          "oneOf": [
+                            {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            {
+                              "type": "object",
+                              "required": ["contract"],
+                              "properties": {
+                                "slot": {
+                                  "type": "string",
+                                  "pattern": "^[a-z][a-z0-9_]*$"
+                                },
+                                "contract": {
+                                  "type": "string",
+                                  "minLength": 1
+                                }
+                              },
+                              "additionalProperties": false
+                            }
+                          ]
                         },
                         "value": {
                           "type": "array",
@@ -4048,8 +4514,27 @@
                           "const": "contains"
                         },
                         "prop": {
-                          "type": "string",
-                          "minLength": 1
+                          "oneOf": [
+                            {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            {
+                              "type": "object",
+                              "required": ["contract"],
+                              "properties": {
+                                "slot": {
+                                  "type": "string",
+                                  "pattern": "^[a-z][a-z0-9_]*$"
+                                },
+                                "contract": {
+                                  "type": "string",
+                                  "minLength": 1
+                                }
+                              },
+                              "additionalProperties": false
+                            }
+                          ]
                         },
                         "value": {
                           "type": ["string", "number", "boolean"]
@@ -4065,8 +4550,27 @@
                           "const": "range"
                         },
                         "prop": {
-                          "type": "string",
-                          "minLength": 1
+                          "oneOf": [
+                            {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            {
+                              "type": "object",
+                              "required": ["contract"],
+                              "properties": {
+                                "slot": {
+                                  "type": "string",
+                                  "pattern": "^[a-z][a-z0-9_]*$"
+                                },
+                                "contract": {
+                                  "type": "string",
+                                  "minLength": 1
+                                }
+                              },
+                              "additionalProperties": false
+                            }
+                          ]
                         },
                         "value": {
                           "type": "object",
@@ -4081,7 +4585,16 @@
                                   "required": ["token"],
                                   "properties": {
                                     "token": {
-                                      "enum": ["today", "overdue", "next_7d", "after_7d"]
+                                      "enum": [
+                                        "today",
+                                        "overdue",
+                                        "next_7d",
+                                        "after_7d",
+                                        "this_week",
+                                        "next_14d",
+                                        "this_month",
+                                        "last_month"
+                                      ]
                                     }
                                   },
                                   "additionalProperties": false
@@ -4098,7 +4611,16 @@
                                   "required": ["token"],
                                   "properties": {
                                     "token": {
-                                      "enum": ["today", "overdue", "next_7d", "after_7d"]
+                                      "enum": [
+                                        "today",
+                                        "overdue",
+                                        "next_7d",
+                                        "after_7d",
+                                        "this_week",
+                                        "next_14d",
+                                        "this_month",
+                                        "last_month"
+                                      ]
                                     }
                                   },
                                   "additionalProperties": false
@@ -4383,8 +4905,27 @@
                                     "enum": ["asc", "desc"]
                                   },
                                   "field": {
-                                    "type": "string",
-                                    "minLength": 1
+                                    "oneOf": [
+                                      {
+                                        "type": "string",
+                                        "minLength": 1
+                                      },
+                                      {
+                                        "type": "object",
+                                        "required": ["contract"],
+                                        "properties": {
+                                          "slot": {
+                                            "type": "string",
+                                            "pattern": "^[a-z][a-z0-9_]*$"
+                                          },
+                                          "contract": {
+                                            "type": "string",
+                                            "minLength": 1
+                                          }
+                                        },
+                                        "additionalProperties": false
+                                      }
+                                    ]
                                   }
                                 },
                                 "additionalProperties": false
@@ -4429,8 +4970,27 @@
                                       "enum": ["sum", "latest"]
                                     },
                                     "field": {
-                                      "type": "string",
-                                      "minLength": 1
+                                      "oneOf": [
+                                        {
+                                          "type": "string",
+                                          "minLength": 1
+                                        },
+                                        {
+                                          "type": "object",
+                                          "required": ["contract"],
+                                          "properties": {
+                                            "slot": {
+                                              "type": "string",
+                                              "pattern": "^[a-z][a-z0-9_]*$"
+                                            },
+                                            "contract": {
+                                              "type": "string",
+                                              "minLength": 1
+                                            }
+                                          },
+                                          "additionalProperties": false
+                                        }
+                                      ]
                                     }
                                   },
                                   "additionalProperties": false
@@ -4568,8 +5128,27 @@
                                     "enum": ["asc", "desc"]
                                   },
                                   "field": {
-                                    "type": "string",
-                                    "minLength": 1
+                                    "oneOf": [
+                                      {
+                                        "type": "string",
+                                        "minLength": 1
+                                      },
+                                      {
+                                        "type": "object",
+                                        "required": ["contract"],
+                                        "properties": {
+                                          "slot": {
+                                            "type": "string",
+                                            "pattern": "^[a-z][a-z0-9_]*$"
+                                          },
+                                          "contract": {
+                                            "type": "string",
+                                            "minLength": 1
+                                          }
+                                        },
+                                        "additionalProperties": false
+                                      }
+                                    ]
                                   }
                                 },
                                 "additionalProperties": false
@@ -4614,8 +5193,27 @@
                                       "enum": ["sum", "latest"]
                                     },
                                     "field": {
-                                      "type": "string",
-                                      "minLength": 1
+                                      "oneOf": [
+                                        {
+                                          "type": "string",
+                                          "minLength": 1
+                                        },
+                                        {
+                                          "type": "object",
+                                          "required": ["contract"],
+                                          "properties": {
+                                            "slot": {
+                                              "type": "string",
+                                              "pattern": "^[a-z][a-z0-9_]*$"
+                                            },
+                                            "contract": {
+                                              "type": "string",
+                                              "minLength": 1
+                                            }
+                                          },
+                                          "additionalProperties": false
+                                        }
+                                      ]
                                     }
                                   },
                                   "additionalProperties": false
@@ -4702,8 +5300,27 @@
                               "enum": ["eq", "ne", "gt", "lt"]
                             },
                             "prop": {
-                              "type": "string",
-                              "minLength": 1
+                              "oneOf": [
+                                {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                {
+                                  "type": "object",
+                                  "required": ["contract"],
+                                  "properties": {
+                                    "slot": {
+                                      "type": "string",
+                                      "pattern": "^[a-z][a-z0-9_]*$"
+                                    },
+                                    "contract": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    }
+                                  },
+                                  "additionalProperties": false
+                                }
+                              ]
                             },
                             "value": {
                               "anyOf": [
@@ -4715,7 +5332,16 @@
                                   "required": ["token"],
                                   "properties": {
                                     "token": {
-                                      "enum": ["today", "overdue", "next_7d", "after_7d"]
+                                      "enum": [
+                                        "today",
+                                        "overdue",
+                                        "next_7d",
+                                        "after_7d",
+                                        "this_week",
+                                        "next_14d",
+                                        "this_month",
+                                        "last_month"
+                                      ]
                                     }
                                   },
                                   "additionalProperties": false
@@ -4733,8 +5359,27 @@
                               "const": "in"
                             },
                             "prop": {
-                              "type": "string",
-                              "minLength": 1
+                              "oneOf": [
+                                {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                {
+                                  "type": "object",
+                                  "required": ["contract"],
+                                  "properties": {
+                                    "slot": {
+                                      "type": "string",
+                                      "pattern": "^[a-z][a-z0-9_]*$"
+                                    },
+                                    "contract": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    }
+                                  },
+                                  "additionalProperties": false
+                                }
+                              ]
                             },
                             "value": {
                               "type": "array",
@@ -4754,8 +5399,27 @@
                               "const": "contains"
                             },
                             "prop": {
-                              "type": "string",
-                              "minLength": 1
+                              "oneOf": [
+                                {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                {
+                                  "type": "object",
+                                  "required": ["contract"],
+                                  "properties": {
+                                    "slot": {
+                                      "type": "string",
+                                      "pattern": "^[a-z][a-z0-9_]*$"
+                                    },
+                                    "contract": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    }
+                                  },
+                                  "additionalProperties": false
+                                }
+                              ]
                             },
                             "value": {
                               "type": ["string", "number", "boolean"]
@@ -4771,8 +5435,27 @@
                               "const": "range"
                             },
                             "prop": {
-                              "type": "string",
-                              "minLength": 1
+                              "oneOf": [
+                                {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                {
+                                  "type": "object",
+                                  "required": ["contract"],
+                                  "properties": {
+                                    "slot": {
+                                      "type": "string",
+                                      "pattern": "^[a-z][a-z0-9_]*$"
+                                    },
+                                    "contract": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    }
+                                  },
+                                  "additionalProperties": false
+                                }
+                              ]
                             },
                             "value": {
                               "type": "object",
@@ -4787,7 +5470,16 @@
                                       "required": ["token"],
                                       "properties": {
                                         "token": {
-                                          "enum": ["today", "overdue", "next_7d", "after_7d"]
+                                          "enum": [
+                                            "today",
+                                            "overdue",
+                                            "next_7d",
+                                            "after_7d",
+                                            "this_week",
+                                            "next_14d",
+                                            "this_month",
+                                            "last_month"
+                                          ]
                                         }
                                       },
                                       "additionalProperties": false
@@ -4804,7 +5496,16 @@
                                       "required": ["token"],
                                       "properties": {
                                         "token": {
-                                          "enum": ["today", "overdue", "next_7d", "after_7d"]
+                                          "enum": [
+                                            "today",
+                                            "overdue",
+                                            "next_7d",
+                                            "after_7d",
+                                            "this_week",
+                                            "next_14d",
+                                            "this_month",
+                                            "last_month"
+                                          ]
                                         }
                                       },
                                       "additionalProperties": false
@@ -5089,8 +5790,27 @@
                                         "enum": ["asc", "desc"]
                                       },
                                       "field": {
-                                        "type": "string",
-                                        "minLength": 1
+                                        "oneOf": [
+                                          {
+                                            "type": "string",
+                                            "minLength": 1
+                                          },
+                                          {
+                                            "type": "object",
+                                            "required": ["contract"],
+                                            "properties": {
+                                              "slot": {
+                                                "type": "string",
+                                                "pattern": "^[a-z][a-z0-9_]*$"
+                                              },
+                                              "contract": {
+                                                "type": "string",
+                                                "minLength": 1
+                                              }
+                                            },
+                                            "additionalProperties": false
+                                          }
+                                        ]
                                       }
                                     },
                                     "additionalProperties": false
@@ -5135,8 +5855,27 @@
                                           "enum": ["sum", "latest"]
                                         },
                                         "field": {
-                                          "type": "string",
-                                          "minLength": 1
+                                          "oneOf": [
+                                            {
+                                              "type": "string",
+                                              "minLength": 1
+                                            },
+                                            {
+                                              "type": "object",
+                                              "required": ["contract"],
+                                              "properties": {
+                                                "slot": {
+                                                  "type": "string",
+                                                  "pattern": "^[a-z][a-z0-9_]*$"
+                                                },
+                                                "contract": {
+                                                  "type": "string",
+                                                  "minLength": 1
+                                                }
+                                              },
+                                              "additionalProperties": false
+                                            }
+                                          ]
                                         }
                                       },
                                       "additionalProperties": false
@@ -5274,8 +6013,27 @@
                                         "enum": ["asc", "desc"]
                                       },
                                       "field": {
-                                        "type": "string",
-                                        "minLength": 1
+                                        "oneOf": [
+                                          {
+                                            "type": "string",
+                                            "minLength": 1
+                                          },
+                                          {
+                                            "type": "object",
+                                            "required": ["contract"],
+                                            "properties": {
+                                              "slot": {
+                                                "type": "string",
+                                                "pattern": "^[a-z][a-z0-9_]*$"
+                                              },
+                                              "contract": {
+                                                "type": "string",
+                                                "minLength": 1
+                                              }
+                                            },
+                                            "additionalProperties": false
+                                          }
+                                        ]
                                       }
                                     },
                                     "additionalProperties": false
@@ -5320,8 +6078,27 @@
                                           "enum": ["sum", "latest"]
                                         },
                                         "field": {
-                                          "type": "string",
-                                          "minLength": 1
+                                          "oneOf": [
+                                            {
+                                              "type": "string",
+                                              "minLength": 1
+                                            },
+                                            {
+                                              "type": "object",
+                                              "required": ["contract"],
+                                              "properties": {
+                                                "slot": {
+                                                  "type": "string",
+                                                  "pattern": "^[a-z][a-z0-9_]*$"
+                                                },
+                                                "contract": {
+                                                  "type": "string",
+                                                  "minLength": 1
+                                                }
+                                              },
+                                              "additionalProperties": false
+                                            }
+                                          ]
                                         }
                                       },
                                       "additionalProperties": false

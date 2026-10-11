@@ -7,7 +7,7 @@
 // обращения к LLM; reject — системное сообщение-отказ (журнал append-only, §4.6).
 //
 // РЕШЕНИЕ ПО КОНТРАКТУ levelGate (dispatch): полная провалидированность payload'а
-// (стадии 2–4 конвейера §9.2 — aspects-схемы, инварианты, expectedUpdatedAt/§5.2) —
+// (стадии 2–4 конвейера §9.2 — aspects-схемы, инварианты, замок текста expectedBodyRevision/§8.1) —
 // обязанность РЕВАЛИДАЦИИ APPROVE, а не dry-run'а при создании pending: dry-run не
 // спасает от изменения состояния за время ожидания (ревалидация на approve обязательна
 // в любом случае), а двойная валидация избыточна. Цена: структурная ошибка возможна
@@ -17,12 +17,11 @@
 // исполняется атомарной группой с batch_id = pendingId (одиночный тул — batch из
 // одной операции, валиден по §9.2; payload-batch_execute — собственная структура с
 // ПЕРЕЗАПИСЬЮ его batch_id на pendingId — двойная идемпотентность по одному ключу).
-// Детерминированный audit-id = batchAuditMessageId(owner, pendingId) — он заменяет
-// отдельную формулу uuidv5('approval:<owner>:<pendingId>') ранней редакции брифа:
-// та же детерминированность и идемпотентность по PK chat_messages, но одним общим
-// механизмом (резолюция координатора). Подмена batch_id безопасна: pendingId
-// генерирует сервер (uuidv7), коллизия с клиентским batch_id невероятна. Повторный
-// approve: findByAuditId → replay сохранённого результата; гонка одинаковых approve →
+// Ключ записи журнала исполненной единицы — сам pendingId (`(graph_id, id)` таблицы журнала,
+// спека скорости §11.2): та же детерминированность и идемпотентность, что у любой пачки, одним
+// общим механизмом (резолюция координатора). Подмена batch_id безопасна: pendingId генерирует
+// сервер (uuidv7), коллизия с клиентским batch_id невероятна. Повторный approve: запись пачки
+// найдена (`findBatchWrite`) → replay сохранённого результата; гонка одинаковых approve →
 // AuditIdConflictError → тот же replay (§7.8).
 //
 // ЕДИНИЦЫ ПАЧКИ (D42 ОЧ.2): тот же носитель несёт отложенные действия и ВОПРОСЫ рутины —
@@ -35,11 +34,11 @@ import { createHash } from 'node:crypto';
 import {
   type ActionDefinition,
   answerMessageId,
-  batchAuditMessageId,
   batchExecuteInput,
   canonicalJson,
   effectiveLabel,
   type GraphId,
+  globalThreadId,
   newId,
   pendingMessageId,
   QUESTION_MAX,
@@ -48,6 +47,8 @@ import {
   questionStaleMessageId,
   rejectMessageId,
   rolloverInput,
+  type UndoContinuation,
+  type UndoTextChangedDetails,
 } from '@orbis/shared';
 import {
   type BodyDoc,
@@ -58,7 +59,7 @@ import {
 } from '@orbis/shared/doc';
 import type { ExprScalar } from '@orbis/shared/expr';
 import { OWNER_LOCALE } from '@orbis/shared/query';
-import { eq, inArray, sql } from 'drizzle-orm';
+import { inArray, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { actionDateArgs, recheckPrecondition } from '../actions/precondition';
 import type { DeferredRow } from '../actions/resolve';
@@ -71,11 +72,20 @@ import type { Db } from '../db/client';
 import { chatMessages } from '../db/schema';
 import { type Tx, withIdentity } from '../db/with-identity';
 import { ExecError, type StructuredError } from '../errors';
+import { undoContinuationOf, undoRefusalText } from '../executor/body-chain';
 import { execute } from '../executor/executor';
-import { makeChatJournalSink } from '../executor/journal';
-import type { ActorKind, ExecuteResult } from '../executor/types';
-import { isUndone, undoAction } from '../executor/undo';
+import { makeJournalSink } from '../executor/journal';
+import {
+  executedIds,
+  findAction,
+  findBatch,
+  isUndone,
+  type JournalEntry,
+} from '../executor/journal-read';
+import type { ActorKind, ExecuteErr, ExecuteOk, ExecuteResult } from '../executor/types';
+import { undoAction } from '../executor/undo';
 import type { Identity } from '../identity';
+import { ownerTimeZone } from '../query/context';
 import { actionHash } from '../registry/actions';
 import { effectiveRegistry } from '../registry/cache';
 import type { RegistrySnapshot } from '../registry/load';
@@ -83,8 +93,8 @@ import { lockOwnerRegistry } from '../registry/ops';
 import type { Card } from '../tools/registry';
 import type { ConfirmationLevel } from './confirmation';
 
-// Боевой синк §7.8 — audit-сообщение approve пишется тем же tx, что стадия 5
-const sink = makeChatJournalSink();
+// Боевой синк §7.8 — запись журнала approve пишется тем же tx, что стадия 5
+const sink = makeJournalSink();
 
 /** Русский плюрал операций batch: 1 операция, 2 операции, 5 операций. */
 export function operationsNoun(n: number): string {
@@ -438,8 +448,8 @@ export type CreatePendingArgs =
  * Карточка-запрос explicit-confirmation (§7.10): системное сообщение с
  * metadata.pending (immutable payload) + metadata.cards[confirmation_card
  * mode:'explicit'] — или карточка из args.card, если вызывающий рисует запрос по-своему
- * (V1.6). НИЧЕГО в граф и журнал: сообщение не несёт metadata.actions,
- * поэтому для журнала §7.8 (undo-сканы containment'ом по actions) невидимо.
+ * (V1.6). НИЧЕГО в граф и журнал: сообщение не является записью журнала,
+ * поэтому для чтения журнала §7.8 (`journal-read`) невидимо.
  *
  * id сообщения = pendingId — прямая адресация; поиск при approve/reject —
  * containment по metadata.pending.id (GIN chat_messages_metadata_gin).
@@ -715,14 +725,19 @@ function assertNotQuestion(pending: PendingRecord): void {
  * переписало бы судьбу предложения, которого уже нет. Отдельного статуса предложения
  * причина не заводит: судьба исходного живёт здесь, в ленте, а признак на живом — поле
  * `edited_from` (Ш1.8).
+ *
+ * 'undo_refused' — карточка подтверждения отката (`undo_of`) закрыта отказом правила отмены текста (§8.6, К-43, Д-8):
+ * текст записи изменили после отменяемого действия, а продолжения «Всё равно отменить» у пути, рождённого моделью, нет
+ * (Р-17). Открытой с кнопкой, которая откажет снова, карточка не остаётся; место продолжения — в `metadata.continuation`
+ * отказа. Только у карточек отката: у единиц пачки прогона и предложений рутины её не бывает.
  */
-export type RejectReason = 'owner' | 'superseded' | 'stale' | 'edited';
+export type RejectReason = 'owner' | 'superseded' | 'stale' | 'edited' | 'undo_refused';
 
 // ВНИМАНИЕ: единственное из четырёх мест причины, где расширение НЕ ловит компилятор
 // (тип, REJECT_CONTENT и STATUS_BY_REJECT_REASON — Record'ы, они падают сборкой). Строка,
 // забытая здесь, откатывается fallback'ом rejectedReason к 'owner' — то есть правка
 // владельца молча превращается в его же отказ.
-const rejectReason = z.enum(['owner', 'superseded', 'stale', 'edited']);
+const rejectReason = z.enum(['owner', 'superseded', 'stale', 'edited', 'undo_refused']);
 
 /** Текст reject-сообщения по причине — владелец читает ленту, а не значение поля. */
 const REJECT_CONTENT: Record<RejectReason, string> = {
@@ -730,6 +745,7 @@ const REJECT_CONTENT: Record<RejectReason, string> = {
   superseded: 'Предложение заменено новым прогоном',
   stale: 'Предложение устарело: состояние изменилось',
   edited: 'Предложение заменено правкой владельца',
+  undo_refused: 'Откат не применён: текст изменён после действия',
 };
 
 /** Текст §Б6-7 — СВОЙ, а не `REJECT_CONTENT.stale` («состояние изменилось»): изменилась ДЕКЛАРАЦИЯ,
@@ -788,17 +804,13 @@ async function expectedDeltaStaleOf(
 }
 
 /**
- * Исполнена ли единица — audit-сообщение по детерминированному PK (§7.8). Спрашивается ДО проверок
- * свежести действия: исполненную единицу «Принять» повторяет replay'ем сохранённого результата, и ни
- * снятая после исполнения декларация, ни ставшее ложным предусловие (его сделало ложным само
+ * Исполнена ли единица — запись пачки в журнале по её `batch_id` = pendingId (§7.8; `journal-read.findBatch`).
+ * Спрашивается ДО проверок свежести действия: исполненную единицу «Принять» повторяет replay'ем сохранённого
+ * результата, и ни снятая после исполнения декларация, ни ставшее ложным предусловие (его сделало ложным само
  * исполнение) не вправе подменить replay отказом.
  */
 async function isExecuted(tx: Tx, graphId: GraphId, pendingId: string): Promise<boolean> {
-  const rows = await tx
-    .select({ id: chatMessages.id })
-    .from(chatMessages)
-    .where(eq(chatMessages.id, batchAuditMessageId(graphId, pendingId)));
-  return rows.length > 0;
+  return (await findBatch(tx, graphId, pendingId)) !== undefined;
 }
 
 /**
@@ -812,10 +824,19 @@ async function isExecuted(tx: Tx, graphId: GraphId, pendingId: string): Promise<
  * неизменяема, §4.6) — читаются как отказ владельца: до V1.8 отклонить pending могла
  * только его кнопка, так что это не догадка, а факт истории.
  */
-export async function rejectedReason(tx: Tx, pendingId: string): Promise<RejectReason | undefined> {
+export async function rejectedReason(
+  tx: Tx,
+  pendingId: string,
+  graphId?: GraphId,
+): Promise<RejectReason | undefined> {
   const probe = JSON.stringify({ type: 'confirmation_rejected', rejects: pendingId });
   const rows = await tx.execute(
-    sql`SELECT metadata FROM chat_messages WHERE metadata @> ${probe}::jsonb LIMIT 1`,
+    sql`SELECT metadata FROM chat_messages WHERE metadata @> ${probe}::jsonb ${
+      graphId === undefined
+        ? sql``
+        : sql`AND EXISTS (SELECT 1 FROM chat_threads t
+        WHERE t.id = chat_messages.thread_id AND t.graph_id = ${graphId}::uuid)`
+    } LIMIT 1`,
   );
   const row = rows[0];
   if (!row) return undefined;
@@ -826,6 +847,27 @@ export async function rejectedReason(tx: Tx, pendingId: string): Promise<RejectR
 /** Pending отклонён ⇔ существует сообщение {type:'confirmation_rejected', rejects}. */
 async function isRejected(tx: Tx, pendingId: string): Promise<boolean> {
   return (await rejectedReason(tx, pendingId)) !== undefined;
+}
+
+/**
+ * Отказ «Принять» у закрытой карточки. Закрытая отказом правила отмены (`undo_refused`, К-43) — «уже закрыто»: владелец
+ * жмёт кнопку карточки, которую сервер закрыл сам, и «отклонено» читалось бы как его собственное решение; повторного
+ * отказа правила с тем же перечнем тоже нет — карточка закрыта, место продолжения названо её закрытием. Причина уходит
+ * кодом (`data.orbis.details.reason`), чтобы клиент погасил кнопки, не разбирая текст.
+ */
+function closedCardError(pendingId: string, reason: RejectReason): ExecError {
+  if (reason === 'undo_refused') {
+    return new ExecError(
+      'VALIDATION',
+      'Подтверждение уже закрыто: текст изменён после действия, откат не применён',
+      { pendingId, reason },
+    );
+  }
+  return new ExecError(
+    'VALIDATION',
+    `подтверждение ${pendingId} отклонено — исполнение невозможно (§7.10)`,
+    { pendingId },
+  );
 }
 
 /**
@@ -985,27 +1027,31 @@ export async function reportMergeConflictUnit(
  * Одобрение §7.10: исполнить СОХРАНЁННЫЙ payload, не повторяя вызов модели.
  * Порядок проверок: (1) pending виден под RLS (чужой и несуществующий → единый
  * NOT_FOUND); (2) не отклонён → VALIDATION «отклонено»; (3) исполненность проверяет
- * сам executor batch-путём (findByAuditId по batchAuditMessageId(owner, pendingId) →
- * идемпотентный replay сохранённого результата — «как executor для batch», §7.8).
+ * сам executor batch-путём (запись пачки с ключом pendingId → идемпотентный replay
+ * сохранённого результата — «как executor для batch», §7.8).
  * Исполнение — полный конвейер (стадии 1–7): это и есть «ревалидация текущего
  * состояния» §7.10 — изменившееся/удалённое состояние даёт структурную ошибку
  * (NOT_FOUND/STALE_VERSION/INVARIANT/...), не тихий провал, и ничего не пишет.
  *
  * Сериализация против reject (fix round): проверка (2) в отдельном tx — лишь
  * fast-path; авторитетная перепроверка «не отклонён» выполняется ПОД advisory-lock'ом
- * по pendingId, взятым ДО ПЕРВОГО ЧТЕНИЯ СОСТОЯНИЯ в audit-tx executor'а (beforeStages) —
- * В ТОМ ЖЕ tx, где пишется audit-сообщение. Именно «до первого чтения», а не «первым
+ * по pendingId, взятым ДО ПЕРВОГО ЧТЕНИЯ СОСТОЯНИЯ в транзакции исполнителя (beforeStages) —
+ * В ТОМ ЖЕ tx, где пишется запись журнала. Именно «до первого чтения», а не «первым
  * statement'ом»: два первых statement'а любого такого tx ставит сам `withIdentity`
  * (set_config + SET LOCAL ROLE), и буквальная формулировка не выполнялась бы НИКОГДА —
  * ни здесь, ни у reject'а. Точный контракт и цена ошибки — в доке `acquirePendingLock`. Конкурентный reject держит тот же замок: он либо
  * закоммитился ДО захвата (перепроверка увидит reject-сообщение свежим snapshot'ом
  * READ COMMITTED → «отклонено», ни одной записи), либо ждёт наш commit и увидит
- * audit-сообщение → «уже исполнено». Write-skew исключён; закреплено гонным тестом.
+ * запись журнала → «уже исполнено». Write-skew исключён; закреплено гонным тестом.
  */
+/** Одобрение отмены — прежний ответ с id отменённого действия, без признака нового действия (К-41, R-31). */
+export type ApproveUndoOk = Omit<ExecuteOk, 'consequences'> & { consequences?: never };
+export type ApproveResult = ExecuteResult | ApproveUndoOk;
+
 export async function approvePending(
   db: Db,
   args: { identity: Identity; pendingId: string; clock?: () => Date },
-): Promise<ExecuteResult> {
+): Promise<ApproveResult> {
   const graphId = args.identity.graph;
   try {
     const found = await withIdentity(db, args.identity, async (tx) => {
@@ -1029,7 +1075,13 @@ export async function approvePending(
           reason: 'stale',
           text: DELTA_STALE_TEXT,
         });
-        return { msg, stale: deltaStale, staleOf: 'delta' as const, live: undefined };
+        return {
+          msg,
+          stale: deltaStale,
+          staleOf: 'delta' as const,
+          live: undefined,
+          undoing: undefined,
+        };
       }
       if (act !== null && 'stale' in act) {
         // ГАШЕНИЕ ПИШЕТСЯ ЭТОЙ ЖЕ ТРАНЗАКЦИЕЙ, А ОТКАЗ БРОСАЕТСЯ ПОСЛЕ ЕЁ КОММИТА. Бросок ВНУТРИ
@@ -1043,16 +1095,27 @@ export async function approvePending(
           reason: 'stale',
           text: ACTION_STALE_TEXT,
         });
-        return { msg, stale: act.stale, staleOf: 'action' as const, live: undefined };
+        return {
+          msg,
+          stale: act.stale,
+          staleOf: 'action' as const,
+          live: undefined,
+          undoing: undefined,
+        };
       }
-      if (await isRejected(tx, args.pendingId)) {
-        throw new ExecError(
-          'VALIDATION',
-          `подтверждение ${args.pendingId} отклонено — исполнение невозможно (§7.10)`,
-          { pendingId: args.pendingId },
-        );
-      }
-      return { msg, stale: null, staleOf: null, live: act ?? undefined };
+      const rejected = await rejectedReason(tx, args.pendingId);
+      if (rejected !== undefined) throw closedCardError(args.pendingId, rejected);
+      // Отменяемое действие карточки отката — ради места продолжения её отказа (`continuationOf`, К-43): журнал
+      // append-only, запись действия неизменяема, и читать её в этой транзакции безопасно
+      const found =
+        msg.pending.undo_of === undefined
+          ? undefined
+          : await findAction(tx, graphId, msg.pending.undo_of);
+      const undoing =
+        found === undefined
+          ? undefined
+          : { entry: found, continuation: await undoContinuationOf(tx, found) };
+      return { msg, stale: null, staleOf: null, live: act ?? undefined, undoing };
     });
     if (found.stale !== null && found.staleOf === 'delta') {
       throw new ExecError('VALIDATION', `единица устарела — снята: ${found.stale}`, {
@@ -1076,10 +1139,10 @@ export async function approvePending(
     // ОТКАТ ИСПОЛНЯЕТ UNDO, А НЕ ПАЧКА (Р-К-21, В-8). `execute` обратных операций породил бы НОВЫЙ
     // action, то есть сам откат стал бы отменяемым, а отменённое действие осталось бы в журнале
     // неотменённым — «отмени последнее» второй раз вернуло бы всё обратно. Внутренний режим
-    // (`undoAction` → `applyUndo`) вместо action пишет {type:'undo', undoes} тем же tx и снимает
+    // (`undoAction` → `applyUndo`) вместо action пишет запись отмены (строку журнала `type:'undo'`) тем же tx и снимает
     // пометки `needs-review` — ровно то, что сделал бы прямой `undo_last` на уровне `execute`.
     const undoOf = pending.undo_of;
-    if (undoOf !== undefined) return await approveUndoUnit(db, args, undoOf);
+    if (undoOf !== undefined) return await approveUndoUnit(db, args, undoOf, found.undoing);
     // ПЕРЕНОС ИСПОЛНЯЕТСЯ СВОИМ КОДОМ, а не пачкой операций (задача 10 Б-2, Р-К-39): `toOperations`
     // собирает ExecuteRequest, а `rolloverCreate` строит его САМ — по одной `entity_create` на строку,
     // с `mechanism: 'rule'` и пречеком преемников. Без этой ветки единица упёрлась бы в «неизвестный
@@ -1089,6 +1152,7 @@ export async function approvePending(
     // Чтение pending отдельным tx безопасно: journal append-only, metadata неизменяема
     // (§4.6). audit — в тред карточки-запроса; атрибуция — исходный актор (§7.8)
     const operations = toOperations(pending);
+    const source = pending.source === 'system' ? 'ui' : pending.source;
     const r = await execute(
       db,
       {
@@ -1096,12 +1160,12 @@ export async function approvePending(
         // СИСТЕМНАЯ единица исполняется ОТ ВЛАДЕЛЬЦА, и это развилка, а не приведение
         // типов. `system` в записи отвечает на вопрос «кто поставил» — конфликт слияния
         // поставить некому. Запись же делает рука владельца, нажавшая «Принять», и журнал
-        // §7.8 обязан показывать именно её: с `source: 'system'` действие ушло бы из ленты
-        // (`chat/messages.ts` прячет системный audit) и мимо «отмени последнее»
-        // (`findLastUndoable` пропускает `source='system'`) — то есть владелец не смог бы
-        // отменить то, что сам и подтвердил.
+        // §7.8 обязан показывать именно её: с `source: 'system'` действие ушло бы мимо
+        // «отмени последнее» (`findLastUndoable` пропускает `source='system'`) и плашки
+        // интерфейса — то есть владелец не смог бы отменить то, что сам и подтвердил. Как
+        // правка владельца в интерфейсе оно и треда не получает (К-29, Р-12).
         actorKind: pending.actor_kind === 'system' ? 'owner' : pending.actor_kind,
-        source: pending.source === 'system' ? 'ui' : pending.source,
+        source,
         // Грант исходного вызова доживает до исполнения (С2): подтвердил владелец, но в
         // журнале §7.8 видно, КАКОЙ доступ этот план попросил
         actorGrantId: pending.actor_grant_id,
@@ -1111,7 +1175,10 @@ export async function approvePending(
         // И правка владельца (Ш1.5, В-1): применено не то, что предложила рутина, а
         // правленое — журнал §7.8 обязан хранить, ЧТО именно эта правка заменила
         editedFrom: pending.edited_from,
-        threadId: found.msg.threadId,
+        // Тред карточки-запроса — где лечь записи разговора, агента или рутины. Одобренная системная единица —
+        // правка владельца в интерфейсе (К-29): треда у её записи нет (Р-12), как у любой кнопки; синк снял бы его
+        // и сам (`journalThreadOf`), здесь это сказано явно — чтобы тред не выглядел значимым там, где его нет
+        ...(source !== 'ui' && { threadId: found.msg.threadId }),
         operations,
         batchId: args.pendingId,
         // Автор-приложение §Б6-4: одобренное действие ложится строкой `type:'action'` с `action_id` и
@@ -1125,7 +1192,7 @@ export async function approvePending(
       },
       {
         sink,
-        // Первый statement audit-tx (до replay-проверки и стадий 1–7): замок +
+        // Первый statement транзакции исполнителя (до replay-проверки и стадий 1–7): замок +
         // авторитетная перепроверка «не отклонён» — см. док approvePending
         beforeStages: async (tx) => {
           await acquirePendingLock(tx, args.pendingId);
@@ -1213,11 +1280,11 @@ export async function approvePending(
  * пачки, другим исполнением: `rolloverCreate` вместо `execute` сохранённых операций.
  *
  * `batchId` ПЕРЕНОСА = pendingId, а не id исходного вызова, и это не косметика. Судьба единицы
- * («Принята») читается по audit-сообщению с PK `batchAuditMessageId(graph, pendingId)` (`isExecuted`,
- * `listRunUnits`) — ровно так, как у пачки, которой `approvePending` передаёт `batchId: pendingId`.
- * С id вызова перенос исполнялся бы, а единица навсегда оставалась бы «открытой»: «Принять все»
+ * («Принята») читается по записи пачки в журнале с `batch_id` = pendingId (`isExecuted` — `findBatch`,
+ * `listRunUnits` — `executedIds`, API журнала) — ровно так, как у пачки, которой `approvePending` передаёт
+ * `batchId: pendingId`. С id вызова перенос исполнялся бы, а единица навсегда оставалась бы «открытой»: «Принять все»
  * жевало бы её снова, сверка `undecided` не снимала бы флажок. Идемпотентность повтора держится тем же
- * ключом: `rolloverCreate` отвечает replay'ем по audit-сообщению этого batchId.
+ * ключом: `rolloverCreate` отвечает replay'ем по записи пачки этого batchId (`findBatch`).
  *
  * Замок и «не отклонена» — в audit-транзакции (`beforeStages`), тем же швом, что у пачки. Атрибуция —
  * исходный актор (§7.8): рутина остаётся рутиной, чат — чатом; системная единица исполняется от
@@ -1230,14 +1297,16 @@ async function approveRolloverUnit(
 ): Promise<ExecuteResult> {
   const pending = msg.pending;
   const input = rolloverInput.parse(pending.input);
+  const source = pending.source === 'system' ? 'ui' : pending.source;
   const r = await rolloverCreate(
     db,
     args.identity,
     { ...input, batchId: args.pendingId },
     {
       actorKind: pending.actor_kind === 'system' ? 'owner' : pending.actor_kind,
-      source: pending.source === 'system' ? 'ui' : pending.source,
-      threadId: msg.threadId,
+      source,
+      // То же правило треда, что у пачки (`approvePending`): правке владельца в интерфейсе тред не передаётся (К-29)
+      ...(source !== 'ui' && { threadId: msg.threadId }),
       ...(pending.run_id !== undefined && { runId: pending.run_id }),
       ...(pending.actor_grant_id !== undefined && { actorGrantId: pending.actor_grant_id }),
     },
@@ -1255,6 +1324,7 @@ async function approveRolloverUnit(
   return {
     ok: true,
     actionId: r.actionId,
+    consequences: r.consequences,
     results: r.envelopeIds,
     idempotentReplay: r.idempotentReplay,
   };
@@ -1264,45 +1334,116 @@ async function approveRolloverUnit(
  * «Принять» карточки отката (`undo_of`, В-8) — та же судьба, что у пачки, другим исполнением
  * (фикс-раунд 1 задачи 8, I-3).
  *
- * ЗАМОК ЕДИНИЦЫ И «НЕ ОТКЛОНЕНА» — В ТРАНЗАКЦИИ UNDO-СООБЩЕНИЯ (шов `beforeStages` у `undoAction`),
- * ровно как у пачки в audit-tx: иначе параллельные «Принять» и «Отклонить» проходили бы свои
+ * ЗАМОК ЕДИНИЦЫ И «НЕ ОТКЛОНЕНА» — В ТРАНЗАКЦИИ ЗАПИСИ ОТМЕНЫ (шов `beforeStages` у `undoAction`),
+ * ровно как у пачки в транзакции её записи журнала: иначе параллельные «Принять» и «Отклонить» проходили бы свои
  * проверки до чужого коммита (write-skew, докблок `approvePending`). Исполненность отката для
- * `rejectPendingTx` — undo-сообщение по отменяемому действию (`isUndone`), audit у отката нет.
+ * `rejectPendingTx` — запись отмены отменяемого действия (`isUndone`), записи пачки у отката нет.
  *
  * ПОВТОР — replay, а не отказ: если отменяемое действие уже отменено (этой же карточкой раньше или
  * параллельным нажатием), «Принять» отвечает успехом с id отменённого действия и
  * `idempotentReplay`, как повтор пачки по audit. Проверка — ПОСЛЕ неудачи и отдельной транзакцией:
- * проигравшая гонка узнаёт о чужом коммите только так, а отказ «отклонено» с undo-сообщением не
+ * проигравшая гонка узнаёт о чужом коммите только так, а отказ «отклонено» с записью отмены не
  * совпадает никогда (под замком одно исключает другое).
+ *
+ * ОТКАЗ ПРАВИЛА ОТМЕНЫ ТЕКСТА (§8.6, К-43, Д-8) ЗАКРЫВАЕТ КАРТОЧКУ. Путь рождён моделью, и продолжения «Всё равно
+ * отменить» у него нет (Р-17): открытая карточка осталась бы с кнопкой, которая откажет снова. Закрытие — отказ
+ * `undo_refused` с местом продолжения (`continuationOf` отменяемого действия: где человек может отменить его сам) в
+ * метаданных и в тексте ленты; ответ «Принять» — тот же отказ `UNDO_TEXT_CHANGED` с деталями и текстом закрытия, его
+ * карточка показывает на месте кнопок. Закрытие — ОТДЕЛЬНОЙ транзакцией: транзакция отмены откатилась вместе с замком
+ * единицы из `beforeStages`, и `rejectPendingTx` берёт его заново сам.
  */
 async function approveUndoUnit(
   db: Db,
   args: { identity: Identity; pendingId: string },
   undoOf: string,
-): Promise<ExecuteResult> {
+  undoing: { entry: JournalEntry; continuation: UndoContinuation } | undefined,
+): Promise<ApproveUndoOk | ExecuteErr> {
   // Отказ «отклонено» под замком — не повод для replay, даже если действие успели отменить другим
   // путём: судьба карточки уже записана, и она — «отклонено».
   let rejected = false;
   const r = await undoAction(
     db,
-    { identity: args.identity, actionId: undoOf },
+    // Путь — `chat`: карточку отката (`undo_of`) поставил разговор, владелец её принимает (РП-11). Своего продолжения
+    // у пути нет (К-43) — отказ правила назовёт место, где отменяемое действие отменяют с продолжением
+    {
+      identity: args.identity,
+      actionId: undoOf,
+      path: 'chat',
+      continuation: undoing?.continuation ?? { kind: 'none' },
+    },
     {
       beforeStages: async (tx) => {
         await acquirePendingLock(tx, args.pendingId);
-        if (await isRejected(tx, args.pendingId)) {
+        const reason = await rejectedReason(tx, args.pendingId);
+        if (reason !== undefined) {
           rejected = true;
-          throw new ExecError(
-            'VALIDATION',
-            `подтверждение ${args.pendingId} отклонено — исполнение невозможно (§7.10)`,
-            { pendingId: args.pendingId },
-          );
+          throw closedCardError(args.pendingId, reason);
         }
       },
     },
   );
-  if (r.ok || rejected) return r;
-  const undone = await withIdentity(db, args.identity, (tx) => isUndone(tx, undoOf));
+  // Ответ «Принять» — id ОТМЕНЁННОГО действия (форма исполнения единицы): записи пачки у отката нет, и id записи
+  // отмены карточке не нужен — её судьбу читают по отменённому действию (`isUndone`)
+  if (r.ok) return { ok: true, actionId: r.undone.id, results: r.results, idempotentReplay: false };
+  if (rejected) return r;
+  if (r.error.code === 'UNDO_TEXT_CHANGED') {
+    const closed = await closeRefusedUndoUnit(
+      db,
+      args,
+      r.error.details as UndoTextChangedDetails,
+      undoing?.entry,
+    );
+    if (closed !== undefined) return closed;
+  }
+  const undone = await withIdentity(db, args.identity, (tx) =>
+    isUndone(tx, args.identity.graph, undoOf),
+  );
   return undone ? { ok: true, actionId: undoOf, results: [], idempotentReplay: true } : r;
+}
+
+/**
+ * Закрытие карточки отката отказом правила §8.6 (`undo_refused`, К-43) — ответ «Принять» для такого отказа; `undefined` —
+ * закрыть не вышло, потому что отменяемое действие успели отменить другим путём (`rejectPendingTx` отказывает
+ * `VALIDATION` «уже исполнено»): тогда ответ — replay, как у любого повтора (решает вызывающий по `isUndone`).
+ *
+ * Карточку уже закрыли иначе, пока отказ шёл (владелец нажал «Отклонить»), — её судьба та, что записана: ответ — отказ
+ * «закрыто» с той причиной, а не второе закрытие. Повторный отказ правила той же карточки (две «Принять» наперегонки)
+ * ответит тем же отказом `UNDO_TEXT_CHANGED`: запись закрытия одна (детерминированный PK отказа).
+ */
+async function closeRefusedUndoUnit(
+  db: Db,
+  args: { identity: Identity; pendingId: string },
+  details: UndoTextChangedDetails,
+  undoing: Pick<JournalEntry, 'textSession' | 'source'> | undefined,
+): Promise<ExecuteErr | undefined> {
+  let closed: { result: RejectPendingTxResult; text: string };
+  try {
+    closed = await withIdentity(db, args.identity, async (tx) => {
+      // Зона владельца — не состояние карточки: читать её до замка `rejectPendingTx` можно (контракт его докблока)
+      const words = {
+        globalThreadId: globalThreadId(args.identity.graph),
+        timeZone: await ownerTimeZone(tx, args.identity.graph),
+        now: new Date(),
+      };
+      const text = `Откат не применён: ${undoRefusalText(details, undoing ?? { textSession: false, source: 'system' }, words)}`;
+      const result = await rejectPendingTx(tx, {
+        identity: args.identity,
+        pendingId: args.pendingId,
+        reason: 'undo_refused',
+        continuation: details.continuation,
+        text,
+      });
+      return { result, text };
+    });
+  } catch (e) {
+    if (e instanceof ExecError && e.code === 'VALIDATION') return undefined;
+    throw e;
+  }
+  if (closed.result.alreadyRejected && closed.result.reason !== 'undo_refused') {
+    const err = closedCardError(args.pendingId, closed.result.reason);
+    return { ok: false, error: { code: err.code, message: err.message, details: err.details } };
+  }
+  return { ok: false, error: { code: 'UNDO_TEXT_CHANGED', message: closed.text, details } };
 }
 
 /**
@@ -1320,6 +1461,12 @@ export interface RejectPendingArgs {
   pendingId: string;
   reason?: RejectReason;
   text?: string;
+  /**
+   * Место продолжения отказа `undo_refused` (карточка отката закрыта правилом §8.6, К-43): где человек может отменить
+   * действие с продолжением. Данные судьбы, как причина: пишется в `metadata.continuation` отказа (текст ленты его
+   * называет словами, но текст — только представление).
+   */
+  continuation?: UndoContinuation;
 }
 
 /**
@@ -1344,14 +1491,14 @@ export type RejectPendingResult =
  * Отклонение §7.10 В ЧУЖОЙ ТРАНЗАКЦИИ — тело rejectPending без собственного withIdentity.
  * Журнал append-only (§4.6): карточка-запрос не правится, в её тред пишется НОВОЕ
  * системное сообщение {type:'confirmation_rejected', rejects} с детерминированным PK
- * rejectMessageId(owner, pendingId) — идемпотентность reject по PK, как у audit-сообщений
- * (§7.8). Уже исполненный pending отклонить нельзя (audit-сообщение по детерминированному
- * PK уже существует) → VALIDATION.
+ * rejectMessageId(owner, pendingId) — идемпотентность reject по PK, как у записей журнала
+ * (§7.8). Уже исполненный pending отклонить нельзя (запись журнала пачки с ключом pendingId
+ * уже существует) → VALIDATION.
  *
  * Сериализация против approve (fix round): advisory-lock по pendingId берётся ЗДЕСЬ, до
  * первого чтения состояния (см. док acquirePendingLock) — конкурентный approve держит тот
- * же замок в audit-tx; проверка «уже исполнено» идёт строго после захвата, поэтому видит
- * его закоммиченный audit (или сама коммитится первой, и approve увидит reject).
+ * же замок в транзакции записи журнала; проверка «уже исполнено» идёт строго после захвата, поэтому видит
+ * его закоммиченную запись пачки (или сама коммитится первой, и approve увидит reject).
  * Повторный reject идемпотентен: проверка isRejected под замком + ON CONFLICT DO NOTHING
  * по детерминированному PK (двойная страховка — второго сообщения не бывает).
  *
@@ -1363,7 +1510,7 @@ export type RejectPendingResult =
  * КОНТРАКТ ВЫЗЫВАТЕЛЯ:
  *  - tx открыт withIdentity(db, args.identity) — ПОД ТОЙ ЖЕ парой. Проверка этого стоила бы
  *    round-trip на каждый вызов, поэтому её нет: findPendingMessage/rejectedReason
- *    скоупит RLS по identity транзакции, а rejectMessageId/batchAuditMessageId считаются
+ *    скоупит RLS по identity транзакции, а rejectMessageId и проба журнала считаются
  *    от args.identity.graph — рассинхрон дал бы отказ мимо цели. Тот же контракт у createPending.
  *  - никакого чтения состояния этого pendingId в этой транзакции ДО вызова: замок берётся
  *    здесь, и прочитанное раньше — снапшот до захвата (тот самый write-skew). Вызывателю,
@@ -1387,24 +1534,20 @@ export async function rejectPendingTx(
   // Гейт — в tx-форме, а не в обёртке: иначе мимо него прошли бы вызовы из открытых
   // транзакций (лестница правки Ш1, гашение пачки)
   assertNotQuestion(msg.pending);
-  const auditId = batchAuditMessageId(args.identity.graph, args.pendingId);
-  const executed = await tx
-    .select({ id: chatMessages.id })
-    .from(chatMessages)
-    .where(eq(chatMessages.id, auditId));
-  if (executed.length > 0) {
+  // Адрес исполненной единицы в журнале — сам pendingId (ключ записи пачки), отдельного id записи нет
+  if ((await findBatch(tx, args.identity.graph, args.pendingId)) !== undefined) {
     throw new ExecError(
       'VALIDATION',
       `подтверждение ${args.pendingId} уже исполнено — отклонить нельзя`,
-      { pendingId: args.pendingId, auditId },
+      { pendingId: args.pendingId },
     );
   }
-  // Карточка отката (`undo_of`, В-8) исполняется `undoAction`, и audit-сообщения по ней нет:
-  // исполненность — undo-сообщение по отменяемому действию. Без этой проверки «Отклонить» после
+  // Карточка отката (`undo_of`, В-8) исполняется `undoAction`, и записи пачки по ней нет:
+  // исполненность — запись отмены отменяемого действия. Без этой проверки «Отклонить» после
   // «Принять» писало бы «отклонено» рядом с «отменено» (фикс-раунд 1 задачи 8, I-3). Читается
-  // под тем же замком: «Принять» отката держит его в транзакции undo-сообщения (`approveUndoUnit`).
+  // под тем же замком: «Принять» отката держит его в транзакции записи отмены (`approveUndoUnit`).
   const undoOf = msg.pending.undo_of;
-  if (undoOf !== undefined && (await isUndone(tx, undoOf))) {
+  if (undoOf !== undefined && (await isUndone(tx, args.identity.graph, undoOf))) {
     throw new ExecError(
       'VALIDATION',
       `подтверждение ${args.pendingId} уже исполнено — отклонить нельзя`,
@@ -1425,7 +1568,12 @@ export async function rejectPendingTx(
     threadId: msg.threadId,
     role: 'system',
     content: args.text ?? REJECT_CONTENT[reason],
-    metadata: { type: 'confirmation_rejected', rejects: args.pendingId, reason },
+    metadata: {
+      type: 'confirmation_rejected',
+      rejects: args.pendingId,
+      reason,
+      ...(args.continuation !== undefined && { continuation: args.continuation }),
+    },
   });
   return {
     pendingId: args.pendingId,
@@ -1458,6 +1606,69 @@ export async function rejectPending(db: Db, args: RejectPendingArgs): Promise<Re
     }
     throw e;
   }
+}
+
+/**
+ * Вход `entity_update` старого контракта внутри сохранённого payload'а: одиночный тул или операция пачки. jsonpath —
+ * тот же запрос для обеих форм, и проба живёт в SQL, а не разбором каждой карточки: предложений у графа сотни, а
+ * снимаемых — единицы.
+ */
+const OLD_BODY_CONTRACT_PATHS = [
+  '$.pending ? (@.tool == "entity_update" && exists(@.input.expectedUpdatedAt))',
+  '$.pending ? (@.tool == "batch_execute").input.operations[*] ? (@.tool == "entity_update" && exists(@.input.expectedUpdatedAt))',
+] as const;
+
+/** Один классификатор старого payload для отчёта и снятия; явный граф нужен также админскому SELECT. */
+async function oldBodyProposalRows(tx: Tx, graph: GraphId): Promise<Array<{ id: string | null }>> {
+  const rows = (await tx.execute(sql`
+    SELECT metadata->'pending'->>'id' AS id
+      FROM chat_messages m JOIN chat_threads t ON t.id = m.thread_id
+     WHERE t.graph_id = ${graph}::uuid AND metadata ? 'pending'
+       AND (jsonb_path_exists(metadata, ${OLD_BODY_CONTRACT_PATHS[0]}::jsonpath)
+         OR jsonb_path_exists(metadata, ${OLD_BODY_CONTRACT_PATHS[1]}::jsonpath))
+     ORDER BY m.created_at, m.id`)) as unknown as Array<{ id: string | null }>;
+  return rows;
+}
+
+/** Только чтение: предстоящие снятия без advisory-замков и записи судьбы. */
+export async function listStaleBodyProposals(
+  tx: Tx,
+  graph: GraphId,
+  executedBeforeTransfer: ReadonlySet<string> = new Set(),
+): Promise<string[]> {
+  const out: string[] = [];
+  for (const { id } of await oldBodyProposalRows(tx, graph)) {
+    if (
+      id !== null &&
+      !executedBeforeTransfer.has(id.toLowerCase()) &&
+      !(await isExecuted(tx, graph, id)) &&
+      (await rejectedReason(tx, id, graph)) === undefined
+    )
+      out.push(id);
+  }
+  return out;
+}
+
+// Хранимые предложения старого контракта (§8.2, РП-14): вход entity_update с expectedUpdatedAt после смены контракта
+// упал бы при одобрении VALIDATION (схема .strict()). Переписать поле в expectedBodyRevision = текущая значило бы
+// обнулить проверку предложения, поэтому такие предложения снимаются отказом stale тем же путём, что rejectPendingTx.
+// tx — транзакция withIdentity той же пары: rejectPendingTx пишет отказ под RLS владельца и берёт замок предложения сам.
+//
+// Возвращает id снятых предложений (зовёт прод-операция перевода, задача 21 плана А). Открытое — не исполненное и не
+// отклонённое: исполненное отклонить нельзя (запись пачки уже в журнале — отказ rejectPendingTx), отклонённое уже снято —
+// повтор возвращает пустой список. Исполненность спрашивается ПОД замком предложения (acquirePendingLock, контракт
+// rejectPendingTx: состояние единицы читается только после захвата).
+export async function closeStaleBodyProposals(tx: Tx, who: Identity): Promise<string[]> {
+  const rows = await oldBodyProposalRows(tx, who.graph);
+  const closed: string[] = [];
+  for (const { id } of rows) {
+    if (id === null) continue;
+    await acquirePendingLock(tx, id);
+    if (await isExecuted(tx, who.graph, id)) continue;
+    const r = await rejectPendingTx(tx, { identity: who, pendingId: id, reason: 'stale' });
+    if (!r.alreadyRejected) closed.push(id);
+  }
+  return closed;
 }
 
 /**
@@ -1536,7 +1747,7 @@ export type AnswerQuestionResult =
  * у остальных судеб.
  *
  * Автор ответа — ВЛАДЕЛЕЦ: `role:'user'` + `source:'ui'` (§6/§9.5 «ответы — ui-сообщения»),
- * в отличие от гашения, автор которого — система. Сообщение не несёт `metadata.actions`,
+ * в отличие от гашения, автор которого — система. Сообщение не является записью журнала,
  * поэтому в журнал §7.8 и в Undo не попадает — это требование инварианта §9.5, а не
  * деталь: ответ владельца ничего не меняет в графе и откатывать в нём нечего.
  *
@@ -1611,7 +1822,7 @@ export async function answerPendingQuestion(
  * Гашение вопроса пачки (ОЧ.8): нерешённые единицы прошлых прогонов снимает новый
  * прогон — плановый или «Продолжить сейчас». Append-сообщение с детерминированным PK
  * `questionStaleMessageId(owner, pendingId)`, автор — СИСТЕМА (`role:'system'`), в отличие
- * от ответа. `metadata.actions` нет, как и у ответа: в журнал §7.8 и Undo не попадает.
+ * от ответа. Записи журнала нет, как и у ответа: в журнал §7.8 и Undo не попадает.
  *
  * `text` — параметром, а не таблицей причин: у гашения вопроса нет `RejectReason`
  * (четвёрка причин описывает судьбу ДЕЙСТВИЯ), а формулировка зависит от того, кто гасит
@@ -1691,8 +1902,9 @@ export interface RunUnit {
  *     `routines/lifecycle.ts`, докблок `liveProposalRuns`), поэтому выигрыш в том, что
  *     таблица проходится ОДИН раз вместо двух, а дедуп и порядок получаются построением;
  *  2) судьбы — SELECT по IN-списку детерминированных PK (`uuid_eq` leakproof, индекс под
- *     RLS берётся): approve → `batchAuditMessageId`, reject → `rejectMessageId`, ответ →
- *     `answerMessageId`, гашение → `questionStaleMessageId`. Ни одной пробы по ленте.
+ *     RLS берётся): reject → `rejectMessageId`, ответ → `answerMessageId`, гашение →
+ *     `questionStaleMessageId`; approve — исполненная пачка в журнале по `batch_id` = pendingId
+ *     (`journal-read.executedIds`, РП-9: журнал читает только его API). Ни одной пробы по ленте.
  *
  * Порядок — `created_at, id`: тай-брейк по id обязателен, иначе обход пачки («принять
  * все») в разных вызовах шёл бы по единицам вразнобой — сводка разъезжалась бы со списком
@@ -1723,8 +1935,10 @@ export async function listRunUnits(tx: Tx, graphId: GraphId, runId: string): Pro
   );
 
   const units: RunUnit[] = [];
-  /** PK судьбы → чья она и что означает; из ключей складывается второй запрос. */
+  /** PK судьбы в ленте → чья она и что означает; из ключей складывается второй запрос. */
   const fateKeys = new Map<string, { pendingId: string; fate: RunUnit['fate'] }>();
+  /** Отложенные действия пачки: их «принято» — исполненная пачка в журнале (`executedIds`). */
+  const actionIds: string[] = [];
   for (const raw of rows as unknown as Array<Record<string, unknown>>) {
     const record = parsePendingRecord(
       raw.id as string,
@@ -1757,21 +1971,21 @@ export async function listRunUnits(tx: Tx, graphId: GraphId, runId: string): Pro
         fate: 'stale',
       });
     } else {
-      fateKeys.set(batchAuditMessageId(graphId, record.id), {
-        pendingId: record.id,
-        fate: 'approved',
-      });
+      actionIds.push(record.id);
       fateKeys.set(rejectMessageId(graphId, record.id), { pendingId: record.id, fate: 'rejected' });
     }
   }
   if (fateKeys.size === 0) return units;
 
+  /** Что НАШЛОСЬ по каждой единице; выбор судьбы — ниже, отдельно от порядка выборки. */
+  const found = new Map<string, WrittenFates>();
+  for (const pendingId of await executedIds(tx, graphId, actionIds)) {
+    found.set(pendingId, { ...found.get(pendingId), approved: true });
+  }
   const fates = await tx
     .select({ id: chatMessages.id, metadata: chatMessages.metadata })
     .from(chatMessages)
     .where(inArray(chatMessages.id, [...fateKeys.keys()]));
-  /** Что НАШЛОСЬ по каждой единице; выбор судьбы — ниже, отдельно от порядка выборки. */
-  const found = new Map<string, WrittenFates>();
   for (const row of fates) {
     const key = fateKeys.get(row.id);
     if (key === undefined) continue; // недостижимо: список PK и составил этот запрос
@@ -1781,8 +1995,6 @@ export async function listRunUnits(tx: Tx, graphId: GraphId, runId: string): Pro
       seen.answer = typeof metadata.answer === 'string' ? metadata.answer : null;
     } else if (key.fate === 'stale') {
       seen.stale = true;
-    } else if (key.fate === 'approved') {
-      seen.approved = true;
     } else {
       // Та же терпимость к истории, что у rejectedReason: сообщение без причины —
       // отказ владельца (до V1.8 отклонить мог только он)

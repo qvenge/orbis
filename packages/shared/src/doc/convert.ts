@@ -396,7 +396,8 @@ class RefDefsFound extends Error {}
  * - `text` — прежним потокенным путём внутри куска. Кусок из одних пробелов узлов не даёт.
  * - `query` → `queryBlock {ast: null, text}` — непривязанным, как и прежде (`bindQueryBlocks`).
  * - `record` → `recordBlock`, `card` → `aspectCard {aspect: null, text}`;
- *   `ownCards` → `ownCards`, `host` → `hostBlock {name}` (1б).
+ *   `ownCards` → `ownCards`, `host` → `hostBlock {name}` (1б); `param` → `paramBlock {text}` (1в) —
+ *   строка маркера дословно, без хвоста строки (перевод и пробелы ставит печать).
  * - контейнеры — рекурсивно; пустая часть — пустой абзац (часть схемы — `block+`).
  * - `broken` → `rawBlock` с ДОСЛОВНЫМ текстом. Хвостовые переводы строки срезаны, как у токенов
  *   выше: `raw` узлов препрохода несёт перевод своей строки, а разделитель между блоками ставит
@@ -427,6 +428,9 @@ function pageNodesToDoc(nodes: PageNode[]): JSONContent[] {
         break;
       case 'host':
         out.push({ type: 'hostBlock', attrs: { name: node.name } });
+        break;
+      case 'param':
+        out.push({ type: 'paramBlock', attrs: { text: node.raw.replace(/[ \t]*\r?\n?$/, '') } });
         break;
       case 'columns':
         out.push({
@@ -545,12 +549,13 @@ const SKELETON_KINDS: ReadonlySet<string> = new Set([
   'aspectCard',
   'ownCards',
   'hostBlock',
+  'paramBlock',
   'queryBlock',
 ]);
 
 /**
  * Скелет документа формата v3: последовательность и вложенность контейнеров, частей, блоков
- * обвязки, карточек, своих карточек и блоков хоста (1б) и блоков данных — с атрибутами, которые
+ * обвязки, карточек, своих карточек и блоков хоста (1б), параметров (1в) и блоков данных — с атрибутами, которые
  * печатаются в маркер (подпись вкладки, имя блока, текст карточки).
  *
  * Зачем сверка скелета сверх сверки текста. Схема документа ШИРЕ грамматики: место узла
@@ -577,6 +582,9 @@ function skeleton(doc: JSONContent): string {
     // Имя блока хоста — как у блока обвязки: чужое имя печатается `{{foo}}`, разбор оставит текст,
     // скелет разойдётся — и документ уйдёт в `rawBlock`, а не ляжет парой, где body значит другое.
     else if (type === 'hostBlock') out.push(`host:${String(node.attrs?.name)}`);
+    // Параметр — текстом маркера: печать `null` пуста, чужой текст разберётся абзацем — скелет
+    // разойдётся, и документ уйдёт в `rawBlock`, а не ляжет парой, где body значит другое.
+    else if (type === 'paramBlock') out.push(`param:${trimmed(node.attrs?.text)}`);
     else if (type !== null) out.push(type);
     const content = node.content ?? [];
     if (type !== null && content.length > 0) out.push('(');
@@ -717,9 +725,12 @@ export function bodyDocError(input: BodyDoc | JSONContent): string | undefined {
  * `entities.query_refs` — по нему слияние свойства находит тела, которые на него ссылаются,
  * не обходя корпус (`registry/ops.ts`).
  *
- * Имена КОНТРАКТОВ и НАБОРОВ (`class.contract`, `rel.sourceNotIn.contract`, Б-1) в индекс НЕ
- * едут, и это не пропуск: индекс обслуживает слияние СВОЙСТВ — оно переписывает адреса
- * свойств в телах, — а контракт слиянию не подлежит вовсе (`property_merge` работает по
+ * Имена КОНТРАКТОВ и НАБОРОВ (`class.contract`, `rel.sourceNotIn.contract`, Б-1) и АДРЕСА
+ * КОНТРАКТА в `prop`/`field` (`{contract, slot}`, спека 1в §3.1) в индекс НЕ едут, и это не
+ * пропуск: `add` берёт только строку, а объект адреса обходится как узел, чьи ключи
+ * (`contract`, `slot`) в список имён свойств не входят. Причина одна: индекс обслуживает
+ * слияние СВОЙСТВ — оно переписывает адреса свойств в телах, — а контракт слиянию не подлежит
+ * вовсе (`property_merge` работает по
  * свойствам, §Б1-2). Ехать сюда контракту стало бы нужно, только если появится операция,
  * переписывающая его имя.
  *
@@ -731,6 +742,7 @@ export function bodyDocError(input: BodyDoc | JSONContent): string | undefined {
  * Регистр приводится к нижнему — сравнение `text[]` в PG регистрозависимо, а uuid в дереве
  * приходит как написан.
  */
+// ОБХОДЧИК-Q: refs-index
 export function queryRefsFromDoc(input: BodyDoc | JSONContent): string[] {
   const refs = new Set<string>();
   const add = (value: unknown): void => {

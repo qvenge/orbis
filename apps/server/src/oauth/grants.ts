@@ -10,6 +10,7 @@ import { and, eq, gt, isNull, or, sql } from 'drizzle-orm';
 import type { Db } from '../db/client';
 import { agentGrants } from '../db/schema';
 import { type Identity, isIdentity, parseAccountId, parseGraphId } from '../identity';
+import { addDbTime } from '../perf/server-timing';
 import { OAuthError } from './errors';
 import {
   ACCESS_PREFIX,
@@ -114,6 +115,10 @@ export async function verifyBearer(db: Db, token: string): Promise<GrantIdentity
   // решая, агентский это Bearer или владельческий JWT. Перечисление вручную давало бы
   // две правды, расходящиеся при добавлении третьего вида токена.
   if (!BEARER_PREFIXES.some((prefix) => token.startsWith(prefix))) return null;
+  // Запрос к базе ВНЕ транзакции `withIdentity` — в `Server-Timing` запроса он идёт отдельным слагаемым (спека скорости
+  // §3.1, РП-3). Счёт здесь, а не у вызывающих: лукап зовут и tRPC (`context.ts`), и `/mcp` (`mcp/transport.ts`), и
+  // счёт у одного из них оставил бы время базы другого пути неучтённым.
+  const t0 = performance.now();
   const rows = await db
     .update(agentGrants)
     .set({ lastUsedAt: new Date() })
@@ -130,7 +135,8 @@ export async function verifyBearer(db: Db, token: string): Promise<GrantIdentity
       issuedBy: agentGrants.issuedBy,
       scope: agentGrants.scope,
       label: agentGrants.label,
-    });
+    })
+    .finally(() => addDbTime(performance.now() - t0));
   const row = rows[0];
   if (!row) return null;
   // Каст, а не разбор: колонка `scope` — text с DEFAULT 'full', перечисление живёт одним

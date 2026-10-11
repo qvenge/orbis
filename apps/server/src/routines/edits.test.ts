@@ -16,7 +16,7 @@ import {
 
 const TARGET = '019a0000-0000-7000-8000-000000000001';
 const OTHER = '019a0000-0000-7000-8000-000000000002';
-const UPDATED_AT = '2026-08-20T10:00:00.000Z';
+const BODY_REVISION = 7;
 
 type Operation = { tool: string; input: Record<string, unknown> };
 
@@ -28,7 +28,7 @@ function updateOp(): Operation {
       id: TARGET,
       title: 'Заголовок',
       body: '# Было',
-      expectedUpdatedAt: UPDATED_AT,
+      expectedBodyRevision: BODY_REVISION,
       props: { 'orbis/task_status': 'in_progress', 'orbis/priority': 2 },
       // Форма §А7-3: адрес пункта — id свойства. Литеральный якорь, а не производная от
       // кода: инвариант «правка владельца не меняет предусловие» сверяет два КАНОНА одной и
@@ -83,7 +83,7 @@ function reasonOf(run: () => unknown): { code: string; reason: unknown } {
 }
 
 describe('buildEditedOperations', () => {
-  test('правка тела: body → bodyDoc, ключ body удалён, expectedUpdatedAt и precondition нетронуты, safeParse проходит', () => {
+  test('правка тела: body → bodyDoc, ключ body удалён, expectedBodyRevision и precondition нетронуты, safeParse проходит', () => {
     const source = [updateOp()];
     const built = buildEditedOperations(source, edits({ body: [{ index: 0, bodyDoc: BODY_DOC }] }));
 
@@ -92,8 +92,8 @@ describe('buildEditedOperations', () => {
     // XOR тела — refine, а не union (contracts/tools.ts:137-140): ключ body обязан УЙТИ
     expect(Object.hasOwn(input, 'body')).toBe(false);
     expect(input.bodyDoc).toEqual(BODY_DOC);
-    // Ш1.6: CAS переносится КАК ЕСТЬ — иначе правка тела затирала бы чужую
-    expect(input.expectedUpdatedAt).toBe(UPDATED_AT);
+    // Ш1.6: замок текста переносится КАК ЕСТЬ — иначе правка тела затирала бы чужую
+    expect(input.expectedBodyRevision).toBe(BODY_REVISION);
     expect(input.precondition).toEqual(updateOp().input.precondition);
     expect(input.title).toBe('Заголовок');
     expect(input.aspects).toEqual(updateOp().input.aspects);

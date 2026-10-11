@@ -12,7 +12,7 @@ export type PanelCommand =
   | { kind: 'createRelation'; entityId: string; key: RelationKey }
   | { kind: 'deleteRelation'; entityId: string; key: RelationKey };
 export type CommandOutcome =
-  | { kind: 'confirmed'; actionId?: string }
+  | { kind: 'confirmed'; actionId?: string; consequences?: boolean }
   | { kind: 'rejected'; message: string }
   | { kind: 'unknown'; message: string };
 export type RunPanelCommand = (command: PanelCommand) => Promise<CommandOutcome>;

@@ -19,7 +19,7 @@ import { PlaceQuestion } from './PlaceQuestion';
  *   их включает диалог настроек, а кнопка плашки — одно действие, которое владелец видит); в архиве —
  *   «[A] в архиве — [восстановить]» одной пачкой `archived: false` (Э-20: включение архивного ничего
  *   не открыло бы);
- * - `reserved` — «Бюджет придёт со следующим срезом», без кнопки (§3.4);
+ * - `reserved` — «Бюджет придёт отдельным срезом», без кнопки (§3.4; текст — спека 1в §7.4);
  * - `app-unknown` — из адреса «Приложение не найдено», из «Дома» страницы — «Дом страницы не найден»
  *   (carry задачи 20, Fable M-4): это разные поломки, и чинятся они в разных местах;
  * - `no-view` — «В „A“ нет вида для таких записей — открыть в [X]»: X — разовый переход (новый шаг,
@@ -45,7 +45,7 @@ export function OpenPlaqueList({ plaques, apps, record }: OpenPlaquesProps) {
           case 'app-off':
             return <AppOff key={`off:${p.appId}`} plaque={p} title={titleOf(p.appId)} />;
           case 'reserved':
-            return <Plaque key="reserved">Бюджет придёт со следующим срезом</Plaque>;
+            return <Plaque key="reserved">Бюджет придёт отдельным срезом</Plaque>;
           case 'app-unknown':
             return (
               <Plaque key={`unknown:${p.ref}`}>

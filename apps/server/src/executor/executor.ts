@@ -11,7 +11,7 @@
 import {
   attachAspectInput,
   attachToolName,
-  batchAuditMessageId,
+  type BodyActionInfo,
   batchExecuteInput,
   type EntityUpdatePrecondition,
   type EntityUpdatePreconditionItem,
@@ -27,7 +27,9 @@ import {
   type RuleDefinition,
   relationCreateInput,
   relationDeleteInput,
+  type SettingsSetInput,
   setExtensionEnabledInput,
+  settingsSetInput,
   surfaceExtensionOf,
 } from '@orbis/shared';
 // Конверсия тела живёт в @orbis/shared/doc — ОДИН экземпляр правил разбора и сериализации
@@ -60,13 +62,18 @@ import {
   invalidateSpentCacheOfOwner,
 } from '../budget/spent-cache';
 import type { Db } from '../db/client';
-import { entities, entityOrigins, entityVersions, relations } from '../db/schema';
+import { entities, entityOrigins, entityVersions, relations, userSettings } from '../db/schema';
 import { type Tx, withIdentity } from '../db/with-identity';
 import { resolveEntitlement } from '../entitlements';
 import type { CompileCtx } from '../query/compile-ast';
-import { ownerTimeZone, todayInTimeZone } from '../query/context';
+import { ownerQuerySettings, todayInTimeZone, WEEK_START } from '../query/context';
 import { effectiveRegistry, parseRegistryOfSnapshot } from '../registry/cache';
-import { type AspectDelta, aspectDeltaAfterRemove, aspectDeltaAfterSet } from '../registry/deltas';
+import {
+  type AspectDelta,
+  aspectDeltaAfterRemove,
+  aspectDeltaAfterSet,
+  REGISTRY_DELTA_TARGET_KINDS,
+} from '../registry/deltas';
 import { disabledExtensionsOf, setExtensionDisabled } from '../registry/extensions';
 import type { RegistrySnapshot } from '../registry/load';
 import {
@@ -154,11 +161,27 @@ import {
   subscriptionRemoveInput,
   subscriptionSetInput,
 } from '../tools/registry-tools';
-// Date→ISO живёт ТОЛЬКО в wire.ts (Task 12); executor использует те же функции
-import { toWireEntity as toWire, toWireRelation } from '../wire';
+// Date→ISO живёт ТОЛЬКО в wire.ts (Task 12); executor использует те же функции. Ответ мутации записи — строка
+// `RETURNING` с ревизией тела и временем его изменения (`toWireEntityWithRevision`, спека скорости §8.1); строки для
+// хуков (бюджет, «дом») — без них, им колонки тела не нужны.
+import {
+  toWireEntity as toWire,
+  toWireEntityWithRevision,
+  toWireRelation,
+  toWireUserSettings,
+  type WireUserSettings,
+} from '../wire';
 import { recomputeProjectAncestors } from './ancestors';
 import { assertEntityProps } from './aspects-validate';
+// `bodyActionOf` body-chain — действующее действие тела для ответа; имя здесь занято объявлением действия транзакции
+import {
+  assertUndoTextRule,
+  bodyActionInfo,
+  bodyActionOf as currentBodyActionOf,
+  VERSION_LABEL_MAX,
+} from './body-chain';
 import { bodyFieldsFromMarkdown } from './body-fields';
+import { bodyActionBefore, bodyChanges, createdBodyStamp, stampVirtualBody } from './body-stamp';
 import { ExecError } from './errors';
 import { applyHomeFollowUps, type HomeHook, homeHookOf } from './home';
 import {
@@ -171,6 +194,7 @@ import {
   assertRoutineUntouchable,
   resolveEntityTitles,
 } from './invariants';
+import type { JournalEntry } from './journal-read';
 import { dropStaleCarryover, hasBodyInInput, needsProjectSeed, normalizeTags } from './normalize';
 import {
   applyPropsPatch,
@@ -196,6 +220,12 @@ import {
   type VirtualGraphEffects,
   type VirtualRelationCreate,
 } from './relations';
+import {
+  assertNothingAppended,
+  assertTextSessionRequest,
+  sessionOperations,
+  sessionToContinue,
+} from './text-session';
 import type {
   ActionOperation,
   ActionRecord,
@@ -231,6 +261,25 @@ interface ExecCtx {
   sink: JournalSink;
   /** Внутренний режим undo (§7.8) — см. InternalUndoMode; только из undo.ts. */
   internalUndo?: InternalUndoMode;
+  /**
+   * Действие текущего тела, объявленное транзакцией (`orbis.body_action`, спека скорости §8.1, РП-16): id записи
+   * журнала этой транзакции (у пачки — batch_id), у отмены — id её записи отмены; `null` — транзакция без журнала
+   * (`NOOP_SINK`: сев, мир, садовник). Колонки базы ставит триггер; здесь значение нужно виртуальным строкам пачки.
+   * Продолжение сеанса правки текста объявляет действие заново — id сеанса (РП-16), и поле следует за объявлением.
+   */
+  bodyAction: string | null;
+  /**
+   * Сеанс правки текста, который продолжает эта транзакция (§8.5, `text-session.ts`): записи журнала у неё нет, ответ —
+   * id сеанса. Ставит `prepareEntityUpdate` одиночного пути; нет — обычное действие.
+   */
+  continuedSession?: string;
+  /** Запись журнала продолжаемого сеанса — её уже прочитала проба сеанса; ответ правки берёт начало сеанса отсюда. */
+  continuedSessionEntry?: JournalEntry;
+  /**
+   * `now()` транзакции по часам базы — время записи журнала этой транзакции (`created_at DEFAULT now()`); снимается
+   * запросом объявления действия (`declareBodyAction`). Нет — транзакция без журнала.
+   */
+  txNow?: Date;
   /**
    * Контекст компиляции запросов (§А5-7) — ЛЕНИВЫЙ и на транзакцию: его спрашивает
    * единственный потребитель, проверка ссылочных свойств (§А6-1), и только когда операция
@@ -282,13 +331,15 @@ function contourOf(ctx: ExecCtx): BudgetContour {
  */
 function compileCtxOf(ctx: ExecCtx): Promise<CompileCtx> {
   ctx.compileCtx ??= (async () => {
-    const timeZone = await ownerTimeZone(ctx.tx, ctx.req.identity.graph);
+    const settings = await ownerQuerySettings(ctx.tx, ctx.req.identity.graph);
     return {
       graphId: ctx.req.identity.graph,
       reg: ctx.registry,
       thisEntityId: null,
-      timeZone,
-      today: todayInTimeZone(timeZone, ctx.clock()),
+      timeZone: settings.timeZone,
+      today: todayInTimeZone(settings.timeZone, ctx.clock()),
+      weekStart: WEEK_START,
+      ownerCurrency: settings.currency,
     };
   })();
   return ctx.compileCtx;
@@ -318,8 +369,19 @@ export type WireRegistryResult =
   | { module: string; enabled: boolean };
 
 interface OpOutcome {
-  result: WireEntity | WireRelation | WireOrigin | WireEntityVersion | WireRegistryResult;
+  result:
+    | WireEntity
+    | WireRelation
+    | WireOrigin
+    | WireEntityVersion
+    | WireRegistryResult
+    | WireUserSettings;
   replay?: boolean;
+  /**
+   * Строка записи после правки (`RETURNING`, с колонками тела) — у `entity_update`: по ней одиночный путь считает
+   * действующее действие тела для ответа правки (`ExecutorDeps.reportBodyAction`), не перечитывая запись.
+   */
+  row?: EntityRow;
 }
 
 /** Данные стадий 6–7 одной операции; для batch агрегируются в один action (§7.8). */
@@ -330,6 +392,15 @@ interface JournalPlan {
   title: string;
   operations: ActionOperation[];
   inverse: ActionOperation[];
+  /**
+   * «Действие тела до» (§8.6 «Цепочка»): записи, чьё тело операция РЕАЛЬНО сменила (ревизия строки `RETURNING` выросла),
+   * → значение колонки `body_action_id` до операции. Заполняется в `apply` — «сменила» знает только база (триггер
+   * сравнивает `IS DISTINCT FROM`, правка тем же текстом ключа не даёт). Запись журнала собирает планы
+   * `collectBodyBefore`.
+   */
+  bodyBefore?: Record<string, string | null>;
+  /** Запись сеанса правки текста (§8.5): признак `text_session`, операции без «после» (`sessionOperations`). */
+  textSession?: true;
 }
 
 /**
@@ -344,6 +415,10 @@ interface BudgetHook {
 
 /** Результат стадий 1–4: план записи. apply — стадия 5, единственные записи в БД. */
 interface PreparedOp {
+  /** Уже разрешённые адреса входа: дельта журнала сравнивается с ними, а не с ключами полей ядра. */
+  touchedProperties?: ReadonlySet<string>;
+  /** Засев тела сверх входа — эффект правил подготовки, даже если его нет среди свойств дельты. */
+  seededBody?: boolean;
   journal: JournalPlan;
   apply(ctx: ExecCtx): Promise<OpOutcome>;
   budgetHook?: BudgetHook;
@@ -413,12 +488,84 @@ export class BatchState {
   }
 }
 
-/** Синк по умолчанию: стадии 6–7 вычисляются, но никуда не пишутся (боевой — Task 11).
+/** Синк по умолчанию: стадии 6–7 вычисляются, но никуда не пишутся (боевой — `makeJournalSink`).
  *  ВНИМАНИЕ: без персистентного синка идемпотентность batch по batch_id недоступна. */
 const NOOP_SINK: JournalSink = {
   write: async () => {},
-  findByAuditId: async () => undefined,
+  writeUndo: async () => {},
+  findBatchWrite: async () => undefined,
 };
+
+/**
+ * Какое действие объявляет транзакция executor'а (спека скорости §8.1, РП-16). Транзакция executor'а и есть ОДНО действие
+ * журнала (одиночное — `actionId`, пачка — `batch_id`) или одна запись отмены (id заведён до применения, РП-11).
+ * Без журнала (`NOOP_SINK`: сев, мир, садовник, рутина переноса) — не объявляет: колонка остаётся пустой (К-34), иначе
+ * она указывала бы на запись журнала, которой нет.
+ */
+function bodyActionOf(
+  sink: JournalSink,
+  internalUndo: InternalUndoMode | undefined,
+  actionId: string,
+): string | null {
+  if (internalUndo !== undefined) return internalUndo.undoRecordId;
+  // Нижний регистр — канон uuid в базе: колонку тела, прочитанную под замком, сравнивают с объявленным действием
+  // (`bodyActionBefore`), и id пачки в верхнем регистре (модель через MCP) не узнал бы в ней само действие — «до»
+  // сослалось бы на него же (M-5 гейта задачи 7).
+  return sink === NOOP_SINK ? null : actionId.toLowerCase();
+}
+
+/**
+ * Объявление действия ОДИН раз на транзакцию — первой инструкцией после идентичности: триггер `entities_body_stamp`
+ * проставит его каждой записи, чьё тело сменится, включая сырой SQL слияния свойства и его отката. `is_local = true` —
+ * настройка умирает с транзакцией; на переиспользованном соединении она остаётся определённой ПУСТОЙ, и триггер читает
+ * её через NULLIF (0026).
+ */
+async function declareBodyAction(tx: Tx, bodyAction: string | null): Promise<Date | undefined> {
+  if (bodyAction === null) return undefined;
+  // Тем же запросом — `now()` транзакции: время записи журнала этой транзакции (`created_at DEFAULT now()`), без
+  // лишнего обхода; по нему ответ правки называет начало только что открытого действия тела (§8.2, R-22). Точность —
+  // как у колонки (`timestamptz(3)`, база ОКРУГЛЯЕТ микросекунды): иначе ответ правки и чтение записи расходились бы на
+  // миллисекунду.
+  const rows = (await tx.execute(
+    sql`SELECT set_config('orbis.body_action', ${bodyAction}, true) AS declared,
+               now()::timestamptz(3) AS tx_now`,
+  )) as unknown as Array<{ tx_now: unknown }>;
+  const at = rows[0]?.tx_now;
+  // Сырая выдача drizzle отдаёт timestamptz строкой (date-парсеры postgres.js отключены) — как у чтения журнала
+  return at instanceof Date ? at : new Date(String(at));
+}
+
+/**
+ * «Действие тела до» записи журнала из планов всех её операций (§8.6): объединение, ПЕРВЫЙ ключ побеждает — в пачке
+ * значение до первой правки этой записи, а не промежуточное. Нет ключей — ПУСТОЙ объект, а не отсутствие поля
+ * (рулинг R-21): `NULL` в журнале значит только «запись перенесена до плана А и цепочки не несёт» — правило отмены
+ * текста проверяет такие записи по данным отмены (`body-chain.ts`, `bodyEntitiesOf`), а новой записи без смены тела
+ * проверять нечего.
+ */
+function collectBodyBefore(plans: readonly PreparedOp[]): Record<string, string | null> {
+  const out: Record<string, string | null> = {};
+  for (const plan of plans) {
+    for (const [entityId, before] of Object.entries(plan.journal.bodyBefore ?? {})) {
+      if (!Object.hasOwn(out, entityId)) out[entityId] = before;
+    }
+  }
+  return out;
+}
+
+/**
+ * Записать «до» записи, если операция РЕАЛЬНО сменила её тело: ревизия строки `RETURNING` больше ревизии, от которой
+ * операция считалась (строка под замком или виртуальная строка пачки). Правка тем же текстом ревизию не двигает —
+ * ключа нет (К-34: «изменила тело» = «триггер сменил тело»). Ключ — id строки из базы (канонический регистр uuid).
+ */
+function noteBodyBefore(
+  journal: JournalPlan,
+  row: EntityRow,
+  current: EntityRow,
+  before: string | null,
+): void {
+  if (row.bodyRevision <= current.bodyRevision) return;
+  journal.bodyBefore = { ...journal.bodyBefore, [row.id]: before };
+}
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -470,7 +617,7 @@ const entityVersionPinInput = z
     // trim ДО min(1): подпись из одних пробелов рисуется пустотой в списке и в карточке
     // журнала («Закреплена версия «   »») — то есть снимок без подписи, а её тут нет
     // только у строк «до бэкфилла».
-    label: z.string().trim().min(1).max(200),
+    label: z.string().trim().min(1).max(VERSION_LABEL_MAX),
   })
   .strict();
 
@@ -503,6 +650,26 @@ function toWireOrigin(row: typeof entityOrigins.$inferSelect): WireOrigin {
   };
 }
 
+/** Последствия — по собранным планам той же транзакции; клиент не угадывает правила и дописанные операции. */
+function consequencesOf(
+  plans: readonly PreparedOp[],
+  followUps: readonly PreparedOp[],
+  extra: readonly ActionOperation[],
+): boolean {
+  if (followUps.length > 0 || extra.length > 0) return true;
+  return plans.some((plan) => {
+    if (plan.seededBody === true) return true;
+    if (plan.touchedProperties === undefined) return false;
+    return plan.journal.operations.some(({ payload }) => {
+      const props = payload.props as Record<string, unknown> | undefined;
+      const unset = payload.unset as string[] | undefined;
+      return [...Object.keys(props ?? {}), ...(unset ?? [])].some(
+        (key) => !plan.touchedProperties?.has(key),
+      );
+    });
+  });
+}
+
 export async function execute(
   db: Db,
   req: ExecuteRequest,
@@ -511,6 +678,8 @@ export async function execute(
   const clock = req.clock ?? (() => new Date());
   const sink = deps.sink ?? NOOP_SINK;
   try {
+    // Сеанс правки текста (§8.5) — только одиночное автосохранение тела владельцем: до транзакции, для обоих путей
+    assertTextSessionRequest(req);
     const single = req.operations.length === 1 ? req.operations[0] : undefined;
 
     // Ветка batch (§7.8, §9.2): явный batchId, несколько операций или тул batch_execute
@@ -519,7 +688,12 @@ export async function execute(
     }
 
     const actionId = newId();
+    const bodyAction = bodyActionOf(sink, deps.internalUndo, actionId);
     return await withIdentity(db, req.identity, async (tx) => {
+      // Действие текущего тела (§8.1): транзакция executor'а и есть ОДНО действие журнала (или одна запись отмены) —
+      // объявляем его один раз, и триггер entities_body_stamp проставит его каждой записи, чьё тело сменится, включая
+      // сырой SQL слияния свойства. Без журнала (сев, мир, садовник: NOOP_SINK) — не объявляем (К-34).
+      const txNow = await declareBodyAction(tx, bodyAction);
       // Шов сериализации §7.10 — до первого чтения состояния (см. ExecutorDeps.beforeStages)
       if (deps.beforeStages) await deps.beforeStages(tx);
       // Снимок реестра — ДО замка контура, и это безопасно: три SELECT'а по таблицам
@@ -534,6 +708,10 @@ export async function execute(
       // за ним замки правил уникальности (см. lockUniqueAmongRules): порядок «контур → правила»
       await lockBudgetContour(tx, registry, req.identity.graph, [single]);
       await lockUniqueAmongRules(tx, registry, req.identity.graph, [single]);
+      // Единое правило отмены текста (§8.6) — ОДНО место для всех путей отмены (`body-chain.ts`): после `beforeStages`
+      // (отказ «отклонено» карточки отката — раньше правила) и advisory-замков (правило берёт строки FOR UPDATE, а
+      // порядок «advisory → строки» глобален — см. lockBudgetContour), до стадий. Отказ — всего действия (К-21).
+      if (deps.internalUndo) await assertUndoTextRule(tx, req.identity.graph, deps.internalUndo);
       const ctx: ExecCtx = {
         tx,
         registry,
@@ -546,6 +724,8 @@ export async function execute(
         clock,
         sink,
         internalUndo: deps.internalUndo,
+        bodyAction,
+        ...(txNow !== undefined && { txNow }),
       };
       const plan = await prepareOp(ctx, single.tool, single.input); // стадии 1–4
       const out = await plan.apply(ctx); // стадия 5
@@ -558,8 +738,9 @@ export async function execute(
         // между ними безразличен, а общий шов «после всех дописанных» держит один путь с пачкой.
         followUps = [...followUps, ...(await applyHomeFollowUpsOf(ctx, [plan]))];
       }
+      let consequences = false;
       // Стадии 6–7. Внутренний режим undo: вместо action тем же tx пишется
-      // undo-сообщение — undo не порождает нового action (undo неотменяем, §7.8).
+      // запись отмены — undo не порождает нового action (undo неотменяем, §7.8).
       // Иначе — обычный журнал; идемпотентный replay по client-UUID его пропускает (§5.3)
       if (ctx.internalUndo) {
         // Пересчёт предков (§А8) откату НУЖЕН: inverse вернул ребро, предки обязаны сойтись
@@ -574,7 +755,7 @@ export async function execute(
         // целиком — это один ленивый пересчёт против неполной модели того, что откат сделал.
         // Отмена — редкая явная операция, цена честная.
         await invalidateSpentCacheOfOwner(tx, req.identity.graph);
-        await ctx.internalUndo.writeUndoMessage(tx);
+        await writeUndoRecord(ctx, ctx.internalUndo, [plan]);
       } else if (out.replay !== true) {
         const allPlans = [plan, ...followUps];
         // Пересчёт — ПОСЛЕ бюджет-хука: снятие устаревшей привязки удаляет ребро, а роль
@@ -584,21 +765,44 @@ export async function execute(
         // менять его ради этого не за что.)
         const recomputeOps = await applyAncestorRecompute(ctx, allPlans);
         const refOps = await applyRefEffects(ctx, allPlans);
-        await writeJournal(ctx, {
-          ...plan.journal,
-          operations: [
-            ...allPlans.flatMap((p) => p.journal.operations),
+        consequences = consequencesOf([plan], followUps, [...recomputeOps, ...refOps]);
+        if (plan.journal.textSession === true) {
+          // Сеанс правки текста (§8.5): вход — только тело, дописанных операций у записи сеанса быть не может — ни у
+          // новой (её операции — без «после»), ни у продолженной (своей записи нет, их данные отмены терялись бы молча).
+          assertNothingAppended(ctx.continuedSession ?? actionId, [
+            ...followUps.flatMap((p) => p.journal.operations),
             ...recomputeOps,
             ...refOps,
-          ],
-          inverse: aggregateInverse(allPlans),
-        });
+          ]);
+        }
+        // Продолженный сеанс: правка легла в запись сеанса, своей записи журнала у неё нет
+        if (ctx.continuedSession === undefined) {
+          await writeJournal(ctx, {
+            ...plan.journal,
+            operations: [
+              ...allPlans.flatMap((p) => p.journal.operations),
+              ...recomputeOps,
+              ...refOps,
+            ],
+            inverse: aggregateInverse(allPlans),
+            bodyBefore: collectBodyBefore(allPlans),
+          });
+        }
       }
+      // Действующее действие тела для ответа правки (§8.2, R-22) — в ЭТОЙ транзакции, по строке `RETURNING`: без
+      // отдельной читающей транзакции роутера на каждом автосохранении
+      const reported =
+        deps.reportBodyAction === true && out.row !== undefined
+          ? await reportedBodyAction(ctx, plan, out.row)
+          : undefined;
       return {
         ok: true as const,
-        actionId,
+        // У продолжения сеанса — id записи сеанса (§8.2): её отменяют и её называет ответ
+        actionId: ctx.continuedSession ?? actionId,
         results: [out.result],
         idempotentReplay: out.replay === true,
+        consequences,
+        ...(reported !== undefined && { bodyAction: reported }),
       };
     });
   } catch (e) {
@@ -655,14 +859,16 @@ async function executeBatch(
     ops = req.operations;
   }
 
-  // Идемпотентность §7.8: детерминированный PK audit-сообщения
-  const auditId = batchAuditMessageId(req.identity.graph, batchId);
-
+  // Идемпотентность §7.8: ключ записи пачки в журнале — сам batch_id (`(graph_id, id)`, спека скорости §11.2)
+  const bodyAction = bodyActionOf(sink, internalUndo, batchId);
+  let replayChecked = false;
   try {
     return await withIdentity(db, req.identity, async (tx) => {
+      // Действие текущего тела — ОДНО на всю пачку (§8.1, см. одиночный путь): её строка журнала одна, id = batch_id
+      await declareBodyAction(tx, bodyAction);
       // Шов сериализации §7.10 — до первого чтения состояния, ДО replay-проверки и стадий
       // (см. ExecutorDeps.beforeStages): конкурентный reject либо закоммичен (проверка
-      // beforeStages его увидит), либо ждёт этот tx и увидит audit-сообщение
+      // beforeStages его увидит), либо ждёт этот tx и увидит запись журнала
       if (beforeStages) await beforeStages(tx);
       // Снимок реестра — ДО замка контура (см. одиночный путь: плановые SELECT'ы в цикл
       // ожидания не входят, а предикат контура без реестра неполон — Р-27)
@@ -673,6 +879,9 @@ async function executeBatch(
       // за ним замки правил уникальности — тем же порядком, что на одиночном пути
       await lockBudgetContour(tx, registry, req.identity.graph, ops);
       await lockUniqueAmongRules(tx, registry, req.identity.graph, ops);
+      // Единое правило отмены текста (§8.6) — тем же местом, что на одиночном пути: до стадий всех операций пачки
+      // (закрепления версий идут первыми операциями, и отказ правила не оставляет ни одной из них)
+      if (internalUndo) await assertUndoTextRule(tx, req.identity.graph, internalUndo);
       const ctx: ExecCtx = {
         tx,
         registry,
@@ -684,12 +893,14 @@ async function executeBatch(
         clock,
         sink,
         internalUndo,
+        bodyAction,
       };
 
       // Повтор batch_id: вернуть сохранённый результат, ничего не применяя (§7.8, §13.4).
       // Внутренний режим undo не идемпотентен по batch_id (id технический) — не проверяем.
       if (!internalUndo) {
-        const existing = await sink.findByAuditId(tx, auditId);
+        const existing = await sink.findBatchWrite(tx, req.identity.graph, batchId);
+        replayChecked = true;
         if (existing) return replayFromAudit(batchId, existing);
       }
 
@@ -718,7 +929,7 @@ async function executeBatch(
       }
 
       // Стадии 6–7. Внутренний режим undo: вместо action тем же tx пишется
-      // undo-сообщение (undo не порождает нового action — undo неотменяем, §7.8)
+      // запись отмены (undo не порождает нового action — undo неотменяем, §7.8)
       if (internalUndo) {
         // См. одиночный путь: откату пересчёт предков и сведение зеркал нужны, журнала нет.
         await applyAncestorRecompute(ctx, plans);
@@ -726,8 +937,14 @@ async function executeBatch(
         // Кэш spent — см. одиночный путь: откат идёт мимо хука, задетые сущности планами не
         // выражены, снос владельца дешевле неполной модели.
         await invalidateSpentCacheOfOwner(tx, req.identity.graph);
-        await internalUndo.writeUndoMessage(tx);
-        return { ok: true as const, actionId: batchId, results, idempotentReplay: false };
+        await writeUndoRecord(ctx, internalUndo, plans);
+        return {
+          ok: true as const,
+          actionId: batchId,
+          results,
+          idempotentReplay: false,
+          consequences: false,
+        };
       }
       // Бюджет-хук A4 (§2.3): после применения ВСЕХ операций batch — привязка/ребиндинг
       // тем же tx. Дописанные операции входят в тот же action (Undo откатывает целиком);
@@ -743,8 +960,14 @@ async function executeBatch(
       // Пересчёт предков — после бюджет-хука (см. одиночный путь).
       const recomputeOps = await applyAncestorRecompute(ctx, allPlans);
       const refOps = await applyRefEffects(ctx, allPlans);
+      const consequences = consequencesOf(
+        plans,
+        [...followUps, ...homeFollowUps],
+        [...recomputeOps, ...refOps],
+      );
       // Обычный batch: ОДИН action на весь batch, id = batch_id; inverse — в обратном
-      // порядке исполнения (§7.8). PK audit-сообщения — batchAuditMessageId.
+      // порядке исполнения (§7.8). Ключ строки журнала — `(graph_id, batch_id)`.
+      const bodyBefore = collectBodyBefore(allPlans);
       const action: ActionRecord = {
         id: batchId,
         // §Б6-4: строка действия отличима от голой пачки ТИПОМ, а не догадкой по metadata.
@@ -762,9 +985,9 @@ async function executeBatch(
         ...(req.action?.module != null && { module: req.action.module }),
         operations: [...allPlans.flatMap((p) => p.journal.operations), ...recomputeOps, ...refOps],
         inverse: aggregateInverse(allPlans),
+        body_before: bodyBefore,
       };
       await sink.write(tx, {
-        id: auditId,
         graphId: req.identity.graph,
         threadId: req.threadId,
         action,
@@ -779,15 +1002,43 @@ async function executeBatch(
               : (req.batchLabel ?? `batch: операций — ${ops.length}`),
         },
         results,
+        consequences,
+        ...(req.cardInReply !== undefined && { cardInReply: req.cardInReply }),
       });
-      return { ok: true as const, actionId: batchId, results, idempotentReplay: false };
+      return {
+        ok: true as const,
+        actionId: batchId,
+        results,
+        idempotentReplay: false,
+        consequences,
+      };
     });
   } catch (e) {
-    // Гонка одинаковых batch'ей: конкурент вставил audit-сообщение первым → конфликт PK
-    // (23505) → tx уже откачен → читаем сохранённый результат отдельным tx (§7.8)
-    if (e instanceof AuditIdConflictError) {
-      const saved = await withIdentity(db, req.identity, (tx) => sink.findByAuditId(tx, auditId));
+    // Конкурент мог сохранить эту пачку, пока мы ждали замка: проигравшая подготовка тоже может
+    // отказать до INSERT журнала. tx уже откачен — восстанавливаем исходный результат (§7.8, R-39).
+    // Ранние гейты (beforeStages, RLS треда) должны пройти ДО любого replay; internalUndo должен
+    // исполнить inverse, а не вернуть сохранённое прямое действие.
+    if (!internalUndo && replayChecked) {
+      const saved = await withIdentity(db, req.identity, (tx) =>
+        sink.findBatchWrite(tx, req.identity.graph, batchId),
+      ).catch(() => {
+        // Без доступного журнала replay не доказан: сохраняем исходный реальный отказ.
+        throw e;
+      });
       if (saved) return replayFromAudit(batchId, saved);
+    }
+    if (e instanceof AuditIdConflictError) {
+      // Ключ занят записью, которая пачкой не является (РП-12): клиентский batch_id совпал с id одиночного действия
+      // графа — ключи журнала одно пространство `(graph_id, id)`. Это не повтор: чужая запись не отдаётся, пачка
+      // откачена. Отказ — тот же, что у занятого client-UUID сообщения (`appendMessageIdempotent`).
+      throw new ExecError(
+        'CONFLICT',
+        'batch_id занят другой записью журнала — сгенерируйте новый UUID',
+        {
+          batchId,
+          reason: 'id_conflict',
+        },
+      );
     }
     throw e;
   }
@@ -799,6 +1050,8 @@ function replayFromAudit(batchId: string, saved: JournalWrite): ExecuteResult {
     actionId: batchId,
     results: saved.results ?? [],
     idempotentReplay: true,
+    // Старый массив не хранил признак: отсутствие не позволяет достоверно восстановить исторические правила (R-32).
+    consequences: saved.consequences ?? false,
   };
 }
 
@@ -1191,6 +1444,7 @@ async function prepareOp(
   if (tool === 'aspect_row_restore') return prepareAspectRowRestore(ctx, input);
   if (tool === 'rule_delta_restore') return prepareRuleDeltaRestore(ctx, input);
   if (tool === 'module_set') return prepareModuleSet(ctx, input);
+  if (tool === 'settings_set') return prepareSettingsSet(ctx, input);
   if (tool === 'property_row_restore') return preparePropertyRowRestore(ctx, input);
   if (tool === 'property_merge_undo') return preparePropertyMergeUndo(ctx, input);
   if (tool.startsWith('attach_')) {
@@ -1258,13 +1512,95 @@ async function writeJournal(ctx: ExecCtx, p: JournalPlan): Promise<void> {
     ...(ctx.req.editedFrom !== undefined && { edited_from: ctx.req.editedFrom }),
     operations: p.operations,
     inverse: p.inverse,
+    // Всегда — пустой объект, когда тело не сменилось ни у одной записи (R-21): `NULL` остаётся признаком перенесённой
+    // записи (см. `collectBodyBefore`)
+    body_before: p.bodyBefore ?? {},
+    ...(p.textSession === true && { text_session: true }),
   };
   await ctx.sink.write(ctx.tx, {
     graphId: ctx.req.identity.graph,
     threadId: ctx.req.threadId,
     action,
     card: { tool: p.tool, entity_id: p.entityId, title: p.title },
+    ...(ctx.req.cardInReply !== undefined && { cardInReply: ctx.req.cardInReply }),
   });
+}
+
+/**
+ * Запись отмены (внутренний режим, §7.8, РП-11) — ПОСЛЕ применения inverse ТЕМ ЖЕ tx: сначала перепроверка «уже
+ * отменено» и снятие пометок ссылок (`onApplied`, `undo.ts`), затем строка `type:'undo'` с id, заведённым до
+ * применения. Операции записи — применённый inverse отменённого действия (аудит, К-45): ровно его исполнитель
+ * прогнал как тулы.
+ *
+ * «Действие тела до» (§8.6 «Цепочка») — из планов применённого inverse, тем же сбором, что у действий: отмена тоже
+ * меняет тело (её id становится действием текущего тела), и раскрутка цепочки через запись отмены читает колонку ДО
+ * неё. Закрепления версий (страховка сеанса правки текста, продолжение «Всё равно отменить» — К-20, К-30) — ПЕРВЫЕ
+ * операции запроса отмены (`applyUndo`), по одной на запись из `undo.pinned`: они ложатся первыми операциями записи
+ * отмены, их id — в `pinned_version_ids`.
+ */
+async function writeUndoRecord(
+  ctx: ExecCtx,
+  undo: InternalUndoMode,
+  plans: readonly PreparedOp[],
+): Promise<void> {
+  await undo.onApplied(ctx.tx);
+  const pins = plans.slice(0, undo.pinned.size);
+  await ctx.sink.writeUndo(ctx.tx, {
+    graphId: ctx.req.identity.graph,
+    undoRecordId: undo.undoRecordId,
+    undoing: undo.undoing,
+    path: undo.path,
+    actorUserId: ctx.req.identity.actor,
+    operations: [...pins.flatMap((p) => p.journal.operations), ...undo.undoing.inverse],
+    pinnedVersionIds: pins.map(pinnedVersionIdOf),
+    bodyBefore: collectBodyBefore(plans),
+  });
+}
+
+/**
+ * id версии, которую закрепила операция записи отмены. Не закрепление на месте закрепления — поломка сборки запроса
+ * отмены (`applyUndo` кладёт закрепления первыми), а не отказ: исключение откатывает транзакцию, и запись отмены с
+ * чужой операцией под видом страховки не ложится.
+ */
+function pinnedVersionIdOf(plan: PreparedOp): string {
+  const id = plan.journal.operations[0]?.payload.id;
+  if (plan.journal.type !== 'version_pinned' || typeof id !== 'string') {
+    throw new Error(
+      `инвариант записи отмены (§8.6): на месте закрепления версии — ${plan.journal.type}`,
+    );
+  }
+  return id;
+}
+
+/**
+ * Действующее действие текущего тела записи после одиночной правки (§8.2 «ответы с записью», рулинг R-22). Колонки — из
+ * строки `RETURNING`. Колонку поставило это же действие — его запись журнала легла этой транзакцией, и ответ собирается
+ * без запроса: новое действие — из запроса и плана (начало — `now()` транзакции, оно же время записи журнала),
+ * продолжение сеанса — из записи сеанса, прочитанной пробой. Колонку правка не трогала (заголовок, свойства, тег) —
+ * общий путь `bodyActionOf`: один запрос за живым действием колонки, раскрутка — только у записи отмены.
+ */
+async function reportedBodyAction(
+  ctx: ExecCtx,
+  plan: PreparedOp,
+  row: EntityRow,
+): Promise<BodyActionInfo | null> {
+  const raw = row.bodyActionId;
+  if (raw === null) return null;
+  if (ctx.continuedSessionEntry !== undefined && raw === ctx.continuedSessionEntry.id) {
+    return bodyActionInfo(ctx.continuedSessionEntry, ctx.req.identity, row);
+  }
+  if (raw === ctx.actionId.toLowerCase() && ctx.txNow !== undefined) {
+    return {
+      actionId: raw,
+      textSession: plan.journal.textSession === true,
+      // Действие пишется от имени этой же пары: «моё» — ровно когда актор — человек-владелец
+      mine: ctx.req.actorKind === 'owner',
+      actorKind: ctx.req.actorKind,
+      startedAt: ctx.txNow.toISOString(),
+      endedAt: row.bodyChangedAt.toISOString(),
+    };
+  }
+  return currentBodyActionOf(ctx.tx, ctx.req.identity, row);
 }
 
 /** Inverse планов в порядке отката: обратный порядок исполнения, внутри плана — тоже (§7.8). */
@@ -2060,7 +2396,8 @@ async function prepareEntityCreate(
   // проект, заведённый чатом, MCP и UI, получает одно и то же тело. У create «тело до
   // операции» — это канон входа (пусто, если body не прислали ИЛИ прислали пустую строку:
   // что считать телом входа, решает hasBodyInInput — одно правило на все три пути).
-  if (needsProjectSeed(undefined, state, body, hasBodyInInput(input))) {
+  const seededBody = needsProjectSeed(undefined, state, body, hasBodyInInput(input));
+  if (seededBody) {
     ({ body, bodyDoc, bodyRefs, queryRefs } = bodyFieldsFromMarkdown(
       projectBodyTemplate(id),
       ctx.registry,
@@ -2098,8 +2435,11 @@ async function prepareEntityCreate(
     updatedAt: now,
     archived: false,
   };
+  // Виртуальная строка — с колонками тела, которые поставит INSERT-ветка триггера (РП-17): правка тела той же записи
+  // дальше в пачке сверяется с ревизией 1, а не с пустотой. В `values` (вставку) их нет — колонки пишет только триггер.
+  const created = { ...values, ...createdBodyStamp(ctx.bodyAction, now) } as EntityRow;
   // Эффект batch: созданная строка видна стадиям 3–4 следующих операций
-  batch?.entities.set(id, values as EntityRow);
+  batch?.entities.set(id, created);
 
   const journal: JournalPlan = {
     type: 'entity_created',
@@ -2133,8 +2473,10 @@ async function prepareEntityCreate(
   const inBatch = batch !== undefined;
   return {
     journal,
-    budgetHook: { before: null, after: values as EntityRow },
-    ...homeHookOf(null, values as EntityRow),
+    budgetHook: { before: null, after: created },
+    touchedProperties: touchedProperties(propsPatch),
+    seededBody,
+    ...homeHookOf(null, created),
     ...refWrite,
     // Стадия 5: идемпотентная вставка по client-UUID (§5.3, §9.1)
     async apply(applyCtx: ExecCtx): Promise<OpOutcome> {
@@ -2165,9 +2507,9 @@ async function prepareEntityCreate(
             reason: 'id_conflict',
           });
         }
-        return { result: toWire(own), replay: true };
+        return { result: toWireEntityWithRevision(own), replay: true };
       }
-      return { result: toWire(row) };
+      return { result: toWireEntityWithRevision(row) };
     },
   };
 }
@@ -2208,28 +2550,41 @@ async function prepareEntityUpdate(
   // предусловий не встречает — inverse их не несёт, поэтому отдельной ветки здесь нет.
   if (input.precondition) assertPrecondition(ctx.registry, input.precondition, before, current);
 
-  // §5.2: правка body требует optimistic-check по updated_at; патчи без body — LWW.
-  // Внутренний режим undo (§7.8) требование ПРОПУСКАЕТ: Undo восстанавливает
-  // зафиксированное в журнале прежнее состояние поверх текущего — это осознанный
-  // LWW-откат, а не пользовательская правка (inverse не несёт expectedUpdatedAt).
+  // Замок ТЕКСТА (спека скорости §8.1, D3 уточнён): правка тела сверяет РЕВИЗИЮ ТЕЛА строки под FOR UPDATE (в пачке —
+  // виртуальной строки, где триггер повторён в памяти, РП-17), а не `updated_at` записи. Ревизию двигает только смена
+  // тела, поэтому правка статуса, свойства, тега или заголовка между чтением и сохранением текста замка не краснит;
+  // патчи без тела — LWW, как и прежде. Внутренний режим undo (§7.8) требование ПРОПУСКАЕТ: Undo восстанавливает
+  // зафиксированное в журнале прежнее состояние поверх текущего — это осознанный LWW-откат, а не пользовательская
+  // правка (inverse ревизии не несёт).
   //
   // ОБА поля тела под одним гейтом: сохранения редактора едут ТОЛЬКО bodyDoc, и пока условие
   // смотрело на один input.body, они проходили мимо — 409 не наступал никогда, а конкурентная
   // правка затиралась молча (ревью Б3).
   if ((input.body !== undefined || input.bodyDoc !== undefined) && ctx.internalUndo === undefined) {
-    if (input.expectedUpdatedAt === undefined) {
-      throw new ExecError('VALIDATION', 'правка body требует expectedUpdatedAt (§5.2)', {
+    if (input.expectedBodyRevision === undefined) {
+      throw new ExecError('VALIDATION', 'правка body требует expectedBodyRevision (§8.1)', {
         id: input.id,
       });
     }
-    const currentIso = current.updatedAt.toISOString();
-    if (currentIso !== input.expectedUpdatedAt) {
+    if (current.bodyRevision !== input.expectedBodyRevision) {
       throw new ExecError(
         'STALE_VERSION',
-        'body изменён конкурентно: перечитайте запись и повторите правку (§5.2)',
-        { id: input.id, expected: input.expectedUpdatedAt, current: currentIso },
+        'текст изменён конкурентно: перечитайте запись и повторите правку (§8.1)',
+        { id: input.id, expected: input.expectedBodyRevision, current: current.bodyRevision },
       );
     }
+  }
+
+  // Сеанс правки текста (§8.5, `text-session.ts`) — после замка текста, по строке под FOR UPDATE: она же сериализует
+  // гонку двух автосохранений. Только одиночный путь: у пачки сеанса нет (`assertTextSessionRequest`). Продолжение
+  // объявляет действие заново — id сеанса S (РП-16): триггер поставит колонке S, записи этой транзакции не будет.
+  const textSession = ctx.req.textSession === true && batch === undefined;
+  const continued = textSession ? await sessionToContinue(ctx, current) : null;
+  if (continued !== null) {
+    await declareBodyAction(ctx.tx, continued.id);
+    ctx.bodyAction = continued.id;
+    ctx.continuedSession = continued.id;
+    ctx.continuedSessionEntry = continued;
   }
 
   const now = ctx.clock();
@@ -2506,8 +2861,6 @@ async function prepareEntityUpdate(
     // и связи из него достаёт регэксп (Б2: backlinks не зависят от разбираемости тела).
     patch.bodyRefs = bodyRefsFromDoc(storedDoc);
     patch.queryRefs = queryRefsFromDoc(storedDoc);
-    changed.body = body;
-    prior.body = current.body;
   } else if (
     ctx.internalUndo === undefined &&
     needsProjectSeed(before, state, current.body, hasBodyInInput(input))
@@ -2515,7 +2868,7 @@ async function prepareEntityUpdate(
     // Заготовка тела проекта (С10). Ветка стоит ПЕРЕД строковой намеренно: `body: ''` — это
     // «тела не прислали» (hasBodyInInput), и строковая ветка записала бы пустоту, отменив
     // засев. Документ во входе разобран веткой выше — он телом считается всегда, даже пустой.
-    // Гейт expectedUpdatedAt (§5.2) не срабатывает и срабатывать не должен: он смотрит на
+    // Замок текста (§8.1) не срабатывает и срабатывать не должен: он смотрит на
     // ВХОД, а не на патч, и терять тут нечего — тело пусто.
     const seeded = bodyFieldsFromMarkdown(projectBodyTemplate(input.id), ctx.registry);
     patch.body = seeded.body;
@@ -2523,10 +2876,8 @@ async function prepareEntityUpdate(
     preserveBodyBeforeDoc(patch, current);
     patch.bodyRefs = seeded.bodyRefs;
     patch.queryRefs = seeded.queryRefs;
-    // Засев — часть эффекта операции, поэтому едет и в журнал: undo вернёт пустое тело
+    // Засев — часть эффекта операции, поэтому едет и в журнал (ниже, общим правилом): undo вернёт пустое тело
     // вместе с аспектом, а не оставит заготовку на сущности, которая проектом быть перестала.
-    changed.body = seeded.body;
-    prior.body = current.body;
   } else if (input.body !== undefined) {
     // КАНОН, а не input.body: body — производная документа, и сравнивать «как написала
     // модель» бессмысленно (вердикт Б1). FTS не страдает (проверено спайком), сиды каноничны.
@@ -2536,7 +2887,14 @@ async function prepareEntityUpdate(
     preserveBodyBeforeDoc(patch, current);
     patch.bodyRefs = bodyRefs; // дерево ∪ raw — backlinks не теряются (Б2)
     patch.queryRefs = queryRefs;
-    changed.body = body;
+  }
+  // Тело — в журнал (и в данные отмены) ТОЛЬКО при реальной смене текста (рулинг R-21): тем же признаком, по которому
+  // триггер сдвигает ревизию (`bodyChanges` — `IS DISTINCT FROM` по `body` и `body_doc`; в пачке — против виртуальной
+  // строки). Тело, присланное тем же текстом, отмена писать не должна: иначе она молча стёрла бы текст, набранный
+  // после действия, мимо правила §8.6 (оно касается записей, чью ревизию действие сдвинуло, — ключей «действия тела
+  // до»), а у записи без смены тела ложно отказывала бы. «Данные отмены пишут тело» ⇔ «ключ «действия тела до»».
+  if (patch.body !== undefined && bodyChanges(current, patch)) {
+    changed.body = patch.body;
     prior.body = current.body;
   }
   if (input.tags !== undefined) {
@@ -2569,22 +2927,35 @@ async function prepareEntityUpdate(
   Object.assign(prior, stateDelta(state, before));
   gateEntitlements(ctx, 'entity_update');
 
-  // Эффект batch: строка после патча видна следующим операциям
-  const afterRow = { ...current, ...patch } as EntityRow;
+  // Эффект batch: строка после патча видна следующим операциям — с приращением ревизии тела, которое сделает триггер
+  // (РП-17): иначе вторая правка тела той же записи в пачке сверялась бы с устаревшей ревизией (Д-13).
+  const afterRow = stampVirtualBody(current, patch, ctx.bodyAction, now);
   batch?.entities.set(input.id, afterRow);
+  // «До» считается от строки, прочитанной под замком (в пачке — виртуальной); ляжет в журнал, только если тело
+  // действительно сменится (`noteBodyBefore` в apply).
+  const writesBody = patch.body !== undefined || patch.bodyDoc !== undefined;
+  const bodyBefore = bodyActionBefore(current.bodyActionId, ctx.bodyAction);
 
   const journal: JournalPlan = {
     type: 'entity_updated',
     entityId: input.id,
     tool: 'entity_update',
     title: input.title ?? current.title,
-    operations: [{ op: 'entity_update', payload: { id: input.id, ...changed } }],
+    // Запись сеанса правки текста — без «после» (§8.5): после — текущий текст самой записи
+    operations: textSession
+      ? sessionOperations(input.id)
+      : [{ op: 'entity_update', payload: { id: input.id, ...changed } }],
     inverse: [{ op: 'entity_update', payload: { id: input.id, ...prior } }],
+    ...(textSession && { textSession: true as const }),
   };
 
   return {
     journal,
     budgetHook: { before: current, after: afterRow },
+    touchedProperties: touchedProperties(propsPatch),
+    seededBody:
+      ctx.internalUndo === undefined &&
+      needsProjectSeed(before, state, current.body, hasBodyInInput(input)),
     ...homeHookOf(current, afterRow),
     ...ancestorRootsOnProjectChange(ctx.registry, input.id, before, state),
     // Ссылочная половина записи (§А6): проверка целей и зеркала — после стадии 5.
@@ -2601,7 +2972,8 @@ async function prepareEntityUpdate(
         .returning();
       const row = updated[0];
       if (!row) throw new ExecError('NOT_FOUND', 'запись не найдена', { id: input.id });
-      return { result: toWire(row) };
+      if (writesBody) noteBodyBefore(journal, row, current, bodyBefore);
+      return { result: toWireEntityWithRevision(row), row };
     },
   };
 }
@@ -2736,8 +3108,10 @@ async function prepareAttach(
     patch.bodyRefs = seed.bodyRefs;
     patch.queryRefs = seed.queryRefs;
   }
-  const afterRow = { ...current, ...patch } as EntityRow;
+  // Засев — тоже смена тела: виртуальная строка повторяет приращение триггера (РП-17), «до» — как у правки тела.
+  const afterRow = stampVirtualBody(current, patch, ctx.bodyAction, now);
   batch?.entities.set(input.entity_id, afterRow);
+  const bodyBefore = bodyActionBefore(current.bodyActionId, ctx.bodyAction);
 
   const journal: JournalPlan = {
     type: 'entity_updated',
@@ -2760,7 +3134,8 @@ async function prepareAttach(
         payload: {
           id: input.entity_id,
           ...stateDelta(state, before),
-          ...(seed !== undefined ? { body: current.body } : {}),
+          // Тело — только при реальной смене (R-21, то же правило, что у правки тела)
+          ...(seed !== undefined && bodyChanges(current, patch) ? { body: current.body } : {}),
         },
       },
     ],
@@ -2769,6 +3144,8 @@ async function prepareAttach(
   return {
     journal,
     budgetHook: { before: current, after: afterRow },
+    touchedProperties: touchedProperties(propsPatch),
+    seededBody: seed !== undefined,
     // Тот же признак, что у `entity_update`: attach навешивает «приложение» с местами, и два пути
     // записи одних свойств не должны разъезжаться (довод `ancestorRootsOnProjectChange`).
     ...homeHookOf(current, afterRow),
@@ -2784,7 +3161,8 @@ async function prepareAttach(
         .returning();
       const row = updated[0];
       if (!row) throw new ExecError('NOT_FOUND', 'запись не найдена', { id: input.entity_id });
-      return { result: toWire(row) };
+      if (seed !== undefined) noteBodyBefore(journal, row, current, bodyBefore);
+      return { result: toWireEntityWithRevision(row) };
     },
   };
 }
@@ -3536,13 +3914,29 @@ const propertyMergeUndoInput = z
           // восстановленного документа.
           bodyRefs: z.array(z.string()).optional(),
           queryRefs: z.array(z.string()).optional(),
+          // «Действие тела до» держателя (§8.6) — ОПЦИОНАЛЬНО тем же доводом: слияния, записанные до колонок тела
+          // (0026), ключа не несут. Откат его не пишет (колонку ставит триггер), но строгая схема обязана его принять.
+          bodyActionBefore: z.string().uuid().nullable().optional(),
         })
         .strict(),
     ),
     // ОПЦИОНАЛЬНО, и это не небрежность: журнал append-only (§4.6), и действия, записанные
     // до появления четвёртого рода держателей (дельты), ключа `deltas` не несут вовсе.
     // Требовать его значило бы сделать неоткатываемыми вчерашние слияния владельца.
-    deltas: z.array(z.object({ id: z.string().uuid(), delta: z.unknown() }).strict()).optional(),
+    deltas: z
+      .array(
+        z
+          .object({
+            id: z.string().uuid(),
+            delta: z.unknown(),
+            target: z
+              .object({ kind: z.enum(REGISTRY_DELTA_TARGET_KINDS), id: z.string().min(1) })
+              .strict()
+              .optional(),
+          })
+          .strict(),
+      )
+      .optional(),
     // Тем же порядком и по той же причине — id зеркал-рёбер (§А6-2), чью подпись слияние
     // перевело на цель; у слияний, записанных до этого, ключа нет.
     mirrors: z.array(z.string().uuid()).optional(),
@@ -3560,6 +3954,7 @@ const propertyMergeUndoInput = z
           .object({
             carrier: z.enum(['aspect', 'property', 'role']),
             id: z.string().min(1),
+            key: z.string().min(1).optional(),
             rules: z.unknown(),
           })
           .strict(),
@@ -3732,7 +4127,12 @@ async function preparePropertyMerge(_ctx: ExecCtx, rawInput: unknown): Promise<P
       registryGate(applyCtx, 'property_merge', { properties: [input.source, input.into] });
       // Гейт R-13: слияние в свойство с `writer` (или из него) записало бы его значения SQL-ом.
       writerGate(applyCtx, 'property_merge', [input.source, input.into]);
-      const merged = await mergeProperty(applyCtx.tx, applyCtx.req.identity.graph, input);
+      const merged = await mergeProperty(
+        applyCtx.tx,
+        applyCtx.req.identity.graph,
+        input,
+        applyCtx.bodyAction,
+      );
       // §Б5-5: слияние переписало props носителей — состав spent мог измениться у любого
       // конверта. Половина владельца в `registry_version` тоже сдвинулась (`registry/ops.ts`)
       // и строки перестали бы отвечать сами; снос — чтобы они не пережили пересчёт мусором.
@@ -3754,6 +4154,9 @@ async function preparePropertyMerge(_ctx: ExecCtx, rawInput: unknown): Promise<P
         op: 'property_merge_undo',
         payload: merged.inverse as unknown as Record<string, unknown>,
       });
+      // «Действие тела до» держателей, чьё тело слияние сменило (§8.6): сырой SQL тел писал под объявленным действием
+      // транзакции, и цепочке отмены нужно значение колонки до него.
+      if (Object.keys(merged.bodyBefore).length > 0) journal.bodyBefore = merged.bodyBefore;
       return {
         result: {
           source,
@@ -3820,6 +4223,70 @@ async function prepareModuleSet(ctx: ExecCtx, rawInput: unknown): Promise<Prepar
         payload: { module: input.module, enabled: wasEnabled },
       });
       return { result: { module: input.module, enabled: input.enabled } };
+    },
+  };
+}
+
+const SETTINGS_LABELS: Record<keyof SettingsSetInput, string> = {
+  timezone: 'часовой пояс',
+  defaultCurrency: 'валюта',
+  weekStartDay: 'начало недели',
+  tagColors: 'цвета тегов',
+  installedViews: 'виды',
+  pinnedEntities: 'записи на главной',
+  viewPreferences: 'вид списков',
+};
+
+/**
+ * Правка настроек владельца (спека скорости §10.2 п. 1): через executor, с журналом и Undo — до этой задачи ручка писала
+ * `user_settings` прямым UPDATE мимо журнала, и у одного вида данных было два пути (включение расширений — уже executor).
+ * ВНУТРЕННЯЯ операция, как `module_set`: в реестре тулов её нет, единственный вход — `user.updateSettings`.
+ * Гейт по актору — защита в глубину (довод `prepareModuleSet`). Inverse — прежние значения ТРОНУТЫХ полей, прочитанные
+ * под замком строки, а не «обратное входу».
+ */
+async function prepareSettingsSet(ctx: ExecCtx, rawInput: unknown): Promise<PreparedOp> {
+  if (ctx.req.actorKind !== 'owner') {
+    throw new ExecError('FORBIDDEN_LEVEL', 'правка настроек — операция владельца (§10.2)', {
+      tool: 'settings_set',
+      actorKind: ctx.req.actorKind,
+    });
+  }
+  const input = parseEnvelope(settingsSetInput, rawInput, 'settings_set');
+  const fields = Object.keys(input) as Array<keyof SettingsSetInput>;
+  // Обычные настройки — данные графа, не перенастройка реестра: registryPlan обозначает
+  // именно его писателей для инварианта §С8-23. Отмена настроек остаётся без подтверждения.
+  const journal: JournalPlan = {
+    type: 'settings_set',
+    entityId: null,
+    tool: 'settings_set',
+    title: `Настройки: ${fields.map((f) => SETTINGS_LABELS[f]).join(', ')}`,
+    operations: [],
+    inverse: [],
+  };
+  return {
+    journal,
+    async apply(applyCtx: ExecCtx): Promise<OpOutcome> {
+      const graph = applyCtx.req.identity.graph;
+      const [before] = await applyCtx.tx
+        .select()
+        .from(userSettings)
+        .where(eq(userSettings.graphId, graph))
+        .for('update');
+      if (before === undefined)
+        throw new ExecError('NOT_FOUND', 'настройки не найдены', { graphId: graph });
+      const [after] = await applyCtx.tx
+        .update(userSettings)
+        .set({ ...input, updatedAt: applyCtx.clock() })
+        .where(eq(userSettings.graphId, graph))
+        .returning();
+      if (after === undefined)
+        throw new ExecError('NOT_FOUND', 'настройки не найдены', { graphId: graph });
+      journal.operations.push({ op: 'settings_set', payload: { ...input } });
+      journal.inverse.push({
+        op: 'settings_set',
+        payload: Object.fromEntries(fields.map((f) => [f, before[f]])),
+      });
+      return { result: toWireUserSettings(after) };
     },
   };
 }
@@ -4008,7 +4475,7 @@ async function prepareAspectImplementsRemove(
  * устройство хранилища.
  *
  * ПОЧЕМУ СВОЯ ПОДПИСКА НА ЗАНЯТУЮ ПОВЕРХНОСТЬ — ОТКАЗ, А НЕ ЗАПИСЬ. Движки Б-1 адресуют
- * подписку ПО ID (`agendaSubscriptionOf`, `budgetOverviewOf`), а не по поверхности: своя
+ * подписку ПО ID (`budgetOverviewOf`), а не по поверхности: своя
  * строка рядом с системной легла бы в снимок и не была бы прочитана никем — тул отрапортовал
  * бы успех о настройке, которой не видно нигде. Условие снятия гейта названо: движок начнёт
  * выбирать подписку поверхности по `rank` (§Б5-1) — тогда здесь останется только проверка
@@ -4596,7 +5063,14 @@ async function preparePropertyMergeUndo(_ctx: ExecCtx, rawInput: unknown): Promi
   return {
     journal,
     async apply(applyCtx: ExecCtx): Promise<OpOutcome> {
-      await undoMerge(applyCtx.tx, applyCtx.req.identity.graph, input as unknown as MergeInverse);
+      const undone = await undoMerge(
+        applyCtx.tx,
+        applyCtx.req.identity.graph,
+        input as unknown as MergeInverse,
+        applyCtx.bodyAction,
+      );
+      // Запись отмены хранит «действие тела до» держателей, чьё тело откат сменил (§8.6) — тем же сбором, что у действий
+      if (Object.keys(undone.bodyBefore).length > 0) journal.bodyBefore = undone.bodyBefore;
       return {
         result: {
           source: input.source,

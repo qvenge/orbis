@@ -48,7 +48,7 @@ type RetryState = {
    * ниже), а кнопок досыла и автосливов — сколько угодно, и каждая обязана видеть чужой.
    */
   flushing: boolean;
-  enqueueCreate: (input: EntityCreateInput, source: 'fast_path') => QueuedCreate;
+  enqueueCreate: (input: EntityCreateInput, source: 'fast_path', threadId?: string) => QueuedCreate;
   /** Возвращает число подтверждённых операций — на нём висит инвалидация графа. */
   flushNow: () => Promise<number>;
   cancel: (clientId: string) => void;
@@ -63,12 +63,12 @@ function snapshot(): { size: number; pending: QueuedCreate[] } {
 export const useRetryBuffer = create<RetryState>((set) => ({
   ...snapshot(),
   flushing: false,
-  enqueueCreate: (input, source) => {
+  enqueueCreate: (input, source, threadId) => {
     // id из парсера — тот самый UUID, который (возможно) уже принят сервером в упавшей
     // онлайн-попытке: сохраняем его как clientId, иначе ретрай создаст вторую сущность.
     const op = buffer.enqueue({
       tool: 'entity.create',
-      payload: { input, source },
+      payload: { input, source, ...(threadId && { threadId }) },
       clientId: input.id,
     });
     set(snapshot());

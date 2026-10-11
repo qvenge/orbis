@@ -14,14 +14,17 @@
 import type {
   AspectDefinition,
   ContractDefinition,
+  JournalRef,
   PropertyDefinition,
   RelationRoleDefinition,
 } from '@orbis/shared';
 import { z } from 'zod';
 import { withIdentity } from '../db/with-identity';
 import { execErrorToTRPC } from '../errors';
+import type { WireRegistryResult } from '../executor/executor';
 import { execute } from '../executor/executor';
-import { makeChatJournalSink } from '../executor/journal';
+import { makeJournalSink } from '../executor/journal';
+import { journalRef } from '../executor/journal-ref';
 import type { Identity } from '../identity';
 import { reportMergeConflictUnit } from '../policy/pending';
 import { effectiveRegistry } from '../registry/cache';
@@ -49,7 +52,7 @@ import { ownerOnlyProcedure, protectedProcedure, router } from '../trpc';
 import { registryVersionOf } from '../wire';
 
 // Боевой синк — один инстанс на модуль (без состояния, пишет тем же tx, §7.8)
-const sink = makeChatJournalSink();
+const sink = makeJournalSink();
 
 /**
  * Мутации реестра — ЗЕРКАЛА ТУЛОВ, а не вторая реализация (§А9-2, §А10-2).
@@ -63,7 +66,10 @@ const sink = makeChatJournalSink();
  * `source: 'ui'` — прямое действие владельца, как у остальных ручек-мутаций.
  */
 function registryMutation(tool: string) {
-  return async (ctx: { db: Parameters<typeof execute>[0]; identity: Identity }, input: unknown) => {
+  return async (
+    ctx: { db: Parameters<typeof execute>[0]; identity: Identity },
+    input: unknown,
+  ): Promise<WireRegistryResult & JournalRef> => {
     const r = await execute(
       ctx.db,
       {
@@ -80,7 +86,7 @@ function registryMutation(tool: string) {
       await reportMergeConflictUnit(ctx.db, ctx.identity, r.error);
       throw execErrorToTRPC(r.error);
     }
-    return r.results[0];
+    return { ...(r.results[0] as WireRegistryResult), ...journalRef(r) };
   };
 }
 

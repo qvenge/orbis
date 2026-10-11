@@ -1,10 +1,14 @@
 import { newId, ROLE_SUBITEM } from '@orbis/shared';
 import { Plus } from 'lucide-react';
-import { type FormEvent, useState } from 'react';
+import { type FormEvent, useRef, useState } from 'react';
 import { invalidateGraph } from '../../lib/invalidate';
+import { startAction } from '../../perf/marks';
 import { trpc } from '../../trpc';
 import { Spinner } from '../../ui/Spinner';
 import { useToast } from '../../ui/toast-store';
+import { journalRefOf } from '../undo/journal-ref';
+import { isUndoEpoch, undoEpoch } from '../undo/undo-epoch';
+import { offerUndoLazy } from '../undo/undo-lazy';
 
 // §3.7 / D-g: текст → title БЕЗ интерпретации. Контекст задаёт связь: `entity` — подзадача записи
 // («＋» на записи, спека 1б §6.4, РП-9), `root` — без контекста. Вариант `smart-list` снят (§9.4):
@@ -16,19 +20,34 @@ export function QuickCapture({ context }: { context: CaptureContext }) {
   const { show } = useToast();
   const utils = trpc.useUtils();
   const create = trpc.entity.create.useMutation({
-    onSuccess: () => invalidateGraph(utils),
+    meta: { undoStack: 'self' },
+    onSuccess: (data, vars) => {
+      invalidateGraph(utils);
+      const ref = journalRefOf(data);
+      if (ref)
+        offerUndoLazy({
+          title: `Создано: «${vars.input.title}»`,
+          actionId: ref.actionId,
+          entityIds: [],
+        });
+    },
   });
-  // Связь с родителем (context.kind === 'entity') создаётся ПОСЛЕ сущности, то есть
-  // после инвалидации выше: без второго вызова секция подзадач родителя перечиталась бы
-  // ровно до появления связи и не показала бы её.
-  const relation = trpc.relation.create.useMutation({ onSuccess: () => invalidateGraph(utils) });
-  const isPending = create.isPending || relation.isPending;
+  // Потерянный ответ повторяется по тому же id (РП-21). Смена контекста — новое намерение:
+  // иначе replay прежней пачки вернёт запись, привязанную к другому родителю.
+  const attemptRef = useRef<{ id: string; text: string; parentId: string | null } | null>(null);
+  const isPending = create.isPending;
 
   async function submit(e: FormEvent) {
     e.preventDefault();
+    const epoch = undoEpoch();
     const title = text.trim();
     if (!title || isPending) return;
-    const id = newId();
+    // Отклик «＋» (спека скорости §3.1): видимого до подтверждения нет — оптимистика «＋» в плане Б (§7.1).
+    const action = startAction('create');
+    const parentId = context.kind === 'entity' ? context.parentId.toLowerCase() : null;
+    const previous = attemptRef.current;
+    const id = previous?.text === title && previous.parentId === parentId ? previous.id : newId();
+    attemptRef.current = { id, text: title, parentId };
     // НОВАЯ форма (§А1-1): статус — плоским свойством, аспект — ЯВНЫМ списком. Старая карта
     // вешала `orbis/task` самим фактом ключа `status`; без списка запись под родителем
     // родилась бы не задачей — без чекбокса и мимо Повестки.
@@ -36,7 +55,7 @@ export function QuickCapture({ context }: { context: CaptureContext }) {
     const tags: string[] = [];
     // Ошибка мутации — toast, введённый текст НЕ очищается (ввод не теряется).
     try {
-      const ent = await create.mutateAsync({
+      await create.mutateAsync({
         input: {
           id,
           title,
@@ -44,16 +63,18 @@ export function QuickCapture({ context }: { context: CaptureContext }) {
           ...(subtask ? { props: { 'orbis/task_status': 'inbox' }, aspects: ['orbis/task'] } : {}),
         },
         source: 'quick_capture',
+        // Одна операция не оставляет созданную запись без связи (§7.2).
+        ...(context.kind === 'entity'
+          ? { link: { parentId: context.parentId, role: ROLE_SUBITEM } }
+          : {}),
       });
-      if (context.kind === 'entity') {
-        await relation.mutateAsync({
-          source_id: context.parentId,
-          target_id: ent.id,
-          role: ROLE_SUBITEM,
-        });
-      }
+      if (!isUndoEpoch(epoch)) return;
+      action.confirmed();
+      if (!isUndoEpoch(epoch)) return;
+      attemptRef.current = null;
       setText('');
     } catch {
+      if (!isUndoEpoch(epoch)) return;
       show('Не удалось сохранить', 'danger');
     }
   }

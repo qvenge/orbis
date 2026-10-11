@@ -9,6 +9,7 @@ import {
   useState,
 } from 'react';
 import { useToast } from '../../ui/toast-store';
+import { isUndoEpoch, subscribeUndoEpoch, undoEpoch } from '../undo/undo-epoch';
 import {
   type PanelHostActions,
   type PanelTarget,
@@ -36,9 +37,18 @@ function useOwner() {
   const [target, setTarget] = useState<PanelTarget | null>(null);
   const [registration, setRegistration] = useState<Registration | null>(null);
   const current = useRef<Registration | null>(null);
-  const flight = useRef(false);
+  const flight = useRef<{ epoch: number } | null>(null);
   const [, setPending] = useState(false);
   const { show } = useToast();
+  useLayoutEffect(
+    () =>
+      subscribeUndoEpoch(() => {
+        flight.current = null;
+        setPending(false);
+        setTarget(null);
+      }),
+    [],
+  );
   const register = useCallback((next: Registration) => {
     current.current = next;
     setRegistration(next);
@@ -58,7 +68,8 @@ function useOwner() {
   const run = useCallback<PanelHostActions['run']>(
     (action, addressed, execute) => {
       if (flight.current) return;
-      flight.current = true;
+      const ticket = { epoch: undoEpoch() };
+      flight.current = ticket;
       setPending(true);
       const frozen = { ...addressed };
       void runLazyPanelHost(
@@ -72,9 +83,13 @@ function useOwner() {
         undefined,
         execute,
       )
-        .catch(() => show('Не удалось открыть действие — повторите попытку', 'danger'))
+        .catch(() => {
+          if (isUndoEpoch(ticket.epoch))
+            show('Не удалось открыть действие — повторите попытку', 'danger');
+        })
         .finally(() => {
-          flight.current = false;
+          if (flight.current !== ticket) return;
+          flight.current = null;
           setPending(false);
         });
     },
@@ -85,7 +100,7 @@ function useOwner() {
     ...(registration?.host ?? { screenEntityId: '', available: unavailable.available }),
     run,
     get pending() {
-      return flight.current;
+      return flight.current !== null;
     },
   };
   return { api, slot: <PropertiesRelationsSlot target={target} host={host} onClose={close} /> };

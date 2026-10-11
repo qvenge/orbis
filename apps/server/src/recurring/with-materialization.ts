@@ -37,7 +37,7 @@ export interface QueryWithMaterializationOpts<T> {
  * него повторяющаяся задача со сроком в них просто не появлялась. Цена названа вслух:
  * запрос со сроком теперь ВСЕГДА идёт двумя транзакциями вместо одной (фаза 1 — контекст и
  * разбор, фаза 2 — исполнение), а между ними работает executor. Это ровно та цена, которую
- * §5.4 назначает за ленивую материализацию, — просто теперь её платит и Agenda.
+ * §5.4 назначает за ленивую материализацию, — просто теперь её платят и блоки Повестки.
  */
 export async function queryWithMaterialization<T>(
   opts: QueryWithMaterializationOpts<T>,
@@ -56,7 +56,13 @@ export async function queryWithMaterialization<T>(
     const ast = opts.parse(cctx);
     // Триггеры и горизонт — параметры строки `materialize` из того же снимка, по которому запрос
     // разобран и будет исполнен (`cctx.reg`): второй снимок разошёлся бы с первым.
-    const window = materializationWindow(ast, cctx.today, materializeRuleOf(cctx.reg).rule.params);
+    const window = materializationWindow(
+      ast,
+      cctx.today,
+      materializeRuleOf(cctx.reg).rule.params,
+      cctx.reg,
+      cctx.weekStart,
+    );
     if (window) return { kind: 'materialize', window, ast, cctx };
     return { kind: 'done', result: await opts.run(tx, ast, cctx) };
   });

@@ -11,6 +11,7 @@ import {
   BUILTIN_ACTION_DEFS,
   type SensitivityFact,
 } from '@orbis/shared';
+import { PAGE_ONLY_HINT } from '@orbis/shared/query';
 import {
   ACTION_FIXTURES,
   GRANTS_AUTONOMY_UNDERDECLARED,
@@ -21,7 +22,14 @@ import { withIdentity } from '../db/with-identity';
 // Имена реестровых тулов читаются, а не правятся (tools/* — задача 7): пин рулинга 6-1 обязан
 // видеть и тулы, которые заведут следующие задачи, а не список, переписанный сюда руками.
 import { REGISTRY_TOOL_NAMES } from '../tools/registry-tools';
-import { actionExprScope, actionHash, assertAction, stepFactsOf, stepReversible } from './actions';
+import {
+  actionExprScope,
+  actionHash,
+  assertAction,
+  assertActionQuery,
+  stepFactsOf,
+  stepReversible,
+} from './actions';
 import { effectiveRegistry } from './cache';
 import type { RegistrySnapshot } from './load';
 
@@ -85,6 +93,22 @@ test('в `over` запрещена проекция и «this», относит�
     over: { filter: { rel: { kind: 'children_of', of: 'this' } } },
   };
   expect(() => assertAction(withThis, { reg, systemSeed: true })).toThrow(/this/);
+});
+
+test('в `over` $-ссылка — отказ формы с подсказкой «только в блоках страниц и шаблонов» (1в §3.8)', () => {
+  const withParam = {
+    ...BUILTIN_ACTION_DEFS[1],
+    over: { filter: { prop: 'orbis/due_date', op: 'eq', value: { param: 'period' } } },
+  };
+  let caught: unknown;
+  try {
+    assertAction(withParam, { reg, systemSeed: true });
+  } catch (e) {
+    caught = e;
+  }
+  expect(caught).toMatchObject({ code: 'VALIDATION', details: { reason: 'ACTION_MALFORMED' } });
+  const issues = (caught as { details: { issues: string[] } }).details.issues;
+  expect(issues.some((i) => i.includes(PAGE_ONLY_HINT))).toBe(true);
 });
 
 // Р-19: кап 0 — это не «кап есть», а испорченная форма: вердикт МЕНЯЕТСЯ на отказ формы, а не
@@ -434,6 +458,35 @@ test('archived из boolean-параметра — законно; из date-п�
   );
 });
 
+// РП-24 плана А: поле конверта `expectedBodyRevision` — позиция типа number (ревизия тела), прежнего `expectedUpdatedAt`
+// в конверте нет (замок текста сменился без переходного слоя, спека скорости §8.2).
+test('expectedBodyRevision из number-параметра — законно; из date-параметра — ACTION_VALUE_TYPE; expectedUpdatedAt — ACTION_STEP_INPUT (РП-24)', () => {
+  const revisionFrom = (v: unknown) => [
+    { tool: 'entity_update', input: { id: SELF, expectedBodyRevision: v } },
+  ];
+  expect(
+    verdict({
+      ...builtin(1),
+      params: [{ name: 'rev', type: { kind: 'number' } }],
+      steps: revisionFrom({ $expr: { param: 'rev' } }),
+    }),
+  ).toBe('ok');
+  expect(verdict({ ...builtin(1), steps: revisionFrom({ $expr: { param: 'to' } }) })).toEqual(
+    VALUE_TYPE,
+  );
+  expect(
+    verdict({
+      ...builtin(1),
+      steps: [
+        {
+          tool: 'entity_update',
+          input: { id: SELF, expectedUpdatedAt: { $expr: { param: 'to' } } },
+        },
+      ],
+    }),
+  ).toEqual({ code: 'VALIDATION', reason: 'ACTION_STEP_INPUT' });
+});
+
 // I-3: тип `{param}` — тем же `exprTypeOfKind`, что у `{prop}` (Produces-интерфейс задачи 7).
 test('тип параметра — родом свойства: select сравним с select-свойством; json-параметр — отказ формы', () => {
   const p = builtin(1);
@@ -671,4 +724,18 @@ test('шаг entity_update со снятием аспекта — ACTION_STEP_IN
   });
   // Пустой список снятия — не снятие.
   expect(verdict(detaching([]))).toBe('ok');
+});
+
+test('assertActionQuery: адрес контракта в множестве целей законен (спека 1в §3.1, РП-3)', () => {
+  // «Просроченные по „когда“» — предикат множества целей, как любой другой: проекции и `this` нет.
+  expect(() =>
+    assertActionQuery('user/postpone', {
+      filter: {
+        and: [
+          { prop: { contract: 'orbis/when' }, op: 'eq', value: { token: 'overdue' } },
+          { class: { contract: 'orbis/completable', set: 'open' } },
+        ],
+      },
+    }),
+  ).not.toThrow();
 });

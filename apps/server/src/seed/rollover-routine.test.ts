@@ -8,10 +8,10 @@ import { type GraphId, newId } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import { enableFinanceForTest } from '../../test/finance-on';
 import { appDb, freshGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
+import { journalOf } from '../../test/journal-helpers';
 import { activeRoutines, type RoutineRow, routineById } from '../agent-loop/queries';
 import { withIdentity } from '../db/with-identity';
 import { execute } from '../executor/executor';
-import type { ActionRecord } from '../executor/types';
 import { ScriptedProvider } from '../llm/scripted';
 import type { LLMResponse } from '../llm/types';
 import { approvePending, listRunUnits } from '../policy/pending';
@@ -246,12 +246,8 @@ describe('прогон рутины «Перенос остатков» (Р-К-3
     expect(after.map((u) => u.fate)).toEqual(['approved']);
     // Атрибуция — ПРОГОН рутины, а не «владелец на экране»: откат прогона найдёт перенос по run_id.
     if (!approved.ok) return;
-    const journal = (await withIdentity(db, personal(owner), (tx) =>
-      tx.execute(sql`SELECT metadata FROM chat_messages
-                      WHERE metadata @> ${JSON.stringify({ actions: [{ id: approved.actionId }] })}::jsonb`),
-    )) as unknown as Array<{ metadata: { actions: ActionRecord[] } }>;
-    const action = journal[0]?.metadata.actions[0];
-    expect([action?.source, action?.run_id, action?.mechanism]).toEqual(['routine', runId, 'rule']);
+    const action = await journalOf(owner, approved.actionId);
+    expect([action?.source, action?.runId, action?.mechanism]).toEqual(['routine', runId, 'rule']);
     // Повторное «Принять» — replay, второй группы конвертов нет.
     const again = await approvePending(db, {
       identity: personal(owner),

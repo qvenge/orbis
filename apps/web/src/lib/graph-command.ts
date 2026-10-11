@@ -11,7 +11,7 @@ const REJECTIONS: Record<string, string> = {
 };
 /** A single transport attempt. Only explicit public HTTP refusals prove non-commit. */
 export async function runGraphCommand(
-  write: () => Promise<{ actionId?: string }>,
+  write: () => Promise<{ actionId?: string; consequences?: boolean }>,
 ): Promise<CommandOutcome> {
   try {
     const result = await write();
@@ -25,7 +25,11 @@ export async function runGraphCommand(
       return { kind: 'unknown', message: UNKNOWN };
     return result.actionId === undefined
       ? { kind: 'confirmed' }
-      : { kind: 'confirmed', actionId: result.actionId };
+      : {
+          kind: 'confirmed',
+          actionId: result.actionId,
+          ...(typeof result.consequences === 'boolean' && { consequences: result.consequences }),
+        };
   } catch (error) {
     if (error instanceof TRPCClientError) {
       const code: unknown = error.data?.code;

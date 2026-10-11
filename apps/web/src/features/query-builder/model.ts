@@ -28,6 +28,7 @@
 
 import type { PropertyKind } from '@orbis/shared';
 import type {
+  ParseOptions,
   QueryAst,
   QueryBound,
   QueryDisplayMode,
@@ -83,7 +84,8 @@ export function aspectsOf(nodes: readonly QueryFilterNode[]): string[] {
 
 /** Лист «свойство равно значению» — из них складываются списки `anyOf`/`noneOf`. */
 function eqLeaf(node: QueryFilterNode): { prop: string; value: QueryBound } | null {
-  if (!('prop' in node)) return null;
+  // Адрес контракта (1в) строки формы не получает — см. `positive`.
+  if (!('prop' in node) || typeof node.prop !== 'string') return null;
   if (node.op !== 'eq' && node.op !== 'contains') return null;
   return { prop: node.prop, value: node.value as QueryBound };
 }
@@ -111,7 +113,10 @@ function positive(node: QueryFilterNode): FieldNodeView | null {
     if (same === null) return null;
     return { prop: same.prop, op: 'anyOf', values: same.values, from: null, to: null };
   }
-  if (!('prop' in node)) return null;
+  // Адрес контракта (спека 1в §3.1: `orbis/when=…`, `orbis/when.deadline=…`) — не свойство:
+  // строки поля у него нет, и узел доезжает до печати нетронутым, как аспект или связь. Строка,
+  // собранная из адреса по подписи свойства, переписала бы его в id несуществующего свойства.
+  if (!('prop' in node) || typeof node.prop !== 'string') return null;
   const base = { prop: node.prop, values: [] as QueryBound[], from: null, to: null };
   switch (node.op) {
     case 'eq':
@@ -136,7 +141,8 @@ function positive(node: QueryFilterNode): FieldNodeView | null {
   }
 }
 
-/** Узел → строка поля; `null` — конструкция не про свойство (аспект, тег, связь, поиск). */
+/** Узел → строка поля; `null` — конструкция не про свойство (аспект, тег, связь, поиск, адрес). */
+// ОБХОДЧИК-Q: web-builder-model
 export function fieldNodeView(node: QueryFilterNode): FieldNodeView | null {
   if ('not' in node) {
     const inner = positive(node.not);
@@ -384,10 +390,13 @@ export type Printed = {
  * разводит `}` бэкслешем (`query/print.ts`), разбор снимает экран тем же правилом, и `}}` в
  * напечатанной key-форме не появляется в принципе. Барьер остался там, где он ещё нужен, — на
  * СЫРОМ тексте, который до дерева не доехал (`QueryTextEditor`, `QueryWidget.save`).
+ *
+ * `opts` — место текста по роду тела (`placeOf`, 1в §3.8): обратный разбор блока страницы со
+ * ссылкой `$<имя>` без места отказал бы `PAGE_ONLY`, и форма не дала бы сохранить законный блок.
  */
-export function printQuery(ast: QueryAst, reg: QueryRegistry): Printed {
+export function printQuery(ast: QueryAst, reg: QueryRegistry, opts: ParseOptions = {}): Printed {
   const text = printQueryAst(ast, reg.parse, 'key');
-  const back = parseQueryAst(text, reg.parse);
+  const back = parseQueryAst(text, reg.parse, opts);
   return { text, error: back.ok ? null : back.error.message };
 }
 
@@ -399,11 +408,19 @@ export function printQuery(ast: QueryAst, reg: QueryRegistry): Printed {
  * Разбор СТРОГИЙ: тела сидированных смарт-листов переведены в key-форму (Задача 21b), и
  * мост старой грамматики, который держал «Настроить» открытым на них формой, а не текстовым
  * редактором, удалён вместе с ней.
+ *
+ * Разбор — с местом по роду тела (`opts`, 1в §3.8): блок страницы со ссылкой `$<имя>` правится
+ * формой (строка ссылки — только для чтения), блок заметки с ней — строковым редактором с отказом.
  */
-export function parseForForm(initial: string, reg: QueryRegistry): QueryAst | null {
-  const r = parseQueryAst(initial.trim(), reg.parse);
+// ОБХОДЧИК-Q: web-form-parse
+export function parseForForm(
+  initial: string,
+  reg: QueryRegistry,
+  opts: ParseOptions = {},
+): QueryAst | null {
+  const r = parseQueryAst(initial.trim(), reg.parse, opts);
   if (!r.ok) return null;
-  return printQuery(r.ast, reg).text === null ? null : r.ast;
+  return printQuery(r.ast, reg, opts).text === null ? null : r.ast;
 }
 
 /**
@@ -416,12 +433,16 @@ export function parseForForm(initial: string, reg: QueryRegistry): QueryAst | nu
  * их не правит (колонки пишутся текстом блока), и держать невидимую копию значило бы вернуть
  * человеку то, что он уже снял. Плитка без агрегата получает `count` — единственный, которому не
  * нужно свойство.
+ *
+ * Группировка по дням (`group`, 1в §5.2) живёт только у строк: при `table`/`tile` снимается (разбор
+ * отверг бы пару правилом `groupNeedsRows`), при `list`/`compact` и без `display` — сохраняется.
  */
 export function withDisplay(ast: QueryAst, display: QueryDisplayMode | undefined): QueryAst {
-  const { display: _d, aggregate, columns, ...rest } = ast;
+  const { display: _d, aggregate, columns, group, ...rest } = ast;
   const next: QueryAst = display === undefined ? rest : { ...rest, display };
   if (display === 'tile') next.aggregate = aggregate ?? { fn: 'count' };
   if (display === 'table' && columns !== undefined) next.columns = columns;
+  if (group !== undefined && display !== 'table' && display !== 'tile') next.group = group;
   return next;
 }
 

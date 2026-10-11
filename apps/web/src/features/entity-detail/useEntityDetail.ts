@@ -1,11 +1,28 @@
-import { RULE_TASK_STATUS_DEFAULT } from '@orbis/shared';
-import { useQueryClient } from '@tanstack/react-query';
+import type { JournalRef } from '@orbis/shared';
+import { resetSteps } from '../entity-editor/arrows-stack';
+import { confirmBody, markBodyPending } from '../undo/body-provenance';
+import { journalRefOf } from '../undo/journal-ref';
+import { isUndoEpoch, undoEpoch } from '../undo/undo-epoch';
+import { pushUndoable } from '../undo/undo-stack';
+
+export { journalRefOf } from '../undo/journal-ref';
+
+import { offerUndoLazy } from '../undo/undo-lazy';
+import type { UndoToastRule } from '../undo/undo-toast';
+export type UndoToastOption =
+  | UndoToastRule
+  | ((vars: UpdateInput, prior: Entity | undefined) => UndoToastRule | null);
+
+import { type PerfActionKind, RULE_TASK_STATUS_DEFAULT } from '@orbis/shared';
+import { type QueryClient, useQueryClient } from '@tanstack/react-query';
 import type { JSONContent } from '@tiptap/core';
 import { TRPCClientError } from '@trpc/client';
 import { getQueryKey } from '@trpc/react-query';
 import { useRef, useState } from 'react';
 import { invalidateGraph } from '../../lib/invalidate';
+import { isBodyStale, isTitleStale } from '../../lib/orbis-error';
 import { useNoteRegistryVersion } from '../../lib/registry/useRegistry';
+import { startAction } from '../../perf/marks';
 import { type RouterInputs, type RouterOutputs, trpc } from '../../trpc';
 // Листовые модули: своих рантайм-зависимостей у них нет вовсе, и схему редактора они не тянут
 // (стережёт save.test.tsx). Зачем они здесь — см. `settleBodyDraft` ниже.
@@ -20,6 +37,9 @@ import { runPollInterval } from './run-poll';
 
 type Entity = RouterOutputs['entity']['get']['entity'];
 type UpdateInput = RouterInputs['entity']['update'];
+
+// Принятие переживает размонтирование редактора, но не переезжает в кэш другого клиента.
+const TITLE_GENERATIONS = new WeakMap<QueryClient, Record<string, number>>();
 
 // §9.2: detail тянет body+relations+backlinks+thread (backlinks — секция «Связанное»
 // §3.5.8, Task D5). Один и тот же input — ключ кэша для useQuery и точечных
@@ -157,8 +177,9 @@ function settleBodyDraft(vars: UpdateInput, err?: unknown): void {
 }
 
 /**
- * Общая optimistic-concurrency обвязка entity.update (§5.2): optimistic-патч + откат при
- * любой ошибке; CONFLICT (409, из STALE_VERSION) → флаг conflict для сообщения «обновите».
+ * Общая optimistic-concurrency обвязка entity.update: optimistic-патч + откат при любой ошибке;
+ * отказ замка текста (`STALE_VERSION` в `data.orbis`, спека скорости §8.1) → флаг conflict для
+ * сообщения «обновите».
  *
  * `onSettled` — довесок вызывающего к УРОВНЮ МУТАЦИИ, а не поштучный колбэк `mutate`.
  * Разница ровно та, что уже описана у `settleBodyDraft` выше: поштучные колбэки (второй
@@ -181,17 +202,26 @@ function settleBodyDraft(vars: UpdateInput, err?: unknown): void {
  */
 const OPTIMISTIC = new WeakMap<UpdateInput, UpdateInput>();
 
+/**
+ * Вид действия для замера отклика (спека скорости §3.1) — по ОБЪЕКТУ правки, тем же приёмом, что `OPTIMISTIC`: чекбокс
+ * и выбор статуса шлют одинаковую правку статуса, различает их только место вызова, а на провод поле не попадает.
+ */
+const PERF_KIND = new WeakMap<UpdateInput, PerfActionKind>();
+
 /** Значение возврата из закрытия на время полёта — строка `default` каталога поставки (Б-2 №98). */
 const REOPEN_STATUS = (RULE_TASK_STATUS_DEFAULT.params as { value: { const: string } }).value.const;
 
 export function useEntityUpdate(
   entityId: string,
-  opts: { onSettled?: (vars: UpdateInput) => void } = {},
+  opts: { onSettled?: (vars: UpdateInput) => void; undoToast?: UndoToastOption } = {},
 ) {
   const utils = trpc.useUtils();
   const queryClient = useQueryClient();
+  const titleGenerations: Record<string, number> = TITLE_GENERATIONS.get(queryClient) ?? {};
+  TITLE_GENERATIONS.set(queryClient, titleGenerations);
   const input = detailGetInput(entityId);
   const [conflict, setConflict] = useState(false);
+  const [titleStale, setTitleStale] = useState(false);
 
   // Флаг — про ЭТУ запись, поэтому смена сущности под тем же хуком его гасит: иначе «Изменено
   // в другом месте» переезжало бы с записи, где конфликт был, на соседнюю, где его не было.
@@ -199,11 +229,12 @@ export function useEntityUpdate(
   if (prevIdRef.current !== entityId) {
     prevIdRef.current = entityId;
     setConflict(false);
+    setTitleStale(false);
   }
 
   /**
-   * Последняя мутация ПО КАЖДОЙ записи: её номер, метка версии и признак «сверял ли её сервер
-   * по версии» (см. `checksVersion` — это НЕ то же, что «послана ли метка»).
+   * Последняя мутация ПО КАЖДОЙ записи: её номер, ревизия тела и признак «сверял ли её сервер
+   * по ревизии» (см. `checksVersion` — это НЕ то же, что «послана ли ревизия»).
    *
    * Живых мутаций по одной записи бывает две, и источников этому ДВА. Первый: автосохранение
    * тела бросает зависший запрос по выдержке и досылает поверх него (useBodySave,
@@ -218,19 +249,26 @@ export function useEntityUpdate(
    * устаревшей мутацию первой, и та лишилась бы отката — ровно того, ради чего он и написан.
    */
   const seqRef = useRef(0);
+  const latestTitle = useRef<Record<string, number>>({});
   const latestRef = useRef<
-    Record<string, { seq: number; expectedUpdatedAt?: string; checksVersion: boolean }>
+    Record<string, { seq: number; expectedBodyRevision?: number; checksVersion: boolean }>
   >({});
 
   /**
-   * Сверяет ли СЕРВЕР версию у этой правки. Не «послан ли `expectedUpdatedAt`»: гейт §5.2 стоит
-   * под условием `body !== undefined || bodyDoc !== undefined` (executor.ts), и правка без тела
-   * проходит по LWW — метку сервер у неё просто игнорирует. Значит `saveTitle` шлёт
-   * `expectedUpdatedAt`, но 409 не получит НИКОГДА, а `toggleTask`/`setArchived` не шлют его
-   * вовсе (ревью Задачи 14, Н-3).
+   * Сверяет ли СЕРВЕР ревизию тела у этой правки. Не «послана ли `expectedBodyRevision`»: замок
+   * текста (§8.1) стоит под условием `body !== undefined || bodyDoc !== undefined` (executor.ts),
+   * и правка без тела проходит по LWW — ревизию сервер у неё просто игнорирует (ревью Задачи 14,
+   * Н-3).
    */
   const checksVersion = (vars: UpdateInput) =>
     vars.body !== undefined || vars.bodyDoc !== undefined;
+
+  // Явно принятое имя важнее старого title-only save. Тело остаётся на своей ревизии.
+  const titleAccepted = (vars: UpdateInput, ctx?: { titleGeneration: number }) =>
+    ctx !== undefined &&
+    vars.title !== undefined &&
+    !checksVersion(vars) &&
+    ctx.titleGeneration !== (titleGenerations[vars.id] ?? 0);
 
   /**
    * Приехал ли ответ мутации, которую УЖЕ сменила следующая по той же записи.
@@ -251,37 +289,65 @@ export function useEntityUpdate(
   /**
    * Принесёт ли преемник ТОТ ЖЕ конфликт — единственное основание промолчать о 409.
    *
-   * Условий два, и оба необходимы. Преемник должен сам проверяться сервером по версии (иначе
-   * он 409 не получит ни при каких обстоятельствах) И уйти с той же меткой (иначе конфликт у
-   * него будет свой). Одной совпавшей метки НЕ ДОСТАТОЧНО, и это не теория: правка тела и
-   * следом переименование уходят с одной и той же меткой — кэшный `updatedAt` за время полёта
-   * не двигается, `applyPatch` его не трогает, а перечитывание идёт только в `onSettled`.
-   * Промолчи мы по одной метке — 409 правки тела не показал бы никто (ревью Задачи 14, Н-3).
+   * Условий два, и оба необходимы. Преемник должен сам проверяться сервером по ревизии (иначе
+   * он 409 не получит ни при каких обстоятельствах) И уйти с той же ревизией (иначе конфликт у
+   * него будет свой). Одной совпавшей ревизии НЕ ДОСТАТОЧНО: правка без тела ревизии не несёт
+   * вовсе, и у неё «та же ревизия» — это два `undefined`. Промолчи мы по одному совпадению — 409
+   * правки тела не показал бы никто (ревью Задачи 14, Н-3).
    */
-  const bringsSameConflict = (id: string, ctx?: { expectedUpdatedAt?: string }) => {
+  const bringsSameConflict = (id: string, ctx?: { expectedBodyRevision?: number }) => {
     const latest = latestRef.current[id];
-    return latest?.checksVersion === true && latest.expectedUpdatedAt === ctx?.expectedUpdatedAt;
+    return (
+      latest?.checksVersion === true && latest.expectedBodyRevision === ctx?.expectedBodyRevision
+    );
   };
 
   const mutation = trpc.entity.update.useMutation({
+    meta: { undoStack: 'self' },
     onMutate: async (vars) => {
+      const epoch = undoEpoch();
+      const titleGeneration = titleGenerations[vars.id] ?? 0;
+      const titleSeq =
+        vars.title !== undefined && !checksVersion(vars)
+          ? (latestTitle.current[vars.id] ?? 0) + 1
+          : undefined;
+      if (titleSeq !== undefined) latestTitle.current[vars.id] = titleSeq;
+      // Отклик действия (спека скорости §3.1) — от нажатия, поэтому ДО первого `await`. Автосохранение текста — не
+      // действие: сеанс печати меряется иначе, и замер каждого сохранения засорил бы отклик кнопок.
+      const action =
+        vars.body !== undefined || vars.bodyDoc !== undefined
+          ? null
+          : startAction(
+              PERF_KIND.get(vars) ??
+                (vars.title !== undefined
+                  ? 'title'
+                  : vars.props !== undefined && 'orbis/task_status' in vars.props
+                    ? 'status'
+                    : 'other'),
+            );
       setConflict(false);
       await utils.entity.get.cancel(input);
+      if (!isUndoEpoch(epoch)) return;
       const prev = utils.entity.get.getData(input);
       const prevUpdatedAt =
         queryClient.getQueryState(getQueryKey(trpc.entity.get, input, 'query'))?.dataUpdatedAt ?? 0;
       const shown = OPTIMISTIC.get(vars) ?? vars;
-      // Local entity edits retain the response's registryVersion and read provenance.
-      // A cache write must not announce that retained version as a new server read.
-      utils.entity.get.setData(
-        input,
-        (old) => (old ? { ...old, entity: applyPatch(old.entity, shown) } : old),
-        { updatedAt: prevUpdatedAt },
-      );
+      if (!titleAccepted(vars, { titleGeneration }))
+        utils.entity.get.setData(
+          input,
+          (old) => (old ? { ...old, entity: applyPatch(old.entity, shown) } : old),
+          // Local writes retain the last actual server response's registry provenance.
+          { updatedAt: prevUpdatedAt },
+        );
+      const pendingBody =
+        vars.autosave === true ? utils.entity.get.getData(input)?.entity.bodyDoc : undefined;
+      markBodyPending(pendingBody);
+      // «Видно» — кадр после оптимистичного патча: к нему React успевает нарисовать правку.
+      if (action) requestAnimationFrame(() => action.visible());
       seqRef.current += 1;
       latestRef.current[vars.id] = {
         seq: seqRef.current,
-        expectedUpdatedAt: vars.expectedUpdatedAt,
+        expectedBodyRevision: vars.expectedBodyRevision,
         checksVersion: checksVersion(vars),
       };
       // Ключ едет в контекст ВМЕСТЕ со снимком. Откат обязан лечь туда же, откуда снимок
@@ -290,9 +356,14 @@ export function useEntityUpdate(
       return {
         prev,
         prevUpdatedAt,
+        pendingBody,
         input,
         seq: seqRef.current,
-        expectedUpdatedAt: vars.expectedUpdatedAt,
+        expectedBodyRevision: vars.expectedBodyRevision,
+        titleGeneration,
+        titleSeq,
+        epoch,
+        action,
       };
     },
     onError: (err, vars, ctx) => {
@@ -300,9 +371,9 @@ export function useEntityUpdate(
       // сейчас на экране (см. settleBodyDraft).
       settleBodyDraft(vars, err);
       const old = superseded(vars.id, ctx);
-      // Брошенная мутация не откатывает ничего: поверх её снимка уже лёг патч преемника.
-      // Откат — иначе ВСЕГДА и по ключу из контекста: он про свою запись, чья бы очередь ни шла.
-      if (ctx && !old)
+      const accepted = titleAccepted(vars, ctx);
+      // Снимок до преемника или принятого title уже устарел; остальные откаты — по своему ключу.
+      if (ctx && !old && !accepted)
         utils.entity.get.setData(ctx.input, ctx.prev, { updatedAt: ctx.prevUpdatedAt });
       // Отказ «по объекту» — прежде всего `MODULE_DISABLED` (срез 1б §8.3): расширение выключили в
       // другом месте, и маска в кеше экрана устарела — перечитать её, чтобы поля встали только
@@ -317,19 +388,44 @@ export function useEntityUpdate(
       // зажигал бы «Изменено в другом месте» на соседней, которой никто не касался
       // (ревью Задачи 13, И-4). `entityId` здесь — из ПОСЛЕДНЕГО рендера (react-query
       // проталкивает свежие опции в незавершённую мутацию), `vars.id` — из отправки.
+      if (!accepted && isTitleStale(err)) resetSteps(vars.id);
       if (vars.id !== entityId) return;
+      if (!old && ctx && isUndoEpoch(ctx.epoch) && isBodyStale(err)) resetSteps(vars.id);
+      if (!accepted && isTitleStale(err)) setTitleStale(true);
       // Молчим только о конфликте, который преемник принесёт и сам (см. bringsSameConflict).
       if (old && bringsSameConflict(vars.id, ctx)) return;
-      if (err instanceof TRPCClientError && err.data?.code === 'CONFLICT') setConflict(true);
+      // Конфликт — отказ замка текста по структурному коду (`data.orbis`, РП-5), а не любой 409.
+      if (isBodyStale(err)) setConflict(true);
     },
-    onSuccess: (_data, vars, ctx) => {
+    onSuccess: (data, vars, ctx) => {
+      confirmBody(ctx?.pendingBody);
       // Тоже первым делом: сохранённый черновик обязан уйти с диска, даже если экран этой
       // записи давно закрыт (см. settleBodyDraft).
       settleBodyDraft(vars);
+      const ref = journalRefOf(data);
+      if (
+        ref !== null &&
+        !offerByRule(opts.undoToast, ref, vars, ctx?.prev?.entity) &&
+        stackable(vars)
+      )
+        pushUndoable({
+          actionId: ref.actionId,
+          title: `правка «${ctx?.prev?.entity.title ?? vars.id}»`,
+          entityIds: vars.body !== undefined || vars.bodyDoc !== undefined ? [vars.id] : [],
+        });
       // Поздний успех устаревшей мутации не говорит ничего о расхождении, которое держит
       // плашку сейчас. Сверки меток здесь нет, и это не забытая симметрия с onError, а разные
       // вопросы: там решается, ПОКАЗЫВАТЬ ли конфликт (промолчать можно лишь о том, который
       // принесёт и преемник), здесь — ГАСИТЬ ли уже показанный. Проверено мутацией M55.
+      // Подтверждение title имеет свою очередь: успех чекбокса не отменяет принятие имени.
+      if (
+        ctx &&
+        isUndoEpoch(ctx.epoch) &&
+        ctx.titleSeq !== undefined &&
+        ctx.titleSeq === latestTitle.current[vars.id] &&
+        !titleAccepted(vars, ctx)
+      )
+        titleGenerations[vars.id] = (titleGenerations[vars.id] ?? 0) + 1;
       if (superseded(vars.id, ctx)) return;
       // И тот же корень, что у Н-3: гасит плашку только правка, версию которой сервер сверял.
       // Успех чекбокса или архивации о конфликте тела не знает ничего — а обвязка общая, и
@@ -338,18 +434,20 @@ export function useEntityUpdate(
       if (!checksVersion(vars)) return;
       if (vars.id === entityId) setConflict(false);
     },
-    // Detail — единственный путь закрытия/переноса/архивации сущности из списков (Agenda,
-    // Browser, Budget), а списки читают ДРУГОЙ ключ кэша — entity.query. Он держит
-    // собственный staleTime (60 с у Agenda по K16, 30 с глобально в trpc.ts) и при
-    // refetchOnWindowFocus:false сам не протухнет: без явной инвалидации закрытая задача
-    // висела бы в «Просроченном» до минуты после «Готово» (02-core-os §4.2, приёмка §8.2).
-    // Тот же путь уже у QuickCapture/QuickAddBar/ImportFlow — здесь его недоставало.
+    // Экран записи — главный путь закрытия, переноса и архивации записи, которую показывают
+    // списки («Записи») и блоки страниц (Повестка, Daily Planning), а они читают ДРУГИЕ ключи
+    // кэша — `entity.query` и данные блоков `entity.blocks`. Их staleTime (30 с глобально в
+    // trpc.ts) при refetchOnWindowFocus:false сам не истечёт вовремя: без явной инвалидации
+    // закрытая задача висела бы в «Просрочено» Повестки до полуминуты после «Готово».
+    // Тот же путь уже у QuickCapture — здесь его недоставало.
     // Р17: инвалидация detail — БЕЗ аргумента. Правка аспекта двигает прогресс чужой
     // открытой цели, а переименование — строку этой сущности у соседей: в их подзадачах
     // и backlinks и в строках query_result чата (EntityRef читает ключ {id} без include,
     // backlinks приезжают внутри ответа соседа — точечный ключ detail не задевал ни то,
     // ни другое).
-    onSettled: (_data, _err, vars) => {
+    onSettled: (_data, err, vars, ctx) => {
+      // «Подтверждено» — ответ сервера без ошибки; отказ подтверждением не считается.
+      if (!err) ctx?.action?.confirmed();
       invalidateGraph(utils);
       // Довесок вызывающего — здесь же, на уровне мутации (см. докблок хука): у секций записи это
       // гашение денежных агрегатов бюджета, которые `invalidateGraph` не покрывает по построению.
@@ -357,7 +455,17 @@ export function useEntityUpdate(
     },
   });
 
-  return { mutation, conflict, dismissConflict: () => setConflict(false) };
+  return {
+    mutation,
+    conflict,
+    dismissConflict: () => setConflict(false),
+    titleStale,
+    dismissTitleStale: () => {
+      // TitleBlock вызывает это лишь после успешного актуального «Обновить».
+      titleGenerations[entityId] = (titleGenerations[entityId] ?? 0) + 1;
+      setTitleStale(false);
+    },
+  };
 }
 
 export function useEntityDetail(entityId: string) {
@@ -386,7 +494,11 @@ export function useEntityDetail(entityId: string) {
  * одинаково.
  */
 export function useRecordEdits(entityId: string, entity: Entity | undefined) {
-  const { mutation, conflict, dismissConflict } = useEntityUpdate(entityId);
+  const utils = trpc.useUtils();
+  const { mutation, conflict, dismissConflict, titleStale, dismissTitleStale } = useEntityUpdate(
+    entityId,
+    { undoToast: recordEditRule },
+  );
 
   /**
    * Чекбокс task (§3.6): шлёт ТОЛЬКО смену статуса (optimistic + откат при ошибке).
@@ -401,12 +513,15 @@ export function useRecordEdits(entityId: string, entity: Entity | undefined) {
    */
   function toggleTask(done: boolean) {
     if (done) {
-      mutation.mutate({ id: entityId, props: { 'orbis/task_status': 'done' } });
+      const vars: UpdateInput = { id: entityId, props: { 'orbis/task_status': 'done' } };
+      PERF_KIND.set(vars, 'checkbox');
+      mutation.mutate(vars);
       return;
     }
     const vars: UpdateInput = { id: entityId, unset: ['orbis/task_status'] };
     // Чекбокс не пропадает на время полёта (C2 M-1): в кеше — значение возврата, на проводе — `unset`.
     OPTIMISTIC.set(vars, { id: entityId, props: { 'orbis/task_status': REOPEN_STATUS } });
+    PERF_KIND.set(vars, 'checkbox');
     mutation.mutate(vars);
   }
 
@@ -416,12 +531,14 @@ export function useRecordEdits(entityId: string, entity: Entity | undefined) {
   // нём держались два теста — то есть зелёными они были на пути, которого в проде нет
   // (ревью раунда 3). Сюжеты переписаны на достижимый путь, метод удалён.
 
-  // Правка заголовка (DF п.3) — тот же контракт §5.2, что у body: у memory-правила
-  // title и есть вся его машиночитаемая часть (K19.4), и правка «формулировки»,
-  // обещанная экраном «Память AI», — это именно правка title.
-  function saveTitle(title: string) {
+  // Замок — видимое значение на начало ввода; результат нужен TitleEditor и будущим стрелкам (§7.5).
+  function saveTitle(title: string, expectedTitle: string) {
     if (!entity) return;
-    mutation.mutate({ id: entityId, title, expectedUpdatedAt: entity.updatedAt });
+    return mutation.mutateAsync({ id: entityId, title, expectedTitle });
+  }
+
+  function refreshTitle() {
+    return utils.entity.get.fetch(detailGetInput(entityId));
   }
 
   function setArchived(archived: boolean) {
@@ -432,8 +549,51 @@ export function useRecordEdits(entityId: string, entity: Entity | undefined) {
     update: mutation,
     toggleTask,
     saveTitle,
+    titleStale,
+    refreshTitle,
+    dismissTitleStale,
     setArchived,
     conflict,
     dismissConflict,
   };
+}
+
+/**
+ * Плашка по правилу (§7.5 п. 1). Последствия называет сервер (`consequences`, §8.2) — клиент их не угадывает. Правки с
+ * правилом тела не пишут (заголовок, свойства, архив), поэтому досыла перед их отменой нет (`entityIds: []`).
+ */
+function offerByRule(
+  option: UndoToastOption | undefined,
+  ref: JournalRef,
+  vars: UpdateInput,
+  prior: Entity | undefined,
+): boolean {
+  if (option === undefined) return false;
+  const rule = typeof option === 'function' ? option(vars, prior) : option;
+  if (rule === null || (rule.kind === 'if-consequences' && !ref.consequences)) return false;
+  offerUndoLazy({
+    title: rule.kind === 'free-value' ? `${rule.title} ${rule.prior} → ${rule.next}` : rule.title,
+    actionId: ref.actionId,
+    entityIds: [],
+  });
+  return true;
+}
+/** Правило шапки записи: галочка — по последствиям, архив — всегда, заголовок — без плашки (у него стрелки, п. 4). */
+export function recordEditRule(vars: UpdateInput, prior: Entity | undefined): UndoToastRule | null {
+  const title = prior?.title ?? '';
+  if (vars.archived !== undefined)
+    return {
+      kind: 'always',
+      title: vars.archived ? `В архиве: «${title}»` : `Из архива: «${title}»`,
+    };
+  if (vars.props?.['orbis/task_status'] === 'done')
+    return { kind: 'if-consequences', title: `Задача закрыта: «${title}»` };
+  if (vars.unset?.includes('orbis/task_status'))
+    return { kind: 'if-consequences', title: `Задача открыта: «${title}»` };
+  return null;
+}
+
+/** У текста и заголовка собственные стрелки: одна правка не получает две отмены. */
+function stackable(vars: UpdateInput): boolean {
+  return vars.autosave !== true && vars.title === undefined;
 }

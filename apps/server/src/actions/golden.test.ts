@@ -30,7 +30,6 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import {
   BUILTIN_ACTION_DEFS,
-  batchAuditMessageId,
   canonicalJson,
   type GraphId,
   newId,
@@ -49,9 +48,11 @@ import {
   requireEnv,
   truncateAll,
 } from '../../test/helpers';
+import { journalOf as journalEntryOf, wholeJournalOf } from '../../test/journal-helpers';
 import { confirmPurchase } from '../budget/plan-to-fact';
 import { withIdentity } from '../db/with-identity';
-import { makeChatJournalSink } from '../executor/journal';
+import { makeJournalSink } from '../executor/journal';
+import { actionRecordOf } from '../executor/journal-read';
 import { stateDelta } from '../executor/props';
 import type { ActionCard, ActionRecord, WireEntity } from '../executor/types';
 import { undoAction } from '../executor/undo';
@@ -64,7 +65,7 @@ import { actionCallFacts } from './run';
 
 requireEnv();
 const { db, client } = appDb();
-const sink = makeChatJournalSink();
+const sink = makeJournalSink();
 
 /**
  * Владельцы половин: `legacy` — сегодняшний код, `action` — декларация конвейером (`resolveAction`
@@ -157,16 +158,21 @@ async function snapshotWorld(owner: GraphId, slugs: readonly string[]): Promise<
   });
 }
 
-/** Строка журнала по детерминированному PK audit-сообщения (§7.8). */
+/**
+ * Строка журнала пачки по её batch_id (§7.8) — через API журнала (помощник `journalOf`), в форме
+ * эталона: запись действия (`ActionRecord`) и карточка. Эталон хранит прежнюю форму строки; сменит её
+ * вместе с хранилищем задача 5 (эталоны пересдаются руками).
+ */
 async function journalOf(
   owner: GraphId,
   batchId: string,
 ): Promise<{ action: ActionRecord; card: ActionCard }> {
-  const found = await withIdentity(db, personal(owner), (tx) =>
-    sink.findByAuditId(tx, batchAuditMessageId(owner, batchId)),
-  );
-  if (found === undefined) throw new Error(`audit-сообщение ${batchId} не найдено`);
-  return { action: found.action, card: found.card as ActionCard };
+  const found = await journalEntryOf(owner, batchId);
+  if (found === undefined) throw new Error(`запись журнала ${batchId} не найдена`);
+  return {
+    action: actionRecordOf(found),
+    card: { tool: found.cardTool, entity_id: found.entityId, title: found.title },
+  };
 }
 
 const caseOf = (name: string) => {
@@ -463,16 +469,31 @@ async function stateOf(
 }
 
 /**
- * Запись отката в журнале — undo-сообщение `{type:'undo', undoes}` (§7.8): нового action откат не
- * порождает (undo неотменяем), поэтому «строка журнала» случая отката — именно оно.
+ * Запись отката в журнале — строка `type:'undo'` (§7.8, спека скорости §11.2): нового action откат не
+ * порождает (undo неотменяем), поэтому «строка журнала» случая отката — именно она. Форма эталона — поля строки
+ * snake_case, как у записи действия выше: путь отмены, актор, заголовок и тул, затронутые записи, операции
+ * (применённый inverse — аудит) и пустой собственный inverse. Эталон пересдан задачей 5 руками (прежняя запись
+ * отмены несла только `{type, undoes}`).
  */
 async function undoRecordOf(owner: GraphId, actionId: string): Promise<unknown> {
-  const probe = JSON.stringify({ type: 'undo', undoes: actionId });
-  const rows = await withIdentity(db, personal(owner), (tx) =>
-    tx.execute(sql`SELECT metadata FROM chat_messages WHERE metadata @> ${probe}::jsonb`),
-  );
-  if (rows.length !== 1) throw new Error(`undo-сообщений ${actionId}: ${rows.length}, ждали одно`);
-  return rows[0]?.metadata;
+  const undos = (await wholeJournalOf(owner)).filter((e) => e.undoes === actionId);
+  const u = undos[0];
+  if (undos.length !== 1 || u === undefined)
+    throw new Error(`записей отмены ${actionId}: ${undos.length}, ждали одну`);
+  return {
+    type: u.type,
+    undoes: u.undoes,
+    source: u.source,
+    actor_kind: u.actorKind,
+    actor_user_id: u.actorUserId,
+    mechanism: u.mechanism,
+    entity_id: u.entityId,
+    entity_ids: u.entityIds,
+    title: u.title,
+    card_tool: u.cardTool,
+    operations: u.operations,
+    inverse: u.inverse,
+  };
 }
 
 beforeAll(async () => {
@@ -505,7 +526,7 @@ beforeAll(async () => {
         params: { occurred_on: OCCURRED_ON },
         batch_id: batchOf(OWNER.action, 'purchase'),
       },
-      { today: OCCURRED_ON, timeZone: 'Europe/Moscow' },
+      { today: OCCURRED_ON, timeZone: 'Europe/Moscow', ownerCurrency: 'RUB' },
     ),
   );
   const r = await execute(
@@ -546,6 +567,7 @@ beforeAll(async () => {
     const r = await resolveAction(tx, reg, OWNER.tasks, call, {
       today: OCCURRED_ON,
       timeZone: 'Europe/Moscow',
+      ownerCurrency: 'RUB',
     });
     return classifyToolCall(
       actionCallFacts(reg, r.decl, r.operations, r.targets, chatCtx(OWNER.tasks)),
@@ -624,7 +646,7 @@ describe('§С8-27 plan-to-fact: код и декларация дают оди�
           await effectiveRegistry(tx, owner),
           owner,
           { action: 'finance/plan-to-fact', self: id, params: { occurred_on: OCCURRED_ON } },
-          { today: OCCURRED_ON, timeZone: 'Europe/Moscow' },
+          { today: OCCURRED_ON, timeZone: 'Europe/Moscow', ownerCurrency: 'RUB' },
         ).then(
           () => ({ code: 'нет отказа', reason: undefined }),
           (e: unknown) => ({

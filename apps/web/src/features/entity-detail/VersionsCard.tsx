@@ -8,15 +8,22 @@
 // Восстанавливается ТОЛЬКО тело — аспекты, связи и заголовок в снимок не входят (инвариант 8
 // среза). Об этом сказано в подтверждении: «восстановить версию» без оговорки читается как
 // «вернуть запись целиком», и человек нажимал бы её, ожидая большего, чем случится.
-import { useId, useState } from 'react';
+import { useEffect, useId, useRef, useState, useSyncExternalStore } from 'react';
 import { formatDate } from '../../lib/format';
 import { invalidateGraph } from '../../lib/invalidate';
+import { isBodyStale } from '../../lib/orbis-error';
 import { type RouterOutputs, trpc } from '../../trpc';
 import { Badge } from '../../ui/Badge';
 import { Button } from '../../ui/Button';
 import { Dialog } from '../../ui/Dialog';
 import { useToast } from '../../ui/toast-store';
-import { useHostReadOnly } from './record-host';
+import { resetSteps } from '../entity-editor/arrows-stack';
+import { beginBodyRewrite, bodyRevisionOf, flushBodyOf } from '../entity-editor/body-flush';
+import { journalRefOf } from '../undo/journal-ref';
+import { isUndoEpoch, subscribeUndoEpoch, undoEpoch } from '../undo/undo-epoch';
+import { offerUndoLazy } from '../undo/undo-lazy';
+import { shownBodyRevision, useHostReadOnly } from './record-host';
+import { detailGetInput } from './useEntityDetail';
 
 type Entity = RouterOutputs['entity']['get']['entity'];
 type Version = RouterOutputs['version']['list'][number];
@@ -42,25 +49,94 @@ export function VersionsCard({ entity, active }: { entity: Entity; active: boole
   const [target, setTarget] = useState<Version | null>(null);
   const cancelId = useId();
 
+  const epoch = useSyncExternalStore(subscribeUndoEpoch, undoEpoch, undoEpoch);
+  const restoreEpoch = useRef(epoch);
+  const finishRewrite = useRef<(revision?: number) => void>(() => {});
   const restore = trpc.version.restore.useMutation({
-    onSuccess: () => {
-      setTarget(null);
+    meta: { undoStack: 'self' },
+    onMutate: () => ({ finish: finishRewrite.current, entityId: entity.id }),
+    onSuccess: (data, _vars, ctx) => {
+      resetSteps(data.id);
+      utils.entity.get.setData(detailGetInput(data.id), (old) =>
+        old ? { ...old, entity: data } : old,
+      );
+      ctx?.finish(data.bodyRevision);
+      if (currentId.current === data.id && alive.current) setTarget(null);
       // Тело записи переписано — граф перечитывается целиком (Р17): та же запись открыта в
       // редакторе, а её строка живёт в чужих подзадачах и backlinks.
       invalidateGraph(utils);
-      show('Тело восстановлено');
+      const ref = journalRefOf(data);
+      if (ref)
+        offerUndoLazy({
+          title: 'Тело восстановлено',
+          actionId: ref.actionId,
+          entityIds: [entity.id],
+        });
     },
     // Отказ показываем строкой ниже, а модалку закрываем: открытый диалог поверх сообщения об
     // отказе читался бы как «нажми ещё раз» (тот же порядок в RunFeed).
-    onError: () => setTarget(null),
+    onError: (_error, _vars, ctx) => {
+      ctx?.finish();
+      if (currentId.current === ctx?.entityId && alive.current) setTarget(null);
+    },
   });
 
+  const alive = useRef(true);
+  const currentId = useRef(entity.id);
+  currentId.current = entity.id;
+  useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+    };
+  }, []);
+  const flushPending = useRef<{ epoch: number } | null>(null);
+  const [flushingEpoch, setFlushingEpoch] = useState<number | null>(null);
+  const flushing = flushingEpoch === epoch;
+  const restoreOwned = isUndoEpoch(restoreEpoch.current);
+  const restoring = restore.isPending && restoreOwned;
+  const restoreTo = async (version: Version) => {
+    if ((flushPending.current && isUndoEpoch(flushPending.current.epoch)) || restoring) return;
+    const intent = { epoch: undoEpoch() };
+    flushPending.current = intent;
+    const id = entity.id;
+    setFlushingEpoch(intent.epoch);
+    try {
+      const flushed = await flushBodyOf(id);
+      if (!isUndoEpoch(intent.epoch) || !alive.current || currentId.current !== id) return;
+      if (flushed === 'blocked' || flushed === 'offline') {
+        setTarget(null);
+        show(
+          flushed === 'blocked'
+            ? 'Текст записи не сохранён — сначала закончите правку или разрешите конфликт текста, затем восстанавливайте'
+            : 'Нет связи: набранный текст ещё не на сервере — восстановление не отправлено',
+          'danger',
+        );
+        return;
+      }
+      finishRewrite.current = beginBodyRewrite(id);
+      restoreEpoch.current = intent.epoch;
+      restore.mutate({
+        versionId: version.id,
+        expectedBodyRevision: bodyRevisionOf(id) ?? shownBodyRevision(entity),
+      });
+    } finally {
+      // Cleanup принадлежит этому ожиданию: поздний finally не снимает новый flight.
+      if (flushPending.current === intent) {
+        flushPending.current = null;
+        if (isUndoEpoch(intent.epoch) && alive.current && currentId.current === id)
+          setFlushingEpoch(null);
+      }
+    }
+  };
+
   /**
-   * 409 — НЕ плашка тела экрана (`screenConflict`), и это не небрежность: та питается только
-   * `entity.update` через useEntityDetail, а восстановление идёт своим роутером и до неё не
-   * доезжает никогда. Секция обязана сказать о своём отказе сама.
+   * Отказ замка текста (`STALE_VERSION` в `data.orbis`, спека скорости §8.1) — НЕ плашка тела
+   * экрана (`screenConflict`), и это не небрежность: та питается только `entity.update` через
+   * useEntityDetail, а восстановление идёт своим роутером и до неё не доезжает никогда. Секция
+   * обязана сказать о своём отказе сама.
    */
-  const conflict = restore.error?.data?.code === 'CONFLICT';
+  const conflict = restoreOwned && isBodyStale(restore.error);
 
   const versions = list.data;
 
@@ -88,7 +164,7 @@ export function VersionsCard({ entity, active }: { entity: Entity; active: boole
           </Button>
         </div>
       )}
-      {restore.isError && !conflict && (
+      {restoreOwned && restore.isError && !conflict && (
         <p role="alert" className="text-danger text-sm">
           {restore.error.message}
         </p>
@@ -126,7 +202,7 @@ export function VersionsCard({ entity, active }: { entity: Entity; active: boole
                 <Button
                   variant="outline"
                   size="sm"
-                  disabled={restore.isPending}
+                  disabled={restoring || flushing}
                   onClick={() => setTarget(v)}
                 >
                   Восстановить
@@ -163,15 +239,8 @@ export function VersionsCard({ entity, active }: { entity: Entity; active: boole
               </Button>
               <Button
                 size="sm"
-                disabled={restore.isPending}
-                onClick={() =>
-                  restore.mutate({
-                    versionId: target.id,
-                    // Метка ОТКРЫТОЙ записи: сервер сверит её и откажет 409, если тело правили,
-                    // пока экран смотрел на список (§5.2) — молча затирать чужое нельзя.
-                    expectedUpdatedAt: entity.updatedAt,
-                  })
-                }
+                disabled={restoring || flushing}
+                onClick={() => void restoreTo(target)}
               >
                 Восстановить
               </Button>

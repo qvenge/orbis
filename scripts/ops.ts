@@ -18,11 +18,18 @@
 //   bun scripts/ops.ts census         # только чтение: сколько тел перенос изменит сильнее прочих
 //   bun scripts/ops.ts audit-bodies   # только чтение: агрегаты по корпусу тел перед конверсией
 //   bun scripts/ops.ts census-v3      # только чтение: что изменит формат тела v3 (станут блоками, display=)
-//   bun scripts/ops.ts backfill-body-doc  # конверсия тел в body_doc — ТОЛЬКО после audit-bodies
 //   bun scripts/ops.ts reset-world --confirm <PROD_REF> --i-understand RESET  # РАЗРУШАЮЩАЯ (РП-7)
-//   bun scripts/ops.ts migrate-1b --report                # только чтение: план перевода данных среза 1б
-//   bun scripts/ops.ts migrate-1b --apply --i-understand  # разовый перевод данных среза 1б (РП-16)
-//   bun scripts/ops.ts ping           # связность и версия PostgreSQL
+//   bun scripts/ops.ts migrate-1v --report                           # только чтение: отчёт среза 1в (ДО миграции 0023)
+//   bun scripts/ops.ts migrate-1v --drop-agenda-rows --i-understand  # подписки/дельты владельца на Повестку (§6.5)
+//   bun scripts/ops.ts migrate-1v --apply --i-understand             # перевод графа среза 1в: одна пачка (§6.6)
+//   bun scripts/ops.ts migrate-1v --undo <actionId> --i-understand   # отмена пачки перевода (Undo §6.6)
+//   ORBIS_REHEARSAL_DSN=<DSN> bun scripts/ops.ts migrate-1v --rehearsal <режим>  # репетиция: только localhost
+//   bun scripts/ops.ts migrate-speed-a --report                    # отчёт переноса журнала, только чтение
+//   bun scripts/ops.ts migrate-speed-a --apply --i-understand        # первый проход: сообщения остаются
+//   bun scripts/ops.ts migrate-speed-a --apply --sweep-messages --i-understand # второй проход после нового кода
+//   ORBIS_REHEARSAL_DSN=<DSN> bun scripts/ops.ts migrate-speed-a --rehearsal <режим> # только localhost
+//   bun scripts/ops.ts perf [--since 7d] [--metric <m>]  # только чтение: объём журнала, перцентили замеров, чистка pg_cron
+//   bun scripts/ops.ts ping           # связность, версия PostgreSQL и состояние pg_cron
 //   bun scripts/ops.ts issue-pat <uuid аккаунта> [метка] [--scope worker]  # headless-токен (§9.3)
 import { join } from 'node:path';
 import {
@@ -43,19 +50,16 @@ import {
   FLAGGED_LIMIT,
   formatFlagged,
 } from '../apps/server/src/db/audit-bodies';
-import {
-  backfillBodyDoc,
-  backfillExitCode,
-  describeRoleAccess,
-  drizzleBackfillIo,
-} from '../apps/server/src/db/backfill-body-doc';
 import { type CensusV3Row, censusV3, formatCensusV3 } from '../apps/server/src/db/census-v3';
-import { runMigrate1b } from '../apps/server/src/db/migrate-1b';
+import { migrate1vIo, runMigrate1v } from '../apps/server/src/db/migrate-1v';
+import { migrateSpeedAIo, runMigrateSpeedA } from '../apps/server/src/db/migrate-speed-a';
+import { runPerfReport } from '../apps/server/src/db/perf-report';
 import {
   REGISTRY_DELTAS_QUERY,
   REGISTRY_DRIFT_QUERIES,
 } from '../apps/server/src/db/registry-drift';
 import { runResetWorld } from '../apps/server/src/db/reset-world';
+import { describeRoleAccess } from '../apps/server/src/db/role-access';
 import * as schema from '../apps/server/src/db/schema';
 import {
   codeSystemDefinitions,
@@ -63,11 +67,7 @@ import {
   seedRegistries,
   seedRegistriesReport,
 } from '../apps/server/src/db/seed-registries';
-import {
-  identitiesForScheduler,
-  identityOfPerson,
-  parseAccountId,
-} from '../apps/server/src/identity';
+import { identityOfPerson, parseAccountId } from '../apps/server/src/identity';
 import { issuePatGrant, NotGraphOwnerError } from '../apps/server/src/oauth/grants';
 import { PAT_USAGE, parsePatArgs } from '../apps/server/src/oauth/pat-args';
 import {
@@ -371,7 +371,7 @@ async function auditBodiesOp(): Promise<number> {
     });
     console.log(`тел всего: ${r.total}`);
     console.log(`канон изменит body: ${r.changed}`);
-    // ДВА СТОП-КРАНА прода. Оба обязаны быть нулевыми до запуска backfill-body-doc: «канон
+    // ДВА СТОП-КРАНА прода. Оба обязаны быть нулевыми для признания конверсии: «канон
     // изменит body» на эту роль не годится — он велик и на здоровом корпусе (нормализация
     // разметки), а эти два растут только от настоящей беды.
     console.log(`СТОП-КРАН канон неустойчив (canon(canon) ≠ canon): ${r.unstable}`);
@@ -417,67 +417,6 @@ async function auditBodiesOp(): Promise<number> {
       );
     }
     return auditExitCode(who, r);
-  });
-}
-
-/**
- * Разовая конверсия тел в структурную форму (`entities.body_doc`) — ЕДИНСТВЕННАЯ пишущая
- * операция белого списка, которая трогает пользовательские данные.
- *
- * Порядок на проде жёсткий: сперва `migrate` (колонки без неё нет), потом READ-ONLY
- * `audit-bodies` — и только если его числа приемлемы, эта команда. Аудит для того и заведён:
- * заметная доля raw-блоков или ненулевые «ссылки внутри raw» означают, что до конверсии надо
- * расширять белые списки токенов, а не запускать бэкфилл. Откатывать нечем.
- *
- * Идемпотентна: берёт только строки с `body_doc IS NULL`, поэтому повторный запуск не делает
- * ничего. Пишет ОБЕ колонки — `body` тоже выравнивается до канона, иначе инвариант
- * «body === serializeBody(body_doc)» ломался бы на самом первом шаге.
- *
- * Работает по ЖИВОЙ базе, поэтому запись идёт под CAS: строку, которую владелец или агент
- * тронул между выборкой и записью, бэкфилл НЕ переписывает (иначе затёр бы свежий текст
- * каноном прочитанного старого). Такие строки попадают в «пропущено» и остаются на ленивую
- * конверсию при первом чтении.
- *
- * Печатает ТРИ числа и ФАКТ РОЛИ. Одних чисел мало: роль с грантами, но без `BYPASSRLS`, под
- * FORCE RLS видит ноль строк — и «0 / 0 / 0» у неё неотличимо от «корпус уже сконвертирован»
- * (воспроизведено пробой под `authenticated`: `count(*)` вернул 0 при непустой таблице). Три
- * числа этот случай различить НЕ МОГУТ в принципе — различает только `rolbypassrls`, поэтому
- * он и печатается (ревью M-2, второй круг).
- *
- * Ни цикл, ни SQL здесь не дублируются: сырой пул `withDb` оборачивается в drizzle (так же, как
- * в migrateOp и issuePat выше) и отдаётся тому же `drizzleBackfillIo`, который прогоняет тест.
- * Дословная вторая копия цикла осталась бы непокрытой и разошлась бы с проверенной на первой же
- * правке (ревью И16).
- */
-async function backfillBodyDocOp(): Promise<number> {
-  return withDb(async (sql) => {
-    const db = drizzle(sql, { schema });
-    const who = await describeRoleAccess(db);
-    console.log(`роль: ${who.role} (BYPASSRLS: ${who.bypassRls ? 'да' : 'НЕТ'})`);
-    const result = await backfillBodyDoc(drizzleBackfillIo(db));
-    const { done, skipped, pending } = result;
-    console.log(`сконвертировано тел: ${done}`);
-    console.log(`осталось неконвертированных: ${pending}`);
-    console.log(`пропущено (тело изменилось во время прогона): ${skipped}`);
-    // `done === 0` в гейте обязателен наравне с остатком: без BYPASSRLS обнуляется И pending
-    // (он считается тем же SELECT под той же политикой), поэтому гейт только по остатку
-    // молчал бы ровно в том случае, ради которого заведён.
-    if (pending > 0 || done === 0) {
-      console.log(
-        who.bypassRls
-          ? '\nОстаток — норма, если тела правили во время прогона: их догонит повторный запуск' +
-              '\n(или ленивая конверсия при первом чтении). Если же и остаток, и сконвертировано' +
-              '\nнулевые — корпус либо уже сконвертирован, либо пуст; сверь с `audit-bodies`.'
-          : `\nВНИМАНИЕ: роль ${who.role} НЕ несёт BYPASSRLS, а на entities включён FORCE RLS` +
-              '\nс политикой current_graph_select (текущий граф И грант актора в нём). Прямое' +
-              '\nподключение не выставляет ни того, ни другого, поэтому такая роль видит НОЛЬ строк —' +
-              '\nи нули выше означают «корпус НЕ ВИДЕН», а НЕ «корпус сконвертирован».' +
-              '\nНужен DSN роли с BYPASSRLS (на Supabase — postgres).',
-      );
-    }
-    // Код возврата, а не только предупреждение (итоговое ревью, находка 6): печать читает
-    // человек, а запуск из скрипта читает КОД, и он врал успехом на «корпус не виден».
-    return backfillExitCode(who, result);
   });
 }
 
@@ -591,32 +530,69 @@ async function resetWorldOp(args: string[]): Promise<number> {
 }
 
 /**
- * Разовый перевод данных среза 1б (РП-16, спека §12): граф старой формы → записи поставки, навигация
- * оболочки хоста из закреплённых, шесть списков → страницы поставки, Финансы выключены — одной пачкой
- * исполнителя на граф с подписью журнала. `--report` печатает план и ничего не пишет.
+ * Прод-операция среза 1в (спека 1в §6.5, §6.6, §10; РП-14): `--report` ДО миграции `0023` (без загрузки
+ * реестра), `--drop-agenda-rows` по слову владельца, `--apply` — одна пачка исполнителя на граф с источником
+ * `system` (Повестка, навигация хоста, «Год», Upcoming), `--undo` — отмена этой пачки (запись журнала скрыта
+ * из ленты, и другого пути к Undo у владельца нет), `--rehearsal` — DSN локальной базы репетиции.
  *
- * Логика, гейт подтверждения и печать — в `db/migrate-1b.ts` под тестом на фикстуре прод-формы; здесь
- * обвязка, как у `reset-world`. Графы — те же пары «граф, владелец», что обходит планировщик
- * (`identitiesForScheduler`: графы со строкой настроек); запись идёт под идентичностью владельца
- * (`withIdentity` делает `SET LOCAL ROLE authenticated` — админская роль это умеет).
+ * Логика, гейт, сторож DSN репетиции, печать и сборка IO (`migrate1vIo`) — в `db/migrate-1v.ts` под тестом на
+ * фикстуре прод-формы; здесь — Ключница, окружение и драйвер. Графы — пары «граф, владелец» планировщика (`identitiesForScheduler`);
+ * перевод идёт под идентичностью владельца (`withIdentity` делает `SET LOCAL ROLE authenticated`).
+ * `--rehearsal` подменяет ровно DSN: Ключница при нём не читается вовсе, а DSN из окружения пропускается
+ * только с хостом `localhost`/`127.0.0.1` (сторож — `rehearsalDsnRefusal`).
  */
-async function migrate1bOp(args: string[]): Promise<number> {
-  return runMigrate1b(args, {
-    readDsn,
-    openDb: (dsn) => {
-      const sql = postgres(dsn, { max: 1 });
-      return { db: drizzle(sql, { schema }), close: () => sql.end() };
-    },
-    identities: identitiesForScheduler,
-    log: (line) => console.log(line),
-    error: (line) => console.error(line),
-  });
+async function migrate1vOp(args: string[]): Promise<number> {
+  // Сборка IO — `migrate1vIo` модуля операции (под тестом); здесь — только Ключница, окружение и драйвер.
+  return runMigrate1v(
+    args,
+    migrate1vIo({
+      readDsn,
+      env: process.env,
+      openSql: (dsn) => postgres(dsn, { max: 1 }),
+      log: (line) => console.log(line),
+      error: (line) => console.error(line),
+    }),
+  );
 }
 
+/** Перенос журнала плана А (РП-2): подтверждение и локальная репетиция проверяются до чтения Ключницы. */
+async function migrateSpeedAOp(args: string[]): Promise<number> {
+  return runMigrateSpeedA(
+    args,
+    migrateSpeedAIo({
+      readDsn,
+      env: process.env,
+      openSql: (dsn) => postgres(dsn, { max: 1 }),
+      log: (line) => console.log(line),
+      error: (line) => console.error(line),
+    }),
+  );
+}
+
+/** Только чтение (спека скорости §3.3): объём журнала по графам, дням (UTC) и источникам действия (§3.1), перцентили полевых замеров с разрезами и последний прогон чистки `pg_cron`. */
+async function perfOp(args: string[]): Promise<number> {
+  return withDb((sql) =>
+    runPerfReport(args, { sql, log: (l) => console.log(l), error: (l) => console.error(l) }),
+  );
+}
+
+/**
+ * Связность и версия PostgreSQL; с плана скорости — и `pg_cron` (предпроверка прод-задачи плана А, ПВ-5): миграция 0024
+ * ставит расширение и задачу чистки замеров, а без библиотеки в `shared_preload_libraries` `CREATE EXTENSION` упадёт.
+ */
 async function ping(): Promise<number> {
   await withDb(async (sql) => {
     const [row] = await sql<{ version: string }[]>`SELECT version()`;
     console.log(row?.version ?? 'нет ответа');
+    const [cron] = await sql<
+      { available: string | null; installed: string | null; preload: boolean }[]
+    >`
+      SELECT (SELECT default_version FROM pg_available_extensions WHERE name = 'pg_cron') AS available,
+             (SELECT extversion FROM pg_extension WHERE extname = 'pg_cron') AS installed,
+             current_setting('shared_preload_libraries') LIKE '%pg_cron%' AS preload`;
+    console.log(
+      `pg_cron: доступно ${cron?.available ?? 'нет'}, установлено ${cron?.installed ?? 'нет'}, в shared_preload_libraries: ${cron?.preload ? 'да' : 'нет'}`,
+    );
   });
   return 0;
 }
@@ -775,10 +751,6 @@ const OPS: Record<string, { run: (args: string[]) => Promise<number>; help: stri
     run: censusV3Op,
     help: 'только чтение: что изменит формат тела v3 — станут блоками, плашки, display=table/list; узлы страницы не на месте (не ноль — СТОП перед 1б; тела не печатаются)',
   },
-  'backfill-body-doc': {
-    run: backfillBodyDocOp,
-    help: 'конверсия тел в body_doc + выравнивание body до канона; ТОЛЬКО после audit-bodies',
-  },
   'reset-world': {
     run: resetWorldOp,
     help:
@@ -786,13 +758,22 @@ const OPS: Record<string, { run: (args: string[]) => Promise<number>; help: stri
       'пользовательские строки реестров и дельты; ' +
       'пересеять шесть реестров. Требует --confirm <PROD_REF> и --i-understand RESET',
   },
-  'migrate-1b': {
-    run: migrate1bOp,
+  'migrate-1v': {
+    run: migrate1vOp,
     help:
-      'разовый перевод данных среза 1б: --report — только план (ничего не пишет); ' +
-      '--apply --i-understand — одна пачка исполнителя на граф с подписью журнала',
+      'срез 1в: --report (только чтение, ДО миграции 0023) | --drop-agenda-rows --i-understand | ' +
+      '--apply --i-understand (одна пачка на граф, источник system) | --undo <actionId> --i-understand; ' +
+      '--rehearsal — DSN из ORBIS_REHEARSAL_DSN, только localhost',
   },
-  ping: { run: ping, help: 'связность и версия PostgreSQL' },
+  'migrate-speed-a': {
+    run: migrateSpeedAOp,
+    help: 'перенос журнала: --report | --apply [--sweep-messages] --i-understand; --rehearsal — модификатор режима, DSN только localhost/127.0.0.1',
+  },
+  perf: {
+    run: perfOp,
+    help: 'только чтение: объём журнала по графам, дням (UTC) и источникам действия, перцентили полевых замеров, чистка pg_cron [--since 7d] [--metric <m>] (спека скорости §3.3)',
+  },
+  ping: { run: ping, help: 'связность, версия PostgreSQL и состояние pg_cron' },
   dump: {
     run: dumpOp,
     help: 'только чтение: плейн-дамп прода в <каталог> вне git (личные данные — удалить после репетиции)',

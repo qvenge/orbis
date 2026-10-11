@@ -57,7 +57,7 @@ import type { PropsViolation } from '../registry/validate-props';
 import { bumpOwnerRegistryVersion } from '../registry/version';
 import { toWireEntity, toWireEntityFromSql } from '../wire';
 import { touchesBudgetContour } from './executor';
-import { makeChatJournalSink } from './journal';
+import { makeJournalSink } from './journal';
 import {
   applyPropsPatch,
   comparePropertyValue,
@@ -76,7 +76,7 @@ requireEnv();
 
 const { db, client } = appDb();
 const owner = mintGraph();
-const sink = makeChatJournalSink();
+const sink = makeJournalSink();
 const T0 = new Date('2026-08-26T10:00:00.000Z');
 const CATEGORY_A = '019e4466-aaaa-7e07-b5d4-64be9721da51';
 const CATEGORY_B = '019e4466-bbbb-7e07-b5d4-64be9721da52';
@@ -945,10 +945,15 @@ describe('флаг writer: свойство пишет только назван
         reason: 'writer',
       });
     }
+    // `upcoming` — СНЯТЫЙ с поставки ключ (срез 1в §6.3, РП-10): эталона у него нет, но вариантом
+    // `orbis/supply_key` он остаётся — записи 1б с ним живут, и механизм `supply` его по-прежнему пишет.
     const created = entityOf(
       await run('entity_create', supplyPage('upcoming'), { mechanism: 'supply' }),
     );
     expect((await rowOf(created.id)).props[SUPPLY_KEY]).toBe('upcoming');
+    // Ключ вне вариантов — отказ схемы значения даже у `supply`: «снятый» ≠ «любой».
+    const unknown = await run('entity_create', supplyPage('no-such-key'), { mechanism: 'supply' });
+    expect(unknown.ok).toBe(false);
 
     // Правка готовой записи поставки — то же распоряжение: и запись, и снятие отпечатка владельцу закрыты.
     const patch = await run('entity_update', {
@@ -1307,6 +1312,8 @@ describe('списочные пути несут новую форму', () => {
             thisEntityId: note.id,
             today: '2026-08-26',
             timeZone: 'Europe/Moscow',
+            weekStart: 'monday',
+            ownerCurrency: 'RUB',
           }),
         )),
       ] as Array<Record<string, unknown>>;

@@ -15,8 +15,17 @@ function parsed(text: string): QueryAst {
   return r.ast;
 }
 
-test('RELATIVE_DATE_TOKENS — ровно четыре токена грамматики', () => {
-  expect([...RELATIVE_DATE_TOKENS]).toEqual(['today', 'overdue', 'next_7d', 'after_7d']);
+test('RELATIVE_DATE_TOKENS — ровно восемь токенов языка (с 1в, спека §3.4)', () => {
+  expect([...RELATIVE_DATE_TOKENS]).toEqual([
+    'today',
+    'overdue',
+    'next_7d',
+    'after_7d',
+    'this_week',
+    'next_14d',
+    'this_month',
+    'last_month',
+  ]);
 });
 
 test('относительный токен — не абсолютная дата', () => {
@@ -113,4 +122,18 @@ test('не дата: has=, текстовое свойство со «строк
   // Свойства нет в реестре — «дата» ли оно, неизвестно; судить берётся только реестр.
   const unknown: QueryAst = { filter: { prop: 'user/nope', op: 'eq', value: '2026-01-01' } };
   expect(absoluteDateIn(unknown, REG)).toBeNull();
+});
+
+test('1в §3.8: абсолютная дата у адреса слота с датой и у значения «когда» — находка', () => {
+  expect(absoluteDateIn(parsed('orbis/when.deadline=2026-07-17'), REG)).toEqual({
+    prop: 'orbis/when.deadline',
+    value: '2026-07-17',
+  });
+  expect(absoluteDateIn(parsed('orbis/when>=2026-07-15'), REG)).toEqual({
+    prop: 'orbis/when',
+    value: '2026-07-15',
+  });
+  expect(absoluteDateIn(parsed('orbis/when=today'), REG)).toBeNull();
+  // Адрес суммы — не дата, число в нём находкой не считается.
+  expect(absoluteDateIn(parsed('orbis/money-movement.amount>1000'), REG)).toBeNull();
 });

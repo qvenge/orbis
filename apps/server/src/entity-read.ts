@@ -1,8 +1,8 @@
 // apps/server/src/entity-read.ts
 // §9.2 entity_get: include-логика полного чтения одной сущности — ОБЩИЙ хелпер
 // роутера entity (tRPC) и диспатча тулов LLM/MCP (tools/dispatch.ts), не копия.
-// include по умолчанию body+relations; entity возвращается целиком (wire-форма
-// entitySchema всегда несёт body), include управляет доп. секциями.
+// include по умолчанию relations; тело и документ — только явным opt-in,
+// дополнительные секции и лёгкая форма entity соответствуют текущему wire-контракту.
 // Вызывается ТОЛЬКО под withIdentity (RLS, §4.10); ошибки — ExecError (роутер
 // мапит в TRPCError, диспатч — в структурированный error-результат).
 import {
@@ -14,16 +14,17 @@ import {
   ROLE_REF,
 } from '@orbis/shared';
 import { readBodyDoc } from '@orbis/shared/doc';
-import { desc, eq, or, sql } from 'drizzle-orm';
+import { eq, or, sql } from 'drizzle-orm';
 import type { WireChatMessage } from './chat/messages';
-import { chatMessages, entities, relations } from './db/schema';
+import { entities, relations } from './db/schema';
 import type { Tx } from './db/with-identity';
 import { ExecError } from './errors';
 import type { WireEntity, WireRelation } from './executor/types';
+import { threadPage } from './journal/thread-page';
 import { effectiveRegistry, parseRegistryOfSnapshot } from './registry/cache';
 import type { RegistrySnapshot } from './registry/load';
 import { mirrorRuleOf } from './rules/carriers';
-import { toWireChatMessage, toWireEntity, toWireEntityFromSql, toWireRelation } from './wire';
+import { toWireEntityFromSql, toWireEntityWithRevision, toWireRelation } from './wire';
 
 /**
  * Источник обратной ссылки (02-core-os §3.5.8): явная связь роли `mention`, упоминание из
@@ -59,6 +60,9 @@ export interface Backlink {
 
 /** Потолок объединённой секции «Связанное» (sign-off K1): это экран, а не выгрузка. */
 const BACKLINKS_LIMIT = 100;
+
+/** Страница треда в `entity.get` — та же, что страница `chat.listMessages` по умолчанию (Д-7). */
+const THREAD_PAGE = 50;
 
 /**
  * Подпись упоминания из тела. Не из реестра, и это не пробел: у ссылки `[[entity:…]]` роли
@@ -111,6 +115,10 @@ function propertyLabels(reg: RegistrySnapshot, ids: readonly string[]): Map<stri
 }
 
 export interface EntityReadResult {
+  /**
+   * Запись с ревизией тела (`toWireEntityWithRevision`) — но типом общей формы записи: клиент кладёт ответ чтения туда
+   * же, куда строки списков (хост шаблона, оболочки, записи поставки), и сужение типа здесь разошлось бы по всем им.
+   */
   entity: WireEntity;
   relations?: WireRelation[];
   backlinks?: Backlink[];
@@ -134,7 +142,8 @@ export async function readEntity(
   graphId: GraphId,
   input: EntityGetUiInput,
 ): Promise<EntityReadResult> {
-  const include = new Set(input.include ?? ['body', 'relations']);
+  // Тело и документ — только по просьбе (§9); экран просит обе формы в DETAIL_INCLUDE.
+  const include = new Set(input.include ?? ['relations']);
   const rows = await tx.select().from(entities).where(eq(entities.id, input.id));
   const row = rows[0];
   // RLS: чужая и несуществующая неразличимы — единый NOT_FOUND
@@ -161,7 +170,10 @@ export async function readEntity(
     row.bodyDoc = readBodyDoc(row.bodyDoc, row.body, parseRegistryOfSnapshot(await registry()));
   }
 
-  const out: EntityReadResult = { entity: toWireEntity(row, wantsDoc) };
+  // Одна запись — с ревизией тела и временем его изменения (§8.1): с них клиент начинает правку текста.
+  const out: EntityReadResult = {
+    entity: toWireEntityWithRevision(row, wantsDoc, include.has('body')),
+  };
 
   if (include.has('relations')) {
     const rels = await tx
@@ -225,7 +237,7 @@ export async function readEntity(
         UNION
         SELECT id FROM ref_side
       )
-      SELECT e.id, e.graph_id, e.title, e.emoji, e.body, e.body_refs, e.tags,
+      SELECT e.id, e.graph_id, e.title, e.emoji, e.body_refs, e.tags,
              -- Столбцы те же, что в SELECT-листе компилятора (§6): их ждёт
              -- toWireEntityFromSql, и списочное чтение обязано нести ту же новую форму,
              -- что и одиночное (иначе backlinks молча отдают пустые props/aspects).
@@ -293,14 +305,14 @@ export async function readEntity(
     if (truncated) out.backlinksTruncated = true;
   }
   if (include.has('thread')) {
-    // Детерминированный id (§4.5); лениво НЕ создаёт: нет треда → пустой список
+    // Детерминированный id (§4.5); лениво НЕ создаёт: нет треда → пустой список. Выдача — та же страница, что у
+    // `chat.listMessages` (Д-7: раньше тред отдавался целиком и без фильтра — маркеры «думает» и журнал с телами
+    // уходили клиенту и агентам): последние THREAD_PAGE строк, новые первыми, карточки журнала без тел.
     const threadId = entityThreadId(graphId, row.id);
-    const msgs = await tx
-      .select()
-      .from(chatMessages)
-      .where(eq(chatMessages.threadId, threadId))
-      .orderBy(desc(chatMessages.createdAt), desc(chatMessages.id));
-    out.thread = { threadId, messages: msgs.map(toWireChatMessage) };
+    out.thread = {
+      threadId,
+      messages: await threadPage(tx, graphId, threadId, { limit: THREAD_PAGE }),
+    };
   }
   return out;
 }

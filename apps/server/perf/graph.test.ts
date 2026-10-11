@@ -18,6 +18,7 @@
 // Числа печатаются ВСЕГДА (все замеры поимённо, не только итог), включая зелёный прогон:
 // дрейф обязан быть виден глазами, а не только по красному.
 import { afterAll, beforeAll, expect, test } from 'bun:test';
+import { parseQueryAst, type QueryAst, toParseRegistry } from '@orbis/shared/query';
 import { sql } from 'drizzle-orm';
 import { withIdentity } from '../src/db/with-identity';
 import { recomputeProjectAncestors } from '../src/executor/ancestors';
@@ -60,12 +61,43 @@ const SMALL_CEILING_MS = 150;
  */
 const P95_RUNS = 20;
 
-/** Пороги П6 (§С8-13) — ДОСЛОВНО из спеки, а не «то, что получилось». */
+/**
+ * Пороги П6 (§С8-13) — ДОСЛОВНО из спеки, а не «то, что получилось»; два из них перекалиброваны
+ * РЕШЕНИЕМ ВЛАДЕЛЬЦА (R-13, 29.09), а не по факту замера, — у каждого своя строка ниже.
+ */
 const BUDGETS_MS = {
-  /** Обход поддерева под RLS запросом, который реально уходит из query-блока. */
-  'descendants_of:subtree': 100,
+  /**
+   * Обход поддерева под RLS запросом, который реально уходит из query-блока. Перекалибровка 1в,
+   * задача 3 (R-13, решение владельца 29.09): 100 → 130. `id` последним ключом §3.5 снимает раннюю
+   * остановку LIMIT — все 4 999 строк поддерева выбираются и сортируются top-N; индекс (graph_id, id) —
+   * трек «скорость». p95 до: 67,3 / 78,1 мс (02.09), EXPLAIN 74–77 мс; после: 115 / 98 / 122 мс
+   * (три прогона 29.09, тихая база), EXPLAIN 96–103 мс.
+   */
+  'descendants_of:subtree': 130,
   /** Пересчёт предков на поддереве ≥ 5000 узлов. */
   'recompute:subtree5k': 1000,
+  /**
+   * Значение «когда» (спека 1в С1в-14): страница Повестки по корпусу из 50 000 задач со сроками.
+   * Калибровка 1в, задача 1: порога в спеке нет — p95 первого прогона × 3, вверх до 10 мс
+   * (p95 = 142,8 мс → 430). Прогон ДО предфильтра значения (`valuePrefilter`, `contract-sql.ts`)
+   * давал 681,1 мс: коррелированный подзапрос дат считался на каждой из 50 000 строк.
+   */
+  'when:value-next_7d': 430,
+  /**
+   * Адрес слота `deadline` с `overdue` — калибровка 1в, задача 1 (p95 = 10,5 мс → 40). Перекалибровка 1в,
+   * задача 3 (R-13, решение владельца 29.09): 40 → 350. `id` последним ключом §3.5 снимает раннюю
+   * остановку LIMIT: при статистике с многими графами план собирает все ≈25 000 совпадений графа и
+   * сортирует; индекс (graph_id, id) — трек «скорость». p95 до: 10,5 / 18,1 / 21,4 мс (задача 1); после:
+   * 116 / 152 / 156 мс (прогоны координатора — много графов в базе), 18 / 15 / 16 мс (три графа);
+   * EXPLAIN при `n_distinct(graph_id) = 500`: 3,8 мс до, 109,5 мс после.
+   */
+  'when:slot-deadline': 350,
+} as const;
+
+/** Запросы замера «когда» — тексты, как их пишет блок страницы (спека 1в С1в-14). */
+const WHEN_QUERIES = {
+  'when:value-next_7d': 'orbis/when=next_7d, sortBy=orbis/when:asc, limit=200',
+  'when:slot-deadline': 'orbis/when.deadline=overdue',
 } as const;
 
 /**
@@ -149,6 +181,8 @@ beforeAll(async () => {
         graphId: GRAPH_OWNER_ID,
         today: '2026-07-03',
         timeZone: 'Europe/Moscow',
+        weekStart: 'monday',
+        ownerCurrency: 'RUB',
         reg,
       }),
     )),
@@ -162,6 +196,8 @@ beforeAll(async () => {
         graphId: GRAPH_OWNER_ID,
         today: '2026-07-03',
         timeZone: 'Europe/Moscow',
+        weekStart: 'monday',
+        ownerCurrency: 'RUB',
         reg,
       }),
     )),
@@ -186,6 +222,8 @@ test('корпус наполнен: обход идёт по данным, а �
     graphId: GRAPH_OWNER_ID,
     today: '2026-07-03',
     timeZone: 'Europe/Moscow',
+    weekStart: 'monday' as const,
+    ownerCurrency: 'RUB',
     reg,
   };
   const rows = await withIdentity(db, personal(GRAPH_OWNER_ID), async (tx) => [
@@ -211,7 +249,14 @@ test('корпус наполнен: обход идёт по данным, а �
 }, 300_000);
 
 test('П6: descendants_of под RLS и пересчёт предков на поддереве ≥5k', async () => {
-  const ctx = { graphId: GRAPH_OWNER_ID, today: '2026-07-03', timeZone: 'Europe/Moscow', reg };
+  const ctx = {
+    graphId: GRAPH_OWNER_ID,
+    today: '2026-07-03',
+    timeZone: 'Europe/Moscow',
+    weekStart: 'monday' as const,
+    ownerCurrency: 'RUB',
+    reg,
+  };
 
   // Два наблюдения рядом с гейтом (порога не несут, но без них порог нечем толковать):
   // обход ОТ КОРНЯ (весь корпус) и выгрузка ВСЕГО поддерева вместо страницы.
@@ -266,10 +311,28 @@ test('П6: descendants_of под RLS и пересчёт предков на п�
   });
   expect(cleared.recomputed).toBeGreaterThanOrEqual(4900);
 
+  // Язык контрактов (1в): значение «когда» и адрес слота на том же корпусе, под RLS.
+  const whenMs: Partial<Record<keyof typeof WHEN_QUERIES, number>> = {};
+  for (const [key, text] of Object.entries(WHEN_QUERIES) as [keyof typeof WHEN_QUERIES, string][]) {
+    const parsed = parseQueryAst(text, toParseRegistry(reg, 'ru'));
+    if (!parsed.ok) throw new Error(`${key}: ${parsed.error.code} ${parsed.error.message}`);
+    const ast: QueryAst = parsed.ast;
+    const hits = await withIdentity(db, personal(GRAPH_OWNER_ID), (tx) =>
+      tx.execute(compileCountAst(ast, ctx)),
+    );
+    // Сторож выборки: замер по пустому множеству ничего бы не мерил.
+    expect(Number((hits[0] as { count?: unknown })?.count)).toBeGreaterThan(0);
+    whenMs[key] = await measureP95(key, P95_RUNS, () =>
+      withIdentity(db, personal(GRAPH_OWNER_ID), (tx) => tx.execute(compileQueryAst(ast, ctx))),
+    );
+  }
+
   const over: string[] = [];
   for (const [key, ms] of [
     ['descendants_of:subtree', subtree],
     ['recompute:subtree5k', recompute],
+    ['when:value-next_7d', whenMs['when:value-next_7d'] ?? Number.POSITIVE_INFINITY],
+    ['when:slot-deadline', whenMs['when:slot-deadline'] ?? Number.POSITIVE_INFINITY],
   ] as const) {
     // Строка про порог П6 печатается на КАЖДОМ прогоне и для достигнутого порога тоже:
     // «достигнут» — такой же факт замера, как «не достигнут», и исчезнуть из вывода он не

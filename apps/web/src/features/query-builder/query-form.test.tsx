@@ -1,12 +1,16 @@
 import { DAILY_PLANNING_BODY, UPCOMING_BODY } from '@orbis/server/src/seed/smart-lists';
 import { parsePageText } from '@orbis/shared/doc/page-grammar';
-import { parseQueryAst, printQueryAst } from '@orbis/shared/query';
+import type { BodyKind } from '@orbis/shared/doc/placement';
+import { parseQueryAst, printQueryAst, QUERY_DATE_TOKEN_LABELS } from '@orbis/shared/query';
 import { FIXTURE_PARSE_REGISTRY as REG } from '@orbis/shared/query/fixtures';
-import { fireEvent, screen, within } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { expect, test, vi } from 'vitest';
+import { BodyKindProvider } from '../../lib/query-blocks/body-kind';
 import { type MockHandler, renderWithProviders } from '../../test/harness';
 import { registryReply } from '../../test/registry';
+import { QueryBlockEditor } from './QueryBlockEditor';
 import { QueryBuilderForm } from './QueryBuilderForm';
+import { QueryTextEditor } from './QueryTextEditor';
 
 /** Тексты блоков данных тела — препроходом, которым их читает первый кадр (РП-6). */
 const queryBlocks = (body: string): string[] =>
@@ -377,6 +381,30 @@ test('date-свойство правится относительными ток
   expect(saved(onSave)).toBe('aspect=orbis/task, orbis/due_date=today|next_7d');
 });
 
+test('1в §3.4: строка даты предлагает восемь подписей словаря токенов (РП-17) и точное значение', async () => {
+  const { onSave } = await openForm('aspect=orbis/task, orbis/due_date=today');
+  const select = screen.getByLabelText('Срок: значение 1') as HTMLSelectElement;
+  expect([...select.options].map((o) => [o.value, o.text])).toEqual([
+    ...Object.entries(QUERY_DATE_TOKEN_LABELS),
+    ['exact', 'точное значение'],
+  ]);
+  // Подписи — ровно спеки (словарь, а не локальный список web).
+  expect([...select.options].map((o) => o.text)).toEqual([
+    'сегодня',
+    'просрочено',
+    '7 дней',
+    'позже 7 дней',
+    'эта неделя',
+    '14 дней',
+    'этот месяц',
+    'прошлый месяц',
+    'точное значение',
+  ]);
+  fireEvent.change(select, { target: { value: 'this_month' } });
+  save();
+  expect(saved(onSave)).toBe('aspect=orbis/task, orbis/due_date=this_month');
+});
+
 test('date-свойство принимает точную дату вместо токена', async () => {
   const { onSave } = await openForm('aspect=orbis/task, orbis/due_date=today');
   fireEvent.change(screen.getByLabelText('Срок: значение 1'), { target: { value: 'exact' } });
@@ -690,4 +718,112 @@ test('у контролов формы есть связанные подпис�
   ]) {
     expect(screen.getByLabelText(label)).toBeInTheDocument();
   }
+});
+
+// Язык контрактов (спека 1в §3.1–§3.2): адрес контракта строки поля не получает, но форма его не
+// теряет — узел доезжает до печати нетронутым, как аспект или связь.
+test('форма над `orbis/when=next_7d, aspect=orbis/task`: аспект отмечен, адрес на месте после печати', async () => {
+  const { onSave } = await openForm('orbis/when=next_7d, aspect=orbis/task, limit=30');
+  expect(screen.getByRole('checkbox', { name: /Задача/ })).toBeChecked();
+  fireEvent.change(screen.getByLabelText('Лимит выдачи'), { target: { value: '5' } });
+  save();
+  expect(saved(onSave)).toBe('orbis/when=next_7d, aspect=orbis/task, limit=5');
+});
+
+test('сортировка по значению «когда» переживает правку направления — адрес остаётся адресом', async () => {
+  const { onSave } = await openForm('aspect=orbis/task, sortBy=orbis/when:asc');
+  fireEvent.change(screen.getByLabelText('Направление 1'), { target: { value: 'desc' } });
+  save();
+  expect(saved(onSave)).toBe('aspect=orbis/task, sortBy=orbis/when:desc');
+});
+
+// ─────────────── Параметр страницы в конструкторе (спека 1в §5.1, РП-5; обходчики web) ───────────────
+
+/** Форма под родом тела — как в редакторе страницы или заметки (род — контекстом экрана). */
+async function openFormIn(kind: BodyKind, initial: string) {
+  const onSave = vi.fn();
+  renderWithProviders(
+    <BodyKindProvider kind={kind}>
+      <QueryBlockEditor initial={initial} onSave={onSave} onCancel={() => {}} />
+    </BodyKindProvider>,
+    aspectsHandler,
+  );
+  return { onSave };
+}
+
+test('страница: строка условия с $period — `$period` только для чтения, печать сохраняет ссылку', async () => {
+  const initial = 'aspect=orbis/task, orbis/due_date=$period, limit=30';
+  const { onSave } = await openFormIn('page', initial);
+  // Форма, а не текстовый редактор: разбор и обратная печать — с местом страницы.
+  await screen.findByLabelText('Лимит выдачи');
+  const ref = screen.getByLabelText('Срок: значение 1') as HTMLInputElement;
+  expect(ref.value).toBe('$period');
+  expect(ref.readOnly).toBe(true);
+  expect(document.body.textContent).not.toContain('[object Object]');
+  fireEvent.change(screen.getByLabelText('Лимит выдачи'), { target: { value: '5' } });
+  save();
+  expect(saved(onSave)).toBe('aspect=orbis/task, orbis/due_date=$period, limit=5');
+});
+
+test('заметка: блок с $period — строковый редактор с отказом «только в блоках страниц и шаблонов»', async () => {
+  await openFormIn('note', 'aspect=orbis/task, orbis/due_date=$period');
+  expect(await screen.findByTestId('query-text-error')).toHaveTextContent(
+    'только в блоках страниц и шаблонов',
+  );
+});
+
+test('страница: строковый редактор разбирает $period без отказа', async () => {
+  renderWithProviders(
+    <BodyKindProvider kind="template">
+      <QueryTextEditor
+        initial="aspect=orbis/task, orbis/due_date=$period"
+        onSave={() => {}}
+        onCancel={() => {}}
+      />
+    </BodyKindProvider>,
+    aspectsHandler,
+  );
+  const field = await screen.findByTestId('query-text-edit');
+  // Реестр приехал — разбор идёт (опечатка в имени свойства даёт отказ), а ссылка отказа не даёт.
+  fireEvent.change(field, { target: { value: 'aspect=orbis/task, orbis/due_dat=$period' } });
+  expect(await screen.findByTestId('query-text-error')).toBeInTheDocument();
+  fireEvent.change(field, { target: { value: 'aspect=orbis/task, orbis/due_date=$period' } });
+  await waitFor(() => expect(screen.queryByTestId('query-text-error')).toBeNull());
+});
+
+// Перенос из задачи 2: токен без нужного края для оператора строки сохранение отвергло бы
+// (`TOKEN_EDGE`), поэтому форма его не предлагает. Знание краёв — из `@orbis/shared/query`.
+const tokensOf = (label: string) =>
+  [...(screen.getByLabelText(label) as HTMLSelectElement).options]
+    .map((o) => o.value)
+    .filter((v) => v !== 'exact');
+
+test('токены строки даты сужены по оператору: у `<` нет overdue, у `>` нет after_7d, у `=` — все восемь', async () => {
+  const all = Object.keys(QUERY_DATE_TOKEN_LABELS);
+  const without = (t: string) => all.filter((x) => x !== t);
+  await openForm('aspect=orbis/task, orbis/due_date<today');
+  expect(tokensOf('Срок: значение')).toEqual(without('overdue'));
+  fireEvent.change(screen.getByLabelText('Срок'), { target: { value: 'gt' } });
+  expect(tokensOf('Срок: значение')).toEqual(without('after_7d'));
+  fireEvent.change(screen.getByLabelText('Срок'), { target: { value: 'range' } });
+  expect(tokensOf('Срок: от')).toEqual(without('overdue'));
+  expect(tokensOf('Срок: до')).toEqual(without('after_7d'));
+  fireEvent.change(screen.getByLabelText('Срок'), { target: { value: 'anyOf' } });
+  expect(tokensOf('Срок: значение 1')).toEqual(all);
+});
+
+// Фикс-круг 1 (m-1): смена оператора пересобирает узел из литералов и молча теряла бы ссылку, поэтому
+// строка со ссылкой — только для чтения целиком: оператор, значения, кнопки.
+test('страница: строка с $period — оператор и значения только для чтения, ссылка переживает печать', async () => {
+  const initial = 'aspect=orbis/task, orbis/due_date=$period, limit=30';
+  const { onSave } = await openFormIn('page', initial);
+  await screen.findByLabelText('Лимит выдачи');
+  expect(screen.getByLabelText('Срок')).toBeDisabled();
+  expect(screen.queryByRole('button', { name: /Добавить значение: Срок/ })).toBeNull();
+  expect(screen.queryByRole('button', { name: /Удалить значение 1: Срок/ })).toBeNull();
+  // Попытка сменить оператор (событие доходит и до погашенного селекта в jsdom) узел не пересобирает.
+  fireEvent.change(screen.getByLabelText('Срок'), { target: { value: 'lt' } });
+  fireEvent.change(screen.getByLabelText('Лимит выдачи'), { target: { value: '5' } });
+  save();
+  expect(saved(onSave)).toBe('aspect=orbis/task, orbis/due_date=$period, limit=5');
 });

@@ -1,3 +1,4 @@
+import type { JournalRef } from '@orbis/shared';
 // apps/server/src/routers/relation.ts
 // Роутер relation (§9.1): мутации — единственным путём через execute (§9.2),
 // чтение графа — под withIdentity (RLS). Только трансляция, без бизнес-логики.
@@ -8,18 +9,19 @@ import { relations } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { execErrorToTRPC } from '../errors';
 import { execute } from '../executor/executor';
-import { makeChatJournalSink } from '../executor/journal';
+import { makeJournalSink } from '../executor/journal';
+import { journalRef } from '../executor/journal-ref';
 import type { WireRelation } from '../executor/types';
 import { ownerOnlyProcedure, protectedProcedure, router } from '../trpc';
 import { toWireRelation } from '../wire';
 
 // Боевой синк — один инстанс на модуль (без состояния, пишет тем же tx, §7.8)
-const sink = makeChatJournalSink();
+const sink = makeJournalSink();
 
 export const relationRouter = router({
   create: ownerOnlyProcedure
     .input(relationCreateInput)
-    .mutation(async ({ ctx, input }): Promise<WireRelation & { actionId?: string }> => {
+    .mutation(async ({ ctx, input }): Promise<WireRelation & JournalRef> => {
       const r = await execute(
         ctx.db,
         {
@@ -31,28 +33,23 @@ export const relationRouter = router({
         { sink },
       );
       if (!r.ok) throw execErrorToTRPC(r.error);
-      const relation = r.results[0] as WireRelation;
-      return r.idempotentReplay ? relation : { ...relation, actionId: r.actionId };
+      return { ...(r.results[0] as WireRelation), ...journalRef(r) };
     }),
 
-  delete: ownerOnlyProcedure
-    .input(relationDeleteInput)
-    .mutation(async ({ ctx, input }): Promise<{ ok: true; actionId?: string }> => {
-      const r = await execute(
-        ctx.db,
-        {
-          identity: ctx.identity,
-          actorKind: 'owner',
-          source: 'ui', // прямое действие владельца в UI
-          operations: [{ tool: 'relation_delete', input }],
-        },
-        { sink },
-      );
-      if (!r.ok) throw execErrorToTRPC(r.error);
-      return r.idempotentReplay
-        ? { ok: true as const }
-        : { ok: true as const, actionId: r.actionId };
-    }),
+  delete: ownerOnlyProcedure.input(relationDeleteInput).mutation(async ({ ctx, input }) => {
+    const r = await execute(
+      ctx.db,
+      {
+        identity: ctx.identity,
+        actorKind: 'owner',
+        source: 'ui', // прямое действие владельца в UI
+        operations: [{ tool: 'relation_delete', input }],
+      },
+      { sink },
+    );
+    if (!r.ok) throw execErrorToTRPC(r.error);
+    return { ok: true as const, ...journalRef(r) };
+  }),
 
   /** Связи сущности, обе стороны (source и target); RLS скоупит владельцем. */
   listFor: protectedProcedure

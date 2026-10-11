@@ -1,6 +1,11 @@
 // apps/server/test/legacy-world.ts
 import type { GraphId } from '@orbis/shared';
-import { LEGACY_ETALON_TEXTS, SEED_SMART_LISTS } from '@orbis/shared/supply';
+import {
+  LEGACY_ETALON_TEXTS,
+  LEGACY_SEED_LIST_SLUGS,
+  SEED_SMART_LISTS,
+  UPCOMING_BODY,
+} from '@orbis/shared/supply';
 import { sql } from 'drizzle-orm';
 import { ensureGlobalThread } from '../src/chat/threads';
 import { withIdentity } from '../src/db/with-identity';
@@ -13,9 +18,13 @@ import { appDb, personal } from './helpers';
 /**
  * Мир СТАРОЙ ФОРМЫ (до среза 1б) — таким его оставил прежний онбординг у владельца в проде.
  *
- * Зачем фикстура, а не прежний код сева: код сева 1б этой формы больше не производит, а два
- * потребителя её ждут — отказ `GRAPH_NEEDS_MIGRATION` на входе (задача 12) и перевод данных
- * `migrate-1b` (задача 13, ветка «прежний эталон» РП-35).
+ * Зачем фикстура, а не прежний код сева: код сева этой формы больше не производит, а её ждёт отказ
+ * `GRAPH_NEEDS_MIGRATION` на входе (заведение графа, `seed/setup-graph.ts`). Перевод данных 1б
+ * `migrate-1b`, второй потребитель, исполнен в проде 28.09 и снят срезом 1в (РП-13).
+ *
+ * Шесть списков — ПРЕЖНИЕ (`LEGACY_SEED_LIST_SLUGS`, с Upcoming), а не нынешний сев с Повесткой
+ * (срез 1в §6.3): заголовки и эмодзи — у пяти из `SEED_SMART_LISTS`, у Upcoming — свои литералы ниже
+ * (её в нынешнем севе нет).
  *
  * Состав: 12 категорий (как сегодня: тег `category`, аспект Финансов); шесть списков с тегом
  * `smart-list` БЕЗ аспектов — у Daily Planning, Upcoming, All Tasks (до §Б1-2, R-39), «Года» и «Жизни»
@@ -33,14 +42,21 @@ export async function seedLegacyWorld(graph: GraphId): Promise<void> {
   const { db, client } = appDb();
   try {
     await withIdentity(db, who, (tx) => ensurePersonalGraph(tx, who));
-    const lists = SEED_SMART_LISTS.map((l) => ({
-      id: seedSmartListId(graph, l.slug),
-      title: l.title,
-      emoji: l.emoji,
-      body: LEGACY_ETALON_TEXTS[l.slug] ?? l.body,
-      tags: ['smart-list'],
-      props: {},
-    }));
+    const lists = LEGACY_SEED_LIST_SLUGS.map((slug) => {
+      const now = SEED_SMART_LISTS.find((l) => l.slug === slug);
+      const head =
+        slug === 'upcoming'
+          ? { title: 'Upcoming', emoji: '🗓️', body: UPCOMING_BODY }
+          : { title: now?.title ?? slug, emoji: now?.emoji ?? null, body: now?.body ?? '' };
+      return {
+        id: seedSmartListId(graph, slug),
+        title: head.title,
+        emoji: head.emoji,
+        body: LEGACY_ETALON_TEXTS[slug] ?? head.body,
+        tags: ['smart-list'],
+        props: {},
+      };
+    });
     const categories = SEED_CATEGORIES.map((c) => ({
       id: seedCategoryId(graph, c.slug),
       title: c.title,

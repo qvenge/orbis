@@ -26,7 +26,8 @@ import type { WireChatMessage } from '../src/chat/messages';
 import { aiUsage, chatMessages, entities } from '../src/db/schema';
 import { withIdentity } from '../src/db/with-identity';
 import { execute } from '../src/executor/executor';
-import type { ActionRecord, WireEntity } from '../src/executor/types';
+import type { JournalEntry } from '../src/executor/journal-read';
+import type { WireEntity } from '../src/executor/types';
 import { ScriptedProvider } from '../src/llm/scripted';
 import { makeMcpHandler } from '../src/mcp/transport';
 import { issuePatGrant } from '../src/oauth/grants';
@@ -34,6 +35,7 @@ import { appRouter } from '../src/router';
 import type { Card } from '../src/tools/registry';
 import { createCallerFactory } from '../src/trpc';
 import { accountOf, appDb, mintGraph, personal, requireEnv, truncateAll } from './helpers';
+import { threadJournal } from './journal-helpers';
 
 requireEnv();
 
@@ -104,19 +106,9 @@ async function callTool(
   };
 }
 
-/** actions[0] всех audit-сообщений глобального треда владельца (§7.8). */
-async function globalAuditActions(): Promise<ActionRecord[]> {
-  const rows = await withIdentity(db, personal(owner), (tx) =>
-    tx
-      .select()
-      .from(chatMessages)
-      .where(eq(chatMessages.threadId, globalThreadId(owner)))
-      .orderBy(chatMessages.createdAt, chatMessages.id),
-  );
-  return rows
-    .filter((r) => r.role === 'system')
-    .map((r) => (r.metadata as { actions?: ActionRecord[] }).actions?.[0])
-    .filter((a): a is ActionRecord => a !== undefined);
+/** Действия журнала в глобальном треде владельца (§7.8), без записей отмены. */
+async function globalAuditActions(): Promise<JournalEntry[]> {
+  return (await threadJournal(owner, globalThreadId(owner))).filter((e) => e.type !== 'undo');
 }
 
 /** Сид-сущность владельца через executor без синка — без audit-шума в тредах. */
@@ -267,13 +259,13 @@ describe('e2e слайс 1b: агент через MCP ведёт проект �
     // Audit — системные сообщения в ГЛОБАЛЬНОМ треде владельца с actor_kind=agent,
     // source=mcp (02 §2.3, §7.8): действия агента видимы владельцу, атрибуция честная
     const actions = await globalAuditActions();
-    const agentActions = actions.filter((a) => a.actor_kind === 'agent' && a.source === 'mcp');
+    const agentActions = actions.filter((a) => a.actorKind === 'agent' && a.source === 'mcp');
     // 3 entity_created (проект+2 задачи+note = 4 create) + 2 relation_created
     expect(agentActions.filter((a) => a.type === 'entity_created')).toHaveLength(4);
     expect(agentActions.filter((a) => a.type === 'relation_created')).toHaveLength(2);
-    for (const a of agentActions) expect(a.actor_user_id).toBe(accountOf(owner));
+    for (const a of agentActions) expect(a.actorUserId).toBe(accountOf(owner));
     // Создание проекта отражено
-    expect(agentActions.some((a) => a.entity_id === projectId && a.type === 'entity_created')).toBe(
+    expect(agentActions.some((a) => a.entityId === projectId && a.type === 'entity_created')).toBe(
       true,
     );
   });
@@ -360,7 +352,7 @@ describe('e2e слайс 1b: агент через MCP ведёт проект �
 
     // Агентский entity_update→done journaled в глобальный тред (actor 'agent'/'mcp')
     const doneAction = (await globalAuditActions()).find(
-      (a) => a.actor_kind === 'agent' && a.type === 'entity_updated' && a.entity_id === task1Id,
+      (a) => a.actorKind === 'agent' && a.type === 'entity_updated' && a.entityId === task1Id,
     );
     expect(doneAction).toBeDefined();
     expect(doneAction?.source).toBe('mcp');
@@ -450,7 +442,7 @@ describe('e2e слайс 1b: агент через MCP ведёт проект �
     expect(after).toHaveLength(11);
     for (const row of after) expect(row.archived).toBe(true);
 
-    // Повторный approve — идемпотентный replay по PK audit-сообщения (§7.8)
+    // Повторный approve — идемпотентный replay по (graph_id, id) журнала (§7.8)
     const again = await ownerCaller.ai.approve({ pendingId });
     expect(again.idempotentReplay).toBe(true);
   });
@@ -534,14 +526,11 @@ describe('e2e слайс 1b: агент через MCP ведёт проект �
       taskMsgs.some((m) => (m.metadata as { author_kind?: string }).author_kind === 'agent'),
     ).toBe(true);
 
-    // Глобальный тред несёт audit агентских действий (actor_kind=agent)
-    const globalMsgs = exp.chatMessages.filter((m) => m.threadId === globalThreadId(owner));
+    // Журнал дампа (ключ `journal`, v3 — спека скорости §11) несёт действия агента (actor_kind=agent) в глобальном
+    // треде. Это проверка ФОРМАТА экспорта, а не чтение журнала.
+    expect(exp.version).toBe(3);
     expect(
-      globalMsgs.some((m) =>
-        ((m.metadata as { actions?: ActionRecord[] }).actions ?? []).some(
-          (a) => a.actor_kind === 'agent',
-        ),
-      ),
+      exp.journal.some((e) => e.actorKind === 'agent' && e.threadId === globalThreadId(owner)),
     ).toBe(true);
   });
 });

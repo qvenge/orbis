@@ -14,7 +14,12 @@ import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { useState } from 'react';
 import { expect, test, vi } from 'vitest';
 import { AspectSection } from '../../features/entity-detail/AspectSection';
-import { renderWithProviders, trpcError, wireEntity } from '../../test/harness';
+import {
+  mockEntityUpdateResult,
+  renderWithProviders,
+  trpcError,
+  wireEntity,
+} from '../../test/harness';
 import { registryReply } from '../../test/registry';
 import { controlKindOf } from './controls';
 import { PropertyControl } from './PropertyControl';
@@ -202,7 +207,7 @@ test('I-1: карточка выключенного приложения с а�
         const nav = (input as { props?: Record<string, unknown> }).props?.[APP_NAV];
         if (Array.isArray(nav) && nav.includes(YEAR))
           throw trpcError('BAD_REQUEST', 'цель архивна');
-        return { entity: app };
+        return mockEntityUpdateResult(app);
       }
       return handler(path, input);
     },

@@ -1,3 +1,4 @@
+import type { BlockResult, EntityBlocksResult } from '@orbis/shared';
 import { MISPLACED_HINT } from '@orbis/shared/doc/placement';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { useState } from 'react';
@@ -7,6 +8,8 @@ import { ThisEntityProvider } from '../../../lib/query-blocks/this-entity';
 import { useBadgeData } from '../../../lib/query-blocks/useBadgeData';
 import { resetNavForTests } from '../../../state/navigation';
 import {
+  BLOCKS_TIME_ZONE,
+  BLOCKS_TODAY,
   blocksReply,
   blockTexts,
   installCrashTrap,
@@ -16,7 +19,7 @@ import {
   wireEntity,
 } from '../../../test/harness';
 import { recordAddress, topAddress } from '../../../test/nav';
-import { registryReply } from '../../../test/registry';
+import { BUILTIN_REGISTRY, registryReply } from '../../../test/registry';
 import { EditorShell } from '../../entity-editor/EditorShell';
 import { REGISTRY_FAILED_MESSAGE } from './BlockPlaque';
 import { DataBlock } from './DataBlock';
@@ -184,6 +187,90 @@ test('table с columns: деньги — с валютой привязки су
   await waitFor(() => expect(within(table).getByText('1 500.00 $')).toBeInTheDocument());
 });
 
+/**
+ * «Закрыто» в формах блока — признак СЕРВЕРА (`closedIds`, Б-2 №78 п. 42), а не проекция строки:
+ * набор `closed`, заданный условием, строка не вычисляет (`setClasses` отдаёт `[]`), и зачёркивание
+ * по проекции расходилось бы с фильтром блока. Реестр ниже — встроенный, но с предикатным набором.
+ */
+const PREDICATE_CLOSED_REGISTRY = {
+  ...BUILTIN_REGISTRY,
+  contracts: BUILTIN_REGISTRY.contracts.map((c) =>
+    c.id === 'orbis/completable' && c.kind === 'slots'
+      ? { ...c, sets: { ...c.sets, closed: { op: '==', args: [{ slot: 'status' }, 'done'] } } }
+      : c,
+  ),
+};
+const closedHandler =
+  (text: string, rows: unknown[], closedIds: string[], predicate: boolean): MockHandler =>
+  (path, input) =>
+    path === 'registry.effective'
+      ? predicate
+        ? PREDICATE_CLOSED_REGISTRY
+        : BUILTIN_REGISTRY
+      : (blocksReply({
+          [text]: { ok: true, kind: 'rows', rows: rows as never, more: 0, closedIds },
+        })(path, input) ?? {});
+
+for (const display of ['list', 'compact', 'table'] as const) {
+  test(`${display}: строка из closedIds зачёркнута, хотя проекция «открыто» (предикатный набор)`, async () => {
+    const text = `aspect=orbis/task, display=${display}`;
+    renderWithProviders(
+      <DataBlock text={text} />,
+      closedHandler(
+        text,
+        [
+          task('Закрыта', { 'orbis/task_status': 'done', 'orbis/due_date': '2026-07-18' }),
+          task('Открыта', { 'orbis/due_date': '2026-07-19' }),
+        ],
+        ['Закрыта'],
+        true,
+      ),
+    );
+    if (display !== 'compact') await screen.findByText('18 июл.');
+    expect(await screen.findByText('Закрыта')).toHaveClass('line-through');
+    expect(screen.getByText('Открыта')).not.toHaveClass('line-through');
+  });
+
+  test(`${display}: строка вне closedIds не зачёркнута, хотя проекция «закрыто»`, async () => {
+    const text = `aspect=orbis/task, display=${display}`;
+    renderWithProviders(
+      <DataBlock text={text} />,
+      closedHandler(
+        text,
+        [task('Сделана', { 'orbis/task_status': 'done', 'orbis/due_date': '2026-07-18' })],
+        [],
+        false,
+      ),
+    );
+    if (display !== 'compact') await screen.findByText('18 июл.');
+    expect(await screen.findByText('Сделана')).not.toHaveClass('line-through');
+  });
+}
+
+// Таблица с `columns` рисует заголовок двумя путями — постоянной «Название» (колонки заголовка в
+// `columns` нет) и колонкой `orbis/title` из `columns`; `closedIds` обязан дойти до обоих. Тесты
+// выше гоняют таблицу без `columns` (`FactsTable`), и связь этих двух мест с набором не держали.
+for (const columns of ['orbis/due_date', 'orbis/title|orbis/due_date'] as const) {
+  test(`table с columns=${columns}: строка из closedIds зачёркнута, хотя проекция «открыто»`, async () => {
+    const text = `aspect=orbis/task, display=table, columns=${columns}`;
+    renderWithProviders(
+      <DataBlock text={text} />,
+      closedHandler(
+        text,
+        [
+          task('Закрыта', { 'orbis/task_status': 'done', 'orbis/due_date': '2026-07-18' }),
+          task('Открыта', { 'orbis/due_date': '2026-07-19' }),
+        ],
+        ['Закрыта'],
+        true,
+      ),
+    );
+    await screen.findByText('18 июл.');
+    expect(screen.getByRole('button', { name: 'Закрыта' })).toHaveClass('line-through');
+    expect(screen.getByRole('button', { name: 'Открыта' })).not.toHaveClass('line-through');
+  });
+}
+
 test('tile count — число и подпись title', async () => {
   const text = 'aspect=orbis/task, display=tile, aggregate=count, title=Задач';
   renderWithProviders(
@@ -195,40 +282,136 @@ test('tile count — число и подпись title', async () => {
   expect(tile).toHaveTextContent('Задач');
 });
 
-test('tile sum — сумма с символом валюты (RUB → ₽)', async () => {
-  const text = 'aspect=orbis/financial, display=tile, aggregate=sum:orbis/amount, title=Потрачено';
+// Сумма по валютам (спека 1в §3.6, РП-7): провод несёт суммы раздельно в порядке «валюта владельца,
+// прочие по алфавиту, без валюты — последней». Плитка: одна — «12 000 ₽»; две–три — через « · » в
+// порядке провода; больше трёх — плашка «разные валюты» с их перечнем.
+const SUM_TEXT =
+  'aspect=orbis/financial, display=tile, aggregate=sum:orbis/amount, title=Потрачено';
+
+async function sumTile(sums: { currency: string | null; sum: string; count: number }[]) {
   renderWithProviders(
-    <DataBlock text={text} />,
-    handler({ [text]: { ok: true, kind: 'sum', sum: '1200.50', count: 3, currencies: ['RUB'] } }),
+    <DataBlock text={SUM_TEXT} />,
+    handler({
+      [SUM_TEXT]: { ok: true, kind: 'sum', count: sums.reduce((n, s) => n + s.count, 0), sums },
+    }),
   );
-  const tile = await screen.findByTestId('qb-tile');
-  expect(within(tile).getByTestId('qb-tile-value')).toHaveTextContent('1 200.50 ₽');
+  return screen.findByTestId('qb-tile');
+}
+
+test('tile sum — одна валюта: сумма с символом (RUB → ₽), плашки нет', async () => {
+  const tile = await sumTile([{ currency: 'RUB', sum: '12000', count: 3 }]);
+  expect(within(tile).getByTestId('qb-tile-value')).toHaveTextContent(/^12 000 ₽$/);
   expect(tile).toHaveTextContent('Потрачено');
   expect(screen.queryByTestId('qb-currencies')).toBeNull();
 });
 
-test('tile sum в разных валютах — сумма без символа и плашка «разные валюты» (РП-20)', async () => {
-  const text = 'aspect=orbis/financial, display=tile, aggregate=sum:orbis/amount';
-  renderWithProviders(
-    <DataBlock text={text} />,
-    handler({
-      [text]: { ok: true, kind: 'sum', sum: '300', count: 2, currencies: ['RUB', 'USD'] },
-    }),
-  );
-  const tile = await screen.findByTestId('qb-tile');
-  expect(within(tile).getByTestId('qb-tile-value')).toHaveTextContent(/^300$/);
-  expect(screen.getByTestId('qb-currencies')).toHaveTextContent('разные валюты: RUB, USD');
+test('tile sum — две и три валюты: через « · » в порядке провода, плашки нет', async () => {
+  const tile = await sumTile([
+    { currency: 'RUB', sum: '12000', count: 1 },
+    { currency: 'USD', sum: '50', count: 1 },
+  ]);
+  expect(within(tile).getByTestId('qb-tile-value')).toHaveTextContent(/^12 000 ₽ · 50 \$$/);
+  expect(screen.queryByTestId('qb-currencies')).toBeNull();
 });
 
-test('tile latest — значение', async () => {
+test('tile sum — три валюты одной строкой', async () => {
+  const tile = await sumTile([
+    { currency: 'RUB', sum: '12000', count: 1 },
+    { currency: 'EUR', sum: '20', count: 1 },
+    { currency: 'USD', sum: '50', count: 1 },
+  ]);
+  expect(within(tile).getByTestId('qb-tile-value')).toHaveTextContent(/^12 000 ₽ · 20 € · 50 \$$/);
+  expect(screen.queryByTestId('qb-currencies')).toBeNull();
+});
+
+test('tile sum — больше трёх валют: плашка «разные валюты» с перечнем, суммы не склеены', async () => {
+  const tile = await sumTile([
+    { currency: 'RUB', sum: '12000', count: 1 },
+    { currency: 'EUR', sum: '20', count: 1 },
+    { currency: 'KZT', sum: '5', count: 1 },
+    { currency: 'USD', sum: '50', count: 1 },
+  ]);
+  expect(screen.getByTestId('qb-currencies')).toHaveTextContent(
+    'разные валюты: RUB, EUR, KZT, USD',
+  );
+  expect(within(tile).getByTestId('qb-tile-value')).toHaveTextContent('4 валюты');
+  expect(within(tile).getByTestId('qb-tile-value')).not.toHaveTextContent('12 000');
+});
+
+test('tile sum — не денежные строки (валюта null): число без символа в той же строке', async () => {
+  const tile = await sumTile([
+    { currency: 'RUB', sum: '12000', count: 1 },
+    { currency: null, sum: '100', count: 1 },
+  ]);
+  expect(within(tile).getByTestId('qb-tile-value')).toHaveTextContent(/^12 000 ₽ · 100$/);
+});
+
+// Порог «больше трёх» считает ВАЛЮТЫ (спека 1в §3.6): не денежная сумма валютой не является.
+test('tile sum — три валюты и не денежное число: одной строкой, плашки нет', async () => {
+  const tile = await sumTile([
+    { currency: 'RUB', sum: '12000', count: 1 },
+    { currency: 'EUR', sum: '20', count: 1 },
+    { currency: 'USD', sum: '50', count: 1 },
+    { currency: null, sum: '100', count: 1 },
+  ]);
+  expect(within(tile).getByTestId('qb-tile-value')).toHaveTextContent(
+    /^12 000 ₽ · 20 € · 50 \$ · 100$/,
+  );
+  expect(screen.queryByTestId('qb-currencies')).toBeNull();
+});
+
+test('tile sum — четыре валюты и не денежное число: «4 валюты · 100», в плашке только валюты', async () => {
+  const tile = await sumTile([
+    { currency: 'RUB', sum: '12000', count: 1 },
+    { currency: 'EUR', sum: '20', count: 1 },
+    { currency: 'KZT', sum: '5', count: 1 },
+    { currency: 'USD', sum: '50', count: 1 },
+    { currency: null, sum: '100', count: 1 },
+  ]);
+  expect(within(tile).getByTestId('qb-tile-value')).toHaveTextContent(/^4 валюты · 100$/);
+  expect(screen.getByTestId('qb-currencies')).toHaveTextContent(
+    /^разные валюты: RUB, EUR, KZT, USD$/,
+  );
+});
+
+test('tile sum — пустая выборка: «0»', async () => {
+  const tile = await sumTile([]);
+  expect(within(tile).getByTestId('qb-tile-value')).toHaveTextContent(/^0$/);
+});
+
+test('tile latest — значение (не денежное — без символа)', async () => {
   const text =
     'aspect=orbis/financial, display=tile, aggregate=latest:orbis/amount, title=Последняя';
   renderWithProviders(
     <DataBlock text={text} />,
-    handler({ [text]: { ok: true, kind: 'latest', value: '72.5' } }),
+    handler({ [text]: { ok: true, kind: 'latest', value: '72.5', currency: null } }),
   );
   const tile = await screen.findByTestId('qb-tile');
-  expect(within(tile).getByTestId('qb-tile-value')).toHaveTextContent('72.5');
+  expect(within(tile).getByTestId('qb-tile-value')).toHaveTextContent(/^72.5$/);
+});
+
+test('tile latest денежное — с символом валюты (спека 1в §3.7)', async () => {
+  const text =
+    'aspect=orbis/financial, display=tile, aggregate=latest:orbis/amount, sortBy=orbis/occurred_on:desc';
+  renderWithProviders(
+    <DataBlock text={text} />,
+    handler({ [text]: { ok: true, kind: 'latest', value: '12000', currency: 'RUB' } }),
+  );
+  const tile = await screen.findByTestId('qb-tile');
+  expect(within(tile).getByTestId('qb-tile-value')).toHaveTextContent(/^12 000 ₽$/);
+});
+
+// Обходчик `web-tile-form` (спека 1в, рулинг R-4): `latest` над адресом контракта — значение без
+// поиска свойства по строке-ключу; плитка рисуется, а не падает. Денежное — с валютой провода.
+test('tile latest по адресу слота — значение, без падения; валюта — с провода', async () => {
+  const text =
+    'aspect=orbis/financial, display=tile, aggregate=latest:orbis/money-movement.amount, title=Последняя';
+  renderWithProviders(
+    <DataBlock text={text} />,
+    handler({ [text]: { ok: true, kind: 'latest', value: '72.5', currency: 'USD' } }),
+  );
+  const tile = await screen.findByTestId('qb-tile');
+  expect(within(tile).getByTestId('qb-tile-value')).toHaveTextContent(/^72.5 \$$/);
 });
 
 test('«ещё 2» раскрывается на месте — второй вызов пачкой из одного с бо́льшим limit', async () => {
@@ -239,8 +422,14 @@ test('«ещё 2» раскрывается на месте — второй в�
     handler({
       [text]: (b) =>
         b.limit === undefined
-          ? { ok: true, kind: 'rows', rows: rows.slice(0, 3) as never, more: 2 }
-          : { ok: true, kind: 'rows', rows: rows.slice(0, b.limit) as never, more: 0 },
+          ? { ok: true, kind: 'rows', rows: rows.slice(0, 3) as never, more: 2, closedIds: [] }
+          : {
+              ok: true,
+              kind: 'rows',
+              rows: rows.slice(0, b.limit) as never,
+              more: 0,
+              closedIds: [],
+            },
     }),
   );
   await waitFor(() => expect(screen.getAllByTestId('qb-item')).toHaveLength(3));
@@ -277,8 +466,14 @@ test('раскрытое «ещё N» не переживает смену за�
     handler({
       [text]: (b) =>
         b.limit === undefined
-          ? { ok: true, kind: 'rows', rows: rows.slice(0, 3) as never, more: 2 }
-          : { ok: true, kind: 'rows', rows: rows.slice(0, b.limit) as never, more: 0 },
+          ? { ok: true, kind: 'rows', rows: rows.slice(0, 3) as never, more: 2, closedIds: [] }
+          : {
+              ok: true,
+              kind: 'rows',
+              rows: rows.slice(0, b.limit) as never,
+              more: 0,
+              closedIds: [],
+            },
     }),
   );
   await waitFor(() => expect(screen.getAllByTestId('qb-item')).toHaveLength(3));
@@ -328,12 +523,14 @@ test('бейджи разделов (badgeOf) — одной пачкой entity
         const items = (input as { blocks: { key: string; badgeOf: string }[] }).blocks;
         return {
           results: Object.fromEntries(
-            items.map((b) => [
+            items.map((b): [string, BlockResult] => [
               b.key,
-              { ok: true, kind: 'count', count: counts[pages.indexOf(b.badgeOf)] },
+              { ok: true, kind: 'count', count: counts[pages.indexOf(b.badgeOf)] ?? 0 },
             ]),
           ),
-        };
+          today: BLOCKS_TODAY,
+          timeZone: BLOCKS_TIME_ZONE,
+        } satisfies EntityBlocksResult;
       }
       return registryReply(path) ?? {};
     },
@@ -387,7 +584,7 @@ test('F2: у потолка строк «ещё N» не рисуется — п
   const rows = Array.from({ length: 500 }, (_, i) => wireEntity({ id: `r${i}`, title: `r${i}` }));
   renderWithProviders(
     <DataBlock text={text} />,
-    handler({ [text]: { ok: true, kind: 'rows', rows: rows as never, more: 3 } }),
+    handler({ [text]: { ok: true, kind: 'rows', rows: rows as never, more: 3, closedIds: [] } }),
   );
   expect(await screen.findByTestId('qb-cap')).toHaveTextContent('показаны первые 500');
   expect(screen.queryByRole('button', { name: /ещё/ })).toBeNull();

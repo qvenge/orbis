@@ -33,6 +33,7 @@ import {
 import { appendMessageIdempotent } from '../chat/messages';
 import { ensureGlobalThread } from '../chat/threads';
 import { execute } from '../executor/executor';
+import { makeJournalSink } from '../executor/journal';
 import { previewMergeConflicts, type RegistryDeltaRow } from '../registry/deltas';
 import { seedOwner } from '../seed/onboarding';
 import { SEED_WORLD_SIZE } from '../seed/world';
@@ -68,6 +69,8 @@ const WORLD_TABLES_UNDER_TEST = [
   'entity_origins',
   'entity_versions',
   'envelope_spent_cache',
+  'action_journal',
+  'action_journal_entities',
 ] as const;
 
 const { db: admin, client: adminClient } = adminDb();
@@ -293,22 +296,26 @@ describe('reset-world — состав пересева на живой базе
     if (entity === undefined || second === undefined) {
       throw new Error('онбординг не посеял двух сущностей');
     }
-    // Ребро и сообщение треда — БОЕВЫМ путём, и они здесь не для полноты картины: сообщений
-    // онбординг не пишет вовсе, а рёбра пишет только ссылочными свойствами оболочки хоста (см. счёт
-    // ниже) — поэтому без них «relations и chat_messages снесены»
-    // доказывалось бы не данными, а только тем, что TRUNCATE без CASCADE упал бы на FK. Для
-    // таблицы, которая однажды выйдет из-под FK, этого пина не будет вовсе.
-    const edge = await execute(app, {
-      identity: personal(owner),
-      actorKind: 'owner',
-      source: 'fast_path',
-      operations: [
-        {
-          tool: 'relation_create',
-          input: { source_id: entity.id, target_id: second.id, role: 'mention' },
-        },
-      ],
-    });
+    // Ребро, его запись журнала и сообщение треда — БОЕВЫМ путём, и они здесь не для полноты картины:
+    // сообщений онбординг не пишет вовсе, рёбра пишет только ссылочными свойствами оболочки хоста (см.
+    // счёт ниже), журнал — не пишет (сев идёт без синка) — поэтому без них «relations, chat_messages и
+    // журнал снесены» доказывалось бы не данными, а только тем, что TRUNCATE без CASCADE упал бы на FK.
+    // Для таблицы, которая однажды выйдет из-под FK, этого пина не будет вовсе.
+    const edge = await execute(
+      app,
+      {
+        identity: personal(owner),
+        actorKind: 'owner',
+        source: 'fast_path',
+        operations: [
+          {
+            tool: 'relation_create',
+            input: { source_id: entity.id, target_id: second.id, role: 'mention' },
+          },
+        ],
+      },
+      { sink: makeJournalSink() },
+    );
     if (!edge.ok) throw new Error(`ребро фикстуры не создано: ${JSON.stringify(edge.error)}`);
     await withIdentity(app, personal(owner), async (tx) => {
       const threadId = await ensureGlobalThread(tx, owner);
@@ -343,7 +350,7 @@ describe('reset-world — состав пересева на живой базе
     expect(await count('registry_deltas')).toBe(1);
     expect(await count('property_definitions', 'graph_id IS NOT NULL')).toBe(1);
     expect(await count('aspect_definitions', 'graph_id IS NOT NULL')).toBe(1);
-    // Все СЕМЬ таблиц сноса непусты ДО операции — иначе «снесено» ниже проверяло бы пустоту,
+    // Все ДЕВЯТЬ таблиц сноса непусты ДО операции — иначе «снесено» ниже проверяло бы пустоту,
     // которая и так была.
     for (const table of WORLD_TABLES_UNDER_TEST) {
       const n = await count(table);
@@ -370,6 +377,9 @@ describe('reset-world — состав пересева на живой базе
     expect(report.world.entity_origins).toBe(1);
     expect(report.world.entity_versions).toBe(1);
     expect(report.world.envelope_spent_cache).toBe(1);
+    // Запись журнала ребра и её боковые строки (РП-8) — по uuid-ключу операции на каждую: id ребра и оба конца
+    expect(report.world.action_journal).toBe(1);
+    expect(report.world.action_journal_entities).toBe(3);
     expect(report.deltas).toBe(1);
     expect(report.definitions.property_definitions).toBe(1);
     expect(report.definitions.aspect_definitions).toBe(1);
@@ -390,7 +400,7 @@ describe('reset-world — состав пересева на живой базе
       ),
     ).toBe(1);
     // Снимок «после» самой операции говорит то же самое — им оператор Шага 6 и сверяется.
-    expect(Object.values(report.after.world)).toEqual([0, 0, 0, 0, 0, 0, 0]);
+    expect(Object.values(report.after.world)).toEqual([0, 0, 0, 0, 0, 0, 0, 0, 0]);
     expect(report.after.deltas).toBe(0);
     expect(report.after.ownerDefinitions).toBe(0);
     expect(report.after.ownerVersionMax).toBe(0);

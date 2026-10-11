@@ -22,8 +22,7 @@ import { APP_NAV, type PropertyDefinition } from '@orbis/shared';
  * предложения (Ш1.3) — иначе владелец читал бы их как разные вещи. Прежний дом константы —
  * `features/entity-detail/AspectCards.tsx`; переехала сюда вместе с самими контролами.
  */
-export const FIELD_CLASS =
-  'w-full rounded-md bg-transparent px-2 py-1 text-sm text-text outline-none transition hover:bg-surface-2 focus-visible:bg-surface-2/70 focus-visible:ring-2 focus-visible:ring-accent/40';
+export { FIELD_CLASS } from './field-class';
 
 /**
  * Род контрола. Это НЕ копия словаря типов (§А2-2): типов двенадцать, а контролов меньше —
@@ -145,9 +144,9 @@ export type ControlParse =
  * NaN, и оба молча уехали бы на сервер числом (прежний `coerce` так и делал).
  *
  * Decimal остаётся СТРОКОЙ на всём пути (Global Constraints: деньги не проходят через
- * float); запятая приводится к точке — так набирают с русской раскладки. Нормализация до
- * двух знаков живёт в Финансах (`features/budget/moneyInput.ts`) и здесь не повторяется:
- * два знака — правило денег, а не всех decimal-свойств (`orbis/target_value` меряет книги).
+ * float); запятая приводится к точке — так набирают с русской раскладки. Нормализации до
+ * двух знаков здесь нет: два знака — правило денег, а не всех decimal-свойств
+ * (`orbis/target_value` меряет книги).
  */
 export function parseControlValue(def: PropertyDefinition, raw: string): ControlParse {
   const trimmed = raw.trim();

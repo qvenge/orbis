@@ -13,7 +13,7 @@ import { detailGetInput } from '../entity-detail/useEntityDetail';
 import { SupplyPlaqueSlot } from '../supply/SupplyPlaqueSlot';
 import { PageView } from './PageView';
 import { RecordView } from './RecordView';
-import { templateForOf } from './TemplateBanner';
+import { templateForOf } from './template-for';
 
 type EntityGetReply = RouterOutputs['entity']['get'];
 
@@ -90,6 +90,7 @@ export function TemplatePreview({
   // (`PageView`); у предпросмотра черновика плашки нет — там правят черновик, а не запись.
   const ownPlaque = onClose === undefined && (waiting || chosen !== entity.id);
 
+  // Шаблон прочитан экраном с телом (DETAIL_INCLUDE).
   return (
     <div className="flex flex-col gap-2">
       {ownPlaque && <SupplyPlaqueSlot entity={entity} />}
@@ -175,7 +176,11 @@ function PreviewOn({
     // Ориентир — вокруг записи предпросмотра, без плашки выбора над ней: тест «ничего не
     // правится» обходит всё, что внутри, а выбор записи — законный жест самого предпросмотра.
     <div data-testid="template-preview-record">
-      <RecordView reply={get.data} preview={{ id: template.id, body: template.body }} readOnly />
+      <RecordView
+        reply={get.data}
+        preview={{ id: template.id, body: template.body ?? '' }}
+        readOnly
+      />
     </div>
   );
 }

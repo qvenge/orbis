@@ -170,7 +170,7 @@ export async function truncateAll(): Promise<void> {
   const { db, client } = adminDb();
   await db.execute(sql`TRUNCATE entities, relations, user_settings, chat_threads,
     chat_messages, ai_usage, entity_origins, entity_versions, agent_grants, oauth_clients,
-    envelope_spent_cache
+    envelope_spent_cache, perf_samples, action_journal, action_journal_entities
     RESTART IDENTITY CASCADE`);
   // Встроенные строки реестров сознательно переживают зачистку: их кладёт один раз
   // `bun run db:prepare`, и пересевать реестр между сьютами значило бы гонять сид сотни раз.
@@ -578,6 +578,10 @@ export interface RawRowSpec {
  * которого исполнитель бы НЕ ПРОПУСТИЛ (null у свойства, состояние «до бэкфилла»,
  * сломанная форма) — иначе отказ читателя на таком значении нечем воспроизвести. Валидатор
  * здесь намеренно обойдён, поэтому и имя честное: не «строка», а «сырая строка».
+ *
+ * Колонок тела (0026) здесь нет и быть не должно: их ставит только триггер `entities_body_stamp` —
+ * у прямого INSERT'а мимо исполнителя ревизия 1 и ПУСТОЕ действие текущего тела, ровно как у
+ * ops-скрипта (писатель вне executor'а, К-19).
  */
 export function rawEntityRow(spec: RawRowSpec): typeof entities.$inferInsert {
   return {

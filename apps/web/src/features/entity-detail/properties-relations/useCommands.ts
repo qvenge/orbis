@@ -6,6 +6,7 @@ import { useGraphUndo } from '../../../lib/useGraphUndo';
 import { trpc } from '../../../trpc';
 import { useToast } from '../../../ui/toast-store';
 import { useDetailedUpdateBatch } from '../../page/useUpdateBatch';
+import { isUndoEpoch, undoEpoch } from '../../undo/undo-epoch';
 import { detailGetInput } from '../useEntityDetail';
 import type { CommandOutcome, PanelCommand, RunPanelCommand, ValuesPatch } from './types';
 
@@ -53,6 +54,7 @@ export function usePanelCommands(): {
           message: 'Не удалось подтвердить сохранение. Проверьте состояние записи',
         };
       inFlight.current = true;
+      const epoch = undoEpoch();
       try {
         let outcome: CommandOutcome;
         let title: string;
@@ -101,19 +103,22 @@ export function usePanelCommands(): {
             outcome = await runGraphCommand(() =>
               utils.client.relation.create.mutate(snapshot.key),
             );
-            invalidateGraphCommand(utils);
+            if (isUndoEpoch(epoch)) invalidateGraphCommand(utils);
             break;
           case 'deleteRelation':
             title = `Снята связь „${registry.label(snapshot.key.role)}“`;
             outcome = await runGraphCommand(() =>
               utils.client.relation.delete.mutate(snapshot.key),
             );
-            invalidateGraphCommand(utils);
+            if (isUndoEpoch(epoch)) invalidateGraphCommand(utils);
             break;
         }
+        if (!isUndoEpoch(epoch))
+          return { kind: 'unknown', message: 'Сеанс изменился — состояние записи не подтверждено' };
         if (outcome.kind === 'unknown') uncertain.current.add(commandId);
         if (outcome.kind === 'confirmed') {
-          if (outcome.actionId) undo(outcome.actionId, title);
+          if (outcome.actionId && typeof outcome.consequences === 'boolean')
+            undo(outcome.actionId, title);
           else show(title);
         }
         return outcome;
@@ -129,12 +134,16 @@ export function usePanelCommands(): {
       const snapshot = structuredClone(command);
       const commandId = identity(snapshot);
       try {
+        const epoch = undoEpoch();
         const input = detailGetInput(snapshot.entityId);
         // A read started before the write cannot prove the current state. Cancel that exact
         // key, mark it stale without a duplicate active refetch, then start a new fetch.
         await utils.entity.get.cancel(input);
+        if (!isUndoEpoch(epoch)) return 'unavailable';
         await utils.entity.get.invalidate(input, { refetchType: 'none' });
+        if (!isUndoEpoch(epoch)) return 'unavailable';
         const current = await utils.entity.get.fetch(input);
+        if (!isUndoEpoch(epoch)) return 'unavailable';
         if (
           !current?.entity ||
           current.entity.id !== snapshot.entityId ||

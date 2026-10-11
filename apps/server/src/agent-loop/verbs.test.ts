@@ -12,7 +12,7 @@ import type {
   MyQueueResult,
   RunStepResult,
 } from '@orbis/shared';
-import { batchAuditMessageId, newId } from '@orbis/shared';
+import { newId } from '@orbis/shared';
 import { eq, sql } from 'drizzle-orm';
 import {
   adminDb,
@@ -23,10 +23,11 @@ import {
   requireEnv,
   truncateAll,
 } from '../../test/helpers';
-import { chatMessages, entities } from '../db/schema';
+import { actionsOf, journalOf } from '../../test/journal-helpers';
+import { entities } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { execute } from '../executor/executor';
-import { makeChatJournalSink } from '../executor/journal';
+import { makeJournalSink } from '../executor/journal';
 import { answerPendingQuestion } from '../policy/pending';
 import { effectiveRegistry } from '../registry/cache';
 import { statusPatch } from '../registry/class-write';
@@ -40,7 +41,6 @@ requireEnv();
 
 const { db, client } = appDb();
 const {
-  actionsOf,
   childrenOf,
   link,
   propsOf,
@@ -248,26 +248,20 @@ describe('orbis_claim_task: атомарный захват (С7, инвариа
   let otherGrantId = '';
   let projectId = '';
 
-  /** Сохранённый ответ вызова (§7.8) как он лежит в журнале — админ-DSN, мимо RLS. */
+  /** Сохранённый ответ вызова (§7.8) как он лежит в журнале — запись пачки через API журнала. */
   async function savedResults(callId: string): Promise<Array<Record<string, unknown>>> {
-    const auditId = batchAuditMessageId(owner, callId);
-    const { db: admin, client: adminClient } = adminDb();
-    try {
-      const rows = await admin
-        .select({ metadata: chatMessages.metadata })
-        .from(chatMessages)
-        .where(eq(chatMessages.id, auditId));
-      const md = rows[0]?.metadata as { results?: Array<Record<string, unknown>> } | undefined;
-      if (md?.results === undefined) throw new Error(`снимок ответа ${auditId} не найден`);
-      return md.results;
-    } finally {
-      await adminClient.end();
-    }
+    const results = (await journalOf(owner, callId))?.results;
+    if (results === undefined) throw new Error(`снимок ответа ${callId} не найден`);
+    return results as Array<Record<string, unknown>>;
   }
 
   /**
+   * ПОДДЕЛКА хранилища, а не чтение журнала: снимок правится там, где он лежит (колонка `results` строки журнала,
+   * ключ — граф и batch_id вызова). Чтение снимка идёт через API (`savedResults`).
+   *
    * Правка СОХРАНЁННОГО ответа (§7.8) админ-DSN — мимо исполнителя, как расходящаяся
-   * строка `entities` у соседних проб. Иначе форму снимка не выбрать: обе колонки в нём
+   * строка `entities` у соседних проб. Журнал только дописывается, и у ролей приложения правки нет — её делает
+   * админ-DSN, как любая подделка хранилища в тестах. Иначе форму снимка не выбрать: обе колонки в нём
    * согласованы по построению, и «какую читает replay» поведением не наблюдаемо.
    *
    * Подтверждение подстановки живёт СНАРУЖИ — вызывающий читает снимок `savedResults` до
@@ -278,19 +272,25 @@ describe('orbis_claim_task: атомарный захват (С7, инвариа
     callId: string,
     edit: (results: Array<Record<string, unknown>>) => Array<Record<string, unknown>>,
   ): Promise<void> {
-    const auditId = batchAuditMessageId(owner, callId);
     const { db: admin, client: adminClient } = adminDb();
     try {
-      const rows = await admin
-        .select({ metadata: chatMessages.metadata })
-        .from(chatMessages)
-        .where(eq(chatMessages.id, auditId));
-      const md = rows[0]?.metadata as { results?: Array<Record<string, unknown>> } | undefined;
-      if (md?.results === undefined) throw new Error(`снимок ответа ${auditId} не найден`);
-      await admin
-        .update(chatMessages)
-        .set({ metadata: { ...md, results: edit(md.results) } })
-        .where(eq(chatMessages.id, auditId));
+      const rows = (await admin.execute(
+        sql`SELECT results FROM action_journal WHERE graph_id = ${owner}::uuid AND id = ${callId}::uuid`,
+      )) as unknown as Array<{
+        results:
+          | Array<Record<string, unknown>>
+          | { items: Array<Record<string, unknown>>; consequences: boolean }
+          | null;
+      }>;
+      const saved = rows[0]?.results;
+      const results = Array.isArray(saved) ? saved : saved?.items;
+      if (results === undefined || results === null) {
+        throw new Error(`снимок ответа ${callId} не найден`);
+      }
+      await admin.execute(
+        sql`UPDATE action_journal SET results = ${JSON.stringify(Array.isArray(saved) ? edit(results) : { ...saved, items: edit(results) })}::jsonb
+             WHERE graph_id = ${owner}::uuid AND id = ${callId}::uuid`,
+      );
     } finally {
       await adminClient.end();
     }
@@ -379,9 +379,9 @@ describe('orbis_claim_task: атомарный захват (С7, инвариа
     // Журнал §7.8: ровно один action типа batch, с run_id и actor_grant_id
     const action = (await actionsOf(owner)).find((a) => a.id === c.action_id);
     expect(action?.type).toBe('batch');
-    expect(action?.run_id).toBe(c.run_id);
-    expect(action?.actor_grant_id).toBe(grantId);
-    expect(action?.actor_kind).toBe('agent');
+    expect(action?.runId).toBe(c.run_id);
+    expect(action?.actorGrantId).toBe(grantId);
+    expect(action?.actorKind).toBe('agent');
     expect(action?.source).toBe('mcp');
   });
 
@@ -667,7 +667,7 @@ describe('orbis_claim_task: атомарный захват (С7, инвариа
         batchId: callId,
         operations: [{ tool: 'entity_update', input: { id: note.id, title: 'Заметка (правка)' } }],
       },
-      { sink: makeChatJournalSink() },
+      { sink: makeJournalSink() },
     );
     expect(pre.ok).toBe(true);
 
@@ -854,9 +854,9 @@ describe('Глаголы II: шаг, чекпойнт, итог (С3, С5, С8, 
     // Журнал §7.8: шаг — свой action с адресом прогона и гранта
     const action = (await actionsOf(owner)).find((a) => a.id === callId);
     expect(action?.type).toBe('batch');
-    expect(action?.run_id).toBe(runId);
-    expect(action?.actor_grant_id).toBe(grantId);
-    expect(action?.actor_kind).toBe('agent');
+    expect(action?.runId).toBe(runId);
+    expect(action?.actorGrantId).toBe(grantId);
+    expect(action?.actorKind).toBe('agent');
     expect(action?.source).toBe('mcp');
   });
 
@@ -968,8 +968,8 @@ describe('Глаголы II: шаг, чекпойнт, итог (С3, С5, С8, 
     // Прогон и тикет меняются ОДНИМ action'ом: откат вернёт их вместе
     const action = (await actionsOf(owner)).find((a) => a.id === c.action_id);
     expect(action?.type).toBe('batch');
-    expect(action?.run_id).toBe(runId);
-    expect(action?.actor_grant_id).toBe(grantId);
+    expect(action?.runId).toBe(runId);
+    expect(action?.actorGrantId).toBe(grantId);
   });
 
   test('orbis_finish без may_close: тикет waiting «готово, проверь», НЕ done; report на прогоне (С8, приёмка 9)', async () => {
@@ -1425,7 +1425,7 @@ describe('субъект прогона — рутина (V1.5)', () => {
       identity: personal(owner),
       subject: { kind: 'routine', routineId },
       clock,
-      sink: makeChatJournalSink(),
+      sink: makeJournalSink(),
     };
   }
 
@@ -1469,10 +1469,10 @@ describe('субъект прогона — рутина (V1.5)', () => {
 
     // Бухгалтерия прогона (Р-7): актор — внутренний AI, источник — system, прогон адресован
     const action = (await actionsOf(owner)).find((a) => a.id === c.action_id);
-    expect(action?.actor_kind).toBe('ai');
+    expect(action?.actorKind).toBe('ai');
     expect(action?.source).toBe('system');
-    expect(action?.run_id).toBe(runId);
-    expect(action?.actor_grant_id).toBeUndefined();
+    expect(action?.runId).toBe(runId);
+    expect(action?.actorGrantId).toBeUndefined();
   });
 
   test('orbis_run_step рутинного прогона (вызовом раннера) пишет шаг с CAS-счётчиком; прогон другой рутины → CONFLICT «другому субъекту»', async () => {
@@ -1581,13 +1581,13 @@ describe('субъект прогона — рутина (V1.5)', () => {
     expect(openRun['orbis/run_outcome']).toBe('finished');
     expect(openRun['orbis/undecided']).toBe(true);
     // Ровно один action на прогон — закрывающий: бухгалтерской дозаписи флажка следом нет
-    expect(
-      (await actionsOf(owner)).filter((a) => a.run_id === open.runId).map((a) => a.id),
-    ).toEqual([closed.action_id]);
+    expect((await actionsOf(owner)).filter((a) => a.runId === open.runId).map((a) => a.id)).toEqual(
+      [closed.action_id],
+    );
     // Актор прежний (§9.6): писатель флажка обязан быть `system`, иначе «отмени последнее»
     // после «Принять» снимало бы флажок вместо действия владельца (undo пропускает system)
     const action = (await actionsOf(owner)).find((a) => a.id === closed.action_id);
-    expect(action?.actor_kind).toBe('ai');
+    expect(action?.actorKind).toBe('ai');
     expect(action?.source).toBe('system');
 
     // 2. Единственная единица прогона решена владельцем — писать нечего: флажка нет вовсе
@@ -1631,11 +1631,11 @@ describe('субъект прогона — рутина (V1.5)', () => {
     expect(run['orbis/run_checkpoint']).toEqual({ question, asked_at: iso(T0) });
     expect(run['orbis/undecided']).toBe(true);
     // Одним action'ом и прежним актором — те же два довода, что у closeRoutineRun выше
-    expect((await actionsOf(owner)).filter((a) => a.run_id === runId).map((a) => a.id)).toEqual([
+    expect((await actionsOf(owner)).filter((a) => a.runId === runId).map((a) => a.id)).toEqual([
       c.action_id,
     ]);
     const action = (await actionsOf(owner)).find((a) => a.id === c.action_id);
-    expect(action?.actor_kind).toBe('ai');
+    expect(action?.actorKind).toBe('ai');
     expect(action?.source).toBe('system');
   });
 

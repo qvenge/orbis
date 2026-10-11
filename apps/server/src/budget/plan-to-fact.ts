@@ -12,7 +12,6 @@
 // точностью до четырёх расхождений §Б6-4. Здесь осталась РУЧКА: вход §2.7, идемпотентность по
 // batchId клиента (audit-PK §7.8) и код отказа, который читает экран (`asLegacyRefusal`).
 import {
-  batchAuditMessageId,
   type ConfirmPurchaseInput,
   type ConfirmPurchaseResult,
   effectiveLabel,
@@ -26,14 +25,15 @@ import type { Db } from '../db/client';
 import { withIdentity } from '../db/with-identity';
 import { ExecError, type ExecErrorCode } from '../errors';
 import { execute } from '../executor/executor';
-import { makeChatJournalSink } from '../executor/journal';
+import { makeJournalSink } from '../executor/journal';
+import { findBatch } from '../executor/journal-read';
 import type { Identity } from '../identity';
 import { effectiveRegistry } from '../registry/cache';
 import { disabledExtensionsOf } from '../registry/extensions';
 
-// Синк один на модуль (как post-due.ts / rollover): состояния не хранит, audit-сообщение
-// batch пишется тем же tx, что операции executor'а (§7.8).
-const sink = makeChatJournalSink();
+// Синк один на модуль (как post-due.ts / rollover): состояния не хранит, запись журнала
+// пачки пишется тем же tx, что операции executor'а (§7.8).
+const sink = makeJournalSink();
 
 /** Декларация, которой ручка переводит покупку (`BUILTIN_ACTION_DEFS`, модуль Финансы). */
 const PLAN_TO_FACT_ACTION = 'finance/plan-to-fact';
@@ -56,12 +56,15 @@ export async function confirmPurchase(
   input: ConfirmPurchaseInput,
 ): Promise<ConfirmPurchaseResult> {
   const graphId = who.graph;
-  const auditId = batchAuditMessageId(graphId, input.batchId);
-  const replay = await withIdentity(db, who, (tx) => sink.findByAuditId(tx, auditId));
+  const replay = await withIdentity(db, who, (tx) => findBatch(tx, graphId, input.batchId));
   if (replay !== undefined) {
     // Сохранённый результат — из журнала: `execute` вернул бы его же batch-веткой, но для
     // этого ему нужны операции, а резолвить их у повтора нечем (см. докблок выше).
-    return { actionId: replay.action.id, idempotentReplay: true };
+    return {
+      actionId: replay.id,
+      consequences: replay.consequences ?? false,
+      idempotentReplay: true,
+    };
   }
   try {
     // «Сегодня» и зона — той же функцией, что у `runAction` и «Принять» (`actionDateArgs`):
@@ -119,7 +122,11 @@ export async function confirmPurchase(
       { sink },
     );
     if (!r.ok) throw new ExecError(r.error.code as ExecErrorCode, r.error.message, r.error.details);
-    return { actionId: r.actionId, idempotentReplay: r.idempotentReplay };
+    return {
+      actionId: r.actionId,
+      consequences: r.consequences,
+      idempotentReplay: r.idempotentReplay,
+    };
   } catch (e) {
     throw asLegacyRefusal(e);
   }

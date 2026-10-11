@@ -29,12 +29,14 @@ import {
   isHostTemplateRecord,
   LEGACY_ETALON_TEXTS,
   RESERVED_APP_KEYS,
+  RETIRED_SUPPLY_KEYS,
   SUPPLY_ETALONS,
+  SUPPLY_KEY_VALUES,
   SUPPLY_KEYS,
   type SupplyEtalon,
-  type SupplyKey,
+  type SupplyKeyValue,
 } from './etalons';
-import { SEED_SMART_LISTS } from './lists';
+import { AGENDA_BODY, LEGACY_SEED_LIST_SLUGS, SEED_SMART_LISTS, UPCOMING_BODY } from './lists';
 import {
   parseAppPrint,
   parsePagePrint,
@@ -87,15 +89,15 @@ describe('шаблон хоста (спека 1б §8.5, §9.2)', () => {
   });
 });
 
-describe('ключи и эталоны (РП-6)', () => {
-  test('десять ключей в порядке РП-6, у каждого ровно один эталон', () => {
+describe('ключи и эталоны (РП-6, срез 1в §6.3, РП-10)', () => {
+  test('десять ключей эталонов в порядке РП-6 (Повестка на месте Upcoming), у каждого ровно один эталон', () => {
     expect([...SUPPLY_KEYS]).toEqual([
       'host-template',
       'host-shell',
       'home',
       'records',
       'daily-planning',
-      'upcoming',
+      'agenda',
       'all-tasks',
       'horizon-year',
       'horizon-life',
@@ -105,12 +107,55 @@ describe('ключи и эталоны (РП-6)', () => {
     for (const key of SUPPLY_KEYS) expect(etalonOf(key).key).toBe(key);
   });
 
-  test('SUPPLY_KEYS == варианты orbis/supply_key реестра; budget зарезервирован и в варианты не входит', () => {
+  test('снятые с поставки ключи — отдельным списком: upcoming, эталона у него нет (§6.3)', () => {
+    expect([...RETIRED_SUPPLY_KEYS]).toEqual(['upcoming']);
+    expect([...SUPPLY_KEY_VALUES]).toEqual([...SUPPLY_KEYS, ...RETIRED_SUPPLY_KEYS]);
+    for (const k of RETIRED_SUPPLY_KEYS) {
+      expect(SUPPLY_KEYS as readonly string[]).not.toContain(k);
+      expect(SUPPLY_ETALONS.filter((e) => (e.key as string) === k)).toEqual([]);
+      // Эталона нет — `etalonOf` честно отказывает, а не отдаёт чужой.
+      expect(() => etalonOf(k as unknown as (typeof SUPPLY_KEYS)[number])).toThrow(k);
+    }
+  });
+
+  test('варианты orbis/supply_key == SUPPLY_KEY_VALUES (эталоны и снятые); budget зарезервирован и в варианты не входит', () => {
     const def = BUILTIN_PROPERTY_META.find((p) => p.id === SUPPLY_KEY);
     if (def?.type.kind !== 'select') throw new Error('orbis/supply_key — не select');
-    expect(def.type.options.map((o) => o.key)).toEqual([...SUPPLY_KEYS]);
+    expect(def.type.options.map((o) => o.key)).toEqual([...SUPPLY_KEY_VALUES]);
     expect([...RESERVED_APP_KEYS]).toEqual(['budget']);
-    for (const k of RESERVED_APP_KEYS) expect(SUPPLY_KEYS as readonly string[]).not.toContain(k);
+    for (const k of RESERVED_APP_KEYS) {
+      expect(SUPPLY_KEY_VALUES as readonly string[]).not.toContain(k);
+    }
+    // Подписи вариантов — заголовки записей (М-1 гейта 9 среза 1б): Повестка и снятая Upcoming.
+    const label = (k: string) =>
+      def.type.kind === 'select' && def.type.options.find((o) => o.key === k)?.label.ru;
+    expect(label('agenda')).toBe('Повестка');
+    expect(label('upcoming')).toBe('Upcoming');
+  });
+
+  test('сев мира — эталоны без снятых: прежние шесть слагов сева — отдельным списком', () => {
+    expect(SEED_SMART_LISTS.map((l) => l.slug)).toEqual([
+      'daily-planning',
+      'agenda',
+      'all-tasks',
+      'horizon-year',
+      'horizon-life',
+      'routines',
+    ]);
+    expect(SEED_SMART_LISTS[1]).toEqual({
+      slug: 'agenda',
+      title: 'Повестка',
+      emoji: '🗓️',
+      body: AGENDA_BODY,
+    });
+    expect([...LEGACY_SEED_LIST_SLUGS]).toEqual([
+      'daily-planning',
+      'upcoming',
+      'all-tasks',
+      'horizon-year',
+      'horizon-life',
+      'routines',
+    ]);
   });
 
   test('«Домой», «Записи», оболочка хоста — §6.5, §3.5', () => {
@@ -134,7 +179,7 @@ describe('ключи и эталоны (РП-6)', () => {
       title: 'Orbis',
       emoji: '🪐',
       home: 'home',
-      nav: ['records', 'daily-planning', 'upcoming', 'all-tasks', 'horizon-year', 'routines'],
+      nav: ['records', 'daily-planning', 'agenda', 'all-tasks', 'horizon-year', 'routines'],
       navForm: 'header-list',
     });
   });
@@ -189,11 +234,21 @@ describe('словарь 1б в эталонах (спека §1, РП-35)', () 
     const life = etalonOf('horizon-life');
     if (year.kind === 'app' || life.kind === 'app') throw new Error('горизонт — не страница');
     const ladder = year.text.split('\n').find((l) => l.startsWith('Лестница горизонтов'));
-    for (const title of ['«Daily Planning»', '«Upcoming»', '«Жизнь»'])
+    for (const title of ['«Daily Planning»', '«Повестка»', '«Жизнь»'])
       expect(ladder).toContain(title);
     for (const q of ['**Ценности**', '**Зоны ответственности**', '**Отказы**']) {
       expect(life.text).toContain(q);
     }
+  });
+
+  test('«Год» говорит о Повестке (срез 1в §6.4): строка горизонтов дословно, Upcoming не названа', () => {
+    const year = etalonOf('horizon-year');
+    if (year.kind === 'app') throw new Error('горизонт — не страница');
+    const ladder = year.text.split('\n').find((l) => l.startsWith('Лестница горизонтов'));
+    expect(ladder).toBe(
+      'Лестница горизонтов целиком: день — список «Daily Planning», неделя и две — «Повестка», год — этот список, жизнь — список «Жизнь». «Жизни» нет в навигации хоста: её находят поиском.',
+    );
+    expect(year.text).not.toContain('Upcoming');
   });
 
   test('«Год» не отправляет искать «Жизнь» в «Записи»: страницы там скрыты по умолчанию (§9.6, финал A M-2)', () => {
@@ -253,10 +308,18 @@ describe('прежние эталоны (РП-35, В-9, R-39)', () => {
     expect(LEGACY_ETALON_TEXTS['horizon-life']).toBe(OLD_LIFE);
     // Длины — те, что репетиция сняла с прод-тел (UTF-16, как `String#length`).
     expect([OLD_DAILY.length, OLD_UPCOMING.length, OLD_ALL_TASKS.length]).toEqual([492, 372, 138]);
-    for (const key of Object.keys(LEGACY_ETALON_TEXTS) as SupplyKey[]) {
-      const e = etalonOf(key);
-      if (e.kind === 'app') throw new Error('горизонт — не страница');
-      expect(e.text).not.toBe(LEGACY_ETALON_TEXTS[key] as string);
+    // Новый эталон — у ключей эталонов; у снятого `upcoming` его нет (§6.3), и прежний текст отличается
+    // от эталона 1б снятого ключа (`UPCOMING_BODY`) — тот и лежит печатью в записях 1б.
+    for (const key of Object.keys(LEGACY_ETALON_TEXTS) as SupplyKeyValue[]) {
+      const now =
+        key === 'upcoming'
+          ? UPCOMING_BODY
+          : (() => {
+              const e = etalonOf(key);
+              if (e.kind === 'app') throw new Error('горизонт — не страница');
+              return e.text;
+            })();
+      expect(now).not.toBe(LEGACY_ETALON_TEXTS[key] as string);
     }
   });
 });
@@ -373,6 +436,18 @@ describe('supplyStatusOf (§9.1 п. 5)', () => {
     expect(supplyStatusOf(app(props))).toBe('etalon');
     expect(supplyStatusOf(app({ ...props, [APP_NAV]: ['a', 'b', 'c'] }))).toBe('edited');
     expect(supplyStatusOf(app(props, 'Мой Orbis'))).toBe('edited');
+  });
+
+  test('снятый ключ upcoming (§6.3): род печати — по аспекту записи, эталона кода не нужно', () => {
+    const old = { title: 'Upcoming', emoji: '🗓️', body: UPCOMING_BODY };
+    const upcoming = (over: Partial<typeof old> = {}) => ({
+      aspects: [PAGE_ASPECT, SUPPLY_ASPECT],
+      ...old,
+      ...over,
+      props: { [SUPPLY_KEY]: 'upcoming', [SUPPLY_TEXT]: printPageRecord(old) },
+    });
+    expect(supplyStatusOf(upcoming())).toBe('etalon');
+    expect(supplyStatusOf(upcoming({ body: `${UPCOMING_BODY}\n\nСвоё` }))).toBe('edited');
   });
 
   test('запись без аспекта «поставка» → null', () => {

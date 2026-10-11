@@ -34,7 +34,7 @@ import { withIdentity } from '../db/with-identity';
 import { type EntitlementResolver, resolveEntitlement } from '../entitlements';
 import { ExecError } from '../errors';
 import { execute } from '../executor/executor';
-import { makeChatJournalSink } from '../executor/journal';
+import { makeJournalSink } from '../executor/journal';
 import type { Identity } from '../identity';
 import { toolResultMessage } from '../llm/context';
 import type { LLMMessage, LLMResponse, LLMToolCall, LLMToolDef } from '../llm/types';
@@ -46,7 +46,7 @@ import { buildRoutineContext, type RoutineContextRoutine } from './context';
 import { pauseIfFailing, type RoutineDeps, routineHistory, supersedeOpen } from './lifecycle';
 
 /** Боевой синк — один инстанс на модуль (состояния не хранит), как в dispatch.ts. */
-const defaultSink = makeChatJournalSink();
+const defaultSink = makeJournalSink();
 
 /**
  * Терминальные инструменты рутины: те, что закрывают прогон САМИ (V1.6, V1.9). После их

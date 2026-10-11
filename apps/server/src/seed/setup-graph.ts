@@ -5,7 +5,8 @@
 // граф, где нет оболочки хоста, заводит его один раз; на каждом следующем входе онбординг не пишет
 // НИЧЕГО (§0.2 п. 2, «никаких тихих записей»). Досевов нет: новая запись поставки или новый эталон в
 // заведённом графе приходят только предложением (§9.1), разовые переводы данных — прод-процедурой со
-// словом владельца (`migrate-1b`, задача 13).
+// словом владельца (белый список `scripts/ops.ts`; перевод 1б `migrate-1b` исполнен в проде 28.09 и снят
+// срезом 1в, РП-13).
 //
 // ПРИЗНАК «ГРАФ ЗАВЕДЁН» — запись с `orbis/supply_key = host-shell`, В ТОМ ЧИСЛЕ АРХИВНАЯ (Р-29): в
 // продукте её нельзя удалить, только заархивировать, и архив — решение владельца, а не «графа нет».
@@ -46,7 +47,7 @@
 // «последним действием» для Undo оно не должно.
 import { type GraphId, ORBIS_NAMESPACE, SUPPLY_ASPECT, SUPPLY_KEY } from '@orbis/shared';
 import {
-  SEED_SMART_LISTS,
+  LEGACY_SEED_LIST_SLUGS,
   SUPPLY_ETALONS,
   type SupplyEtalon,
   type SupplyKey,
@@ -59,6 +60,7 @@ import { userSettings } from '../db/schema';
 import { type Tx, withIdentity } from '../db/with-identity';
 import { ExecError } from '../errors';
 import { execute } from '../executor/executor';
+import { ownerExtensionWord } from '../executor/journal-read';
 import type { Identity } from '../identity';
 import { effectiveRegistry } from '../registry/cache';
 import { disabledExtensionsOf, setExtensionDisabled } from '../registry/extensions';
@@ -109,15 +111,16 @@ async function shellExists(tx: Tx, graph: GraphId): Promise<boolean> {
 
 /**
  * Состояние графа по одной пробе чтения. `ready` — оболочка хоста есть (с архивной); `legacy` — мир
- * старой формы (Э-18): ЛЮБОЙ из шести списков на своём прежнем id без аспекта «поставка». Не только
+ * старой формы (Э-18): ЛЮБОЙ из ПРЕЖНИХ шести списков сева (`LEGACY_SEED_LIST_SLUGS` — с Upcoming, а не
+ * нынешний сев с Повесткой, срез 1в §6.3) на своём прежнем id без аспекта «поставка». Не только
  * «Daily Planning»: граф, где его строки нет, а пять других старой формы, иначе сошёл бы за новый —
  * пачка страниц пропустила бы занятые id, оболочка поставила бы навигацию на записи вне поставки, и
- * `migrate-1b` больше не предлагался бы. Заводить поверх такого мира нельзя, переводить молча — тем
- * более; `new` — иначе.
+ * отказ «граф старой формы» больше не звучал бы. Заводить поверх такого мира нельзя, переводить молча —
+ * тем более; `new` — иначе.
  */
 async function graphState(tx: Tx, graph: GraphId): Promise<GraphState> {
   if (await shellExists(tx, graph)) return 'ready';
-  const listIds = SEED_SMART_LISTS.map((l) => seedSmartListId(graph, l.slug));
+  const listIds = LEGACY_SEED_LIST_SLUGS.map((slug) => seedSmartListId(graph, slug));
   const legacy = await tx.execute(sql`
     SELECT 1 FROM entities
      WHERE graph_id = ${graph}::uuid
@@ -153,20 +156,11 @@ async function worldSeeded(tx: Tx, graph: GraphId): Promise<boolean> {
  * есть операция `module_set` по `finance` (с Undo — тоже слово). Проба — по ОПЕРАЦИИ, а не по типу
  * действия (финал 1б, остатки М-9, М-10): `module_set` приходит и одиночным действием, и внутри пачки
  * `app.setDisabled` (тип `batch`), — а слово о другом расширении Финансы не касается, и заведение
- * доводит их до выключения, как задумано.
+ * доводит их до выключения, как задумано. Журнал читает его API (`journal-read.ownerExtensionWord`, РП-9): любое
+ * слово — включил, выключил или отменил — значит «маска владельца».
  */
 async function ownerSetMask(tx: Tx, graph: GraphId): Promise<boolean> {
-  const probe = {
-    actions: [
-      { operations: [{ op: 'module_set', payload: { module: SETUP_DISABLED_EXTENSION } }] },
-    ],
-  };
-  const rows = await tx.execute(sql`
-    SELECT 1 FROM chat_messages m JOIN chat_threads t ON t.id = m.thread_id
-     WHERE t.graph_id = ${graph}::uuid
-       AND m.metadata @> ${JSON.stringify(probe)}::jsonb
-     LIMIT 1`);
-  return rows.length > 0;
+  return (await ownerExtensionWord(tx, graph, SETUP_DISABLED_EXTENSION)) !== undefined;
 }
 
 /**
@@ -273,7 +267,9 @@ async function seedSupplyRecords(
 
 /**
  * Завести граф владельца, если он не заведён. Граф старой формы — отказ `GRAPH_NEEDS_MIGRATION` без
- * единой записи (Э-18: его переводит `migrate-1b`).
+ * единой записи (Э-18). Перевод 1б `migrate-1b` снят срезом 1в (РП-13: исполнен в проде 28.09, его план
+ * стоял на эталонах, которые 1в меняет) — перевода нет: мир пересевается `reset-world` (ранбук), данные графа
+ * сносятся.
  *
  * `installedViews` и `pinnedEntities` не пишутся (РП-15): закреплённые стали навигацией оболочки хоста.
  */
@@ -295,7 +291,7 @@ export async function setupGraph(
   if (state === 'legacy') {
     throw new ExecError(
       'GRAPH_NEEDS_MIGRATION',
-      'граф старой формы: его нужно перевести на новую версию (bun scripts/ops.ts migrate-1b)',
+      'граф старой формы: перевода нет — мир пересевается операцией reset-world, данные графа сносятся (docs/implementation/02-ops-runbook.md, «Что делает пересев и что он сносит»)',
       { graph },
     );
   }

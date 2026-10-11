@@ -2,7 +2,7 @@
 // Контекст LLM-вызова прогона рутины (V1.5). От чатового (llm/context.ts) отличается
 // ровно двумя вещами — и обе принципиальные:
 //
-//   1. СИСТЕМНЫЙ СЛОЙ СВОЙ (ROUTINE_SYSTEM_PROMPT_V4 + секция режима): у фонового прогона
+//   1. СИСТЕМНЫЙ СЛОЙ СВОЙ (ROUTINE_SYSTEM_PROMPT_V5 + секция режима): у фонового прогона
 //      нет собеседника, зато есть режим, белый список и терминальные глаголы. С промптом
 //      чат-ассистента модель завершала бы цикл «ответом пользователю», которого никто не
 //      прочтёт.
@@ -33,7 +33,7 @@ import {
   memoryLine,
   todaySectionFor,
 } from '../llm/context';
-import { ROUTINE_SYSTEM_PROMPT_V4, routineModeSection } from '../llm/prompts/routine-v4';
+import { ROUTINE_SYSTEM_PROMPT_V5, routineModeSection } from '../llm/prompts/routine-v5';
 import type { LLMMessage } from '../llm/types';
 import { ROUTINE_MODE_PROPERTY, ROUTINE_TOOLS_PROPERTY } from '../policy/confirmation';
 import type { RejectReason } from '../policy/pending';
@@ -184,13 +184,15 @@ function proposalLabel(status: ProposalStatus, proposal: RunSummary['proposal'])
  * `edited` для единицы недостижим: правку до принятия (Ш1.5) владелец делает над
  * ПРЕДЛОЖЕНИЕМ, а у предложения `kind` нет вовсе, и в пачку оно не попадает (Б5). Слово
  * стоит здесь потому, что `Record<RejectReason, …>` — способ узнать о пятой причине
- * сборкой, а не молчаливым «отклонено» в истории.
+ * сборкой, а не молчаливым «отклонено» в истории. `undo_refused` недостижим тем же доводом:
+ * так закрывается только карточка отката (`undo_of`), а она не единица прогона.
  */
 const UNIT_REJECT_LABEL: Record<RejectReason, string> = {
   owner: 'отклонено',
   stale: 'устарело',
   superseded: 'снято',
   edited: 'заменено правкой',
+  undo_refused: 'не применено: текст изменён',
 };
 
 /**
@@ -292,7 +294,7 @@ export async function buildRoutineContext(
   // аспектов (тот же приём, что у `buildContext`, `llm/context.ts`).
   const disabled = await disabledExtensionsOf(tx, input.graphId);
   const sections: string[] = [
-    ROUTINE_SYSTEM_PROMPT_V4,
+    ROUTINE_SYSTEM_PROMPT_V5,
     // Дата — сразу за промптом, как и в чате (§Б7-6-1): рутина работает со «сроком
     // сегодня» и «просрочено», и без даты считала бы их от даты обучения модели.
     // Переставлять из-за неё нечего: блока продолжений у раннера нет.
@@ -300,8 +302,9 @@ export async function buildRoutineContext(
   ];
 
   // Д-9 (спека 1б §8.2): проза ВКЛЮЧЁННЫХ расширений — сразу за датой, тем же порядком, что в
-  // чате. Без этого слоя routine-v4 (денежные строки routine-v3 сняты в фрагмент Финансов) оставил
-  // бы фон без денежных правил при включённых Финансах, а рукописный текст учил бы их при выключенных.
+  // чате. Без этого слоя routine-v4 и v5 (денежные строки routine-v3 сняты в фрагмент Финансов)
+  // оставили бы фон без денежных правил при включённых Финансах, а рукописный текст учил бы их при
+  // выключенных.
   const fragments = extensionPromptFragments(disabled);
   if (fragments !== null) sections.push(fragments);
 

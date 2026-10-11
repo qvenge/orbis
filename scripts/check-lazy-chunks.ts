@@ -3,8 +3,7 @@
  * Страж инварианта ленивой загрузки (ветка backlog-lazy-split, решение D33).
  *
  * Экраны вынесены из первого кадра через React.lazy в `apps/web/src/app/router.tsx` (с среза 1б —
- * экран записи и экран поиска хоста; экраны Бюджета и импорта ушли из интерфейса в `legacy-1v`,
- * спека 1б §8.6).
+ * экран записи и экран поиска хоста).
  * Инвариант держится на том, что у этих модулей НЕТ ни одного статического импортёра в графе
  * сборки: статический импорт рядом с динамическим схлопывает чанк обратно во входной.
  *
@@ -36,14 +35,70 @@
  */
 import { readdirSync, readFileSync } from 'node:fs';
 import { gzipSync } from 'node:zlib';
+import ts from 'typescript';
+
+/** Сборщик может оставить lazy export в отдельном чанке, но вынести static sibling в общий. Проверяем также исходные рёбра. */
+export function runtimeModuleImports(source: string): string[] {
+  const file = ts.createSourceFile(
+    'source.tsx',
+    source,
+    ts.ScriptTarget.Latest,
+    false,
+    ts.ScriptKind.TSX,
+  );
+  return file.statements.flatMap((node) => {
+    if (ts.isImportDeclaration(node)) {
+      const clause = node.importClause;
+      const bindings = clause?.namedBindings;
+      const runtime =
+        clause === undefined ||
+        (!clause.isTypeOnly &&
+          (clause.name !== undefined ||
+            (bindings !== undefined &&
+              (ts.isNamespaceImport(bindings) || bindings.elements.some((e) => !e.isTypeOnly)))));
+      return runtime && ts.isStringLiteral(node.moduleSpecifier) ? [node.moduleSpecifier.text] : [];
+    }
+    if (
+      ts.isExportDeclaration(node) &&
+      !node.isTypeOnly &&
+      node.moduleSpecifier !== undefined &&
+      ts.isStringLiteral(node.moduleSpecifier)
+    ) {
+      const runtime =
+        node.exportClause === undefined ||
+        ts.isNamespaceExport(node.exportClause) ||
+        node.exportClause.elements.some((e) => !e.isTypeOnly);
+      return runtime ? [node.moduleSpecifier.text] : [];
+    }
+    return [];
+  });
+}
+const SOURCE_LAZY_EDGES = [
+  { source: 'apps/web/src/features/chat/ChatScreen.tsx', modules: ['ChatPanel', 'useFastPath'] },
+  { source: 'apps/web/src/app/frame/SideChat.tsx', modules: ['ChatPanel', 'useFastPath'] },
+  {
+    source: 'apps/web/src/features/entity-detail/AspectSection.tsx',
+    modules: ['AspectSectionView', 'PropertyControl', 'property-edit-rule'],
+  },
+  { source: 'apps/web/src/features/entity-detail/Subtasks.tsx', modules: ['SubtaskAdd'] },
+  { source: 'apps/web/src/lib/entity-ref/RefField.tsx', modules: ['controls'] },
+  {
+    source: 'apps/web/src/features/entity-detail/DetailScreen.tsx',
+    modules: ['VersionsCard', 'ConfigureView'],
+  },
+  { source: 'apps/web/src/features/entity-detail/record-blocks.tsx', modules: ['VersionsCard'] },
+  {
+    source: 'apps/web/src/features/entity-detail/ProposalOverlay.tsx',
+    modules: ['ProposalOverlayView'],
+  },
+];
 
 const ASSETS_DIR = 'apps/web/dist/assets';
 const ROUTER = 'apps/web/src/app/router.tsx';
 
 /**
- * Экраны, у которых обязан быть собственный чанк. Сверяется с router.tsx ниже. Пять экранов Бюджета
- * и импорта (`BudgetScreen`, `CategoryScreen`, `RolloverScreen`, `TransactionsScreen`, `ImportFlow`)
- * сняты срезом 1б (РП-26, РП-31): роутер их больше не знает, код лежит в `legacy-1v` вне сборки.
+ * Экраны, у которых обязан быть собственный чанк. Сверяется с router.tsx ниже. Экраны Бюджета и
+ * импорта сняты с роутера срезом 1б (РП-26, РП-31), их код удалён срезом 1в (§8.1).
  */
 const LAZY_SCREENS = [
   'DetailScreen',
@@ -62,8 +117,8 @@ const LAZY_SCREENS = [
  *    категории Бюджета; экран категории ушёл из роутера, и rollup вклеил строку в чанк
  *    `DetailScreen` (+2,67 кБ gzip файла по отчёту vite). Вес экрана записи с ней держат пороги
  *    `--max-gzip`/`--max-closure-gzip` (РП-25);
- *  - `txQuery` (`features/budget/txQuery.ts`) был общим чанком экранов «Транзакции» и категории;
- *    ни одного ленивого импортёра у него не осталось, отдельного чанка больше нет.
+ *  - строитель запроса ленты транзакций был общим чанком экранов «Транзакции» и категории; ни
+ *    одного ленивого импортёра у него не осталось, отдельного чанка не стало (модуль удалён 1в §8.1).
  *
  * Третий общий чанк, `dist-*` (код Radix), сюда сознательно НЕ включён: его имя даёт путь внутри
  * node_modules, а не наш файл, и при добавлении Radix-компонента в ленивый экран он разъезжается на
@@ -76,6 +131,7 @@ const SHARED_CHUNKS: readonly string[] = [
   // панель и есть его первый модуль (замерено сборкой задачи 24: `SearchPanel-*.js`). Статический
   // импорт панели из эагерного кода (кнопка 🔍, хоткей, рамка) вклеил бы её во входной чанк.
   'SearchPanel',
+  'ChatPanel',
 ];
 
 /**
@@ -119,6 +175,16 @@ const LAZY_EDITOR_MODULES = ['BodyEditor', 'MarkdownToggle'];
  * `features/supply/SupplyPlaqueSlot.tsx`.
  */
 const LAZY_DETAIL_MODULES = [
+  'AspectSectionView',
+  'SubtaskAdd',
+  'UndoArrows',
+  // R44: настройка после соответствующего жеста.
+  'ConfigureView',
+  'undo-toast',
+  // R42: версии и диалог закрепления грузятся после первого открытия списка или жеста.
+  'VersionsCard',
+  // R43: запрос eager, представление непустого предложения lazy.
+  'ProposalOverlayView',
   'DetailMenu',
   'RecordsBlock',
   'OpenPlaqueList',
@@ -129,12 +195,19 @@ const LAZY_DETAIL_MODULES = [
   'RefManyControl',
   'RunFeed',
   'AssignmentCard',
-  'VersionsCard',
   'PinVersionDialog',
   'SupplyPlaque',
   // Задача 23: плашка выключенного расширения с «Включить» — переключатель с тостом и отменой нужен
   // только записи с выключенным расширением (точка лени — `entity-detail/AspectSection.tsx`).
   'ExtensionOffPlaque',
+  // Срез 1в (§5.1, РП-18): переключатель параметра страницы нужен редкой странице, а рендерер
+  // эагерен в каждом открытии записи (точка лени — `features/page/blocks/ParamSwitchSlot.tsx`).
+  'ParamSwitch',
+  // Срез 1в (§5.2, РП-18, задача 7): лента по дням — группы, подписи дней и колонка времени в поясе
+  // владельца — нужна редкому блоку страницы (точка лени — `features/page/blocks/DayGroupsSlot.tsx`).
+  'DayGroups',
+  // Скорость, задача 12 (R-29): лента нужна только записи прогона, не первому кадру каждой записи.
+  'RunFeed',
 ];
 
 /**
@@ -210,6 +283,48 @@ const FORBIDDEN_EDGES: readonly { from: string; to: string; hint: string }[] = [
   })),
   {
     from: 'DetailScreen',
+    to: 'AspectSectionView',
+    hint: 'Форма свойств должна оставаться за lazy фасадом AspectSection.',
+  },
+  {
+    from: 'DetailScreen',
+    to: 'SubtaskAdd',
+    hint: 'Поле создания подзадачи должно оставаться за lazy списком Subtasks.',
+  },
+  {
+    from: 'DetailScreen',
+    to: 'UndoArrows',
+    hint: 'Стрелки и KeyboardBar должны загружаться через UndoArrowsSlot.',
+  },
+  { from: 'DetailScreen', to: 'ConfigureView', hint: 'R44: редактор настройки после жеста.' },
+  {
+    from: 'DetailScreen',
+    to: 'ProposalOverlayView',
+    hint: 'R43: query wrapper не импортирует представление статически.',
+  },
+  {
+    from: 'DetailScreen',
+    to: 'VersionsCard',
+    hint: 'R42: оба потребителя версий грузят модуль только через lazy().',
+  },
+  {
+    from: 'DetailScreen',
+    to: 'undo-toast',
+    hint: 'Отмена и плашка — только через undo-lazy, после первого действия.',
+  },
+  {
+    from: 'DetailScreen',
+    to: 'RunFeed',
+    hint: 'Ленту прогона грузит только lazy() из entity-detail/own-cards.tsx (R-29).',
+  },
+
+  {
+    from: 'DetailScreen',
+    to: 'ChatPanel',
+    hint: 'R118: оба входа чата грузят панель после открытия.',
+  },
+  {
+    from: 'DetailScreen',
     to: 'doc',
     hint:
       "Ищите импортёра: `grep -rn \"@orbis/shared/doc'\" apps/web/src --include='*.ts*'` —\n" +
@@ -246,6 +361,16 @@ const FORBIDDEN_EDGES: readonly { from: string; to: string; hint: string }[] = [
     hint:
       "Ищите импортёра: `grep -rn \"RefListControl'\" apps/web/src --include='*.ts*'` — контрол\n" +
       'грузится только лениво из `lib/registry/PropertyControl.tsx` и редактором навигации (задача 21).',
+  },
+  {
+    // Полевые замеры (план скорости, задача 3, гейт I-1): транспорт пачек (клиент tRPC с `httpLink`) и наблюдатели
+    // Web Vitals — ленивым чанком `perf/boot` из `main.tsx`; эагерны только метки и буфер. Статический импорт
+    // `boot`, `transport` или `vitals` из эагерного кода вклеил бы их обратно в первый кадр записи (замер: ≈700 Б gzip).
+    from: 'DetailScreen',
+    to: 'boot',
+    hint:
+      "Ищите импортёра: `grep -rn \"perf/\\(boot\\|transport\\|vitals\\)'\" apps/web/src --include='*.ts*'` —\n" +
+      'их грузит только `import()` в `main.tsx`; буфер туда передаётся аргументом (`PerfBuffer`).',
   },
 ];
 
@@ -453,6 +578,94 @@ export function checkBudgets(dir: string, budgets: Budgets): { code: 0 | 1; line
   return { code: failed ? 1 : 0, lines };
 }
 
+// --- Запрещённое содержимое замыкания (R-19 среза 1в) ---------------------------------------
+
+/** Текст, которого в эагерном замыкании чанка быть не должно, и файл-источник этого текста. */
+export interface ClosureTextRule {
+  chunk: string;
+  text: string;
+  source: string;
+  hint: string;
+}
+
+/**
+ * Встроенный словарь свойств (`BUILTIN_PROPERTY_META`, ≈7 КБ gzip, с каноном Q-AST внутри
+ * `orbis/progress_source`) web не читает — реестр ему отдаёт сервер, — и сборщик его выбрасывает
+ * (R-19 среза 1в: вызов со словарём помечен чистым, `contracts/budget.ts` не ищет по словарю на
+ * верхнем уровне). Вернуть его в первый кадр экрана записи может одна строка — снятая аннотация
+ * или новый поиск по словарю при загрузке модуля, — и порог замыкания это НЕ ловит: запас после
+ * R-19 больше веса словаря (замерено мутацией: без аннотации — 329 380 Б при пороге 329 400).
+ * Поэтому отдельная проверка — по ТЕКСТУ описания свойства, который есть только в словаре.
+ *
+ * Позитивный контроль — текст обязан стоять в `source`: переписанное описание иначе сделало бы
+ * проверку вечным «ok» (маркер пропал бы из сборки вместе с источником).
+ */
+const FORBIDDEN_CLOSURE_TEXT: readonly ClosureTextRule[] = [
+  {
+    chunk: 'DetailScreen',
+    text: 'Нет сети — доступен только быстрый ввод (сумма + категория).',
+    source: 'apps/web/src/features/chat/useFastPath.ts',
+    hint: 'R118: useFastPath должен оставаться за ленивой панелью обоих входов чата.',
+  },
+  {
+    chunk: 'DetailScreen',
+    text: 'Деньги приходят или уходят',
+    source: 'packages/shared/src/registry/builtin-properties.ts',
+    hint:
+      'Встроенный словарь свойств приехал в первый кадр. Проверьте аннотацию чистоты у\n' +
+      '`BUILTIN_PROPERTY_META` и что ни один модуль, который грузит web, не читает словарь на\n' +
+      'верхнем уровне (образец — `DIRECTION_OPTIONS` в `contracts/budget.ts`).',
+  },
+  {
+    // Схема замеров (план скорости, задача 3, гейт I-1): web берёт из контракта только типы и списки, схема разбирает
+    // вход на сервере. Цепочку `z.object(…).strict()` сборщик чистой не считает — без пометки `@__PURE__` у фабрик
+    // схема ехала бы в первый кадр записи мёртвым кодом (≈180 Б gzip). Маркер — маска версии, она есть только в схеме.
+    chunk: 'DetailScreen',
+    text: '/^\\d+\\.\\d+\\.\\d+$/',
+    source: 'packages/shared/src/contracts/perf.ts',
+    hint:
+      'Схема замеров приехала в первый кадр. Проверьте пометки `@__PURE__` у `perfSampleSchema` и\n' +
+      '`perfReportInput` и что web не читает их (только типы `PerfSample`, списки `PERF_*`).',
+  },
+];
+
+/**
+ * Проверка содержимого замыкания. Код 1 — текст найден в замыкании чанка либо отсутствует в своём
+ * источнике (маркер устарел); чанка нет ровно одного — тоже код 1, как у порогов.
+ */
+export function checkClosureText(
+  dir: string,
+  rules: readonly ClosureTextRule[],
+  readSource: (path: string) => string = (path) => readFileSync(path, 'utf8'),
+): { code: 0 | 1; lines: string[] } {
+  const files = readdirSync(dir);
+  const lines: string[] = [];
+  for (const rule of rules) {
+    if (!readSource(rule.source).includes(rule.text)) {
+      lines.push(
+        `check-lazy-chunks: маркер «${rule.text}» не найден в ${rule.source} — проверка ` +
+          `содержимого ${rule.chunk} устарела; выберите текст, который там есть.`,
+      );
+      continue;
+    }
+    const found = chunkFilesIn(files, rule.chunk);
+    if (found.length !== 1) {
+      lines.push(`check-lazy-chunks: чанков ${rule.chunk}-*.js не ровно один (${found.length}).`);
+      continue;
+    }
+    const hit = closureOf(dir, found[0] as string).find((f) =>
+      readFileSync(`${dir}/${f}`, 'utf8').includes(rule.text),
+    );
+    if (hit !== undefined) {
+      lines.push(
+        `check-lazy-chunks: в эагерном замыкании ${found[0]} (файл ${hit}) — «${rule.text}» ` +
+          `из ${rule.source}.\n${rule.hint}`,
+      );
+    }
+  }
+  return { code: lines.length === 0 ? 0 : 1, lines };
+}
+
 // --- Проверка сборки ------------------------------------------------------------------------
 
 function main(argv: readonly string[]): void {
@@ -469,6 +682,23 @@ function main(argv: readonly string[]): void {
   // то есть ровно тем способом, против которого этот страж и написан. Сверяем не число, а
   // ИМЕНА: чанк называется по базовому имени модуля из import(), поэтому список обязан совпасть
   // с набором ленивых импортов роутера точь-в-точь.
+  for (const edge of SOURCE_LAZY_EDGES) {
+    const imports = runtimeModuleImports(readFileSync(edge.source, 'utf8'));
+    const forbidden = imports.filter((path) =>
+      edge.modules.includes(
+        path
+          .replace(/\.(?:tsx?|jsx?)$/, '')
+          .split('/')
+          .at(-1) ?? '',
+      ),
+    );
+    if (forbidden.length > 0) {
+      console.error(
+        `check-lazy-chunks: source static edge ${edge.source} → ${forbidden.join(', ')}; siblings одного модуля тоже должны оставаться lazy.`,
+      );
+      process.exit(1);
+    }
+  }
   const routerSrc = readFileSync(ROUTER, 'utf8');
   const inRouter = [...routerSrc.matchAll(/lazy\([\s\S]{0,200}?import\('([^']+)'\)/g)].map(
     (m) => m[1].split('/').pop() as string,
@@ -590,6 +820,11 @@ function main(argv: readonly string[]): void {
     console.error(weight.lines.join('\n'));
     process.exit(1);
   }
+  const content = checkClosureText(ASSETS_DIR, FORBIDDEN_CLOSURE_TEXT);
+  if (content.code !== 0) {
+    console.error(content.lines.join('\n'));
+    process.exit(1);
+  }
 
   console.log(
     `check-lazy-chunks: ok — отдельные чанки на месте у всех ${guarded.length} ` +
@@ -598,7 +833,8 @@ function main(argv: readonly string[]): void {
       `${LAZY_DETAIL_MODULES.length} ленивых модулей экрана записи + ` +
       `${LAZY_FRAME_MODULES.length} ленивых модулей рамки), список экранов сверен с роутером, ` +
       `состав чанков сверен по запрещённым рёбрам (${FORBIDDEN_EDGES.length}) ` +
-      `(${FORBIDDEN_EDGES.map((e) => `${e.from} ↛ ${e.to}`).join(', ')}).`,
+      `(${FORBIDDEN_EDGES.map((e) => `${e.from} ↛ ${e.to}`).join(', ')}), ` +
+      `содержимое замыканий — по ${FORBIDDEN_CLOSURE_TEXT.length} маркерам (R-19).`,
   );
   for (const line of weight.lines) console.log(line);
 }

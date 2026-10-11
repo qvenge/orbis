@@ -6,6 +6,9 @@ import { invalidateQueryBlocks } from '../../lib/query-blocks/batch';
 import { type RouterOutputs, trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
 import { Spinner } from '../../ui/Spinner';
+import { journalRefOf } from '../undo/journal-ref';
+import { offerUndoLazy } from '../undo/undo-lazy';
+import { pushUndoable } from '../undo/undo-stack';
 import { useHostReadOnly } from './record-host';
 import { detailGetInput } from './useEntityDetail';
 
@@ -118,6 +121,7 @@ export function Blockers({ entityId, relations }: { entityId: string; relations:
   // Ацикличность blocks проверяет сервер (§4.2): путь цикла доезжает ТОЛЬКО в message
   // (cause по HTTP не сериализуется) — его и показываем плашкой (02 §6).
   const relate = trpc.relation.create.useMutation({
+    meta: { undoStack: 'self' },
     // Плашка одна на две мутации, поэтому старт каждой гасит чужую ошибку: иначе отказ
     // создания («замкнула бы цикл») перекрывал бы любой последующий отказ снятия и висел
     // бы даже после успешных действий.
@@ -126,7 +130,14 @@ export function Blockers({ entityId, relations }: { entityId: string; relations:
     onMutate: () => {
       unrelate.reset();
     },
-    onSuccess: (_data, vars) => {
+    onSuccess: (data, vars) => {
+      const ref = journalRefOf(data);
+      if (ref)
+        pushUndoable({
+          actionId: ref.actionId,
+          title: `блокировка «${title(vars.source_id === entityId ? vars.target_id : vars.source_id)}»`,
+          entityIds: [],
+        });
       setDraft('');
       setAdding(false);
       // Направление — часть состояния формы: без сброса внешне свежая форма молча
@@ -135,13 +146,20 @@ export function Blockers({ entityId, relations }: { entityId: string; relations:
       refresh(vars.source_id === entityId ? vars.target_id : vars.source_id);
     },
   });
-  // Снятие ошибочной связи: relation.create не отдаёт actionId, Undo журналом из секции
-  // недоступен — обратный путь только через relation.delete.
+  // Снятие связи предлагает отмену собственного действия журнала.
   const unrelate = trpc.relation.delete.useMutation({
+    meta: { undoStack: 'self' },
     onMutate: () => {
       relate.reset();
     },
-    onSuccess: (_data, vars) => {
+    onSuccess: (data, vars) => {
+      const ref = journalRefOf(data);
+      if (ref)
+        offerUndoLazy({
+          title: `Блокировка снята: «${title(vars.source_id === entityId ? vars.target_id : vars.source_id)}»`,
+          actionId: ref.actionId,
+          entityIds: [],
+        });
       setConfirming(null);
       refresh(vars.source_id === entityId ? vars.target_id : vars.source_id);
     },
@@ -256,7 +274,7 @@ export function Blockers({ entityId, relations }: { entityId: string; relations:
           />
           {/* Порядок веток: сначала «ещё не искали», потом ошибка/загрузка, и только затем
               пустой результат — иначе «ничего не найдено» мигало бы на каждом нажатии.
-              Прецедент разводки состояний — TransactionsScreen §3.3. */}
+              Прецедент разводки состояний — лента транзакций Бюджета, 03-budget §3.3. */}
           {q.length < SEARCH_MIN ? (
             <p className={PICKER_NOTE}>Поиск от 2 символов</p>
           ) : search.isError ? (

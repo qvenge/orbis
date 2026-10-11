@@ -23,6 +23,7 @@ import { noteRegistryVersion, resetRegistryVersionForTests } from '../../lib/reg
 import { HOST_HOME, useNav } from '../../state/navigation';
 import {
   type MockHandler,
+  mockEntityUpdateResult,
   renderWithProviders,
   trpcError,
   type WireEntityFixture,
@@ -575,6 +576,12 @@ export function structureHandler(
         if (other === undefined) throw trpcError('NOT_FOUND');
         return { ...base, entity: other };
       }
+      case 'entity.update': {
+        const patch = input as { id: string; tags?: string[] };
+        const row = patch.id === main.id ? main : WORLD.get(patch.id);
+        if (row === undefined) throw trpcError('NOT_FOUND');
+        return mockEntityUpdateResult({ ...row, tags: patch.tags ?? row.tags });
+      }
       case 'entity.query': {
         // Записи поставки (`useSupplyRecords`): шаблон хоста по варианту фикстуры.
         if ((input as { query?: unknown }).query === SUPPLY_RECORDS_QUERY) return supplyRows;
@@ -699,6 +706,14 @@ export async function captureDetail(
     )
       throw new Error(`${f.name}: строка заголовка не встала`);
   });
+  // Lazy RunFeed может разрешиться после нескольких тихих кадров заголовка.
+  // Снимок agent-run требует фактическую карточку; отсутствие остаётся ошибкой waitFor.
+  if (f.entity.aspects.includes('orbis/agent-run')) {
+    await waitFor(() => {
+      if (container.querySelector('[data-testid="run-feed"]') === null)
+        throw new Error(`${f.name}: карточка истории прогонов не встала`);
+    });
+  }
   let last = '';
   let quiet = 0;
   for (let tick = 0; quiet < SETTLE_QUIET_TICKS; tick++) {

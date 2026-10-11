@@ -64,11 +64,16 @@ const ENTRIES: readonly AspectEntry[] = [
     aiInstructions:
       'Применяй, когда во вводе есть дата или время события. orbis/start_at обязателен (ISO 8601 с таймзоной пользователя). orbis/recurrence задаётся только на шаблоне повторения; инстансы порождает сервер.',
     tagMappings: ['schedule', 'event', 'meeting', 'appointment'],
-    // §Б2-1 (schedule): событие даёт `moment` контракта «когда» (Agenda берёт дни по нему), а
+    // §Б2-1 (schedule): событие даёт `moment` контракта «когда» (лента Повестки берёт дни по нему), а
     // `orbis/recurrence` (json) — маркер шаблона: класс задаёт САМО НАЛИЧИЕ значения (Р-К-3).
     // Роль порождения — константа: свойства под неё нет и быть не должно.
     implements: [
-      { contract: 'orbis/when', bind: { moment: 'orbis/start_at' } },
+      // `end` и `all_day` (1в §4.1) — подробности момента: подписи строк читают их слотами, а не
+      // сырыми свойствами расписания (§4.3 спеки 1в).
+      {
+        contract: 'orbis/when',
+        bind: { moment: 'orbis/start_at', end: 'orbis/end_at', all_day: 'orbis/all_day' },
+      },
       {
         contract: 'orbis/recurrence',
         bind: { template_marker: 'orbis/recurrence' },
@@ -120,7 +125,12 @@ const ENTRIES: readonly AspectEntry[] = [
           { slot: 'status', variant: 'cancelled', class: 'cancelled' },
         ],
       },
-      { contract: 'orbis/when', bind: { deadline: 'orbis/due_date' } },
+      // `done` (1в §4.1) — время завершения: его ставит правило `task_completed_at` при входе в
+      // «сделано» и снимает при уходе; в значении «даты» это факт, он вытесняет срок (§4.2).
+      {
+        contract: 'orbis/when',
+        bind: { deadline: 'orbis/due_date', done: 'orbis/completed_at' },
+      },
       // §Б2-1 (task, делегируемость): те же шесть вариантов ложатся на ПЯТЬ однозначных классов — по
       // одному варианту на класс. `cancelled` не отнесён намеренно: отменённая задача не состояние
       // делегирования, и её класс — `null` (§Б2-3).

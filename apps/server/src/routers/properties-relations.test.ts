@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, expect, test } from 'bun:test';
-import { type GraphId, globalThreadId } from '@orbis/shared';
-import { sql } from 'drizzle-orm';
-import { adminDb, appDb, freshGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
+import type { GraphId } from '@orbis/shared';
+import { appDb, freshGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
+import { actionsOf as journalActionsOf } from '../../test/journal-helpers';
 import { appRouter } from '../router';
 import { createCallerFactory } from '../trpc';
 
@@ -12,15 +12,7 @@ function callerFor(graph: GraphId) {
   return createCaller({ identity: personal(graph), actorKind: 'owner', db, clientVersion: null });
 }
 async function actionsOf(graph: GraphId): Promise<string[]> {
-  const { db: admin, client: adminClient } = adminDb();
-  try {
-    const rows =
-      await admin.execute(sql`SELECT metadata->'actions'->0->>'id' AS id FROM chat_messages
-      WHERE thread_id = ${globalThreadId(graph)} AND metadata->'actions'->0->>'id' IS NOT NULL ORDER BY id`);
-    return [...rows].map((r) => r.id as string);
-  } finally {
-    await adminClient.end();
-  }
+  return (await journalActionsOf(graph)).map((action) => action.id).sort();
 }
 async function customFields(api: ReturnType<typeof createCaller>) {
   const raw = await api.registry.createProperty({
@@ -75,12 +67,14 @@ test('ПС-18: delete с исходной тройкой возвращает р
   const key = { source_id: source.id, target_id: target.id, role: 'subitem' };
   const made = await api.relation.create(key);
   expect(made.actionId).toEqual(expect.any(String));
+  expect(made.consequences).toEqual(expect.any(Boolean));
   if (!made.actionId) throw new Error('create не вернул actionId');
   await api.ai.undo({ actionId: made.actionId });
   expect(await api.relation.listFor({ entityId: source.id })).toEqual([]);
   await api.relation.create(key);
   const removed = await api.relation.delete(key);
   expect(removed.actionId).toEqual(expect.any(String));
+  expect(removed.consequences).toEqual(expect.any(Boolean));
   if (!removed.actionId) throw new Error('мутация не вернула actionId');
   await api.ai.undo({ actionId: removed.actionId });
   const got = await api.entity.get({ id: target.id, include: ['relations'] });
@@ -231,7 +225,8 @@ test('ПС-20: два независимых источника', async () => {
   expect(before.entity.bodyRefs).toEqual([target.id]);
   await api.relation.delete(key);
   const removed = await api.entity.get({ id: source.id, include: ['body', 'relations'] });
-  expect(removed.entity.body).toBe(before.entity.body);
+  expect(before.entity.body).toBeDefined();
+  expect(removed.entity.body).toBe(before.entity.body!);
   expect(removed.entity.bodyRefs).toEqual([target.id]);
   expect(removed.relations).toEqual([]);
   await api.relation.create(key);
@@ -239,7 +234,7 @@ test('ПС-20: два независимых источника', async () => {
   await api.entity.update({
     id: source.id,
     body: 'Чип убран',
-    expectedUpdatedAt: beforeBodyEdit.entity.updatedAt,
+    expectedBodyRevision: beforeBodyEdit.entity.bodyRevision,
   });
   const after = await api.entity.get({ id: source.id, include: ['body', 'relations'] });
   expect(after.entity.bodyRefs).toEqual([]);

@@ -17,11 +17,8 @@ import {
   type AccountId,
   addDays,
   applyMemoryRules,
-  batchAuditMessageId,
   type CanonicalRow,
   csvMappingToolJsonSchema,
-  EXTENSION_IDS,
-  EXTENSION_MANIFESTS,
   extensionName,
   externalRowId,
   type FastPathCategory,
@@ -57,7 +54,8 @@ import { type Tx, withIdentity } from '../db/with-identity';
 import { type EntitlementResolver, IMPORT_CSV_KEY, resolveEntitlement } from '../entitlements';
 import { ExecError, type ExecErrorCode } from '../errors';
 import { execute } from '../executor/executor';
-import { makeChatJournalSink } from '../executor/journal';
+import { makeJournalSink } from '../executor/journal';
+import { findBatch } from '../executor/journal-read';
 import type { ExecuteRequest, WireEntity } from '../executor/types';
 import type { Identity } from '../identity';
 import type { LLMRequest, LLMResponse } from '../llm/types';
@@ -66,9 +64,9 @@ import { memoryRulesWhere } from '../memory/select';
 import { disabledExtensionsOf } from '../registry/extensions';
 import type { Card } from '../tools/registry';
 
-// Синк один на модуль (как rollover/post-due): состояния не хранит, audit-сообщение
-// batch пишется тем же tx, что и операции исполнителя (§7.8).
-const sink = makeChatJournalSink();
+// Синк один на модуль (как rollover/post-due): состояния не хранит, запись журнала
+// пачки пишется тем же tx, что и операции исполнителя (§7.8).
+const sink = makeJournalSink();
 
 /**
  * Свойство категории (§А8/В1) — оно же подпись зеркала-ребра в `meta.property`. Литералом
@@ -103,24 +101,27 @@ export function gateImportCsv(account: AccountId, resolve: EntitlementResolver):
 }
 
 /**
- * Импорт — путь расширения «Финансы» (его тул `import_csv_start` в манифесте). ГЕЙТ НА ВСЕХ ТРЁХ
- * шагах — analyze, review, confirm, — а не только на создании (спека 1б §8.3, Р-23 п. 4.3 «закрыть
- * обход маски»): `analyze` тратит токены модели на выписку, которую некуда положить, `review`
- * читает дубли для флоу, который всё равно упрётся в отказ. Прежде отказывал только исполнитель —
- * на создании финансового аспекта, то есть ПОСЛЕ LLM-вызова и ревью. Первым из гейтов шага: «это
- * выключено» — ответ раньше «лимит тарифа исчерпан». Расширение — из манифеста по имени тула, а не
- * литералом: тул переедет — переедет и гейт. Отказ `MODULE_DISABLED` → `FORBIDDEN` на проводе.
+ * Импорт — путь расширения «Финансы». ГЕЙТ НА ВСЕХ ТРЁХ шагах — analyze, review, confirm, — а не
+ * только на создании (спека 1б §8.3, Р-23 п. 4.3 «закрыть обход маски»): `analyze` тратит токены
+ * модели на выписку, которую некуда положить, `review` читает дубли для флоу, который всё равно
+ * упрётся в отказ. Прежде отказывал только исполнитель — на создании финансового аспекта, то есть
+ * ПОСЛЕ LLM-вызова и ревью. Первым из гейтов шага: «это выключено» — ответ раньше «лимит тарифа
+ * исчерпан». Отказ `MODULE_DISABLED` → `FORBIDDEN` на проводе.
+ *
+ * ПОЧЕМУ ЛИТЕРАЛ (спека 1в §7.4, §13): до среза Бюджет тула импорта нет — расширение названо
+ * явно. Прежде оно находилось в манифесте по имени тула `import_csv_start`; тул снят, и
+ * поиск по имени вернул бы «ничьё» — `isExtensionEnabled(undefined, …)` пропускает всё, и
+ * выключенные Финансы перестали бы закрывать импорт молча. Вернётся тул в манифест Финансов (срез
+ * Бюджет) — литерал остаётся верным: импорт выписок и тогда путь Финансов.
  */
 async function gateImportExtension(db: Db, who: Identity): Promise<void> {
-  const ext = EXTENSION_IDS.find((id) =>
-    EXTENSION_MANIFESTS[id].tools.includes('import_csv_start'),
-  );
+  const ext = 'finance' as const;
   const disabled = await withIdentity(db, who, (tx) => disabledExtensionsOf(tx, who.graph));
   if (isExtensionEnabled(ext, disabled)) return;
   throw new ExecError(
     'MODULE_DISABLED',
-    `импорт выписок принадлежит выключенному расширению «${extensionName(ext ?? '')}» (§Б8-3)`,
-    { module: ext ?? null, extension: ext ?? null, reason: 'create' },
+    `импорт выписок принадлежит выключенному расширению «${extensionName(ext)}» (§Б8-3)`,
+    { module: ext, extension: ext, reason: 'create' },
   );
 }
 
@@ -536,8 +537,8 @@ function isWireEntity(result: unknown): result is WireEntity {
  *
  * «Конверт-родитель» — то же, что у хука и агрегатов: роль `envelope-binding` с
  * источником-конвертом. Карточка импорта обязана считать «без конверта» так же, как считает
- * его экран бюджета, иначе владелец увидит в итоге импорта одно число, а во вкладке Budget —
- * другое; до 0017 общим у пятерых читателей было расширенное множество ролей
+ * его движок Бюджета (`budget.overview`, `budget_status`), иначе владелец увидит в итоге импорта
+ * одно число, а в сводке бюджета — другое; до 0017 общим у пятерых читателей было расширенное множество ролей
  * (`legacyParentRolesSql`), с 0017 — одна роль.
  *
  * Признак `'orbis/financial' = ANY(e.aspects)` на ЦЕЛИ — не перестраховка: `orbis/budget`
@@ -619,7 +620,7 @@ async function assertAdoptTargets(db: Db, who: Identity, input: ImportConfirmInp
   if (targets.size === 0) return;
 
   await withIdentity(db, who, async (tx) => {
-    const replay = await sink.findByAuditId(tx, batchAuditMessageId(who.graph, input.batchId));
+    const replay = await findBatch(tx, who.graph, input.batchId);
     if (replay !== undefined) return; // повтор batchId: executor вернёт результат первого прогона
 
     const ids = sql.join(
@@ -684,8 +685,8 @@ async function assertAdoptTargets(db: Db, who: Identity, input: ImportConfirmInp
  * не оставляют следа нигде: по таким строкам сущностей не создаётся. До этой правки
  * метрика была объявлена в PRD, но измерить её было физически нечем.
  *
- * Пишется отдельным системным сообщением, а не в audit действия: журнал append-only
- * (§4.6), и метаданные существующего audit-сообщения править нельзя. PK детерминирован
+ * Пишется отдельным системным сообщением, а не в запись журнала действия: журнал только
+ * дописывается (§11.2), и существующую запись править нельзя. PK детерминирован
  * по batchId — идемпотентный повтор confirm не удваивает статистику. Своя ошибка
  * логируется и НЕ пробрасывается: импорт уже закоммичен, и провал статистики не имеет
  * права его ронять (тот же контракт, что у эскалации правил, K7).
@@ -844,6 +845,7 @@ export async function confirmImport(
   await writeImportSummary(db, who, input, { created, adopted });
   return {
     actionId: r.actionId,
+    consequences: r.consequences,
     idempotentReplay: r.idempotentReplay,
     created,
     adopted,

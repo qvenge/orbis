@@ -146,3 +146,55 @@ test('дерево глубже капа возвращается КАК ЕСТ�
   const deep = { filter: node } as unknown as QueryAst;
   expect(normalizeQueryAst(deep, REG)).toBe(deep);
 });
+
+test('1в: адрес в `prop`, `sortBy` и `aggregate` — ключ контракта становится id, слот как есть', () => {
+  const ast: QueryAst = {
+    filter: {
+      and: [
+        { prop: { contract: 'user/reviewable', slot: 'state' }, op: 'eq', value: 'published' },
+        { prop: { contract: 'orbis/when' }, op: 'eq', value: { token: 'today' } },
+      ],
+    },
+    sortBy: [{ field: { contract: 'user/reviewable', slot: 'state' }, dir: 'asc' }],
+    display: 'tile',
+    aggregate: { fn: 'sum', field: { contract: 'user/reviewable', slot: 'state' } },
+  };
+  expect(normalizeQueryAst(ast, REG)).toEqual({
+    filter: {
+      and: [
+        {
+          prop: { contract: FIXTURE_USER_CONTRACT_ID, slot: 'state' },
+          op: 'eq',
+          value: 'published',
+        },
+        { prop: { contract: 'orbis/when' }, op: 'eq', value: { token: 'today' } },
+      ],
+    },
+    sortBy: [{ field: { contract: FIXTURE_USER_CONTRACT_ID, slot: 'state' }, dir: 'asc' }],
+    display: 'tile',
+    aggregate: { fn: 'sum', field: { contract: FIXTURE_USER_CONTRACT_ID, slot: 'state' } },
+  });
+});
+
+test('1в: адрес с контрактом вне реестра — как есть (отказ называет компилятор)', () => {
+  const ast: QueryAst = {
+    filter: { prop: { contract: 'user/nope', slot: 'x' }, op: 'eq', value: 'a' },
+  };
+  expect(normalizeQueryAst(ast, REG)).toEqual(ast);
+});
+
+test('1в §5.2: поле группы — точка записи имени: key свойства → id, key контракта адреса → id', () => {
+  const byProp: QueryAst = { filter: null, group: { by: 'day', field: 'user/effort_points' } };
+  expect(normalizeQueryAst(byProp, REG).group).toEqual({
+    by: 'day',
+    field: FIXTURE_USER_PROPERTY_ID,
+  });
+  const byAddress: QueryAst = {
+    filter: null,
+    group: { by: 'day', field: { contract: 'user/reviewable', slot: 'state' } },
+  };
+  expect(normalizeQueryAst(byAddress, REG).group).toEqual({
+    by: 'day',
+    field: { contract: FIXTURE_USER_CONTRACT_ID, slot: 'state' },
+  });
+});

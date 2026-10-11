@@ -1,11 +1,21 @@
 import { PAGE_ASPECT } from '@orbis/shared';
 import { type Address, buildAddress, currentEntry } from '@orbis/shared/nav';
-import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  lazy,
+  type ReactNode,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { ScreenMenuProvider } from '../../app/frame/ScreenMenu';
 import { NotFoundScreen } from '../../app/NotFoundScreen';
 import { ScreenHeader } from '../../app/ScreenHeader';
 import { useOpenRecord } from '../../app/useOpenRecord';
 import { invalidateGraph } from '../../lib/invalidate';
+import { ScreenReadyMark, useCachedAtOpen } from '../../perf/marks';
 import { mayLeave } from '../../state/leave-guard';
 import { placeKeyOf, useNav } from '../../state/navigation';
 import { trpc } from '../../trpc';
@@ -16,7 +26,6 @@ import { useToast } from '../../ui/toast-store';
 import { OpenPlaques } from '../apps/OpenPlaques';
 import { useApps } from '../apps/useApps';
 import { useOpening } from '../apps/useOpening';
-import { ConfigureView } from '../page/ConfigureView';
 import { PageView } from '../page/PageView';
 import { type DisputeRequest, type RecordShown, RecordView } from '../page/RecordView';
 import { type TabMemory, TabMemoryProvider, TabMemoryScope } from '../page/TabsContainer';
@@ -33,6 +42,10 @@ import { ProposalOverlay } from './ProposalOverlay';
 import type { LatestPanelHost } from './properties-relations/panel-host';
 import { ROUTINE_ASPECT } from './RoutineStatusBlock';
 import { useEntityDetail } from './useEntityDetail';
+
+const ConfigureView = lazy(() =>
+  import('../page/ConfigureView').then((m) => ({ default: m.ConfigureView })),
+);
 
 const TASK = 'orbis/task';
 const ASSIGNMENT = 'orbis/assignment';
@@ -54,7 +67,11 @@ export function DetailScreen({
   lead?: ReactNode;
   home?: boolean;
 }) {
+  const [titleShown, setTitleShown] = useState(false);
   const { get, setArchived, update, conflict, dismissConflict } = useEntityDetail(entityId);
+  // Разрез «из кеша» для замера готовности (спека скорости §3.1) — по кешу В МОМЕНТ ОТКРЫТИЯ записи, поэтому до ранних
+  // возвратов ниже: хуки безусловны. Сама готовность — листом `ScreenReadyMark` в разметке записи (гейт задачи 3, M-3).
+  const cachedAtOpen = useCachedAtOpen(entityId, get.data !== undefined);
   const utils = trpc.useUtils();
   const openRecord = useOpenRecord();
   /**
@@ -439,6 +456,7 @@ export function DetailScreen({
       (chosenTarget
         ? { onOpenProperties: () => panelOwner.open(chosenTarget) }
         : { propertiesUnavailableReason: 'дождитесь записи предпросмотра' })),
+    bodyAction: get.data?.bodyAction ?? null,
     onArchive: () => setArchived(!entity.archived),
     onCopyLink: () => void copyLink(configuringId ?? entityId),
     onPinVersion: () => setPinVersion(true),
@@ -506,6 +524,7 @@ export function DetailScreen({
       <TabMemoryProvider value={tabs}>
         <BodyScreenProvider
           value={{
+            arrows: { titleShown, onTitleShown: setTitleShown },
             asMarkdown,
             onCloseMarkdown: () => setAsMarkdown(false),
             screenConflict: conflict,
@@ -605,7 +624,13 @@ export function DetailScreen({
             Режим «Настроить» (§9.1) заменяет показ телом в редакторе, шаблон страницы — его
             предпросмотром на записи (§9.3). */}
             {mode?.kind === 'configure' ? (
-              <ConfigureView targetId={mode.targetId} onDone={() => setMode(null)} />
+              <Suspense fallback={<p role="status">Загружаем настройку…</p>}>
+                <ConfigureView
+                  key={mode.targetId}
+                  targetId={mode.targetId}
+                  onDone={() => setMode(null)}
+                />
+              </Suspense>
             ) : isPage && !asRecord ? (
               // Вкладки страницы — её собственные: пространство памяти по id страницы. Иначе третья
               // вкладка страницы A открывала бы третью вкладку страницы B — это разные тексты.
@@ -633,6 +658,13 @@ export function DetailScreen({
           </div>
         </BodyScreenProvider>
       </TabMemoryProvider>
+      {/* Готовность экрана — холодный старт и переход (спека скорости §3.1). Последним ребёнком: лист ничего не
+          рисует, а его подписка на счётчик запросов перерисовывает только его самого (гейт задачи 3, M-3). */}
+      <ScreenReadyMark
+        entityId={entityId}
+        screen={home ? 'home' : isPage ? 'page' : 'record'}
+        cached={cachedAtOpen}
+      />
     </ScreenMenuProvider>
   );
 }

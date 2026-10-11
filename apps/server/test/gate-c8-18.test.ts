@@ -2,7 +2,7 @@
 // Гейт части Б (§С8-18, ревизия 3): два пользовательских аспекта, заведённых ТОЛЬКО декларацией,
 // участвуют в четырёх потребителях без строки кода под них. Изначально все четыре утверждения
 // несли пометку `.failing`: каждое переводит в обычный тест та задача вехи I, которая его
-// зеленит (4 — excludeBlocked, 6 — Agenda, 7 — строка M14, 9 — spent; Р-К-9). С задачи 9
+// зеленит (4 — excludeBlocked, 6 — Повестка языком «когда» (1в), 7 — строка M14, 9 — spent; Р-К-9). С задачи 9
 // помеченных не осталось: все четыре потребителя зелены. Задача 10 проверяет это сторожем
 // ниже и снимает греп-доказательство.
 //
@@ -214,23 +214,39 @@ function taken<T>(r: Collected<T> | undefined, what: string): T {
 }
 
 /**
- * Строки повестки — ОДНИМ вызовом подписки (§А5-5). Три боевых текста §6.1 сняты вместе с
- * переводом вкладки (шаг 18): собственного текста запроса у Повестки больше нет.
- * Аспект гейта попадает сюда ТОЛЬКО декларацией — `user/gate-plain` реализует `orbis/when`
- * (слот `moment`) и `orbis/completable`, ни строки кода под него ни в движке, ни в роутере.
+ * Блоки Повестки ЯЗЫКОМ «КОГДА» (спека 1в §6.5: гейт перевыражается на `orbis/when`) — одной
+ * пачкой `entity.blocks`: окно, просроченное и «дальше». Аспект гейта попадает сюда ТОЛЬКО
+ * декларацией — `user/gate-plain` реализует `orbis/when` (слот `moment`) и `orbis/completable`, ни
+ * строки кода под него ни в компиляторе, ни в роутере. Третий блок — ради записи §С8-21 (два
+ * `moment`: gate-plain и расписание): она стоит за окном, и её строка обязана быть ровно одной —
+ * у движка подписки на ней был `SLOT_AMBIGUOUS`, у значения «когда» две привязки — просто две даты.
  */
-async function agendaRows(
-  user: GraphId,
-): Promise<Array<{ id: string; section: 'window' | 'overdue' }>> {
-  const r = await callerFor(user).agenda.list({ days: 8 });
-  return r.rows.map((x) => ({ id: x.entity.id, section: x.section }));
+const AGENDA_BLOCKS = {
+  window: 'orbis/when=next_7d, !class=orbis/recurrence:templates',
+  overdue: 'orbis/when=overdue, class=orbis/completable:open',
+  later: 'orbis/when=after_7d, !class=orbis/recurrence:templates',
+} as const;
+type AgendaBlock = keyof typeof AGENDA_BLOCKS;
+
+async function agendaRows(user: GraphId): Promise<Record<AgendaBlock, string[]>> {
+  const { results } = await callerFor(user).entity.blocks({
+    blocks: Object.entries(AGENDA_BLOCKS).map(([key, text]) => ({ key, text })),
+  });
+  const ids = (key: AgendaBlock): string[] => {
+    const r = results[key];
+    if (r === undefined || !r.ok || r.kind !== 'rows') {
+      throw new Error(`блок Повестки «${key}»: ${JSON.stringify(r)}`);
+    }
+    return r.rows.map((row) => row.id);
+  };
+  return { window: ids('window'), overdue: ids('overdue'), later: ids('later') };
 }
 
 /** Тот же текст, что у снимка `core/exclude-blocked` (0b): состав, а не порядок. */
 const EXCLUDE_BLOCKED_QUERY = 'excludeBlocked=true, sortBy=orbis/title:asc, limit=50';
 
 let overview: Collected<Overview>;
-let agenda: Collected<Array<{ id: string; section: 'window' | 'overdue' }>>;
+let agenda: Collected<Record<AgendaBlock, string[]>>;
 let m14: Collected<{ reg: Registry; fin: WireEntityRead; closed: WireEntityRead }>;
 let excluded: Collected<Set<string>>;
 
@@ -296,14 +312,18 @@ describe('гейт §С8-18: аспект только декларацией', 
     expect(env?.spent).toBe(GATE_AMOUNT);
   });
 
-  // ЗЕЛЁНЫЙ с задачи 6. Прежде вкладка спрашивала тремя текстами, требовавшими
-  // `aspect=orbis/schedule`/`aspect=orbis/task`, и дело гейта, не несущее ни того ни другого,
-  // не попадало ни в одну секцию. Теперь секции строит подписка по КОНТРАКТАМ — `user/gate-plain`
-  // реализует `orbis/when` (слот `moment`) и `orbis/completable`, и этого достаточно.
-  test('дела gate-plain попадают в Agenda: окно и просроченное (§С8-18, потребитель 2)', () => {
-    const section = new Map(taken(agenda, 'Agenda').map((r) => [r.id, r.section]));
-    expect(section.get(world.windowId)).toBe('window');
-    expect(section.get(world.overdueId)).toBe('overdue');
+  // ЗЕЛЁНЫЙ с задачи 6 среза Б-1, ПЕРЕВЫРАЖЕН в задаче 1 среза 1в. Прежде секции строила
+  // подписка `agenda.list` по контрактам; теперь — блоки языком «когда» (значение контракта по
+  // привязкам аспектов записи). `user/gate-plain` реализует `orbis/when` (слот `moment`) и
+  // `orbis/completable`, и этого по-прежнему достаточно.
+  test('дела gate-plain попадают в Повестку языком «когда» (§С8-18, потребитель 2)', () => {
+    const blocks = taken(agenda, 'Повестка');
+    expect(blocks.window).toContain(world.windowId);
+    expect(blocks.overdue).toContain(world.overdueId);
+    expect(blocks.overdue).not.toContain(world.windowId);
+    expect(blocks.window).not.toContain(world.overdueId);
+    // §С8-21: две привязки `moment` — одна строка, без `SLOT_AMBIGUOUS`.
+    expect(blocks.later.filter((id) => id === world.ambiguousId)).toHaveLength(1);
   });
 
   // ЗЕЛЁНЫЙ с задачи 7. Прежде строку собирали ветки `if` по именам аспектов

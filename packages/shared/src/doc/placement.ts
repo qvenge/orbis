@@ -8,24 +8,37 @@
  * на экране и нормой в редакторе.
  *
  * Модуль листовой: импортирует только `page-grammar`, разбор запроса с датами
- * (`query/parse-ast`, `query/dates`) и строки отказов (`contracts/block-messages`, без импортов). Его тянет экран записи, а оттуда нельзя дотянуться до
+ * (`query/parse-ast`, `query/dates`), обход ссылок на параметры (`query/page-only`, без импортов) и
+ * строки отказов (`contracts/block-messages`, без импортов). Его тянет экран записи, а оттуда нельзя дотянуться до
  * барреля `@orbis/shared/doc` (tiptap, marked; сторожа `scripts/check-lazy-chunks.ts` и
  * `save.test.tsx`). Разбор запроса несёт zod (`query/ast.ts`), но экран записи уже держит его
  * через корневой `@orbis/shared`, так что нового веса в чанк это не добавляет.
  */
 
 import { EMPTY_QUERY_MESSAGE } from '../contracts/block-messages';
-import { absoluteDateIn, RELATIVE_DATE_TOKENS } from '../query/dates';
+import { absoluteDateIn } from '../query/dates';
+import { paramNamesIn } from '../query/page-only';
 import { effectiveLabel, type ParseRegistry, parseQueryAst } from '../query/parse-ast';
+import { QUERY_DATE_TOKEN_LABELS } from '../query/tokens';
 import {
   CONTAINER_LIMITS,
   type GrammarErrorCode,
   type PageNode,
+  type PageParamDecl,
+  paramDeclsOf,
   parsePageText,
 } from './page-grammar';
 
 export type BodyKind = 'note' | 'page' | 'template';
-export type PlacedBlock = 'container' | 'record' | 'body' | 'card' | 'query' | 'own-cards' | 'host';
+export type PlacedBlock =
+  | 'container'
+  | 'record'
+  | 'body'
+  | 'card'
+  | 'query'
+  | 'own-cards'
+  | 'host'
+  | 'param';
 
 /**
  * Матрица §5.5. Блоки обвязки (`record` — кроме `{{body}}`, и `card`) показывают запись
@@ -37,6 +50,10 @@ export type PlacedBlock = 'container' | 'record' | 'body' | 'card' | 'query' | '
  * Срез 1б (РП-4): свои карточки `{{cards: own}}` — как карточка, они тоже показывают запись
  * `this`. Блоки хоста `{{apps}}` и `{{records}}` — только страница: они не показывают запись вовсе,
  * а рисуют примитив хоста, и в шаблоне повторились бы на экране каждой записи этого шаблона.
+ *
+ * Срез 1в (§5.1): параметр страницы `{{param: …}}` — страница и шаблон. В заметке переключателю
+ * негде жить: значение параметра — состояние экрана страницы, а заметка — документ; ссылки `$` в её
+ * блоках данных всё равно отвергнет разбор без места (`PAGE_ONLY`).
  */
 const MATRIX: Record<PlacedBlock, Record<BodyKind, boolean>> = {
   container: { note: false, page: true, template: true },
@@ -46,6 +63,7 @@ const MATRIX: Record<PlacedBlock, Record<BodyKind, boolean>> = {
   query: { note: true, page: true, template: true },
   'own-cards': { note: false, page: true, template: true },
   host: { note: false, page: true, template: false },
+  param: { note: false, page: true, template: true },
 };
 
 /** Матрица §5.5. */
@@ -90,7 +108,8 @@ export const CONTAINER_NODES: ReadonlySet<string> = new Set(['columns', 'tabs'])
 export const PAGE_BLOCK_GROUP = 'pageBlock';
 /**
  * Узлы страницы — члены группы `pageBlock`: контейнеры, блок обвязки, карточка, свои карточки
- * `ownCards` и блок хоста `hostBlock` (1б). Совпадение со схемой сторожит `schema.test.ts`.
+ * `ownCards`, блок хоста `hostBlock` (1б) и параметр `paramBlock` (1в). Совпадение со схемой
+ * сторожит `schema.test.ts`.
  */
 export const LAYOUT_NODES: ReadonlySet<string> = new Set([
   ...CONTAINER_NODES,
@@ -98,6 +117,7 @@ export const LAYOUT_NODES: ReadonlySet<string> = new Set([
   'aspectCard',
   'ownCards',
   'hostBlock',
+  'paramBlock',
 ]);
 /**
  * Родители, в чьём `content` разрешена группа `pageBlock`: верх документа и части контейнеров.
@@ -160,7 +180,10 @@ export type PlacementIssueCode =
   | 'SECOND_BODY'
   | 'SECOND_BLOCK'
   | 'ABSOLUTE_DATE'
-  | 'QUERY_INVALID';
+  | 'QUERY_INVALID'
+  // Параметр страницы (1в §5.1): ошибка блока `{{param}}` (неверное умолчание, чужой токен…) и
+  // ссылка `$<имя>` блока данных на имя, которого тело не объявляет.
+  | 'PARAM_INVALID';
 
 export interface PlacementIssue {
   code: PlacementIssueCode;
@@ -191,6 +214,22 @@ export const SECOND_CARDS_MESSAGE =
 export const SECOND_OWN_CARDS_MESSAGE =
   'Второй блок {{cards: own}}: свои карточки записи показываются один раз, лишний блок не рисуется.';
 
+/**
+ * Плашка второго параметра с тем же именем (1в §5.1, механизм «второй» 1б): объявление действует
+ * первое, лишний блок не рисуется.
+ */
+export function secondParamMessage(name: string): string {
+  return `Второй параметр «${name}»: действует первый, лишний блок не рисуется.`;
+}
+
+/**
+ * Ссылка `$<имя>` на параметр, которого тело не объявляет (1в §5.1): «ошибка блока с плашкой». Одна
+ * формулировка на плашку блока данных в web и на причину «шаблон не разобран».
+ */
+export function undeclaredParamMessage(name: string, kind: BodyKind): string {
+  return `параметр «${name}» не объявлен ${KIND_WORD[kind]}`;
+}
+
 /** Текст плашки второй карточки одного аспекта; `raw` — блок, как он написан. */
 export function secondCardMessage(raw: string): string {
   return `Второй ${raw.trim()}: карточка этого аспекта уже стоит выше, лишняя не рисуется.`;
@@ -204,7 +243,8 @@ export function secondCardMessage(raw: string): string {
  */
 export { EMPTY_QUERY_MESSAGE };
 
-const DATE_HINT = `замените на относительный токен: ${RELATIVE_DATE_TOKENS.join(', ')}`;
+/** Подсказка — перечень токенов из словаря (`tokens.ts`, РП-17): второго списка нет. */
+const DATE_HINT = `замените на относительный токен: ${Object.keys(QUERY_DATE_TOKEN_LABELS).join(', ')}`;
 
 const KIND_WORD: Record<BodyKind, string> = {
   note: 'в заметке',
@@ -228,6 +268,8 @@ function placedBlockOf(node: PageNode): PlacedBlock | null {
       return 'own-cards';
     case 'host':
       return 'host';
+    case 'param':
+      return 'param';
     default:
       return null;
   }
@@ -248,6 +290,9 @@ function blockLabel(node: PageNode): string {
       return 'Блок {{cards: own}}';
     case 'host':
       return `Блок {{${node.name}}}`;
+    // Именем, а не строкой целиком: маркер длинный, а плашка называет, КАКОЙ параметр.
+    case 'param':
+      return node.decl === null ? 'Блок {{param}}' : `Блок {{param: ${node.decl.name}}}`;
     default:
       return 'Блок';
   }
@@ -283,11 +328,20 @@ function misplaced(
   };
 }
 
+/**
+ * Проблема блока данных. Место разбора — по роду тела (1в §3.8, РП-5): на странице и в шаблоне
+ * `$`-ссылка законна (`place: 'page'`), в заметке — отказ `PAGE_ONLY` с подсказкой, плашкой
+ * `QUERY_INVALID`. Правило абсолютной даты на блоке со ссылкой работает как обычно: ссылка —
+ * не литерал (`absoluteDateIn`). Ссылка на имя, которого нет среди объявлений тела (`declared`),
+ * — `PARAM_INVALID`; проверяется после даты — порядок тот же, что у плашек блока данных в web.
+ */
+// ОБХОДЧИК-Q: placement-issue
 function queryIssue(
   text: string,
   kind: BodyKind,
   reg: ParseRegistry,
   path: number[],
+  declared: ReadonlyMap<string, PageParamDecl>,
 ): PlacementIssue | null {
   // Без краевых пробелов — как разбирает блок данных (`lib/query-blocks/parse.ts` в web):
   // иначе позиция в плашке тела и в плашке самого блока разошлись бы на пробел после `query:`.
@@ -296,7 +350,7 @@ function queryIssue(
   // деревом «весь корпус», шаблон с таким блоком считался бы разобранным, а блок данных
   // вернул бы все записи владельца.
   if (inner === '') return { code: 'QUERY_INVALID', message: EMPTY_QUERY_MESSAGE, path };
-  const parsed = parseQueryAst(inner, reg);
+  const parsed = parseQueryAst(inner, reg, kind === 'note' ? {} : { place: 'page' });
   if (!parsed.ok) {
     const { message, position } = parsed.error;
     return {
@@ -313,7 +367,12 @@ function queryIssue(
   // id, а `parseQueryAst` уже перевёл key (`user/deadline`) в id. Дерево с key в `prop`
   // прошло бы правило молча — у своих свойств владельца key ≠ id (перенос ревью задачи 6).
   const found = absoluteDateIn(parsed.ast, reg);
-  if (found === null) return null;
+  if (found === null) {
+    const missing = paramNamesIn(parsed.ast).find((n) => !declared.has(n));
+    return missing === undefined
+      ? null
+      : { code: 'PARAM_INVALID', message: undeclaredParamMessage(missing, kind), path };
+  }
   const def = reg.properties.get(found.prop);
   const name = def ? effectiveLabel(def.label, reg.locale) : found.prop;
   return {
@@ -341,9 +400,12 @@ function queryIssue(
  * контейнера, а контейнер в заметке не работает вовсе (§5.5), и совет вроде «колонок бывает от
  * 2 до 4» звал бы чинить то, что и после починки не заработает.
  *
- * Второй `{{cards}}`, второй `{{cards: own}}` и повтор `{{card: X}}` ОДИНАКОВЫМ текстом —
- * `SECOND_BLOCK` здесь; разные написания одного аспекта (ключ и подпись) без реестра не узнать —
+ * Второй `{{cards}}`, второй `{{cards: own}}`, повтор `{{card: X}}` ОДИНАКОВЫМ текстом и второй
+ * параметр с тем же именем (1в) — `SECOND_BLOCK` здесь; разные написания одного аспекта (ключ и подпись) без реестра не узнать —
  * их ловит план рендера web, где реестр есть. Неуместные и лежащие в `broken` блоки не считаются: они и так не рисуются.
+ *
+ * Параметр страницы (1в §5.1) на странице и в шаблоне: ошибка блока `{{param}}` и ссылка блока данных
+ * на необъявленное имя — `PARAM_INVALID` (шаблон с таким блоком к выбору не предлагается).
  */
 export function bodyIssues(
   nodes: readonly PageNode[],
@@ -355,6 +417,9 @@ export function bodyIssues(
   let cards = 0;
   let ownCards = 0;
   const cardTexts = new Set<string>();
+  const paramNames = new Set<string>();
+  // Объявления — со всего тела, а не «выше блока»: переключатель ниже блока законен (§5.1).
+  const declared = paramDeclsOf(nodes);
 
   const visit = (list: readonly PageNode[], prefix: number[]) => {
     list.forEach((node, i) => {
@@ -392,6 +457,24 @@ export function bodyIssues(
         }
         return;
       }
+      // Второй параметр с тем же именем (1в §5.1). Параметр с ошибкой блока в счёт «второго» не
+      // идёт — его объявление не действует; сама ошибка — `PARAM_INVALID` с текстом препрохода:
+      // плашка на месте блока и причина «шаблон не разобран» (перенос гейта задачи 4, M-4).
+      if (node.kind === 'param') {
+        const name = node.decl?.name;
+        if (name === undefined) {
+          out.push({
+            code: 'PARAM_INVALID',
+            message: `${blockLabel(node)}: ${node.problem}.`,
+            path,
+          });
+        } else if (paramNames.has(name)) {
+          out.push({ code: 'SECOND_BLOCK', message: secondParamMessage(name), path });
+        } else {
+          paramNames.add(name);
+        }
+        return;
+      }
       if (node.kind === 'card') {
         // `aspect` препроход уже отдал без краевых пробелов — «{{card:  x }}» и «{{card: x}}» равны.
         if (cardTexts.has(node.aspect)) {
@@ -414,7 +497,7 @@ export function bodyIssues(
         return;
       }
       if (node.kind === 'query') {
-        const issue = queryIssue(node.text, kind, reg, path);
+        const issue = queryIssue(node.text, kind, reg, path, declared);
         if (issue) out.push(issue);
         return;
       }

@@ -168,13 +168,13 @@ describe('registry.setAction / removeAction — зеркала тулов дей
     const who = await freshGraph();
     const caller = callerFor(who);
     const before = (await caller.registry.effective()).version;
-    expect(await caller.registry.setAction(OWN_ACTION_DECL)).toEqual({
+    expect(await caller.registry.setAction(OWN_ACTION_DECL)).toMatchObject({
       action: 'user/close-month',
     });
     const after = (await caller.registry.effective()).version;
     // Половина владельца сдвинулась: кеш снимка перечитается (§А10-1).
     expect(after).not.toBe(before);
-    expect(await caller.registry.removeAction({ action: 'user/close-month' })).toEqual({
+    expect(await caller.registry.removeAction({ action: 'user/close-month' })).toMatchObject({
       action: 'user/close-month',
     });
     const { db: admin, client: adminClient } = adminDb();
@@ -220,12 +220,12 @@ describe('registry.setRule / removeRule — зеркала тулов прави
     const who = await freshGraph();
     const caller = callerFor(who);
     const before = (await caller.registry.effective()).version;
-    expect(await caller.registry.setRule({ target: { aspect: 'orbis/task' }, rule: RULE })).toEqual(
-      {
-        rule: 'urgent_needs_due',
-        carrier: { kind: 'aspect', id: 'orbis/task' },
-      },
-    );
+    expect(
+      await caller.registry.setRule({ target: { aspect: 'orbis/task' }, rule: RULE }),
+    ).toMatchObject({
+      rule: 'urgent_needs_due',
+      carrier: { kind: 'aspect', id: 'orbis/task' },
+    });
     const mid = await caller.registry.effective();
     expect(mid.version).not.toBe(before);
     expect(mid.aspects.find((x) => x.id === 'orbis/task')?.rules.map((r) => r.id)).toContain(

@@ -1,44 +1,28 @@
 import { useCallback } from 'react';
-import { trpc } from '../trpc';
+import { offerUndoLazy } from '../features/undo/undo-lazy';
 import { useToast } from '../ui/toast-store';
-import { runGraphCommand } from './graph-command';
-import { invalidateGraphCommand } from './invalidate';
 
-/** The toast owns its vanilla Undo callback, so closing its originating form is harmless. */
+/** Current shared Undo owns body settlement, continuation and the global stack. */
 export function useGraphUndo(): (
   actionId: string,
   doneTitle: string,
   legacyFailureTitle?: string,
+  entityIds?: string[],
 ) => void {
-  const utils = trpc.useUtils();
   const { show } = useToast();
   return useCallback(
-    (actionId, doneTitle, legacyFailureTitle) => {
+    (actionId, doneTitle, legacyFailureTitle, entityIds) => {
       if (!actionId) {
         show(doneTitle);
         return;
       }
-      let inFlight = false;
-      let attempted = false;
-      show(doneTitle, 'default', {
-        label: 'Отменить',
-        onSelect: () => {
-          if (inFlight || attempted) return;
-          inFlight = true;
-          attempted = true;
-          void runGraphCommand(() => utils.client.ai.undo.mutate({ actionId }))
-            .then((outcome) => {
-              invalidateGraphCommand(utils);
-              if (outcome.kind === 'rejected')
-                show(legacyFailureTitle ?? outcome.message, 'danger');
-              else if (outcome.kind === 'unknown') show('Не удалось подтвердить отмену', 'danger');
-            })
-            .finally(() => {
-              inFlight = false;
-            });
-        },
+      offerUndoLazy({
+        actionId,
+        title: doneTitle,
+        ...(legacyFailureTitle !== undefined && { failed: legacyFailureTitle }),
+        ...(entityIds !== undefined && { entityIds }),
       });
     },
-    [utils, show],
+    [show],
   );
 }
