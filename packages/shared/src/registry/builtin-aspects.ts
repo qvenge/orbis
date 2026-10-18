@@ -105,9 +105,11 @@ const ENTRIES: readonly AspectEntry[] = [
       ['orbis/completed_at', false],
       ['orbis/effort_min', false],
       ['orbis/waiting_for', false],
+      ['orbis/planned_date', false],
+      ['orbis/plan_order', false],
     ],
     aiInstructions:
-      'Применяй к действиям. orbis/task_status по умолчанию inbox; явный срок → orbis/due_date (дата, не момент). orbis/completed_at проставляет сервер при переходе в done — не передавай его сам.',
+      'Применяй к действиям. orbis/task_status по умолчанию inbox; явный срок → orbis/due_date (дата, не момент). День работы над задачей → orbis/planned_date, независимо от срока. orbis/completed_at проставляет сервер при переходе в done — не передавай его сам.',
     tagMappings: ['task', 'todo', 'action', 'deadline'],
     // §Б2-1 (task): шесть вариантов `orbis/task_status` ложатся на три класса завершаемости — это
     // и есть тот один набор `closed`, в который сходятся семь мест `!done&!cancelled` (§Б1-2).

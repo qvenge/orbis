@@ -23,6 +23,7 @@ import { OwnCards } from '../entity-detail/OwnCards';
 import { AspectCardFor, OWN_ASPECT_CARDS, RestCards } from '../entity-detail/own-cards';
 import { RECORD_BLOCK_COMPONENTS } from '../entity-detail/record-blocks';
 import { recordStubLabel, tabShowLabel } from '../entity-editor/layout-parts';
+import { PlanningBlockSlot } from '../planning/PlanningBlockSlot';
 import { BlockPlaque, issueTone, REGISTRY_FAILED_MESSAGE } from './blocks/BlockPlaque';
 import { DataBlock } from './blocks/DataBlock';
 import { ParamSwitchSlot } from './blocks/ParamSwitchSlot';
@@ -336,7 +337,9 @@ function PageNodeView({
       // «Записи» — своей точкой лени (спека 1б §12, Н-9): рендерер эагерен в экране записи, а блок
       // нужен одной странице. Запись открывается в текущем разделе — поверх этой страницы.
       // «Приложения» — тоже своей точкой лени: плитки нужны «Домой» и редкой странице.
-      return node.name === 'records' ? <RecordsBlockSlot onOpen={openEntity} /> : <AppsBlockSlot />;
+      if (node.name === 'records') return <RecordsBlockSlot onOpen={openEntity} />;
+      if (node.name === 'apps') return <AppsBlockSlot />;
+      return <PlanningBlockSlot kind={node.name} onOpen={openEntity} />;
     case 'param':
       // Параметр страницы (1в §5.1) — переключатель на месте блока. Узел без объявления сюда не
       // доходит: ошибка блока — `PARAM_INVALID`, плашкой выше, как «второй» и неуместный.

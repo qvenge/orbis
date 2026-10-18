@@ -59,7 +59,7 @@ export type RecordBlockName = (typeof RECORD_BLOCK_NAMES)[number];
  * РП-4, `placement.ts`). Отдельным списком, а не в `RECORD_BLOCK_NAMES`: иначе они попали бы в
  * `recordBlock` с его матрицей и заглушками «блока записи».
  */
-export const HOST_BLOCK_NAMES = ['apps', 'records'] as const;
+export const HOST_BLOCK_NAMES = ['apps', 'records', 'day-planner', 'inbox'] as const;
 export type HostBlockName = (typeof HOST_BLOCK_NAMES)[number];
 
 /**
@@ -153,7 +153,7 @@ const RECORD_BLOCK_RE =
 // Свои карточки — ровно `own` после `cards:` (пробелы вокруг — как у карточки): иной аргумент
 // (`{{cards: mine}}`) — незнакомая форма, текст (§5.7 1а). Блоки хоста — голые имена без аргумента.
 const OWN_CARDS_RE = /^\{\{cards:[ \t]*own\}\}[ \t]*$/;
-const HOST_BLOCK_RE = /^\{\{(apps|records)\}\}[ \t]*$/;
+const HOST_BLOCK_RE = /^\{\{(apps|records|day-planner|inbox)\}\}[ \t]*$/;
 const CARD_RE = /^\{\{card:[ \t]*(\S.*?)\}\}[ \t]*$/;
 // Параметр страницы — одна строка по образцу карточки: аргументы начинаются с НЕпробельного символа,
 // разбор линейный; `}}` внутри подписи экранируется (`\}`), и строка кончается ПОСЛЕДНИМ `}}`.

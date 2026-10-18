@@ -60,7 +60,9 @@ export function QuickCapture({ context }: { context: CaptureContext }) {
           id,
           title,
           tags,
-          ...(subtask ? { props: { 'orbis/task_status': 'inbox' }, aspects: ['orbis/task'] } : {}),
+          ...(subtask
+            ? { props: { 'orbis/task_status': 'inbox' }, aspects: ['orbis/task'] }
+            : { props: { 'orbis/inbox_state': 'pending' } }),
         },
         source: 'quick_capture',
         // Одна операция не оставляет созданную запись без связи (§7.2).
