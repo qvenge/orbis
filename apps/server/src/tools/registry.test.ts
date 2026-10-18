@@ -657,6 +657,8 @@ describe('buildToolRegistry: attach_* из реестра аспектов (§7.
       'orbis/completed_at',
       'orbis/effort_min',
       'orbis/waiting_for',
+      'orbis/planned_date',
+      'orbis/plan_order',
     ]);
     expect(data.required).toEqual(['orbis/task_status']);
     expect(data.additionalProperties).toBe(false);

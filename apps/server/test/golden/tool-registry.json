@@ -3783,7 +3783,7 @@
   },
   {
     "name": "attach_orbis_task",
-    "description": "Применяй к действиям. orbis/task_status по умолчанию inbox; явный срок → orbis/due_date (дата, не момент). orbis/completed_at проставляет сервер при переходе в done — не передавай его сам.",
+    "description": "Применяй к действиям. orbis/task_status по умолчанию inbox; явный срок → orbis/due_date (дата, не момент). День работы над задачей → orbis/planned_date, независимо от срока. orbis/completed_at проставляет сервер при переходе в done — не передавай его сам.",
     "inputJsonSchema": {
       "type": "object",
       "properties": {
@@ -3918,6 +3918,24 @@
                 "kind": "text"
               },
               "description": "Ждём — Чего или кого задача ждёт, чтобы сдвинуться"
+            },
+            "orbis/planned_date": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+              "x-orbis-type": {
+                "kind": "date"
+              },
+              "description": "День в плане — День, выбранный для работы над задачей; не крайний срок"
+            },
+            "orbis/plan_order": {
+              "type": "integer",
+              "minimum": 0,
+              "x-orbis-type": {
+                "kind": "number",
+                "min": 0,
+                "integer": true
+              },
+              "description": "Порядок в плане — Порядок задачи в списке выбранного дня"
             }
           },
           "required": ["orbis/task_status"],
