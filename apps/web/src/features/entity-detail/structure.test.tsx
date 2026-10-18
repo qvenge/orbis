@@ -6,7 +6,8 @@
  * спеки 1а §8.2) плюс переезд «⋯» в присутствие хоста (1б, РП-24) — поимёнными функциями поверх
  * `golden/*.json`, а не правкой файлов — пересъёмка эталона
  * с нового экрана превратила бы приёмку «расхождения — только намеренные» в «экран похож сам на
- * себя». Любое иное расхождение — дефект экрана, а не повод для четвёртой функции.
+ * себя». План дня добавляет поверх 1б только два объявленных поля задачи — `withPlanningFields`.
+ * Любое иное расхождение — дефект экрана, а не повод переснимать эталон.
  *
  * Съёмка — `structure.capture.test.tsx` (по `CAPTURE=1`); этот файл только сверяет.
  */
@@ -35,6 +36,24 @@ import {
 import type { DetailStructure } from './structure-snapshot';
 
 installCrashTrap();
+
+/**
+ * Спека «День и Входящие», раздел «Архитектура и данные»: два новых поля задачи видны и в
+ * обычной карточке. Меняем только точную старую секцию, сохраняя исторический golden и все
+ * остальные части экрана. Ожидание независимо от живого реестра и снятого с экрана результата.
+ */
+function withPlanningFields(golden: DetailStructure): DetailStructure {
+  const before =
+    'aspect:orbis/task[prop:orbis/task_status,prop:orbis/priority,prop:orbis/due_date,prop:orbis/completed_at,prop:orbis/effort_min,prop:orbis/waiting_for]';
+  const after = `${before.slice(0, -1)},prop:orbis/planned_date,prop:orbis/plan_order]`;
+  const part = (value: string) => (value === before ? after : value);
+  return {
+    aboveTabs: golden.aboveTabs.map(part),
+    tabs: golden.tabs.map((tab) => ({ ...tab, parts: tab.parts.map(part) })),
+  };
+}
+
+const intendedPlanning = (golden: DetailStructure) => withPlanningFields(INTENDED_1B(golden));
 
 beforeEach(() => {
   localStorage.clear();
@@ -134,7 +153,7 @@ describe('каждая фикстура показывает шапку и св�
  * Шаблон хоста — ЗАПИСЬ поставки (`structureHandler` по умолчанию отдаёт её с эталонным телом в
  * той форме, в какой её пишет сервер): вид экрана через запись обязан совпасть со снимком 1а (С1б-9).
  */
-describe('INTENDED_1B(эталон) = экран через запись шаблона хоста (С1а-5, С1а-6, С1б-9, С1б-16)', () => {
+describe('INTENDED_1B + поля плана = экран через запись шаблона хоста (С1а-5, С1а-6, С1б-9, С1б-16)', () => {
   const structures = goldenStructure as Record<string, DetailStructure>;
   const requests = goldenRequests as Record<string, Record<string, number>>;
 
@@ -147,7 +166,7 @@ describe('INTENDED_1B(эталон) = экран через запись шаб�
   for (const f of STRUCTURE_FIXTURES) {
     test(f.name, async () => {
       const got = await captureDetail(f);
-      expect(got.structure).toEqual(INTENDED_1B(structures[f.name] as DetailStructure));
+      expect(got.structure).toEqual(intendedPlanning(structures[f.name] as DetailStructure));
       expect(got.requests).toEqual(INTENDED_1B_REQUESTS(requests[f.name] ?? {}));
     });
   }
@@ -177,9 +196,9 @@ const VARIANTS: readonly {
   variant: HostTemplateVariant;
   expected: (golden: DetailStructure) => DetailStructure;
 }[] = [
-  { variant: 'none', expected: INTENDED_1B },
-  { variant: 'archived', expected: INTENDED_1B },
-  { variant: 'broken', expected: (g) => withHostTemplatePlaque(INTENDED_1B(g)) },
+  { variant: 'none', expected: intendedPlanning },
+  { variant: 'archived', expected: intendedPlanning },
+  { variant: 'broken', expected: (g) => withHostTemplatePlaque(intendedPlanning(g)) },
 ];
 
 for (const { variant, expected } of VARIANTS) {
