@@ -47,7 +47,6 @@ export function Inbox({ onOpen }: { onOpen: (id: string) => void }) {
         ...(r.aspects.includes('orbis/task') && { detach: ['orbis/task'] }),
       };
       input.props = { [INBOX_STATE]: 'processed' };
-      input.tags = [...new Set([...r.tags, 'gtd-reference'])];
       input.unset = [PLANNED_DATE, PLAN_ORDER];
     } else {
       input.props = { [INBOX_STATE]: choice };

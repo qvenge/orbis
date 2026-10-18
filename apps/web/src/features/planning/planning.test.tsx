@@ -151,9 +151,9 @@ test('inbox triage preserves body, relationships and identity', async () => {
   expect(patch).toMatchObject({
     id: raw.id,
     aspects: { attach: ['orbis/note'] },
-    tags: ['personal', 'gtd-reference'],
     props: { 'orbis/inbox_state': 'processed' },
   });
+  expect(patch).not.toHaveProperty('tags');
   expect(patch.body).toBeUndefined();
   expect(patch).not.toHaveProperty('relations');
 });
@@ -251,4 +251,31 @@ test('unknown creation retries the original intent after date and draft change',
   expect(stored.size).toBe(1);
   expect(field).toHaveValue('Новый черновик');
   await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument());
+});
+
+test.each([
+  { name: 'addition', current: ['personal', 'old', 'research'] },
+  { name: 'removal', current: ['personal'] },
+])('knowledge conversion preserves concurrent tag $name', async ({ current }) => {
+  const raw = wireEntity({ id: task.id, title: 'Мысль', tags: ['personal', 'old'] });
+  let serverTags = [...raw.tags];
+  const writes: BatchCall[] = [];
+  renderWithProviders(<Inbox onOpen={onOpen} />, (path, input) => {
+    if (path === 'entity.query') return [raw];
+    if (path === 'entity.updateBatch') {
+      const call = input as BatchCall;
+      writes.push(call);
+      for (const operation of call.operations) {
+        if (operation.tool === 'entity_update' && operation.input.tags !== undefined)
+          serverTags = operation.input.tags;
+      }
+      return {};
+    }
+    return registryReply(path) ?? [];
+  });
+  const row = await screen.findByRole('article', { name: raw.title });
+  serverTags = [...current]; // Another writer committed after the Inbox snapshot loaded.
+  fireEvent.click(within(row).getByRole('button', { name: 'В знания' }));
+  await waitFor(() => expect(writes).toHaveLength(1));
+  expect(serverTags).toEqual(current);
 });
