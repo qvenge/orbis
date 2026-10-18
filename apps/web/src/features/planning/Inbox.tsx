@@ -10,7 +10,7 @@ import {
   PLAN_ORDER,
   PLANNED_DATE,
   type PlanningRecord,
-  TASK_STATUS,
+  taskPromotionPatch,
 } from './model';
 import { PlanningCapture } from './PlanningCapture';
 
@@ -38,12 +38,9 @@ export function Inbox({ onOpen }: { onOpen: (id: string) => void }) {
     if (choice === 'archive') input.archived = true;
     else if (choice === 'task') {
       input.aspects = { attach: ['orbis/task'] };
-      input.props = {
-        [INBOX_STATE]: 'processed',
-        ...(!r.props[TASK_STATUS] || r.props[TASK_STATUS] === 'inbox'
-          ? { [TASK_STATUS]: 'planned' }
-          : {}),
-      };
+      const promotion = taskPromotionPatch(r);
+      Object.assign(input, promotion);
+      input.props = { ...promotion.props, [INBOX_STATE]: 'processed' };
     } else if (choice === 'note') {
       input.aspects = {
         attach: ['orbis/note'],

@@ -1,4 +1,5 @@
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { useState } from 'react';
 import { beforeEach, expect, test, vi } from 'vitest';
 import { renderWithProviders, trpcError, wireEntity } from '../../test/harness';
 import { registryReply } from '../../test/registry';
@@ -40,12 +41,12 @@ test('failed creation retains the draft and reuses identity on retry', async () 
   fireEvent.click(screen.getByRole('button', { name: 'Добавить задачу' }));
   await screen.findByRole('alert');
   expect(field).toHaveValue('Позвонить');
-  fireEvent.click(screen.getByRole('button', { name: 'Добавить задачу' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Повторить сохранение' }));
   await waitFor(() => expect(field).toHaveValue(''));
   expect(inputs).toHaveLength(2);
-  expect(inputs[1].input.id).toBe(inputs[0].input.id);
-  expect(inputs[0].input.props?.['orbis/planned_date']).toBe('2026-10-19');
-  expect(inputs[0].input.props?.['orbis/due_date']).toBeUndefined();
+  expect(inputs[1]?.input.id).toBe(inputs[0]?.input.id);
+  expect(inputs[0]?.input.props?.['orbis/planned_date']).toBe('2026-10-19');
+  expect(inputs[0]?.input.props?.['orbis/due_date']).toBeUndefined();
 });
 
 test('capture in flight cannot duplicate, erase a newer draft or change its original date', async () => {
@@ -73,7 +74,7 @@ test('capture in flight cannot duplicate, erase a newer draft or change its orig
     expect(screen.getByRole('button', { name: 'Добавить задачу' })).not.toBeDisabled(),
   );
   expect(field).toHaveValue('Вторая');
-  expect(created[0].input.props?.['orbis/planned_date']).toBe('2026-10-19');
+  expect(created[0]?.input.props?.['orbis/planned_date']).toBe('2026-10-19');
   view.unmount();
 });
 
@@ -91,12 +92,12 @@ test('raw multiline capture preserves text and creates no task classification', 
   });
   fireEvent.click(screen.getByRole('button', { name: 'Сохранить во входящие' }));
   await waitFor(() => expect(created).toHaveLength(1));
-  expect(created[0].input).toMatchObject({
+  expect(created[0]?.input).toMatchObject({
     title: 'Идея',
     body: 'Идея\nhttps://example.com\nПодумать позже',
     props: { 'orbis/inbox_state': 'pending' },
   });
-  expect(created[0].input.aspects).toBeUndefined();
+  expect(created[0]?.input.aspects).toBeUndefined();
 });
 
 test('day selection queries the selected day; completion patches the existing task only', async () => {
@@ -115,12 +116,12 @@ test('day selection queries the selected day; completion patches the existing ta
     return registryReply(path) ?? [];
   });
   fireEvent.change(await screen.findByLabelText('Выбрать дату'), {
-    target: { value: '2026-10-19' },
+    target: { value: '2099-01-15' },
   });
-  await waitFor(() => expect(JSON.stringify(reads.at(-1))).toContain('2026-10-19'));
+  await waitFor(() => expect(JSON.stringify(reads.at(-1))).toContain('2099-01-15'));
   fireEvent.click(await screen.findByRole('checkbox', { name: 'Выполнить: Отправить резюме' }));
   await waitFor(() => expect(writes).toHaveLength(1));
-  expect(writes[0].operations).toEqual([
+  expect(writes[0]?.operations).toEqual([
     { tool: 'entity_update', input: { id: task.id, props: { 'orbis/task_status': 'done' } } },
   ]);
 });
@@ -144,8 +145,8 @@ test('inbox triage preserves body, relationships and identity', async () => {
   const row = await screen.findByRole('article', { name: raw.title });
   fireEvent.click(within(row).getByRole('button', { name: 'В знания' }));
   await waitFor(() => expect(writes).toHaveLength(1));
-  const operation = writes[0].operations[0];
-  if (operation.tool !== 'entity_update') throw new Error('Expected update');
+  const operation = writes[0]?.operations[0];
+  if (operation?.tool !== 'entity_update') throw new Error('Expected update');
   const patch = operation.input;
   expect(patch).toMatchObject({
     id: raw.id,
@@ -202,8 +203,52 @@ test('reordering skips completed tasks and saves one undoable batch', async () =
   fireEvent.click(await screen.findByRole('button', { name: 'Выше' }));
   await waitFor(() => expect(writes).toHaveLength(1));
   expect(
-    writes[0].operations.map((op) => (op.tool === 'entity_update' ? op.input.id : null)),
+    writes[0]?.operations.map((op) => (op.tool === 'entity_update' ? op.input.id : null)),
   ).toEqual([second.id, first.id]);
   fireEvent.click(await screen.findByRole('button', { name: 'Отменить' }));
   await waitFor(() => expect(undos).toEqual([{ actionId }]));
+});
+
+test('unknown creation retries the original intent after date and draft change', async () => {
+  let rejectFirst!: (e: unknown) => void;
+  const writes: CreateCall[] = [];
+  const stored = new Map<string, CreateCall>();
+  function CaptureWithDay() {
+    const [day, setDay] = useState('2026-10-19');
+    return (
+      <>
+        <button type="button" onClick={() => setDay('2026-10-20')}>
+          Другой день
+        </button>
+        <PlanningCapture day={day} />
+      </>
+    );
+  }
+  renderWithProviders(<CaptureWithDay />, (path, input) => {
+    if (path === 'entity.create') {
+      const call = input as CreateCall;
+      writes.push(call);
+      stored.set(call.input.id ?? '', call);
+      if (writes.length === 1)
+        return new Promise((_resolve, reject) => {
+          rejectFirst = reject;
+        });
+      return {};
+    }
+    return registryReply(path) ?? [];
+  });
+  const field = screen.getByRole('textbox', { name: 'Новая задача' });
+  fireEvent.change(field, { target: { value: 'Первая' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Добавить задачу' }));
+  await waitFor(() => expect(writes).toHaveLength(1));
+  fireEvent.click(screen.getByRole('button', { name: 'Другой день' }));
+  fireEvent.change(field, { target: { value: 'Новый черновик' } });
+  rejectFirst(trpcError('INTERNAL_SERVER_ERROR'));
+  await screen.findByRole('alert');
+  fireEvent.click(screen.getByRole('button', { name: 'Повторить сохранение' }));
+  await waitFor(() => expect(writes).toHaveLength(2));
+  expect(writes[1]).toEqual(writes[0]);
+  expect(stored.size).toBe(1);
+  expect(field).toHaveValue('Новый черновик');
+  await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument());
 });

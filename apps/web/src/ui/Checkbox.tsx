@@ -8,6 +8,7 @@ import { Checkbox as RC } from 'radix-ui';
  * Причина отказа обязана быть на самом контроле — молча неактивный чекбокс читается как поломка.
  */
 export function Checkbox({
+  id,
   checked,
   onCheckedChange,
   disabled = false,
@@ -15,6 +16,7 @@ export function Checkbox({
   'aria-label': ariaLabel,
   className = '',
 }: {
+  id?: string;
   checked: boolean;
   onCheckedChange: (v: boolean) => void;
   disabled?: boolean;
@@ -24,6 +26,7 @@ export function Checkbox({
 }) {
   return (
     <RC.Root
+      id={id}
       checked={checked}
       onCheckedChange={(v) => onCheckedChange(v === true)}
       disabled={disabled}

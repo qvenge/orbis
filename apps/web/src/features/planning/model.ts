@@ -37,6 +37,17 @@ export function sortPlannedTasks<T extends PlanningRecord>(rows: readonly T[]): 
   );
 }
 
+/** Promote only an unclassified task; the server checks this expectation atomically. */
+export function taskPromotionPatch(record: PlanningRecord) {
+  const status = record.props[TASK_STATUS];
+  return status === undefined || status === 'inbox'
+    ? {
+        props: { [TASK_STATUS]: 'planned' },
+        expectedTaskStatus: status === 'inbox' ? ('inbox' as const) : null,
+      }
+    : { props: {} };
+}
+
 /** A merge patch only: neither scheduling nor triage rewrites content or links. */
 export function planTaskPatch(record: PlanningRecord, day: string, rank: number) {
   const props: Record<string, unknown> = {
@@ -44,10 +55,11 @@ export function planTaskPatch(record: PlanningRecord, day: string, rank: number)
     [PLAN_ORDER]: rank,
     [INBOX_STATE]: 'processed',
   };
-  if (!record.props[TASK_STATUS] || record.props[TASK_STATUS] === 'inbox')
-    props[TASK_STATUS] = 'planned';
+  const promotion = taskPromotionPatch(record);
+  Object.assign(props, promotion.props);
   return {
     id: record.id,
+    ...promotion,
     props,
     ...(!record.aspects.includes('orbis/task') && { aspects: { attach: ['orbis/task'] } }),
   };

@@ -76,3 +76,39 @@ test('raw capture → triage → day planning retains identity, content and inde
   expect((await pending()).map((r) => r.id)).toEqual([legacy.id]);
   expect((await api.entity.get({ id: note.id })).entity.aspects).toContain('orbis/note');
 });
+
+test('stale planning cannot overwrite a task status changed by another writer', async () => {
+  const owner = await freshGraph();
+  const api = createCallerFactory(appRouter)({
+    identity: personal(owner),
+    actorKind: 'owner',
+    db,
+    clientVersion: null,
+  });
+  for (const initial of [undefined, 'inbox']) {
+    for (const status of ['waiting', 'in_progress', 'done']) {
+      const raw = await api.entity.create({
+        input: {
+          title: 'Конкурентная задача',
+          tags: [],
+          ...(initial ? { aspects: ['orbis/task'], props: { 'orbis/task_status': initial } } : {}),
+        },
+        source: 'quick_capture',
+      });
+      await api.entity.update({
+        id: raw.id,
+        aspects: { attach: ['orbis/task'] },
+        props: { 'orbis/task_status': status },
+      });
+      await expect(
+        api.entity.updateBatch({
+          operations: [{ tool: 'entity_update', input: planTaskPatch(raw, '2026-10-19', 0) }],
+        }),
+      ).rejects.toMatchObject({ code: 'CONFLICT' });
+      const current = (await api.entity.get({ id: raw.id })).entity;
+      expect(current.props['orbis/task_status']).toBe(status);
+      expect(current.props['orbis/planned_date']).toBeUndefined();
+      if (status === 'done') expect(current.props['orbis/completed_at']).toBeTruthy();
+    }
+  }
+});
