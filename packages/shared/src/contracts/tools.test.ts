@@ -420,3 +420,17 @@ describe('entityQueryInput / entityGetInput', () => {
     expect(entityGetInput.safeParse({ id: 'nope' }).success).toBe(false);
   });
 });
+
+test('only the UI accepts a narrow expected Inbox status, including absence', () => {
+  for (const expectedTaskStatus of [null, 'inbox']) {
+    const input = { id: UUID, expectedTaskStatus, props: { 'orbis/task_status': 'planned' } };
+    expect(entityUpdateUiInput.safeParse(input).success).toBe(true);
+    expect(
+      entityUpdateBatchInput.safeParse({ operations: [{ tool: 'entity_update', input }] }).success,
+    ).toBe(true);
+    expect(entityUpdateInput.safeParse(input).success).toBe(false);
+  }
+  expect(entityUpdateUiInput.safeParse({ id: UUID, expectedTaskStatus: 'done' }).success).toBe(
+    false,
+  );
+});

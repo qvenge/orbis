@@ -285,6 +285,8 @@ describe('property_catalog: форма строки (§А9-3)', () => {
       'orbis/completed_at',
       'orbis/effort_min',
       'orbis/waiting_for',
+      'orbis/planned_date',
+      'orbis/plan_order',
     ]);
   });
 });

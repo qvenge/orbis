@@ -312,7 +312,7 @@ test('потолок токенов и лимит шагов ЧАТА — сце
 // ---------------------------------------------------------------------------
 
 test('цифры точности в тексте владельцу — не украшение: они воспроизводятся прогоном по реестру', () => {
-  // Текст обещает «90 свойств, 4005 пар, 26 пересекли порог». Обещание проверяется здесь же:
+  // Текст обещает «93 свойства, 4278 пар, 28 пересекли порог». Обещание проверяется здесь же:
   // разъехавшись с реестром, оно превратилось бы в докблок-неправду — четвёртый рецидив ветки.
   const rows = BUILTIN_PROPERTY_META;
   const ru = (t: Record<string, string>): string => t.ru ?? t.en ?? Object.values(t)[0] ?? '';
@@ -331,10 +331,10 @@ test('цифры точности в тексте владельцу — не у
       if (s >= SIMILARITY_THRESHOLD) crossed += 1;
     }
   }
-  expect([rows.length, pairs, crossed]).toEqual([90, 4005, 26]);
-  expect(HEURISTIC_ACCURACY_NOTE).toContain('90 свойств');
-  expect(HEURISTIC_ACCURACY_NOTE).toContain('4005 пар');
-  expect(HEURISTIC_ACCURACY_NOTE).toContain('пересекают 26 пар');
+  expect([rows.length, pairs, crossed]).toEqual([93, 4278, 28]);
+  expect(HEURISTIC_ACCURACY_NOTE).toContain('93 свойства');
+  expect(HEURISTIC_ACCURACY_NOTE).toContain('4278 пар');
+  expect(HEURISTIC_ACCURACY_NOTE).toContain('пересекают 28 пар');
 });
 
 test('текст владельцу говорит, что верных среди них НОЛЬ и что решает он, а не скрипт', () => {

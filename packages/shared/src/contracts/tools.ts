@@ -140,6 +140,8 @@ const entityUpdateUiFields = entityUpdateInput.extend({
   bodyDoc: bodyDocSchema.optional(),
   // Замок заголовка владельца (§8.2): тул агента остаётся без этого поля.
   expectedTitle: z.string().optional(),
+  // Promotion from Inbox must not overwrite work started by another writer.
+  expectedTaskStatus: z.literal('inbox').nullable().optional(),
 });
 export const entityUpdateUiInput = entityUpdateUiFields
   .extend({ autosave: z.literal(true).optional() })

@@ -2389,7 +2389,7 @@ test('секции свойств: состав и ПОРЯДОК строк —
   renderWithProviders(<DetailScreen entityId="e1" />, richHandler);
   const section = await screen.findByTestId('aspect-orbis/task');
   const labels = [...section.querySelectorAll('dt')].map((dt) => dt.textContent);
-  // Ровно шесть свойств аспекта «Задача» в порядке `rank` ссылки — включая четыре, у которых
+  // Ровно восемь свойств аспекта «Задача» в порядке `rank` ссылки — включая шесть, у которых
   // на этой записи значения нет.
   expect(labels).toEqual([
     'Состояние задачи',
@@ -2398,6 +2398,8 @@ test('секции свойств: состав и ПОРЯДОК строк —
     'Когда завершена',
     'Трудоёмкость, мин',
     'Ждём',
+    'День в плане',
+    'Порядок в плане',
   ]);
 });
 

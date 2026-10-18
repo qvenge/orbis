@@ -68,6 +68,8 @@ describe('aspectToolJsonSchema (§А9-1)', () => {
       'orbis/completed_at',
       'orbis/effort_min',
       'orbis/waiting_for',
+      'orbis/planned_date',
+      'orbis/plan_order',
     ]);
     // Перемешанные ранги приводятся к порядку rank, а не порядку массива.
     const shuffled: AspectDefinition = {
@@ -85,6 +87,8 @@ describe('aspectToolJsonSchema (§А9-1)', () => {
       'orbis/completed_at',
       'orbis/effort_min',
       'orbis/waiting_for',
+      'orbis/planned_date',
+      'orbis/plan_order',
     ]);
   });
 
