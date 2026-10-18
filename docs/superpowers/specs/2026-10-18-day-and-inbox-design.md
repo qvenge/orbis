@@ -1,28 +1,68 @@
 # День и Входящие
 
-## Approved intent
+## Проблема и цель
 
-The user approved replacing the overloaded personal dashboard with a simple daily task list and asked for an Inbox for unprocessed thoughts, links and tasks. Existing records, project links, knowledge and strategy must survive. The primary workflow is: choose Tomorrow, enter three tasks, reorder, reload, complete one and move another. No project, priority or deadline is required to capture a task.
+Стартовая страница смешивала стратегию, цикл, проекты, очереди и инструкции. Для простого списка на завтра приходилось понимать запросы и свойства записей. Цель изменения — дать два понятных ежедневных действия: составить список на выбранный день и быстро сохранить необработанную мысль. Существующие записи, знания, связи с проектами и стратегические материалы сохраняются.
 
-## User experience
+Пользователь согласовал упрощение интерфейса и Inbox. Разработка продукта отделяется от настройки личного графа: код поставляет универсальные блоки, а навигация и тексты конкретного пользователя меняются отдельной обратимой операцией после выпуска.
 
-- Day: Today / Tomorrow / date selection; inline title entry with Enter; persisted ordering; completion directly in the list; collapsed completed section; move to another day; add existing project tasks without duplication. A planned day is separate from a deadline.
-- Inbox: free-text capture with no mandatory categorization. Process the same record into a task (optionally add to a day), a note, Later, or Archive. Later is an accessible tab and records can return to Inbox. Existing unclassified records and inbox tasks remain discoverable. No automatic classification or automatic scheduling.
-- Navigation: Day, Inbox, Projects, Knowledge, Strategy. Preserve cycle/reviews under Strategy and reserve under Projects. Simplify the user's existing task/project templates and remove smoke-test copy and numeric task-title prefixes.
-- Appearance: reuse existing dark/light tokens and controls, clear list hierarchy, concise labels, no planning instructions above the list. Accessible buttons, keyboard operation and narrow viewport support.
+## Пользовательские сценарии
 
-## Implementation decisions
+### План дня
 
-Implement native lazy page blocks `{{day-planner}}` and `{{inbox}}`, using existing page routing and graph entities. Do not add a separate database or task store. Register `orbis/planned_date` (date), `orbis/plan_order` (nonnegative integer), and `orbis/inbox_state` (pending / processed / later). Task planning fields belong to the task aspect; inbox state is a general optional property. Planning does not change due_date. Ordering is a stable numeric field with createdAt/id tie-breakers. Reordering adjacent tasks uses the existing atomic updateBatch command and Undo.
+1. Открыть «День», выбрать «Сегодня», «Завтра» или дату.
+2. Ввести название задачи и нажать Enter. Проект, приоритет и дедлайн не обязательны.
+3. Добавить уже существующую задачу через «Из существующих задач» — используется та же запись.
+4. Отметить выполнение чекбоксом. Завершённые задачи доступны в свёрнутой секции.
+5. В меню задачи изменить порядок, перенести её на другую дату или убрать из дня. Запись и её связи сохраняются.
 
-New global raw capture marks inbox_state=pending and does not attach a task aspect. Legacy inbox detection includes task_status=inbox and records with no aspects, excluding archived and explicitly deferred/reference records. Processing preserves content, tags and unrelated aspects, and moves the same entity out of the inbox. Knowledge attaches note and gtd-reference for the existing knowledge view; Later stays explicitly discoverable. Scheduling an existing task preserves waiting/in-progress states and project relations, while an inbox task becomes planned. Agent-assigned active work must not be silently duplicated or restarted.
+Плановая дата отличается от срока выполнения. «Сегодня» и «Завтра» определяются часовым поясом владельца. Относительный день обновляется при возвращении в окно и раз в минуту. Большие списки раскрываются кнопкой «Показать ещё». Перестановка требует загрузить весь список и ограничена 100 задачами одной секции из-за лимита атомарной команды; открытая и завершённая секции упорядочиваются независимо.
 
-Date boundaries use the owner's settings time zone; calendar arithmetic is date-only. Query result limits are visible and expandable. Errors preserve typed text; uncertain create retries use the same entity id; no success is reported before acknowledgement. Mutations use existing graph write paths and Undo. Page-only blocks are not executable inside record/template preview.
+### Входящие
 
-## Delivery and verification
+1. Записать мысль, ссылку или многострочный текст без выбора типа записи.
+2. Позже выбрать «В задачи», «В знания», «Позже» либо «В архив».
+3. Из вкладки «Позже» вернуть запись на разбор.
+4. Задачу после разбора можно выбрать для дня через существующие задачи; все задачи доступны из «Проектов».
 
-Implement and test in an isolated worktree from current origin/main. Inspect desktop and narrow layouts in a local preview with clearly synthetic data, then validate connected behavior without creating fake production tasks. Personal navigation/content migration is backed up and applied only after the deployed app understands the new blocks. No secrets or production data go into code or fixtures. User files and other worktrees remain untouched.
+Все действия меняют исходную запись. Текст, идентификатор, связи и несвязанные свойства не теряются. «В знания» добавляет аспект заметки и существующий тег справочных материалов. «В архив» использует обратимый архив, а не физическое удаление. Старые необработанные записи и задачи со статусом inbox остаются доступны.
 
-## Out of scope
+## Навигация и личная миграция
 
-Automatic task generation, AI prioritization, recurring plans, a complete redesign of every Orbis surface, and automatic changes to the user's life strategy.
+Основные разделы: **День · Входящие · Проекты · Знания · Стратегия**. Цикл и обзоры доступны из Стратегии, резерв и прежние планы — из Проектов. Ссылки на повестку и все записи сохраняются. Раздел Проектов содержит общую очередь задач, чтобы разобранные записи без проекта не исчезали.
+
+Перед переносом перечитать текущие страницы и сохранить резервную копию вне публичного репозитория. Сохранить актуальное содержание Стратегии, добавив ссылки на цикл и обзор. Убрать только известные числовые префиксы задач текущего цикла и тестовый текст «смоук 1а» из пользовательских шаблонов. Изменения текста передавать с expectedBodyRevision. Не переписывать саму жизненную стратегию и не назначать пользователю новые сроки.
+
+## Архитектура и данные
+
+Новые ленивые блоки страниц: `{{day-planner}}` и `{{inbox}}`. Они работают с обычными сущностями графа и существующими tRPC-командами. Отдельное хранилище задач и новые runtime-зависимости не нужны.
+
+| Свойство | Тип | Назначение |
+| --- | --- | --- |
+| `orbis/planned_date` | date | День, на который запланирована задача; не due_date |
+| `orbis/plan_order` | неотрицательное целое | Порядок в списке дня |
+| `orbis/inbox_state` | pending / processed / later | Состояние разбора записи |
+
+Первые два свойства добавляются к аспекту task; состояние Inbox может быть у записи любого типа. При равном или отсутствующем порядке используются createdAt и id. Новый элемент получает порядок по времени добавления, перестановка записывает последовательные значения одной атомарной пачкой.
+
+Inbox включает явные pending/later и старые необработанные записи по прежним статусам/тегам. Архив, закрытые задачи и processed не попадают на разбор. Глобальный быстрый ввод помечает новую сырую запись pending; создание подзадачи сохраняет прежнее поведение.
+
+## Сохранение, конкуренция и отмена
+
+Создание привязано к неизменяемому намерению: UUID, текст, исходный день и порядок. При неопределённом результате запроса доступно явное «Повторить сохранение» с тем же UUID и теми же данными. Новый черновик и переход на другую дату не заменяют это намерение и не стираются при подтверждении старого запроса. Пока результат не подтверждён, новая отправка заблокирована; редактировать черновик можно.
+
+Перевод inbox/неразобранной записи в planned использует узкое UI-поле `expectedTaskStatus` (inbox или отсутствие). Роутер переводит его в существующее предусловие executor под FOR UPDATE. Если другой писатель уже начал или завершил задачу, вся устаревшая команда отклоняется с CONFLICT; активный статус и completed_at сохраняются. Модельному tool-контракту это UI-поле не доступно.
+
+Правки используют существующие updateBatch и общий Undo. UI сообщает об успехе после подтверждения. Режим предпросмотра не показывает интерактивные контролы. Блоки запрещены внутри обычной заметки или шаблона.
+
+## Проверка и выпуск
+
+Проверяются контракт реестра и round trip блоков, независимость плановой даты от дедлайна, календарные границы, сохранение идентичности/текста, неизвестный исход при изменении дня и черновика, конкурирующее изменение статуса, порядок и Undo. Совместимость проверяется существующими тестами страниц, предпросмотра, быстрого ввода и атомарных команд. В браузере проверяются desktop/узкий экран, светлая/тёмная тема и основные действия на явно синтетических данных.
+
+Порядок выпуска: чистое ревью и успешный CI → резервная копия → штатный `ops.ts seed-registries` и проверка ожидаемых расхождений → merge/деплой совместимого кода → проверка `/health` и реестра → свежая проверка личных страниц → отдельная атомарная миграция навигации → приёмка рабочего интерфейса. Новые тела страниц нельзя публиковать раньше совместимого приложения. Личные данные и резервные копии не входят в PR.
+
+Полный набор проверок и реальные результаты фиксируются в плане; незавершённая проверка не считается успешной. По запросу пользователя от 19 октября проводится повторный цикл ревью и правок до отсутствия замечаний перед выпуском.
+
+## Вне объёма
+
+Автоматическая генерация/приоритизация задач ИИ, повторяющиеся планы, полная переработка всех экранов, изменения жизненной стратегии и деталей других проектов.
