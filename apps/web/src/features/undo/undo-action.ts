@@ -82,6 +82,9 @@ export async function runUndo(
 /** Как у прежних четырёх мест вместе: граф, маска расширений (приложения, расширения), денежные агрегаты (карточки). */
 function refresh(utils: UndoUtils): void {
   invalidateGraphCommand(utils);
+  // Undo может удалить страховку восстановления или создать версию перед принудительной отменой.
+  // Состав затронутых версий известен серверу; неактивные списки лишь помечаются протухшими.
+  void utils.version.list.invalidate();
   void utils.user.getSettings.invalidate();
 }
 

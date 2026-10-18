@@ -65,6 +65,8 @@ export function VersionsCard({ entity, active }: { entity: Entity; active: boole
       // Тело записи переписано — граф перечитывается целиком (Р17): та же запись открыта в
       // редакторе, а её строка живёт в чужих подзадачах и backlinks.
       invalidateGraph(utils);
+      // Восстановление закрепляет прежнее тело страховочной версией на сервере.
+      void utils.version.list.invalidate({ entityId: data.id });
       const ref = journalRefOf(data);
       if (ref)
         offerUndoLazy({
