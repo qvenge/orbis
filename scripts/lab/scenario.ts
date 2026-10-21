@@ -545,9 +545,9 @@ function createdIdOf(post: unknown): string | null {
 }
 
 /**
- * «＋» (§3.4 п. 3): запись (на домашней — без контекста) или подзадача (на записи — `entity.create`, затем
- * `relation.create`, `QuickCapture.tsx`); у подзадачи свой вид действия — два запроса подряд, не «создание» (M-7).
- * Подтверждение — конец ответа последней мутации, видимо — поле очистилось. Id регистрируется для уборки ДО
+ * «＋» (§3.4 п. 3): запись (на домашней — без контекста) или подзадача (на записи — `entity.create`
+ * с `link`, QuickCapture.tsx). Создание и привязка атомарны; вид подзадачи сохраняется отдельно для сравнения.
+ * Подтверждение — конец ответа entity.create, видимо — поле очистилось. Id регистрируется для уборки ДО
  * ожидания ответа — из тела запроса: запись есть на сервере, даже если ответ потеряется (I-3).
  */
 async function capture(
@@ -583,11 +583,7 @@ async function capture(
       { timeout: 30_000 },
     )
   ).jsonValue()) as number;
-  const last = await responseEnd(
-    page,
-    kind === 'subtask' ? 'relation.create' : 'entity.create',
-    t0,
-  );
+  const last = await responseEnd(page, 'entity.create', t0);
   mark(out, { metric: 'action_confirmed', kind, durMs: last - t0, repeat: r });
   mark(out, { metric: 'action_visible', kind, durMs: cleared - t0, repeat: r });
   return id;
