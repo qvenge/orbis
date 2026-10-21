@@ -63,6 +63,8 @@ const A8: Record<AspectId, readonly Row[]> = {
     ['completed_at', 'orbis/completed_at', false],
     ['effort_min', 'orbis/effort_min', false],
     ['waiting_for', 'orbis/waiting_for', false],
+    [null, 'orbis/planned_date', false],
+    [null, 'orbis/plan_order', false],
   ],
   'orbis/financial': [
     ['amount', 'orbis/amount', true],
@@ -276,20 +278,24 @@ const B2: Partial<Record<AspectId, readonly unknown[]>> = {
 };
 
 /** Свойства §А8, у которых нет аспекта-носителя: вычисляемые «Новые свойства реформы». */
-const FREE_DOMAIN_IDS = ['orbis/parent_project', 'orbis/root_project'] as const;
+const FREE_DOMAIN_IDS = [
+  'orbis/parent_project',
+  'orbis/root_project',
+  'orbis/inbox_state',
+] as const;
 
 const byId = new Map(BUILTIN_PROPERTY_META.map((p) => [p.id, p]));
 const defsById = new Map(BUILTIN_ASPECT_DEFS.map((a) => [a.id, a]));
 
-test('86 доменных свойств + 4 core; id/key уникальны; у всех label.ru/en и description.ru/en', () => {
+test('89 доменных свойств + 4 core; id/key уникальны; у всех label.ru/en и description.ru/en', () => {
   const domain = BUILTIN_PROPERTY_META.filter((p) => p.storage === 'props');
   const core = BUILTIN_PROPERTY_META.filter((p) => p.storage === 'core');
   // Счёт §А8: 73 поля − 3 слияния − 1 удаление + 4 новых = 73; core в счёт словаря не входят.
   // Срез 1а §3 добавил два свойства страницы («Шаблон для», «Главнее, чем») — 75.
   // Срез 1б (РП-3) — одиннадцать: шесть «приложения», «Дом» страницы, четыре «поставки» — 86.
-  expect(domain.length).toBe(86);
+  expect(domain.length).toBe(89);
   expect(core.map((p) => p.id)).toEqual([...CORE_PROPERTY_IDS]);
-  expect(BUILTIN_PROPERTY_META.length).toBe(90);
+  expect(BUILTIN_PROPERTY_META.length).toBe(93);
 
   // Состав доменного словаря = все id таблицы §А8 плюс два вычисляемых свойства реформы.
   const fromA8 = new Set<string>();
@@ -328,7 +334,7 @@ test('86 доменных свойств + 4 core; id/key уникальны; у
     .filter((id) => id !== 'orbis/grant');
   for (const id of runOwn) expect(byId.get(id)?.flags.system_writable).toBe(true);
   expect(byId.get('orbis/current_value')?.flags.model_writable).toBe(false);
-  for (const id of FREE_DOMAIN_IDS) {
+  for (const id of ['orbis/parent_project', 'orbis/root_project']) {
     expect(byId.get(id)?.flags.model_writable).toBe(false);
     expect(byId.get(id)?.flags.computed).toEqual({ rule: 'nearest_ancestor' });
     expect(byId.get(id)?.type.kind).toBe('ref');
@@ -473,6 +479,7 @@ test('select-варианты: ASCII key, порядок rank — снимок, 
   const SELECT_OPTIONS: Readonly<Record<string, readonly string[]>> = {
     'orbis/task_status': ['inbox', 'planned', 'in_progress', 'waiting', 'done', 'cancelled'],
     'orbis/priority': ['low', 'medium', 'high'],
+    'orbis/inbox_state': ['pending', 'processed', 'later'],
     'orbis/direction': ['income', 'expense'],
     'orbis/content_type': ['markdown', 'plain', 'checklist'],
     'orbis/spend_class': ['fixed', 'discretionary'],
@@ -1027,6 +1034,9 @@ const A8_TYPES: Record<string, string> = {
   'orbis/task_status': 'select{options:6}|core',
   'orbis/priority': 'select{options:3}|core',
   'orbis/due_date': 'date|core',
+  'orbis/planned_date': 'date|core',
+  'orbis/plan_order': 'number{integer:true,min:0}|core',
+  'orbis/inbox_state': 'select{options:3}|core',
   'orbis/completed_at': 'timestamp|core',
   'orbis/effort_min': 'number{integer:true,min:1}|core',
   'orbis/waiting_for': 'text|core',
@@ -1131,7 +1141,7 @@ test('тип и модуль каждого свойства — по колон
     return `${type}|${property.module ?? 'core'}`;
   };
 
-  expect(Object.keys(A8_TYPES).length).toBe(90);
+  expect(Object.keys(A8_TYPES).length).toBe(93);
   for (const property of BUILTIN_PROPERTY_META) {
     expect(`${property.id}: ${signature(property)}`).toBe(
       `${property.id}: ${A8_TYPES[property.id] ?? '<нет в снимке §А8>'}`,

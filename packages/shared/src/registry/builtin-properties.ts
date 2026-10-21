@@ -13,7 +13,7 @@
  * «Главнее, чем»: итого **75 доменных + 4 core**. Они стоят В КОНЦЕ массива, после core-проекций:
  * `rank` = позиция, и вставка перед core сдвинула бы `rank` четырёх core-строк — дрейф реестра.
  * Срез 1б (РП-3, спека §4.2, §4.3, §9.1) добавил одиннадцать — шесть свойств «приложения», «Дом»
- * страницы и четыре свойства «поставки»: итого **86 доменных + 4 core**, тоже В КОНЦЕ массива.
+ * страницы и четыре свойства «поставки»: итого **89 доменных + 4 core**, тоже В КОНЦЕ массива.
  *
  * Чего здесь НЕТ и почему: `orbis/project_id` §А8 удаляет; `orbis/date` и `orbis/weight` §А8
  * называет общими понятиями будущих модулей и прямо оговаривает — в v1 не сеются, потому что
@@ -1358,10 +1358,47 @@ const ENTRIES: readonly PropertyEntry[] = [
     module: null,
     flags: { writer: 'supply' },
   },
+  {
+    id: 'orbis/planned_date',
+    label: { ru: 'День в плане', en: 'Planned day' },
+    description: {
+      ru: 'День, выбранный для работы над задачей; не крайний срок',
+      en: 'Day chosen to work on a task, independent of its deadline',
+    },
+    type: { kind: 'date' },
+    module: null,
+  },
+  {
+    id: 'orbis/plan_order',
+    label: { ru: 'Порядок в плане', en: 'Plan order' },
+    description: {
+      ru: 'Порядок задачи в списке выбранного дня',
+      en: 'Task position in the chosen day',
+    },
+    type: { kind: 'number', integer: true, min: 0 },
+    module: null,
+  },
+  {
+    id: 'orbis/inbox_state',
+    label: { ru: 'Разбор входящих', en: 'Inbox state' },
+    description: {
+      ru: 'Состояние разбора быстрой записи',
+      en: 'Processing state of a raw capture',
+    },
+    type: {
+      kind: 'select',
+      options: options(
+        ['pending', 'Разобрать', 'Pending'],
+        ['processed', 'Разобрано', 'Processed'],
+        ['later', 'Позже', 'Later'],
+      ),
+    },
+    module: null,
+  },
 ];
 
 /**
- * Встроенный словарь свойств: 86 доменных (`storage: 'props'`) + 4 core-проекции.
+ * Встроенный словарь свойств: 89 доменных (`storage: 'props'`) + 4 core-проекции.
  * `key` встроенного изначально равен `id` (§А2-1), `graph_id` — NULL, статус — `active`.
  *
  * `@__PURE__` (R-19 среза 1в): словарь читают сервер, сид и тесты; web его не читает — реестр

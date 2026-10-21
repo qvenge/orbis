@@ -41,11 +41,11 @@ afterAll(async () => {
 });
 
 describe('registry.effective (§А9-2)', () => {
-  test('владельцу без единой своей строки едут ВСЕ встроенные: 90 свойств, 16 аспектов, 11 ролей, 7 контрактов', async () => {
+  test('владельцу без единой своей строки едут ВСЕ встроенные: 93 свойств, 16 аспектов, 11 ролей, 7 контрактов', async () => {
     const reg = await a.registry.effective();
     // Счёт литералами, а не длиной встроенных массивов: снимок §А8 нормативен, и «сколько
     // сид положил» здесь должно совпасть со «сколько спека назвала», а не с самим собой.
-    expect(reg.properties.length).toBe(90);
+    expect(reg.properties.length).toBe(93);
     expect(reg.aspects.length).toBe(16);
     expect(reg.roles.length).toBe(11);
     expect(reg.contracts.length).toBe(7);

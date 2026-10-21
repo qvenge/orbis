@@ -60,11 +60,23 @@ import { runBlocks } from './entity-blocks';
 // а тред/сообщение он пишет тем же tx, что executor (§7.8).
 const sink = makeJournalSink();
 
-/** Видимый заголовок владельца сверяет executor готовым предусловием под FOR UPDATE (§8.2, К-35). */
-function withTitleLock({ expectedTitle, ...fields }: Omit<EntityUpdateUiInput, 'autosave'>) {
-  return expectedTitle === undefined
-    ? fields
-    : { ...fields, precondition: [{ property: 'orbis/title', in: [expectedTitle] }] };
+/** UI expectations are checked by the executor under FOR UPDATE, in the write transaction. */
+function withUiLocks({
+  expectedTitle,
+  expectedTaskStatus,
+  ...fields
+}: Omit<EntityUpdateUiInput, 'autosave'>) {
+  const precondition = [
+    ...(expectedTitle === undefined ? [] : [{ property: 'orbis/title', in: [expectedTitle] }]),
+    ...(expectedTaskStatus === undefined
+      ? []
+      : [
+          expectedTaskStatus === null
+            ? { property: 'orbis/task_status', absent: true as const }
+            : { property: 'orbis/task_status', in: [expectedTaskStatus] },
+        ]),
+  ];
+  return precondition.length ? { ...fields, precondition } : fields;
 }
 
 /**
@@ -408,7 +420,7 @@ export const entityRouter = router({
         }
     > => {
       const { autosave, ...uiFields } = input;
-      const fields = withTitleLock(uiFields);
+      const fields = withUiLocks(uiFields);
       const r = await execute(
         ctx.db,
         {
@@ -463,7 +475,7 @@ export const entityRouter = router({
     .input(entityUpdateBatchInput)
     .mutation(async ({ ctx, input }): Promise<JournalRef & { results: unknown[] }> => {
       const operations = input.operations.map((op) =>
-        op.tool === 'entity_update' ? { ...op, input: withTitleLock(op.input) } : op,
+        op.tool === 'entity_update' ? { ...op, input: withUiLocks(op.input) } : op,
       );
       const r = await execute(
         ctx.db,

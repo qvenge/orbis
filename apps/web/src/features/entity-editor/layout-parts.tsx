@@ -41,6 +41,8 @@ export const OWN_CARDS_TITLE = 'Свои карточки';
 export const HOST_BLOCK_TITLES: Readonly<Record<HostBlockName, string>> = {
   apps: 'Приложения',
   records: 'Записи',
+  'day-planner': 'День',
+  inbox: 'Входящие',
 };
 
 /** Подписи заглушек 1б — теми же квадратными скобками, что у блоков обвязки: место, а не данные. */

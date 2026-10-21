@@ -508,7 +508,7 @@ describe('блоки обвязки §5.3', () => {
 
 describe('свои карточки и блоки хоста (спека 1б §8.5, §6.2 п. 3, §3.5)', () => {
   test('имена блоков хоста — «Приложения» и «Записи»', () => {
-    expect(HOST_BLOCK_NAMES).toEqual(['apps', 'records']);
+    expect(HOST_BLOCK_NAMES).toEqual(['apps', 'records', 'day-planner', 'inbox']);
   });
 
   test.each([
