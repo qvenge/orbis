@@ -95,11 +95,14 @@ describe('withIdentity (RLS-механика, findings B7)', () => {
 
   test('внутри транзакции auth.uid() = актор, снаружи — NULL', async () => {
     const inside = await withIdentity(db, personal(userA), async (tx) => {
-      const r = await tx.execute(sql`SELECT auth.uid()::text AS uid, current_user AS who`);
+      const r = await tx.execute(
+        sql`SELECT auth.uid()::text AS uid, current_user AS who, pg_current_xact_id_if_assigned()::text AS xid`,
+      );
       return r[0];
     });
     expect(inside?.uid).toBe(userA);
     expect(inside?.who).toBe('authenticated');
+    expect(inside?.xid).toBeNull();
     // свежий checkout после транзакции чист (пул max=3, гоняем несколько раз).
     // Прямой auth.uid() под orbis_app недоступен: NOINHERIT без грантов на схему auth,
     // а GRANT USAGE ON SCHEMA auth от postgres тихо не выдаётся (findings грабля 1).

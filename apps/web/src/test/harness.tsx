@@ -437,6 +437,7 @@ export function mockEntityUpdateResult(
     bodyRevision: entity.bodyRevision ?? 1,
     bodyChangedAt: entity.bodyChangedAt ?? wire.updatedAt,
     bodyAction: entity.bodyAction ?? null,
+    txId: entity.txId ?? '1',
     actionId: entity.actionId ?? `action-${wire.id}`,
     consequences: entity.consequences ?? false,
   };

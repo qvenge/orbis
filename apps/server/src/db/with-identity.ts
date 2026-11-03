@@ -10,6 +10,7 @@
 // Между Г-3 и Г-4 ключ `graph` политиками ещё игнорировался, и промежуточное состояние держалось
 // на тождестве id личного графа (спека §8.1) — это прошлое, а не нынешнее поведение.
 import { sql } from 'drizzle-orm';
+import { recordReadWatermark } from '../freshness/watermark';
 // `isIdentity` — ЗНАЧЕНИЕ, а не тип, и лист этим не нарушен: ИЗМЕРЕНО (финальное ревью ветки) —
 // полный граф импортов `identity.ts` это {db/client, db/schema}, то есть ровно то, что здесь уже
 // есть через `import type { Identity }`; из значений `identity.ts` импортирует один `sql`, цикла нет.
@@ -64,7 +65,12 @@ export async function withIdentity<T>(
         role: 'authenticated',
         graph: who.graph.toLowerCase(),
       });
-      await tx.execute(sql`SELECT set_config('request.jwt.claims', ${claims}, true)`);
+      const [snapshot] = await tx.execute<{ watermark: string }>(sql`
+        SELECT set_config('request.jwt.claims', ${claims}, true),
+               pg_snapshot_xmin(pg_current_snapshot())::text AS watermark
+      `);
+      if (!snapshot) throw new Error('withIdentity: отсутствует граница снимка');
+      recordReadWatermark(snapshot.watermark);
       await tx.execute(sql`SET LOCAL ROLE authenticated`);
       return fn(tx);
     });

@@ -417,6 +417,7 @@ export const entityRouter = router({
     }): Promise<
       WireEntityWithRevision & { body: string } & JournalRef & {
           bodyAction: BodyActionInfo | null;
+          txId: string;
         }
     > => {
       const { autosave, ...uiFields } = input;
@@ -431,9 +432,14 @@ export const entityRouter = router({
           operations: [{ tool: 'entity_update', input: fields }],
         },
         // Действующее действие тела ответа считает исполнитель в транзакции правки (R-22), см. ниже
-        { sink, reportBodyAction: true },
+        {
+          sink,
+          reportBodyAction: true,
+          reportBodyDoc: fields.body !== undefined || fields.bodyDoc !== undefined,
+        },
       );
       if (!r.ok) throw execErrorToTRPC(r.error);
+      if (r.txId == null) throw new Error('entity.update: отсутствует xid транзакции');
       // Эскалация повторных исправлений категории (§7.8, решение K7): пост-коммит
       // хуков в executor'е нет — вызов идёт ЗДЕСЬ, после успешного execute, отдельной
       // транзакцией. Своей ошибки наружу не отдаёт: правка категории уже закоммичена.
@@ -450,6 +456,7 @@ export const entityRouter = router({
       return {
         ...(r.results[0] as WireEntityWithRevision & { body: string }),
         bodyAction: r.bodyAction ?? null,
+        txId: r.txId,
         ...journalRef(r),
       };
     },

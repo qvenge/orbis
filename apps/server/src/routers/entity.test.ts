@@ -5,12 +5,14 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import type { GraphId } from '@orbis/shared';
 import { entitySchema, entityThreadId, entityUpdateInput, globalThreadId } from '@orbis/shared';
+import { parseBody } from '@orbis/shared/doc';
 import { PAGE_ONLY_HINT, QUERY_TREE_DEPTH_CAP } from '@orbis/shared/query';
 import { TRPCError } from '@trpc/server';
 import { fetchRequestHandler } from '@trpc/server/adapters/fetch';
 import { sql } from 'drizzle-orm';
 import { adminDb, appDb, freshGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
 import { actionsOf, journalOf } from '../../test/journal-helpers';
+import type { Db } from '../db/client';
 import { execute } from '../executor/executor';
 import { makeJournalSink } from '../executor/journal';
 import { appRouter } from '../router';
@@ -341,6 +343,112 @@ describe('замок заголовка владельца через интер
 });
 
 describe('entity.update: замок текста по ревизии тела (спека скорости §8.1–§8.2)', () => {
+  test('квитанция автосохранения называет xid именно записи, в том числе внутри сеанса', async () => {
+    const user = await freshGraph();
+    const caller = callerFor(user);
+    const created = await caller.entity.create({
+      input: { title: 'Сеанс', tags: [], body: 'v1' },
+      source: 'fast_path',
+    });
+    const first = await caller.entity.update({
+      id: created.id,
+      body: 'v2',
+      expectedBodyRevision: created.bodyRevision,
+      autosave: true,
+    });
+    const second = await caller.entity.update({
+      id: created.id,
+      body: 'v3',
+      expectedBodyRevision: first.bodyRevision,
+      autosave: true,
+    });
+    expect(second.actionId).toBe(first.actionId);
+    expect(second.txId).not.toBe(first.txId);
+    expect(second.body).toBe('v3');
+    expect(second.bodyDoc).toEqual(parseBody('v3'));
+    expect(second.bodyRevision).toBe(first.bodyRevision + 1);
+    expect(second.bodyAction).toMatchObject({ actionId: first.actionId });
+
+    const unchanged = await caller.entity.update({
+      id: created.id,
+      body: 'v3',
+      expectedBodyRevision: second.bodyRevision,
+      autosave: true,
+    });
+    expect(unchanged.bodyRevision).toBe(second.bodyRevision);
+    const { client: admin } = adminDb();
+    try {
+      const rows = await admin`SELECT tx_id::text AS xid, scope FROM change_feed
+        WHERE graph_id = ${user} AND kind = 'entity' AND row_key = ${created.id}
+        AND tx_id IN (${first.txId}::xid8, ${second.txId}::xid8) ORDER BY tx_id`;
+      expect([...rows]).toEqual([
+        { xid: first.txId, scope: 'body' },
+        { xid: second.txId, scope: 'body' },
+      ]);
+    } finally {
+      await admin.end();
+    }
+  });
+
+  test('post-commit эскалация не подменяет xid правки', async () => {
+    const user = await freshGraph();
+    const caller = callerFor(user);
+    const createCategory = (title: string) =>
+      caller.entity.create({
+        input: { title, tags: [], aspects: ['orbis/category'] },
+        source: 'fast_path',
+      });
+    const before = await createCategory('Исходная категория');
+    const category = await createCategory('Новая категория');
+    const payment = await caller.entity.create({
+      input: {
+        title: 'Платёж',
+        tags: [],
+        aspects: ['orbis/financial'],
+        body: 'до',
+        props: {
+          'orbis/amount': '20.00',
+          'orbis/direction': 'expense',
+          'orbis/finance_category': before.id,
+          'orbis/occurred_on': '2026-07-20',
+        },
+      },
+      source: 'fast_path',
+    });
+    const completed: string[] = [];
+    const transaction: Db['transaction'] = (fn, config) =>
+      db.transaction(async (tx) => {
+        const result = await fn(tx);
+        // Присваиваем xid читающим TX эскалации, чтобы отличить их от исходного UPDATE.
+        const [row] = await tx.execute<{ xid: string }>(
+          sql`SELECT pg_current_xact_id()::text AS xid`,
+        );
+        if (!row) throw new Error('отсутствует xid');
+        completed.push(row.xid);
+        return result;
+      }, config);
+    const observedDb = new Proxy(db, {
+      get: (target, key, receiver) =>
+        key === 'transaction' ? transaction : Reflect.get(target, key, receiver),
+    });
+    const update = await createCaller({
+      identity: personal(user),
+      actorKind: 'owner',
+      db: observedDb,
+      clientVersion: null,
+    }).entity.update({
+      id: payment.id,
+      body: 'после',
+      expectedBodyRevision: payment.bodyRevision,
+      props: { 'orbis/finance_category': category.id },
+    });
+
+    expect(completed.length).toBeGreaterThan(1);
+    expect(completed[0]).toBe(update.txId);
+    expect(completed.at(-1)).not.toBe(update.txId);
+    expect(update.bodyDoc).toEqual(parseBody('после'));
+  });
+
   test('стухшая ревизия → CONFLICT; повтор с ревизией из ответа — успех; tags — LWW без проверки', async () => {
     const user = await freshGraph();
     const caller = callerFor(user);

@@ -137,6 +137,8 @@ export interface ExecuteOk {
    * `ExecutorDeps.reportBodyAction`; посчитано в транзакции правки (рулинг R-22).
    */
   bodyAction?: BodyActionInfo | null;
+  /** xid транзакции одиночной entity_update. */
+  txId?: string;
 }
 
 export interface ExecuteErr {
@@ -604,4 +606,6 @@ export interface ExecutorDeps {
    * автосохранению лишних обходов.
    */
   reportBodyAction?: boolean;
+  /** Добавить bodyDoc из RETURNING в результат одиночной правки тела. */
+  reportBodyDoc?: boolean;
 }

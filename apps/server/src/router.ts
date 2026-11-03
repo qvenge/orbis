@@ -10,6 +10,7 @@ import { agentRunRouter } from './routers/agent-run';
 import { aiRouter } from './routers/ai';
 import { appsRouter } from './routers/apps';
 import { budgetRouter } from './routers/budget';
+import { changesRouter } from './routers/changes';
 import { chatRouter } from './routers/chat';
 import { entityRouter } from './routers/entity';
 // `import` — зарезервированное слово JS: ключ роутера так назвать можно, переменную нет
@@ -26,6 +27,7 @@ import { protectedProcedure, publicProcedure, router } from './trpc';
 
 export const appRouter = router({
   ping: publicProcedure.query(() => ({ ok: true })),
+  changes: changesRouter,
   // Провод диагностики (смоук/ручная проверка токена): наружу едет АКТОР — тот аккаунт,
   // чьим именем подписана транзакция. Имя поля — ключ журнала `actor_user_id` (D11), оно
   // не про граф, и переименование сломало бы смоуки, читающие ответ.

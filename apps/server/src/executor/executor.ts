@@ -43,7 +43,7 @@ import {
   queryRefsFromDoc,
 } from '@orbis/shared/doc';
 import { OWNER_LOCALE } from '@orbis/shared/query';
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, getTableColumns, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import {
   BindingReads,
@@ -382,6 +382,7 @@ interface OpOutcome {
    * действующее действие тела для ответа правки (`ExecutorDeps.reportBodyAction`), не перечитывая запись.
    */
   row?: EntityRow;
+  txId?: string;
 }
 
 /** Данные стадий 6–7 одной операции; для batch агрегируются в один action (§7.8). */
@@ -799,10 +800,15 @@ export async function execute(
         ok: true as const,
         // У продолжения сеанса — id записи сеанса (§8.2): её отменяют и её называет ответ
         actionId: ctx.continuedSession ?? actionId,
-        results: [out.result],
+        results: [
+          deps.reportBodyDoc === true && out.row !== undefined
+            ? toWireEntityWithRevision(out.row, true)
+            : out.result,
+        ],
         idempotentReplay: out.replay === true,
         consequences,
         ...(reported !== undefined && { bodyAction: reported }),
+        ...(out.txId !== undefined && { txId: out.txId }),
       };
     });
   } catch (e) {
@@ -2969,11 +2975,14 @@ async function prepareEntityUpdate(
         .update(entities)
         .set(patch)
         .where(eq(entities.id, input.id))
-        .returning();
-      const row = updated[0];
-      if (!row) throw new ExecError('NOT_FOUND', 'запись не найдена', { id: input.id });
+        .returning({
+          ...getTableColumns(entities),
+          txId: sql<string>`pg_current_xact_id_if_assigned()::text`,
+        });
+      if (!updated[0]) throw new ExecError('NOT_FOUND', 'запись не найдена', { id: input.id });
+      const { txId, ...row } = updated[0];
       if (writesBody) noteBodyBefore(journal, row, current, bodyBefore);
-      return { result: toWireEntityWithRevision(row), row };
+      return { result: toWireEntityWithRevision(row), row, txId };
     },
   };
 }
