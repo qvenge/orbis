@@ -175,3 +175,45 @@ test('иной отказ seedOnboarding без настроек — прежн�
   // Экран перевода — по его метке, а не по тексту: текст меняется, метка — нет (гейт m-1).
   expect(screen.queryByTestId('migration-screen')).toBeNull();
 });
+
+test('scoped seed waits for a bearer and transitions only from its confirmed request', async () => {
+  const { PrivacyActionsContext } = await import('../../lib/local-data/privacy-actions');
+  const { StrictMode, useState } = await import('react');
+  const scope = { accountId: 'a', graphId: 'a', epoch: 1 };
+  const transitions: (typeof scope)[] = [];
+  function Host() {
+    const [canSeed, setCanSeed] = useState(false);
+    return (
+      <PrivacyActionsContext.Provider
+        value={{
+          shared: false,
+          scope,
+          canSeed,
+          logout() {},
+          toggleShared() {},
+          graphSeeded: (accepted) => transitions.push(accepted),
+        }}
+      >
+        <button type="button" onClick={() => setCanSeed(true)}>
+          Авторизация доступна
+        </button>
+        <OnboardingGate>app</OnboardingGate>
+      </PrivacyActionsContext.Provider>
+    );
+  }
+  const { calls } = renderWithProviders(
+    <StrictMode>
+      <Host />
+    </StrictMode>,
+    (path) => {
+      if (path === 'user.getSettings') return settings;
+      if (path === 'user.seedOnboarding') return { seeded: true };
+      throw new Error(`unexpected ${path}`);
+    },
+  );
+  await screen.findByText('app');
+  expect(calls.filter((c) => c.path === 'user.seedOnboarding')).toHaveLength(0);
+  fireEvent.click(screen.getByRole('button', { name: 'Авторизация доступна' }));
+  await waitFor(() => expect(transitions).toEqual([scope]));
+  expect(calls.filter((c) => c.path === 'user.seedOnboarding')).toHaveLength(1);
+});

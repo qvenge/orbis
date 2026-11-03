@@ -4,6 +4,12 @@
 
 import { newId } from '@orbis/shared';
 import type { BodyDoc } from '@orbis/shared/doc';
+import {
+  captureInputAccess,
+  type InputAccess,
+  type InputStorage,
+  removeStorageKeys,
+} from '../../lib/local-data/input-access';
 
 /**
  * Неотправленный черновик тела — на диск браузера.
@@ -25,6 +31,7 @@ export type Draft = {
   doc: BodyDoc;
   /** Unique local write identity; legacy slots did not have one. */
   slot?: string;
+  recovery?: true;
   /** Ревизия тела, ПОВЕРХ которой набрана правка (та же, что уехала в мутацию `expectedBodyRevision`). */
   baseRevision?: number;
   /**
@@ -116,30 +123,32 @@ function expired(savedAt: string, now: number): boolean {
  * больше некому, и оставленные они пролежали бы вечно — ровно та беда, против которой заведён
  * срок жизни. Чужие ключи хранилища не трогаются вовсе.
  */
-export function sweepDrafts(): void {
+export function sweepDrafts(access = captureInputAccess()): void {
+  if (!access?.isCurrent()) return;
+  const { storage, prefix } = access;
   try {
     const now = Date.now();
     const doomed: string[] = [];
-    for (let i = 0; i < localStorage.length; i += 1) {
-      const k = localStorage.key(i);
-      if (k === null) continue;
-      if (k.startsWith(FINISHED_PREFIX)) {
-        const at = Number(localStorage.getItem(k));
+    for (const k of storage.keys()) {
+      if (!k.startsWith(prefix)) continue;
+      const localKey = k.slice(prefix.length);
+      if (localKey.startsWith(FINISHED_PREFIX)) {
+        const at = Number(storage.getItem(k));
         if (now - at > DRAFT_TTL_MS) doomed.push(k);
         continue;
       }
-      if (!k.startsWith(`${KEY_PREFIX}:`)) continue;
-      const rest = k.slice(KEY_PREFIX.length + 1);
+      if (!localKey.startsWith(`${KEY_PREFIX}:`)) continue;
+      const rest = localKey.slice(KEY_PREFIX.length + 1);
       // Одна часть вместо двух — ключ до скоупа по аккаунту.
       if (!rest.includes(':')) {
         doomed.push(k);
         continue;
       }
-      const raw = localStorage.getItem(k);
+      const raw = storage.getItem(k);
       const draft = raw === null ? null : parseDraft(raw);
       if (draft === null || expired(draft.savedAt, now)) doomed.push(k);
     }
-    for (const k of doomed) localStorage.removeItem(k);
+    for (const k of doomed) storage.removeItem(k);
   } catch {
     // Отключённое хранилище — не повод ронять открытие записи (см. saveDraft).
   }
@@ -152,15 +161,24 @@ export function sweepDrafts(): void {
  * главный путь, а сама правка в это время уезжает на сервер и о своей судьбе честно
  * докладывает индикатором.
  */
-function writeKey(k: string, value: string): void {
+function writeKey(
+  k: string,
+  value: string,
+  access: InputAccess | null = captureInputAccess(),
+): boolean {
+  if (!access?.isCurrent()) return false;
+  const { storage, prefix } = access;
   try {
-    localStorage.setItem(k, value);
+    storage.setItem(prefix + k, value);
+    return true;
   } catch {
-    sweepDrafts();
+    sweepDrafts(access);
     try {
-      localStorage.setItem(k, value);
+      if (!access.isCurrent()) return false;
+      storage.setItem(prefix + k, value);
+      return true;
     } catch {
-      /* см. докблок */
+      return false;
     }
   }
 }
@@ -175,7 +193,7 @@ function writeKey(k: string, value: string): void {
 function parseDraft(raw: string): Draft | null {
   const value: unknown = JSON.parse(raw);
   if (typeof value !== 'object' || value === null) return null;
-  const { doc, baseRevision, baseUpdatedAt, savedAt, rejected, slot } = value as Record<
+  const { doc, baseRevision, baseUpdatedAt, savedAt, rejected, slot, recovery } = value as Record<
     string,
     unknown
   >;
@@ -199,6 +217,7 @@ function parseDraft(raw: string): Draft | null {
     ...(revision !== undefined ? { baseRevision: revision } : { baseUpdatedAt: stamp }),
     savedAt,
     ...(typeof slot === 'string' && { slot }),
+    ...(recovery === true && { recovery }),
     rejected: rejected === true,
   };
 }
@@ -206,10 +225,35 @@ function parseDraft(raw: string): Draft | null {
 /** Захваченный ключ сохраняет последние слова прежнему владельцу без записи в новый scope. */
 export function captureDraftWriter(entityId: string) {
   const capturedKey = key(entityId);
-  return (doc: BodyDoc, baseRevision: number, now: string, rejected = false): void => {
-    const draft: Draft = { doc, baseRevision, savedAt: now, rejected, slot: newId() };
-    writeKey(capturedKey, JSON.stringify(draft));
-  };
+  let writer: string | undefined;
+  const access = captureInputAccess();
+  const payload = (doc: BodyDoc, baseRevision: number, now: string, rejected: boolean) =>
+    JSON.stringify({ doc, baseRevision, savedAt: now, rejected, slot: newId() } satisfies Draft);
+  const write = (doc: BodyDoc, baseRevision: number, now: string, rejected = false): boolean =>
+    writeKey(capturedKey, payload(doc, baseRevision, now, rejected), access);
+  return Object.assign(write, {
+    preserve(doc: BodyDoc, baseRevision: number, now: string, rejected: boolean) {
+      const slot = newId();
+      writer ??= newId();
+      const target = `${capturedKey}:${writer}:${slot}`;
+      const bytes = JSON.stringify({
+        doc,
+        baseRevision,
+        savedAt: now,
+        rejected,
+        slot,
+        recovery: true,
+      } satisfies Draft);
+      if (writeKey(target, bytes, access)) return undefined;
+      // The retry owns only these exact bytes. It cannot read a later editor or target a new owner.
+      return () =>
+        !!access &&
+        writeKey(target, bytes, {
+          ...access,
+          isCurrent: access.canPreserve ?? access.isCurrent,
+        });
+    },
+  });
 }
 
 export function saveDraft(
@@ -237,11 +281,27 @@ export function saveDraft(
  */
 export function readDraft(entityId: string): Draft | null {
   try {
-    const raw = localStorage.getItem(key(entityId));
+    const access = captureInputAccess();
+    if (!access?.isCurrent()) return null;
+    const raw = access.storage.getItem(access.prefix + key(entityId));
     const draft = raw === null ? null : parseDraft(raw);
     return draft?.slot && isDraftSlotFinished(scope, entityId, draft.slot) ? null : draft;
   } catch {
     return null; // и сам доступ к хранилищу может бросить — см. saveDraft
+  }
+}
+
+export function readRecoveryDraft(entityId: string, exceptToken?: string): Draft | null {
+  try {
+    const access = captureInputAccess();
+    if (!access?.isCurrent()) return null;
+    return (
+      listDraftsIn(access.storage, scope, access.prefix, entityId).find(
+        ({ draft }) => draft.recovery && (exceptToken === undefined || draft.slot !== exceptToken),
+      )?.draft ?? null
+    );
+  } catch {
+    return null;
   }
 }
 
@@ -257,7 +317,8 @@ export function markDraftRejected(entityId: string): void {
 
 export function clearDraft(entityId: string): void {
   try {
-    localStorage.removeItem(key(entityId));
+    const access = captureInputAccess();
+    if (access?.isCurrent()) access.storage.removeItem(access.prefix + key(entityId));
   } catch {
     /* см. saveDraft */
   }
@@ -267,9 +328,23 @@ function finishedKey(accountId: string, entityId: string, token: string): string
   return `${FINISHED_PREFIX}${accountId.toLowerCase()}:${entityId.toLowerCase()}:${token}`;
 }
 
+export function isDraftSlotFinishedIn(
+  storage: InputStorage,
+  accountId: string,
+  entityId: string,
+  token: string,
+  prefix = '',
+): boolean {
+  return storage.getItem(prefix + finishedKey(accountId, entityId, token)) !== null;
+}
+
 export function isDraftSlotFinished(accountId: string, entityId: string, token: string): boolean {
   try {
-    return localStorage.getItem(finishedKey(accountId, entityId, token)) !== null;
+    const access = captureInputAccess();
+    return (
+      !!access?.isCurrent() &&
+      access.storage.getItem(access.prefix + finishedKey(accountId, entityId, token)) !== null
+    );
   } catch {
     return false;
   }
@@ -282,15 +357,71 @@ export function isDraftSlotFinished(accountId: string, entityId: string, token: 
  */
 export function finishDraftSlot(accountId: string, entityId: string, token: string): boolean {
   try {
-    localStorage.setItem(finishedKey(accountId, entityId, token), String(Date.now()));
+    const access = captureInputAccess();
+    if (!access?.isCurrent()) return false;
+    access.storage.setItem(
+      access.prefix + finishedKey(accountId, entityId, token),
+      String(Date.now()),
+    );
     return true;
   } catch {
     return false;
   }
 }
 
+export function listDraftsIn(
+  storage: InputStorage,
+  accountId?: string,
+  prefix = '',
+  entity?: string,
+) {
+  const drafts: { accountId: string; entityId: string; draft: Draft }[] = [];
+  const start = `${prefix}${KEY_PREFIX}:`;
+  for (const key of storage.keys()) {
+    if (!key.startsWith(start)) continue;
+    const [owner, entityId] = key.slice(start.length).split(':');
+    if (
+      !owner ||
+      !entityId ||
+      (accountId !== undefined && owner !== accountId) ||
+      (entity !== undefined && entityId !== entity)
+    )
+      continue;
+    try {
+      const raw = storage.getItem(key);
+      const draft = raw === null ? null : parseDraft(raw);
+      if (!draft || expired(draft.savedAt, Date.now())) continue;
+      if (
+        draft.slot &&
+        storage.getItem(prefix + finishedKey(owner, entityId, draft.slot)) !== null
+      ) {
+        continue;
+      }
+      drafts.push({ accountId: owner, entityId, draft });
+    } catch (error) {
+      if (!(error instanceof SyntaxError)) throw error;
+    }
+  }
+  return drafts;
+}
+
+export function countDraftsIn(storage: InputStorage, accountId?: string, prefix = ''): number {
+  return listDraftsIn(storage, accountId, prefix).length;
+}
+
+export function clearDraftsIn(storage: InputStorage, accountId?: string, prefix = ''): void {
+  const suffix = accountId === undefined ? '' : `${accountId}:`;
+  const payloads = `${prefix}${KEY_PREFIX}:${suffix}`;
+  const finished = `${prefix}${FINISHED_PREFIX}${suffix}`;
+  removeStorageKeys(storage, (key) => key.startsWith(payloads) || key.startsWith(finished));
+}
+
 export function abandonDraftSlot(entityId: string, token: string): void {
   finishDraftSlot(scope, entityId, token);
+}
+
+export function finishCurrentDraftSlot(entityId: string, token: string): boolean {
+  return finishDraftSlot(scope, entityId, token);
 }
 
 // The mutation carries the submitted slot without changing its wire input.

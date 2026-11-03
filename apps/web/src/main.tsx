@@ -1,19 +1,19 @@
 import { isOAuthAuthorizePath } from '@orbis/shared';
 import { onlineManager, QueryClientProvider } from '@tanstack/react-query';
-import { type ReactNode, StrictMode, useLayoutEffect, useState, useSyncExternalStore } from 'react';
+import { type ReactNode, StrictMode, useLayoutEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { App } from './App';
-import { AuthProvider, getCurrentToken, useAuth } from './auth/AuthProvider';
+import { AuthProvider, configureProductToken, getCurrentToken, useAuth } from './auth/AuthProvider';
 import { clearLocalMessages } from './features/chat/local-messages';
 import { resetEnsuredThreads } from './features/chat/useEnsuredThread';
 import { ConsentScreen } from './features/oauth/ConsentScreen';
 import { OnboardingGate } from './features/onboarding/OnboardingGate';
 import { UndoBinder } from './features/undo/undo-binding';
-import { isUndoEpoch, subscribeUndoEpoch, undoEpoch } from './features/undo/undo-epoch';
 import { bindFreshnessRuntime } from './lib/freshness/provenance';
 import { createFreshnessRuntime } from './lib/freshness/runtime';
 import { FreshnessContext } from './lib/freshness/screen';
 import { createFreshnessTransport } from './lib/freshness/transport';
+import { createBrowserLocalData } from './lib/local-data/browser-lifecycle';
 import { bindQueryResponses } from './lib/local-data/query-responses';
 import { QueryBatchProvider } from './lib/query-blocks/batch';
 import { resetRegistryObservation } from './lib/registry/useRegistry';
@@ -21,12 +21,33 @@ import { initTheme } from './lib/theme';
 import { perfBuffer } from './perf/collector';
 import { registerRetrySend } from './state/retry';
 import { makeRetrySend } from './state/retry-send';
-import { makeTrpcClient, makeVanillaClient, queryClient, trpc } from './trpc';
+import {
+  configureProductTransport,
+  makeTrpcClient,
+  makeVanillaClient,
+  queryClient,
+  trpc,
+} from './trpc';
 import { Toaster } from './ui/Toast';
 import './styles/globals.css';
 
 initTheme();
-onlineManager.setOnline(navigator.onLine);
+const privacy = createBrowserLocalData();
+configureProductToken(privacy.getToken);
+configureProductTransport(privacy.getLease);
+onlineManager.setEventListener((setOnline) => {
+  const update = () => setOnline(navigator.onLine && !!privacy.getToken());
+  update();
+  window.addEventListener('online', update);
+  window.addEventListener('offline', update);
+  const unsubscribe = privacy.subscribe(update);
+  return () => {
+    window.removeEventListener('online', update);
+    window.removeEventListener('offline', update);
+    unsubscribe();
+  };
+});
+void privacy.start();
 // Полевые замеры (спека скорости §3.2) — ленивым чанком: входной чанк входит в эагерное замыкание экрана записи, и там
 // только склейка — метки и буфер (гейт задачи 3, I-1). Потерь нет: замеры до загрузки чанка ждут в буфере, наблюдатели
 // Resource Timing и Web Vitals подписываются с `buffered`. Буфер — аргументом (`PerfBuffer`). Отказ загрузки (сеть) — без
@@ -41,35 +62,40 @@ const trpcClient = makeTrpcClient(getCurrentToken);
 registerRetrySend(makeRetrySend(makeVanillaClient(getCurrentToken)));
 
 function FreshnessSession({ children }: { children: ReactNode }) {
-  const { userId } = useAuth();
-  const epoch = useSyncExternalStore(subscribeUndoEpoch, undoEpoch);
+  const { scope, shared } = useAuth();
   const [runtime, setRuntime] = useState<ReturnType<typeof createFreshnessRuntime>>();
   useLayoutEffect(() => {
-    if (!userId) return;
-    const accountId = userId.toLowerCase();
-    // Owner JWTs resolve to their personal graph, whose id equals owner_ref
-    // (server identityOfPerson, graphs_personal_identity). Grants use a different resolver.
-    const scope = { accountId, graphId: accountId, epoch };
+    const lease = privacy.getLease();
+    if (!scope || !lease?.isCurrent()) return;
     const next = createFreshnessRuntime({
       queryClient,
       scope,
       transport: createFreshnessTransport({ getToken: getCurrentToken }),
-      isCurrent: () => isUndoEpoch(epoch),
+      isCurrent: lease.isCurrent,
     });
     const unbind = bindFreshnessRuntime(queryClient, next);
-    const responses = bindQueryResponses(queryClient, next);
+    const responses = bindQueryResponses(queryClient, next, shared ? { enabled: false } : {});
     setRuntime(next);
-    return () => {
+    let closed = false;
+    function close() {
+      if (closed) return;
+      closed = true;
       responses.close();
       next.dispose();
       unbind();
+      void queryClient.cancelQueries();
       queryClient.clear();
       clearLocalMessages(queryClient);
       resetEnsuredThreads();
       resetRegistryObservation();
+    }
+    const unregister = privacy.registerRuntimeFreeze(close);
+    return () => {
+      unregister();
+      close();
     };
-  }, [userId, epoch]);
-  if (!runtime || runtime.scope.epoch !== epoch) return null;
+  }, [scope, shared]);
+  if (!runtime || runtime.scope.epoch !== scope?.epoch) return null;
   return <FreshnessContext.Provider value={runtime}>{children}</FreshnessContext.Provider>;
 }
 
@@ -81,7 +107,7 @@ createRoot(rootElement).render(
             блоков живут в нём, а пачка уходит клиентом tRPC. Один на приложение: блоки всех
             экранов, появившиеся одновременно, делят одну пачку. */}
         <QueryBatchProvider>
-          <AuthProvider>
+          <AuthProvider privacy={privacy}>
             {/* Экран согласия OAuth — внутри AuthProvider (незалогиненного он сам уводит на
               вход), но ВНЕ OnboardingGate: выдача доступа агенту не требует пройденного
               онбординга. Серверного роута под этим путём нет — GET доходит до SPA-fallback

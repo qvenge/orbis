@@ -4,6 +4,7 @@ import { act, screen } from '@testing-library/react';
 import { useEffect, useState } from 'react';
 import { beforeEach, expect, test, vi } from 'vitest';
 import {
+  type BodyPublication,
   freshnessRuntimeOf,
   nextNetworkOrder,
   recordNetworkReadReceipt,
@@ -122,6 +123,7 @@ function mount(
     respond?: Respond;
     strict?: boolean;
     durable?: boolean;
+    acceptBody?: (receipt: BodyPublication) => void;
   } = {},
 ) {
   const box = { respond: opts.respond ?? ok };
@@ -134,7 +136,8 @@ function mount(
     const [props, setProps] = useState(initial);
     hold.set = setProps;
     const client = useQueryClient();
-    if (opts.durable) freshnessRuntimeOf(client)?.setSinks({ acceptBody: () => {} });
+    if (opts.durable)
+      freshnessRuntimeOf(client)?.setSinks({ acceptBody: opts.acceptBody ?? (() => {}) });
     const api = useBodySave(props.id, props.entity);
     hold.api = api;
     useEffect(() => {
@@ -2109,4 +2112,64 @@ test('запор слота не переезжает на соседнюю за
   expect(stored(`orbis:body-draft:${OWNER}:e2`).doc).toEqual(TWO);
   // …а черновик первой записи цел: соседка его не трогала.
   expect(stored().doc).toEqual(FUTURE);
+});
+
+test('recovery sends the exact existing slot and keeps it and the independent candidate until durable ACK', async () => {
+  const first = 'recovery-x';
+  const second = 'recovery-y';
+  for (const [token, doc] of [
+    [first, ONE],
+    [second, TWO],
+  ] as const) {
+    localStorage.setItem(
+      `${KEY}:writer:${token}`,
+      JSON.stringify({
+        doc,
+        slot: token,
+        savedAt: new Date().toISOString(),
+        baseRevision: ENTITY.bodyRevision,
+        rejected: false,
+        recovery: true,
+      }),
+    );
+  }
+  const original = Storage.prototype.setItem;
+  const quota = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (
+    this: Storage,
+    key,
+    value,
+  ) {
+    if (key === KEY) throw new DOMException('full', 'QuotaExceededError');
+    original.call(this, key, value);
+  });
+  const server = gatedServer();
+  const receipts: BodyPublication[] = [];
+  try {
+    const view = mount({
+      durable: true,
+      respond: server.respond,
+      acceptBody: (receipt) => receipts.push(receipt),
+    });
+    const selected = view.api().pendingDraft;
+    expect(selected?.doc).toEqual(ONE);
+    await view.apply();
+    await tick();
+    expect(view.updates()).toHaveLength(1);
+    await server.answer(0, { ...SAVED, bodyDoc: ONE });
+    expect(readDraft('e1')).toBeNull();
+    expect(localStorage.getItem(`orbis:body-draft-finished:${OWNER}:e1:${first}`)).toBeNull();
+    expect(receipts).toMatchObject([{ draftToken: first, entityId: 'e1' }]);
+    expect(localStorage.getItem(`${KEY}:writer:${second}`)).toContain(second);
+    await view.unmount();
+    const reopened = mount({ durable: true });
+    expect(reopened.api().pendingDraft?.doc).toEqual(ONE);
+    await reopened.unmount();
+    // Emulate successful durable completion, the callback used by query-responses.
+    expect(finishDraftSlot(OWNER, 'e1', first)).toBe(true);
+    const afterDurable = mount({ durable: true });
+    expect(afterDurable.api().pendingDraft?.doc).toEqual(TWO);
+    await afterDurable.unmount();
+  } finally {
+    quota.mockRestore();
+  }
 });

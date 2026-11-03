@@ -1,12 +1,20 @@
-import { type ReactNode, useEffect } from 'react';
+import { type ReactNode, useEffect, useRef } from 'react';
+import { usePrivacyActions } from '../../lib/local-data/privacy-actions';
 import { trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
 import { Spinner } from '../../ui/Spinner';
 
 export function OnboardingGate({ children }: { children: ReactNode }) {
+  const privacy = usePrivacyActions();
+  const started = useRef(false);
   const settings = trpc.user.getSettings.useQuery();
   const seed = trpc.user.seedOnboarding.useMutation({
-    onSuccess: () => {
+    onMutate: () => privacy?.scope,
+    onSuccess: (result, _variables, scope) => {
+      if (result.seeded && scope && privacy) {
+        privacy.graphSeeded(scope);
+        return;
+      }
       // Настройки перечитываются после ответа: после заведения графа (в том числе после
       // reset-world, где строка настроек уже была) в них новая маска расширений. На
       // {seeded:false} перечитывать нечего, но ветка одна — лишний запрос раз за сессию.
@@ -24,9 +32,12 @@ export function OnboardingGate({ children }: { children: ReactNode }) {
   // «граф заведён» — запись оболочки хоста, а не строка настроек (после reset-world строка есть,
   // а графа нет — вход заводит его заново, срез 1б §8.6). На заведённом графе вход ничего не
   // пишет. Для пользователя С настройками вызов идёт параллельно рендеру и его не блокирует.
+  const canSeed = privacy?.canSeed ?? true;
   useEffect(() => {
-    if (seed.isIdle) seed.mutate();
-  }, [seed.isIdle, seed.mutate]);
+    if (!canSeed || !seed.isIdle || started.current) return;
+    started.current = true;
+    seed.mutate();
+  }, [canSeed, seed.isIdle, seed.mutate]);
 
   // Экран перевода — НЕЗАВИСИМО от needsSeed: у графа старой формы строка настроек есть, и
   // фоновый отказ, который ниже приложение «не блокирует», здесь обязан его остановить —
@@ -69,6 +80,7 @@ export function OnboardingGate({ children }: { children: ReactNode }) {
         <Button
           variant="outline"
           onClick={() => {
+            started.current = false;
             seed.reset();
             void settings.refetch();
           }}

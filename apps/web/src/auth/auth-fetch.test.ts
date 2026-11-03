@@ -17,7 +17,8 @@ async function refreshExpiredSession(label: string, response: () => Response) {
   const fetch = vi.fn(async () => response());
   vi.stubGlobal('fetch', fetch);
   vi.resetModules();
-  const { auth } = await import('./supabase');
+  const { getAuthClient } = await import('./supabase');
+  const auth = await getAuthClient();
   await auth.initialize();
   await auth.stopAutoRefresh();
   const events: string[] = [];
@@ -133,7 +134,8 @@ test('real auth SDK retains the stored session during bootstrap rate limiting', 
   vi.stubGlobal('fetch', fetch);
   vi.resetModules();
   vi.useFakeTimers();
-  const { auth } = await import('./supabase');
+  const { getAuthClient } = await import('./supabase');
+  const auth = await getAuthClient();
   const events: string[] = [];
   let initialized!: () => void;
   const initial = new Promise<void>((resolve) => {

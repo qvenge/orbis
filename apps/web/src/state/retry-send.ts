@@ -69,16 +69,20 @@ async function attemptCreate(
   input: EntityCreateInput,
   source: 'fast_path',
   threadId?: string,
+  scopeSignal?: AbortSignal,
 ): Promise<AttemptOutcome> {
+  if (scopeSignal?.aborted) return 'transport_failure';
   const control = new AbortController();
   let onDeadline: (outcome: AttemptOutcome) => void = () => {};
   const deadline = new Promise<AttemptOutcome>((resolve) => {
     onDeadline = resolve;
   });
-  const timer = setTimeout(() => {
+  const cancel = () => {
     control.abort();
     onDeadline('transport_failure');
-  }, SEND_TIMEOUT_MS);
+  };
+  const timer = setTimeout(cancel, SEND_TIMEOUT_MS);
+  scopeSignal?.addEventListener('abort', cancel, { once: true });
   // Отказ разбирается здесь же, поэтому `sent` никогда не отклоняется: проигравшая гонку
   // ветка не оставит необработанного rejection.
   const sent = client.entity.create
@@ -91,13 +95,14 @@ async function attemptCreate(
     return await Promise.race([sent, deadline]);
   } finally {
     clearTimeout(timer);
+    scopeSignal?.removeEventListener('abort', cancel);
   }
 }
 
 export function makeRetrySend(
   client: OrbisVanillaClient,
-): (op: QueuedCreate) => Promise<FlushOutcome> {
-  return async (op) => {
+): (op: QueuedCreate, signal?: AbortSignal) => Promise<FlushOutcome> {
+  return async (op, signal) => {
     const { input, source, threadId } = op.payload as {
       input: EntityCreateInput;
       source: 'fast_path';
@@ -106,7 +111,7 @@ export function makeRetrySend(
     // Идемпотентность по client-UUID (§5.3): id операции — из payload, если он там есть
     // (упавший онлайн-create уже отправлял его серверу), иначе clientId очереди.
     const id = input.id ?? op.clientId;
-    const first = await attemptCreate(client, { ...input, id }, source, threadId);
+    const first = await attemptCreate(client, { ...input, id }, source, threadId, signal);
     if (first !== 'id_conflict') return first;
     // id занят ЧУЖОЙ строкой — своя дала бы replay-успех. Запись владельца не создана,
     // и ждать бессмысленно: повторяем РОВНО один раз с замещающим id. Он ДЕТЕРМИНИРОВАН
@@ -120,6 +125,7 @@ export function makeRetrySend(
       { ...input, id: retryCreateId(id) },
       source,
       threadId,
+      signal,
     );
     return second === 'id_conflict' ? 'business_rejection' : second;
   };

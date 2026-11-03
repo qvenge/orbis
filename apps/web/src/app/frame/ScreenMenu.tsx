@@ -11,6 +11,7 @@ import {
   useState,
 } from 'react';
 import { openSettings } from '../../features/settings/settings-tab';
+import { usePrivacyActions } from '../../lib/local-data/privacy-actions';
 import type { DropdownMenuItem } from '../../ui/DropdownMenu';
 import { type LazyMenuControl, LazyMenuSlot } from '../../ui/LazyMenuSlot';
 
@@ -85,6 +86,8 @@ function loaderKey(load: object): number {
  */
 export function ScreenMenu(): ReactElement {
   const source = useContext(ScreenMenuContext);
+  const privacy = usePrivacyActions();
+  const logout = privacy?.logout;
   const [allApps, setAllApps] = useState(false);
   const hostItems = useMemo<DropdownMenuItem[]>(
     () => [
@@ -103,8 +106,9 @@ export function ScreenMenu(): ReactElement {
         icon: <Settings size={16} aria-hidden />,
         onSelect: () => openSettings('general'),
       },
+      ...(logout ? [{ label: 'Выйти', onSelect: logout }] : []),
     ],
-    [],
+    [logout],
   );
   const load = source?.load ?? loadHostMenu;
   const menuProps = useMemo(

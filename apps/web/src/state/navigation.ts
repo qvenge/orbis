@@ -36,6 +36,7 @@ import {
   type SectionKey,
 } from '@orbis/shared/nav';
 import { create } from 'zustand';
+import { type InputStorage, removeStorageKeys } from '../lib/local-data/input-access';
 import { markNavigationStart, type NavTarget } from '../perf/marks';
 import { mayLeave } from './leave-guard';
 
@@ -76,6 +77,11 @@ export interface NavState {
   model: NavModel;
   mode: LaunchMode;
   overlay: NavOverlay | null;
+  /** A create screen in memory. It never enters the navigation model or history. */
+  pendingCreate: string | null;
+  openPendingCreate(id: string): void;
+  closePendingCreate(id: string): void;
+  confirmPendingCreate(id: string): void;
   /**
    * Режим сайта: есть ли позади в истории вкладки запись Orbis (индекс записи > 0). Полем стора, а
    * не вопросом к порту при рисовании: «‹» обязан появиться, когда индекс сменился, даже если модель
@@ -127,9 +133,47 @@ export function sectionRoot(app: AppKey, section: SectionKey): Address {
     : { kind: 'record', app: appRefOf(app), id: section };
 }
 
+type NavigationScope = {
+  accountId: string;
+  graphId: string;
+  generation: string;
+  shared: boolean;
+  isCurrent(): boolean;
+};
+let scope: NavigationScope | null | undefined;
+
+export function configureNavigation(next: NavigationScope | null | undefined): void {
+  scope = next;
+}
+export const navigationScope = () => scope;
+export const navigationActive = () => scope === undefined || !!scope?.isCurrent();
+
+function storageKey(): string | undefined {
+  if (scope === undefined) return NAV_STORAGE_KEY;
+  if (scope && !scope.shared && scope.isCurrent()) {
+    return `${NAV_STORAGE_KEY}:${scope.accountId}:${scope.graphId}`;
+  }
+}
+
+export function clearNavigationIn(
+  storage: InputStorage,
+  accountId?: string,
+  graphId?: string,
+): void {
+  const prefix =
+    accountId === undefined ? `${NAV_STORAGE_KEY}:` : `${NAV_STORAGE_KEY}:${accountId}:`;
+  removeStorageKeys(
+    storage,
+    (key) =>
+      key === NAV_STORAGE_KEY ||
+      (graphId === undefined ? key.startsWith(prefix) : key === prefix + graphId),
+  );
+}
+
 export function readPersistedNav(): NavModel | null {
   try {
-    const raw = localStorage.getItem(NAV_STORAGE_KEY);
+    const key = storageKey();
+    const raw = key ? localStorage.getItem(key) : null;
     return raw === null ? null : restoreFrom(JSON.parse(raw));
   } catch {
     // Битый JSON, запрещённое хранилище (приватный режим) — старт с домашней, а не падение.
@@ -139,7 +183,8 @@ export function readPersistedNav(): NavModel | null {
 
 function persist(model: NavModel): void {
   try {
-    localStorage.setItem(NAV_STORAGE_KEY, JSON.stringify(persistOf(model)));
+    const key = storageKey();
+    if (key) localStorage.setItem(key, JSON.stringify(persistOf(model)));
   } catch {
     // Хранилище недоступно или переполнено: навигация живёт и без сохранения, теряется только
     // «где остановились» после перезапуска.
@@ -170,18 +215,26 @@ function notePlaceChange(prev: NavModel, next: NavModel): void {
 
 /** Действие → модель и эффект; стража спрашивает вызывающий. */
 function run(action: NavAction): void {
+  if (!navigationActive()) return;
   const s = useNav.getState();
   const r = navReduce(s.model, action, s.mode);
   // Уточнение места того же экрана (`replace`, РП-21) и состояние экрана (`view`) — не переход.
   if (action.type !== 'replace' && action.type !== 'view') notePlaceChange(s.model, r.model);
-  useNav.setState({ model: r.model, overlay: null });
+  useNav.setState({
+    model: r.model,
+    overlay: null,
+    ...((action.type !== 'view' && action.type !== 'replace') ||
+    targetKeyOf(s.model) !== targetKeyOf(r.model)
+      ? { pendingCreate: null }
+      : {}),
+  });
   persist(r.model);
   port?.apply(r.effect);
 }
 
 /** Переход: страж ухода первой строкой (РП-33). */
 function go(action: NavAction): void {
-  if (!mayLeave()) return;
+  if (!navigationActive() || !mayLeave()) return;
   run(action);
 }
 
@@ -189,6 +242,31 @@ export const useNav = create<NavState>()((set, get) => ({
   model: initialModel(HOST_HOME),
   mode: 'site',
   overlay: null,
+  pendingCreate: null,
+  openPendingCreate: (id) => {
+    if (navigationActive() && mayLeave()) set({ pendingCreate: id });
+  },
+  closePendingCreate: (id) => {
+    if (get().pendingCreate === id) set({ pendingCreate: null });
+  },
+  confirmPendingCreate: (id) => {
+    const { model, pendingCreate } = get();
+    if (!navigationActive() || pendingCreate !== id) return;
+    if (!mayLeave()) {
+      set({ pendingCreate: null });
+      return;
+    }
+    const address = currentEntry(model).address;
+    const fromHostScreen =
+      address.kind === 'host-screen' && (address.screen === 'chat' || address.screen === 'search');
+    const app = address.kind === 'host-screen' ? HOST_APP : model.activeApp;
+    run({
+      type: 'open',
+      address: { kind: 'record', app: appRefOf(app), id },
+      app,
+      from: fromHostScreen ? 'host-screen' : 'content',
+    });
+  },
   behind: false,
   openRecord: (id, opts = {}) => {
     const app = opts.app ?? get().model.activeApp;
@@ -220,6 +298,11 @@ export const useNav = create<NavState>()((set, get) => ({
         q === undefined ? { kind: 'host-screen', screen } : { kind: 'host-screen', screen, q },
     }),
   back: () => {
+    if (!navigationActive()) return;
+    if (get().pendingCreate !== null) {
+      set({ pendingCreate: null });
+      return;
+    }
     if (!mayLeave()) return;
     if (get().overlay !== null) {
       // Экран поверх модели (плашка, старая ссылка) снимается: под ним — место модели.
@@ -244,7 +327,8 @@ export function useShowBack(): boolean {
   const mode = useNav((s) => s.mode);
   const overlay = useNav((s) => s.overlay);
   const behind = useNav((s) => s.behind);
-  if (overlay !== null) return true;
+  const pending = useNav((s) => s.pendingCreate);
+  if (overlay !== null || pending !== null) return true;
   if (mode === 'app') return canGoBack(model);
   return behind || canGoBack(model);
 }
@@ -275,16 +359,25 @@ export function setNavState(next: {
   overlay: NavOverlay | null;
   mode?: LaunchMode;
 }): void {
+  if (!navigationActive()) return;
   notePlaceChange(useNav.getState().model, next.model);
   useNav.setState({
     model: next.model,
     overlay: next.overlay,
+    pendingCreate: null,
     ...(next.mode !== undefined && { mode: next.mode }),
   });
   persist(next.model);
 }
 
-/** Модель как у только что открытой вкладки — ТОЛЬКО для тестов (стор живёт модулем). */
-export function resetNavForTests(): void {
-  useNav.setState({ model: initialModel(HOST_HOME), mode: 'site', overlay: null, behind: false });
+export function resetNavigation(): void {
+  useNav.setState({
+    model: initialModel(HOST_HOME),
+    mode: 'site',
+    overlay: null,
+    pendingCreate: null,
+    behind: false,
+  });
 }
+
+export const resetNavForTests = resetNavigation;

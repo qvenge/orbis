@@ -8,6 +8,7 @@ import {
   type QueuedCreate,
   setQueueScope,
 } from '../lib/retry-buffer';
+import { captureQueueStorage } from '../lib/retry-buffer/storage';
 
 const storage = localStorageQueue;
 const buffer = createRetryBuffer(storage);
@@ -17,11 +18,16 @@ const buffer = createRetryBuffer(storage);
  * дерева, поэтому store здесь не трогаем (обновление чужого store в фазе рендера) —
  * его синхронизирует useRetryFlush на монтировании.
  */
+let retryOwner: string | null = null;
 export function setRetryScope(userId: string | null): void {
+  if (retryOwner !== userId) {
+    retryOwner = userId;
+    cancelDrain();
+  }
   setQueueScope(userId);
 }
 
-export type RetrySend = (op: QueuedCreate) => Promise<FlushOutcome>;
+export type RetrySend = (op: QueuedCreate, signal?: AbortSignal) => Promise<FlushOutcome>;
 let sendImpl: RetrySend | null = null;
 // Task 8 регистрирует реальный send (entity.create + mapSendError).
 export function registerRetrySend(fn: RetrySend) {
@@ -29,7 +35,23 @@ export function registerRetrySend(fn: RetrySend) {
 }
 
 /** Идущий слив (см. flushNow): на весь модуль один, буфер и store тоже синглтоны. */
-let inFlight: Promise<number> | null = null;
+let inFlight: { control: AbortController; result: Promise<number> } | null = null;
+let canSend = () => true;
+
+export function setRetryAdmission(admit: () => boolean): void {
+  canSend = admit;
+}
+
+function cancelDrain(): void {
+  const old = inFlight;
+  inFlight = null;
+  old?.control.abort();
+}
+
+export function freezeRetryBuffer(): void {
+  cancelDrain();
+  useRetryBuffer.setState({ size: 0, pending: [], flushing: false });
+}
 
 /**
  * Потолок проходов одного слива. Проходы нужны для записей, легших в очередь ВО ВРЕМЯ
@@ -77,7 +99,10 @@ export const useRetryBuffer = create<RetryState>((set) => ({
     // посреди прохода (перевыпуск токена, тесты), и тогда одна очередь ушла бы двумя
     // разными клиентами — исходы в пределах одного слива стали бы несопоставимы.
     const send = sendImpl;
-    if (!send) return 0;
+    if (!send || !canSend()) return 0;
+    const scopedStorage = captureQueueStorage();
+    if (!scopedStorage.isCurrent() || scopedStorage.load().length === 0) return 0;
+    const scopedBuffer = createRetryBuffer(scopedStorage);
     // Слив сериализован: два параллельных вызова видели ОДИН снимок очереди
     // (lib/retry-buffer/index.ts удаляет запись только ПОСЛЕ await send) и слали каждую
     // операцию дважды. Сервер идемпотентен по client-UUID, поэтому дублей сущностей не
@@ -87,33 +112,47 @@ export const useRetryBuffer = create<RetryState>((set) => ({
     // одно и то же. Разделённый промис ОБЯЗАН оседать, иначе к нему присоединятся все
     // следующие вызовы и буфер замолчит до перезагрузки, — предел ожидания отправки
     // держит state/retry-send.ts.
-    if (inFlight) return inFlight;
+    if (inFlight) return inFlight.result;
+    const control = new AbortController();
+    const isCurrent = () => !control.signal.aborted && scopedStorage.isCurrent() && canSend();
+    let finish!: (total: number) => void;
+    let fail!: (error: unknown) => void;
+    const result = new Promise<number>((resolve, reject) => {
+      finish = resolve;
+      fail = reject;
+    });
+    inFlight = { control, result };
     set({ flushing: true });
-    inFlight = (async () => {
+    const drain = async () => {
       let total = 0;
       try {
         // Проходов может быть несколько: очередь пополняется ВО ВРЕМЯ слива — fast-path
         // кладёт запись и тут же зовёт flush, попадая в этот самый разделённый промис.
         // Без доп. прохода такая запись ждала бы следующего триггера, а их наперечёт.
         for (let pass = 0; pass < MAX_FLUSH_PASSES; pass += 1) {
-          const before = storage.load();
+          if (!isCurrent()) return 0;
+          const before = scopedStorage.load();
           if (before.length === 0) break;
           const known = new Set(before.map((q) => q.clientId));
-          total += await buffer.flush(send);
+          total += await scopedBuffer.flush((op) => send(op, control.signal), isCurrent);
+          if (!isCurrent()) return 0;
           // Ещё проход — ТОЛЬКО если появилась НОВАЯ запись. Условие «ушла хоть одна»
           // здесь не годится: при смешанном исходе (одна упала, другая прошла) следующий
           // проход обошёл бы ВСЮ очередь и переслал только что упавшую — тот же лишний
           // трафик, ради которого правка и делалась, только по другой оси: N записей,
           // падающих по разу, давали бы порядка N²/2 запросов, и без всякого бэкоффа.
-          if (storage.load().every((q) => known.has(q.clientId))) break;
+          if (scopedStorage.load().every((q) => known.has(q.clientId))) break;
         }
         return total;
       } finally {
-        inFlight = null;
-        set({ ...snapshot(), flushing: false });
+        if (inFlight?.control === control) {
+          inFlight = null;
+          set({ ...snapshot(), flushing: false });
+        }
       }
-    })();
-    return inFlight;
+    };
+    void drain().then(finish, fail);
+    return result;
   },
   cancel: (clientId) => {
     buffer.cancel(clientId);

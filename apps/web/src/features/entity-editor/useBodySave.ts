@@ -16,6 +16,7 @@ import type { JSONContent } from '@tiptap/core';
 import { TRPCClientError } from '@trpc/client';
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { freshnessRuntimeOf } from '../../lib/freshness/provenance';
+import { registerPendingInput } from '../../lib/local-data/lifecycle';
 import { finishStoredDraft } from '../../lib/local-data/query-responses';
 import { isBodyStale } from '../../lib/orbis-error';
 import type { RouterInputs } from '../../trpc';
@@ -30,8 +31,10 @@ import {
   clearDraft,
   DRAFT_REJECTING_CODE,
   type Draft,
+  finishCurrentDraftSlot,
   markDraftRejected,
   readDraft,
+  readRecoveryDraft,
   saveDraft,
   sweepDrafts,
 } from './draft-storage';
@@ -201,6 +204,7 @@ export interface BodySave {
     doc: BodyDoc;
     savedAt: string;
     rejected: boolean;
+    recovery?: true;
     /**
      * Черновик набран ДРУГОЙ версией схемы документа, и привести его к текущей нечем (§А11-2):
      * либо версия из будущего (откат релиза), либо в документе есть нода, которой в схеме нет.
@@ -227,6 +231,7 @@ const offered = (draft: Draft, foreignSchema: boolean) => ({
   doc: draft.doc,
   savedAt: draft.savedAt,
   rejected: draft.rejected,
+  ...(draft.recovery && { recovery: draft.recovery }),
   foreignSchema,
 });
 
@@ -429,6 +434,7 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
    * отдельным чанком (ревью раунда 2, Н-1).
    */
   const ownDraftRef = useRef<{ token: string; awaitingBasis?: BodyBasis }>(undefined);
+  const recoveryRef = useRef<{ token: string; doc: BodyDoc }>(undefined);
   /**
    * Документ, который сервер отверг ТЕРМИНАЛЬНО.
    *
@@ -500,14 +506,13 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
     write: captureDraftWriter(entityId),
     basis: entity.bodyDoc,
   });
-  const preserveOwnerPending = useCallback(() => {
+  const pendingOwnerInput = useCallback((separate = false) => {
     const doc = pendingRef.current;
     const writer = writerRef.current;
     if (
       doc === null ||
       !pendingFromEditorRef.current ||
-      pendingDraftRef.current !== null ||
-      foreignDraftRef.current !== null
+      (!separate && (pendingDraftRef.current !== null || foreignDraftRef.current !== null))
     )
       return;
     // Основа захвачена прежним владельцем, а не взята из новых props/cache перед reset.
@@ -518,13 +523,35 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
       sameDoc(doc.doc, writer.basis.doc as JSONContent)
     )
       return;
-    writer.write(
+    return doc;
+  }, []);
+  const preserveOwnerPending = useCallback(() => {
+    const doc = pendingOwnerInput();
+    if (!doc) return;
+    return writerRef.current.write(
       doc,
       pendingBaseRef.current,
       new Date().toISOString(),
       rejectedDocRef.current === doc,
     );
-  }, []);
+  }, [pendingOwnerInput]);
+  useEffect(
+    () =>
+      registerPendingInput({
+        pending: () => pendingOwnerInput(true),
+        preserve: () => {
+          const doc = pendingOwnerInput(true);
+          if (!doc) return;
+          return writerRef.current.write.preserve(
+            doc,
+            pendingBaseRef.current,
+            new Date().toISOString(),
+            rejectedDocRef.current === doc,
+          );
+        },
+      }),
+    [pendingOwnerInput],
+  );
   const prevEpochRef = useRef(epoch);
   const prevIdRef = useRef(entityId);
   if (prevIdRef.current !== entityId || prevEpochRef.current !== epoch) {
@@ -560,6 +587,7 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
     // гарантированным 409, и заодно переписал бы черновик первой чужой ревизией.
     clearDraftTimer();
     ownDraftRef.current = undefined;
+    recoveryRef.current = undefined;
     pendingRef.current = null;
     pendingFromEditorRef.current = false;
     // Ревизия отложенного — про ПРЕЖНЮЮ запись, и уехать под id соседней она не должна ни при
@@ -634,6 +662,7 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
     const doc = pendingRef.current;
     if (doc === null) return;
 
+    const recovery = recoveryRef.current?.doc === doc ? recoveryRef.current : undefined;
     const base = entityRef.current;
     const held = pendingUnconfirmedRef.current;
     const confirmed = base.bodyDoc && !isBodyPending(base.bodyDoc) ? base.bodyDoc : null;
@@ -665,6 +694,12 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
     if (confirmed && matchesBody(confirmed, doc)) {
       pendingRef.current = null;
       pendingUnconfirmedRef.current = null;
+      if (recovery) {
+        if (freshnessRuntimeOf(queryClient)?.requiresDurableDraft())
+          finishStoredDraft(queryClient, entityId, recovery.token, base.bodyRevision, confirmed);
+        recoveryRef.current = undefined;
+        setPendingDraft(readRecoveryDraft(entityId, recovery.token));
+      }
       // Черновик снимается — но ТОЛЬКО СВОЙ, написанный из набранного здесь. Условие не
       // перестраховка: редактор при монтировании гарантированно присылает тело базы с
       // проставленными блочными id, то есть попадает ровно сюда, — и без условия это эхо
@@ -735,8 +770,10 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
     // возобновляется тем же кругом.
     // Второй запор — `foreignDraftRef`, и он ПЕРЕЖИВАЕТ снятие баннера: см. там же, почему
     // «открыть серверное тело» не решение, а отсрочка (гейт-ревью раунда 1, Critical).
-    let draftToken: string | undefined;
-    if (pendingDraftRef.current === null && foreignDraftRef.current === null) {
+    // An applied recovery already owns a durable input slot. Submit its exact
+    // token so the response-cache ACK can finish it even if a mirror could not be written.
+    let draftToken = recovery?.token;
+    if (!recovery && pendingDraftRef.current === null && foreignDraftRef.current === null) {
       draftToken = saveDraft(entityId, doc, expectedBodyRevision, new Date().toISOString());
       // По ПРОИСХОЖДЕНИЮ документа, а не безусловно: досыл кладёт на диск ровно то, что оттуда
       // и прочитал, и своим этот черновик не делает (см. `ownDraftRef`).
@@ -841,6 +878,13 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
         // досыл уходит из уборки эффекта, когда наблюдателя уже отцепили (ревью раунда 1,
         // I-1). Здесь остаётся ровно то, что про ЭТОТ хук и умирает вместе с ним.
         if (stale() || currentOperation?.() === false) return;
+        if (recovery && recoveryRef.current === recovery) {
+          recoveryRef.current = undefined;
+          if (pendingRef.current === doc) {
+            const next = readRecoveryDraft(entityId, recovery.token);
+            if (next) setPendingDraft(next);
+          }
+        }
         lastFailedRef.current = false;
         if (ownDraftRef.current?.token === draftToken) ownDraftRef.current = undefined;
         writerRef.current.basis = doc;
@@ -927,6 +971,7 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
     offerConflictDraft,
     preserveOwnerPending,
     queryClient,
+    setPendingDraft,
   ]);
 
   const capturePendingBasis = useCallback(() => {
@@ -1130,7 +1175,7 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
     // Запор принадлежит ЗАПИСИ, а не хуку: снимается при КАЖДОМ открытии, иначе черновик чужой
     // версии одной записи оставлял бы без страховки соседнюю (хук переживает смену `entityId`).
     foreignDraftRef.current = null;
-    const stored = readDraft(entityId);
+    const stored = readRecoveryDraft(entityId) ?? readDraft(entityId);
     if (stored === null) return;
     // Развилка версии схемы — ПЕРВОЙ, раньше сверки с телом записи (§А11-2). Порядок несущий:
     // сверка ниже сравнивает `base.bodyDoc.v === draft.doc.v`, и у черновика прошлой версии она
@@ -1151,6 +1196,10 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
       // сходом черновика с диска (см. `foreignDraftRef`).
       foreignDraftRef.current = stored;
       setPendingDraft(stored, true);
+      return;
+    }
+    if (draft.recovery) {
+      setPendingDraft(draft);
       return;
     }
     const base = entityRef.current;
@@ -1221,6 +1270,7 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
     if (draft === null) return;
     setPendingDraft(null);
     pendingRef.current = draft.doc;
+    if (draft.recovery && draft.slot) recoveryRef.current = { token: draft.slot, doc: draft.doc };
     // ТЕКУЩАЯ ревизия, а не та, на которой черновик набирали: правка сознательно кладётся поверх
     // чужой — этого и просит единственная кнопка, которую человек нажал. Уйди она со старой
     // ревизией, сервер ответил бы 409, то есть «оставить моё» не делало бы ничего. Она же — основа того, что
@@ -1245,6 +1295,13 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
     // не лежит, значило бы отнять страховку у записи навсегда.
     foreignDraftRef.current = null;
     if (offer === null) return;
+    if (offer.recovery && offer.slot) {
+      if (finishCurrentDraftSlot(entityId, offer.slot)) {
+        const next = readRecoveryDraft(entityId) ?? readDraft(entityId);
+        if (next) setPendingDraft(next);
+      } else setPendingDraft(offer);
+      return;
+    }
     // Стирается ровно ПОКАЗАННЫЙ черновик, а не «тот, что лежит на диске сейчас». Пока баннер
     // висел, человек мог продолжить печатать — и его свежий неотправленный текст уже занял
     // диск. Стереть его кнопкой, обещавшей выбросить СТАРУЮ правку, значит потерять текст

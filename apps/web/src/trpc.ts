@@ -97,6 +97,27 @@ function retryNetworkRead(failureCount: number, error: unknown): boolean {
 
 export const queryClient = makeQueryClient({ ...responseQueryOptions, retry: retryNetworkRead });
 
+type ProductTransportLease = { signal: AbortSignal; isCurrent(): boolean };
+let readProductLease: (() => ProductTransportLease | undefined) | undefined;
+
+export function configureProductTransport(read?: () => ProductTransportLease | undefined): void {
+  readProductLease = read;
+}
+
+const leaseCurrent = (lease: ProductTransportLease | undefined) =>
+  readProductLease === undefined || !!lease?.isCurrent();
+
+function productToken(getToken: () => string | null) {
+  const token = getToken();
+  if (readProductLease && !token) throw new NetworkTransportError('Сеанс доступен только из кеша');
+  return token;
+}
+
+function scopedSignal(lease: ProductTransportLease | undefined, signal?: AbortSignal | null) {
+  if (!lease) return signal;
+  return signal ? AbortSignal.any([lease.signal, signal]) : lease.signal;
+}
+
 export function trpcHeaders(getToken: () => string | null): Record<string, string> {
   const token = getToken();
   return {
@@ -110,11 +131,20 @@ const networkReadReceiptLink: TRPCLink<AppRouter> =
   ({ op, next }) =>
     observable((observer) => {
       const epoch = undoEpoch();
+      const lease = readProductLease?.();
+      if (!leaseCurrent(lease)) {
+        observer.error(TRPCClientError.from(new Error('Сессия изменилась')));
+        return;
+      }
       const read = op.type === 'query' || (op.type === 'mutation' && op.path === 'entity.blocks');
       const startedSequence = nextNetworkOrder();
       const startedAt = Date.now();
       return next(op).subscribe({
         next(value) {
+          if (!isUndoEpoch(epoch) || !leaseCurrent(lease)) {
+            observer.error(TRPCClientError.from(new Error('Сессия изменилась')));
+            return;
+          }
           const response = value.context?.response;
           if (read && response instanceof Response && 'data' in value.result) {
             const watermark = changeXidInput.safeParse(response.headers.get(READ_WATERMARK_HEADER));
@@ -131,11 +161,11 @@ const networkReadReceiptLink: TRPCLink<AppRouter> =
               op.context.onNetworkReadReceipt(receipt, raw);
             }
           }
-          if (isUndoEpoch(epoch)) observer.next(value);
-          else observer.error(TRPCClientError.from(new Error('Сессия изменилась')));
+          observer.next(value);
         },
         error: (error) => {
-          if (read) recordReadErrorReceipt(error, { epoch, startedSequence });
+          if (read && isUndoEpoch(epoch) && leaseCurrent(lease))
+            recordReadErrorReceipt(error, { epoch, startedSequence });
           observer.error(error);
         },
         complete: () => observer.complete(),
@@ -198,6 +228,7 @@ export function authErrorLink(handlers: {
     ({ op, next }) =>
       observable((observer) => {
         const epoch = undoEpoch();
+        const lease = readProductLease?.();
         return next(op).subscribe({
           next: (v) => observer.next(v),
           complete: () => observer.complete(),
@@ -208,8 +239,14 @@ export function authErrorLink(handlers: {
               : err instanceof TRPCClientError
                 ? err.data?.code
                 : undefined;
-            if (code === 'PRECONDITION_FAILED' && isUndoEpoch(epoch)) handlers.onOutdated();
-            else if (code === 'UNAUTHORIZED' && !freshness && isUndoEpoch(epoch))
+            if (code === 'PRECONDITION_FAILED' && isUndoEpoch(epoch) && leaseCurrent(lease))
+              handlers.onOutdated();
+            else if (
+              code === 'UNAUTHORIZED' &&
+              !freshness &&
+              isUndoEpoch(epoch) &&
+              leaseCurrent(lease)
+            )
               handlers.onUnauthorized();
             observer.error(err);
           },
@@ -234,15 +271,26 @@ export function orbisLinks(getToken: () => string | null): TRPCLink<AppRouter>[]
     let batch: ReturnType<TRPCLink<AppRouter>> | undefined;
     return (operation) => {
       const epoch = undoEpoch();
+      const lease = readProductLease?.();
       if (batch === undefined || activeEpoch !== epoch) {
         activeEpoch = epoch;
         // У каждого владельца собственная очередь: старый запрос не объединяется с новым и не получает его токен.
         batch = httpBatchLink<AppRouter>({
           url: TRPC_URL,
-          fetch: fetchWithNetworkStatus,
+          fetch: (url, init) => {
+            if (!leaseCurrent(lease) || !isUndoEpoch(epoch)) throw new Error('Сессия изменилась');
+            const token = productToken(getToken);
+            const headers = new Headers(init?.headers);
+            if (token) headers.set('authorization', `Bearer ${token}`);
+            return fetchWithNetworkStatus(url, {
+              ...init,
+              headers,
+              signal: scopedSignal(lease, init?.signal),
+            });
+          },
           headers: () => {
-            if (!isUndoEpoch(epoch)) throw new Error('Сессия изменилась');
-            return trpcHeaders(getToken);
+            if (!isUndoEpoch(epoch) || !leaseCurrent(lease)) throw new Error('Сессия изменилась');
+            return trpcHeaders(() => productToken(getToken));
           },
         })(runtime);
       }
@@ -254,10 +302,13 @@ export function orbisLinks(getToken: () => string | null): TRPCLink<AppRouter>[]
     EventSource,
     eventSourceOptions({ op }) {
       const epoch = undoEpoch();
+      const lease = readProductLease?.();
       const request = op.context.freshnessStream as FreshnessStreamRequest | undefined;
       return {
         async fetch(url, init) {
-          if (!isUndoEpoch(epoch) || op.signal?.aborted) throw new Error('Сессия изменилась');
+          if (!isUndoEpoch(epoch) || op.signal?.aborted || !leaseCurrent(lease))
+            throw new Error('Сессия изменилась');
+          productToken(getToken);
           const headers = new Headers(init.headers);
           for (const [name, value] of Object.entries(
             trpcHeaders(() => request?.token ?? getToken()),
@@ -269,7 +320,7 @@ export function orbisLinks(getToken: () => string | null): TRPCLink<AppRouter>[]
             // The actual HTTP resume boundary must always come from the runtime.
             headers.set('Last-Event-ID', request.beforeFetch());
           }
-          return fetch(url, { ...init, headers });
+          return fetch(url, { ...init, headers, signal: scopedSignal(lease, init.signal) });
         },
       };
     },

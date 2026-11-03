@@ -6,9 +6,15 @@ let unauthorized: Listener | null = null;
 
 export function onClientOutdated(fn: Listener) {
   outdated = fn;
+  return () => {
+    if (outdated === fn) outdated = null;
+  };
 }
 export function onUnauthorized(fn: Listener) {
   unauthorized = fn;
+  return () => {
+    if (unauthorized === fn) unauthorized = null;
+  };
 }
 export function emitClientOutdated() {
   outdated?.();

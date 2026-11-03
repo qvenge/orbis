@@ -1,5 +1,6 @@
 import { lazy, Suspense, useEffect, useState } from 'react';
 import { ScreenHeader } from '../../app/ScreenHeader';
+import { usePrivacyActions } from '../../lib/local-data/privacy-actions';
 import { useNav } from '../../state/navigation';
 import { trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
@@ -43,7 +44,12 @@ export function SettingsScreen() {
               {
                 value: 'general',
                 label: 'Общие',
-                content: <GeneralForm settings={settings.data} />,
+                content: (
+                  <>
+                    <GeneralForm settings={settings.data} />
+                    <LocalDataSettings />
+                  </>
+                ),
               },
               { value: 'memory', label: 'Память AI', content: <MemorySection /> },
               { value: 'aspects', label: 'Аспекты', content: <AspectsList /> },
@@ -92,6 +98,27 @@ function MemorySection() {
       </p>
       <Button variant="outline" onClick={() => useNav.getState().openHostScreen('memory')}>
         Открыть память AI
+      </Button>
+    </div>
+  );
+}
+
+function LocalDataSettings() {
+  const privacy = usePrivacyActions();
+  if (!privacy) return null;
+  return (
+    <div className="flex flex-col items-start gap-3 p-3">
+      <label className="flex items-center gap-2 text-sm">
+        <input type="checkbox" checked={privacy.shared} onChange={privacy.toggleShared} />
+        Это общий компьютер — не хранить данные на устройстве
+      </label>
+      {privacy.message && (
+        <p role="alert" className="text-sm">
+          {privacy.message}
+        </p>
+      )}
+      <Button variant="outline" onClick={privacy.logout}>
+        Выйти
       </Button>
     </div>
   );

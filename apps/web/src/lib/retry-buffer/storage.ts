@@ -1,3 +1,8 @@
+import {
+  captureInputAccess,
+  type InputStorage,
+  removeStorageKeys,
+} from '../local-data/input-access';
 import type { QueuedCreate } from './index';
 
 const KEY_PREFIX = 'orbis:retry-buffer:v1';
@@ -7,23 +12,15 @@ export interface QueueStorage {
   save(items: QueuedCreate[]): void;
 }
 
-// Буфер скоупится по владельцу: до скоупа (нет сессии) — общий ключ, после логина —
-// `<prefix>:<userId>`. Иначе на общем браузере следующий залогинившийся аккаунт
-// дренировал бы чужие незасланные записи в свой workspace (§5.3 — буфер персональный).
 let scope: string | null = null;
+let scopeEpoch = 0;
+const queueKey = (userId: string | null) => (userId ? `${KEY_PREFIX}:${userId}` : KEY_PREFIX);
 
-function keyFor(): string {
-  return scope ? `${KEY_PREFIX}:${scope}` : KEY_PREFIX;
-}
-
-function readKey(key: string): QueuedCreate[] {
+function readKey(storage: InputStorage, key: string): QueuedCreate[] {
   try {
-    const raw = localStorage.getItem(key);
+    const raw = storage.getItem(key);
     if (!raw) return [];
     const parsed: unknown = JSON.parse(raw);
-    // Порча ключа не должна ронять приложение: store создаётся на импорте модуля
-    // (state/retry.ts), исключение здесь означало бы белый экран до ручной чистки
-    // localStorage — и на каждой перезагрузке, потому что значение переживает reload.
     return Array.isArray(parsed) ? parsed.filter(isQueuedCreate) : [];
   } catch {
     return [];
@@ -38,24 +35,75 @@ function isQueuedCreate(v: unknown): v is QueuedCreate {
   );
 }
 
-/**
- * Привязать буфер к владельцу сессии (null — выход из аккаунта). Записи, накопленные
- * до первого скоупа (общий ключ), переносятся владельцу: это тот же браузер до логина,
- * терять офлайн-ввод нельзя. Дальше каждый аккаунт видит только свою очередь.
- */
 export function setQueueScope(userId: string | null): void {
+  if (scope !== userId) scopeEpoch += 1;
   scope = userId;
-  if (!userId) return;
-  const legacy = readKey(KEY_PREFIX);
+  const access = captureInputAccess();
+  if (!userId || !access?.isCurrent() || access.prefix) return;
+  const legacy = readKey(access.storage, KEY_PREFIX);
   if (legacy.length === 0) return;
-  const own = readKey(keyFor());
-  localStorage.setItem(keyFor(), JSON.stringify([...own, ...legacy]));
-  localStorage.removeItem(KEY_PREFIX);
+  const own = readKey(access.storage, queueKey(userId));
+  access.storage.setItem(queueKey(userId), JSON.stringify([...own, ...legacy]));
+  access.storage.removeItem(KEY_PREFIX);
+}
+
+export function captureQueueStorage(): QueueStorage & { isCurrent(): boolean } {
+  const access = captureInputAccess();
+  const owner = scope;
+  const epoch = scopeEpoch;
+  const isCurrent = () => scopeEpoch === epoch && !!access?.isCurrent();
+  const key = (access?.prefix ?? '') + queueKey(owner);
+  return {
+    isCurrent,
+    load: () => (access && isCurrent() ? readKey(access.storage, key) : []),
+    save(items) {
+      if (!access || !isCurrent()) throw new Error('Сеанс ввода изменился');
+      access.storage.setItem(key, JSON.stringify(items));
+    },
+  };
 }
 
 export const localStorageQueue: QueueStorage = {
-  load: () => readKey(keyFor()),
-  // save намеренно не глушит исключения (quota/private mode): молча потерянная запись
-  // хуже видимой ошибки — вызывающий (useFastPath) сообщает пользователю.
-  save: (items) => localStorage.setItem(keyFor(), JSON.stringify(items)),
+  load: () => captureQueueStorage().load(),
+  save: (items) => captureQueueStorage().save(items),
 };
+
+export function listQueuedIn(storage: InputStorage, accountId?: string, prefix = '') {
+  if (accountId !== undefined) return readKey(storage, prefix + queueKey(accountId));
+  return storage
+    .keys()
+    .filter((key) => key === prefix + KEY_PREFIX || key.startsWith(`${prefix}${KEY_PREFIX}:`))
+    .flatMap((key) => readKey(storage, key));
+}
+
+export function queuedInputOwners(storage: InputStorage, prefix: string): string[] {
+  const start = `${prefix}${KEY_PREFIX}:`;
+  return storage
+    .keys()
+    .filter((key) => key.startsWith(start) && readKey(storage, key).length > 0)
+    .map((key) => key.slice(start.length));
+}
+
+export function mergeQueuedInto(
+  storage: InputStorage,
+  accountId: string,
+  items: readonly QueuedCreate[],
+): void {
+  if (items.length === 0) return;
+  const key = queueKey(accountId);
+  const current = readKey(storage, key);
+  const seen = new Set(current.map((item) => item.clientId));
+  storage.setItem(
+    key,
+    JSON.stringify([...current, ...items.filter((item) => !seen.has(item.clientId))]),
+  );
+}
+
+export function clearQueuedIn(storage: InputStorage, accountId?: string, prefix = ''): void {
+  const start = prefix + KEY_PREFIX;
+  removeStorageKeys(storage, (key) =>
+    accountId === undefined
+      ? key === start || key.startsWith(`${start}:`)
+      : key === prefix + queueKey(accountId),
+  );
+}

@@ -24,7 +24,10 @@ export interface RetryBuffer {
    * инвалидацию кэша: отказ (business_rejection) очередь тоже чистит, но граф не меняет,
    * и перечитывать по нему нечего.
    */
-  flush(send: (op: QueuedCreate) => Promise<FlushOutcome>): Promise<number>;
+  flush(
+    send: (op: QueuedCreate) => Promise<FlushOutcome>,
+    isCurrent?: () => boolean,
+  ): Promise<number>;
   cancel(clientId: string): void;
   size(): number;
 }
@@ -46,10 +49,12 @@ export function createRetryBuffer(storage: QueueStorage = localStorageQueue): Re
       storage.save([...storage.load(), item]);
       return item;
     },
-    async flush(send) {
+    async flush(send, isCurrent = () => true) {
       let confirmed = 0;
       for (const item of storage.load()) {
+        if (!isCurrent()) return 0;
         const outcome = await send(item);
+        if (!isCurrent()) return 0;
         if (outcome === 'confirmed') confirmed += 1;
         if (outcome === 'confirmed' || outcome === 'business_rejection') {
           storage.save(storage.load().filter((q) => q.clientId !== item.clientId));

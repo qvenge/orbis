@@ -37,8 +37,10 @@ async function build(env: { url?: string; anon?: string }): Promise<BuiltClient>
   vi.stubEnv('VITE_SUPABASE_URL', env.url);
   vi.stubEnv('VITE_SUPABASE_ANON_KEY', env.anon);
   vi.resetModules(); // клиент строится на импорте — без сброса вернётся кэш прошлого env
-  const { auth } = await import('./supabase');
-  return auth as unknown as BuiltClient;
+  const { getAuthClient, retireAuthClient } = await import('./supabase');
+  const client = (await getAuthClient()) as unknown as BuiltClient;
+  await retireAuthClient();
+  return client;
 }
 
 afterAll(() => vi.unstubAllEnvs());
@@ -89,4 +91,341 @@ test('поток входа — implicit с разбором ссылки, се�
   expect(built.autoRefreshToken).toBe(true);
   expect(built.detectSessionInUrl).toBe(true);
   expect(built.flowType).toBe('implicit');
+});
+
+const OWNER = '19a9f940-258f-4abe-b092-1e227304a372';
+const storageKey = 'sb-testproj-auth-token';
+
+function accessToken(owner: string, exp: number) {
+  return `eyJhbGciOiJIUzI1NiJ9.${btoa(JSON.stringify({ sub: owner, exp }))}.synthetic`;
+}
+
+test('a real SDK transient failure opens only the validated expired account scope', async () => {
+  vi.stubEnv('VITE_SUPABASE_URL', URL_ENV);
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async () => Response.json({}, { status: 429 })),
+  );
+  vi.resetModules();
+  vi.useFakeTimers();
+  const exp = Math.floor(Date.now() / 1000) - 1;
+  const raw = JSON.stringify({
+    user: { id: OWNER },
+    access_token: accessToken(OWNER, exp),
+    refresh_token: 'fixture',
+    expires_at: exp,
+    expires_in: 3600,
+  });
+  localStorage.setItem(storageKey, raw);
+  const { readAuthSession, subscribeAuthSession, retireAuthClient } = await import('./supabase');
+  const unsubscribe = subscribeAuthSession(() => {});
+  try {
+    await vi.advanceTimersByTimeAsync(32_000);
+    expect(readAuthSession()).toMatchObject({ status: 'cache-only', userId: OWNER, token: null });
+    expect(localStorage.getItem(storageKey)).toBe(raw);
+  } finally {
+    unsubscribe();
+    await retireAuthClient();
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    localStorage.clear();
+  }
+});
+
+test('a real SDK terminal refusal removes the local identity instead of opening its cache', async () => {
+  vi.stubEnv('VITE_SUPABASE_URL', URL_ENV);
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async () => Response.json({ error_code: 'refresh_token_not_found' }, { status: 400 })),
+  );
+  vi.resetModules();
+  const exp = Math.floor(Date.now() / 1000) - 1;
+  localStorage.setItem(
+    storageKey,
+    JSON.stringify({
+      user: { id: OWNER },
+      access_token: accessToken(OWNER, exp),
+      refresh_token: 'fixture',
+      expires_at: exp,
+      expires_in: 3600,
+    }),
+  );
+  const { readAuthSession, subscribeAuthSession, retireAuthClient } = await import('./supabase');
+  const unsubscribe = subscribeAuthSession(() => {});
+  try {
+    await vi.waitFor(() =>
+      expect(readAuthSession()).toMatchObject({ status: 'anon', userId: null }),
+    );
+    expect(localStorage.getItem(storageKey)).toBeNull();
+  } finally {
+    unsubscribe();
+    await retireAuthClient();
+    vi.unstubAllGlobals();
+    localStorage.clear();
+  }
+});
+
+test('a late password grant from a retired SDK cannot restore its storage or the app owner', async () => {
+  vi.stubEnv('VITE_SUPABASE_URL', URL_ENV);
+  let receiveRequest!: () => void;
+  const requested = new Promise<void>((resolve) => {
+    receiveRequest = resolve;
+  });
+  let releaseResponse!: (value: Response) => void;
+  const held = new Promise<Response>((resolve) => {
+    releaseResponse = resolve;
+  });
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(() => {
+      receiveRequest();
+      return held;
+    }),
+  );
+  vi.resetModules();
+  const { auth, readAuthSession, subscribeAuthSession, retireAuthClient } = await import(
+    './supabase'
+  );
+  const unsubscribe = subscribeAuthSession(() => {});
+  try {
+    const pending = auth.signInWithPassword({ email: 'a@example.invalid', password: 'password' });
+    await requested;
+    await auth.signOut();
+    releaseResponse(
+      Response.json({
+        access_token: accessToken(OWNER, Math.floor(Date.now() / 1000) + 3600),
+        refresh_token: 'fixture-refresh',
+        expires_in: 3600,
+        user: { id: OWNER },
+      }),
+    );
+    await pending;
+    expect(localStorage.getItem(storageKey)).toBeNull();
+    expect(readAuthSession()).toMatchObject({ status: 'anon', userId: null, token: null });
+  } finally {
+    unsubscribe();
+    await retireAuthClient();
+    vi.unstubAllGlobals();
+    localStorage.clear();
+  }
+});
+
+test('offline shared handoff preserves only its captured same-owner session after authorization', async () => {
+  vi.stubEnv('VITE_SUPABASE_URL', URL_ENV);
+  const request = vi.fn(() => Promise.reject(new Error('offline')));
+  vi.stubGlobal('fetch', request);
+  vi.resetModules();
+  const exp = Math.floor(Date.now() / 1000) + 3600;
+  const raw = JSON.stringify({
+    user: { id: OWNER },
+    access_token: accessToken(OWNER, exp),
+    refresh_token: 'fixture',
+    expires_at: exp,
+    expires_in: 3600,
+  });
+  sessionStorage.setItem('shared-source', raw);
+  const { setAuthClientScope, captureAuthHandoff, retireAuthClient } = await import('./supabase');
+  try {
+    await setAuthClientScope({ storageKey: 'shared-source', backend: sessionStorage });
+    const handoff = captureAuthHandoff();
+    expect(handoff?.userId).toBe(OWNER);
+    await retireAuthClient();
+    expect(handoff?.persistTo(localStorage, storageKey, () => false)).toBe(false);
+    localStorage.setItem(storageKey, 'other session');
+    expect(handoff?.persistTo(localStorage, storageKey, () => true)).toBe(false);
+    expect(localStorage.getItem(storageKey)).toBe('other session');
+    localStorage.removeItem(storageKey);
+    expect(handoff?.persistTo(localStorage, storageKey, () => true)).toBe(true);
+    expect(localStorage.getItem(storageKey)).toBe(raw);
+    expect(sessionStorage.getItem('shared-source')).toBe(raw);
+    expect(request).not.toHaveBeenCalled();
+  } finally {
+    await retireAuthClient();
+    vi.unstubAllGlobals();
+    localStorage.clear();
+    sessionStorage.clear();
+  }
+});
+
+test('switching scope waits for the retiring SDK channel before publishing a new client', async () => {
+  vi.stubEnv('VITE_SUPABASE_URL', URL_ENV);
+  vi.resetModules();
+  const { getAuthClient, setAuthClientScope, retireAuthClient } = await import('./supabase');
+  const old = await getAuthClient();
+  let finishDispose!: () => void;
+  const held = new Promise<void>((resolve) => {
+    finishDispose = resolve;
+  });
+  const dispose = old.dispose.bind(old);
+  const spy = vi.spyOn(old, 'dispose').mockImplementation(async () => {
+    await held;
+    await dispose();
+  });
+  try {
+    const switching = setAuthClientScope({ storageKey: 'next-scope', backend: sessionStorage });
+    let acquired = false;
+    const next = Promise.resolve(getAuthClient()).then((client) => {
+      acquired = true;
+      return client;
+    });
+    await Promise.resolve();
+    expect(acquired).toBe(false);
+    finishDispose();
+    await switching;
+    expect(await next).not.toBe(old);
+  } finally {
+    finishDispose();
+    await retireAuthClient();
+    spy.mockRestore();
+  }
+});
+
+test('retired auth cannot reopen its retained credential before explicit scope admission', async () => {
+  vi.stubEnv('VITE_SUPABASE_URL', URL_ENV);
+  vi.resetModules();
+  const { getAuthClient, setAuthClientScope, retireAuthClient } = await import('./supabase');
+  await getAuthClient();
+  await retireAuthClient();
+  await expect(getAuthClient()).rejects.toThrow();
+  await setAuthClientScope({ storageKey: 'fresh', backend: null });
+  await expect(getAuthClient()).resolves.toBeDefined();
+  await retireAuthClient();
+});
+
+test('freshness refresh cannot receive an expired bearer even if the SDK returned a Session', async () => {
+  vi.stubEnv('VITE_SUPABASE_URL', URL_ENV);
+  const exp = Math.floor(Date.now() / 1000) + 3600;
+  const raw = JSON.stringify({
+    user: { id: OWNER },
+    access_token: accessToken(OWNER, exp),
+    refresh_token: 'fixture',
+    expires_at: exp,
+    expires_in: 3600,
+  });
+  localStorage.setItem(storageKey, raw);
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async () =>
+      Response.json({
+        user: { id: OWNER },
+        access_token: accessToken(OWNER, exp - 7200),
+        refresh_token: 'next',
+        expires_in: 3600,
+      }),
+    ),
+  );
+  vi.resetModules();
+  const { auth, retireAuthClient } = await import('./supabase');
+  try {
+    const result = await auth.refreshSession();
+    expect(result.data.session).toBeNull();
+    expect(result.error?.name).toBe('AuthRetryableFetchError');
+  } finally {
+    await retireAuthClient();
+    vi.unstubAllGlobals();
+    localStorage.clear();
+  }
+});
+
+test('offline cold bootstrap can open its expired cache without waiting for SDK retry', async () => {
+  vi.stubEnv('VITE_SUPABASE_URL', URL_ENV);
+  const online = vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false);
+  const exp = Math.floor(Date.now() / 1000) - 1;
+  localStorage.setItem(
+    storageKey,
+    JSON.stringify({
+      user: { id: OWNER },
+      access_token: accessToken(OWNER, exp),
+      refresh_token: 'fixture',
+      expires_at: exp,
+      expires_in: 3600,
+    }),
+  );
+  let releaseResponse!: (value: Response) => void;
+  const held = new Promise<Response>((resolve) => {
+    releaseResponse = resolve;
+  });
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(() => held),
+  );
+  vi.resetModules();
+  const { readAuthSession, subscribeAuthSession, retireAuthClient } = await import('./supabase');
+  const unsubscribe = subscribeAuthSession(() => {});
+  try {
+    expect(readAuthSession()).toMatchObject({ status: 'cache-only', userId: OWNER, token: null });
+  } finally {
+    unsubscribe();
+    await retireAuthClient();
+    releaseResponse(Response.json({ error_code: 'refresh_token_not_found' }, { status: 400 }));
+    online.mockRestore();
+    vi.unstubAllGlobals();
+    localStorage.clear();
+  }
+});
+
+test.each([
+  'positive',
+  'terminal',
+])('a late %s refresh cannot mutate a normal session adopted via storage', async (reply) => {
+  vi.stubEnv('VITE_SUPABASE_URL', URL_ENV);
+  const nextOwner = '12345678-1234-1234-1234-123456789abc';
+  const now = Math.floor(Date.now() / 1000);
+  const makeSession = (owner: string, expiresAt: number) => ({
+    user: { id: owner },
+    access_token: accessToken(owner, expiresAt),
+    refresh_token: 'refresh-' + owner,
+    expires_at: expiresAt,
+    expires_in: 3600,
+  });
+  const original = makeSession(OWNER, now + 3600);
+  const replacement = makeSession(nextOwner, now - 60);
+  const key = 'sb-testproj-auth-token';
+  localStorage.setItem(key, JSON.stringify(original));
+  let started!: () => void;
+  const requested = new Promise<void>((resolve) => {
+    started = resolve;
+  });
+  let release!: (response: Response) => void;
+  const held = new Promise<Response>((resolve) => {
+    release = resolve;
+  });
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(() => {
+      started();
+      return held;
+    }),
+  );
+  vi.resetModules();
+  const { auth, getAuthClient, readAuthSession, subscribeAuthSession, retireAuthClient } =
+    await import('./supabase');
+  const unsubscribe = subscribeAuthSession(() => {});
+  try {
+    await vi.waitFor(() => expect(readAuthSession().userId).toBe(OWNER));
+    await (await getAuthClient()).stopAutoRefresh();
+    vi.useFakeTimers();
+    const refresh = auth.refreshSession();
+    await requested;
+    const raw = JSON.stringify(replacement);
+    localStorage.setItem(key, raw);
+    window.dispatchEvent(new StorageEvent('storage', { key, newValue: raw }));
+    expect(readAuthSession()).toMatchObject({ status: 'cache-only', userId: nextOwner });
+    release(
+      reply === 'positive'
+        ? Response.json(original)
+        : Response.json({ error_code: 'refresh_token_not_found' }, { status: 400 }),
+    );
+    await vi.advanceTimersByTimeAsync(32_000);
+    expect((await refresh).data.session).toBeNull();
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(localStorage.getItem(key)).toBe(raw);
+    expect(readAuthSession()).toMatchObject({ status: 'cache-only', userId: nextOwner });
+  } finally {
+    unsubscribe();
+    await retireAuthClient();
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    localStorage.clear();
+  }
 });

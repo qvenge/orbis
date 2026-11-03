@@ -527,3 +527,40 @@ test('тот же id при смене authed владельца: новый Edi
   fireEvent.keyDown(screen.getByTestId('title-edit'), { key: 'z', ctrlKey: true });
   expect(save).toHaveBeenCalledWith('План', 'План');
 });
+
+test('a cache-only scope reaches opted-in children without exposing a product token', async () => {
+  const { getCurrentToken } = await import('./AuthProvider');
+  mockSession({ token: null, userId: 'u1', status: 'cache-only' });
+  const { rerender } = render(
+    <AuthProvider>
+      <Child />
+    </AuthProvider>,
+  );
+  expect(screen.queryByTestId('child')).not.toBeInTheDocument();
+  expect(screen.queryByTestId('login-screen')).not.toBeInTheDocument();
+  rerender(
+    <AuthProvider allowCacheOnly>
+      <Child />
+    </AuthProvider>,
+  );
+  expect(screen.getByTestId('child')).toHaveTextContent('user:u1');
+  expect(getCurrentToken()).toBeNull();
+});
+
+test('an accepted bearer becomes unusable at expiry even before React rerenders', async () => {
+  const { getCurrentToken } = await import('./AuthProvider');
+  vi.useFakeTimers();
+  try {
+    mockSession({ token: 'jwt', userId: 'u1', status: 'authed', expiresAt: Date.now() + 1000 });
+    render(
+      <AuthProvider>
+        <Child />
+      </AuthProvider>,
+    );
+    expect(getCurrentToken()).toBe('jwt');
+    vi.setSystemTime(Date.now() + 1001);
+    expect(getCurrentToken()).toBeNull();
+  } finally {
+    vi.useRealTimers();
+  }
+});

@@ -38,7 +38,10 @@ import {
   connectHistoryPort,
   HOST_HOME,
   type NavOverlay,
+  navigationActive,
+  navigationScope,
   readPersistedNav,
+  resetNavigation,
   sectionRoot,
   setNavState,
   useNav,
@@ -48,6 +51,8 @@ import { readLaunchMode } from './launch-mode';
 /** Что лежит в `history.state` записи Orbis. `guard` — охранная запись режима приложения. */
 interface NavHistoryState {
   orbisNav: 2;
+  owner?: string;
+  lineage?: string;
   idx: number;
   guard?: true;
   model: NavModel;
@@ -120,6 +125,44 @@ function isNavHistoryState(x: unknown): x is NavHistoryState {
   );
 }
 
+let lineage: string | undefined;
+let memoryId = 0;
+const memoryHistory = new Map<number, NavHistoryState>();
+
+function ownerKey(): string | undefined {
+  const scope = navigationScope();
+  return scope ? JSON.stringify([scope.accountId, scope.graphId, scope.generation]) : undefined;
+}
+
+function ownState(value: unknown): NavHistoryState | undefined {
+  const scope = navigationScope();
+  if (scope === undefined) return isNavHistoryState(value) ? value : undefined;
+  if (!scope?.isCurrent()) return;
+  if (scope.shared) {
+    if (
+      isObj(value) &&
+      value.orbisNav === 3 &&
+      value.lineage === lineage &&
+      typeof value.id === 'number'
+    )
+      return memoryHistory.get(value.id);
+  } else if (isNavHistoryState(value) && value.owner === ownerKey() && value.lineage === lineage) {
+    return value;
+  }
+}
+
+function isAppState(value: unknown): boolean {
+  return isObj(value) && (value.orbisNav === 2 || value.orbisNav === 3);
+}
+
+export function freezeNavigationHistory(): void {
+  activeUninstall?.();
+  memoryHistory.clear();
+  lineage = undefined;
+  resetNavigation();
+  window.history.replaceState(null, '', '/');
+}
+
 // ─── состояние стороны истории ────────────────────────────────────────────────────────────────
 
 /** Индекс текущей записи Orbis во вкладке (сайт). */
@@ -149,13 +192,35 @@ function setIdx(next: number): void {
 }
 
 function urlNow(): string {
+  if (navigationScope()?.shared) return '/';
   const { model, overlay } = useNav.getState();
   return overlay !== null ? overlay.path : buildAddress(currentEntry(model).address);
 }
 
-function snapshot(guard = false): NavHistoryState {
+function snapshot(guard = false) {
   const { model, overlay } = useNav.getState();
-  return { orbisNav: 2, idx, model, overlay, ...(guard && { guard: true as const }) };
+  const state: NavHistoryState = {
+    orbisNav: 2,
+    idx,
+    model,
+    overlay,
+    ...(guard && { guard: true }),
+  };
+  const scope = navigationScope();
+  if (!scope) return state;
+  if (!scope.shared) return { ...state, owner: ownerKey(), lineage };
+  // Replacing an existing entry can reuse its slot. Pushing a new index needs its own snapshot.
+  const previous = window.history.state;
+  const old = ownState(previous);
+  const id =
+    old?.idx === idx &&
+    old.guard === state.guard &&
+    isObj(previous) &&
+    typeof previous.id === 'number'
+      ? previous.id
+      : ++memoryId;
+  memoryHistory.set(id, state);
+  return { orbisNav: 3, id, lineage };
 }
 
 /**
@@ -227,11 +292,23 @@ function enterAddress(model: NavModel, a: Address, mode: 'app' | 'site'): NavMod
  * активное место (§7.3 «переживает перезапуск: активный раздел»).
  */
 export function startNavigation(): void {
+  if (!navigationActive()) return;
   const mode = readLaunchMode();
   leaving = false;
   expectingPop = false;
-  const own = window.history.state;
-  if (isNavHistoryState(own)) {
+  const stored = window.history.state;
+  const scope = navigationScope();
+  if (scope && !lineage) {
+    lineage =
+      !scope.shared &&
+      isNavHistoryState(stored) &&
+      stored.owner === ownerKey() &&
+      typeof stored.lineage === 'string'
+        ? stored.lineage
+        : crypto.randomUUID();
+  }
+  const own = ownState(stored);
+  if (own) {
     setNavState({ model: own.model, overlay: own.overlay, mode });
     setIdx(mode === 'site' ? own.idx : 0);
     // Перезагрузка в режиме приложения на базовой записи (охранную уже сняли) — вернуть охранную.
@@ -243,7 +320,9 @@ export function startNavigation(): void {
 
   let model = readPersistedNav() ?? initialModel(HOST_HOME);
   let overlay: NavOverlay | null = null;
-  const path = window.location.pathname + window.location.search;
+  // The URL of a stale Orbis snapshot is its former owner's place, not an external link.
+  const path =
+    scope && isAppState(stored) ? '/' : window.location.pathname + window.location.search;
   const parsed = parseAddress(path);
   if (
     mode === 'site' &&
@@ -290,6 +369,7 @@ export function startNavigation(): void {
 export function settleOverlay(
   target: { kind: 'address'; address: Address } | { kind: 'section'; section: string },
 ): void {
+  if (!navigationActive()) return;
   const { model, mode } = useNav.getState();
   const next =
     target.kind === 'section'
@@ -327,10 +407,16 @@ function onPopSite(event: PopStateEvent): void {
     window.history.pushState(snapshot(), '', urlNow());
     return;
   }
-  const st: unknown = event.state;
-  if (isNavHistoryState(st)) {
+  const pending = useNav.getState().pendingCreate;
+  if (pending !== null) useNav.getState().closePendingCreate(pending);
+  const st = ownState(event.state);
+  if (st) {
     setNavState({ model: st.model, overlay: st.overlay });
     setIdx(st.idx);
+    return;
+  }
+  if (navigationScope() && isAppState(event.state)) {
+    window.history.replaceState(snapshot(), '', urlNow());
     return;
   }
   // Запись не наша (чужой pushState, запись 1а после выкатки): место — по адресной строке.
@@ -347,8 +433,14 @@ function onPopSite(event: PopStateEvent): void {
 
 function onPopApp(event: PopStateEvent): void {
   // Шаг вперёд на охранную запись (браузерная «вперёд» в окне PWA) — не «назад».
-  if (isNavHistoryState(event.state) && event.state.guard === true) return;
+  if (ownState(event.state)?.guard === true) return;
   if (leaving) return;
+  const pending = useNav.getState().pendingCreate;
+  if (pending !== null) {
+    useNav.getState().closePendingCreate(pending);
+    window.history.pushState(snapshot(true), '', urlNow());
+    return;
+  }
   if (!mayLeave()) {
     window.history.pushState(snapshot(true), '', urlNow());
     return;
@@ -383,13 +475,15 @@ export function installHistory(): () => void {
     atFirstEntry: () => useNav.getState().mode === 'site' && idx === 0,
   });
   const onPop = (event: PopStateEvent) => {
+    if (!navigationActive()) return;
     if (useNav.getState().mode === 'app') onPopApp(event);
     else onPopSite(event);
   };
   // Страница вернулась из кеша навигации (bfcache) после отпущенного «назад»: человек снова здесь —
   // охранная запись нужна снова (см. `leaving`).
   const onPageShow = (event: PageTransitionEvent) => {
-    if (event.persisted && leaving && useNav.getState().mode === 'app') writeAppPlace();
+    if (navigationActive() && event.persisted && leaving && useNav.getState().mode === 'app')
+      writeAppPlace();
   };
   window.addEventListener('popstate', onPop);
   window.addEventListener('pageshow', onPageShow);

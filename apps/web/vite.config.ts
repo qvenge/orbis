@@ -26,6 +26,7 @@ export default defineConfig({
       registerType: 'autoUpdate',
       manifest: pwaManifest,
       workbox: {
+        importScripts: ['/orbis-local-data-worker.js'],
         navigateFallback: '/index.html', // app-shell для офлайна
         // png/ico — иконки манифеста: без них установленное PWA стартует офлайн без иконок.
         globPatterns: ['**/*.{js,css,html,svg,woff2,png,ico}'],
