@@ -7,7 +7,13 @@ import type { ReactNode } from 'react';
 import { afterEach, beforeEach, expect, test } from 'vitest';
 import { buildQueryRegistry } from '../../lib/query-blocks/catalog';
 import { useRetryBuffer } from '../../state/retry';
-import { mockEntityUpdateResult, mockLink, trpcError, wireEntity } from '../../test/harness';
+import {
+  mockEntityUpdateResult,
+  mockLink,
+  queryReply,
+  trpcError,
+  wireEntity,
+} from '../../test/harness';
 import { BUILTIN_REGISTRY } from '../../test/registry';
 import { trpc } from '../../trpc';
 import { type ChatMessage, chatThreadKey, useChatThread } from './useChatThread';
@@ -115,9 +121,9 @@ function handlerBase(path: string, input?: unknown) {
   // entity.query обслуживает ДВА запроса fast-path (категории и memory-правила) —
   // ветвление по строке запроса, иначе правила приедут списком категорий.
   if (path === 'entity.query') {
-    return (input as { query?: string } | undefined)?.query === RULES_QUERY.query
-      ? rules
-      : categories;
+    return queryReply(
+      (input as { query?: string } | undefined)?.query === RULES_QUERY.query ? rules : categories,
+    );
   }
   if (path === 'chat.listMessages') return [];
   return {};
@@ -287,8 +293,8 @@ test('тёплый кэш правил: зависший запрос прави
     }
     return handlerBase(path, input);
   });
-  qc.setQueryData(getQueryKey(trpc.entity.query, CATEGORY_QUERY, 'query'), categories);
-  qc.setQueryData(getQueryKey(trpc.entity.query, RULES_QUERY, 'query'), rules);
+  qc.setQueryData(getQueryKey(trpc.entity.query, CATEGORY_QUERY, 'query'), queryReply(categories));
+  qc.setQueryData(getQueryKey(trpc.entity.query, RULES_QUERY, 'query'), queryReply(rules));
   qc.setQueryData(getQueryKey(trpc.user.getSettings, undefined, 'query'), settings);
   // Ровно то состояние кэша, в котором его оставляет предыдущий успешный create.
   await qc.invalidateQueries();
@@ -371,7 +377,7 @@ test('офлайн (тёплый кэш) + уверенный → retry-буфе
   Object.defineProperty(navigator, 'onLine', { value: false, configurable: true });
   const { Wrap, calls, qc } = wrapper(handlerBase);
   // Прогрев кэша (как будто категории/валюта уже загружались онлайн ранее).
-  qc.setQueryData(getQueryKey(trpc.entity.query, CATEGORY_QUERY, 'query'), categories);
+  qc.setQueryData(getQueryKey(trpc.entity.query, CATEGORY_QUERY, 'query'), queryReply(categories));
   qc.setQueryData(getQueryKey(trpc.user.getSettings, undefined, 'query'), settings);
   const { result } = renderHook(() => useFastPath('t1'), { wrapper: Wrap });
   await act(async () => {

@@ -1,7 +1,7 @@
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { useState } from 'react';
 import { beforeEach, expect, test, vi } from 'vitest';
-import { renderWithProviders, trpcError, wireEntity } from '../../test/harness';
+import { queryReply, renderWithProviders, trpcError, wireEntity } from '../../test/harness';
 import { registryReply } from '../../test/registry';
 import type { RouterInputs } from '../../trpc';
 import { Toaster } from '../../ui/Toast';
@@ -104,10 +104,16 @@ test('day selection queries the selected day; completion patches the existing ta
   const writes: BatchCall[] = [];
   const reads: unknown[] = [];
   renderWithProviders(<DayPlanner onOpen={onOpen} />, (path, input) => {
-    if (path === 'user.getSettings') return { timezone: 'Asia/Almaty' };
+    if (path === 'user.getSettings')
+      return {
+        timezone: 'Asia/Almaty',
+        today: '2026-10-19',
+        nextMidnightAt: new Date(Date.now() + 86_400_000).toISOString(),
+        graphEstablished: true,
+      };
     if (path === 'entity.query') {
       reads.push(input);
-      return [task];
+      return queryReply([task]);
     }
     if (path === 'entity.updateBatch') {
       writes.push(input as BatchCall);
@@ -135,7 +141,7 @@ test('inbox triage preserves body, relationships and identity', async () => {
   });
   const writes: BatchCall[] = [];
   renderWithProviders(<Inbox onOpen={onOpen} />, (path, input) => {
-    if (path === 'entity.query') return [raw];
+    if (path === 'entity.query') return queryReply([raw]);
     if (path === 'entity.updateBatch') {
       writes.push(input as BatchCall);
       return {};
@@ -181,8 +187,14 @@ test('reordering skips completed tasks and saves one undoable batch', async () =
       <Toaster />
     </>,
     (path, input) => {
-      if (path === 'user.getSettings') return { timezone: 'Asia/Almaty' };
-      if (path === 'entity.query') return [first, finished, second];
+      if (path === 'user.getSettings')
+        return {
+          timezone: 'Asia/Almaty',
+          today: '2026-10-19',
+          nextMidnightAt: new Date(Date.now() + 86_400_000).toISOString(),
+          graphEstablished: true,
+        };
+      if (path === 'entity.query') return queryReply([first, finished, second]);
       if (path === 'entity.updateBatch') {
         writes.push(input as BatchCall);
         return { actionId, consequences: false, results: [] };
@@ -261,7 +273,7 @@ test.each([
   let serverTags = [...raw.tags];
   const writes: BatchCall[] = [];
   renderWithProviders(<Inbox onOpen={onOpen} />, (path, input) => {
-    if (path === 'entity.query') return [raw];
+    if (path === 'entity.query') return queryReply([raw]);
     if (path === 'entity.updateBatch') {
       const call = input as BatchCall;
       writes.push(call);
@@ -278,4 +290,48 @@ test.each([
   fireEvent.click(within(row).getByRole('button', { name: 'В знания' }));
   await waitFor(() => expect(writes).toHaveLength(1));
   expect(serverTags).toEqual(current);
+});
+
+test('relative planning day follows server settings after waking and fixed date stays selected', async () => {
+  let settings = {
+    timezone: 'Pacific/Kiritimati',
+    today: '2030-01-02',
+    nextMidnightAt: '2030-01-02T10:00:00.000Z',
+    graphEstablished: true,
+  };
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(new Date('2030-01-02T00:00:00.000Z'));
+  try {
+    renderWithProviders(<DayPlanner onOpen={onOpen} />, (path) => {
+      if (path === 'user.getSettings') return settings;
+      if (path === 'entity.query') return queryReply([]);
+      return registryReply(path) ?? [];
+    });
+    const field = await screen.findByLabelText('Выбрать дату');
+    await waitFor(() => expect(field).toHaveValue('2030-01-02'));
+
+    settings = {
+      ...settings,
+      timezone: 'America/Los_Angeles',
+      today: '2030-01-03',
+      nextMidnightAt: '2030-01-04T08:00:00.000Z',
+    };
+    fireEvent.click(screen.getByRole('button', { name: 'Завтра' }));
+    await waitFor(() => expect(field).toHaveValue('2030-01-03'));
+    vi.setSystemTime(new Date('2030-01-03T12:00:00.000Z'));
+    fireEvent(window, new Event('focus'));
+    await waitFor(() => expect(field).toHaveValue('2030-01-04'));
+
+    fireEvent.change(field, { target: { value: '2099-01-15' } });
+    settings = {
+      ...settings,
+      today: '2030-01-04',
+      nextMidnightAt: '2030-01-05T08:00:00.000Z',
+    };
+    vi.setSystemTime(new Date('2030-01-04T12:00:00.000Z'));
+    fireEvent(window, new Event('focus'));
+    await waitFor(() => expect(field).toHaveValue('2099-01-15'));
+  } finally {
+    vi.useRealTimers();
+  }
 });

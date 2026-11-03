@@ -22,7 +22,7 @@
 //    конца, и наружу уезжают только они: агрегат считает SQL через `::numeric`, а
 //    процент клиент выводит из тех же строк точным BigInt (§3.3). Числа с плавающей
 //    точкой контракт этой функции не пересекают вовсе.
-import type { GraphId } from '@orbis/shared';
+import type { GraphId, ReadDependencies } from '@orbis/shared';
 import {
   QUERY_TREE_DEPTH_CAP,
   type QueryAst,
@@ -43,6 +43,7 @@ import {
   compileSumAst,
 } from '../query/compile-ast';
 import { queryContext } from '../query/context';
+import { observeQuery } from '../query/dependencies';
 import { parseRegistryOf } from '../query/parse-text';
 
 /**
@@ -286,6 +287,7 @@ export async function goalProgressFor(
   tx: Tx,
   graphId: GraphId,
   entity: WireEntity,
+  onFreshness?: (freshness: ReadDependencies) => void,
 ): Promise<GoalProgress | undefined> {
   // Признак носителя (Р9): значения `orbis/progress_source` и `orbis/target_value`
   // остаются в `props` и после снятия аспекта цели, а старая карта теряла их вместе с ним.
@@ -333,7 +335,11 @@ export async function goalProgressFor(
   }
   // `this` источника прогресса — сама цель: query-блок принадлежит ей (§6.1)
   const cctx = await queryContext(tx, graphId, entity.id);
-  return computeGoalProgress(tx, cctx, goal.data);
+  if (onFreshness === undefined) return computeGoalProgress(tx, cctx, goal.data);
+  const observed = observeQuery(cctx);
+  const progress = await computeGoalProgress(tx, observed.ctx, goal.data);
+  onFreshness(observed.freshness());
+  return progress;
 }
 
 /**

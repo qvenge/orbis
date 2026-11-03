@@ -99,7 +99,7 @@ export function refTargetOf(def: PropertyDefinition): QueryAst | QueryAst[] | un
   return def.type.kind === 'ref' ? def.type.target : undefined;
 }
 
-type QueryEntity = RouterOutputs['entity']['query'][number];
+type QueryEntity = RouterOutputs['entity']['query']['rows'][number];
 
 /**
  * Выдача цели свойства — ОДИН запрос на цель и набранный фрагмент.
@@ -130,8 +130,7 @@ export function useRefOptions(
     { enabled, trpc: { abortOnUnmount: true } },
   );
   return {
-    // Array.isArray — та же защита от неожиданной формы ответа, что была у прежних пяти копий.
-    options: Array.isArray(q.data) ? q.data : [],
+    options: q.data?.rows ?? [],
     // Отключённый запрос (нет ref definition) у TanStack Query тоже в статусе pending — но показывать
     // там нечего, поэтому загрузкой считается только включённый.
     isPending: enabled && q.isPending && !q.isError,

@@ -6,7 +6,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { resetRegistryVersionForTests } from '../../../lib/registry/useRegistry';
 import { registerLeaveGuard } from '../../../state/leave-guard';
 import { useNav } from '../../../state/navigation';
-import { renderWithProviders, wireEntity } from '../../../test/harness';
+import { queryReply, renderWithProviders, wireEntity } from '../../../test/harness';
 import { navAt } from '../../../test/nav';
 import { BUILTIN_REGISTRY, registryReply } from '../../../test/registry';
 import { trpc } from '../../../trpc';
@@ -38,7 +38,7 @@ it('waiting preview entry stays disabled; resolved same-page panel closes back t
       JSON.stringify((input as { ast: unknown }).ast) ===
         JSON.stringify(previewCandidatesAst(['orbis/task']))
     )
-      return pending;
+      return pending.then((rows) => queryReply(rows));
     return registryReply(path) ?? [];
   });
   fireEvent.click(await screen.findByTestId('screen-menu'));
@@ -145,7 +145,7 @@ it('real preview menu targets chosen B readonly and explicit body opens B via ho
       JSON.stringify((input as { ast: unknown }).ast) ===
         JSON.stringify(previewCandidatesAst(['orbis/task']))
     )
-      return [wireEntity({ id: other, title: 'Пример B', aspects: [], props: {} })];
+      return queryReply([wireEntity({ id: other, title: 'Пример B', aspects: [], props: {} })]);
     return registryReply(path) ?? [];
   });
   await screen.findByTestId('template-preview-record');

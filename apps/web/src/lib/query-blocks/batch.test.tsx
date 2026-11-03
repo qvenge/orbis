@@ -1,7 +1,9 @@
+import { type EntityBlocksResult, READ_WATERMARK_HEADER } from '@orbis/shared';
 import { bindQueryBlocks, parseBody } from '@orbis/shared/doc';
 import { FIXTURE_PARSE_REGISTRY } from '@orbis/shared/query/fixtures';
-import { fireEvent, screen, waitFor } from '@testing-library/react';
-import { useState } from 'react';
+import { QueryClientProvider } from '@tanstack/react-query';
+import { fireEvent, renderHook, screen, waitFor } from '@testing-library/react';
+import { type PropsWithChildren, useState } from 'react';
 import { afterEach, expect, test, vi } from 'vitest';
 import { EditorShell } from '../../features/entity-editor/EditorShell';
 import { DataBlock } from '../../features/page/blocks/DataBlock';
@@ -9,15 +11,16 @@ import {
   type BlockReplyValue,
   blocksReply,
   blockTexts,
+  fixtureFreshness,
   installCrashTrap,
   type MockHandler,
   renderWithProviders,
   wireEntity,
 } from '../../test/harness';
 import { registryReply } from '../../test/registry';
-import { trpc } from '../../trpc';
+import { makeQueryClient, makeTrpcClient, networkReadReceiptOf, trpc } from '../../trpc';
 import { invalidateGraph } from '../invalidate';
-import { useBlockData } from './batch';
+import { QueryBatchProvider, useBlockData } from './batch';
 import { ThisEntityProvider } from './this-entity';
 
 // Единый механизм данных блоков (спека страниц 1а §6.3): блок просит «результат моего запроса
@@ -381,3 +384,70 @@ function Probe({ text, params }: { text: string; params: Record<string, string> 
   const q = useBlockData(text, { params });
   return <span>{q.data?.ok ? 'есть' : ''}</span>;
 }
+
+test('successful block cache entries inherit the receipt of their shared POST', async () => {
+  const reply: EntityBlocksResult = {
+    today: '2026-11-03',
+    timeZone: 'Europe/Moscow',
+    results: {
+      '0': {
+        ok: true,
+        kind: 'rows',
+        rows: [],
+        more: 0,
+        closedIds: [],
+        freshness: fixtureFreshness,
+      },
+      '1': {
+        ok: true,
+        kind: 'count',
+        count: 1,
+        freshness: { ...fixtureFreshness, bodyOrStamp: true },
+      },
+      '2': { ok: false, error: { code: 'EMPTY', message: 'Only this block failed' } },
+    },
+  };
+  const fetch = vi.fn(
+    async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      new Response(JSON.stringify([{ result: { data: reply } }]), {
+        headers: { [READ_WATERMARK_HEADER]: '18446744073709551614' },
+      }),
+  );
+  vi.stubGlobal('fetch', fetch);
+  try {
+    const queryClient = makeQueryClient();
+    const client = makeTrpcClient(() => null);
+    function Wrapper({ children }: PropsWithChildren) {
+      return (
+        <trpc.Provider client={client} queryClient={queryClient}>
+          <QueryClientProvider client={queryClient}>
+            <QueryBatchProvider>{children}</QueryBatchProvider>
+          </QueryClientProvider>
+        </trpc.Provider>
+      );
+    }
+    const { result } = renderHook(
+      () => ({
+        rows: useBlockData('aspect=orbis/task'),
+        count: useBlockData('search=task, display=tile, aggregate=count'),
+        error: useBlockData('bad'),
+      }),
+      { wrapper: Wrapper },
+    );
+    await waitFor(() => expect(result.current.error.isError).toBe(true));
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(fetch.mock.calls[0]?.[0]).toContain('entity.blocks');
+    expect(fetch.mock.calls[0]?.[1]?.method).toBe('POST');
+    expect(result.current.error.error?.message).toBe('Only this block failed');
+    expect(result.current.rows.data).toMatchObject({ kind: 'rows', timeZone: reply.timeZone });
+    expect(result.current.count.data).toMatchObject({
+      kind: 'count',
+      freshness: { bodyOrStamp: true },
+    });
+    const receipt = networkReadReceiptOf(result.current.rows.data);
+    expect(receipt?.watermark).toBe('18446744073709551614');
+    expect(networkReadReceiptOf(result.current.count.data)).toBe(receipt);
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});

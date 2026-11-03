@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { EffectiveRegistry } from '../../../lib/registry/labels';
 import {
   type MockHandler,
+  queryReply,
   renderWithProviders,
   trpcError,
   wireEntity,
@@ -93,11 +94,11 @@ const handler: MockHandler = (path, input) =>
   path === 'entity.resolveRefs'
     ? (input as { ids: string[] }).ids.map((id) => ref(id))
     : path === 'entity.query'
-      ? [
+      ? queryReply([
           wireEntity({ id: A, title: 'Проект', props: {}, aspects: [] }),
           wireEntity({ id: B, title: 'Задача', props: {}, aspects: [] }),
           wireEntity({ id: C, title: 'Сосед', props: {}, aspects: [] }),
-        ]
+        ])
       : {};
 function Host({
   edges = [],
@@ -710,7 +711,7 @@ describe('relation current-state and shell seams', () => {
     );
     const { calls } = renderWithProviders(
       <Host initial={relationDraft('mention')} />,
-      (path, input) => (path === 'entity.query' ? rows : handler(path, input)),
+      (path, input) => (path === 'entity.query' ? queryReply(rows) : handler(path, input)),
     );
     await screen.findByText('Уточните поиск: показано до 20 записей');
     expect(screen.queryByRole('button', { name: 'Выбрать: Choice 0' })).toBeNull();
@@ -850,7 +851,9 @@ it('old unscoped search response cannot enter the new contract role scope', asyn
         const ast = (input as { ast: { filter: unknown } }).ast;
         return ast.filter === null
           ? old
-          : [wireEntity({ id: C, title: 'Подходящий тикет', aspects: ['orbis/task'], props: {} })];
+          : queryReply([
+              wireEntity({ id: C, title: 'Подходящий тикет', aspects: ['orbis/task'], props: {} }),
+            ]);
       }
       return handler(path, input);
     },
@@ -858,7 +861,7 @@ it('old unscoped search response cannot enter the new contract role scope', asyn
   await waitFor(() => expect(calls.some((c) => c.path === 'entity.query')).toBe(true));
   fireEvent.change(screen.getByLabelText('Роль связи'), { target: { value: 'ticket' } });
   expect(await screen.findByRole('button', { name: 'Выбрать: Подходящий тикет' })).toBeVisible();
-  release([wireEntity({ id: A, title: 'Старый ответ', aspects: [], props: {} })]);
+  release(queryReply([wireEntity({ id: A, title: 'Старый ответ', aspects: [], props: {} })]));
   await waitFor(() =>
     expect(screen.queryByRole('button', { name: 'Выбрать: Старый ответ' })).toBeNull(),
   );

@@ -17,6 +17,7 @@ import {
   BLOCKS_TIME_ZONE,
   BLOCKS_TODAY,
   blocksReply,
+  fixtureFreshness,
   installCrashTrap,
   type MockHandler,
   renderWithProviders,
@@ -148,6 +149,7 @@ const GROUPS: BlockDayGroup[] = [
 
 const groupsResult = (more = 0): BlockResult => ({
   ok: true,
+  freshness: fixtureFreshness,
   kind: 'groups',
   groups: GROUPS,
   more,
@@ -238,6 +240,7 @@ test('дата строки СО временем — в поясе ответа
   });
   renderFeed(TEXT, {
     ok: true,
+    freshness: fixtureFreshness,
     kind: 'groups',
     groups: [
       {
@@ -329,6 +332,7 @@ test('hide_empty: группы без строк (только «свободн�
   const text = `${TEXT}, hide_empty`;
   const { container } = renderFeed(text, {
     ok: true,
+    freshness: fixtureFreshness,
     kind: 'groups',
     groups: [
       { day: '2026-09-27', rows: [] },

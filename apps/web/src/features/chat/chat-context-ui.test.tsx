@@ -27,7 +27,7 @@ import {
 import { useSideChat } from '../../app/frame/side-chat-store';
 import { noteRegistryVersion, resetRegistryVersionForTests } from '../../lib/registry/useRegistry';
 import { useNav } from '../../state/navigation';
-import { installCrashTrap, renderWithProviders, wireEntity } from '../../test/harness';
+import { installCrashTrap, queryReply, renderWithProviders, wireEntity } from '../../test/harness';
 import { BUILTIN_REGISTRY } from '../../test/registry';
 import type { CaptureContext } from '../browser/QuickCapture';
 import { withRecordContext } from './record-context';
@@ -102,7 +102,8 @@ function renderApp(hold?: { id: string; until: Promise<void> }) {
         return wireEntity({ id: e.id, title: e.title, aspects: e.aspects ?? [] });
       }
       case 'entity.query':
-        if ((input as { query?: string }).query === 'aspect=orbis/category') return [TAXI];
+        if ((input as { query?: string }).query === 'aspect=orbis/category')
+          return queryReply([TAXI]);
         return answer(path, input, type);
       default:
         return answer(path, input, type);

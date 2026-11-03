@@ -3,7 +3,7 @@ import { act, fireEvent, screen, waitFor } from '@testing-library/react';
 import { useState } from 'react';
 import { afterEach, expect, test, vi } from 'vitest';
 import { field } from '../../features/entity-detail/properties-relations/test-fixtures';
-import { renderWithProviders, wireEntity } from '../../test/harness';
+import { queryReply, renderWithProviders, wireEntity } from '../../test/harness';
 import { BUILTIN_REGISTRY } from '../../test/registry';
 import { refQueryAst, useRefOptions } from './RefField';
 import { contractTarget, implementsContract, useEntityOptions } from './useEntityOptions';
@@ -68,7 +68,7 @@ function LegacyProbe({ definition }: { definition?: ReturnType<typeof field> }) 
 }
 test('legacy ref без target включён; undefined/nonref выключены', async () => {
   const first = renderWithProviders(<LegacyProbe definition={field({ kind: 'ref' })} />, (path) =>
-    path === 'entity.query' ? [row(1)] : {},
+    path === 'entity.query' ? queryReply([row(1)]) : {},
   );
   await waitFor(() => expect(first.calls.filter((c) => c.path === 'entity.query')).toHaveLength(1));
   expect(first.calls.find((c) => c.path === 'entity.query')?.input).toMatchObject({
@@ -92,7 +92,7 @@ test('enabled false не запрашивает всё; budget считает ra
   expect(off.calls).toHaveLength(0);
   off.unmount();
   const on = renderWithProviders(<Probe exclude={[row(1).id, row(2).id]} />, (path) =>
-    path === 'entity.query' ? Array.from({ length: 20 }, (_, i) => row(i + 1)) : {},
+    path === 'entity.query' ? queryReply(Array.from({ length: 20 }, (_, i) => row(i + 1))) : {},
   );
   await waitFor(() => expect(state().titles).toHaveLength(18));
   expect(state().more).toBe(true);
@@ -111,7 +111,7 @@ test('debounce 199/200ms и поздний ответ остаётся под с
     if (path !== 'entity.query') return {};
     const filter = (input as { ast: QueryAst }).ast.filter;
     return filter && 'search' in filter
-      ? [wireEntity({ id: row(2).id, title: 'Новая выдача' })]
+      ? queryReply([wireEntity({ id: row(2).id, title: 'Новая выдача' })])
       : old;
   });
   await act(async () => {
@@ -133,7 +133,7 @@ test('debounce 199/200ms и поздний ответ остаётся под с
   });
   expect(state().titles).toEqual(['Новая выдача']);
   await act(async () => {
-    release([wireEntity({ id: row(1).id, title: 'Старая выдача' })]);
+    release(queryReply([wireEntity({ id: row(1).id, title: 'Старая выдача' })]));
     await vi.advanceTimersByTimeAsync(1);
   });
   expect(state().titles).toEqual(['Новая выдача']);
@@ -144,7 +144,7 @@ test('отказ чтения отличается от empty и retry полу�
   renderWithProviders(<Probe />, (path) => {
     if (path === 'entity.query') {
       if (failed) throw new Error('network');
-      return [];
+      return queryReply([]);
     }
     return {};
   });

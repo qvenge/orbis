@@ -197,9 +197,9 @@ test('записи поставки видны в обычной выдаче: �
     db,
     clientVersion: null,
   });
-  const byPage = await caller.entity.query({ query: `aspect=${PAGE_ASPECT}` });
+  const { rows: byPage } = await caller.entity.query({ query: `aspect=${PAGE_ASPECT}` });
   expect(byPage.map((r) => r.id)).toContain(records);
-  const bySupply = await caller.entity.query({ query: `aspect=${SUPPLY_ASPECT}` });
+  const { rows: bySupply } = await caller.entity.query({ query: `aspect=${SUPPLY_ASPECT}` });
   expect(bySupply.map((r) => r.id)).toContain(records);
 });
 

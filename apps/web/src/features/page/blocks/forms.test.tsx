@@ -12,6 +12,7 @@ import {
   BLOCKS_TODAY,
   blocksReply,
   blockTexts,
+  fixtureFreshness,
   installCrashTrap,
   type MockHandler,
   renderWithProviders,
@@ -208,7 +209,14 @@ const closedHandler =
         ? PREDICATE_CLOSED_REGISTRY
         : BUILTIN_REGISTRY
       : (blocksReply({
-          [text]: { ok: true, kind: 'rows', rows: rows as never, more: 0, closedIds },
+          [text]: {
+            ok: true,
+            freshness: fixtureFreshness,
+            kind: 'rows',
+            rows: rows as never,
+            more: 0,
+            closedIds,
+          },
         })(path, input) ?? {});
 
 for (const display of ['list', 'compact', 'table'] as const) {
@@ -275,7 +283,7 @@ test('tile count — число и подпись title', async () => {
   const text = 'aspect=orbis/task, display=tile, aggregate=count, title=Задач';
   renderWithProviders(
     <DataBlock text={text} />,
-    handler({ [text]: { ok: true, kind: 'count', count: 7 } }),
+    handler({ [text]: { ok: true, freshness: fixtureFreshness, kind: 'count', count: 7 } }),
   );
   const tile = await screen.findByTestId('qb-tile');
   expect(within(tile).getByTestId('qb-tile-value')).toHaveTextContent('7');
@@ -292,7 +300,13 @@ async function sumTile(sums: { currency: string | null; sum: string; count: numb
   renderWithProviders(
     <DataBlock text={SUM_TEXT} />,
     handler({
-      [SUM_TEXT]: { ok: true, kind: 'sum', count: sums.reduce((n, s) => n + s.count, 0), sums },
+      [SUM_TEXT]: {
+        ok: true,
+        freshness: fixtureFreshness,
+        kind: 'sum',
+        count: sums.reduce((n, s) => n + s.count, 0),
+        sums,
+      },
     }),
   );
   return screen.findByTestId('qb-tile');
@@ -384,7 +398,15 @@ test('tile latest — значение (не денежное — без сим�
     'aspect=orbis/financial, display=tile, aggregate=latest:orbis/amount, title=Последняя';
   renderWithProviders(
     <DataBlock text={text} />,
-    handler({ [text]: { ok: true, kind: 'latest', value: '72.5', currency: null } }),
+    handler({
+      [text]: {
+        ok: true,
+        freshness: fixtureFreshness,
+        kind: 'latest',
+        value: '72.5',
+        currency: null,
+      },
+    }),
   );
   const tile = await screen.findByTestId('qb-tile');
   expect(within(tile).getByTestId('qb-tile-value')).toHaveTextContent(/^72.5$/);
@@ -395,7 +417,15 @@ test('tile latest денежное — с символом валюты (спе�
     'aspect=orbis/financial, display=tile, aggregate=latest:orbis/amount, sortBy=orbis/occurred_on:desc';
   renderWithProviders(
     <DataBlock text={text} />,
-    handler({ [text]: { ok: true, kind: 'latest', value: '12000', currency: 'RUB' } }),
+    handler({
+      [text]: {
+        ok: true,
+        freshness: fixtureFreshness,
+        kind: 'latest',
+        value: '12000',
+        currency: 'RUB',
+      },
+    }),
   );
   const tile = await screen.findByTestId('qb-tile');
   expect(within(tile).getByTestId('qb-tile-value')).toHaveTextContent(/^12 000 ₽$/);
@@ -408,7 +438,15 @@ test('tile latest по адресу слота — значение, без па
     'aspect=orbis/financial, display=tile, aggregate=latest:orbis/money-movement.amount, title=Последняя';
   renderWithProviders(
     <DataBlock text={text} />,
-    handler({ [text]: { ok: true, kind: 'latest', value: '72.5', currency: 'USD' } }),
+    handler({
+      [text]: {
+        ok: true,
+        freshness: fixtureFreshness,
+        kind: 'latest',
+        value: '72.5',
+        currency: 'USD',
+      },
+    }),
   );
   const tile = await screen.findByTestId('qb-tile');
   expect(within(tile).getByTestId('qb-tile-value')).toHaveTextContent(/^72.5 \$$/);
@@ -422,9 +460,17 @@ test('«ещё 2» раскрывается на месте — второй в�
     handler({
       [text]: (b) =>
         b.limit === undefined
-          ? { ok: true, kind: 'rows', rows: rows.slice(0, 3) as never, more: 2, closedIds: [] }
+          ? {
+              ok: true,
+              freshness: fixtureFreshness,
+              kind: 'rows',
+              rows: rows.slice(0, 3) as never,
+              more: 2,
+              closedIds: [],
+            }
           : {
               ok: true,
+              freshness: fixtureFreshness,
               kind: 'rows',
               rows: rows.slice(0, b.limit) as never,
               more: 0,
@@ -466,9 +512,17 @@ test('раскрытое «ещё N» не переживает смену за�
     handler({
       [text]: (b) =>
         b.limit === undefined
-          ? { ok: true, kind: 'rows', rows: rows.slice(0, 3) as never, more: 2, closedIds: [] }
+          ? {
+              ok: true,
+              freshness: fixtureFreshness,
+              kind: 'rows',
+              rows: rows.slice(0, 3) as never,
+              more: 2,
+              closedIds: [],
+            }
           : {
               ok: true,
+              freshness: fixtureFreshness,
               kind: 'rows',
               rows: rows.slice(0, b.limit) as never,
               more: 0,
@@ -525,7 +579,12 @@ test('бейджи разделов (badgeOf) — одной пачкой entity
           results: Object.fromEntries(
             items.map((b): [string, BlockResult] => [
               b.key,
-              { ok: true, kind: 'count', count: counts[pages.indexOf(b.badgeOf)] ?? 0 },
+              {
+                ok: true,
+                freshness: fixtureFreshness,
+                kind: 'count',
+                count: counts[pages.indexOf(b.badgeOf)] ?? 0,
+              },
             ]),
           ),
           today: BLOCKS_TODAY,
@@ -584,7 +643,16 @@ test('F2: у потолка строк «ещё N» не рисуется — п
   const rows = Array.from({ length: 500 }, (_, i) => wireEntity({ id: `r${i}`, title: `r${i}` }));
   renderWithProviders(
     <DataBlock text={text} />,
-    handler({ [text]: { ok: true, kind: 'rows', rows: rows as never, more: 3, closedIds: [] } }),
+    handler({
+      [text]: {
+        ok: true,
+        freshness: fixtureFreshness,
+        kind: 'rows',
+        rows: rows as never,
+        more: 3,
+        closedIds: [],
+      },
+    }),
   );
   expect(await screen.findByTestId('qb-cap')).toHaveTextContent('показаны первые 500');
   expect(screen.queryByRole('button', { name: /ещё/ })).toBeNull();

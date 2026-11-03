@@ -3,6 +3,7 @@ import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import {
   isRecordScreenListCall,
+  queryReply,
   renderWithProviders,
   trpcError,
   wireEntity,
@@ -106,7 +107,7 @@ function handler(fx: Fixture) {
     }
     if (path === 'entity.suggest') return fx.onSuggest ? fx.onSuggest() : [sugg(found)];
     // Остался только соседям-спискам (ListProbe): пикер на entity.query больше не ходит.
-    if (path === 'entity.query') return [];
+    if (path === 'entity.query') return queryReply([]);
     if (path === 'relation.create') {
       if (fx.onRelationCreate) return fx.onRelationCreate();
       return rel('new', 'e1', 'x1', 'dependency');
@@ -125,7 +126,7 @@ const PROBE_QUERY = { query: 'aspect=orbis/task, orbis/task_status=!done, limit=
 
 function ListProbe() {
   const q = trpc.entity.query.useQuery(PROBE_QUERY);
-  return <span data-testid="list-probe">{(q.data ?? []).length}</span>;
+  return <span data-testid="list-probe">{(q.data?.rows ?? []).length}</span>;
 }
 
 /**

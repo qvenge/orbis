@@ -96,7 +96,7 @@ export function useFastPath(threadId: string) {
   type QueryOut = ReturnType<typeof utils.entity.query.getData>;
   type SettingsOut = ReturnType<typeof utils.user.getSettings.getData>;
   function mapCtx(cats: QueryOut, settings: SettingsOut, rules: QueryOut): FastPathCtx {
-    const categories: FastPathCategory[] = (cats ?? []).map((e) => {
+    const categories: FastPathCategory[] = (cats?.rows ?? []).map((e) => {
       // Значения — плоско в `props` по id свойства (§А1-1); аспект `orbis/category` тут уже
       // сказан самим запросом (`CATEGORY_QUERY`), и второй раз его спрашивать не у чего.
       const aliases = e.props['orbis/aliases'];
@@ -120,7 +120,7 @@ export function useFastPath(threadId: string) {
       // (`ruleAppliesTo`), а не запросом: дизъюнкцию «эта область ИЛИ никакой» грамматика
       // не выражает, а сервер отбирает именно так (см. memoryRules.ts).
       // updatedAt — арбитр конфликта двух правил на один образец (applyMemoryRules).
-      rules: (rules ?? []).flatMap((e) => {
+      rules: (rules?.rows ?? []).flatMap((e) => {
         if (!ruleAppliesTo(e.props['orbis/rule_scope'], RULES_SCOPE)) return [];
         const pattern = e.props['orbis/rule_pattern'];
         const targetId = e.props['orbis/rule_target'];

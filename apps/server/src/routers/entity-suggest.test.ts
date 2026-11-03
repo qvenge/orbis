@@ -81,10 +81,10 @@ describe('entity.suggest (§6.1 не трогаем: своя процедура
 
     // Контроль: `search=` жив и по целому слову находит — иначе тест был бы зелёным
     // по ложной причине (пустой FTS вместо доказанной разницы семантик).
-    expect(titles(await caller.entity.query({ query: 'search=Купить, limit=10' }))).toEqual([
+    expect(titles((await caller.entity.query({ query: 'search=Купить, limit=10' })).rows)).toEqual([
       'Купить кроссовки',
     ]);
-    expect(await caller.entity.query({ query: 'search=куп, limit=10' })).toEqual([]);
+    expect((await caller.entity.query({ query: 'search=куп, limit=10' })).rows).toEqual([]);
 
     expect(titles(await caller.entity.suggest({ term: 'куп' }))).toEqual(['Купить кроссовки']);
   });
@@ -105,9 +105,9 @@ describe('entity.suggest (§6.1 не трогаем: своя процедура
 
     // Контроль: прежний путь это находил — значит речь о СОХРАНЕНИИ находимости, а не о
     // новой возможности. Если бы `search=` тут промахнулся, тест не доказывал бы регресса.
-    expect(titles(await caller.entity.query({ query: 'search=квартал, limit=10' }))).toEqual([
-      'Отчёт за квартал',
-    ]);
+    expect(titles((await caller.entity.query({ query: 'search=квартал, limit=10' })).rows)).toEqual(
+      ['Отчёт за квартал'],
+    );
     expect(titles(await caller.entity.suggest({ term: 'квартал' }))).toEqual(['Отчёт за квартал']);
     // И по префиксу второго слова — того, чего `search=` как раз не умеет
     expect(titles(await caller.entity.suggest({ term: 'кварт' }))).toEqual(['Отчёт за квартал']);

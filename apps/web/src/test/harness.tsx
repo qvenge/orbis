@@ -1,10 +1,12 @@
 import type { AppRouter } from '@orbis/server/src/router';
 import {
   type BlockResult,
+  type BlockSuccess,
   type EntityBlocksInput,
   type EntityBlocksResult,
   type EntityBlockTextItem,
   entityBlocksInput,
+  type ReadDependencies,
 } from '@orbis/shared';
 import { type DefaultOptions, QueryClientProvider } from '@tanstack/react-query';
 import { type RenderResult, render } from '@testing-library/react';
@@ -163,7 +165,7 @@ const SUSPENDED = <div data-testid="harness-suspended">дерево подвис
 function unroutedDefault(path: string, input: unknown): unknown {
   // Бейдж Повестки в оболочке снят вместе с оболочкой вкладок (срез 1б §8.6): умолчания
   // `agenda.list` за сьют больше нет — его запроса нет ни на одном экране.
-  if (isRecordScreenListCall({ path, input })) return [];
+  if (isRecordScreenListCall({ path, input })) return queryReply([]);
   // «Обновления» поставки (срез 1б §9.1): плашка записи поставки спрашивает их на её экране — сьют,
   // который поставку не проверяет, получает «обновлений нет», а не `{}` вместо списка.
   if (path === 'supply.updates') return [];
@@ -284,7 +286,21 @@ export const BLOCKS_TODAY = '2026-09-27';
 export const BLOCKS_TIME_ZONE = 'Asia/Novosibirsk';
 
 /** Ответ одному блоку пачки: строки (сокращение для `kind:'rows'` без остатка) или сам результат. */
-export type BlockReplyValue = readonly WireEntityFixture[] | BlockResult;
+export const fixtureFreshness: ReadDependencies = {
+  entityIds: [],
+  graph: true,
+  bodyOrStamp: false,
+  threadIds: [],
+  settings: true,
+  registry: true,
+  expiresAt: null,
+};
+
+export function queryReply<T>(rows: readonly T[], freshness = fixtureFreshness) {
+  return { rows, freshness };
+}
+
+export type BlockReplyValue = readonly WireEntityFixture[] | BlockSuccess | BlockResult;
 type BlockItem = EntityBlockTextItem;
 
 /**
@@ -303,10 +319,18 @@ export function blocksReply(
   map: Readonly<Record<string, BlockReplyValue | ((block: BlockItem) => BlockReplyValue)>>,
 ): (path: string, input: unknown) => unknown | undefined {
   const asResult = (v: BlockReplyValue | undefined): BlockResult => {
-    if (v === undefined) return { ok: true, kind: 'rows', rows: [], more: 0, closedIds: [] };
-    if (Array.isArray(v))
-      return { ok: true, kind: 'rows', rows: v as never, more: 0, closedIds: [] };
-    return v as BlockResult;
+    if (v === undefined || Array.isArray(v)) {
+      return {
+        ok: true,
+        kind: 'rows',
+        rows: (v ?? []) as never,
+        more: 0,
+        closedIds: [],
+        freshness: fixtureFreshness,
+      };
+    }
+    const result = v as BlockSuccess | BlockResult;
+    return result.ok ? { freshness: fixtureFreshness, ...result } : result;
   };
   return (path, input) => {
     if (path !== 'entity.blocks') return undefined;
@@ -322,7 +346,11 @@ export function blocksReply(
       results: Object.fromEntries(
         blocks.map((b) => {
           // Бейдж раздела (`badgeOf`, срез 1б) карта текстов не описывает: «числа нет».
-          if (!('text' in b)) return [b.key, { ok: true, kind: 'none' } satisfies BlockResult];
+          if (!('text' in b))
+            return [
+              b.key,
+              { ok: true, kind: 'none', freshness: fixtureFreshness } satisfies BlockResult,
+            ];
           const entry = map[b.text.trim()];
           return [b.key, asResult(typeof entry === 'function' ? entry(b) : entry)];
         }),

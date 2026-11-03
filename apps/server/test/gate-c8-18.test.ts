@@ -267,14 +267,15 @@ beforeAll(async () => {
     return { reg, fin, closed };
   });
   excluded = await collect(
-    async () => new Set((await c.entity.query({ query: EXCLUDE_BLOCKED_QUERY })).map((e) => e.id)),
+    async () =>
+      new Set((await c.entity.query({ query: EXCLUDE_BLOCKED_QUERY })).rows.map((e) => e.id)),
   );
 });
 
 describe('гейт §С8-18: аспект только декларацией', () => {
   test('обстановка гейта на месте: конверт, трата, два дела, блокеры и сущность §С8-21', async () => {
     const ids = new Set(
-      (await callerFor(owner).entity.query({ query: 'sortBy=orbis/title:asc, limit=50' })).map(
+      (await callerFor(owner).entity.query({ query: 'sortBy=orbis/title:asc, limit=50' })).rows.map(
         (e) => e.id,
       ),
     );

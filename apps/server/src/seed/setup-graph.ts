@@ -100,7 +100,7 @@ const SETUP_DISABLED_EXTENSION = 'finance';
 type GraphState = 'ready' | 'legacy' | 'new';
 
 /** Оболочка хоста есть (с архивной) — признак «граф заведён» (Р-29). */
-async function shellExists(tx: Tx, graph: GraphId): Promise<boolean> {
+export async function shellExists(tx: Tx, graph: GraphId): Promise<boolean> {
   const shell = await tx.execute(sql`
     SELECT 1 FROM entities
      WHERE graph_id = ${graph}::uuid

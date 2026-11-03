@@ -9,6 +9,7 @@ import { z } from 'zod';
 import type { Entity } from '../schemas/entity';
 import { BLOCK_ITEM_MESSAGES, BLOCK_TEXT_MAX } from './block-messages';
 import { entityFieldsSchema } from './fields';
+import type { ReadDependencies } from './freshness';
 import { entityCreateUiInput, entityUpdateBatchItemInput } from './tools';
 
 export * from './block-messages';
@@ -194,14 +195,17 @@ export interface BlockDayGroup {
  * `count` — записей выборки. `latest` — значение первой записи в порядке блока (без `sortBy` —
  * последней правки) и её валюта (`null` — не денежное, §3.7).
  */
-export type BlockResult =
+export type BlockSuccess =
   | { ok: true; kind: 'rows'; rows: BlockEntity[]; more: number; closedIds: string[] }
   | { ok: true; kind: 'groups'; groups: BlockDayGroup[]; more: number; closedIds: string[] }
   | { ok: true; kind: 'count'; count: number }
   | { ok: true; kind: 'sum'; count: number; sums: BlockSum[] }
   | { ok: true; kind: 'latest'; value: string | null; currency: string | null }
   // Бейдж страницы без блоков данных: числа нет, и это не отказ — раздел рисуется без бейджа.
-  | { ok: true; kind: 'none' }
+  | { ok: true; kind: 'none' };
+
+export type BlockResult =
+  | (BlockSuccess & { freshness: ReadDependencies })
   | { ok: false; error: BlockError };
 /**
  * Ответ пачки. `today` и `timeZone` — «сегодня» и пояс владельца, по которым сервер разрешил токены и

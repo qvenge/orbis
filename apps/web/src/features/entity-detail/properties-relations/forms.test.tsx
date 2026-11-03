@@ -10,7 +10,7 @@ afterEach(() => {
 });
 
 import { type EffectiveRegistry, lookupOf } from '../../../lib/registry/labels';
-import { renderWithProviders, trpcError } from '../../../test/harness';
+import { queryReply, renderWithProviders, trpcError } from '../../../test/harness';
 import { trpc } from '../../../trpc';
 import { useDisabledExtensions } from '../../settings/extension-mask';
 import { AspectsTab } from './AspectsTab';
@@ -505,7 +505,7 @@ describe('refusal and command lifecycle integration', () => {
           { id: oldRef, title: 'Старое в архиве', emoji: null, archived: true, completable: null },
           { id: newRef, title: 'Новое', emoji: null, archived: false, completable: null },
         ];
-      if (path === 'entity.query') return [{ ...entity, id: newRef, title: 'Новое' }];
+      if (path === 'entity.query') return queryReply([{ ...entity, id: newRef, title: 'Новое' }]);
       if (path === 'entity.get')
         return {
           entity: { ...entity, id: oldRef, title: 'Старое в архиве' },
@@ -567,7 +567,7 @@ describe('refusal and command lifecycle integration', () => {
               },
             ]
           : p === 'entity.query'
-            ? []
+            ? queryReply([])
             : {},
     );
     fireEvent.click(await screen.findByRole('button', { name: /^Убрать: Старое в архиве \(/ }));
@@ -762,7 +762,7 @@ it('pending preserves mounted batched ref control and disables edits without per
     path === 'entity.resolveRefs'
       ? [{ id: oldRef, title: 'Старое в архиве', emoji: null, archived: true, completable: null }]
       : path === 'entity.query'
-        ? []
+        ? queryReply([])
         : path === 'entity.get'
           ? { entity: refEntity }
           : {},
@@ -975,7 +975,8 @@ it('real internal refusal becomes unknown with raw preserved and no automatic re
   let writes = 0;
   renderWithProviders(<RefusalHost />, (path) => {
     if (path === 'registry.effective') return refRegistry;
-    if (path === 'entity.resolveRefs' || path === 'entity.query') return [];
+    if (path === 'entity.resolveRefs') return [];
+    if (path === 'entity.query') return queryReply([]);
     if (path === 'entity.updateBatch') {
       writes++;
       throw trpcError('INTERNAL_SERVER_ERROR', 'SELECT secret FROM personal_graph; stack trace');

@@ -92,6 +92,7 @@ import {
   groupKeySql,
   whenLateralJoins,
 } from './contract-sql';
+import type { QueryRead } from './dependencies';
 
 /**
  * Контекст компиляции. Имена полей — из плана (на них ссылаются Задачи 9b, 10a/10b, 11, 13c).
@@ -114,6 +115,8 @@ export interface CompileCtx {
   today: string;
   /** IANA-таймзона владельца — по ней date-токены читают timestamp-свойства. */
   timeZone: string;
+  nextMidnightAt?: () => string;
+  observeRead?: (read: QueryRead) => void;
   /**
    * Начало недели для токена `this_week` (спека 1в §3.4). Обязательное, а не с умолчанием: контекст
    * собирают несколько мест, и забытое поле обязано быть ошибкой типов, а не молчаливым понедельником.
@@ -277,6 +280,7 @@ function propRef(propertyId: string, ctx: CompileCtx): PropRef {
         { property: def.id },
       );
     }
+    if (column === 'updated_at') ctx.observeRead?.('bodyOrStamp');
     return { def, text: sql.raw(column), list, core: true };
   }
   return { def, text: sql`props->>${lit(def.id)}`, list, core: false };
@@ -513,6 +517,7 @@ function tokenEdgeParam(
   form: Exclude<TokenForm, 'eq'>,
   ctx: CompileCtx,
 ): SQL {
+  ctx.observeRead?.('date');
   const edges = tokenEdges(token, ctx.today, ctx.weekStart);
   const day = form === 'lt' || form === 'gte' ? edges.start : edges.end;
   if (day === null) {
@@ -529,6 +534,7 @@ function tokenEdgeParam(
  * (`contract-sql.ts`) — вторая копия таблицы токенов разошлась бы с этой.
  */
 export function dayTokenCond(d: SQL, token: QueryDateToken, ctx: CompileCtx): SQL {
+  ctx.observeRead?.('date');
   const { start, end } = tokenEdges(token, ctx.today, ctx.weekStart);
   if (start !== null && end !== null) return sql`${d} BETWEEN ${start}::date AND ${end}::date`;
   if (start !== null) return sql`${d} >= ${start}::date`;
@@ -874,6 +880,7 @@ function compileNode(node: QueryFilterNode, ctx: CompileCtx): SQL {
   if ('aspect' in node) return sql`aspects @> ARRAY[${lit(aspectOrFail(node.aspect, ctx).id)}]`;
   if ('tag' in node) return sql`tags @> ${textArray([node.tag])}`;
   if ('search' in node) {
+    ctx.observeRead?.('bodyOrStamp');
     return sql`(to_tsvector('simple', title) @@ plainto_tsquery('simple', ${node.search}) OR to_tsvector('simple', body) @@ plainto_tsquery('simple', ${node.search}))`;
   }
   if ('rel' in node) return relCond(node.rel, ctx);
@@ -1078,6 +1085,7 @@ export function compileQueryAst(
   opts: { fields?: EntityFields } = {},
 ): SQL {
   const c = whenLateralCtx(ctx);
+  if (opts.fields && opts.fields !== 'none') c.observeRead?.('bodyOrStamp');
   const where = compileWhere(ast, c);
   const order = compileOrderBy(ast, c);
   return sql`SELECT ${sql.raw(entitySelectColumns(opts.fields ?? 'none'))} FROM ${entitiesFrom(c)} WHERE ${where} ORDER BY ${order} LIMIT ${ast.limit ?? DEFAULT_LIMIT}`;
@@ -1106,6 +1114,12 @@ export function compileBlockRowsAst(
   opts: { fields?: EntityFields } = {},
 ): SQL {
   const ctx = whenLateralCtx(outer);
+  if (
+    (opts.fields && opts.fields !== 'none') ||
+    ast.columns?.some(({ field }) => CORE_COLUMN[field] === 'updated_at')
+  )
+    ctx.observeRead?.('bodyOrStamp');
+  if (ast.group !== undefined) ctx.observeRead?.('date');
   const columns = sql`${sql.raw(entitySelectColumns(opts.fields ?? 'none'))}, COALESCE(${closedMembershipSql(ctx)}, false) AS __closed, count(*) OVER () AS __total`;
   const where = compileWhere(ast, ctx);
   const order = compileOrderBy(ast, ctx);
@@ -1264,6 +1278,7 @@ export function sumsOf(
  * читается тем же правилом (цели с `sortBy` — в перепись §3.4).
  */
 export function compileLatestAst(ast: QueryAst, field: QueryFieldRef, outer: CompileCtx): SQL {
+  outer.observeRead?.('bodyOrStamp');
   const ctx = whenLateralCtx(outer);
   const ref = numericRef(field, ctx, 'latest');
   const currency = moneyCurrencyExpr(field, ctx) ?? sql`NULL::text`;

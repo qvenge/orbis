@@ -81,6 +81,21 @@ export function todayInTimeZone(timeZone: string, now: Date = new Date()): strin
   return new Intl.DateTimeFormat('en-CA', { timeZone }).format(now);
 }
 
+/** First instant of the next local calendar day, including gaps at local midnight. */
+export function nextMidnightInTimeZone(timeZone: string, now: Date = new Date()): string {
+  const format = new Intl.DateTimeFormat('en-CA', { timeZone });
+  const today = format.format(now);
+  let before = now.getTime();
+  // Even a DST rollback or a skipped local day fits within this UTC search window.
+  let after = before + 48 * 60 * 60 * 1000;
+  while (after - before > 1) {
+    const at = Math.floor((before + after) / 2);
+    if (format.format(at) === today) before = at;
+    else after = at;
+  }
+  return new Date(after).toISOString();
+}
+
 /**
  * ЧЧ:ММ момента в зоне владельца — части `formatToParts`, а не строка локали (она зависит от сборки ICU). Одна функция
  * на все подписи времени для модели и владельца: строки «Недавние правки владельца» (`llm/context.ts`) и подпись
@@ -125,11 +140,13 @@ export async function queryContext(
 ): Promise<CompileCtx> {
   const reg = await effectiveRegistry(tx, graph);
   const settings = await ownerQuerySettings(tx, graph);
+  let nextMidnightAt: string | undefined;
   return {
     graphId: graph,
     reg,
     thisEntityId,
     today: todayInTimeZone(settings.timeZone, now),
+    nextMidnightAt: () => (nextMidnightAt ??= nextMidnightInTimeZone(settings.timeZone, now)),
     timeZone: settings.timeZone,
     weekStart: WEEK_START,
     ownerCurrency: settings.currency,

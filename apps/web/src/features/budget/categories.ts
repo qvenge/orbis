@@ -10,7 +10,7 @@ import { useRefTitle } from '../../lib/entity-ref/RefField';
 import { useRegistry } from '../../lib/registry/useRegistry';
 import type { RouterOutputs } from '../../trpc';
 
-type QueryEntity = RouterOutputs['entity']['query'][number];
+type QueryEntity = RouterOutputs['entity']['query']['rows'][number];
 
 // `orbis/title` — namespaced key core-свойства (§А1-3), а не голое `title`: голым словом
 // грамматика называет ПАРАМЕТР ЗАГОЛОВКА выдачи, и `sortBy=title:asc` она отвергает как

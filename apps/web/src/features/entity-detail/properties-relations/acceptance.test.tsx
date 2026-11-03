@@ -2,7 +2,12 @@ import type { AspectDefinition } from '@orbis/shared';
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it } from 'vitest';
 import { resetRegistryVersionForTests } from '../../../lib/registry/useRegistry';
-import { installCrashTrap, renderWithProviders, wireEntity } from '../../../test/harness';
+import {
+  installCrashTrap,
+  queryReply,
+  renderWithProviders,
+  wireEntity,
+} from '../../../test/harness';
 import { BUILTIN_REGISTRY } from '../../../test/registry';
 import { Toaster } from '../../../ui/Toast';
 import { useToastStore } from '../../../ui/toast-store';
@@ -91,9 +96,9 @@ it('public menu executes all five panel commands against mutable patch-only tran
           completable: null,
         }));
       if (path === 'entity.query')
-        return [
+        return queryReply([
           wireEntity({ id: otherId, title: 'Существующий источник', props: {}, aspects: [] }),
-        ];
+        ]);
       if (path === 'entity.updateBatch') {
         const actionId = receipt();
         const operations = (input as { operations: { tool: string; input: Patch }[] }).operations;

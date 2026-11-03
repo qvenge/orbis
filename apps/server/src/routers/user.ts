@@ -7,7 +7,7 @@ import type { JournalRef } from '@orbis/shared';
 // оболочка хоста последней (R-20), каждый шаг своей транзакцией. Роутер не вправе знать, сколько их,
 // — иначе следующая фаза заведения потребовала бы правки и здесь.
 // Настройки идут через executor (settings_set, §10.2 п. 1), маска расширений — module_set.
-import { setExtensionEnabledInput, settingsSetInput } from '@orbis/shared';
+import { isValidTimeZone, setExtensionEnabledInput, settingsSetInput } from '@orbis/shared';
 import { eq } from 'drizzle-orm';
 import { userSettings } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
@@ -16,7 +16,9 @@ import { execute } from '../executor/executor';
 import { makeJournalSink } from '../executor/journal';
 import { journalRef } from '../executor/journal-ref';
 import { exportData, type OrbisExport } from '../export';
+import { DEFAULT_TIMEZONE, nextMidnightInTimeZone, todayInTimeZone } from '../query/context';
 import { seedOwner } from '../seed/onboarding';
+import { shellExists } from '../seed/setup-graph';
 import { ownerOnlyProcedure, protectedProcedure, router } from '../trpc';
 import { toWireUserSettings, type WireUserSettings } from '../wire';
 
@@ -41,19 +43,27 @@ export const userRouter = router({
     }
   }),
 
-  getSettings: protectedProcedure.query(
-    ({ ctx }): Promise<WireUserSettings> =>
-      withIdentity(ctx.db, ctx.identity, async (tx) => {
-        const rows = await tx
-          .select()
-          .from(userSettings)
-          .where(eq(userSettings.graphId, ctx.identity.graph));
-        if (!rows[0]) {
-          // Нет строки → онбординг не проходил (или чужая под RLS): единый NOT_FOUND
-          throw execErrorToTRPC({ code: 'NOT_FOUND', message: 'настройки не найдены' });
-        }
-        return toWireUserSettings(rows[0]);
-      }),
+  getSettings: protectedProcedure.query(({ ctx }) =>
+    withIdentity(ctx.db, ctx.identity, async (tx) => {
+      const rows = await tx
+        .select()
+        .from(userSettings)
+        .where(eq(userSettings.graphId, ctx.identity.graph));
+      if (!rows[0]) {
+        // Нет строки → онбординг не проходил (или чужая под RLS): единый NOT_FOUND
+        throw execErrorToTRPC({ code: 'NOT_FOUND', message: 'настройки не найдены' });
+      }
+      const settings = toWireUserSettings(rows[0]);
+      const graphEstablished = await shellExists(tx, ctx.identity.graph);
+      const timeZone = isValidTimeZone(settings.timezone) ? settings.timezone : DEFAULT_TIMEZONE;
+      const now = new Date();
+      return {
+        ...settings,
+        graphEstablished,
+        today: todayInTimeZone(timeZone, now),
+        nextMidnightAt: nextMidnightInTimeZone(timeZone, now),
+      };
+    }),
   ),
 
   updateSettings: ownerOnlyProcedure

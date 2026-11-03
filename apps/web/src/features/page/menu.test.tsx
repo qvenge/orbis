@@ -21,6 +21,7 @@ import { resetNavForTests, useNav } from '../../state/navigation';
 import {
   installCrashTrap,
   type MockHandler,
+  queryReply,
   renderWithProviders,
   staleBodyError,
   trpcError,
@@ -223,7 +224,7 @@ function templatesOf(world: World): WireEntityFixture[] {
 
 function worldHandler(f: StructureFixture, world: World): MockHandler {
   return (path, input) => {
-    if (isTemplatesList(path, input)) return templatesOf(world);
+    if (isTemplatesList(path, input)) return queryReply(templatesOf(world));
     if (path === 'entity.updateBatch') {
       applyBatch(world, (input as { operations: Op[] }).operations);
       return { actionId: ACTION_ID, consequences: false, results: [] };

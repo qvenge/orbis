@@ -19,6 +19,7 @@ import { beforeEach, expect, test, vi } from 'vitest';
 import {
   installCrashTrap,
   type MockHandler,
+  queryReply,
   renderWithProviders,
   wireEntity,
 } from '../../test/harness';
@@ -125,7 +126,9 @@ function render(updates: () => SupplyUpdate[] = () => []) {
       case 'user.getSettings':
         return SETTINGS;
       case 'entity.query':
-        return (input as { query: string }).query === APPS_QUERY ? [...apps.values()] : [];
+        return queryReply(
+          (input as { query: string }).query === APPS_QUERY ? [...apps.values()] : [],
+        );
       case 'entity.updateBatch': {
         for (const { tool, input: op } of (input as { operations: BatchOp[] }).operations) {
           const cur = apps.get(op.id);

@@ -24,6 +24,7 @@ import { HOST_HOME, useNav } from '../../state/navigation';
 import {
   type MockHandler,
   mockEntityUpdateResult,
+  queryReply,
   renderWithProviders,
   trpcError,
   type WireEntityFixture,
@@ -584,16 +585,17 @@ export function structureHandler(
       }
       case 'entity.query': {
         // Записи поставки (`useSupplyRecords`): шаблон хоста по варианту фикстуры.
-        if ((input as { query?: unknown }).query === SUPPLY_RECORDS_QUERY) return supplyRows;
+        if ((input as { query?: unknown }).query === SUPPLY_RECORDS_QUERY)
+          return queryReply(supplyRows);
         // Записи-приложения (`useApps`, правило открытия): своих приложений у фикстуры нет —
         // экран в хосте, как снят эталон 1а (оболочку хоста правило читает как сам хост).
-        if ((input as { query?: unknown }).query === APPS_QUERY) return [];
+        if ((input as { query?: unknown }).query === APPS_QUERY) return queryReply([]);
         const text = JSON.stringify(input);
         // История прогонов (useTicketRuns): дети записи с аспектом прогона.
-        if (text.includes('orbis/agent-run')) return RUNS_BY_PARENT[main.id] ?? [];
+        if (text.includes('orbis/agent-run')) return queryReply(RUNS_BY_PARENT[main.id] ?? []);
         // Выдачи ссылочных свойств (RefField, бейдж категории, строка правила памяти).
-        if (text.includes('orbis/category')) return [CATEGORY];
-        return [];
+        if (text.includes('orbis/category')) return queryReply([CATEGORY]);
+        return queryReply([]);
       }
       case 'entity.resolveRefs':
         return (input as { ids: string[] }).ids.flatMap((rid) => {

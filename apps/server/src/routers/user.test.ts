@@ -47,11 +47,13 @@ describe('настройки через executor (§10.2 п. 1)', () => {
     });
     const result = await c.user.updateSettings({ timezone: 'UTC' });
     expect(transactions).toBe(1);
-    expect(result).toEqual({
-      ...(await caller.user.getSettings()),
-      actionId: expect.any(String),
-      consequences: false,
-    });
+    const { graphEstablished, today, nextMidnightAt, ...settings } =
+      await caller.user.getSettings();
+    expect(result).toEqual({ ...settings, actionId: expect.any(String), consequences: false });
+    expect(graphEstablished).toBe(true);
+    expect(nextMidnightAt).toBe(
+      `${new Date(Date.parse(today) + 86_400_000).toISOString().slice(0, 10)}T00:00:00.000Z`,
+    );
   });
   test('сбой синка откатывает и настройки, и уже вставленную запись журнала', async () => {
     const { graph, caller } = await owner();

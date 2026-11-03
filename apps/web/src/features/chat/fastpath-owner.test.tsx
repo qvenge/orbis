@@ -12,7 +12,7 @@ import { useSession } from '../../auth/supabase';
 import { useFastPath } from '../../features/chat/useFastPath';
 import { isUndoEpoch, resetUndoSession, undoEpoch } from '../../features/undo/undo-epoch';
 import { registerRetrySend, useRetryBuffer, useRetryFlush } from '../../state/retry';
-import { renderWithProviders, trpcError, wireEntity } from '../../test/harness';
+import { queryReply, renderWithProviders, trpcError, wireEntity } from '../../test/harness';
 
 afterEach(() => {
   cleanup();
@@ -75,9 +75,9 @@ for (const mode of [
     });
     const { calls } = renderWithProviders(<Host />, (path, input) =>
       path === 'entity.query'
-        ? (input as { query: string }).query === 'aspect=orbis/category'
-          ? [category]
-          : []
+        ? queryReply(
+            (input as { query: string }).query === 'aspect=orbis/category' ? [category] : [],
+          )
         : path === 'user.getSettings'
           ? { timezone: 'UTC', defaultCurrency: 'RUB', disabledModules: [] }
           : path === 'entity.create'
@@ -184,7 +184,7 @@ for (const phase of ['categories', 'settings', 'rules', 'replacement'] as const)
             return new Promise((resolve) => {
               release = resolve;
             });
-          return cats ? [category] : [];
+          return queryReply(cats ? [category] : []);
         }
         if (path === 'user.getSettings')
           return phase === 'settings'
@@ -213,11 +213,11 @@ for (const phase of ['categories', 'settings', 'rules', 'replacement'] as const)
     await act(async () => {
       release(
         phase === 'categories'
-          ? [category]
+          ? queryReply([category])
           : phase === 'settings'
             ? { timezone: 'UTC', defaultCurrency: 'RUB' }
             : phase === 'rules'
-              ? []
+              ? queryReply([])
               : wireEntity({ id: '019a0000-0000-7000-8000-000000000006', title: 'кофе' }),
       );
       await promise;

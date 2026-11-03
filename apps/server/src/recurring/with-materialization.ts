@@ -21,7 +21,7 @@ export interface QueryWithMaterializationOpts<T> {
   /** Разбор запроса; ошибку парсинга мапит вызывающий (TRPCError у роутера, ExecError у диспатча). */
   parse: (cctx: CompileCtx) => QueryAst;
   /** Компиляция + исполнение под withIdentity-tx. */
-  run: (tx: Tx, ast: QueryAst, cctx: CompileCtx) => Promise<T>;
+  run: (tx: Tx, ast: QueryAst, cctx: CompileCtx, windowReadsDate: boolean) => Promise<T>;
 }
 
 /**
@@ -50,21 +50,26 @@ export async function queryWithMaterialization<T>(
         window: { from: string; to: string };
         ast: QueryAst;
         cctx: CompileCtx;
+        windowReadsDate: boolean;
       };
   const phase1 = await withIdentity(db, identity, async (tx): Promise<Phase1> => {
     const cctx = await queryContext(tx, identity.graph, opts.thisEntityId);
     const ast = opts.parse(cctx);
     // Триггеры и горизонт — параметры строки `materialize` из того же снимка, по которому запрос
     // разобран и будет исполнен (`cctx.reg`): второй снимок разошёлся бы с первым.
+    let windowReadsDate = false;
     const window = materializationWindow(
       ast,
       cctx.today,
       materializeRuleOf(cctx.reg).rule.params,
       cctx.reg,
       cctx.weekStart,
+      () => {
+        windowReadsDate = true;
+      },
     );
-    if (window) return { kind: 'materialize', window, ast, cctx };
-    return { kind: 'done', result: await opts.run(tx, ast, cctx) };
+    if (window) return { kind: 'materialize', window, ast, cctx, windowReadsDate };
+    return { kind: 'done', result: await opts.run(tx, ast, cctx, windowReadsDate) };
   });
   if (phase1.kind === 'done') return phase1.result;
   await materializeInstances({
@@ -74,5 +79,7 @@ export async function queryWithMaterialization<T>(
     to: phase1.window.to,
     today: phase1.cctx.today,
   });
-  return withIdentity(db, identity, (tx) => opts.run(tx, phase1.ast, phase1.cctx));
+  return withIdentity(db, identity, (tx) =>
+    opts.run(tx, phase1.ast, phase1.cctx, phase1.windowReadsDate),
+  );
 }

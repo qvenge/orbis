@@ -792,6 +792,43 @@ describe('entity.get: прогресс приезжает с целью и то�
     expect(got.goalProgress?.current).toBe('2');
   });
 
+  test('goal detail observes the date of its progress query and changes with an independent task', async () => {
+    const user = await freshGraph();
+    const caller = callerFor(user);
+    const goal = await createGoal(user, {
+      title: 'Задачи на сегодня',
+      progress_source: {
+        query: 'aspect=orbis/task, orbis/due_date=today, orbis/task_status=done',
+        aggregate: 'count',
+      },
+      target_value: '10',
+    });
+    await caller.user.seedOnboarding();
+    const { today, nextMidnightAt } = await caller.user.getSettings();
+    const task = await caller.entity.create({
+      input: {
+        title: 'Сторонняя задача',
+        tags: [],
+        aspects: ['orbis/task'],
+        props: { 'orbis/due_date': today, 'orbis/task_status': 'planned' },
+      },
+      source: 'ui',
+    });
+    const read = () => caller.entity.get({ id: goal.id, include: [] });
+    const before = await read();
+    expect(before.goalProgress?.current).toBe('0');
+    expect(before.freshness).toMatchObject({
+      graph: true,
+      entityIds: [goal.id],
+      settings: true,
+      expiresAt: nextMidnightAt,
+    });
+    await caller.entity.update({ id: task.id, props: { 'orbis/task_status': 'done' } });
+    const after = await read();
+    expect(after.goalProgress?.current).toBe('1');
+    expect(after.entity.updatedAt).toBe(before.entity.updatedAt);
+  });
+
   test('испорченный источник прогресса не мешает открыть цель', async () => {
     const user = await freshGraph();
     const caller = callerFor(user);

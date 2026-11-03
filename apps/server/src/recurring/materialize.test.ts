@@ -959,7 +959,7 @@ describe('хук entity.query/count (§5.4: любой запрос диапаз
       aspects: ['orbis/schedule'],
     });
 
-    const results = await caller.entity.query({ query: 'orbis/start_at=next_7d' });
+    const { rows: results } = await caller.entity.query({ query: 'orbis/start_at=next_7d' });
     const ids = new Set(results.map((r) => r.id));
     // Инстансы сегодняшнего и завтрашнего дня материализованы и попали в выдачу
     expect(ids.has(recurringInstanceId(templateId, today))).toBe(true);
@@ -982,7 +982,7 @@ describe('хук entity.query/count (§5.4: любой запрос диапаз
       props: dailyScheduleProps(today),
       aspects: ['orbis/schedule'],
     });
-    const results = await caller.entity.query({ query: 'orbis/start_at=next_14d' });
+    const { rows: results } = await caller.entity.query({ query: 'orbis/start_at=next_14d' });
     const ids = new Set(results.map((r) => r.id));
     // Экземпляр на сегодня+12 — за краем прежнего next_7d — создан и в выдаче.
     expect(ids.has(recurringInstanceId(templateId, addDays(today, 12)))).toBe(true);
@@ -1005,7 +1005,7 @@ describe('хук entity.query/count (§5.4: любой запрос диапаз
     });
     const base = ruleDefinitionSchema.parse(RULE_MATERIALIZE);
     if (base.template !== 'materialize') throw new Error('RULE_MATERIALIZE — не materialize');
-    const narrowed = await withRule(
+    const { rows: narrowed } = await withRule(
       'orbis/schedule',
       [
         {
@@ -1018,7 +1018,7 @@ describe('хук entity.query/count (§5.4: любой запрос диапаз
     expect(narrowed.map((e) => e.id)).toEqual([templateId]); // только шаблон
     expect((await derivedFrom(owner, templateId)).length).toBe(0);
     // Позитивный контроль: та же выдача под строкой сида материализует окно.
-    const full = await caller.entity.query({ query: 'orbis/start_at=next_7d' });
+    const { rows: full } = await caller.entity.query({ query: 'orbis/start_at=next_7d' });
     expect(full.length).toBe(9);
   });
 
@@ -1034,7 +1034,7 @@ describe('хук entity.query/count (§5.4: любой запрос диапаз
       aspects: ['orbis/schedule'],
     });
 
-    const results = await caller.entity.query({ query: 'aspect=orbis/schedule' });
+    const { rows: results } = await caller.entity.query({ query: 'aspect=orbis/schedule' });
     expect(results.map((r) => r.id)).toEqual([templateId]); // только шаблон, инстансов нет
 
     const rows = await derivedFrom(owner, templateId);
@@ -1090,7 +1090,7 @@ describe('хук entity.query/count (§5.4: любой запрос диапаз
       aspects: ['orbis/schedule', 'orbis/financial'],
     });
 
-    const results = await caller.entity.query({
+    const { rows: results } = await caller.entity.query({
       query: `aspect=orbis/financial, orbis/occurred_on=${from}..${to}, sortBy=orbis/occurred_on:asc`,
     });
     const ids = new Set(results.map((r) => r.id));

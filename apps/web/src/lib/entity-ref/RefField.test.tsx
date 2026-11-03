@@ -9,7 +9,7 @@
 import { BUILTIN_ASPECT_DEFS, BUILTIN_PROPERTY_META, type PropertyDefinition } from '@orbis/shared';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { expect, test, vi } from 'vitest';
-import { renderWithProviders, trpcError, wireEntity } from '../../test/harness';
+import { queryReply, renderWithProviders, trpcError, wireEntity } from '../../test/harness';
 import { PropertyControl } from '../registry/PropertyControl';
 import { REF_OPTIONS_LIMIT, RefField, refQueryAst, useRefTitle } from './RefField';
 
@@ -37,7 +37,9 @@ test('множество берётся ЦЕЛЬЮ свойства: катег�
   const answer = (path: string, input: unknown) => {
     if (path !== 'entity.query') return {};
     asked.push(input);
-    return rows(wireEntity({ id: CAT_FOOD, title: 'Еда', aspects: ['orbis/category'] }));
+    return queryReply(
+      rows(wireEntity({ id: CAT_FOOD, title: 'Еда', aspects: ['orbis/category'] })),
+    );
   };
 
   const first = renderWithProviders(
@@ -54,7 +56,9 @@ test('множество берётся ЦЕЛЬЮ свойства: катег�
     (path, input) => {
       if (path !== 'entity.query') return {};
       asked.push(input);
-      return rows(wireEntity({ id: ROUTINE, title: 'Утренний обзор', aspects: ['orbis/routine'] }));
+      return queryReply(
+        rows(wireEntity({ id: ROUTINE, title: 'Утренний обзор', aspects: ['orbis/routine'] })),
+      );
     },
   );
   await waitFor(() =>
@@ -89,7 +93,7 @@ test('союз целей: несколько множеств → `or`; чле�
 test('в списке ТОЛЬКО то, что вернула цель: чужая запись своей опции не получает', async () => {
   renderWithProviders(<RefField def={FINANCE_CATEGORY} value="" onChange={() => {}} />, (path) =>
     path === 'entity.query'
-      ? rows(wireEntity({ id: CAT_FOOD, title: 'Еда', aspects: ['orbis/category'] }))
+      ? queryReply(rows(wireEntity({ id: CAT_FOOD, title: 'Еда', aspects: ['orbis/category'] })))
       : {},
   );
   await waitFor(() => expect(screen.getByRole('option', { name: 'Еда' })).toBeInTheDocument());
@@ -113,7 +117,7 @@ test('КОНВЕРТ получает пикер автоматически: с�
     <PropertyControl def={FINANCE_CATEGORY} value={CAT_FOOD} onChange={() => {}} />,
     (path) =>
       path === 'entity.query'
-        ? rows(wireEntity({ id: CAT_FOOD, title: 'Еда', aspects: ['orbis/category'] }))
+        ? queryReply(rows(wireEntity({ id: CAT_FOOD, title: 'Еда', aspects: ['orbis/category'] })))
         : {},
   );
   const select = await screen.findByLabelText('Категория');
@@ -127,9 +131,11 @@ test('выбор шлёт id записи; пустой вариант СНИМ�
     <RefField def={FINANCE_CATEGORY} value={CAT_FOOD} onChange={onChange} />,
     (path) =>
       path === 'entity.query'
-        ? rows(
-            wireEntity({ id: CAT_FOOD, title: 'Еда', aspects: ['orbis/category'] }),
-            wireEntity({ id: CAT_FUN, title: 'Развлечения', aspects: ['orbis/category'] }),
+        ? queryReply(
+            rows(
+              wireEntity({ id: CAT_FOOD, title: 'Еда', aspects: ['orbis/category'] }),
+              wireEntity({ id: CAT_FUN, title: 'Развлечения', aspects: ['orbis/category'] }),
+            ),
           )
         : {},
   );
@@ -151,7 +157,7 @@ test('значение вне выдачи не теряется: три при�
     <RefField def={FINANCE_CATEGORY} value="gone" onChange={() => {}} />,
     (path) =>
       path === 'entity.query'
-        ? rows(wireEntity({ id: CAT_FOOD, title: 'Еда', aspects: ['orbis/category'] }))
+        ? queryReply(rows(wireEntity({ id: CAT_FOOD, title: 'Еда', aspects: ['orbis/category'] })))
         : {},
   );
   const select = await screen.findByLabelText('Категория');
@@ -182,7 +188,7 @@ test('значение вне выдачи не теряется: три при�
     (path) => (path === 'entity.query' ? pending : {}),
   );
   expect(await screen.findByLabelText('Категория')).toHaveDisplayValue('Загрузка…');
-  release([]);
+  release(queryReply([]));
 });
 
 test('поиск появляется на упёршейся в потолок выдаче и уезжает узлом {search} в ту же цель', async () => {
@@ -199,7 +205,7 @@ test('поиск появляется на упёршейся в потолок 
     (path, input) => {
       if (path !== 'entity.query') return {};
       asked.push(input);
-      return full;
+      return queryReply(full);
     },
   );
   // Поле поиска появляется ТОЛЬКО когда выдача упёрлась в потолок: до этого список полон.
@@ -220,7 +226,7 @@ test('поиск появляется на упёршейся в потолок 
 test('короткая выдача поля поиска не показывает: контрол без работы', async () => {
   renderWithProviders(<RefField def={FINANCE_CATEGORY} value="" onChange={() => {}} />, (path) =>
     path === 'entity.query'
-      ? rows(wireEntity({ id: CAT_FOOD, title: 'Еда', aspects: ['orbis/category'] }))
+      ? queryReply(rows(wireEntity({ id: CAT_FOOD, title: 'Еда', aspects: ['orbis/category'] })))
       : {},
   );
   await screen.findByRole('option', { name: 'Еда' });
@@ -244,7 +250,9 @@ test('useRefTitle: название из ТОЙ ЖЕ выдачи, что у п�
     (path, input) => {
       if (path !== 'entity.query') return {};
       asked.push(input);
-      return rows(wireEntity({ id: CAT_FOOD, title: 'Еда', aspects: ['orbis/category'] }));
+      return queryReply(
+        rows(wireEntity({ id: CAT_FOOD, title: 'Еда', aspects: ['orbis/category'] })),
+      );
     },
   );
   await waitFor(() => expect(screen.getAllByTestId('title')[0]).toHaveTextContent('Еда'));
@@ -259,7 +267,9 @@ test('ref без target ищет любые доступные неархивн�
   const { calls } = renderWithProviders(
     <RefField def={loose} value="" onChange={() => {}} />,
     (path) =>
-      path === 'entity.query' ? [wireEntity({ id: CAT_FOOD, title: 'Любая запись' })] : {},
+      path === 'entity.query'
+        ? queryReply([wireEntity({ id: CAT_FOOD, title: 'Любая запись' })])
+        : {},
   );
   await screen.findByRole('option', { name: 'Любая запись' });
   expect(calls.find((c) => c.path === 'entity.query')?.input).toMatchObject({

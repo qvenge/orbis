@@ -277,7 +277,7 @@ afterAll(async () => {
 // привязка к конвертам), пороги продолжат выполняться, и гейт будет зелёным, ничего не
 // меряя. Границы намеренно грубые — это проверка «не пусто», а не второй пин фикстуры.
 test('фикстура наполнена: гейт меряет данные, а не пустой граф', async () => {
-  const list = await caller.entity.query({ query: LIST50_QUERY });
+  const { rows: list } = await caller.entity.query({ query: LIST50_QUERY });
   expect(list).toHaveLength(50);
 
   const badge = await caller.entity.count({ query: BADGE_QUERY });
@@ -288,7 +288,7 @@ test('фикстура наполнена: гейт меряет данные, �
   // spent > 0 хотя бы у одного конверта: транзакции реально привязаны бюджет-хуком
   expect(overview.envelopes.some((e) => e.spent !== '0.00')).toBe(true);
 
-  const agenda = await caller.entity.query({ query: AGENDA_WINDOW_TEXT_PRE_B1 });
+  const { rows: agenda } = await caller.entity.query({ query: AGENDA_WINDOW_TEXT_PRE_B1 });
   expect(agenda.length).toBeGreaterThan(100);
 
   // Повестка-страница: все три блока — ok и НЕ пусты, лента — группами по дням. Отказ блока или

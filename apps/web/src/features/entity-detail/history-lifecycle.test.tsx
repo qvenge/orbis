@@ -11,7 +11,9 @@ import { NativeRow } from '../../features/entity-detail/NativeRow';
 import { canRedoStep, canUndoStep, clearAllSteps } from '../../features/entity-editor/arrows-stack';
 import { BodyEditor } from '../../features/entity-editor/BodyEditor';
 import {
+  fixtureFreshness,
   mockEntityUpdateResult,
+  queryReply,
   renderWithProviders,
   trpcError,
   wireEntity,
@@ -52,7 +54,13 @@ function ControlledBodyHost({
   return (
     <RecordHostProvider
       value={recordHostValue(
-        { entity: row, relations: [], registryVersion: BUILTIN_REGISTRY.version, bodyAction: null },
+        {
+          entity: row,
+          relations: [],
+          registryVersion: BUILTIN_REGISTRY.version,
+          bodyAction: null,
+          freshness: fixtureFreshness,
+        },
         { extensionHooks, openTab: 'record', readOnly },
       )}
     >
@@ -1539,7 +1547,7 @@ for (const removeTitle of [false, true])
       };
       if (path === 'entity.query' && vars.query === SUPPLY_RECORDS_QUERY) {
         supplyReads++;
-        return [hostTemplateRecord(template)];
+        return queryReply([hostTemplateRecord(template)]);
       }
       if (path === 'entity.get') {
         reads++;
@@ -1837,7 +1845,7 @@ for (const returned of ['План Б', 'План'])
             };
             if (path === 'entity.query' && vars.query === SUPPLY_RECORDS_QUERY) {
               supplyReads++;
-              return [hostTemplateRecord(template)];
+              return queryReply([hostTemplateRecord(template)]);
             }
             if (path === 'entity.get') {
               if (vars.id === 'e1') reads++;
@@ -2029,7 +2037,7 @@ for (const outcome of ['foreign', 'pending', 'accepted'] as const)
             };
             if (path === 'entity.query' && vars.query === SUPPLY_RECORDS_QUERY) {
               supplyReads++;
-              return [hostTemplateRecord(template)];
+              return queryReply([hostTemplateRecord(template)]);
             }
             if (path === 'entity.get') {
               if (vars.id === 'e1') reads++;
@@ -2204,7 +2212,7 @@ test('first actual BODY-only visit observes baseline before native acquisition a
   }
   renderWithProviders(<Host />, (path, input) => {
     if (path === 'entity.query' && (input as { query?: string }).query === SUPPLY_RECORDS_QUERY)
-      return [hostTemplateRecord('{{body}}')];
+      return queryReply([hostTemplateRecord('{{body}}')]);
     if (path === 'entity.get') {
       reads++;
       return { entity: { ...entity, title }, relations: [], thread: null };
@@ -2284,7 +2292,7 @@ for (const missingDoc of [false, true])
       (path, input) => {
         const vars = input as { id?: string; query?: string };
         if (path === 'entity.query' && vars.query === SUPPLY_RECORDS_QUERY)
-          return [hostTemplateRecord('{{body}}')];
+          return queryReply([hostTemplateRecord('{{body}}')]);
         if (path === 'entity.get')
           return {
             entity: {

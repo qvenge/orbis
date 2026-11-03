@@ -2,7 +2,7 @@ import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, test } from 'vitest';
 import { App } from '../App';
 import { useNav } from '../state/navigation';
-import { renderWithProviders, wireEntity } from '../test/harness';
+import { queryReply, renderWithProviders, wireEntity } from '../test/harness';
 import { recordAddress, topAddress } from '../test/nav';
 import { registryReply } from '../test/registry';
 import { resetFrame, stubLaunchMode, unstubLaunchMode } from './frame/frame-fixtures';
@@ -21,7 +21,7 @@ const handler = (path: string, input: unknown) => {
   }
   if (path === 'user.getSettings')
     return { timezone: 'Europe/Moscow', defaultCurrency: 'RUB', weekStartDay: 1 };
-  if (path === 'entity.query') return [];
+  if (path === 'entity.query') return queryReply([]);
   return {};
 };
 

@@ -638,7 +638,7 @@ describe.each(
   test('7. записи видны: entity.query, entity.get, entity.blocks', async () => {
     const { g, rec } = await setup();
     const caller = callerOf(g);
-    const found = await caller.entity.query({ query: `aspect=${c.aspect}` });
+    const { rows: found } = await caller.entity.query({ query: `aspect=${c.aspect}` });
     expect(found.map((e) => e.id)).toContain(rec);
     const got = await caller.entity.get({ id: rec });
     expect(got.entity.aspects).toContain(c.aspect);

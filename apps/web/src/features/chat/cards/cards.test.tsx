@@ -4,6 +4,7 @@ import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { resetNavForTests } from '../../../state/navigation';
 import {
   type MockHandler,
+  queryReply,
   renderWithProviders,
   trpcError,
   wireEntity,
@@ -685,7 +686,7 @@ test('entity_card: поля подписаны СЛОВАМИ реестра, а
   // До Задачи 13a словарь подписей не знал ни одного из этих ключей (они сменились на id
   // свойств Задачей 12), и владелец читал в ленте `orbis/amount` вместо «Сумма».
   renderWithProviders(<div>{renderCards(msg([finCard]))}</div>, (path) =>
-    noEnvelope(path, [categoryEntity]),
+    noEnvelope(path, queryReply([categoryEntity])),
   );
   const card = await screen.findByTestId('entity-card');
   expect(await within(card).findByText('Сумма')).toBeInTheDocument();
@@ -698,7 +699,7 @@ test('entity_card: поля подписаны СЛОВАМИ реестра, а
 
 test('entity_card: категория показана НАЗВАНИЕМ, а не uuid (D6c п.2)', async () => {
   const { calls } = renderWithProviders(<div>{renderCards(msg([finCard]))}</div>, (path) =>
-    noEnvelope(path, [categoryEntity]),
+    noEnvelope(path, queryReply([categoryEntity])),
   );
   const card = await screen.findByTestId('entity-card');
   await waitFor(() => expect(card).toHaveTextContent('Еда'));
@@ -726,7 +727,7 @@ test('entity_card: категории нет в списке → uuid как з�
     keyFields: { ...finCard.keyFields, 'orbis/finance_category': 'c-неизвестная' },
   };
   renderWithProviders(<div>{renderCards(msg([finCard, ghostCard]))}</div>, (path) =>
-    noEnvelope(path, [categoryEntity]),
+    noEnvelope(path, queryReply([categoryEntity])),
   );
   const cards = await screen.findAllByTestId('entity-card');
   // Обе карточки делят один запрос и один кэш — «Еда» доказывает, что список уже разрешён.
@@ -748,7 +749,7 @@ test('entity_card: пока категории грузятся, строки к
   expect(card).not.toHaveTextContent('c1');
   expect(card).not.toHaveTextContent('категория');
 
-  release([categoryEntity]);
+  release(queryReply([categoryEntity]));
   await waitFor(() => expect(card).toHaveTextContent('Еда'));
 });
 

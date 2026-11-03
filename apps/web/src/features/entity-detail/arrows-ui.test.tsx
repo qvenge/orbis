@@ -1,7 +1,7 @@
 import { act, fireEvent, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, expect, test, vi } from 'vitest';
-import { installCrashTrap, renderWithProviders } from '../../test/harness';
+import { installCrashTrap, queryReply, renderWithProviders } from '../../test/harness';
 import { navAt } from '../../test/nav';
 import { canRedoStep } from '../entity-editor/arrows-stack';
 import { SUPPLY_RECORDS_QUERY } from '../page/useSupplyRecords';
@@ -23,7 +23,7 @@ for (const bodyOnly of [false, true])
         path === 'entity.query' &&
         (input as { query?: string }).query === SUPPLY_RECORDS_QUERY
       )
-        return [hostTemplateRecord('{{body}}')];
+        return queryReply([hostTemplateRecord('{{body}}')]);
       return base(path, input);
     });
     // Cold leaf может компилироваться одновременно с другими workers; это не latency pin.

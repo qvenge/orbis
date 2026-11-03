@@ -3,7 +3,7 @@ import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { useState } from 'react';
 import { beforeEach, expect, test } from 'vitest';
 import { resetNavForTests } from '../../state/navigation';
-import { renderWithProviders, trpcError, wireEntity } from '../../test/harness';
+import { queryReply, renderWithProviders, trpcError, wireEntity } from '../../test/harness';
 import { registryReply } from '../../test/registry';
 import { Toaster } from '../../ui/Toast';
 import { useToastStore } from '../../ui/toast-store';
@@ -26,7 +26,7 @@ test('EntityList: первая страница 50 через entity.query; «е
     (path, input) => {
       if (path === 'entity.query') {
         const q = (input as { query: string }).query;
-        return q.includes('limit=100') ? [...page, ent('e50', 'T50')] : page;
+        return queryReply(q.includes('limit=100') ? [...page, ent('e50', 'T50')] : page);
       }
       throw new Error(`unexpected ${path}`);
     },
@@ -111,7 +111,7 @@ test('EntityList: загрузка → skeleton-ряды (role=status), не т�
 
 test('EntityList: пусто → EmptyState «Здесь появятся ваши записи»', async () => {
   renderWithProviders(<EntityList showPagesAndApps={false} onOpen={() => {}} />, (path) => {
-    if (path === 'entity.query') return [];
+    if (path === 'entity.query') return queryReply([]);
     throw new Error(`unexpected ${path}`);
   });
   await waitFor(() => expect(screen.getByText('Здесь появятся ваши записи')).toBeInTheDocument());

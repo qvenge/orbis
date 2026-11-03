@@ -4,7 +4,7 @@ import { useRef } from 'react';
 import { beforeEach, expect, test } from 'vitest';
 import { invalidateGraph } from '../../lib/invalidate';
 import { resetNavForTests, useNav } from '../../state/navigation';
-import { type MockHandler, renderWithProviders, wireEntity } from '../../test/harness';
+import { type MockHandler, queryReply, renderWithProviders, wireEntity } from '../../test/harness';
 import { trpc } from '../../trpc';
 import { DropdownMenu } from '../../ui/DropdownMenu';
 import type { WireEntity } from '../entity-detail/record-host';
@@ -69,7 +69,7 @@ function network(rows: WireEntity[], get: (id: string) => unknown | Promise<unkn
   return (path, input) => {
     if (path === 'entity.query') {
       expect(input).toEqual({ query: APPS_QUERY });
-      return rows.map(light);
+      return queryReply(rows.map(light));
     }
     if (path === 'entity.get') {
       const request = input as { id: string; include?: string[] };

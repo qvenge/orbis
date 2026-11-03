@@ -38,8 +38,10 @@ import { DESKTOP_QUERY } from '../../app/frame/useViewport';
 import { noteRegistryVersion, resetRegistryVersionForTests } from '../../lib/registry/useRegistry';
 import { useNav } from '../../state/navigation';
 import {
+  fixtureFreshness,
   installCrashTrap,
   type MockHandler,
+  queryReply,
   renderWithProviders,
   type WireEntityFixture,
   wireEntity,
@@ -102,6 +104,7 @@ function searchHandler(): MockHandler {
       const found = groups[g];
       byText.set(texts[g], {
         ok: true,
+        freshness: fixtureFreshness,
         kind: 'rows',
         rows: (found?.rows ?? []).map(row) as never,
         more: found?.more ?? 0,
@@ -114,7 +117,7 @@ function searchHandler(): MockHandler {
     // то же самое — и тест краснеет на счёте пачек, а не на пустом экране (мутация (а) шага 6).
     if (path === 'entity.query') {
       const found = byText.get((input as { query?: string }).query ?? '');
-      if (found?.ok && found.kind === 'rows') return found.rows;
+      if (found?.ok && found.kind === 'rows') return queryReply(found.rows);
     }
     const answer = base(path, input, type);
     if (path !== 'entity.blocks') return answer;
@@ -124,6 +127,7 @@ function searchHandler(): MockHandler {
       if ('text' in b)
         results[b.key] = byText.get(b.text) ?? {
           ok: true,
+          freshness: fixtureFreshness,
           kind: 'rows',
           rows: [],
           more: 0,

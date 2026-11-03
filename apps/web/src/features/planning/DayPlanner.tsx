@@ -30,10 +30,10 @@ export function DayPlanner({ onOpen }: { onOpen: (id: string) => void }) {
     }
   };
   const q = trpc.entity.query.useQuery({ ast: dayQuery(day, limit + 1) }, { enabled: ready });
-  const rows = sortPlannedTasks((q.data ?? []).slice(0, limit));
+  const rows = sortPlannedTasks((q.data?.rows ?? []).slice(0, limit));
   const open = rows.filter((r) => !isClosed(r));
   const closed = rows.filter(isClosed);
-  const more = (q.data?.length ?? 0) > limit;
+  const more = (q.data?.rows.length ?? 0) > limit;
   async function reorder(id: string, offset: number) {
     const selected = rows.find((r) => r.id === id);
     if (!selected) return;

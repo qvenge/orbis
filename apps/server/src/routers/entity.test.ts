@@ -616,7 +616,7 @@ describe('entity.query / entity.count (§6.3–6.4)', () => {
       },
       source: 'fast_path',
     });
-    const rows = await caller.entity.query({
+    const { rows } = await caller.entity.query({
       query:
         'aspect=orbis/task, orbis/task_status=inbox, sortBy=orbis/created_at:desc, display=list, title=Inbox',
     });
@@ -645,15 +645,17 @@ describe('entity.query / entity.count (§6.3–6.4)', () => {
     });
     await caller.entity.create({ input: { title: 'Просто заметка', tags: [] }, source: 'ui' });
 
-    const byText = await caller.entity.query({ query: 'aspect=orbis/task' });
-    const byAst = await caller.entity.query({ ast: { filter: { aspect: 'orbis/task' } } });
+    const { rows: byText } = await caller.entity.query({ query: 'aspect=orbis/task' });
+    const { rows: byAst } = await caller.entity.query({
+      ast: { filter: { aspect: 'orbis/task' } },
+    });
     expect(byAst.map((r) => r.id)).toEqual([created.id]);
     // Формы РАЗНЫЕ, путь ОДИН: расхождение выдач означало бы два компилятора.
     expect(byAst.map((r) => r.id)).toEqual(byText.map((r) => r.id));
     // …и то же у счётчика: сигнатура у обоих чтений общая.
-    expect(await caller.entity.count({ ast: { filter: { aspect: 'orbis/task' } } })).toEqual({
-      count: 1,
-    });
+    expect(
+      (await caller.entity.count({ ast: { filter: { aspect: 'orbis/task' } } })).count,
+    ).toEqual(1);
   });
 
   /**
@@ -673,19 +675,19 @@ describe('entity.query / entity.count (§6.3–6.4)', () => {
       },
       source: 'ui',
     });
-    const plain = await caller.entity.query({ query: 'aspect=orbis/task' });
+    const { rows: plain } = await caller.entity.query({ query: 'aspect=orbis/task' });
     expect(plain.map((r) => r.id)).toEqual([created.id]);
 
-    const tile = await caller.entity.query({
+    const { rows: tile } = await caller.entity.query({
       query: 'aspect=orbis/task, display=tile, aggregate=count, hide_empty',
     });
     expect(tile.map((r) => r.id)).toEqual([created.id]);
-    const table = await caller.entity.query({
+    const { rows: table } = await caller.entity.query({
       query: 'aspect=orbis/task, display=table, columns=orbis/due_date|orbis/priority',
     });
     expect(table.map((r) => r.id)).toEqual([created.id]);
     // Тот же путь у дерева и у счётчика.
-    const byAst = await caller.entity.query({
+    const { rows: byAst } = await caller.entity.query({
       ast: {
         filter: { aspect: 'orbis/task' },
         display: 'tile',
@@ -694,8 +696,9 @@ describe('entity.query / entity.count (§6.3–6.4)', () => {
     });
     expect(byAst.map((r) => r.id)).toEqual([created.id]);
     expect(
-      await caller.entity.count({ query: 'aspect=orbis/task, display=tile, aggregate=count' }),
-    ).toEqual({ count: 1 });
+      (await caller.entity.count({ query: 'aspect=orbis/task, display=tile, aggregate=count' }))
+        .count,
+    ).toEqual(1);
     // Согласованность проекции держит и схема входа `ast:` (мимо разбора текста).
     const bad = await trpcError(
       caller.entity.query({ ast: { filter: { aspect: 'orbis/task' }, display: 'tile' } }),
@@ -782,8 +785,8 @@ describe('entity.query / entity.count (§6.3–6.4)', () => {
       });
     }
     const q = 'aspect=orbis/task, orbis/task_status=inbox, limit=1';
-    expect((await caller.entity.query({ query: q })).length).toBe(1);
-    expect(await caller.entity.count({ query: q })).toEqual({ count: 3 });
+    expect((await caller.entity.query({ query: q })).rows.length).toBe(1);
+    expect((await caller.entity.count({ query: q })).count).toEqual(3);
   });
 
   test('невалидный запрос → BAD_REQUEST с {message, position} в cause (§6.4)', async () => {

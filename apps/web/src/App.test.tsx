@@ -3,7 +3,7 @@ import { afterEach, beforeEach, expect, test } from 'vitest';
 import { App } from './App';
 import { resetFrame, stubLaunchMode, unstubLaunchMode } from './app/frame/frame-fixtures';
 import { useRetryBuffer } from './state/retry';
-import { renderWithProviders } from './test/harness';
+import { queryReply, renderWithProviders } from './test/harness';
 
 beforeEach(() => {
   stubLaunchMode('site');
@@ -19,7 +19,7 @@ afterEach(() => {
 // хоста, внизу справа кнопки хоста. Сегодня рамка одна на телефон и десктоп (рейка и сайдбар —
 // задача 25).
 test('рамка: присутствие хоста сверху и кнопки хоста внизу; ни вкладок, ни закреплённых', async () => {
-  renderWithProviders(<App />, (path) => (path === 'entity.query' ? [] : {}));
+  renderWithProviders(<App />, (path) => (path === 'entity.query' ? queryReply([]) : {}));
   expect(await screen.findByTestId('host-presence')).toBeInTheDocument();
   expect(screen.getByTestId('host-buttons')).toBeInTheDocument();
   expect(screen.queryByRole('tab')).toBeNull();

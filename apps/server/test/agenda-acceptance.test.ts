@@ -340,6 +340,6 @@ describe('Повестка на 14 дней и «завтра»', () => {
 describe('бейдж раздела «Повестка» (§6.2)', () => {
   test('число первого блока данных — «Просрочено» по умолчаниям параметра: 1', async () => {
     const res = await runBlocks(db, personal(graph), [{ key: 'badge', badgeOf: agendaId }], NOW);
-    expect(res.results.badge).toEqual({ ok: true, kind: 'count', count: 1 });
+    expect(res.results.badge).toMatchObject({ ok: true, kind: 'count', count: 1 });
   });
 });

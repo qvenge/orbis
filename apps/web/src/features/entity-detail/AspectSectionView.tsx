@@ -74,7 +74,7 @@ function useAspectEdits(entity: Entity, snapshot: AspectSnapshot) {
       const key = [...Object.keys(vars.props ?? {}), ...(vars.unset ?? [])][0];
       const def = key ? registry.property(key) : undefined;
       const ast = def ? refQueryAst(refTargetOf(def), '') : null;
-      const options = ast ? utils.entity.query.getData({ ast }) : undefined;
+      const options = ast ? utils.entity.query.getData({ ast })?.rows : undefined;
       return propertyEditRule(
         registry,
         vars,

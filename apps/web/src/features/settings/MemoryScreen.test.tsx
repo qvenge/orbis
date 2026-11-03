@@ -9,6 +9,7 @@ import { FrameAppContext } from '../../app/frame/FrameApp';
 import { resetNavForTests, useNav } from '../../state/navigation';
 import {
   isSupplyRecordsCall,
+  queryReply,
   renderWithProviders,
   trpcError,
   wireEntity,
@@ -58,7 +59,7 @@ afterEach(() => {
 
 test('MemoryScreen: правило и факт списком, запрос aspect=orbis/memory без второго sortBy', async () => {
   const { calls } = renderWithProviders(<MemoryScreen />, (path) =>
-    path === 'entity.query' ? [rule, fact] : {},
+    path === 'entity.query' ? queryReply([rule, fact]) : {},
   );
   await waitFor(() => expect(screen.getByText('кофе → Развлечения')).toBeInTheDocument());
   expect(screen.getByText('Работаю из дома по пятницам')).toBeInTheDocument();
@@ -101,7 +102,7 @@ test('MemoryScreen: строка правила собрана из свойст
     // Два разных `entity.query`: список памяти идёт строкой грамматики, выдача цели ссылки
     // — деревом (`ast`). Различаем по форме входа, как это делает и сам сервер.
     if (path === 'entity.query') {
-      return (input as { query?: string }).query === undefined ? [category] : [stale];
+      return queryReply((input as { query?: string }).query === undefined ? [category] : [stale]);
     }
     return registryReply(path) ?? {};
   });
@@ -115,7 +116,9 @@ test('MemoryScreen: строка правила собрана из свойст
 });
 
 test('MemoryScreen: пояснение, что AI помнит и как этим управлять', async () => {
-  renderWithProviders(<MemoryScreen />, (path) => (path === 'entity.query' ? [rule] : {}));
+  renderWithProviders(<MemoryScreen />, (path) =>
+    path === 'entity.query' ? queryReply([rule]) : {},
+  );
   await waitFor(() => expect(screen.getByTestId('memory-intro')).toBeInTheDocument());
   expect(screen.getByTestId('memory-intro')).toHaveTextContent(/правил/i);
 });
@@ -126,7 +129,7 @@ test('MemoryScreen: тап по правилу открывает запись �
     <FrameAppContext.Provider value={{ app: 'host', via: 'host-page' }}>
       <MemoryScreen />
     </FrameAppContext.Provider>,
-    (path) => (path === 'entity.query' ? [rule] : {}),
+    (path) => (path === 'entity.query' ? queryReply([rule]) : {}),
   );
   await waitFor(() => expect(screen.getByTestId('memory-row')).toBeInTheDocument());
   fireEvent.click(screen.getByTestId('memory-row'));
@@ -141,7 +144,7 @@ test('MemoryScreen: тап по правилу открывает запись �
 });
 
 test('MemoryScreen: пустая память — своё пустое состояние, а не «быстрая запись ниже»', async () => {
-  renderWithProviders(<MemoryScreen />, (path) => (path === 'entity.query' ? [] : {}));
+  renderWithProviders(<MemoryScreen />, (path) => (path === 'entity.query' ? queryReply([]) : {}));
   await waitFor(() => expect(screen.getByTestId('memory-empty')).toBeInTheDocument());
   expect(screen.queryByTestId('memory-row')).toBeNull();
   expect(screen.queryByText(/быструю запись/i)).toBeNull();
@@ -166,7 +169,7 @@ test('MemoryScreen: отказ запроса — плашка ошибки, а 
 test('MemoryScreen: пометки «формат» нет ни у одной строки — класс закрыт на записи', async () => {
   const prose = mem('r2', 'кофе это развлечения', 'rule');
   renderWithProviders(<MemoryScreen />, (path) =>
-    path === 'entity.query' ? [rule, prose, fact] : {},
+    path === 'entity.query' ? queryReply([rule, prose, fact]) : {},
   );
   await waitFor(() => expect(screen.getAllByTestId('memory-row')).toHaveLength(3));
   expect(screen.queryAllByTestId('memory-broken')).toHaveLength(0);
@@ -189,7 +192,7 @@ test('роутер: адрес /settings/memory рисует экран памя
     if (path === 'user.getSettings') return settings;
     if (path === 'chat.ensureThread') return { threadId: 't1' };
     if (path === 'chat.listMessages') return [];
-    if (path === 'entity.query') return [rule];
+    if (path === 'entity.query') return queryReply([rule]);
     return {};
   });
   await waitFor(() => expect(screen.getByTestId('memory-intro')).toBeInTheDocument());
@@ -202,7 +205,7 @@ test('роутер: правило, открытое с /settings/memory, лож
     if (path === 'user.getSettings') return settings;
     if (path === 'chat.ensureThread') return { threadId: 't1' };
     if (path === 'chat.listMessages') return [];
-    if (path === 'entity.query') return [rule];
+    if (path === 'entity.query') return queryReply([rule]);
     return {};
   });
   fireEvent.click(await screen.findByTestId('memory-row'));

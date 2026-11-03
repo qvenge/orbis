@@ -25,7 +25,7 @@ export function useEntityOptions({
   }, [term]);
   const ast = refQueryAst(target, settled, limit);
   const query = trpc.entity.query.useQuery({ ast }, { enabled, trpc: { abortOnUnmount: true } });
-  const raw = Array.isArray(query.data) ? query.data : [];
+  const raw = query.data?.rows ?? [];
   const waiting = term.trim() !== settled;
   const retry = useCallback(() => {
     if (enabled) void query.refetch();

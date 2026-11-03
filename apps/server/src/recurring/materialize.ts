@@ -179,6 +179,7 @@ export function materializationWindow(
     contracts: ReadonlyMap<string, ContractDefinition>;
   },
   weekStart: WeekStart,
+  onCalendarRead?: () => void,
 ): { from: string; to: string } | null {
   if (pageOnlyFeatureIn(ast) === 'param') {
     throw new Error('параметр не подставлен: окно материализации считается после substituteParams');
@@ -186,6 +187,9 @@ export function materializationWindow(
   let from: string | null = null;
   let to: string | null = null;
   const widen = (f: string, t: string) => {
+    // Даже окно по литералам клампится к скользящему горизонту и ретро-полу.
+    // Пустое окно с открытой границей может стать непустым завтра.
+    onCalendarRead?.();
     // Пустое окно (конец раньше начала) вклада не даёт: `<next_7d` — «до сегодня», а прошлое
     // лениво не порождаем.
     if (t < f) return;

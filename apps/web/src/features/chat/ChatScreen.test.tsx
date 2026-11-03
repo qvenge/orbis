@@ -2,7 +2,7 @@ import { act, fireEvent, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { resetNavForTests } from '../../state/navigation';
 import { registerRetrySend, useRetryBuffer } from '../../state/retry';
-import { renderWithProviders, trpcError } from '../../test/harness';
+import { queryReply, renderWithProviders, trpcError } from '../../test/harness';
 import { ChatScreen } from './ChatScreen';
 
 const settings = { defaultCurrency: 'RUB', timezone: 'Europe/Moscow', pinnedEntities: [] };
@@ -29,7 +29,7 @@ test('глобальный чат: pending ai.sendMessage → typing-индик�
     if (path === 'chat.ensureThread') return { threadId: 't1' };
     if (path === 'chat.listMessages') return [];
     if (path === 'user.getSettings') return settings;
-    if (path === 'entity.query') return []; // без категорий fast-path не сработает → LLM-путь
+    if (path === 'entity.query') return queryReply([]); // без категорий fast-path не сработает → LLM-путь
     if (path === 'ai.sendMessage') return new Promise(() => {}); // мутация висит → isSending=true
     throw new Error(`unexpected ${path}`);
   });
@@ -58,7 +58,7 @@ const strictMocks = (path: string) => {
   if (path === 'chat.ensureThread') return { threadId: 't1' };
   if (path === 'chat.listMessages') return [];
   if (path === 'user.getSettings') return settings;
-  if (path === 'entity.query') return [];
+  if (path === 'entity.query') return queryReply([]);
   throw new Error(`unexpected ${path}`);
 };
 
@@ -98,7 +98,7 @@ const chatMocks = (path: string) => {
   if (path === 'chat.ensureThread') return { threadId: 't1' };
   if (path === 'chat.listMessages') return [];
   if (path === 'user.getSettings') return settings;
-  if (path === 'entity.query') return [];
+  if (path === 'entity.query') return queryReply([]);
   throw new Error(`unexpected ${path}`);
 };
 

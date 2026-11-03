@@ -99,9 +99,9 @@ describe('e2e слайс 1a: день из 02 §5 (два пользовател
 
     // 12 категорий + 10 записей поставки хоста (шаблон, оболочка, «Домой», «Записи», шесть списков —
     // срез 1б §9.1) + садовник словаря (§А2-7, Задача 17) + «Перенос остатков» (задача 10 Б-2) = 24
-    const cats = await a.entity.query({ query: 'tags=category' });
+    const { rows: cats } = await a.entity.query({ query: 'tags=category' });
     expect(cats.length).toBe(12);
-    const pages = await a.entity.query({ query: 'aspect=orbis/page' });
+    const { rows: pages } = await a.entity.query({ query: 'aspect=orbis/page' });
     expect(pages.length).toBe(10 - 1); // все записи поставки, кроме оболочки хоста (приложение)
 
     // Настройки §7.3 — дефолты стартового набора
@@ -118,7 +118,7 @@ describe('e2e слайс 1a: день из 02 §5 (два пользовател
   // ── Шаг 2: эмуляция fast-path-результата (расход «обед 340») ───────────────
   test('шаг 2: ввод «обед 340» + entity.create расхода → запись журнала с action и inverse', async () => {
     // id «Еды» — из результата сидирования (query по тегу+FTS), НЕ хардкод uuid
-    const found = await a.entity.query({ query: 'tags=category, search=Еда' });
+    const { rows: found } = await a.entity.query({ query: 'tags=category, search=Еда' });
     expect(found.length).toBe(1);
     foodId = found[0]?.id ?? '';
     expect(foodId).toBe(seedCategoryId(userA, 'food')); // сходится с формулой сида (§5.4)
@@ -214,7 +214,7 @@ describe('e2e слайс 1a: день из 02 §5 (два пользовател
     // Дословный Inbox-блок из тела Daily Planning (02 §3.3)
     const inbox =
       'aspect=orbis/task, orbis/task_status=inbox, sortBy=orbis/created_at:desc, display=list, title=Inbox';
-    const rows = await a.entity.query({ query: inbox });
+    const { rows } = await a.entity.query({ query: inbox });
     expect(rows.map((r) => r.id)).toEqual([sneakersId]);
     expect(() => entitySchema.parse(rows[0])).not.toThrow();
 
@@ -249,7 +249,7 @@ describe('e2e слайс 1a: день из 02 §5 (два пользовател
 
     // Шесть списков с 1б — страницы поставки (§9.4); прочие страницы поставки блоков запроса не несут.
     // Тест читает тела страниц поставки, поэтому просит full (§9); пины блоков остаются прежними.
-    const lists = await a.entity.query({ query: 'aspect=orbis/page', fields: 'full' });
+    const { rows: lists } = await a.entity.query({ query: 'aspect=orbis/page', fields: 'full' });
     expect(lists.length).toBeGreaterThanOrEqual(6);
     // Параметры страницы (срез 1в §5.1) — значения по умолчанию из объявлений того же тела: так блок
     // исполняет экран, пока владелец не тронул переключатель.
@@ -277,7 +277,7 @@ describe('e2e слайс 1a: день из 02 §5 (два пользовател
     for (const block of blocks) {
       // Отказ обязан быть видимым в отчёте вместе с самим текстом блока: без него
       // «не прошло» приходится искать, перебирая тела руками.
-      const rows = await a.entity.query({ query: block }).catch((e: unknown) => {
+      const { rows } = await a.entity.query({ query: block }).catch((e: unknown) => {
         throw new Error(`блок не исполнился: «${block}» — ${(e as Error).message}`);
       });
       expect(Array.isArray(rows)).toBe(true);
@@ -292,7 +292,7 @@ describe('e2e слайс 1a: день из 02 §5 (два пользовател
     // краснеть, и обе краснеют (проверено двумя противоположными мутациями `tokenCond`).
     const today = blocks.find((b) => b.includes('due_date=today'));
     if (today === undefined) throw new Error('в телах нет блока «Сегодня»');
-    const todayRows = await a.entity.query({ query: today });
+    const { rows: todayRows } = await a.entity.query({ query: today });
     expect(todayRows.map((r) => r.id)).toEqual([sneakersId]);
     // И бейдж сайдбара считает то же самое: у count своя ветка компиляции.
     expect((await a.entity.count({ query: today })).count).toBe(1);
@@ -375,14 +375,16 @@ describe('e2e слайс 1a: день из 02 §5 (два пользовател
     const openTasks = 'aspect=orbis/task, orbis/task_status=!done&!cancelled';
     // Без excludeBlocked видны все открытые задачи (после undo шага 5 их три: кроссовки,
     // блокер и контрольная «Продлить страховку» из шага 4b)
-    const all = await a.entity.query({ query: openTasks });
+    const { rows: all } = await a.entity.query({ query: openTasks });
     const allIds = all.map((r) => r.id);
     expect(allIds).toContain(sneakersId);
     expect(allIds).toContain(blockerId);
     expect(allIds).toContain(laterId);
 
     // С excludeBlocked=true заблокированная (target живой blocks) исчезает, блокер остаётся
-    const unblocked = await a.entity.query({ query: `${openTasks}, excludeBlocked=true` });
+    const { rows: unblocked } = await a.entity.query({
+      query: `${openTasks}, excludeBlocked=true`,
+    });
     const unblockedIds = unblocked.map((r) => r.id);
     expect(unblockedIds).not.toContain(sneakersId);
     expect(unblockedIds).toContain(blockerId);
@@ -454,7 +456,7 @@ describe('e2e слайс 1a: день из 02 §5 (два пользовател
     expect(await b.user.seedOnboarding()).toEqual({ seeded: true });
 
     // Срез изоляции №1: B видит 12 СВОИХ категорий, ни одной чужой (RLS §4.10)
-    const bCats = await b.entity.query({ query: 'tags=category' });
+    const { rows: bCats } = await b.entity.query({ query: 'tags=category' });
     expect(bCats.length).toBe(12);
     const bIds = new Set(bCats.map((c) => c.id));
     const bExpected = new Set(SEED_CATEGORIES.map((c) => seedCategoryId(userB, c.slug)));

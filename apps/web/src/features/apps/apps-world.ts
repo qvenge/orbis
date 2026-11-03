@@ -24,7 +24,9 @@ import { frameHandler, frameWorld, PAGES, SHELL_ROW } from '../../app/frame/fram
 import {
   BLOCKS_TIME_ZONE,
   BLOCKS_TODAY,
+  fixtureFreshness,
   type MockHandler,
+  queryReply,
   type WireEntityFixture,
   wireEntity,
 } from '../../test/harness';
@@ -158,10 +160,12 @@ export function appsHandler(w: AppsWorld): MockHandler {
   return (path, input, type) => {
     if (path === 'entity.query') {
       const q = (input as { query?: string }).query ?? '';
-      if (q === APPS_QUERY) return [SHELL_ROW, ...w.apps];
-      if (q === PAGE_TEMPLATES_QUERY) return w.templates;
+      if (q === APPS_QUERY) return queryReply([SHELL_ROW, ...w.apps]);
+      if (q === PAGE_TEMPLATES_QUERY) return queryReply(w.templates);
       if (q === HOMED_PAGES_QUERY) {
-        return all().filter((e) => e.aspects.includes(PAGE_ASPECT) && HOME_PROPERTY in e.props);
+        return queryReply(
+          all().filter((e) => e.aspects.includes(PAGE_ASPECT) && HOME_PROPERTY in e.props),
+        );
       }
     }
     if (path === 'entity.blocks' && w.blockRows !== undefined) {
@@ -172,6 +176,7 @@ export function appsHandler(w: AppsWorld): MockHandler {
             b.key,
             {
               ok: true,
+              freshness: fixtureFreshness,
               kind: 'rows',
               rows: ((b.text !== undefined && w.blockRows?.[b.text.trim()]) || []) as never,
               more: 0,

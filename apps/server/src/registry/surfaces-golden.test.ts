@@ -129,7 +129,7 @@ beforeAll(async () => {
     const names = new Map(
       SURFACE_SLUGS.map((s) => [surfaceEntityId(owner, s).toLowerCase(), `@${s}`]),
     );
-    const found = await caller.entity.query({ ast: AMOUNT_AST });
+    const { rows: found } = await caller.entity.query({ ast: AMOUNT_AST });
     amountNames.set(
       state,
       found.map((r) => names.get(r.id.toLowerCase()) ?? '<uuid>'),

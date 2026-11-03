@@ -28,8 +28,10 @@ import { resetNavForTests, useNav } from '../../state/navigation';
 import {
   BLOCKS_TIME_ZONE,
   BLOCKS_TODAY,
+  fixtureFreshness,
   type MockHandler,
   mockEntityUpdateResult,
+  queryReply,
   trpcError,
   type WireEntityFixture,
   wireEntity,
@@ -194,11 +196,12 @@ export function frameHandler(world: FrameWorld = frameWorld()): MockHandler {
       }
       case 'entity.query': {
         const q = (input as { query?: string }).query ?? '';
-        if (q === SUPPLY_RECORDS_QUERY) return world.supply;
+        if (q === SUPPLY_RECORDS_QUERY) return queryReply(world.supply);
         // Записи-приложения (`useApps`): оболочка хоста и «Мой дом» — как их отдал бы сервер.
-        if (q === APPS_QUERY) return world.all.filter((e) => e.aspects.includes(APP_ASPECT));
-        if (q.includes('sortBy=orbis/updated_at:desc')) return world.recordsList;
-        return [];
+        if (q === APPS_QUERY)
+          return queryReply(world.all.filter((e) => e.aspects.includes(APP_ASPECT)));
+        if (q.includes('sortBy=orbis/updated_at:desc')) return queryReply(world.recordsList);
+        return queryReply([]);
       }
       case 'entity.resolveRefs':
         return (input as { ids: string[] }).ids.flatMap((rid) => {
@@ -211,13 +214,23 @@ export function frameHandler(world: FrameWorld = frameWorld()): MockHandler {
           results: Object.fromEntries(
             blocks.map((b): [string, BlockResult] => {
               if ('text' in b)
-                return [b.key, { ok: true, kind: 'rows', rows: [], more: 0, closedIds: [] }];
+                return [
+                  b.key,
+                  {
+                    ok: true,
+                    freshness: fixtureFreshness,
+                    kind: 'rows',
+                    rows: [],
+                    more: 0,
+                    closedIds: [],
+                  },
+                ];
               const n = world.badges[b.badgeOf];
               return [
                 b.key,
                 n === undefined
-                  ? { ok: true, kind: 'none' }
-                  : { ok: true, kind: 'count', count: n },
+                  ? { ok: true, freshness: fixtureFreshness, kind: 'none' }
+                  : { ok: true, freshness: fixtureFreshness, kind: 'count', count: n },
               ];
             }),
           ),

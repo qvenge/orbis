@@ -186,7 +186,9 @@ function ctxFor(): ToolCallCtx {
 
 describe('сумма по валютам (спека 1в §3.6)', () => {
   test('плитка «движения денег»: валюта владельца первой, прочие по алфавиту; запись без валюты — в валюте владельца', async () => {
-    expect(await tile('aspect=orbis/financial, display=tile, aggregate=sum:orbis/amount')).toEqual({
+    expect(
+      await tile('aspect=orbis/financial, display=tile, aggregate=sum:orbis/amount'),
+    ).toMatchObject({
       ok: true,
       kind: 'sum',
       count: 4,
@@ -200,7 +202,7 @@ describe('сумма по валютам (спека 1в §3.6)', () => {
   });
 
   test('не денежное свойство (калории) — одна сумма без валюты', async () => {
-    expect(await tile('aspect=user/cal, display=tile, aggregate=sum:user/kcal')).toEqual({
+    expect(await tile('aspect=user/cal, display=tile, aggregate=sum:user/kcal')).toMatchObject({
       ok: true,
       kind: 'sum',
       count: 1,
@@ -209,7 +211,7 @@ describe('сумма по валютам (спека 1в §3.6)', () => {
   });
 
   test('денежность — по привязке аспекта НА ЗАПИСИ: то же свойство без аспекта — число без валюты', async () => {
-    expect(await tile('tags=pay, display=tile, aggregate=sum:user/pay_sum')).toEqual({
+    expect(await tile('tags=pay, display=tile, aggregate=sum:user/pay_sum')).toMatchObject({
       ok: true,
       kind: 'sum',
       count: 2,
@@ -239,7 +241,7 @@ describe('сумма по валютам (спека 1в §3.6)', () => {
   test('пустая выборка — ни одной суммы, счёт 0', async () => {
     expect(
       await tile('aspect=orbis/financial, tags=nothing, display=tile, aggregate=sum:orbis/amount'),
-    ).toEqual({ ok: true, kind: 'sum', count: 0, sums: [] });
+    ).toMatchObject({ ok: true, kind: 'sum', count: 0, sums: [] });
   });
 
   test('user_query агента: карточка несёт суммы по валютам, а не одно число', async () => {
@@ -286,17 +288,17 @@ describe('«последнее» (спека 1в §3.7)', () => {
       await tile(
         'aspect=orbis/financial, display=tile, aggregate=latest:orbis/amount, sortBy=orbis/occurred_on:desc',
       ),
-    ).toEqual({ ok: true, kind: 'latest', value: '50', currency: 'USD' });
+    ).toMatchObject({ ok: true, kind: 'latest', value: '50', currency: 'USD' });
   });
 
   test('без sortBy — последняя правка; запись без валюты — валюта владельца', async () => {
     expect(
       await tile('aspect=orbis/financial, display=tile, aggregate=latest:orbis/amount'),
-    ).toEqual({ ok: true, kind: 'latest', value: '12000', currency: 'RUB' });
+    ).toMatchObject({ ok: true, kind: 'latest', value: '12000', currency: 'RUB' });
   });
 
   test('не денежное — без валюты', async () => {
-    expect(await tile('aspect=user/cal, display=tile, aggregate=latest:user/kcal')).toEqual({
+    expect(await tile('aspect=user/cal, display=tile, aggregate=latest:user/kcal')).toMatchObject({
       ok: true,
       kind: 'latest',
       value: '300',
@@ -311,7 +313,7 @@ describe('валюта владельца — из его настроек', () 
     try {
       expect(
         await tile('aspect=orbis/financial, display=tile, aggregate=sum:orbis/amount'),
-      ).toEqual({
+      ).toMatchObject({
         ok: true,
         kind: 'sum',
         count: 4,

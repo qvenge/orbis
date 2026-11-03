@@ -25,6 +25,7 @@ import {
   blocksReply,
   installCrashTrap,
   type MockHandler,
+  queryReply,
   renderWithProviders,
   trpcError,
   type WireEntityFixture,
@@ -167,7 +168,7 @@ function openRecord(
     if (isTemplatesList(path, input)) {
       if (world.listFails) throw trpcError('INTERNAL_SERVER_ERROR', 'база недоступна');
       // Копии строк: кеш запроса не должен видеть правки мира до перечитывания.
-      return world.templates.map((t) => ({ ...t, props: { ...t.props } }));
+      return queryReply(world.templates.map((t) => ({ ...t, props: { ...t.props } })));
     }
     if (path === 'entity.updateBatch') {
       applyBatch(world, input);
@@ -350,7 +351,7 @@ describe('выбор шаблона (§4.2)', () => {
             path === 'entity.query' &&
             (input as { query?: string }).query === SUPPLY_RECORDS_QUERY
           )
-            return [crashing];
+            return queryReply([crashing]);
           if (path === 'entity.updateBatch') {
             batches.push((input as { operations: unknown }).operations);
             return { actionId: ACTION_ID, consequences: false, results: [] };
@@ -618,7 +619,7 @@ describe('разовый выбор и ожидание реестра', () => {
   function renderRecordView(f: StructureFixture, world: World, override: { templateId: string }) {
     const screenHandler = structureHandler(f);
     const handler: MockHandler = (path, input) =>
-      isTemplatesList(path, input) ? world.templates : screenHandler(path, input);
+      isTemplatesList(path, input) ? queryReply(world.templates) : screenHandler(path, input);
     const reply = {
       entity: f.entity,
       relations: [],

@@ -18,7 +18,7 @@ export function TaskPicker({
   const [limit, setLimit] = useState(50);
   const [search, setSearch] = useState('');
   const q = trpc.entity.query.useQuery({ ast: availableTasksQuery(limit + 1) });
-  const rows = (q.data ?? [])
+  const rows = (q.data?.rows ?? [])
     .slice(0, limit)
     .filter((r) => r.title.toLocaleLowerCase().includes(search.toLocaleLowerCase()));
   return (
@@ -67,7 +67,7 @@ export function TaskPicker({
       {!q.isPending && !q.isError && rows.length === 0 && (
         <p className="text-sm text-text-muted">В загруженных задачах совпадений нет.</p>
       )}
-      {(q.data?.length ?? 0) > limit && (
+      {(q.data?.rows.length ?? 0) > limit && (
         <Button variant="outline" onClick={() => setLimit((n) => n + 50)}>
           Показать ещё задачи
         </Button>

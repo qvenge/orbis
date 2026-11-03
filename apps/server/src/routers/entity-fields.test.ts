@@ -49,19 +49,22 @@ async function setup() {
 }
 test('entity.query без выбора — без body; start — первая строка; full — тело', async () => {
   const { caller, note, task } = await setup();
-  const light = await caller.entity.query({ query: 'aspect=orbis/note' });
+  const { rows: light } = await caller.entity.query({ query: 'aspect=orbis/note' });
   expect(light.some((e) => e.id === note)).toBe(true);
   expect(light.every((e) => !('body' in e) && !('bodyStart' in e))).toBe(true);
-  const start = await caller.entity.query({ query: 'aspect=orbis/note', fields: 'start' });
+  const { rows: start } = await caller.entity.query({
+    query: 'aspect=orbis/note',
+    fields: 'start',
+  });
   expect(start.find((e) => e.id === note)?.bodyStart).toBe('Первая строка текста.');
   expect(start.every((e) => !('body' in e))).toBe(true);
   expect(
-    (await caller.entity.query({ query: 'aspect=orbis/task', fields: 'start' })).find(
+    (await caller.entity.query({ query: 'aspect=orbis/task', fields: 'start' })).rows.find(
       (e) => e.id === task,
     )?.bodyStart,
   ).toBeNull();
   expect(
-    (await caller.entity.query({ query: 'aspect=orbis/note', fields: 'full' })).find(
+    (await caller.entity.query({ query: 'aspect=orbis/note', fields: 'full' })).rows.find(
       (e) => e.id === note,
     )?.body,
   ).toContain('Вторая.');
@@ -208,6 +211,9 @@ test('start читает только первые восемь верхних �
     },
     source: 'ui',
   });
-  const start = await caller.entity.query({ query: 'aspect=orbis/note', fields: 'start' });
+  const { rows: start } = await caller.entity.query({
+    query: 'aspect=orbis/note',
+    fields: 'start',
+  });
   expect(start.find((e) => e.id === outside.id)?.bodyStart).toBeNull();
 });

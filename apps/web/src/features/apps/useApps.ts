@@ -66,7 +66,7 @@ function infoOf(row: WireEntity): AppInfo {
 
 export function useApps(): Apps {
   const q = trpc.entity.query.useQuery({ query: APPS_QUERY });
-  const rows = q.data ?? NO_ROWS;
+  const rows = q.data?.rows ?? NO_ROWS;
   const status = q.data !== undefined ? 'ok' : q.isError ? 'error' : 'loading';
   return useMemo(() => {
     // Оболочка хоста — одним определением с рамкой (`isHostShellRow`, финал 1б Fable M-3).

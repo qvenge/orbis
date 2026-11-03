@@ -6,7 +6,14 @@ import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 import { useResolvedRefs } from '../../../lib/entity-ref/useResolvedRefs';
 import { useBlockData } from '../../../lib/query-blocks/batch';
 import { resetRegistryVersionForTests, useRegistry } from '../../../lib/registry/useRegistry';
-import { blocksReply, renderWithProviders, trpcError, wireEntity } from '../../../test/harness';
+import {
+  blocksReply,
+  fixtureFreshness,
+  queryReply,
+  renderWithProviders,
+  trpcError,
+  wireEntity,
+} from '../../../test/harness';
 import { BUILTIN_REGISTRY, registryReply } from '../../../test/registry';
 import { trpc } from '../../../trpc';
 import { useToastStore } from '../../../ui/toast-store';
@@ -380,8 +387,8 @@ function FreshnessProbe() {
         {JSON.stringify({
           current: current.data?.entity.title,
           other: another.data?.entity.title,
-          query: query.data?.[0]?.title,
-          count: count.data,
+          query: query.data?.rows[0]?.title,
+          count: count.data?.count,
           block: block.data?.ok && block.data.kind === 'rows' ? block.data.rows[0]?.title : null,
           ref: refs.byId.get(id)?.title,
           budget: budget.data,
@@ -412,8 +419,9 @@ test('create and Undo refresh all live graph views including shared refs and bud
       const title = `Снимок ${generation}`;
       if (p === 'entity.get')
         return { ...fixture(), entity: wireEntity({ id: (input as { id: string }).id, title }) };
-      if (p === 'entity.query') return [wireEntity({ id, title })];
-      if (p === 'entity.count' || p === 'budget.alertCount') return generation;
+      if (p === 'entity.query') return queryReply([wireEntity({ id, title })]);
+      if (p === 'entity.count') return { count: generation, freshness: fixtureFreshness };
+      if (p === 'budget.alertCount') return generation;
       if (p === 'entity.resolveRefs')
         return [{ id, title, emoji: null, archived: false, completable: false }];
       if (p === 'relation.listFor') return generation ? [relation] : [];

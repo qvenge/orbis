@@ -46,6 +46,7 @@ import { noteRegistryVersion, resetRegistryVersionForTests } from '../../lib/reg
 import {
   installCrashTrap,
   type MockHandler,
+  queryReply,
   renderWithProviders,
   trpcError,
   type WireEntityFixture,
@@ -569,7 +570,7 @@ test('(д) карточка аспекта «страница» — «Дом» �
     (path) => {
       const reg = registryReply(path);
       if (reg !== undefined) return reg;
-      if (path === 'entity.query') return [MY_ROW];
+      if (path === 'entity.query') return queryReply([MY_ROW]);
       return {};
     },
   );

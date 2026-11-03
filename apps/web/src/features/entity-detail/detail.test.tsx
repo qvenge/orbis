@@ -21,10 +21,12 @@ import {
   BLOCKS_TODAY,
   blocksReply,
   blockTexts,
+  fixtureFreshness,
   installCrashTrap,
   isRecordScreenListCall,
   type MockHandler,
   mockEntityUpdateResult,
+  queryReply,
   renderWithProviders,
   staleBodyError,
   trpcError,
@@ -564,7 +566,7 @@ const SUBTASK_PROBE = { query: 'aspect=orbis/task, orbis/task_status=!done, limi
 
 function ListProbe() {
   const q = trpc.entity.query.useQuery(SUBTASK_PROBE);
-  return <span data-testid="list-probe">{(q.data ?? []).length}</span>;
+  return <span data-testid="list-probe">{(q.data?.rows ?? []).length}</span>;
 }
 
 test('создание подзадачи инвалидирует entity.query (списки перечитываются)', async () => {
@@ -583,7 +585,7 @@ test('создание подзадачи инвалидирует entity.query 
         const { input: created } = input as { input: { id: string; title: string } };
         return { ...entity, id: created.id, title: created.title };
       }
-      if (path === 'entity.query') return [];
+      if (path === 'entity.query') return queryReply([]);
       return registryReply(path) ?? {};
     },
   );
@@ -1284,7 +1286,8 @@ const category = (id: string, title: string) =>
 const finHandler = (path: string) => {
   if (path === 'entity.get')
     return { entity: finEntity, relations: [], thread: { threadId: 'th1', messages: [] } };
-  if (path === 'entity.query') return [category(CAT_FOOD, 'Еда'), category(CAT_FUN, 'Развлечения')];
+  if (path === 'entity.query')
+    return queryReply([category(CAT_FOOD, 'Еда'), category(CAT_FUN, 'Развлечения')]);
   if (path === 'entity.update') return mockEntityUpdateResult(finEntity);
   return registryReply(path) ?? {};
 };
@@ -1352,7 +1355,7 @@ test('financial: список пришёл, а ссылка ведёт мимо 
     if (path === 'entity.get')
       return { entity: orphan, relations: [], thread: { threadId: 'th1', messages: [] } };
     if (path === 'entity.query')
-      return [category(CAT_FOOD, 'Еда'), category(CAT_FUN, 'Развлечения')];
+      return queryReply([category(CAT_FOOD, 'Еда'), category(CAT_FUN, 'Развлечения')]);
     return registryReply(path) ?? {};
   });
   const select = await screen.findByLabelText('Категория');
@@ -1391,10 +1394,11 @@ test('financial: рефетч списка упал, но список уже е
     if (path === 'entity.get')
       return { entity: orphan, relations: [], thread: { threadId: 'th1', messages: [] } };
     // Списки экрана записи (шаблоны, записи поставки) — не список категорий: счёт ниже — только категорий.
-    if (isRecordScreenListCall({ path, input })) return [];
+    if (isRecordScreenListCall({ path, input })) return queryReply([]);
     if (path === 'entity.query') {
       queries += 1;
-      if (queries === 1) return [category(CAT_FOOD, 'Еда'), category(CAT_FUN, 'Развлечения')];
+      if (queries === 1)
+        return queryReply([category(CAT_FOOD, 'Еда'), category(CAT_FUN, 'Развлечения')]);
       throw trpcError('INTERNAL_SERVER_ERROR');
     }
     if (path === 'entity.update') return mockEntityUpdateResult(orphan);
@@ -1529,7 +1533,7 @@ test('правка Финансов гасит агрегаты, даже есл
   });
   const { calls } = renderWithProviders(<CardsUntilHidden entity={taskedFin} />, (path) => {
     if (path === 'budget.alertCount') return 0;
-    if (path === 'entity.query') return [category(CAT_FOOD, 'Еда')];
+    if (path === 'entity.query') return queryReply([category(CAT_FOOD, 'Еда')]);
     if (path === 'entity.update') return mockEntityUpdateResult(pending);
     return registryReply(path) ?? {};
   });
@@ -1574,7 +1578,7 @@ test('снятие аспекта Финансов гасит агрегаты, 
   });
   const { calls } = renderWithProviders(<CardsUntilHidden entity={taskedFin} />, (path) => {
     if (path === 'budget.alertCount') return 0;
-    if (path === 'entity.query') return [category(CAT_FOOD, 'Еда')];
+    if (path === 'entity.query') return queryReply([category(CAT_FOOD, 'Еда')]);
     if (path === 'entity.update') return mockEntityUpdateResult(pending);
     return registryReply(path) ?? {};
   });
@@ -1609,7 +1613,7 @@ test('правка суммы (стандартное свойство ядра 
     </>,
     (path) => {
       if (path === 'budget.alertCount') return 0;
-      if (path === 'entity.query') return [category(CAT_FOOD, 'Еда')];
+      if (path === 'entity.query') return queryReply([category(CAT_FOOD, 'Еда')]);
       if (path === 'entity.update') return mockEntityUpdateResult(taskedFin);
       return registryReply(path) ?? {};
     },
@@ -2050,6 +2054,7 @@ const bodyHandler =
             b.key,
             {
               ok: true,
+              freshness: fixtureFreshness,
               kind: 'rows',
               rows: [found('Разобрать Inbox')] as never,
               more: 0,
@@ -2455,7 +2460,7 @@ test('блоки видны у аспекта БЕЗ единого заполн
     (target: unknown): MockHandler =>
     (path) => {
       if (path === 'entity.get') return { entity: target, relations: [], thread: null };
-      if (path === 'entity.query') return [];
+      if (path === 'entity.query') return queryReply([]);
       if (path === 'agentRun.sweep') return { swept: 0 };
       if (path === 'routine.overview')
         return { nextBucketAt: null, lastRun: null, waiting: 0, openProposal: false, undecided: 0 };
@@ -3687,7 +3692,7 @@ function adeHandler(opts: { entity?: unknown; runs?: unknown[] } = {}): MockHand
   const target = opts.entity ?? TICKET;
   return (path) => {
     if (path === 'entity.get') return { entity: target, relations: [], thread: null };
-    if (path === 'entity.query') return opts.runs ?? [RUN];
+    if (path === 'entity.query') return queryReply(opts.runs ?? [RUN]);
     if (path === 'oauth.listGrants') return [GRANT];
     if (path === 'agentRun.sweep') return { swept: 0 };
     if (path === 'agentRun.answerCheckpoint') return { ticket: target, run: RUN };
@@ -4047,7 +4052,7 @@ describe('ADE: тикет', () => {
       }
       // У второго тикета прогонов ещё нет вовсе — самый строгий случай для placeholder'а.
       if (path === 'entity.query')
-        return (input as { query: string }).query.includes('t2') ? [] : [RUN];
+        return queryReply((input as { query: string }).query.includes('t2') ? [] : [RUN]);
       if (path === 'oauth.listGrants') return [GRANT];
       if (path === 'agentRun.sweep') return { swept: 0 };
       return registryReply(path) ?? {};
@@ -4082,7 +4087,7 @@ describe('ADE: тикет', () => {
         return { entity: id === 't2' ? TICKET_B : TICKET, relations: [], thread: null };
       }
       if (path === 'entity.query')
-        return (input as { query: string }).query.includes('t2') ? [runB] : [RUN];
+        return queryReply((input as { query: string }).query.includes('t2') ? [runB] : [RUN]);
       if (path === 'oauth.listGrants') return [GRANT];
       if (path === 'agentRun.sweep') return { swept: 0 };
       return registryReply(path) ?? {};
@@ -4136,7 +4141,7 @@ describe('ADE: тикет', () => {
           thread: null,
         };
       }
-      if (path === 'entity.query') return [RUN];
+      if (path === 'entity.query') return queryReply([RUN]);
       if (path === 'oauth.listGrants') return [GRANT];
       if (path === 'agentRun.sweep') return { swept: 0 };
       return registryReply(path) ?? {};
@@ -4183,7 +4188,7 @@ describe('ADE: тикет', () => {
           thread: null,
         };
       }
-      if (path === 'entity.query') return [RUN];
+      if (path === 'entity.query') return queryReply([RUN]);
       if (path === 'oauth.listGrants') return [GRANT];
       if (path === 'agentRun.sweep') return { swept: 0 };
       return registryReply(path) ?? {};
@@ -5044,7 +5049,8 @@ function routineHandler(
   });
   return (path, input) => {
     if (path === 'entity.get') return { entity: current(), relations: [], thread: null };
-    if (path === 'entity.query') return opts.runs ?? [ROUTINE_RUN_DONE, ROUTINE_RUN_FAILED];
+    if (path === 'entity.query')
+      return queryReply(opts.runs ?? [ROUTINE_RUN_DONE, ROUTINE_RUN_FAILED]);
     if (path === 'routine.overview')
       return (
         opts.overview ?? {

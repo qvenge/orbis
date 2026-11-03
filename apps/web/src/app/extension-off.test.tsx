@@ -44,6 +44,7 @@ import {
   type MockHandler,
   mockEntityUpdateResult,
   mockLink,
+  queryReply,
   renderWithProviders,
   trpcError,
   type WireEntityFixture,
@@ -187,8 +188,8 @@ function screenHandler(world: World): MockHandler {
             : {}),
         };
       case 'entity.query':
-        if (q === PAGE_TEMPLATES_QUERY) return world.templates ?? [];
-        return [taxi];
+        if (q === PAGE_TEMPLATES_QUERY) return queryReply(world.templates ?? []);
+        return queryReply([taxi]);
       case 'entity.update':
         return mockEntityUpdateResult(world.onUpdate?.(input) ?? world.entity);
       case 'user.setModuleEnabled': {
@@ -385,7 +386,7 @@ describe('(г) быстрый ввод', () => {
             return { defaultCurrency: 'RUB', disabledModules: state.mask };
           if (path === 'entity.query') {
             const q = (input as { query?: string } | undefined)?.query;
-            return q === RULES_QUERY ? [] : [taxi];
+            return queryReply(q === RULES_QUERY ? [] : [taxi]);
           }
           if (path === 'chat.listMessages') return [];
           if (path === 'entity.create')

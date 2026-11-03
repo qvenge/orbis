@@ -41,10 +41,11 @@ test('raw capture → triage → day planning retains identity, content and inde
     source: 'quick_capture',
   });
   const aspects = BUILTIN_ASPECT_DEFS.map((a) => a.id);
-  const pending = () => api.entity.query({ ast: inboxQuery(aspects, 'pending', 100) });
+  const pending = async () =>
+    (await api.entity.query({ ast: inboxQuery(aspects, 'pending', 100) })).rows;
   expect((await pending()).map((r) => r.id).sort()).toEqual([raw.id, legacy.id].sort());
   expect(
-    (await api.entity.query({ ast: inboxQuery(aspects, 'later', 100) })).map((r) => r.id),
+    (await api.entity.query({ ast: inboxQuery(aspects, 'later', 100) })).rows.map((r) => r.id),
   ).toEqual([later.id]);
   await api.entity.updateBatch({
     operations: [
@@ -57,7 +58,10 @@ test('raw capture → triage → day planning retains identity, content and inde
       },
     ],
   });
-  const day = await api.entity.query({ ast: dayQuery('2026-10-19', 100), fields: 'full' });
+  const { rows: day } = await api.entity.query({
+    ast: dayQuery('2026-10-19', 100),
+    fields: 'full',
+  });
   expect(day.map((r) => r.id)).toEqual([raw.id]);
   expect(day[0]?.body).toBe(raw.body);
   expect(day[0]?.props['orbis/due_date']).toBe('2026-11-01');

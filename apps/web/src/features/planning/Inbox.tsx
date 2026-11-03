@@ -28,7 +28,7 @@ export function Inbox({ onOpen }: { onOpen: (id: string) => void }) {
     },
     { enabled: !!registry.data },
   );
-  const rows = (q.data ?? []).slice(0, limit).filter((r) => classifyInbox(r) === tab);
+  const rows = (q.data?.rows ?? []).slice(0, limit).filter((r) => classifyInbox(r) === tab);
   async function triage(
     r: PlanningRecord,
     choice: 'task' | 'note' | 'later' | 'pending' | 'archive',
@@ -197,7 +197,7 @@ export function Inbox({ onOpen }: { onOpen: (id: string) => void }) {
               </article>
             ))}
           </div>
-          {(q.data?.length ?? 0) > limit && (
+          {(q.data?.rows.length ?? 0) > limit && (
             <Button variant="outline" onClick={() => setLimit((n) => n + 50)}>
               Показать ещё
             </Button>

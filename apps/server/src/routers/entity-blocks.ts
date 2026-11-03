@@ -6,11 +6,13 @@ import {
   BLOCK_ROWS_CAP,
   type BlockError,
   type BlockResult,
+  type BlockSuccess,
   type DayGroupField,
   type DayGroupInputRow,
   type EntityBlocksInput,
   type EntityBlocksResult,
   layoutDayGroups,
+  type ReadDependencies,
   type RowRegistry,
 } from '@orbis/shared';
 // Листовой сабпат, не баррель `@orbis/shared/doc`: нужна одна строка, а не редактор документа.
@@ -41,6 +43,7 @@ import {
 } from '../query/compile-ast';
 import { queryContext } from '../query/context';
 import { DAY_RE } from '../query/contract-sql';
+import { observeQuery } from '../query/dependencies';
 import { substituteParams } from '../query/params';
 import { parseQueryText } from '../query/parse-text';
 import { materializationWindow, materializeInstances } from '../recurring/materialize';
@@ -80,7 +83,13 @@ type Plan =
 /** `settled` — ответ блока известен без SQL: отказ разбора или бейдж страницы без блоков. */
 type Prepared =
   | { key: string; kind: 'settled'; result: BlockResult }
-  | { key: string; kind: 'planned'; plan: Plan; window: Window | null };
+  | {
+      key: string;
+      kind: 'planned';
+      plan: Plan;
+      window: Window | null;
+      freshness: ReadDependencies;
+    };
 
 type TextItem = Extract<EntityBlocksInput['blocks'][number], { text: string }>;
 
@@ -122,6 +131,7 @@ function prepareQuery(
   base: CompileCtx,
   params: Parameters<typeof materializationWindow>[2],
   compile: (ast: QueryAst, cctx: CompileCtx) => Plan,
+  badgeOf?: string,
 ): Prepared {
   const text = rawText.trim();
   if (text === '') {
@@ -131,17 +141,20 @@ function prepareQuery(
       result: { ok: false, error: { code: 'EMPTY', message: EMPTY_QUERY_MESSAGE } },
     };
   }
-  const cctx: CompileCtx = { ...base, thisEntityId };
+  const { ctx: cctx, freshness } = observeQuery(
+    { ...base, thisEntityId },
+    badgeOf ? [badgeOf] : [],
+  );
+  if (badgeOf) cctx.observeRead('bodyOrStamp');
   try {
     const ast = substituteParams(parseQueryText(text, cctx, { place: 'page' }), values);
-    return {
-      key,
-      kind: 'planned',
-      plan: compile(ast, cctx),
-      // Реестр — тот же снимок, что разбирал блок: окно от адреса контракта считается по его
-      // привязкам (1в §3.4).
-      window: materializationWindow(ast, cctx.today, params, cctx.reg, cctx.weekStart),
-    };
+    const plan = compile(ast, cctx);
+    // Реестр — тот же снимок, что разбирал блок: окно от адреса контракта считается по его
+    // привязкам (1в §3.4).
+    const window = materializationWindow(ast, cctx.today, params, cctx.reg, cctx.weekStart, () =>
+      cctx.observeRead('date'),
+    );
+    return { key, kind: 'planned', plan, window, freshness: freshness() };
   } catch (e) {
     return { key, kind: 'settled', result: { ok: false, error: compileFailure(e) } };
   }
@@ -220,7 +233,8 @@ async function prepareBadges(
     .where(and(eq(entities.graphId, identity.graph), inArray(entities.id, ids)));
   const bodies = new Map(rows.map((r) => [r.id, r.body]));
   for (const item of items) {
-    const body = bodies.get(item.badgeOf.toLowerCase());
+    const badgeOf = item.badgeOf.toLowerCase();
+    const body = bodies.get(badgeOf);
     if (body === undefined) {
       out.set(item.key, { key: item.key, kind: 'settled', result: BADGE_NOT_FOUND });
       continue;
@@ -233,11 +247,32 @@ async function prepareBadges(
     out.set(
       item.key,
       text === null
-        ? { key: item.key, kind: 'settled', result: { ok: true, kind: 'none' } }
-        : prepareQuery(item.key, text, item.badgeOf, defaults, base, params, (ast, c) => ({
-            kind: 'count',
-            sql: compileCountAst(ast, c),
-          })),
+        ? {
+            key: item.key,
+            kind: 'settled',
+            result: {
+              ok: true,
+              kind: 'none',
+              freshness: {
+                ...observeQuery(base, [badgeOf]).freshness(),
+                bodyOrStamp: true,
+                graph: false,
+              },
+            },
+          }
+        : prepareQuery(
+            item.key,
+            text,
+            badgeOf,
+            defaults,
+            base,
+            params,
+            (ast, c) => ({
+              kind: 'count',
+              sql: compileCountAst(ast, c),
+            }),
+            badgeOf,
+          ),
     );
   }
   return out;
@@ -370,7 +405,7 @@ function unionWindow(a: Window | null, b: Window | null): Window | null {
   return { from: b.from < a.from ? b.from : a.from, to: b.to > a.to ? b.to : a.to };
 }
 
-async function executePlan(sp: Tx, plan: Plan): Promise<BlockResult> {
+async function executePlan(sp: Tx, plan: Plan): Promise<BlockSuccess> {
   switch (plan.kind) {
     case 'rows': {
       const { rows, more } = await shownRows(sp, plan);
@@ -436,7 +471,8 @@ async function executeAll(tx: Tx, prepared: Prepared[]): Promise<EntityBlocksRes
       continue;
     }
     try {
-      entries.push([p.key, await tx.transaction((sp) => executePlan(sp, p.plan))]);
+      const result = await tx.transaction((sp) => executePlan(sp, p.plan));
+      entries.push([p.key, { ...result, freshness: p.freshness }]);
     } catch (e) {
       // Молча гасить нельзя (конвенция fail-soft сервера): без строки в журнале отказ
       // исполнения в проде недиагностируем. Наружу — без текста базы: он про колонки и касты,

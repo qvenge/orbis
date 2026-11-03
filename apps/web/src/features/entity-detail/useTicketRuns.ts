@@ -9,7 +9,7 @@ import { type RouterOutputs, trpc } from '../../trpc';
 import { runPollInterval } from './run-poll';
 
 /** Прогон в объёме списка — ровно то, что отдаёт `entity.query` (без bodyDoc и связей). */
-export type TicketRun = RouterOutputs['entity']['query'][number];
+export type TicketRun = RouterOutputs['entity']['query']['rows'][number];
 
 /**
  * Аспект прогона — он же узел `aspect=` запроса выше и гейт блоков экрана. ЗНАЧЕНИЯ прогона
@@ -71,15 +71,12 @@ export function useTicketRuns(
       // Последний прогон идёт → список опрашивается (run-poll.ts): от него зависят блок
       // состояния рутины («идёт прогон», кнопка «Прогнать сейчас») и блок ожидания тикета
       refetchInterval: (query) => {
-        const rows = query.state.data;
-        const last = Array.isArray(rows) ? rows[0] : undefined;
+        const last = query.state.data?.rows[0];
         return last === undefined ? false : runPollInterval(last.props);
       },
     },
   );
-  // Array.isArray — защита от неожиданной формы ответа: секция живёт на
-  // общем detail-экране, и неожиданная форма ответа не должна ронять всю страницу.
-  const runs = Array.isArray(q.data) ? q.data : [];
+  const runs = q.data?.rows ?? [];
   // sortBy=orbis/created_at:desc — последний прогон стоит ПЕРВЫМ.
   return { runs, lastRun: runs[0], isLoading: q.isLoading };
 }

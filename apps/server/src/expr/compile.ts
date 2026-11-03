@@ -103,7 +103,7 @@ function slotsContract(
 }
 
 /** Выражение доступа к значению свойства на строке `row` (каст — по `kind` реестра). */
-function propertySql(prop: PropertyDefinition, row: SQL): SQL {
+function propertySql(prop: PropertyDefinition, row: SQL, ctx: CompileCtx): SQL {
   if (prop.storage === 'core') {
     const column = CORE_COLUMN[prop.id];
     if (column === undefined) {
@@ -113,13 +113,14 @@ function propertySql(prop: PropertyDefinition, row: SQL): SQL {
         { property: prop.id },
       );
     }
+    if (column === 'updated_at') ctx.observeRead?.('bodyOrStamp');
     return sql`${row}.${sql.raw(column)}`;
   }
   return castedExpr(sql`${row}.props->>${lit(prop.id)}`, prop.type);
 }
 
 /** «У значения есть значение»: у core-проекции — колонка не NULL, у props — наличие ключа. */
-function propertyPresenceSql(prop: PropertyDefinition, row: SQL): SQL {
+function propertyPresenceSql(prop: PropertyDefinition, row: SQL, ctx: CompileCtx): SQL {
   if (prop.storage === 'core') {
     const column = CORE_COLUMN[prop.id];
     if (column === undefined) {
@@ -129,6 +130,7 @@ function propertyPresenceSql(prop: PropertyDefinition, row: SQL): SQL {
         { property: prop.id },
       );
     }
+    if (column === 'updated_at') ctx.observeRead?.('bodyOrStamp');
     return sql`${row}.${sql.raw(column)} IS NOT NULL`;
   }
   return sql`${row}.props ? ${lit(prop.id)}`;
@@ -174,7 +176,7 @@ function slotSql(slot: string, scope: SlotScope): SQL {
   if (fixed !== undefined) return typeof fixed === 'string' ? lit(fixed) : sql.raw(String(fixed));
   const propertyId = scope.binding.bind[slot];
   if (propertyId === undefined) return sql`NULL`;
-  return propertySql(propertyOf(propertyId, scope, slot), scope.row);
+  return propertySql(propertyOf(propertyId, scope, slot), scope.row, scope.cctx);
 }
 
 /**
@@ -187,7 +189,7 @@ function presenceSql(slot: string, scope: SlotScope): SQL {
   if (scope.binding.fixed[slot] !== undefined) return sql`true`;
   const propertyId = scope.binding.bind[slot];
   if (propertyId === undefined) return sql`false`;
-  return propertyPresenceSql(propertyOf(propertyId, scope, slot), scope.row);
+  return propertyPresenceSql(propertyOf(propertyId, scope, slot), scope.row, scope.cctx);
 }
 
 /** Условие «слот несёт один из вариантов класса» (§Б2-2). */
@@ -206,7 +208,7 @@ function variantCond(slot: string, variants: readonly (string | boolean)[], scop
     );
     return parts.length === 1 ? (parts[0] as SQL) : sql`(${sql.join(parts, sql.raw(' OR '))})`;
   }
-  const value = propertySql(prop, scope.row);
+  const value = propertySql(prop, scope.row, scope.cctx);
   // Булев вариант — литерал `true`/`false`, а не строка: `->>` даёт текст, но каст реестра
   // уже привёл выражение к boolean.
   const literals = variants.map((v) => (typeof v === 'boolean' ? sql.raw(String(v)) : lit(v)));
@@ -238,7 +240,7 @@ function valueSql(node: ExprNode, scope: ExprCompileScope): SQL {
         property: node.prop,
       });
     }
-    return propertySql(prop, scope.row);
+    return propertySql(prop, scope.row, scope.cctx);
   }
   if ('slot' in node) return slotSql(node.slot, slotScopeOf(scope, 'slot'));
   if ('param' in node) {
@@ -251,7 +253,10 @@ function valueSql(node: ExprNode, scope: ExprCompileScope): SQL {
     return scalarSql(value);
   }
   if ('ctx' in node) {
-    if (node.ctx === '$today') return sql`${scope.cctx.today}::date`;
+    if (node.ctx === '$today') {
+      scope.cctx.observeRead?.('date');
+      return sql`${scope.cctx.today}::date`;
+    }
     // `::text`, а не голая колонка: чекер типизирует `$self` ТЕКСТОМ (`check.ts`, «`$owner` и
     // `$self` — идентификаторы: сравнивать их можно только с текстом»), а ссылочное свойство
     // приезжает проекцией `props->>…`, тоже текстом. Без каста Postgres встречал бы
@@ -343,7 +348,7 @@ function hasPredicate(name: string, scope: ExprCompileScope): SQL {
       { name },
     );
   }
-  return propertyPresenceSql(prop, scope.row);
+  return propertyPresenceSql(prop, scope.row, scope.cctx);
 }
 
 /**

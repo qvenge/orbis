@@ -21,6 +21,7 @@ import {
   installCrashTrap,
   type MockHandler,
   mockEntityUpdateResult,
+  queryReply,
   renderWithProviders,
   staleBodyError,
   trpcError,
@@ -160,16 +161,20 @@ function open(main: StructureFixture, rows: WireEntityFixture[], over?: MockHand
     if (path === 'entity.query') {
       const q = input as { query?: string; ast?: QueryAst };
       if (q.query === PAGE_TEMPLATES_QUERY) {
-        return all.filter((r) => {
-          const tf = r.props[TEMPLATE_FOR_PROPERTY];
-          return r.aspects.includes(PAGE_ASPECT) && Array.isArray(tf) && tf.length > 0;
-        });
+        return queryReply(
+          all.filter((r) => {
+            const tf = r.props[TEMPLATE_FOR_PROPERTY];
+            return r.aspects.includes(PAGE_ASPECT) && Array.isArray(tf) && tf.length > 0;
+          }),
+        );
       }
       if (q.ast !== undefined) {
         const need = aspectsOfFilter(q.ast);
-        return all
-          .filter((r) => need.every((a) => r.aspects.includes(a)))
-          .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
+        return queryReply(
+          all
+            .filter((r) => need.every((a) => r.aspects.includes(a)))
+            .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1)),
+        );
       }
     }
     if (path === 'entity.get') {

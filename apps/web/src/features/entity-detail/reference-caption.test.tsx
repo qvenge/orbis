@@ -1,6 +1,11 @@
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { expect, test } from 'vitest';
-import { mockEntityUpdateResult, renderWithProviders, wireEntity } from '../../test/harness';
+import {
+  mockEntityUpdateResult,
+  queryReply,
+  renderWithProviders,
+  wireEntity,
+} from '../../test/harness';
 import { navAt } from '../../test/nav';
 import { registryReply } from '../../test/registry';
 import { Toaster } from '../../ui/Toast';
@@ -25,10 +30,10 @@ test('actual reference picker caption uses prior and next cached labels without 
     (path) => {
       if (path === 'entity.get') return { entity, relations: [], thread: null };
       if (path === 'entity.query')
-        return [
+        return queryReply([
           wireEntity({ id: old, title: 'Old label', aspects: ['orbis/category'] }),
           wireEntity({ id: next, title: 'Next label', aspects: ['orbis/category'] }),
-        ];
+        ]);
       if (path === 'entity.update')
         return {
           ...mockEntityUpdateResult(entity),

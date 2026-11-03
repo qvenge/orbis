@@ -3,7 +3,7 @@ import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { App } from '../App';
 import { resetNavForTests } from '../state/navigation';
 import { registerRetrySend, useRetryBuffer } from '../state/retry';
-import { renderWithProviders } from '../test/harness';
+import { fixtureFreshness, queryReply, renderWithProviders } from '../test/harness';
 import { trpc } from '../trpc';
 
 // §2.6/§5.3: retry-буфер должен сливаться сам — на старте (онлайн) и при offline→online.
@@ -11,7 +11,8 @@ const appMocks = (path: string) => {
   if (path === 'chat.ensureThread') return { threadId: 't1' };
   if (path === 'chat.listMessages') return [];
   // `entity.query` шлёт пробник ниже и рамка (записи поставки хоста).
-  if (path === 'entity.query') return [];
+  if (path === 'entity.query') return queryReply([]);
+  if (path === 'entity.count') return { count: 0, freshness: fixtureFreshness };
   return {};
 };
 

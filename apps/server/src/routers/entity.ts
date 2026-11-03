@@ -17,9 +17,11 @@ import {
   entityGetUiInput,
   entityResolveRefsInput,
   entitySuggestInput,
+  entityThreadId,
   entityUpdateBatchInput,
   entityUpdateUiInput,
   newId,
+  type ReadDependencies,
   type RowRegistry,
   rowProjectionOf,
 } from '@orbis/shared';
@@ -48,6 +50,7 @@ import type { WireEntityWithRevision } from '../executor/types';
 import { type GoalProgress, goalProgressFor } from '../goals/progress';
 import type { Identity } from '../identity';
 import { type CompileCtx, compileCountAst, compileQueryAst } from '../query/compile-ast';
+import { observeQuery } from '../query/dependencies';
 import { parseQueryText, parseRegistryOf } from '../query/parse-text';
 import { queryWithMaterialization } from '../recurring/with-materialization';
 import { effectiveRegistry } from '../registry/cache';
@@ -125,12 +128,12 @@ function compileAstOrThrow(
  * ДО компиляции/исполнения; без окна запрос исполняется тем же tx (детали — в
  * recurring/with-materialization.ts, тот же каркас у LLM/MCP-диспатча entity_query).
  */
-function runQueryWithMaterialization<T>(
+function runQueryWithMaterialization<T extends object>(
   db: Db,
   identity: Identity,
   input: QueryInput,
   run: (tx: Tx, ast: QueryAst, cctx: CompileCtx) => Promise<T>,
-): Promise<T> {
+): Promise<T & { freshness: ReadDependencies }> {
   return queryWithMaterialization({
     db,
     identity,
@@ -144,7 +147,12 @@ function runQueryWithMaterialization<T>(
       input.ast === undefined
         ? parseOrThrow(input.query as string, cctx)
         : normalizeQueryAst(input.ast, parseRegistryOf(cctx)),
-    run,
+    run: async (tx, ast, cctx, windowReadsDate) => {
+      const observed = observeQuery(cctx);
+      if (windowReadsDate) observed.ctx.observeRead('date');
+      const result = await run(tx, ast, observed.ctx);
+      return { ...result, freshness: observed.freshness() };
+    },
   });
 }
 
@@ -518,6 +526,7 @@ export const entityRouter = router({
         goalProgress?: GoalProgress;
         registryVersion: string;
         bodyAction: BodyActionInfo | null;
+        freshness: ReadDependencies;
       }
     > => {
       try {
@@ -530,7 +539,33 @@ export const entityRouter = router({
           // Прецедент аддитивного поля с явной аннотацией — actionId у create выше.
           // Той же tx: расчёт читает граф под уже установленной identity (RLS), своей
           // транзакции не открывает. Обычная сущность в него не заходит вовсе.
-          const goalProgress = await goalProgressFor(tx, ctx.identity.graph, result.entity);
+          let progressDeps: ReadDependencies | undefined;
+          const goalProgress = await goalProgressFor(
+            tx,
+            ctx.identity.graph,
+            result.entity,
+            (deps) => {
+              progressDeps = deps;
+            },
+          );
+          const { entity, relations, backlinks, thread } = result;
+          const freshness: ReadDependencies = {
+            entityIds: [
+              ...new Set([
+                entity.id,
+                ...(relations ?? []).flatMap((rel) => [rel.sourceId, rel.targetId]),
+                ...(backlinks ?? []).map((link) => link.entity.id),
+              ]),
+            ],
+            graph: relations !== undefined || backlinks !== undefined || progressDeps !== undefined,
+            bodyOrStamp: progressDeps?.bodyOrStamp ?? false,
+            threadIds: input.include?.includes('thread')
+              ? [thread?.threadId ?? entityThreadId(ctx.identity.graph, entity.id)]
+              : [],
+            settings: progressDeps?.settings ?? false,
+            registry: true,
+            expiresAt: progressDeps?.expiresAt ?? null,
+          };
           /**
            * Версия реестра (§А10-1) — второе аддитивное поле, и по тому же правилу: в
            * `readEntity` её класть нельзя (контракт с диспатчем тулов, модели она не
@@ -550,8 +585,8 @@ export const entityRouter = router({
           // Третье аддитивное поле — действующее действие тела (§8.2, К-37; данные сеанса — поле роутера, Д-16)
           const bodyAction = await currentBodyAction(tx, ctx.identity, result.entity.id);
           return goalProgress === undefined
-            ? { ...result, registryVersion, bodyAction }
-            : { ...result, goalProgress, registryVersion, bodyAction };
+            ? { ...result, registryVersion, bodyAction, freshness }
+            : { ...result, goalProgress, registryVersion, bodyAction, freshness };
         });
       } catch (e) {
         if (e instanceof ExecError) throw execErrorToTRPC(e);
@@ -566,7 +601,9 @@ export const entityRouter = router({
         compileQueryAst(a, c, { fields: input.fields ?? 'none' }),
       );
       const rows = await tx.execute(compiled);
-      return [...rows].map((r) => toWireEntityFromSql(r as Record<string, unknown>));
+      return {
+        rows: [...rows].map((r) => toWireEntityFromSql(r as Record<string, unknown>)),
+      };
     }),
   ),
 

@@ -1,35 +1,58 @@
 import { useEffect, useState } from 'react';
-import { todayISO } from '../../lib/dates';
 import { trpc } from '../../trpc';
 import { planningDayOffset } from './model';
 
 export function usePlanningDay() {
   const settings = trpc.user.getSettings.useQuery();
+  const { refetch } = settings;
   const [selection, select] = useState('today');
-  const [, tick] = useState(0);
+  const today = settings.data?.today;
+  const nextMidnightAt = settings.data?.nextMidnightAt;
+
   useEffect(() => {
-    const refresh = () => tick((n) => n + 1);
-    const timer = window.setInterval(refresh, 60_000);
-    window.addEventListener('focus', refresh);
-    return () => {
-      window.clearInterval(timer);
-      window.removeEventListener('focus', refresh);
+    if (!nextMidnightAt) return;
+    const deadline = Date.parse(nextMidnightAt);
+    if (!Number.isFinite(deadline)) return;
+    const refreshIfExpired = () => {
+      if (Date.now() >= deadline && document.visibilityState !== 'hidden')
+        void refetch({ cancelRefetch: false });
     };
-  }, []);
-  const today = todayISO(settings.data?.timezone);
+    let timer: number | undefined;
+    const schedule = () => {
+      const delay = Math.max(0, deadline - Date.now());
+      timer = window.setTimeout(
+        () => {
+          if (Date.now() < deadline) schedule();
+          else refreshIfExpired();
+        },
+        Math.min(delay, 2_147_483_647),
+      );
+    };
+    schedule();
+    window.addEventListener('focus', refreshIfExpired);
+    document.addEventListener('visibilitychange', refreshIfExpired);
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener('focus', refreshIfExpired);
+      document.removeEventListener('visibilitychange', refreshIfExpired);
+    };
+  }, [nextMidnightAt, refetch]);
+
   const day =
     selection === 'today'
-      ? today
+      ? (today ?? '')
       : selection === 'tomorrow'
-        ? planningDayOffset(today, 1)
+        ? today
+          ? planningDayOffset(today, 1)
+          : ''
         : selection;
   return {
     day,
     today,
     selection,
     select,
-    ready: settings.isSuccess,
-    failed: settings.isError,
-    retry: settings.refetch,
+    ready: today !== undefined,
+    failed: settings.isError && today === undefined,
+    retry: refetch,
   };
 }

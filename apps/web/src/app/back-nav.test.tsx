@@ -2,7 +2,7 @@ import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, test } from 'vitest';
 import { App } from '../App';
 import { useNav } from '../state/navigation';
-import { renderWithProviders, wireEntity } from '../test/harness';
+import { queryReply, renderWithProviders, wireEntity } from '../test/harness';
 import { recordAddress, topAddress } from '../test/nav';
 import { registryReply } from '../test/registry';
 import { resetFrame, stubLaunchMode, unstubLaunchMode } from './frame/frame-fixtures';
@@ -20,7 +20,7 @@ const handler = (path: string, input: unknown) => {
     const id = (input as { id: string }).id;
     return { entity: wireEntity({ id, title: `Запись ${id}` }), relations: [], thread: null };
   }
-  if (path === 'entity.query') return [];
+  if (path === 'entity.query') return queryReply([]);
   if (path === 'chat.ensureThread') return { threadId: 't1' };
   if (path === 'chat.listMessages') return [];
   return {};

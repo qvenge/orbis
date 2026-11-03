@@ -8,6 +8,7 @@ import {
   type BlockResult,
   type GraphId,
   newId,
+  RULE_MATERIALIZE,
   recurringInstanceId,
 } from '@orbis/shared';
 import { EMPTY_QUERY_MESSAGE } from '@orbis/shared/doc/placement';
@@ -24,14 +25,16 @@ import {
 import type { Db } from '../db/client';
 import { entities } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
-import { DEFAULT_TIMEZONE, todayInTimeZone } from '../query/context';
+import { DEFAULT_TIMEZONE, nextMidnightInTimeZone, todayInTimeZone } from '../query/context';
 import { appRouter } from '../router';
 import { createCallerFactory } from '../trpc';
-import { EXECUTION_FAILED_MESSAGE } from './entity-blocks';
+import { EXECUTION_FAILED_MESSAGE, runBlocks } from './entity-blocks';
 
 requireEnv();
 
 const { db, client } = appDb();
+if (RULE_MATERIALIZE.template !== 'materialize') throw new Error('expected the materialize rule');
+const horizonDays = RULE_MATERIALIZE.params.horizon_days;
 const createCaller = createCallerFactory(appRouter);
 
 function callerFor(user: GraphId, withDb: Db = db) {
@@ -179,7 +182,7 @@ describe('entity.blocks — пачка данных блоков (§6.3)', () =>
     expect(children.more).toBe(0);
 
     const spent = asKind(results.spent, 'sum');
-    expect(spent).toEqual({
+    expect(spent).toMatchObject({
       ok: true,
       kind: 'sum',
       count: 2,
@@ -220,10 +223,15 @@ describe('entity.blocks — пачка данных блоков (§6.3)', () =>
         },
       ],
     });
-    expect(results.n).toEqual({ ok: true, kind: 'count', count: 7 });
+    expect(results.n).toMatchObject({ ok: true, kind: 'count', count: 7 });
     // Последняя по updated_at — вторая созданная запись.
-    expect(results.last).toEqual({ ok: true, kind: 'latest', value: '250.50', currency: 'RUB' });
-    expect(results.none).toEqual({ ok: true, kind: 'sum', count: 0, sums: [] });
+    expect(results.last).toMatchObject({
+      ok: true,
+      kind: 'latest',
+      value: '250.50',
+      currency: 'RUB',
+    });
+    expect(results.none).toMatchObject({ ok: true, kind: 'sum', count: 0, sums: [] });
   });
 
   test('сумма по валютам раздельно; запись без валюты — в валюте владельца (дефект 1а: терялась, спека 1в §3.6)', async () => {
@@ -253,7 +261,7 @@ describe('entity.blocks — пачка данных блоков (§6.3)', () =>
         { key: 'mixed', text: 'aspect=orbis/financial, display=tile, aggregate=sum:orbis/amount' },
       ],
     });
-    expect(results.mixed).toEqual({
+    expect(results.mixed).toMatchObject({
       ok: true,
       kind: 'sum',
       count: 4,
@@ -348,7 +356,7 @@ describe('entity.blocks — пачка данных блоков (§6.3)', () =>
     const err = asError(results.titleSum);
     expect(err.code).toBe('TYPE');
     expect(typeof err.position).toBe('number');
-    expect(results.fine).toEqual({ ok: true, kind: 'count', count: 7 });
+    expect(results.fine).toMatchObject({ ok: true, kind: 'count', count: 7 });
   });
 
   test('ошибка разбора — отказ своего блока с кодом и позицией, без SQL; соседи целы', async () => {
@@ -366,7 +374,7 @@ describe('entity.blocks — пачка данных блоков (§6.3)', () =>
     expect(err.position).toBe(0);
     expect(err.message.length).toBeGreaterThan(0);
     expect(asKind(results.ok1, 'rows').rows).toHaveLength(2);
-    expect(results.ok2).toEqual({ ok: true, kind: 'count', count: 7 });
+    expect(results.ok2).toMatchObject({ ok: true, kind: 'count', count: 7 });
   });
 
   test('ошибка ИСПОЛНЕНИЯ (кривое значение в базе) — отказ своего блока, соседи той же пачки целы (SAVEPOINT)', async () => {
@@ -495,7 +503,7 @@ describe('entity.blocks — пачка данных блоков (§6.3)', () =>
     const { results } = await agent.entity.blocks({
       blocks: [{ key: 'n', text: 'aspect=orbis/task, display=tile, aggregate=count' }],
     });
-    expect(results.n).toEqual({ ok: true, kind: 'count', count: 7 });
+    expect(results.n).toMatchObject({ ok: true, kind: 'count', count: 7 });
   });
 
   test('права: чужая запись в thisEntityId под RLS не видна — пустые строки, а не чужие данные', async () => {
@@ -505,7 +513,13 @@ describe('entity.blocks — пачка данных блоков (§6.3)', () =>
     const { results } = await callerFor(stranger).entity.blocks({
       blocks: [{ key: 'peek', text: 'children_of=this', thisEntityId: projectId }],
     });
-    expect(results.peek).toEqual({ ok: true, kind: 'rows', rows: [], more: 0, closedIds: [] });
+    expect(results.peek).toMatchObject({
+      ok: true,
+      kind: 'rows',
+      rows: [],
+      more: 0,
+      closedIds: [],
+    });
   });
 });
 
@@ -522,7 +536,7 @@ describe('entity.blocks — группировка по дням (спека 1в
     // Строки настроек нет — запасной пояс; «сегодня» — в нём (как у компиляции блоков).
     expect(res.timeZone).toBe(DEFAULT_TIMEZONE);
     expect(res.today).toBe(todayInTimeZone(DEFAULT_TIMEZONE));
-    expect(res.results.feed).toEqual({
+    expect(res.results.feed).toMatchObject({
       ok: true,
       kind: 'groups',
       groups: [],
@@ -566,7 +580,7 @@ describe('entity.blocks — бейдж раздела `badgeOf` (срез 1б §
     const { results } = await callerFor(user).entity.blocks({
       blocks: [{ key: 'badge', badgeOf: section }],
     });
-    expect(results.badge).toEqual({ ok: true, kind: 'count', count: 7 });
+    expect(results.badge).toMatchObject({ ok: true, kind: 'count', count: 7 });
   });
 
   test('страница без блоков данных — kind:none, а не отказ', async () => {
@@ -575,7 +589,7 @@ describe('entity.blocks — бейдж раздела `badgeOf` (срез 1б §
     const { results } = await callerFor(user).entity.blocks({
       blocks: [{ key: 'badge', badgeOf: section }],
     });
-    expect(results.badge).toEqual({ ok: true, kind: 'none' });
+    expect(results.badge).toMatchObject({ ok: true, kind: 'none' });
   });
 
   test('чужой и несуществующий id — отказ бейджа (ok:false), не чужие данные', async () => {
@@ -606,7 +620,8 @@ describe('entity.blocks — бейдж раздела `badgeOf` (срез 1б §
         { key: 'b2', badgeOf: empty },
       ],
     });
-    expect(results).toEqual({
+    expect(Object.keys(results).sort()).toEqual(['b1', 'b2', 'text']);
+    expect(results).toMatchObject({
       text: { ok: true, kind: 'count', count: 2 },
       b1: { ok: true, kind: 'count', count: 7 },
       b2: { ok: true, kind: 'none' },
@@ -656,12 +671,12 @@ describe('entity.blocks — параметр страницы (спека 1в §
       ],
     });
     expect(asKind(results.rows, 'rows').rows).toHaveLength(2);
-    expect(results.tile).toEqual({ ok: true, kind: 'count', count: 2 });
+    expect(results.tile).toMatchObject({ ok: true, kind: 'count', count: 2 });
     // То же с next_7d — одна: значение действительно подставлено, а не проигнорировано.
     const week = await callerFor(user).entity.blocks({
       blocks: [{ key: 'tile', text: TILE, params: { period: 'next_7d' } }],
     });
-    expect(week.results.tile).toEqual({ ok: true, kind: 'count', count: 1 });
+    expect(week.results.tile).toMatchObject({ ok: true, kind: 'count', count: 1 });
     // Одна пачка: два блока с параметром стоят столько же транзакций, сколько один.
     const one = countingDb();
     await callerFor(user, one.db).entity.blocks({ blocks: [{ key: 'tile', text: TILE, params }] });
@@ -683,7 +698,7 @@ describe('entity.blocks — параметр страницы (спека 1в §
       message: 'параметр «period» не объявлен на странице',
     });
     expect(asError(results.bad).code).toBe('PARAM_VALUE');
-    expect(results.plain).toEqual({ ok: true, kind: 'count', count: 2 });
+    expect(results.plain).toMatchObject({ ok: true, kind: 'count', count: 2 });
   });
 
   test('params — поле элемента пачки: больше 16 ключей — отказ схемы пачки', async () => {
@@ -702,7 +717,7 @@ describe('entity.blocks — параметр страницы (спека 1в §
     const { results } = await callerFor(user).entity.blocks({
       blocks: [{ key: 'badge', badgeOf: section }],
     });
-    expect(results.badge).toEqual({ ok: true, kind: 'count', count: 1 });
+    expect(results.badge).toMatchObject({ ok: true, kind: 'count', count: 1 });
   });
 
   test('бейдж: параметр с ошибкой блока или без объявления — отказ бейджа UNKNOWN_PARAM', async () => {
@@ -722,4 +737,116 @@ describe('entity.blocks — параметр страницы (спека 1в §
     expect(asError(results.broken).code).toBe('UNKNOWN_PARAM');
     expect(asError(results.undeclared).code).toBe('UNKNOWN_PARAM');
   });
+});
+
+test('badge metadata covers body edits even before the page contains a query', async () => {
+  const caller = callerFor(await freshGraph());
+  const page = await caller.entity.create({
+    input: { title: 'Badge page', body: 'Empty page', tags: [] },
+    source: 'ui',
+  });
+  const read = () =>
+    caller.entity.blocks({
+      blocks: [
+        { key: 'badge', badgeOf: page.id },
+        { key: 'bad', text: 'unknown_property=42' },
+      ],
+    });
+  const first = await read();
+  expect(first.results.badge).toMatchObject({
+    ok: true,
+    kind: 'none',
+    freshness: { entityIds: [page.id], bodyOrStamp: true },
+  });
+  expect(first.results.bad).toMatchObject({ ok: false });
+  expect(first.results.bad).not.toHaveProperty('freshness');
+
+  await caller.entity.update({
+    id: page.id,
+    expectedBodyRevision: page.bodyRevision,
+    body: '{{query:search=Badge}}',
+  });
+  expect((await read()).results.badge).toMatchObject({
+    ok: true,
+    kind: 'count',
+    freshness: { entityIds: [page.id], bodyOrStamp: true, graph: true },
+  });
+});
+
+test('fixed-date reads expire at the horizon even before a recurring instance is eligible', async () => {
+  const user = await freshGraph();
+  const caller = callerFor(user);
+  const now = new Date();
+  const today = todayInTimeZone(DEFAULT_TIMEZONE, now);
+  const tomorrow = new Date(nextMidnightInTimeZone(DEFAULT_TIMEZONE, now));
+  const horizonDay = addDays(today, horizonDays);
+  const fixedDay = addDays(horizonDay, 1);
+  const query = `aspect=orbis/schedule, orbis/when=${fixedDay}`;
+  const open = `aspect=orbis/schedule, orbis/when>${horizonDay}`;
+  const template = await caller.entity.create({
+    input: {
+      title: 'Ежедневная планёрка',
+      tags: [],
+      props: {
+        'orbis/start_at': `${today}T09:00:00+03:00`,
+        'orbis/timezone': DEFAULT_TIMEZONE,
+        'orbis/recurrence': { freq: 'daily', interval: 1 },
+      },
+      aspects: ['orbis/schedule'],
+    },
+    source: 'ui',
+  });
+  const page = await caller.entity.create({
+    input: { title: 'Бейдж', body: `{{query:${query}}}`, tags: [] },
+    source: 'ui',
+  });
+
+  const read = (at: Date) =>
+    runBlocks(
+      db,
+      personal(user),
+      [
+        { key: 'fixed', text: query },
+        { key: 'open', text: open },
+        { key: 'badge', badgeOf: page.id },
+        { key: 'plain', text: 'aspect=orbis/schedule' },
+      ],
+      at,
+    );
+  const first = (await read(now)).results;
+  expect(asKind(first.fixed, 'rows').rows).toEqual([]);
+  expect(asKind(first.open, 'rows').rows).toEqual([]);
+  expect(asKind(first.badge, 'count').count).toBe(0);
+  expect(asKind(first.fixed, 'rows').freshness.expiresAt).toBe(tomorrow.toISOString());
+  expect(asKind(first.open, 'rows').freshness.expiresAt).toBe(tomorrow.toISOString());
+  expect(asKind(first.badge, 'count').freshness.expiresAt).toBe(tomorrow.toISOString());
+  expect(asKind(first.plain, 'rows').freshness.expiresAt).toBeNull();
+
+  const next = (await read(tomorrow)).results;
+  const instance = recurringInstanceId(template.id, fixedDay);
+  expect(asKind(next.fixed, 'rows').rows.map((r) => r.id)).toContain(instance);
+  expect(asKind(next.open, 'rows').rows.map((r) => r.id)).toContain(instance);
+  expect(asKind(next.badge, 'count').count).toBe(1);
+});
+
+test('entity.query and count expire when a date candidate can enter the materialization window', async () => {
+  const caller = callerFor(await freshGraph());
+  const now = new Date();
+  const today = todayInTimeZone(DEFAULT_TIMEZONE, now);
+  const deadline = nextMidnightInTimeZone(DEFAULT_TIMEZONE, now);
+  const fixed = `orbis/due_date=${addDays(today, horizonDays + 1)}`;
+  const beyond = `orbis/due_date>${addDays(today, horizonDays)}`;
+  for (const query of [fixed, beyond]) {
+    expect(await caller.entity.query({ query })).toMatchObject({
+      rows: [],
+      freshness: { expiresAt: deadline },
+    });
+    expect(await caller.entity.count({ query })).toMatchObject({
+      count: 0,
+      freshness: { expiresAt: deadline },
+    });
+  }
+  expect(
+    (await caller.entity.count({ query: 'aspect=orbis/task' })).freshness.expiresAt,
+  ).toBeNull();
 });

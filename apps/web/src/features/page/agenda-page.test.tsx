@@ -17,6 +17,7 @@ import { useNav } from '../../state/navigation';
 import {
   BLOCKS_TODAY,
   blocksReply,
+  fixtureFreshness,
   installCrashTrap,
   type MockHandler,
   renderWithProviders,
@@ -62,6 +63,7 @@ const twoWeeks = wireEntity({ id: id(13), title: 'Через десять дне
 /** Лента — по значению периода: так видно, какое значение посчитал «сервер». */
 const feed = (b: { params?: Record<string, string> }): BlockResult => ({
   ok: true,
+  freshness: fixtureFreshness,
   kind: 'groups',
   groups: [
     {

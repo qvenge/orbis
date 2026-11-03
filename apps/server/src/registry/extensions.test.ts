@@ -687,7 +687,9 @@ describe('§С8-22: подписки и сохранённые AST при вык
 
   test('сохранённый AST с orbis/amount продолжает резолвиться и находить записи (§Б8-3)', async () => {
     // `entity.query` отдаёт МАССИВ строк (`routers/entity.ts`), не конверт с `items`.
-    const found = await caller.entity.query({ query: 'aspect=orbis/financial, orbis/amount>100' });
+    const { rows: found } = await caller.entity.query({
+      query: 'aspect=orbis/financial, orbis/amount>100',
+    });
     expect(found.length).toBeGreaterThan(0); // определения остаются резолвимыми на чтение
   });
 

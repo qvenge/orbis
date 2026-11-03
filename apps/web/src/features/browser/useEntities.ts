@@ -8,7 +8,7 @@ export function useEntities(filters: string, showPagesAndApps: boolean) {
   const [limit, setLimit] = useState(PAGE);
   const query = browserQuery({ limit, filters, showPagesAndApps });
   const q = trpc.entity.query.useQuery({ query });
-  const entities = q.data ?? [];
+  const entities = q.data?.rows ?? [];
   const hasMore = entities.length >= limit;
   // isError наружу: без него отказ выборки неотличим от пустого результата — потребитель
   // рисует пустое состояние и врёт про содержимое графа (бэклог фазы D, MemoryScreen).

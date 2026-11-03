@@ -19,6 +19,7 @@ import { noteRegistryVersion, resetRegistryVersionForTests } from '../../lib/reg
 import {
   installCrashTrap,
   type MockHandler,
+  queryReply,
   renderWithProviders,
   type WireEntityFixture,
   wireEntity,
@@ -266,11 +267,11 @@ function openPreview(
     }
     if (path === 'entity.query') {
       const q = input as { query?: string; ast?: QueryAst };
-      if (q.query === PAGE_TEMPLATES_QUERY) return [tpl];
+      if (q.query === PAGE_TEMPLATES_QUERY) return queryReply([tpl]);
       // Подходящие записи предпросмотра — ровно их деревом; прочие деревья (выдача ссылки
       // карточки категории) отвечает обработчик экрана записи.
       if (JSON.stringify(q.ast) === JSON.stringify(previewCandidatesAst(forAspects))) {
-        return [record.entity];
+        return queryReply([record.entity]);
       }
     }
     if (path === 'entity.get') {

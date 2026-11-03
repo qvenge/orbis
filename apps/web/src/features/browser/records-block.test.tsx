@@ -18,6 +18,7 @@ import { useNav } from '../../state/navigation';
 import {
   installCrashTrap,
   type MockHandler,
+  queryReply,
   renderWithProviders,
   type WireEntityFixture,
   wireEntity,
@@ -84,14 +85,12 @@ const queriesOf = (calls: { path: string; input: unknown }[]): string[] =>
     .map((c) => (c.input as { query: string }).query);
 
 /** Ответ списка: по `limit=` запроса — столько строк, сколько «есть» в графе (`total`). */
-const listReply =
-  (total: number): MockHandler =>
-  (path, input) => {
-    if (!isRecordsList(path, input)) return undefined;
-    const q = (input as { query: string }).query;
-    const limit = Number(/limit=(\d+)/.exec(q)?.[1] ?? '50');
-    return rows(Math.min(total, limit));
-  };
+const listReply = (total: number) => (path: string, input: unknown) => {
+  if (!isRecordsList(path, input)) return undefined;
+  const q = (input as { query: string }).query;
+  const limit = Number(/limit=(\d+)/.exec(q)?.[1] ?? '50');
+  return queryReply(rows(Math.min(total, limit)));
+};
 
 const page = (body: string): WireEntityFixture =>
   wireEntity({ id: PAGE_ID, title: 'Записи', body, aspects: [PAGE_ASPECT] });
@@ -159,9 +158,9 @@ test('переключатель «Показать страницы и прил
     () => {},
     (path, input) => {
       const list = listReply(3)(path, input);
-      if (!Array.isArray(list)) return list;
+      if (list === undefined) return undefined;
       const q = (input as { query: string }).query;
-      return q.includes('!aspect=orbis/page') ? list : [pageRow, ...list];
+      return q.includes('!aspect=orbis/page') ? list : { ...list, rows: [pageRow, ...list.rows] };
     },
   );
   await waitFor(() => expect(screen.getAllByTestId('entity-row')).toHaveLength(3));

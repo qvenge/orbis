@@ -187,6 +187,7 @@ import { resetRegistryVersionForTests } from '../../../lib/registry/useRegistry'
 import { mayLeave } from '../../../state/leave-guard';
 import {
   type MockHandler,
+  queryReply,
   renderWithProviders,
   trpcError,
   wireEntity,
@@ -422,7 +423,7 @@ it.each([
     if (path === 'entity.get')
       return { entity: current, relations, registryVersion: registry.version };
     if (path === 'entity.query')
-      return [wireEntity({ id: neighbor, title: 'Сосед', props: {}, aspects: [] })];
+      return queryReply([wireEntity({ id: neighbor, title: 'Сосед', props: {}, aspects: [] })]);
     if (path === 'entity.resolveRefs')
       return (input as { ids: string[] }).ids.map((id) => ({
         id,
@@ -539,7 +540,7 @@ const handler: MockHandler = (path) =>
     : path === 'registry.effective'
       ? registry
       : path === 'entity.query'
-        ? []
+        ? queryReply([])
         : path === 'entity.resolveRefs'
           ? []
           : {};

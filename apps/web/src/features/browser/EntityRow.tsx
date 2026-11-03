@@ -6,7 +6,7 @@ import { useRowProjection } from '../../lib/registry/row';
 import { useRegistry } from '../../lib/registry/useRegistry';
 import type { RouterOutputs } from '../../trpc';
 
-type Entity = RouterOutputs['entity']['query'][number];
+type Entity = RouterOutputs['entity']['query']['rows'][number];
 
 const AMOUNT_TONE_CLASS: Record<MoneyTone, string> = {
   danger: 'text-danger',

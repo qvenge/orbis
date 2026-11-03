@@ -48,7 +48,7 @@ import { useExtensionEnabled } from '../settings/extension-mask';
 import { isUndoEpoch, subscribeUndoEpoch, undoEpoch } from '../undo/undo-epoch';
 import { useHostReadOnly } from './record-host';
 
-type Entity = RouterOutputs['entity']['query'][number];
+type Entity = RouterOutputs['entity']['query']['rows'][number];
 
 // §3.6 rich-money: тон из formatMoney — expense→danger, income→success.
 const AMOUNT_TONE_CLASS: Record<MoneyTone, string> = {

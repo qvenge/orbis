@@ -13,6 +13,7 @@ import { noteRegistryVersion, resetRegistryVersionForTests } from '../../lib/reg
 import {
   installCrashTrap,
   type MockHandler,
+  queryReply,
   renderWithProviders,
   trpcError,
   type WireEntityFixture,
@@ -81,12 +82,13 @@ function open(
   );
   const handler: MockHandler = async (path, input, type) => {
     const q = (input as { query?: unknown } | undefined)?.query;
-    if (path === 'entity.query' && q === PAGE_TEMPLATES_QUERY) return opts.templates ?? [];
+    if (path === 'entity.query' && q === PAGE_TEMPLATES_QUERY)
+      return queryReply(opts.templates ?? []);
     if (path === 'entity.query' && q === SUPPLY_RECORDS_QUERY) {
       if (opts.supplyGate !== undefined) await opts.supplyGate;
       if (opts.supplyFails === true)
         throw trpcError('INTERNAL_SERVER_ERROR', 'поставка недоступна');
-      if (opts.supply !== undefined) return opts.supply;
+      if (opts.supply !== undefined) return queryReply(opts.supply);
     }
     return base(path, input, type);
   };

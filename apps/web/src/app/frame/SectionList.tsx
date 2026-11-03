@@ -52,7 +52,7 @@ export function SectionList({
         if (id !== undefined && id !== null) out.set(id, HOST_APP);
       }
     }
-    for (const r of homed.data ?? []) {
+    for (const r of homed.data?.rows ?? []) {
       const h = r.props[HOME_PROPERTY];
       const key = typeof h === 'string' && h !== '' && h !== apps.hostShell?.id ? h : HOST_APP;
       if (key !== app) out.set(r.id, key);

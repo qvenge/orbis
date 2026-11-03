@@ -17,6 +17,7 @@ import {
   blockTexts,
   installCrashTrap,
   type MockHandler,
+  queryReply,
   renderWithProviders,
   trpcError,
   type WireEntityFixture,
@@ -88,7 +89,7 @@ function openPage(
     // обвязку, а не путь данных (мутация (б) задачи 13).
     const text = path === 'entity.query' ? (input as { query?: string }).query?.trim() : undefined;
     const direct = text === undefined ? undefined : map[text];
-    if (Array.isArray(direct)) return direct;
+    if (Array.isArray(direct)) return queryReply(direct);
     return blocks(path, input) ?? screenHandler(path, input);
   };
   return renderWithProviders(<DetailScreen entityId={entity.id} />, handler, {
@@ -507,7 +508,7 @@ describe('плашка «второй» (SECOND_BLOCK, 1а новое-11)', () =
       extra: f.extra ?? {},
       over: (path, input) =>
         path === 'entity.query' && (input as { query?: string }).query === PAGE_TEMPLATES_QUERY
-          ? [tpl]
+          ? queryReply([tpl])
           : undefined,
     });
   }

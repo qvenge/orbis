@@ -430,7 +430,9 @@ describe('категории §7.1', () => {
     const caller = callerFor(user);
     await caller.user.seedOnboarding();
 
-    const rows = await caller.entity.query({ query: 'tags=category, sortBy=orbis/created_at:asc' });
+    const { rows } = await caller.entity.query({
+      query: 'tags=category, sortBy=orbis/created_at:asc',
+    });
     expect(rows.length).toBe(12);
     // Проверка формы — ТЕМ ЖЕ валидатором, которым её проверяет запись (стадия 2
     // исполнителя, `assertEntityProps` по эффективному снимку реестра). Прежде здесь стояла
@@ -473,7 +475,7 @@ describe('категории §7.1', () => {
     const caller = callerFor(user);
     await caller.user.seedOnboarding();
 
-    const rows = await caller.entity.query({ query: 'tags=category, search=Еда' });
+    const { rows } = await caller.entity.query({ query: 'tags=category, search=Еда' });
     expect(rows.map((r) => r.title)).toContain('Еда');
     expect(rows.every((r) => r.tags.includes('category'))).toBe(true);
   });
@@ -691,7 +693,7 @@ describe('smart lists §7.2 / §3.3', () => {
     );
     expect(upcoming.length).toBe(0);
     // Тега `smart-list` нет ни на одной записи графа — поиск по нему пуст.
-    expect(await callerFor(user).entity.query({ query: 'tags=smart-list' })).toEqual([]);
+    expect((await callerFor(user).entity.query({ query: 'tags=smart-list' })).rows).toEqual([]);
   });
 });
 
@@ -786,7 +788,7 @@ describe('горизонты показывают обещанное (§3.3, E4)
   async function idsOfBlock(user: GraphId, body: string, index: number): Promise<Set<string>> {
     const block = queryBlocksOf(body)[index];
     if (block === undefined) throw new Error(`в body нет query-блока №${index}`);
-    const rows = await callerFor(user).entity.query({ query: block });
+    const { rows } = await callerFor(user).entity.query({ query: block });
     return new Set(rows.map((r) => r.id));
   }
 
@@ -874,7 +876,7 @@ describe('смарт-лист «Рутины» (§3.3, §7.2, V1.9, D42)', () =>
   async function idsOfBlock(user: GraphId, index: number): Promise<Set<string>> {
     const block = queryBlocksOf(ROUTINES_LIST_BODY)[index];
     if (block === undefined) throw new Error(`в теле «Рутин» нет query-блока №${index}`);
-    const rows = await callerFor(user).entity.query({ query: block });
+    const { rows } = await callerFor(user).entity.query({ query: block });
     return new Set(rows.map((r) => r.id));
   }
 
@@ -1113,6 +1115,9 @@ describe('заведение графа (§8.6, РП-15, С1б-5)', () => {
     expect(await caller.user.seedOnboarding()).toEqual({ seeded: false });
     expect(await worldSnapshot(user)).toEqual(before);
     expect((await rowOf(user, supplyRecordId(user, 'host-shell'))).archived).toBe(true);
+    expect((await caller.user.getSettings()).graphEstablished).toBe(true);
+    await deleteRow(user, supplyRecordId(user, 'host-shell'));
+    expect((await caller.user.getSettings()).graphEstablished).toBe(false);
   });
 
   test('(д) мир старой формы без оболочки хоста — отказ GRAPH_NEEDS_MIGRATION, ни одной записи', async () => {

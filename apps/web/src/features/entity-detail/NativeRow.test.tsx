@@ -9,7 +9,7 @@ import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
 import { expect, test, vi } from 'vitest';
 import type { MockHandler } from '../../test/harness';
-import { renderWithProviders, trpcError, wireEntity } from '../../test/harness';
+import { queryReply, renderWithProviders, trpcError, wireEntity } from '../../test/harness';
 import { BUILTIN_REGISTRY, registryReply } from '../../test/registry';
 import { NativeRow } from './NativeRow';
 
@@ -251,7 +251,7 @@ test('financial: бейдж — НАЗВАНИЕ категории, а не uui
       })}
       onToggleTask={() => {}}
     />,
-    withCategories([category(CAT_FOOD, 'Еда')]),
+    withCategories(queryReply([category(CAT_FOOD, 'Еда')])),
   );
   expect(await screen.findByText('Еда')).toBeInTheDocument();
   expect(screen.queryByText(CAT_FOOD)).toBeNull();
@@ -283,7 +283,7 @@ test('financial: категории нет в списке → uuid как за�
         onToggleTask={() => {}}
       />
     </>,
-    withCategories([category(CAT_FOOD, 'Еда')]),
+    withCategories(queryReply([category(CAT_FOOD, 'Еда')])),
   );
   // Обе строки делят один запрос и один кэш — «Еда» доказывает, что список уже разрешён.
   expect(await screen.findByText('Еда')).toBeInTheDocument();
@@ -313,7 +313,7 @@ test('financial: пока категории грузятся, бейджа с u
   expect(screen.queryByText(CAT_FOOD)).toBeNull();
   expect(screen.getByTestId('native-row').querySelectorAll('span')).toHaveLength(2);
 
-  release([category(CAT_FOOD, 'Еда')]);
+  release(queryReply([category(CAT_FOOD, 'Еда')]));
   expect(await screen.findByText('Еда')).toBeInTheDocument();
 });
 
@@ -350,7 +350,7 @@ test('конверт: бейджа категории нет и список к�
       )}
       onToggleTask={() => {}}
     />,
-    withCategories([category(CAT_FOOD, 'Еда')]),
+    withCategories(queryReply([category(CAT_FOOD, 'Еда')])),
   );
   await screen.findByText('Конверт Еда');
   await waitFor(() => expect(screen.queryByText('Еда')).toBeNull());
@@ -364,7 +364,7 @@ test('снятый аспект-носитель: бейджа категори�
       entity={row({ 'orbis/finance_category': CAT_FOOD }, [], { title: 'Осиротевшая запись' })}
       onToggleTask={() => {}}
     />,
-    withCategories([category(CAT_FOOD, 'Еда')]),
+    withCategories(queryReply([category(CAT_FOOD, 'Еда')])),
   );
   await screen.findByText('Осиротевшая запись');
   // Запрос списка категорий — наблюдаемый след бейджа: он уходит из `CategoryBadge`, и его
@@ -542,7 +542,7 @@ test('память: строка правила собрана из свойст
       onToggleTask={() => {}}
       onSaveTitle={() => {}}
     />,
-    withCategories([RULE_TARGET_CATEGORY]),
+    withCategories(queryReply([RULE_TARGET_CATEGORY])),
   );
   expect(screen.getByTestId('memory-rule-pattern')).toHaveTextContent('пятерочка');
   // Название категории — АКТУАЛЬНОЕ, по ссылке; сохранённая подпись в заголовке при этом
@@ -577,7 +577,7 @@ test('память: предупреждения о формате заголо�
         onToggleTask={() => {}}
         onSaveTitle={() => {}}
       />,
-      withCategories([RULE_TARGET_CATEGORY]),
+      withCategories(queryReply([RULE_TARGET_CATEGORY])),
     );
     expect(screen.queryByTestId('title-warning')).toBeNull();
     expect(screen.getByTestId('title-edit')).not.toHaveAttribute('aria-describedby');

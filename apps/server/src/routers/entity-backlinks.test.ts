@@ -112,6 +112,7 @@ test('backlinks: секция «Связанное» подписывает на
   await caller.relation.create({ source_id: target.id, target_id: mentioned.id, role: 'mention' });
 
   const got = await caller.entity.get({ id: target.id, include: ['backlinks'] });
+  expect(got.freshness).toMatchObject({ graph: true, registry: true });
   const labels = new Map((got.backlinks ?? []).map((b) => [b.entity.id, b.viaLabel]));
   // Подписи — ИЗ РЕЕСТРА (builtin-roles: source_label/target_label роли `mention`),
   // а не из словаря клиента: у web своего словаря направлений больше нет.
@@ -204,11 +205,23 @@ test('backlinks: архивные исключены (обе стороны — 
     target_id: target.id,
     role: 'mention',
   });
+  const detail = () => caller.entity.get({ id: target.id, include: ['backlinks'] });
+  expect((await detail()).freshness).toMatchObject({
+    graph: true,
+    entityIds: expect.arrayContaining([target.id, relArchived.id, mentionArchived.id]),
+  });
   await caller.entity.update({ id: relArchived.id, archived: true });
   await caller.entity.update({ id: mentionArchived.id, archived: true });
 
-  const got = await caller.entity.get({ id: target.id, include: ['backlinks'] });
+  const got = await detail();
   expect(got.backlinks).toEqual([]);
+  expect(got.freshness).toMatchObject({ graph: true, entityIds: [target.id] });
+
+  await caller.entity.update({ id: mentionArchived.id, archived: false });
+  await caller.entity.update({ id: mentionArchived.id, title: 'Новое имя источника' });
+  expect((await detail()).backlinks).toMatchObject([
+    { entity: { id: mentionArchived.id, title: 'Новое имя источника' } },
+  ]);
 });
 
 test('backlinks: чужая сущность недостижима (RLS)', async () => {

@@ -34,7 +34,7 @@ import {
   useQueryClient,
 } from '@tanstack/react-query';
 import { createContext, type ReactNode, useContext, useEffect, useMemo, useRef } from 'react';
-import { trpc } from '../../trpc';
+import { inheritNetworkReadReceipt, trpc } from '../../trpc';
 import { useThisEntityId } from './this-entity';
 
 export const QUERY_BLOCK_KEY = 'query-block';
@@ -52,7 +52,6 @@ type BlockAsk = Omit<EntityBlockTextItem, 'key'> | Omit<EntityBlockBadgeItem, 'k
  */
 export type BlockData =
   | Exclude<BlockResult, { kind: 'groups' | 'rows' }>
-  // Строки — с поясом ответа: форма `list` печатает дату строки в нём, а не в поясе браузера (М-2 ревью C).
   | (Extract<BlockResult, { kind: 'rows' }> & { timeZone: string })
   | (Extract<BlockResult, { kind: 'groups' }> & { today: string; timeZone: string });
 type Pending = { ask: BlockAsk; resolve: (r: BlockData) => void; reject: (e: unknown) => void };
@@ -144,9 +143,8 @@ export function QueryBatchProvider({ children }: { children: ReactNode }) {
     const send = async (chunk: Pending[]) => {
       const blocks: BlockItem[] = chunk.map((p, i) => ({ ...p.ask, key: String(i) }));
       try {
-        const { results, today, timeZone } = await clientRef.current.entity.blocks.mutate({
-          blocks,
-        });
+        const response = await clientRef.current.entity.blocks.mutate({ blocks });
+        const { results, today, timeZone } = response;
         chunk.forEach((p, i) => {
           const r = results[String(i)];
           if (r === undefined) {
@@ -157,13 +155,14 @@ export function QueryBatchProvider({ children }: { children: ReactNode }) {
               }),
             );
           } else if (r.ok) {
-            p.resolve(
+            const result =
               r.kind === 'groups'
                 ? { ...r, today, timeZone }
                 : r.kind === 'rows'
                   ? { ...r, timeZone }
-                  : r,
-            );
+                  : r;
+            inheritNetworkReadReceipt(response, result);
+            p.resolve(result);
           } else {
             p.reject(new BlockDataError(r.error));
           }

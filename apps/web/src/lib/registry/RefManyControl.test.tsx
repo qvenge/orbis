@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
 import { expect, test, vi } from 'vitest';
 import { field } from '../../features/entity-detail/properties-relations/test-fixtures';
-import { renderWithProviders, wireEntity } from '../../test/harness';
+import { queryReply, renderWithProviders, wireEntity } from '../../test/harness';
 import { PropertyControl } from './PropertyControl';
 import { RefManyControl } from './RefManyControl';
 
@@ -62,7 +62,7 @@ test('архив/недоступные/51 выбранная остаются, 
       path === 'entity.resolveRefs'
         ? [resolved]
         : path === 'entity.query'
-          ? [wireEntity({ id: next, title: 'Сама запись' })]
+          ? queryReply([wireEntity({ id: next, title: 'Сама запись' })])
           : {},
   );
   await screen.findByText('Старое в архиве');
@@ -103,7 +103,10 @@ test('max, disabled и selected exclude запрещают add, серверны
     (path) =>
       path === 'entity.resolveRefs'
         ? [resolved]
-        : [wireEntity({ id: old, title: 'Выбранное' }), wireEntity({ id: next, title: 'Новое' })],
+        : queryReply([
+            wireEntity({ id: old, title: 'Выбранное' }),
+            wireEntity({ id: next, title: 'Новое' }),
+          ]),
   );
   await screen.findByRole('button', { name: 'Добавить: Новое' });
   expect(screen.queryByRole('button', { name: 'Добавить: Выбранное' })).toBeNull();
@@ -125,11 +128,13 @@ test('ошибка поиска отличается от empty; raw20 пока�
     if (path === 'entity.resolveRefs') return [resolved];
     if (path === 'entity.query') {
       if (failed) throw new Error('network');
-      return Array.from({ length: 20 }, (_, i) =>
-        wireEntity({
-          id: i === 0 ? old : `00000000-0000-4000-8000-${String(i + 2).padStart(12, '0')}`,
-          title: `Найдено ${i}`,
-        }),
+      return queryReply(
+        Array.from({ length: 20 }, (_, i) =>
+          wireEntity({
+            id: i === 0 ? old : `00000000-0000-4000-8000-${String(i + 2).padStart(12, '0')}`,
+            title: `Найдено ${i}`,
+          }),
+        ),
       );
     }
     return {};
@@ -168,7 +173,7 @@ test('PropertyControl generic many opt-in сохраняет self, legacy без
       path === 'entity.resolveRefs'
         ? [resolved]
         : path === 'entity.query'
-          ? [wireEntity({ id: next, title: 'Самоссылка' })]
+          ? queryReply([wireEntity({ id: next, title: 'Самоссылка' })])
           : {},
   );
   fireEvent.click(await screen.findByRole('button', { name: 'Добавить: Самоссылка' }));
