@@ -2,8 +2,9 @@
 // (E2, goals/progress.ts) и кладёт его СОСЕДОМ сущности в ответ entity.get — клиент только
 // рисует полосу и объясняет, когда посчитать не вышло.
 import { parseBody } from '@orbis/shared/doc';
-import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
+import { testFreshnessOf } from '../../test/freshness';
 import { type MockHandler, renderWithProviders, wireEntity } from '../../test/harness';
 import { navAt } from '../../test/nav';
 import { registryReply } from '../../test/registry';
@@ -249,7 +250,8 @@ test('пустой массив показан прочерком, а не пу�
 
 test('прогресс обновляется после создания сущности из другого места экрана', async () => {
   let current = '150000.00';
-  const handler: MockHandler = (path) => {
+  let createdId: string | undefined;
+  const handler: MockHandler = (path, input) => {
     if (path === 'entity.get')
       return {
         entity: goal,
@@ -259,22 +261,34 @@ test('прогресс обновляется после создания сущ
         goalProgress: { current, target: '300000.00' },
       };
     if (path === 'entity.create') {
-      current = '200000.00'; // сервер посчитает прогресс заново на следующем чтении
-      return { ...goal, id: 'new' };
+      const created = (input as { input: { id: string; title: string } }).input;
+      createdId = created.id;
+      current = '200000.00';
+      return wireEntity({ id: created.id, title: created.title, graphId: 'owner' });
     }
     // Реестр — шаблону хоста: полосу прогресса он ставит карточкой `{{card: orbis/goal}}`, а
     // карточку по имени аспекта узнаёт только реестр (задача 14 страниц 1а).
     return registryReply(path) ?? {};
   };
-  renderWithProviders(
+  const { queryClient } = renderWithProviders(
     <>
       <DetailScreen entityId="g1" />
       <QuickCapture context={{ kind: 'root' }} />
     </>,
     handler,
+    { freshness: true },
   );
   expect(await screen.findByText('150 000 / 300 000')).toBeInTheDocument();
   fireEvent.change(screen.getByLabelText('Быстрая запись'), { target: { value: 'зарплата' } });
   fireEvent.click(screen.getByLabelText('Добавить'));
-  await waitFor(() => expect(screen.getByText('200 000 / 300 000')).toBeInTheDocument());
+  await waitFor(() => expect(screen.getByLabelText('Быстрая запись')).toHaveValue(''));
+  expect(screen.getByText('150 000 / 300 000')).toBeInTheDocument();
+  const committed = createdId;
+  if (!committed) throw new Error('Missing committed create');
+  act(() =>
+    testFreshnessOf(queryClient).changes([
+      { kind: 'entity', rowKey: committed, operation: 'insert' },
+    ]),
+  );
+  await screen.findByText('200 000 / 300 000');
 });

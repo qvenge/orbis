@@ -7,9 +7,11 @@ const Inbox = lazy(() => import('./Inbox').then((m) => ({ default: m.Inbox })));
 export function PlanningBlockSlot({
   kind,
   onOpen,
+  captureSlot,
 }: {
   kind: 'day-planner' | 'inbox';
   onOpen: (id: string) => void;
+  captureSlot?: string;
 }) {
   const readOnly = useHostReadOnly();
   if (readOnly)
@@ -26,7 +28,11 @@ export function PlanningBlockSlot({
         </p>
       }
     >
-      {kind === 'day-planner' ? <Day onOpen={onOpen} /> : <Inbox onOpen={onOpen} />}
+      {kind === 'day-planner' ? (
+        <Day onOpen={onOpen} captureSlot={captureSlot} />
+      ) : (
+        <Inbox onOpen={onOpen} captureSlot={captureSlot} />
+      )}
     </Suspense>
   );
 }

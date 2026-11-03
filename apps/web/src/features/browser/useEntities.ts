@@ -1,3 +1,4 @@
+import { getQueryKey } from '@trpc/react-query';
 import { useState } from 'react';
 import { trpc } from '../../trpc';
 import { browserQuery } from './query';
@@ -14,6 +15,7 @@ export function useEntities(filters: string, showPagesAndApps: boolean) {
   // рисует пустое состояние и врёт про содержимое графа (бэклог фазы D, MemoryScreen).
   return {
     entities,
+    queryKey: getQueryKey(trpc.entity.query, { query }, 'query'),
     hasMore,
     loadMore: () => setLimit((l) => l + PAGE),
     isLoading: q.isLoading,

@@ -3,6 +3,11 @@ import { getQueryKey } from '@trpc/react-query';
 import { useCallback, useRef, useState, useSyncExternalStore } from 'react';
 import { freshnessRuntimeOf } from '../../lib/freshness/provenance';
 import { useFreshnessVisible } from '../../lib/freshness/screen';
+import {
+  useCreateAwareOpen,
+  useCreatePlacement,
+  useCreateSurface,
+} from '../../lib/optimistic/use-create-intent';
 import { useRegistry } from '../../lib/registry/useRegistry';
 import { trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
@@ -18,7 +23,13 @@ import {
 } from './model';
 import { PlanningCapture } from './PlanningCapture';
 
-export function Inbox({ onOpen }: { onOpen: (id: string) => void }) {
+export function Inbox({
+  onOpen,
+  captureSlot,
+}: {
+  onOpen: (id: string) => void;
+  captureSlot?: string;
+}) {
   const [tab, setTab] = useState<'pending' | 'later'>('pending');
   const [limit, setLimit] = useState(50);
   const [busy, setBusy] = useState(false);
@@ -33,7 +44,8 @@ export function Inbox({ onOpen }: { onOpen: (id: string) => void }) {
   };
   const q = trpc.entity.query.useQuery(input, { enabled: shown && !!registry.data });
   const runtime = freshnessRuntimeOf(client);
-  const hash = hashKey(getQueryKey(trpc.entity.query, input, 'query'));
+  const key = getQueryKey(trpc.entity.query, input, 'query');
+  const hash = hashKey(key);
   const subscribe = useCallback(
     (listener: () => void) => runtime?.subscribePublication(hash, listener) ?? (() => {}),
     [runtime, hash],
@@ -48,7 +60,11 @@ export function Inbox({ onOpen }: { onOpen: (id: string) => void }) {
       .filter((r) => classifyInbox(r) === tab)
       .map((r) => r.id),
   );
-  const rows = (q.data?.rows ?? []).filter((r) => members.has(r.id));
+  const placement = { key, ids: [...members] };
+  const origin = useCreateSurface('inbox', captureSlot);
+  const { hiddenCanonical } = useCreatePlacement(origin, placement);
+  const openRecord = useCreateAwareOpen(onOpen);
+  const rows = (q.data?.rows ?? []).filter((r) => members.has(r.id) && !hiddenCanonical.has(r.id));
   async function triage(
     r: PlanningRecord,
     choice: 'task' | 'note' | 'later' | 'pending' | 'archive',
@@ -92,7 +108,7 @@ export function Inbox({ onOpen }: { onOpen: (id: string) => void }) {
   }
   return (
     <section aria-label="Входящие" className="mx-auto w-full max-w-3xl space-y-5 py-2">
-      <PlanningCapture />
+      <PlanningCapture captureSlot={captureSlot} placement={placement} />
       <div className="flex gap-1 border-b border-line pb-2">
         <Button
           variant={tab === 'pending' ? 'primary' : 'ghost'}
@@ -157,7 +173,7 @@ export function Inbox({ onOpen }: { onOpen: (id: string) => void }) {
               >
                 <button
                   type="button"
-                  onClick={() => onOpen(r.id)}
+                  onClick={() => openRecord(r.id)}
                   className="w-full cursor-pointer text-left font-medium text-text break-words focus-visible:outline-accent"
                 >
                   {r.title}

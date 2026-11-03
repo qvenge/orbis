@@ -1,3 +1,4 @@
+import { type QueryClient, useQueryClient } from '@tanstack/react-query';
 import { useLayoutEffect } from 'react';
 import { trpc } from '../../trpc';
 
@@ -7,20 +8,25 @@ import { trpc } from '../../trpc';
  * тестов (`renderWithProviders`: каждый рендер — свой клиент и свой мок сети).
  */
 export type UndoUtils = ReturnType<typeof trpc.useUtils>;
-let bound: UndoUtils | null = null;
-export function bindUndo(u: UndoUtils | null): void {
-  bound = u;
+let bound: { utils: UndoUtils; queryClient?: QueryClient } | null = null;
+export function bindUndo(utils: UndoUtils | null, queryClient?: QueryClient): void {
+  bound = utils && { utils, queryClient };
 }
 export function boundUndoUtils(): UndoUtils | null {
-  return bound;
+  return bound?.utils ?? null;
+}
+export function boundUndoQueryClient(): QueryClient | undefined {
+  return bound?.queryClient;
 }
 export function UndoBinder(): null {
   const utils = trpc.useUtils();
+  const queryClient = useQueryClient();
   useLayoutEffect(() => {
-    bindUndo(utils);
+    bindUndo(utils, queryClient);
+    const binding = bound;
     return () => {
-      if (boundUndoUtils() === utils) bindUndo(null);
+      if (bound === binding) bindUndo(null);
     };
-  }, [utils]);
+  }, [utils, queryClient]);
   return null;
 }

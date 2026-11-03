@@ -633,7 +633,7 @@ test('подзадачи: подпункт рождается ЗАДАЧЕЙ; с
     if (path === 'entity.create') {
       const { input: created } = input as { input: { id: string; title: string } };
       childId = created.id;
-      return { ...entity, id: created.id, title: created.title };
+      return { ...entity, id: created.id, title: created.title, graphId: 'owner' };
     }
     return registryReply(path) ?? {};
   });
@@ -671,7 +671,9 @@ test('подзадачи: подпункт рождается ЗАДАЧЕЙ; с
   expect(calls.filter((call) => call.path === 'relation.create')).toHaveLength(0);
 
   expect(await screen.findByTestId('subtask')).toBeInTheDocument();
-  expect(await screen.findByRole('button', { name: 'Купить молоко' })).toBeInTheDocument();
+  expect(
+    await within(await screen.findByTestId('subtask')).findByText('Купить молоко'),
+  ).toBeInTheDocument();
   // Второе чтение той же выборки ушло: секция живёт на relations из entity.get.
   expect(calls.some((c) => c.path === 'relation.listFor')).toBe(false);
 });
@@ -726,7 +728,7 @@ test('создание подзадачи инвалидирует entity.query 
   expect(calls.filter((call) => call.path === 'relation.create')).toHaveLength(0);
 });
 
-test('атомарный отказ подзадачи: тост, сохранённый черновик и тот же id при повторе', async () => {
+test('атомарный отказ подзадачи сохраняет причину и черновик, новая отправка получает новый UUID', async () => {
   let attempts = 0;
   const { calls } = renderWithProviders(
     <>
@@ -735,7 +737,7 @@ test('атомарный отказ подзадачи: тост, сохранё
     </>,
     (path, input) => {
       if (path === 'entity.create') {
-        if (++attempts === 1) throw trpcError('NOT_FOUND');
+        if (++attempts === 1) throw trpcError('NOT_FOUND', 'Родитель удалён');
         const created = (input as { input: { id: string; title: string } }).input;
         return { ...entity, id: created.id, title: created.title };
       }
@@ -745,13 +747,16 @@ test('атомарный отказ подзадачи: тост, сохранё
   const field = screen.getByLabelText('Новая подзадача');
   fireEvent.change(field, { target: { value: 'Купить молоко' } });
   fireEvent.keyDown(field, { key: 'Enter' });
-  expect(await screen.findByText('Не удалось сохранить')).toBeInTheDocument();
+  expect(await screen.findByText('Родитель удалён')).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Повторить сохранение' })).toBeNull();
   expect(field).toHaveValue('Купить молоко');
   fireEvent.keyDown(field, { key: 'Enter' });
   await waitFor(() => expect(field).toHaveValue(''));
   const creates = calls.filter((call) => call.path === 'entity.create');
   expect(creates).toHaveLength(2);
-  expect(creates[1]?.input).toEqual(creates[0]?.input);
+  expect((creates[1]?.input as { input: { id: string } }).input.id).not.toBe(
+    (creates[0]?.input as { input: { id: string } }).input.id,
+  );
   expect(creates[1]?.input).toMatchObject({ link: { parentId: 'e1', role: 'subitem' } });
   expect(calls.filter((call) => call.path === 'relation.create')).toHaveLength(0);
 });
@@ -771,13 +776,14 @@ function SubtasksSwitch() {
 
 test('подзадача: тот же текст после отказа и смены родителя получает новый id', async () => {
   const { calls } = renderWithProviders(<SubtasksSwitch />, (path) => {
-    if (path === 'entity.create') throw trpcError('NOT_FOUND');
+    if (path === 'entity.create') throw trpcError('NOT_FOUND', 'Родитель недоступен');
     return registryReply(path) ?? {};
   });
   const field = screen.getByLabelText('Новая подзадача');
   fireEvent.change(field, { target: { value: 'Купить молоко' } });
   fireEvent.keyDown(field, { key: 'Enter' });
-  await screen.findByText('Не удалось сохранить');
+  await screen.findByText('Родитель недоступен');
+  expect(field).toHaveValue('Купить молоко');
   fireEvent.click(screen.getByRole('button', { name: 'Другой родитель' }));
   fireEvent.keyDown(field, { key: 'Enter' });
   await waitFor(() =>

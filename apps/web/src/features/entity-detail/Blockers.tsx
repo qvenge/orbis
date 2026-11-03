@@ -1,12 +1,16 @@
 import { ROLE_DEPENDENCY } from '@orbis/shared';
 import { Ban, Plus, X } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useOpenRecord } from '../../app/useOpenRecord';
 import { useFreshnessVisible } from '../../lib/freshness/screen';
+import type { RelationKey } from '../../lib/optimistic/adapters';
+import {
+  type RelationOperation,
+  useRelationCommand,
+} from '../../lib/optimistic/use-relation-command';
 import { type RouterOutputs, trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
 import { Spinner } from '../../ui/Spinner';
-import { journalRefOf } from '../undo/journal-ref';
 import { offerUndoLazy } from '../undo/undo-lazy';
 import { pushUndoable } from '../undo/undo-stack';
 import { useHostReadOnly } from './record-host';
@@ -60,6 +64,19 @@ export function Blockers({ entityId, relations }: { entityId: string; relations:
   const [draft, setDraft] = useState('');
   const [direction, setDirection] = useState<Direction>('out');
   const [confirming, setConfirming] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const locked = useRef(false);
+  const [failure, setFailure] = useState<{
+    entityId: string;
+    kind: 'rejected' | 'unknown';
+    message: string;
+    operation: RelationOperation;
+    key: RelationKey;
+  }>();
+  const activeFailure = failure?.entityId === entityId ? failure : undefined;
+  const currentId = useRef(entityId);
+  currentId.current = entityId;
+  const { run, reconcile } = useRelationCommand();
 
   const blocks = relations.filter((r) => r.role === ROLE_DEPENDENCY);
   const outgoing = blocks.filter((r) => r.sourceId === entityId);
@@ -100,51 +117,55 @@ export function Blockers({ entityId, relations }: { entityId: string; relations:
     (e) => !known.has(e.id) && (direction === 'out' || e.completable?.closed !== true),
   );
 
-  // Ацикличность blocks проверяет сервер (§4.2): путь цикла доезжает ТОЛЬКО в message
-  // (cause по HTTP не сериализуется) — его и показываем плашкой (02 §6).
-  const relate = trpc.relation.create.useMutation({
-    meta: { undoStack: 'self' },
-    // Плашка одна на две мутации, поэтому старт каждой гасит чужую ошибку: иначе отказ
-    // создания («замкнула бы цикл») перекрывал бы любой последующий отказ снятия и висел
-    // бы даже после успешных действий.
-    // Тело-блок, а не `() => unrelate.reset()`: возвращённое значение onMutate — это
-    // context мутации, и вывод его типа замкнулся бы на саму мутацию (TS7022).
-    onMutate: () => {
-      unrelate.reset();
-    },
-    onSuccess: (data, vars) => {
-      const ref = journalRefOf(data);
-      if (ref)
-        pushUndoable({
-          actionId: ref.actionId,
-          title: `блокировка «${title(vars.source_id === entityId ? vars.target_id : vars.source_id)}»`,
-          entityIds: [],
-        });
+  function finish(operation: RelationOperation) {
+    if (operation === 'delete') setConfirming(null);
+    else {
       setDraft('');
       setAdding(false);
-      // Направление — часть состояния формы: без сброса внешне свежая форма молча
-      // создавала бы следующую связь в обратную сторону.
       setDirection('out');
-    },
-  });
-  // Снятие связи предлагает отмену собственного действия журнала.
-  const unrelate = trpc.relation.delete.useMutation({
-    meta: { undoStack: 'self' },
-    onMutate: () => {
-      relate.reset();
-    },
-    onSuccess: (data, vars) => {
-      const ref = journalRefOf(data);
-      if (ref)
-        offerUndoLazy({
-          title: `Блокировка снята: «${title(vars.source_id === entityId ? vars.target_id : vars.source_id)}»`,
-          actionId: ref.actionId,
-          entityIds: [],
-        });
-      setConfirming(null);
-    },
-  });
-  const failure = relate.error ?? unrelate.error;
+    }
+  }
+
+  async function mutate(operation: RelationOperation, key: RelationKey) {
+    if (locked.current || activeFailure?.kind === 'unknown') return;
+    const label = title(key.source_id === entityId ? key.target_id : key.source_id);
+    locked.current = true;
+    setBusy(true);
+    setFailure(undefined);
+    try {
+      const outcome = await run(operation, key);
+      if (!outcome) return;
+      if (outcome.kind !== 'confirmed') {
+        if (currentId.current === entityId) setFailure({ ...outcome, operation, key, entityId });
+        return;
+      }
+      if (outcome.actionId && typeof outcome.consequences === 'boolean') {
+        const entry = { actionId: outcome.actionId, entityIds: [] };
+        if (operation === 'delete')
+          offerUndoLazy({ ...entry, title: `Блокировка снята: «${label}»` });
+        else pushUndoable({ ...entry, title: `блокировка «${label}»` });
+      }
+      if (currentId.current === entityId) finish(operation);
+    } finally {
+      locked.current = false;
+      setBusy(false);
+    }
+  }
+
+  async function verifyFailure() {
+    if (!activeFailure || locked.current) return;
+    locked.current = true;
+    setBusy(true);
+    try {
+      const result = await reconcile(entityId, activeFailure.operation, activeFailure.key);
+      if (result === 'unavailable' || currentId.current !== entityId) return;
+      setFailure(undefined);
+      if (result === 'matches') finish(activeFailure.operation);
+    } finally {
+      locked.current = false;
+      setBusy(false);
+    }
+  }
 
   const open = openRecord;
   const list = (label: string, items: Relation[]) => (
@@ -159,7 +180,9 @@ export function Blockers({ entityId, relations }: { entityId: string; relations:
               onClick={() => open(other(r))}
               className="min-w-0 flex-1 cursor-pointer truncate text-left hover:underline"
             >
-              {title(other(r))}
+              {byId.get(other(r))?.title ??
+                search.data?.find((row) => row.id === other(r))?.title ??
+                title(other(r))}
             </button>
             {/* Подтверждение-минимум: соседние разрушающие действия web («Снять аспект»,
                 «Архивировать») модалок не заводят, а Undo по actionId здесь недоступен —
@@ -170,9 +193,9 @@ export function Blockers({ entityId, relations }: { entityId: string; relations:
                   variant="ghost"
                   size="sm"
                   className="shrink-0 text-danger"
-                  disabled={unrelate.isPending}
+                  disabled={busy || activeFailure?.kind === 'unknown'}
                   onClick={() =>
-                    unrelate.mutate({
+                    void mutate('delete', {
                       source_id: r.sourceId,
                       target_id: r.targetId,
                       role: ROLE_DEPENDENCY,
@@ -189,7 +212,7 @@ export function Blockers({ entityId, relations }: { entityId: string; relations:
                   // до ухода с экрана, хотя действие уже отменено.
                   onClick={() => {
                     setConfirming(null);
-                    unrelate.reset();
+                    if (activeFailure?.kind === 'rejected') setFailure(undefined);
                   }}
                 >
                   Отмена
@@ -202,6 +225,7 @@ export function Blockers({ entityId, relations }: { entityId: string; relations:
                 className="shrink-0"
                 aria-label="Снять блокировку"
                 title="Снять блокировку"
+                disabled={busy || activeFailure?.kind === 'unknown'}
                 onClick={() => setConfirming(r.id)}
               >
                 <X size={14} aria-hidden />
@@ -273,9 +297,10 @@ export function Blockers({ entityId, relations }: { entityId: string; relations:
                 <li key={e.id}>
                   <button
                     type="button"
-                    disabled={relate.isPending}
+                    disabled={busy || activeFailure?.kind === 'unknown'}
                     onClick={() =>
-                      relate.mutate(
+                      void mutate(
+                        'create',
                         direction === 'out'
                           ? { source_id: entityId, target_id: e.id, role: ROLE_DEPENDENCY }
                           : { source_id: e.id, target_id: entityId, role: ROLE_DEPENDENCY },
@@ -291,10 +316,20 @@ export function Blockers({ entityId, relations }: { entityId: string; relations:
           )}
         </div>
       )}
-      {failure && (
-        <p role="alert" className="px-2 text-sm text-danger">
-          {failure.message}
+      {busy && confirming && (
+        <p role="status" className={PICKER_NOTE}>
+          Снимается…
         </p>
+      )}
+      {activeFailure && (
+        <div role="alert" className="px-2 text-sm text-danger">
+          <p>{activeFailure.message}</p>
+          {activeFailure.kind === 'unknown' && (
+            <Button size="sm" disabled={busy} onClick={() => void verifyFailure()}>
+              Проверить состояние
+            </Button>
+          )}
+        </div>
       )}
     </div>
   );

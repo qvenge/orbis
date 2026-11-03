@@ -85,7 +85,13 @@ function HostCapture() {
   const overlay = useNav((s) => s.overlay);
   const place = overlay === null ? chatContextOf(model, 'side') : null;
   const kind = useRecordKind(place?.kind === 'record' ? place.id : null);
-  return <QuickCapture context={captureContextOf(place, kind !== 'record')} />;
+  return (
+    <QuickCapture
+      context={captureContextOf(place, kind !== 'record')}
+      surface="host-capture"
+      captureSlot={overlay?.path}
+    />
+  );
 }
 
 /**
@@ -116,6 +122,7 @@ function captureKeyOf(s: ReturnType<typeof useNav.getState>): string {
 export function HostButtons() {
   const pending = useRetryBuffer((s) => s.size);
   const [capture, setCapture] = useState(false);
+  const pendingCreate = useNav((s) => s.pendingCreate);
   const popupRef = useRef<HTMLDivElement>(null);
   const plusRef = useRef<HTMLButtonElement>(null);
   // Смена места закрывает «＋» — при рендере, а не эффектом: кадра со всплывашкой над новым местом нет.
@@ -126,7 +133,7 @@ export function HostButtons() {
     if (capture) setCapture(false);
   }
   useEffect(() => {
-    if (!capture) return;
+    if (!capture || pendingCreate) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
       setCapture(false);
@@ -145,7 +152,7 @@ export function HostButtons() {
       document.removeEventListener('keydown', onKey);
       document.removeEventListener('pointerdown', onDown, true);
     };
-  }, [capture]);
+  }, [capture, pendingCreate]);
   // Окно поиска или экран — по ширине (окно ⌘K живёт вне рамки); остальное — по рамке, в которой
   // нарисована капсула (`DesktopFrameContext`): рамка телефона на ширине десктопа (чанк рамки десктопа
   // едет или отказал) — телефонные 💬 и место капсулы.
@@ -160,6 +167,7 @@ export function HostButtons() {
       {capture && (
         <div
           ref={popupRef}
+          hidden={!!pendingCreate}
           data-testid="host-capture"
           className="pointer-events-auto w-[min(92vw,28rem)] rounded-card border border-line bg-surface pt-3 shadow-pop"
         >

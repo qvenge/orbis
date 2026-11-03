@@ -9,11 +9,14 @@ import { ChatScreen } from '../features/chat/ChatScreen';
 import { useSupplyRecords } from '../features/page/useSupplyRecords';
 import { MemoryScreen } from '../features/settings/MemoryScreen';
 import { SettingsScreen } from '../features/settings/SettingsScreen';
+import { FreshnessVisibility } from '../lib/freshness/screen';
+import { useCreateDispatch, useCreateIntent } from '../lib/optimistic/use-create-intent';
 import { useEntityMetadataUpdate } from '../lib/optimistic/useEntityMetadataUpdate';
 import { appKeyOf, HOST_HOME, type NavOverlay, useNav } from '../state/navigation';
 import { trpc } from '../trpc';
 import { Button } from '../ui/Button';
 import { EmptyState } from '../ui/EmptyState';
+import { useToast } from '../ui/toast-store';
 import { ChunkErrorBoundary } from './ChunkErrorBoundary';
 import { type FrameApp, FrameAppContext } from './frame/FrameApp';
 import { useAppShell } from './frame/useAppShell';
@@ -62,6 +65,19 @@ export function resetDetailScreenModuleForTests(): void {
 export function ActiveScreen() {
   const model = useNav((s) => s.model);
   const overlay = useNav((s) => s.overlay);
+  const pendingId = useNav((s) => s.pendingCreate) ?? null;
+  const pending = useCreateIntent(pendingId);
+  const { show } = useToast();
+  useEffect(() => {
+    if (pendingId === null) return;
+    const nav = useNav.getState();
+    if (nav.pendingCreate !== pendingId) return;
+    if (pending?.status === 'ack') nav.confirmPendingCreate(pendingId);
+    else if (!pending || pending.status === 'rejected') {
+      nav.closePendingCreate(pendingId);
+      if (pending) show(pending.message, 'danger');
+    }
+  }, [pending, pendingId, show]);
   const address = currentEntry(model).address;
   // Какой экран хоста — важно ссылкам с него: чат и поиск снимаются переходом, настройки и память
   // остаются в стопке (§7.3; финал 1б, C1 M-3).
@@ -83,16 +99,52 @@ export function ActiveScreen() {
         {/* Одна граница на всё содержимое <main>: экраны сменяют друг друга целиком. resetKey
             снимает пойманную ошибку при уходе на другое место. */}
         <ChunkErrorBoundary resetKey={place}>
-          <Suspense fallback={<ScreenFallback />}>
-            {overlay !== null ? (
-              <OverlayScreen overlay={overlay} />
-            ) : (
-              <PlaceScreen address={address} />
-            )}
-          </Suspense>
+          <div hidden={!!pending} className={pending ? undefined : 'contents'}>
+            <FreshnessVisibility visible={!pending}>
+              <Suspense fallback={<ScreenFallback />}>
+                {overlay !== null ? (
+                  <OverlayScreen overlay={overlay} />
+                ) : (
+                  <PlaceScreen address={address} />
+                )}
+              </Suspense>
+            </FreshnessVisibility>
+          </div>
+          {pending && <PendingCreateScreen intent={pending} />}
         </ChunkErrorBoundary>
       </FrameAppContext.Provider>
     </main>
+  );
+}
+
+function PendingCreateScreen({
+  intent,
+}: {
+  intent: NonNullable<ReturnType<typeof useCreateIntent>>;
+}) {
+  const { retry } = useCreateDispatch();
+  return (
+    <>
+      <ScreenHeader title={intent.status === 'ack' ? intent.result.title : intent.title} />
+      <div className="mx-auto max-w-3xl space-y-3 px-4 py-5">
+        {intent.status === 'unknown' ? (
+          <>
+            <p role="alert">{intent.message}</p>
+            <Button variant="outline" onClick={() => void retry(intent.id)}>
+              Повторить сохранение
+            </Button>
+          </>
+        ) : intent.status === 'rejected' ? (
+          <p role="alert">{intent.message}</p>
+        ) : (
+          <p role="status">{intent.status === 'ack' ? 'Открывается…' : 'Создаётся…'}</p>
+        )}
+        {intent.body && <p className="whitespace-pre-wrap">{intent.body}</p>}
+        <Button variant="ghost" onClick={() => useNav.getState().closePendingCreate(intent.id)}>
+          Вернуться
+        </Button>
+      </div>
+    </>
   );
 }
 

@@ -1,4 +1,4 @@
-import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { useState } from 'react';
 import { beforeEach, expect, test, vi } from 'vitest';
 import { queryReply, renderWithProviders, trpcError, wireEntity } from '../../test/harness';
@@ -32,7 +32,8 @@ test('failed creation retains the draft and reuses identity on retry', async () 
     if (path === 'entity.create') {
       inputs.push(input as CreateCall);
       if (inputs.length === 1) throw trpcError('INTERNAL_SERVER_ERROR');
-      return {};
+      const { id, title } = (input as CreateCall).input;
+      return wireEntity({ id: id ?? '', title });
     }
     return registryReply(path) ?? [];
   });
@@ -69,7 +70,7 @@ test('capture in flight cannot duplicate, erase a newer draft or change its orig
   fireEvent.submit(form);
   await waitFor(() => expect(created).toHaveLength(1));
   fireEvent.change(field, { target: { value: 'Вторая' } });
-  finish({});
+  finish(wireEntity({ id: created[0]?.input.id ?? '', title: 'Первая' }));
   await waitFor(() =>
     expect(screen.getByRole('button', { name: 'Добавить задачу' })).not.toBeDisabled(),
   );
@@ -245,7 +246,7 @@ test('unknown creation retries the original intent after date and draft change',
         return new Promise((_resolve, reject) => {
           rejectFirst = reject;
         });
-      return {};
+      return wireEntity({ id: call.input.id ?? '', title: call.input.title });
     }
     return registryReply(path) ?? [];
   });
@@ -263,6 +264,81 @@ test('unknown creation retries the original intent after date and draft change',
   expect(stored.size).toBe(1);
   expect(field).toHaveValue('Новый черновик');
   await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument());
+});
+
+test.each([
+  'pending',
+  'unknown',
+])('another day accepts a new task while the first day is %s and keeps its retry', async (state) => {
+  const attempts: { command: CreateCall; confirm: () => void; lose: () => void }[] = [];
+  renderWithProviders(
+    <DayPlanner onOpen={onOpen} />,
+    (path, input) => {
+      if (path === 'user.getSettings')
+        return {
+          timezone: 'Asia/Almaty',
+          today: '2026-10-19',
+          nextMidnightAt: new Date(Date.now() + 86_400_000).toISOString(),
+          graphEstablished: true,
+        };
+      if (path === 'entity.query') return queryReply([]);
+      if (path === 'entity.create') {
+        const command = input as CreateCall;
+        const { id, title } = command.input;
+        return new Promise((resolve, reject) => {
+          attempts.push({
+            command,
+            confirm: () => resolve(wireEntity({ id: id ?? '', title, graphId: 'owner' })),
+            lose: () => reject(trpcError('INTERNAL_SERVER_ERROR')),
+          });
+        });
+      }
+      return registryReply(path) ?? {};
+    },
+    { freshness: true },
+  );
+  const plan = within(await screen.findByRole('region', { name: 'План дня' }));
+  await waitFor(() => expect(plan.getByLabelText('Выбрать дату')).toHaveValue('2026-10-19'));
+  const field = plan.getByRole('textbox', { name: 'Новая задача' });
+  const add = plan.getByRole('button', { name: 'Добавить задачу' });
+  fireEvent.change(field, { target: { value: 'Задача на сегодня' } });
+  fireEvent.click(add);
+  await waitFor(() => expect(attempts).toHaveLength(1));
+  const [today] = attempts;
+  if (!today) throw new Error('Expected today’s create');
+  if (state === 'unknown') {
+    await act(async () => today.lose());
+    await plan.findByRole('button', { name: 'Повторить сохранение' });
+  }
+  expect(add).toBeDisabled();
+
+  fireEvent.click(plan.getByRole('button', { name: 'Завтра' }));
+  await waitFor(() => expect(plan.getByLabelText('Выбрать дату')).toHaveValue('2026-10-20'));
+  fireEvent.change(field, { target: { value: 'Задача на завтра' } });
+  expect(add).toBeEnabled();
+  fireEvent.click(add);
+  await waitFor(() => expect(attempts).toHaveLength(2));
+  const tomorrow = attempts[1];
+  if (!tomorrow) throw new Error('Expected tomorrow’s create');
+  expect(tomorrow.command.input.id).not.toBe(today.command.input.id);
+  expect(today.command.input.props?.['orbis/planned_date']).toBe('2026-10-19');
+  expect(tomorrow.command.input.props?.['orbis/planned_date']).toBe('2026-10-20');
+
+  fireEvent.change(field, { target: { value: 'Следующий черновик на завтра' } });
+  if (state === 'pending') await act(async () => today.lose());
+  const retry = await plan.findByRole('button', { name: 'Повторить сохранение' });
+  expect(plan.getByRole('alert')).toHaveTextContent('Задача на сегодня');
+  fireEvent.click(retry);
+  await waitFor(() => expect(attempts).toHaveLength(3));
+  const recovery = attempts[2];
+  if (!recovery) throw new Error('Expected today’s retry');
+  expect(recovery.command).toEqual(today.command);
+  await act(async () => recovery.confirm());
+  expect(field).toHaveValue('Следующий черновик на завтра');
+  expect(plan.getByLabelText('Выбрать дату')).toHaveValue('2026-10-20');
+  await act(async () => tomorrow.confirm());
+  await waitFor(() => expect(add).toBeEnabled());
+  expect(field).toHaveValue('Следующий черновик на завтра');
 });
 
 test.each([

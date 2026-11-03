@@ -1,8 +1,14 @@
 import { Inbox } from 'lucide-react';
+import {
+  useCreateAwareOpen,
+  useCreatePlacement,
+  useCreateSurface,
+} from '../../lib/optimistic/use-create-intent';
 import { Button } from '../../ui/Button';
 import { EmptyState } from '../../ui/EmptyState';
 import { Skeleton } from '../../ui/Skeleton';
 import { EntityRow } from './EntityRow';
+import { QuickCapture } from './QuickCapture';
 import { useEntities } from './useEntities';
 
 /**
@@ -14,12 +20,53 @@ export function EntityList({
   filters = '',
   showPagesAndApps,
   onOpen,
+  capture = false,
+  captureSlot,
 }: {
   filters?: string;
   showPagesAndApps: boolean;
+  capture?: boolean;
+  captureSlot?: string;
   onOpen: (id: string) => void;
 }) {
-  const { entities, hasMore, loadMore, isLoading } = useEntities(filters, showPagesAndApps);
+  const { entities, queryKey, hasMore, loadMore, isLoading } = useEntities(
+    filters,
+    showPagesAndApps,
+  );
+  const origin = useCreateSurface('records-capture', captureSlot);
+  const placement = { key: queryKey, ids: entities.map((entity) => entity.id) };
+  const { hiddenCanonical } = useCreatePlacement(origin, capture ? placement : undefined);
+  const open = useCreateAwareOpen(onOpen);
+  return (
+    <>
+      <EntityListRows
+        entities={capture ? entities.filter((entity) => !hiddenCanonical.has(entity.id)) : entities}
+        onOpen={open}
+        hasMore={hasMore}
+        loadMore={loadMore}
+        isLoading={isLoading}
+      />
+      {capture && (
+        <QuickCapture
+          context={{ kind: 'root' }}
+          surface="records-capture"
+          captureSlot={captureSlot}
+          placement={placement}
+        />
+      )}
+    </>
+  );
+}
+
+function EntityListRows({
+  entities,
+  onOpen,
+  hasMore,
+  loadMore,
+  isLoading,
+}: Pick<ReturnType<typeof useEntities>, 'entities' | 'hasMore' | 'loadMore' | 'isLoading'> & {
+  onOpen: (id: string) => void;
+}) {
   if (isLoading)
     return (
       <div className="flex flex-col gap-2 p-3">

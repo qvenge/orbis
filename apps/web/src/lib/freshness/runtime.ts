@@ -4,6 +4,7 @@ import {
   changeXidInput,
   entityThreadId,
   type GraphId,
+  ROLE_REF,
 } from '@orbis/shared';
 import {
   hashKey,
@@ -14,7 +15,8 @@ import {
   type QueryKey,
 } from '@tanstack/react-query';
 import { confirmBody } from '../../features/undo/body-provenance';
-import type { EntityPatch } from '../optimistic/adapters';
+import type { EntityPatch, RelationKey } from '../optimistic/adapters';
+import { createCreateIntentRegistry } from '../optimistic/create-intents';
 import {
   createOptimisticStore,
   type OptimisticOutcome,
@@ -136,6 +138,7 @@ export function createFreshnessRuntime({
   const publicationListeners = new Map<string, Set<() => void>>();
   const acceptedReads = new WeakSet<ReadPublication>();
   const optimistic = createOptimisticStore(scope);
+  const createIntents = createCreateIntentRegistry(scope, () => (current() ? scope : undefined));
   const displayRepairAttempts = new Map<string, Promise<unknown> | null>();
   const refresh = new Set<string>();
   const staleKeys = new Set<string>();
@@ -360,8 +363,8 @@ export function createFreshnessRuntime({
     resetSequence = nextNetworkOrder();
     bodies.clear();
     deleted.clear();
-    // The store retires ACK obligations, but a pending fetch can still revert
-    // to the display it captured before this reset.
+    // Retire old read evidence and preserve unsettled relation commands.
+    // A pending fetch can still revert to the display it captured before this reset.
     const reprojected = optimistic.reset(resetSequence, true);
     for (const hash of reprojected) reproject(hash);
     sinks.resetResponses?.(scope, resetSequence, token);
@@ -910,6 +913,7 @@ export function createFreshnessRuntime({
     captureOperation,
     isCurrentOperation,
     isCurrentScope: current,
+    createIntents,
     beginBodySave,
     settleBodySave,
     mutationSettled,
@@ -958,6 +962,13 @@ export function createFreshnessRuntime({
       if (!current()) return;
       const sequence = nextNetworkOrder();
       const token = optimistic.beginOptimistic(scope, String(sequence), patches, sequence);
+      if (token) reprojectEntities(token.entityIds);
+      return token;
+    },
+    beginRelation(operation: 'create' | 'delete', key: RelationKey) {
+      if (!current() || key.role === ROLE_REF) return;
+      const sequence = nextNetworkOrder();
+      const token = optimistic.beginRelation(scope, String(sequence), operation, key, sequence);
       if (token) reprojectEntities(token.entityIds);
       return token;
     },
@@ -1040,6 +1051,7 @@ export function createFreshnessRuntime({
       pendingSaves.clear();
       displayRepairAttempts.clear();
       optimistic.reset();
+      createIntents.reset();
       publications.clear();
       publicationListeners.clear();
       bodies.clear();

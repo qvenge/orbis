@@ -13,11 +13,18 @@ import {
   entityPatchFields,
   type FieldChange,
   fieldKey,
+  hasRelationRows,
   isEntityResponseKey,
   liveCardFields,
   projectEntityResponse,
+  projectRelationResponse,
+  type RelationChange,
+  type RelationKey,
+  type RelationRow,
+  relationEndpoint,
   responseEntityRows,
   rowContainsField,
+  sameRelation,
 } from './adapters';
 
 export type OptimisticToken = Readonly<{
@@ -26,7 +33,13 @@ export type OptimisticToken = Readonly<{
   startedSequence: number;
 }>;
 export type OptimisticOutcome =
-  | { kind: 'confirmed'; ackSequence?: number; txId?: string; suppressTitle?: boolean }
+  | {
+      kind: 'confirmed';
+      ackSequence?: number;
+      txId?: string;
+      suppressTitle?: boolean;
+      relation?: RelationRow;
+    }
   | { kind: 'failed'; recheck?: boolean }
   | { kind: 'unknown' };
 
@@ -35,6 +48,7 @@ type Layer = {
   token: OptimisticToken;
   changes: Map<string, Map<string, FieldChange>>;
   confirmed?: Confirmation;
+  relation?: RelationChange;
 };
 
 type TrackedRead = {
@@ -97,6 +111,14 @@ export function createOptimisticStore(scope: FreshnessScope) {
     const affected = new Map<string, QueryKey>();
     for (const [hash, tracked] of reads) {
       if (layer?.confirmed && covers(tracked, layer.confirmed)) continue;
+      const endpoint = relationEndpoint(tracked.read.key);
+      const relevantRelation =
+        (!layer || layer.relation) &&
+        endpoint !== undefined &&
+        ids.includes(endpoint) &&
+        hasRelationRows(tracked.read.key, tracked.read.raw);
+      if (relevantRelation) affected.set(hash, tracked.read.key);
+      if (layer?.relation) continue;
       const relevant = ids.some((id) => {
         const row = tracked.rows.get(id);
         if (!row) return false;
@@ -106,6 +128,10 @@ export function createOptimisticStore(scope: FreshnessScope) {
       if (relevant) affected.set(hash, tracked.read.key);
     }
     for (const [hash, key] of reading) {
+      const endpoint = relationEndpoint(key);
+      if ((!layer || layer.relation) && endpoint !== undefined && ids.includes(endpoint))
+        affected.set(hash, key);
+      if (layer?.relation) continue;
       if (
         ids.some((id) => {
           const changes = layer?.changes.get(id);
@@ -118,6 +144,14 @@ export function createOptimisticStore(scope: FreshnessScope) {
   }
 
   function hidesEarlierChange(layer: Layer): boolean {
+    const relation = layer.relation;
+    if (relation) {
+      for (const earlier of byEntity.get(relation.key.source_id) ?? []) {
+        if (earlier === layer) break;
+        if (earlier.relation && sameRelation(earlier.relation.key, relation.key)) return true;
+      }
+      return false;
+    }
     for (const [id, fields] of layer.changes) {
       for (const earlier of byEntity.get(id) ?? []) {
         if (earlier === layer) break;
@@ -160,6 +194,18 @@ export function createOptimisticStore(scope: FreshnessScope) {
     }
     return [...winners.values()].flatMap(({ field, confirmation }) =>
       confirmation && covered(confirmation, field) ? [] : [field],
+    );
+  }
+
+  function selectRelations(id: string, basis: TrackedRead | undefined): RelationChange[] {
+    const winners = new Map<string, Layer>();
+    for (const layer of byEntity.get(id) ?? []) {
+      if (!layer.relation) continue;
+      const key = layer.relation.key;
+      winners.set(JSON.stringify([key.source_id, key.target_id, key.role]), layer);
+    }
+    return [...winners.values()].flatMap(({ relation, confirmed }) =>
+      relation && (!confirmed || !covers(basis, confirmed)) ? [relation] : [],
     );
   }
 
@@ -226,6 +272,46 @@ export function createOptimisticStore(scope: FreshnessScope) {
       return token;
     },
 
+    beginRelation(
+      operationScope: FreshnessScope,
+      mutationId: string,
+      operation: 'create' | 'delete',
+      key: RelationKey,
+      startedSequence = nextNetworkOrder(),
+    ): OptimisticToken | undefined {
+      if (!sameFreshnessScope(scope, operationScope) || layers.has(mutationId)) return;
+      const snapshot = Object.freeze({
+        source_id: key.source_id.toLowerCase(),
+        target_id: key.target_id.toLowerCase(),
+        role: key.role,
+      });
+      const token: OptimisticToken = Object.freeze({
+        mutationId,
+        startedSequence,
+        entityIds: Object.freeze([...new Set([snapshot.source_id, snapshot.target_id])]),
+      });
+      const at = new Date().toISOString();
+      const relation: RelationChange = { key: snapshot };
+      if (operation === 'create')
+        relation.row = {
+          id: `pending-relation:${mutationId}`,
+          sourceId: snapshot.source_id,
+          targetId: snapshot.target_id,
+          role: snapshot.role,
+          meta: {},
+          createdAt: at,
+          updatedAt: at,
+        };
+      const layer: Layer = { token, changes: new Map(), relation };
+      layers.set(mutationId, layer);
+      for (const id of token.entityIds) {
+        const related = byEntity.get(id) ?? new Set<Layer>();
+        related.add(layer);
+        byEntity.set(id, related);
+      }
+      return token;
+    },
+
     /** Returns the keys that still need a confirmed read, for the existing freshness scheduler. */
     settleOptimistic(token: OptimisticToken | undefined, outcome: OptimisticOutcome): QueryKey[] {
       if (!token) return [];
@@ -238,8 +324,9 @@ export function createOptimisticStore(scope: FreshnessScope) {
           ackSequence: outcome.ackSequence ?? nextNetworkOrder(),
           ...(tx.success ? { txId: BigInt(tx.data) } : {}),
         };
+        if (layer.relation?.row && outcome.relation) layer.relation.row = outcome.relation;
         refresh = [...readObligations(token.entityIds, layer).values()];
-        if (outcome.suppressTitle) {
+        if (outcome.suppressTitle && !layer.relation) {
           for (const fields of layer.changes.values()) fields.delete('title');
           if ([...layer.changes.values()].every((fields) => fields.size === 0)) removeLayer(layer);
         }
@@ -255,7 +342,7 @@ export function createOptimisticStore(scope: FreshnessScope) {
     /** Explicitly accepting a newly read title retires only prior local title intents. */
     acceptTitle(id: string, beforeSequence: number): void {
       for (const layer of byEntity.get(id) ?? []) {
-        if (layer.token.startedSequence >= beforeSequence) continue;
+        if (layer.relation || layer.token.startedSequence >= beforeSequence) continue;
         layer.changes.get(id)?.delete('title');
         if ([...layer.changes.values()].every((fields) => fields.size === 0)) removeLayer(layer);
       }
@@ -285,19 +372,22 @@ export function createOptimisticStore(scope: FreshnessScope) {
         ...(priorAuthority ? { priorAuthority } : {}),
       };
       const wasReading = reading.delete(read.queryHash);
-      if (!old && !wasReading && tracked.rows.size === 0) return;
+      const hasRelations =
+        relationEndpoint(read.key) !== undefined && hasRelationRows(read.key, read.raw);
+      if (!old && !wasReading && tracked.rows.size === 0 && !hasRelations) return;
       if (accepted) {
         unindex(previousAuthority);
         index(tracked);
       }
-      if (tracked.rows.size > 0 || priorAuthority) reads.set(read.queryHash, tracked);
+      if (tracked.rows.size > 0 || priorAuthority || hasRelations)
+        reads.set(read.queryHash, tracked);
       else reads.delete(read.queryHash);
       notifyCards([...(previousAuthority?.rows.keys() ?? []), ...tracked.rows.keys(), ...prune()]);
     },
 
     /** Dynamic results can first include a record even when this key already has a base. */
     watchResponse(queryHash: string, key: QueryKey): boolean {
-      if (!isEntityResponseKey(key)) return false;
+      if (!isEntityResponseKey(key) && relationEndpoint(key) === undefined) return false;
       reading.set(queryHash, key);
       return true;
     },
@@ -309,6 +399,12 @@ export function createOptimisticStore(scope: FreshnessScope) {
     needsRebase(hash: string): boolean {
       const tracked = reads.get(hash);
       if (!tracked) return false;
+      const endpoint = relationEndpoint(tracked.read.key);
+      if (endpoint !== undefined && hasRelationRows(tracked.read.key, tracked.read.raw)) {
+        for (const layer of byEntity.get(endpoint) ?? []) {
+          if (layer.relation && layer.confirmed && !covers(tracked, layer.confirmed)) return true;
+        }
+      }
       for (const [id, row] of tracked.rows) {
         for (const layer of byEntity.get(id) ?? []) {
           if (!layer.confirmed || covers(tracked, layer.confirmed)) continue;
@@ -341,9 +437,13 @@ export function createOptimisticStore(scope: FreshnessScope) {
       const tracked = reads.get(read.queryHash);
       const basis = tracked?.read === read ? tracked : undefined;
       if (!basis && !usable(read)) return shown;
-      return projectEntityResponse(read.key, shown, (id) =>
+      const projected = projectEntityResponse(read.key, shown, (id) =>
         selectFields(id, (confirmation) => covers(basis, confirmation)),
       );
+      const endpoint = relationEndpoint(read.key);
+      return endpoint === undefined
+        ? projected
+        : projectRelationResponse(read.key, projected, selectRelations(endpoint, basis));
     },
 
     /** Chat payloads are historical. Only the card renderer consumes this separate view. */
@@ -393,14 +493,20 @@ export function createOptimisticStore(scope: FreshnessScope) {
     reset(startedSequenceCutoff = resetCutoff, retainBases = false): Iterable<string> {
       const affected = readObligations([...byEntity.keys()]);
       resetCutoff = Math.max(startedSequenceCutoff, resetCutoff);
-      layers.clear();
-      byEntity.clear();
       if (retainBases) {
+        // An in-scope feed reset retires read evidence, not an unsettled relation command.
+        // A later confirmation can still shield an earlier pending change to the same edge.
+        for (const layer of layers.values()) {
+          if (!layer.relation || (layer.confirmed && !hidesEarlierChange(layer)))
+            removeLayer(layer);
+        }
         // Visible cache can keep its old rows while it reconciles. They are display bases
         // only, without the evidence or card authority of the retired feed generation.
         for (const [hash, { read, rows }] of reads)
           reads.set(hash, { read, rows, accepted: false });
       } else {
+        layers.clear();
+        byEntity.clear();
         reads.clear();
       }
       reading.clear();

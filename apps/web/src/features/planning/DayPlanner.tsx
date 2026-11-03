@@ -1,5 +1,11 @@
+import { getQueryKey } from '@trpc/react-query';
 import { useRef, useState } from 'react';
 import { useFreshnessVisible } from '../../lib/freshness/screen';
+import {
+  useCreateAwareOpen,
+  useCreatePlacement,
+  useCreateSurface,
+} from '../../lib/optimistic/use-create-intent';
 import { trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
 import { Dialog } from '../../ui/Dialog';
@@ -11,7 +17,13 @@ import { PlanningCapture } from './PlanningCapture';
 import { TaskPicker } from './TaskPicker';
 import { usePlanningDay } from './usePlanningDay';
 
-export function DayPlanner({ onOpen }: { onOpen: (id: string) => void }) {
+export function DayPlanner({
+  onOpen,
+  captureSlot,
+}: {
+  onOpen: (id: string) => void;
+  captureSlot?: string;
+}) {
   const { day, selection, select, ready, failed, retry } = usePlanningDay();
   const [limit, setLimit] = useState(50);
   const [picker, setPicker] = useState(false);
@@ -31,13 +43,19 @@ export function DayPlanner({ onOpen }: { onOpen: (id: string) => void }) {
     }
   };
   const shown = useFreshnessVisible();
-  const q = trpc.entity.query.useQuery(
-    { ast: dayQuery(day, limit + 1) },
-    { enabled: ready && shown },
-  );
+  const input = { ast: dayQuery(day, limit + 1) };
+  const q = trpc.entity.query.useQuery(input, { enabled: ready && shown });
   const rows = sortPlannedTasks((q.data?.rows ?? []).slice(0, limit));
-  const open = rows.filter((r) => !isClosed(r));
-  const closed = rows.filter(isClosed);
+  const placement = {
+    key: getQueryKey(trpc.entity.query, input, 'query'),
+    ids: rows.map((row) => row.id),
+  };
+  const origin = useCreateSurface(`planning:${day}`, captureSlot);
+  const { hiddenCanonical } = useCreatePlacement(origin, ready ? placement : undefined);
+  const shownRows = rows.filter((row) => !hiddenCanonical.has(row.id));
+  const open = shownRows.filter((r) => !isClosed(r));
+  const closed = shownRows.filter(isClosed);
+  const openRecord = useCreateAwareOpen(onOpen);
   const more = (q.data?.rows.length ?? 0) > limit;
   async function reorder(id: string, offset: number) {
     const selected = rows.find((r) => r.id === id);
@@ -80,7 +98,7 @@ export function DayPlanner({ onOpen }: { onOpen: (id: string) => void }) {
         <PlannedTaskRow
           key={r.id}
           record={r}
-          onOpen={onOpen}
+          onOpen={openRecord}
           run={run}
           busy={busy}
           onReorder={(id, offset) => void reorder(id, offset)}
@@ -128,7 +146,12 @@ export function DayPlanner({ onOpen }: { onOpen: (id: string) => void }) {
         </p>
       ) : (
         <>
-          <PlanningCapture day={day} disabled={!ready} />
+          <PlanningCapture
+            captureSlot={captureSlot}
+            day={day}
+            disabled={!ready}
+            placement={placement}
+          />
           {!ready || q.isPending ? (
             <p role="status" className="text-sm text-text-muted">
               Загрузка плана…

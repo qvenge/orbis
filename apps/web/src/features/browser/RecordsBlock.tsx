@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import { EntityList } from './EntityList';
 import { Filters } from './Filters';
-import { QuickCapture } from './QuickCapture';
 
 /**
  * Блок «Записи» (`{{records}}`, спека 1б §3.5): сегодняшний экран Browser одним блоком — фильтр по
@@ -16,7 +15,13 @@ import { QuickCapture } from './QuickCapture';
  * Раскладка — без своего скролла: список растёт в потоке страницы, прокручивает её тот, кто её
  * показывает. Вложенная прокрутка внутри страницы — вторая полоса и потерянный жест на телефоне.
  */
-export function RecordsBlock({ onOpen }: { onOpen: (id: string) => void }) {
+export function RecordsBlock({
+  onOpen,
+  captureSlot,
+}: {
+  onOpen: (id: string) => void;
+  captureSlot?: string;
+}) {
   const [filters, setFilters] = useState('');
   // Выключен по умолчанию (§9.6): страницы и приложения — обёртки над записями, в общем списке их
   // не показывают; переключатель — для того, кто ищет именно их.
@@ -33,8 +38,13 @@ export function RecordsBlock({ onOpen }: { onOpen: (id: string) => void }) {
         />
         Показать страницы и приложения
       </label>
-      <EntityList filters={filters} showPagesAndApps={showPagesAndApps} onOpen={onOpen} />
-      <QuickCapture context={{ kind: 'root' }} />
+      <EntityList
+        filters={filters}
+        showPagesAndApps={showPagesAndApps}
+        onOpen={onOpen}
+        capture
+        captureSlot={captureSlot}
+      />
     </section>
   );
 }

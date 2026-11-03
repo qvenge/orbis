@@ -53,7 +53,7 @@ test('cold add leaf: eager heading, usable первый input, IME/pending и at
   expect(peekUndoable()?.actionId).toBe(`action-${create.input.id}`);
 });
 
-test('lazy add: отказ держит draft/id, новые current parent props дают новый retry id', async () => {
+test('lazy add: подтверждённый отказ сохраняет ввод и причину, новая отправка получает новый UUID', async () => {
   let change!: () => void;
   function Host() {
     const [parent, set] = useState('e1');
@@ -66,13 +66,14 @@ test('lazy add: отказ держит draft/id, новые current parent prop
     );
   }
   const { calls } = renderWithProviders(<Host />, (path) => {
-    if (path === 'entity.create') throw trpcError('NOT_FOUND');
+    if (path === 'entity.create') throw trpcError('NOT_FOUND', 'Родитель не найден');
     return registryReply(path) ?? {};
   });
   const field = await screen.findByLabelText('Новая подзадача');
   fireEvent.change(field, { target: { value: '  Повтор  ' } });
   fireEvent.keyDown(field, { key: 'Enter' });
-  await screen.findByText('Не удалось сохранить');
+  await screen.findByText('Родитель не найден');
+  expect(screen.queryByRole('button', { name: 'Повторить сохранение' })).toBeNull();
   expect(field).toHaveValue('  Повтор  ');
   fireEvent.keyDown(field, { key: 'Enter' });
   await waitFor(() => expect(calls.filter((c) => c.path === 'entity.create')).toHaveLength(2));
@@ -83,7 +84,9 @@ test('lazy add: отказ держит draft/id, новые current parent prop
   const creates = calls
     .filter((c) => c.path === 'entity.create')
     .map((c) => c.input as { input: { id: string }; link: { parentId: string } });
-  expect(creates[1]).toEqual(creates[0]);
+  expect(creates[1]?.input.id).not.toBe(creates[0]?.input.id);
+  expect(creates[1]?.link.parentId).toBe('e1');
+  expect(calls.filter((call) => call.path === 'relation.create')).toHaveLength(0);
   expect(creates[2]?.input.id).not.toBe(creates[0]?.input.id);
   expect(creates[2]?.link.parentId).toBe('e2');
   expect(field).toHaveValue('  Повтор  ');
@@ -102,14 +105,17 @@ for (const changeOwner of [false, true])
     fireEvent.change(field, { target: { value: 'Создать' } });
     fireEvent.keyDown(field, { key: 'Enter' });
     await waitFor(() => expect(r.calls.some((c) => c.path === 'entity.create')).toBe(true));
+    const sent = r.calls.find((c) => c.path === 'entity.create')?.input as {
+      input: { id: string };
+    };
     r.unmount();
     if (changeOwner) resetUndoSession();
     await act(async () => {
-      release(mockEntityUpdateResult({ id: 'new-task', title: 'Создать' }));
+      release(mockEntityUpdateResult({ id: sent.input.id, title: 'Создать' }));
       await pending;
     });
     if (changeOwner) expect(peekUndoable()).toBeUndefined();
-    else await waitFor(() => expect(peekUndoable()?.actionId).toBe('action-new-task'));
+    else await waitFor(() => expect(peekUndoable()?.actionId).toBe(`action-${sent.input.id}`));
   });
 
 for (const changeParent of [false, true])
@@ -130,13 +136,16 @@ for (const changeParent of [false, true])
     fireEvent.change(field, { target: { value: 'Старый запрос' } });
     fireEvent.keyDown(field, { key: 'Enter' });
     await waitFor(() => expect(r.calls.some((c) => c.path === 'entity.create')).toBe(true));
+    const sent = r.calls.find((c) => c.path === 'entity.create')?.input as {
+      input: { id: string };
+    };
     if (changeParent) act(() => change());
     fireEvent.change(field, { target: { value: 'Новый черновик' } });
     await act(async () => {
-      release(mockEntityUpdateResult({ id: 'old-task', title: 'Старый запрос' }));
+      release(mockEntityUpdateResult({ id: sent.input.id, title: 'Старый запрос' }));
       await pending;
     });
     await waitFor(() => expect(screen.queryByLabelText('Сохранение')).toBeNull());
     expect(field).toHaveValue('Новый черновик');
-    expect(peekUndoable()?.actionId).toBe('action-old-task');
+    expect(peekUndoable()?.actionId).toBe(`action-${sent.input.id}`);
   });

@@ -1,4 +1,5 @@
 import type { UndoResult, UndoTextChangedDetails } from '@orbis/shared';
+import { captureCommandScope, freshnessRuntimeOf } from '../../lib/freshness/provenance';
 import { GRAPH_OFFLINE, graphOnline } from '../../lib/graph-command';
 import { orbisErrorOf } from '../../lib/orbis-error';
 import { resetSteps } from '../entity-editor/arrows-stack';
@@ -8,7 +9,7 @@ import {
   flushBodyOf,
   mountedBodyIds,
 } from '../entity-editor/body-flush';
-import { boundUndoUtils } from './undo-binding';
+import { boundUndoQueryClient, boundUndoUtils } from './undo-binding';
 import { isUndoEpoch, undoEpoch } from './undo-epoch';
 
 export const UNDO_FAILED = 'Не удалось отменить изменения';
@@ -29,6 +30,9 @@ export async function runUndo(
   const epoch = undoEpoch();
   const utils = boundUndoUtils();
   if (utils === null) return { kind: 'failed', message: UNDO_FAILED };
+  const client = boundUndoQueryClient();
+  const isCurrent = client && captureCommandScope(client);
+  const createIntents = client && freshnessRuntimeOf(client)?.createIntents;
   const gates = new Map<string, FinishBodyRewrite>();
   const release = () => {
     for (const finish of gates.values()) finish();
@@ -68,6 +72,7 @@ export async function runUndo(
     for (const { entityId } of result.bodyRevisions) resetSteps(entityId);
     for (const [id, finish] of gates)
       finish(result.bodyRevisions.find((r) => r.entityId === id)?.bodyRevision);
+    if (isCurrent?.()) createIntents?.releaseAction(actionId);
     return { kind: 'undone', result };
   } catch (e) {
     release();

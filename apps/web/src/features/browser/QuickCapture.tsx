@@ -1,81 +1,54 @@
-import { newId, ROLE_SUBITEM } from '@orbis/shared';
+import { ROLE_SUBITEM } from '@orbis/shared';
 import { Plus } from 'lucide-react';
-import { type FormEvent, useRef, useState } from 'react';
-import { startAction } from '../../perf/marks';
-import { trpc } from '../../trpc';
+import type { FormEvent } from 'react';
+import { CreateIntentRows } from '../../lib/optimistic/CreateIntentRows';
+import {
+  type CreatePlacement,
+  useCreateCapture,
+  useCreateSurface,
+} from '../../lib/optimistic/use-create-intent';
 import { Spinner } from '../../ui/Spinner';
-import { useToast } from '../../ui/toast-store';
-import { journalRefOf } from '../undo/journal-ref';
-import { isUndoEpoch, undoEpoch } from '../undo/undo-epoch';
-import { offerUndoLazy } from '../undo/undo-lazy';
 
 // §3.7 / D-g: текст → title БЕЗ интерпретации. Контекст задаёт связь: `entity` — подзадача записи
 // («＋» на записи, спека 1б §6.4, РП-9), `root` — без контекста. Вариант `smart-list` снят (§9.4):
 // смарт-листы стали страницами, а «＋» на странице — без контекста.
 export type CaptureContext = { kind: 'root' } | { kind: 'entity'; parentId: string };
 
-export function QuickCapture({ context }: { context: CaptureContext }) {
-  const [text, setText] = useState('');
-  const { show } = useToast();
-  const create = trpc.entity.create.useMutation({
-    meta: { undoStack: 'self' },
-    onSuccess: (data, vars) => {
-      const ref = journalRefOf(data);
-      if (ref)
-        offerUndoLazy({
-          title: `Создано: «${vars.input.title}»`,
-          actionId: ref.actionId,
-          entityIds: [],
-        });
-    },
-  });
-  // Потерянный ответ повторяется по тому же id (РП-21). Смена контекста — новое намерение:
-  // иначе replay прежней пачки вернёт запись, привязанную к другому родителю.
-  const attemptRef = useRef<{ id: string; text: string; parentId: string | null } | null>(null);
-  const isPending = create.isPending;
+export function QuickCapture({
+  context,
+  surface,
+  captureSlot,
+  placement,
+}: {
+  context: CaptureContext;
+  surface?: string;
+  captureSlot?: string;
+  placement?: CreatePlacement;
+}) {
+  const parentId = context.kind === 'entity' ? context.parentId.toLowerCase() : undefined;
+  // Host surfaces already identify the physical form. A parent classified after a
+  // request starts changes only the command of a future submission.
+  const origin = useCreateSurface(surface ?? `capture:${parentId ?? 'root'}`, captureSlot);
+  const formScope = useCreateSurface(surface ?? 'capture', captureSlot);
+  const capture = useCreateCapture(origin, placement, formScope);
+  const { text } = capture;
+  const isPending = capture.rows.some((view) => view.status === 'pending');
 
-  async function submit(e: FormEvent) {
+  function submit(e: FormEvent) {
     e.preventDefault();
-    const epoch = undoEpoch();
     const title = text.trim();
-    if (!title || isPending) return;
-    // Отклик «＋» (спека скорости §3.1): видимого до подтверждения нет — оптимистика «＋» в плане Б (§7.1).
-    const action = startAction('create');
-    const parentId = context.kind === 'entity' ? context.parentId.toLowerCase() : null;
-    const previous = attemptRef.current;
-    const id = previous?.text === title && previous.parentId === parentId ? previous.id : newId();
-    attemptRef.current = { id, text: title, parentId };
-    // НОВАЯ форма (§А1-1): статус — плоским свойством, аспект — ЯВНЫМ списком. Старая карта
-    // вешала `orbis/task` самим фактом ключа `status`; без списка запись под родителем
-    // родилась бы не задачей — без чекбокса и мимо Повестки.
-    const subtask = context.kind === 'entity';
-    const tags: string[] = [];
-    // Ошибка мутации — toast, введённый текст НЕ очищается (ввод не теряется).
-    try {
-      await create.mutateAsync({
-        input: {
-          id,
-          title,
-          tags,
-          ...(subtask
-            ? { props: { 'orbis/task_status': 'inbox' }, aspects: ['orbis/task'] }
-            : { props: { 'orbis/inbox_state': 'pending' } }),
-        },
-        source: 'quick_capture',
-        // Одна операция не оставляет созданную запись без связи (§7.2).
-        ...(context.kind === 'entity'
-          ? { link: { parentId: context.parentId, role: ROLE_SUBITEM } }
-          : {}),
-      });
-      if (!isUndoEpoch(epoch)) return;
-      action.confirmed();
-      if (!isUndoEpoch(epoch)) return;
-      attemptRef.current = null;
-      setText('');
-    } catch {
-      if (!isUndoEpoch(epoch)) return;
-      show('Не удалось сохранить', 'danger');
-    }
+    if (!title || !capture.canSubmit(title)) return;
+    capture.submit({
+      input: {
+        title,
+        tags: [],
+        ...(parentId
+          ? { props: { 'orbis/task_status': 'inbox' }, aspects: ['orbis/task'] }
+          : { props: { 'orbis/inbox_state': 'pending' } }),
+      },
+      source: 'quick_capture',
+      ...(parentId && { link: { parentId, role: ROLE_SUBITEM } }),
+    });
   }
 
   const empty = text.trim().length === 0;
@@ -86,13 +59,13 @@ export function QuickCapture({ context }: { context: CaptureContext }) {
         <input
           aria-label="Быстрая запись"
           value={text}
-          onChange={(e) => setText(e.target.value)}
+          onChange={(e) => capture.edit(e.target.value)}
           placeholder="Быстрая запись — без интерпретации…"
           className="min-w-0 flex-1 bg-transparent py-1.5 text-sm text-text outline-none placeholder:text-text-muted"
         />
         <button
           type="submit"
-          disabled={isPending || empty}
+          disabled={empty || !capture.canSubmit(text.trim())}
           aria-label="Добавить"
           className="flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-full bg-accent text-accent-foreground transition hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 disabled:cursor-default disabled:bg-surface-2 disabled:text-text-muted"
         >
@@ -103,6 +76,7 @@ export function QuickCapture({ context }: { context: CaptureContext }) {
           )}
         </button>
       </div>
+      <CreateIntentRows {...capture} />
     </form>
   );
 }

@@ -1,4 +1,5 @@
 import type { QueryKey } from '@tanstack/react-query';
+import type { RouterInputs, RouterOutputs } from '../../trpc';
 
 type Fields = Record<string, unknown>;
 
@@ -261,4 +262,59 @@ export function liveCardFields<T extends EntityCardFields>(
     aspects: sameItems(nextAspects, card.aspects) ? card.aspects : nextAspects,
     keyFields: sameKeyFields ? card.keyFields : keyFields,
   };
+}
+
+export type RelationKey = Readonly<RouterInputs['relation']['delete']>;
+export type RelationRow = NonNullable<RouterOutputs['entity']['get']['relations']>[number];
+export type RelationChange = {
+  key: RelationKey;
+  row?: RelationRow;
+};
+
+export function sameRelation(a: RelationKey, b: RelationKey): boolean {
+  return a.source_id === b.source_id && a.target_id === b.target_id && a.role === b.role;
+}
+
+export function relationEndpoint(key: QueryKey): string | undefined {
+  const input = record(record(key[1])?.input);
+  if (entityResponseFamily(key) === 'entity.get') {
+    if (Array.isArray(input?.include) && input.include.includes('relations'))
+      return typeof input.id === 'string' ? input.id : undefined;
+  }
+  if (entityResponseFamily(key) === 'relation.listFor')
+    return typeof input?.entityId === 'string' ? input.entityId : undefined;
+}
+
+export function hasRelationRows(key: QueryKey, value: unknown): boolean {
+  return Array.isArray(
+    entityResponseFamily(key) === 'relation.listFor' ? value : record(value)?.relations,
+  );
+}
+
+export function projectRelationResponse(
+  key: QueryKey,
+  base: unknown,
+  changes: readonly RelationChange[],
+): unknown {
+  if (!changes.length) return base;
+  const list = entityResponseFamily(key) === 'relation.listFor';
+  const value = list ? base : record(base)?.relations;
+  if (!Array.isArray(value)) return base;
+  let rows = value;
+  for (const { key: relation, row } of changes) {
+    const present = (item: unknown) => {
+      const fields = record(item);
+      return (
+        fields?.sourceId === relation.source_id &&
+        fields.targetId === relation.target_id &&
+        fields.role === relation.role
+      );
+    };
+    if (row) {
+      if (!rows.some(present)) rows = [...rows, row];
+    } else if (rows.some(present)) {
+      rows = rows.filter((item) => !present(item));
+    }
+  }
+  return rows === value ? base : list ? rows : { ...record(base), relations: rows };
 }

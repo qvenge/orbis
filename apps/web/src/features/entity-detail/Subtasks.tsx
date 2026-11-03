@@ -1,10 +1,17 @@
 import { ROLE_SUBITEM, ROLE_TICKET } from '@orbis/shared';
+import { getQueryKey } from '@trpc/react-query';
 import { Circle } from 'lucide-react';
 import { lazy, Suspense } from 'react';
 import { useOpenRecord } from '../../app/useOpenRecord';
 import { EntityRef } from '../../lib/entity-ref/EntityRef';
-import type { RouterOutputs } from '../../trpc';
+import {
+  useCreateAwareOpen,
+  useCreateIntents,
+  useCreatePlacement,
+} from '../../lib/optimistic/use-create-intent';
+import { type RouterOutputs, trpc } from '../../trpc';
 import { useHostReadOnly } from './record-host';
+import { detailGetInput } from './useEntityDetail';
 
 const SubtaskAdd = lazy(() => import('./SubtaskAdd').then((m) => ({ default: m.SubtaskAdd })));
 
@@ -41,16 +48,37 @@ export function Subtasks({ parentId, relations }: { parentId: string; relations:
    * `run` в список НЕ входит — ради этого разделение и заводилось; `category-parent` тоже:
    * дерево категорий живёт на своём экране.
    */
-  const visibleIds = relations
+  const serverIds = relations
     .filter((r) => SUBTASK_ROLES.includes(r.role) && r.sourceId === parentId)
     .map((r) => r.targetId);
   const readOnly = useHostReadOnly();
-  const openRecord = useOpenRecord();
+  const openRecord = useCreateAwareOpen(useOpenRecord());
+  const { registry, intents } = useCreateIntents();
+  const origin = `subtasks:${parentId.toLowerCase()}`;
+  const placement = {
+    key: getQueryKey(trpc.entity.get, detailGetInput(parentId), 'query'),
+    ids: serverIds,
+    rawContains: (raw: unknown, id: string) =>
+      (raw as { relations?: Relation[] } | undefined)?.relations?.some(
+        (edge) =>
+          edge.sourceId === parentId && edge.targetId === id && SUBTASK_ROLES.includes(edge.role),
+      ) === true,
+  };
+  const { hiddenCanonical } = useCreatePlacement(origin, readOnly ? undefined : placement);
+  const visibleIds = serverIds.filter((id) => !hiddenCanonical.has(id));
+  const localCount = readOnly
+    ? 0
+    : intents.filter(
+        (intent) =>
+          intent.origin === origin &&
+          intent.status !== 'rejected' &&
+          (intent.status !== 'ack' || !serverIds.includes(intent.id)),
+      ).length;
 
   return (
     <div className="flex flex-col gap-1">
       <p className="text-2xs font-medium uppercase tracking-wide text-text-muted">
-        Подзадачи ({visibleIds.length})
+        Подзадачи ({visibleIds.length + localCount})
       </p>
       {visibleIds.length > 0 && (
         <ul className="flex flex-col">
@@ -62,7 +90,13 @@ export function Subtasks({ parentId, relations }: { parentId: string; relations:
             >
               <Circle size={14} aria-hidden className="shrink-0 text-text-muted/70" />
               {/* Открытие подзадачи — в стопку текущего раздела поверх записи. */}
-              <EntityRef id={id} onOpen={openRecord} />
+              {registry.isUnconfirmedCreate(id) ? (
+                <button type="button" onClick={() => openRecord(id)}>
+                  {registry.lookup(id)?.title}
+                </button>
+              ) : (
+                <EntityRef id={id} onOpen={openRecord} />
+              )}
             </li>
           ))}
         </ul>
@@ -70,7 +104,7 @@ export function Subtasks({ parentId, relations }: { parentId: string; relations:
       {/* Тихая строка добавления (Notion): плюс + borderless-инпут, Enter добавляет. */}
       {!readOnly && (
         <Suspense fallback={null}>
-          <SubtaskAdd parentId={parentId} />
+          <SubtaskAdd parentId={parentId} placement={placement} />
         </Suspense>
       )}
     </div>

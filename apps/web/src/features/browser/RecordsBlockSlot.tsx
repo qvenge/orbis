@@ -24,7 +24,13 @@ export function resetRecordsBlockModuleForTests(): void {
   LazyRecordsBlock = lazy(load);
 }
 
-export function RecordsBlockSlot({ onOpen }: { onOpen: (id: string) => void }) {
+export function RecordsBlockSlot({
+  onOpen,
+  captureSlot,
+}: {
+  onOpen: (id: string) => void;
+  captureSlot?: string;
+}) {
   return (
     <Suspense
       fallback={
@@ -37,7 +43,7 @@ export function RecordsBlockSlot({ onOpen }: { onOpen: (id: string) => void }) {
         </div>
       }
     >
-      <LazyRecordsBlock onOpen={onOpen} />
+      <LazyRecordsBlock onOpen={onOpen} captureSlot={captureSlot} />
     </Suspense>
   );
 }

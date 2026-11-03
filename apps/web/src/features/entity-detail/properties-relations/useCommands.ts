@@ -2,8 +2,9 @@ import { useQueryClient } from '@tanstack/react-query';
 import { getQueryKey } from '@trpc/react-query';
 import { useCallback, useRef } from 'react';
 import { freshnessRuntimeOf, nextNetworkOrder } from '../../../lib/freshness/provenance';
-import { graphOnline, runGraphCommand } from '../../../lib/graph-command';
+import { graphOnline } from '../../../lib/graph-command';
 import { networkOnlyResponse } from '../../../lib/local-data/query-responses';
+import { useRelationCommand } from '../../../lib/optimistic/use-relation-command';
 import { useRegistry } from '../../../lib/registry/useRegistry';
 import { useGraphUndo } from '../../../lib/useGraphUndo';
 import { trpc } from '../../../trpc';
@@ -40,6 +41,7 @@ export function usePanelCommands(): {
   const utils = trpc.useUtils();
   const queryClient = useQueryClient();
   const registry = useRegistry();
+  const { run: runRelation, reconcile: reconcileRelation } = useRelationCommand();
   const batch = useDetailedUpdateBatch();
   const undo = useGraphUndo();
   const { show } = useToast();
@@ -60,7 +62,7 @@ export function usePanelCommands(): {
       inFlight.current = true;
       const epoch = undoEpoch();
       try {
-        let outcome: CommandOutcome;
+        let outcome: CommandOutcome | undefined;
         let title: string;
         switch (snapshot.kind) {
           case 'values':
@@ -104,18 +106,14 @@ export function usePanelCommands(): {
             break;
           case 'createRelation':
             title = `Добавлена связь „${registry.label(snapshot.key.role)}“`;
-            outcome = await runGraphCommand(() =>
-              utils.client.relation.create.mutate(snapshot.key),
-            );
+            outcome = await runRelation('create', snapshot.key);
             break;
           case 'deleteRelation':
             title = `Снята связь „${registry.label(snapshot.key.role)}“`;
-            outcome = await runGraphCommand(() =>
-              utils.client.relation.delete.mutate(snapshot.key),
-            );
+            outcome = await runRelation('delete', snapshot.key);
             break;
         }
-        if (!isUndoEpoch(epoch))
+        if (!outcome || !isUndoEpoch(epoch))
           return { kind: 'unknown', message: 'Сеанс изменился — состояние записи не подтверждено' };
         if (outcome.kind === 'unknown') uncertain.current.add(commandId);
         if (outcome.kind === 'confirmed') {
@@ -128,13 +126,22 @@ export function usePanelCommands(): {
         inFlight.current = false;
       }
     },
-    [batch, utils, registry, undo, show],
+    [batch, registry, runRelation, undo, show],
   );
   const reconcile = useCallback(
     async (command: PanelCommand): Promise<'matches' | 'differs' | 'unavailable'> => {
       if (inFlight.current || !graphOnline()) return 'unavailable';
       const snapshot = structuredClone(command);
       const commandId = identity(snapshot);
+      if (snapshot.kind === 'createRelation' || snapshot.kind === 'deleteRelation') {
+        const result = await reconcileRelation(
+          snapshot.entityId,
+          snapshot.kind === 'createRelation' ? 'create' : 'delete',
+          snapshot.key,
+        );
+        if (result !== 'unavailable') uncertain.current.delete(commandId);
+        return result;
+      }
       try {
         const epoch = undoEpoch();
         const input = detailGetInput(snapshot.entityId);
@@ -174,18 +181,6 @@ export function usePanelCommands(): {
           case 'detach':
             matches = !current.entity.aspects.includes(snapshot.aspectId);
             break;
-          case 'createRelation':
-          case 'deleteRelation': {
-            if (!Array.isArray(current.relations)) return 'unavailable';
-            const present = current.relations.some(
-              (edge) =>
-                edge.sourceId === snapshot.key.source_id &&
-                edge.targetId === snapshot.key.target_id &&
-                edge.role === snapshot.key.role,
-            );
-            matches = snapshot.kind === 'createRelation' ? present : !present;
-            break;
-          }
         }
         uncertain.current.delete(commandId);
         return matches ? 'matches' : 'differs';
@@ -193,7 +188,7 @@ export function usePanelCommands(): {
         return 'unavailable';
       }
     },
-    [utils, queryClient],
+    [utils, queryClient, reconcileRelation],
   );
   return { run, reconcile };
 }

@@ -73,7 +73,10 @@ test('QuickCapture внутри записи: подпункт рождаетс�
   // исполнителя (роль `run`) в неё попасть не должен.
   const { calls } = renderWithProviders(
     <QuickCapture context={{ kind: 'entity', parentId: 'p1' }} />,
-    (path) => (path === 'entity.create' ? ent('child', 'подзадача') : {}),
+    (path, input) =>
+      path === 'entity.create'
+        ? ent((input as { input: { id: string } }).input.id, 'подзадача')
+        : {},
   );
   fireEvent.change(screen.getByLabelText(/быстрая запись/i), { target: { value: 'подзадача' } });
   fireEvent.submit(screen.getByTestId('quick-capture-form'));
@@ -118,7 +121,7 @@ test('EntityList: пусто → EmptyState «Здесь появятся ваш
   expect(screen.getByText(/Добавьте первую через быструю запись/)).toBeInTheDocument();
 });
 
-test('QuickCapture: ошибка мутации → toast «Не удалось сохранить», ввод сохранён', async () => {
+test('QuickCapture: неизвестный исход оставляет ввод и предлагает явный повтор', async () => {
   renderWithProviders(
     <>
       <QuickCapture context={{ kind: 'root' }} />
@@ -134,8 +137,10 @@ test('QuickCapture: ошибка мутации → toast «Не удалось 
   });
   fireEvent.submit(screen.getByTestId('quick-capture-form'));
 
-  await waitFor(() => expect(screen.getByText('Не удалось сохранить')).toBeInTheDocument());
-  // Введённый текст НЕ очищен — пользователь может повторить сабмит.
+  await waitFor(() =>
+    expect(screen.getByRole('button', { name: 'Повторить сохранение' })).toBeInTheDocument(),
+  );
+  // Введённый текст остаётся при неизвестном исходе.
   expect(screen.getByLabelText(/быстрая запись/i)).toHaveValue('важная заметка');
 });
 
@@ -156,7 +161,7 @@ function CaptureSwitch({ initial }: { initial: CaptureContext }) {
   );
 }
 
-test('QuickCapture: отказ сохраняет черновик; повтор того же намерения шлёт тот же id', async () => {
+test('QuickCapture: явный повтор неизвестного исхода шлёт ту же команду', async () => {
   let attempts = 0;
   const { calls } = renderWithProviders(
     <CaptureSwitch initial={{ kind: 'entity', parentId: 'p1' }} />,
@@ -172,9 +177,9 @@ test('QuickCapture: отказ сохраняет черновик; повтор
   const field = screen.getByLabelText(/быстрая запись/i);
   fireEvent.change(field, { target: { value: 'Тот же текст' } });
   fireEvent.submit(screen.getByTestId('quick-capture-form'));
-  expect(await screen.findByText('Не удалось сохранить')).toBeInTheDocument();
+  const retry = await screen.findByRole('button', { name: 'Повторить сохранение' });
   expect(field).toHaveValue('Тот же текст');
-  fireEvent.submit(screen.getByTestId('quick-capture-form'));
+  fireEvent.click(retry);
   await waitFor(() => expect(field).toHaveValue(''));
   const creates = calls.filter((call) => call.path === 'entity.create');
   expect(creates).toHaveLength(2);
@@ -195,7 +200,7 @@ for (const next of ['Другой родитель', 'Без родителя'])
       target: { value: 'Тот же текст' },
     });
     fireEvent.submit(screen.getByTestId('quick-capture-form'));
-    await screen.findByText('Не удалось сохранить');
+    await screen.findByRole('button', { name: 'Повторить сохранение' });
     fireEvent.click(screen.getByRole('button', { name: next }));
     fireEvent.submit(screen.getByTestId('quick-capture-form'));
     await waitFor(() =>
