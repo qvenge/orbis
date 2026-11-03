@@ -16,6 +16,7 @@ import type { JSONContent } from '@tiptap/core';
 import { TRPCClientError } from '@trpc/client';
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { freshnessRuntimeOf } from '../../lib/freshness/provenance';
+import { finishStoredDraft } from '../../lib/local-data/query-responses';
 import { isBodyStale } from '../../lib/orbis-error';
 import type { RouterInputs } from '../../trpc';
 import { useEntityUpdate } from '../entity-detail/useEntityDetail';
@@ -23,6 +24,7 @@ import { isBodyPending } from '../undo/body-provenance';
 import { isUndoEpoch, subscribeUndoEpoch, undoEpoch } from '../undo/undo-epoch';
 import type { FlushResult } from './body-flush';
 import {
+  abandonDraftSlot,
   bindSubmittedDraft,
   captureDraftWriter,
   clearDraft,
@@ -108,6 +110,17 @@ export type BodySaveEntity = {
   updatedAt: string;
   bodyDoc?: { v: number; doc: Record<string, unknown> } | null;
 };
+
+type BodyBasis = { revision: number; doc: NonNullable<BodySaveEntity['bodyDoc']> };
+
+function unconfirmedBasis(entity: BodySaveEntity): BodyBasis | null {
+  const doc = entity.bodyDoc;
+  return doc && isBodyPending(doc) ? { revision: entity.bodyRevision, doc } : null;
+}
+
+function matchesBody(a: BodyBasis['doc'], b: BodyBasis['doc']): boolean {
+  return a.v === b.v && sameDoc(a.doc as JSONContent, b.doc as JSONContent);
+}
 
 export interface BodySave {
   onDocChange: (doc: BodyDoc) => void;
@@ -359,6 +372,8 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
    * затёрла бы текст агента молча (рулинг R-17, спека §8.3).
    */
   const shownRevisionRef = useRef(entity.bodyRevision);
+  const shownUnconfirmedRef = useRef(unconfirmedBasis(entity));
+  const pendingUnconfirmedRef = useRef<{ basis: BodyBasis; waiting: boolean } | null>(null);
   const timerRef = useRef<number | null>(null);
   const inFlightRef = useRef(false);
   const mountedRef = useRef(true);
@@ -413,7 +428,7 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
    * после досыла» здесь НОРМАЛЕН: досыл заведён нулевым таймером в эффекте, редактор приезжает
    * отдельным чанком (ревью раунда 2, Н-1).
    */
-  const ownDraftRef = useRef(false);
+  const ownDraftRef = useRef<{ token: string; awaitingBasis?: BodyBasis }>(undefined);
   /**
    * Документ, который сервер отверг ТЕРМИНАЛЬНО.
    *
@@ -544,13 +559,15 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
     // ревизию читает из рефов, то есть уехал бы под id ПЕРВОЙ записи с ревизией ВТОРОЙ — с
     // гарантированным 409, и заодно переписал бы черновик первой чужой ревизией.
     clearDraftTimer();
-    ownDraftRef.current = false;
+    ownDraftRef.current = undefined;
     pendingRef.current = null;
     pendingFromEditorRef.current = false;
     // Ревизия отложенного — про ПРЕЖНЮЮ запись, и уехать под id соседней она не должна ни при
     // каких обстоятельствах (гарантированный 409 в лучшем случае, чужая правка — в худшем).
     pendingBaseRef.current = entity.bodyRevision;
     shownRevisionRef.current = entity.bodyRevision;
+    shownUnconfirmedRef.current = unconfirmedBasis(entity);
+    pendingUnconfirmedRef.current = null;
     // Отвергнутый документ — про ПРЕЖНЮЮ запись: под новой этот объект не встретится никогда,
     // но держать ссылку на чужое тело здесь незачем ровно так же, как и отложенное.
     rejectedDocRef.current = null;
@@ -583,6 +600,26 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
     return confirmed && confirmed.current?.() !== false ? Math.max(confirmed.revision, base) : base;
   }, []);
 
+  const offerConflictDraft = useCallback(() => {
+    const doc = pendingRef.current;
+    if (doc !== null) {
+      const draft: Draft = {
+        doc,
+        baseRevision: pendingBaseRef.current,
+        savedAt: new Date().toISOString(),
+        rejected: false,
+      };
+      draft.slot = saveDraft(entityId, doc, pendingBaseRef.current, draft.savedAt);
+      setPendingDraft(draft);
+    } else {
+      const draft = readDraft(entityId);
+      if (draft !== null) setPendingDraft(draft);
+    }
+    pendingRef.current = null;
+    pendingUnconfirmedRef.current = null;
+    clearTimer();
+  }, [entityId, setPendingDraft, clearTimer]);
+
   // Тип объявлен явно: без него `save`, зовущий себя из собственного колбэка, попадает в
   // циклический вывод типа (TS7022).
   const save = useCallback<() => void>(() => {
@@ -598,26 +635,56 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
     if (doc === null) return;
 
     const base = entityRef.current;
+    const held = pendingUnconfirmedRef.current;
+    const confirmed = base.bodyDoc && !isBodyPending(base.bodyDoc) ? base.bodyDoc : null;
+    const sameBasis =
+      held &&
+      confirmed &&
+      base.bodyRevision === held.basis.revision &&
+      matchesBody(confirmed, held.basis.doc);
+    if (sameBasis && shownUnconfirmedRef.current === held.basis) {
+      // The editor need not reseat the same document to start using its confirmed lineage.
+      shownUnconfirmedRef.current = null;
+    }
+    if (held && pendingFromEditorRef.current && matchesBody(held.basis.doc, doc)) {
+      // An initial echo has no slot. Undoing a held edit retires only its never-sent token.
+      const ownDraft = ownDraftRef.current;
+      if (ownDraft?.awaitingBasis === held.basis) {
+        abandonDraftSlot(entityId, ownDraft.token);
+        ownDraftRef.current = undefined;
+        if (readDraft(entityId) === null) setFailure(null);
+      }
+      pendingRef.current = null;
+      pendingUnconfirmedRef.current = null;
+      return;
+    }
     // Правка ли это вообще. Сравнение по СМЫСЛУ: UniqueID кладёт attrs.id во все блоки, и по
     // строковому равенству документ «менялся» бы всегда (см. strip-ids.ts). Проверка стоит
     // ПЕРВОЙ — раньше терминальной остановки и раньше учёта полёта: и то и другое решает,
     // отправлять ли, а здесь выясняется, есть ли что отправлять вообще.
-    if (
-      base.bodyDoc != null &&
-      !isBodyPending(base.bodyDoc) &&
-      base.bodyDoc.v === doc.v &&
-      sameDoc(doc.doc, base.bodyDoc.doc as JSONContent)
-    ) {
+    if (confirmed && matchesBody(confirmed, doc)) {
       pendingRef.current = null;
+      pendingUnconfirmedRef.current = null;
       // Черновик снимается — но ТОЛЬКО СВОЙ, написанный из набранного здесь. Условие не
       // перестраховка: редактор при монтировании гарантированно присылает тело базы с
       // проставленными блочными id, то есть попадает ровно сюда, — и без условия это эхо
       // стирало бы с диска чужой неотправленный черновик, ещё не показанный человеку
       // (ревью раунда 1, И-6). Свой же снимать обязательно: иначе правку, которую человек
       // набрал и сам же отменил, следующее открытие записи воскресило бы досылом.
-      if (ownDraftRef.current) {
-        if (!freshnessRuntimeOf(queryClient)?.requiresDurableDraft()) clearDraft(entityId);
-        ownDraftRef.current = false;
+      const ownDraftToken = ownDraftRef.current?.token;
+      if (ownDraftToken) {
+        const durable = freshnessRuntimeOf(queryClient)?.requiresDurableDraft();
+        const stored = readDraft(entityId);
+        if (!durable) clearDraft(entityId);
+        else if (stored?.slot === ownDraftToken) {
+          if (stored.doc.v === doc.v && sameDoc(stored.doc.doc, doc.doc)) {
+            finishStoredDraft(queryClient, entityId, ownDraftToken, base.bodyRevision, confirmed);
+          } else if (!inFlightRef.current && stored.baseRevision === base.bodyRevision) {
+            // The editor returned to the same server revision after abandoning its own change.
+            abandonDraftSlot(entityId, ownDraftToken);
+          }
+        }
+        ownDraftRef.current = undefined;
       }
       // Остановка снимается ВМЕСТЕ с отложенным документом, и это не симметрия ради симметрии.
       // Причина остановки одна — ОТВЕРГНУТЫЙ документ, — а его здесь уже нет: на руках ровно
@@ -640,6 +707,12 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
     // известная». Берётся она НЕ здесь: ревизия взята на начало набора, в момент правки (см.
     // `pendingBaseRef` — там же и сюжет, ради которого).
     const expectedBodyRevision = pendingBaseRef.current;
+    if (held && confirmed && !sameBasis) {
+      if (pendingDraftRef.current === null && foreignDraftRef.current === null)
+        offerConflictDraft();
+      setFailure('network');
+      return;
+    }
 
     // Черновик кладётся на диск ПЕРЕД всеми причинами не отправлять, и это главное свойство
     // страховки: она обязана работать именно тогда, когда отправка не работает. Раньше запись
@@ -667,12 +740,20 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
       draftToken = saveDraft(entityId, doc, expectedBodyRevision, new Date().toISOString());
       // По ПРОИСХОЖДЕНИЮ документа, а не безусловно: досыл кладёт на диск ровно то, что оттуда
       // и прочитал, и своим этот черновик не делает (см. `ownDraftRef`).
-      ownDraftRef.current = pendingFromEditorRef.current;
+      ownDraftRef.current = pendingFromEditorRef.current
+        ? { token: draftToken, awaitingBasis: held && !confirmed ? held.basis : undefined }
+        : undefined;
       // Приговор сервера свежая запись только что стёрла — возвращаем его, если на диск лёг
       // РОВНО отвергнутый документ (см. `rejectedDocRef`).
       if (rejectedDocRef.current === doc) markDraftRejected(entityId);
     }
 
+    if (held && !confirmed) {
+      held.waiting = true;
+      setFailure('network');
+      return;
+    }
+    pendingUnconfirmedRef.current = null;
     if (stoppedRef.current || rewriteRef.current !== undefined) return;
     // Ревизия неизвестна (0 — `shownBodyRevision`): замок взять не с чего, а отказ разбора хук принял бы за приговор
     // документу — пометил бы черновик «сервер отверг» и выключил сохранение. Не шлём: текст лежит черновиком.
@@ -761,14 +842,14 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
         // I-1). Здесь остаётся ровно то, что про ЭТОТ хук и умирает вместе с ним.
         if (stale() || currentOperation?.() === false) return;
         lastFailedRef.current = false;
-        ownDraftRef.current = false;
+        if (ownDraftRef.current?.token === draftToken) ownDraftRef.current = undefined;
         writerRef.current.basis = doc;
         confirmedRef.current = { revision: saved.bodyRevision, current: currentOperation };
         // Ревизия отложенного двигается вместе с подтверждённой, и это обязательно: правка,
         // набранная ПОВЕРХ только что сохранённой, — её потомок, и база у неё теперь ответ
         // сервера. Не двинь мы её, досыл из onSettled ушёл бы с ревизией, которую этот же
         // успех и сдвинул, — то есть с гарантированным 409 от собственного предшественника.
-        pendingBaseRef.current = saved.bodyRevision;
+        if (!pendingUnconfirmedRef.current) pendingBaseRef.current = saved.bodyRevision;
         // Снимается с очереди только ЭТОТ документ. Приехавшую за время запроса правку
         // отправит её СОБСТВЕННЫЙ таймер паузы, а если тот успел сработать, пока шёл
         // запрос, — досыл из onSettled. Второй путь заметнее, первый — чаще.
@@ -837,36 +918,89 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
         settleRef.current();
       },
     });
-  }, [entityId, epoch, mutate, clearTimer, clearGiveUp, preserveOwnerPending, queryClient]);
+  }, [
+    entityId,
+    epoch,
+    mutate,
+    clearTimer,
+    clearGiveUp,
+    offerConflictDraft,
+    preserveOwnerPending,
+    queryClient,
+  ]);
+
+  const capturePendingBasis = useCallback(() => {
+    const basis = shownUnconfirmedRef.current;
+    const unconfirmed = basis && freshnessRuntimeOf(queryClient)?.requiresDurableDraft();
+    pendingUnconfirmedRef.current = unconfirmed ? { basis, waiting: false } : null;
+    pendingBaseRef.current = unconfirmed
+      ? basis.revision
+      : currentExpected(shownRevisionRef.current);
+  }, [currentExpected, queryClient]);
+
+  const resumeBasis = useCallback(() => {
+    if (!isUndoEpoch(epoch) || !pendingUnconfirmedRef.current?.waiting) return;
+    const body = entityRef.current.bodyDoc;
+    if (body && !isBodyPending(body)) save();
+  }, [epoch, save]);
+  useEffect(resumeBasis);
+  useEffect(() => {
+    let active = true;
+    // An equal network reply can confirm the same object without a React render.
+    const unsubscribe = queryClient.getQueryCache().subscribe((event) => {
+      if (event.type !== 'updated' || event.action.type !== 'success') return;
+      const [path, options] = event.query.queryKey;
+      if (
+        Array.isArray(path) &&
+        path.join('.') === 'entity.get' &&
+        (options as { input?: { id?: string } } | undefined)?.input?.id === entityId &&
+        pendingUnconfirmedRef.current?.waiting
+      )
+        queueMicrotask(() => {
+          if (active) resumeBasis();
+        });
+    });
+    return () => {
+      active = false;
+      unsubscribe();
+    };
+  }, [entityId, queryClient, resumeBasis]);
 
   const onDocChange = useCallback(
     (doc: BodyDoc) => {
       if (rewriteRef.current !== undefined) {
         // Позднее событие редактора сохраняем отдельным предложением, а не кладём поверх результата отмены.
+        const baseRevision = currentExpected(shownRevisionRef.current);
         const draft: Draft = {
           doc,
-          baseRevision: currentExpected(shownRevisionRef.current),
+          baseRevision,
           savedAt: new Date().toISOString(),
           rejected: false,
         };
-        saveDraft(entityId, doc, draft.baseRevision!, draft.savedAt);
+        saveDraft(entityId, doc, baseRevision, draft.savedAt);
         setPendingDraft(draft);
         return;
       }
       pendingRef.current = doc;
       // Ревизия ПОКАЗАННОГО текста (или своего подтверждённого сохранения, если оно новее): человек печатает поверх
       // того, что видит, а не поверх того, что успело приехать в кэш (рулинг R-17).
-      pendingBaseRef.current = currentExpected(shownRevisionRef.current);
+      capturePendingBasis();
       pendingFromEditorRef.current = true;
       clearTimer();
       timerRef.current = window.setTimeout(save, SAVE_DEBOUNCE_MS);
     },
-    [save, clearTimer, currentExpected, entityId, setPendingDraft],
+    [save, clearTimer, capturePendingBasis, currentExpected, entityId, setPendingDraft],
   );
 
-  const onShown = useCallback((revision: number) => {
-    shownRevisionRef.current = revision;
-  }, []);
+  const onShown = useCallback(
+    (revision: number) => {
+      shownRevisionRef.current = revision;
+      const doc = entity.bodyDoc;
+      shownUnconfirmedRef.current =
+        revision === entity.bodyRevision && doc && isBodyPending(doc) ? { revision, doc } : null;
+    },
+    [entity.bodyRevision, entity.bodyDoc],
+  );
 
   const flush = save;
 
@@ -874,6 +1008,8 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
     if (inFlightRef.current) return true;
     const doc = pendingRef.current;
     if (doc === null) return false;
+    const basis = pendingUnconfirmedRef.current?.basis;
+    if (basis && pendingFromEditorRef.current && matchesBody(basis.doc, doc)) return false;
     const base = entityRef.current.bodyDoc;
     return !(
       !isBodyPending(base) &&
@@ -967,28 +1103,11 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
     if (typeof revision === 'number' && entity.bodyRevision >= revision) {
       // Затвор блокировал запись старого тела; EntityBody причинно сажает принятое тело в каждый режим до unlock.
       shownRevisionRef.current = entity.bodyRevision;
+      shownUnconfirmedRef.current = unconfirmedBasis(entity);
       rewriteRef.current = undefined;
       setRewritePending(false);
     }
   });
-  const offerConflictDraft = useCallback(() => {
-    const doc = pendingRef.current;
-    if (doc !== null) {
-      const draft: Draft = {
-        doc,
-        baseRevision: pendingBaseRef.current,
-        savedAt: new Date().toISOString(),
-        rejected: false,
-      };
-      saveDraft(entityId, doc, pendingBaseRef.current, draft.savedAt);
-      setPendingDraft(draft);
-    } else {
-      const draft = readDraft(entityId);
-      if (draft !== null) setPendingDraft(draft);
-    }
-    pendingRef.current = null;
-    clearTimer();
-  }, [entityId, setPendingDraft, clearTimer]);
 
   /**
    * Возврат к записи, у которой на диске остался неотправленный черновик.
@@ -1046,6 +1165,14 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
       sameDoc(draft.doc.doc, base.bodyDoc.doc as JSONContent)
     ) {
       if (!freshnessRuntimeOf(queryClient)?.requiresDurableDraft()) clearDraft(entityId);
+      else if (stored.slot)
+        finishStoredDraft(queryClient, entityId, stored.slot, base.bodyRevision, base.bodyDoc);
+      return;
+    }
+    // Восстановленный ответ даёт экран для чтения, но не серверную основу
+    // для автоматической отправки. Локальный текст остаётся доступным.
+    if (freshnessRuntimeOf(queryClient)?.requiresDurableDraft() && isBodyPending(base.bodyDoc)) {
+      setPendingDraft(draft);
       return;
     }
     // Черновик старой формы (до плана А) несёт baseUpdatedAt и не несёт ревизии (§8.3, К-26): совпал штамп записи —
@@ -1079,6 +1206,7 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
       // Основа черновика, сверенная выше с ревизией записи, — а не кэш на момент таймера: чужая правка, приехавшая
       // между сверкой и досылом, иначе была бы затёрта черновиком молча.
       pendingBaseRef.current = draftBase;
+      pendingUnconfirmedRef.current = null;
       pendingFromEditorRef.current = false; // документ с диска, а не из-под рук
       save();
     }, 0);
@@ -1097,7 +1225,7 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
     // чужой — этого и просит единственная кнопка, которую человек нажал. Уйди она со старой
     // ревизией, сервер ответил бы 409, то есть «оставить моё» не делало бы ничего. Она же — основа того, что
     // теперь показано (экран сажает черновик местной копией, и `onShown` о ней молчит).
-    pendingBaseRef.current = currentExpected(shownRevisionRef.current);
+    capturePendingBasis();
     shownRevisionRef.current = pendingBaseRef.current;
     pendingFromEditorRef.current = false; // документ с диска: человек выбрал его, а не набрал
     // Терминальная остановка снимается: она про НАБОР (иначе каждое нажатие уходило бы в сеть
@@ -1106,7 +1234,7 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
     // Молча не сделать ничего по нажатию единственной кнопки было бы хуже лишнего запроса.
     stoppedRef.current = false;
     save();
-  }, [save, setPendingDraft, currentExpected]);
+  }, [save, setPendingDraft, capturePendingBasis]);
 
   const discardPendingDraft = useCallback(() => {
     const offer = pendingDraftRef.current;
@@ -1129,7 +1257,7 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
       onDisk.baseUpdatedAt === offer.baseUpdatedAt
     ) {
       clearDraft(entityId);
-      ownDraftRef.current = false;
+      ownDraftRef.current = undefined;
     }
   }, [entityId, setPendingDraft]);
 

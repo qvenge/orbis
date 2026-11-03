@@ -1,5 +1,6 @@
 import { etalonOf, type SupplyKey, type SupplyKeyValue } from '@orbis/shared/supply';
 import { useCallback } from 'react';
+import { diskAwareStaleTime } from '../../lib/freshness/provenance';
 import { type RouterOutputs, trpc } from '../../trpc';
 import { useToast } from '../../ui/toast-store';
 import { journalRefOf } from '../undo/journal-ref';
@@ -61,7 +62,9 @@ export function useSupplyUpdates(): {
   updates: readonly SupplyUpdate[];
   status: 'loading' | 'ok' | 'error';
 } {
-  const q = trpc.supply.updates.useQuery(undefined, { staleTime: SUPPLY_UPDATES_STALE_MS });
+  const q = trpc.supply.updates.useQuery(undefined, {
+    staleTime: diskAwareStaleTime(SUPPLY_UPDATES_STALE_MS),
+  });
   return {
     updates: q.data ?? NO_UPDATES,
     status: q.data !== undefined ? 'ok' : q.isError ? 'error' : 'loading',

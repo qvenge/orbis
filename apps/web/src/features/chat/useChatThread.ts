@@ -4,6 +4,7 @@ import { TRPCClientError } from '@trpc/client';
 import { useEffect, useSyncExternalStore } from 'react';
 import { freshnessRuntimeOf } from '../../lib/freshness/provenance';
 import { useFreshnessVisible } from '../../lib/freshness/screen';
+import { networkOnlyResponse } from '../../lib/local-data/query-responses';
 import { type RouterOutputs, trpc } from '../../trpc';
 import { isUndoEpoch, undoEpoch } from '../undo/undo-epoch';
 import { localMessagesOf, projectLocalMessages } from './local-messages';
@@ -39,7 +40,10 @@ export function useChatThread(threadId: string) {
     enabled: useFreshnessVisible(),
     initialPageParam: undefined as string | undefined,
     queryFn: ({ pageParam }) =>
-      utils.chat.listMessages.fetch({ threadId, before: pageParam, limit: PAGE }, { staleTime: 0 }),
+      utils.chat.listMessages.fetch(
+        { threadId, before: pageParam, limit: PAGE },
+        { staleTime: 0, meta: networkOnlyResponse },
+      ),
     // The compound cursor also orders messages created in the same millisecond.
     getNextPageParam: (lastPage) => {
       if (lastPage.length < PAGE) return undefined;

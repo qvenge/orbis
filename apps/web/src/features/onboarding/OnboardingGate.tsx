@@ -4,7 +4,7 @@ import { Button } from '../../ui/Button';
 import { Spinner } from '../../ui/Spinner';
 
 export function OnboardingGate({ children }: { children: ReactNode }) {
-  const settings = trpc.user.getSettings.useQuery(undefined, { retry: false });
+  const settings = trpc.user.getSettings.useQuery();
   const seed = trpc.user.seedOnboarding.useMutation({
     onSuccess: () => {
       // Настройки перечитываются после ответа: после заведения графа (в том числе после
@@ -56,7 +56,10 @@ export function OnboardingGate({ children }: { children: ReactNode }) {
   // ИЛИ getSettings упал не-NOT_FOUND ошибкой. Фоновый провал заведения у пользователя
   // С настройками приложение НЕ блокирует — попытка повторится при следующей сессии.
   // reset() возвращает мутацию в idle → эффект перезапускает seed; refetch() — для ошибки настроек.
-  if ((seed.isError && needsSeed) || (settings.isError && !needsSeed)) {
+  if (
+    (seed.isError && needsSeed) ||
+    (settings.isError && !needsSeed && settings.data === undefined)
+  ) {
     return (
       <div
         role="alert"

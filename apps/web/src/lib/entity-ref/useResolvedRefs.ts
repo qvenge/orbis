@@ -1,6 +1,7 @@
 import { ENTITY_RESOLVE_REFS_MAX } from '@orbis/shared';
 import { useCallback, useMemo, useRef } from 'react';
 import { type RouterOutputs, trpc } from '../../trpc';
+import { diskAwareStaleTime } from '../freshness/provenance';
 import { useFreshnessVisible } from '../freshness/screen';
 
 export type RefTitle = RouterOutputs['entity']['resolveRefs'][number];
@@ -48,7 +49,9 @@ export function useResolvedRefs(ids: readonly string[]) {
   const shown = useFreshnessVisible();
   const resolved = trpc.useQueries(
     (t) =>
-      batches.map((ids) => t.entity.resolveRefs({ ids }, { staleTime: 30_000, enabled: shown })),
+      batches.map((ids) =>
+        t.entity.resolveRefs({ ids }, { staleTime: diskAwareStaleTime(30_000), enabled: shown }),
+      ),
     { combine },
   );
   const retry = useCallback(() => {

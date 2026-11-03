@@ -333,15 +333,20 @@ export function createFreshnessRuntime({
   }
 
   function refreshVisible() {
-    for (const query of cache.getAll()) if (showing(query) && relevant(query)) mark(query, true);
+    for (const query of cache.getAll()) {
+      // TanStack already resumes a paused retry. Keep any pending event/reset obligation
+      // in refresh, but do not create a second one merely because connectivity returned.
+      if (query.state.fetchStatus === 'idle' && showing(query) && relevant(query))
+        mark(query, true);
+    }
     schedule();
   }
 
-  function resetAll() {
+  function resetAll(token: string) {
     resetSequence = nextNetworkOrder();
     bodies.clear();
     deleted.clear();
-    sinks.resetResponses?.(scope, resetSequence);
+    sinks.resetResponses?.(scope, resetSequence, token);
     for (const query of cache.getAll()) mark(query, true);
     schedule();
   }
@@ -500,7 +505,7 @@ export function createFreshnessRuntime({
       }
       resetTokens.add(token);
       cursor = page.watermark;
-      resetAll();
+      resetAll(token);
       return true;
     }
     if (
@@ -775,6 +780,21 @@ export function createFreshnessRuntime({
       return projectBody(read.key, sinks.project ? sinks.project(read) : read.raw);
     },
     projectBody,
+    projectRestoredBody(key: QueryKey, raw: unknown) {
+      const id = queryInput(key)?.id;
+      const ack = id && bodies.get(id);
+      if (!ack) return undefined;
+      const projected = projectBody(key, raw);
+      if (projected === raw) return undefined;
+      const detail = projected as { entity: { bodyDoc?: unknown } };
+      const { bodyDoc } = detail.entity;
+      // The disk marker belongs to this publication, not to another view sharing the ACK object.
+      const data =
+        bodyDoc && typeof bodyDoc === 'object'
+          ? { ...detail, entity: { ...detail.entity, bodyDoc: { ...bodyDoc } } }
+          : detail;
+      return { data, receivedAt: ack.receivedAt };
+    },
     publishBody(entityId: string) {
       if (!current()) return;
       for (const query of cache.getAll()) {

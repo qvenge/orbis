@@ -1,5 +1,5 @@
 # check=skip=SecretsUsedInArgOrEnv
-# ^ Осознанный пропуск: единственные ARG/ENV ниже — VITE_SUPABASE_URL/ANON_KEY, публичные
+# ^ Осознанный пропуск: VITE_SUPABASE_URL/ANON_KEY публичны
 #   по дизайну (Supabase publishable-ключ и так уезжает в браузерный бандл; граница доступа —
 #   RLS, не секретность ключа). Настоящие секреты (DATABASE_URL, ANTHROPIC_API_KEY,
 #   OPENAI_API_KEY) в образ НЕ попадают — это рантайм-env на Render.
@@ -32,12 +32,18 @@ COPY . .
 ARG VITE_SUPABASE_URL=http://localhost:54321
 ARG VITE_SUPABASE_ANON_KEY=anon
 ARG VITE_API_URL=""
+ARG VITE_BUILD_ID
+ARG RENDER_GIT_COMMIT
+ARG VITE_RESPONSE_PERSISTENCE
 ENV VITE_SUPABASE_URL=$VITE_SUPABASE_URL \
     VITE_SUPABASE_ANON_KEY=$VITE_SUPABASE_ANON_KEY \
     VITE_API_URL=$VITE_API_URL
 
+# Render даёт SHA коммита через RENDER_GIT_COMMIT, локальная сборка может передать VITE_BUILD_ID.
 # 4) Сборка web-статики → apps/web/dist (дефолт WEB_DIST_DIR разрешается от WORKDIR /app).
-RUN cd apps/web && bun run build
+RUN cd apps/web && \
+    VITE_BUILD_ID="${VITE_BUILD_ID:-${RENDER_GIT_COMMIT}}" \
+    VITE_RESPONSE_PERSISTENCE="${VITE_RESPONSE_PERSISTENCE}" bun run build
 
 ENV NODE_ENV=production
 EXPOSE 3001

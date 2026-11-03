@@ -1,5 +1,6 @@
 import { useCallback, useRef } from 'react';
 import { runGraphCommand } from '../../../lib/graph-command';
+import { networkOnlyResponse } from '../../../lib/local-data/query-responses';
 import { useRegistry } from '../../../lib/registry/useRegistry';
 import { useGraphUndo } from '../../../lib/useGraphUndo';
 import { trpc } from '../../../trpc';
@@ -137,7 +138,10 @@ export function usePanelCommands(): {
         // key, then force a network read even if its cached result was fresh.
         await utils.entity.get.cancel(input);
         if (!isUndoEpoch(epoch)) return 'unavailable';
-        const current = await utils.entity.get.fetch(input, { staleTime: 0 });
+        const current = await utils.entity.get.fetch(input, {
+          staleTime: 0,
+          meta: networkOnlyResponse,
+        });
         if (!isUndoEpoch(epoch)) return 'unavailable';
         if (
           !current?.entity ||

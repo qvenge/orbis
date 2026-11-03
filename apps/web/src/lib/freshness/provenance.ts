@@ -6,6 +6,7 @@ export type NetworkReadReceipt = Readonly<{
   epoch: number;
   watermark: string | null;
   receivedAt: number;
+  startedAt?: number;
   startedSequence: number;
 }>;
 
@@ -44,7 +45,11 @@ export type BodyPublication = {
 export type FreshnessSinks = {
   writeNetwork?: (read: Extract<ReadPublication, { source: 'network' }>) => void;
   acceptBody?: (receipt: BodyPublication) => void;
-  resetResponses?: (scope: FreshnessScope, startedSequenceCutoff: number) => void;
+  resetResponses?: (
+    scope: FreshnessScope,
+    startedSequenceCutoff: number,
+    resetToken: string,
+  ) => void;
   removeEntity?: (scope: FreshnessScope, id: string) => void;
   project?: (read: ReadPublication) => unknown;
 };
@@ -101,6 +106,42 @@ export function recordDiskRead(
 
 export function diskReadOf(raw: unknown) {
   if (typeof raw === 'object' && raw !== null) return restored.get(raw);
+}
+
+type DiskOrigin = Extract<ReadOrigin, { source: 'disk' }> & { scope: FreshnessScope };
+const diskAttempts = new WeakMap<object, { raw: unknown; origin: DiskOrigin }>();
+
+/** The TanStack observer publishes before QueryCache.onSuccess. Stage by query for scalars too. */
+export function stageDiskRead(
+  query: object,
+  raw: unknown,
+  origin: DiskOrigin,
+  signal: AbortSignal,
+) {
+  const attempt = { raw, origin };
+  diskAttempts.set(query, attempt);
+  if (raw !== null && typeof raw === 'object') recordDiskRead(raw, origin);
+  signal.addEventListener(
+    'abort',
+    () => {
+      if (diskAttempts.get(query) === attempt) diskAttempts.delete(query);
+    },
+    { once: true },
+  );
+}
+
+export function isPublishingDisk(query: { state: { data: unknown } }) {
+  const attempt = diskAttempts.get(query);
+  return attempt !== undefined && Object.is(query.state.data, attempt.raw);
+}
+
+export const diskAwareStaleTime = (normal: number) => (query: { state: { data: unknown } }) =>
+  isPublishingDisk(query) ? 0 : normal;
+
+export function takeDiskRead(query: object, raw: unknown): DiskOrigin | undefined {
+  const attempt = diskAttempts.get(query);
+  diskAttempts.delete(query);
+  if (attempt && Object.is(attempt.raw, raw)) return attempt.origin;
 }
 
 export function observeNetworkRead(shown: unknown, receipt: NetworkReadReceipt): void {

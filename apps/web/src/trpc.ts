@@ -1,6 +1,11 @@
 import type { AppRouter } from '@orbis/server/src/router';
 import { CLIENT_VERSION_HEADER, changeXidInput, READ_WATERMARK_HEADER } from '@orbis/shared';
-import { type DefaultOptions, MutationCache, QueryClient } from '@tanstack/react-query';
+import {
+  type DefaultOptions,
+  MutationCache,
+  onlineManager,
+  QueryClient,
+} from '@tanstack/react-query';
 import {
   createTRPCClient,
   httpBatchLink,
@@ -27,6 +32,7 @@ import {
   recordNetworkReadReceipt,
   recordReadErrorReceipt,
 } from './lib/freshness/provenance';
+import { responseQueryOptions } from './lib/local-data/query-responses';
 
 export {
   inheritNetworkReadReceipt,
@@ -60,12 +66,36 @@ export function makeQueryClient(queries?: DefaultOptions['queries']): QueryClien
         staleTime: 30_000,
         ...queries,
       },
-      mutations: { retry: false },
+      mutations: { retry: false, networkMode: 'always' },
     },
   });
   return client;
 }
-export const queryClient = makeQueryClient();
+class NetworkTransportError extends Error {}
+
+async function fetchWithNetworkStatus(url: RequestInfo | URL, init?: RequestInit) {
+  if (navigator.onLine === false) throw new NetworkTransportError('Нет сети');
+  try {
+    return await fetch(url, init);
+  } catch (error) {
+    if (error instanceof TypeError)
+      throw new NetworkTransportError('Сервер недоступен', { cause: error });
+    throw error;
+  }
+}
+
+function retryNetworkRead(failureCount: number, error: unknown): boolean {
+  let cause = error;
+  while (cause instanceof Error) {
+    if (cause instanceof TRPCClientError && (cause.data || cause.meta?.response)) return false;
+    if (cause instanceof NetworkTransportError)
+      return !onlineManager.isOnline() || failureCount < 3;
+    cause = cause.cause;
+  }
+  return false;
+}
+
+export const queryClient = makeQueryClient({ ...responseQueryOptions, retry: retryNetworkRead });
 
 export function trpcHeaders(getToken: () => string | null): Record<string, string> {
   const token = getToken();
@@ -82,6 +112,7 @@ const networkReadReceiptLink: TRPCLink<AppRouter> =
       const epoch = undoEpoch();
       const read = op.type === 'query' || (op.type === 'mutation' && op.path === 'entity.blocks');
       const startedSequence = nextNetworkOrder();
+      const startedAt = Date.now();
       return next(op).subscribe({
         next(value) {
           const response = value.context?.response;
@@ -91,6 +122,7 @@ const networkReadReceiptLink: TRPCLink<AppRouter> =
               epoch,
               watermark: watermark.success ? watermark.data : null,
               receivedAt: Date.now(),
+              startedAt,
               startedSequence,
             };
             const raw = value.result.data;
@@ -207,6 +239,7 @@ export function orbisLinks(getToken: () => string | null): TRPCLink<AppRouter>[]
         // У каждого владельца собственная очередь: старый запрос не объединяется с новым и не получает его токен.
         batch = httpBatchLink<AppRouter>({
           url: TRPC_URL,
+          fetch: fetchWithNetworkStatus,
           headers: () => {
             if (!isUndoEpoch(epoch)) throw new Error('Сессия изменилась');
             return trpcHeaders(getToken);

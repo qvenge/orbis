@@ -1,5 +1,5 @@
 import { isOAuthAuthorizePath } from '@orbis/shared';
-import { QueryClientProvider } from '@tanstack/react-query';
+import { onlineManager, QueryClientProvider } from '@tanstack/react-query';
 import { type ReactNode, StrictMode, useLayoutEffect, useState, useSyncExternalStore } from 'react';
 import { createRoot } from 'react-dom/client';
 import { App } from './App';
@@ -14,6 +14,7 @@ import { bindFreshnessRuntime } from './lib/freshness/provenance';
 import { createFreshnessRuntime } from './lib/freshness/runtime';
 import { FreshnessContext } from './lib/freshness/screen';
 import { createFreshnessTransport } from './lib/freshness/transport';
+import { bindQueryResponses } from './lib/local-data/query-responses';
 import { QueryBatchProvider } from './lib/query-blocks/batch';
 import { resetRegistryObservation } from './lib/registry/useRegistry';
 import { initTheme } from './lib/theme';
@@ -25,6 +26,7 @@ import { Toaster } from './ui/Toast';
 import './styles/globals.css';
 
 initTheme();
+onlineManager.setOnline(navigator.onLine);
 // Полевые замеры (спека скорости §3.2) — ленивым чанком: входной чанк входит в эагерное замыкание экрана записи, и там
 // только склейка — метки и буфер (гейт задачи 3, I-1). Потерь нет: замеры до загрузки чанка ждут в буфере, наблюдатели
 // Resource Timing и Web Vitals подписываются с `buffered`. Буфер — аргументом (`PerfBuffer`). Отказ загрузки (сеть) — без
@@ -55,8 +57,10 @@ function FreshnessSession({ children }: { children: ReactNode }) {
       isCurrent: () => isUndoEpoch(epoch),
     });
     const unbind = bindFreshnessRuntime(queryClient, next);
+    const responses = bindQueryResponses(queryClient, next);
     setRuntime(next);
     return () => {
+      responses.close();
       next.dispose();
       unbind();
       queryClient.clear();

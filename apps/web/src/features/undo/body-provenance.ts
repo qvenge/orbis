@@ -6,6 +6,9 @@ import {
   networkReadReceiptOf,
   observeNetworkRead,
   type ReadPublication,
+  recordDiskRead,
+  sameFreshnessScope,
+  takeDiskRead,
   takeScalarReadReceipt,
 } from '../../lib/freshness/provenance';
 import { isUndoEpoch } from './undo-epoch';
@@ -35,13 +38,20 @@ export function makeBodyQueryCache(clientOf: () => QueryClient): QueryCache {
       const path = Array.isArray(prefix) ? prefix.join('.') : prefix;
       const body = () =>
         (query.state.data as { entity?: { bodyDoc?: unknown } } | undefined)?.entity?.bodyDoc;
-      const disk = diskReadOf(raw);
+      const staged = takeDiskRead(query, raw);
+      const disk = staged ?? diskReadOf(raw);
       if (disk) {
-        forgetNetworkObservation(query.state.data);
+        const shown = query.state.data;
+        forgetNetworkObservation(shown);
         if (path === 'entity.get') markBodyPending(body());
+        if (staged && runtime && sameFreshnessScope(staged.scope, runtime.scope)) {
+          if (shown !== null && typeof shown === 'object') recordDiskRead(shown, staged);
+          query.setState({ dataUpdatedAt: staged.receivedAt, isInvalidated: true });
+        }
         runtime?.acceptRead({ ...disk, key: query.queryKey, queryHash: query.queryHash, raw });
         return;
       }
+      if (path === 'chatThread' && query.state.fetchMeta?.fetchMore?.direction) return;
       const scalar = takeScalarReadReceipt(query, raw);
       const receipt = networkReadReceiptOf(path === 'chatThread' ? newest(raw) : raw) ?? scalar;
       if (!receipt || !isUndoEpoch(receipt.epoch)) {

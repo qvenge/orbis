@@ -1,7 +1,13 @@
 import { type BodyDoc, DOC_SCHEMA_VERSION, parseBody } from '@orbis/shared/doc';
+import { useQueryClient } from '@tanstack/react-query';
 import { act, screen } from '@testing-library/react';
 import { useEffect, useState } from 'react';
 import { beforeEach, expect, test, vi } from 'vitest';
+import {
+  freshnessRuntimeOf,
+  nextNetworkOrder,
+  recordNetworkReadReceipt,
+} from '../../lib/freshness/provenance';
 import {
   installCrashTrap,
   mockEntityUpdateResult,
@@ -11,7 +17,9 @@ import {
 } from '../../test/harness';
 import { type RouterOutputs, trpc } from '../../trpc';
 import { detailGetInput } from '../entity-detail/useEntityDetail';
-import { setDraftScope } from './draft-storage';
+import { markBodyPending } from '../undo/body-provenance';
+import { undoEpoch } from '../undo/undo-epoch';
+import { finishDraftSlot, readDraft, saveDraft, setDraftScope } from './draft-storage';
 import { SaveIndicator } from './SaveIndicator';
 import { type BodySave, type BodySaveEntity, useBodySave } from './useBodySave';
 
@@ -108,7 +116,13 @@ function gatedServer() {
 type Props = { id: string; entity: BodySaveEntity };
 
 function mount(
-  opts: { id?: string; entity?: BodySaveEntity; respond?: Respond; strict?: boolean } = {},
+  opts: {
+    id?: string;
+    entity?: BodySaveEntity;
+    respond?: Respond;
+    strict?: boolean;
+    durable?: boolean;
+  } = {},
 ) {
   const box = { respond: opts.respond ?? ok };
   const initial: Props = { id: opts.id ?? 'e1', entity: opts.entity ?? ENTITY };
@@ -119,6 +133,8 @@ function mount(
   function Parent() {
     const [props, setProps] = useState(initial);
     hold.set = setProps;
+    const client = useQueryClient();
+    if (opts.durable) freshnessRuntimeOf(client)?.setSinks({ acceptBody: () => {} });
     const api = useBodySave(props.id, props.entity);
     hold.api = api;
     useEffect(() => {
@@ -140,11 +156,12 @@ function mount(
       if (sends > MAX_SENDS) return new Promise(() => {});
       return mockEntityUpdateResult(box.respond(input));
     },
-    { strict: opts.strict },
+    { strict: opts.strict, freshness: opts.durable },
   );
 
   return {
     container: r.container,
+    queryClient: r.queryClient,
     mountEffectRuns: () => runs.mountEffect,
     api: () => hold.api as BodySave,
     updates: () => r.calls.filter((c) => c.path === 'entity.update'),
@@ -233,6 +250,227 @@ beforeEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
   };
+});
+
+test('восстановленное с диска тело не запускает автоматический досыл черновика', async () => {
+  const bodyDoc = structuredClone(BASE);
+  markBodyPending(bodyDoc);
+  saveDraft('e1', ONE, ENTITY.bodyRevision, new Date().toISOString());
+  const view = mount({ entity: { ...ENTITY, bodyDoc }, durable: true });
+  await tick();
+  expect(view.updates()).toHaveLength(0);
+  expect(view.api().pendingDraft?.doc).toEqual(ONE);
+});
+
+test('набор поверх дискового тела ждёт подтверждения той же основы', async () => {
+  const bodyDoc = structuredClone(BASE);
+  markBodyPending(bodyDoc);
+  const view = mount({ entity: { ...ENTITY, bodyDoc }, durable: true });
+  view.api().onDocChange(ONE);
+  await tick(SAVE_PAUSE);
+  expect(readDraft('e1')?.doc).toEqual(ONE);
+  expect(view.updates()).toHaveLength(0);
+  await view.set({ id: 'e1', entity: ENTITY });
+  await tick();
+  expect(view.updates()).toHaveLength(1);
+  expect(view.input(0)).toMatchObject({ expectedBodyRevision: 3, bodyDoc: ONE });
+});
+
+test('равный сетевой detail разрешает сохранение даже без смены bodyDoc в редакторе', async () => {
+  const bodyDoc = structuredClone(BASE);
+  markBodyPending(bodyDoc);
+  const view = mount({ entity: { ...ENTITY, bodyDoc }, durable: true });
+  const key = [['entity', 'get'], { input: { id: 'e1' }, type: 'query' }];
+  view.queryClient.setQueryData(key, { entity: { ...ENTITY, bodyDoc } });
+  view.api().onDocChange(ONE);
+  await tick(SAVE_PAUSE);
+  expect(view.updates()).toHaveLength(0);
+  const reply = { entity: { ...ENTITY, bodyDoc: structuredClone(BASE) } };
+  recordNetworkReadReceipt(reply, {
+    epoch: undoEpoch(),
+    watermark: '10',
+    receivedAt: Date.now(),
+    startedSequence: nextNetworkOrder(),
+  });
+  await act(async () => {
+    await view.queryClient.fetchQuery({ queryKey: key, queryFn: async () => reply, staleTime: 0 });
+    await vi.advanceTimersByTimeAsync(0);
+  });
+  expect(view.updates()).toHaveLength(1);
+  expect(view.input(0)).toMatchObject({ expectedBodyRevision: 3, bodyDoc: ONE });
+});
+
+test('новая серверная основа оставляет набранный по диску текст предложением', async () => {
+  const bodyDoc = structuredClone(BASE);
+  markBodyPending(bodyDoc);
+  const view = mount({ entity: { ...ENTITY, bodyDoc }, durable: true });
+  view.api().onDocChange(ONE);
+  await tick(SAVE_PAUSE);
+  await view.set({ id: 'e1', entity: MOVED });
+  await tick();
+  expect(view.updates()).toHaveLength(0);
+  expect(view.api().pendingDraft?.doc).toEqual(ONE);
+  expect(readDraft('e1')?.baseRevision).toBe(3);
+});
+
+test('эхо дискового тела не создаёт правку или черновик', async () => {
+  const bodyDoc = structuredClone(BASE);
+  markBodyPending(bodyDoc);
+  const view = mount({ entity: { ...ENTITY, bodyDoc }, durable: true });
+  view.api().onDocChange(withBlockIds(BASE));
+  await tick(SAVE_PAUSE);
+  expect(view.updates()).toHaveLength(0);
+  expect(readDraft('e1')).toBeNull();
+});
+
+test.each([
+  false,
+  true,
+])('возврат к исходному дисковому телу завершает отменённый ввод (GET подтвердил основу: %s)', async (confirmed) => {
+  const bodyDoc = structuredClone(BASE);
+  markBodyPending(bodyDoc);
+  const view = mount({ entity: { ...ENTITY, bodyDoc }, durable: true });
+  view.api().onDocChange(ONE);
+  await tick(SAVE_PAUSE);
+  expect(readDraft('e1')?.doc).toEqual(ONE);
+  view.api().onDocChange(withBlockIds(BASE));
+  if (confirmed) await view.set({ id: 'e1', entity: ENTITY });
+  await tick(SAVE_PAUSE);
+  expect(view.updates()).toHaveLength(0);
+  const abandoned = readDraft('e1');
+  await view.unmount();
+
+  const reopened = mount({ entity: ENTITY, durable: true });
+  await tick();
+  expect(reopened.updates()).toHaveLength(0);
+  expect(abandoned).toBeNull();
+});
+
+test('возврат к дисковому телу сохраняет слот, записанный другой вкладкой', async () => {
+  const bodyDoc = structuredClone(BASE);
+  markBodyPending(bodyDoc);
+  const view = mount({ entity: { ...ENTITY, bodyDoc }, durable: true });
+  view.api().onDocChange(ONE);
+  await tick(SAVE_PAUSE);
+  expect(readDraft('e1')?.doc).toEqual(ONE);
+  const other = saveDraft('e1', TWO, ENTITY.bodyRevision, new Date().toISOString());
+
+  view.api().onDocChange(BASE);
+  await tick(SAVE_PAUSE);
+
+  expect(view.updates()).toHaveLength(0);
+  expect(readDraft('e1')).toMatchObject({ slot: other, doc: TWO });
+});
+
+test.each([
+  'после ACK',
+  'до ACK',
+  'до ACK и истечения паузы',
+])('следующий набор в том же редакторе использует свой ACK (%s)', async (timing) => {
+  const bodyDoc = structuredClone(BASE);
+  markBodyPending(bodyDoc);
+  const server = gatedServer();
+  const view = mount({ entity: { ...ENTITY, bodyDoc }, durable: true, respond: server.respond });
+  view.api().onDocChange(ONE);
+  await tick(SAVE_PAUSE);
+  await view.set({ id: 'e1', entity: ENTITY });
+  await tick();
+  expect(view.updates()).toHaveLength(1);
+  expect(view.input(0)).toMatchObject({ expectedBodyRevision: 3, bodyDoc: ONE });
+
+  if (timing !== 'после ACK') {
+    view.api().onDocChange(TWO);
+    if (timing === 'до ACK') await tick(SAVE_PAUSE);
+    expect(view.updates()).toHaveLength(1);
+  }
+  await server.answer(0, SAVED);
+  await view.set({ id: 'e1', entity: { ...ENTITY, bodyDoc: ONE, bodyRevision: 4 } });
+  if (timing === 'после ACK') view.api().onDocChange(TWO);
+  await tick(SAVE_PAUSE);
+
+  expect(view.updates()).toHaveLength(2);
+  expect(view.input(1)).toMatchObject({ expectedBodyRevision: 4, bodyDoc: TWO });
+  await server.answer(1, { ...SAVED, bodyRevision: 5 });
+});
+
+test('эхо дисковой основы сохраняет отправленный слот до подтверждения записи на диск', async () => {
+  const bodyDoc = structuredClone(BASE);
+  markBodyPending(bodyDoc);
+  const server = gatedServer();
+  const view = mount({ entity: { ...ENTITY, bodyDoc }, durable: true, respond: server.respond });
+  view.api().onDocChange(ONE);
+  await tick(SAVE_PAUSE);
+  await view.set({ id: 'e1', entity: ENTITY });
+  await tick();
+  expect(view.updates()).toHaveLength(1);
+  const submitted = readDraft('e1');
+  expect(submitted?.doc).toEqual(ONE);
+
+  await view.set({ id: 'e1', entity: { ...ENTITY, bodyDoc } });
+  view.api().onShown(ENTITY.bodyRevision);
+  view.api().onDocChange(withBlockIds(BASE));
+  await tick(SAVE_PAUSE);
+  expect(readDraft('e1')).toEqual(submitted);
+
+  await server.answer(0, SAVED);
+  view.api().onDocChange(withBlockIds(BASE));
+  await tick(SAVE_PAUSE);
+  expect(view.updates()).toHaveLength(1);
+  expect(readDraft('e1')).toEqual(submitted);
+});
+
+test('явный выбор черновика поверх дискового тела тоже ждёт подтверждения', async () => {
+  const bodyDoc = structuredClone(BASE);
+  markBodyPending(bodyDoc);
+  saveDraft('e1', ONE, ENTITY.bodyRevision - 1, new Date().toISOString());
+  const view = mount({ entity: { ...ENTITY, bodyDoc }, durable: true });
+  await view.apply();
+  expect(view.updates()).toHaveLength(0);
+  expect(readDraft('e1')?.doc).toEqual(ONE);
+  await view.set({ id: 'e1', entity: ENTITY });
+  await tick();
+  expect(view.updates()).toHaveLength(1);
+  expect(view.input(0)).toMatchObject({ expectedBodyRevision: 3, bodyDoc: ONE });
+});
+
+test('выбранный черновик нельзя применить к новой неподтверждённой пользователем основе', async () => {
+  const bodyDoc = structuredClone(BASE);
+  markBodyPending(bodyDoc);
+  saveDraft('e1', ONE, ENTITY.bodyRevision - 1, new Date().toISOString());
+  const view = mount({ entity: { ...ENTITY, bodyDoc }, durable: true });
+  await view.apply();
+  await view.set({ id: 'e1', entity: MOVED });
+  await tick();
+  expect(view.updates()).toHaveLength(0);
+  expect(view.api().pendingDraft?.doc).toEqual(ONE);
+  expect(readDraft('e1')?.baseRevision).toBe(3);
+});
+
+test('завершение по токену скрывает старый черновик и сохраняет новый', () => {
+  const now = new Date().toISOString();
+  const old = saveDraft('e1', ONE, ENTITY.bodyRevision, now);
+  const oldRaw = raw() ?? '';
+  expect(oldRaw).not.toBe('');
+  const next = saveDraft('e1', TWO, ENTITY.bodyRevision, now);
+  const nextRaw = raw() ?? '';
+  expect(nextRaw).not.toBe('');
+  expect(finishDraftSlot(OWNER, 'e1', old)).toBe(true);
+  expect(readDraft('e1')?.slot).toBe(next);
+  localStorage.setItem(KEY, oldRaw);
+  expect(readDraft('e1')).toBeNull();
+  localStorage.setItem(KEY, nextRaw);
+  expect(readDraft('e1')?.slot).toBe(next);
+});
+
+test('возврат к той же подтверждённой ревизии снимает только собственную отменённую правку', async () => {
+  const view = mount({ respond: fail500, durable: true });
+  view.api().onDocChange(ONE);
+  await tick(SAVE_PAUSE);
+  expect(readDraft('e1')?.doc).toEqual(ONE);
+  view.api().onDocChange(BASE);
+  await tick(SAVE_PAUSE);
+  expect(readDraft('e1')).toBeNull();
+  expect(view.updates()).toHaveLength(1);
 });
 
 // --- запись и стирание ------------------------------------------------------------------------

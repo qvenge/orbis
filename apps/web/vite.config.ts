@@ -2,12 +2,24 @@
 // type-checked in this single file; plain vite's defineConfig doesn't type `test`.
 import tailwind from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
+import { loadEnv } from 'vite';
 import { VitePWA } from 'vite-plugin-pwa';
 import { defineConfig } from 'vitest/config';
 import { pwaManifest } from './src/pwa/manifest';
 
 export default defineConfig({
   plugins: [
+    {
+      name: 'orbis-build-id',
+      config(_config, { command, mode, isPreview }) {
+        const building = command === 'build' && !isPreview;
+        const buildId = building ? loadEnv(mode, process.cwd(), 'VITE_').VITE_BUILD_ID : 'dev';
+        if (!buildId || (building && !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(buildId))) {
+          throw new Error('VITE_BUILD_ID must be the commit SHA for this web build');
+        }
+        return { define: { 'import.meta.env.VITE_BUILD_ID': JSON.stringify(buildId) } };
+      },
+    },
     react(),
     tailwind(),
     VitePWA({

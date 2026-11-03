@@ -60,6 +60,7 @@ export type Draft = {
 export const DRAFT_REJECTING_CODE = 'BAD_REQUEST';
 
 const KEY_PREFIX = 'orbis:body-draft';
+const FINISHED_PREFIX = 'orbis:body-draft-finished:';
 
 /**
  * Сколько живёт неотправленный черновик.
@@ -121,7 +122,13 @@ export function sweepDrafts(): void {
     const doomed: string[] = [];
     for (let i = 0; i < localStorage.length; i += 1) {
       const k = localStorage.key(i);
-      if (k === null || !k.startsWith(`${KEY_PREFIX}:`)) continue;
+      if (k === null) continue;
+      if (k.startsWith(FINISHED_PREFIX)) {
+        const at = Number(localStorage.getItem(k));
+        if (now - at > DRAFT_TTL_MS) doomed.push(k);
+        continue;
+      }
+      if (!k.startsWith(`${KEY_PREFIX}:`)) continue;
       const rest = k.slice(KEY_PREFIX.length + 1);
       // Одна часть вместо двух — ключ до скоупа по аккаунту.
       if (!rest.includes(':')) {
@@ -231,7 +238,8 @@ export function saveDraft(
 export function readDraft(entityId: string): Draft | null {
   try {
     const raw = localStorage.getItem(key(entityId));
-    return raw === null ? null : parseDraft(raw);
+    const draft = raw === null ? null : parseDraft(raw);
+    return draft?.slot && isDraftSlotFinished(scope, entityId, draft.slot) ? null : draft;
   } catch {
     return null; // и сам доступ к хранилищу может бросить — см. saveDraft
   }
@@ -253,6 +261,36 @@ export function clearDraft(entityId: string): void {
   } catch {
     /* см. saveDraft */
   }
+}
+
+function finishedKey(accountId: string, entityId: string, token: string): string {
+  return `${FINISHED_PREFIX}${accountId.toLowerCase()}:${entityId.toLowerCase()}:${token}`;
+}
+
+export function isDraftSlotFinished(accountId: string, entityId: string, token: string): boolean {
+  try {
+    return localStorage.getItem(finishedKey(accountId, entityId, token)) !== null;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Logical removal of an exact slot. A token-specific tombstone cannot remove a newer
+ * localStorage value written by another tab between a compare and a removeItem.
+ * The legacy payload is overwritten by the next edit or removed by its existing TTL.
+ */
+export function finishDraftSlot(accountId: string, entityId: string, token: string): boolean {
+  try {
+    localStorage.setItem(finishedKey(accountId, entityId, token), String(Date.now()));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function abandonDraftSlot(entityId: string, token: string): void {
+  finishDraftSlot(scope, entityId, token);
 }
 
 // The mutation carries the submitted slot without changing its wire input.

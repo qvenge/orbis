@@ -28,7 +28,11 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useMemo, useSyncExternalStore } from 'react';
 import { isUndoEpoch, subscribeUndoEpoch, undoEpoch } from '../../features/undo/undo-epoch';
 import { trpc } from '../../trpc';
-import { freshnessRuntimeOf, networkObservationOf } from '../freshness/provenance';
+import {
+  diskAwareStaleTime,
+  freshnessRuntimeOf,
+  networkObservationOf,
+} from '../freshness/provenance';
 import { useFreshnessVisible } from '../freshness/screen';
 import { type EffectiveRegistry, lookupOf, type RegistryLookup } from './labels';
 
@@ -145,7 +149,7 @@ export function useRegistry(): RegistryView {
     // Снимок протухает не по часам, а по версии. `staleTime` конечный означал бы перезапрос по
     // таймеру, то есть плату за событие, которого нет. Прежний снимок на время перечитывания
     // держит тот же ключ сам — кадра без реестра (и размонтирования тела посреди правки) нет.
-    staleTime: Number.POSITIVE_INFINITY,
+    staleTime: diskAwareStaleTime(Number.POSITIVE_INFINITY),
   });
   const data = query.data;
   const failed = query.isError && data === undefined;
