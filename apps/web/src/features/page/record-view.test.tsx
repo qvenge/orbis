@@ -189,7 +189,7 @@ function openRecord(
       <Toaster />
     </>,
     handler,
-    { queries: queryClient.getDefaultOptions().queries },
+    { queries: queryClient.getDefaultOptions().queries, freshness: true },
   );
 }
 
@@ -852,9 +852,10 @@ describe('фикс-раунд 1: реестр, пачка спора', () => {
     const plaque = await screen.findByTestId('dispute-plaque');
     const choice = within(plaque).getByRole('button', { name: 'Шаблон задачи' });
     fireEvent.click(choice);
-    await waitFor(() => expect(choice).toBeDisabled());
+    // The optimistic winner is shown before ACK, so the pending dispute is no longer clickable.
+    await waitFor(() => expect(screen.queryByTestId('dispute-plaque')).toBeNull());
+    expect(choice).not.toBeInTheDocument();
     fireEvent.click(choice);
-    fireEvent.click(within(plaque).getByRole('button', { name: 'Шаблон проекта' }));
     batchGate.open();
     await waitFor(() => expect(screen.queryByTestId('dispute-plaque')).toBeNull());
     expect(calls.filter((c) => c.path === 'entity.updateBatch')).toHaveLength(1);

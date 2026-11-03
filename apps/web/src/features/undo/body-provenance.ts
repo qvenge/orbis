@@ -8,6 +8,7 @@ import {
   type ReadPublication,
   recordDiskRead,
   sameFreshnessScope,
+  shareProjectedData,
   takeDiskRead,
   takeScalarReadReceipt,
 } from '../../lib/freshness/provenance';
@@ -41,25 +42,56 @@ export function makeBodyQueryCache(clientOf: () => QueryClient): QueryCache {
       const staged = takeDiskRead(query, raw);
       const disk = staged ?? diskReadOf(raw);
       if (disk) {
-        const shown = query.state.data;
-        forgetNetworkObservation(shown);
+        const initial = query.state.data;
+        forgetNetworkObservation(initial);
         if (path === 'entity.get') markBodyPending(body());
         if (staged && runtime && sameFreshnessScope(staged.scope, runtime.scope)) {
-          if (shown !== null && typeof shown === 'object') recordDiskRead(shown, staged);
+          if (initial !== null && typeof initial === 'object') recordDiskRead(initial, staged);
           query.setState({ dataUpdatedAt: staged.receivedAt, isInvalidated: true });
         }
-        runtime?.acceptRead({ ...disk, key: query.queryKey, queryHash: query.queryHash, raw });
+        if (runtime) {
+          const read: ReadPublication = {
+            ...disk,
+            key: query.queryKey,
+            queryHash: query.queryHash,
+            raw,
+          };
+          runtime.acceptRead(read);
+          const publication = runtime.publicationOf(query.queryHash);
+          if (publication) {
+            // B6 owns the disk body source. An unrelated metadata layer must not
+            // mark a live ACK's shared document as pending on behalf of a disk view.
+            const projected =
+              publication.source === 'disk'
+                ? runtime.projectMetadata(publication)
+                : runtime.project(publication);
+            if (projected !== raw) {
+              query.setState({ data: shareProjectedData(query, projected) });
+            }
+            const shown = query.state.data;
+            if (publication.source === 'disk' && shown !== null && typeof shown === 'object')
+              recordDiskRead(shown, publication);
+            if (publication.source === 'network' && runtime.isAcceptedRead(publication)) {
+              observeNetworkRead(shown, publication.receipt);
+              if (path === 'entity.get') confirmBody(body());
+              return;
+            }
+          }
+        }
+        if (path === 'entity.get') markBodyPending(body());
         return;
       }
       if (path === 'chatThread' && query.state.fetchMeta?.fetchMore?.direction) return;
       const scalar = takeScalarReadReceipt(query, raw);
       const receipt = networkReadReceiptOf(path === 'chatThread' ? newest(raw) : raw) ?? scalar;
       if (!receipt || !isUndoEpoch(receipt.epoch)) {
+        runtime?.finishOptimisticRead(query.queryHash);
         if (path === 'entity.get') markBodyPending(body());
         return;
       }
       let accepted = true;
       let bodyFromAck = false;
+      let shownReceipt = receipt;
       if (runtime) {
         const previous = runtime.publicationOf(query.queryHash);
         // Fetching older chat pages reuses the existing newest page and its time.
@@ -78,17 +110,25 @@ export function makeBodyQueryCache(clientOf: () => QueryClient): QueryCache {
           receipt,
         };
         accepted = runtime.acceptRead(read);
-        const projected = accepted
-          ? runtime.project(read)
+        const publication = runtime.publicationOf(query.queryHash);
+        if (publication !== read) {
+          runtime.finishOptimisticRead(query.queryHash);
+          if (publication?.source === 'network' && runtime.isAcceptedRead(publication)) {
+            accepted = true;
+            shownReceipt = publication.receipt;
+          }
+        }
+        const projected = publication
+          ? runtime.project(publication)
           : runtime.projectBody(query.queryKey, raw);
         if (projected !== raw) {
-          const stale = query.state.isInvalidated;
-          query.setData(projected, { updatedAt: query.state.dataUpdatedAt, manual: true });
-          if (stale) query.invalidate();
+          query.setState({ data: shareProjectedData(query, projected) });
         }
-        bodyFromAck = path === 'entity.get' && runtime.projectBody(query.queryKey, raw) !== raw;
+        const bodyBase = publication ? publication.raw : raw;
+        bodyFromAck =
+          path === 'entity.get' && runtime.projectBody(query.queryKey, bodyBase) !== bodyBase;
       }
-      if (accepted) observeNetworkRead(query.state.data, receipt);
+      if (accepted) observeNetworkRead(query.state.data, shownReceipt);
       else forgetNetworkObservation(query.state.data);
       if (path === 'entity.get') {
         if (accepted || bodyFromAck) confirmBody(body());

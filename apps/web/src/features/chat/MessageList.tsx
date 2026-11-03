@@ -10,6 +10,7 @@ import {
   contentDuplicatesCard,
   renderCardBodies,
   renderCards,
+  useCardProjection,
 } from './cards/renderCards';
 import { SystemMessage } from './cards/SystemMessage';
 import { readSuggestions, Suggestions } from './Suggestions';
@@ -23,6 +24,26 @@ export function ThreadSkeleton() {
       <Skeleton className="h-10 w-2/5 self-end rounded-card" />
       <Skeleton className="h-10 w-1/2 self-start rounded-card" />
     </div>
+  );
+}
+
+function AssistantBody({
+  message,
+  handlers,
+  openEntity,
+}: {
+  message: ChatMessage;
+  handlers: CardHandlers;
+  openEntity: ReturnType<typeof useOpenRecord>;
+}) {
+  const project = useCardProjection(message);
+  return (
+    <>
+      {message.content && !contentDuplicatesCard(message, handlers, project) && (
+        <Markdown source={message.content} onEntityLink={openEntity} className="leading-relaxed" />
+      )}
+      {renderCards(message, handlers, project)}
+    </>
   );
 }
 
@@ -129,19 +150,11 @@ export function MessageList({
             data-role={m.role}
             className="flex w-full max-w-[92%] flex-col gap-2 self-start text-sm text-text"
           >
-            {/* Абзац снимается, только если его текст ДОСЛОВНО повторяет заголовок
-                отрисованной карточки или строки журнала (journal/thread-page.ts сервера):
-                печатать «Кофе» абзацем и «Кофе» карточкой подряд — шум. Карточка не
-                отрисовалась → текст остаётся (см. contentDuplicatesCard); прочие
-                system-строки (запрос подтверждения, отказ) — абзацем, как были.
-                Пузырь пользователя правилу не подчиняется намеренно: там текст — то,
-                что человек написал сам, и прятать его нельзя ни при каком совпадении. */}
-            {/* Правило выше сравнивает СЫРОЙ m.content с заголовком карточки — markdown
-                ничего в нём не меняет, отрисовка идёт уже после решения. */}
-            {m.content && !contentDuplicatesCard(m, { onRetry, onReparse, readOnly }) && (
-              <Markdown source={m.content} onEntityLink={openEntity} className="leading-relaxed" />
-            )}
-            {renderCards(m, { onRetry, onReparse, readOnly })}
+            <AssistantBody
+              message={m}
+              handlers={{ onRetry, onReparse, readOnly }}
+              openEntity={openEntity}
+            />
           </article>
         ),
       )}

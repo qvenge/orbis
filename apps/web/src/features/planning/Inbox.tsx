@@ -1,4 +1,7 @@
-import { useRef, useState } from 'react';
+import { hashKey, useQueryClient } from '@tanstack/react-query';
+import { getQueryKey } from '@trpc/react-query';
+import { useCallback, useRef, useState, useSyncExternalStore } from 'react';
+import { freshnessRuntimeOf } from '../../lib/freshness/provenance';
 import { useFreshnessVisible } from '../../lib/freshness/screen';
 import { useRegistry } from '../../lib/registry/useRegistry';
 import { trpc } from '../../trpc';
@@ -23,14 +26,29 @@ export function Inbox({ onOpen }: { onOpen: (id: string) => void }) {
   const registry = useRegistry();
   const run = useUpdateBatch();
   const shown = useFreshnessVisible();
-  const q = trpc.entity.query.useQuery(
-    {
-      ast: inboxQuery(registry.data?.aspects.map((a) => a.id) ?? [], tab, limit + 1),
-      fields: 'full',
-    },
-    { enabled: shown && !!registry.data },
+  const client = useQueryClient();
+  const input = {
+    ast: inboxQuery(registry.data?.aspects.map((a) => a.id) ?? [], tab, limit + 1),
+    fields: 'full' as const,
+  };
+  const q = trpc.entity.query.useQuery(input, { enabled: shown && !!registry.data });
+  const runtime = freshnessRuntimeOf(client);
+  const hash = hashKey(getQueryKey(trpc.entity.query, input, 'query'));
+  const subscribe = useCallback(
+    (listener: () => void) => runtime?.subscribePublication(hash, listener) ?? (() => {}),
+    [runtime, hash],
   );
-  const rows = (q.data?.rows ?? []).slice(0, limit).filter((r) => classifyInbox(r) === tab);
+  const snapshot = useCallback(() => runtime?.publicationOf(hash), [runtime, hash]);
+  // The visible result can be structurally equal when the server catches up to an overlay.
+  const raw = useSyncExternalStore(subscribe, snapshot)?.raw as typeof q.data;
+  // Preserve the existing tab classifier on the server rows while showing live fields.
+  const members = new Set(
+    (raw?.rows ?? q.data?.rows ?? [])
+      .slice(0, limit)
+      .filter((r) => classifyInbox(r) === tab)
+      .map((r) => r.id),
+  );
+  const rows = (q.data?.rows ?? []).filter((r) => members.has(r.id));
   async function triage(
     r: PlanningRecord,
     choice: 'task' | 'note' | 'later' | 'pending' | 'archive',

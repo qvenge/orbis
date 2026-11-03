@@ -19,12 +19,19 @@ import type { JSONContent } from '@tiptap/core';
 import { TRPCClientError } from '@trpc/client';
 import { getQueryKey } from '@trpc/react-query';
 import { useRef, useState } from 'react';
-import { freshnessRuntimeOf } from '../../lib/freshness/provenance';
+import {
+  captureCommandScope,
+  freshnessRuntimeOf,
+  nextNetworkOrder,
+} from '../../lib/freshness/provenance';
 import { useFreshnessVisible } from '../../lib/freshness/screen';
+import { GRAPH_OFFLINE, graphFailure, graphOnline } from '../../lib/graph-command';
+import { networkOnlyResponse } from '../../lib/local-data/query-responses';
 import { isBodyStale, isTitleStale } from '../../lib/orbis-error';
 import { useNoteRegistryVersion } from '../../lib/registry/useRegistry';
 import { startAction } from '../../perf/marks';
 import { type RouterInputs, type RouterOutputs, trpc } from '../../trpc';
+import { useToast } from '../../ui/toast-store';
 // Листовые модули: своих рантайм-зависимостей у них нет вовсе, и схему редактора они не тянут
 // (стережёт save.test.tsx). Зачем они здесь — см. `settleBodyDraft` ниже.
 import {
@@ -62,65 +69,20 @@ export function detailGetInput(id: string): RouterInputs['entity']['get'] {
   return { id, include: DETAIL_INCLUDE };
 }
 
-/**
- * Разбор `aspects` НОВОЙ формы (§А1-1): `{attach, detach}`.
- *
- * Разбор, а не приведение типом, потому что вход роутера — union: до Задачи 13c он принимает
- * и старую карту «аспект → поля», которой этот экран больше не шлёт (шлют ещё Финансы и
- * `MemoryRuleCard`, но через СВОИ мутации, не через эту обвязку). Пустые списки на месте
- * незаполненных полей делают патч тотальным: «ключа нет» и «список пуст» здесь одно и то же.
- */
-function aspectPatchOf(input: UpdateInput['aspects']): { attach: string[]; detach: string[] } {
-  const patch = input as { attach?: unknown; detach?: unknown } | undefined;
-  const list = (v: unknown): string[] =>
-    Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
-  return { attach: list(patch?.attach), detach: list(patch?.detach) };
+type BodyFields = Pick<Entity, 'body' | 'bodyDoc'>;
+
+function withBody(entity: Entity, body: BodyFields): Entity {
+  const next = { ...entity, ...body };
+  if (!Object.hasOwn(body, 'body')) delete next.body;
+  if (!Object.hasOwn(body, 'bodyDoc')) delete next.bodyDoc;
+  return next;
 }
 
-/**
- * Оптимистичное применение entity_update-патча поверх кэша — НОВОЙ формой (§А1-1):
- * `props` ставит значения, `unset` их снимает, `aspects.attach|detach` меняет интерпретацию.
- * `updatedAt` НЕ трогаем — истинное значение принесёт refetch.
- *
- * Снятое свойство именно УДАЛЯЕТСЯ из `props`, а не превращается в `null`. Разница
- * наблюдаема: `null` — законное значение json-свойства, и строка формы, увидев его, показала
- * бы «значение есть, оно пустое» вместо «значения нет» — а сервер тем временем удалил ключ.
- * Прежний патч оставлял `null` (`aspects[a][f] = null`), и карточка назначения знала об этом
- * особым правилом («проверка на строку, а не на „не пусто“»).
- *
- * Снятие аспекта значений НЕ трогает (Р9): аспект — интерпретация, а не владелец поля.
- * Прежний патч удалял с ним всю карту полей — то есть показывал владельцу потерю фактов,
- * которой на сервере не происходило.
- */
-function applyPatch(entity: Entity, input: UpdateInput): Entity {
-  const next: Entity = { ...entity };
-  if (input.title !== undefined) next.title = input.title;
-  if (input.emoji !== undefined) next.emoji = input.emoji;
-  if (input.body !== undefined) next.body = input.body;
-  if (input.bodyDoc !== undefined) {
-    next.bodyDoc = input.bodyDoc;
-    // `body` НЕ трогаем: markdown-проекцию делает сервер, и только он. Клиентский сериализатор
-    // затащил бы всю схему документа (~156 кБ gzip) в чанк detail — то есть в первый кадр,
-    // ровно мимо двухфазного монтирования; а две реализации проекции ещё и разошлись бы.
-    // До ответа сервера просмотр показывает прежний текст — это заметно только при отказе сети.
-  }
-  if (input.archived !== undefined) next.archived = input.archived;
-  // Теги — полной заменой списка, как их пишет контракт (`entityUpdateInput.tags`). Строчными их
-  // делает сервер (`normalizeTags`); `{{tags}}` шлёт уже строчные, так что патч совпадает с
-  // перечитанным и не мигает регистром.
-  if (input.tags !== undefined) next.tags = input.tags;
-  if (input.props !== undefined || input.unset !== undefined) {
-    const props: Record<string, unknown> = { ...entity.props };
-    for (const [propertyId, value] of Object.entries(input.props ?? {})) props[propertyId] = value;
-    for (const propertyId of input.unset ?? []) delete props[propertyId];
-    next.props = props;
-  }
-  if (input.aspects !== undefined) {
-    const { attach, detach } = aspectPatchOf(input.aspects);
-    const kept = entity.aspects.filter((id) => !detach.includes(id));
-    next.aspects = [...kept, ...attach.filter((id) => !kept.includes(id))];
-  }
-  return next;
+function bodyFields(entity: Entity): BodyFields {
+  return {
+    ...(entity.body !== undefined && { body: entity.body }),
+    ...(entity.bodyDoc !== undefined && { bodyDoc: entity.bodyDoc }),
+  };
 }
 
 /**
@@ -179,11 +141,6 @@ function settleBodyDraft(vars: UpdateInput, err?: unknown): void {
 }
 
 /**
- * Общая optimistic-concurrency обвязка entity.update: optimistic-патч + откат при любой ошибке;
- * отказ замка текста (`STALE_VERSION` в `data.orbis`, спека скорости §8.1) → флаг conflict для
- * сообщения «обновите».
- *
- */
 /**
  * Оптимистичный патч, отличный от того, что уходит на сервер, — по ОБЪЕКТУ правки (финал 1б, C2 M-1).
  * Снятие галочки шлёт `unset` статуса (значение возврата решает строка каталога), но тот же `unset`
@@ -204,11 +161,11 @@ const PERF_KIND = new WeakMap<UpdateInput, PerfActionKind>();
 const REOPEN_STATUS = (RULE_TASK_STATUS_DEFAULT.params as { value: { const: string } }).value.const;
 
 export function useEntityUpdate(entityId: string, opts: { undoToast?: UndoToastOption } = {}) {
+  const { show } = useToast();
   const utils = trpc.useUtils();
   const queryClient = useQueryClient();
   const titleGenerations: Record<string, number> = TITLE_GENERATIONS.get(queryClient) ?? {};
   TITLE_GENERATIONS.set(queryClient, titleGenerations);
-  const input = detailGetInput(entityId);
   const [conflict, setConflict] = useState(false);
   const [titleStale, setTitleStale] = useState(false);
 
@@ -263,12 +220,9 @@ export function useEntityUpdate(entityId: string, opts: { undoToast?: UndoToastO
    * Приехал ли ответ мутации, которую УЖЕ сменила следующая по той же записи.
    *
    * Спрашивают об этом ДВА колбэка, и ни одному признак не отвечает на весь вопрос целиком.
-   * Откату (onError) его ДОСТАТОЧНО: снимок брошенной мутации сделан ДО патча преемника, и
-   * вернуть его — значит выбросить чужую свежую правку. Кэш при этом лечит инвалидация в
-   * onSettled; опора именно на неё, и в офлайне, где перечитывание не доедет, оптимистичный
-   * патч отказавшей мутации на экране задержится. А решениям про плашку конфликта признака
-   * мало: показу нужен ещё и `bringsSameConflict`, гашению (onSuccess) — `checksVersion` самой
-   * осевшей правки. Разбор у каждого места свой, общего правила на все три случая нет.
+   * Старый отказ тела не должен снимать подготовленный документ преемника. Для плашки
+   * конфликта дополнительно проверяются `bringsSameConflict` при отказе и `checksVersion`
+   * при успехе. Метаданные снимают только токен завершившейся операции в общем хранилище.
    */
   const superseded = (id: string, ctx?: { seq: number }) =>
     ctx !== undefined &&
@@ -292,8 +246,11 @@ export function useEntityUpdate(entityId: string, opts: { undoToast?: UndoToastO
   };
 
   const mutation = trpc.entity.update.useMutation({
+    networkMode: 'always',
     meta: { undoStack: 'self' },
     onMutate: async (vars) => {
+      if (!graphOnline()) throw new Error(GRAPH_OFFLINE);
+      const input = detailGetInput(vars.id);
       const epoch = undoEpoch();
       const runtime = freshnessRuntimeOf(queryClient);
       const bodyToken =
@@ -324,29 +281,69 @@ export function useEntityUpdate(entityId: string, opts: { undoToast?: UndoToastO
                     : 'other'),
             );
       setConflict(false);
-      await utils.entity.get.cancel(input);
-      if (
-        !isUndoEpoch(epoch) ||
-        (bodyToken && !runtime?.isCurrentOperation(bodyToken.startedSequence))
-      ) {
-        return bodyToken
-          ? { runtime, bodyToken, epoch, input, titleGeneration, seq: seqRef.current }
-          : undefined;
+      const commandScope = captureCommandScope(queryClient);
+      const currentOperation = checksVersion(vars) ? runtime?.captureOperation() : undefined;
+      const prior = utils.entity.get.getData(input)?.entity;
+      const optimisticToken = titleAccepted(vars, { titleGeneration })
+        ? undefined
+        : runtime?.beginOptimistic([OPTIMISTIC.get(vars) ?? vars]);
+
+      // Body is still the editor's own pending projection with a CAS/draft receipt.
+      let bodyPatch:
+        | {
+            prior: BodyFields;
+            pending: BodyFields;
+            updatedAt: number;
+            revision: Entity['bodyRevision'];
+          }
+        | undefined;
+      if (checksVersion(vars)) {
+        await utils.entity.get.cancel(input);
+        if (
+          !isUndoEpoch(epoch) ||
+          !commandScope() ||
+          (bodyToken && !runtime?.isCurrentOperation(bodyToken.startedSequence))
+        ) {
+          return bodyToken
+            ? {
+                runtime,
+                bodyToken,
+                optimisticToken,
+                commandScope,
+                currentOperation,
+                epoch,
+                input,
+                titleGeneration,
+                seq: seqRef.current,
+              }
+            : undefined;
+        }
+        const key = getQueryKey(trpc.entity.get, input, 'query');
+        const before = utils.entity.get.getData(input)?.entity;
+        if (before) {
+          const updatedAt = queryClient.getQueryState(key)?.dataUpdatedAt ?? 0;
+          const pending = {
+            ...bodyFields(before),
+            ...(vars.body !== undefined && { body: vars.body }),
+            ...(vars.bodyDoc !== undefined && { bodyDoc: vars.bodyDoc }),
+          };
+          utils.entity.get.setData(
+            input,
+            (old) => (old ? { ...old, entity: withBody(old.entity, pending) } : old),
+            { updatedAt },
+          );
+          const after = utils.entity.get.getData(input)?.entity;
+          if (after) {
+            bodyPatch = {
+              prior: bodyFields(before),
+              pending: bodyFields(after),
+              updatedAt,
+              revision: before.bodyRevision,
+            };
+            if (vars.autosave) markBodyPending(after.bodyDoc);
+          }
+        }
       }
-      const prev = utils.entity.get.getData(input);
-      const prevUpdatedAt =
-        queryClient.getQueryState(getQueryKey(trpc.entity.get, input, 'query'))?.dataUpdatedAt ?? 0;
-      const shown = OPTIMISTIC.get(vars) ?? vars;
-      if (!titleAccepted(vars, { titleGeneration }))
-        utils.entity.get.setData(
-          input,
-          (old) => (old ? { ...old, entity: applyPatch(old.entity, shown) } : old),
-          // Local writes retain the last actual server response's registry provenance.
-          { updatedAt: prevUpdatedAt },
-        );
-      const pendingBody =
-        vars.autosave === true ? utils.entity.get.getData(input)?.entity.bodyDoc : undefined;
-      markBodyPending(pendingBody);
       // «Видно» — кадр после оптимистичного патча: к нему React успевает нарисовать правку.
       if (action) requestAnimationFrame(() => action.visible());
       seqRef.current += 1;
@@ -355,15 +352,14 @@ export function useEntityUpdate(entityId: string, opts: { undoToast?: UndoToastO
         expectedBodyRevision: vars.expectedBodyRevision,
         checksVersion: checksVersion(vars),
       };
-      // Ключ едет в контекст ВМЕСТЕ со снимком. Откат обязан лечь туда же, откуда снимок
-      // взят, а `input` — замыкание ПОСЛЕДНЕГО рендера: смени экран сущность, пока запрос в
-      // полёте, и откат положил бы данные прежней записи под ключ новой (ревью Задачи 13, I1).
       return {
-        prev,
-        prevUpdatedAt,
-        pendingBody,
+        prior,
+        bodyPatch,
         runtime,
         bodyToken,
+        optimisticToken,
+        commandScope,
+        currentOperation,
         input,
         seq: seqRef.current,
         expectedBodyRevision: vars.expectedBodyRevision,
@@ -374,21 +370,38 @@ export function useEntityUpdate(entityId: string, opts: { undoToast?: UndoToastO
       };
     },
     onError: (err, vars, ctx) => {
+      if (ctx && (!isUndoEpoch(ctx.epoch) || !ctx.commandScope())) return;
+      const failure = graphFailure(err);
+      ctx?.runtime?.settleOptimistic(ctx.optimisticToken, {
+        kind: failure.kind === 'unknown' ? 'unknown' : 'failed',
+      });
       // Отказ может пометить только черновик этого поколения графа и отправки.
-      // Навигация между записями сама по себе не отменяет эту пометку.
       if (ctx?.bodyToken && !ctx.runtime?.settleBodySave(ctx.bodyToken, { error: err })) return;
+      if (ctx?.currentOperation?.() === false) return;
       settleBodyDraft(vars, err);
       const old = superseded(vars.id, ctx);
       const accepted = titleAccepted(vars, ctx);
-      // Снимок до преемника или принятого title уже устарел; остальные откаты — по своему ключу.
+      const patch = ctx?.bodyPatch;
       if (
         ctx &&
+        patch &&
         !old &&
-        !accepted &&
         queryClient.getQueryState(getQueryKey(trpc.entity.get, ctx.input, 'query'))
-          ?.dataUpdatedAt === ctx.prevUpdatedAt
-      )
-        utils.entity.get.setData(ctx.input, ctx.prev, { updatedAt: ctx.prevUpdatedAt });
+          ?.dataUpdatedAt === patch.updatedAt
+      ) {
+        utils.entity.get.setData(
+          ctx.input,
+          (current) =>
+            current &&
+            current.entity.bodyRevision === patch.revision &&
+            current.entity.bodyDoc === patch.pending.bodyDoc &&
+            current.entity.body === patch.pending.body
+              ? { ...current, entity: withBody(current.entity, patch.prior) }
+              : current,
+          { updatedAt: patch.updatedAt },
+        );
+      }
+      if (!checksVersion(vars) && !isTitleStale(err)) show(failure.message, 'danger');
       // Отказ «по объекту» — прежде всего `MODULE_DISABLED` (срез 1б §8.3): расширение выключили в
       // другом месте, и маска в кеше экрана устарела — перечитать её, чтобы поля встали только
       // чтением и появилась плашка. На проводе это `FORBIDDEN` (`cause` по HTTP не сериализуется), и
@@ -412,7 +425,13 @@ export function useEntityUpdate(entityId: string, opts: { undoToast?: UndoToastO
       if (isBodyStale(err)) setConflict(true);
     },
     onSuccess: (data, vars, ctx) => {
+      if (ctx && (!isUndoEpoch(ctx.epoch) || !ctx.commandScope())) return;
       const runtime = ctx?.runtime;
+      runtime?.settleOptimistic(ctx?.optimisticToken, {
+        kind: 'confirmed',
+        txId: data.txId,
+        suppressTitle: titleAccepted(vars, ctx),
+      });
       if (ctx?.bodyToken && runtime) {
         const matches =
           typeof data.id === 'string' && data.id.toLowerCase() === vars.id.toLowerCase();
@@ -426,17 +445,16 @@ export function useEntityUpdate(entityId: string, opts: { undoToast?: UndoToastO
         if (!superseded(vars.id, ctx) && !runtime.hasNewerBodySave(ctx.bodyToken)) {
           runtime.publishBody(vars.id);
         }
-      } else confirmBody(ctx?.pendingBody);
+      } else {
+        if (ctx?.currentOperation?.() === false) return;
+        confirmBody(ctx?.bodyPatch?.pending.bodyDoc);
+      }
       if (!runtime?.requiresDurableDraft()) settleBodyDraft(vars);
       const ref = journalRefOf(data);
-      if (
-        ref !== null &&
-        !offerByRule(opts.undoToast, ref, vars, ctx?.prev?.entity) &&
-        stackable(vars)
-      )
+      if (ref !== null && !offerByRule(opts.undoToast, ref, vars, ctx?.prior) && stackable(vars))
         pushUndoable({
           actionId: ref.actionId,
-          title: `правка «${ctx?.prev?.entity.title ?? vars.id}»`,
+          title: `правка «${ctx?.prior?.title ?? vars.id}»`,
           entityIds: vars.body !== undefined || vars.bodyDoc !== undefined ? [vars.id] : [],
         });
       // Поздний успех устаревшей мутации не говорит ничего о расхождении, которое держит
@@ -497,6 +515,7 @@ export function useEntityDetail(entityId: string) {
  */
 export function useRecordEdits(entityId: string, entity: Entity | undefined) {
   const utils = trpc.useUtils();
+  const client = useQueryClient();
   const { mutation, conflict, dismissConflict, titleStale, dismissTitleStale } = useEntityUpdate(
     entityId,
     { undoToast: recordEditRule },
@@ -539,8 +558,23 @@ export function useRecordEdits(entityId: string, entity: Entity | undefined) {
     return mutation.mutateAsync({ id: entityId, title, expectedTitle });
   }
 
-  function refreshTitle() {
-    return utils.entity.get.fetch(detailGetInput(entityId));
+  async function refreshTitle() {
+    if (!graphOnline()) throw new Error(GRAPH_OFFLINE);
+    const epoch = undoEpoch();
+    const input = detailGetInput(entityId);
+    const runtime = freshnessRuntimeOf(client);
+    const cutoff = nextNetworkOrder();
+    await utils.entity.get.cancel(input);
+    const started = nextNetworkOrder();
+    const read = await utils.entity.get.fetch(input, { staleTime: 0, meta: networkOnlyResponse });
+    if (
+      !isUndoEpoch(epoch) ||
+      (runtime &&
+        !runtime.hasAcceptedResult(getQueryKey(trpc.entity.get, input, 'query'), read, started))
+    )
+      throw new Error('Не удалось подтвердить заголовок');
+    runtime?.acceptOptimisticTitle(entityId, cutoff);
+    return read;
   }
 
   function setArchived(archived: boolean) {

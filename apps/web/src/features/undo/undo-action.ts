@@ -1,4 +1,5 @@
 import type { UndoResult, UndoTextChangedDetails } from '@orbis/shared';
+import { GRAPH_OFFLINE, graphOnline } from '../../lib/graph-command';
 import { orbisErrorOf } from '../../lib/orbis-error';
 import { resetSteps } from '../entity-editor/arrows-stack';
 import {
@@ -51,6 +52,10 @@ export async function runUndo(
     if (!isUndoEpoch(epoch) || boundUndoUtils() !== utils) {
       release();
       return { kind: 'failed', message: UNDO_FAILED };
+    }
+    if (!graphOnline()) {
+      release();
+      return { kind: 'failed', message: GRAPH_OFFLINE };
     }
     const result: UndoResult = await utils.client.ai.undo.mutate({
       actionId,

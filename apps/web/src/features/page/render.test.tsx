@@ -94,6 +94,7 @@ function openPage(
   };
   return renderWithProviders(<DetailScreen entityId={entity.id} />, handler, {
     queries: queryClient.getDefaultOptions().queries,
+    freshness: true,
   });
 }
 

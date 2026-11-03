@@ -8,7 +8,7 @@ import {
 } from '@orbis/shared';
 import { type BodyDoc, parseBody, serializeBody } from '@orbis/shared/doc';
 import { parsePageText } from '@orbis/shared/doc/page-grammar';
-import { onlineManager } from '@tanstack/react-query';
+import { hashKey, onlineManager } from '@tanstack/react-query';
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { getQueryKey } from '@trpc/react-query';
@@ -411,7 +411,7 @@ test('снятие галочки: пока правка летит, чекбо�
     ...entity,
     props: { 'orbis/task_status': 'done', 'orbis/completed_at': '2026-09-01T10:00:00.000Z' },
   };
-  const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
+  const { calls } = renderWithDetailFeed(<DetailScreen entityId="e1" />, (path) => {
     if (path === 'entity.get')
       return { entity: closed, relations: [], thread: { threadId: 'th1', messages: [] } };
     // Ответ не приходит: на экране — только оптимистичный патч.
@@ -1021,6 +1021,7 @@ test.each([
   let current = initial;
   let saves = 0;
   let reads = 0;
+  let failReads = false;
   let rejectSave: (error: unknown) => void = () => {};
   const pendingSave = new Promise<never>((_, reject) => {
     rejectSave = reject;
@@ -1049,7 +1050,7 @@ test.each([
     (path) => {
       if (path === 'entity.get') {
         reads += 1;
-        if (readFails && reads === 4) throw trpcError('INTERNAL_SERVER_ERROR', 'Чтение недоступно');
+        if (failReads) throw trpcError('INTERNAL_SERVER_ERROR', 'Чтение недоступно');
         return { entity: current, relations: [], thread: null };
       }
       if (path === 'entity.update') {
@@ -1090,11 +1091,13 @@ test.each([
   await waitFor(() => expect(screen.getByLabelText('Заголовок')).toHaveValue('Новое агентское'));
   expect(screen.getByLabelText('Заголовок в кэше')).toHaveTextContent('Новое агентское');
   expect(screen.queryByText('Заголовок изменён в другом месте — обновите')).not.toBeInTheDocument();
+  const readsBeforeLateSave = reads;
+  failReads = readFails;
   await act(async () => {
     rejectSave(stale());
     await pendingSave.catch(() => {});
   });
-  await waitFor(() => expect(reads).toBe(4));
+  await waitFor(() => expect(reads).toBeGreaterThan(readsBeforeLateSave));
   await waitFor(() =>
     expect(screen.getByLabelText('Заголовок в кэше')).toHaveAttribute('data-read-status', 'idle'),
   );
@@ -1178,7 +1181,7 @@ test('принятое обновление после холодного пер
       </>
     );
   }
-  renderWithDetailFeed(<Host />, (path, input) => {
+  const { queryClient } = renderWithDetailFeed(<Host />, (path, input) => {
     if (path === 'entity.get') {
       if ((input as { id: string }).id === 'e2') return pendingNeighbor;
       reads += 1;
@@ -1213,9 +1216,13 @@ test('принятое обновление после холодного пер
   fireEvent.change(field, { target: { value: 'Новый черновик' } });
   await user.tab();
   await screen.findByText('Заголовок изменён в другом месте — обновите');
+  const runtime = testFreshnessOf(queryClient).runtime;
+  const key = hashKey(getQueryKey(trpc.entity.get, detailGetInput('e1'), 'query'));
   await waitFor(() =>
-    expect(screen.getByLabelText('Заголовок в кэше')).toHaveTextContent('Новое агентское'),
+    expect(runtime.publicationOf(key)?.raw).toMatchObject({ entity: { title: 'Новое агентское' } }),
   );
+  // The accepted raw title is available while the previous title operation is still pending.
+  expect(screen.getByLabelText('Заголовок в кэше')).toHaveTextContent('Черновик');
   await user.click(field);
   await user.click(screen.getByRole('button', { name: 'Обновить' }));
   await waitFor(() => expect(screen.getByLabelText('Заголовок')).toHaveValue('Новое агентское'));
@@ -1355,7 +1362,7 @@ function externalStatusChange(): { handler: MockHandler; getCalls: () => number 
 
 test('поле свойства подхватывает внешнее изменение значения (статус после чекбокса)', async () => {
   const { handler } = externalStatusChange();
-  renderWithProviders(<DetailScreen entityId="e1" />, handler);
+  renderWithDetailFeed(<DetailScreen entityId="e1" />, handler);
   // Контрол ищется по ПОДПИСИ свойства из реестра — тем же словом, которое видит владелец.
   const field = await screen.findByLabelText('Состояние задачи');
   expect(field).toHaveValue('inbox');
@@ -2612,7 +2619,7 @@ test('useEntityDetail: снятие свойства шлёт unset; кэш те
     props: { 'orbis/task_status': 'waiting', 'orbis/waiting_for': 'ответа коллеги' },
     aspects: ['orbis/task'],
   });
-  const { calls } = renderWithProviders(
+  const { calls } = renderWithDetailFeed(
     <>
       <PropsProbe />
       <DetailScreen entityId="e1" />
@@ -2649,7 +2656,7 @@ test('useEntityDetail: снятие свойства шлёт unset; кэш те
 });
 
 test('useEntityDetail: снятие аспекта шлёт aspects.detach и значений НЕ теряет (Р9)', async () => {
-  const { calls } = renderWithProviders(
+  const { calls } = renderWithDetailFeed(
     <>
       <PropsProbe />
       <DetailScreen entityId="e1" />
@@ -5262,7 +5269,7 @@ describe('V1: рутина', () => {
   });
 
   test('«Прогнать сейчас» зовёт routine.runNow и открывает прогон; «Пауза» шлёт stage paused и превращается в «Возобновить» (приёмка 10)', async () => {
-    const { calls } = renderWithProviders(<DetailScreen entityId="rt1" />, routineHandler());
+    const { calls } = renderWithDetailFeed(<DetailScreen entityId="rt1" />, routineHandler());
     const status = await screen.findByTestId('routine-status');
 
     await userEvent.click(within(status).getByRole('button', { name: 'Прогнать сейчас' }));

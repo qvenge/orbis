@@ -10,9 +10,13 @@ import {
 } from '@orbis/shared';
 import { useQueryClient } from '@tanstack/react-query';
 import { TRPCClientError } from '@trpc/client';
+import { captureCommandScope } from '../../lib/freshness/provenance';
+import { GRAPH_OFFLINE, graphOnline } from '../../lib/graph-command';
+import { useEntityMetadataUpdate } from '../../lib/optimistic/useEntityMetadataUpdate';
 import { useFlushBuffer, useOnline, useRetryBuffer } from '../../state/retry';
 import { isConflict, mapSendError } from '../../state/retry-send';
 import { trpc } from '../../trpc';
+import { useToast } from '../../ui/toast-store';
 import { isUndoEpoch, undoEpoch } from '../undo/undo-epoch';
 import { localMessagesOf } from './local-messages';
 import { MEMORY_RULES_QUERY, MEMORY_RULES_STALE_TIME, RULES_SCOPE } from './memoryRules';
@@ -86,7 +90,8 @@ export function useFastPath(threadId: string) {
   // Архивация fast-сущности при «Разобрать с AI» (reparse): для списков и открытой
   // сущности это такая же правка графа, как создание, — снятая запись обязана из них
   // уйти, иначе одна строка выглядит двумя сущностями.
-  const update = trpc.entity.update.useMutation();
+  const update = useEntityMetadataUpdate();
+  const { show } = useToast();
   const localMessages = localMessagesOf(queryClient);
 
   // Категории (aspect=orbis/category) + валюта + memory-правила → контекст парсера.
@@ -371,8 +376,23 @@ export function useFastPath(threadId: string) {
   // «Разобрать с AI»: снять fast-сущность (archived) и отправить исходную строку LLM-путём.
   // Архив гарантирует «одна строка ≠ две сущности» (D-плана): первая (fast) уходит, LLM создаёт свою.
   function reparse(entityId: string, text: string): void {
-    if (entityId) update.mutate({ id: entityId, archived: true });
-    sendMessage(text);
+    if (!graphOnline()) {
+      show(GRAPH_OFFLINE, 'danger');
+      return;
+    }
+    const epoch = undoEpoch();
+    if (!entityId) {
+      sendMessage(text);
+      return;
+    }
+    const current = captureCommandScope(queryClient);
+    // A failed archive must not start a second creation for the same input.
+    void update
+      .mutateAsync({ id: entityId, archived: true })
+      .then(() => {
+        if (isUndoEpoch(epoch) && current()) sendMessage(text);
+      })
+      .catch(() => {});
   }
 
   function insertMessage(

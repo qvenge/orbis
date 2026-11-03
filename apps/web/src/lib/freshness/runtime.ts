@@ -8,11 +8,18 @@ import {
 import {
   hashKey,
   isCancelledError,
+  notifyManager,
   type Query,
   type QueryClient,
   type QueryKey,
 } from '@tanstack/react-query';
 import { confirmBody } from '../../features/undo/body-provenance';
+import type { EntityPatch } from '../optimistic/adapters';
+import {
+  createOptimisticStore,
+  type OptimisticOutcome,
+  type OptimisticToken,
+} from '../optimistic/store';
 import { cacheDependencyOf } from './dependencies';
 import {
   type BodyPublication,
@@ -21,9 +28,12 @@ import {
   type FreshnessSinks,
   networkObservationOf,
   nextNetworkOrder,
+  observeNetworkRead,
   type ReadPublication,
   readErrorReceiptOf,
+  recordDiskRead,
   sameFreshnessScope,
+  shareProjectedData,
 } from './provenance';
 import type { createFreshnessTransport, FreshnessScope } from './transport';
 
@@ -123,6 +133,10 @@ export function createFreshnessRuntime({
 }) {
   const cache = queryClient.getQueryCache();
   const publications = new Map<string, ReadPublication>();
+  const publicationListeners = new Map<string, Set<() => void>>();
+  const acceptedReads = new WeakSet<ReadPublication>();
+  const optimistic = createOptimisticStore(scope);
+  const displayRepairAttempts = new Map<string, Promise<unknown> | null>();
   const refresh = new Set<string>();
   const staleKeys = new Set<string>();
   const lastRefresh = new Map<string, number>();
@@ -346,6 +360,10 @@ export function createFreshnessRuntime({
     resetSequence = nextNetworkOrder();
     bodies.clear();
     deleted.clear();
+    // The store retires ACK obligations, but a pending fetch can still revert
+    // to the display it captured before this reset.
+    const reprojected = optimistic.reset(resetSequence, true);
+    for (const hash of reprojected) reproject(hash);
     sinks.resetResponses?.(scope, resetSequence, token);
     for (const query of cache.getAll()) mark(query, true);
     schedule();
@@ -586,6 +604,10 @@ export function createFreshnessRuntime({
     } else if (before || visible) schedule();
   }
 
+  function notifyPublication(hash: string): void {
+    for (const listener of publicationListeners.get(hash) ?? []) listener();
+  }
+
   function acceptRead(read: ReadPublication): boolean {
     if (!current() || !sameFreshnessScope(scope, read.scope) || read.source === 'optimistic')
       return false;
@@ -595,23 +617,34 @@ export function createFreshnessRuntime({
     if (read.source === 'disk') {
       if (prior?.source === 'network') return false;
       publications.set(read.queryHash, read);
+      optimistic.acceptResponse(read);
+      finishOptimisticRead(read.queryHash);
+      notifyPublication(read.queryHash);
       mark(query, true);
       schedule();
       return false;
     }
     const { receipt } = read;
-    if (receipt.epoch !== scope.epoch) return false;
+    if (
+      receipt.epoch !== scope.epoch ||
+      (prior?.source === 'network' && receipt.startedSequence < prior.receipt.startedSequence)
+    )
+      return false;
+    if (receipt.startedSequence <= resetSequence) {
+      mark(query, true);
+      schedule();
+      return false;
+    }
     const { watermark } = receipt;
     if (watermark !== null && (minimum === undefined || cmp(watermark, minimum) < 0))
       minimum = watermark;
-    const stale =
-      receipt.startedSequence <= resetSequence ||
-      (cursor !== undefined && (watermark === null || cmp(watermark, cursor) < 0));
-    if (prior?.source !== 'network' || receipt.startedSequence >= prior.receipt.startedSequence) {
-      publications.set(read.queryHash, read);
-    }
+    const stale = cursor !== undefined && (watermark === null || cmp(watermark, cursor) < 0);
+    publications.set(read.queryHash, read);
+    optimistic.acceptResponse(read, !stale);
+    finishOptimisticRead(read.queryHash);
     if (stale) mark(query, watermark !== null);
     else {
+      acceptedReads.add(read);
       staleKeys.delete(query.queryHash);
       if (family(read.key) === 'user.getSettings') {
         const raw = read.raw as { graphEstablished?: boolean; nextMidnightAt?: string };
@@ -624,8 +657,76 @@ export function createFreshnessRuntime({
       if (p && p !== 'none' && projectBody(read.key, read.raw) === read.raw)
         sinks.writeNetwork?.(read);
     }
+    if (!stale && optimistic.needsRebase(read.queryHash)) mark(query, true);
+    notifyPublication(read.queryHash);
     schedule();
     return !stale;
+  }
+
+  function isAcceptedRead(read: ReadPublication): boolean {
+    return (
+      read.source === 'network' &&
+      acceptedReads.has(read) &&
+      isCurrentOperation(read.receipt.startedSequence)
+    );
+  }
+
+  function projectMetadata(read: ReadPublication): unknown {
+    const shown = sinks.project ? sinks.project(read) : read.raw;
+    return optimistic.projectResponse(read, shown);
+  }
+
+  function project(read: ReadPublication): unknown {
+    return projectBody(read.key, projectMetadata(read));
+  }
+
+  function reproject(queryHash: string): void {
+    if (!current()) return;
+    const read = publications.get(queryHash);
+    const query = cache.get(queryHash);
+    if (!read || !query) return;
+    const previous = query.state.data;
+    let shown = project(read);
+    if (shown === previous) return;
+    if (family(read.key) === 'entity.get') {
+      // Only a read or the specialized body writer replaces the editor's current body.
+      const before = previous as
+        | { entity?: Record<string, unknown>; bodyAction?: unknown }
+        | undefined;
+      const after = shown as typeof before;
+      if (before?.entity && after?.entity && before.entity.id === after.entity.id) {
+        const entity = { ...after.entity };
+        for (const key of [
+          'body',
+          'bodyDoc',
+          'bodyRevision',
+          'bodyChangedAt',
+          'bodyRefs',
+          'bodyStart',
+        ]) {
+          if (Object.hasOwn(before.entity, key)) entity[key] = before.entity[key];
+          else delete entity[key];
+        }
+        shown = {
+          ...after,
+          entity,
+          ...(Object.hasOwn(before, 'bodyAction') && { bodyAction: before.bodyAction }),
+        };
+      }
+    }
+    const data = shareProjectedData(query, shown);
+    if (data === previous) return;
+    const network = networkObservationOf(previous);
+    const disk = diskReadOf(previous);
+    if (network) observeNetworkRead(data, network);
+    if (disk && data && typeof data === 'object') recordDiskRead(data, disk);
+    query.setState({ data });
+  }
+
+  function reprojectEntities(ids: readonly string[]) {
+    notifyManager.batch(() => {
+      for (const hash of optimistic.affectedResponses(ids).keys()) reproject(hash);
+    });
   }
 
   function projectBody(key: QueryKey, data: unknown, includeEqual = false): unknown {
@@ -718,14 +819,68 @@ export function createFreshnessRuntime({
     return valid && (!!result || error !== undefined);
   }
 
+  function finishOptimisticRead(hash: string) {
+    displayRepairAttempts.delete(hash);
+    optimistic.finishRead(hash);
+  }
+
+  function watchDisplayRepairAttempt(query: Query) {
+    const attempt = query.promise;
+    const hash = query.queryHash;
+    if (
+      !current() ||
+      !attempt ||
+      cache.get(hash) !== query ||
+      !displayRepairAttempts.has(hash) ||
+      displayRepairAttempts.get(hash) === attempt
+    )
+      return;
+    displayRepairAttempts.set(hash, attempt);
+    void attempt.catch((error) => {
+      if (!current() || !isCancelledError(error) || displayRepairAttempts.get(hash) !== attempt)
+        return;
+      if (query.promise && query.promise !== attempt) watchDisplayRepairAttempt(query);
+      else finishOptimisticRead(hash);
+    });
+  }
+
   const unsubscribe = cache.subscribe((event) => {
     if (event.type === 'removed') {
       const hash = event.query.queryHash;
-      publications.delete(hash);
+      if (publications.delete(hash)) notifyPublication(hash);
+      displayRepairAttempts.delete(hash);
+      optimistic.forgetResponse(hash);
       lastRefresh.delete(hash);
       refresh.delete(hash);
       staleKeys.delete(hash);
       expired.delete(hash);
+    }
+    if (event.type === 'updated') {
+      const { action, query } = event;
+      if (
+        action.type === 'fetch' &&
+        current() &&
+        optimistic.watchResponse(query.queryHash, query.queryKey)
+      ) {
+        // Cancellation may arrive in this turn. The retryer is installed only
+        // after the fetch action, so attach its promise separately.
+        displayRepairAttempts.set(query.queryHash, null);
+        queueMicrotask(() => watchDisplayRepairAttempt(query));
+      }
+      if (action.type === 'error') finishOptimisticRead(query.queryHash);
+      if (
+        action.type === 'setState' &&
+        action.state.fetchStatus === 'idle' &&
+        action.state.data !== undefined &&
+        displayRepairAttempts.has(query.queryHash) &&
+        current()
+      ) {
+        // TanStack revert restores the state from fetch start. Reapply today's view
+        // without making the cancellation look like a successful read.
+        finishOptimisticRead(query.queryHash);
+        if (staleKeys.has(query.queryHash)) query.invalidate();
+        reproject(query.queryHash);
+      }
     }
     if (
       event.type === 'updated' &&
@@ -754,6 +909,7 @@ export function createFreshnessRuntime({
     acceptChanges,
     captureOperation,
     isCurrentOperation,
+    isCurrentScope: current,
     beginBodySave,
     settleBodySave,
     mutationSettled,
@@ -773,12 +929,56 @@ export function createFreshnessRuntime({
     },
     getScreen: () => snapshot,
     publicationOf: (hash: string) => publications.get(hash),
+    subscribePublication(hash: string, listener: () => void): () => void {
+      const listeners = publicationListeners.get(hash) ?? new Set<() => void>();
+      listeners.add(listener);
+      publicationListeners.set(hash, listeners);
+      return () => {
+        listeners.delete(listener);
+        if (!listeners.size) publicationListeners.delete(hash);
+      };
+    },
+    isAcceptedRead,
+    hasAcceptedResult(key: QueryKey, raw: unknown, afterSequence: number): boolean {
+      const read = publications.get(hashKey(key));
+      return (
+        read?.source === 'network' &&
+        read.raw === raw &&
+        read.receipt.startedSequence > afterSequence &&
+        isAcceptedRead(read)
+      );
+    },
+    acceptOptimisticTitle(id: string, beforeSequence: number) {
+      if (!current()) return;
+      optimistic.acceptTitle(id, beforeSequence);
+      reprojectEntities([id]);
+    },
+    finishOptimisticRead,
+    beginOptimistic(patches: readonly EntityPatch[]) {
+      if (!current()) return;
+      const sequence = nextNetworkOrder();
+      const token = optimistic.beginOptimistic(scope, String(sequence), patches, sequence);
+      if (token) reprojectEntities(token.entityIds);
+      return token;
+    },
+    settleOptimistic(token: OptimisticToken | undefined, outcome: OptimisticOutcome) {
+      if (!current() || !token) return;
+      const keys = optimistic.settleOptimistic(token, outcome);
+      reprojectEntities(token.entityIds);
+      for (const key of keys) {
+        const query = cache.get(hashKey(key));
+        if (query) mark(query, true);
+      }
+      if (keys.length) schedule();
+    },
+    projectCard: optimistic.projectCard,
+    subscribeCard: optimistic.subscribeCard,
+    cardRevision: optimistic.cardRevision,
     setSinks(next: FreshnessSinks) {
       sinks = { ...sinks, ...next };
     },
-    project(read: ReadPublication) {
-      return projectBody(read.key, sinks.project ? sinks.project(read) : read.raw);
-    },
+    project,
+    projectMetadata,
     projectBody,
     projectRestoredBody(key: QueryKey, raw: unknown) {
       const id = queryInput(key)?.id;
@@ -816,17 +1016,7 @@ export function createFreshnessRuntime({
         (save) => save.entityId === token.entityId && save.startedSequence > token.startedSequence,
       ),
     requiresDurableDraft: () => sinks.acceptBody !== undefined,
-    reproject(queryHash: string) {
-      if (!current()) return;
-      const read = publications.get(queryHash);
-      const query = cache.get(queryHash);
-      if (read && query && sinks.project) {
-        query.setData(projectBody(read.key, sinks.project(read)), {
-          updatedAt: query.state.dataUpdatedAt,
-          manual: true,
-        });
-      }
-    },
+    reproject,
     wasDeleted: (id: string) => deleted.has(id),
     isCurrentReadError,
     confirmedMissing(id: string, error: unknown) {
@@ -848,7 +1038,10 @@ export function createFreshnessRuntime({
         if (timer !== undefined) clock.clearTimeout(timer);
       }
       pendingSaves.clear();
+      displayRepairAttempts.clear();
+      optimistic.reset();
       publications.clear();
+      publicationListeners.clear();
       bodies.clear();
       own.clear();
       resetTokens.clear();

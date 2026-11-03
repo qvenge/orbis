@@ -316,6 +316,7 @@ function open(
   };
   const r = renderWithProviders(<Screen first={f.entity.id} />, handler, {
     queries: opts.queries ?? queryClient.getDefaultOptions().queries,
+    freshness: true,
   });
   const batches = () =>
     r.calls

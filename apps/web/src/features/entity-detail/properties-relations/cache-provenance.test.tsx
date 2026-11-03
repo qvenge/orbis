@@ -54,7 +54,7 @@ it.each([
           : path === 'entity.update'
             ? write
             : { ok: true },
-    { queries: { staleTime: Infinity } },
+    { queries: { staleTime: Infinity }, freshness: true },
   );
   fireEvent.click(await screen.findByRole('tab', { name: 'Свойства' }));
   fireEvent.click(screen.getByRole('button', { name: 'Редактировать свойства' }));

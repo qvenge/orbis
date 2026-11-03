@@ -1,4 +1,6 @@
-import type { ReactNode } from 'react';
+import { QueryClientContext } from '@tanstack/react-query';
+import { type ReactNode, useCallback, useContext, useMemo, useSyncExternalStore } from 'react';
+import { freshnessRuntimeOf } from '../../../lib/freshness/provenance';
 import { Button } from '../../../ui/Button';
 import { Card as CardBox } from '../../../ui/Card';
 import type { ChatMessage } from '../useChatThread';
@@ -13,7 +15,7 @@ import { ProposalCard } from './ProposalCard';
 import { QueryResultCard } from './QueryResultCard';
 import { QuestionCard } from './QuestionCard';
 import { SystemMessage } from './SystemMessage';
-import type { Card, JournalCardMeta } from './types';
+import type { Card, EntityCardData, JournalCardMeta } from './types';
 
 // Метка синтетической карточки fast-path (useFastPath): entityId+исходная строка.
 type FastPathMeta = { entityId?: string; text: string; status: 'confirmed' | 'pending' };
@@ -96,6 +98,43 @@ function cardEchoText(card: Card): string | undefined {
   return undefined;
 }
 
+type CardProjection = (card: EntityCardData) => EntityCardData;
+
+/** One subscription supplies the same card title to the message echo and the renderer. */
+export function useCardProjection(msg: ChatMessage): CardProjection | undefined {
+  const client = useContext(QueryClientContext);
+  const runtime = client ? freshnessRuntimeOf(client) : undefined;
+  const ids = useMemo(() => {
+    const { meta, cards, confirmed } = readMeta(msg);
+    return confirmed && !meta.journal
+      ? [
+          ...new Set(
+            cards.flatMap((card) =>
+              card.kind === 'entity_card' && typeof card.entityId === 'string'
+                ? [card.entityId]
+                : [],
+            ),
+          ),
+        ]
+      : [];
+  }, [msg]);
+  const subscribe = useCallback(
+    (listener: () => void) => {
+      const off = runtime ? ids.map((id) => runtime.subscribeCard(id, listener)) : [];
+      return () => {
+        for (const unsubscribe of off) unsubscribe();
+      };
+    },
+    [runtime, ids],
+  );
+  const snapshot = useCallback(
+    () => (runtime ? ids.map((id) => runtime.cardRevision(id)).join(',') : ''),
+    [runtime, ids],
+  );
+  useSyncExternalStore(subscribe, snapshot);
+  return ids.length ? runtime?.projectCard : undefined;
+}
+
 /**
  * Текст сообщения дублирует то, что несёт карточка, которую лента ФАКТИЧЕСКИ отрисовала?
  * Тогда абзац печатать не нужно (MessageList).
@@ -105,14 +144,18 @@ function cardEchoText(card: Card): string | undefined {
  * Историческая карточка без kind и любой неизвестный kind уходят в default: return null —
  * там абзац остаётся ЕДИНСТВЕННЫМ носителем смысла и обязан быть виден.
  */
-export function contentDuplicatesCard(msg: ChatMessage, handlers: CardHandlers = {}): boolean {
+export function contentDuplicatesCard(
+  msg: ChatMessage,
+  handlers: CardHandlers = {},
+  project?: CardProjection,
+): boolean {
   const text = msg.content.trim();
   if (text === '') return false;
   const { meta, cards, confirmed } = readMeta(msg);
   // Строка журнала без карточки рисуется `JournalCard`, и заголовок действия несёт она сама
   if (meta.journal !== undefined && cards.length === 0) return meta.journal.title.trim() === text;
   return cards.some((card, i) => {
-    const echo = cardEchoText(card);
+    const echo = cardEchoText(card.kind === 'entity_card' && project ? project(card) : card);
     return (
       echo !== undefined &&
       echo.trim() === text &&
@@ -126,6 +169,7 @@ type CardCtx = {
   meta: CardsMeta;
   handlers: CardHandlers;
   confirmed: boolean;
+  project?: CardProjection;
 };
 
 /**
@@ -141,7 +185,8 @@ function renderCard(card: Card, i: number, ctx: CardCtx): ReactNode {
       return (
         <EntityCard
           key={i}
-          card={card}
+          card={ctx.project?.(card) ?? card}
+          live={meta.journal === undefined && !ctx.project}
           confirmed={confirmed}
           readOnly={readOnly}
           // Отменено ли действие (§11.2): карточке ответа признак ставит выдача треда (R-14), карточке строки
@@ -260,7 +305,11 @@ export function authorLabel(msg: ChatMessage): string | undefined {
  * текста и карточек вместе (MessageList: пост рутины/агента/AI в тред). `renderCards` ниже —
  * то же плюс метка; два входа, а не флаг, чтобы вызывающий не мог забыть про метку молча.
  */
-export function renderCardBodies(msg: ChatMessage, handlers: CardHandlers = {}): ReactNode[] {
+export function renderCardBodies(
+  msg: ChatMessage,
+  handlers: CardHandlers = {},
+  project?: CardProjection,
+): ReactNode[] {
   const { meta, cards, confirmed } = readMeta(msg);
   // Строка журнала без карточки записи (агент, пачка разговора) — строка-сводка с «Отменить» (§11.3, Р-16)
   if (meta.journal !== undefined && cards.length === 0) {
@@ -268,7 +317,9 @@ export function renderCardBodies(msg: ChatMessage, handlers: CardHandlers = {}):
       <JournalCard key="journal" meta={meta.journal} readOnly={handlers.readOnly === true} />,
     ];
   }
-  const body = cards.map((card, i) => renderCard(card, i, { msg, meta, handlers, confirmed }));
+  const body = cards.map((card, i) =>
+    renderCard(card, i, { msg, meta, handlers, confirmed, project }),
+  );
   // «Разобрать с AI» — только у подтверждённой fast-карточки (офлайн «⏳» недоступна до confirm).
   const fp = meta.fastPath;
   if (fp?.status === 'confirmed' && fp.entityId && handlers.onReparse) {
@@ -291,8 +342,12 @@ export function renderCardBodies(msg: ChatMessage, handlers: CardHandlers = {}):
 // Сообщение агента (author_kind) и действие агента или рутины с карточкой (journal) оборачиваются
 // в SystemMessage (🤖 агент, 02 §2.3) — см. authorLabel. Строка-сводка журнала без карточки
 // автора называет сама (`JournalCard`) — вторая метка над ней повторила бы её.
-export function renderCards(msg: ChatMessage, handlers: CardHandlers = {}): ReactNode {
-  const body = renderCardBodies(msg, handlers);
+export function renderCards(
+  msg: ChatMessage,
+  handlers: CardHandlers = {},
+  project?: CardProjection,
+): ReactNode {
+  const body = renderCardBodies(msg, handlers, project);
   const { meta, cards } = readMeta(msg);
   if (meta.journal !== undefined && cards.length === 0) return <>{body}</>;
   const label = authorLabel(msg);

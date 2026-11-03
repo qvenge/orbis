@@ -14,7 +14,7 @@ import {
   fixtureFreshness,
   mockEntityUpdateResult,
   queryReply,
-  renderWithProviders,
+  renderWithProviders as renderWithHarness,
   trpcError,
   wireEntity,
 } from '../../test/harness';
@@ -30,6 +30,9 @@ import { BodyBlock } from './record-blocks';
 import { RecordHostProvider, recordHostValue } from './record-host';
 import { hostTemplateRecord } from './structure-fixtures';
 import { detailGetInput } from './useEntityDetail';
+
+const renderWithProviders: typeof renderWithHarness = (ui, handler, options) =>
+  renderWithHarness(ui, handler, { ...options, freshness: true });
 
 const doc = parseBody('тело');
 const entity = { ...wireEntity({ id: 'e1', title: 'План' }), bodyDoc: doc };

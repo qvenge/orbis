@@ -9,10 +9,32 @@ const REJECTIONS: Record<string, string> = {
   FORBIDDEN: 'Изменение недоступно',
   CONFLICT: 'Состояние изменилось',
 };
+export const GRAPH_OFFLINE = 'Нет сети';
+
+export function graphOnline(): boolean {
+  return typeof navigator === 'undefined' || navigator.onLine;
+}
+
+function publicRejection(error: unknown): string | undefined {
+  if (error instanceof Error && error.message === GRAPH_OFFLINE) return GRAPH_OFFLINE;
+  if (!(error instanceof TRPCClientError)) return;
+  const code: unknown = error.data?.code;
+  if (typeof code !== 'string' || !Object.hasOwn(REJECTIONS, code)) return;
+  const message = error.message.trim();
+  // Only structured public refusals can carry a server explanation to the UI.
+  return message && message !== code ? message : REJECTIONS[code];
+}
+
+export function graphFailure(error: unknown): Exclude<CommandOutcome, { kind: 'confirmed' }> {
+  const message = publicRejection(error);
+  return message ? { kind: 'rejected', message } : { kind: 'unknown', message: UNKNOWN };
+}
+
 /** A single transport attempt. Only explicit public HTTP refusals prove non-commit. */
 export async function runGraphCommand(
   write: () => Promise<{ actionId?: string; consequences?: boolean }>,
 ): Promise<CommandOutcome> {
+  if (!graphOnline()) return { kind: 'rejected', message: GRAPH_OFFLINE };
   try {
     const result = await write();
     if (
@@ -31,20 +53,6 @@ export async function runGraphCommand(
           ...(typeof result.consequences === 'boolean' && { consequences: result.consequences }),
         };
   } catch (error) {
-    if (error instanceof TRPCClientError) {
-      const code: unknown = error.data?.code;
-      const fallback =
-        typeof code === 'string' && Object.hasOwn(REJECTIONS, code) ? REJECTIONS[code] : undefined;
-      if (fallback) {
-        // The server's non-internal tRPC messages are public structured refusals.
-        // Do not copy data/cause/stack into a form outcome.
-        const message = error.message.trim();
-        return {
-          kind: 'rejected',
-          message: message && message !== error.data?.code ? message : fallback,
-        };
-      }
-    }
-    return { kind: 'unknown', message: UNKNOWN };
+    return graphFailure(error);
   }
 }

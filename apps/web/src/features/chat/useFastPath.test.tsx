@@ -524,6 +524,26 @@ test('«разобрать с AI» → archived:true + ai.sendMessage исход
   });
 });
 
+test('a confirmed reparse archive continues after an overflow in the same scope', async () => {
+  let acknowledge: (value: unknown) => void = () => {};
+  const pending = new Promise((resolve) => {
+    acknowledge = resolve;
+  });
+  const { Wrap, calls, qc } = wrapper((path, input) => {
+    if (path === 'entity.update') return pending;
+    if (path === 'ai.sendMessage') return assistantReply;
+    return handlerBase(path, input);
+  });
+  const freshness = makeTestFreshness(qc);
+  const { result } = renderHook(() => useFastPath('t1'), { wrapper: Wrap });
+  act(() => result.current.reparse('e1', 'обед 340'));
+  await waitFor(() => expect(calls.some((c) => c.path === 'entity.update')).toBe(true));
+  expect(calls.some((c) => c.path === 'ai.sendMessage')).toBe(false);
+  act(() => freshness.reset());
+  await act(async () => acknowledge(mockEntityUpdateResult({ id: 'e1', title: 'обед' })));
+  await waitFor(() => expect(calls.some((c) => c.path === 'ai.sendMessage')).toBe(true));
+});
+
 test('§3: ошибка ai.sendMessage → текст не теряется (error_card + retryId/retryText в треде)', async () => {
   const { Wrap, qc } = wrapper((path, input) => {
     if (path === 'ai.sendMessage') throw trpcError('LLM_UNAVAILABLE');

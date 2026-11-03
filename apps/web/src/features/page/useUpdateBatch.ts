@@ -1,6 +1,8 @@
 import type { EntityUpdateBatchInput } from '@orbis/shared';
+import { useQueryClient } from '@tanstack/react-query';
 import { useCallback } from 'react';
-import { runGraphCommand } from '../../lib/graph-command';
+import { captureCommandScope, freshnessRuntimeOf } from '../../lib/freshness/provenance';
+import { GRAPH_OFFLINE, graphOnline, runGraphCommand } from '../../lib/graph-command';
 import { trpc } from '../../trpc';
 import { useToast } from '../../ui/toast-store';
 import type { CommandOutcome } from '../entity-detail/properties-relations/types';
@@ -39,23 +41,42 @@ export function useDetailedUpdateBatch(): (
   options?: UpdateBatchOptions,
 ) => Promise<CommandOutcome> {
   const utils = trpc.useUtils();
+  const client = useQueryClient();
   return useCallback(
     async (operations, options = {}) => {
+      if (!graphOnline()) return { kind: 'rejected', message: GRAPH_OFFLINE };
       const epoch = undoEpoch();
+      const runtime = freshnessRuntimeOf(client);
+      const current = captureCommandScope(client);
+      const token = runtime?.beginOptimistic(
+        operations.flatMap((op) => (op.tool === 'entity_update' ? [op.input] : [])),
+      );
       const outcome = await runGraphCommand(() =>
         utils.client.entity.updateBatch.mutate({
           operations,
           ...(options.action !== undefined && { label: options.action }),
         }),
       );
-      if (!isUndoEpoch(epoch))
+      if (!isUndoEpoch(epoch) || !current())
         return { kind: 'unknown', message: 'Сеанс изменился — состояние записи не подтверждено' };
+      runtime?.settleOptimistic(
+        token,
+        outcome.kind === 'confirmed'
+          ? { kind: 'confirmed' }
+          : outcome.kind === 'unknown'
+            ? { kind: 'unknown' }
+            : { kind: 'failed', recheck: true },
+      );
       if (outcome.kind === 'confirmed')
         for (const op of operations)
-          if (op.tool === 'entity_update' && op.input.body !== undefined) resetSteps(op.input.id);
+          if (
+            op.tool === 'entity_update' &&
+            (op.input.body !== undefined || op.input.bodyDoc !== undefined)
+          )
+            resetSteps(op.input.id);
       return outcome;
     },
-    [utils],
+    [utils, client],
   );
 }
 
@@ -77,7 +98,12 @@ export function useUpdateBatch(): RunUpdateBatch {
       const outcome = await run(operations, options);
       if (!isUndoEpoch(epoch)) return false;
       if (outcome.kind !== 'confirmed') {
-        show(options.failed ?? BATCH_FAILED, 'danger');
+        show(
+          outcome.message === GRAPH_OFFLINE ? GRAPH_OFFLINE : (options.failed ?? BATCH_FAILED),
+          'danger',
+          undefined,
+          outcome.message === GRAPH_OFFLINE ? undefined : outcome.message,
+        );
         return false;
       }
       if (!outcome.actionId || typeof outcome.consequences !== 'boolean') return true;

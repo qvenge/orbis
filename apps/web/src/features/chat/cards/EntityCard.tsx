@@ -1,9 +1,9 @@
 import { useQueryClient } from '@tanstack/react-query';
 import { getQueryKey } from '@trpc/react-query';
-import { useState } from 'react';
+import { useCallback, useState, useSyncExternalStore } from 'react';
 import { useOpenRecord } from '../../../app/useOpenRecord';
 import { formatAmount } from '../../../lib/format';
-import { networkReadContext } from '../../../lib/freshness/provenance';
+import { freshnessRuntimeOf, networkReadContext } from '../../../lib/freshness/provenance';
 import { useFreshnessVisible } from '../../../lib/freshness/screen';
 import { fieldLabel } from '../../../lib/registry/labels';
 import { useRegistry } from '../../../lib/registry/useRegistry';
@@ -19,12 +19,14 @@ import type { EntityCardData } from './types';
 
 // inline-правка полей аспекта — на detail-экране (Task 14); в чат-карточке read-only + Undo + тап в detail (MVP §2.3)
 export function EntityCard({
-  card,
+  card: historicalCard,
+  live = true,
   confirmed = true,
   readOnly = false,
   undone: undoneOnServer = false,
 }: {
   card: EntityCardData;
+  live?: boolean;
   /** false — fast-path «⏳ ждёт отправки»: запись ещё не на сервере (02 §2.5). */
   confirmed?: boolean;
   /** Лента только для чтения (предпросмотр шаблона): без «Отменить» — переход к записи остаётся. */
@@ -35,6 +37,16 @@ export function EntityCard({
    */
   undone?: boolean;
 }) {
+  const client = useQueryClient();
+  const runtime = confirmed && live ? freshnessRuntimeOf(client) : undefined;
+  const entityId = historicalCard.entityId;
+  const subscribe = useCallback(
+    (listener: () => void) => runtime?.subscribeCard(entityId, listener) ?? (() => {}),
+    [runtime, entityId],
+  );
+  const snapshot = useCallback(() => runtime?.cardRevision(entityId) ?? 0, [runtime, entityId]);
+  useSyncExternalStore(subscribe, snapshot);
+  const card = runtime?.projectCard(historicalCard) ?? historicalCard;
   const [undoneHere, setUndone] = useState(false);
   const undone = undoneOnServer || undoneHere;
   const openRecord = useOpenRecord();
@@ -71,7 +83,6 @@ export function EntityCard({
     planned !== 'true' &&
     typeof categoryRef === 'string' &&
     typeof occurredOn === 'string';
-  const client = useQueryClient();
   const visible = useFreshnessVisible();
   const envelope = {
     categoryId: typeof categoryRef === 'string' ? categoryRef : '',

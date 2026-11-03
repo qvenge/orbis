@@ -138,6 +138,7 @@ it('restore holds its optimistic UI through the actual addressed mutation, not j
           : type === 'mutation'
             ? mutation
             : (registryReply(path) ?? []),
+    { freshness: true },
   );
   fireEvent.click(await screen.findByTestId('screen-menu'));
   fireEvent.click(await screen.findByRole('menuitem', { name: 'Свойства и связи' }));

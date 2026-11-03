@@ -1,5 +1,8 @@
+import { useQueryClient } from '@tanstack/react-query';
+import { getQueryKey } from '@trpc/react-query';
 import { useCallback, useRef } from 'react';
-import { runGraphCommand } from '../../../lib/graph-command';
+import { freshnessRuntimeOf, nextNetworkOrder } from '../../../lib/freshness/provenance';
+import { graphOnline, runGraphCommand } from '../../../lib/graph-command';
 import { networkOnlyResponse } from '../../../lib/local-data/query-responses';
 import { useRegistry } from '../../../lib/registry/useRegistry';
 import { useGraphUndo } from '../../../lib/useGraphUndo';
@@ -35,6 +38,7 @@ export function usePanelCommands(): {
   reconcile: (command: PanelCommand) => Promise<'matches' | 'differs' | 'unavailable'>;
 } {
   const utils = trpc.useUtils();
+  const queryClient = useQueryClient();
   const registry = useRegistry();
   const batch = useDetailedUpdateBatch();
   const undo = useGraphUndo();
@@ -128,7 +132,7 @@ export function usePanelCommands(): {
   );
   const reconcile = useCallback(
     async (command: PanelCommand): Promise<'matches' | 'differs' | 'unavailable'> => {
-      if (inFlight.current) return 'unavailable';
+      if (inFlight.current || !graphOnline()) return 'unavailable';
       const snapshot = structuredClone(command);
       const commandId = identity(snapshot);
       try {
@@ -138,11 +142,18 @@ export function usePanelCommands(): {
         // key, then force a network read even if its cached result was fresh.
         await utils.entity.get.cancel(input);
         if (!isUndoEpoch(epoch)) return 'unavailable';
+        const started = nextNetworkOrder();
         const current = await utils.entity.get.fetch(input, {
           staleTime: 0,
           meta: networkOnlyResponse,
         });
         if (!isUndoEpoch(epoch)) return 'unavailable';
+        const runtime = freshnessRuntimeOf(queryClient);
+        if (
+          runtime &&
+          !runtime.hasAcceptedResult(getQueryKey(trpc.entity.get, input, 'query'), current, started)
+        )
+          return 'unavailable';
         if (
           !current?.entity ||
           current.entity.id !== snapshot.entityId ||
@@ -182,7 +193,7 @@ export function usePanelCommands(): {
         return 'unavailable';
       }
     },
-    [utils],
+    [utils, queryClient],
   );
   return { run, reconcile };
 }

@@ -82,6 +82,7 @@ function renderUnder(
   navAt(f.entity.id);
   return renderWithProviders(<Host id={f.entity.id}>{ui}</Host>, handler, {
     queries: queryClient.getDefaultOptions().queries,
+    freshness: true,
   });
 }
 

@@ -7,11 +7,9 @@ import {
 import { useState } from 'react';
 import { aspectLabel } from '../../lib/registry/labels';
 import { useRegistry } from '../../lib/registry/useRegistry';
-import { trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
 import { Card } from '../../ui/Card';
 import type { WireEntity } from '../entity-detail/record-host';
-import { PAGE_TEMPLATES_QUERY, patchTemplatesList } from './usePageTemplates';
 import { useUpdateBatch } from './useUpdateBatch';
 
 /**
@@ -38,9 +36,7 @@ const byCreation = (a: WireEntity, b: WireEntity) =>
  * пачку «цель архивна» (РП-21). Пустое «Главнее, чем» пишется СНЯТИЕМ: пустой список у ссылочного
  * свойства — не «ничего», а значение, и держать его незачем.
  *
- * Экран переключается патчем списка до ответа (`patchTemplatesList`, Л-2): функция выбора находит
- * победителя сама по патченому кешу — второй копии правды «кто выбран» у экрана нет. Правда
- * сервера — перечитыванием после записи; отказ пачки — откат снимком.
+ * Общая проекция пачки переключает шаблон до подтверждения. Отказ снимает ее слой.
  */
 export function DisputePlaque({
   contenders,
@@ -50,7 +46,6 @@ export function DisputePlaque({
   rows: WireEntity[];
 }) {
   const reg = useRegistry();
-  const utils = trpc.useUtils();
   const runBatch = useUpdateBatch();
   // Закрыта — выбор сделан. Два пути: повторный выбор текущего победителя (меню «Сменить выбор»,
   // задача 15) — писать нечего, а плашка, оставшаяся висеть после нажатия, выглядела бы отказом;
@@ -74,8 +69,6 @@ export function DisputePlaque({
       return;
     }
     setPending(true);
-    // Экран переключается сразу: функция выбора видит патч списка (Л-2), не дожидаясь пачки.
-    const rollback = await patchTemplatesList(utils, changes);
     // Одна копия механизма «пачка → тост „Отменить“ → Undo → перечитывание» с меню ⋮ (C1-I4);
     // тексты отказа — свои: плашка знает, что именно не записано.
     const written = await runBatch(
@@ -93,22 +86,8 @@ export function DisputePlaque({
         undoFailed: 'Не удалось отменить выбор',
       },
     );
-    if (!written) {
-      // Отказ: экран и плашка — как до жеста.
-      rollback();
-      // The selection may have failed because its template changed elsewhere.
-      void utils.entity.query
-        .fetch({ query: PAGE_TEMPLATES_QUERY }, { staleTime: 0 })
-        .catch(() => {});
-      setPending(false);
-      return;
-    }
-    // Refresh this command's result before dismissing the placement chooser.
-    await utils.entity.query
-      .fetch({ query: PAGE_TEMPLATES_QUERY }, { staleTime: 0 })
-      .catch(() => {});
     setPending(false);
-    setClosed(true);
+    if (written) setClosed(true);
   }
 
   return (

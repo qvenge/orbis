@@ -1,4 +1,10 @@
-import { hashKey, type QueryClient, type QueryKey } from '@tanstack/react-query';
+import {
+  hashKey,
+  type Query,
+  type QueryClient,
+  type QueryKey,
+  replaceEqualDeep,
+} from '@tanstack/react-query';
 import type { createFreshnessRuntime } from './runtime';
 import type { FreshnessScope } from './transport';
 
@@ -65,6 +71,23 @@ export const sameFreshnessScope = (a: FreshnessScope, b: FreshnessScope) =>
 const runtimes = new WeakMap<QueryClient, ReturnType<typeof createFreshnessRuntime>>();
 export function freshnessRuntimeOf(client: QueryClient) {
   return runtimes.get(client);
+}
+
+/** A feed reset retires reads and display intents, while a command still belongs to this scope. */
+export function captureCommandScope(client: QueryClient): () => boolean {
+  const runtime = freshnessRuntimeOf(client);
+  return () => freshnessRuntimeOf(client) === runtime && (runtime?.isCurrentScope() ?? true);
+}
+
+/** Change the visible value without a TanStack success transition. */
+export function shareProjectedData<TError>(query: Query<unknown, TError>, shown: unknown): unknown {
+  const { structuralSharing } = query.options;
+  const previous = query.state.data;
+  return typeof structuralSharing === 'function'
+    ? structuralSharing(previous, shown)
+    : structuralSharing === false
+      ? shown
+      : replaceEqualDeep(previous, shown);
 }
 
 export function bindFreshnessRuntime(
