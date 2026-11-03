@@ -1,9 +1,11 @@
 import { AuthClient, type Session } from '@supabase/auth-js';
 import { useEffect, useState } from 'react';
+import { authFetch } from './auth-fetch';
 import { authUrl, storageKeyFor } from './config';
 
 const url = import.meta.env.VITE_SUPABASE_URL ?? 'http://localhost:54321';
 const anon = import.meta.env.VITE_SUPABASE_ANON_KEY ?? 'anon';
+const endpoint = authUrl(url);
 
 // Диета бандла: из supabase-js использовались только четыре вызова .auth, остальное —
 // postgrest/realtime/storage/functions, к которым web не обращается вовсе (все данные идут
@@ -23,7 +25,8 @@ const anon = import.meta.env.VITE_SUPABASE_ANON_KEY ?? 'anon';
 //                                         стенд пропускает и без него — промах этой строкой
 //                                         на разработческой машине не ловится вообще).
 export const auth = new AuthClient({
-  url: authUrl(url),
+  url: endpoint,
+  fetch: authFetch(endpoint),
   storageKey: storageKeyFor(url),
   // Плоский мерж опций в GoTrueClient (`{...DEFAULT_OPTIONS, ...options}`) заменяет
   // дефолтные заголовки целиком, поэтому вендорский 'X-Client-Info' отсюда пропадает.

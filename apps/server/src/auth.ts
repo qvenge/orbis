@@ -83,9 +83,18 @@ async function verifyViaLegacySecret(token: string): Promise<JWTPayload | null> 
   }
 }
 
-/** Валидный токен → `sub` (id АККАУНТА, из него резолвер 1 делает пару); иначе null, без throw. */
-export async function verifyAccessToken(token: string): Promise<string | null> {
+/** Дедлайн берётся из того же верифицированного payload, что и sub. */
+export async function verifyAccessClaims(
+  token: string,
+): Promise<{ sub: string; expiresAt: number | null } | null> {
   const payload = (await verifyViaJwks(token)) ?? (await verifyViaLegacySecret(token));
   const sub = payload?.sub;
-  return typeof sub === 'string' && sub.length > 0 ? sub : null;
+  if (typeof sub !== 'string' || sub.length === 0) return null;
+  const expiry = Math.floor((payload?.exp ?? NaN) * 1000);
+  return { sub, expiresAt: Number.isSafeInteger(expiry) ? expiry : null };
+}
+
+/** Валидный токен → sub (id аккаунта), иначе null. */
+export async function verifyAccessToken(token: string): Promise<string | null> {
+  return (await verifyAccessClaims(token))?.sub ?? null;
 }

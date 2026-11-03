@@ -1,10 +1,18 @@
 import type { AppRouter } from '@orbis/server/src/router';
-import { CLIENT_VERSION_HEADER } from '@orbis/shared';
+import { CLIENT_VERSION_HEADER, changeXidInput, READ_WATERMARK_HEADER } from '@orbis/shared';
 import { type DefaultOptions, MutationCache, QueryClient } from '@tanstack/react-query';
-import { createTRPCClient, httpBatchLink, TRPCClientError, type TRPCLink } from '@trpc/client';
+import {
+  createTRPCClient,
+  httpBatchLink,
+  httpSubscriptionLink,
+  splitLink,
+  TRPCClientError,
+  type TRPCLink,
+} from '@trpc/client';
 import { createTRPCReact } from '@trpc/react-query';
 import type { inferRouterInputs, inferRouterOutputs } from '@trpc/server';
 import { observable } from '@trpc/server/observable';
+import { EventSource } from 'eventsource';
 import { APP_VERSION } from './app/version';
 import { emitClientOutdated, emitUnauthorized } from './auth/events';
 import { makeBodyQueryCache } from './features/undo/body-provenance';
@@ -46,6 +54,76 @@ export function trpcHeaders(getToken: () => string | null): Record<string, strin
   };
 }
 
+/** One HTTP response's evidence for the raw result, captured before cache publication. */
+export type NetworkReadReceipt = Readonly<{
+  epoch: number;
+  watermark: string | null;
+  receivedAt: number;
+  startedSequence: number;
+}>;
+let networkOrder = 0;
+
+/** Tab-local ordering shared by request starts and confirmed mutation ACKs. */
+export function nextNetworkOrder(): number {
+  return ++networkOrder;
+}
+const networkReadReceipts = new WeakMap<object, NetworkReadReceipt>();
+
+export function networkReadReceiptOf(raw: unknown): NetworkReadReceipt | undefined {
+  if (typeof raw === 'object' && raw !== null) return networkReadReceipts.get(raw);
+}
+
+export function inheritNetworkReadReceipt(rawParent: unknown, constituent: object): void {
+  const receipt = networkReadReceiptOf(rawParent);
+  if (receipt) networkReadReceipts.set(constituent, receipt);
+}
+
+const networkReadReceiptLink: TRPCLink<AppRouter> =
+  () =>
+  ({ op, next }) =>
+    observable((observer) => {
+      const epoch = undoEpoch();
+      const read = op.type === 'query' || (op.type === 'mutation' && op.path === 'entity.blocks');
+      const startedSequence = nextNetworkOrder();
+      return next(op).subscribe({
+        next(value) {
+          const response = value.context?.response;
+          if (read && response instanceof Response && 'data' in value.result) {
+            const watermark = changeXidInput.safeParse(response.headers.get(READ_WATERMARK_HEADER));
+            const receipt: NetworkReadReceipt = {
+              epoch,
+              watermark: watermark.success ? watermark.data : null,
+              receivedAt: Date.now(),
+              startedSequence,
+            };
+            const raw = value.result.data;
+            if (typeof raw === 'object' && raw !== null) networkReadReceipts.set(raw, receipt);
+            if (typeof op.context.onNetworkReadReceipt === 'function') {
+              op.context.onNetworkReadReceipt(receipt);
+            }
+          }
+          observer.next(value);
+        },
+        error: (error) => observer.error(error),
+        complete: () => observer.complete(),
+      });
+    });
+
+export type FreshnessStreamRequest = {
+  token: string;
+  beforeFetch: () => string;
+};
+
+export function trpcErrorCode(error: unknown): string | undefined {
+  if (!(error instanceof TRPCClientError)) return undefined;
+  const cause = error.cause;
+  const status = cause && 'code' in cause ? cause.code : undefined;
+  return (
+    error.data?.code ??
+    (status === 401 ? 'UNAUTHORIZED' : status === 412 ? 'PRECONDITION_FAILED' : undefined)
+  );
+}
+
 // Линк-перехватчик: ключуется на КОД ошибки (cause по HTTP не сериализуется).
 // PRECONDITION_FAILED → CLIENT_OUTDATED (412), UNAUTHORIZED → login (401).
 export function authErrorLink(handlers: {
@@ -60,9 +138,15 @@ export function authErrorLink(handlers: {
           next: (v) => observer.next(v),
           complete: () => observer.complete(),
           error: (err) => {
-            const code = err instanceof TRPCClientError ? err.data?.code : undefined;
+            const freshness = op.type === 'subscription' || op.path === 'changes.reconcile';
+            const code = freshness
+              ? trpcErrorCode(err)
+              : err instanceof TRPCClientError
+                ? err.data?.code
+                : undefined;
             if (code === 'PRECONDITION_FAILED') handlers.onOutdated();
-            else if (code === 'UNAUTHORIZED' && isUndoEpoch(epoch)) handlers.onUnauthorized();
+            else if (code === 'UNAUTHORIZED' && !freshness && isUndoEpoch(epoch))
+              handlers.onUnauthorized();
             observer.error(err);
           },
         });
@@ -100,9 +184,39 @@ export function orbisLinks(getToken: () => string | null): TRPCLink<AppRouter>[]
       return batch(operation);
     };
   };
+  const subscriptions = httpSubscriptionLink<AppRouter, typeof EventSource>({
+    url: TRPC_URL,
+    EventSource,
+    eventSourceOptions({ op }) {
+      const epoch = undoEpoch();
+      const request = op.context.freshnessStream as FreshnessStreamRequest | undefined;
+      return {
+        async fetch(url, init) {
+          if (!isUndoEpoch(epoch) || op.signal?.aborted) throw new Error('Сессия изменилась');
+          const headers = new Headers(init.headers);
+          for (const [name, value] of Object.entries(
+            trpcHeaders(() => request?.token ?? getToken()),
+          )) {
+            headers.set(name, value);
+          }
+          if (request) {
+            // The parser can observe an id before the runtime accepts the page.
+            // The actual HTTP resume boundary must always come from the runtime.
+            headers.set('Last-Event-ID', request.beforeFetch());
+          }
+          return fetch(url, { ...init, headers });
+        },
+      };
+    },
+  });
   return [
     authErrorLink({ onOutdated: emitClientOutdated, onUnauthorized: emitUnauthorized }),
-    scopedBatch,
+    networkReadReceiptLink,
+    splitLink({
+      condition: (op) => op.type === 'subscription',
+      true: subscriptions,
+      false: scopedBatch,
+    }),
   ];
 }
 

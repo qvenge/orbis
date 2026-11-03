@@ -1,7 +1,8 @@
 import { makeAiDeps } from './ai/send-message';
-import { createApp, resolvePort } from './app';
+import { createApp, isChangeStreamRequest, resolvePort } from './app';
 import { makeDb } from './db/client';
 import { type RegistryDriftStatus, reportRegistryDriftOnStartup } from './db/registry-drift';
+import { changeStreamEnabled, startChangeListener } from './freshness/listener';
 import { assertPublicOriginConfigured } from './oauth/metadata';
 import { type RoutineScheduler, startRoutineScheduler } from './routines/scheduler';
 import { manualRuns } from './routines/shutdown';
@@ -14,7 +15,7 @@ import { manualRuns } from './routines/shutdown';
 assertPublicOriginConfigured();
 
 // Один пул соединений на процесс; в request-контекст db попадает ссылкой (Task 12)
-const { db, client } = makeDb();
+const { db, client, makeListenerClient } = makeDb();
 
 // AI-deps — один инстанс на процесс (§7.7: провайдеров два, выбор — env, имя модели
 // для метеринга отдаёт сам провайдер);
@@ -23,6 +24,7 @@ const { db, client } = makeDb();
 // ORBIS_LLM_PROVIDER или в production; ОБА ключа сразу без явного
 // ORBIS_LLM_PROVIDER — выбор неоднозначен, и молчаливый метерился бы чужой моделью
 const ai = makeAiDeps();
+const changeListener = changeStreamEnabled() ? startChangeListener(makeListenerClient) : undefined;
 
 // Реестры в БД против кода — пять реестров и таблица действий (§А12-1 п.4). НЕ fail-fast и
 // НЕ блокирует приём запросов: пересев — шаг релиза с ноутбука владельца, и приложение
@@ -42,6 +44,7 @@ let scheduler: RoutineScheduler | undefined;
 const app = createApp({
   db,
   ai,
+  ...(changeListener && { changeListener }),
   registryDrift: () => registryDrift,
   routineScheduler: () => ({
     enabled: scheduler !== undefined,
@@ -49,9 +52,15 @@ const app = createApp({
   }),
 });
 
+let shuttingDown = false;
 const server = Bun.serve({
   port: resolvePort(),
-  fetch: app.fetch,
+  fetch(request) {
+    if (changeListener && !shuttingDown && isChangeStreamRequest(request)) {
+      server.timeout(request, 60);
+    }
+    return app.fetch(request);
+  },
 });
 
 if (process.env.ORBIS_ROUTINE_SCHEDULER === '1') {
@@ -82,10 +91,16 @@ if (process.env.ORBIS_ROUTINE_SCHEDULER === '1') {
 // второй — ПОСЛЕ `server.stop()`: запрос runNow, доживший в дренаже, регистрирует прогон уже
 // после первого вызова, и дождаться его может только повторный (идемпотентный) shutdown.
 async function shutdown(signal: string): Promise<void> {
+  if (shuttingDown) return;
+  shuttingDown = true;
   console.log(`[server] ${signal}: останавливаюсь, дожидаюсь in-flight запросов`);
   try {
+    const listenerStopped = changeListener?.close();
     const schedulerStopped = scheduler?.stop();
     void manualRuns.shutdown(); // рубильник сразу; ожидание — повторным вызовом ниже
+    await listenerStopped?.catch((error) =>
+      console.error('[freshness] ошибка остановки LISTEN:', error),
+    );
     await server.stop(); // без force: активные запросы доживают
     await schedulerStopped;
     await manualRuns.shutdown(); // дождаться и прогонов, зарегистрированных в дренаже

@@ -4,8 +4,9 @@
 // bun-окружения (обязательство «изоляция auth от type-графа router»).
 import { CLIENT_VERSION_HEADER } from '@orbis/shared';
 import type { AiDeps } from './ai/send-message';
-import { verifyAccessToken } from './auth';
+import { verifyAccessClaims } from './auth';
 import type { Db } from './db/client';
+import type { ChangeListener } from './freshness/listener';
 import { identityOfGrant, identityOfPerson, parseAccountId } from './identity';
 import { verifyBearer } from './oauth/grants';
 import { BEARER_PREFIXES } from './oauth/tokens';
@@ -15,7 +16,7 @@ import type { Context } from './trpc';
  * Фабрика createContext: db и AI-deps (Task 9: провайдер один на процесс, §7.7)
  * создаются один раз при старте (index.ts) и замыкаются здесь.
  */
-export function makeCreateContext(db: Db, ai?: AiDeps) {
+export function makeCreateContext(db: Db, ai?: AiDeps, changeListener?: ChangeListener) {
   return async function createContext({ req }: { req: Request }): Promise<Context> {
     const header = req.headers.get('authorization');
     const token = header?.startsWith('Bearer ') ? header.slice('Bearer '.length) : null;
@@ -50,9 +51,11 @@ export function makeCreateContext(db: Db, ai?: AiDeps) {
       };
     }
 
-    const sub = token ? await verifyAccessToken(token) : null;
+    const claims = token ? await verifyAccessClaims(token) : null;
     return {
-      identity: sub === null ? null : identityOfPerson(parseAccountId(sub)),
+      identity: claims === null ? null : identityOfPerson(parseAccountId(claims.sub)),
+      ...(claims?.expiresAt != null && { expiresAt: claims.expiresAt }),
+      ...(changeListener && { changeListener }),
       actorKind: 'owner',
       db,
       clientVersion,

@@ -4,6 +4,7 @@ import { initTRPC, TRPCError } from '@trpc/server';
 import type { AiDeps } from './ai/send-message';
 import type { Db } from './db/client';
 import { orbisErrorData } from './errors';
+import type { ChangeListener } from './freshness/listener';
 import type { Identity } from './identity';
 import type { GrantRef } from './oauth/grants';
 
@@ -12,8 +13,6 @@ import type { GrantRef } from './oauth/grants';
 // db — один инстанс на процесс (index.ts), в контекст кладётся ссылкой (Task 12).
 // createContext живёт в context.ts (Task 14): здесь — только типы и сборка процедур,
 // чтобы type-граф AppRouter → router → trpc не тянул runtime-импорты auth.
-// type, а не interface: у interface нет неявной index signature, и он не проходит
-// требование Record<string, unknown> у createContext в @hono/trpc-server.
 export type Context = {
   identity: Identity | null;
   /**
@@ -32,6 +31,9 @@ export type Context = {
    */
   grant?: GrantRef;
   db: Db;
+  /** Milliseconds since Unix epoch, from the verified owner JWT. */
+  expiresAt?: number;
+  changeListener?: ChangeListener;
   /** Значение заголовка CLIENT_VERSION_HEADER; null — заголовок не прислан (curl/смоуки). */
   clientVersion: string | null;
   /**
@@ -54,6 +56,10 @@ export type Context = {
 // (`errors.ts`): тела и тексты записей туда не попадают. Ключ `orbis` есть у всех ветвей (у прочих — пустой, JSON
 // его не пишет): форма ошибки на клиенте выводится из этого форматтера, и союз без ключа прятал бы поле от типов.
 const t = initTRPC.context<Context>().create({
+  sse: {
+    ping: { enabled: true, intervalMs: 25_000 },
+    client: { reconnectAfterInactivityMs: 60_000 },
+  },
   errorFormatter({ shape, error }) {
     if (shape.data.code !== 'INTERNAL_SERVER_ERROR') {
       return { ...shape, data: { ...shape.data, orbis: orbisErrorData(error.cause) } };

@@ -4,8 +4,8 @@
 // /.well-known/*) регистрируются ПЕРЕД статикой, поэтому их ответы не перехватываются
 // SPA-fallback'ом (Hono исполняет matching-хендлеры в порядке регистрации; API-хендлер
 // возвращает Response и не зовёт next → serveStatic до него не доходит).
-import { trpcServer } from '@hono/trpc-server';
 import { registryDriftIds } from '@orbis/shared';
+import { fetchRequestHandler } from '@trpc/server/adapters/fetch';
 import { type Context, Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { serveStatic } from 'hono/bun';
@@ -13,6 +13,7 @@ import type { AiDeps } from './ai/send-message';
 import { makeCreateContext } from './context';
 import type { Db } from './db/client';
 import type { RegistryDriftStatus } from './db/registry-drift';
+import { type ChangeListener, changeStreamEnabled } from './freshness/listener';
 import { readWatermarkHeaders, withReadWatermark } from './freshness/watermark';
 import { makeMcpHandler } from './mcp/transport';
 import { mountOAuthMetadata } from './oauth/metadata';
@@ -78,6 +79,20 @@ function cacheHeaders(path: string, c: Context): void {
  * этот — режет мусор до парсинга.
  */
 export const TRPC_MAX_BODY_BYTES = 4 * 1024 * 1024;
+const CHANGE_STREAM_PATH = '/trpc/changes.watch';
+
+/** Match the raw-path aliases that tRPC's fetch adapter routes to the watch. */
+export function isChangeStreamRequest(request: Request): boolean {
+  if (request.method !== 'GET') return false;
+  const path = new URL(request.url).pathname;
+  if (!path.startsWith('/trpc/')) return false;
+  try {
+    // tRPC trims a final slash from the full path and then from the procedure.
+    return decodeURIComponent(path.replace(/\/{1,2}$/, '')) === CHANGE_STREAM_PATH;
+  } catch {
+    return false;
+  }
+}
 
 /**
  * Платформенный body-limit /trpc/* по образцу /mcp (mcp/transport.ts): считает по
@@ -120,6 +135,7 @@ function oauthMethodNotAllowed(path: string) {
 export interface AppDeps {
   db: Db;
   ai: AiDeps;
+  changeListener?: ChangeListener;
   /** Переопределение корня статики (тест/Docker); по умолчанию WEB_DIST_DIR. */
   webDistDir?: string;
   /**
@@ -140,6 +156,7 @@ export interface AppDeps {
 export function createApp({
   db,
   ai,
+  changeListener,
   webDistDir = WEB_DIST_DIR,
   registryDrift,
   routineScheduler,
@@ -183,14 +200,30 @@ export function createApp({
   // любой zod-валидации (порядок регистрации = порядок исполнения middleware).
   app.use('/trpc/*', trpcBodyLimit);
   app.use('/trpc/*', withReadWatermark);
-  app.use(
-    '/trpc/*',
-    trpcServer({
+  const createContext = makeCreateContext(db, ai, changeListener);
+  // Bun resolves @hono/trpc-server to CJS. The ESM router's tracked() uses a
+  // different Symbol there, so the CJS adapter would serialize the tuple
+  // instead of emitting its SSE id. Use the public ESM adapter throughout.
+  app.use('/trpc/*', async (c) => {
+    if (
+      (!changeStreamEnabled() || changeListener?.signal.aborted) &&
+      isChangeStreamRequest(c.req.raw)
+    ) {
+      // A non-SSE response leaves the client's reconcile timer running. Closing
+      // the connection also prevents reuse of an old keep-alive during shutdown.
+      return new Response(null, {
+        status: 503,
+        headers: { Connection: 'close', 'Cache-Control': 'no-store' },
+      });
+    }
+    return fetchRequestHandler({
+      endpoint: '/trpc',
+      req: c.req.raw,
       router: appRouter,
-      createContext: makeCreateContext(db, ai),
+      createContext,
       responseMeta: ({ eagerGeneration }) => ({ headers: readWatermarkHeaders(eagerGeneration) }),
-    }),
-  );
+    });
+  });
   // MCP-эндпоинт внешних агентов (§9.3): Streamable HTTP, только по гранту из
   // agent_grants — access-токен OAuth или headless-PAT (transport.ts)
   app.use('/mcp', serverTiming());
