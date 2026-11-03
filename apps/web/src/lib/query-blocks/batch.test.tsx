@@ -2,11 +2,12 @@ import { type EntityBlocksResult, READ_WATERMARK_HEADER } from '@orbis/shared';
 import { bindQueryBlocks, parseBody } from '@orbis/shared/doc';
 import { FIXTURE_PARSE_REGISTRY } from '@orbis/shared/query/fixtures';
 import { QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, renderHook, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, renderHook, screen, waitFor } from '@testing-library/react';
 import { type PropsWithChildren, useState } from 'react';
 import { afterEach, expect, test, vi } from 'vitest';
 import { EditorShell } from '../../features/entity-editor/EditorShell';
 import { DataBlock } from '../../features/page/blocks/DataBlock';
+import { testFreshnessOf } from '../../test/freshness';
 import {
   type BlockReplyValue,
   blocksReply,
@@ -19,7 +20,6 @@ import {
 } from '../../test/harness';
 import { registryReply } from '../../test/registry';
 import { makeQueryClient, makeTrpcClient, networkReadReceiptOf, trpc } from '../../trpc';
-import { invalidateGraph } from '../invalidate';
 import { QueryBatchProvider, useBlockData } from './batch';
 import { ThisEntityProvider } from './this-entity';
 
@@ -181,28 +181,21 @@ test('(е) один текст в первом кадре и в NodeView ред�
   expect(batches(calls)).toHaveLength(1);
 });
 
-function Invalidator() {
-  const utils = trpc.useUtils();
-  return (
-    <button type="button" onClick={() => invalidateGraph(utils)}>
-      запись в граф
-    </button>
-  );
-}
-
-test('(ж) invalidateGraph — блоки перезапрашиваются ОДНОЙ пачкой', async () => {
-  const { calls } = renderWithProviders(
+test('(ж) a graph change refreshes the visible blocks in one POST', async () => {
+  const { calls, queryClient } = renderWithProviders(
     <>
       <DataBlock text="tags=a" />
       <DataBlock text="tags=b" />
       <DataBlock text="tags=c" />
-      <Invalidator />
     </>,
     handler({ 'tags=a': [ent('A')], 'tags=b': [ent('B')], 'tags=c': [ent('C')] }),
+    { freshness: true },
   );
   await waitFor(() => expect(screen.getAllByTestId('qb-item')).toHaveLength(3));
   expect(batches(calls)).toHaveLength(1);
-  fireEvent.click(screen.getByRole('button', { name: 'запись в граф' }));
+  await act(async () =>
+    testFreshnessOf(queryClient).changes([{ kind: 'entity', rowKey: 'record' }]),
+  );
   await waitFor(() => expect(batches(calls)).toHaveLength(2));
   expect([...blockTexts(batches(calls)[1] as { input: unknown })].sort()).toEqual([
     'tags=a',

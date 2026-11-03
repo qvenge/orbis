@@ -1,11 +1,11 @@
 import { APP_ASPECT, SUPPLY_ASPECT, SUPPLY_KEY, SUPPLY_TEXT } from '@orbis/shared';
+import { useQueryClient } from '@tanstack/react-query';
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { useRef } from 'react';
 import { beforeEach, expect, test } from 'vitest';
-import { invalidateGraph } from '../../lib/invalidate';
 import { resetNavForTests, useNav } from '../../state/navigation';
+import { testFreshnessOf } from '../../test/freshness';
 import { type MockHandler, queryReply, renderWithProviders, wireEntity } from '../../test/harness';
-import { trpc } from '../../trpc';
 import { DropdownMenu } from '../../ui/DropdownMenu';
 import type { WireEntity } from '../entity-detail/record-host';
 import { shellRevertPlan } from '../supply/revert-shell';
@@ -44,13 +44,16 @@ beforeEach(() => resetNavForTests());
 function FrameMenu() {
   const menu = useFrameMenu();
   const anchor = useRef<HTMLButtonElement>(null);
-  const utils = trpc.useUtils();
+  const queryClient = useQueryClient();
   return (
     <>
       <button type="button" id="frame-trigger" ref={anchor}>
         Меню рамки
       </button>
-      <button type="button" onClick={() => invalidateGraph(utils)}>
+      <button
+        type="button"
+        onClick={() => testFreshnessOf(queryClient).changes([{ kind: 'entity', rowKey: B }])}
+      >
         Перечитать граф
       </button>
       <DropdownMenu
@@ -194,14 +197,14 @@ test('переключение рамки: позднее тело A не под
   ]);
 });
 
-test('invalidateGraph перечитывает single body key вместе с лёгким списком', async () => {
+test('graph feed перечитывает single body key вместе с лёгким списком', async () => {
   active(A);
   const row = pageApp();
   let body = BODY;
   const { calls } = renderWithProviders(
     <FrameMenu />,
     network([row], () => read({ ...row, body })),
-    { queries: { staleTime: 30_000 } },
+    { queries: { staleTime: 30_000 }, freshness: true },
   );
   expect(await screen.findByText('Как в поставке')).toBeInTheDocument();
   body = 'Владелец изменил текст.';

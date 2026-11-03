@@ -20,6 +20,20 @@ import { journalRefOf } from './features/undo/journal-ref';
 import { currentMutationEpoch, guardMutationEpoch } from './features/undo/mutation-epoch';
 import { isUndoEpoch, undoEpoch } from './features/undo/undo-epoch';
 import { pushUndoable } from './features/undo/undo-stack';
+import {
+  freshnessRuntimeOf,
+  type NetworkReadReceipt,
+  nextNetworkOrder,
+  recordNetworkReadReceipt,
+  recordReadErrorReceipt,
+} from './lib/freshness/provenance';
+
+export {
+  inheritNetworkReadReceipt,
+  type NetworkReadReceipt,
+  networkReadReceiptOf,
+  nextNetworkOrder,
+} from './lib/freshness/provenance';
 
 export const trpc = createTRPCReact<AppRouter>();
 
@@ -35,14 +49,21 @@ export function makeQueryClient(queries?: DefaultOptions['queries']): QueryClien
     },
   });
   guardMutationEpoch(mutationCache);
-  return new QueryClient({
+  const client: QueryClient = new QueryClient({
     mutationCache,
-    queryCache: makeBodyQueryCache(),
+    queryCache: makeBodyQueryCache(() => client),
     defaultOptions: {
-      queries: { retry: false, refetchOnWindowFocus: false, staleTime: 30_000, ...queries },
+      queries: {
+        retry: false,
+        refetchOnWindowFocus: false,
+        refetchOnReconnect: false,
+        staleTime: 30_000,
+        ...queries,
+      },
       mutations: { retry: false },
     },
   });
+  return client;
 }
 export const queryClient = makeQueryClient();
 
@@ -52,30 +73,6 @@ export function trpcHeaders(getToken: () => string | null): Record<string, strin
     ...(token ? { authorization: `Bearer ${token}` } : {}),
     [CLIENT_VERSION_HEADER]: APP_VERSION,
   };
-}
-
-/** One HTTP response's evidence for the raw result, captured before cache publication. */
-export type NetworkReadReceipt = Readonly<{
-  epoch: number;
-  watermark: string | null;
-  receivedAt: number;
-  startedSequence: number;
-}>;
-let networkOrder = 0;
-
-/** Tab-local ordering shared by request starts and confirmed mutation ACKs. */
-export function nextNetworkOrder(): number {
-  return ++networkOrder;
-}
-const networkReadReceipts = new WeakMap<object, NetworkReadReceipt>();
-
-export function networkReadReceiptOf(raw: unknown): NetworkReadReceipt | undefined {
-  if (typeof raw === 'object' && raw !== null) return networkReadReceipts.get(raw);
-}
-
-export function inheritNetworkReadReceipt(rawParent: unknown, constituent: object): void {
-  const receipt = networkReadReceiptOf(rawParent);
-  if (receipt) networkReadReceipts.set(constituent, receipt);
 }
 
 const networkReadReceiptLink: TRPCLink<AppRouter> =
@@ -97,15 +94,50 @@ const networkReadReceiptLink: TRPCLink<AppRouter> =
               startedSequence,
             };
             const raw = value.result.data;
-            if (typeof raw === 'object' && raw !== null) networkReadReceipts.set(raw, receipt);
+            recordNetworkReadReceipt(raw, receipt);
             if (typeof op.context.onNetworkReadReceipt === 'function') {
-              op.context.onNetworkReadReceipt(receipt);
+              op.context.onNetworkReadReceipt(receipt, raw);
             }
           }
+          if (isUndoEpoch(epoch)) observer.next(value);
+          else observer.error(TRPCClientError.from(new Error('Сессия изменилась')));
+        },
+        error: (error) => {
+          if (read) recordReadErrorReceipt(error, { epoch, startedSequence });
+          observer.error(error);
+        },
+        complete: () => observer.complete(),
+      });
+    });
+
+// Includes direct vanilla writes and rejected/uncertain outcomes. These procedures
+// use POST without being graph commands.
+const readPosts = new Set(['entity.blocks', 'import.analyze', 'import.review', 'perf.report']);
+
+const graphMutationLink: TRPCLink<AppRouter> =
+  () =>
+  ({ op, next }) =>
+    observable((observer) => {
+      const active = freshnessRuntimeOf(queryClient);
+      const isWrite =
+        op.type === 'mutation' && !readPosts.has(op.path) && !op.path.startsWith('oauth.');
+      let notified = false;
+      const settled = () => {
+        if (notified) return;
+        notified = true;
+        if (isWrite && active === freshnessRuntimeOf(queryClient)) active?.mutationSettled();
+      };
+      return next(op).subscribe({
+        next: (value) => {
+          // Unary callers unsubscribe from the observable on next.
+          settled();
           observer.next(value);
         },
-        error: (error) => observer.error(error),
         complete: () => observer.complete(),
+        error: (error) => {
+          settled();
+          observer.error(error);
+        },
       });
     });
 
@@ -144,7 +176,7 @@ export function authErrorLink(handlers: {
               : err instanceof TRPCClientError
                 ? err.data?.code
                 : undefined;
-            if (code === 'PRECONDITION_FAILED') handlers.onOutdated();
+            if (code === 'PRECONDITION_FAILED' && isUndoEpoch(epoch)) handlers.onOutdated();
             else if (code === 'UNAUTHORIZED' && !freshness && isUndoEpoch(epoch))
               handlers.onUnauthorized();
             observer.error(err);
@@ -211,6 +243,7 @@ export function orbisLinks(getToken: () => string | null): TRPCLink<AppRouter>[]
   });
   return [
     authErrorLink({ onOutdated: emitClientOutdated, onUnauthorized: emitUnauthorized }),
+    graphMutationLink,
     networkReadReceiptLink,
     splitLink({
       condition: (op) => op.type === 'subscription',

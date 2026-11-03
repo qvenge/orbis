@@ -10,7 +10,6 @@ import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { ChunkErrorBoundary } from '../../app/ChunkErrorBoundary';
-import { invalidateGraph } from '../../lib/invalidate';
 import { noteRegistryVersion, resetRegistryVersionForTests } from '../../lib/registry/useRegistry';
 import { installCrashTrap, renderWithProviders, wireEntity } from '../../test/harness';
 import { navAt } from '../../test/nav';
@@ -77,7 +76,7 @@ function Screen() {
       <button type="button" data-testid="revisit" onClick={() => setVisit((v) => v + 1)}>
         снова
       </button>
-      <button type="button" data-testid="refetch" onClick={() => invalidateGraph(utils)}>
+      <button type="button" data-testid="refetch" onClick={() => void utils.entity.get.refetch()}>
         перечитать
       </button>
       <ChunkErrorBoundary resetKey={`entity-${visit}`}>

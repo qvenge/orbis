@@ -7,6 +7,7 @@ import type { ReactNode } from 'react';
 import { afterEach, beforeEach, expect, test } from 'vitest';
 import { buildQueryRegistry } from '../../lib/query-blocks/catalog';
 import { useRetryBuffer } from '../../state/retry';
+import { makeTestFreshness } from '../../test/freshness';
 import {
   mockEntityUpdateResult,
   mockLink,
@@ -16,6 +17,7 @@ import {
 } from '../../test/harness';
 import { BUILTIN_REGISTRY } from '../../test/registry';
 import { trpc } from '../../trpc';
+import { localMessagesOf, projectLocalMessages } from './local-messages';
 import { type ChatMessage, chatThreadKey, useChatThread } from './useChatThread';
 import { useFastPath } from './useFastPath';
 
@@ -26,7 +28,7 @@ const RULES_QUERY = { query: 'aspect=orbis/memory, orbis/memory_kind=rule' };
 
 function threadMsgs(qc: QueryClient): ChatMessage[] {
   const data = qc.getQueryData(chatThreadKey('t1')) as { pages: ChatMessage[][] } | undefined;
-  return (data?.pages ?? []).flat();
+  return projectLocalMessages((data?.pages ?? []).flat(), localMessagesOf(qc).snapshot('t1'));
 }
 function hasErrorCard(m: ChatMessage): boolean {
   const cards = (m.metadata as { cards?: { kind: string }[] })?.cards ?? [];
@@ -324,12 +326,16 @@ test('успешный fast-path create инвалидирует budget-кэш (
     return handlerBase(path, input);
   });
   const envInput = { categoryId: 'cat-food', date: '2026-07-13' };
+  const feed = makeTestFreshness(qc);
   const envKey = getQueryKey(trpc.budget.envelopeForCategory, envInput, 'query');
   qc.setQueryData(envKey, null); // тёплый кэш «до записи»
   const { result } = renderHook(() => useFastPath('t1'), { wrapper: Wrap });
   await act(async () => {
     await result.current.submit('обед 340');
   });
+  await act(async () =>
+    feed.changes([{ kind: 'entity', rowKey: 'purchase', operation: 'insert' }]),
+  );
   await waitFor(() => expect(qc.getQueryState(envKey)?.isInvalidated).toBe(true));
 });
 
@@ -347,6 +353,7 @@ test('CONFLICT → повтор со свежим id, и budget-кэш инва�
     }
     return handlerBase(path, input);
   });
+  const feed = makeTestFreshness(qc);
   const envKey = getQueryKey(
     trpc.budget.envelopeForCategory,
     { categoryId: 'cat-food', date: '2026-07-13' },
@@ -357,6 +364,9 @@ test('CONFLICT → повтор со свежим id, и budget-кэш инва�
   await act(async () => {
     await result.current.submit('обед 340');
   });
+  await act(async () =>
+    feed.changes([{ kind: 'entity', rowKey: 'purchase', operation: 'insert' }]),
+  );
   await waitFor(() => expect(qc.getQueryState(envKey)?.isInvalidated).toBe(true));
 });
 

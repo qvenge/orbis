@@ -167,10 +167,23 @@ describe('INTENDED_1B + поля плана = экран через запись
     test(f.name, async () => {
       const got = await captureDetail(f);
       expect(got.structure).toEqual(intendedPlanning(structures[f.name] as DetailStructure));
-      expect(got.requests).toEqual(INTENDED_1B_REQUESTS(requests[f.name] ?? {}));
+      expect(got.requests).toEqual(intendedFreshnessRequests(f.name, requests[f.name] ?? {}));
     });
   }
 });
+
+// Historical 1а/1б goldens stay as baselines. The hidden Details tab no longer
+// reads the budget category options or the relation endpoint titles on first frame.
+function intendedFreshnessRequests(name: string, baseline: Record<string, number>) {
+  const requests = INTENDED_1B_REQUESTS(baseline);
+  if (name === 'budget')
+    return { ...requests, 'entity.query': (requests['entity.query'] ?? 0) - 1 };
+  if (name === 'with-relations') {
+    const { 'entity.resolveRefs': _relations, ...visible } = requests;
+    return { ...visible, 'entity.get': (visible['entity.get'] ?? 0) - 1 };
+  }
+  return requests;
+}
 
 /** Части строки заголовка — первое, что шаблон хоста ставит над вкладками (`{{title}}`). */
 const TITLE_PARTS: ReadonlySet<string> = new Set(['emoji', 'native-row', 'native-memory']);
@@ -209,7 +222,7 @@ for (const { variant, expected } of VARIANTS) {
       test(f.name, async () => {
         const got = await captureDetail(f, undefined, { hostTemplate: variant });
         expect(got.structure).toEqual(expected(structures[f.name] as DetailStructure));
-        expect(got.requests).toEqual(INTENDED_1B_REQUESTS(requests[f.name] ?? {}));
+        expect(got.requests).toEqual(intendedFreshnessRequests(f.name, requests[f.name] ?? {}));
       });
     }
   });

@@ -96,15 +96,17 @@ export function DisputePlaque({
     if (!written) {
       // Отказ: экран и плашка — как до жеста.
       rollback();
+      // The selection may have failed because its template changed elsewhere.
+      void utils.entity.query
+        .fetch({ query: PAGE_TEMPLATES_QUERY }, { staleTime: 0 })
+        .catch(() => {});
       setPending(false);
       return;
     }
-    // Плашка закрывается после перечитывания: до него кнопки заперты, второе нажатие дало бы
-    // вторую пачку. `cancelRefetch: false` — ждать перечитывание, уже начатое пачкой
-    // (`invalidateGraph`), а не гасить его и слать второе.
-    await utils.entity.query.invalidate({ query: PAGE_TEMPLATES_QUERY }, undefined, {
-      cancelRefetch: false,
-    });
+    // Refresh this command's result before dismissing the placement chooser.
+    await utils.entity.query
+      .fetch({ query: PAGE_TEMPLATES_QUERY }, { staleTime: 0 })
+      .catch(() => {});
     setPending(false);
     setClosed(true);
   }

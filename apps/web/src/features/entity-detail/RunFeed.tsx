@@ -9,7 +9,6 @@ import { useId, useState } from 'react';
 import { useOpenRecord } from '../../app/useOpenRecord';
 import { EntityRef } from '../../lib/entity-ref/EntityRef';
 import { formatDate } from '../../lib/format';
-import { invalidateGraph } from '../../lib/invalidate';
 import { Markdown } from '../../lib/markdown/Markdown';
 import { type RouterOutputs, trpc } from '../../trpc';
 import { Badge } from '../../ui/Badge';
@@ -162,7 +161,6 @@ export function RunFeed({ entity }: { entity: Entity }) {
   // Предпросмотр шаблона (хост `readOnly`): лента прогона видна целиком, отката и карточки
   // предложения с «Принять»/«Отклонить» нет — вместо карточки её проза (отчёт).
   const readOnly = useHostReadOnly();
-  const utils = trpc.useUtils();
   const [confirm, setConfirm] = useState(false);
   const cancelId = useId();
   const tz = trpc.user.getSettings.useQuery().data?.timezone;
@@ -205,13 +203,7 @@ export function RunFeed({ entity }: { entity: Entity }) {
     grant?.label ?? (grantId === undefined ? undefined : `${grantId.slice(0, 8)}…`);
 
   const rollback = trpc.agentRun.rollback.useMutation({
-    onSuccess: (result) => {
-      setConfirm(false);
-      // Конфликт не тронул граф ВОВСЕ (инвариант 7) — перечитывать нечего. `ok` и `partial`
-      // двигают и тикет (вернулся в очередь), и сам прогон (архивирован inverse'ом создания),
-      // и видно это на соседних экранах — инвалидация та же полная, что у любой правки (Р17).
-      if (result.ok || result.reason === 'partial') invalidateGraph(utils);
-    },
+    onSuccess: () => setConfirm(false),
     // Сеть или отказ процедуры: модалку закрываем, отказ показываем строкой ниже — открытый
     // диалог поверх сообщения об ошибке читался бы как «нажми ещё раз».
     onError: () => setConfirm(false),

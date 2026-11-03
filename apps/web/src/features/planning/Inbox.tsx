@@ -1,4 +1,5 @@
 import { useRef, useState } from 'react';
+import { useFreshnessVisible } from '../../lib/freshness/screen';
 import { useRegistry } from '../../lib/registry/useRegistry';
 import { trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
@@ -21,12 +22,13 @@ export function Inbox({ onOpen }: { onOpen: (id: string) => void }) {
   const locked = useRef(false);
   const registry = useRegistry();
   const run = useUpdateBatch();
+  const shown = useFreshnessVisible();
   const q = trpc.entity.query.useQuery(
     {
       ast: inboxQuery(registry.data?.aspects.map((a) => a.id) ?? [], tab, limit + 1),
       fields: 'full',
     },
-    { enabled: !!registry.data },
+    { enabled: shown && !!registry.data },
   );
   const rows = (q.data?.rows ?? []).slice(0, limit).filter((r) => classifyInbox(r) === tab);
   async function triage(

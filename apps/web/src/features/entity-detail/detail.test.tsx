@@ -2,6 +2,7 @@ import { DAILY_PLANNING_BODY } from '@orbis/server/src/seed/smart-lists';
 import {
   type BlockResult,
   bodyDraftNoteId,
+  type Change,
   type EntityBlocksResult,
   PAGE_ASPECT,
 } from '@orbis/shared';
@@ -10,12 +11,14 @@ import { parsePageText } from '@orbis/shared/doc/page-grammar';
 import { onlineManager } from '@tanstack/react-query';
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { getQueryKey } from '@trpc/react-query';
 import { useEffect, useState } from 'react';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { AuthProvider } from '../../auth/AuthProvider';
 import { auth, useSession } from '../../auth/supabase';
 import { useRegistry } from '../../lib/registry/useRegistry';
 import { useNav } from '../../state/navigation';
+import { makeTestFreshness, testFreshnessOf } from '../../test/freshness';
 import {
   BLOCKS_TIME_ZONE,
   BLOCKS_TODAY,
@@ -39,6 +42,7 @@ import { Toaster } from '../../ui/Toast';
 import { useChatThread } from '../chat/useChatThread';
 import { resetEnsuredThreads } from '../chat/useEnsuredThread';
 import { readDraft, setDraftScope } from '../entity-editor/draft-storage';
+import { isUndoEpoch, undoEpoch } from '../undo/undo-epoch';
 import { AspectSections } from './AspectSection';
 import { BODY_SAVING } from './body-gate';
 import { resetDetailMenuModuleForTests } from './DetailMenuSlot';
@@ -46,6 +50,118 @@ import { DetailScreen } from './DetailScreen';
 import { RoutineStatusBlock } from './RoutineStatusBlock';
 import { Subtasks } from './Subtasks';
 import { detailGetInput } from './useEntityDetail';
+
+/**
+ * The detail fixtures below model a server commit through the feed, just as their
+ * mocked read handlers model the resulting snapshot. No cache invalidations live here.
+ */
+function renderWithDetailFeed(
+  ui: Parameters<typeof renderWithProviders>[0],
+  handler: MockHandler,
+  opts: Parameters<typeof renderWithProviders>[2] = {},
+) {
+  type Event = Partial<Change> & Pick<Change, 'kind' | 'rowKey'>;
+  let detailId = 'e1';
+  let threadId: string | undefined;
+  const inputFields = (value: unknown) => (value ?? {}) as Record<string, unknown>;
+  const emit = (epoch: number, changes: Event[]) => {
+    if (!changes.length || !isUndoEpoch(epoch)) return;
+    const feed = testFreshnessOf(rendered.queryClient);
+    if (feed.scope.epoch !== epoch) return;
+    // Fixture autosave receipts and fixture foreign changes deliberately use different xid.
+    feed.changes(changes, Number(feed.watermark()) + 100);
+  };
+  const rendered = renderWithProviders(
+    ui,
+    (path, input, type) => {
+      const params = inputFields(input);
+      const id = typeof params.id === 'string' ? params.id : detailId;
+      const epoch = undoEpoch();
+      if (
+        path === 'entity.get' &&
+        Array.isArray(params.include) &&
+        params.include.includes('bodyDoc')
+      )
+        detailId = id;
+      if (path === 'chat.listMessages' && typeof params.threadId === 'string')
+        threadId = params.threadId;
+      function committed(value: unknown) {
+        const result = inputFields(value);
+        const changes: Event[] = [];
+        const entity = (rowKey: string, scope: 'body' | 'other' = 'other') =>
+          changes.push({ kind: 'entity', rowKey, scope });
+        if (path === 'entity.update') entity(id, params.bodyDoc === undefined ? 'other' : 'body');
+        if (path === 'entity.create' && typeof result.id === 'string') {
+          entity(result.id);
+          const parent = inputFields(params.link).parentId;
+          if (typeof parent === 'string')
+            changes.push({
+              kind: 'relation',
+              rowKey: 'created-edge',
+              entityIds: [parent, result.id],
+              operation: 'insert',
+            });
+        }
+        if (path === 'version.pin' && typeof params.entityId === 'string')
+          changes.push({
+            kind: 'version',
+            rowKey: 'pinned',
+            entityIds: [params.entityId],
+            operation: 'insert',
+          });
+        if (path === 'version.restore' && typeof result.id === 'string') {
+          entity(result.id, 'body');
+          changes.push({
+            kind: 'version',
+            rowKey: 'before-restore',
+            entityIds: [result.id],
+            operation: 'insert',
+          });
+        }
+        if (
+          path === 'agentRun.answerCheckpoint' ||
+          (path === 'agentRun.rollback' && (result.ok || result.reason === 'partial')) ||
+          (path === 'agentRun.sweep' && Number(result.swept) > 0)
+        ) {
+          entity(typeof params.ticketId === 'string' ? params.ticketId : detailId);
+          if (typeof params.runId === 'string') entity(params.runId);
+        }
+        if (path === 'ai.undo' && result.undone) {
+          const revisions = Array.isArray(result.bodyRevisions) ? result.bodyRevisions : [];
+          for (const revision of revisions)
+            if (typeof revision.entityId === 'string') entity(revision.entityId, 'body');
+          if (!changes.length) entity(detailId);
+        }
+        if (
+          path === 'routine.decideProposal' &&
+          ['applied', 'rejected', 'stale'].includes(String(result.status))
+        ) {
+          if (typeof params.runId === 'string') entity(params.runId);
+          if (threadId)
+            changes.push({ kind: 'message', rowKey: 'decision', threadId, operation: 'insert' });
+        }
+        emit(epoch, changes);
+        return value;
+      }
+      function rejected(error: unknown): never {
+        if (
+          path === 'entity.update' &&
+          (error as { data?: { code?: string } })?.data?.code === 'CONFLICT'
+        )
+          emit(epoch, [{ kind: 'entity', rowKey: id }]);
+        throw error;
+      }
+      if (type !== 'mutation') return handler(path, input, type);
+      try {
+        return Promise.resolve(handler(path, input, type)).then(committed, rejected);
+      } catch (error) {
+        return rejected(error);
+      }
+    },
+    { ...opts, freshness: true },
+  );
+  return rendered;
+}
 
 // Сессия — стабом: экран записи сам сессию не читает, а сюжеты «412 и 401 посреди набора» ниже монтируют НАСТОЯЩИЙ
 // AuthProvider (экран «Обновить», выход по 401, скоуп черновиков) — без сети Supabase.
@@ -329,7 +445,7 @@ test('снятие галочки: пока правка летит, чекбо�
 test('нетронутый редактор подхватывает правку тела, приехавшую с сервера', async () => {
   let getCalls = 0;
   const outside = { ...entity, body: 'извне', bodyDoc: parseBody('извне'), updatedAt: 'B' };
-  renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
+  renderWithDetailFeed(<DetailScreen entityId="e1" />, (path) => {
     if (path === 'entity.get') {
       getCalls += 1;
       return {
@@ -366,7 +482,7 @@ test('редактор посадил чужую правку тела — на�
     updatedAt: 'B',
   };
   const updates: Array<{ bodyDoc?: unknown; expectedBodyRevision?: number }> = [];
-  renderWithProviders(<DetailScreen entityId="e1" />, (path, input) => {
+  renderWithDetailFeed(<DetailScreen entityId="e1" />, (path, input) => {
     if (path === 'entity.get') {
       getCalls += 1;
       return {
@@ -414,7 +530,7 @@ test('набранное в редакторе переживает чужую �
     bodyDoc: parseBody('извне'),
     updatedAt: 'B',
   };
-  renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
+  renderWithDetailFeed(<DetailScreen entityId="e1" />, (path) => {
     if (path === 'entity.get') {
       getCalls += 1;
       return {
@@ -490,7 +606,7 @@ test('409 правки тела: откат кэша к прежнему body + 
 
 test('подзадачи: подпункт рождается ЗАДАЧЕЙ; список из entity.get; рефетч того же ключа, без relation.listFor', async () => {
   let childId: string | null = null;
-  const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, (path, input) => {
+  const { calls } = renderWithDetailFeed(<DetailScreen entityId="e1" />, (path, input) => {
     if (path === 'entity.get') {
       const { id } = input as { id: string };
       // Титул подзадачи дочитывает EntityRef отдельным entity.get без include.
@@ -521,10 +637,10 @@ test('подзадачи: подпункт рождается ЗАДАЧЕЙ; с
     }
     return registryReply(path) ?? {};
   });
-  await screen.findByRole('heading', { name: 'Задача' }); // экран отрисован; тело здесь ни при чём
+  await openDetails();
   expect(screen.queryByTestId('subtask')).toBeNull();
 
-  const field = screen.getByLabelText('Новая подзадача');
+  const field = await screen.findByLabelText('Новая подзадача');
   fireEvent.change(field, { target: { value: 'Купить молоко' } });
   fireEvent.keyDown(field, { key: 'Enter' });
 
@@ -570,7 +686,7 @@ function ListProbe() {
 }
 
 test('создание подзадачи инвалидирует entity.query (списки перечитываются)', async () => {
-  const { calls } = renderWithProviders(
+  const { calls } = renderWithDetailFeed(
     <>
       <DetailScreen entityId="e1" />
       <ListProbe />
@@ -589,7 +705,7 @@ test('создание подзадачи инвалидирует entity.query 
       return registryReply(path) ?? {};
     },
   );
-  await screen.findByRole('heading', { name: 'Задача' }); // экран отрисован; тело здесь ни при чём
+  await openDetails();
   const probes = () =>
     calls.filter(
       (c) =>
@@ -727,7 +843,7 @@ function externalTitleChange(): { handler: MockHandler; getCalls: () => number }
 
 test('незакоммиченный ввод в заголовок переживает внешнее изменение', async () => {
   const { handler, getCalls } = externalTitleChange();
-  renderWithProviders(<DetailScreen entityId="e1" />, handler);
+  renderWithDetailFeed(<DetailScreen entityId="e1" />, handler);
   const field = await screen.findByLabelText('Заголовок');
   // Печатаем, но НЕ сохраняем (blur не было)
   fireEvent.change(field, { target: { value: 'кофе → Тра' } });
@@ -739,7 +855,7 @@ test('незакоммиченный ввод в заголовок пережи
 
 test('нетронутый заголовок подхватывает переименование с сервера', async () => {
   const { handler } = externalTitleChange();
-  renderWithProviders(<DetailScreen entityId="e1" />, handler);
+  renderWithDetailFeed(<DetailScreen entityId="e1" />, handler);
   expect(await screen.findByLabelText('Заголовок')).toHaveValue('Задача');
 
   fireEvent.click(screen.getByRole('checkbox', { name: /готово/i }));
@@ -750,7 +866,7 @@ test('нетронутый заголовок подхватывает пере�
 
 test('отказ замка заголовка сохраняет ввод; рефокус не обходит замок; «Обновить» задаёт новую основу', async () => {
   let current = entity;
-  const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, (path, input) => {
+  const { calls } = renderWithDetailFeed(<DetailScreen entityId="e1" />, (path, input) => {
     if (path === 'entity.get')
       return { entity: current, relations: [], thread: { threadId: 'th1', messages: [] } };
     if (path === 'entity.update') {
@@ -778,6 +894,7 @@ test('отказ замка заголовка сохраняет ввод; ре
   await screen.findByText('Заголовок изменён в другом месте — обновите');
   expect(field).toHaveValue('Набранное');
   expect(screen.queryByText('Изменено в другом месте')).not.toBeInTheDocument();
+  await waitFor(() => expect(calls.filter((c) => c.path === 'entity.get')).toHaveLength(2));
   fireEvent.focus(field);
   fireEvent.change(field, { target: { value: 'Набранное ещё' } });
   fireEvent.blur(field);
@@ -810,7 +927,7 @@ test('отказ замка заголовка сохраняет ввод; ре
 });
 
 test('отказ тела 409 при сохранении заголовка не зажигает баннер заголовка', async () => {
-  const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
+  const { calls } = renderWithDetailFeed(<DetailScreen entityId="e1" />, (path) => {
     if (path === 'entity.get')
       return { entity, relations: [], thread: { threadId: 'th1', messages: [] } };
     if (path === 'entity.update') throw staleBodyError();
@@ -850,7 +967,7 @@ test('позднее обновление заголовка прежней за
     relations: [],
     thread: null,
   });
-  renderWithProviders(<Host />, (path, input) => {
+  renderWithDetailFeed(<Host />, (path, input) => {
     const id = (input as { id?: string })?.id;
     if (path === 'entity.get') {
       if (id === 'e1' && ++firstReads > 2) return pending;
@@ -924,7 +1041,7 @@ test.each([
       </output>
     );
   }
-  const { calls } = renderWithProviders(
+  const { calls } = renderWithDetailFeed(
     <>
       <DetailScreen entityId="e1" />
       <TitleProbe />
@@ -993,7 +1110,7 @@ test('принятое обновление одного клиента не с�
       code: 'CONFLICT',
       details: { reason: 'precondition_failed', mismatches: [{ property: 'orbis/title' }] },
     });
-  const first = renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
+  const first = renderWithDetailFeed(<DetailScreen entityId="e1" />, (path) => {
     if (path === 'entity.get') return { entity: initial, relations: [], thread: null };
     if (path === 'entity.update') throw stale();
     return registryReply(path) ?? {};
@@ -1008,7 +1125,7 @@ test('принятое обновление одного клиента не с�
   const pendingSave = new Promise<never>((_, reject) => {
     rejectSave = reject;
   });
-  const second = renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
+  const second = renderWithDetailFeed(<DetailScreen entityId="e1" />, (path) => {
     if (path === 'entity.get') return { entity: initial, relations: [], thread: null };
     if (path === 'entity.update') return mockEntityUpdateResult(pendingSave);
     return registryReply(path) ?? {};
@@ -1061,7 +1178,7 @@ test('принятое обновление после холодного пер
       </>
     );
   }
-  renderWithProviders(<Host />, (path, input) => {
+  renderWithDetailFeed(<Host />, (path, input) => {
     if (path === 'entity.get') {
       if ((input as { id: string }).id === 'e2') return pendingNeighbor;
       reads += 1;
@@ -1154,7 +1271,7 @@ test.each([
     relations: [],
     thread: null,
   });
-  const { calls } = renderWithProviders(<Host />, (path, input) => {
+  const { calls } = renderWithDetailFeed(<Host />, (path, input) => {
     const id = (input as { id?: string })?.id;
     if (path === 'entity.get') {
       if (id === 'e1' && ++reads > 2) return pending;
@@ -1249,7 +1366,7 @@ test('поле свойства подхватывает внешнее изме
 
 test('незакоммиченный ввод в поле свойства переживает внешнее изменение', async () => {
   const { handler, getCalls } = externalStatusChange();
-  renderWithProviders(<DetailScreen entityId="e1" />, handler);
+  renderWithDetailFeed(<DetailScreen entityId="e1" />, handler);
   // Проба идёт по ТЕКСТОВОМУ свойству: черновик живёт только у контрола со свободным вводом
   // (`select` берёт значение прямо из props и черновика не держит вовсе).
   const field = await screen.findByLabelText('Ждём');
@@ -1390,7 +1507,7 @@ test('financial: рефетч списка упал, но список уже е
     ...finEntity,
     props: { ...finEntity.props, 'orbis/finance_category': 'gone' },
   };
-  renderWithProviders(<DetailScreen entityId="e1" />, (path, input) => {
+  renderWithDetailFeed(<DetailScreen entityId="e1" />, (path, input) => {
     if (path === 'entity.get')
       return { entity: orphan, relations: [], thread: { threadId: 'th1', messages: [] } };
     // Списки экрана записи (шаблоны, записи поставки) — не список категорий: счёт ниже — только категорий.
@@ -1531,7 +1648,7 @@ test('правка Финансов гасит агрегаты, даже есл
   const pending = new Promise<Partial<RouterOutputs['entity']['update']>>((resolve) => {
     settle = resolve;
   });
-  const { calls } = renderWithProviders(<CardsUntilHidden entity={taskedFin} />, (path) => {
+  const { calls } = renderWithDetailFeed(<CardsUntilHidden entity={taskedFin} />, (path) => {
     if (path === 'budget.alertCount') return 0;
     if (path === 'entity.query') return queryReply([category(CAT_FOOD, 'Еда')]);
     if (path === 'entity.update') return mockEntityUpdateResult(pending);
@@ -1576,7 +1693,7 @@ test('снятие аспекта Финансов гасит агрегаты, 
   const pending = new Promise<Partial<RouterOutputs['entity']['update']>>((resolve) => {
     settle = resolve;
   });
-  const { calls } = renderWithProviders(<CardsUntilHidden entity={taskedFin} />, (path) => {
+  const { calls } = renderWithDetailFeed(<CardsUntilHidden entity={taskedFin} />, (path) => {
     if (path === 'budget.alertCount') return 0;
     if (path === 'entity.query') return queryReply([category(CAT_FOOD, 'Еда')]);
     if (path === 'entity.update') return mockEntityUpdateResult(pending);
@@ -1605,8 +1722,8 @@ test('снятие аспекта Финансов гасит агрегаты, 
   await waitFor(() => expect(budgetReads()).toBeGreaterThan(1));
 });
 
-test('правка суммы (стандартное свойство ядра в слоте «движения денег») гасит бюджетные агрегаты, правка свойства вне денежных слотов — нет', async () => {
-  const { calls } = renderWithProviders(
+test('правка суммы (стандартное свойство ядра в слоте «движения денег») и статус меняют граф, поэтому бюджетные агрегаты перечитываются', async () => {
+  const { calls } = renderWithDetailFeed(
     <>
       <BudgetProbe />
       <AspectSections entity={taskedFin} exclude={NO_EXCLUDED} />
@@ -1621,29 +1738,17 @@ test('правка суммы (стандартное свойство ядра 
   const budgetReads = () => calls.filter((c) => c.path === 'budget.alertCount').length;
   await waitFor(() => expect(budgetReads()).toBe(1));
 
-  // (а) свойство вне слотов денежных контрактов (`orbis/task_status`): граф протух, бюджет — нет.
   const graphReads = () => calls.filter((c) => c.path === 'entity.query').length;
-  // Список категорий пикера — единственное чтение графа в этой пробе; дожидаемся его, иначе
-  // «стало два» ниже могло бы засчитать сам первый запрос.
   await waitFor(() => expect(graphReads()).toBe(1));
   const status = await screen.findByLabelText('Состояние задачи');
   fireEvent.change(status, { target: { value: 'done' } });
-  /**
-   * Ждём НАБЛЮДАЕМОГО СЛЕДА оседания, а не стенных часов: `onSettled` мутации зовёт
-   * `invalidateGraph`, тот гасит `entity.query`, и живой запрос категорий перечитывается
-   * вторым вызовом. Выдержка `setTimeout` на её месте давала ЛОЖНУЮ ЗЕЛЕНЬ: с медленным
-   * ответом сервера (замерено на 200 мс) проверка ниже успевала пройти до того, как колбэк
-   * вообще случился, — то есть тест был зелен и при «инвалидировать всегда».
-   */
   await waitFor(() => expect(graphReads()).toBe(2));
-  expect(budgetReads()).toBe(1);
+  await waitFor(() => expect(budgetReads()).toBe(2));
 
-  // (б) сумма — `module: null` с 1б, но связана слотом `amount` «движения денег»: агрегаты
-  // обязаны перечитаться.
   const amount = screen.getByLabelText('Сумма');
   fireEvent.change(amount, { target: { value: '420.00' } });
   fireEvent.blur(amount);
-  await waitFor(() => expect(budgetReads()).toBeGreaterThan(1));
+  await waitFor(() => expect(budgetReads()).toBeGreaterThan(2));
 });
 
 // --- query-блоки body (02-core-os §3.4) ------------------------------------------------
@@ -2265,7 +2370,7 @@ test('409 правки тела не гаснет от успеха чекбок
   // само, а расхождение осталось бы.
   seedDraft(parseBody('правка тела'), STALE_REVISION);
   const seen: unknown[] = [];
-  const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, bodyConflictHandler(seen));
+  const { calls } = renderWithDetailFeed(<DetailScreen entityId="e1" />, bodyConflictHandler(seen));
 
   fireEvent.click(await screen.findByRole('button', { name: 'Оставить моё' }));
   await screen.findByText(/Изменено в другом месте — обновите/);
@@ -2289,7 +2394,7 @@ test('409 правки тела не гаснет от переименован�
   // расхождении ушло бы с экрана.
   seedDraft(parseBody('правка тела'), STALE_REVISION);
   const seen: unknown[] = [];
-  const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, bodyConflictHandler(seen));
+  const { calls } = renderWithDetailFeed(<DetailScreen entityId="e1" />, bodyConflictHandler(seen));
 
   fireEvent.click(await screen.findByRole('button', { name: 'Оставить моё' }));
   await screen.findByText(/Изменено в другом месте — обновите/);
@@ -3108,7 +3213,7 @@ test('ничего не трогали: приехавшее тело не за�
     updatedAt: 'B',
   };
   const serve = { outside: false };
-  renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
+  renderWithDetailFeed(<DetailScreen entityId="e1" />, (path) => {
     if (path === 'entity.get')
       return { entity: serve.outside ? outside : entity, relations: [], thread: null };
     if (path === 'entity.update') return mockEntityUpdateResult(entity);
@@ -3217,7 +3322,7 @@ test('выход из разметки сажает набранное ПОСЛ�
   // Снимок серверного тела берётся на ВХОДЕ в разметку, а не замирает на монтировании. Разница
   // видна без всяких часов — по причинному факту «круг сохранения завершился»: после него
   // тело в кэше уже другое, чем было при монтировании (ре-ревью раунда 5).
-  const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, bodyHandler('тело'));
+  const { calls } = renderWithDetailFeed(<DetailScreen entityId="e1" />, bodyHandler('тело'));
   const field = await editorField();
   await userEvent.click(field);
   await userEvent.type(field, ' раз');
@@ -3745,7 +3850,7 @@ function TwoTickets() {
 
 describe('ADE: тикет', () => {
   test('таб «Запись»: виден вопрос чекпойнта и кнопка; ввод ответа → agentRun.answerCheckpoint с ticketId/runId/answer (приёмка 7–8)', async () => {
-    const { calls } = renderWithProviders(<DetailScreen entityId="t1" />, adeHandler());
+    const { calls } = renderWithDetailFeed(<DetailScreen entityId="t1" />, adeHandler());
     const panel = await screen.findByRole('tabpanel', { name: 'Запись' });
     expect(await within(panel).findByText('Какую БД брать?')).toBeInTheDocument();
     // Заголовок — по исходу последнего прогона: у checkpoint это вопрос, а не итог.
@@ -3985,7 +4090,7 @@ describe('ADE: тикет', () => {
     // Экран тикета открывают часто, а брошенный прогон — событие редкое: инвалидация на
     // каждом открытии стоила бы второго entity.get с телом и bodyDoc (самый тяжёлый запрос
     // экрана) ради ответа «ничего не подмели».
-    const idle = renderWithProviders(<DetailScreen entityId="t1" />, adeHandler());
+    const idle = renderWithDetailFeed(<DetailScreen entityId="t1" />, adeHandler());
     await screen.findByRole('tabpanel', { name: 'Запись' });
     await waitFor(() =>
       expect(idle.calls.filter((c) => c.path === 'agentRun.sweep')).toHaveLength(1),
@@ -3998,7 +4103,7 @@ describe('ADE: тикет', () => {
     idle.unmount();
 
     // …и это не «экран разучился перечитывать»: подмели хоть один прогон — граф протух
-    const swept = renderWithProviders(<DetailScreen entityId="t1" />, (path, input) => {
+    const swept = renderWithDetailFeed(<DetailScreen entityId="t1" />, (path, input) => {
       if (path === 'agentRun.sweep') return { swept: 1 };
       return adeHandler()(path, input);
     });
@@ -4150,7 +4255,10 @@ describe('ADE: тикет', () => {
     // Прогон не попадает в подзадачи НИ НА ОДНОМ кадре: роль известна из самой связи, и
     // дочитывать запись ребёнка, чтобы это выяснить, больше не нужно.
     await waitFor(() => expect(within(details).getAllByTestId('subtask')).toHaveLength(1));
-    expect(within(details).getByTestId('subtask')).toHaveTextContent('Написать тест');
+    await openDetails();
+    await waitFor(() =>
+      expect(within(details).getByTestId('subtask')).toHaveTextContent('Написать тест'),
+    );
     expect(within(details).getByText('Подзадачи (1)')).toBeInTheDocument();
     // …и при этом он на месте в своей секции — истории прогонов карточки назначения на «Записи»
     // (§8.2 (3)): отсев не «потерял прогон».
@@ -4195,7 +4303,10 @@ describe('ADE: тикет', () => {
     });
     const details = await screen.findByRole('tabpanel', { name: 'Детали' });
     await waitFor(() => expect(within(details).getAllByTestId('subtask')).toHaveLength(1));
-    expect(within(details).getByTestId('subtask')).toHaveTextContent('Починить парсер');
+    await openDetails();
+    await waitFor(() =>
+      expect(within(details).getByTestId('subtask')).toHaveTextContent('Починить парсер'),
+    );
   });
 });
 
@@ -4362,7 +4473,7 @@ describe('ADE: прогон', () => {
   });
 
   test('откат: подтверждение → agentRun.rollback({runId}); на экране записка сервера и число откаченных', async () => {
-    const { calls } = renderWithProviders(<DetailScreen entityId="r1" />, runHandler());
+    const { calls } = renderWithDetailFeed(<DetailScreen entityId="r1" />, runHandler());
     const feed = await screen.findByTestId('run-feed');
     await userEvent.click(within(feed).getByRole('button', { name: 'Откатить прогон в Orbis' }));
     // Подтверждение — модалкой из ui/, а не window.confirm: жест необратим, и спрашивать о
@@ -4673,7 +4784,7 @@ const versionReads = (calls: { path: string; input: unknown }[], entityId: strin
 
 describe('ADE: версии', () => {
   test('меню ⋮ → «Закрепить версию»: диалог с подписью → version.pin({entityId,label}), список версий протухает', async () => {
-    const { calls } = renderWithProviders(
+    const { calls } = renderWithDetailFeed(
       <>
         <DetailScreen entityId="e1" />
         <Toaster />
@@ -4741,7 +4852,7 @@ describe('ADE: версии', () => {
   });
 
   test('«Восстановить» → подтверждение → version.restore({versionId, expectedBodyRevision}) и перечитывание графа', async () => {
-    const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, versionsHandler());
+    const { calls } = renderWithDetailFeed(<DetailScreen entityId="e1" />, versionsHandler());
     await openDetails();
     await waitFor(() =>
       expect(within(screen.getByTestId('versions-card')).getAllByRole('listitem')).toHaveLength(2),
@@ -5208,7 +5319,7 @@ describe('V1: рутина', () => {
       props: { ...ROUTINE.props, 'orbis/routine_stage': 'paused' },
     } as RoutineFixture;
     const base = routineHandler({ entity: paused });
-    const { calls } = renderWithProviders(<BlockUntilHidden entity={paused} />, (path, input) =>
+    const { calls } = renderWithDetailFeed(<BlockUntilHidden entity={paused} />, (path, input) =>
       path === 'entity.update' ? pending : base(path, input),
     );
     const overviewReads = () => calls.filter((c) => c.path === 'routine.overview').length;
@@ -6290,7 +6401,7 @@ describe('слой предложения', () => {
   });
 
   test('правка значения поля в строке → edits.fields в вызове decideProposal; принятое сворачивает слой и обновляет ленту треда (приёмки 6, 9)', async () => {
-    const { calls } = renderWithProviders(
+    const { calls } = renderWithDetailFeed(
       <>
         <ThreadProbe />
         <DetailScreen entityId="e1" />
@@ -6386,7 +6497,7 @@ describe('слой предложения', () => {
   });
 
   test('исходы решения: stale → расхождения списком, replaced → подпись и перечитка списка (приёмки 14, 15)', async () => {
-    const stale = renderWithProviders(
+    const stale = renderWithDetailFeed(
       <DetailScreen entityId="e1" />,
       overlayHandler({
         decide: {
@@ -6414,7 +6525,7 @@ describe('слой предложения', () => {
     // Список ЖИВОЙ: после ответа `replaced` перечитка приносит ДРУГОЕ предложение (правленое,
     // со своим pendingId) — плашка мёртвого исчезает, и подпись обязана это пережить.
     let live: unknown = proposalFor();
-    const replaced = renderWithProviders(<DetailScreen entityId="e1" />, (path, input) => {
+    const replaced = renderWithDetailFeed(<DetailScreen entityId="e1" />, (path, input) => {
       if (path === 'routine.proposalsForEntity') return [live];
       if (path === 'routine.decideProposal') {
         live = proposalFor({ pendingId: 'p9', editedFrom: 'p1' });
@@ -7168,7 +7279,7 @@ test('агент правит текст, пока владелец печата
     bodyDoc: server.doc,
     bodyRevision: server.revision,
   });
-  renderWithProviders(<DetailScreen entityId="e1" />, (path, input) => {
+  renderWithDetailFeed(<DetailScreen entityId="e1" />, (path, input) => {
     if (path === 'entity.get')
       return { entity: shown(), relations: [], thread: { threadId: 'th1', messages: [] } };
     if (path === 'entity.update') {
@@ -7231,7 +7342,7 @@ test('«Обновить» на плашке конфликта сажает т�
     bodyDoc: server.doc,
     bodyRevision: server.revision,
   });
-  renderWithProviders(<DetailScreen entityId="e1" />, (path, input) => {
+  renderWithDetailFeed(<DetailScreen entityId="e1" />, (path, input) => {
     if (path === 'entity.get')
       return { entity: shown(), relations: [], thread: { threadId: 'th1', messages: [] } };
     if (path === 'entity.update') {
@@ -7299,7 +7410,7 @@ test('R19: Refresh предлагает последний набор, Keep mine
     bodyDoc: server.doc,
     bodyRevision: server.revision,
   });
-  renderWithProviders(<DetailScreen entityId="e1" />, (path, input) => {
+  renderWithDetailFeed(<DetailScreen entityId="e1" />, (path, input) => {
     if (path === 'entity.get')
       return { entity: shown(), relations: [], thread: { threadId: 'th1', messages: [] } };
     if (path === 'entity.update') {
@@ -7376,7 +7487,7 @@ test('own undo удерживает старый редактор до ново�
     body: 'до правки',
     bodyDoc: parseBody('до правки'),
   };
-  const { calls } = renderWithProviders(
+  const { calls } = renderWithDetailFeed(
     <>
       <DetailScreen entityId="e1" />
       <button type="button" onClick={() => void runUndo('a1', { entityIds: ['e1'] })}>
@@ -7614,7 +7725,7 @@ test('fix1: clean markdown участвует в rewrite gate и принима�
     body: 'новое тело после отмены',
     bodyDoc: parseBody('новое тело после отмены'),
   };
-  const { calls } = renderWithProviders(
+  const { calls } = renderWithDetailFeed(
     <>
       <DetailScreen entityId="e1" />
       <button type="button" onClick={() => void runUndo('a1', { entityIds: ['e1'] })}>
@@ -7880,7 +7991,7 @@ test('Task18: stable AuthProvider ownerchange сбрасывает markdown owne
       </>
     );
   }
-  const { calls } = renderWithProviders(<Host />, (path) => {
+  const { calls, queryClient } = renderWithProviders(<Host />, (path) => {
     if (path === 'entity.get')
       return { entity: fresh ? next : entity, relations: [], thread: null };
     if (path === 'ai.undo')
@@ -7930,6 +8041,9 @@ test('Task18: stable AuthProvider ownerchange сбрасывает markdown owne
       bodyRevisions: [{ entityId: 'e1', bodyRevision: next.bodyRevision }],
     }),
   );
+  // Delivery for the newly accepted owner is independent of the old transport.
+  const feed = makeTestFreshness(queryClient);
+  await act(async () => feed.changes([{ kind: 'entity', rowKey: 'e1', scope: 'body' }]));
   await waitFor(() => expect(area).toHaveValue('Новый владелец'));
   expect(area).not.toHaveAttribute('readonly');
   fireEvent.change(area, { target: { value: 'Новый владелец ещё' } });
@@ -7938,3 +8052,77 @@ test('Task18: stable AuthProvider ownerchange сбрасывает markdown owne
     timeout: 3000,
   });
 }, 10000);
+
+test('accepted deletion replaces the opened detail with a back action and retains the draft', async () => {
+  let removed = false;
+  const { queryClient } = renderWithProviders(
+    <DetailScreen entityId="e1" />,
+    (path) => {
+      if (path === 'entity.get') {
+        if (removed) throw trpcError('NOT_FOUND');
+        return { entity, relations: [], thread: null };
+      }
+      return registryReply(path) ?? {};
+    },
+    { freshness: true },
+  );
+  await screen.findByRole('heading', { name: entity.title });
+  const draft = parseBody('Мой текст до удаления');
+  seedDraft(draft, STALE_REVISION);
+  const feed = testFreshnessOf(queryClient);
+  const removeEntity = vi.fn();
+  feed.runtime.setSinks({ removeEntity });
+  removed = true;
+  await act(async () => feed.changes([{ kind: 'entity', rowKey: 'e1', operation: 'delete' }]));
+  await screen.findByRole('heading', { name: 'Запись удалена' });
+  expect(
+    within(screen.getByTestId('deleted-record')).getByRole('button', { name: 'Назад' }),
+  ).toBeInTheDocument();
+  expect(readDraft('e1')?.doc).toEqual(draft);
+  expect(removeEntity).toHaveBeenCalledWith(feed.scope, 'e1');
+});
+
+test('NOT_FOUND from a pre-reset detail request keeps the open record while current data loads', async () => {
+  let reads = 0;
+  let rejectOld!: (err: unknown) => void;
+  let resolveCurrent!: (reply: unknown) => void;
+  const old = new Promise((_resolve, reject) => {
+    rejectOld = reject;
+  });
+  const current = new Promise((resolve) => {
+    resolveCurrent = resolve;
+  });
+  const reply = { entity, relations: [], thread: null };
+  const { queryClient } = renderWithProviders(
+    <DetailScreen entityId="e1" />,
+    (path) => {
+      if (path !== 'entity.get') return registryReply(path) ?? {};
+      reads++;
+      return reads === 1 ? reply : reads === 2 ? old : current;
+    },
+    { freshness: true },
+  );
+  await screen.findByRole('heading', { name: entity.title });
+  const feed = testFreshnessOf(queryClient);
+  const removeEntity = vi.fn();
+  feed.runtime.setSinks({ removeEntity });
+  const queryKey = getQueryKey(trpc.entity.get, detailGetInput('e1'), 'query');
+  let oldRead!: Promise<void>;
+  act(() => {
+    oldRead = queryClient.refetchQueries({ queryKey, exact: true });
+  });
+  await waitFor(() => expect(reads).toBe(2));
+  act(() => feed.reset());
+  await act(async () => {
+    rejectOld(trpcError('NOT_FOUND'));
+    await oldRead;
+  });
+  await waitFor(() => expect(reads).toBe(3));
+  expect(screen.getByRole('heading', { name: entity.title })).toBeVisible();
+  expect(screen.queryByTestId('deleted-record')).toBeNull();
+  expect(removeEntity).not.toHaveBeenCalled();
+  await act(async () =>
+    resolveCurrent({ ...reply, entity: { ...entity, title: 'Запись после reset' } }),
+  );
+  await screen.findByRole('heading', { name: 'Запись после reset' });
+});

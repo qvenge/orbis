@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
+import { FreshnessVisibility, useFreshnessVisible } from '../../../lib/freshness/screen';
 import { lookupOf } from '../../../lib/registry/labels';
 import { useNoteRegistryVersion, useRegistry } from '../../../lib/registry/useRegistry';
 import { mayLeave, registerLeaveGuard } from '../../../state/leave-guard';
@@ -65,9 +66,11 @@ export function PropertiesRelationsPanel({
   );
   // Publishing refs does not render the parent; stale bridge ids are refused by the host.
   host.pageContext?.publish({ id: host.pageContext.entity?.id, ...pageActions });
-  const get = trpc.entity.get.useQuery(detailGetInput(target.entityId));
+  const get = trpc.entity.get.useQuery(detailGetInput(target.entityId), {
+    enabled: useFreshnessVisible(),
+  });
   const reg = useRegistry();
-  useNoteRegistryVersion(get.data?.registryVersion, get.dataUpdatedAt);
+  useNoteRegistryVersion(get.data, get.dataUpdatedAt);
   const disabledExtensions = useDisabledExtensions();
   const latestExecutionContext = useRef({
     readOnly: target.readOnly,
@@ -535,21 +538,23 @@ export function PropertiesRelationsPanel({
             aria-labelledby={`${tabId}-tab-${index}`}
             hidden={tab !== name}
           >
-            <FormFooterTarget value={tab === name ? footer : null}>
-              {name === 'Аспекты' ? (
-                <AspectsTab {...form(name)} />
-              ) : name === 'Свойства' ? (
-                <PropertiesTab {...form(name)} />
-              ) : (
-                <RelationsTab
-                  {...form(name)}
-                  relations={get.data.relations ?? []}
-                  onNavigate={(id) => request(() => useNav.getState().openRecord(id))}
-                  onShowProperties={() => setTab('Свойства')}
-                  onOpenBody={() => hostAction('openBody')}
-                />
-              )}
-            </FormFooterTarget>
+            <FreshnessVisibility visible={tab === name}>
+              <FormFooterTarget value={tab === name ? footer : null}>
+                {name === 'Аспекты' ? (
+                  <AspectsTab {...form(name)} />
+                ) : name === 'Свойства' ? (
+                  <PropertiesTab {...form(name)} />
+                ) : (
+                  <RelationsTab
+                    {...form(name)}
+                    relations={get.data.relations ?? []}
+                    onNavigate={(id) => request(() => useNav.getState().openRecord(id))}
+                    onShowProperties={() => setTab('Свойства')}
+                    onOpenBody={() => hostAction('openBody')}
+                  />
+                )}
+              </FormFooterTarget>
+            </FreshnessVisibility>
           </div>
         ))}
         {tab !== 'Связи' && (

@@ -14,7 +14,6 @@ import { renderWithProviders } from '../../test/harness';
 import { BUILTIN_REGISTRY } from '../../test/registry';
 import { trpc } from '../../trpc';
 import { EntityRef } from '../entity-ref/EntityRef';
-import { invalidateGraph } from '../invalidate';
 import { fieldLabel } from './labels';
 import { noteRegistryVersion, resetRegistryVersionForTests, useRegistry } from './useRegistry';
 
@@ -150,8 +149,10 @@ function Probe() {
       <button type="button" onClick={registry.retry}>
         Повторить реестр
       </button>
-      {/* Ровно то, что делает боевой код после ЛЮБОЙ правки графа (`lib/invalidate.ts`). */}
-      <button type="button" onClick={() => invalidateGraph(utils)}>
+      <button
+        type="button"
+        onClick={() => void utils.entity.get.fetch({ id: 'e1' }, { staleTime: 0 })}
+      >
         Перечитать
       </button>
     </div>

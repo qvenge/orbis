@@ -1,7 +1,6 @@
 import type { EntityUpdateBatchInput } from '@orbis/shared';
 import { useCallback } from 'react';
 import { runGraphCommand } from '../../lib/graph-command';
-import { invalidateGraphCommand } from '../../lib/invalidate';
 import { trpc } from '../../trpc';
 import { useToast } from '../../ui/toast-store';
 import type { CommandOutcome } from '../entity-detail/properties-relations/types';
@@ -54,7 +53,6 @@ export function useDetailedUpdateBatch(): (
       if (outcome.kind === 'confirmed')
         for (const op of operations)
           if (op.tool === 'entity_update' && op.input.body !== undefined) resetSteps(op.input.id);
-      invalidateGraphCommand(utils);
       return outcome;
     },
     [utils],
@@ -68,16 +66,7 @@ export function useDetailedUpdateBatch(): (
  * «страница» остался. Обслуживает меню ⋮ и плашку спора шаблонов — одна копия механизма
  * «пачка → тост „Отменить“ → Undo → перечитывание» (финальное ревью, C1-I4).
  *
- * После записи и после Undo — `invalidateGraph`: правка меняет и запись, и список шаблонов, и
- * данные блоков страницы. Экран перечитывает всё это сам, второй копии «что теперь показано» здесь
- * нет. Отказ тоже перечитывает: чаще всего он значит, что экран устарел (запись правили мимо него,
- * `STALE_VERSION`), и повтор с тем же снимком упал бы так же.
- *
- * Undo — клиентом, а не хуком мутации: к нажатию «Отменить» меню и его диалог могут быть уже
- * размонтированы (запись стала страницей — у меню другие пункты, спор решён — плашки нет).
- *
- * Промис сообщает исход (`true` — пачка записана) и НЕ отвергается: отказ человек узнаёт тостом,
- * а вызывающему исход нужен для своего состояния (плашка спора закрывается только записанной).
+ * Changes from the write and from Undo arrive through the same feed.
  */
 export function useUpdateBatch(): RunUpdateBatch {
   const run = useDetailedUpdateBatch();

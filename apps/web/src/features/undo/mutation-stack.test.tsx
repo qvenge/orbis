@@ -1,6 +1,7 @@
 import { QueryCache, QueryClient, useQueryClient } from '@tanstack/react-query';
 import { act, fireEvent, screen, waitFor } from '@testing-library/react';
 import { beforeEach, expect, test, vi } from 'vitest';
+import { nextNetworkOrder, recordNetworkReadReceipt } from '../../lib/freshness/provenance';
 import { renderWithProviders } from '../../test/harness';
 import { makeQueryClient, type RouterInputs, trpc } from '../../trpc';
 import { useEntityUpdate } from '../entity-detail/useEntityDetail';
@@ -322,9 +323,8 @@ test('R56 actual producer lostresponse then current freshread preserves shareddo
   expect(isBodyPending(optimistic)).toBe(true);
   await client.fetchQuery({
     queryKey: key,
-    queryFn: async () => ({
-      entity: { ...base.entity, bodyDoc: structuredClone(doc), bodyRevision: 4 },
-    }),
+    queryFn: async () =>
+      confirmed({ entity: { ...base.entity, bodyDoc: structuredClone(doc), bodyRevision: 4 } }),
   });
   const fresh = client.getQueryData(key) as typeof base;
   expect(fresh.entity.bodyDoc).toBe(optimistic);
@@ -364,9 +364,10 @@ test('R56 oldfetch new untagged doc cannot grant; canceled old/new flight only c
   resetUndoSession();
   await client.fetchQuery({
     queryKey: key,
-    queryFn: async () => ({
-      entity: { bodyDoc: structuredClone(equalCurrentDisk), bodyRevision: 6 },
-    }),
+    queryFn: async () =>
+      confirmed({
+        entity: { bodyDoc: structuredClone(equalCurrentDisk), bodyRevision: 6 },
+      }),
   });
   const accepted = client.getQueryData(key) as {
     entity: { bodyDoc: object; bodyRevision: number };
@@ -379,3 +380,13 @@ test('R56 oldfetch new untagged doc cannot grant; canceled old/new flight only c
   expect(isBodyPending(accepted.entity.bodyDoc)).toBe(false);
   client.clear();
 });
+
+function confirmed<T extends object>(data: T): T {
+  recordNetworkReadReceipt(data, {
+    epoch: undoEpoch(),
+    watermark: '0',
+    receivedAt: Date.now(),
+    startedSequence: nextNetworkOrder(),
+  });
+  return data;
+}

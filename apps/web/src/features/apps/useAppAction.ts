@@ -1,6 +1,5 @@
 import type { ExtensionId } from '@orbis/shared';
 import { useCallback } from 'react';
-import { invalidateGraph } from '../../lib/invalidate';
 import { trpc } from '../../trpc';
 import { useToast } from '../../ui/toast-store';
 import { journalRefOf } from '../undo/journal-ref';
@@ -38,8 +37,7 @@ function doneTitle(act: AppAct): string {
 /**
  * Выключить, включить или удалить приложение: ОДНА пачка сервера (свойство «Выключено» или архив и
  * `module_set` отмеченных расширений), один тост «Отменить» — `ai.undo` по `actionId` откатывает
- * пачку целиком (§8.6 «одна пачка, один Undo»). После записи и отмены — `invalidateGraph` (список
- * приложений, рамка, плашки правила открытия) и настройки (маска расширений).
+ * пачку целиком (§8.6 «одна пачка, один Undo»).
  */
 export function useAppAction(): (act: AppAct) => Promise<boolean> {
   const utils = trpc.useUtils();
@@ -48,10 +46,6 @@ export function useAppAction(): (act: AppAct) => Promise<boolean> {
     async (act) => {
       const epoch = undoEpoch();
       let journalResponse: unknown;
-      const refresh = () => {
-        invalidateGraph(utils);
-        void utils.user.getSettings.invalidate();
-      };
       let actionId: string;
       try {
         ({ actionId } = journalResponse =
@@ -68,11 +62,9 @@ export function useAppAction(): (act: AppAct) => Promise<boolean> {
       } catch {
         if (!isUndoEpoch(epoch)) return false;
         show(APP_ACTION_FAILED, 'danger');
-        refresh();
         return false;
       }
       if (!isUndoEpoch(epoch)) return false;
-      refresh();
       if (journalRefOf(journalResponse) === null) return true;
       offerUndoLazy({ title: doneTitle(act), actionId: actionId, entityIds: [] });
       return true;

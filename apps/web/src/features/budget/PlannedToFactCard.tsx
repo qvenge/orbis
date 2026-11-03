@@ -10,7 +10,6 @@ import { TRPCClientError } from '@trpc/client';
 import { useState } from 'react';
 import { todayISO } from '../../lib/dates';
 import { formatMoney, type MoneyTone } from '../../lib/format';
-import { invalidateBudget, invalidateGraph } from '../../lib/invalidate';
 import { trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
 import { Card } from '../../ui/Card';
@@ -29,7 +28,6 @@ export function PlannedToFactCard({
   prompt: PlanToFactPrompt;
   onClose: () => void;
 }) {
-  const utils = trpc.useUtils();
   const settings = trpc.user.getSettings.useQuery();
   // Название категории — по category_ref (сущность orbis/category); без ref не грузим
   const categoryQ = trpc.entity.get.useQuery(
@@ -68,9 +66,6 @@ export function PlannedToFactCard({
       return;
     }
     if (!isUndoEpoch(epoch)) return;
-    await invalidateBudget(utils);
-    if (!isUndoEpoch(epoch)) return;
-    invalidateGraph(utils);
     onClose();
   }
 

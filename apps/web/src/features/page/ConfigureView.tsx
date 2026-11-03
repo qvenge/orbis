@@ -1,5 +1,6 @@
 import { isHostTemplateRecord } from '@orbis/shared/supply';
 import { useEffect } from 'react';
+import { useFreshnessVisible } from '../../lib/freshness/screen';
 import { ThisEntityProvider } from '../../lib/query-blocks/this-entity';
 import { registerLeaveGuard } from '../../state/leave-guard';
 import { trpc } from '../../trpc';
@@ -32,7 +33,9 @@ import { TemplateBanner, templateForOf } from './TemplateBanner';
  * `this` в блоках данных тела — сама настраиваемая запись (§6.4), как на её показе.
  */
 export function ConfigureView({ targetId, onDone }: { targetId: string; onDone: () => void }) {
-  const get = trpc.entity.get.useQuery(detailGetInput(targetId));
+  const get = trpc.entity.get.useQuery(detailGetInput(targetId), {
+    enabled: useFreshnessVisible(),
+  });
   // Тело настройки регистрируется у экрана так же, как тело записи: жесты меню ⋮, переписывающие
   // запись, обязаны знать о неотправленной правке и здесь (финальное ревью, F-I1).
   const { bodyGate } = useBodyScreen();

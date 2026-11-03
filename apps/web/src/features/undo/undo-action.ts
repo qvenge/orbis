@@ -1,5 +1,4 @@
 import type { UndoResult, UndoTextChangedDetails } from '@orbis/shared';
-import { invalidateGraphCommand } from '../../lib/invalidate';
 import { orbisErrorOf } from '../../lib/orbis-error';
 import { resetSteps } from '../entity-editor/arrows-stack';
 import {
@@ -8,7 +7,7 @@ import {
   flushBodyOf,
   mountedBodyIds,
 } from '../entity-editor/body-flush';
-import { boundUndoUtils, type UndoUtils } from './undo-binding';
+import { boundUndoUtils } from './undo-binding';
 import { isUndoEpoch, undoEpoch } from './undo-epoch';
 
 export const UNDO_FAILED = 'Не удалось отменить изменения';
@@ -64,12 +63,10 @@ export async function runUndo(
     for (const { entityId } of result.bodyRevisions) resetSteps(entityId);
     for (const [id, finish] of gates)
       finish(result.bodyRevisions.find((r) => r.entityId === id)?.bodyRevision);
-    refresh(utils);
     return { kind: 'undone', result };
   } catch (e) {
     release();
     if (!isUndoEpoch(epoch)) return { kind: 'failed', message: UNDO_FAILED };
-    refresh(utils);
     const orbis = orbisErrorOf(e);
     if (orbis?.code === 'UNDO_TEXT_CHANGED' && orbis.details !== undefined)
       return { kind: 'refused', details: orbis.details as unknown as UndoTextChangedDetails };
@@ -79,15 +76,6 @@ export async function runUndo(
     return { kind: 'failed', message: UNDO_FAILED };
   }
 }
-/** Как у прежних четырёх мест вместе: граф, маска расширений (приложения, расширения), денежные агрегаты (карточки). */
-function refresh(utils: UndoUtils): void {
-  invalidateGraphCommand(utils);
-  // Undo может удалить страховку восстановления или создать версию перед принудительной отменой.
-  // Состав затронутых версий известен серверу; неактивные списки лишь помечаются протухшими.
-  void utils.version.list.invalidate();
-  void utils.user.getSettings.invalidate();
-}
-
 export type UndoOutcome =
   | { kind: 'undone'; result: UndoResult }
   | { kind: 'refused'; details: UndoTextChangedDetails }

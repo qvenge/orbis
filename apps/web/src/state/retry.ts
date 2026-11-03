@@ -1,7 +1,6 @@
 import type { EntityCreateInput } from '@orbis/shared';
-import { useCallback, useEffect, useRef, useSyncExternalStore } from 'react';
+import { useEffect, useRef, useSyncExternalStore } from 'react';
 import { create } from 'zustand';
-import { invalidateGraph } from '../lib/invalidate';
 import {
   createRetryBuffer,
   type FlushOutcome,
@@ -9,7 +8,6 @@ import {
   type QueuedCreate,
   setQueueScope,
 } from '../lib/retry-buffer';
-import { trpc } from '../trpc';
 
 const storage = localStorageQueue;
 const buffer = createRetryBuffer(storage);
@@ -131,24 +129,13 @@ export const useRetryBuffer = create<RetryState>((set) => ({
  * вернулся в сеть» — заканчивался тем, что запись легла на сервер, а список, на который
  * человек смотрит, её не показывает.
  *
- * Инвалидация висит на ПОДТВЕРЖДЁННОМ успехе (confirmed > 0), а не на самой попытке:
- * business_rejection тоже чистит очередь, но графа не меняет, и перечитывать по нему
- * нечего. Буфер — исторически хрупкое место, и лишний перечит здесь хуже, чем кажется:
- * он маскирует отказ видимостью работы.
- *
  * Число подтверждённых уходит и вызывающему: по нему кнопка досыла (ChatScreen) решает,
  * жаловаться ли на неудачу. Считать это по размеру очереди «до и после» нельзя — размер
  * врёт в обе стороны: запись, легшая в очередь ВО ВРЕМЯ слива, выглядит как отказ, а
  * слив, где одна запись прошла, а другая упала, выглядит как удача.
  */
 export function useFlushBuffer(): () => Promise<number> {
-  const utils = trpc.useUtils();
-  const flushNow = useRetryBuffer((s) => s.flushNow);
-  return useCallback(async () => {
-    const confirmed = await flushNow();
-    if (confirmed > 0) invalidateGraph(utils);
-    return confirmed;
-  }, [flushNow, utils]);
+  return useRetryBuffer((s) => s.flushNow);
 }
 
 /**

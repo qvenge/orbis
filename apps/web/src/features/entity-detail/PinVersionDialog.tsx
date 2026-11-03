@@ -31,7 +31,6 @@ const LABEL_MAX = 200;
  * надо гасить при смене сущности.
  */
 export function PinVersionDialog({ entityId, onClose }: { entityId: string; onClose: () => void }) {
-  const utils = trpc.useUtils();
   const [label, setLabel] = useState('');
   const fieldId = useId();
   const field = useRef<HTMLInputElement>(null);
@@ -58,10 +57,6 @@ export function PinVersionDialog({ entityId, onClose }: { entityId: string; onCl
     onMutate: (vars) => ({ epoch: pinIntent.current.epoch, id: vars.entityId }),
     onSuccess: (data, _vars, intent) => {
       if (!intent || !current(intent)) return;
-      // Инвалидируется ТОЛЬКО список версий, без invalidateGraph: закрепление пишет строку
-      // снимка и саму запись не двигает вовсе (executor.prepareVersionPin — INSERT в
-      // entity_versions, entities не тронут), то есть протух ровно этот список.
-      void utils.version.list.invalidate({ entityId });
       const ref = journalRefOf(data);
       if (ref) offerUndoLazy({ title: 'Версия закреплена', actionId: ref.actionId, entityIds: [] });
       onClose();

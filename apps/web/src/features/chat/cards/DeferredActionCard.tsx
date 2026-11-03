@@ -80,7 +80,7 @@ export function DeferredActionCard({
       );
       // Бюджет перечитывается только у ПРИМЕНЁННОГО: отложенная правка могла тронуть сумму,
       // категорию или статус траты (см. `settled`).
-      settled({ applied: result.status === 'applied' });
+      settled({ applied: result.status === 'applied', already: result.status === 'already' });
     },
   });
 

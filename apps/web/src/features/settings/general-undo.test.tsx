@@ -1,6 +1,7 @@
 import { fireEvent, screen } from '@testing-library/react';
 import { useState } from 'react';
 import { beforeEach, expect, test } from 'vitest';
+import { testFreshnessOf } from '../../test/freshness';
 import { renderWithProviders } from '../../test/harness';
 import type { RouterOutputs } from '../../trpc';
 import { resetUndoSession } from '../undo/undo-epoch';
@@ -55,23 +56,29 @@ function SettingsScreen() {
 }
 test('real runUndo перечитывает принятую чистую форму без ложной повторной записи', async () => {
   let current = settings;
-  const { calls } = renderWithProviders(<SettingsScreen />, (path, input) => {
-    if (path === 'user.getSettings') return current;
-    if (path === 'user.updateSettings') {
-      current = { ...current, ...(input as object) };
-      return { ...current, actionId: 'settings', consequences: false };
-    }
-    if (path === 'ai.undo') {
-      current = settings;
-      return {
-        actionId: 'undo',
-        undone: { id: 'settings', title: 'Настройки' },
-        pinnedVersions: [],
-        bodyRevisions: [],
-      };
-    }
-    return {};
-  });
+  const { calls, queryClient } = renderWithProviders(
+    <SettingsScreen />,
+    (path, input) => {
+      if (path === 'user.getSettings') return current;
+      if (path === 'user.updateSettings') {
+        current = { ...current, ...(input as object) };
+        testFreshnessOf(queryClient).changes([{ kind: 'settings', rowKey: 'owner' }]);
+        return { ...current, actionId: 'settings', consequences: false };
+      }
+      if (path === 'ai.undo') {
+        current = settings;
+        testFreshnessOf(queryClient).changes([{ kind: 'settings', rowKey: 'owner' }]);
+        return {
+          actionId: 'undo',
+          undone: { id: 'settings', title: 'Настройки' },
+          pinnedVersions: [],
+          bodyRevisions: [],
+        };
+      }
+      return {};
+    },
+    { freshness: true },
+  );
   const field = await screen.findByLabelText('Таймзона');
   fireEvent.change(field, { target: { value: 'Europe/Moscow' } });
   fireEvent.click(screen.getByText('Сохранить'));
@@ -86,22 +93,29 @@ test('real runUndo перечитывает принятую чистую фор
 test('живой черновик после отправки сохраняется при accepted refetch', async () => {
   let current = settings;
   let finish!: (value: unknown) => void;
-  const { calls } = renderWithProviders(<SettingsScreen />, (path, input) => {
-    if (path === 'user.getSettings') return current;
-    if (path === 'user.updateSettings') {
-      current = { ...current, ...(input as object) };
-      return new Promise((resolve) => {
-        finish = resolve;
-      });
-    }
-    return {};
-  });
+  const { calls, queryClient } = renderWithProviders(
+    <SettingsScreen />,
+    (path, input) => {
+      if (path === 'user.getSettings') return current;
+      if (path === 'user.updateSettings') {
+        current = { ...current, ...(input as object) };
+        return new Promise((resolve) => {
+          finish = resolve;
+        });
+      }
+      return {};
+    },
+    { freshness: true },
+  );
   const field = await screen.findByLabelText('Таймзона');
   fireEvent.change(field, { target: { value: 'Europe/Moscow' } });
   fireEvent.click(screen.getByText('Сохранить'));
   await waitFor(() => expect(finish).toBeDefined());
   fireEvent.change(field, { target: { value: 'Asia/Barnaul' } });
-  await act(async () => finish({ ...current, actionId: 'settings', consequences: false }));
+  await act(async () => {
+    finish({ ...current, actionId: 'settings', consequences: false });
+    testFreshnessOf(queryClient).changes([{ kind: 'settings', rowKey: 'owner' }]);
+  });
   await waitFor(() => expect(calls.filter((c) => c.path === 'user.getSettings')).toHaveLength(2));
   expect(field).toHaveValue('Asia/Barnaul');
 });

@@ -6,6 +6,7 @@ import {
   noteRegistryVersion,
   resetRegistryVersionForTests,
 } from '../../../lib/registry/useRegistry';
+import { testFreshnessOf } from '../../../test/freshness';
 import { renderWithProviders, trpcError } from '../../../test/harness';
 import { trpc } from '../../../trpc';
 import { detailGetInput, useEntityUpdate } from '../useEntityDetail';
@@ -95,4 +96,33 @@ it.each([
   await waitFor(() => expect(screen.getByRole('button', { name: 'Сохранить' })).not.toBeDisabled());
   expect(client?.getQueryState(key)?.dataUpdatedAt).toBeGreaterThan(originalReadAt ?? 0);
   expect(calls.filter((call) => call.path === 'entity.updateBatch')).toHaveLength(0);
+});
+
+it('an accepted foreign property change preserves a dirty panel value', async () => {
+  let server = entity;
+  const { queryClient } = renderWithProviders(
+    <PropertiesRelationsPanel
+      target={{ entityId: entity.id, readOnly: false }}
+      host={{ screenEntityId: entity.id, available: new Set(), run() {} }}
+      onClose={() => {}}
+    />,
+    (path) =>
+      path === 'entity.get'
+        ? { entity: server, relations: [], registryVersion: registry.version }
+        : path === 'registry.effective'
+          ? registry
+          : {},
+    { freshness: true },
+  );
+  fireEvent.click(await screen.findByRole('tab', { name: 'Свойства' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Редактировать свойства' }));
+  fireEvent.change(screen.getByLabelText('Поле теста'), {
+    target: { value: 'локальный черновик' },
+  });
+  server = { ...entity, title: 'Заголовок с сервера' };
+  await act(async () =>
+    testFreshnessOf(queryClient).changes([{ kind: 'entity', rowKey: entity.id }]),
+  );
+  await screen.findByText('Заголовок с сервера');
+  expect(screen.getByLabelText('Поле теста')).toHaveValue('локальный черновик');
 });

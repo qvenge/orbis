@@ -2,7 +2,7 @@ import { ROLE_DEPENDENCY } from '@orbis/shared';
 import { Ban, Plus, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { useOpenRecord } from '../../app/useOpenRecord';
-import { invalidateQueryBlocks } from '../../lib/query-blocks/batch';
+import { useFreshnessVisible } from '../../lib/freshness/screen';
 import { type RouterOutputs, trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
 import { Spinner } from '../../ui/Spinner';
@@ -10,7 +10,6 @@ import { journalRefOf } from '../undo/journal-ref';
 import { offerUndoLazy } from '../undo/undo-lazy';
 import { pushUndoable } from '../undo/undo-stack';
 import { useHostReadOnly } from './record-host';
-import { detailGetInput } from './useEntityDetail';
 
 type Relation = NonNullable<RouterOutputs['entity']['get']['relations']>[number];
 /** Куда смотрит создаваемая связь: текущая блокирует выбранную (out) или наоборот (in). */
@@ -57,7 +56,6 @@ export function Blockers({ entityId, relations }: { entityId: string; relations:
   // снимаются.
   const readOnly = useHostReadOnly();
   const openRecord = useOpenRecord();
-  const utils = trpc.useUtils();
   const [adding, setAdding] = useState(false);
   const [draft, setDraft] = useState('');
   const [direction, setDirection] = useState<Direction>('out');
@@ -72,7 +70,8 @@ export function Blockers({ entityId, relations }: { entityId: string; relations:
   // Титулы и статусы сторон — ОДНИМ запросом (entity.resolveRefs), а не entity.get на
   // строку: сущность целиком секции не нужна, ей нужны титул и статус, а per-id шторм
   // тем заметнее, чем длиннее список.
-  const sides = trpc.entity.resolveRefs.useQuery({ ids }, { enabled: ids.length > 0 });
+  const shown = useFreshnessVisible();
+  const sides = trpc.entity.resolveRefs.useQuery({ ids }, { enabled: shown && ids.length > 0 });
   const byId = new Map((sides.data ?? []).map((e) => [e.id, e]));
   const title = (id: string) => byId.get(id)?.title ?? `${id.slice(0, 8)}…`;
   // Пока сущность не доехала — блокер считается живым: спрятать реальную блокировку хуже,
@@ -101,23 +100,6 @@ export function Blockers({ entityId, relations }: { entityId: string; relations:
     (e) => !known.has(e.id) && (direction === 'out' || e.completable?.closed !== true),
   );
 
-  /**
-   * Инвалидация после правки графа (DF п.5). Трёх ключей мало не бывает:
-   *  - entity.get текущей сущности — свой список связей;
-   *  - entity.get ВТОРОЙ стороны — её detail держит собственный список связей и, если
-   *    открывался раньше, лежит в кэше уже неверным;
-   *  - entity.query — Browser, Повестка и списки с excludeBlocked (§6.1) читают другой
-   *    ключ со своим staleTime (60 с у Повестки, K16) и сами не протухнут: без этого
-   *    новая блокировка до минуты не видна нигде, кроме этого экрана;
-   *  - блоки данных тела (`entity.blocks`) — те же списки с excludeBlocked, только в теле
-   *    записи и страницы, со своим ключом на блок (спека страниц 1а §6.3).
-   */
-  const refresh = (otherId: string) => {
-    void utils.entity.get.invalidate(detailGetInput(entityId));
-    void utils.entity.get.invalidate({ id: otherId });
-    void utils.entity.query.invalidate();
-    invalidateQueryBlocks();
-  };
   // Ацикличность blocks проверяет сервер (§4.2): путь цикла доезжает ТОЛЬКО в message
   // (cause по HTTP не сериализуется) — его и показываем плашкой (02 §6).
   const relate = trpc.relation.create.useMutation({
@@ -143,7 +125,6 @@ export function Blockers({ entityId, relations }: { entityId: string; relations:
       // Направление — часть состояния формы: без сброса внешне свежая форма молча
       // создавала бы следующую связь в обратную сторону.
       setDirection('out');
-      refresh(vars.source_id === entityId ? vars.target_id : vars.source_id);
     },
   });
   // Снятие связи предлагает отмену собственного действия журнала.
@@ -161,7 +142,6 @@ export function Blockers({ entityId, relations }: { entityId: string; relations:
           entityIds: [],
         });
       setConfirming(null);
-      refresh(vars.source_id === entityId ? vars.target_id : vars.source_id);
     },
   });
   const failure = relate.error ?? unrelate.error;

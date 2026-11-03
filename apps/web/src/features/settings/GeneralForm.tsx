@@ -17,7 +17,6 @@ const THEME_OPTIONS: { value: ThemePref; label: string }[] = [
 ];
 
 export function GeneralForm({ settings }: { settings: Settings }) {
-  const utils = trpc.useUtils();
   const { show } = useToast();
   const update = trpc.user.updateSettings.useMutation({
     onMutate: (patch) => {
@@ -50,7 +49,6 @@ export function GeneralForm({ settings }: { settings: Settings }) {
       };
     },
     onSuccess: (data, _patch, intent) => {
-      void utils.user.getSettings.invalidate();
       const ref = journalRefOf(data);
       if (ref && (intent?.offer || ref.consequences))
         offerUndoLazy({

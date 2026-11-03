@@ -6,6 +6,7 @@ import { AuthProvider } from '../../auth/AuthProvider';
 import { useSession } from '../../auth/supabase';
 import { noteRegistryVersion, resetRegistryVersionForTests } from '../../lib/registry/useRegistry';
 import { resetNavForTests } from '../../state/navigation';
+import { testFreshnessOf } from '../../test/freshness';
 import {
   installCrashTrap,
   type MockHandler,
@@ -151,7 +152,7 @@ function openScreen(a: BodyActionInfo | null, next?: BodyActionInfo) {
   let current = a;
   const base = structureHandler(f);
   navAt(f.entity.id);
-  return renderWithProviders(
+  const rendered = renderWithProviders(
     <>
       <DetailScreen entityId={f.entity.id} />
       <Toaster />
@@ -163,11 +164,16 @@ function openScreen(a: BodyActionInfo | null, next?: BodyActionInfo) {
         return { ...(base(path, input) as object), bodyAction: current };
       if (path === 'ai.undo') {
         current = next ?? null;
+        testFreshnessOf(rendered.queryClient).changes([
+          { kind: 'entity', rowKey: f.entity.id, scope: 'body' },
+        ]);
         return { ...RESULT, bodyRevisions: [{ entityId: f.entity.id, bodyRevision: 2 }] };
       }
       return base(path, input);
     },
+    { freshness: true },
   );
+  return rendered;
 }
 async function openMenu() {
   fireEvent.keyDown(await screen.findByTestId('screen-menu'), { key: 'Enter' });

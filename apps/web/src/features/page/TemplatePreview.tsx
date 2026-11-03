@@ -2,6 +2,7 @@ import { PAGE_ASPECT } from '@orbis/shared';
 import type { QueryAst } from '@orbis/shared/query';
 import { isHostTemplateRecord } from '@orbis/shared/supply';
 import { useEffect, useId, useState } from 'react';
+import { useFreshnessVisible } from '../../lib/freshness/screen';
 import { aspectLabel } from '../../lib/registry/labels';
 import { useRegistry } from '../../lib/registry/useRegistry';
 import { type RouterOutputs, trpc } from '../../trpc';
@@ -63,7 +64,10 @@ export function TemplatePreview({
   const forAspects = templateForOf(entity.props);
   const reg = useRegistry();
   const selectId = useId();
-  const candidates = trpc.entity.query.useQuery({ ast: previewCandidatesAst(forAspects) });
+  const candidates = trpc.entity.query.useQuery(
+    { ast: previewCandidatesAst(forAspects) },
+    { enabled: useFreshnessVisible() },
+  );
   // Страницы — не записи предпросмотра: их показывает своё тело, а не шаблон (§4.2 шаг 1). Сама
   // страница — тоже страница и отсеивается тем же правилом; для неё в выборе своя строка.
   const rows = (candidates.data?.rows ?? []).filter((r) => !r.aspects.includes(PAGE_ASPECT));
@@ -152,7 +156,9 @@ function PreviewOn({
   template: Pick<EntityGetReply['entity'], 'id' | 'body'>;
   onPreviewTarget?: (pageId: string, target: PanelTarget | null) => void;
 }) {
-  const get = trpc.entity.get.useQuery(detailGetInput(recordId));
+  const get = trpc.entity.get.useQuery(detailGetInput(recordId), {
+    enabled: useFreshnessVisible(),
+  });
   const ready = !get.isError && get.data?.entity.id === recordId;
   useEffect(() => {
     onPreviewTarget?.(template.id, ready ? { entityId: recordId, readOnly: true } : null);

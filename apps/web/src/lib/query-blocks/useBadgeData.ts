@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
+import { useFreshnessVisible } from '../freshness/screen';
 import { QUERY_BLOCK_KEY, useBlockBatcher } from './batch';
 
 /** Потолок числа на бейдже: больше — «99+», как у бейджей навигации телефонов. */
@@ -19,6 +20,7 @@ export function useBadgeData(entityId: string): { badge: string | null } {
   const batcher = useBlockBatcher('useBadgeData');
   const q = useQuery({
     queryKey: [QUERY_BLOCK_KEY, 'badge', entityId],
+    enabled: useFreshnessVisible(),
     queryFn: () => batcher.ask({ badgeOf: entityId }),
   });
   const r = q.data;

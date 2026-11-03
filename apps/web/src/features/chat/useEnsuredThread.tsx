@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
+import { isUndoEpoch, undoEpoch } from '../undo/undo-epoch';
 
 /** Состояние заведения треда: до ответа — `pending`, дальше либо id, либо причина отказа. */
 export type EnsuredThread =
@@ -111,8 +112,10 @@ export function useEnsuredThread(entityId?: string): {
     // Запись фиксируется в замыкании: сравнение с ней на ответе и есть защита от позднего
     // ответа прежней записи.
     const requested = entityId;
+    const epoch = undoEpoch();
     void mutateAsync(requested === undefined ? {} : { entityId: requested }).then(
       (r) => {
+        if (!isUndoEpoch(epoch)) return;
         // В кеш — ВСЕГДА и под тем id, для которого спрашивали: этот ответ про него правда,
         // даже если экран уже смотрит на соседнюю запись.
         if (requested !== undefined) sessionThreads.set(requested, r.threadId);
@@ -122,6 +125,7 @@ export function useEnsuredThread(entityId?: string): {
       // Отказ — вторым аргументом then, а не отдельным catch: своя ветка отказа обязана
       // сработать РОВНО на отказе ensure, а не заодно на любой ошибке в ветке успеха выше.
       (e: unknown) => {
+        if (!isUndoEpoch(epoch)) return;
         if (startedForRef.current?.entityId !== requested) return;
         setState({ status: 'failed', message: e instanceof Error ? e.message : String(e) });
       },

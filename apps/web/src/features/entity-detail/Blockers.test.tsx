@@ -1,6 +1,7 @@
 import { parseBody } from '@orbis/shared/doc';
-import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
+import { testFreshnessOf } from '../../test/freshness';
 import {
   isRecordScreenListCall,
   queryReply,
@@ -166,6 +167,10 @@ afterEach(() => {
 // ожидания завершаются по факту, а не по таймеру.
 const SIDES_LOADED = { timeout: 10_000 };
 
+async function openDetails() {
+  fireEvent.click(await screen.findByRole('tab', { name: 'Детали' }));
+}
+
 test('блокировки: «блокирует» — исходящие, «заблокирована» — только незакрытые задачи', {
   timeout: 30_000,
 }, async () => {
@@ -181,6 +186,7 @@ test('блокировки: «блокирует» — исходящие, «з�
     }),
   );
 
+  await openDetails();
   expect(await screen.findByText('Ждёт меня', undefined, SIDES_LOADED)).toBeInTheDocument();
   expect(await screen.findByText('Живой блокер', undefined, SIDES_LOADED)).toBeInTheDocument();
   expect(screen.getByText(/блокирует/i)).toBeInTheDocument();
@@ -196,7 +202,7 @@ test('блокировки: «блокирует» — исходящие, «з�
 
 test('пустые списки блокировок и пустой backlinks скрыты (кнопка добавления остаётся)', async () => {
   renderWithProviders(<DetailScreen entityId="e1" />, handler({}));
-  await screen.findByRole('heading', { name: 'Задача' }); // экран отрисован
+  await openDetails();
 
   expect(screen.queryByText(/^блокирует$/i)).not.toBeInTheDocument();
   expect(screen.queryByText(/^заблокирована$/i)).not.toBeInTheDocument();
@@ -211,7 +217,7 @@ test('добавление блокировки: поиск через entity.su
     <DetailScreen entityId="e1" />,
     handler({ onRelationCreate: () => ({ actionId: 'blocking', consequences: false }) }),
   );
-  await screen.findByRole('heading', { name: 'Задача' }); // экран отрисован
+  await openDetails();
 
   fireEvent.click(screen.getByRole('button', { name: 'Добавить блокировку' }));
   fireEvent.change(screen.getByLabelText('Поиск записи'), { target: { value: 'Найд' } });
@@ -246,7 +252,7 @@ test('добавление блокировки: поиск через entity.su
 // «Заблокирована» было нечем пополнить — приходилось открывать detail самого блокера.
 test('добавление блокировки: направление «заблокирована» шлёт обратную связь', async () => {
   const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, handler({}));
-  await screen.findByRole('heading', { name: 'Задача' }); // экран отрисован
+  await openDetails();
 
   fireEvent.click(screen.getByRole('button', { name: 'Добавить блокировку' }));
   fireEvent.change(screen.getByLabelText('Направление блокировки'), { target: { value: 'in' } });
@@ -270,6 +276,7 @@ test('снятие блокировки: крестик → подтвержде
     <DetailScreen entityId="e1" />,
     handler({ relations: [rel('r1', 'e1', 't1', 'dependency')] }),
   );
+  await openDetails();
   expect(await screen.findByText('Ждёт меня')).toBeInTheDocument();
 
   fireEvent.click(screen.getByRole('button', { name: 'Снять блокировку' }));
@@ -290,7 +297,7 @@ test('снятие блокировки: крестик → подтвержде
 // запроса подряд, из которых полезен только последний.
 test('пикер: быстрый ввод трёх символов даёт один запрос, а не три', async () => {
   const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, handler({}));
-  await screen.findByRole('heading', { name: 'Задача' }); // экран отрисован
+  await openDetails();
 
   fireEvent.click(screen.getByRole('button', { name: 'Добавить блокировку' }));
   const input = screen.getByLabelText('Поиск записи');
@@ -312,7 +319,7 @@ test('пикер: подсказка до ввода, спиннер в полё
     release = res;
   });
   renderWithProviders(<DetailScreen entityId="e1" />, handler({ onSuggest: () => gate }));
-  await screen.findByRole('heading', { name: 'Задача' }); // экран отрисован
+  await openDetails();
 
   fireEvent.click(screen.getByRole('button', { name: 'Добавить блокировку' }));
   expect(screen.getByText(/поиск от 2 символов/i)).toBeInTheDocument();
@@ -337,7 +344,7 @@ test('пикер: отказ поиска показан плашкой, а не
       },
     }),
   );
-  await screen.findByRole('heading', { name: 'Задача' }); // экран отрисован
+  await openDetails();
 
   fireEvent.click(screen.getByRole('button', { name: 'Добавить блокировку' }));
   fireEvent.change(screen.getByLabelText('Поиск записи'), { target: { value: 'Куп' } });
@@ -357,7 +364,7 @@ test('цикл blocks: серверный отказ показан плашко
       },
     }),
   );
-  await screen.findByRole('heading', { name: 'Задача' }); // экран отрисован
+  await openDetails();
 
   fireEvent.click(screen.getByRole('button', { name: 'Добавить блокировку' }));
   fireEvent.change(screen.getByLabelText('Поиск записи'), { target: { value: 'Найд' } });
@@ -373,7 +380,7 @@ test('цикл blocks: серверный отказ показан плашко
 // молча создавала следующую связь в обратную сторону.
 test('форма: после создания связи направление возвращается к дефолтному', async () => {
   renderWithProviders(<DetailScreen entityId="e1" />, handler({}));
-  await screen.findByRole('heading', { name: 'Задача' }); // экран отрисован
+  await openDetails();
 
   fireEvent.click(screen.getByRole('button', { name: 'Добавить блокировку' }));
   fireEvent.change(screen.getByLabelText('Направление блокировки'), { target: { value: 'in' } });
@@ -397,6 +404,7 @@ test('плашка: «Отмена» подтверждения убирает �
       },
     }),
   );
+  await openDetails();
   expect(await screen.findByText('Ждёт меня')).toBeInTheDocument();
 
   fireEvent.click(screen.getByRole('button', { name: 'Снять блокировку' }));
@@ -425,6 +433,7 @@ test('плашка: ошибка снятия сменяет ошибку соз
       },
     }),
   );
+  await openDetails();
   expect(await screen.findByText('Ждёт меня')).toBeInTheDocument();
 
   fireEvent.click(screen.getByRole('button', { name: 'Добавить блокировку' }));
@@ -448,7 +457,7 @@ test('пикер: закрытая задача не предлагается б
     <DetailScreen entityId="e1" />,
     handler({ onSuggest: () => [sugg(found), sugg(doneBlocker)] }),
   );
-  await screen.findByRole('heading', { name: 'Задача' }); // экран отрисован
+  await openDetails();
 
   fireEvent.click(screen.getByRole('button', { name: 'Добавить блокировку' }));
   fireEvent.change(screen.getByLabelText('Поиск записи'), { target: { value: 'блокер' } });
@@ -488,14 +497,15 @@ test('backlinks: одна секция, подпись направления �
 // список связей и врал бы столько же.
 
 test('создание блокировки инвалидирует entity.query (списки перечитываются)', async () => {
-  const { calls } = renderWithProviders(
+  const { calls, queryClient } = renderWithProviders(
     <>
       <DetailScreen entityId="e1" />
       <ListProbe />
     </>,
     handler({}),
+    { freshness: true },
   );
-  await screen.findByRole('heading', { name: 'Задача' }); // экран отрисован
+  await openDetails();
   const probes = () =>
     calls.filter(
       (c) =>
@@ -507,18 +517,26 @@ test('создание блокировки инвалидирует entity.quer
   fireEvent.change(screen.getByLabelText('Поиск записи'), { target: { value: 'Найд' } });
   fireEvent.click(await screen.findByRole('button', { name: 'Найденная сущность' }));
 
+  await waitFor(() => expect(calls.some((c) => c.path === 'relation.create')).toBe(true));
+  await act(async () =>
+    testFreshnessOf(queryClient).changes([
+      { kind: 'relation', rowKey: 'new', entityIds: ['e1', 'x1'] },
+    ]),
+  );
   await waitFor(() => expect(probes().length).toBeGreaterThan(1));
 });
 
 test('снятие блокировки инвалидирует вторую сторону связи и entity.query', async () => {
-  const { calls } = renderWithProviders(
+  const { calls, queryClient } = renderWithProviders(
     <>
       <DetailScreen entityId="e1" />
       <ListProbe />
       <SideProbe id="t1" />
     </>,
     handler({ relations: [rel('r1', 'e1', 't1', 'dependency')] }),
+    { freshness: true },
   );
+  await openDetails();
   expect(await screen.findByText('Ждёт меня')).toBeInTheDocument();
   const probes = () =>
     calls.filter(
@@ -533,6 +551,12 @@ test('снятие блокировки инвалидирует вторую с
   fireEvent.click(screen.getByRole('button', { name: 'Снять блокировку' }));
   fireEvent.click(screen.getByRole('button', { name: 'Снять' }));
 
+  await waitFor(() => expect(calls.some((c) => c.path === 'relation.delete')).toBe(true));
+  await act(async () =>
+    testFreshnessOf(queryClient).changes([
+      { kind: 'relation', rowKey: 'r1', entityIds: ['e1', 't1'], operation: 'delete' },
+    ]),
+  );
   await waitFor(() => expect(sideGets().length).toBeGreaterThan(sidesBefore));
   await waitFor(() => expect(probes().length).toBeGreaterThan(1));
 });

@@ -11,9 +11,11 @@ import {
   KNOWN_NODE_TYPES,
   upgradeBodyDoc,
 } from '@orbis/shared/doc/types';
+import { useQueryClient } from '@tanstack/react-query';
 import type { JSONContent } from '@tiptap/core';
 import { TRPCClientError } from '@trpc/client';
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { freshnessRuntimeOf } from '../../lib/freshness/provenance';
 import { isBodyStale } from '../../lib/orbis-error';
 import type { RouterInputs } from '../../trpc';
 import { useEntityUpdate } from '../entity-detail/useEntityDetail';
@@ -21,6 +23,7 @@ import { isBodyPending } from '../undo/body-provenance';
 import { isUndoEpoch, subscribeUndoEpoch, undoEpoch } from '../undo/undo-epoch';
 import type { FlushResult } from './body-flush';
 import {
+  bindSubmittedDraft,
   captureDraftWriter,
   clearDraft,
   DRAFT_REJECTING_CODE,
@@ -47,11 +50,7 @@ type UpdateBodyDoc = RouterInputs['entity']['update']['bodyDoc'];
  */
 export type { BodyDoc };
 
-/**
- * Пауза перед сохранением — щедрая НАМЕРЕННО: onSettled мутации зовёт invalidateGraph(utils),
- * то есть инвалидацию ВСЕГО графа (useEntityDetail.ts:75), и сохранение на каждый штрих било бы
- * по кэшу каждые несколько нажатий.
- */
+/** Пауза перед отправкой очередного документа. */
 export const SAVE_DEBOUNCE_MS = 2000;
 
 /**
@@ -269,6 +268,7 @@ function toCurrentSchema(draft: Draft): Draft | null {
  * её сервер, и только он.
  */
 export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave {
+  const queryClient = useQueryClient();
   const { mutation, conflict, dismissConflict } = useEntityUpdate(entityId);
   const mutate = mutation.mutate;
 
@@ -372,12 +372,10 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
   /** «Как только текущий запрос осядет — отправить отложенное». Ставится вместо второй попытки. */
   const chainedRef = useRef(false);
   /**
-   * Ревизия тела, которую сервер подтвердил ПОСЛЕДНИМ сохранением. Кэш узнаёт новое значение
-   * только с перечитывания (его заводит invalidateGraph в onSettled), а оно может и опоздать:
-   * пауза 2 с, а круг «мутация + перечитывание» на плохой связи длиннее. С ревизией из кэша
-   * второе сохранение подряд ловило бы 409 без всякой чужой правки.
+   * Ревизия подтверждённого сохранения доступна досылу сразу из ответа, пока
+   * редактор и наблюдатели кеша ещё не приняли новый кадр.
    */
-  const confirmedRef = useRef<number | null>(null);
+  const confirmedRef = useRef<{ revision: number; current?: () => boolean } | null>(null);
   /**
    * Поколение записи. Растёт при смене `entityId` и отсекает колбэки запросов, ушедших ДО
    * смены: сам запрос при этом не отменяется (он про прежнюю запись и обязан доехать), но его
@@ -579,14 +577,10 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
    * базы — по умолчанию кэшной (`Math.max(confirmed, entity.bodyRevision)`), у набора —
    * ревизии показанного текста (`onDocChange`, рулинг R-17); ревизия только растёт.
    *
-   * Кэшной одной мало: он узнаёт новое значение только с перечитывания (его заводит
-   * invalidateGraph в onSettled), а оно может и опоздать — пауза 2 с, а круг «мутация +
-   * перечитывание» на плохой связи длиннее. С ревизией из кэша второе сохранение подряд ловило
-   * бы 409 без всякой чужой правки.
    */
   const currentExpected = useCallback((base: number = entityRef.current.bodyRevision): number => {
     const confirmed = confirmedRef.current;
-    return confirmed !== null && confirmed > base ? confirmed : base;
+    return confirmed && confirmed.current?.() !== false ? Math.max(confirmed.revision, base) : base;
   }, []);
 
   // Тип объявлен явно: без него `save`, зовущий себя из собственного колбэка, попадает в
@@ -622,7 +616,7 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
       // (ревью раунда 1, И-6). Свой же снимать обязательно: иначе правку, которую человек
       // набрал и сам же отменил, следующее открытие записи воскресило бы досылом.
       if (ownDraftRef.current) {
-        clearDraft(entityId);
+        if (!freshnessRuntimeOf(queryClient)?.requiresDurableDraft()) clearDraft(entityId);
         ownDraftRef.current = false;
       }
       // Остановка снимается ВМЕСТЕ с отложенным документом, и это не симметрия ради симметрии.
@@ -668,8 +662,9 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
     // возобновляется тем же кругом.
     // Второй запор — `foreignDraftRef`, и он ПЕРЕЖИВАЕТ снятие баннера: см. там же, почему
     // «открыть серверное тело» не решение, а отсрочка (гейт-ревью раунда 1, Critical).
+    let draftToken: string | undefined;
     if (pendingDraftRef.current === null && foreignDraftRef.current === null) {
-      saveDraft(entityId, doc, expectedBodyRevision, new Date().toISOString());
+      draftToken = saveDraft(entityId, doc, expectedBodyRevision, new Date().toISOString());
       // По ПРОИСХОЖДЕНИЮ документа, а не безусловно: досыл кладёт на диск ровно то, что оттуда
       // и прочитал, и своим этот черновик не делает (см. `ownDraftRef`).
       ownDraftRef.current = pendingFromEditorRef.current;
@@ -711,6 +706,7 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
     const gen = genRef.current;
     const requestEpoch = undoEpoch();
     const stale = () => gen !== genRef.current || !isUndoEpoch(requestEpoch);
+    const currentOperation = freshnessRuntimeOf(queryClient)?.captureOperation();
 
     inFlightRef.current = true;
     chainedRef.current = false;
@@ -727,6 +723,12 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
       // Отказ здесь именно СЕТЕВОЙ: следующая правка попытается снова, и правильно сделает —
       // брошенный запрос мог не доехать вовсе.
       setSaving(false);
+      if (currentOperation?.() === false) {
+        chainedRef.current = false;
+        lastFailedRef.current = true;
+        settleRef.current();
+        return;
+      }
       // Ответа не было вовсе — отказ транспортный (`transportFailedRef`).
       transportFailedRef.current = true;
       lastFailedRef.current = true;
@@ -742,95 +744,100 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
       settleRef.current();
       if (queued) save();
     }, SAVE_GIVE_UP_MS);
-    mutate(
-      // Приведение, а не проверка формы: `JSONContent` описывает ЛЮБОЙ узел ProseMirror, а
-      // вход мутации сужен до узла `doc` с массивом блоков — на уровне типов эти две правды
-      // не сводятся. Проверять форму здесь незачем: ровно это и спрашивает серверный гейт
-      // (Задача 5), а его отказ терминален и виден.
-      // `autosave` — сеанс правки текста (§8.5): КАЖДОЕ сохранение отсюда — текст редактора владельца, включая досыл
-      // черновика и «оставить моё»; сервер складывает их в одну запись журнала, пока паузы короче 10 минут.
-      { id: entityId, bodyDoc: doc as UpdateBodyDoc, expectedBodyRevision, autosave: true },
-      {
-        onSuccess: (saved) => {
-          // Черновика с диска здесь НЕ снимаем: это делает обвязка уровня мутации
-          // (useEntityDetail.settleBodyDraft), и делает всегда. Поштучные колбэки — второй
-          // аргумент `mutate` — библиотека зовёт только при живых слушателях, а самый важный
-          // досыл уходит из уборки эффекта, когда наблюдателя уже отцепили (ревью раунда 1,
-          // I-1). Здесь остаётся ровно то, что про ЭТОТ хук и умирает вместе с ним.
-          if (stale()) return;
-          lastFailedRef.current = false;
-          ownDraftRef.current = false;
-          writerRef.current.basis = doc;
-          confirmedRef.current = saved.bodyRevision;
-          // Ревизия отложенного двигается вместе с подтверждённой, и это обязательно: правка,
-          // набранная ПОВЕРХ только что сохранённой, — её потомок, и база у неё теперь ответ
-          // сервера. Не двинь мы её, досыл из onSettled ушёл бы с ревизией, которую этот же
-          // успех и сдвинул, — то есть с гарантированным 409 от собственного предшественника.
-          pendingBaseRef.current = saved.bodyRevision;
-          // Снимается с очереди только ЭТОТ документ. Приехавшую за время запроса правку
-          // отправит её СОБСТВЕННЫЙ таймер паузы, а если тот успел сработать, пока шёл
-          // запрос, — досыл из onSettled. Второй путь заметнее, первый — чаще.
-          if (pendingRef.current === doc) pendingRef.current = null;
-          transportFailedRef.current = false;
-          setFailure(null);
-        },
-        onError: (err) => {
-          if (stale()) return;
-          const terminal =
-            err instanceof TRPCClientError && err.data?.code === DRAFT_REJECTING_CODE;
-          // Пометку на диске ставит обвязка уровня мутации (см. onSuccess выше). Черновик при
-          // этом НЕ стирается ни там, ни тут: отвергнутый текст набирал человек, и выбросить
-          // его молча — потеря того самого класса, ради которого черновик и заведён. А досылать
-          // его сам хук больше не станет (см. Draft.rejected): повтор обречён, каждое открытие
-          // записи стоило бы обречённого запроса и молча выключало бы ей сохранение.
-          //
-          // Здесь запоминается САМ документ, а не факт отказа: следующая запись черновика ЭТИМ
-          // хуком обязана вернуть пометку именно ему и никому другому (см. `rejectedDocRef`).
-          // Реф принадлежит текущему поколению записи и владельцу; старый ответ не меняет его.
-          if (terminal) rejectedDocRef.current = doc;
-          // Замок текста — по структурному коду отказа (`data.orbis`, РП-5), а не по транспортному
-          // CONFLICT: 409 бывает и у других отказов, а «досыл обречён» — только у этого.
-          if (isBodyStale(err)) staleDocRef.current = doc;
-          lastFailedRef.current = true;
-          // Транспортный — без ответа сервера: не ошибка tRPC вовсе или ошибка без кода и статуса.
-          transportFailedRef.current =
-            !(err instanceof TRPCClientError) ||
-            (err.data?.code === undefined && err.data?.httpStatus === undefined);
-          setFailure(terminal ? 'terminal' : 'network');
-          // Документ не выбрасывается: `pendingRef` остаётся, потому что при 409 человек
-          // продолжает набирать ровно этот текст, и подмена его серверным вырвала бы правку
-          // из-под рук.
-          if (terminal) stoppedRef.current = true;
-        },
-        onSettled: () => {
-          // Отсечка ЗДЕСЬ тестом не покрыта и покрыта быть НЕ МОЖЕТ — проверено мутацией
-          // (снять её: все тесты зелёные). Доказательство, а не наблюдение: до этого колбэка
-          // запрос прежней записи вообще доживает лишь тогда, когда после смены записи никто
-          // не сохранял (иначе query-core отцепил наблюдателя от первой мутации, и поштучные
-          // колбэки не зовутся вовсе — I2). А в этом случае сброс уже обнулил и признак
-          // полёта, и флаг досыла, а выдержки соседней записи ещё не существует: её взводит
-          // только `save`, и он же следом зовёт `mutate` — то есть отцепляет. Снимать нечего
-          // ни здесь, ни ниже. Оставлена ради симметрии с двумя колбэками выше, где отсечка
-          // нагружена по-настоящему.
-          if (stale()) return;
-          clearGiveUp();
-          inFlightRef.current = false;
-          setSaving(false);
-          // Досыл отложенного — ОДИН, и только если его просили, пока шёл запрос. Сам по себе
-          // отказ повтора не заводит: тот ушёл бы с той же протухшей ревизией и
-          // получил бы тот же 409 — и так по кругу. Флаг снимается перед вызовом, поэтому
-          // круг «отказ → досыл → отказ → досыл» невозможен: второй досыл никто не просил.
-          if (lastFailedRef.current) settleRef.current();
-          const queued = pendingRef.current !== null && !sameDoc(pendingRef.current.doc, doc.doc);
-          if (chainedRef.current && (!lastFailedRef.current || queued)) {
-            chainedRef.current = false;
-            save();
-          }
-          settleRef.current();
-        },
+    // The server validates the document. Keep its exact local draft slot with this send.
+    const request = {
+      id: entityId,
+      bodyDoc: doc as UpdateBodyDoc,
+      expectedBodyRevision,
+      autosave: true as const,
+    };
+    bindSubmittedDraft(request, draftToken);
+    mutate(request, {
+      onSuccess: (saved) => {
+        // Черновика с диска здесь НЕ снимаем: это делает обвязка уровня мутации
+        // (useEntityDetail.settleBodyDraft), и делает всегда. Поштучные колбэки — второй
+        // аргумент `mutate` — библиотека зовёт только при живых слушателях, а самый важный
+        // досыл уходит из уборки эффекта, когда наблюдателя уже отцепили (ревью раунда 1,
+        // I-1). Здесь остаётся ровно то, что про ЭТОТ хук и умирает вместе с ним.
+        if (stale() || currentOperation?.() === false) return;
+        lastFailedRef.current = false;
+        ownDraftRef.current = false;
+        writerRef.current.basis = doc;
+        confirmedRef.current = { revision: saved.bodyRevision, current: currentOperation };
+        // Ревизия отложенного двигается вместе с подтверждённой, и это обязательно: правка,
+        // набранная ПОВЕРХ только что сохранённой, — её потомок, и база у неё теперь ответ
+        // сервера. Не двинь мы её, досыл из onSettled ушёл бы с ревизией, которую этот же
+        // успех и сдвинул, — то есть с гарантированным 409 от собственного предшественника.
+        pendingBaseRef.current = saved.bodyRevision;
+        // Снимается с очереди только ЭТОТ документ. Приехавшую за время запроса правку
+        // отправит её СОБСТВЕННЫЙ таймер паузы, а если тот успел сработать, пока шёл
+        // запрос, — досыл из onSettled. Второй путь заметнее, первый — чаще.
+        if (pendingRef.current === doc) pendingRef.current = null;
+        transportFailedRef.current = false;
+        setFailure(null);
       },
-    );
-  }, [entityId, epoch, mutate, clearTimer, clearGiveUp, preserveOwnerPending]);
+      onError: (err) => {
+        if (stale() || currentOperation?.() === false) return;
+        const terminal = err instanceof TRPCClientError && err.data?.code === DRAFT_REJECTING_CODE;
+        // Пометку на диске ставит обвязка уровня мутации (см. onSuccess выше). Черновик при
+        // этом НЕ стирается ни там, ни тут: отвергнутый текст набирал человек, и выбросить
+        // его молча — потеря того самого класса, ради которого черновик и заведён. А досылать
+        // его сам хук больше не станет (см. Draft.rejected): повтор обречён, каждое открытие
+        // записи стоило бы обречённого запроса и молча выключало бы ей сохранение.
+        //
+        // Здесь запоминается САМ документ, а не факт отказа: следующая запись черновика ЭТИМ
+        // хуком обязана вернуть пометку именно ему и никому другому (см. `rejectedDocRef`).
+        // Реф принадлежит текущему поколению записи и владельцу; старый ответ не меняет его.
+        if (terminal) rejectedDocRef.current = doc;
+        // Замок текста — по структурному коду отказа (`data.orbis`, РП-5), а не по транспортному
+        // CONFLICT: 409 бывает и у других отказов, а «досыл обречён» — только у этого.
+        if (isBodyStale(err)) staleDocRef.current = doc;
+        lastFailedRef.current = true;
+        // Транспортный — без ответа сервера: не ошибка tRPC вовсе или ошибка без кода и статуса.
+        transportFailedRef.current =
+          !(err instanceof TRPCClientError) ||
+          (err.data?.code === undefined && err.data?.httpStatus === undefined);
+        setFailure(terminal ? 'terminal' : 'network');
+        // Документ не выбрасывается: `pendingRef` остаётся, потому что при 409 человек
+        // продолжает набирать ровно этот текст, и подмена его серверным вырвала бы правку
+        // из-под рук.
+        if (terminal) stoppedRef.current = true;
+      },
+      onSettled: () => {
+        // Отсечка ЗДЕСЬ тестом не покрыта и покрыта быть НЕ МОЖЕТ — проверено мутацией
+        // (снять её: все тесты зелёные). Доказательство, а не наблюдение: до этого колбэка
+        // запрос прежней записи вообще доживает лишь тогда, когда после смены записи никто
+        // не сохранял (иначе query-core отцепил наблюдателя от первой мутации, и поштучные
+        // колбэки не зовутся вовсе — I2). А в этом случае сброс уже обнулил и признак
+        // полёта, и флаг досыла, а выдержки соседней записи ещё не существует: её взводит
+        // только `save`, и он же следом зовёт `mutate` — то есть отцепляет. Снимать нечего
+        // ни здесь, ни ниже. Оставлена ради симметрии с двумя колбэками выше, где отсечка
+        // нагружена по-настоящему.
+        if (stale()) return;
+        clearGiveUp();
+        inFlightRef.current = false;
+        setSaving(false);
+        if (currentOperation?.() === false) {
+          // The draft survives reset. Do not automatically replay it against the old basis.
+          chainedRef.current = false;
+          lastFailedRef.current = true;
+          settleRef.current();
+          return;
+        }
+        // Досыл отложенного — ОДИН, и только если его просили, пока шёл запрос. Сам по себе
+        // отказ повтора не заводит: тот ушёл бы с той же протухшей ревизией и
+        // получил бы тот же 409 — и так по кругу. Флаг снимается перед вызовом, поэтому
+        // круг «отказ → досыл → отказ → досыл» невозможен: второй досыл никто не просил.
+        if (lastFailedRef.current) settleRef.current();
+        const queued = pendingRef.current !== null && !sameDoc(pendingRef.current.doc, doc.doc);
+        if (chainedRef.current && (!lastFailedRef.current || queued)) {
+          chainedRef.current = false;
+          save();
+        }
+        settleRef.current();
+      },
+    });
+  }, [entityId, epoch, mutate, clearTimer, clearGiveUp, preserveOwnerPending, queryClient]);
 
   const onDocChange = useCallback(
     (doc: BodyDoc) => {
@@ -1038,7 +1045,7 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
       base.bodyDoc.v === draft.doc.v &&
       sameDoc(draft.doc.doc, base.bodyDoc.doc as JSONContent)
     ) {
-      clearDraft(entityId);
+      if (!freshnessRuntimeOf(queryClient)?.requiresDurableDraft()) clearDraft(entityId);
       return;
     }
     // Черновик старой формы (до плана А) несёт baseUpdatedAt и не несёт ревизии (§8.3, К-26): совпал штамп записи —
@@ -1079,7 +1086,7 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
     // гасит досыл первого, сносимого прохода — уборки всех эффектов React прогоняет между
     // двумя проходами.
     return clearDraftTimer;
-  }, [entityId, save, setPendingDraft, clearDraftTimer]);
+  }, [entityId, save, setPendingDraft, clearDraftTimer, queryClient]);
 
   const applyPendingDraft = useCallback(() => {
     const draft = pendingDraftRef.current;

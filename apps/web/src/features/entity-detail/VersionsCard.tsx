@@ -8,9 +8,13 @@
 // Восстанавливается ТОЛЬКО тело — аспекты, связи и заголовок в снимок не входят (инвариант 8
 // среза). Об этом сказано в подтверждении: «восстановить версию» без оговорки читается как
 // «вернуть запись целиком», и человек нажимал бы её, ожидая большего, чем случится.
+
+import { useQueryClient } from '@tanstack/react-query';
+import { getQueryKey } from '@trpc/react-query';
 import { useEffect, useId, useRef, useState, useSyncExternalStore } from 'react';
 import { formatDate } from '../../lib/format';
-import { invalidateGraph } from '../../lib/invalidate';
+import { freshnessRuntimeOf } from '../../lib/freshness/provenance';
+import { useFreshnessVisible } from '../../lib/freshness/screen';
 import { isBodyStale } from '../../lib/orbis-error';
 import { type RouterOutputs, trpc } from '../../trpc';
 import { Badge } from '../../ui/Badge';
@@ -19,6 +23,7 @@ import { Dialog } from '../../ui/Dialog';
 import { useToast } from '../../ui/toast-store';
 import { resetSteps } from '../entity-editor/arrows-stack';
 import { beginBodyRewrite, bodyRevisionOf, flushBodyOf } from '../entity-editor/body-flush';
+import { confirmBody } from '../undo/body-provenance';
 import { journalRefOf } from '../undo/journal-ref';
 import { isUndoEpoch, subscribeUndoEpoch, undoEpoch } from '../undo/undo-epoch';
 import { offerUndoLazy } from '../undo/undo-lazy';
@@ -33,6 +38,7 @@ export function VersionsCard({ entity, active }: { entity: Entity; active: boole
   // переписал бы тело записи, взятой для примера.
   const readOnly = useHostReadOnly();
   const utils = trpc.useUtils();
+  const client = useQueryClient();
   const { show } = useToast();
   // Часовой пояс — по УЖЕ живому ключу кэша (его читает сам экран): своей сети секция не
   // добавляет.
@@ -43,7 +49,8 @@ export function VersionsCard({ entity, active }: { entity: Entity; active: boole
    * КАЖДОМ открытии любой записи — включая те, где по вкладкам никто не ходил. Ровно та
    * плата, из-за которой «Тред» живым не держат (см. Tabs).
    */
-  const list = trpc.version.list.useQuery({ entityId: entity.id }, { enabled: active });
+  const shown = useFreshnessVisible();
+  const list = trpc.version.list.useQuery({ entityId: entity.id }, { enabled: active && shown });
 
   /** Версия, о восстановлении которой сейчас спрашивают. Null — диалога нет. */
   const [target, setTarget] = useState<Version | null>(null);
@@ -51,22 +58,47 @@ export function VersionsCard({ entity, active }: { entity: Entity; active: boole
 
   const epoch = useSyncExternalStore(subscribeUndoEpoch, undoEpoch, undoEpoch);
   const restoreEpoch = useRef(epoch);
+  const restoreCurrent = useRef<(() => boolean) | undefined>(undefined);
   const finishRewrite = useRef<(revision?: number) => void>(() => {});
   const restore = trpc.version.restore.useMutation({
     meta: { undoStack: 'self' },
-    onMutate: () => ({ finish: finishRewrite.current, entityId: entity.id }),
+    onMutate: () => ({
+      finish: finishRewrite.current,
+      entityId: entity.id,
+      epoch: restoreEpoch.current,
+      current: restoreCurrent.current,
+    }),
     onSuccess: (data, _vars, ctx) => {
+      if (!ctx || !isUndoEpoch(ctx.epoch)) return;
+      if (ctx.current?.() === false) {
+        ctx.finish();
+        if (currentId.current === ctx.entityId && alive.current) setTarget(null);
+        return;
+      }
       resetSteps(data.id);
-      utils.entity.get.setData(detailGetInput(data.id), (old) =>
-        old ? { ...old, entity: data } : old,
-      );
+      freshnessRuntimeOf(client)?.rememberBody(data.id, data);
+      const input = detailGetInput(data.id);
+      const previous = utils.entity.get.getData(input);
+      if (previous && (previous.entity.bodyRevision ?? 0) <= data.bodyRevision) {
+        const { body, bodyDoc, bodyRevision, bodyChangedAt } = data;
+        const updatedAt = client.getQueryState(
+          getQueryKey(trpc.entity.get, input, 'query'),
+        )?.dataUpdatedAt;
+        utils.entity.get.setData(
+          input,
+          {
+            ...previous,
+            entity: { ...previous.entity, body, bodyDoc, bodyRevision, bodyChangedAt },
+          },
+          { updatedAt },
+        );
+        confirmBody(utils.entity.get.getData(input)?.entity.bodyDoc);
+      }
       ctx?.finish(data.bodyRevision);
       if (currentId.current === data.id && alive.current) setTarget(null);
       // Тело записи переписано — граф перечитывается целиком (Р17): та же запись открыта в
       // редакторе, а её строка живёт в чужих подзадачах и backlinks.
-      invalidateGraph(utils);
       // Восстановление закрепляет прежнее тело страховочной версией на сервере.
-      void utils.version.list.invalidate({ entityId: data.id });
       const ref = journalRefOf(data);
       if (ref)
         offerUndoLazy({
@@ -78,8 +110,9 @@ export function VersionsCard({ entity, active }: { entity: Entity; active: boole
     // Отказ показываем строкой ниже, а модалку закрываем: открытый диалог поверх сообщения об
     // отказе читался бы как «нажми ещё раз» (тот же порядок в RunFeed).
     onError: (_error, _vars, ctx) => {
-      ctx?.finish();
-      if (currentId.current === ctx?.entityId && alive.current) setTarget(null);
+      if (!ctx || !isUndoEpoch(ctx.epoch)) return;
+      ctx.finish();
+      if (currentId.current === ctx.entityId && alive.current) setTarget(null);
     },
   });
 
@@ -95,17 +128,24 @@ export function VersionsCard({ entity, active }: { entity: Entity; active: boole
   const flushPending = useRef<{ epoch: number } | null>(null);
   const [flushingEpoch, setFlushingEpoch] = useState<number | null>(null);
   const flushing = flushingEpoch === epoch;
-  const restoreOwned = isUndoEpoch(restoreEpoch.current);
-  const restoring = restore.isPending && restoreOwned;
+  const restoreOwned = isUndoEpoch(restoreEpoch.current) && restoreCurrent.current?.() !== false;
+  const restoring = restore.isPending && isUndoEpoch(restoreEpoch.current);
   const restoreTo = async (version: Version) => {
     if ((flushPending.current && isUndoEpoch(flushPending.current.epoch)) || restoring) return;
+    const current = freshnessRuntimeOf(client)?.captureOperation();
     const intent = { epoch: undoEpoch() };
     flushPending.current = intent;
     const id = entity.id;
     setFlushingEpoch(intent.epoch);
     try {
       const flushed = await flushBodyOf(id);
-      if (!isUndoEpoch(intent.epoch) || !alive.current || currentId.current !== id) return;
+      if (
+        !isUndoEpoch(intent.epoch) ||
+        current?.() === false ||
+        !alive.current ||
+        currentId.current !== id
+      )
+        return;
       if (flushed === 'blocked' || flushed === 'offline') {
         setTarget(null);
         show(
@@ -118,6 +158,7 @@ export function VersionsCard({ entity, active }: { entity: Entity; active: boole
       }
       finishRewrite.current = beginBodyRewrite(id);
       restoreEpoch.current = intent.epoch;
+      restoreCurrent.current = current;
       restore.mutate({
         versionId: version.id,
         expectedBodyRevision: bodyRevisionOf(id) ?? shownBodyRevision(entity),
@@ -159,7 +200,7 @@ export function VersionsCard({ entity, active }: { entity: Entity; active: boole
               // Сбрасываем отказ ДО перечитывания: тревога, оставшаяся висеть над свежей
               // записью, утверждала бы неправду.
               restore.reset();
-              invalidateGraph(utils);
+              void utils.entity.get.fetch(detailGetInput(entity.id), { staleTime: 0 });
             }}
           >
             Обновить

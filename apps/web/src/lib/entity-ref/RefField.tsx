@@ -22,6 +22,7 @@ import { effectiveLabel, OWNER_LOCALE, type PropertyDefinition } from '@orbis/sh
 import type { QueryAst, QueryFilterNode } from '@orbis/shared/query';
 import { useState } from 'react';
 import { type RouterOutputs, trpc } from '../../trpc';
+import { useFreshnessVisible } from '../freshness/screen';
 import { FIELD_CLASS } from '../registry/field-class';
 
 /**
@@ -122,7 +123,8 @@ export function useRefOptions(
   def: PropertyDefinition | undefined,
   search = '',
 ): { options: QueryEntity[]; isPending: boolean; isError: boolean } {
-  const enabled = def?.type.kind === 'ref';
+  const shown = useFreshnessVisible();
+  const enabled = shown && def?.type.kind === 'ref';
   const ast = refQueryAst(def === undefined ? undefined : refTargetOf(def), search);
   const q = trpc.entity.query.useQuery(
     // Запрос выключен без ref definition; target undefined у ref означает любую запись.

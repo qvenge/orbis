@@ -1,5 +1,4 @@
 import { useState } from 'react';
-import { invalidateGraph } from '../../../lib/invalidate';
 import { orbisErrorOf } from '../../../lib/orbis-error';
 import { fieldLabel } from '../../../lib/registry/labels';
 import { useRegistry } from '../../../lib/registry/useRegistry';
@@ -38,7 +37,6 @@ export function ConfirmationCard({
   // Клиентский expiry — только UI; approve всё равно ревалидирует на сервере (D-a).
   const expired = now - new Date(createdAt).getTime() > EXPIRY_MS;
 
-  const utils = trpc.useUtils();
   const approve = trpc.ai.approve.useMutation({
     meta: { undoStack: 'skip' },
     onSuccess: () => {
@@ -46,8 +44,6 @@ export function ConfirmationCard({
       // Подтверждают именно РИСКОВАННОЕ (удаление, массовая правка) — путь, после
       // которого протухает больше всего. Без этой строки не перечитывались ни списки,
       // ни открытая сущность, ни бюджет: пачка исполнена, а экран показывал прежнее.
-      invalidateGraph(utils);
-      void utils.budget.invalidate();
     },
     onError: (e) => {
       // approve может вернуть структурную ошибку постфактум. Карточку отката (`undo_of`) при отказе правила отмены

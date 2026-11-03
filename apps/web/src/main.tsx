@@ -1,13 +1,21 @@
 import { isOAuthAuthorizePath } from '@orbis/shared';
 import { QueryClientProvider } from '@tanstack/react-query';
-import { StrictMode } from 'react';
+import { type ReactNode, StrictMode, useLayoutEffect, useState, useSyncExternalStore } from 'react';
 import { createRoot } from 'react-dom/client';
 import { App } from './App';
-import { AuthProvider, getCurrentToken } from './auth/AuthProvider';
+import { AuthProvider, getCurrentToken, useAuth } from './auth/AuthProvider';
+import { clearLocalMessages } from './features/chat/local-messages';
+import { resetEnsuredThreads } from './features/chat/useEnsuredThread';
 import { ConsentScreen } from './features/oauth/ConsentScreen';
 import { OnboardingGate } from './features/onboarding/OnboardingGate';
 import { UndoBinder } from './features/undo/undo-binding';
+import { isUndoEpoch, subscribeUndoEpoch, undoEpoch } from './features/undo/undo-epoch';
+import { bindFreshnessRuntime } from './lib/freshness/provenance';
+import { createFreshnessRuntime } from './lib/freshness/runtime';
+import { FreshnessContext } from './lib/freshness/screen';
+import { createFreshnessTransport } from './lib/freshness/transport';
 import { QueryBatchProvider } from './lib/query-blocks/batch';
+import { resetRegistryObservation } from './lib/registry/useRegistry';
 import { initTheme } from './lib/theme';
 import { perfBuffer } from './perf/collector';
 import { registerRetrySend } from './state/retry';
@@ -30,6 +38,37 @@ const trpcClient = makeTrpcClient(getCurrentToken);
 // Боевая проводка retry-буфера: flush → entity.create(source:'fast_path') через vanilla-клиент.
 registerRetrySend(makeRetrySend(makeVanillaClient(getCurrentToken)));
 
+function FreshnessSession({ children }: { children: ReactNode }) {
+  const { userId } = useAuth();
+  const epoch = useSyncExternalStore(subscribeUndoEpoch, undoEpoch);
+  const [runtime, setRuntime] = useState<ReturnType<typeof createFreshnessRuntime>>();
+  useLayoutEffect(() => {
+    if (!userId) return;
+    const accountId = userId.toLowerCase();
+    // Owner JWTs resolve to their personal graph, whose id equals owner_ref
+    // (server identityOfPerson, graphs_personal_identity). Grants use a different resolver.
+    const scope = { accountId, graphId: accountId, epoch };
+    const next = createFreshnessRuntime({
+      queryClient,
+      scope,
+      transport: createFreshnessTransport({ getToken: getCurrentToken }),
+      isCurrent: () => isUndoEpoch(epoch),
+    });
+    const unbind = bindFreshnessRuntime(queryClient, next);
+    setRuntime(next);
+    return () => {
+      next.dispose();
+      unbind();
+      queryClient.clear();
+      clearLocalMessages(queryClient);
+      resetEnsuredThreads();
+      resetRegistryObservation();
+    };
+  }, [userId, epoch]);
+  if (!runtime || runtime.scope.epoch !== epoch) return null;
+  return <FreshnessContext.Provider value={runtime}>{children}</FreshnessContext.Provider>;
+}
+
 createRoot(rootElement).render(
   <StrictMode>
     <trpc.Provider client={trpcClient} queryClient={queryClient}>
@@ -50,9 +89,11 @@ createRoot(rootElement).render(
             {isOAuthAuthorizePath(window.location.pathname) ? (
               <ConsentScreen />
             ) : (
-              <OnboardingGate>
-                <App />
-              </OnboardingGate>
+              <FreshnessSession>
+                <OnboardingGate>
+                  <App />
+                </OnboardingGate>
+              </FreshnessSession>
             )}
             {/* Тосты доступны и до прохождения онбординга, поэтому вне гейта. */}
             <UndoBinder />

@@ -3,6 +3,7 @@ import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { App } from '../App';
 import { resetNavForTests } from '../state/navigation';
 import { registerRetrySend, useRetryBuffer } from '../state/retry';
+import { testFreshnessOf } from '../test/freshness';
 import { fixtureFreshness, queryReply, renderWithProviders } from '../test/harness';
 import { trpc } from '../trpc';
 
@@ -82,19 +83,26 @@ function GraphProbe() {
   return null;
 }
 
-/** Слив по событию 'online' с заданным исходом отправки; возвращает счётчик вызовов. */
+/** Hold the D2 result until the three visible reads have run. */
 async function flushWithOutcome(outcome: 'confirmed' | 'business_rejection') {
-  const send = vi.fn(async () => outcome);
+  let settle: () => void = () => {};
+  const committed = new Promise<void>((resolve) => {
+    settle = resolve;
+  });
+  const send = vi.fn(async () => {
+    await committed;
+    return outcome;
+  });
   registerRetrySend(send);
-  setOnline(false);
   useRetryBuffer.getState().enqueueCreate({ title: 'офлайн-запись', tags: [] }, 'fast_path');
 
-  const { calls } = renderWithProviders(
+  const { calls, queryClient } = renderWithProviders(
     <>
       <App />
       <GraphProbe />
     </>,
     appMocks,
+    { freshness: true },
   );
   // Ждём первого чтения каждого ключа, иначе «прибавилось» считалось бы от нуля.
   await waitFor(() => {
@@ -113,15 +121,16 @@ async function flushWithOutcome(outcome: 'confirmed' | 'business_rejection') {
     count: before('entity.count'),
   };
 
-  setOnline(true);
-  await act(async () => {
-    window.dispatchEvent(new Event('online'));
-  });
   await waitFor(() => expect(send).toHaveBeenCalledTimes(1));
+  await act(async () => {
+    settle();
+    if (outcome === 'confirmed')
+      testFreshnessOf(queryClient).changes([{ kind: 'entity', rowKey: 'e1', operation: 'insert' }]);
+  });
   return { calls, snapshot, after: before };
 }
 
-test('подтверждённый слив буфера перечитывает граф целиком (query + get + count)', async () => {
+test('событие созданной из буфера записи перечитывает зависимые query + get + count', async () => {
   const { snapshot, after } = await flushWithOutcome('confirmed');
   await waitFor(() => {
     expect(after('entity.query')).toBeGreaterThan(snapshot.query);

@@ -1,3 +1,4 @@
+import { FreshnessStatus } from './frame/FreshnessStatus';
 import { HostPresence } from './frame/HostPresence';
 
 /**
@@ -16,6 +17,7 @@ export function ScreenHeader({ title }: { title: string }) {
       <HostPresence />
       <div className="flex h-9 items-center px-4 pb-1">
         <h1 className="min-w-0 flex-1 truncate text-sm font-medium">{title}</h1>
+        <FreshnessStatus />
       </div>
     </header>
   );

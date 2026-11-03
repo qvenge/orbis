@@ -19,7 +19,8 @@ import type { JSONContent } from '@tiptap/core';
 import { TRPCClientError } from '@trpc/client';
 import { getQueryKey } from '@trpc/react-query';
 import { useRef, useState } from 'react';
-import { invalidateGraph } from '../../lib/invalidate';
+import { freshnessRuntimeOf } from '../../lib/freshness/provenance';
+import { useFreshnessVisible } from '../../lib/freshness/screen';
 import { isBodyStale, isTitleStale } from '../../lib/orbis-error';
 import { useNoteRegistryVersion } from '../../lib/registry/useRegistry';
 import { startAction } from '../../perf/marks';
@@ -31,9 +32,9 @@ import {
   DRAFT_REJECTING_CODE,
   markDraftRejected,
   readDraft,
+  submittedDraftOf,
 } from '../entity-editor/draft-storage';
 import { sameDoc } from '../entity-editor/strip-ids';
-import { runPollInterval } from './run-poll';
 
 type Entity = RouterOutputs['entity']['get']['entity'];
 type UpdateInput = RouterInputs['entity']['update'];
@@ -166,7 +167,8 @@ function settleBodyDraft(vars: UpdateInput, err?: unknown): void {
   const sent = vars.bodyDoc;
   if (sent === undefined) return;
   const draft = readDraft(vars.id);
-  if (draft === null) return;
+  const submitted = submittedDraftOf(vars);
+  if (draft === null || (submitted !== undefined && draft.slot !== submitted)) return;
   if (draft.doc.v !== sent.v || !sameDoc(draft.doc.doc, sent.doc as JSONContent)) return;
   if (err === undefined) {
     clearDraft(vars.id);
@@ -181,16 +183,6 @@ function settleBodyDraft(vars: UpdateInput, err?: unknown): void {
  * отказ замка текста (`STALE_VERSION` в `data.orbis`, спека скорости §8.1) → флаг conflict для
  * сообщения «обновите».
  *
- * `onSettled` — довесок вызывающего к УРОВНЮ МУТАЦИИ, а не поштучный колбэк `mutate`.
- * Разница ровно та, что уже описана у `settleBodyDraft` выше: поштучные колбэки (второй
- * аргумент `mutate`) библиотека зовёт только при ЖИВЫХ слушателях
- * (`@tanstack/query-core`, `mutationObserver.js`: `if (this.#mutateOptions && this.hasListeners())`),
- * а экран записи размонтируется на первом же переходе — роутер рисует только активную
- * вкладку. Правка, за которой человек сразу ушёл на соседнюю вкладку, теряла бы свой
- * побочный эффект молча; на уровне мутации он исполняется ВСЕГДА.
- *
- * Аргумент — `vars` отправки, а не замыкание вызывающего: колбэк переживает размонтирование
- * и обязан решать по тому, ЧТО УЕХАЛО, а не по тому, что было на экране в момент рендера.
  */
 /**
  * Оптимистичный патч, отличный от того, что уходит на сервер, — по ОБЪЕКТУ правки (финал 1б, C2 M-1).
@@ -211,10 +203,7 @@ const PERF_KIND = new WeakMap<UpdateInput, PerfActionKind>();
 /** Значение возврата из закрытия на время полёта — строка `default` каталога поставки (Б-2 №98). */
 const REOPEN_STATUS = (RULE_TASK_STATUS_DEFAULT.params as { value: { const: string } }).value.const;
 
-export function useEntityUpdate(
-  entityId: string,
-  opts: { onSettled?: (vars: UpdateInput) => void; undoToast?: UndoToastOption } = {},
-) {
+export function useEntityUpdate(entityId: string, opts: { undoToast?: UndoToastOption } = {}) {
   const utils = trpc.useUtils();
   const queryClient = useQueryClient();
   const titleGenerations: Record<string, number> = TITLE_GENERATIONS.get(queryClient) ?? {};
@@ -306,6 +295,15 @@ export function useEntityUpdate(
     meta: { undoStack: 'self' },
     onMutate: async (vars) => {
       const epoch = undoEpoch();
+      const runtime = freshnessRuntimeOf(queryClient);
+      const bodyToken =
+        vars.autosave && vars.expectedBodyRevision !== undefined
+          ? runtime?.beginBodySave({
+              entityId: vars.id,
+              expectedBodyRevision: vars.expectedBodyRevision,
+              draftToken: submittedDraftOf(vars),
+            })
+          : undefined;
       const titleGeneration = titleGenerations[vars.id] ?? 0;
       const titleSeq =
         vars.title !== undefined && !checksVersion(vars)
@@ -327,7 +325,14 @@ export function useEntityUpdate(
             );
       setConflict(false);
       await utils.entity.get.cancel(input);
-      if (!isUndoEpoch(epoch)) return;
+      if (
+        !isUndoEpoch(epoch) ||
+        (bodyToken && !runtime?.isCurrentOperation(bodyToken.startedSequence))
+      ) {
+        return bodyToken
+          ? { runtime, bodyToken, epoch, input, titleGeneration, seq: seqRef.current }
+          : undefined;
+      }
       const prev = utils.entity.get.getData(input);
       const prevUpdatedAt =
         queryClient.getQueryState(getQueryKey(trpc.entity.get, input, 'query'))?.dataUpdatedAt ?? 0;
@@ -357,6 +362,8 @@ export function useEntityUpdate(
         prev,
         prevUpdatedAt,
         pendingBody,
+        runtime,
+        bodyToken,
         input,
         seq: seqRef.current,
         expectedBodyRevision: vars.expectedBodyRevision,
@@ -367,13 +374,20 @@ export function useEntityUpdate(
       };
     },
     onError: (err, vars, ctx) => {
-      // Диск — первым делом и БЕЗ единой отсечки: он про запись, а не про то, чья очередь
-      // сейчас на экране (см. settleBodyDraft).
+      // Отказ может пометить только черновик этого поколения графа и отправки.
+      // Навигация между записями сама по себе не отменяет эту пометку.
+      if (ctx?.bodyToken && !ctx.runtime?.settleBodySave(ctx.bodyToken, { error: err })) return;
       settleBodyDraft(vars, err);
       const old = superseded(vars.id, ctx);
       const accepted = titleAccepted(vars, ctx);
       // Снимок до преемника или принятого title уже устарел; остальные откаты — по своему ключу.
-      if (ctx && !old && !accepted)
+      if (
+        ctx &&
+        !old &&
+        !accepted &&
+        queryClient.getQueryState(getQueryKey(trpc.entity.get, ctx.input, 'query'))
+          ?.dataUpdatedAt === ctx.prevUpdatedAt
+      )
         utils.entity.get.setData(ctx.input, ctx.prev, { updatedAt: ctx.prevUpdatedAt });
       // Отказ «по объекту» — прежде всего `MODULE_DISABLED` (срез 1б §8.3): расширение выключили в
       // другом месте, и маска в кеше экрана устарела — перечитать её, чтобы поля встали только
@@ -381,7 +395,7 @@ export function useEntityUpdate(
       // прочие отказы с тем же кодом (`COMPUTED_WRITE`, `ROLE_SYSTEM_ONLY`) обходятся одним лишним
       // чтением настроек — дешевле, чем разбирать текст отказа.
       if (err instanceof TRPCClientError && err.data?.code === 'FORBIDDEN')
-        void utils.user.getSettings.invalidate();
+        void utils.user.getSettings.fetch(undefined, { staleTime: 0 }).catch(() => {});
       // А флаг — только если ответ пришёл по ТЕКУЩЕЙ записи. Эти колбэки — уровня МУТАЦИИ:
       // они исполняются всегда, даже когда наблюдателя уже отцепили, и о поколении записи в
       // useBodySave ничего не знают. Без сверки 409 по прежней записи, доехавший после смены,
@@ -398,10 +412,22 @@ export function useEntityUpdate(
       if (isBodyStale(err)) setConflict(true);
     },
     onSuccess: (data, vars, ctx) => {
-      confirmBody(ctx?.pendingBody);
-      // Тоже первым делом: сохранённый черновик обязан уйти с диска, даже если экран этой
-      // записи давно закрыт (см. settleBodyDraft).
-      settleBodyDraft(vars);
+      const runtime = ctx?.runtime;
+      if (ctx?.bodyToken && runtime) {
+        const matches =
+          typeof data.id === 'string' && data.id.toLowerCase() === vars.id.toLowerCase();
+        const current = runtime.settleBodySave(
+          ctx.bodyToken,
+          matches
+            ? { txId: data.txId, result: data }
+            : { error: 'Ответ сохранения относится к другой записи' },
+        );
+        if (!matches || !current) return;
+        if (!superseded(vars.id, ctx) && !runtime.hasNewerBodySave(ctx.bodyToken)) {
+          runtime.publishBody(vars.id);
+        }
+      } else confirmBody(ctx?.pendingBody);
+      if (!runtime?.requiresDurableDraft()) settleBodyDraft(vars);
       const ref = journalRefOf(data);
       if (
         ref !== null &&
@@ -434,24 +460,8 @@ export function useEntityUpdate(
       if (!checksVersion(vars)) return;
       if (vars.id === entityId) setConflict(false);
     },
-    // Экран записи — главный путь закрытия, переноса и архивации записи, которую показывают
-    // списки («Записи») и блоки страниц (Повестка, Daily Planning), а они читают ДРУГИЕ ключи
-    // кэша — `entity.query` и данные блоков `entity.blocks`. Их staleTime (30 с глобально в
-    // trpc.ts) при refetchOnWindowFocus:false сам не истечёт вовремя: без явной инвалидации
-    // закрытая задача висела бы в «Просрочено» Повестки до полуминуты после «Готово».
-    // Тот же путь уже у QuickCapture — здесь его недоставало.
-    // Р17: инвалидация detail — БЕЗ аргумента. Правка аспекта двигает прогресс чужой
-    // открытой цели, а переименование — строку этой сущности у соседей: в их подзадачах
-    // и backlinks и в строках query_result чата (EntityRef читает ключ {id} без include,
-    // backlinks приезжают внутри ответа соседа — точечный ключ detail не задевал ни то,
-    // ни другое).
-    onSettled: (_data, err, vars, ctx) => {
-      // «Подтверждено» — ответ сервера без ошибки; отказ подтверждением не считается.
+    onSettled: (_data, err, _vars, ctx) => {
       if (!err) ctx?.action?.confirmed();
-      invalidateGraph(utils);
-      // Довесок вызывающего — здесь же, на уровне мутации (см. докблок хука): у секций записи это
-      // гашение денежных агрегатов бюджета, которые `invalidateGraph` не покрывает по построению.
-      opts.onSettled?.(vars);
     },
   });
 
@@ -470,17 +480,9 @@ export function useEntityUpdate(
 
 export function useEntityDetail(entityId: string) {
   const get = trpc.entity.get.useQuery(detailGetInput(entityId), {
-    // Идущий прогон опрашивается сам (run-poll.ts): экран прогона после «Прогнать сейчас»
-    // иначе застывал бы на «идёт · 0 шагов» до перезагрузки. Для остальных записей — false.
-    refetchInterval: (query) => runPollInterval(query.state.data?.entity.props),
+    enabled: useFreshnessVisible(),
   });
-  /**
-   * Версия реестра из ответа (§А10-1): по ней инвалидируется клиентский снимок подписей и
-   * каталога полей (`useRegistry`). Экран записи — главный её носитель: `entity.get`
-   * уходит отсюда после КАЖДОЙ правки графа (`invalidateGraph`), то есть ровно тогда, когда
-   * снимок мог устареть, и подписи карточек аспектов обновляются без перезагрузки.
-   */
-  useNoteRegistryVersion(get.data?.registryVersion, get.dataUpdatedAt);
+  useNoteRegistryVersion(get.data, get.dataUpdatedAt);
   const entity = get.data?.entity;
   return { get, entity, ...useRecordEdits(entityId, entity) };
 }

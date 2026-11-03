@@ -26,7 +26,10 @@
 // процедуры.
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useMemo, useSyncExternalStore } from 'react';
+import { isUndoEpoch, subscribeUndoEpoch, undoEpoch } from '../../features/undo/undo-epoch';
 import { trpc } from '../../trpc';
+import { freshnessRuntimeOf, networkObservationOf } from '../freshness/provenance';
+import { useFreshnessVisible } from '../freshness/screen';
 import { type EffectiveRegistry, lookupOf, type RegistryLookup } from './labels';
 
 /** Ключ снимка реестра — один на приложение; версия в него не входит (см. шапку файла). */
@@ -74,17 +77,16 @@ function subscribe(listener: () => void): () => void {
 }
 
 /**
- * ТОЛЬКО для тестов: вернуть модульное состояние к «сервер версии ещё не называл».
+ * При завершении scope вернуть наблюдение к «сервер версии ещё не называл».
  *
  * Нужна потому, что хранилище выше живёт МОДУЛЕМ и переживает размонтирование дерева — как и
  * должно в бою (версия реестра не сбрасывается от перехода между экранами). В тестовом файле
  * это означало бы, что второй тест стартует с версией, которую наблюдал первый, и проверял бы
  * не то, что написано в его имени.
  *
- * Из продуктового кода звать её нельзя: она стирает наблюдённую версию и память о сделанном
- * перечитывании — следующая названная версия перечитала бы реестр на пустом месте.
+ * Обычная навигация это наблюдение сохраняет.
  */
-export function resetRegistryVersionForTests(): void {
+export function resetRegistryObservation(): void {
   observedVersion = undefined;
   observedAt = 0;
   refetchedFor = undefined;
@@ -96,9 +98,18 @@ export function resetRegistryVersionForTests(): void {
  * что делать это надо ПОСЛЕ рендера: `noteRegistryVersion` будит подписчиков, а обновление
  * внешнего хранилища во время рендера — предупреждение React и лишний кадр.
  */
-export function useNoteRegistryVersion(version: string | undefined, readAt?: number): void {
-  useEffect(() => noteRegistryVersion(version, readAt), [version, readAt]);
+export function useNoteRegistryVersion(
+  response: { registryVersion?: string } | undefined,
+  changedAt: number,
+): void {
+  const receipt = changedAt > 0 ? networkObservationOf(response) : undefined;
+  useEffect(() => {
+    if (receipt && isUndoEpoch(receipt.epoch))
+      noteRegistryVersion(response?.registryVersion, receipt.receivedAt);
+  }, [response?.registryVersion, receipt]);
 }
+
+export const resetRegistryVersionForTests = resetRegistryObservation;
 
 /** Снимок реестра для читателя: словари, поиск, подписи и версия, под которой он сложен. */
 export interface RegistryView extends RegistryLookup {
@@ -129,6 +140,7 @@ export function useRegistry(): RegistryView {
   );
   const query = useQuery({
     queryKey: REGISTRY_QUERY_KEY,
+    enabled: useFreshnessVisible(),
     queryFn: (): Promise<EffectiveRegistry> => utils.client.registry.effective.query(),
     // Снимок протухает не по часам, а по версии. `staleTime` конечный означал бы перезапрос по
     // таймеру, то есть плату за событие, которого нет. Прежний снимок на время перечитывания
@@ -139,7 +151,15 @@ export function useRegistry(): RegistryView {
   const failed = query.isError && data === undefined;
   const refreshFailed = query.isError;
   const refreshing = query.isFetching;
-  const versionStale = version !== undefined && data?.version !== version;
+  const epoch = useSyncExternalStore(subscribeUndoEpoch, undoEpoch);
+  const receipt = networkObservationOf(data);
+  const confirmed = receipt?.epoch === epoch;
+  const previousScope = receipt !== undefined && !confirmed;
+  useEffect(() => {
+    if (previousScope) void query.refetch({ cancelRefetch: false });
+  }, [previousScope, query.refetch]);
+  const versionStale =
+    (data !== undefined && !confirmed) || (version !== undefined && data?.version !== version);
   const retry = useCallback(() => {
     void query.refetch();
   }, [query.refetch]);
@@ -157,13 +177,17 @@ export function useRegistry(): RegistryView {
     // одно перечитывание). Слитая с ним, новая версия осталась бы «уже перечитанной», а снимок —
     // старым до следующей смены. Лишнего запроса это не стоит: на одну версию он один (страж
     // выше), а первый запрос холодного старта сюда не попадает — снимка ещё нет.
-    void queryClient.invalidateQueries({ queryKey: REGISTRY_QUERY_KEY }, { cancelRefetch: true });
+    const runtime = freshnessRuntimeOf(queryClient);
+    if (runtime) runtime.requestRead(REGISTRY_QUERY_KEY);
+    else
+      void queryClient.invalidateQueries({ queryKey: REGISTRY_QUERY_KEY }, { cancelRefetch: true });
   }, [version, data, queryClient]);
   // Cached readers mount repeatedly. Their snapshot initializes the version once;
   // it cannot supersede a newer version already reported by graph reads.
   useEffect(() => {
-    if (observedVersion === undefined) noteRegistryVersion(data?.version, query.dataUpdatedAt);
-  }, [data?.version, query.dataUpdatedAt]);
+    if (receipt && confirmed && observedVersion === undefined)
+      noteRegistryVersion(data?.version, receipt.receivedAt);
+  }, [data?.version, confirmed, receipt]);
   // Локаль здесь НЕ параметр хука, хотя `label()` её принимает: снимок один на всё
   // приложение, а локаль владельца — одна и общая с сервером (`OWNER_LOCALE`). Параметр
   // хука означал бы два разных перевода одного реестра на одном экране.

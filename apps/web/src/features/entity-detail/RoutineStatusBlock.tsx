@@ -11,7 +11,7 @@
 import type { ReactNode } from 'react';
 import { useOpenRecord } from '../../app/useOpenRecord';
 import { formatDate, plural } from '../../lib/format';
-import { invalidateGraph } from '../../lib/invalidate';
+import { useFreshnessVisible } from '../../lib/freshness/screen';
 import { type RouterOutputs, trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
 import { str, strArray } from './aspect-read';
@@ -85,7 +85,6 @@ export function RoutineStatusBlock({
   lastRun: TicketRun | undefined;
 }) {
   const openEntity = useOpenRecord();
-  const utils = trpc.useUtils();
   const tz = trpc.user.getSettings.useQuery().data?.timezone;
   // Предпросмотр шаблона (хост `readOnly`): состояние рутины видно, «Прогнать сейчас» и паузы нет —
   // ручной прогон и пауза двигали бы рутину, взятую для примера.
@@ -100,41 +99,20 @@ export function RoutineStatusBlock({
    * таймзоне владельца и серверным часам, и вычислять его на клиенте значило бы завести
    * второй календарь со своим пониманием перехода на зимнее время.
    */
-  const overview = trpc.routine.overview.useQuery({ routineId: entity.id });
-
-  /**
-   * Обзор — четвёртый взгляд на тот же граф, и протухает он вместе с ним: ручной прогон меняет
-   * в нём «последний прогон», пауза — «следующее срабатывание». `invalidateGraph` о нём не
-   * знает (он про entity.query/get/count), поэтому обзор гасится здесь, рядом с обеими
-   * мутациями, — иначе после паузы экран продолжал бы обещать срабатывание в 07:00.
-   */
-  const invalidateOverview = () => {
-    void utils.routine.overview.invalidate();
-  };
+  const overview = trpc.routine.overview.useQuery(
+    { routineId: entity.id },
+    { enabled: useFreshnessVisible() },
+  );
 
   const runNow = trpc.routine.runNow.useMutation({
     onSuccess: ({ runId }) => {
       // Ответ приходит ДО модели (V1.3): за исходом владелец пойдёт на экран самого прогона,
       // туда и ведём. Инвалидация — до перехода: прогон уже создан, и история рутины без неё
       // осталась бы вчерашней.
-      invalidateGraph(utils);
-      invalidateOverview();
       openEntity(runId);
     },
   });
-  /**
-   * Пауза — обычная правка свойства, и идёт она общей обвязкой entity.update: оптимистичный
-   * патч, откат при отказе и инвалидация графа уже написаны там (useEntityUpdate).
-   *
-   * Гашение ОБЗОРА — на уровне мутации (`onSettled` хука), а не в поштучном колбэке `mutate`.
-   * Прежде оно висело вторым аргументом `mutate`, и такие колбэки `@tanstack/query-core`
-   * зовёт только пока у наблюдателя есть слушатели (`mutationObserver.js:77`): «Возобновить»
-   * и немедленный уход с экрана оставляли `overview.nextBucketAt` посчитанным НА ПАУЗЕ, то
-   * есть `null`, — и владелец видел «Следующее срабатывание: —» у живой рутины. Окно тут
-   * ограничено `staleTime` обзора (30 с) и `refetchOnMount` чинит его сам, но чинит поздно и
-   * не всегда: возврат на экран внутри окна показывает ту же неправду.
-   */
-  const { mutation: update } = useEntityUpdate(entity.id, { onSettled: invalidateOverview });
+  const { mutation: update } = useEntityUpdate(entity.id);
 
   const run = lastRun?.props;
   const outcome = str(run?.['orbis/run_outcome']);

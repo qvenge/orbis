@@ -1,5 +1,6 @@
 import { Tabs as RT } from 'radix-ui';
 import { type ReactNode, useState } from 'react';
+import { FreshnessVisibility } from '../lib/freshness/screen';
 
 /**
  * Вкладки. `keepMounted` — свойство КАЖДОЙ вкладки, а не компонента, и это не украшение API.
@@ -95,7 +96,7 @@ export function Tabs({
           forceMount={t.keepMounted === true ? true : undefined}
           className={t.keepMounted === true ? 'pt-3 data-[state=inactive]:hidden' : 'pt-3'}
         >
-          {t.content}
+          <FreshnessVisibility visible={value === t.value}>{t.content}</FreshnessVisibility>
         </RT.Content>
       ))}
     </RT.Root>

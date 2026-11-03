@@ -74,7 +74,9 @@ it.each([
   fireEvent.click(await screen.findByTestId('screen-menu'));
   fireEvent.click(await screen.findByRole('menuitem', { name: 'Свойства и связи' }));
   const next = await screen.findByRole('dialog', { name: 'Свойства и связи' });
-  expect(within(next).getByRole('button', { name: 'Сделать страницей' })).toBeEnabled();
+  await waitFor(() =>
+    expect(within(next).getByRole('button', { name: 'Сделать страницей' })).toBeEnabled(),
+  );
   if (kind === 'host') {
     fireEvent.click(within(next).getByRole('button', { name: 'Сделать страницей' }));
     await waitFor(() =>
@@ -89,7 +91,9 @@ it.each([
     expect(next).toBeInTheDocument();
     await act(async () => releaseNext({ actionId: 'current-owner-action', consequences: false }));
   }
-  expect(within(next).getByRole('button', { name: 'Сделать страницей' })).toBeEnabled();
+  await waitFor(() =>
+    expect(within(next).getByRole('button', { name: 'Сделать страницей' })).toBeEnabled(),
+  );
   expect(calls.filter((c) => c.path === 'entity.updateBatch')).toHaveLength(
     kind === 'host' ? 2 : 1,
   );

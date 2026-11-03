@@ -22,13 +22,13 @@ import {
 import { parseBody } from '@orbis/shared/doc';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, fireEvent, renderHook, screen, waitFor, within } from '@testing-library/react';
+import { getQueryKey } from '@trpc/react-query';
 import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { EntityCard } from '../features/chat/cards/EntityCard';
 import { MemoryRuleCard } from '../features/chat/cards/MemoryRuleCard';
 import type { EntityCardData, MemoryRuleSuggestionData } from '../features/chat/cards/types';
-import type { ChatMessage } from '../features/chat/useChatThread';
-import { chatThreadKey } from '../features/chat/useChatThread';
+import { localMessagesOf } from '../features/chat/local-messages';
 import { CATEGORY_QUERY, createUnderMask, useFastPath } from '../features/chat/useFastPath';
 import { AspectSection } from '../features/entity-detail/AspectSection';
 import { resetDetailMenuModuleForTests } from '../features/entity-detail/DetailMenuSlot';
@@ -36,9 +36,9 @@ import { DetailScreen } from '../features/entity-detail/DetailScreen';
 import { NativeRow } from '../features/entity-detail/NativeRow';
 import { RecordHostProvider, recordHostValue } from '../features/entity-detail/record-host';
 import { PAGE_TEMPLATES_QUERY } from '../features/page/usePageTemplates';
-import { invalidateBudget } from '../lib/invalidate';
 import { noteRegistryVersion, resetRegistryVersionForTests } from '../lib/registry/useRegistry';
 import { useRetryBuffer } from '../state/retry';
+import { testFreshnessOf } from '../test/freshness';
 import {
   installCrashTrap,
   type MockHandler,
@@ -55,13 +55,6 @@ import { BUILTIN_REGISTRY, registryReply } from '../test/registry';
 import { queryClient, trpc } from '../trpc';
 import { useExtensionRecordHooks } from './extension-registry';
 
-// Агрегаты бюджета гасятся помощником `lib/invalidate` (§8.4 п. 7 — «безвредно, остаётся»): шпион
-// поверх настоящего, прочие экспорты (`invalidateGraph`) — как есть.
-vi.mock('../lib/invalidate', async (importOriginal) => {
-  const orig = await importOriginal<typeof import('../lib/invalidate')>();
-  return { ...orig, invalidateBudget: vi.fn(orig.invalidateBudget) };
-});
-
 installCrashTrap();
 
 beforeEach(() => {
@@ -72,7 +65,6 @@ beforeEach(() => {
   resetRegistryVersionForTests();
   noteRegistryVersion(BUILTIN_REGISTRY.version);
   useRetryBuffer.setState({ size: 0, pending: [] });
-  vi.mocked(invalidateBudget).mockClear();
 });
 
 afterEach(() => {
@@ -205,7 +197,7 @@ function screenHandler(world: World): MockHandler {
   };
 }
 
-function openRecord(world: World, extra?: ReactNode) {
+function openRecord(world: World, extra?: ReactNode, freshness = false) {
   navAt(world.entity.id);
   return renderWithProviders(
     <>
@@ -213,7 +205,7 @@ function openRecord(world: World, extra?: ReactNode) {
       {extra}
     </>,
     screenHandler(world),
-    { queries: queryClient.getDefaultOptions().queries },
+    { queries: queryClient.getDefaultOptions().queries, freshness },
   );
 }
 
@@ -402,8 +394,7 @@ describe('(г) быстрый ввод', () => {
     );
     const { result } = renderHook(() => useFastPath('t1'), { wrapper: Wrap });
     const cardAspects = () => {
-      const data = qc.getQueryData(chatThreadKey('t1')) as { pages: ChatMessage[][] } | undefined;
-      const msg = (data?.pages ?? []).flat()[0];
+      const msg = localMessagesOf(qc).snapshot('t1')[0];
       return (msg?.metadata as { cards?: { aspects?: string[] }[] } | undefined)?.cards?.[0]
         ?.aspects;
     };
@@ -559,14 +550,23 @@ test('(е) Финансы выключены: «Запомнить» прави�
 // --- (ж) агрегаты бюджета после правки финансовой записи --------------------------------------
 
 test('(ж) Финансы выключены: правка суммы проходит и гасит `budget.*` — безвредно, остаётся', async () => {
-  const { calls } = openRecord({ mask: ['finance'], entity: CASES.finance.entity });
+  const { calls, queryClient } = openRecord(
+    { mask: ['finance'], entity: CASES.finance.entity },
+    undefined,
+    true,
+  );
+  const budget = getQueryKey(trpc.budget.overview, { month: '2026-11' }, 'query');
+  queryClient.setQueryData(budget, null);
   const section = await screen.findByTestId('aspect-orbis/financial');
   await within(section).findByText(plaqueText('finance'));
   const amount = within(section).getByTestId('prop-orbis/amount');
   fireEvent.change(amount, { target: { value: '700' } });
   fireEvent.blur(amount);
   await waitFor(() => expect(updates(calls).length).toBeGreaterThan(0));
-  await waitFor(() => expect(vi.mocked(invalidateBudget)).toHaveBeenCalled());
+  await act(async () =>
+    testFreshnessOf(queryClient).changes([{ kind: 'entity', rowKey: CASES.finance.entity.id }]),
+  );
+  await waitFor(() => expect(queryClient.getQueryState(budget)?.isInvalidated).toBe(true));
 });
 
 // --- (з) включение возвращает всё --------------------------------------------------------------
@@ -574,13 +574,16 @@ test('(ж) Финансы выключены: правка суммы прохо
 describe('(з) «Включить» на плашке возвращает всё', () => {
   test('Цели: «Включить» → `user.setModuleEnabled` → плашки нет, поля правятся, «Снять аспект «Цель»»', async () => {
     const world: World = { mask: ['goals'], entity: CASES.goals.entity };
-    const { calls } = openRecord(world);
+    const { calls, queryClient } = openRecord(world, undefined, true);
     const section = await screen.findByTestId('aspect-orbis/goal');
     fireEvent.click(await within(section).findByRole('button', { name: enableLabel('goals') }));
     await waitFor(() =>
       expect(calls.filter((c) => c.path === 'user.setModuleEnabled').map((c) => c.input)).toEqual([
         { module: 'goals', enabled: true },
       ]),
+    );
+    await act(async () =>
+      testFreshnessOf(queryClient).changes([{ kind: 'settings', rowKey: 'owner' }]),
     );
     await waitFor(() => expect(screen.queryByText(plaqueText('goals'))).toBeNull());
     const back = screen.getByTestId('aspect-orbis/goal');
@@ -592,12 +595,15 @@ describe('(з) «Включить» на плашке возвращает вс�
 
   test('Финансы: поля, бейдж категории и строка остатка конверта вернулись', async () => {
     const world: World = { mask: ['finance'], entity: CASES.finance.entity };
-    const { calls } = openRecord(world, <EntityCard card={finCard} />);
+    const { calls, queryClient } = openRecord(world, <EntityCard card={finCard} />, true);
     const section = await screen.findByTestId('aspect-orbis/financial');
     await within(section).findByText(plaqueText('finance'));
     expect(within(screen.getByTestId('native-row')).queryByText('Такси')).toBeNull();
     fireEvent.click(within(section).getByRole('button', { name: enableLabel('finance') }));
     await waitFor(() => expect(calls.some((c) => c.path === 'user.setModuleEnabled')).toBe(true));
+    await act(async () =>
+      testFreshnessOf(queryClient).changes([{ kind: 'settings', rowKey: 'owner' }]),
+    );
     await waitFor(() => expect(screen.queryByText(plaqueText('finance'))).toBeNull());
     expect(await within(screen.getByTestId('native-row')).findByText('Такси')).toBeInTheDocument();
     expect(await screen.findByTestId('envelope-remaining')).toBeInTheDocument();

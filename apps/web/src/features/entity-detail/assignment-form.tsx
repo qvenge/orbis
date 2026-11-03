@@ -1,4 +1,5 @@
 import { useId } from 'react';
+import { useFreshnessVisible } from '../../lib/freshness/screen';
 import { trpc } from '../../trpc';
 import type { Entity, PanelCommand } from './properties-relations/types';
 
@@ -36,7 +37,10 @@ export function assignmentScopeLabel(scope: string): string {
 }
 /** Shared key deduplicates card summary and fields; human opens no grant request. */
 export function useAssignmentGrants(draft: AssignmentDraft) {
-  const grants = trpc.oauth.listGrants.useQuery(undefined, { enabled: draft.executor === 'agent' });
+  const visible = useFreshnessVisible();
+  const grants = trpc.oauth.listGrants.useQuery(undefined, {
+    enabled: visible && draft.executor === 'agent',
+  });
   const live = (grants.data ?? []).filter((g) => g.revokedAt === null);
   const revoked =
     grants.data !== undefined && draft.grantId !== '' && !live.some((g) => g.id === draft.grantId);

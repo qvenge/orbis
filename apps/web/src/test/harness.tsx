@@ -19,9 +19,16 @@ import { APPS_QUERY } from '../features/apps/useApps';
 import { PAGE_TEMPLATES_QUERY } from '../features/page/usePageTemplates';
 import { SUPPLY_RECORDS_QUERY } from '../features/page/useSupplyRecords';
 import { UndoBinder } from '../features/undo/undo-binding';
+import { undoEpoch } from '../features/undo/undo-epoch';
+import {
+  nextNetworkOrder,
+  recordNetworkReadReceipt,
+  recordReadErrorReceipt,
+} from '../lib/freshness/provenance';
 import { QueryBatchProvider } from '../lib/query-blocks/batch';
 import type { RouterOutputs } from '../trpc';
 import { authErrorLink, makeQueryClient, trpc } from '../trpc';
+import { fixtureWatermarkOf, makeTestFreshness } from './freshness';
 
 /**
  * Ловушка для КРАХОВ В ОБРАБОТЧИКАХ. Зовётся на верхнем уровне файла тестов.
@@ -131,18 +138,40 @@ export function staleBodyError(
   );
 }
 
-export function mockLink(handler: MockHandler): TRPCLink<AppRouter> {
+export function mockLink(handler: MockHandler, watermark = () => '0'): TRPCLink<AppRouter> {
   return () =>
     ({ op }) =>
       observable((observer) => {
-        Promise.resolve(handler(op.path, op.input, op.type))
+        const epoch = undoEpoch();
+        const startedSequence = nextNetworkOrder();
+        let answer: unknown;
+        try {
+          answer = handler(op.path, op.input, op.type);
+        } catch (error) {
+          answer = Promise.reject(error);
+        }
+        Promise.resolve(answer)
           .then((data) => {
+            if (op.type === 'query' || op.path === 'entity.blocks') {
+              const receipt = {
+                epoch,
+                startedSequence,
+                watermark: watermark(),
+                receivedAt: Date.now(),
+              };
+              recordNetworkReadReceipt(data, receipt);
+              if (typeof op.context.onNetworkReadReceipt === 'function')
+                op.context.onNetworkReadReceipt(receipt, data);
+            }
             observer.next({ result: { type: 'data', data } });
             observer.complete();
           })
-          .catch((err) =>
-            observer.error(err instanceof TRPCClientError ? err : TRPCClientError.from(err)),
-          );
+          .catch((err) => {
+            const error = err instanceof TRPCClientError ? err : TRPCClientError.from(err);
+            if (op.type === 'query' || op.path === 'entity.blocks')
+              recordReadErrorReceipt(error, { epoch, startedSequence });
+            observer.error(error);
+          });
         return () => {};
       });
 }
@@ -168,6 +197,7 @@ function unroutedDefault(path: string, input: unknown): unknown {
   if (isRecordScreenListCall({ path, input })) return queryReply([]);
   // «Обновления» поставки (срез 1б §9.1): плашка записи поставки спрашивает их на её экране — сьют,
   // который поставку не проверяет, получает «обновлений нет», а не `{}` вместо списка.
+  if (path === 'version.list') return [];
   if (path === 'supply.updates') return [];
   return undefined;
 }
@@ -205,21 +235,33 @@ const unrouted = (value: unknown): boolean =>
 export function renderWithProviders(
   ui: ReactNode,
   handler: MockHandler = () => ({}),
-  opts: { strict?: boolean; queries?: DefaultOptions['queries']; authErrors?: boolean } = {},
-): RenderResult & { calls: { path: string; input: unknown }[] } {
+  opts: {
+    strict?: boolean;
+    queries?: DefaultOptions['queries'];
+    authErrors?: boolean;
+    freshness?: boolean;
+  } = {},
+): RenderResult & {
+  calls: { path: string; input: unknown }[];
+  queryClient: ReturnType<typeof makeQueryClient>;
+} {
   const calls: { path: string; input: unknown }[] = [];
   const qc = makeQueryClient({ staleTime: 0, ...opts.queries });
+  if (opts.freshness) makeTestFreshness(qc);
   const client = trpc.createClient({
     links: [
       ...(opts.authErrors
         ? [authErrorLink({ onOutdated: emitClientOutdated, onUnauthorized: emitUnauthorized })]
         : []),
-      mockLink(async (path, input, type) => {
-        calls.push({ path, input });
-        const answer = await handler(path, input, type);
-        const fallback = unroutedDefault(path, input);
-        return fallback !== undefined && unrouted(answer) ? fallback : answer;
-      }),
+      mockLink(
+        async (path, input, type) => {
+          calls.push({ path, input });
+          const answer = await handler(path, input, type);
+          const fallback = unroutedDefault(path, input);
+          return fallback !== undefined && unrouted(answer) ? fallback : answer;
+        },
+        () => fixtureWatermarkOf(qc),
+      ),
     ],
   });
   const tree = (
@@ -237,7 +279,7 @@ export function renderWithProviders(
     </trpc.Provider>
   );
   const result = render(opts.strict ? <StrictMode>{tree}</StrictMode> : tree);
-  return Object.assign(result, { calls });
+  return Object.assign(result, { calls, queryClient: qc });
 }
 
 /**

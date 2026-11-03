@@ -1,19 +1,12 @@
 import { type ReactNode, useEffect } from 'react';
-import { invalidateGraph } from '../../lib/invalidate';
 import { trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
 import { Spinner } from '../../ui/Spinner';
 
 export function OnboardingGate({ children }: { children: ReactNode }) {
   const settings = trpc.user.getSettings.useQuery(undefined, { retry: false });
-  const utils = trpc.useUtils();
   const seed = trpc.user.seedOnboarding.useMutation({
-    onSuccess: (r) => {
-      // Заведение графа создаёт записи (мир, записи поставки). Списки, успевшие прочитаться
-      // пустыми до его конца, сами не протухнут — на первом запуске это ровно тот случай.
-      // Только при фактическом заведении: на заведённом графе вход ничего не пишет
-      // ({seeded:false}, срез 1б §8.6), и гонять инвалидацию на каждом старте сессии не за что.
-      if (r?.seeded) invalidateGraph(utils);
+    onSuccess: () => {
       // Настройки перечитываются после ответа: после заведения графа (в том числе после
       // reset-world, где строка настроек уже была) в них новая маска расширений. На
       // {seeded:false} перечитывать нечего, но ветка одна — лишний запрос раз за сессию.

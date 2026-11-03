@@ -68,7 +68,7 @@ export function QuestionCard({
       if (result.status === 'answered') setDraft('');
       // Ответ графа не пишет, но снимает флажок `undecided` с аспекта прогона (§9.6) —
       // поэтому «применённым» он не считается, а инвалидация графа нужна (см. `settled`).
-      settled({ applied: false });
+      settled({ applied: false, already: result.status === 'already' });
     },
   });
 

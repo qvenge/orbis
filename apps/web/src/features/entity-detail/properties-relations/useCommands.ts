@@ -1,6 +1,5 @@
 import { useCallback, useRef } from 'react';
 import { runGraphCommand } from '../../../lib/graph-command';
-import { invalidateGraphCommand } from '../../../lib/invalidate';
 import { useRegistry } from '../../../lib/registry/useRegistry';
 import { useGraphUndo } from '../../../lib/useGraphUndo';
 import { trpc } from '../../../trpc';
@@ -103,14 +102,12 @@ export function usePanelCommands(): {
             outcome = await runGraphCommand(() =>
               utils.client.relation.create.mutate(snapshot.key),
             );
-            if (isUndoEpoch(epoch)) invalidateGraphCommand(utils);
             break;
           case 'deleteRelation':
             title = `Снята связь „${registry.label(snapshot.key.role)}“`;
             outcome = await runGraphCommand(() =>
               utils.client.relation.delete.mutate(snapshot.key),
             );
-            if (isUndoEpoch(epoch)) invalidateGraphCommand(utils);
             break;
         }
         if (!isUndoEpoch(epoch))
@@ -137,12 +134,10 @@ export function usePanelCommands(): {
         const epoch = undoEpoch();
         const input = detailGetInput(snapshot.entityId);
         // A read started before the write cannot prove the current state. Cancel that exact
-        // key, mark it stale without a duplicate active refetch, then start a new fetch.
+        // key, then force a network read even if its cached result was fresh.
         await utils.entity.get.cancel(input);
         if (!isUndoEpoch(epoch)) return 'unavailable';
-        await utils.entity.get.invalidate(input, { refetchType: 'none' });
-        if (!isUndoEpoch(epoch)) return 'unavailable';
-        const current = await utils.entity.get.fetch(input);
+        const current = await utils.entity.get.fetch(input, { staleTime: 0 });
         if (!isUndoEpoch(epoch)) return 'unavailable';
         if (
           !current?.entity ||

@@ -1,3 +1,5 @@
+import { useQueryClient } from '@tanstack/react-query';
+import { getQueryKey } from '@trpc/react-query';
 // Предложение рутины (V1.6, V1.9, V1.14): что рутина хочет изменить в графе — ПОСТРОЧНО, с
 // объяснением прозой и решением владельца.
 //
@@ -18,17 +20,17 @@
 //    сервер: сверка предусловий на «Принять», гашение новым прогоном, решение со второго
 //    экрана. Часы вкладки об этом не знают ничего, и «устарело» по возрасту сообщения
 //    гасило бы кнопки живого предложения — и наоборот.
-import { useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useOpenRecord } from '../../../app/useOpenRecord';
 import { EntityRef } from '../../../lib/entity-ref/EntityRef';
 import { formatDate } from '../../../lib/format';
-import { invalidateGraph } from '../../../lib/invalidate';
+import { networkReadContext } from '../../../lib/freshness/provenance';
+import { useFreshnessVisible } from '../../../lib/freshness/screen';
 import { useRegistry } from '../../../lib/registry/useRegistry';
 import { type RouterOutputs, trpc } from '../../../trpc';
 import { Button } from '../../../ui/Button';
 import { Card } from '../../../ui/Card';
-import { chatThreadKey } from '../useChatThread';
+import { useChatThreadCatchup } from '../useChatThread';
 import { BODY_DIFF_SKIP_NOTES, BodyDiffUnits, type DiffUnit } from './BodyDiff';
 import {
   beforeText,
@@ -173,12 +175,19 @@ export function ProposalCard({
   threadId?: string;
 }) {
   const openEntity = useOpenRecord();
-  const utils = trpc.useUtils();
   // Подписи строк предложения и разбора расхождений — из реестра (§А9-2).
   const registry = useRegistry();
-  const queryClient = useQueryClient();
   const tz = trpc.user.getSettings.useQuery().data?.timezone;
-  const proposal = trpc.routine.proposal.useQuery({ runId });
+  const client = useQueryClient();
+  const proposal = trpc.routine.proposal.useQuery(
+    { runId },
+    {
+      enabled: useFreshnessVisible(),
+      trpc: {
+        context: networkReadContext(client, getQueryKey(trpc.routine.proposal, { runId }, 'query')),
+      },
+    },
+  );
   /**
    * Расхождения ПОСЛЕДНЕГО нажатия «Принять» — в сыром виде, как их вернул сервер. Держать их
    * состоянием, а не читать из перечитанного предложения, нужно ради формы: ответ мутации
@@ -193,39 +202,18 @@ export function ProposalCard({
    */
   const [replacedReason, setReplacedReason] = useState<ReplacedReason | null>(null);
 
+  const catchUpThread = useChatThreadCatchup(threadId);
   const decide = trpc.routine.decideProposal.useMutation({
     meta: { undoStack: 'skip' },
     onSuccess: (result) => {
-      /**
-       * Граф двигает ЛЮБОЕ решение, а не только принятое, — и это не перестраховка.
-       * `approve` исполняет пачку правок; но и `reject`, и `stale` пишут судьбу предложения в
-       * аспект самого прогона (`proposal.status`, `decided_at`, `mismatches`) обычным
-       * executor'ом, то есть меняют запись графа. Без инвалидации кэш держит её ещё 30 секунд
-       * (staleTime): история прогонов на экране рутины продолжала бы показывать «предложение:
-       * ждёт решения» после отказа, а обзор рутины — прежнее «ждёт».
-       */
-      invalidateGraph(utils);
-      // Принятое предложение правит и деньги (перенос категории, сумма, статус траты) —
-      // бюджетные агрегаты живут своим ключом и в invalidateGraph не входят (ConfirmationCard).
-      if (result.status === 'applied') void utils.budget.invalidate();
       setDecidedRows(result.status === 'stale' ? divergenceRows(registry, result) : null);
       setReplacedReason(result.status === 'replaced' ? result.reason : null);
-      /**
-       * Лента треда живёт СВОИМ ключом react-query, и `invalidateGraph` его не касается
-       * (lib/invalidate.ts — там ровно entity.query/get/count). А тред от решения меняется
-       * всегда: отказ дописывает свою строку, а правка владельца рождает ВТОРУЮ карточку
-       * предложения (Ш1.5). Без этой инвалидации ни то, ни другое не появилось бы до ухода
-       * с вкладки и возврата спустя `staleTime` (30 с) — приёмка 9 сорвалась бы молча.
-       *
-       * Только при известном треде: на экране прогона (RunFeed) ленты нет вовсе, и ключа
-       * тоже — рулинг П-5.
-       */
-      if (threadId !== undefined) {
-        void queryClient.invalidateQueries({ queryKey: chatThreadKey(threadId) });
-      }
       // Статус карточки — с сервера ВСЕГДА, в том числе после своего же нажатия: `already`
       // значит, что предложение решили без нас, и локальное «принято» было бы неправдой.
-      void proposal.refetch();
+      if (result.status === 'already' || result.status === 'replaced') {
+        void proposal.refetch();
+        catchUpThread();
+      }
     },
   });
 
@@ -242,7 +230,11 @@ export function ProposalCard({
    * бы в уже решённое предложение (сервер ответит `already`, но окно врать владельцу о
    * состоянии карточки заводить незачем).
    */
-  const busy = decide.isPending || proposal.isFetching;
+  const busy =
+    decide.isPending ||
+    proposal.isFetching ||
+    decide.data?.status === 'applied' ||
+    decide.data?.status === 'rejected';
 
   /**
    * Эта карточка показывает НЕ то предложение, которым прогон живёт сейчас (Ш1.3).

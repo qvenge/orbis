@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useFreshnessVisible } from '../../lib/freshness/screen';
 import { trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
 import type { RunUpdateBatch } from '../page/useUpdateBatch';
@@ -17,7 +18,10 @@ export function TaskPicker({
 }) {
   const [limit, setLimit] = useState(50);
   const [search, setSearch] = useState('');
-  const q = trpc.entity.query.useQuery({ ast: availableTasksQuery(limit + 1) });
+  const q = trpc.entity.query.useQuery(
+    { ast: availableTasksQuery(limit + 1) },
+    { enabled: useFreshnessVisible() },
+  );
   const rows = (q.data?.rows ?? [])
     .slice(0, limit)
     .filter((r) => r.title.toLocaleLowerCase().includes(search.toLocaleLowerCase()));

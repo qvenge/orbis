@@ -44,7 +44,7 @@ export function PageView({ reply }: { reply: EntityGetReply }) {
           onCloseMarkdown: () => {},
           screenConflict: false,
           noticeHost: null,
-          onRefresh: () => void utils.entity.get.invalidate(detailGetInput(entity.id)),
+          onRefresh: () => void utils.entity.get.fetch(detailGetInput(entity.id), { staleTime: 0 }),
           bodyGate,
         }}
       >

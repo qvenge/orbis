@@ -21,7 +21,6 @@ import {
   useState,
 } from 'react';
 import { createPortal } from 'react-dom';
-import { invalidateGraph } from '../../lib/invalidate';
 import { BodyKindProvider } from '../../lib/query-blocks/body-kind';
 import { type RouterOutputs, trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
@@ -207,7 +206,6 @@ export function EntityBody({
       if (bodyGate.current === gate) bodyGate.current = null;
     };
   }, [bodyGate, hasUnsent, flush, blocked, offline, keptOffline, expectedRevision]);
-  const utils = trpc.useUtils();
   /**
    * Отказ «сохранить в заметку» — В САМОМ БАННЕРЕ, а не тостом.
    *
@@ -222,7 +220,6 @@ export function EntityBody({
       // поштучных колбэках: уйди человек с записи, пока запрос в полёте, поштучные не позвались
       // бы вовсе — заметка бы создалась, а черновик остался, и следующее открытие предложило бы
       // сохранить его вторым разом.
-      invalidateGraph(utils);
       // Черновик снимается ТОЛЬКО ПО УСПЕХУ: сними его раньше ответа — отказ мутации оставил бы
       // человека без текста вообще, то есть нарушил бы единственное жёсткое требование §А11-2.
       // Стирается при этом ровно ПОКАЗАННЫЙ черновик (сверка по savedAt/baseUpdatedAt внутри).

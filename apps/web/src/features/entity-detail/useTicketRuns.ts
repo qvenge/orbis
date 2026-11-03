@@ -5,8 +5,9 @@
 // СЛУЖЕБНЫЙ аспект: компилятор запросов выкидывает их из любой выдачи, пока запрос сам их не
 // назвал (`apps/server/src/query/compile-ast.ts`, `namesServiceAspect`), иначе каждый шаг агента
 // поднимал бы прогон в топ «свежего». Без этого узла список тикета был бы пуст ВСЕГДА.
+
+import { useFreshnessVisible } from '../../lib/freshness/screen';
 import { type RouterOutputs, trpc } from '../../trpc';
-import { runPollInterval } from './run-poll';
 
 /** Прогон в объёме списка — ровно то, что отдаёт `entity.query` (без bodyDoc и связей). */
 export type TicketRun = RouterOutputs['entity']['query']['rows'][number];
@@ -54,6 +55,7 @@ export function useTicketRuns(
   ticketId: string,
   enabled: boolean,
 ): { runs: TicketRun[]; lastRun: TicketRun | undefined; isLoading: boolean } {
+  const shown = useFreshnessVisible();
   const q = trpc.entity.query.useQuery(
     { query: ticketRunsQuery(ticketId) },
     // enabled: у записи без назначения прогонов не бывает по построению — платить за них
@@ -66,15 +68,7 @@ export function useTicketRuns(
     // ответ владельца, — ответ уехал бы в прогон СОСЕДНЕГО тикета. А ради чего placeholder
     // ставят обычно — «не схлопнуть список на перечитывании» — здесь и без него: после
     // `invalidateGraph` ключ ТОТ ЖЕ, и react-query держит прежние данные до ответа.
-    {
-      enabled,
-      // Последний прогон идёт → список опрашивается (run-poll.ts): от него зависят блок
-      // состояния рутины («идёт прогон», кнопка «Прогнать сейчас») и блок ожидания тикета
-      refetchInterval: (query) => {
-        const last = query.state.data?.rows[0];
-        return last === undefined ? false : runPollInterval(last.props);
-      },
-    },
+    { enabled: enabled && shown },
   );
   const runs = q.data?.rows ?? [];
   // sortBy=orbis/created_at:desc — последний прогон стоит ПЕРВЫМ.

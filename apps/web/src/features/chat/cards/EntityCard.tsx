@@ -1,6 +1,10 @@
+import { useQueryClient } from '@tanstack/react-query';
+import { getQueryKey } from '@trpc/react-query';
 import { useState } from 'react';
 import { useOpenRecord } from '../../../app/useOpenRecord';
 import { formatAmount } from '../../../lib/format';
+import { networkReadContext } from '../../../lib/freshness/provenance';
+import { useFreshnessVisible } from '../../../lib/freshness/screen';
 import { fieldLabel } from '../../../lib/registry/labels';
 import { useRegistry } from '../../../lib/registry/useRegistry';
 import { trpc } from '../../../trpc';
@@ -40,8 +44,7 @@ export function EntityCard({
 
   // Остаток конверта (03-budget §4.1, B7): для financial-записи ПОСЛЕ подтверждения
   // сервером — «→ <категория> · осталось N ₽» по category_ref и occurred_on ЗАПИСИ.
-  // Остаток «после записи» гарантирует invalidateBudget в useFastPath/onUndo: сервер
-  // считает spent по факту, инвалидация перечитывает после каждой мутации.
+  // Graph changes refresh the balance computed by the server.
   // Только ФАКТИЧЕСКИЙ РАСХОД (ревью B7): у income остаток — шум, planned в spent
   // не входит (§2.7) — показывать «осталось» без самой записи было бы враньём.
   const isFinancial = card.aspects.includes('orbis/financial');
@@ -68,13 +71,21 @@ export function EntityCard({
     planned !== 'true' &&
     typeof categoryRef === 'string' &&
     typeof occurredOn === 'string';
-  const envQ = trpc.budget.envelopeForCategory.useQuery(
-    {
-      categoryId: typeof categoryRef === 'string' ? categoryRef : '',
-      date: typeof occurredOn === 'string' ? occurredOn : '',
+  const client = useQueryClient();
+  const visible = useFreshnessVisible();
+  const envelope = {
+    categoryId: typeof categoryRef === 'string' ? categoryRef : '',
+    date: typeof occurredOn === 'string' ? occurredOn : '',
+  };
+  const envQ = trpc.budget.envelopeForCategory.useQuery(envelope, {
+    enabled: wantRemaining && visible,
+    trpc: {
+      context: networkReadContext(
+        client,
+        getQueryKey(trpc.budget.envelopeForCategory, envelope, 'query'),
+      ),
     },
-    { enabled: wantRemaining },
-  );
+  });
   // null (Unbudgeted) и ошибка чтения → без строки остатка (§4.1: без конверта — ничего)
   const env = wantRemaining && envQ.data ? envQ.data : null;
 

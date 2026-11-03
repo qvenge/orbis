@@ -1,6 +1,5 @@
 import { EXTENSION_MANIFESTS, type ExtensionId, effectiveLabel, OWNER_LOCALE } from '@orbis/shared';
 import { useCallback } from 'react';
-import { invalidateGraph } from '../../lib/invalidate';
 import { trpc } from '../../trpc';
 import { useToast } from '../../ui/toast-store';
 import { journalRefOf } from '../undo/journal-ref';
@@ -29,9 +28,7 @@ export const EXTENSION_TOGGLE_FAILED = 'Не удалось переключит
  * Включить или выключить расширение (§8.6): действие владельца `user.setModuleEnabled` — операция
  * `module_set` исполнителя с журналом, тост «Отменить» отменяет ИМЕННО её (`ai.undo` по `actionId`).
  *
- * После записи и после отмены — `invalidateGraph` (выключение расширения меняет, что видно в записях:
- * поля только чтения, плашки карточек, §8.3) и перечитывание настроек: маску web читает оттуда
- * (`useDisabledExtensions`).
+ * The settings event updates the module mask after the write or Undo.
  *
  * Промис не отвергается: отказ человек видит тостом.
  */
@@ -42,10 +39,6 @@ export function useSetExtensionEnabled(): (ext: ExtensionId, enabled: boolean) =
     async (ext, enabled) => {
       const epoch = undoEpoch();
       let journalResponse: unknown;
-      const refresh = () => {
-        invalidateGraph(utils);
-        void utils.user.getSettings.invalidate();
-      };
       let actionId: string;
       try {
         ({ actionId } = journalResponse = await utils.client.user.setModuleEnabled.mutate({
@@ -55,11 +48,9 @@ export function useSetExtensionEnabled(): (ext: ExtensionId, enabled: boolean) =
       } catch {
         if (!isUndoEpoch(epoch)) return;
         show(EXTENSION_TOGGLE_FAILED, 'danger');
-        refresh();
         return;
       }
       if (!isUndoEpoch(epoch)) return;
-      refresh();
       if (journalRefOf(journalResponse) === null) return;
       offerUndoLazy({
         title: extensionToggleTitle(ext, enabled),

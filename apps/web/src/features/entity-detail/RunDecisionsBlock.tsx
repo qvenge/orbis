@@ -11,7 +11,7 @@
 // двумя местами, и одно событие обязано выглядеть в них одинаково.
 import { useId, useState } from 'react';
 import { useOpenRecord } from '../../app/useOpenRecord';
-import { invalidateGraph } from '../../lib/invalidate';
+import { useFreshnessVisible } from '../../lib/freshness/screen';
 import { useRegistry } from '../../lib/registry/useRegistry';
 import { type RouterOutputs, trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
@@ -158,7 +158,6 @@ function RunBatch({
   terminalUnanswered: boolean;
 }) {
   const openEntity = useOpenRecord();
-  const utils = trpc.useUtils();
   // Предпросмотр шаблона (хост `readOnly`): пачка видна строками-итогами (`UnitStub`), без карточек
   // с «Принять»/«Отклонить» и без «Принять все» и «Продолжить сейчас».
   const readOnly = useHostReadOnly();
@@ -179,7 +178,7 @@ function RunBatch({
    * Пачка — ОДНИМ запросом на прогон, тем же ключом, каким её читает каждая карточка
    * (`useRunUnit`): кэш общий, и решение одной карточки обновляет весь блок.
    */
-  const units = trpc.routine.runUnits.useQuery({ runId });
+  const units = trpc.routine.runUnits.useQuery({ runId }, { enabled: useFreshnessVisible() });
   // Та же защита, что у списка прогонов: блок живёт на общем detail-экране, и неожиданная
   // форма ответа не должна ронять всю страницу.
   const list = Array.isArray(units.data) ? units.data : [];
@@ -205,7 +204,8 @@ function RunBatch({
    * `runNow` разрешён и на паузе (рука владельца выше расписания), поэтому «показать лишнюю
    * кнопку» здесь ошибка дешевле, чем «спрятать рабочую».
    */
-  const overview = trpc.routine.overview.useQuery({ routineId }, { enabled: visible });
+  const shown = useFreshnessVisible();
+  const overview = trpc.routine.overview.useQuery({ routineId }, { enabled: visible && shown });
   const paused = overview.data?.nextBucketAt === null;
 
   const decideAll = trpc.routine.decideAll.useMutation({
@@ -215,9 +215,6 @@ function RunBatch({
       // Решение двигает граф (применённые правки) и снимает флажок с аспекта прогона —
       // тот же хвост, что у одиночной карточки (`useRunUnit.settled`), кроме ленты треда:
       // на экране прогона её нет вовсе (рулинг П-5).
-      invalidateGraph(utils);
-      if (items.some((i) => i.status === 'applied')) void utils.budget.invalidate();
-      void utils.routine.overview.invalidate();
       void units.refetch();
     },
   });
@@ -227,8 +224,6 @@ function RunBatch({
       setConfirm(false);
       // Поведение то же, что у «Прогнать сейчас» на экране рутины (Решение 9): ответ приходит
       // ДО модели, и за исходом владелец идёт на экран нового прогона.
-      invalidateGraph(utils);
-      void utils.routine.overview.invalidate();
       openEntity(started);
     },
     // Отказ («прогон уже идёт», исчерпан лимит) показываем строкой, а модалку закрываем:

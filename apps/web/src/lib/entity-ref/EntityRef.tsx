@@ -1,5 +1,6 @@
 import { trpc } from '../../trpc';
 import { Skeleton } from '../../ui/Skeleton';
+import { useFreshnessVisible } from '../freshness/screen';
 import { useNoteRegistryVersion } from '../registry/useRegistry';
 
 /**
@@ -9,7 +10,7 @@ import { useNoteRegistryVersion } from '../registry/useRegistry';
  * ошибка/нет данных — укороченный моноширинный id; успех — title.
  */
 export function EntityRef({ id, onOpen }: { id: string; onOpen?: (id: string) => void }) {
-  const q = trpc.entity.get.useQuery({ id });
+  const q = trpc.entity.get.useQuery({ id }, { enabled: useFreshnessVisible() });
   /**
    * Версия реестра из этого же ответа (§А10-1) — повод перечитать снимок подписей.
    *
@@ -19,7 +20,7 @@ export function EntityRef({ id, onOpen }: { id: string; onOpen?: (id: string) =>
    * снятым при последнем открытии записи. Хук идемпотентен: та же строка не будит никого,
    * поэтому десяток чипов на экране стоит один раз.
    */
-  useNoteRegistryVersion(q.data?.registryVersion, q.dataUpdatedAt);
+  useNoteRegistryVersion(q.data, q.dataUpdatedAt);
   if (q.isLoading) return <Skeleton className="inline-block h-4 w-24 align-middle" />;
   const title = q.data?.entity.title;
   if (!title)

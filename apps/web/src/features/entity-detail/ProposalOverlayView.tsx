@@ -38,11 +38,9 @@
 // наследуется целиком, а сторожат его `scripts/check-lazy-chunks.ts` (состав чанка) и список
 // файлов в `save.test.tsx`.
 import { type BodyDiffResult, diffBodyDocs } from '@orbis/shared/doc/diff';
-import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
 import { useOpenRecord } from '../../app/useOpenRecord';
 import { EntityRef } from '../../lib/entity-ref/EntityRef';
-import { invalidateGraph } from '../../lib/invalidate';
 import { BodyKindProvider } from '../../lib/query-blocks/body-kind';
 import { ThisEntityProvider } from '../../lib/query-blocks/this-entity';
 import { isScalar, valueText as rawValueText } from '../../lib/registry/format';
@@ -210,6 +208,11 @@ export function ProposalOverlayView({
    * тем предложением, которое эту подмену объясняет.
    */
   const [replacedReason, setReplacedReason] = useState<ReplacedReason | null>(null);
+  const [lastStale, setLastStale] = useState<{ id: string; rows: StaleRow[] } | null>(null);
+  const removedStale =
+    lastStale && !proposals.some(({ pendingId }) => pendingId === lastStale.id)
+      ? lastStale.rows
+      : null;
 
   /**
    * Развёрнутыми считаются только те, что ЕСТЬ В СЕГОДНЯШНЕМ списке. Принятое предложение
@@ -224,7 +227,7 @@ export function ProposalOverlayView({
   // Пустой список — ещё не повод исчезнуть: ответ `replaced` мог прийти по предложению,
   // живой наследник которого решён в другой вкладке, и тогда список пуст, а сказать владельцу
   // есть что.
-  if (proposals.length === 0 && replacedReason === null) return null;
+  if (proposals.length === 0 && replacedReason === null && removedStale === null) return null;
   return (
     <div
       data-testid="proposal-overlay"
@@ -239,6 +242,7 @@ export function ProposalOverlayView({
           {`${REPLACED_NOTES[replacedReason]}${proposals.length > 0 ? ' — ниже живое предложение' : ''}`}
         </p>
       )}
+      {removedStale !== null && <StaleProposal rows={removedStale} />}
       {/* Род тела — по САМОЙ записи, как у её тела на экране (`EntityBody`): правка предложения к
           телу страницы или шаблона — тот же редактор с рамками частей и меню «/» страницы, а не
           заметки, где колонки встали бы плашками «сделать страницей?». */}
@@ -260,6 +264,7 @@ export function ProposalOverlayView({
               )
             }
             onAnswer={setReplacedReason}
+            onStale={(rows) => setLastStale(rows && { id: view.pendingId, rows })}
           />
         ))}
       </BodyKindProvider>
@@ -283,6 +288,7 @@ function ProposalPlate({
   busy: listBusy,
   onToggle,
   onAnswer,
+  onStale,
 }: {
   view: ProposalView;
   entityId: string;
@@ -294,12 +300,12 @@ function ProposalPlate({
   onToggle: (next: boolean) => void;
   /** Ответ `replaced` наверх: подпись обязана пережить подмену этой плашки живой. */
   onAnswer: (reason: ReplacedReason | null) => void;
+  onStale: (rows: StaleRow[] | null) => void;
 }) {
-  const utils = trpc.useUtils();
-  const queryClient = useQueryClient();
   // Подписи строк и разбора расхождений — из реестра (§А9-2); ОДИН снимок на всю плашку,
   // дальше уходит пропом в строки.
   const registry = useRegistry();
+  const utils = trpc.useUtils();
   /**
    * Буфер правок значений — ПО КЛЮЧУ СТРОКИ, а не массивом: владелец правит одно поле
    * несколько раз (набрал, стёр, набрал заново), и массив копил бы дубли, которые сервер
@@ -337,40 +343,12 @@ function ProposalPlate({
 
   const decide = trpc.routine.decideProposal.useMutation({
     onSuccess: (result) => {
-      /**
-       * Граф двигает ЛЮБОЕ решение, а не только принятое: и отказ, и `stale` пишут судьбу
-       * предложения в аспект самого прогона — то есть меняют запись графа (тот же довод, что
-       * в ProposalCard).
-       */
-      invalidateGraph(utils);
-      // Принятое предложение правит и деньги (перенос категории, сумма, статус траты) —
-      // бюджетные агрегаты живут своим ключом и в invalidateGraph не входят.
-      if (result.status === 'applied') void utils.budget.invalidate();
-      setStaleRows(result.status === 'stale' ? divergenceRows(registry, result) : null);
+      const rows = result.status === 'stale' ? divergenceRows(registry, result) : null;
+      setStaleRows(rows);
+      onStale(rows);
+      if (result.status === 'already' || result.status === 'replaced')
+        void utils.routine.proposalsForEntity.fetch({ entityId }, { staleTime: 0 }).catch(() => {});
       onAnswer(result.status === 'replaced' ? result.reason : null);
-      /**
-       * Список предложений записи о решении сам не узнает — перечитываем его явно; вместе с
-       * ним и `routine.proposal`, по которому живут карточки в лентах и на экране прогона.
-       *
-       * КРОМЕ `stale`, и это осознанное исключение. Устаревшее предложение сервер тут же
-       * гасит (`rejectPending(reason:'stale')`), то есть из ответа `proposalsForEntity` оно
-       * уходит — а вместе с плашкой ушёл бы и разбор расхождений, ради которого владелец
-       * сюда и смотрит. Список перечитается сам при следующем открытии записи; до тех пор
-       * плашка стоит без кнопок и говорит, ЧЕМ именно граф разошёлся с предложением.
-       */
-      if (result.status !== 'stale') {
-        void utils.routine.proposalsForEntity.invalidate();
-      }
-      void utils.routine.proposal.invalidate();
-      /**
-       * Лента треда рутины — ПО ПРЕФИКСУ ключа (`chatThreadKey` = `['chatThread', id]`).
-       * Слой стоит на записи и `threadId` рутины не знает вовсе, а тред от решения меняется
-       * всегда: отказ дописывает свою строку, принятие с правками рождает ВТОРУЮ карточку
-       * предложения (Ш1.5). Без этого открытая рядом лента показала бы её только через
-       * `staleTime` (30 с) или после смены вкладки — половина приёмки 9. Цена префикса —
-       * лишняя пометка чужих тредов протухшими; они и так перечитываются лениво.
-       */
-      void queryClient.invalidateQueries({ queryKey: ['chatThread'] });
       // Принятое решать больше нечем: сворачиваем сами, не дожидаясь перечитки, — тело
       // записи обязано вернуться в ту же секунду, а не «когда приедет список».
       if (result.status === 'applied') onToggle(false);
@@ -381,7 +359,11 @@ function ProposalPlate({
   });
 
   const fieldEdits = Object.values(edits);
-  const busy = decide.isPending || listBusy;
+  const busy =
+    decide.isPending ||
+    listBusy ||
+    decide.data?.status === 'applied' ||
+    decide.data?.status === 'rejected';
 
   /**
    * Правленый документ пришёл из редактора строки: кладём в буфер и заводим паузу пересчёта.
@@ -535,22 +517,7 @@ function ProposalPlate({
               </p>
             )}
 
-            {staleRows !== null && (
-              <div
-                // `stale` — ЗНАЧЕНИЕ ответа, а не сбой (Р-2): граф разошёлся с предложением, и
-                // владельцу показывают, чем именно, а не плашку ошибки.
-                role="status"
-                data-testid="proposal-stale"
-                className="flex flex-col gap-1 rounded-control border border-line bg-surface-2/40 p-3 text-sm"
-              >
-                <p>Устарело — состояние изменилось.</p>
-                <ul className="flex flex-col gap-1 text-text-secondary text-xs">
-                  {staleRows.map((row) => (
-                    <li key={row.key}>{row.text}</li>
-                  ))}
-                </ul>
-              </div>
-            )}
+            {staleRows !== null && <StaleProposal rows={staleRows} />}
 
             {/* Кнопок нет у УСТАРЕВШЕГО: сервер погасил это предложение вместе с ответом
                 (`rejectPending(reason:'stale')`), и второе нажатие получило бы `already` —
@@ -569,6 +536,23 @@ function ProposalPlate({
         </ThisEntityProvider>
       )}
     </Card>
+  );
+}
+
+function StaleProposal({ rows }: { rows: StaleRow[] }) {
+  return (
+    <div
+      role="status"
+      data-testid="proposal-stale"
+      className="flex flex-col gap-1 rounded-control border border-line bg-surface-2/40 p-3 text-sm"
+    >
+      <p>Устарело — состояние изменилось.</p>
+      <ul className="flex flex-col gap-1 text-text-secondary text-xs">
+        {rows.map((row) => (
+          <li key={row.key}>{row.text}</li>
+        ))}
+      </ul>
+    </div>
   );
 }
 

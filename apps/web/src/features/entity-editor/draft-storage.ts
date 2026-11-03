@@ -1,6 +1,8 @@
 // Импорт ТОЛЬКО type, и это не стиль: модуль зовёт useBodySave, а его монтирует экран detail
 // (Задача 15) — рантайм-импорт `@orbis/shared/doc` увёл бы схему документа в его чанк, мимо
 // двухфазного монтирования. Стережёт save.test.tsx («страж чанка detail»).
+
+import { newId } from '@orbis/shared';
 import type { BodyDoc } from '@orbis/shared/doc';
 
 /**
@@ -21,6 +23,8 @@ import type { BodyDoc } from '@orbis/shared/doc';
  */
 export type Draft = {
   doc: BodyDoc;
+  /** Unique local write identity; legacy slots did not have one. */
+  slot?: string;
   /** Ревизия тела, ПОВЕРХ которой набрана правка (та же, что уехала в мутацию `expectedBodyRevision`). */
   baseRevision?: number;
   /**
@@ -164,7 +168,10 @@ function writeKey(k: string, value: string): void {
 function parseDraft(raw: string): Draft | null {
   const value: unknown = JSON.parse(raw);
   if (typeof value !== 'object' || value === null) return null;
-  const { doc, baseRevision, baseUpdatedAt, savedAt, rejected } = value as Record<string, unknown>;
+  const { doc, baseRevision, baseUpdatedAt, savedAt, rejected, slot } = value as Record<
+    string,
+    unknown
+  >;
   if (typeof savedAt !== 'string') return null;
   // Основа — ревизия (новая форма) или штамп записи (старая форма, К-26); без основы черновик сверять не с чем, и он
   // ушёл бы в предложение про запись, которой никто не менял. Ноль — законная основа: так пишется черновик записи, чья
@@ -184,6 +191,7 @@ function parseDraft(raw: string): Draft | null {
     doc: doc as BodyDoc,
     ...(revision !== undefined ? { baseRevision: revision } : { baseUpdatedAt: stamp }),
     savedAt,
+    ...(typeof slot === 'string' && { slot }),
     rejected: rejected === true,
   };
 }
@@ -192,17 +200,24 @@ function parseDraft(raw: string): Draft | null {
 export function captureDraftWriter(entityId: string) {
   const capturedKey = key(entityId);
   return (doc: BodyDoc, baseRevision: number, now: string, rejected = false): void => {
-    const draft: Draft = { doc, baseRevision, savedAt: now, rejected };
+    const draft: Draft = { doc, baseRevision, savedAt: now, rejected, slot: newId() };
     writeKey(capturedKey, JSON.stringify(draft));
   };
 }
 
-export function saveDraft(entityId: string, doc: BodyDoc, baseRevision: number, now: string): void {
-  const draft: Draft = { doc, baseRevision, savedAt: now, rejected: false };
+export function saveDraft(
+  entityId: string,
+  doc: BodyDoc,
+  baseRevision: number,
+  now: string,
+): string {
+  const slot = newId();
+  const draft: Draft = { doc, baseRevision, savedAt: now, rejected: false, slot };
   // Переполненное или отключённое хранилище (приватный режим, квота) не повод ронять набор
   // текста: черновик — страховка, а не главный путь. Одну попытку прибраться `writeKey` делает,
   // дальше молча остаёмся без страховки.
   writeKey(key(entityId), JSON.stringify(draft));
+  return slot;
 }
 
 /**
@@ -238,4 +253,13 @@ export function clearDraft(entityId: string): void {
   } catch {
     /* см. saveDraft */
   }
+}
+
+// The mutation carries the submitted slot without changing its wire input.
+const submitted = new WeakMap<object, string>();
+export function bindSubmittedDraft(request: object, slot: string | undefined): void {
+  if (slot !== undefined) submitted.set(request, slot);
+}
+export function submittedDraftOf(request: object): string | undefined {
+  return submitted.get(request);
 }

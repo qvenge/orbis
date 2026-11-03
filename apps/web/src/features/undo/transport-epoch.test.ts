@@ -66,7 +66,7 @@ test('React factory сохраняет batching одной сессии и об�
     '1': { defaultCurrency: 'RUB' },
   });
 });
-test('старые 401/412 доставляются caller; только 412 поднимает глобальный compatibility event', async () => {
+test('старые 401/412 доставляются caller без глобального события', async () => {
   const unauthorized = vi.fn();
   const outdated = vi.fn();
   let fail!: (error: unknown) => void;
@@ -91,9 +91,13 @@ test('старые 401/412 доставляются caller; только 412 п�
   resetUndoSession();
   fail(trpcError('PRECONDITION_FAILED'));
   await expect(old412).rejects.toBeDefined();
-  expect(outdated).toHaveBeenCalledOnce();
+  expect(outdated).not.toHaveBeenCalled();
   const current401 = client.user.updateSettings.mutate({ timezone: 'UTC' });
   fail(trpcError('UNAUTHORIZED'));
   await expect(current401).rejects.toBeDefined();
   expect(unauthorized).toHaveBeenCalledOnce();
+  const current412 = client.user.updateSettings.mutate({ timezone: 'UTC' });
+  fail(trpcError('PRECONDITION_FAILED'));
+  await expect(current412).rejects.toBeDefined();
+  expect(outdated).toHaveBeenCalledOnce();
 });

@@ -1,4 +1,5 @@
 import { useRef, useState } from 'react';
+import { useFreshnessVisible } from '../../lib/freshness/screen';
 import { trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
 import { Dialog } from '../../ui/Dialog';
@@ -29,7 +30,11 @@ export function DayPlanner({ onOpen }: { onOpen: (id: string) => void }) {
       setBusy(false);
     }
   };
-  const q = trpc.entity.query.useQuery({ ast: dayQuery(day, limit + 1) }, { enabled: ready });
+  const shown = useFreshnessVisible();
+  const q = trpc.entity.query.useQuery(
+    { ast: dayQuery(day, limit + 1) },
+    { enabled: ready && shown },
+  );
   const rows = sortPlannedTasks((q.data?.rows ?? []).slice(0, limit));
   const open = rows.filter((r) => !isClosed(r));
   const closed = rows.filter(isClosed);

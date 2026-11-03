@@ -2,7 +2,6 @@ import { newId } from '@orbis/shared';
 import { Plus } from 'lucide-react';
 import { type FormEvent, useRef, useState } from 'react';
 import { runGraphCommand } from '../../lib/graph-command';
-import { invalidateGraph } from '../../lib/invalidate';
 import { trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
 import { isUndoEpoch, undoEpoch } from '../undo/undo-epoch';
@@ -24,7 +23,6 @@ export function PlanningCapture({ day, disabled = false }: { day?: string; disab
     rank: number;
     revision: number;
   } | null>(null);
-  const utils = trpc.useUtils();
   const create = trpc.entity.create.useMutation({ meta: { undoStack: 'self' } });
   function changeText(value: string) {
     draftRevision.current += 1;
@@ -70,7 +68,6 @@ export function PlanningCapture({ day, disabled = false }: { day?: string; disab
         }),
       );
       if (!isUndoEpoch(epoch)) return;
-      invalidateGraph(utils);
       if (result.kind !== 'confirmed') {
         setUnconfirmed(result.kind === 'unknown');
         if (result.kind === 'rejected') attempt.current = null;

@@ -250,6 +250,7 @@ test('неотправленная правка попадает в хранил
     baseRevision: ENTITY.bodyRevision,
     savedAt: '2030-01-01T00:00:02.000Z',
     rejected: false,
+    slot: expect.any(String),
   });
 });
 

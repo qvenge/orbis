@@ -1713,7 +1713,9 @@ test('модули первого кадра не тянут схему реда
     // помощники ядра переехали из каталогов расширений в `lib/`. Сама плашка с «Включить»
     // (`ExtensionOffPlaque.tsx`) — ленивая, сторожится своим чанком (check-lazy-chunks).
     '../settings/extension-mask.ts',
-    '../../lib/invalidate.ts',
+    '../../lib/freshness/runtime.ts',
+    '../../lib/freshness/provenance.ts',
+    '../../lib/freshness/screen.ts',
     '../../lib/dates.ts',
     // Вкладка настроек, которую открывает «⋯ → Настройки» (`ScreenMenu`, задача 22): стор и переход
     // — эагерно из меню экрана записи (финал 1б, C2 M-4).

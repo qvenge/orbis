@@ -2,6 +2,7 @@ import { act, fireEvent, screen, waitFor, within } from '@testing-library/react'
 import { useState } from 'react';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { resetNavForTests } from '../../../state/navigation';
+import { testFreshnessOf } from '../../../test/freshness';
 import {
   type MockHandler,
   queryReply,
@@ -11,6 +12,7 @@ import {
 } from '../../../test/harness';
 import { recordAddress, topAddress } from '../../../test/nav';
 import { registryReply } from '../../../test/registry';
+import { trpc } from '../../../trpc';
 import { Toaster } from '../../../ui/Toast';
 import { smoothAuditText } from '../format-audit';
 import { MEMORY_RULES_QUERY } from '../memoryRules';
@@ -1225,18 +1227,27 @@ test('маркер ленты: пост с author_kind=ai и routine_id → «р
   expect(screen.queryByText('агент')).toBeNull();
 });
 
+function ProposalGraphProbe() {
+  trpc.entity.query.useQuery({ query: 'aspect=orbis/agent-run' });
+  return null;
+}
+
 test('proposal_card: «Отклонить» перечитывает и карточку, и ГРАФ (отказ тоже пишет в аспект прогона)', async () => {
   // Отказ не трогает цели предложения — но пишет судьбу самого предложения в аспект прогона
   // (`proposal.status`, `decided_at`). Это запись графа, и без инвалидации история прогонов на
   // экране рутины держала бы «ждёт решения» ещё 30 секунд (staleTime), то есть показывала бы
   // владельцу отменённое им же ожидание.
-  const { calls } = renderWithProviders(
-    <div>{renderCards(msg([PROPOSAL_CARD]))}</div>,
+  const { calls, queryClient } = renderWithProviders(
+    <div>
+      <ProposalGraphProbe />
+      {renderCards(msg([PROPOSAL_CARD]))}
+    </div>,
     proposalHandler(),
+    { freshness: true },
   );
   const card = await screen.findByTestId('proposal-card');
   await within(card).findByText('Купить билеты');
-  const readsBefore = calls.filter((c) => c.path === 'entity.get').length;
+  const readsBefore = calls.filter((c) => c.path === 'entity.query').length;
 
   fireEvent.click(within(card).getByRole('button', { name: 'Отклонить' }));
   await waitFor(() =>
@@ -1248,13 +1259,14 @@ test('proposal_card: «Отклонить» перечитывает и карт
       decision: 'reject',
     }),
   );
+  await act(async () => testFreshnessOf(queryClient).changes([{ kind: 'entity', rowKey: 'rr1' }]));
   // Статус карточки — с сервера: локальное «отклонено» соврало бы, реши предложение кто-то
   // другой между чтением и нажатием (`already`).
   await waitFor(() =>
     expect(calls.filter((c) => c.path === 'routine.proposal').length).toBeGreaterThan(1),
   );
   await waitFor(() =>
-    expect(calls.filter((c) => c.path === 'entity.get').length).toBeGreaterThan(readsBefore),
+    expect(calls.filter((c) => c.path === 'entity.query').length).toBeGreaterThan(readsBefore),
   );
 });
 
@@ -1389,7 +1401,7 @@ test('карточка с pendingId≠view: «Заменено правкой в
 
 test('живая карточка с view.editedFrom: пометка правки; после approve — «Принято (с правками)» (инвариант 8)', async () => {
   let status = 'pending';
-  const { calls } = renderWithProviders(
+  const { calls, queryClient } = renderWithProviders(
     <div>{renderCards(msg([PROPOSAL_CARD]))}</div>,
     (path, input) => {
       if (path === 'routine.decideProposal') {
@@ -1402,6 +1414,7 @@ test('живая карточка с view.editedFrom: пометка правк�
         ...(status === 'approved' && { decidedAt: '2026-08-20T05:00:00.000Z' }),
       })(path, input);
     },
+    { freshness: true },
   );
   const card = await screen.findByTestId('proposal-card');
   // Инвариант 8: владелец обязан видеть, что живое предложение — ЕГО правка, а не то, что
@@ -1419,6 +1432,7 @@ test('живая карточка с view.editedFrom: пометка правк�
       decision: 'approve',
     }),
   );
+  await act(async () => testFreshnessOf(queryClient).changes([{ kind: 'entity', rowKey: 'rr1' }]));
   // «Принято» без оговорки читалось бы как «принято то, что предлагала рутина».
   expect(await within(card).findByText(/Принято \(с правками\)/)).toBeInTheDocument();
 });
@@ -1486,24 +1500,36 @@ test('свёрнутый дифф: счётчики и ≤3 блоков; skippe
 /** Потребитель ленты треда — тот же хук, что и у настоящего экрана (ключ `chatThreadKey`). */
 function ThreadProbe() {
   const { messages } = useChatThread('t1');
-  return <span data-testid="thread-count">{messages.length}</span>;
+  return (
+    <>
+      <span data-testid="thread-count">{messages.length}</span>
+      {messages.map((message) => (
+        <p key={message.id}>{message.content}</p>
+      ))}
+    </>
+  );
 }
 
-test('ответ replaced → подпись + refetch; onSuccess решения инвалидирует chatThreadKey (приёмки 9, 15)', async () => {
+test('replaced перечитывает адресный тред без нового события; запись отказа приходит по feed (приёмки 9, 15)', async () => {
   // Р-15: молча не проигрывает никто. Вкладка, открытая до правки, шлёт решение по мёртвому
   // предложению и получает `replaced` — без подписи нажатие выглядело бы как «ничего не
   // случилось».
+  let earlierReplacementVisible = false;
   const answered = renderWithProviders(
     <div>
       <ThreadProbe />
       {renderCards(msg([PROPOSAL_CARD]))}
     </div>,
-    (path, input) =>
-      path === 'routine.decideProposal'
-        ? { status: 'replaced', livePendingId: 'p2', liveStatus: 'pending', reason: 'edited' }
-        : path === 'chat.listMessages'
-          ? []
-          : proposalHandler()(path, input),
+    (path, input) => {
+      if (path === 'routine.decideProposal')
+        return { status: 'replaced', livePendingId: 'p2', liveStatus: 'pending', reason: 'edited' };
+      if (path === 'chat.listMessages')
+        return earlierReplacementVisible
+          ? [msg([], { content: 'Другое предложение уже в треде' })]
+          : [];
+      return proposalHandler()(path, input);
+    },
+    { freshness: true },
   );
   let card = await screen.findByTestId('proposal-card');
   const accept = await within(card).findByRole('button', { name: 'Принять' });
@@ -1511,6 +1537,7 @@ test('ответ replaced → подпись + refetch; onSuccess решения
   await waitFor(() =>
     expect(answered.calls.filter((c) => c.path === 'chat.listMessages').length).toBe(1),
   );
+  earlierReplacementVisible = true; // A foreign write precedes the no-op response.
   fireEvent.click(accept);
   expect(await within(card).findByTestId('proposal-replaced-answer')).toHaveTextContent(
     'Заменено правкой владельца — живое предложение обновлено',
@@ -1520,15 +1547,8 @@ test('ответ replaced → подпись + refetch; onSuccess решения
       readsBefore,
     ),
   );
-  // Приёмка 9 ГЛАВНЫМ сценарием: `replaced` приходит вкладке, открытой до правки, — то есть
-  // ровно тогда, когда в ленте УЖЕ появилась вторая карточка, которой эта вкладка не видит.
-  // Без перечитки ленты владелец сидел бы перед подписью «живое предложение обновлено» и
-  // пустым местом там, где оно лежит. Ниже это же свойство проверено на отказе; здесь оно
-  // проверяется на исходе, ради которого написано, — иначе оно следовало бы лишь из
-  // безусловности кода.
-  await waitFor(() =>
-    expect(answered.calls.filter((c) => c.path === 'chat.listMessages').length).toBeGreaterThan(1),
-  );
+  expect(await screen.findByText('Другое предложение уже в треде')).toBeVisible();
+  expect(answered.calls.filter((c) => c.path === 'chat.listMessages')).toHaveLength(2);
   answered.unmount();
 
   // Р-8: лента треда живёт своим ключом react-query, которого invalidateGraph не касается.
@@ -1540,12 +1560,18 @@ test('ответ replaced → подпись + refetch; onSuccess решения
       {renderCards(msg([PROPOSAL_CARD]))}
     </div>,
     (path, input) => (path === 'chat.listMessages' ? [] : proposalHandler()(path, input)),
+    { freshness: true },
   );
   card = await screen.findByTestId('proposal-card');
   await waitFor(() =>
     expect(inThread.calls.filter((c) => c.path === 'chat.listMessages').length).toBe(1),
   );
   fireEvent.click(await within(card).findByRole('button', { name: 'Отклонить' }));
+  await act(async () =>
+    testFreshnessOf(inThread.queryClient).changes([
+      { kind: 'message', rowKey: 'reply', threadId: 't1' },
+    ]),
+  );
   await waitFor(() =>
     expect(inThread.calls.filter((c) => c.path === 'chat.listMessages').length).toBeGreaterThan(1),
   );
@@ -1559,12 +1585,16 @@ test('ответ replaced → подпись + refetch; onSuccess решения
       <ProposalCard runId="rr1" pendingId="p1" />
     </div>,
     (path, input) => (path === 'chat.listMessages' ? [] : proposalHandler()(path, input)),
+    { freshness: true },
   );
   card = await screen.findByTestId('proposal-card');
   await waitFor(() =>
     expect(outsideThread.calls.filter((c) => c.path === 'chat.listMessages').length).toBe(1),
   );
   fireEvent.click(await within(card).findByRole('button', { name: 'Отклонить' }));
+  await act(async () =>
+    testFreshnessOf(outsideThread.queryClient).changes([{ kind: 'entity', rowKey: 'rr1' }]),
+  );
   await waitFor(() =>
     expect(outsideThread.calls.filter((c) => c.path === 'routine.proposal').length).toBeGreaterThan(
       1,
@@ -1847,16 +1877,20 @@ test('deferred_action_card: already с причиной stale — «Устаре
   expect(outcome).not.toHaveTextContent('отклонено');
 });
 
-test('ответ already → показан ПРИМЕНИВШИЙСЯ ответ (С5); onSuccess перечитывает пачку и инвалидирует ленту треда (Р0-11)', async () => {
+test('ответ already → показан ПРИМЕНИВШИЙСЯ ответ (С5); пачка перепроверяется, адресная перечитка показывает ранее записанный ответ (Р0-11)', async () => {
+  let earlierAnswerVisible = false;
   const inThread = renderWithProviders(
     <div>
       <ThreadProbe />
       {renderCards(msg([QUESTION_CARD]))}
     </div>,
-    unitsHandler([questionUnit()], {
-      // Другой ответ применился раньше — своё нажатие НЕ записано (policy/pending.ts)
-      'routine.answerQuestion': { status: 'already', answer: 'Нет, оставить' },
-    }),
+    (path, input, type) => {
+      if (path === 'routine.answerQuestion') return { status: 'already', answer: 'Нет, оставить' };
+      if (path === 'chat.listMessages')
+        return earlierAnswerVisible ? [msg([], { content: 'Ответ из другой вкладки' })] : [];
+      return unitsHandler([questionUnit()])(path, input, type);
+    },
+    { freshness: true },
   );
   const card = await screen.findByTestId('question-card');
   await within(card).findByRole('button', { name: 'Да, перенести' });
@@ -1864,6 +1898,7 @@ test('ответ already → показан ПРИМЕНИВШИЙСЯ отве�
   await waitFor(() =>
     expect(inThread.calls.filter((c) => c.path === 'chat.listMessages').length).toBe(1),
   );
+  earlierAnswerVisible = true; // A foreign write precedes the no-op response.
   fireEvent.click(within(card).getByRole('button', { name: 'Да, перенести' }));
   // Молча не проигрывает никто: без этой строки нажатие выглядело бы как «ничего не случилось»
   expect(await within(card).findByTestId('question-outcome')).toHaveTextContent('Нет, оставить');
@@ -1878,11 +1913,8 @@ test('ответ already → показан ПРИМЕНИВШИЙСЯ отве�
       readsBefore,
     ),
   );
-  // Лента треда живёт СВОИМ ключом, и invalidateGraph его не касается: ответ дописывает в тред
-  // строку, а решение единицы — судьбу (Р0-11, приём ProposalCard :224-226)
-  await waitFor(() =>
-    expect(inThread.calls.filter((c) => c.path === 'chat.listMessages').length).toBeGreaterThan(1),
-  );
+  expect(await screen.findByText('Ответ из другой вкладки')).toBeVisible();
+  expect(inThread.calls.filter((c) => c.path === 'chat.listMessages')).toHaveLength(2);
   inThread.unmount();
 
   // Рулинг П-5: на экране прогона ленты нет вовсе — там `threadId` не передаётся, и карточка
@@ -1895,6 +1927,7 @@ test('ответ already → показан ПРИМЕНИВШИЙСЯ отве�
     unitsHandler([questionUnit()], {
       'routine.answerQuestion': { status: 'answered', pendingId: 'q1' },
     }),
+    { freshness: true },
   );
   const runCard = await screen.findByTestId('question-card');
   await within(runCard).findByRole('button', { name: 'Да, перенести' });
@@ -1902,6 +1935,9 @@ test('ответ already → показан ПРИМЕНИВШИЙСЯ отве�
     expect(onRunScreen.calls.filter((c) => c.path === 'chat.listMessages').length).toBe(1),
   );
   fireEvent.click(within(runCard).getByRole('button', { name: 'Да, перенести' }));
+  await act(async () =>
+    testFreshnessOf(onRunScreen.queryClient).changes([{ kind: 'entity', rowKey: 'rr9' }]),
+  );
   await waitFor(() =>
     expect(onRunScreen.calls.filter((c) => c.path === 'routine.runUnits').length).toBeGreaterThan(
       1,
@@ -2347,15 +2383,20 @@ import { peekUndoable } from '../../undo/undo-stack';
 
 test('Task18: принятие предложения чата с настоящим JournalRef не кладёт запись в стек', async () => {
   let decided = false;
-  renderWithProviders(<div>{renderCards(msg([PROPOSAL_CARD]))}</div>, (path, input) => {
-    if (path === 'routine.decideProposal') {
-      decided = true;
-      return { status: 'applied', actionId: 'chat-action', consequences: true };
-    }
-    return proposalHandler(decided ? { status: 'approved' } : {})(path, input);
-  });
+  const { queryClient } = renderWithProviders(
+    <div>{renderCards(msg([PROPOSAL_CARD]))}</div>,
+    (path, input) => {
+      if (path === 'routine.decideProposal') {
+        decided = true;
+        return { status: 'applied', actionId: 'chat-action', consequences: true };
+      }
+      return proposalHandler(decided ? { status: 'approved' } : {})(path, input);
+    },
+    { freshness: true },
+  );
   const card = await screen.findByTestId('proposal-card');
   fireEvent.click(await within(card).findByRole('button', { name: 'Принять' }));
+  await act(async () => testFreshnessOf(queryClient).changes([{ kind: 'entity', rowKey: 'rr1' }]));
   await waitFor(() => expect(within(card).queryByRole('button', { name: 'Принять' })).toBeNull());
   expect(peekUndoable()).toBeUndefined();
 });

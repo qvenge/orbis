@@ -1,7 +1,6 @@
 import { newId, ROLE_SUBITEM } from '@orbis/shared';
 import { Plus } from 'lucide-react';
 import { type FormEvent, useRef, useState } from 'react';
-import { invalidateGraph } from '../../lib/invalidate';
 import { startAction } from '../../perf/marks';
 import { trpc } from '../../trpc';
 import { Spinner } from '../../ui/Spinner';
@@ -18,11 +17,9 @@ export type CaptureContext = { kind: 'root' } | { kind: 'entity'; parentId: stri
 export function QuickCapture({ context }: { context: CaptureContext }) {
   const [text, setText] = useState('');
   const { show } = useToast();
-  const utils = trpc.useUtils();
   const create = trpc.entity.create.useMutation({
     meta: { undoStack: 'self' },
     onSuccess: (data, vars) => {
-      invalidateGraph(utils);
       const ref = journalRefOf(data);
       if (ref)
         offerUndoLazy({

@@ -1,5 +1,6 @@
 import { PAGE_ASPECT } from '@orbis/shared';
 import { type Address, buildAddress, currentEntry } from '@orbis/shared/nav';
+import { useQueryClient } from '@tanstack/react-query';
 import {
   lazy,
   type ReactNode,
@@ -14,7 +15,8 @@ import { ScreenMenuProvider } from '../../app/frame/ScreenMenu';
 import { NotFoundScreen } from '../../app/NotFoundScreen';
 import { ScreenHeader } from '../../app/ScreenHeader';
 import { useOpenRecord } from '../../app/useOpenRecord';
-import { invalidateGraph } from '../../lib/invalidate';
+import { freshnessRuntimeOf } from '../../lib/freshness/provenance';
+import { FreshnessVisibility } from '../../lib/freshness/screen';
 import { ScreenReadyMark, useCachedAtOpen } from '../../perf/marks';
 import { mayLeave } from '../../state/leave-guard';
 import { placeKeyOf, useNav } from '../../state/navigation';
@@ -72,7 +74,7 @@ export function DetailScreen({
   // Разрез «из кеша» для замера готовности (спека скорости §3.1) — по кешу В МОМЕНТ ОТКРЫТИЯ записи, поэтому до ранних
   // возвратов ниже: хуки безусловны. Сама готовность — листом `ScreenReadyMark` в разметке записи (гейт задачи 3, M-3).
   const cachedAtOpen = useCachedAtOpen(entityId, get.data !== undefined);
-  const utils = trpc.useUtils();
+  const freshness = freshnessRuntimeOf(useQueryClient());
   const openRecord = useOpenRecord();
   /**
    * Состояние экрана в верхе стопки навигации (срез 1б §7.1): вкладка шаблона и «открыть через X»
@@ -356,15 +358,7 @@ export function DetailScreen({
   // сервер до следующего тика планировщика об этом не узнает. Владелец, открывший рутину,
   // чинит это сам, ничего об этом не зная.
   const sweepTarget = isTicket || isRoutine || loaded?.aspects.includes(PROJECT) === true;
-  const sweep = trpc.agentRun.sweep.useMutation({
-    // Подметание МЕНЯЕТ граф (тикеты возвращаются в planned, прогоны становятся abandoned) —
-    // экран обязан показать результат сразу, а не через минуту протухания списков. Но только
-    // когда что-то подмели: обычный ответ — `{swept: 0}`, и безусловная инвалидация стоила бы
-    // второго entity.get с телом и bodyDoc на КАЖДОМ открытии тикета или проекта.
-    onSuccess: (r) => {
-      if (r.swept > 0) invalidateGraph(utils);
-    },
-  });
+  const sweep = trpc.agentRun.sweep.useMutation();
   const sweptForRef = useRef<string | null>(null);
   useEffect(() => {
     if (!sweepTarget || sweptForRef.current === entityId) return;
@@ -405,7 +399,25 @@ export function DetailScreen({
   // скелетон: isLoading уже false, а data не приедет никогда. Проверка — ровно по коду:
   // сеть и 500 «не найдено» не означают, и подменять их этим экраном значило бы врать
   // (такие ошибки остаются на прежнем поведении — это отдельный разговор, не §1.3).
-  if (get.isError && get.error.data?.code === 'NOT_FOUND')
+  const missing =
+    get.isError &&
+    get.error.data?.code === 'NOT_FOUND' &&
+    (!freshness || freshness.isCurrentReadError(get.error));
+  if (missing && (loaded !== undefined || freshness?.wasDeleted(entityId))) {
+    return (
+      <>
+        <ScreenHeader title="Запись удалена" />
+        <div role="status" data-testid="deleted-record" className="mx-auto max-w-3xl p-4">
+          <p>Запись удалена</p>
+          <Button variant="outline" onClick={() => useNav.getState().back()}>
+            Назад
+          </Button>
+        </div>
+        {panelSlot}
+      </>
+    );
+  }
+  if (missing)
     return (
       <>
         <NotFoundScreen />
@@ -598,63 +610,65 @@ export function DetailScreen({
             data-testid="record-area"
             className={`mx-auto w-full max-w-3xl${proposalOpen ? ' hidden' : ''}`}
           >
-            <OpenPlaques
-              plaques={
-                // Вопрос уже на экране (спор мест не решён) — второй по просьбе меню не нужен (гейт 20, m-1).
-                placeRequest === undefined ||
-                opening.plaques.some((p) => p.kind === 'place-dispute')
-                  ? opening.plaques
-                  : [
-                      ...opening.plaques,
-                      {
-                        kind: 'place-dispute',
-                        contenders: placeRequest.contenders,
-                        key: `asked-${placeRequest.n}`,
-                      },
-                    ]
-              }
-              apps={apps}
-              record={entity}
-            />
-            {/* Страница — своим телом (спека страниц 1а §4.2 шаг 1); любая другая запись — через
+            <FreshnessVisibility visible={!proposalOpen}>
+              <OpenPlaques
+                plaques={
+                  // Вопрос уже на экране (спор мест не решён) — второй по просьбе меню не нужен (гейт 20, m-1).
+                  placeRequest === undefined ||
+                  opening.plaques.some((p) => p.kind === 'place-dispute')
+                    ? opening.plaques
+                    : [
+                        ...opening.plaques,
+                        {
+                          kind: 'place-dispute',
+                          contenders: placeRequest.contenders,
+                          key: `asked-${placeRequest.n}`,
+                        },
+                      ]
+                }
+                apps={apps}
+                record={entity}
+              />
+              {/* Страница — своим телом (спека страниц 1а §4.2 шаг 1); любая другая запись — через
             шаблон по функции выбора (§4.2): свой шаблон владельца или шаблон хоста (§8.1). Оба —
             над тем же ответом `entity.get` этого экрана, второго запроса записи нет (РП-13).
             Шапка, меню, слой предложения и плашки над ними — прежние. Вкладки, их keepMounted
             (тело и «Детали» живы, «Тред» — только открытым) — дело шаблона и рендерера.
             Режим «Настроить» (§9.1) заменяет показ телом в редакторе, шаблон страницы — его
             предпросмотром на записи (§9.3). */}
-            {mode?.kind === 'configure' ? (
-              <Suspense fallback={<p role="status">Загружаем настройку…</p>}>
-                <ConfigureView
-                  key={mode.targetId}
-                  targetId={mode.targetId}
-                  onDone={() => setMode(null)}
-                />
-              </Suspense>
-            ) : isPage && !asRecord ? (
-              // Вкладки страницы — её собственные: пространство памяти по id страницы. Иначе третья
-              // вкладка страницы A открывала бы третью вкладку страницы B — это разные тексты.
-              <TabMemoryScope scope={`page:${entity.id}`}>
-                {isTemplate || mode?.kind === 'preview' ? (
-                  <TemplatePreview
-                    page={get.data}
-                    onPreviewTarget={onPreviewTarget}
-                    {...(mode?.kind === 'preview' && { onClose: () => setMode(null) })}
+              {mode?.kind === 'configure' ? (
+                <Suspense fallback={<p role="status">Загружаем настройку…</p>}>
+                  <ConfigureView
+                    key={mode.targetId}
+                    targetId={mode.targetId}
+                    onDone={() => setMode(null)}
                   />
-                ) : (
-                  <PageView reply={get.data} />
-                )}
-              </TabMemoryScope>
-            ) : (
-              <RecordView
-                reply={get.data}
-                onShown={setRecordShown}
-                onConfigureTemplate={configure}
-                templates={opening.templates}
-                {...(openVia !== undefined && { override: openVia })}
-                {...(disputeRequest !== undefined && !isPage && { disputeRequest })}
-              />
-            )}
+                </Suspense>
+              ) : isPage && !asRecord ? (
+                // Вкладки страницы — её собственные: пространство памяти по id страницы. Иначе третья
+                // вкладка страницы A открывала бы третью вкладку страницы B — это разные тексты.
+                <TabMemoryScope scope={`page:${entity.id}`}>
+                  {isTemplate || mode?.kind === 'preview' ? (
+                    <TemplatePreview
+                      page={get.data}
+                      onPreviewTarget={onPreviewTarget}
+                      {...(mode?.kind === 'preview' && { onClose: () => setMode(null) })}
+                    />
+                  ) : (
+                    <PageView reply={get.data} />
+                  )}
+                </TabMemoryScope>
+              ) : (
+                <RecordView
+                  reply={get.data}
+                  onShown={setRecordShown}
+                  onConfigureTemplate={configure}
+                  templates={opening.templates}
+                  {...(openVia !== undefined && { override: openVia })}
+                  {...(disputeRequest !== undefined && !isPage && { disputeRequest })}
+                />
+              )}
+            </FreshnessVisibility>
           </div>
         </BodyScreenProvider>
       </TabMemoryProvider>

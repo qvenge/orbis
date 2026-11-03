@@ -2,6 +2,7 @@ import type { AspectDefinition } from '@orbis/shared';
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it } from 'vitest';
 import { resetRegistryVersionForTests } from '../../../lib/registry/useRegistry';
+import { testFreshnessOf } from '../../../test/freshness';
 import {
   installCrashTrap,
   queryReply,
@@ -73,7 +74,7 @@ it('public menu executes all five panel commands against mutable patch-only tran
   };
   // This transport applies only the exact submitted patch. Rules, defaults, access and
   // transactional rollback belong to the real server integration suite, not this fixture.
-  const { calls } = renderWithProviders(
+  const { calls, queryClient } = renderWithProviders(
     <>
       <DetailScreen entityId={entity.id} />
       <Toaster />
@@ -115,6 +116,7 @@ it('public menu executes all five panel commands against mutable patch-only tran
           };
           for (const id of patch.unset ?? []) delete current.props[id];
         }
+        testFreshnessOf(queryClient).changes([{ kind: 'entity', rowKey: entity.id }]);
         return { ok: true, actionId, consequences: false };
       }
       if (path === 'relation.create' || path === 'relation.delete') {
@@ -139,6 +141,9 @@ it('public menu executes all five panel commands against mutable patch-only tran
                 edge.targetId === key.target_id
               ),
           );
+        testFreshnessOf(queryClient).changes([
+          { kind: 'relation', rowKey: actionId, entityIds: [entity.id, otherId] },
+        ]);
         return { ok: true, actionId, consequences: false };
       }
       if (path === 'ai.undo') {
@@ -146,6 +151,9 @@ it('public menu executes all five panel commands against mutable patch-only tran
         if (!snapshot) throw new Error('unknown action receipt');
         current = structuredClone(snapshot.record);
         edges = structuredClone(snapshot.edges);
+        testFreshnessOf(queryClient).changes([
+          { kind: 'relation', rowKey: 'undo', entityIds: [entity.id, otherId] },
+        ]);
         return {
           actionId: 'undo-receipt',
           undone: { id: (input as { actionId: string }).actionId, title: 'Связь' },
@@ -155,6 +163,7 @@ it('public menu executes all five panel commands against mutable patch-only tran
       }
       return {};
     },
+    { freshness: true },
   );
   fireEvent.click(await screen.findByTestId('screen-menu'));
   fireEvent.click(await screen.findByRole('menuitem', { name: 'Свойства и связи' }));
@@ -178,10 +187,11 @@ it('public menu executes all five panel commands against mutable patch-only tran
   ]);
   expect((batches()[0]?.input as { operations: unknown[] }).operations).toHaveLength(1);
   fireEvent.click(within(panel).getByRole('tab', { name: 'Свойства' }));
+  await within(panel).findByText('Второе поле');
   fireEvent.click(await within(panel).findByText('Редактировать свойства'));
   expect(within(panel).getAllByLabelText('Общее поле')).toHaveLength(1);
   fireEvent.change(within(panel).getByLabelText('Общее поле'), { target: { value: 'Обновлено' } });
-  fireEvent.change(within(panel).getByLabelText('Второе поле'), {
+  fireEvent.change(await within(panel).findByLabelText('Второе поле'), {
     target: { value: 'Последний фокус' },
   });
   fireEvent.click(within(panel).getByText('Снять значение: Свободное поле'));

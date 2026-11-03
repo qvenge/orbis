@@ -27,14 +27,11 @@ import {
   type EntityBlockTextItem,
   entityBlockTextItem,
 } from '@orbis/shared';
-import {
-  type QueryClient,
-  type UseQueryResult,
-  useQuery,
-  useQueryClient,
-} from '@tanstack/react-query';
-import { createContext, type ReactNode, useContext, useEffect, useMemo, useRef } from 'react';
+import { type UseQueryResult, useQuery } from '@tanstack/react-query';
+import { createContext, type ReactNode, useContext, useMemo, useRef } from 'react';
+import { isUndoEpoch, undoEpoch } from '../../features/undo/undo-epoch';
 import { inheritNetworkReadReceipt, trpc } from '../../trpc';
+import { useFreshnessVisible } from '../freshness/screen';
 import { useThisEntityId } from './this-entity';
 
 export const QUERY_BLOCK_KEY = 'query-block';
@@ -54,7 +51,12 @@ export type BlockData =
   | Exclude<BlockResult, { kind: 'groups' | 'rows' }>
   | (Extract<BlockResult, { kind: 'rows' }> & { timeZone: string })
   | (Extract<BlockResult, { kind: 'groups' }> & { today: string; timeZone: string });
-type Pending = { ask: BlockAsk; resolve: (r: BlockData) => void; reject: (e: unknown) => void };
+type Pending = {
+  epoch: number;
+  ask: BlockAsk;
+  resolve: (r: BlockData) => void;
+  reject: (e: unknown) => void;
+};
 
 /**
  * Отказ ОДНОГО блока: код и позиция едут до плашки. Наследник `Error`, чтобы `useQuery` вёл его
@@ -98,54 +100,33 @@ export function useBlockBatcher(who: string): Batcher {
   return batcher;
 }
 
-/**
- * Живые клиенты кеша под провайдером пачки — адресат инвалидации блоков. Счётчик, а не
- * множество: вложенный провайдер над тем же клиентом, снявшись, не должен снять внешний.
- */
-const LIVE_CLIENTS = new Map<QueryClient, number>();
-
-/**
- * Протушить данные ВСЕХ блоков (префикс `[QUERY_BLOCK_KEY]`). Зовёт `invalidateGraph`: данные
- * блоков — ещё один взгляд на граф рядом с `entity.query/get/count`, и протухают они вместе с
- * ними.
- *
- * Клиент кеша берётся у смонтированных провайдеров, а не синглтон `trpc.ts`: `invalidateGraph`
- * получает только `utils` tRPC, у которых клиента react-query наружу нет, а тестовая обвязка
- * живёт на своём клиенте — синглтон протушил бы чужой кеш.
- */
-export function invalidateQueryBlocks(): void {
-  for (const qc of LIVE_CLIENTS.keys()) {
-    void qc.invalidateQueries({ queryKey: [QUERY_BLOCK_KEY] });
-  }
-}
-
 export function QueryBatchProvider({ children }: { children: ReactNode }) {
   const utils = trpc.useUtils();
-  const qc = useQueryClient();
   // Клиент tRPC — через ссылку: собиратель живёт весь срок провайдера, а смена клиента
   // (перелогин) не должна рвать уже поставленную очередь.
   const clientRef = useRef(utils.client);
   clientRef.current = utils.client;
-
-  useEffect(() => {
-    LIVE_CLIENTS.set(qc, (LIVE_CLIENTS.get(qc) ?? 0) + 1);
-    return () => {
-      const left = (LIVE_CLIENTS.get(qc) ?? 1) - 1;
-      if (left > 0) LIVE_CLIENTS.set(qc, left);
-      else LIVE_CLIENTS.delete(qc);
-    };
-  }, [qc]);
 
   const batcher = useMemo<Batcher>(() => {
     let queue: Pending[] = [];
     let scheduled = false;
 
     const send = async (chunk: Pending[]) => {
-      const blocks: BlockItem[] = chunk.map((p, i) => ({ ...p.ask, key: String(i) }));
+      const live = chunk.filter((item) => {
+        if (isUndoEpoch(item.epoch)) return true;
+        item.reject(new Error('Сессия изменилась'));
+        return false;
+      });
+      if (!live.length) return;
+      const blocks: BlockItem[] = live.map((p, i) => ({ ...p.ask, key: String(i) }));
       try {
         const response = await clientRef.current.entity.blocks.mutate({ blocks });
         const { results, today, timeZone } = response;
-        chunk.forEach((p, i) => {
+        live.forEach((p, i) => {
+          if (!isUndoEpoch(p.epoch)) {
+            p.reject(new Error('Сессия изменилась'));
+            return;
+          }
           const r = results[String(i)];
           if (r === undefined) {
             p.reject(
@@ -171,7 +152,7 @@ export function QueryBatchProvider({ children }: { children: ReactNode }) {
         // Отказ всей пачки (сеть, авторизация) — отказ каждого её блока: промолчать значило бы
         // оставить блоки в вечной загрузке. Текст транспорта («Failed to fetch») на плашку не
         // идёт: он английский и ничего не говорит владельцу; исходная ошибка — в `cause`.
-        for (const p of chunk) {
+        for (const p of live) {
           p.reject(
             new BlockDataError({ code: 'TRANSPORT', message: TRANSPORT_MESSAGE }, { cause: e }),
           );
@@ -194,7 +175,7 @@ export function QueryBatchProvider({ children }: { children: ReactNode }) {
     return {
       ask: (ask) =>
         new Promise<BlockData>((resolve, reject) => {
-          queue.push({ ask, resolve, reject });
+          queue.push({ ask, resolve, reject, epoch: undoEpoch() });
           if (!scheduled) {
             scheduled = true;
             setTimeout(flush, 0);
@@ -239,6 +220,7 @@ export function useBlockData(
   const params = opts.params && Object.keys(opts.params).length > 0 ? opts.params : null;
   return useQuery({
     queryKey: [QUERY_BLOCK_KEY, trimmed, thisEntityId ?? null, limit ?? null, params],
+    enabled: useFreshnessVisible(),
     queryFn: () => {
       if (trimmed === '') {
         return Promise.reject(new BlockDataError({ code: 'EMPTY', message: EMPTY_QUERY_MESSAGE }));

@@ -302,11 +302,15 @@ test('relative planning day follows server settings after waking and fixed date 
   vi.useFakeTimers({ toFake: ['Date'] });
   vi.setSystemTime(new Date('2030-01-02T00:00:00.000Z'));
   try {
-    renderWithProviders(<DayPlanner onOpen={onOpen} />, (path) => {
-      if (path === 'user.getSettings') return settings;
-      if (path === 'entity.query') return queryReply([]);
-      return registryReply(path) ?? [];
-    });
+    renderWithProviders(
+      <DayPlanner onOpen={onOpen} />,
+      (path) => {
+        if (path === 'user.getSettings') return settings;
+        if (path === 'entity.query') return queryReply([]);
+        return registryReply(path) ?? [];
+      },
+      { freshness: true },
+    );
     const field = await screen.findByLabelText('Выбрать дату');
     await waitFor(() => expect(field).toHaveValue('2030-01-02'));
 

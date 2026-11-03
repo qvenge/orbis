@@ -1,6 +1,5 @@
 import { etalonOf, type SupplyKey, type SupplyKeyValue } from '@orbis/shared/supply';
 import { useCallback } from 'react';
-import { invalidateGraph } from '../../lib/invalidate';
 import { type RouterOutputs, trpc } from '../../trpc';
 import { useToast } from '../../ui/toast-store';
 import { journalRefOf } from '../undo/journal-ref';
@@ -117,8 +116,6 @@ export function useSupplyAction(): (act: SupplyAct) => Promise<boolean> {
     async (act) => {
       const epoch = undoEpoch();
       let journalResponse: unknown;
-      // `invalidateGraph` гасит и «Обновления» (`lib/invalidate.ts`).
-      const refresh = () => invalidateGraph(utils);
       let actionId: string | null;
       let accepted = 0;
       try {
@@ -151,11 +148,9 @@ export function useSupplyAction(): (act: SupplyAct) => Promise<boolean> {
       } catch {
         if (!isUndoEpoch(epoch)) return false;
         show(SUPPLY_FAILED, 'danger');
-        refresh();
         return false;
       }
       if (!isUndoEpoch(epoch)) return false;
-      refresh();
       if (actionId === null) {
         // «Принять все» без единой неправленой записи: писать было нечего, отменять — тоже.
         show(NOTHING_TO_ACCEPT, 'default');

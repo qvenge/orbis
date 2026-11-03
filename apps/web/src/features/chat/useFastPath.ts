@@ -10,14 +10,14 @@ import {
 } from '@orbis/shared';
 import { useQueryClient } from '@tanstack/react-query';
 import { TRPCClientError } from '@trpc/client';
-import { invalidateGraph } from '../../lib/invalidate';
 import { useFlushBuffer, useOnline, useRetryBuffer } from '../../state/retry';
 import { isConflict, mapSendError } from '../../state/retry-send';
 import { trpc } from '../../trpc';
 import { isUndoEpoch, undoEpoch } from '../undo/undo-epoch';
+import { localMessagesOf } from './local-messages';
 import { MEMORY_RULES_QUERY, MEMORY_RULES_STALE_TIME, RULES_SCOPE } from './memoryRules';
 import { withRecordContext } from './record-context';
-import { type ChatMessage, chatThreadKey, upsertNewest, useSendMessage } from './useChatThread';
+import { type ChatMessage, useSendMessage } from './useChatThread';
 
 /** Экспортирован ради пиннинга: боевой текст обязан разбираться каноном (§А5-3). */
 export const CATEGORY_QUERY = { query: 'aspect=orbis/category' } as const;
@@ -79,8 +79,6 @@ export function useFastPath(threadId: string) {
   const utils = trpc.useUtils();
   const online = useOnline();
   const enqueueCreate = useRetryBuffer((s) => s.enqueueCreate);
-  // Слив с инвалидацией: подтверждённая буфером запись — такая же новая сущность графа,
-  // как созданная онлайн (Р17, круг правок 2).
   const flushBuffer = useFlushBuffer();
   const { sendMessage, retryMessage, isSending } = useSendMessage(threadId);
 
@@ -88,8 +86,8 @@ export function useFastPath(threadId: string) {
   // Архивация fast-сущности при «Разобрать с AI» (reparse): для списков и открытой
   // сущности это такая же правка графа, как создание, — снятая запись обязана из них
   // уйти, иначе одна строка выглядит двумя сущностями.
-  const update = trpc.entity.update.useMutation({ onSuccess: () => invalidateGraph(utils) });
-  const key = chatThreadKey(threadId);
+  const update = trpc.entity.update.useMutation();
+  const localMessages = localMessagesOf(queryClient);
 
   // Категории (aspect=orbis/category) + валюта + memory-правила → контекст парсера.
   // `cats`/`settings`/`rules` — сырьё кэша/сети.
@@ -202,7 +200,7 @@ export function useFastPath(threadId: string) {
   }
 
   // Возвращает id синтетического сообщения; повторный вызов с тем же messageId ПЕРЕПИСЫВАЕТ
-  // карточку (upsertNewest дедупит по id) — так «⚡ без AI» деградирует в «⏳ ждёт отправки».
+  // карточку (слой сообщений дедупит по id) — так «⚡ без AI» деградирует в «⏳ ждёт отправки».
   function insertCard(
     create: EntityCreateInput,
     note: string,
@@ -225,6 +223,7 @@ export function useFastPath(threadId: string) {
         fastPath,
       },
       messageId,
+      fastPath.entityId ?? create.id,
     );
     return messageId;
   }
@@ -290,13 +289,6 @@ export function useFastPath(threadId: string) {
       // «⚡ без AI», и при перечитывании треда заменит её, а не встанет второй карточкой в другом треде
       await create.mutateAsync({ input: toCreate, source: 'fast_path', threadId });
       if (!isUndoEpoch(epoch)) return;
-      // §5.1: созданная сущность обязана появиться в списках Browser и счётчиках.
-      // invalidateGraph, а не query-only: открытая цель считает прогресс на чтении
-      // entity.get, и без него полоса осталась бы вчерашней (Р17).
-      invalidateGraph(utils);
-      // 03-budget §4.1/§6.1: запись учтена сервером — остаток конверта на карточке
-      // и бейдж alertCount перечитываются ПОСЛЕ записи, не до.
-      void utils.budget.invalidate();
     } catch (err) {
       if (!isUndoEpoch(epoch)) return;
       // CONFLICT — НЕ успех (уборочная фаза, решение 7; прецедент — быстрая запись Бюджета, B4):
@@ -318,21 +310,24 @@ export function useFastPath(threadId: string) {
           if (!isUndoEpoch(epoch)) return;
           // Карточка была вставлена ДО запроса с отвергнутым id: без переписи её «Разобрать
           // с AI» архивировал бы ЧУЖУЮ строку (NOT_FOUND), а тап открывал бы пустоту.
-          // upsertNewest дедупит по messageId — карточка обновляется на месте, не мигая.
+          // слой сообщений дедупит по messageId — карточка обновляется на месте, не мигая.
           insertCard(
             toCreate,
             '⚡ без AI',
             { entityId: retryId, text, status: 'confirmed' },
             cardId,
           );
-          invalidateGraph(utils);
-          void utils.budget.invalidate();
         } catch {
           if (!isUndoEpoch(epoch)) return;
           // Второй отказ не разбираем по кодам: карточка деградирует в «⏳ ждёт отправки»
           // тем же путём, что транспортный сбой ниже, — ввод уходит в буфер С ТЕМ ЖЕ
           // замещающим id (буфер идемпотентен по client-UUID).
-          insertCard(toCreate, '⏳ ждёт отправки', { text, status: 'pending' }, cardId);
+          insertCard(
+            { ...toCreate, id: retryId },
+            '⏳ ждёт отправки',
+            { text, status: 'pending' },
+            cardId,
+          );
           enqueueCreate({ ...toCreate, id: retryId }, 'fast_path', threadId);
           void flushBuffer();
         }
@@ -380,7 +375,12 @@ export function useFastPath(threadId: string) {
     sendMessage(text);
   }
 
-  function insertMessage(content: string, metadata: ChatMessage['metadata'], id = newId()) {
+  function insertMessage(
+    content: string,
+    metadata: ChatMessage['metadata'],
+    id = newId(),
+    replacesFastPathEntity?: string,
+  ) {
     const synthetic = {
       id,
       threadId,
@@ -389,7 +389,7 @@ export function useFastPath(threadId: string) {
       metadata,
       createdAt: new Date().toISOString(),
     } as ChatMessage;
-    queryClient.setQueryData(key, (old) => upsertNewest(old as never, synthetic));
+    localMessages.note(threadId, synthetic, replacesFastPathEntity);
   }
   function insertSystemNote(note: string) {
     insertMessage(note, {});

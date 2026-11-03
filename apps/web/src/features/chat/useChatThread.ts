@@ -1,8 +1,12 @@
 import { newId } from '@orbis/shared';
 import { useInfiniteQuery, useQueryClient } from '@tanstack/react-query';
 import { TRPCClientError } from '@trpc/client';
-import { invalidateGraph } from '../../lib/invalidate';
+import { useEffect, useSyncExternalStore } from 'react';
+import { freshnessRuntimeOf } from '../../lib/freshness/provenance';
+import { useFreshnessVisible } from '../../lib/freshness/screen';
 import { type RouterOutputs, trpc } from '../../trpc';
+import { isUndoEpoch, undoEpoch } from '../undo/undo-epoch';
+import { localMessagesOf, projectLocalMessages } from './local-messages';
 
 export type ChatMessage = RouterOutputs['chat']['listMessages'][number];
 const PAGE = 50;
@@ -11,147 +15,94 @@ export function chatThreadKey(threadId: string) {
   return ['chatThread', threadId] as const;
 }
 
-type InfiniteData = { pages: ChatMessage[][]; pageParams: (string | undefined)[] };
-
-// Новейшая страница — pages[0] (DESC). Свежее/оптимистичное сообщение — в начало pages[0], дедуп по id.
-export function upsertNewest(old: InfiniteData | undefined, msg: ChatMessage): InfiniteData {
-  if (!old) return { pages: [[msg]], pageParams: [undefined] };
-  const [first = [], ...rest] = old.pages;
-  const without = first.filter((m) => m.id !== msg.id);
-  return { ...old, pages: [[msg, ...without], ...rest] };
-}
-
-// Убрать сообщение по id со всех страниц (снятие устаревшего error_card при «Повторить»).
-export function removeMessage(old: InfiniteData | undefined, id: string): InfiniteData | undefined {
-  if (!old) return old;
-  return { ...old, pages: old.pages.map((p) => p.filter((m) => m.id !== id)) };
+/** A no-op command can confirm that the visible thread missed an earlier write. */
+export function useChatThreadCatchup(threadId: string | undefined) {
+  const client = useQueryClient();
+  const visible = useFreshnessVisible();
+  return () => {
+    if (threadId === undefined || !visible) return;
+    const key = chatThreadKey(threadId);
+    const runtime = freshnessRuntimeOf(client);
+    if (runtime) runtime.requestRead(key);
+    else void client.refetchQueries({ queryKey: key, exact: true, type: 'active' });
+  };
 }
 
 export function useChatThread(threadId: string) {
   const utils = trpc.useUtils();
+  const client = useQueryClient();
+  const local = localMessagesOf(client);
+  const layers = useSyncExternalStore(local.subscribe, () => local.snapshot(threadId));
+  const key = chatThreadKey(threadId);
   const q = useInfiniteQuery({
-    queryKey: chatThreadKey(threadId),
+    queryKey: key,
+    enabled: useFreshnessVisible(),
     initialPageParam: undefined as string | undefined,
     queryFn: ({ pageParam }) =>
-      utils.chat.listMessages.fetch({ threadId, before: pageParam, limit: PAGE }),
-    // Составной курсор `"<createdAt>|<id>"` самого старого загруженного (согласован с
-    // сервером listMessages): устойчив к ms-коллизии двух сообщений в одну createdAt.
+      utils.chat.listMessages.fetch({ threadId, before: pageParam, limit: PAGE }, { staleTime: 0 }),
+    // The compound cursor also orders messages created in the same millisecond.
     getNextPageParam: (lastPage) => {
       if (lastPage.length < PAGE) return undefined;
       const oldest = lastPage[lastPage.length - 1];
       return oldest ? `${oldest.createdAt}|${oldest.id}` : undefined;
     },
   });
-  const messages = (q.data?.pages ?? []).flat();
+  useEffect(() => {
+    const pages = q.data?.pages;
+    if (pages && layers.length) local.observeServer(threadId, pages.flat());
+  }, [q.data, layers, local, threadId]);
   return {
-    messages,
+    messages: projectLocalMessages((q.data?.pages ?? []).flat(), layers),
     fetchOlder: () => q.fetchNextPage(),
     hasMore: q.hasNextPage,
     isLoading: q.isLoading,
   };
 }
 
-// Backoff-рефетч треда при { status: 'processing' }: ответ пишет другой прогон,
-// перечитываем с нарастающей задержкой (лишний invalidate после прихода ответа безвреден).
-export const PROCESSING_REFETCH_DELAYS_MS = [1000, 2000, 4000, 8000, 16000];
-
 export function useSendMessage(threadId: string) {
-  const queryClient = useQueryClient();
-  const utils = trpc.useUtils();
-  const key = chatThreadKey(threadId);
-
-  const refetchWithBackoff = (attempt = 0) => {
-    const delay = PROCESSING_REFETCH_DELAYS_MS[attempt];
-    if (delay === undefined) return;
-    setTimeout(() => {
-      void queryClient.invalidateQueries({ queryKey: key });
-      refetchWithBackoff(attempt + 1);
-    }, delay);
-  };
-
+  const client = useQueryClient();
+  const local = localMessagesOf(client);
   const send = trpc.ai.sendMessage.useMutation({
-    onMutate: async ({ id, content }) => {
-      await queryClient.cancelQueries({ queryKey: key });
-      const optimistic: ChatMessage = {
+    onMutate: ({ id, content, threadId }) => ({
+      epoch: undoEpoch(),
+      token: local.begin(threadId, {
         id,
         threadId,
         role: 'user',
         content,
         metadata: {},
         createdAt: new Date().toISOString(),
-      } as ChatMessage;
-      queryClient.setQueryData<InfiniteData>(key, (old) => upsertNewest(old, optimistic));
+      } as ChatMessage),
+    }),
+    onSuccess: (res, _vars, ctx) => {
+      if (!ctx || !isUndoEpoch(ctx.epoch) || 'status' in res) return;
+      local.confirm(ctx.token, res.assistantMessage as ChatMessage);
     },
-    onSuccess: (res) => {
-      if ('status' in res) {
-        // Ответ готовится другим прогоном (конкурентный ретрай того же client-UUID):
-        // ничего не аппендим — перечитываем тред с нарастающей задержкой, пока
-        // первый прогон не запишет ответ.
-        refetchWithBackoff();
-        return;
-      }
-      if (res.replayed) {
-        // D-f: не аппендим локально — рефетчим тред. Записи replay-прогона тоже могли
-        // затронуть бюджет (клиент их ответа не видел) — кэш инвалидируем и здесь.
-        void queryClient.invalidateQueries({ queryKey: key });
-        void utils.budget.invalidate();
-        return;
-      }
-      queryClient.setQueryData<InfiniteData>(key, (old) =>
-        upsertNewest(old, res.assistantMessage as ChatMessage),
-      );
-      // Р17: ответ AI мог создать/поправить сущности — открытый detail (прогресс цели,
-      // backlinks, подзадачи) обязан перечитаться вместе со списками.
-      invalidateGraph(utils);
-      // Финал B: транзакция через LLM-путь обязана обновить бейдж §6.1/Overview/остатки
-      // конвертов — симметрично fast-path (useFastPath, фикс B7).
-      void utils.budget.invalidate();
-    },
-    onError: (err, variables) => {
-      // Ход мог упасть ПОСЛЕ исполненных действий (К-44): граф и бюджет уже другие, и списки обязаны
-      // это узнать. Тред НЕ перечитываем — перечитывание смыло бы локальную error_card с «Повторить»
-      // ниже; ответ-ошибку сервера с карточками приносит «Повторить» (replay) или следующее чтение.
-      invalidateGraph(utils);
-      void utils.budget.invalidate();
-      // §3 (флаг ревью Task 9): текст НЕ теряем молча. Оптимистичное user-сообщение остаётся,
-      // а рядом вставляем error_card с retryId (id упавшего сообщения) + retryText — «Повторить»
-      // переотправит ту же строку тем же id (дедуп по id, без второго пузыря; renderCards).
+    onError: (err, { id, content, threadId }, ctx) => {
+      if (!ctx || !isUndoEpoch(ctx.epoch)) return;
       const code =
         err instanceof TRPCClientError && typeof err.data?.code === 'string'
           ? err.data.code
           : 'LLM_UNAVAILABLE';
-      const errorMsg: ChatMessage = {
+      local.fail(ctx.token, {
         id: newId(),
         threadId,
         role: 'assistant',
         content: '',
         metadata: {
           cards: [{ kind: 'error_card', code, message: 'Не удалось отправить сообщение.' }],
-          retryId: variables.id,
-          retryText: variables.content,
+          retryId: id,
+          retryText: content,
         },
         createdAt: new Date().toISOString(),
-      } as ChatMessage;
-      queryClient.setQueryData<InfiniteData>(key, (old) => upsertNewest(old, errorMsg));
+      } as ChatMessage);
     },
   });
 
   return {
     sendMessage: (content: string) => send.mutate({ id: newId(), threadId, content }),
-    // «Повторить»: снять устаревший error_card и переслать тем же id — upsertNewest дедупнёт
-    // оптимистичный пузырь (без дубля), при успехе сообщение реконсилится ответом сервера.
-    retryMessage: ({
-      errorMessageId,
-      id,
-      content,
-    }: {
-      errorMessageId: string;
-      id: string;
-      content: string;
-    }) => {
-      queryClient.setQueryData<InfiniteData>(key, (old) => removeMessage(old, errorMessageId));
-      send.mutate({ id, threadId, content });
-    },
+    retryMessage: ({ id, content }: { errorMessageId: string; id: string; content: string }) =>
+      send.mutate({ id, threadId, content }),
     isSending: send.isPending,
   };
 }

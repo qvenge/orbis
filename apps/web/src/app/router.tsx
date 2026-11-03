@@ -9,7 +9,6 @@ import { ChatScreen } from '../features/chat/ChatScreen';
 import { useSupplyRecords } from '../features/page/useSupplyRecords';
 import { MemoryScreen } from '../features/settings/MemoryScreen';
 import { SettingsScreen } from '../features/settings/SettingsScreen';
-import { invalidateGraph } from '../lib/invalidate';
 import { appKeyOf, HOST_HOME, type NavOverlay, useNav } from '../state/navigation';
 import { trpc } from '../trpc';
 import { Button } from '../ui/Button';
@@ -184,8 +183,7 @@ function HomeScreen({ app }: { app: string }) {
 }
 
 function HomeArchived({ id }: { id: string }) {
-  const utils = trpc.useUtils();
-  const restore = trpc.entity.update.useMutation({ onSuccess: () => invalidateGraph(utils) });
+  const restore = trpc.entity.update.useMutation();
   return (
     <>
       <ScreenHeader title="Домой" />

@@ -9,7 +9,6 @@
 import { useId, useState } from 'react';
 import { useOpenRecord } from '../../app/useOpenRecord';
 import { formatDate } from '../../lib/format';
-import { invalidateGraph } from '../../lib/invalidate';
 import { Markdown } from '../../lib/markdown/Markdown';
 import { trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
@@ -37,7 +36,6 @@ export type RoutineRunQuestion = {
 
 export function RoutineQuestionBlock({ run }: { run: RoutineRunQuestion }) {
   const openEntity = useOpenRecord();
-  const utils = trpc.useUtils();
   const answerId = useId();
   // Зона владельца — тем же швом, что у ленты прогона и истории: без неё время печаталось бы
   // в зоне машины, а вопрос, заданный ночью, читается только вместе с «когда».
@@ -50,7 +48,6 @@ export function RoutineQuestionBlock({ run }: { run: RoutineRunQuestion }) {
       setAnswer('');
       // Ответ двигает сам прогон (reply + outcome answered), а его видно и в истории рутины,
       // и в блоке её состояния. Инвалидация та же полная, что у любой правки графа (Р17).
-      invalidateGraph(utils);
     },
   });
 

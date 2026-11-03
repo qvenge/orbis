@@ -1,6 +1,5 @@
 import { HOME_PROPERTY, type OpenPlaque } from '@orbis/shared';
 import type { ReactNode } from 'react';
-import { invalidateGraph } from '../../lib/invalidate';
 import { appRefOf, useNav } from '../../state/navigation';
 import { trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
@@ -110,13 +109,11 @@ function AppOff({
   plaque: Extract<OpenPlaque, { kind: 'app-off' }>;
   title: string;
 }) {
-  const utils = trpc.useUtils();
   const { show } = useToast();
   // Включается только приложение (R-33): расширения «Состава» — отдельное действие в «Приложения и
   // расширения». Отказ — тостом: глобального обработчика ошибок мутаций нет, молчание читалось бы
   // как «кнопка не работает» (гейт 20, m-3).
   const enable = trpc.app.setDisabled.useMutation({
-    onSettled: () => invalidateGraph(utils),
     onError: () => show(`Не удалось включить «${title}»`, 'danger'),
   });
   const runBatch = useUpdateBatch();

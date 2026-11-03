@@ -1,6 +1,7 @@
 import { bindingIndexOf, type QueryAst } from '@orbis/shared';
 import { useCallback, useEffect, useState } from 'react';
 import { trpc } from '../../trpc';
+import { useFreshnessVisible } from '../freshness/screen';
 import type { EffectiveRegistry } from '../registry/labels';
 import { refQueryAst } from './RefField';
 
@@ -24,7 +25,11 @@ export function useEntityOptions({
     return () => clearTimeout(timer);
   }, [term]);
   const ast = refQueryAst(target, settled, limit);
-  const query = trpc.entity.query.useQuery({ ast }, { enabled, trpc: { abortOnUnmount: true } });
+  const shown = useFreshnessVisible();
+  const query = trpc.entity.query.useQuery(
+    { ast },
+    { enabled: enabled && shown, trpc: { abortOnUnmount: true } },
+  );
   const raw = query.data?.rows ?? [];
   const waiting = term.trim() !== settled;
   const retry = useCallback(() => {

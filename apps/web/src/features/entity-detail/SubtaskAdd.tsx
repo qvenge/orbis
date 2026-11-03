@@ -1,7 +1,6 @@
 import { newId, ROLE_SUBITEM } from '@orbis/shared';
 import { Plus } from 'lucide-react';
 import { useRef, useState } from 'react';
-import { invalidateGraph } from '../../lib/invalidate';
 import { trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
 import { Spinner } from '../../ui/Spinner';
@@ -12,7 +11,6 @@ import { offerUndoLazy } from '../undo/undo-lazy';
 
 /** Создание приезжает отдельно; список и его EntityRef уже показываются первым кадром. */
 export function SubtaskAdd({ parentId }: { parentId: string }) {
-  const utils = trpc.useUtils();
   const [draft, setDraft] = useState('');
   const edit = useRef({ parent: parentId.toLowerCase(), sequence: 0 });
   if (edit.current.parent !== parentId.toLowerCase()) {
@@ -22,13 +20,8 @@ export function SubtaskAdd({ parentId }: { parentId: string }) {
   const { show } = useToast();
   const create = trpc.entity.create.useMutation({
     meta: { undoStack: 'self' },
-    // DF п.5: списки читают ДРУГОЙ ключ со своим staleTime (60 с у Повестки, K16) и сами
-    // не протухнут — без этого новая подзадача до минуты не видна ни в Browser, ни в
-    // Повестке. Detail родителя (сама секция подзадач) перечитывается тем же вызовом:
-    // invalidateGraph инвалидирует entity.get целиком (Р17), и точечный ключ родителя в
-    // него входит.
+    // Entity and relation events refresh the parent and graph lists.
     onSuccess: (data, vars) => {
-      invalidateGraph(utils);
       const ref = journalRefOf(data);
       if (ref)
         offerUndoLazy({

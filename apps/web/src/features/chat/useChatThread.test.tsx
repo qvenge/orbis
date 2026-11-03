@@ -1,11 +1,10 @@
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { act, fireEvent, renderHook, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor } from '@testing-library/react';
 import { getQueryKey } from '@trpc/react-query';
-import type { ReactNode } from 'react';
 import { expect, test } from 'vitest';
-import { mockLink, renderWithProviders } from '../../test/harness';
+import { testFreshnessOf } from '../../test/freshness';
+import { renderWithProviders } from '../../test/harness';
 import { type RouterOutputs, trpc } from '../../trpc';
-import { useChatThread, useSendMessage } from './useChatThread';
+import { chatThreadKey, useChatThread, useSendMessage } from './useChatThread';
 
 type Msg = RouterOutputs['chat']['listMessages'][number];
 const mkMsg = (id: string, createdAt: string, role: Msg['role'] = 'user'): Msg =>
@@ -81,126 +80,124 @@ test('optimistic: user-сообщение появляется сразу; не-
   await waitFor(() => expect(screen.getByTestId('count')).toHaveTextContent('2'));
 });
 
-// Финал B (Important 2): транзакция через LLM-путь чата обязана обновлять бейдж §6.1 и
-// Overview — успешный ai.sendMessage инвалидирует budget-кэш (по образцу B7-фикса useFastPath).
-test('успешный ai.sendMessage инвалидирует budget-кэш (бейдж/Overview после LLM-транзакции)', async () => {
-  const qc = new QueryClient({
-    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-  });
-  const client = trpc.createClient({
-    links: [
-      mockLink((path) => {
-        if (path === 'chat.listMessages') return [];
-        if (path === 'ai.sendMessage')
-          return {
-            assistantMessage: mkMsg('resp', '2026-07-05T11:00:00.000Z', 'assistant'),
-            actions: [],
-            pending: [],
-            replayed: false,
-          };
-        throw new Error(`unexpected ${path}`);
-      }),
-    ],
-  });
-  const Wrap = ({ children }: { children: ReactNode }) => (
-    <trpc.Provider client={client} queryClient={qc}>
-      <QueryClientProvider client={qc}>{children}</QueryClientProvider>
-    </trpc.Provider>
-  );
-  const budgetKey = getQueryKey(trpc.budget.overview, { month: '2026-07' }, 'query');
-  qc.setQueryData(budgetKey, null); // тёплый кэш «до записи»
-  const { result } = renderHook(() => useSendMessage('t1'), { wrapper: Wrap });
-  act(() => result.current.sendMessage('обед 340'));
-  await waitFor(() => expect(qc.getQueryState(budgetKey)?.isInvalidated).toBe(true));
-});
-
-// К-44: ход мог упасть ПОСЛЕ исполненных действий — граф и бюджет уже изменились. Кэши графа гаснут, а тред — нет:
-// его перечитывание смыло бы локальную error_card с «Повторить».
-test('сбой ai.sendMessage: кэши графа и бюджета инвалидируются, тред не перечитывается, error_card с «Повторить» на месте', async () => {
-  const qc = new QueryClient({
-    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-  });
-  let listCalls = 0;
-  const client = trpc.createClient({
-    links: [
-      mockLink((path) => {
-        if (path === 'chat.listMessages') {
-          listCalls += 1;
-          return [];
-        }
-        if (path === 'ai.sendMessage') throw new Error('LLM_UNAVAILABLE');
-        throw new Error(`unexpected ${path}`);
-      }),
-    ],
-  });
-  const Wrap = ({ children }: { children: ReactNode }) => (
-    <trpc.Provider client={client} queryClient={qc}>
-      <QueryClientProvider client={qc}>{children}</QueryClientProvider>
-    </trpc.Provider>
-  );
-  const graphKey = getQueryKey(trpc.entity.query, { query: 'aspect=orbis/task' }, 'query');
-  const budgetKey = getQueryKey(trpc.budget.overview, { month: '2026-07' }, 'query');
-  qc.setQueryData(graphKey, []);
-  qc.setQueryData(budgetKey, null);
-  const { result } = renderHook(
-    () => ({ send: useSendMessage('t1'), thread: useChatThread('t1') }),
-    {
-      wrapper: Wrap,
+test('chat graph events invalidate budget and refetch the authoritative thread', async () => {
+  const { queryClient, calls } = renderWithProviders(
+    <Sender />,
+    (path) => {
+      if (path === 'chat.listMessages') return [];
+      if (path === 'ai.sendMessage')
+        return {
+          assistantMessage: mkMsg('resp', '2026-07-05T11:00:00.000Z', 'assistant'),
+          actions: [],
+          pending: [],
+          replayed: false,
+        };
+      throw new Error(`unexpected ${path}`);
     },
+    { freshness: true },
   );
-  await waitFor(() => expect(result.current.thread.isLoading).toBe(false));
-  const listed = listCalls;
-  act(() => result.current.send.sendMessage('создай и упади'));
-  await waitFor(() => expect(qc.getQueryState(graphKey)?.isInvalidated).toBe(true));
-  expect(qc.getQueryState(budgetKey)?.isInvalidated).toBe(true);
-  const cards = result.current.thread.messages.flatMap(
-    (m) => (m.metadata as { cards?: Array<{ kind: string }> }).cards ?? [],
+  await waitFor(() => expect(screen.getByTestId('count')).toHaveTextContent('0'));
+  const budgetKey = getQueryKey(trpc.budget.overview, { month: '2026-07' }, 'query');
+  queryClient.setQueryData(budgetKey, null);
+  fireEvent.click(screen.getByText('send'));
+  await waitFor(() => expect(screen.getByTestId('count')).toHaveTextContent('2'));
+  expect(queryClient.getQueryData(chatThreadKey('t1'))).toMatchObject({ pages: [[]] });
+  await act(async () =>
+    testFreshnessOf(queryClient).changes([
+      { kind: 'entity', rowKey: 'purchase' },
+      { kind: 'message', rowKey: 'resp', threadId: 't1' },
+    ]),
   );
-  expect(cards.some((c) => c.kind === 'error_card')).toBe(true);
-  expect(listCalls).toBe(listed);
-});
-
-test('{ status: processing } → рефетч треда с backoff, без локального аппенда ответа', async () => {
-  // Конкурентный ретрай: ответ пишет другой прогон — клиент перечитывает тред позже
-  let listCalls = 0;
-  renderWithProviders(<Sender />, (path) => {
-    if (path === 'chat.listMessages') {
-      listCalls += 1;
-      return [];
-    }
-    if (path === 'ai.sendMessage') return { status: 'processing' };
-    throw new Error(`unexpected ${path}`);
-  });
-  await waitFor(() => expect(screen.getByTestId('count')).toHaveTextContent('0'));
-  const before = listCalls;
-  fireEvent.click(screen.getByText('send'));
-  // первый шаг backoff (1 с) должен привести к повторному listMessages
-  await waitFor(() => expect(listCalls).toBeGreaterThan(before), { timeout: 3000 });
-});
-
-test('replayed:true → рефетч треда, без локального аппенда ответа', async () => {
-  let listCalls = 0;
-  const replayedList = [
-    mkMsg('u', '2026-07-05T11:00:00.000Z', 'user'),
-    mkMsg('r', '2026-07-05T11:00:01.000Z', 'assistant'),
-  ];
-  const { calls } = renderWithProviders(<Sender />, (path) => {
-    if (path === 'chat.listMessages') {
-      listCalls += 1;
-      return listCalls === 1 ? [] : replayedList;
-    }
-    if (path === 'ai.sendMessage')
-      return {
-        assistantMessage: mkMsg('ignored', 'x', 'assistant'),
-        actions: [],
-        pending: [],
-        replayed: true,
-      };
-    throw new Error(`unexpected ${path}`);
-  });
-  await waitFor(() => expect(screen.getByTestId('count')).toHaveTextContent('0'));
-  fireEvent.click(screen.getByText('send'));
   await waitFor(() =>
-    expect(calls.filter((c) => c.path === 'chat.listMessages').length).toBeGreaterThanOrEqual(2),
+    expect(calls.filter(({ path }) => path === 'chat.listMessages')).toHaveLength(2),
+  );
+  expect(queryClient.getQueryState(budgetKey)?.isInvalidated).toBe(true);
+});
+
+test('partial commit and reset retain the same retry UUID and text outside the raw cache', async () => {
+  let ui:
+    | { send: ReturnType<typeof useSendMessage>; thread: ReturnType<typeof useChatThread> }
+    | undefined;
+  const probe = () => {
+    ui = { send: useSendMessage('t1'), thread: useChatThread('t1') };
+    return null;
+  };
+  const Probe = probe;
+  let server: Msg[] = [];
+  let refuse: (reason: unknown) => void = () => {};
+  const firstSend = new Promise((_resolve, reject) => {
+    refuse = reject;
+  });
+  let sends = 0;
+  const { queryClient, calls } = renderWithProviders(
+    <Probe />,
+    (path) => {
+      if (path === 'chat.listMessages') return server;
+      if (path === 'ai.sendMessage')
+        return ++sends === 1
+          ? firstSend
+          : {
+              assistantMessage: mkMsg('answer', '2026-07-05T11:00:01.000Z', 'assistant'),
+              actions: [],
+              pending: [],
+              replayed: true,
+            };
+      throw new Error(`unexpected ${path}`);
+    },
+    { freshness: true },
+  );
+  await waitFor(() => expect(ui?.thread.isLoading).toBe(false));
+  act(() => ui?.send.sendMessage('создай и упади'));
+  await waitFor(() =>
+    expect(calls.filter(({ path }) => path === 'ai.sendMessage')).toHaveLength(1),
+  );
+  const input = calls.find(({ path }) => path === 'ai.sendMessage')?.input as {
+    id: string;
+    content: string;
+  };
+  server = [{ ...mkMsg(input.id, '2026-07-05T11:00:00.000Z'), content: input.content }];
+  const feed = testFreshnessOf(queryClient);
+  await act(async () => feed.changes([{ kind: 'message', rowKey: input.id, threadId: 't1' }]));
+  await waitFor(() =>
+    expect(queryClient.getQueryData(chatThreadKey('t1'))).toMatchObject({ pages: [server] }),
+  );
+  await act(async () => refuse(new Error('LLM_UNAVAILABLE')));
+  const retry = () => ui?.thread.messages.find(({ metadata }) => metadata.retryId === input.id);
+  await waitFor(() => expect(retry()?.metadata.retryText).toBe(input.content));
+  await act(async () => feed.reset());
+  await waitFor(() =>
+    expect(calls.filter(({ path }) => path === 'chat.listMessages')).toHaveLength(3),
+  );
+  expect(retry()).toBeDefined();
+  expect(ui?.thread.messages.filter(({ id }) => id === input.id)).toHaveLength(1);
+  expect(queryClient.getQueryData(chatThreadKey('t1'))).toMatchObject({ pages: [server] });
+  act(() => ui?.send.retryMessage({ ...input, errorMessageId: retry()?.id ?? '' }));
+  await waitFor(() => expect(ui?.thread.messages.some(({ id }) => id === 'answer')).toBe(true));
+  expect(retry()).toBeUndefined();
+  expect(calls.filter(({ path }) => path === 'ai.sendMessage').map(({ input }) => input)).toEqual([
+    { ...input, threadId: 't1' },
+    { ...input, threadId: 't1' },
+  ]);
+});
+
+test('processing waits for the thread feed instead of using a timer', async () => {
+  const { queryClient, calls } = renderWithProviders(
+    <Sender />,
+    (path) => {
+      if (path === 'chat.listMessages') return [];
+      if (path === 'ai.sendMessage') return { status: 'processing' };
+      throw new Error(`unexpected ${path}`);
+    },
+    { freshness: true },
+  );
+  await waitFor(() => expect(screen.getByTestId('count')).toHaveTextContent('0'));
+  fireEvent.click(screen.getByText('send'));
+  await waitFor(() => expect(screen.getByTestId('count')).toHaveTextContent('1'));
+  expect(calls.filter(({ path }) => path === 'chat.listMessages')).toHaveLength(1);
+  await act(async () =>
+    testFreshnessOf(queryClient).changes([{ kind: 'message', rowKey: 'reply', threadId: 't1' }]),
+  );
+  await waitFor(() =>
+    expect(calls.filter(({ path }) => path === 'chat.listMessages')).toHaveLength(2),
   );
 });

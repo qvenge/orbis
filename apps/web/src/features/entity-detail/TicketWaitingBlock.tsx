@@ -2,7 +2,6 @@
 // прогона, потому что жест у них ОДИН: прочитать текст и ответить, вернув работу в круг.
 import { useId, useState } from 'react';
 import { useOpenRecord } from '../../app/useOpenRecord';
-import { invalidateGraph } from '../../lib/invalidate';
 import { Markdown } from '../../lib/markdown/Markdown';
 import { type RouterOutputs, trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
@@ -31,7 +30,6 @@ export function TicketWaitingBlock({
   lastRun: TicketRun | undefined;
 }) {
   const openEntity = useOpenRecord();
-  const utils = trpc.useUtils();
   // Предпросмотр шаблона (хост `readOnly`): вопрос виден, ответа и «Закрыть тикет» нет.
   const readOnly = useHostReadOnly();
   const answerId = useId();
@@ -42,7 +40,6 @@ export function TicketWaitingBlock({
       // Ответ двигает ДВЕ записи — прогон (reply) и тикет (waiting → planned), — и обе видны
       // соседям: тикет стоит в очереди агента и в списках проекта. Инвалидация та же полная,
       // что у любой правки графа (Р17).
-      invalidateGraph(utils);
     },
   });
   const { mutation: update } = useEntityUpdate(entity.id);

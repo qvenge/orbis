@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 import { useResolvedRefs } from '../../../lib/entity-ref/useResolvedRefs';
 import { useBlockData } from '../../../lib/query-blocks/batch';
 import { resetRegistryVersionForTests, useRegistry } from '../../../lib/registry/useRegistry';
+import { testFreshnessOf } from '../../../test/freshness';
 import {
   blocksReply,
   fixtureFreshness,
@@ -400,15 +401,21 @@ function FreshnessProbe() {
 }
 test('create and Undo refresh all live graph views including shared refs and budget', async () => {
   let generation = 0;
-  const { calls } = renderWithProviders(
+  const { calls, queryClient } = renderWithProviders(
     <FreshnessProbe />,
     (p, input) => {
       if (p === 'relation.create') {
         generation = 1;
+        testFreshnessOf(queryClient).changes([
+          { kind: 'relation', rowKey: 'relation', entityIds: [id, other] },
+        ]);
         return { actionId, consequences: false };
       }
       if (p === 'ai.undo') {
         generation = 0;
+        testFreshnessOf(queryClient).changes([
+          { kind: 'relation', rowKey: 'relation', entityIds: [id, other] },
+        ]);
         return {
           actionId: 'undo-receipt',
           undone: { id: actionId, title: 'Связь' },
@@ -431,7 +438,7 @@ test('create and Undo refresh all live graph views including shared refs and bud
         {}
       );
     },
-    { queries: { staleTime: Infinity } },
+    { queries: { staleTime: Infinity }, freshness: true },
   );
   const expected = (g: number) => ({
     current: `Снимок ${g}`,
@@ -512,7 +519,7 @@ function ClosedCacheProbe() {
   );
 }
 test('inactive get and batched ref keys become stale without a new network read after create or Undo', async () => {
-  const { calls } = renderWithProviders(
+  const { calls, queryClient } = renderWithProviders(
     <ClosedCacheProbe />,
     (p) =>
       p === 'entity.get'
@@ -520,16 +527,32 @@ test('inactive get and batched ref keys become stale without a new network read 
         : p === 'entity.resolveRefs'
           ? []
           : (registryReply(p) ?? { actionId, consequences: false }),
-    { queries: { staleTime: Infinity } },
+    { queries: { staleTime: Infinity }, freshness: true },
   );
   fireEvent.click(screen.getByText('Прогреть закрытые'));
   await waitFor(() => expect(screen.getByTestId('primed')).toHaveTextContent('true'));
   fireEvent.click(screen.getByText('Создать'));
   await waitFor(() => expect(useToastStore.getState().toasts.at(-1)?.action).toBeDefined());
+  await act(async () => {
+    testFreshnessOf(queryClient).changes([
+      { kind: 'relation', rowKey: 'relation', entityIds: [id, other] },
+    ]);
+  });
+  await waitFor(() =>
+    expect(
+      queryClient.getQueryState(getQueryKey(trpc.entity.get, { id: other }, 'query'))
+        ?.isInvalidated,
+    ).toBe(true),
+  );
   fireEvent.click(screen.getByText('Проверить кеш'));
   expect(screen.getByTestId('closed')).toHaveTextContent('{"get":true,"refs":true}');
   act(() => useToastStore.getState().toasts.at(-1)?.action?.onSelect());
   await waitFor(() => expect(calls.some((c) => c.path === 'ai.undo')).toBe(true));
+  await act(async () => {
+    testFreshnessOf(queryClient).changes([
+      { kind: 'relation', rowKey: 'relation', entityIds: [id, other] },
+    ]);
+  });
   expect(calls.filter((c) => c.path === 'entity.get')).toHaveLength(1);
   expect(calls.filter((c) => c.path === 'entity.resolveRefs')).toHaveLength(1);
 });

@@ -3,15 +3,12 @@ import {
   type ExtensionId,
   isExtensionEnabled,
   type PropertyDefinition,
-  type RowRegistry,
 } from '@orbis/shared';
 import { lazy, Suspense } from 'react';
 import { refQueryAst, refTargetOf, useRefTitle } from '../../lib/entity-ref/RefField';
-import { invalidateBudget } from '../../lib/invalidate';
 import { displayText, valueText } from '../../lib/registry/format';
 import { aspectLabel, fieldLabel, type RegistryLookup } from '../../lib/registry/labels';
 import { PropertyControl } from '../../lib/registry/PropertyControl';
-import { rowRegistryOf, touchesMoneyContract } from '../../lib/registry/row';
 import { trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
 import type { AspectSnapshot, Entity } from './AspectSection';
@@ -21,45 +18,6 @@ import { useEntityUpdate } from './useEntityDetail';
 const ExtensionOffPlaque = lazy(() =>
   import('./ExtensionOffPlaque').then((m) => ({ default: m.ExtensionOffPlaque })),
 );
-/**
- * Тронула ли ОТПРАВЛЕННАЯ правка то, от чего зависят серверные агрегаты.
- *
- * Считается по `vars` мутации, а не по замыканию строки: колбэк исполняется на уровне
- * мутации и переживает размонтирование экрана, а значит обязан решать по тому, ЧТО УЕХАЛО.
- * Снятие (`unset`) двигает агрегаты ровно так же, как запись, — оба списка сюда и входят.
- *
- * ЧЛЕНСТВО В АСПЕКТЕ — ВТОРОЙ ВХОД, и его отсутствие было дефектом. Серверные агрегаты
- * Финансов ключуются не только на значениях, но и на самом факте аспекта
- * (`budget/aggregates.ts`: `spent` считает записи с `orbis/financial`, привязку к конверту
- * снимает `unbindOps` на detach). Пока признак считался по одним `props`/`unset`, «Снять
- * аспект» отвечало `false`: операция выпадала из `spent`, конверт переставал гаситься, а
- * его сумма на карточках конверта жила неверной до перезагрузки страницы — наблюдатели
- * агрегатов живут дольше экрана и сами не протухают.
- *
- * Правка аспекта гасит агрегаты ВСЕГДА, каким бы аспект ни был, и это не перестраховка:
- * зависимость живёт на СЕРВЕРЕ, а не в реестре. `orbis/schedule` не связывает ни одного слота
- * денежных контрактов — и всё же его `orbis/recurrence` превращает операцию в шаблон, который
- * `spent` не считает. Правило «по привязкам аспекта» пропустило бы ровно этот случай, а список
- * аспектов-исключений в коде разъехался бы с сервером при первом же новом агрегате. Цена ошибки
- * в другую сторону — один лишний `budget.invalidate()` на редкий осознанный жест.
- *
- * Правка значений — по признаку контракта (`touchesMoneyContract`, спека 1б §8.4, Н-5): свойство
- * связано слотом «движения денег» или «конверта». Прежний признак `module === 'finance'` после
- * переноса суммы и даты операции в язык (`module: null`) перестал бы видеть правку суммы.
- */
-function touchesMoneyAggregates(
-  reg: RowRegistry,
-  vars: {
-    props?: Record<string, unknown>;
-    unset?: string[];
-    aspects?: { attach?: string[]; detach?: string[] };
-  },
-): boolean {
-  const aspects = vars.aspects;
-  if ((aspects?.attach?.length ?? 0) > 0 || (aspects?.detach?.length ?? 0) > 0) return true;
-  return touchesMoneyContract([...Object.keys(vars.props ?? {}), ...(vars.unset ?? [])], reg);
-}
-
 /**
  * Правка свойств и аспектов записи из секций — ОДНА обвязка на все секции, что стоят рядом.
  *
@@ -83,18 +41,6 @@ function useAspectEdits(entity: Entity, snapshot: AspectSnapshot) {
           options?.find((entry) => entry.id === id)?.title ??
           utils.entity.get.getData({ id })?.entity.title,
       );
-    },
-    /**
-     * Денежные агрегаты считает сервер, и `invalidateGraph` о них не знает по построению (он
-     * про `entity.query/get/count`) — после правки они протухли.
-     *
-     * УРОВЕНЬ МУТАЦИИ, а не поштучный колбэк `mutate`: правка «Суммы» и немедленный переход
-     * на вкладку Бюджета размонтируют этот экран (роутер рисует только активную вкладку), и
-     * поштучный колбэк библиотека не позвала бы вовсе — остаток конверта и бейдж вкладки
-     * остались бы вчерашними ровно в том сюжете, ради которого механизм и написан.
-     */
-    onSettled: (vars) => {
-      if (touchesMoneyAggregates(rowRegistryOf(registry.data), vars)) void invalidateBudget(utils);
     },
   });
 
