@@ -1,4 +1,4 @@
-// scripts/lab/run.ts — лабораторный прогон против прода (спека скорости §3.4): base | after-a | after-b.
+// scripts/lab/run.ts — лабораторный прогон (спека скорости §3.4).
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { chromium } from 'playwright-core';
@@ -13,13 +13,13 @@ const out = arg('--out');
 const repeat = Number(arg('--repeat') ?? 5);
 if (
   !label ||
-  !['base', 'after-a', 'after-b'].includes(label) ||
+  !['base', 'after-a', 'before-b', 'after-b'].includes(label) ||
   !out ||
   !Number.isInteger(repeat) ||
   repeat < 1
 ) {
   console.error(
-    'run: bun scripts/lab/run.ts --label base|after-a|after-b --out <файл.json> [--repeat 5]',
+    'run: bun scripts/lab/run.ts --label base|after-a|before-b|after-b --out <файл.json> [--repeat 5]',
   );
   process.exit(2);
 }

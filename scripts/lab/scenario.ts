@@ -2,13 +2,14 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import type { BrowserContext, Page } from 'playwright-core';
+import { CLIENT_VERSION_HEADER } from '@orbis/shared';
+import type { BrowserContext, Page, Request, Response } from 'playwright-core';
 // Текст запросов поиска хоста — тот же модуль, что строит их окну поиска: проверка «поиск найдёт запись»
 // обязана спрашивать ровно то, что спросит окно (группы, потолки, квотирование строки), а не свою копию.
 import { SEARCH_GROUPS, searchBlockTexts } from '../../apps/web/src/features/search/search-query';
 import type { LabSample } from './summary';
 
-export const LAB_DIR = join(homedir(), '.orbis-lab');
+export const LAB_DIR = process.env.ORBIS_LAB_DIR ?? join(homedir(), '.orbis-lab');
 export const PROFILE_DIR = join(LAB_DIR, 'profile');
 export const RECORDS_FILE = join(LAB_DIR, 'records.json');
 export const LAB_URL = (process.env.ORBIS_LAB_URL ?? 'https://orbis-64q4.onrender.com').replace(
@@ -113,13 +114,20 @@ export const LAB_SELECTORS = [
   ],
   ['[data-testid="host-chat"]', ['app/frame/HostButtons.tsx', 'data-testid="host-chat"']],
   [
-    '[data-testid="draft-banner"]',
-    ['features/entity-detail/EntityBody.tsx', 'data-testid="draft-banner"'],
+    '#side-chat [data-testid="message-list"]',
+    ['app/frame/SideChat.tsx', 'id="side-chat"', '<ChatPanel context={context}'],
+    ['features/chat/ChatPanel.tsx', '<ThreadView ', '<MessageList'],
+    ['features/chat/MessageList.tsx', 'data-testid="message-list"'],
   ],
   [
-    'main[data-testid="screen-content"] [data-testid="record-area"]',
-    ['app/router.tsx', 'data-testid="screen-content"'],
-    ['features/entity-detail/DetailScreen.tsx', 'data-testid="record-area"'],
+    '#side-chat input[aria-label="Сообщение"]',
+    ['app/frame/SideChat.tsx', 'id="side-chat"'],
+    ['features/chat/ChatPanel.tsx', '<Composer'],
+    ['features/chat/Composer.tsx', '<input', 'aria-label="Сообщение"'],
+  ],
+  [
+    '[data-testid="draft-banner"]',
+    ['features/entity-detail/EntityBody.tsx', 'data-testid="draft-banner"'],
   ],
   [
     'button[data-testid="screen-menu"]',
@@ -133,10 +141,12 @@ export const LAB_SELECTORS = [
 ] as const;
 export type RecordKind = (typeof RECORD_KINDS)[number];
 export interface TypingResult {
-  /** Запросы tRPC по процедурам за весь набор. */
+  /** Запросы tRPC по процедурам за набор и маркер закрытия вкладки. */
   requests: Record<string, number>;
   /** Запросы по временным окнам «очередь + пауза»; поздние ответы могут пересечь границу (N1/R99). */
   perSave: Array<Record<string, number>>;
+  /** Отдельная правка без следующей очереди набора до конца наблюдения за её ACK. */
+  bodySave: BodySaveObservation;
   /** Маркер, набранный перед закрытием вкладки без паузы, виден на новом открытии в пределах потолка. */
   textSurvived: boolean;
   /** Когда маркер появился в области записи — мс от начала загрузки новой вкладки; не появился — `null`. */
@@ -150,6 +160,8 @@ export interface LabRun {
   /** Начало прогона (а не момент записи файла). */
   startedAt: string;
   repeat: number;
+  device: { userAgent: string; viewport: ReturnType<Page['viewportSize']> } | null;
+  clientVersions: string[];
   records: Partial<Record<RecordKind, string>>;
   samples: LabSample[];
   notes: string[];
@@ -455,33 +467,204 @@ function proceduresOf(url: string): string[] | null {
   return i < 0 ? null : decodeURIComponent(path.slice(i + 6)).split(',');
 }
 
-/** Холодный старт (§3.4 п. 1): пустой кеш — HTTP-кеш и кеш service worker (PWA) сносятся через CDP, сессия остаётся. */
-async function coldStarts(
+interface BodySaveObservation {
+  status: 'confirmed' | 'unconfirmed';
+  bodyRevision?: number;
+  txId?: string;
+  beforeRequest: Record<string, number>;
+  /** Все чтения от отправки сохранения до конца выдержки после наблюдения ACK. */
+  sinceRequest: Record<string, number>;
+  waitAfterObservedAckMs: number;
+}
+
+/** tRPC связывает входы и результаты пачки по индексу процедуры, включая HTTP 207. */
+function operationsOf(req: Request) {
+  const procedures = proceduresOf(req.url()) ?? [];
+  if (procedures.length === 0) return [];
+  const url = new URL(req.url());
+  const batched = url.searchParams.get('batch') === '1';
+  const input =
+    req.method() === 'POST'
+      ? req.postDataJSON()
+      : JSON.parse(url.searchParams.get('input') ?? 'null');
+  return procedures.map((procedure, index) => ({
+    procedure,
+    input: (batched ? input?.[index] : input) as Record<string, unknown> | null,
+    batchIndex: batched ? index : undefined,
+  }));
+}
+
+async function wireDataAt(response: Response | null | undefined, index: number | undefined) {
+  const wire = await response?.json().catch(() => null);
+  return (index === undefined ? wire : wire?.[index])?.result?.data;
+}
+
+/**
+ * Отдельная правка: начать отсчёт с конкретного запроса, дождаться его подтверждения,
+ * оставить экран и чат открытыми ещё 6 с (период сверки 5 с). Чтения в окне могут быть
+ * фоновыми, поэтому счётчик даёт наблюдаемых кандидатов, а не источник инвалидации.
+ */
+export async function observeBodySave(
+  page: Page,
+  id: string,
+  marker: string,
+  edit: () => Promise<void>,
+): Promise<BodySaveObservation> {
+  const observation: BodySaveObservation = {
+    status: 'unconfirmed',
+    beforeRequest: {},
+    sinceRequest: {},
+    waitAfterObservedAckMs: 0,
+  };
+  const matched: { request?: Request; batchIndex?: number } = {};
+  const onRequest = (request: Request) => {
+    for (const { procedure, input, batchIndex } of operationsOf(request)) {
+      if (
+        matched.request === undefined &&
+        request.method() === 'POST' &&
+        procedure === 'entity.update' &&
+        input?.id === id &&
+        input.autosave === true &&
+        JSON.stringify(input.bodyDoc ?? input.body ?? '').includes(marker)
+      ) {
+        matched.request = request;
+        matched.batchIndex = batchIndex;
+      }
+      if (
+        (procedure === 'entity.get' && input?.id === id) ||
+        procedure === 'chat.listMessages' ||
+        procedure === 'chat.threadEntity'
+      ) {
+        const reads =
+          matched.request === undefined ? observation.beforeRequest : observation.sinceRequest;
+        reads[procedure] = (reads[procedure] ?? 0) + 1;
+      }
+    }
+  };
+  page.on('request', onRequest);
+  try {
+    const finished = page
+      .waitForEvent('requestfinished', {
+        predicate: (request) => request === matched.request,
+        timeout: 30_000,
+      })
+      .catch(() => null);
+    await edit();
+    const response = await (await finished)?.response();
+    const data = await wireDataAt(response, matched.batchIndex);
+    if (data?.id !== id || typeof data.bodyRevision !== 'number') return observation;
+    observation.status = 'confirmed';
+    observation.bodyRevision = data.bodyRevision;
+    if (typeof data.txId === 'string') observation.txId = data.txId;
+    observation.waitAfterObservedAckMs = 6_000;
+    await page.waitForTimeout(observation.waitAfterObservedAckMs);
+    return observation;
+  } finally {
+    page.off('request', onRequest);
+  }
+}
+
+/** Завершить JS старой вкладки без сетевого запроса и сохранить доступ к хранилищам того же origin. */
+async function parkApp(page: Page): Promise<void> {
+  const blank = await page.evaluate(() =>
+    URL.createObjectURL(
+      new Blob(['<!doctype html><title>Orbis lab</title>'], { type: 'text/html' }),
+    ),
+  );
+  await page.goto(blank);
+}
+
+function clearAccountCache(): Promise<void> {
+  const keys = Object.keys(localStorage).filter((key) => /^sb-.+-auth-token$/.test(key));
+  if (keys.length !== 1) throw new Error('нужна одна сессия в отдельном лаб-профиле');
+  const session = JSON.parse(localStorage.getItem(keys[0] as string) ?? '{}') as {
+    user?: { id?: string };
+  };
+  const id = session.user?.id;
+  if (!id || !/^[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}$/i.test(id)) {
+    throw new Error('в сессии лаб-профиля нет UUID аккаунта');
+  }
+  return new Promise((resolve, reject) => {
+    const deleting = indexedDB.deleteDatabase(`orbis-cache:${id}`);
+    deleting.onsuccess = () => resolve();
+    deleting.onerror = () => reject(deleting.error ?? new Error('ошибка удаления кеша данных'));
+    deleting.onblocked = () => reject(new Error('кеш данных открыт другим писателем лаб-профиля'));
+  });
+}
+
+function hasControlledShell(): boolean {
+  return Boolean(navigator.serviceWorker?.controller);
+}
+
+async function warmEvidence(
+  ctx: BrowserContext,
+  page: Page,
+  id: string,
+): Promise<NonNullable<LabSample['startup']>> {
+  // После очистки service workers установка и активация могут закончиться уже после DOM ready.
+  const controlled = await page
+    .waitForFunction(hasControlledShell, undefined, { timeout: 5_000 })
+    .catch(() => null);
+  if (!controlled) return { shell: 'no-controller', target: 'untested' };
+  // Новый документ без сети доказывает, что приложение прочитало совместимый ответ цели.
+  // Ни формат Б6, ни наличие произвольной строки в IndexedDB здесь не принимаются за готовность.
+  const result = await openOfflineRecord(ctx, id);
+  return result.status === 'ready'
+    ? { shell: 'controlled', target: 'ready-offline' }
+    : { shell: 'controlled', target: 'unavailable', reason: result.status };
+}
+
+/** Один и тот же экран с разными состояниями оболочки и кеша ответов (§3.4 п. 1). */
+export async function coldStarts(
   ctx: BrowserContext,
   page: Page,
   r: number,
   out: LabSample[],
   notes: string[],
+  id: string,
+  afterEmpty: () => Promise<void>,
 ) {
-  const cdp = await ctx.newCDPSession(page);
-  await cdp.send('Network.clearBrowserCache');
-  await cdp.send('Storage.clearDataForOrigin', {
-    origin: LAB_URL,
-    storageTypes: 'cache_storage,service_workers',
-  });
-  await cdp.detach();
-  for (const kind of ['empty', 'warm'] as const) {
-    await page.goto(LAB_URL);
+  const origin = new URL(LAB_URL).origin;
+  if (ctx.pages().some((other) => other !== page && new URL(other.url()).origin === origin)) {
+    throw new Error('перед замером закройте остальные вкладки Orbis в лаб-профиле');
+  }
+  for (const phase of ['cold-shell', 'empty', 'warm'] as const) {
+    if (phase === 'cold-shell') {
+      await parkApp(page);
+      const cdp = await ctx.newCDPSession(page);
+      try {
+        await cdp.send('Network.clearBrowserCache');
+        await cdp.send('Storage.clearDataForOrigin', {
+          origin,
+          storageTypes: 'cache_storage,service_workers',
+        });
+      } finally {
+        await cdp.detach();
+      }
+    } else if (phase === 'empty') {
+      await parkApp(page);
+      await page.evaluate(clearAccountCache);
+    }
+    const startup = phase === 'warm' ? await warmEvidence(ctx, page, id) : undefined;
+    const kind =
+      startup?.shell === 'no-controller'
+        ? 'warm-shell'
+        : startup?.target === 'unavailable'
+          ? 'warm-unverified'
+          : phase;
+    await page.goto(`${LAB_URL}/r/${id}`);
     mark(out, {
       metric: 'cold_start',
       kind,
-      durMs: await waitReady(page, null, notes, `холодный старт ${kind}`),
+      durMs: await waitReady(page, id, notes, `холодный старт ${kind}`),
       repeat: r,
+      ...(startup && { startup }),
     });
     const lcp = await page.evaluate(
       () => (window as unknown as { __lab: { lcp: number | null } }).__lab.lcp,
     );
     if (lcp !== null) mark(out, { metric: 'lcp', kind, durMs: lcp, repeat: r });
+    if (phase === 'empty') await afterEmpty();
   }
 }
 
@@ -492,17 +675,22 @@ async function openViaSearch(page: Page, id: string, title: string): Promise<num
   await page.waitForSelector(`[data-testid="search-hit-${id}"]`, { timeout: 30_000 });
   return clickAt(page, `[data-testid="search-hit-${id}"]`);
 }
-/** Первая запись — опорная: с неё открывается каждая следующая, «‹» возвращает на неё (поиск снимается переходом,
- *  стопка — «опорная → следующая»). Повтор — вторая запись, уже открывавшаяся в этой вкладке (цель 1 §0.3). */
-async function transitions(page: Page, recs: Row[], r: number, out: LabSample[], notes: string[]) {
-  await page.goto(LAB_URL);
-  await waitReady(page, null, notes, 'домашняя');
+/** Начинаем на лаб-записи сразу после очистки кеша данных. Первая запись поиска — опорная:
+ * с неё открывается каждая следующая, «‹» возвращает на неё. Повтор — вторая запись поиска. */
+async function transitions(
+  page: Page,
+  recs: Array<Row & { kind: RecordKind }>,
+  r: number,
+  out: LabSample[],
+  notes: string[],
+) {
   const [anchor, ...rest] = recs;
   if (anchor === undefined) return;
   const t0 = await openViaSearch(page, anchor.id, anchor.title);
   mark(out, {
     metric: 'transition',
     kind: 'first',
+    screen: anchor.kind,
     cached: false,
     durMs: (await waitReady(page, anchor.id, notes, 'переход')) - t0,
     repeat: r,
@@ -512,6 +700,7 @@ async function transitions(page: Page, recs: Row[], r: number, out: LabSample[],
     mark(out, {
       metric: 'transition',
       kind: 'first',
+      screen: rec.kind,
       cached: false,
       durMs: (await waitReady(page, rec.id, notes, 'переход')) - t1,
       repeat: r,
@@ -520,6 +709,7 @@ async function transitions(page: Page, recs: Row[], r: number, out: LabSample[],
     mark(out, {
       metric: 'transition',
       kind: 'back',
+      screen: anchor.kind,
       cached: true,
       durMs: (await waitReady(page, anchor.id, notes, 'назад')) - back,
       repeat: r,
@@ -531,6 +721,7 @@ async function transitions(page: Page, recs: Row[], r: number, out: LabSample[],
     mark(out, {
       metric: 'transition',
       kind: 'repeat',
+      screen: again.kind,
       cached: true,
       durMs: (await waitReady(page, again.id, notes, 'повтор')) - t2,
       repeat: r,
@@ -664,6 +855,51 @@ async function focusEditor(page: Page): Promise<void> {
   await page.click(editor);
 }
 
+async function waitForSideChatView(page: Page): Promise<void> {
+  const options = { state: 'visible', timeout: 10_000 } as const;
+  try {
+    await Promise.all([
+      page.locator('#side-chat [data-testid="message-list"]').waitFor(options),
+      page.locator('#side-chat input[aria-label="Сообщение"]').waitFor(options),
+    ]);
+  } catch (cause) {
+    throw new Error('боковой чат не отрисовал тред и поле ввода', { cause });
+  }
+}
+
+export async function openReadySideChat(page: Page): Promise<void> {
+  const chat = page.locator('[data-testid="host-chat"]');
+  let threadId: string | undefined;
+  const options = { timeout: 10_000 };
+  // Слушаем оба ответа до клика: список может успеть прийти, пока Node ещё разбирает ensure.
+  const ensured = page
+    .waitForResponse(async (res) => {
+      const ensure = operationsOf(res.request()).find(
+        ({ procedure, input }) =>
+          procedure === 'chat.ensureThread' && input?.entityId === undefined,
+      );
+      if (!ensure) return false;
+      const id = (await wireDataAt(res, ensure.batchIndex))?.threadId;
+      if (typeof id !== 'string') return false;
+      threadId = id;
+      return true;
+    }, options)
+    .catch(() => null);
+  const loaded = page
+    .waitForResponse(async (res) => {
+      const reads = operationsOf(res.request()).filter(
+        ({ procedure, input }) => procedure === 'chat.listMessages' && input?.before === undefined,
+      );
+      if (reads.length === 0 || !(await ensured)) return false;
+      const read = reads.find(({ input }) => input?.threadId === threadId);
+      return read !== undefined && Array.isArray(await wireDataAt(res, read.batchIndex));
+    }, options)
+    .catch(() => null);
+  await chat.click(options);
+  if (!(await loaded)) throw new Error('боковой чат не подтвердил загрузку активного треда');
+  await waitForSideChatView(page);
+}
+
 /**
  * Набор ≈30 с при открытом чате (§3.4 п. 4, R-5): очереди `TYPING` с паузой длиннее паузы сохранения — запросы по
  * временным окнам и INP (N1/R99: это не причинная атрибуция сохранению). Затем маркер без паузы и закрытие вкладки: текст живёт только в досыле на `pagehide`
@@ -682,12 +918,14 @@ async function typing(
   page.on('dialog', (d) => void d.accept());
   await page.goto(`${LAB_URL}/r/${noteId}`);
   await waitReady(page, noteId, notes, 'лаб-запись');
-  await page.click('[data-testid="host-chat"]');
+  await openReadySideChat(page);
   await focusEditor(page);
   const requests: Record<string, number> = {};
   const perSave: Array<Record<string, number>> = [];
+  let probing = false;
   let slot: Record<string, number> = {};
   page.on('request', (req) => {
+    if (probing) return;
     for (const p of proceduresOf(req.url()) ?? []) {
       requests[p] = (requests[p] ?? 0) + 1;
       slot[p] = (slot[p] ?? 0) + 1;
@@ -703,11 +941,6 @@ async function typing(
     await page.waitForTimeout(TYPING.pauseMs);
     if ((slot['entity.update'] ?? 0) === 0) notes.push(`набор: очередь ${i + 1} без сохранения`);
   }
-  // Маркер — одним латинским словом: так он цел и в тексте превью, и в редакторе.
-  const marker = `labmark${Date.now()}`;
-  // Хвост с маркером — не окно сохранения: вкладка закрывается раньше паузы, его запросы в `perSave` не идут.
-  slot = {};
-  await page.keyboard.type(marker, { delay: TYPING.charDelayMs });
   mark(out, {
     metric: 'inp',
     kind: 'typing',
@@ -716,6 +949,21 @@ async function typing(
     ),
     repeat: 1,
   });
+  slot = {};
+  await waitForSideChatView(page);
+  const checkpoint = `labcheck${Date.now()}`;
+  probing = true;
+  const bodySave = await observeBodySave(page, noteId, checkpoint, () =>
+    page.keyboard.type(` ${checkpoint} `, { delay: TYPING.charDelayMs }),
+  );
+  probing = false;
+  await waitForSideChatView(page);
+  if (bodySave.status === 'unconfirmed')
+    notes.push('набор: контрольное сохранение не подтверждено');
+  // Маркер — одним латинским словом: так он цел и в тексте превью, и в редакторе.
+  const marker = `labmark${Date.now()}`;
+  // Хвост с маркером — не окно сохранения: вкладка закрывается раньше паузы, его запросы в `perSave` не идут.
+  await page.keyboard.type(marker, { delay: TYPING.charDelayMs });
   const closed = page.waitForEvent('close', { timeout: 30_000 });
   await page.close({ runBeforeUnload: true });
   await closed;
@@ -746,6 +994,7 @@ async function typing(
     return {
       requests,
       perSave,
+      bodySave,
       textSurvived: at !== null,
       survivedAtMs: at === null ? null : Math.round(at),
       draftBanner,
@@ -755,29 +1004,60 @@ async function typing(
   }
 }
 
-/** Холодный старт без сети (§3.4 п. 5): содержимое экрана за 10 с или заметка. */
-async function offlineStart(ctx: BrowserContext, out: LabSample[], notes: string[]) {
-  await ctx.setOffline(true);
+type OfflineRecord =
+  | { status: 'ready'; at: number }
+  | { status: 'shell-unavailable' | 'record-unavailable' };
+
+async function openOfflineRecord(ctx: BrowserContext, id: string): Promise<OfflineRecord> {
   const page = await ctx.newPage();
+  let shell = false;
   try {
-    await page.goto(LAB_URL).catch(() => {});
+    await ctx.setOffline(true);
+    const deadline = Date.now() + 10_000;
+    await page.goto(`${LAB_URL}/r/${id}`, { waitUntil: 'commit', timeout: 10_000 });
+    await page.waitForFunction(hasControlledShell, undefined, {
+      timeout: Math.max(1, deadline - Date.now()),
+    });
+    shell = true;
     const at = (await (
-      await page.waitForFunction(
-        () =>
-          document.querySelector('main[data-testid="screen-content"] [data-testid="record-area"]')
-            ? performance.now()
-            : false,
-        undefined,
-        { timeout: 10_000 },
-      )
+      await page.waitForFunction(recordReady, id, { timeout: Math.max(1, deadline - Date.now()) })
     ).jsonValue()) as number;
-    mark(out, { metric: 'cold_start', kind: 'offline', durMs: at, repeat: 1 });
+    if (at > 10_000) throw new Error('превышен потолок ожидания офлайн');
+    return { status: 'ready', at };
   } catch {
-    notes.push('без сети: содержимого за 10 с нет');
+    return { status: shell ? 'record-unavailable' : 'shell-unavailable' };
   } finally {
-    await page.close();
-    await ctx.setOffline(false);
+    try {
+      await page.close();
+    } finally {
+      await ctx.setOffline(false);
+    }
   }
+}
+
+/** Холодный старт без сети (§3.4 п. 5): целевой экран за 10 с или явная причина. */
+export async function offlineStart(
+  ctx: BrowserContext,
+  out: LabSample[],
+  notes: string[],
+  id: string,
+) {
+  const result = await openOfflineRecord(ctx, id);
+  if (result.status !== 'ready') {
+    notes.push(
+      result.status === 'shell-unavailable'
+        ? 'без сети: оболочка service worker недоступна'
+        : 'без сети: оболочка запущена, целевой экран за 10 с не появился',
+    );
+    return;
+  }
+  mark(out, {
+    metric: 'cold_start',
+    kind: 'offline',
+    durMs: result.at,
+    repeat: 1,
+    startup: { shell: 'controlled', target: 'ready-offline' },
+  });
 }
 
 async function archive(page: Page, id: string, notes: string[]) {
@@ -832,6 +1112,8 @@ export async function runScenario(
     url: LAB_URL,
     startedAt: new Date().toISOString(),
     repeat: o.repeat,
+    device: null,
+    clientVersions: [],
     records: {},
     samples: [],
     notes: [],
@@ -848,6 +1130,11 @@ export async function runScenario(
   };
   await ctx.addInitScript(OBSERVERS);
   const page = ctx.pages()[0] ?? (await ctx.newPage());
+  ctx.on('request', (req) => {
+    if (proceduresOf(req.url()) === null) return;
+    const version = req.headers()[CLIENT_VERSION_HEADER];
+    if (version && !run.clientVersions.includes(version)) run.clientVersions.push(version);
+  });
   // Сжатие на краю сети (§9, §3.4): заголовок ответа по каждой пачке процедур.
   ctx.on('response', (res) => {
     const procs = proceduresOf(res.url());
@@ -856,14 +1143,18 @@ export async function runScenario(
   });
   try {
     await openApp(page);
+    run.device = {
+      userAgent: await page.evaluate(() => navigator.userAgent),
+      viewport: page.viewportSize(),
+    };
     await waitReady(page, null, notes, 'первый вход');
     const picked = await pickRecords(page, notes);
-    const titled: Row[] = [];
+    const titled: Array<Row & { kind: RecordKind }> = [];
     for (const kind of RECORD_KINDS) {
       const rec = picked[kind];
       if (rec === undefined) continue;
       run.records[kind] = rec.id;
-      titled.push(rec);
+      titled.push({ ...rec, kind });
     }
     const stamp = new Date().toISOString().slice(0, 16);
     // В-5: две лаб-записи за прогон
@@ -873,12 +1164,13 @@ export async function runScenario(
     const labTask = await capture(page, `Лаб-подзадача ${stamp}`, 1, samples, 'subtask', register);
     for (let r = 1; r <= o.repeat; r++) {
       o.log(`повтор ${r}/${o.repeat}`);
-      await coldStarts(ctx, page, r, samples, notes);
-      await transitions(page, titled, r, samples, notes);
+      await coldStarts(ctx, page, r, samples, notes, labNote, () =>
+        transitions(page, titled, r, samples, notes),
+      );
       await toggles(page, labTask, r, samples, notes);
     }
     run.typing = await typing(ctx, labNote, samples, notes);
-    await offlineStart(ctx, samples, notes);
+    await offlineStart(ctx, samples, notes, labNote);
     for (const id of [labTask, labNote]) {
       await archive(page, id, notes);
       archived.add(id);

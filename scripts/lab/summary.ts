@@ -4,6 +4,13 @@ import { readFileSync } from 'node:fs';
 export interface LabSample {
   metric: string;
   kind?: string;
+  /** Вид экрана для разбора сырых замеров; сводка сохраняет прежние группы. */
+  screen?: string;
+  startup?: {
+    shell: 'controlled' | 'no-controller';
+    target: 'ready-offline' | 'unavailable' | 'untested';
+    reason?: 'shell-unavailable' | 'record-unavailable';
+  };
   cached?: boolean;
   durMs: number;
   repeat: number;
