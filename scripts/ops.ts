@@ -11,7 +11,7 @@
 // он не попадает, на диске открытым текстом не лежит.
 //
 // Использование:
-//   bun scripts/ops.ts check           # только чтение: расхождение реестров с кодом
+//   bun scripts/ops.ts check           # только чтение: реестры и состояние ленты
 //   bun scripts/ops.ts migrate         # накатить неприменённые миграции схемы
 //   bun scripts/ops.ts seed-registries # upsert шести реестров: свойства, роли, аспекты, контракты, подписки, действия
 //   bun scripts/ops.ts coverage       # только чтение: покрытие транзакций (00-product §8)
@@ -53,7 +53,7 @@ import {
 import { type CensusV3Row, censusV3, formatCensusV3 } from '../apps/server/src/db/census-v3';
 import { migrate1vIo, runMigrate1v } from '../apps/server/src/db/migrate-1v';
 import { migrateSpeedAIo, runMigrateSpeedA } from '../apps/server/src/db/migrate-speed-a';
-import { runPerfReport } from '../apps/server/src/db/perf-report';
+import { changeFeedStatus, runPerfReport } from '../apps/server/src/db/perf-report';
 import {
   REGISTRY_DELTAS_QUERY,
   REGISTRY_DRIFT_QUERIES,
@@ -170,8 +170,16 @@ async function check(): Promise<number> {
       if (version === undefined) {
         throw new Error('check: в registry_system нет строки id=1 — база без миграции 0014');
       }
-      return { rows: out, deltaRows, ownRuleRows, prevSystem, prevVersion: version.version };
+      return {
+        rows: out,
+        deltaRows,
+        ownRuleRows,
+        prevSystem,
+        prevVersion: version.version,
+        feedStatus: await changeFeedStatus(tx),
+      };
     });
+    for (const line of read.feedStatus) console.log(line);
     const rows = read.rows;
     const drift = diffBuiltinRegistries(rows);
     const conflicts = previewMergeConflicts(
@@ -731,7 +739,7 @@ async function issuePat(args: string[]): Promise<number> {
 const OPS: Record<string, { run: (args: string[]) => Promise<number>; help: string }> = {
   check: {
     run: check,
-    help: 'только чтение: расхождение реестров прода с кодом (шесть родов; действия — по колонкам, id = key)',
+    help: 'только чтение: сверка реестров с кодом и состояние ленты изменений',
   },
   migrate: { run: migrateOp, help: 'накатить неприменённые миграции схемы (идемпотентно)' },
   'seed-registries': {

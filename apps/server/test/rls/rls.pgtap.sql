@@ -3,7 +3,7 @@
 -- Всё в одной транзакции с ROLLBACK: БД не мутируется.
 BEGIN;
 CREATE EXTENSION IF NOT EXISTS pgtap;
-SELECT plan(185);
+SELECT plan(197);
 
 -- Графы фикстур (0020): с FK на graphs владельца «из воздуха» не бывает. Весь файл — одна транзакция
 -- с ROLLBACK, отложенные триггеры И-1 до проверки не доходят — гранты заведены ради политик.
@@ -1103,11 +1103,11 @@ SELECT col_not_null('public', 'agent_grants', 'issued_by', 'у гранта аг
 -- политики (SELECT, INSERT) — это пинится поимённо и по клаузам в блоке журнала выше.
 SELECT is((SELECT count(*)::int FROM pg_policies WHERE schemaname = 'public'
     AND roles = '{authenticated}' AND tablename NOT IN ('graphs','graph_members','perf_samples',
-      'action_journal','action_journal_entities')),
+      'action_journal','action_journal_entities','change_feed','change_feed_floor')),
   68, 'политик строк ровно 68 — 17 таблиц × 4 команды, ни одной лишней и ни одной пропавшей');
 SELECT is((SELECT count(*)::int FROM pg_policies p WHERE p.schemaname = 'public'
     AND p.roles = '{authenticated}'
-    AND p.tablename NOT IN ('graphs','graph_members','perf_samples','action_journal','action_journal_entities')
+    AND p.tablename NOT IN ('graphs','graph_members','perf_samples','action_journal','action_journal_entities','change_feed','change_feed_floor')
     AND NOT (p.qual IS NULL AND p.with_check IS NULL)
     AND (p.qual IS NULL OR p.qual LIKE '%current_graph_id()%')
     AND (p.with_check IS NULL OR p.with_check LIKE '%current_graph_id()%')),
@@ -1117,7 +1117,7 @@ SELECT is((SELECT count(*)::int FROM pg_policies p WHERE p.schemaname = 'public'
 -- (`actor_writes` в INSERT `agent_grants`) даёт operator'у право выписать себе полный доступ.
 SELECT is((SELECT count(*)::int FROM pg_policies p WHERE p.schemaname = 'public'
     AND p.roles = '{authenticated}'
-    AND p.tablename NOT IN ('graphs','graph_members','perf_samples','action_journal','action_journal_entities')
+    AND p.tablename NOT IN ('graphs','graph_members','perf_samples','action_journal','action_journal_entities','change_feed','change_feed_floor')
     AND NOT (p.qual IS NULL AND p.with_check IS NULL)
     AND (p.qual IS NULL OR p.qual LIKE '%' || CASE WHEN p.cmd = 'SELECT' THEN 'actor_reads_current_graph()'
            WHEN p.tablename = 'agent_grants' THEN 'actor_owns_current_graph()'
@@ -1181,6 +1181,77 @@ SELECT lives_ok($$INSERT INTO entities (id, graph_id, title) VALUES
 SELECT is((SELECT count(*)::int FROM entities WHERE id = '00000000-0000-7000-8000-0000000000d7'
     AND body_action_id IS NULL AND body_revision = 1),
   1, 'пустая настройка действия тела — колонка действия пуста, ревизия 1');
+
+-- Б1: лента доступна только текущему графу и только на чтение.
+SELECT is((SELECT count(*)::int FROM pg_class WHERE oid IN
+    ('public.change_feed'::regclass, 'public.change_feed_floor'::regclass)
+    AND relrowsecurity AND relforcerowsecurity),
+  2, 'лента и порог: ENABLE и FORCE RLS');
+SELECT is((SELECT string_agg(tablename || ':' || cmd || ':' || roles::text, ',' ORDER BY tablename)
+  FROM pg_policies WHERE schemaname = 'public' AND tablename IN ('change_feed', 'change_feed_floor')),
+  'change_feed:SELECT:{authenticated},change_feed_floor:SELECT:{authenticated}',
+  'у ленты и порога только политики SELECT для authenticated');
+SELECT ok(EXISTS (SELECT FROM pg_roles WHERE rolname = 'orbis_change_feed_owner' AND rolbypassrls
+    AND NOT rolcanlogin AND NOT rolsuper AND NOT rolcreaterole AND NOT rolcreatedb)
+  AND NOT pg_has_role('orbis_app', 'orbis_change_feed_owner', 'MEMBER')
+  AND NOT pg_has_role('authenticated', 'orbis_change_feed_owner', 'MEMBER')
+  AND NOT pg_has_role('anon', 'orbis_change_feed_owner', 'MEMBER'),
+  'роль владельца триггеров NOLOGIN BYPASSRLS без членства ролей приложения');
+SELECT ok(NOT EXISTS (
+  SELECT FROM unnest(ARRAY['orbis_app','authenticated','anon','service_role']) AS roles(role)
+  CROSS JOIN unnest(ARRAY['public.change_feed','public.change_feed_floor']) AS tables(tbl)
+  CROSS JOIN unnest(ARRAY['INSERT','UPDATE','DELETE','TRUNCATE','TRIGGER']) AS privileges(priv)
+  WHERE has_table_privilege(role, tbl, priv)),
+  'ни одна роль приложения не имеет прав записи или установки триггера на feed/floor');
+SELECT is((SELECT count(*)::int FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+  JOIN pg_roles r ON r.oid = p.proowner
+  WHERE n.nspname = 'public' AND p.proname = 'orbis_capture_change_feed'
+    AND r.rolname = 'orbis_change_feed_owner' AND p.prosecdef
+    AND p.proconfig @> ARRAY['search_path=pg_catalog, public']
+    AND NOT has_function_privilege('authenticated', p.oid, 'EXECUTE')
+    AND NOT has_function_privilege('anon', p.oid, 'EXECUTE')
+    AND NOT has_function_privilege('orbis_app', p.oid, 'EXECUTE')
+    AND NOT has_function_privilege('service_role', p.oid, 'EXECUTE')),
+  1, 'владелец definer-функции, фиксированный search_path, закрытый EXECUTE');
+SELECT is((SELECT count(*)::int FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+  WHERE n.nspname = 'public' AND p.proname IN ('orbis_feed_last_event', 'orbis_feed_entity_graph')
+    AND NOT p.prosecdef AND p.proconfig @> ARRAY['search_path=pg_catalog, public']
+    AND has_function_privilege('orbis_change_feed_owner', p.oid, 'EXECUTE')
+    AND NOT has_function_privilege('authenticated', p.oid, 'EXECUTE')
+    AND NOT has_function_privilege('anon', p.oid, 'EXECUTE')
+    AND NOT has_function_privilege('orbis_app', p.oid, 'EXECUTE')
+    AND NOT has_function_privilege('service_role', p.oid, 'EXECUTE')),
+  2, 'оба invoker помощника доказательства закрыты для ролей приложения');
+SELECT ok(
+  NOT has_schema_privilege('orbis_change_feed_owner', 'public', 'CREATE')
+  AND has_column_privilege('orbis_change_feed_owner', 'public.entities', 'graph_id', 'SELECT')
+  AND NOT has_column_privilege('orbis_change_feed_owner', 'public.entities', 'body', 'SELECT')
+  AND NOT has_table_privilege('orbis_change_feed_owner', 'public.change_feed', 'DELETE')
+  AND NOT has_table_privilege('service_role', 'public.change_feed', 'SELECT'),
+  'минимальные права definer и ни одного гранта service_role на feed');
+SELECT is((SELECT string_agg(c.relname, ',' ORDER BY c.relname) FROM (
+  SELECT t.tgrelid FROM pg_trigger t WHERE t.tgfoid = 'public.orbis_capture_change_feed()'::regprocedure
+    AND t.tgenabled = 'O' AND NOT t.tgisinternal
+  GROUP BY t.tgrelid
+  HAVING array_agg(t.tgtype::int ORDER BY t.tgtype) = ARRAY[4, 8, 16, 32]
+) covered JOIN pg_class c ON c.oid = covered.tgrelid),
+  'action_definitions,action_journal,aspect_definitions,chat_messages,chat_threads,contract_definitions,'
+    || 'entities,entity_versions,property_definitions,registry_deltas,registry_system,relation_role_definitions,'
+    || 'relations,subscription_definitions,user_settings',
+  'точная матрица источников имеет отдельные AFTER STATEMENT триггеры I/U/D/T');
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claims', '{"sub":"00000000-0000-4000-8000-00000000000a","graph":"00000000-0000-4000-8000-00000000000a"}', true);
+SELECT results_eq(
+  $$SELECT DISTINCT graph_id::text FROM public.change_feed
+      WHERE tx_id = pg_current_xact_id()$$,
+  ARRAY['00000000-0000-4000-8000-00000000000a'], 'актор A видит в ленте только граф A');
+SELECT is((SELECT count(*)::int FROM public.change_feed_floor), 1, 'держатель гранта видит порог');
+SELECT throws_ok($$UPDATE public.change_feed_floor SET floor = '1'::xid8$$, '42501', NULL,
+  'актор не может изменить порог');
+SELECT set_config('request.jwt.claims', '{"sub":"00000000-0000-4000-8000-00000000000a","graph":"00000000-0000-4000-8000-00000000000b"}', true);
+SELECT is((SELECT (SELECT count(*) FROM public.change_feed) + (SELECT count(*) FROM public.change_feed_floor)),
+  0::bigint, 'подмена graph в claims без гранта не открывает feed или floor');
+RESET ROLE;
 
 SELECT finish();
 ROLLBACK;

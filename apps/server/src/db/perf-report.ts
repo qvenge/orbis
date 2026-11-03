@@ -209,24 +209,42 @@ export async function perfPercentiles(
  * Последний прогон чистки — в точке сохранения: нет доступа к схеме cron — строка, а не сбой отчёта. Расширения нет
  * вовсе (прод до миграции 0024) — тоже строка, и названа прямо, а не текстом ошибки.
  */
-export async function cronCleanupStatus(sql: SqlTx): Promise<string> {
+export async function cronCleanupStatus(sql: SqlTx, jobName = PERF_CLEANUP_JOB): Promise<string> {
+  const label = `задача pg_cron ${jobName}`;
   try {
     return await sql.savepoint(async (sp) => {
       const [has] = await sp<{ t: string | null }[]>`SELECT to_regclass('cron.job')::text AS t`;
-      if (!has?.t) return `задача pg_cron ${PERF_CLEANUP_JOB}: расширение pg_cron не установлено`;
-      const [r] = await sp<{ status: string | null; at: string | null }[]>`
-        SELECT d.status, d.start_time::text AS at FROM cron.job j
+      if (!has?.t) return `${label}: расширение pg_cron не установлено`;
+      const [r] = await sp<{ active: boolean; status: string | null; at: string | null }[]>`
+        SELECT j.active, d.status, d.start_time::text AS at FROM cron.job j
           LEFT JOIN LATERAL (SELECT status, start_time FROM cron.job_run_details x WHERE x.jobid = j.jobid
                               ORDER BY start_time DESC LIMIT 1) d ON true
-         WHERE j.jobname = ${PERF_CLEANUP_JOB}`;
-      if (r === undefined) return `задача pg_cron ${PERF_CLEANUP_JOB}: не найдена`;
-      return r.status === null
-        ? `задача pg_cron ${PERF_CLEANUP_JOB}: ещё не запускалась`
-        : `задача pg_cron ${PERF_CLEANUP_JOB}: последний прогон ${r.at} — ${r.status}`;
+         WHERE j.jobname = ${jobName}`;
+      if (r === undefined) return `${label}: не найдена`;
+      const state = r.active ? 'активна' : 'отключена';
+      const last =
+        r.status === null ? 'ещё не запускалась' : `последний прогон ${r.at} — ${r.status}`;
+      return `${label}: ${state}, ${last}`;
     });
   } catch (e) {
-    return `задача pg_cron ${PERF_CLEANUP_JOB}: нет доступа (${e instanceof Error ? e.message : String(e)})`;
+    return `${label}: нет доступа (${e instanceof Error ? e.message : String(e)})`;
   }
+}
+
+/** Диагностика задержки ленты по кластеру. Содержимое ленты для отчёта не читается. */
+export async function changeFeedStatus(sql: SqlTx): Promise<string[]> {
+  const [age] = await sql<{ seconds: number | null; full: boolean }[]>`
+    SELECT extract(epoch FROM statement_timestamp() -
+        min(xact_start) FILTER (WHERE backend_xid IS NOT NULL))::float8 AS seconds,
+      pg_has_role(current_user, 'pg_read_all_stats', 'USAGE') AS full
+    FROM pg_catalog.pg_stat_activity WHERE pid <> pg_catalog.pg_backend_pid()`;
+  const seconds = age?.seconds;
+  const status = seconds == null ? 'не наблюдается' : `${Math.floor(seconds)} с`;
+  const visibility = age?.full ? '' : ' (видимость чужих сессий ограничена)';
+  return [
+    `Самая старая пишущая транзакция: ${status}${visibility}`,
+    await cronCleanupStatus(sql, 'orbis_change_feed_cleanup'),
+  ];
 }
 
 /**

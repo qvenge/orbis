@@ -3,6 +3,7 @@ import {
   bigint,
   boolean,
   check,
+  customType,
   date,
   foreignKey,
   index,
@@ -20,7 +21,7 @@ import {
   uuid,
 } from 'drizzle-orm/pg-core';
 
-// Схема 24 таблиц: одиннадцать исходных (docs/prd/01-architecture.md §4 — восемь §4.1–§4.8,
+// Схема: одиннадцать исходных (docs/prd/01-architecture.md §4 — восемь §4.1–§4.8,
 // две таблицы доступа внешних агентов §4.13–§4.14 D34 в конце файла, entity_versions
 // ADE-среза 1), восемь таблиц реформы свойств (§С6 спеки «Реформа свойств»): пять реестров,
 // таблица дельт, однострочная таблица версии system-реестра и кэш `spent` конверта (§Б5-5),
@@ -814,4 +815,40 @@ export const graphMembers = pgTable(
     index('graph_members_account').on(t.accountId),
     check('graph_members_grant_kind', sql`${t.grantKind} IN ('owner','operator','observer')`),
   ],
+);
+
+// Служебная транзакционная лента. Идентификаторы xid8 проходят через драйвер строками.
+const xid8 = customType<{ data: string; driverData: string }>({ dataType: () => 'xid8' });
+
+export const changeFeed = pgTable(
+  'change_feed',
+  {
+    id: bigint('id', { mode: 'bigint' }).primaryKey().generatedAlwaysAsIdentity(),
+    txId: xid8('tx_id').notNull(),
+    // Граф может быть удалён раньше истечения срока хранения его событий.
+    graphId: uuid('graph_id').notNull(),
+    kind: text('kind').notNull(),
+    rowKey: text('row_key').notNull(),
+    entityIds: uuid('entity_ids').array().notNull().default(sql`'{}'::uuid[]`),
+    threadId: uuid('thread_id'),
+    operation: text('operation').notNull(),
+    scope: text('scope').notNull(),
+    at: timestamp('at', { withTimezone: true, mode: 'string' }).notNull(),
+    graphWide: boolean('graph_wide').notNull().default(false),
+  },
+  (t) => [
+    index('change_feed_graph_tx_id').on(t.graphId, t.txId, t.id),
+    index('change_feed_parent_proof')
+      .on(t.txId, t.kind, t.rowKey, t.id.desc().nullsFirst())
+      .where(sql`${t.kind} IN ('entity','thread','relation')`),
+  ],
+);
+
+export const changeFeedFloor = pgTable(
+  'change_feed_floor',
+  {
+    id: smallint('id').primaryKey(),
+    floor: xid8('floor').notNull(),
+  },
+  (t) => [check('change_feed_floor_singleton', sql`${t.id} = 1`)],
 );
