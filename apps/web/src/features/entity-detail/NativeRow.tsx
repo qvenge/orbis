@@ -38,7 +38,6 @@ import { mountRecord } from '../entity-editor/editor-cache';
 import {
   acceptTitleSend,
   markTitleSent,
-  observeTitleValue,
   recordTitleChange,
   redoTitle,
   rejectTitleSend,
@@ -47,6 +46,7 @@ import {
 import { useExtensionEnabled } from '../settings/extension-mask';
 import { isUndoEpoch, subscribeUndoEpoch, undoEpoch } from '../undo/undo-epoch';
 import { useHostReadOnly } from './record-host';
+import { useTitleHistoryBasis } from './useTitleHistoryBasis';
 
 type Entity = RouterOutputs['entity']['query']['rows'][number];
 
@@ -159,6 +159,7 @@ function TitleEditor({
       mounted && isUndoEpoch(intent.epoch) && intent.generation === stepsGeneration(),
     [intent],
   );
+  const { observe, watch } = useTitleHistoryBasis(entityId, current);
   const commit = async (v: string, expected: string) => {
     if (!current()) return;
     const sequence = ++saveSequence.current;
@@ -194,20 +195,17 @@ function TitleEditor({
       undo: () => apply(undoTitle(entityId, draftRef.current)),
       redo: () => apply(redoTitle(entityId, draftRef.current)),
       reset: () => {},
-      observe: () => {
-        if (current() && observeTitleValue(entityId, latest.current.serverValue))
-          resetSteps(entityId);
-      },
+      observe: () => observe(latest.current.serverValue),
     });
+    const unwatch = watch();
     return () => {
       mountedRef.current = false;
+      unwatch?.();
       unbind();
       release();
     };
-  }, [entityId, current]);
-  useLayoutEffect(() => {
-    if (current() && observeTitleValue(entityId, value)) resetSteps(entityId);
-  }, [value, entityId, current]);
+  }, [entityId, current, observe, watch]);
+  useLayoutEffect(() => observe(value), [value, observe]);
   return (
     <input
       aria-label="Заголовок"

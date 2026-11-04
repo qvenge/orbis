@@ -1,13 +1,16 @@
 import { afterEach, expect, test, vi } from 'vitest';
+import { nextNetworkOrder } from '../../lib/freshness/provenance';
 import {
   acceptTitleSend,
   clearTitleHistories,
   forgetTitleHistory,
   markTitleSent,
+  observeAcceptedTitle,
   observeTitleValue,
   recordTitleChange,
   redoTitle,
   rejectTitleSend,
+  rememberUnconfirmedTitle,
   resetTitleHistory,
   undoTitle,
 } from './title-history';
@@ -254,3 +257,90 @@ for (const accepted of [false, true])
     rejectTitleSend('e', earlier);
     expect(observeTitleValue('e', 'C')).toBe(true);
   });
+
+test('an accepted repeat under an own presentation does not consume pending or ACK attribution', () => {
+  expect(observeAcceptedTitle('e', 'A')).toBe(false);
+  const sent = markTitleSent('e', 'B');
+  expect(observeTitleValue('e', 'B')).toBe(false);
+  acceptTitleSend('e', sent);
+  expect(observeAcceptedTitle('e', 'A')).toBe(false);
+  expect(observeAcceptedTitle('e', 'B')).toBe(false);
+
+  const newer = markTitleSent('e', 'C');
+  expect(observeTitleValue('e', 'C')).toBe(false);
+  expect(observeAcceptedTitle('e', 'B')).toBe(false);
+  expect(observeAcceptedTitle('e', 'C')).toBe(false);
+  expect(observeAcceptedTitle('e', 'B')).toBe(true);
+  resetTitleHistory('e');
+  acceptTitleSend('e', newer);
+  expect(observeAcceptedTitle('e', 'C')).toBe(true);
+});
+
+test('an intervening accepted transition retires the ACK for a different title', () => {
+  expect(observeAcceptedTitle('e', 'A')).toBe(false);
+  const sent = markTitleSent('e', 'B');
+  expect(observeTitleValue('e', 'B')).toBe(false);
+  acceptTitleSend('e', sent);
+  markTitleSent('e', 'C');
+  expect(observeTitleValue('e', 'C')).toBe(false);
+  expect(observeAcceptedTitle('e', 'C')).toBe(false);
+  expect(observeAcceptedTitle('e', 'B')).toBe(true);
+});
+
+test('a rejected displayed send does not own the changed accepted title', () => {
+  expect(observeAcceptedTitle('e', 'A')).toBe(false);
+  const failed = markTitleSent('e', 'B');
+  expect(observeTitleValue('e', 'B')).toBe(false);
+  expect(rejectTitleSend('e', failed)).toBe(true);
+  markTitleSent('e', 'C');
+  expect(observeAcceptedTitle('e', 'B')).toBe(true);
+});
+
+test('a network read started after the ACK can prove a foreign return to the old title', () => {
+  expect(observeAcceptedTitle('e', 'A')).toBe(false);
+  const sent = markTitleSent('e', 'B');
+  expect(observeTitleValue('e', 'B')).toBe(false);
+  const beforeAck = nextNetworkOrder();
+  acceptTitleSend('e', sent);
+  expect(observeAcceptedTitle('e', 'A', beforeAck)).toBe(false);
+  expect(observeAcceptedTitle('e', 'A', nextNetworkOrder())).toBe(true);
+});
+
+test('only the first network read decides whether the unconfirmed title basis is foreign', () => {
+  rememberUnconfirmedTitle('e', 'disk A');
+  expect(observeTitleValue('e', 'disk A')).toBe(false);
+  recordTitleChange('e', 'disk A', 'draft');
+  rememberUnconfirmedTitle('e', 'later disk');
+  expect(undoTitle('e', 'draft')).toBe('disk A');
+  expect(observeAcceptedTitle('e', 'later disk')).toBe(true);
+});
+
+test('a first network read of the disk title preserves a different pending presentation', () => {
+  rememberUnconfirmedTitle('e', 'A');
+  expect(observeTitleValue('e', 'A')).toBe(false);
+  const sent = markTitleSent('e', 'C');
+  expect(observeTitleValue('e', 'C')).toBe(false);
+  expect(observeAcceptedTitle('e', 'A')).toBe(false);
+  expect(rejectTitleSend('e', sent)).toBe(true);
+});
+
+test('a first network read begun before an own ACK promotes the disk basis and keeps attribution', () => {
+  rememberUnconfirmedTitle('e', 'A');
+  expect(observeTitleValue('e', 'A')).toBe(false);
+  const sent = markTitleSent('e', 'C');
+  expect(observeTitleValue('e', 'C')).toBe(false);
+  const beforeAck = nextNetworkOrder();
+  acceptTitleSend('e', sent);
+  expect(observeAcceptedTitle('e', 'A', beforeAck)).toBe(false);
+  expect(observeAcceptedTitle('e', 'C', nextNetworkOrder())).toBe(false);
+});
+
+test('promoting a disk title retires it as the basis for later network changes', () => {
+  rememberUnconfirmedTitle('e', 'A');
+  expect(observeAcceptedTitle('e', 'A')).toBe(false);
+  expect(observeAcceptedTitle('e', 'D')).toBe(true);
+  resetTitleHistory('e');
+  rememberUnconfirmedTitle('e', 'A');
+  expect(observeAcceptedTitle('e', 'D')).toBe(false);
+  expect(observeAcceptedTitle('e', 'A')).toBe(true);
+});

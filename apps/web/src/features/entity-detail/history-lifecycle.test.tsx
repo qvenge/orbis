@@ -1,8 +1,9 @@
 import { parseBody } from '@orbis/shared/doc';
-import { type QueryClient, useQueryClient } from '@tanstack/react-query';
+import { hashKey, type QueryClient, useQueryClient } from '@tanstack/react-query';
 import { act, fireEvent, screen, waitFor } from '@testing-library/react';
 import type { Editor } from '@tiptap/core';
 import { closeHistory, redoDepth, undoDepth } from '@tiptap/pm/history';
+import { getQueryKey } from '@trpc/react-query';
 import { type ReactNode, StrictMode, useRef, useState } from 'react';
 import { afterEach, expect, test, vi } from 'vitest';
 import { useExtensionRecordHooks } from '../../app/extension-registry';
@@ -10,6 +11,12 @@ import { DetailScreen } from '../../features/entity-detail/DetailScreen';
 import { NativeRow } from '../../features/entity-detail/NativeRow';
 import { canRedoStep, canUndoStep, clearAllSteps } from '../../features/entity-editor/arrows-stack';
 import { BodyEditor } from '../../features/entity-editor/BodyEditor';
+import {
+  freshnessRuntimeOf,
+  nextNetworkOrder,
+  recordDiskRead,
+} from '../../lib/freshness/provenance';
+import { bindQueryResponses, responseQueryOptions } from '../../lib/local-data/query-responses';
 import {
   fixtureFreshness,
   mockEntityUpdateResult,
@@ -38,7 +45,32 @@ const doc = parseBody('тело');
 const entity = { ...wireEntity({ id: 'e1', title: 'План' }), bodyDoc: doc };
 const fallback = (path: string) =>
   registryReply(path) ?? (path === 'entity.resolveRefs' || path === 'entity.suggest' ? [] : {});
+
+function acceptedDetailTitle(client: QueryClient | null, id: string): string | undefined {
+  const runtime = client && freshnessRuntimeOf(client);
+  if (!runtime) return;
+  const hash = hashKey(getQueryKey(trpc.entity.get, detailGetInput(id), 'query'));
+  const read = runtime.publicationOf(hash);
+  if (read && runtime.isAcceptedRead(read))
+    return (read.raw as { entity?: { title?: string } } | undefined)?.entity?.title;
+}
+
 afterEach(() => vi.unstubAllGlobals());
+
+vi.mock('../../lib/local-data/response-cache', () => ({
+  responseBuster: 'test-buster',
+  openResponseCache: (scope: unknown) => ({
+    scope,
+    capture: () => 'ticket',
+    isCurrent: () => true,
+    read: ({ queryHash }: { queryHash: string }) =>
+      queryHash === hashKey(getQueryKey(trpc.entity.get, detailGetInput('e1'), 'query'))
+        ? { data: { entity, relations: [], thread: null }, receivedAt: Date.now() - 60_000 }
+        : undefined,
+    writeServerResponse: async () => true,
+    close() {},
+  }),
+}));
 
 const BODY_ONLY_ARROWS = { titleShown: false, onTitleShown: () => {} };
 function ControlledBodyHost({
@@ -2152,7 +2184,11 @@ for (const outcome of ['foreign', 'pending', 'accepted'] as const)
         const beforeReads = reads;
         act(() => change('e1'));
         await waitFor(() => expect(reads).toBeGreaterThan(beforeReads));
-        const returned = outcome === 'foreign' ? 'План Б' : 'План В';
+        // C is still projected over the accepted basis, including when raw B
+        // returned independently after the previous B send failed.
+        const returned = 'План В';
+        const raw = outcome === 'foreign' ? 'План Б' : returned;
+        await waitFor(() => expect(acceptedDetailTitle(qc, 'e1')).toBe(raw));
         await waitFor(() => expect(cachedTitle()).toBe(returned));
         expect(await screen.findByRole('heading', { name: returned })).toBeInTheDocument();
         await screen.findByTestId('body-editor', undefined, { timeout: 10000 });
@@ -2193,6 +2229,396 @@ for (const outcome of ['foreign', 'pending', 'accepted'] as const)
         expect(settledC).not.toHaveBeenCalled();
         expect(bodyWrites).toBe(0);
       });
+
+for (const outcome of ['same', 'foreign', 'own pending', 'own ACK', 'pre-ACK first A'] as const)
+  test(`first accepted title after an editable disk restore: ${outcome}`, async () => {
+    vi.stubGlobal('requestIdleCallback', (callback: () => void) => {
+      queueMicrotask(callback);
+      return 1;
+    });
+    vi.stubGlobal('cancelIdleCallback', () => {});
+    navAt('e1');
+    const key = getQueryKey(trpc.entity.get, detailGetInput('e1'), 'query');
+    const preAckFirst = outcome === 'pre-ACK first A';
+    const own = outcome === 'own pending' || outcome === 'own ACK' || preAckFirst;
+    const shown = own ? 'Своё имя В' : 'Несохранённый ввод';
+    let show: () => void = () => {};
+    let releaseRead: () => void = () => {};
+    const heldRead = new Promise<void>((resolve) => {
+      releaseRead = resolve;
+    });
+    const heldAck = new Promise(() => {});
+    let storedTitle = outcome === 'foreign' ? 'Чужое имя Д' : entity.title;
+    let reads = 0;
+    const writes = vi.fn();
+
+    function Host() {
+      const [opened, setOpened] = useState(false);
+      show = () => setOpened(true);
+      return opened ? <DetailScreen entityId="e1" /> : null;
+    }
+
+    const { queryClient } = renderWithProviders(
+      <Host />,
+      (path, input) => {
+        if (path === 'entity.get' && (input as { id?: string }).id === 'e1') {
+          reads++;
+          return heldRead.then(() => ({
+            entity: { ...entity, title: storedTitle },
+            relations: [],
+            thread: null,
+          }));
+        }
+        if (path === 'entity.update') {
+          const patch = input as { title: string; expectedTitle: string };
+          writes(patch);
+          if (patch.expectedTitle !== storedTitle) return trpcError('CONFLICT', 'title CAS');
+          storedTitle = patch.title;
+          return outcome === 'own pending' && patch.title === shown
+            ? heldAck
+            : mockEntityUpdateResult({ ...entity, title: storedTitle });
+        }
+        return fallback(path);
+      },
+      { queries: responseQueryOptions },
+    );
+    const runtime = freshnessRuntimeOf(queryClient);
+    if (!runtime) throw new Error('Expected a bound freshness runtime');
+    const responses = bindQueryResponses(queryClient, runtime, { enabled: true });
+    try {
+      await responses.ready;
+      act(show);
+      const field = await screen.findByTestId('title-edit');
+      const arrow = await screen.findByRole('button', { name: 'Шаг назад' });
+      expect(runtime.publicationOf(hashKey(key))?.source).toBe('disk');
+      expect(acceptedDetailTitle(queryClient, 'e1')).toBeUndefined();
+      expect(field).toHaveValue(entity.title);
+      expect(field).not.toHaveAttribute('readonly');
+      const acknowledged = vi.spyOn(titleHistory, 'acceptTitleSend').mockClear();
+      let network: Promise<void> | undefined;
+      const fetch = () => {
+        network = queryClient.refetchQueries({ queryKey: key, exact: true });
+      };
+      if (preAckFirst) {
+        act(fetch);
+        await waitFor(() => expect(reads).toBeGreaterThan(0));
+      }
+      fireEvent.change(field, { target: { value: shown } });
+      if (own) {
+        fireEvent.blur(field);
+        await waitFor(() => expect(writes).toHaveBeenCalledTimes(1));
+        expect(storedTitle).toBe(shown);
+        if (outcome === 'own ACK' || preAckFirst)
+          await waitFor(() => expect(acknowledged).toHaveBeenCalled());
+        else expect(acknowledged).not.toHaveBeenCalled();
+      }
+      expect(arrow).toBeEnabled();
+      if (!preAckFirst) {
+        act(fetch);
+        await waitFor(() => expect(reads).toBeGreaterThan(0));
+      }
+      expect(acceptedDetailTitle(queryClient, 'e1')).toBeUndefined();
+      const afterAck = nextNetworkOrder();
+      let retainedByFirst: boolean | undefined;
+      const unwatch = runtime.subscribePublication(hashKey(key), () => {
+        const read = runtime.publicationOf(hashKey(key));
+        if (
+          preAckFirst &&
+          read?.source === 'network' &&
+          runtime.isAcceptedRead(read) &&
+          read.receipt.startedSequence < afterAck
+        )
+          retainedByFirst = canUndoStep('e1');
+      });
+      try {
+        if (preAckFirst) storedTitle = entity.title; // Independent return to A, after own ACK.
+        await act(async () => {
+          releaseRead();
+          await network;
+        });
+      } finally {
+        unwatch();
+      }
+      const expected = storedTitle;
+      if (preAckFirst) {
+        expect(retainedByFirst).toBe(true);
+        await act(async () => {
+          fetch();
+          await network;
+        });
+        const read = runtime.publicationOf(hashKey(key));
+        if (read?.source !== 'network') throw new Error('Expected post-ACK network read');
+        expect(read.receipt.startedSequence).toBeGreaterThan(afterAck);
+      }
+      await waitFor(() => expect(acceptedDetailTitle(queryClient, 'e1')).toBe(expected));
+      expect(screen.getByTestId('title-edit')).toBe(field);
+      const beforeUndo = preAckFirst ? entity.title : shown;
+      expect(field).toHaveValue(beforeUndo);
+      expect(writes).toHaveBeenCalledTimes(own ? 1 : 0);
+      fireEvent.click(arrow);
+
+      if (outcome === 'foreign' || preAckFirst) {
+        fireEvent.keyDown(field, { key: 'z', code: 'KeyZ', ctrlKey: true });
+        expect(arrow).toBeDisabled();
+        expect(canUndoStep('e1')).toBe(false);
+        expect(field).toHaveValue(beforeUndo);
+        expect(writes).toHaveBeenCalledTimes(own ? 1 : 0);
+        expect(storedTitle).toBe(expected);
+      } else {
+        await waitFor(() => expect(writes).toHaveBeenCalledTimes(own ? 2 : 1));
+        expect(writes).toHaveBeenLastCalledWith({
+          id: 'e1',
+          title: entity.title,
+          expectedTitle: expected,
+        });
+        expect(field).toHaveValue(entity.title);
+        expect(storedTitle).toBe(entity.title);
+      }
+    } finally {
+      responses.close();
+    }
+  });
+
+for (const mode of [
+  'body-only',
+  'title and body',
+  'disk then network',
+  'old raw title after an own ACK',
+] as const)
+  test(`accepted foreign title blocks real Undo (${mode})`, async () => {
+    vi.stubGlobal('requestIdleCallback', (callback: () => void) => {
+      queueMicrotask(callback);
+      return 1;
+    });
+    vi.stubGlobal('cancelIdleCallback', () => {});
+    navAt('e1');
+    const key = getQueryKey(trpc.entity.get, detailGetInput('e1'), 'query');
+    let show: (id: string) => void = () => {};
+    let serverTitle = 'План';
+    let serveDisk = false;
+    let heldDetail: Promise<void> | undefined;
+    let template = '{{title}}\n\n{{body}}';
+    let refreshTemplate: () => Promise<unknown> = async () => {};
+    let acceptTitle: (result: unknown) => void = () => {};
+    let refuseTitle: (error: unknown) => void = () => {};
+    const titleReply = new Promise((resolve, reject) => {
+      acceptTitle = resolve;
+      refuseTitle = reject;
+    });
+    const settledTitle = vi.fn();
+    void titleReply.then(settledTitle, settledTitle);
+    const write = vi.fn();
+
+    function Host() {
+      const [id, setId] = useState('e1');
+      show = setId;
+      const utils = trpc.useUtils();
+      refreshTemplate = () =>
+        utils.entity.query.invalidate({ query: SUPPLY_RECORDS_QUERY, fields: 'full' });
+      const warm = trpc.entity.get.useQuery(detailGetInput('e2'));
+      return (
+        <>
+          <span data-testid="warm-r6">{warm.data?.entity.title}</span>
+          <DetailScreen entityId={id} />
+        </>
+      );
+    }
+
+    const { queryClient } = renderWithProviders(
+      <Host />,
+      (path, input) => {
+        const vars = input as { query?: string; id?: string; title?: string; bodyDoc?: unknown };
+        if (path === 'entity.query' && vars.query === SUPPLY_RECORDS_QUERY)
+          return queryReply([hostTemplateRecord(template)]);
+        if (path === 'entity.get') {
+          const reply = {
+            entity: {
+              ...entity,
+              id: vars.id ?? 'e1',
+              title: vars.id === 'e2' ? 'Сосед' : serveDisk ? 'Старая копия' : serverTitle,
+            },
+            relations: [],
+            thread: null,
+          };
+          if (vars.id === 'e1' && serveDisk) {
+            serveDisk = false;
+            recordDiskRead(reply, {
+              source: 'disk',
+              receivedAt: Date.now() - 60_000,
+              scope: runtime().scope,
+            });
+          }
+          if (vars.id === 'e1' && heldDetail) {
+            const held = heldDetail;
+            heldDetail = undefined;
+            return held.then(() => reply);
+          }
+          return reply;
+        }
+        if (path === 'entity.update') {
+          write(vars);
+          if (vars.title !== undefined) return titleReply;
+          return mockEntityUpdateResult({ ...entity, title: serverTitle });
+        }
+        return fallback(path);
+      },
+      { queries: { gcTime: 0 } },
+    );
+
+    function runtime() {
+      const current = freshnessRuntimeOf(queryClient);
+      if (!current) throw new Error('Expected a bound freshness runtime');
+      return current;
+    }
+
+    const currentRead = () => {
+      const query = queryClient.getQueryCache().find({ queryKey: key, exact: true });
+      return query && runtime().publicationOf(query.queryHash);
+    };
+    const titleOf = (value: unknown) =>
+      (value as { entity?: { title?: string } } | undefined)?.entity?.title;
+    const readState = () => {
+      const read = currentRead();
+      return {
+        source: read?.source,
+        raw: titleOf(read?.raw),
+        visible: titleOf(queryClient.getQueryData(key)),
+        accepted: !!read && runtime().isAcceptedRead(read),
+      };
+    };
+    const refresh = () => queryClient.refetchQueries({ queryKey: key, exact: true });
+    const editorOf = () =>
+      (
+        screen.getByTestId('body-editor').querySelector('.ProseMirror') as HTMLElement & {
+          editor: Editor;
+        }
+      ).editor;
+
+    const field = await screen.findByTestId('title-edit');
+    await waitFor(() => expect(screen.getByTestId('warm-r6')).toHaveTextContent('Сосед'));
+    await screen.findByTestId('body-editor');
+    const editor = editorOf();
+    const unchanged = editor.getJSON();
+    fireEvent.change(field, { target: { value: 'Моё имя В' } });
+    fireEvent.blur(field);
+    await waitFor(() => expect(write).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(readState()).toMatchObject({ raw: 'План', visible: 'Моё имя В', accepted: true }),
+    );
+
+    if (mode === 'title and body')
+      fireEvent.change(field, { target: { value: 'Несохранённый ввод' } });
+    act(() => editor.commands.insertContentAt(1, 'own'));
+    act(() => {
+      editor.view.dispatch(closeHistory(editor.state.tr));
+      editor.commands.deleteRange({ from: 1, to: 4 });
+    });
+    expect(undoDepth(editor.state)).toBe(2);
+    expect(editor.getJSON()).toEqual(unchanged);
+
+    if (mode === 'body-only' || mode === 'disk then network') {
+      act(() => show('e2'));
+      await waitFor(() => expect(screen.getByTestId('title-edit')).toHaveValue('Сосед'));
+      await waitFor(() => expect(currentRead()).toBeUndefined());
+      template = '{{body}}';
+      await act(async () => {
+        await refreshTemplate();
+      });
+      await waitFor(() => expect(screen.queryByTestId('title-edit')).toBeNull());
+      serveDisk = mode === 'disk then network';
+      act(() => show('e1'));
+      await screen.findByRole('heading', { name: 'Моё имя В' });
+      await screen.findByTestId('body-editor');
+      if (mode === 'disk then network')
+        expect(readState()).toMatchObject({ source: 'disk', raw: 'Старая копия', accepted: false });
+    } else {
+      await act(refresh);
+      expect(readState()).toMatchObject({ raw: 'План', visible: 'Моё имя В', accepted: true });
+    }
+    expect(canUndoStep('e1')).toBe(true);
+    expect(undoDepth(editor.state)).toBe(2);
+
+    if (mode === 'old raw title after an own ACK') {
+      const acknowledged = vi.spyOn(titleHistory, 'acceptTitleSend').mockClear();
+      let releaseOldRead: () => void = () => {};
+      heldDetail = new Promise((resolve) => {
+        releaseOldRead = resolve;
+      });
+      const beforeOldRead = nextNetworkOrder();
+      let oldRead: Promise<void> | undefined;
+      act(() => {
+        oldRead = refresh();
+      });
+      await waitFor(() => expect(heldDetail).toBeUndefined());
+      serverTitle = 'Моё имя В';
+      const ack = mockEntityUpdateResult({ ...entity, title: serverTitle });
+      // An independent edit restores the original title before the next GET.
+      serverTitle = 'План';
+      await act(async () => acceptTitle(ack));
+      await waitFor(() =>
+        expect(acknowledged).toHaveBeenCalledWith(
+          'e1',
+          expect.objectContaining({ value: 'Моё имя В', state: 'accepted' }),
+        ),
+      );
+      expect(settledTitle).toHaveBeenCalledTimes(1);
+      const afterAck = nextNetworkOrder();
+      let retainedByOldRead: boolean | undefined;
+      const unwatch = runtime().subscribePublication(hashKey(key), () => {
+        const read = currentRead();
+        if (
+          read?.source === 'network' &&
+          runtime().isAcceptedRead(read) &&
+          read.receipt.startedSequence > beforeOldRead &&
+          read.receipt.startedSequence < afterAck
+        )
+          retainedByOldRead = canUndoStep('e1');
+      });
+      try {
+        await act(async () => {
+          releaseOldRead();
+          await oldRead;
+        });
+      } finally {
+        unwatch();
+      }
+      expect(retainedByOldRead).toBe(true);
+      await act(refresh);
+      expect(readState()).toMatchObject({ raw: 'План', visible: 'План', accepted: true });
+      const read = currentRead();
+      if (read?.source !== 'network') throw new Error('Expected accepted network read after ACK');
+      expect(read.receipt.startedSequence).toBeGreaterThan(afterAck);
+    } else {
+      serverTitle = 'Чужое имя Д';
+      await act(refresh);
+      await waitFor(() =>
+        expect(readState()).toMatchObject({
+          raw: 'Чужое имя Д',
+          visible: 'Моё имя В',
+          accepted: true,
+        }),
+      );
+    }
+    const arrow = screen.getByRole('button', { name: 'Шаг назад' });
+    fireEvent.click(arrow);
+    fireEvent.keyDown(editor.view.dom, { key: 'z', code: 'KeyZ', ctrlKey: true });
+    if (mode === 'title and body') {
+      expect(screen.getByTestId('title-edit')).toBe(field);
+      fireEvent.keyDown(field, { key: 'z', code: 'KeyZ', ctrlKey: true });
+      expect(field).toHaveValue('Несохранённый ввод');
+    }
+    expect(arrow).toBeDisabled();
+    expect(canUndoStep('e1')).toBe(false);
+    expect(editorOf()).toBe(editor);
+    expect(editor.getJSON()).toEqual(unchanged);
+    expect(undoDepth(editor.state)).toBe(0);
+    expect(redoDepth(editor.state)).toBe(0);
+    expect(write).toHaveBeenCalledTimes(1);
+    if (mode !== 'old raw title after an own ACK') {
+      expect(settledTitle).not.toHaveBeenCalled();
+      await act(async () => refuseTitle(trpcError('BAD_REQUEST', 'Правка не записана')));
+    }
+  });
 
 test('first actual BODY-only visit observes baseline before native acquisition and resets fresh foreign title', async () => {
   let idle: (() => void) | undefined;

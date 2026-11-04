@@ -1,3 +1,5 @@
+import { nextNetworkOrder } from '../../lib/freshness/provenance';
+
 /** Снимки поля браузера недоступны программно: заголовок держит свою историю во вкладке. */
 export const TITLE_GROUP_DELAY_MS = 500;
 export const TITLE_DEPTH = 100;
@@ -7,6 +9,9 @@ interface SendToken {
 }
 interface History {
   seen?: string;
+  accepted?: string;
+  unconfirmed?: string;
+  acknowledged?: { value: string; sequence: number };
   pending: SendToken[];
   observed?: SendToken;
   done: string[];
@@ -42,6 +47,41 @@ export function observeTitleValue(id: string, value: string): boolean {
   if (observed >= 0) h.pending.splice(0, observed + 1);
   return foreign;
 }
+/** Projected and disk values may attach an own send but cannot establish a foreign basis. */
+export function canObservePresentedTitle(id: string, value: string): boolean {
+  const h = histories.get(id);
+  if (h?.seen === undefined || h.pending.some((token) => token.value === value)) return true;
+  if (h.observed?.state === 'failed') return h.pending.length === 0;
+  return h.seen === value;
+}
+
+/** A disk title can underlie local steps before the first network read. */
+export function rememberUnconfirmedTitle(id: string, value: string): void {
+  const h = history(id);
+  if (h.accepted === undefined) h.unconfirmed ??= value;
+}
+
+/** Only a new accepted network title can replace the retained server basis. */
+export function observeAcceptedTitle(id: string, value: string, startedSequence = 0): boolean {
+  const h = history(id);
+  const ack = h.acknowledged;
+  const afterAck = ack !== undefined && startedSequence > ack.sequence;
+  const basis = h.accepted ?? h.unconfirmed;
+  h.accepted = value;
+  h.unconfirmed = undefined;
+  if (basis === value && !afterAck) return false;
+  const pending = h.pending.some((token) => token.value === value);
+  const observed = h.observed?.value === value && h.observed.state !== 'failed';
+  const own = pending || observed || ack?.value === value;
+  const foreign = (basis !== undefined || afterAck) && !own;
+  // A read started after the ACK may prove a return to the old title. An
+  // earlier repeat of the old raw title leaves the attribution available.
+  h.acknowledged = undefined;
+  if (pending) observeTitleValue(id, value);
+  else if (foreign || (!h.observed && h.pending.length === 0)) h.seen = value;
+  return foreign;
+}
+
 export function markTitleSent(id: string, value: string): SendToken | undefined {
   const h = history(id);
   const token = { value };
@@ -74,6 +114,8 @@ export function acceptTitleSend(id: string, token: SendToken | undefined): void 
   const h = histories.get(id);
   if (token && h && (h.observed === token || h.pending.includes(token))) {
     token.state = 'accepted';
+    h.acknowledged =
+      h.accepted === token.value ? undefined : { value: token.value, sequence: nextNetworkOrder() };
     if (h.observed === token) h.observed = undefined;
   }
 }
@@ -115,6 +157,7 @@ export const resetTitleHistory = (id: string): void => {
     h.done.length = h.undone.length = h.pending.length = 0;
     h.open = false;
     h.observed = undefined;
+    h.acknowledged = undefined;
   }
 };
 export const forgetTitleHistory = (id: string): void => {

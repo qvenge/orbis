@@ -1,9 +1,8 @@
 import type { RecordBlockName } from '@orbis/shared/doc/page-grammar';
 import { type ComponentType, useCallback, useLayoutEffect, useRef, useState } from 'react';
 import { ThisEntityProvider } from '../../lib/query-blocks/this-entity';
-import { resetSteps, stepsGeneration } from '../entity-editor/arrows-stack';
+import { stepsGeneration } from '../entity-editor/arrows-stack';
 import { mountRecord } from '../entity-editor/editor-cache';
-import { observeTitleValue } from '../entity-editor/title-history';
 import { isUndoEpoch, undoEpoch } from '../undo/undo-epoch';
 import { Backlinks } from './Backlinks';
 import { Blockers } from './Blockers';
@@ -15,6 +14,7 @@ import { Subtasks } from './Subtasks';
 import { TagsBlock } from './TagsBlock';
 import { UndoArrowsSlot } from './UndoArrowsSlot';
 import { useRecordEdits } from './useEntityDetail';
+import { useTitleHistoryBasis } from './useTitleHistoryBasis';
 import { VersionsCardSlot } from './VersionsCardSlot';
 
 /**
@@ -131,13 +131,18 @@ export function BodyBlock() {
       intent.generation === stepsGeneration(),
     [readOnly, titleShown, intent],
   );
+  const { observe, watch } = useTitleHistoryBasis(entity.id, current);
   // Даже без заголовка и до ленивого редактора наблюдение принадлежит тому же LRU записи.
   useLayoutEffect(() => {
-    if (current()) return mountRecord(entity.id);
-  }, [entity.id, current]);
-  useLayoutEffect(() => {
-    if (current() && observeTitleValue(entity.id, entity.title)) resetSteps(entity.id);
-  }, [entity.id, entity.title, current]);
+    if (!current()) return;
+    const release = mountRecord(entity.id);
+    const unwatch = watch();
+    return () => {
+      unwatch?.();
+      release();
+    };
+  }, [entity.id, current, watch]);
+  useLayoutEffect(() => observe(entity.title), [entity.title, observe]);
   return (
     <ThisEntityProvider id={entity.id}>
       {!readOnly && arrows !== undefined && !arrows.titleShown && (
