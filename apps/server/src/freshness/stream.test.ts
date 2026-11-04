@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test';
 import type { ChangePage } from '@orbis/shared';
+import type { ChangeWake } from './listener';
 import { streamChanges } from './stream';
 
 const empty = (watermark: string): ChangePage => ({
@@ -105,6 +106,154 @@ test('two different floor resets at one watermark and the complete reset all rea
       expect((await stream.next()).value).toMatchObject({ reset: { token } });
   } finally {
     stop.abort();
+    await stream.return(undefined);
+  }
+});
+
+function futureCursorReset(): ChangePage {
+  return {
+    watermark: '20',
+    floor: '0',
+    reset: { reason: 'future-cursor', phase: 'complete', token: 'future-cursor:101:0:20' },
+    transactions: [],
+  };
+}
+
+function newHistoryCommit(): ChangePage {
+  return {
+    watermark: '21',
+    floor: '0',
+    reset: null,
+    transactions: [
+      {
+        txId: '20',
+        changes: [
+          {
+            kind: 'entity',
+            rowKey: 'new-history-record',
+            entityIds: ['new-history-record'],
+            threadId: null,
+            operation: 'update',
+            scope: 'other',
+            at: '2026-11-04T00:00:00Z',
+            graphWide: false,
+          },
+        ],
+      },
+    ],
+  };
+}
+
+test.each([
+  false,
+  true,
+])('strict rewind idles until a new wake (old floor: %s)', async (oldFloor) => {
+  const stop = new AbortController();
+  const froms: string[] = [];
+  let committed = false;
+  let wake: (notice: ChangeWake) => void = () => {};
+  const initial: ChangePage = oldFloor
+    ? {
+        watermark: '101',
+        floor: '140',
+        reset: { reason: 'floor', phase: 'provisional', token: 'floor:140:provisional' },
+        transactions: [],
+      }
+    : empty('101');
+  const stream = streamChanges({
+    from: '100',
+    expiresAt: Date.now() + 120_000,
+    signal: stop.signal,
+    subscribe(callback) {
+      wake = callback;
+      return () => {};
+    },
+    async read(from) {
+      froms.push(from);
+      if (from === '100') return { page: initial, targetXid: '100' };
+      if (from === '101') return { page: futureCursorReset(), targetXid: '19' };
+      return committed
+        ? { page: newHistoryCommit(), targetXid: '20' }
+        : { page: empty('20'), targetXid: '19' };
+    },
+  });
+  let pending: ReturnType<typeof stream.next> | undefined;
+  try {
+    expect((await stream.next()).value).toMatchObject({ watermark: '101' });
+    wake({ recovered: true });
+    expect((await stream.next()).value).toEqual(futureCursorReset());
+
+    pending = stream.next();
+    // Long enough for the old retry to fire, far before the idle safety tick.
+    await Bun.sleep(350);
+    expect(froms).toEqual(['100', '101']);
+
+    committed = true;
+    wake({ txId: 20n });
+    expect((await pending).value).toEqual(newHistoryCommit());
+    expect(froms).toEqual(['100', '101', '20']);
+  } finally {
+    stop.abort();
+    await pending;
+    await stream.return(undefined);
+  }
+});
+
+test('a wake during rewind reseeds the next snapshot and retries a held commit', async () => {
+  const stop = new AbortController();
+  const rewindStarted = Promise.withResolvers<void>();
+  const finishRewind = Promise.withResolvers<{ page: ChangePage; targetXid: string }>();
+  const heldSnapshotRead = Promise.withResolvers<void>();
+  const froms: string[] = [];
+  let held = true;
+  let wake: (notice: ChangeWake) => void = () => {};
+  const stream = streamChanges({
+    from: '100',
+    expiresAt: Date.now() + 120_000,
+    signal: stop.signal,
+    subscribe(callback) {
+      wake = callback;
+      return () => {};
+    },
+    async read(from) {
+      froms.push(from);
+      if (from === '100') return { page: empty('101'), targetXid: '100' };
+      if (from === '101') {
+        rewindStarted.resolve();
+        return finishRewind.promise;
+      }
+      if (held) {
+        heldSnapshotRead.resolve();
+        return { page: empty('20'), targetXid: '20' };
+      }
+      if (from === '20') return { page: newHistoryCommit(), targetXid: '20' };
+      return { page: empty('21'), targetXid: '20' };
+    },
+  });
+  let pending: ReturnType<typeof stream.next> | undefined;
+  try {
+    expect((await stream.next()).value).toMatchObject({ watermark: '101' });
+    wake({ recovered: true });
+    pending = stream.next();
+    await rewindStarted.promise;
+    wake({ txId: 20n });
+    wake({ txId: 180n });
+    finishRewind.resolve({ page: futureCursorReset(), targetXid: '19' });
+    expect((await pending).value).toEqual(futureCursorReset());
+
+    pending = stream.next();
+    await heldSnapshotRead.promise;
+    held = false;
+    expect((await pending).value).toEqual(newHistoryCommit());
+    expect(froms).toEqual(['100', '101', '20', '20']);
+
+    pending = stream.next();
+    await Bun.sleep(500);
+    expect(froms).toEqual(['100', '101', '20', '20']);
+  } finally {
+    stop.abort();
+    finishRewind.resolve({ page: futureCursorReset(), targetXid: '19' });
+    await pending;
     await stream.return(undefined);
   }
 });

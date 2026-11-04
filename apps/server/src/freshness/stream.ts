@@ -98,7 +98,16 @@ export async function* streamChanges({
       if (result === STOPPED || stopped.signal.aborted || Date.now() >= cutoff) break;
       const { page, targetXid } = result;
       const watermark = BigInt(page.watermark);
-      if (seedThisRead && BigInt(targetXid) > target) target = BigInt(targetXid);
+      if (page.reset?.reason === 'future-cursor' && watermark < BigInt(from)) {
+        target = BigInt(targetXid);
+        provisionalFloor = 0n;
+        retryDelay = 100;
+        // A wake during the read keeps its deadline. Re-seed from the next
+        // snapshot instead of carrying an XID of uncertain history across.
+        if (notifyAt !== Infinity) seedTarget = true;
+      } else if (seedThisRead && BigInt(targetXid) > target) {
+        target = BigInt(targetXid);
+      }
       if (page.reset?.phase === 'provisional') provisionalFloor = BigInt(page.floor);
       const now = Date.now();
       safetyAt = now + SAFETY_MS;
