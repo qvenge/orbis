@@ -1,6 +1,7 @@
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { AppShell, preloadDesktopFrame } from '../../../app/AppShell';
+import { loadDetailScreen } from '../../../app/detail-screen-loader';
 import {
   noteRegistryVersion,
   resetRegistryVersionForTests,
@@ -29,6 +30,7 @@ beforeEach(async () => {
     removeListener: () => {},
   }));
   await preloadDesktopFrame();
+  await loadDetailScreen();
 });
 afterEach(() => {
   vi.unstubAllGlobals();
