@@ -18,6 +18,7 @@ import { useState } from 'react';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { noteRegistryVersion, resetRegistryVersionForTests } from '../../lib/registry/useRegistry';
 import { resetNavForTests, useNav } from '../../state/navigation';
+import { testFreshnessOf } from '../../test/freshness';
 import {
   installCrashTrap,
   type MockHandler,
@@ -1328,3 +1329,115 @@ for (const bodyGesture of [false, true])
       expect(undoDepth(ed.state)).toBe(2);
     }
   });
+
+test.each([
+  'direct gesture',
+  'open dialog showing below',
+  'open dialog pinning a version',
+] as const)('B13 old body cannot enter a view rewrite after rewind: %s', async (variant) => {
+  const dialogFirst = variant !== 'direct gesture';
+  const hide = variant === 'open dialog pinning a version';
+  const confirmPlan = () =>
+    fireEvent.click(
+      within(screen.getByRole('dialog')).getByRole('button', {
+        name: hide ? 'Сохранить версией и убрать' : 'Показать внизу страницы',
+      }),
+    );
+  const old = fixture(dialogFirst ? 'project' : 'note-plain');
+  const extra = dialogFirst
+    ? [template(TPL_A, 'Шаблон проекта', ['orbis/project'], '{{title}}\n{{cards}}\n')]
+    : [];
+  let release!: () => void;
+  const hold = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let restoring = false;
+  let refreshed = 0;
+  const recordId = old.entity.id;
+  const { queryClient, world, batches } = open(old, extra, {
+    over: async (path, input) => {
+      if (restoring && path === 'entity.get' && (input as { id: string }).id === recordId) {
+        refreshed += 1;
+        await hold;
+      }
+    },
+  });
+  const changedBody = 'new history has different words at the same body revision';
+  const chooseView = () => choose('Изменить вид только этой записи');
+  try {
+    await screen.findByTestId(dialogFirst ? 'page-render' : 'editor-preview');
+    if (dialogFirst) {
+      await chooseView();
+      await screen.findByRole('dialog');
+    }
+    const row = world.rows.get(recordId);
+    if (!row) throw new Error('Expected the target record in the server fixture');
+    const previousRevision = revisionOf(row);
+    row.body = changedBody;
+    row.bodyDoc = parseBody(changedBody);
+    restoring = true;
+    const { runtime, scope, changes } = testFreshnessOf(queryClient);
+    act(() => {
+      changes([], 30);
+      expect(
+        runtime.acceptChanges(
+          scope,
+          {
+            watermark: '20',
+            floor: '0',
+            reset: { reason: 'future-cursor', phase: 'complete', token: 'future-cursor:31:0:20' },
+            transactions: [],
+          },
+          '31',
+        ),
+      ).toBe(true);
+    });
+    await waitFor(() => expect(refreshed).toBeGreaterThan(0));
+    const waitForFreshBody = async () => {
+      await act(async () => release());
+      await waitFor(() => {
+        const candidates = queryClient.getQueriesData({ queryKey: [['entity', 'get']] });
+        expect(candidates.map(([, data]) => data)).toContainEqual(
+          expect.objectContaining({
+            entity: expect.objectContaining({
+              id: recordId,
+              body: changedBody,
+              bodyRevision: previousRevision,
+            }),
+          }),
+        );
+      });
+    };
+    if (dialogFirst) {
+      await waitForFreshBody();
+      confirmPlan();
+      await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    } else {
+      await chooseView();
+    }
+    await act(async () => {});
+    expect(batches()).toEqual([]);
+    expect(world.pins).toEqual([]);
+    expect(world.rows.get(recordId)?.body).toBe(changedBody);
+    expect(world.rows.get(recordId)?.bodyRevision).toBe(previousRevision);
+
+    await waitForFreshBody();
+    await chooseView();
+    if (dialogFirst) {
+      await screen.findByRole('dialog');
+      confirmPlan();
+    }
+    await waitFor(() => expect(batches()).toHaveLength(1));
+    expect(world.rows.get(recordId)?.bodyRevision).toBe(previousRevision + 1);
+    if (hide) {
+      expect(world.pins).toEqual([
+        { entityId: recordId, label: TEXT_BEFORE_VIEW_CHANGE, body: changedBody },
+      ]);
+      expect(world.rows.get(recordId)?.body).not.toContain(changedBody);
+    } else {
+      expect(world.rows.get(recordId)?.body).toContain(changedBody);
+    }
+  } finally {
+    await act(async () => release());
+  }
+});

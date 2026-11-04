@@ -1,8 +1,12 @@
+import { parsePageText } from '@orbis/shared/doc/page-grammar';
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { getQueryKey } from '@trpc/react-query';
-import { useState } from 'react';
-import { beforeEach, expect, it, vi } from 'vitest';
+import { useEffect, useState } from 'react';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { useExtensionRecordHooks } from '../../app/extension-registry';
 import { FreshnessVisibility } from '../../lib/freshness/screen';
+import { browserInputStorage, configureInputAccess } from '../../lib/local-data/input-access';
+import { snapshotPendingInputs } from '../../lib/local-data/lifecycle';
 import { testFreshnessOf } from '../../test/freshness';
 import {
   fixtureFreshness,
@@ -14,17 +18,24 @@ import {
 import { type RouterOutputs, trpc } from '../../trpc';
 import { bindStepOwner, canUndoStep, pushStep, resetSteps } from '../entity-editor/arrows-stack';
 import { registerBodyFlush } from '../entity-editor/body-flush';
-import { readDraft } from '../entity-editor/draft-storage';
+import { listDraftsIn, readDraft, setDraftScope } from '../entity-editor/draft-storage';
 import { type BodySave, type BodySaveEntity, useBodySave } from '../entity-editor/useBodySave';
 import { ConfigureView } from '../page/ConfigureView';
+import { Renderer } from '../page/Renderer';
 import { TemplatePreview } from '../page/TemplatePreview';
 import { BodyScreenProvider } from './EntityBody';
 import { PropertiesRelationsPanel } from './properties-relations/PropertiesRelationsPanel';
 import { registry } from './properties-relations/test-fixtures';
+import { RecordHostProvider, recordHostValue } from './record-host';
 import { detailGetInput, useEntityDetail } from './useEntityDetail';
 import { VersionsCard } from './VersionsCard';
 
 beforeEach(() => localStorage.clear());
+afterEach(() => {
+  configureInputAccess(undefined);
+  sessionStorage.clear();
+  setDraftScope('');
+});
 
 const id = '00000000-0000-4000-8000-000000000001';
 const doc = (text: string) => ({
@@ -409,4 +420,243 @@ it('an overlay keeps configure and template preview mounted without reading unti
         .sort(),
     ).toEqual([previewId, configureId]),
   );
+});
+
+it.each([
+  { edit: 'new edit', same: false },
+  { edit: 'pending debounce', same: false },
+  { edit: 'after fresh GET', same: false },
+  { edit: 'pending debounce', same: true },
+  { edit: 'after own ACK', same: true },
+  { edit: 'managed pending debounce', same: false },
+  { edit: 'managed checkpoint failure', same: false },
+] as const)('rollback with $edit and matching body $same uses only a confirmed basis', async ({
+  edit,
+  same,
+}) => {
+  const refreshed = deferred();
+  const managed = edit.startsWith('managed ') ? browserInputStorage(sessionStorage) : undefined;
+  if (managed) {
+    const controller = new AbortController();
+    setDraftScope('owner');
+    configureInputAccess({
+      storage: managed,
+      prefix: 'rewind:',
+      isCurrent: () => !controller.signal.aborted,
+      drafts: {
+        scope: { accountId: 'owner', graphId: 'owner', generation: 'test' },
+        persistent: false,
+        signal: controller.signal,
+      },
+    });
+  }
+  let detailReads = 0;
+  let editor!: BodySave;
+  const initial = detail(3, 'body observed before rollback');
+  const ownText = 'own ACK before rollback';
+  const own = edit === 'after own ACK' ? doc(ownText) : undefined;
+  const oldText = own ? ownText : 'body observed before rollback';
+  const reusedRevision = own ? 4 : 3;
+  const restoredText = same ? oldText : 'different body with reused revision';
+  let serverBody = restoredText;
+  let settledReset = false;
+  function Editor({ record }: { record: BodySaveEntity }) {
+    editor = useBodySave(id, record);
+    return null;
+  }
+  function Probe() {
+    const read = trpc.entity.get.useQuery(detailGetInput(id));
+    const record = read.data?.entity;
+    return record ? (
+      <Editor record={{ ...record, bodyRevision: record.bodyRevision ?? 0 }} />
+    ) : null;
+  }
+  const { queryClient, calls } = renderWithProviders(
+    <Probe />,
+    (path, input) => {
+      if (path === 'entity.get') return detailReads++ === 0 ? initial : refreshed.promise;
+      if (path === 'entity.update') {
+        const update = input as { expectedBodyRevision: number; bodyDoc: ReturnType<typeof doc> };
+        // Match the executor's equality predicate for a reused current bodyRevision.
+        expect(update.expectedBodyRevision).toBe(settledReset ? reusedRevision : 3);
+        const text = update.bodyDoc.doc.content[0]?.content[0]?.text;
+        if (text === undefined) throw new Error('Expected the text from the editor');
+        if (settledReset) serverBody = text;
+        return { ...entity(settledReset ? reusedRevision + 1 : 4, text), txId: '25' };
+      }
+      throw new Error(path);
+    },
+    { freshness: true },
+  );
+  const postRollbackWrites = () =>
+    calls.filter(({ path }) => path === 'entity.update').length - (own ? 1 : 0);
+  const feed = testFreshnessOf(queryClient);
+  const publishNewHistory = async () => {
+    await act(async () => refreshed.resolve(detail(reusedRevision, restoredText)));
+    const hash = queryClient.getQueryCache().find({ queryKey: key, exact: true })?.queryHash;
+    expect(hash).toBeDefined();
+    await waitFor(() =>
+      expect(feed.runtime.publicationOf(hash ?? '')?.raw).toMatchObject({
+        entity: { bodyRevision: reusedRevision, body: restoredText },
+      }),
+    );
+  };
+  await waitFor(() => expect(editor).toBeDefined());
+  act(() => editor.onShown(3));
+  if (own) {
+    await act(async () => {
+      editor.onDocChange(own);
+      editor.flush();
+    });
+    await waitFor(() => expect(editor.expectedRevision()).toBe(4));
+  }
+  const localText = 'human edit based on the old document';
+  const local = doc(localText);
+  const buffered = edit === 'pending debounce' || !!managed;
+  if (buffered) act(() => editor.onDocChange(local));
+  const priorManaged = managed ? readDraft(id) : undefined;
+  if (managed) expect(priorManaged?.inputToken?.basis).toEqual({ revision: 3 });
+  const failsCheckpoint = edit === 'managed checkpoint failure';
+  if (managed && failsCheckpoint) {
+    snapshotPendingInputs();
+    expect(listDraftsIn(managed, 'owner', 'rewind:')[0]?.draft.slot).toBe(priorManaged?.slot);
+    vi.spyOn(managed, 'setItem').mockImplementation(() => {
+      throw new DOMException('storage full', 'QuotaExceededError');
+    });
+  }
+  act(() => reset(feed));
+  settledReset = true;
+  if (managed) {
+    const stored = listDraftsIn(managed, 'owner', 'rewind:')[0]?.draft;
+    if (failsCheckpoint) expect(stored?.slot).toBe(priorManaged?.slot);
+    const preserved = failsCheckpoint ? readDraft(id) : stored;
+    expect(preserved?.doc).toEqual(local);
+    expect(preserved?.inputToken).toMatchObject({
+      writerId: priorManaged?.inputToken?.writerId,
+      basis: { revision: 0 },
+    });
+    expect(preserved?.slot).not.toBe(priorManaged?.slot);
+  }
+  await waitFor(() => expect(detailReads).toBe(2));
+  // Intentionally do not call onShown after this GET. A focused editor can keep old text.
+  if (edit === 'after fresh GET') await publishNewHistory();
+  if (edit === 'pending debounce' && !same) {
+    // Let the production debounce call save while the authoritative GET is held.
+    await waitFor(() => expect(editor.state).toBe('error'), { timeout: 2_500 });
+  } else {
+    await act(async () => {
+      if (!buffered) editor.onDocChange(local);
+      editor.flush();
+    });
+  }
+  expect(postRollbackWrites()).toBe(0);
+  expect(serverBody).toBe(restoredText);
+  expect(readDraft(id)?.doc).toEqual(local);
+  if (edit !== 'after fresh GET') await publishNewHistory();
+  if (same) {
+    await waitFor(() => expect(postRollbackWrites()).toBe(1));
+    expect(serverBody).toBe(localText);
+  } else {
+    await waitFor(() => expect(editor.pendingDraft?.doc).toEqual(local));
+    expect(postRollbackWrites()).toBe(0);
+    expect(serverBody).toBe(restoredText);
+    await act(async () => editor.applyPendingDraft());
+    await waitFor(() => expect(postRollbackWrites()).toBe(1));
+    expect(serverBody).toBe(localText);
+  }
+});
+
+it.each([
+  'mounted editor',
+  'versions-only template',
+] as const)('version restore in a %s waits for a confirmed basis after rollback', async (host) => {
+  const mounted = host === 'mounted editor';
+  const refreshed = deferred();
+  let detailReads = 0;
+  let editor!: BodySave;
+  function Editor({ record }: { record: BodySaveEntity }) {
+    const save = useBodySave(id, record);
+    editor = save;
+    useEffect(
+      () =>
+        registerBodyFlush(
+          id,
+          save.flushSettled,
+          save.revisionForRewrite,
+          save.beginRewrite,
+          save.rewriteCheckpoint,
+        ),
+      [save.flushSettled, save.revisionForRewrite, save.beginRewrite, save.rewriteCheckpoint],
+    );
+    return null;
+  }
+  function Probe() {
+    const read = trpc.entity.get.useQuery(detailGetInput(id));
+    const extensionHooks = useExtensionRecordHooks();
+    if (!read.data) return null;
+    const record = read.data.entity;
+    if (mounted)
+      return (
+        <>
+          <Editor record={{ ...record, bodyRevision: record.bodyRevision ?? 0 }} />
+          <VersionsCard entity={record} active />
+        </>
+      );
+    return (
+      <RecordHostProvider
+        value={recordHostValue(read.data, { extensionHooks, openTab: 'record', readOnly: false })}
+      >
+        <Renderer
+          nodes={parsePageText('{{versions}}')}
+          kind="template"
+          appendUnplacedCards={false}
+        />
+      </RecordHostProvider>
+    );
+  }
+  const { queryClient, calls } = renderWithProviders(
+    <Probe />,
+    (path) => {
+      if (path === 'entity.get')
+        return detailReads++ === 0 ? detail(3, 'old history') : refreshed.promise;
+      if (path === 'version.list')
+        return [
+          { id: 'v1', label: 'Version', createdAt: '2026-01-01T00:00:00.000Z', hasDoc: true },
+        ];
+      if (path === 'user.getSettings') return { timezone: 'UTC' };
+      if (path === 'registry.effective') return registry;
+      if (path === 'version.restore') return entity(4, 'explicit version restore');
+      throw new Error(path);
+    },
+    { freshness: true },
+  );
+  const restore = async () => {
+    fireEvent.click(screen.getByRole('button', { name: 'Восстановить' }));
+    fireEvent.click(
+      within(screen.getByRole('dialog')).getByRole('button', { name: 'Восстановить' }),
+    );
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  };
+  await screen.findByText('Version');
+  if (mounted) act(() => editor.onShown(3));
+  act(() => reset(testFreshnessOf(queryClient)));
+  await waitFor(() => expect(detailReads).toBe(2));
+  await restore();
+  expect(calls.filter(({ path }) => path === 'version.restore')).toHaveLength(0);
+
+  await act(async () => refreshed.resolve(detail(3, 'different fresh basis')));
+  await waitFor(() =>
+    expect(queryClient.getQueryData(key)).toMatchObject({
+      entity: { body: 'different fresh basis' },
+    }),
+  );
+  if (mounted) {
+    await restore();
+    expect(calls.filter(({ path }) => path === 'version.restore')).toHaveLength(0);
+    act(() => editor.onShown(3, doc('different fresh basis')));
+  }
+  await restore();
+  expect(calls.filter(({ path }) => path === 'version.restore')).toEqual([
+    { path: 'version.restore', input: { versionId: 'v1', expectedBodyRevision: 3 } },
+  ]);
 });

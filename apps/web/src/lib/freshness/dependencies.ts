@@ -1,8 +1,8 @@
-import { entityThreadId, type GraphId, type ReadDependencies } from '@orbis/shared';
+import { entityThreadId, type ReadDependencies } from '@orbis/shared';
 import { MEMORY_RULES_QUERY } from '../../features/chat/memoryRules';
 
 type Persistence = 'none' | 'response' | 'thread-tail';
-type Rule = (input: Fields, data: unknown, graphId?: GraphId) => CacheDependency;
+type Rule = (input: Fields, data: unknown, graphId?: string) => CacheDependency;
 type Fields = Record<string, unknown>;
 
 export type CacheDependency = {
@@ -65,7 +65,7 @@ function money(): CacheDependency {
   return rule('response', graphReads, true);
 }
 
-function pending(input: Fields, data: unknown, graphId?: GraphId): CacheDependency {
+function pending(input: Fields, data: unknown, graphId?: string): CacheDependency {
   const views = Array.isArray(data) ? data.map(fields) : [fields(data)];
   const anchors = ids(
     input.entityId,
@@ -177,7 +177,7 @@ export function cacheDependencyOf(
   key: readonly unknown[],
   data?: unknown,
   ownerNextMidnight?: string | null,
-  graphId?: GraphId,
+  graphId?: string,
 ): CacheDependency | undefined {
   const [prefix, options] = key;
   const family = Array.isArray(prefix) ? prefix.join('.') : prefix;

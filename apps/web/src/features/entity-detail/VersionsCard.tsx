@@ -23,7 +23,7 @@ import { Dialog } from '../../ui/Dialog';
 import { useToast } from '../../ui/toast-store';
 import { resetSteps } from '../entity-editor/arrows-stack';
 import { beginBodyRewrite, bodyRevisionOf, flushBodyOf } from '../entity-editor/body-flush';
-import { confirmBody } from '../undo/body-provenance';
+import { confirmBody, isBodyConfirmedAfter } from '../undo/body-provenance';
 import { journalRefOf } from '../undo/journal-ref';
 import { isUndoEpoch, subscribeUndoEpoch, undoEpoch } from '../undo/undo-epoch';
 import { offerUndoLazy } from '../undo/undo-lazy';
@@ -146,12 +146,21 @@ export function VersionsCard({ entity, active }: { entity: Entity; active: boole
         currentId.current !== id
       )
         return;
-      if (flushed === 'blocked' || flushed === 'offline') {
+      const revision = bodyRevisionOf(id);
+      const history = freshnessRuntimeOf(client)?.bodyHistory() ?? 0;
+      // Custom templates can expose versions without mounting a body editor.
+      const revoked =
+        revision === undefined &&
+        history > 0 &&
+        (!entity.bodyDoc || !isBodyConfirmedAfter(entity.bodyDoc, history));
+      if (flushed === 'blocked' || flushed === 'offline' || revoked) {
         setTarget(null);
         show(
-          flushed === 'blocked'
-            ? 'Текст записи не сохранён — сначала закончите правку или разрешите конфликт текста, затем восстанавливайте'
-            : 'Нет связи: набранный текст ещё не на сервере — восстановление не отправлено',
+          revoked
+            ? 'Дождитесь обновления текста записи перед восстановлением'
+            : flushed === 'blocked'
+              ? 'Текст записи не сохранён — сначала закончите правку или разрешите конфликт текста, затем восстанавливайте'
+              : 'Нет связи: набранный текст ещё не на сервере — восстановление не отправлено',
           'danger',
         );
         return;
@@ -161,7 +170,7 @@ export function VersionsCard({ entity, active }: { entity: Entity; active: boole
       restoreCurrent.current = current;
       restore.mutate({
         versionId: version.id,
-        expectedBodyRevision: bodyRevisionOf(id) ?? shownBodyRevision(entity),
+        expectedBodyRevision: revision ?? shownBodyRevision(entity),
       });
     } finally {
       // Cleanup принадлежит этому ожиданию: поздний finally не снимает новый flight.

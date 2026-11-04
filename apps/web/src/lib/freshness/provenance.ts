@@ -55,6 +55,7 @@ export type FreshnessSinks = {
     scope: FreshnessScope,
     startedSequenceCutoff: number,
     resetToken: string,
+    disposition?: 'history-rewind',
   ) => void;
   removeEntity?: (scope: FreshnessScope, id: string) => void;
   project?: (read: ReadPublication) => unknown;

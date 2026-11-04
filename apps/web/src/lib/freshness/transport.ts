@@ -14,6 +14,7 @@ export type RefreshResult =
 type SessionOptions = {
   scope: FreshnessScope;
   getCursor: () => string;
+  getHistory: () => number;
   isCurrent: (scope: FreshnessScope) => boolean;
   acceptChanges: (scope: FreshnessScope, page: ChangePage, requestedFrom: string) => boolean;
   onConnectionStateChange?: (available: boolean) => void;
@@ -61,7 +62,8 @@ export function createFreshnessTransport({
   let refreshInFlight: { scope: FreshnessScope; result: Promise<RefreshResult> } | undefined;
 
   function openSession(options: SessionOptions) {
-    const { scope, getCursor, acceptChanges, isCurrent, onConnectionStateChange } = options;
+    const { scope, getCursor, getHistory, acceptChanges, isCurrent, onConnectionStateChange } =
+      options;
     const lifetime = new AbortController();
     const alive = () => !lifetime.signal.aborted && isCurrent(scope);
     let closeStream: (() => void) | undefined;
@@ -139,7 +141,9 @@ export function createFreshnessTransport({
       const stream = new AbortController();
       const valid = () => alive() && !stream.signal.aborted;
       let pendingFrom = getCursor();
+      let pendingHistory = getHistory();
       let requestedFrom = pendingFrom;
+      let requestHistory = pendingHistory;
       let watchdog: ReturnType<typeof setTimeout> | undefined;
       let unsubscribe: (() => void) | undefined;
       const retry = () => {
@@ -160,6 +164,7 @@ export function createFreshnessTransport({
         token,
         beforeFetch: () => {
           pendingFrom = getCursor();
+          pendingHistory = getHistory();
           return pendingFrom;
         },
       };
@@ -170,7 +175,9 @@ export function createFreshnessTransport({
           signal: stream.signal,
           context: { freshnessStream },
           onStarted() {
-            if (valid()) requestedFrom = pendingFrom;
+            if (!valid()) return;
+            requestedFrom = pendingFrom;
+            requestHistory = pendingHistory;
           },
           onConnectionStateChange(state) {
             if (!valid()) return;
@@ -185,6 +192,10 @@ export function createFreshnessTransport({
           },
           onData(item) {
             if (!valid()) return;
+            if (requestHistory !== getHistory()) {
+              retry();
+              return;
+            }
             if (
               item &&
               typeof item === 'object' &&
@@ -199,7 +210,15 @@ export function createFreshnessTransport({
               item.data?.watermark === item.id &&
               acceptChanges(scope, item.data, requestedFrom)
             ) {
+              if (BigInt(item.data.watermark) > BigInt(getCursor())) {
+                // An ignored complete reset can advance the server stream, but
+                // must not skip ordinary changes beyond our accepted boundary.
+                retry();
+                return;
+              }
               requestedFrom = item.data.watermark;
+              // A rewind accepted from this stream also moved its server cursor.
+              requestHistory = getHistory();
               delay = MIN_RETRY;
             } else {
               retry();
@@ -207,6 +226,10 @@ export function createFreshnessTransport({
           },
           onError(error) {
             if (!valid()) return;
+            if (requestHistory !== getHistory()) {
+              retry();
+              return;
+            }
             const code = trpcErrorCode(error);
             if (code === 'UNAUTHORIZED') void refresh();
             else if (code === 'PRECONDITION_FAILED') stop();
@@ -224,15 +247,19 @@ export function createFreshnessTransport({
       if (!alive()) return Promise.resolve();
       reconcileTask ??= (async () => {
         const from = getCursor();
+        const history = getHistory();
         const requestedToken = currentToken();
+        const currentAttempt = () => alive() && history === getHistory();
         try {
           const page = await client.changes.reconcile.query({ from }, { signal: lifetime.signal });
-          if (alive() && !acceptChanges(scope, page, from)) {
+          if (!currentAttempt()) return;
+          if (!acceptChanges(scope, page, from) || history !== getHistory()) {
+            // A rewind from reconcile invalidates the older stream's cursor too.
             stopStream();
             schedule();
           }
         } catch (error) {
-          if (!alive()) return;
+          if (!currentAttempt()) return;
           const code = trpcErrorCode(error);
           if (code === 'UNAUTHORIZED' && requestedToken === currentToken()) await refresh();
           else if (code === 'PRECONDITION_FAILED') stop();

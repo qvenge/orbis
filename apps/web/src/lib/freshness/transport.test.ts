@@ -1,6 +1,8 @@
 import { CLIENT_VERSION_HEADER, READ_WATERMARK_HEADER } from '@orbis/shared';
+import { hashKey, QueryClient } from '@tanstack/react-query';
 import { afterEach, expect, test, vi } from 'vitest';
 import { makeVanillaClient, networkReadReceiptOf, nextNetworkOrder } from '../../trpc';
+import { createFreshnessRuntime } from './runtime';
 import { createFreshnessTransport } from './transport';
 
 const scope = { accountId: 'owner', graphId: 'graph', epoch: 1 };
@@ -55,6 +57,7 @@ test('rejection discards the wire id, while a refresh sends the new bearer on a 
       scope,
       isCurrent: () => true,
       getCursor: () => cursor,
+      getHistory: () => 0,
       acceptChanges: (_, result, from) => {
         if (result.watermark === '12' && rejectFirstTwelve) {
           rejectFirstTwelve = false;
@@ -113,6 +116,7 @@ test('SSE and reconcile 401 share refresh and keep the session on network failur
     transport.start({
       scope,
       getCursor: () => '10',
+      getHistory: () => 0,
       isCurrent: () => true,
       acceptChanges: () => true,
     });
@@ -181,6 +185,7 @@ test('a refresh refusal affects its current owner once, even when both channels 
     transport.start({
       scope,
       getCursor: () => '10',
+      getHistory: () => 0,
       isCurrent: () => true,
       acceptChanges: () => true,
     });
@@ -211,6 +216,7 @@ test('stopping and restarting keeps runtime-owned queued work and cursor until o
       scope: { ...scope, epoch },
       isCurrent: () => true,
       getCursor: () => state.cursor,
+      getHistory: () => 0,
       acceptChanges: (_, result) => {
         state.cursor = result.watermark;
         state.queued.push(result.watermark);
@@ -253,6 +259,7 @@ test('a disabled stream stays unavailable while the same session reconciles', as
     transport.start({
       scope,
       getCursor: () => '10',
+      getHistory: () => 0,
       isCurrent: () => true,
       acceptChanges: (_, result, from) => {
         accepted.push([from, result.watermark]);
@@ -264,6 +271,275 @@ test('a disabled stream stays unavailable while the same session reconciles', as
     expect(accepted).toEqual([['10', '11']]);
     expect(availability).not.toHaveBeenCalledWith(true);
     expect(requests.filter((url) => String(url).includes('changes.watch'))).toHaveLength(1);
+  } finally {
+    transport.stop();
+  }
+});
+
+test('an ignored higher complete reset reconnects from the accepted boundary without skipping events', async () => {
+  let cursor = '10';
+  const opened: string[] = [];
+  const received: Array<[string, string]> = [];
+  const reset = {
+    ...page('25'),
+    floor: '20',
+    reset: { reason: 'floor', phase: 'complete', token: 'floor:20:complete' },
+  };
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (_url: string, init?: RequestInit) => {
+      opened.push(new Headers(init?.headers).get('Last-Event-ID') ?? '');
+      if (opened.length === 1) {
+        // Reconcile accepted the same complete token at W21 while this SSE
+        // request from 10 was still outstanding.
+        cursor = '21';
+        return eventStream(`${connected}id: 25\ndata: ${JSON.stringify(reset)}\n\n${frame('26')}`);
+      }
+      return eventStream(connected + frame('22'));
+    }),
+  );
+  const transport = createFreshnessTransport({ getToken: () => 'bearer' });
+  try {
+    transport.start({
+      scope,
+      isCurrent: () => true,
+      getCursor: () => cursor,
+      getHistory: () => 0,
+      acceptChanges: (_, result, from) => {
+        received.push([from, result.watermark]);
+        if (!result.reset) cursor = result.watermark;
+        return true;
+      },
+    });
+    await vi.waitFor(() => expect(cursor).toBe('22'));
+    expect(opened).toEqual(['10', '21']);
+    expect(received).toEqual([
+      ['10', '25'],
+      ['21', '22'],
+    ]);
+  } finally {
+    transport.stop();
+  }
+});
+
+test('overlapping SSE continues from the wire boundary while reconcile is ahead', async () => {
+  let cursor = '10';
+  const fetch = vi.fn(async () => eventStream(connected + frame('11') + frame('12')));
+  vi.stubGlobal('fetch', fetch);
+  const received: Array<[string, string]> = [];
+  const transport = createFreshnessTransport({ getToken: () => 'bearer' });
+  try {
+    transport.start({
+      scope,
+      isCurrent: () => true,
+      getCursor: () => cursor,
+      getHistory: () => 0,
+      acceptChanges: (_, result, from) => {
+        received.push([from, result.watermark]);
+        cursor = '13';
+        return true;
+      },
+    });
+    await vi.waitFor(() =>
+      expect(received).toEqual([
+        ['10', '11'],
+        ['11', '12'],
+      ]),
+    );
+    expect(fetch).toHaveBeenCalledOnce();
+  } finally {
+    transport.stop();
+  }
+});
+
+test.each([
+  { boundary: 'none', reply: 'delete' },
+  { boundary: 'overflow', reply: 'delete' },
+  { boundary: 'rewind', reply: 'delete' },
+  { boundary: 'rewind', reply: 'unauthorized' },
+] as const)('B13 late $reply reconcile after $boundary', async ({ boundary, reply }) => {
+  const rewind = boundary === 'rewind';
+  const client = new QueryClient();
+  const encoder = new TextEncoder();
+  let controller!: ReadableStreamDefaultController;
+  let releasePoll!: (reply: Response) => void;
+  const holdPoll = new Promise<Response>((resolve) => {
+    releasePoll = resolve;
+  });
+  const fetch = vi.fn(async (url: string) =>
+    String(url).includes('changes.watch')
+      ? new Response(
+          new ReadableStream({
+            start(value) {
+              controller = value;
+              controller.enqueue(encoder.encode(connected));
+            },
+          }),
+          { headers: { 'Content-Type': 'text/event-stream' } },
+        )
+      : holdPoll,
+  );
+  vi.stubGlobal('fetch', fetch);
+  const refreshToken = vi.fn(async () => ({ kind: 'retry' as const }));
+  const transport = createFreshnessTransport({ getToken: () => 'bearer', refreshToken });
+  let acceptedCursor!: () => string;
+  const runtime = createFreshnessRuntime({
+    queryClient: client,
+    scope,
+    transport: {
+      ...transport,
+      start(options) {
+        acceptedCursor = options.getCursor;
+        transport.start(options);
+      },
+    },
+  });
+  const settings = [['user', 'getSettings'], { type: 'query' }];
+  client.setQueryData(settings, {});
+  expect(
+    runtime.acceptRead({
+      source: 'network',
+      scope,
+      key: settings,
+      queryHash: hashKey(settings),
+      raw: { graphEstablished: true },
+      receipt: {
+        epoch: scope.epoch,
+        watermark: '10',
+        receivedAt: Date.now(),
+        startedSequence: nextNetworkOrder(),
+      },
+    }),
+  ).toBe(true);
+  const entityId = 'same-uuid-in-both-histories';
+  const change = (operation: 'delete' | 'insert') => ({
+    txId: '32',
+    changes: [
+      {
+        kind: 'entity',
+        rowKey: entityId,
+        entityIds: [entityId],
+        threadId: null,
+        operation,
+        scope: 'other',
+        at: '2026-11-04T00:00:00.000Z',
+        graphWide: false,
+      },
+    ],
+  });
+  const push = <T extends { watermark: string }>(body: T) => {
+    controller.enqueue(encoder.encode(`id: ${body.watermark}\ndata: ${JSON.stringify(body)}\n\n`));
+  };
+  const removeEntity = vi.fn();
+  runtime.setSinks({ removeEntity });
+  try {
+    const poll = transport.reconcile();
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
+    push(page('31'));
+    await vi.waitFor(() => expect(acceptedCursor()).toBe('31'));
+    if (rewind) {
+      push({
+        ...page('20'),
+        reset: { reason: 'future-cursor', phase: 'complete', token: 'future-cursor:31:0:20' },
+      });
+      await vi.waitFor(() => expect(acceptedCursor()).toBe('20'));
+    } else if (boundary === 'overflow') {
+      const reset = vi.fn();
+      runtime.setSinks({ resetResponses: reset });
+      push({
+        ...page('31'),
+        reset: { reason: 'overflow', phase: 'complete', token: 'overflow:31:0:31' },
+      });
+      await vi.waitFor(() => expect(reset).toHaveBeenCalledOnce());
+    }
+    releasePoll(
+      Response.json(
+        reply === 'delete'
+          ? [{ result: { data: { ...page('35'), transactions: [change('delete')] } } }]
+          : [{ error: { code: -32001, message: 'Unauthorized', data: { code: 'UNAUTHORIZED' } } }],
+      ),
+    );
+    await poll;
+    expect(refreshToken).not.toHaveBeenCalled();
+    expect.soft(acceptedCursor()).toBe(rewind ? '20' : '35');
+    if (rewind) {
+      push({ ...page('40'), transactions: [change('insert')] });
+      await vi.waitFor(() => expect(acceptedCursor()).toBe('40'));
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      expect.soft(removeEntity).not.toHaveBeenCalled();
+      expect.soft(runtime.wasDeleted(entityId)).toBe(false);
+    } else {
+      await vi.waitFor(() => expect(removeEntity).toHaveBeenCalledOnce());
+      expect(runtime.wasDeleted(entityId)).toBe(true);
+    }
+  } finally {
+    runtime.dispose();
+    client.clear();
+  }
+});
+
+test('a reconcile-origin rewind aborts the old SSE attempt and reconnects at the lower cursor', async () => {
+  let cursor = '10';
+  let history = 0;
+  const streams: Array<{ from: string | null; signal?: AbortSignal | null }> = [];
+  const accepted: Array<[string, string]> = [];
+  const encoder = new TextEncoder();
+  let oldStream: ReadableStreamDefaultController<Uint8Array> | undefined;
+  const rewind = {
+    ...page('20'),
+    reset: { reason: 'future-cursor', phase: 'complete', token: 'future-cursor:31:0:20' },
+  };
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string, init?: RequestInit) => {
+      if (!String(url).includes('changes.watch'))
+        return Response.json([{ result: { data: rewind } }]);
+      streams.push({ from: new Headers(init?.headers).get('Last-Event-ID'), signal: init?.signal });
+      if (streams.length > 1) return eventStream(connected + frame('21'));
+      return new Response(
+        new ReadableStream({
+          start(controller) {
+            oldStream = controller;
+            controller.enqueue(encoder.encode(connected + frame('31')));
+          },
+        }),
+        { headers: { 'Content-Type': 'text/event-stream' } },
+      );
+    }),
+  );
+  const transport = createFreshnessTransport({ getToken: () => 'bearer' });
+  try {
+    transport.start({
+      scope,
+      isCurrent: () => true,
+      getCursor: () => cursor,
+      getHistory: () => history,
+      acceptChanges: (_, result, from) => {
+        accepted.push([from, result.watermark]);
+        cursor = result.watermark;
+        if (result.reset?.reason === 'future-cursor') history += 1;
+        return true;
+      },
+    });
+    await vi.waitFor(() => expect(cursor).toBe('31'));
+    await transport.reconcile();
+    expect(cursor).toBe('20');
+    expect(streams[0]?.signal?.aborted).toBe(true);
+    expect(oldStream).toBeDefined();
+    try {
+      // A deliberately late frame from the previous history. Some readers
+      // cancel the source immediately; others still have bytes in their buffer.
+      oldStream?.enqueue(encoder.encode(frame('35')));
+    } catch (error) {
+      expect(error).toBeInstanceOf(TypeError);
+    }
+    await vi.waitFor(() => expect(cursor).toBe('21'));
+    expect(streams.map(({ from }) => from)).toEqual(['10', '20']);
+    expect(accepted).toEqual([
+      ['10', '31'],
+      ['31', '20'],
+      ['20', '21'],
+    ]);
   } finally {
     transport.stop();
   }

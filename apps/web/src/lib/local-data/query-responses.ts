@@ -199,12 +199,15 @@ export function bindQueryResponses(
         // Without a durable copy the submitted draft remains recoverable.
       }
     },
-    resetResponses: (owner, sequence, token) => {
+    resetResponses: (owner, sequence, token, disposition) => {
       if (closed || !sameFreshnessScope(scope, owner)) return;
       cutoff = Math.max(cutoff, sequence);
       cancelRestores();
-      if (session.cache) void session.cache.invalidateGeneration(sequence, token);
-      else void ready.then((cache) => !closed && cache?.invalidateGeneration(sequence, token));
+      if (session.cache) void session.cache.invalidateGeneration(sequence, token, disposition);
+      else
+        void ready.then(
+          (cache) => !closed && cache?.invalidateGeneration(sequence, token, disposition),
+        );
       retireChatPlaces();
     },
     removeEntity: (owner, id) => {

@@ -21,7 +21,7 @@ import { finishStoredDraft } from '../../lib/local-data/query-responses';
 import { isBodyStale } from '../../lib/orbis-error';
 import type { RouterInputs } from '../../trpc';
 import { useEntityUpdate } from '../entity-detail/useEntityDetail';
-import { isBodyPending } from '../undo/body-provenance';
+import { isBodyConfirmedAfter, isBodyPending } from '../undo/body-provenance';
 import { isUndoEpoch, subscribeUndoEpoch, undoEpoch } from '../undo/undo-epoch';
 import type { FlushResult } from './body-flush';
 import {
@@ -122,6 +122,11 @@ export type BodySaveEntity = {
 };
 
 type BodyBasis = { revision: number; doc: NonNullable<BodySaveEntity['bodyDoc']> };
+type HeldBasis = { basis: BodyBasis | null; waiting: boolean; rewind?: true };
+
+function confirmedBody(doc: BodySaveEntity['bodyDoc'], history: number): BodyBasis['doc'] | null {
+  return doc && (history ? isBodyConfirmedAfter(doc, history) : !isBodyPending(doc)) ? doc : null;
+}
 
 function unconfirmedBasis(entity: BodySaveEntity): BodyBasis | null {
   const doc = entity.bodyDoc;
@@ -295,6 +300,10 @@ function toCurrentSchema(draft: Draft): Draft | null {
  */
 export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave {
   const queryClient = useQueryClient();
+  const bodyHistory = useCallback(
+    () => freshnessRuntimeOf(queryClient)?.bodyHistory() ?? 0,
+    [queryClient],
+  );
   const { mutation, conflict, dismissConflict } = useEntityUpdate(entityId);
   const mutate = mutation.mutate;
 
@@ -385,9 +394,17 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
    * затёрла бы текст агента молча (рулинг R-17, спека §8.3).
    */
   const shownRevisionRef = useRef(entity.bodyRevision);
+  const historyAtRender = bodyHistory();
   const shownDocRef = useRef(entity.bodyDoc);
+  const shownHistoryRef = useRef(
+    confirmedBody(entity.bodyDoc, historyAtRender) ? historyAtRender : 0,
+  );
+  const pendingBasisRef = useRef<{ history: number; basis: BodyBasis | null }>({
+    history: shownHistoryRef.current,
+    basis: entity.bodyDoc ? { revision: entity.bodyRevision, doc: entity.bodyDoc } : null,
+  });
   const shownUnconfirmedRef = useRef(unconfirmedBasis(entity));
-  const pendingUnconfirmedRef = useRef<{ basis: BodyBasis; waiting: boolean } | null>(null);
+  const pendingUnconfirmedRef = useRef<HeldBasis | null>(null);
   const timerRef = useRef<number | null>(null);
   const burstStartedRef = useRef<number | null>(null);
   const attemptRef = useRef(0);
@@ -407,7 +424,9 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
    * Ревизия подтверждённого сохранения доступна досылу сразу из ответа, пока
    * редактор и наблюдатели кеша ещё не приняли новый кадр.
    */
-  const confirmedRef = useRef<{ revision: number; current?: () => boolean } | null>(null);
+  const confirmedRef = useRef<(BodyBasis & { history: number; current?: () => boolean }) | null>(
+    null,
+  );
   /**
    * Поколение записи. Растёт при смене `entityId` и отсекает колбэки запросов, ушедших ДО
    * смены: сам запрос при этом не отменяется (он про прежнюю запись и обязан доехать), но его
@@ -545,7 +564,7 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
     if (!doc) return;
     return writerRef.current.write(
       doc,
-      pendingBaseRef.current,
+      pendingUnconfirmedRef.current?.rewind ? 0 : pendingBaseRef.current,
       new Date().toISOString(),
       rejectedDocRef.current === doc,
     );
@@ -564,13 +583,43 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
           if (!doc) return;
           return writerRef.current.write.preserve(
             doc,
-            pendingBaseRef.current,
+            pendingUnconfirmedRef.current?.rewind ? 0 : pendingBaseRef.current,
             new Date().toISOString(),
             rejectedDocRef.current === doc,
           );
         },
       }),
     [pendingOwnerInput],
+  );
+  useEffect(
+    () =>
+      freshnessRuntimeOf(queryClient)?.subscribeBodyHistory((history) => {
+        if (!isUndoEpoch(epoch) || history <= pendingBasisRef.current.history) return;
+        const doc = pendingOwnerInput();
+        if (!doc) return;
+        const { basis } = pendingBasisRef.current;
+        pendingUnconfirmedRef.current = {
+          basis,
+          waiting: pendingUnconfirmedRef.current?.waiting ?? false,
+          rewind: true,
+        };
+        const managed = writerRef.current.write.managed;
+        if (managed) {
+          const snapshot = managed.stage(doc, 0, rejectedDocRef.current === doc);
+          if (snapshot) {
+            ownDraftRef.current = {
+              token: snapshot.token.nonce,
+              awaitingBasis: basis ?? undefined,
+            };
+            managed.preserve();
+          }
+        } else {
+          const token = saveDraft(entityId, doc, 0, new Date().toISOString());
+          ownDraftRef.current = { token, awaitingBasis: basis ?? undefined };
+          if (rejectedDocRef.current === doc) markDraftRejected(entityId);
+        }
+      }),
+    [entityId, epoch, pendingOwnerInput, queryClient],
   );
   const prevEpochRef = useRef(epoch);
   const prevIdRef = useRef(entityId);
@@ -617,6 +666,11 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
     pendingBaseRef.current = entity.bodyRevision;
     shownRevisionRef.current = entity.bodyRevision;
     shownDocRef.current = entity.bodyDoc;
+    shownHistoryRef.current = confirmedBody(entity.bodyDoc, historyAtRender) ? historyAtRender : 0;
+    pendingBasisRef.current = {
+      history: shownHistoryRef.current,
+      basis: entity.bodyDoc ? { revision: entity.bodyRevision, doc: entity.bodyDoc } : null,
+    };
     shownUnconfirmedRef.current = unconfirmedBasis(entity);
     pendingUnconfirmedRef.current = null;
     // Отвергнутый документ — про ПРЕЖНЮЮ запись: под новой этот объект не встретится никогда,
@@ -652,27 +706,30 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
     return confirmed && confirmed.current?.() !== false ? Math.max(confirmed.revision, base) : base;
   }, []);
 
-  const offerConflictDraft = useCallback(() => {
-    const doc = pendingRef.current;
-    if (doc !== null) {
-      const draft: Draft = {
-        doc,
-        baseRevision: pendingBaseRef.current,
-        savedAt: new Date().toISOString(),
-        rejected: false,
-      };
-      const managed = writerRef.current.write.managed;
-      const snapshot = managed?.stage(doc, pendingBaseRef.current);
-      if (!managed) draft.slot = saveDraft(entityId, doc, pendingBaseRef.current, draft.savedAt);
-      setPendingDraft(snapshot ? draftFromInput(snapshot) : draft);
-    } else {
-      const draft = readDraft(entityId);
-      if (draft !== null) setPendingDraft(draft);
-    }
-    pendingRef.current = null;
-    pendingUnconfirmedRef.current = null;
-    clearTimer();
-  }, [entityId, setPendingDraft, clearTimer]);
+  const offerConflictDraft = useCallback(
+    (baseRevision = pendingBaseRef.current) => {
+      const doc = pendingRef.current;
+      if (doc !== null) {
+        const draft: Draft = {
+          doc,
+          baseRevision,
+          savedAt: new Date().toISOString(),
+          rejected: false,
+        };
+        const managed = writerRef.current.write.managed;
+        const snapshot = managed?.stage(doc, baseRevision);
+        if (!managed) draft.slot = saveDraft(entityId, doc, baseRevision, draft.savedAt);
+        setPendingDraft(snapshot ? draftFromInput(snapshot) : draft);
+      } else {
+        const draft = readDraft(entityId);
+        if (draft !== null) setPendingDraft(draft);
+      }
+      pendingRef.current = null;
+      pendingUnconfirmedRef.current = null;
+      clearTimer();
+    },
+    [entityId, setPendingDraft, clearTimer],
+  );
 
   // Тип объявлен явно: без него `save`, зовущий себя из собственного колбэка, попадает в
   // циклический вывод типа (TS7022).
@@ -698,18 +755,25 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
       return false;
     }
     const base = entityRef.current;
+    const history = bodyHistory();
+    const captured = pendingBasisRef.current;
+    if (history > captured.history && !pendingUnconfirmedRef.current?.rewind)
+      pendingUnconfirmedRef.current = { basis: captured.basis, waiting: false, rewind: true };
     const held = pendingUnconfirmedRef.current;
-    const confirmed = base.bodyDoc && !isBodyPending(base.bodyDoc) ? base.bodyDoc : null;
+    const confirmed = confirmedBody(base.bodyDoc, history);
     const sameBasis =
-      held &&
+      held?.basis &&
       confirmed &&
       base.bodyRevision === held.basis.revision &&
       matchesBody(confirmed, held.basis.doc);
-    if (sameBasis && shownUnconfirmedRef.current === held.basis) {
-      // The editor need not reseat the same document to start using its confirmed lineage.
-      shownUnconfirmedRef.current = null;
+    if (sameBasis && held) {
+      if (held.rewind) pendingBasisRef.current.history = history;
+      if (shownUnconfirmedRef.current === held.basis) {
+        // The editor need not reseat the same document to start using its confirmed lineage.
+        shownUnconfirmedRef.current = null;
+      }
     }
-    if (held && pendingFromEditorRef.current && matchesBody(held.basis.doc, doc)) {
+    if (held?.basis && pendingFromEditorRef.current && matchesBody(held.basis.doc, doc)) {
       // An initial echo has no slot. Undoing a held edit retires only its never-sent token.
       const ownDraft = ownDraftRef.current;
       if (ownDraft?.awaitingBasis === held.basis) {
@@ -791,9 +855,9 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
     const expectedBodyRevision = pendingBaseRef.current;
     if (held && confirmed && !sameBasis) {
       if (pendingDraftRef.current === null && foreignDraftRef.current === null)
-        offerConflictDraft();
+        offerConflictDraft(held.rewind ? 0 : expectedBodyRevision);
       setFailure('network');
-      return;
+      return held.rewind ? false : undefined;
     }
 
     // An independent writer keeps current input even while an older draft is offered.
@@ -801,15 +865,16 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
     // An applied recovery already owns a durable input slot. Submit its exact
     // token so the response-cache ACK can finish it even if a mirror could not be written.
     let draftToken = recovery?.token;
+    const storedRevision = held?.rewind && !confirmed ? 0 : expectedBodyRevision;
     const snapshot =
       !recovery && managed
-        ? managed.stage(doc, expectedBodyRevision, rejectedDocRef.current === doc)
+        ? managed.stage(doc, storedRevision, rejectedDocRef.current === doc)
         : undefined;
     if (snapshot) {
       draftToken = snapshot.token.nonce;
       ownDraftRef.current = {
         token: draftToken,
-        awaitingBasis: held && !confirmed ? held.basis : undefined,
+        awaitingBasis: !confirmed ? (held?.basis ?? undefined) : undefined,
       };
     } else if (
       !managed &&
@@ -817,11 +882,11 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
       pendingDraftRef.current === null &&
       foreignDraftRef.current === null
     ) {
-      draftToken = saveDraft(entityId, doc, expectedBodyRevision, new Date().toISOString());
+      draftToken = saveDraft(entityId, doc, storedRevision, new Date().toISOString());
       // По ПРОИСХОЖДЕНИЮ документа, а не безусловно: досыл кладёт на диск ровно то, что оттуда
       // и прочитал, и своим этот черновик не делает (см. `ownDraftRef`).
       ownDraftRef.current = pendingFromEditorRef.current
-        ? { token: draftToken, awaitingBasis: held && !confirmed ? held.basis : undefined }
+        ? { token: draftToken, awaitingBasis: !confirmed ? (held?.basis ?? undefined) : undefined }
         : undefined;
       // Приговор сервера свежая запись только что стёрла — возвращаем его, если на диск лёг
       // РОВНО отвергнутый документ (см. `rejectedDocRef`).
@@ -939,13 +1004,19 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
         uncertainAttemptRef.current = false;
         if (ownDraftRef.current?.token === draftToken) ownDraftRef.current = undefined;
         writerRef.current.basis = doc;
-        confirmedRef.current = { revision: saved.bodyRevision, current: currentOperation };
+        confirmedRef.current = {
+          doc,
+          revision: saved.bodyRevision,
+          history,
+          current: currentOperation,
+        };
         // Ревизия отложенного двигается вместе с подтверждённой, и это обязательно: правка,
         // набранная ПОВЕРХ только что сохранённой, — её потомок, и база у неё теперь ответ
         // сервера. Не двинь мы её, досыл из onSettled ушёл бы с ревизией, которую этот же
         // успех и сдвинул, — то есть с гарантированным 409 от собственного предшественника.
         if (!pendingUnconfirmedRef.current) {
           pendingBaseRef.current = saved.bodyRevision;
+          pendingBasisRef.current = { history, basis: confirmedRef.current };
           const next = pendingRef.current;
           if (next && next !== doc && pendingFromEditorRef.current) {
             const rebased = managed?.stage(next, saved.bodyRevision);
@@ -1030,22 +1101,50 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
     preserveOwnerPending,
     queryClient,
     setPendingDraft,
+    bodyHistory,
   ]);
 
-  const capturePendingBasis = useCallback(() => {
-    const basis = shownUnconfirmedRef.current;
-    const unconfirmed = basis && freshnessRuntimeOf(queryClient)?.requiresDurableDraft();
-    pendingUnconfirmedRef.current = unconfirmed ? { basis, waiting: false } : null;
-    pendingBaseRef.current = unconfirmed
-      ? basis.revision
-      : currentExpected(shownRevisionRef.current);
-  }, [currentExpected, queryClient]);
+  const displayedBasis = useCallback((): BodyBasis | null => {
+    const own = confirmedRef.current;
+    const revision = shownRevisionRef.current;
+    const doc = shownDocRef.current;
+    return own && own.history === shownHistoryRef.current && own.revision > revision
+      ? own
+      : doc
+        ? { doc, revision }
+        : null;
+  }, []);
+
+  const capturePendingBasis = useCallback(
+    (explicit = false) => {
+      const history = bodyHistory();
+      const base = entityRef.current;
+      const current = explicit && history ? confirmedBody(base.bodyDoc, history) : null;
+      const basis = current ? { doc: current, revision: base.bodyRevision } : displayedBasis();
+      const captured = current ? history : shownHistoryRef.current;
+      pendingBasisRef.current = { history: captured, basis };
+      const rewind = history > captured;
+      const unconfirmed =
+        shownUnconfirmedRef.current && freshnessRuntimeOf(queryClient)?.requiresDurableDraft()
+          ? shownUnconfirmedRef.current
+          : null;
+      pendingUnconfirmedRef.current = rewind
+        ? { basis, waiting: false, rewind: true }
+        : unconfirmed && !current
+          ? { basis: unconfirmed, waiting: false }
+          : null;
+      pendingBaseRef.current =
+        rewind || current
+          ? (basis?.revision ?? 0)
+          : (unconfirmed?.revision ?? currentExpected(shownRevisionRef.current));
+    },
+    [bodyHistory, currentExpected, displayedBasis, queryClient],
+  );
 
   const resumeBasis = useCallback(() => {
     if (!isUndoEpoch(epoch) || !pendingUnconfirmedRef.current?.waiting) return;
-    const body = entityRef.current.bodyDoc;
-    if (body && !isBodyPending(body)) save();
-  }, [epoch, save]);
+    if (confirmedBody(entityRef.current.bodyDoc, bodyHistory())) save();
+  }, [bodyHistory, epoch, save]);
   useEffect(resumeBasis);
   useEffect(() => {
     let active = true;
@@ -1100,11 +1199,12 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
       // Ревизия ПОКАЗАННОГО текста (или своего подтверждённого сохранения, если оно новее): человек печатает поверх
       // того, что видит, а не поверх того, что успело приехать в кэш (рулинг R-17).
       capturePendingBasis();
-      const snapshot = managed?.stage(doc, pendingBaseRef.current, rejectedDocRef.current === doc);
+      const storedRevision = pendingUnconfirmedRef.current?.rewind ? 0 : pendingBaseRef.current;
+      const snapshot = managed?.stage(doc, storedRevision, rejectedDocRef.current === doc);
       if (snapshot)
         ownDraftRef.current = {
           token: snapshot.token.nonce,
-          awaitingBasis: pendingUnconfirmedRef.current?.basis,
+          awaitingBasis: pendingUnconfirmedRef.current?.basis ?? undefined,
         };
       pendingFromEditorRef.current = true;
       clearTimer();
@@ -1124,10 +1224,16 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
       shownRevisionRef.current = revision;
       const doc = entity.bodyDoc;
       shownDocRef.current = accepted ?? (revision === entity.bodyRevision ? doc : undefined);
+      const history = bodyHistory();
+      const current = confirmedBody(doc, history);
+      shownHistoryRef.current =
+        revision === entity.bodyRevision && current && (!accepted || matchesBody(current, accepted))
+          ? history
+          : 0;
       shownUnconfirmedRef.current =
         revision === entity.bodyRevision && doc && isBodyPending(doc) ? { revision, doc } : null;
     },
-    [entity.bodyRevision, entity.bodyDoc],
+    [bodyHistory, entity.bodyRevision, entity.bodyDoc],
   );
 
   const flush = save;
@@ -1186,9 +1292,26 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
     [],
   );
 
+  const rewriteBasis = useCallback(() => {
+    const history = bodyHistory();
+    const own = confirmedRef.current;
+    if (
+      history === shownHistoryRef.current ||
+      (own?.history === history && own.current?.() !== false)
+    )
+      return currentExpected(shownRevisionRef.current);
+    const shown = displayedBasis();
+    const base = entityRef.current;
+    const fresh = confirmedBody(base.bodyDoc, history);
+    if (shown && fresh && base.bodyRevision === shown.revision && matchesBody(fresh, shown.doc))
+      return shown.revision;
+  }, [bodyHistory, currentExpected, displayedBasis]);
   const rewriteCheckpoint = useCallback(
-    () => (hasUnsent() || blocked() || offline() ? undefined : editSequenceRef.current),
-    [hasUnsent, blocked, offline],
+    () =>
+      hasUnsent() || blocked() || offline() || rewriteBasis() === undefined
+        ? undefined
+        : editSequenceRef.current,
+    [hasUnsent, blocked, offline, rewriteBasis],
   );
 
   settleRef.current = () => {
@@ -1200,7 +1323,7 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
       save();
       if (inFlightRef.current) return;
       result = 'blocked';
-    } else result = 'saved';
+    } else result = rewriteBasis() === undefined ? 'blocked' : 'saved';
     for (const resolve of settleWaitersRef.current.splice(0)) resolve(result);
   };
   const flushSettled = useCallback((): Promise<FlushResult> => {
@@ -1208,11 +1331,14 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
     if (blocked()) return Promise.resolve('blocked');
     if (offline()) return Promise.resolve('offline');
     if (!hasUnsent()) {
-      if (pendingRef.current === null) return Promise.resolve('nothing');
+      if (pendingRef.current === null)
+        return Promise.resolve(rewriteBasis() === undefined ? 'blocked' : 'nothing');
       // A local return to the confirmed body still has checkpoint cancellation to do.
       save();
       if (!inFlightRef.current)
-        return Promise.resolve(pendingRef.current === null ? 'nothing' : 'blocked');
+        return Promise.resolve(
+          pendingRef.current === null && rewriteBasis() !== undefined ? 'nothing' : 'blocked',
+        );
     }
     return new Promise((resolve) => {
       settleWaitersRef.current.push(resolve);
@@ -1223,12 +1349,9 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
       else save();
       settleRef.current();
     });
-  }, [blocked, offline, hasUnsent, save]);
+  }, [blocked, offline, hasUnsent, rewriteBasis, save]);
   // Показанное и собственное подтверждение — разрешение переписывать; невидимый кэш таким разрешением не является.
-  const revisionForRewrite = useCallback(
-    () => currentExpected(shownRevisionRef.current),
-    [currentExpected],
-  );
+  const revisionForRewrite = useCallback(() => rewriteBasis() ?? 0, [rewriteBasis]);
   const beginRewrite = useCallback(() => {
     const token = ++rewriteToken.current;
     const gen = genRef.current;
@@ -1246,6 +1369,9 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
       // Затвор блокировал запись старого тела; EntityBody причинно сажает принятое тело в каждый режим до unlock.
       shownRevisionRef.current = entity.bodyRevision;
       shownDocRef.current = entity.bodyDoc;
+      shownHistoryRef.current = confirmedBody(entity.bodyDoc, historyAtRender)
+        ? historyAtRender
+        : 0;
       shownUnconfirmedRef.current = unconfirmedBasis(entity);
       rewriteRef.current = undefined;
       setRewritePending(false);
@@ -1325,7 +1451,9 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
       if (
         draft.acknowledged ||
         draft.rejected ||
+        bodyHistory() > 0 ||
         draftBase === undefined ||
+        draftBase === 0 ||
         draftBase !== base.bodyRevision
       ) {
         setPendingDraft(draft);
@@ -1333,6 +1461,8 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
       }
       // A separate deferred send is cancelled by StrictMode cleanup and rechecks
       // the edit sequence before touching the active writer.
+      const recoveryHistory = bodyHistory();
+      const basis = confirmedBody(base.bodyDoc, recoveryHistory);
       draftTimerRef.current = window.setTimeout(() => {
         draftTimerRef.current = null;
         if (hydration && editSequence !== editSequenceRef.current) return;
@@ -1342,6 +1472,10 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
         // Основа черновика, сверенная выше с ревизией записи, — а не кэш на момент таймера: чужая правка, приехавшая
         // между сверкой и досылом, иначе была бы затёрта черновиком молча.
         pendingBaseRef.current = draftBase;
+        pendingBasisRef.current = {
+          history: recoveryHistory,
+          basis: basis ? { revision: draftBase, doc: basis } : null,
+        };
         pendingUnconfirmedRef.current = null;
         pendingFromEditorRef.current = false; // документ с диска, а не из-под рук
         save();
@@ -1366,7 +1500,7 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
       unsubscribe?.();
       clearDraftTimer();
     };
-  }, [entityId, save, setPendingDraft, clearDraftTimer, queryClient]);
+  }, [entityId, save, setPendingDraft, clearDraftTimer, queryClient, bodyHistory]);
 
   const applyPendingDraft = useCallback(
     (onAccepted?: (doc: BodyDoc) => void) => {
@@ -1385,7 +1519,7 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
       // чужой — этого и просит единственная кнопка, которую человек нажал. Уйди она со старой
       // ревизией, сервер ответил бы 409, то есть «оставить моё» не делало бы ничего. Она же — основа того, что
       // теперь показано (экран сажает черновик местной копией, и `onShown` о ней молчит).
-      capturePendingBasis();
+      capturePendingBasis(true);
       const revision = pendingBaseRef.current;
       pendingFromEditorRef.current = false; // документ с диска: человек выбрал его, а не набрал
       // Терминальная остановка снимается: она про НАБОР (иначе каждое нажатие уходило бы в сеть
@@ -1396,6 +1530,7 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
       if (save() === false) return;
       shownRevisionRef.current = revision;
       shownDocRef.current = draft.doc;
+      shownHistoryRef.current = pendingBasisRef.current.history;
       onAccepted?.(draft.doc);
     },
     [save, setPendingDraft, capturePendingBasis, entityId],

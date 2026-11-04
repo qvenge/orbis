@@ -230,7 +230,11 @@ export function openResponseCache(
     }
   }
 
-  function invalidateGeneration(startedSequenceCutoff = nextNetworkOrder(), resetToken?: string) {
+  function invalidateGeneration(
+    startedSequenceCutoff = nextNetworkOrder(),
+    resetToken?: string,
+    disposition?: 'history-rewind',
+  ) {
     if (frozen) return Promise.resolve(false);
     cutoff = Math.max(cutoff, startedSequenceCutoff);
     tombstones.clear();
@@ -253,15 +257,18 @@ export function openResponseCache(
               resetting = tx;
               if (frozen) return undefined;
               const control = tx.objectStore(CONTROL_STORE);
-              const [lease, graph = emptyGraph] = await Promise.all([
+              const [lease, graphControl = emptyGraph] = await Promise.all([
                 requestResult<Control | undefined>(control.get('lease')),
                 requestResult<GraphControl | undefined>(control.get(graphKey)),
               ]);
               if (frozen || lease?.lease !== session.lease) return undefined;
-              const history = graph.resetDigests ?? [];
+              // After a rewind the server can issue the same tokens in a new history.
+              // Advance even on a matching digest to fence tickets held by other tabs.
+              const history =
+                disposition === 'history-rewind' ? [] : (graphControl.resetDigests ?? []);
               if (fingerprint && history.includes(fingerprint))
-                return { ...session, generation: graph.generation };
-              const generation = graph.generation + 1;
+                return { ...session, generation: graphControl.generation };
+              const generation = graphControl.generation + 1;
               const resetDigests = fingerprint ? [...history.slice(-15), fingerprint] : history;
               const revisionKeys = await requestResult(
                 control.getAllKeys(IDBKeyRange.bound(revisionPrefix, `${revisionPrefix}\uffff`)),
@@ -331,10 +338,10 @@ export function openResponseCache(
     const entityKeys = [...ids].map((id) => entityIndexKey(scope.graphId, id));
     const ownKey = own && entityIndexKey(scope.graphId, own);
     const entity = object(object(snapshot)?.entity);
-    const result = await guarded(ticket, 'readwrite', async (store, graph, tx) => {
+    const result = await guarded(ticket, 'readwrite', async (store, graphControl, tx) => {
       const localRemoval = ownKey ? tombstones.get(ownKey) : undefined;
       const blocked = entityKeys.filter(
-        (id) => tombstones.has(id) || Object.hasOwn(graph.deleted, id),
+        (id) => tombstones.has(id) || Object.hasOwn(graphControl.deleted, id),
       );
       const revived =
         ownKey &&
@@ -344,7 +351,7 @@ export function openResponseCache(
         entity.id.toLowerCase() === own &&
         startedAt !== undefined &&
         startedAt <= receivedAt &&
-        startedAt > Math.max(localRemoval?.at ?? -1, graph.deleted[ownKey] ?? -1);
+        startedAt > Math.max(localRemoval?.at ?? -1, graphControl.deleted[ownKey] ?? -1);
       if (blocked.length > 0 && !revived) return undefined;
       const existing = await requestResult<Envelope | undefined>(
         store.get([scope.graphId, queryHash]),
@@ -353,13 +360,18 @@ export function openResponseCache(
       if (latestWrites.get(queryHash) !== startedSequence) return undefined;
       if (own) {
         const revision = entity?.bodyRevision;
-        if (typeof revision === 'number' && !(await rememberRevision(tx, graph, own, revision)))
+        if (
+          typeof revision === 'number' &&
+          !(await rememberRevision(tx, graphControl, own, revision))
+        )
           return undefined;
       }
-      if (revived && Object.hasOwn(graph.deleted, ownKey)) {
-        const deleted = { ...graph.deleted };
+      if (revived && Object.hasOwn(graphControl.deleted, ownKey)) {
+        const deleted = { ...graphControl.deleted };
         delete deleted[ownKey];
-        await requestResult(tx.objectStore(CONTROL_STORE).put({ ...graph, deleted }, graphKey));
+        await requestResult(
+          tx.objectStore(CONTROL_STORE).put({ ...graphControl, deleted }, graphKey),
+        );
       }
       const envelope: Envelope = {
         key,
@@ -368,7 +380,7 @@ export function openResponseCache(
         entityKeys,
         graphId: scope.graphId,
         buster,
-        generation: graph.generation,
+        generation: graphControl.generation,
         receivedAt,
         fragmentTimes,
         expiresAt: Math.min(receivedAt, ...Object.values(fragmentTimes ?? {})) + RESPONSE_TTL_MS,
@@ -463,14 +475,17 @@ export function openResponseCache(
     return guarded(
       capture(),
       'readwrite',
-      async (store, graph, tx) => {
+      async (store, graphControl, tx) => {
         const control = tx.objectStore(CONTROL_STORE);
         await Promise.all([
           requestResult(
             control.put(
               {
-                ...graph,
-                deleted: { ...graph.deleted, [key]: Math.max(graph.deleted[key] ?? 0, at) },
+                ...graphControl,
+                deleted: {
+                  ...graphControl.deleted,
+                  [key]: Math.max(graphControl.deleted[key] ?? 0, at),
+                },
               },
               graphKey,
             ),

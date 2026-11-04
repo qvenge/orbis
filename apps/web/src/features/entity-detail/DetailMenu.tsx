@@ -15,6 +15,7 @@ import {
   SUPPLY_KEY_VALUES,
   type SupplyKeyValue,
 } from '@orbis/shared/supply';
+import { useQueryClient } from '@tanstack/react-query';
 import {
   AppWindow,
   Archive,
@@ -39,7 +40,9 @@ import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import type { ScreenMenuContentProps } from '../../app/frame/ScreenMenu';
 import { recordLinkGestures } from '../../lib/entity-ref/prefetch';
 import { useRecordLinkController } from '../../lib/entity-ref/record-link-controller';
+import { freshnessRuntimeOf } from '../../lib/freshness/provenance';
 import { useLocalCreateTarget } from '../../lib/optimistic/create-intent-scope';
+import { trpc } from '../../trpc';
 import { DropdownMenu, type DropdownMenuItem } from '../../ui/DropdownMenu';
 import { useToast } from '../../ui/toast-store';
 import {
@@ -59,7 +62,9 @@ import { homeForTemplate, TemplateForDialog } from '../page/TemplateForDialog';
 import type { PageTemplates } from '../page/usePageTemplates';
 import { type UpdateBatchOperation, useUpdateBatch } from '../page/useUpdateBatch';
 import { REVERT, useSupplyAction } from '../supply/useSupply';
+import { isBodyConfirmedAfter } from '../undo/body-provenance';
 import { settleBody } from './body-gate';
+import { detailGetInput } from './detail-input';
 import type { BodyGateRef } from './EntityBody';
 import { useRevertTextItem } from './RevertTextItem';
 import { shownBodyRevision, type WireEntity } from './record-host';
@@ -204,18 +209,20 @@ const TEMPLATE_FOR = 'Сделать шаблоном для…';
 /**
  * Открытый диалог меню: вопрос случая 3 «Изменить вид» или «Сделать шаблоном для…».
  *
- * Диалог ПОМНИТ, про какую запись и какую ревизию её тела его открыли: `entityId`, `bodyRevision` и
- * план, построенный из тела этой ревизии, — снимок на момент жеста, а не живой проп. Меню монтируется
+ * Диалог ПОМНИТ запись, основу её тела и план, построенный из этой основы. Всё это
+ * снимок на момент жеста, а не живой проп. Меню монтируется
  * без key (`DetailMenuSlot`) и переживает переход на соседнюю запись: читай диалог проп `entity` при
  * нажатии кнопки, он записал бы план одной записи в другую. И замок текста обязан сверять ту
  * ревизию, из тела которой построен план: ревизия, прочитанная позже (рефетч при открытом диалоге),
  * пропустила бы правку мимо экрана, и шаблон затёр бы её молча.
  */
+type ChangeViewBasis = { history: number; revision: number; body: string };
+
 type MenuDialog =
   | {
       kind: 'change-view';
       entityId: string;
-      bodyRevision: number;
+      basis: ChangeViewBasis;
       plan: Extract<ChangeViewPlan, { case: 3 }>;
     }
   | { kind: 'template-for'; entityId: string; value: unknown; homeFor: string | null }
@@ -293,6 +300,8 @@ function RecordMenu({
   }
   const revertText = useRevertTextItem(entity.id, bodyAction);
   const runBatch = useUpdateBatch();
+  const client = useQueryClient();
+  const utils = trpc.useUtils();
   const pageActions = usePageIdentityActions(entity, bodyGate);
   const runSupply = useSupplyAction();
   const writeNav = useNavWrite();
@@ -592,26 +601,42 @@ function RecordMenu({
     };
   }
 
+  const bodyHistory = () => freshnessRuntimeOf(client)?.bodyHistory() ?? 0;
+
+  function canChangeView(basis: ChangeViewBasis): boolean {
+    if (!bodySettled()) return false;
+    const history = bodyHistory();
+    if (history === basis.history) {
+      if (history === 0) return true;
+      const confirmed = utils.entity.get.getData(detailGetInput(entity.id))?.entity;
+      if (
+        confirmed?.bodyDoc &&
+        isBodyConfirmedAfter(confirmed.bodyDoc, history) &&
+        shownBodyRevision(confirmed) === basis.revision &&
+        (confirmed.body ?? '') === basis.body
+      )
+        return true;
+    }
+    show('Текст записи обновился — повторите изменение вида', 'danger');
+    return false;
+  }
+
   function changeView(templateText: string) {
-    if (!bodySettled()) return;
-    // Экран просит тело всегда (DETAIL_INCLUDE).
-    const plan = changeViewPlan(templateText, entity.body ?? '');
+    // The plan and CAS both belong to the same displayed body and feed history.
+    const basis = {
+      history: bodyHistory(),
+      revision: shownBodyRevision(entity),
+      body: entity.body ?? '',
+    };
+    if (!canChangeView(basis)) return;
+    const plan = changeViewPlan(templateText, basis.body);
     // Случай 3 — вопрос владельцу: молча ни убрать текст, ни дописать его нельзя (С1а-8).
     if (plan.case === 3) {
-      setDialog({
-        kind: 'change-view',
-        entityId: entity.id,
-        bodyRevision: shownBodyRevision(entity),
-        plan,
-      });
+      setDialog({ kind: 'change-view', entityId: entity.id, basis, plan });
     } else {
-      void runBatch(
-        [becomePage(entity.id, shownBodyRevision(entity), plan.body)],
-        'Вид записи теперь свой',
-        {
-          action: CHANGE_VIEW,
-        },
-      );
+      void runBatch([becomePage(entity.id, basis.revision, plan.body)], 'Вид записи теперь свой', {
+        action: CHANGE_VIEW,
+      });
     }
   }
 
@@ -700,14 +725,14 @@ function RecordMenu({
           // меню построит новый.
           onHideAsVersion={() => {
             setDialog(null);
-            if (!bodySettled()) return;
+            if (!canChangeView(dialog.basis)) return;
             void runBatch(
               [
                 {
                   tool: 'entity_version_pin',
                   input: { entity_id: dialog.entityId, label: TEXT_BEFORE_VIEW_CHANGE },
                 },
-                becomePage(dialog.entityId, dialog.bodyRevision, dialog.plan.hideAsVersion),
+                becomePage(dialog.entityId, dialog.basis.revision, dialog.plan.hideAsVersion),
               ],
               'Вид записи теперь свой, текст — в версии',
               { action: CHANGE_VIEW },
@@ -715,9 +740,9 @@ function RecordMenu({
           }}
           onShowBelow={() => {
             setDialog(null);
-            if (!bodySettled()) return;
+            if (!canChangeView(dialog.basis)) return;
             void runBatch(
-              [becomePage(dialog.entityId, dialog.bodyRevision, dialog.plan.showBelow)],
+              [becomePage(dialog.entityId, dialog.basis.revision, dialog.plan.showBelow)],
               'Вид записи теперь свой',
               { action: CHANGE_VIEW },
             );

@@ -4,6 +4,7 @@ import {
   forgetNetworkObservation,
   freshnessRuntimeOf,
   networkReadReceiptOf,
+  nextNetworkOrder,
   observeNetworkRead,
   type ReadPublication,
   recordDiskRead,
@@ -16,14 +17,22 @@ import { isUndoEpoch } from './undo-epoch';
 
 /** Applies to the object shown after structural sharing. */
 const pendingBodies = new WeakSet<object>();
+const confirmedBodies = new WeakMap<object, number>();
 export function markBodyPending(doc: unknown): void {
   if (doc !== null && typeof doc === 'object') pendingBodies.add(doc);
 }
 export function confirmBody(doc: unknown): void {
-  if (doc !== null && typeof doc === 'object') pendingBodies.delete(doc);
+  if (doc !== null && typeof doc === 'object') {
+    pendingBodies.delete(doc);
+    confirmedBodies.set(doc, nextNetworkOrder());
+  }
 }
 export function isBodyPending(doc: unknown): boolean {
   return doc !== null && typeof doc === 'object' && pendingBodies.has(doc);
+}
+
+export function isBodyConfirmedAfter(doc: object, cutoff: number): boolean {
+  return !isBodyPending(doc) && (confirmedBodies.get(doc) ?? 0) > cutoff;
 }
 
 function newest(raw: unknown): unknown {

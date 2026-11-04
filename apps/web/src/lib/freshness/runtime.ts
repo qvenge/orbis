@@ -3,7 +3,6 @@ import {
   type ChangePage,
   changeXidInput,
   entityThreadId,
-  type GraphId,
   ROLE_REF,
 } from '@orbis/shared';
 import {
@@ -14,7 +13,7 @@ import {
   type QueryClient,
   type QueryKey,
 } from '@tanstack/react-query';
-import { confirmBody } from '../../features/undo/body-provenance';
+import { confirmBody, markBodyPending } from '../../features/undo/body-provenance';
 import type { EntityPatch, RelationKey } from '../optimistic/adapters';
 import { createCreateIntentRegistry } from '../optimistic/create-intents';
 import {
@@ -176,6 +175,8 @@ export function createFreshnessRuntime({
   let floor: string | undefined;
   let completedFloor: string | undefined;
   let resetSequence = 0;
+  let bodyHistory = 0;
+  const bodyHistoryListeners = new Set<(cutoff: number) => void>();
   let marking: Query | undefined;
   let startingRefreshes = false;
   let ownerMidnight: string | null = null;
@@ -212,7 +213,7 @@ export function createFreshnessRuntime({
       query.queryKey,
       read ? read.raw : query.state.data,
       ownerMidnight,
-      scope.graphId as GraphId,
+      scope.graphId,
     );
   };
   const showing = (query: Query) => query.isActive();
@@ -372,8 +373,16 @@ export function createFreshnessRuntime({
     schedule();
   }
 
-  function resetAll(token: string) {
+  function resetAll(token: string, rewinds: boolean) {
     resetSequence = nextNetworkOrder();
+    if (rewinds) {
+      bodyHistory = resetSequence;
+      for (const query of cache.getAll()) {
+        if (family(query.queryKey) !== 'entity.get') continue;
+        markBodyPending((query.state.data as { entity?: { bodyDoc?: unknown } })?.entity?.bodyDoc);
+      }
+      for (const listener of bodyHistoryListeners) listener(bodyHistory);
+    }
     threadInsertSuffix = undefined;
     bodies.clear();
     deleted.clear();
@@ -381,7 +390,8 @@ export function createFreshnessRuntime({
     // A pending fetch can still revert to the display it captured before this reset.
     const reprojected = optimistic.reset(resetSequence, true);
     for (const hash of reprojected) reproject(hash);
-    sinks.resetResponses?.(scope, resetSequence, token);
+    if (rewinds) sinks.resetResponses?.(scope, resetSequence, token, 'history-rewind');
+    else sinks.resetResponses?.(scope, resetSequence, token);
     for (const query of cache.getAll()) mark(query, true);
     schedule();
   }
@@ -425,9 +435,7 @@ export function createFreshnessRuntime({
           (!body &&
             change.kind === 'entity' &&
             d.threadIds.length > 0 &&
-            change.entityIds.some((id) =>
-              d.threadIds.includes(entityThreadId(scope.graphId as GraphId, id)),
-            ));
+            change.entityIds.some((id) => d.threadIds.includes(entityThreadId(scope.graphId, id))));
         const isRegistry = change.kind === 'registry';
         const isSettings = change.kind === 'settings';
         fetch ||=
@@ -519,8 +527,23 @@ export function createFreshnessRuntime({
         (phase !== 'complete' && (phase !== 'provisional' || reason !== 'floor'))
       )
         return false;
-      const lowering = reason === 'future-cursor' && requestedFrom === from;
-      if ((cmp(page.watermark, from) < 0 && !lowering) || resetTokens.has(token)) return true;
+      const watermarkOrder = cmp(page.watermark, from);
+      const rewinds = reason === 'future-cursor' && requestedFrom === from && watermarkOrder < 0;
+      if (watermarkOrder < 0 && !rewinds) return true;
+      if (!rewinds && resetTokens.has(token)) {
+        // A provisional floor can publish progress while the same transaction
+        // still prevents normal feed delivery. Complete duplicates cannot skip it.
+        if (
+          reason === 'floor' &&
+          phase === 'provisional' &&
+          floor === page.floor &&
+          (completedFloor === undefined || cmp(completedFloor, floor) < 0) &&
+          watermarkOrder > 0 &&
+          cmp(page.watermark, floor) < 0
+        )
+          cursor = page.watermark;
+        return true;
+      }
       if (reason === 'floor') {
         if ((phase === 'provisional') !== cmp(page.watermark, page.floor) < 0) return false;
         if (
@@ -533,17 +556,18 @@ export function createFreshnessRuntime({
         floor = page.floor;
         if (phase === 'complete') completedFloor = floor;
       }
-      if (lowering && cmp(page.watermark, from) < 0) {
+      if (rewinds) {
         // A restored server may reuse xid and body revision numbers.
         floor = page.floor;
         completedFloor = cmp(page.watermark, floor) >= 0 ? floor : undefined;
+        resetTokens.clear();
         own.clear();
         queued = [];
         entries = [];
       }
       resetTokens.add(token);
       cursor = page.watermark;
-      resetAll(token);
+      resetAll(token, rewinds);
       return true;
     }
     if (
@@ -600,6 +624,7 @@ export function createFreshnessRuntime({
         isCurrent: current,
         acceptChanges,
         getCursor: () => cursor ?? from,
+        getHistory: () => bodyHistory,
         onConnectionStateChange: (available) => {
           connected = available;
           scheduleFallback();
@@ -965,6 +990,13 @@ export function createFreshnessRuntime({
     acceptRead,
     acceptChanges,
     captureOperation,
+    bodyHistory: () => bodyHistory,
+    subscribeBodyHistory(listener: (cutoff: number) => void) {
+      bodyHistoryListeners.add(listener);
+      return () => {
+        bodyHistoryListeners.delete(listener);
+      };
+    },
     isCurrentOperation,
     isCurrentScope: current,
     noteOpenedThread(receipt: NetworkReadReceipt, threadId: string, txId: unknown) {
@@ -1122,6 +1154,7 @@ export function createFreshnessRuntime({
       bodies.clear();
       own.clear();
       resetTokens.clear();
+      bodyHistoryListeners.clear();
       deleted.clear();
       refresh.clear();
       staleKeys.clear();
