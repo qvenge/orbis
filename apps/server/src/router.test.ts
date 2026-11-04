@@ -1,7 +1,9 @@
 import { expect, test } from 'bun:test';
-import { MIN_COMPATIBLE_CLIENT_VERSION } from '@orbis/shared';
+import { CLIENT_VERSION_HEADER, MIN_COMPATIBLE_CLIENT_VERSION } from '@orbis/shared';
 import { TRPCError } from '@trpc/server';
 import { accountOf, mintGraph, personal } from '../test/helpers';
+import type { AiDeps } from './ai/send-message';
+import { createApp } from './app';
 import { appRouter } from './router';
 import type { Context } from './trpc';
 
@@ -101,7 +103,7 @@ test('клиент 0.4.x (до среза 1в) получает CLIENT_OUTDATED 
   }
 });
 
-test('клиент 0.5.x (до плана А скорости) получает CLIENT_OUTDATED на entity.update и entity.get, 0.6.0 проходит гейт', async () => {
+test('клиент 0.5.x (до плана А скорости) получает CLIENT_OUTDATED на entity.update и entity.get, текущий минимум проходит гейт', async () => {
   // План А меняет вход правки тела без переходного слоя (спека скорости §8.2, РП-28): `expectedBodyRevision`
   // вместо `expectedUpdatedAt`. Вкладка 0.5.x слала бы прежнее поле, и каждое её сохранение текста отказывало бы
   // разбором — её останавливает гейт версии клиента, на чтении так же, как на записи.
@@ -120,13 +122,52 @@ test('клиент 0.5.x (до плана А скорости) получает 
       expect(((err as TRPCError).cause as { code?: string }).code).toBe('CLIENT_OUTDATED');
     }
   }
-  expect(MIN_COMPATIBLE_CLIENT_VERSION).toBe('0.6.0');
-  const fresh = appRouter.createCaller({ ...ctx, clientVersion: '0.6.0' });
+  const fresh = appRouter.createCaller({ ...ctx, clientVersion: MIN_COMPATIBLE_CLIENT_VERSION });
   const err = await fresh.entity.get({ id }).then(
     () => null,
     (e: unknown) => e,
   );
   expect((err as TRPCError).code).toBe('UNAUTHORIZED');
+});
+
+test('HTTP: клиенты плана А получают 412 до доступа к чтению и записи, 0.7.0 проходит гейт', async () => {
+  const app = createApp({ db: ctx.db, ai: {} as AiDeps });
+  const id = '00000000-0000-7000-8000-0000000000f3';
+  const query = encodeURIComponent(JSON.stringify({ id }));
+  const paths = [
+    [`/trpc/entity.get?input=${query}`, undefined],
+    ['/trpc/entity.blocks', { blocks: [{ key: 'a', text: 'aspect=orbis/task' }] }],
+    ['/trpc/entity.update', { id, title: 'x' }],
+  ] as const;
+
+  for (const version of ['0.6.0', '0.6.9', '0.7.0']) {
+    const headers = { [CLIENT_VERSION_HEADER]: version, 'Content-Type': 'application/json' };
+    for (const [url, input] of paths) {
+      const response = await app.request(
+        url,
+        input === undefined
+          ? { headers }
+          : { method: 'POST', headers, body: JSON.stringify(input) },
+      );
+      if (version === '0.7.0') {
+        expect(response.status).toBe(401);
+        expect(await response.json()).toMatchObject({ error: { data: { code: 'UNAUTHORIZED' } } });
+      } else {
+        expect(response.status).toBe(412);
+        expect(await response.json()).toMatchObject({
+          error: {
+            message: expect.stringContaining('0.7.0'),
+            data: { code: 'PRECONDITION_FAILED' },
+          },
+        });
+      }
+    }
+  }
+  const admitted = await app.request('/trpc/ping', {
+    headers: { [CLIENT_VERSION_HEADER]: '0.7.0' },
+  });
+  expect(admitted.status).toBe(200);
+  expect(await admitted.json()).toEqual({ result: { data: { ok: true } } });
 });
 
 test('устаревший клиент получает отказ версии раньше auth-проверки', async () => {
@@ -236,8 +277,8 @@ test('равная/новая версия, отсутствие и мусорн
   // эквивалентно отсутствию заголовка: пред-проверка формата не блокирует запрос
   const passing = [
     MIN_COMPATIBLE_CLIENT_VERSION,
-    '0.6.1',
-    '0.6.0',
+    '0.7.1',
+    '0.7.0',
     '1.0.0',
     null,
     '',
