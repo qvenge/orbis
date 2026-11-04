@@ -186,14 +186,16 @@ export async function preserveSharedInput(
   generation: string,
   isCurrent: () => boolean,
 ): Promise<boolean> {
-  const drafts = listDraftsIn(source, accountId, prefix);
+  const drafts = listDraftsIn(source, accountId, prefix).sort(
+    (a, b) => Number(!!b.draft.acknowledged) - Number(!!a.draft.acknowledged),
+  );
   const input = drafts.length
     ? openInputStore({ accountId, graphId: accountId, generation }, { isCurrent })
     : undefined;
   try {
     for (const { entityId, draft } of drafts) {
       if (!input || !isCurrent()) return false;
-      const token = {
+      const legacyToken = {
         accountId,
         graphId: accountId,
         generation,
@@ -206,17 +208,30 @@ export async function preserveSharedInput(
             ? { updatedAt: draft.baseUpdatedAt ?? '' }
             : { revision: draft.baseRevision },
       };
+      const managed = draft.inputToken;
+      if (
+        managed &&
+        (managed.accountId !== accountId ||
+          managed.graphId !== accountId ||
+          managed.entityId !== entityId ||
+          managed.generation !== generation ||
+          managed.nonce !== draft.slot)
+      )
+        return false;
+      const token = managed ?? legacyToken;
       if (isDraftSlotFinishedIn(target, accountId, entityId, token.nonce)) continue;
       const ok = await input.persistDraft({
         token,
         doc: draft.doc,
         savedAt: draft.savedAt,
         rejected: draft.rejected,
+        ...(draft.recovery && { recovery: true }),
+        ...(draft.acknowledged && { acknowledged: true }),
       });
       if (ok !== true) return false;
-      // Keep the current synchronous editor reader able to recover the transferred draft.
-      const key =
-        `orbis:body-draft:${accountId}:${entityId}` + (draft.recovery ? `:${token.nonce}` : '');
+      // Preserve the compatible scoped source until the normal input reader imports it.
+      const suffix = draft.recovery ? `:${token.nonce}` : '';
+      const key = `orbis:body-draft:${accountId}:${entityId}${suffix}`;
       if (target.getItem(key) === null) target.setItem(key, JSON.stringify(draft));
     }
     if (!isCurrent()) return false;

@@ -38,6 +38,7 @@ import {
   clearDraft,
   DRAFT_REJECTING_CODE,
   markDraftRejected,
+  markManagedDraftOutcome,
   readDraft,
   submittedDraftOf,
 } from '../entity-editor/draft-storage';
@@ -113,6 +114,13 @@ function settleBodyDraft(vars: UpdateInput, err?: unknown): void {
   if (sent === undefined) return;
   const draft = readDraft(vars.id);
   const submitted = submittedDraftOf(vars);
+  if (
+    submitted !== undefined &&
+    err instanceof TRPCClientError &&
+    err.data?.code === DRAFT_REJECTING_CODE &&
+    markManagedDraftOutcome(vars.id, submitted, 'rejected')
+  )
+    return;
   if (draft === null || (submitted !== undefined && draft.slot !== submitted)) return;
   if (draft.doc.v !== sent.v || !sameDoc(draft.doc.doc, sent.doc as JSONContent)) return;
   if (err === undefined) {
@@ -432,7 +440,10 @@ export function useEntityUpdate(entityId: string, opts: { undoToast?: UndoToastO
         if (ctx?.currentOperation?.() === false) return;
         confirmBody(ctx?.bodyPatch?.pending.bodyDoc);
       }
-      if (!runtime?.requiresDurableDraft()) settleBodyDraft(vars);
+      const submitted = submittedDraftOf(vars);
+      const managed =
+        submitted !== undefined && markManagedDraftOutcome(vars.id, submitted, 'acknowledged');
+      if (!managed && !runtime?.requiresDurableDraft()) settleBodyDraft(vars);
       const ref = journalRefOf(data);
       if (ref !== null && !offerByRule(opts.undoToast, ref, vars, ctx?.prior) && stackable(vars))
         pushUndoable({

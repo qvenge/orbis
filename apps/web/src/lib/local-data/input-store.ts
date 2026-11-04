@@ -5,6 +5,8 @@ import {
   type InputDraftToken,
   type InputScope,
   type InputSlot,
+  type InputSubmission,
+  inputExpired,
   inputSlotKey,
   inputTokenMatchesScope,
   retireInput,
@@ -12,7 +14,6 @@ import {
   validInputSlot,
   validInputSnapshot,
   validInputToken,
-  visibleInput,
 } from './input-slot';
 
 export type { InputDraftSnapshot, InputDraftToken, InputScope } from './input-slot';
@@ -112,6 +113,7 @@ function openDatabase(
 
 /** Use only after the current lifecycle authorizes recovery of preserved, scoped input. */
 type Recovery = { recovery?: true };
+type Checkpoint = Recovery & { submitted?: true; priorSubmission?: InputSubmission };
 type StoredSlot = InputSlot & { graphId: string; entity: [string, string] };
 
 function storedSlot(slot: InputSlot): StoredSlot {
@@ -230,11 +232,23 @@ export function openInputStore(
       for (const row of rows) {
         if (!validInputSlot(row, scope) || (entityId !== undefined && row.key[1] !== entityId))
           continue;
-        const snapshot = visibleInput(row, at);
-        if (snapshot) snapshots.push(snapshot);
-        else if (row.snapshot) {
-          const { key, latest } = row;
-          writes.push(requestResult(store.put(storedSlot({ key, latest }))));
+        const { snapshot, acknowledgedFallback, submitted } = row;
+        const current = snapshot && !inputExpired(snapshot, at) ? snapshot : undefined;
+        const fallback =
+          acknowledgedFallback && !inputExpired(acknowledgedFallback, at)
+            ? acknowledgedFallback
+            : undefined;
+        const submission = submitted && !inputExpired(submitted, at) ? submitted : undefined;
+        if (current) snapshots.push(current);
+        if (fallback) snapshots.push(fallback);
+        if (current !== snapshot || fallback !== acknowledgedFallback || submission !== submitted) {
+          const next = {
+            ...row,
+            snapshot: current,
+            acknowledgedFallback: fallback,
+            submitted: submission,
+          };
+          writes.push(requestResult(store.put(storedSlot(next))));
         }
       }
       await Promise.all(writes);
@@ -252,9 +266,14 @@ export function openInputStore(
       return { pending: snapshots.length - acknowledged, acknowledged };
     },
     /** True means this token is on disk after commit. False leaves the source untouched. */
-    async persistDraft(snapshot: InputDraftSnapshot, options: Recovery = {}) {
+    async persistDraft(snapshot: InputDraftSnapshot, options: Checkpoint = {}) {
       if (!validInputSnapshot(snapshot) || !accepts(snapshot.token, options)) return undefined;
-      return update(snapshot.token, (previous) => checkpointInput(previous, snapshot, now()));
+      if (options.submitted && snapshot.token.generation !== scope.generation) return undefined;
+      const priorSubmission =
+        snapshot.token.generation === scope.generation ? options.priorSubmission : undefined;
+      return update(snapshot.token, (previous) =>
+        checkpointInput(previous, snapshot, now(), options.submitted, priorSubmission),
+      );
     },
     /** May fence a pending checkpoint even if the exact token has not reached disk yet. */
     async removeDraftIfMatch(token: InputDraftToken, options: Recovery = {}) {

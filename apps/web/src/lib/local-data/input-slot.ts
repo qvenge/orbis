@@ -22,13 +22,20 @@ export type InputDraftSnapshot = Readonly<{
   savedAt: string;
   rejected: boolean;
   acknowledged?: true;
+  recovery?: true;
 }>;
+
+export type InputSubmission = Pick<InputDraftSnapshot, 'token' | 'savedAt'>;
 
 export type InputSlot = {
   key: [graphId: string, entityId: string, writerId: string];
   /** High-water token within this one writer stream, including retired or expired edits. */
   latest: InputDraftToken;
   snapshot?: InputDraftSnapshot;
+  /** One confirmed safety copy retained while newer, unconfirmed input is checkpointed. */
+  acknowledgedFallback?: InputDraftSnapshot;
+  /** Exact request provenance for admitting its first ACK after a newer local checkpoint. */
+  submitted?: InputSubmission;
 };
 
 const TTL_MS = 30 * 24 * 60 * 60 * 1000;
@@ -108,7 +115,8 @@ export function validInputSnapshot(value: unknown): value is InputDraftSnapshot 
     object(doc.doc) !== undefined &&
     typeof snapshot.savedAt === 'string' &&
     typeof snapshot.rejected === 'boolean' &&
-    (snapshot.acknowledged === undefined || snapshot.acknowledged === true)
+    (snapshot.acknowledged === undefined || snapshot.acknowledged === true) &&
+    (snapshot.recovery === undefined || snapshot.recovery === true)
   );
 }
 
@@ -119,43 +127,152 @@ export function validInputSlot(value: unknown, scope: InputScope): value is Inpu
   const key = row.key;
   if (!Array.isArray(key) || key.length !== 3) return false;
   if (!inputSlotKey(row.latest).every((part, index) => part === key[index])) return false;
+  const { snapshot, acknowledgedFallback, latest } = row;
+  if (
+    snapshot !== undefined &&
+    (!validInputSnapshot(snapshot) ||
+      !sameLineage(snapshot.token, latest) ||
+      (snapshot.token.sequence >= latest.sequence && !sameInputToken(snapshot.token, latest)))
+  )
+    return false;
+  const submitted = object(row.submitted);
+  if (
+    row.submitted !== undefined &&
+    (!submitted ||
+      typeof submitted.savedAt !== 'string' ||
+      !validInputToken(submitted.token) ||
+      !sameLineage(submitted.token, latest) ||
+      (submitted.token.sequence >= latest.sequence && !sameInputToken(submitted.token, latest)))
+  )
+    return false;
   return (
-    row.snapshot === undefined ||
-    (validInputSnapshot(row.snapshot) &&
-      sameLineage(row.snapshot.token, row.latest) &&
-      (row.snapshot.token.sequence < row.latest.sequence ||
-        sameInputToken(row.snapshot.token, row.latest)))
+    acknowledgedFallback === undefined ||
+    (validInputSnapshot(acknowledgedFallback) &&
+      acknowledgedFallback.acknowledged === true &&
+      sameLineage(acknowledgedFallback.token, latest) &&
+      acknowledgedFallback.token.sequence < (snapshot?.token.sequence ?? latest.sequence) &&
+      snapshot?.acknowledged !== true)
   );
 }
 
-function inputExpired(snapshot: InputDraftSnapshot, now: number): boolean {
+export function inputExpired(snapshot: Pick<InputDraftSnapshot, 'savedAt'>, now: number): boolean {
   const saved = Date.parse(snapshot.savedAt);
   return Number.isFinite(saved) && now - saved > TTL_MS;
+}
+
+function carriedSubmission(
+  previous: InputSlot | undefined,
+  next: InputDraftToken,
+  hint: InputSubmission | undefined,
+  now: number,
+): InputSubmission | undefined {
+  const recorded = previous?.submitted;
+  if (
+    !hint ||
+    !validInputToken(hint.token) ||
+    typeof hint.savedAt !== 'string' ||
+    !sameLineage(hint.token, next) ||
+    hint.token.generation !== next.generation ||
+    hint.token.sequence >= next.sequence ||
+    (recorded && recorded.token.sequence >= hint.token.sequence)
+  )
+    return recorded;
+  const current = previous?.snapshot;
+  const exact = current && !current.acknowledged && sameInputToken(current.token, hint.token);
+  // A later row or an exact tombstone cannot grant fresh authority to this request.
+  if (previous && previous.latest.sequence >= hint.token.sequence && !exact) return recorded;
+  const submission = exact ? { token: hint.token, savedAt: current.savedAt } : hint;
+  return inputExpired(submission, now) ? recorded : submission;
 }
 
 export function checkpointInput(
   previous: InputSlot | undefined,
   draft: InputDraftSnapshot,
   now: number,
+  recordSubmission = false,
+  priorSubmission?: InputSubmission,
 ): InputSlot | undefined {
   const { token } = draft;
   if (inputExpired(draft, now)) return undefined;
-  if (!previous) return { key: inputSlotKey(token), latest: token, snapshot: draft };
-  if (!sameLineage(previous.latest, token) || token.sequence < previous.latest.sequence)
-    return undefined;
-  if (token.sequence > previous.latest.sequence) {
-    return { key: previous.key, latest: token, snapshot: draft };
+  const submission =
+    recordSubmission && !draft.acknowledged ? { token, savedAt: draft.savedAt } : undefined;
+  if (previous && !sameLineage(previous.latest, token)) return undefined;
+  if (!previous || token.sequence > previous.latest.sequence) {
+    const { snapshot, acknowledgedFallback } = previous ?? {};
+    const fallback = snapshot?.acknowledged ? snapshot : acknowledgedFallback;
+    return {
+      key: previous?.key ?? inputSlotKey(token),
+      latest: token,
+      snapshot: draft,
+      submitted: draft.acknowledged
+        ? undefined
+        : (submission ?? carriedSubmission(previous, token, priorSubmission, now)),
+      acknowledgedFallback:
+        !draft.acknowledged && fallback && !inputExpired(fallback, now) ? fallback : undefined,
+    };
   }
 
   // A repeated checkpoint may record an outcome for the same text, but cannot change its body,
   // extend its TTL or recreate content after it was retired.
+  const fallback = previous.acknowledgedFallback;
+  if (fallback && sameInputToken(fallback.token, token))
+    return inputExpired(fallback, now) ? undefined : previous;
   const current = previous.snapshot;
-  if (!current || !sameInputToken(current.token, token) || inputExpired(current, now))
+  const recorded = previous.submitted;
+  const exactSubmission = !!recorded && sameInputToken(recorded.token, token);
+  if (!current || !sameInputToken(current.token, token)) {
+    // The submitted text may have been replaced on disk while its request was in
+    // flight. Only that exact recorded submission can create older ACK insurance.
+    if (
+      !draft.acknowledged ||
+      !exactSubmission ||
+      (current?.acknowledged && current.token.sequence >= token.sequence) ||
+      (fallback && fallback.token.sequence >= token.sequence)
+    )
+      return undefined;
+    const acknowledged = { ...draft, savedAt: recorded.savedAt };
+    if (inputExpired(acknowledged, now)) return undefined;
+    return current && current.token.sequence > token.sequence
+      ? { ...previous, acknowledgedFallback: acknowledged, submitted: undefined }
+      : {
+          ...previous,
+          snapshot: acknowledged,
+          acknowledgedFallback: undefined,
+          submitted: undefined,
+        };
+  }
+  if (
+    inputExpired(current, now) ||
+    (token.sequence < previous.latest.sequence && !current.acknowledged && !draft.acknowledged)
+  )
     return undefined;
   const rejected = current.rejected || draft.rejected;
   const acknowledged = current.acknowledged || draft.acknowledged;
-  if (rejected === current.rejected && acknowledged === current.acknowledged) return previous;
-  return { ...previous, snapshot: { ...current, rejected, ...(acknowledged && { acknowledged }) } };
+  const recovery = current.recovery || draft.recovery;
+  const submitted =
+    exactSubmission && acknowledged
+      ? undefined
+      : submission && !acknowledged && !exactSubmission
+        ? { ...submission, savedAt: current.savedAt }
+        : recorded;
+  if (
+    rejected === current.rejected &&
+    acknowledged === current.acknowledged &&
+    recovery === current.recovery &&
+    submitted === recorded
+  )
+    return previous;
+  return {
+    ...previous,
+    acknowledgedFallback: acknowledged ? undefined : fallback,
+    submitted,
+    snapshot: {
+      ...current,
+      rejected,
+      ...(acknowledged && { acknowledged }),
+      ...(recovery && { recovery }),
+    },
+  };
 }
 
 export function retireInput(
@@ -164,14 +281,22 @@ export function retireInput(
 ): InputSlot | undefined {
   if (!previous) return { key: inputSlotKey(token), latest: token };
   if (!sameLineage(previous.latest, token)) return undefined;
+  const submitted =
+    previous.submitted && sameInputToken(previous.submitted.token, token)
+      ? undefined
+      : previous.submitted;
   if (previous.snapshot && sameInputToken(previous.snapshot.token, token)) {
-    return { key: previous.key, latest: previous.latest };
+    return { ...previous, snapshot: undefined, submitted };
   }
+  const fallback = previous.acknowledgedFallback;
+  if (fallback && sameInputToken(fallback.token, token))
+    return { ...previous, acknowledgedFallback: undefined, submitted };
   if (token.sequence > previous.latest.sequence) {
     // An ACK may precede its checkpoint. Fence that late checkpoint without deleting a
     // different durable copy. The caller owns any separate supersession proof for that copy.
     return { ...previous, latest: token };
   }
+  if (submitted !== previous.submitted) return { ...previous, submitted };
   return undefined;
 }
 
@@ -179,6 +304,11 @@ export function visibleInput(
   slot: InputSlot | undefined,
   now: number,
 ): InputDraftSnapshot | undefined {
-  const snapshot = slot?.snapshot;
-  return snapshot && !inputExpired(snapshot, now) ? snapshot : undefined;
+  return visibleInputs(slot, now)[0];
+}
+
+export function visibleInputs(slot: InputSlot | undefined, now: number): InputDraftSnapshot[] {
+  return [slot?.snapshot, slot?.acknowledgedFallback].filter(
+    (snapshot): snapshot is InputDraftSnapshot => !!snapshot && !inputExpired(snapshot, now),
+  );
 }

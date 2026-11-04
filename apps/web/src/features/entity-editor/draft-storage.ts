@@ -10,6 +10,13 @@ import {
   type InputStorage,
   removeStorageKeys,
 } from '../../lib/local-data/input-access';
+import { validInputToken } from '../../lib/local-data/input-slot';
+import {
+  type InputDraftSnapshot,
+  type InputDraftToken,
+  sameInputToken,
+} from '../../lib/local-data/input-store';
+import { createDraftMirror, type DraftSource } from './draft-mirror';
 
 /**
  * Неотправленный черновик тела — на диск браузера.
@@ -32,6 +39,9 @@ export type Draft = {
   /** Unique local write identity; legacy slots did not have one. */
   slot?: string;
   recovery?: true;
+  inputToken?: InputDraftToken;
+  inputRecovery?: true;
+  acknowledged?: true;
   /** Ревизия тела, ПОВЕРХ которой набрана правка (та же, что уехала в мутацию `expectedBodyRevision`). */
   baseRevision?: number;
   /**
@@ -67,6 +77,8 @@ export type Draft = {
 export const DRAFT_REJECTING_CODE = 'BAD_REQUEST';
 
 const KEY_PREFIX = 'orbis:body-draft';
+const CHECKPOINT_SLOT = 'head';
+const ACKNOWLEDGED_SLOT = 'ack-head';
 const FINISHED_PREFIX = 'orbis:body-draft-finished:';
 
 /**
@@ -128,27 +140,43 @@ export function sweepDrafts(access = captureInputAccess()): void {
   const { storage, prefix } = access;
   try {
     const now = Date.now();
-    const doomed: string[] = [];
+    const doomed = new Map<string, string>();
     for (const k of storage.keys()) {
       if (!k.startsWith(prefix)) continue;
       const localKey = k.slice(prefix.length);
       if (localKey.startsWith(FINISHED_PREFIX)) {
-        const at = Number(storage.getItem(k));
-        if (now - at > DRAFT_TTL_MS) doomed.push(k);
+        const raw = storage.getItem(k);
+        if (raw !== null && now - Number(raw) > DRAFT_TTL_MS) doomed.set(k, raw);
         continue;
       }
       if (!localKey.startsWith(`${KEY_PREFIX}:`)) continue;
       const rest = localKey.slice(KEY_PREFIX.length + 1);
-      // Одна часть вместо двух — ключ до скоупа по аккаунту.
+      const raw = storage.getItem(k);
+      if (raw === null) continue;
+      // Old unscoped keys and exact retired copies can free room before a quota retry.
+      const [owner, entityId] = rest.split(':');
       if (!rest.includes(':')) {
-        doomed.push(k);
+        doomed.set(k, raw);
         continue;
       }
-      const raw = storage.getItem(k);
-      const draft = raw === null ? null : parseDraft(raw);
-      if (draft === null || expired(draft.savedAt, now)) doomed.push(k);
+      try {
+        const draft = parseDraft(raw);
+        if (
+          draft === null ||
+          expired(draft.savedAt, now) ||
+          (draft.slot &&
+            owner !== undefined &&
+            entityId !== undefined &&
+            isDraftSlotFinishedIn(storage, owner, entityId, draft.slot, prefix))
+        )
+          doomed.set(k, raw);
+      } catch {
+        // A malformed key does not prevent cleaning the remaining independently scoped copies.
+      }
     }
-    for (const k of doomed) storage.removeItem(k);
+    for (const [key, raw] of doomed) {
+      if (access.isCurrent() && storage.getItem(key) === raw) storage.removeItem(key);
+    }
   } catch {
     // Отключённое хранилище — не повод ронять открытие записи (см. saveDraft).
   }
@@ -193,10 +221,18 @@ function writeKey(
 function parseDraft(raw: string): Draft | null {
   const value: unknown = JSON.parse(raw);
   if (typeof value !== 'object' || value === null) return null;
-  const { doc, baseRevision, baseUpdatedAt, savedAt, rejected, slot, recovery } = value as Record<
-    string,
-    unknown
-  >;
+  const {
+    doc,
+    baseRevision,
+    baseUpdatedAt,
+    savedAt,
+    rejected,
+    slot,
+    recovery,
+    inputToken,
+    inputRecovery,
+    acknowledged,
+  } = value as Record<string, unknown>;
   if (typeof savedAt !== 'string') return null;
   // Основа — ревизия (новая форма) или штамп записи (старая форма, К-26); без основы черновик сверять не с чем, и он
   // ушёл бы в предложение про запись, которой никто не менял. Ноль — законная основа: так пишется черновик записи, чья
@@ -218,8 +254,299 @@ function parseDraft(raw: string): Draft | null {
     savedAt,
     ...(typeof slot === 'string' && { slot }),
     ...(recovery === true && { recovery }),
+    ...(validInputToken(inputToken) && { inputToken }),
+    ...(inputRecovery === true && { inputRecovery }),
+    ...(acknowledged === true && { acknowledged }),
     rejected: rejected === true,
   };
+}
+
+const draftSessions = new WeakMap<
+  NonNullable<InputAccess['drafts']>,
+  ReturnType<typeof createDraftMirror>
+>();
+
+export function draftFromInput(snapshot: InputDraftSnapshot): Draft {
+  const { token, recovery, ...value } = snapshot;
+  return {
+    ...value,
+    ...(recovery && { recovery }),
+    ...('revision' in token.basis
+      ? { baseRevision: token.basis.revision }
+      : { baseUpdatedAt: token.basis.updatedAt }),
+    slot: token.nonce,
+    inputToken: token,
+  };
+}
+
+function sameWriter(a: InputDraftToken, b: InputDraftToken): boolean {
+  return (
+    a.accountId === b.accountId &&
+    a.graphId === b.graphId &&
+    a.generation === b.generation &&
+    a.entityId === b.entityId &&
+    a.writerId === b.writerId
+  );
+}
+
+function checkpointKey(token: InputDraftToken, acknowledged = false): string {
+  const slot = acknowledged ? ACKNOWLEDGED_SLOT : CHECKPOINT_SLOT;
+  return `${KEY_PREFIX}:${token.accountId}:${token.entityId}:${encodeURIComponent(token.writerId)}:${slot}`;
+}
+
+function inputSession(access = captureInputAccess()) {
+  const metadata = access?.drafts;
+  if (!access || !metadata || metadata.scope.accountId !== scope || metadata.signal.aborted)
+    return undefined;
+  let session = draftSessions.get(metadata);
+  if (session) return session;
+  const { storage, prefix } = access;
+  const { accountId, graphId, generation } = metadata.scope;
+  const start = `${prefix}${KEY_PREFIX}:${accountId}:`;
+  function sources(targetEntity?: string): DraftSource[] {
+    const sources: DraftSource[] = [];
+    try {
+      for (const key of storage.keys()) {
+        if (!key.startsWith(start)) continue;
+        const [entityId, writerOrSlot, slotPart, extra] = key.slice(start.length).split(':');
+        if (!entityId || extra !== undefined || (targetEntity && entityId !== targetEntity))
+          continue;
+        const acknowledgedHead = slotPart === ACKNOWLEDGED_SLOT;
+        const writerHead = slotPart === CHECKPOINT_SLOT || acknowledgedHead;
+        const keySlot = writerHead ? undefined : (slotPart ?? writerOrSlot);
+        const raw = storage.getItem(key);
+        if (raw === null) continue;
+        let draft: Draft | null;
+        try {
+          draft = parseDraft(raw);
+        } catch {
+          continue;
+        }
+        if (
+          !draft ||
+          (writerHead && !draft.inputToken) ||
+          (acknowledgedHead && !draft.acknowledged) ||
+          (keySlot && draft.slot !== keySlot)
+        )
+          continue;
+        if (expired(draft.savedAt, Date.now())) {
+          if (access?.isCurrent() && storage.getItem(key) === raw) storage.removeItem(key);
+          continue;
+        }
+        if (draft.slot && isDraftSlotFinishedIn(storage, accountId, entityId, draft.slot, prefix))
+          continue;
+        const token = draft.inputToken;
+        if (
+          token &&
+          (token.accountId !== accountId ||
+            token.graphId !== graphId ||
+            token.generation !== generation ||
+            token.entityId !== entityId ||
+            token.nonce !== draft.slot ||
+            (slotPart !== undefined &&
+              (writerHead ? encodeURIComponent(token.writerId) : token.writerId) !== writerOrSlot))
+        )
+          continue;
+        const { doc, rejected, savedAt, acknowledged } = draft;
+        const recovery = token && slotPart ? draft.inputRecovery : draft.recovery;
+        const basis =
+          draft.baseRevision !== undefined
+            ? { revision: draft.baseRevision }
+            : draft.baseUpdatedAt !== undefined
+              ? { updatedAt: draft.baseUpdatedAt }
+              : undefined;
+        if (
+          !basis ||
+          (token &&
+            ('revision' in token.basis
+              ? basis.revision !== token.basis.revision
+              : basis.updatedAt !== token.basis.updatedAt))
+        )
+          continue;
+        sources.push({
+          entityId,
+          slot: draft.slot,
+          token,
+          basis,
+          raw,
+          snapshot: {
+            doc,
+            rejected,
+            savedAt,
+            ...(acknowledged && { acknowledged }),
+            ...(recovery && { recovery }),
+          },
+          stillCurrent() {
+            try {
+              return access?.isCurrent() === true && storage.getItem(key) === raw;
+            } catch {
+              return false;
+            }
+          },
+          remove(slot) {
+            try {
+              if (
+                access?.isCurrent() &&
+                !isDraftSlotFinishedIn(storage, accountId, entityId, slot, prefix) &&
+                storage.getItem(key) === raw
+              )
+                storage.removeItem(key);
+            } catch {
+              // A retained source is harmless once the exact native copy is committed.
+            }
+          },
+        });
+      }
+    } catch {
+      // Storage may be disabled independently of IndexedDB.
+    }
+    return sources.sort(
+      (a, b) => Number(!!b.snapshot.acknowledged) - Number(!!a.snapshot.acknowledged),
+    );
+  }
+  session = createDraftMirror(
+    { ...access, drafts: metadata },
+    sources,
+    (snapshot, preserve) => {
+      const { token } = snapshot;
+      const target = checkpointKey(token, snapshot.acknowledged);
+      const headKey = prefix + checkpointKey(token);
+      const current = preserve ? (access.canPreserve ?? access.isCurrent) : access.isCurrent;
+      const scoped = { ...access, isCurrent: current };
+      try {
+        if (
+          !current() ||
+          isDraftSlotFinishedIn(storage, accountId, token.entityId, token.nonce, prefix)
+        )
+          return false;
+        const raw = storage.getItem(prefix + target);
+        if (raw !== null) {
+          const prior = parseDraft(raw);
+          const previous = prior?.inputToken;
+          if (
+            !previous ||
+            !sameWriter(previous, token) ||
+            previous.sequence > token.sequence ||
+            (previous.sequence === token.sequence && !sameInputToken(previous, token))
+          )
+            return false;
+          // Older clients recorded ACK in the pending head. Preserve that exact
+          // copy before replacing it. A failed backup leaves the head in place.
+          if (
+            !snapshot.acknowledged &&
+            prior.acknowledged &&
+            !sameInputToken(previous, token) &&
+            !expired(prior.savedAt, Date.now()) &&
+            !isDraftSlotFinishedIn(storage, accountId, previous.entityId, previous.nonce, prefix)
+          ) {
+            const backup = checkpointKey(previous, true);
+            const existingRaw = storage.getItem(prefix + backup);
+            const existing = existingRaw === null ? null : parseDraft(existingRaw);
+            const retained = existing?.inputToken;
+            if (
+              existingRaw !== null &&
+              (!retained ||
+                !existing.acknowledged ||
+                !sameWriter(retained, previous) ||
+                (retained.sequence === previous.sequence && !sameInputToken(retained, previous)))
+            )
+              return false;
+            if (
+              (!retained ||
+                !existing ||
+                retained.sequence < previous.sequence ||
+                expired(existing.savedAt, Date.now()) ||
+                isDraftSlotFinishedIn(
+                  storage,
+                  accountId,
+                  retained.entityId,
+                  retained.nonce,
+                  prefix,
+                )) &&
+              !writeKey(backup, raw, scoped)
+            )
+              return false;
+            if (storage.getItem(headKey) !== raw) return false;
+          }
+        }
+      } catch {
+        return false;
+      }
+      // Web Storage replaces the same key atomically. Quota failure leaves its prior text intact.
+      // An ACK writes its own key without deleting the pending head, which another tab may replace.
+      return writeKey(
+        target,
+        JSON.stringify({
+          ...draftFromInput(snapshot),
+          recovery: true,
+          ...(snapshot.recovery && { inputRecovery: true }),
+        }),
+        scoped,
+      );
+    },
+    (entityId, slot) => markLegacyFinished(accountId, entityId, slot, access),
+    (entityId, slot) => {
+      try {
+        return isDraftSlotFinishedIn(storage, accountId, entityId, slot, prefix);
+      } catch {
+        return false;
+      }
+    },
+    (token) => {
+      try {
+        const raw = storage.getItem(prefix + checkpointKey(token));
+        const draft = raw === null ? null : parseDraft(raw);
+        const head = draft?.inputToken;
+        // A physical head can remain after its exact cancellation. Only a recoverable
+        // successor is evidence that an older input snapshot has been superseded.
+        return (
+          !!draft &&
+          !!head &&
+          sameWriter(head, token) &&
+          head.sequence > token.sequence &&
+          draft.slot === head.nonce &&
+          !expired(draft.savedAt, Date.now()) &&
+          !isDraftSlotFinishedIn(storage, accountId, head.entityId, head.nonce, prefix)
+        );
+      } catch {
+        return false;
+      }
+    },
+  );
+  draftSessions.set(metadata, session);
+  return session;
+}
+
+export function hydrateDrafts(entityId?: string): Promise<void> | undefined {
+  return inputSession()?.hydrate(entityId);
+}
+
+export function managedDraftIsRetired(entityId: string, slot: string): boolean {
+  return inputSession()?.isRetired(entityId, slot) ?? false;
+}
+
+export function managedDraftIsLive(draft: Draft): boolean {
+  return draft.inputToken !== undefined && inputSession()?.isLive(draft.inputToken) === true;
+}
+
+export function readManagedDrafts(entityId: string): Draft[] | undefined {
+  return inputSession()?.read(entityId).map(draftFromInput);
+}
+
+export async function discardDraftSlot(entityId: string, slot: string): Promise<boolean> {
+  const managed = inputSession();
+  return managed ? managed.finish(entityId, slot) : finishCurrentDraftSlot(entityId, slot);
+}
+
+export function markManagedDraftOutcome(
+  entityId: string,
+  slot: string,
+  outcome: 'rejected' | 'acknowledged',
+): boolean {
+  const session = inputSession();
+  if (!session?.find(entityId, slot)) return false;
+  session.outcome(entityId, slot, outcome);
+  return true;
 }
 
 /** Захваченный ключ сохраняет последние слова прежнему владельцу без записи в новый scope. */
@@ -227,11 +554,13 @@ export function captureDraftWriter(entityId: string) {
   const capturedKey = key(entityId);
   let writer: string | undefined;
   const access = captureInputAccess();
+  const managed = inputSession(access)?.writer(entityId);
   const payload = (doc: BodyDoc, baseRevision: number, now: string, rejected: boolean) =>
     JSON.stringify({ doc, baseRevision, savedAt: now, rejected, slot: newId() } satisfies Draft);
   const write = (doc: BodyDoc, baseRevision: number, now: string, rejected = false): boolean =>
     writeKey(capturedKey, payload(doc, baseRevision, now, rejected), access);
   return Object.assign(write, {
+    managed,
     preserve(doc: BodyDoc, baseRevision: number, now: string, rejected: boolean) {
       const slot = newId();
       writer ??= newId();
@@ -280,6 +609,8 @@ export function saveDraft(
  * а не второй рубеж.
  */
 export function readDraft(entityId: string): Draft | null {
+  const managed = readManagedDrafts(entityId);
+  if (managed) return managed.find((draft) => !draft.recovery) ?? null;
   try {
     const access = captureInputAccess();
     if (!access?.isCurrent()) return null;
@@ -292,6 +623,8 @@ export function readDraft(entityId: string): Draft | null {
 }
 
 export function readRecoveryDraft(entityId: string, exceptToken?: string): Draft | null {
+  const managed = readManagedDrafts(entityId);
+  if (managed) return managed.find((draft) => draft.recovery && draft.slot !== exceptToken) ?? null;
   try {
     const access = captureInputAccess();
     if (!access?.isCurrent()) return null;
@@ -356,8 +689,22 @@ export function isDraftSlotFinished(accountId: string, entityId: string, token: 
  * The legacy payload is overwritten by the next edit or removed by its existing TTL.
  */
 export function finishDraftSlot(accountId: string, entityId: string, token: string): boolean {
+  const access = captureInputAccess();
+  const managed = inputSession(access);
+  if (managed?.scope.accountId === accountId && managed.find(entityId, token)) {
+    void managed.finish(entityId, token);
+    return true;
+  }
+  return markLegacyFinished(accountId, entityId, token, access);
+}
+
+function markLegacyFinished(
+  accountId: string,
+  entityId: string,
+  token: string,
+  access: InputAccess | null,
+): boolean {
   try {
-    const access = captureInputAccess();
     if (!access?.isCurrent()) return false;
     access.storage.setItem(
       access.prefix + finishedKey(accountId, entityId, token),
@@ -376,6 +723,7 @@ export function listDraftsIn(
   entity?: string,
 ) {
   const drafts: { accountId: string; entityId: string; draft: Draft }[] = [];
+  const managed = new Map<string, number>();
   const start = `${prefix}${KEY_PREFIX}:`;
   for (const key of storage.keys()) {
     if (!key.startsWith(start)) continue;
@@ -397,7 +745,20 @@ export function listDraftsIn(
       ) {
         continue;
       }
-      drafts.push({ accountId: owner, entityId, draft });
+      const entry = { accountId: owner, entityId, draft };
+      const token = draft.inputToken;
+      if (token) {
+        const identity = JSON.stringify([owner, entityId, token.nonce]);
+        const index = managed.get(identity);
+        const earlier = index === undefined ? undefined : drafts[index]?.draft.inputToken;
+        if (index !== undefined && earlier && sameInputToken(earlier, token)) {
+          // A pending head and its ACK key can carry the same exact input.
+          if (draft.acknowledged) drafts[index] = entry;
+          continue;
+        }
+        if (index === undefined) managed.set(identity, drafts.length);
+      }
+      drafts.push(entry);
     } catch (error) {
       if (!(error instanceof SyntaxError)) throw error;
     }
@@ -417,7 +778,7 @@ export function clearDraftsIn(storage: InputStorage, accountId?: string, prefix 
 }
 
 export function abandonDraftSlot(entityId: string, token: string): void {
-  finishDraftSlot(scope, entityId, token);
+  void discardDraftSlot(entityId, token);
 }
 
 export function finishCurrentDraftSlot(entityId: string, token: string): boolean {

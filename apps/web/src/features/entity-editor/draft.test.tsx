@@ -2,13 +2,14 @@ import { type BodyDoc, DOC_SCHEMA_VERSION, parseBody } from '@orbis/shared/doc';
 import { useQueryClient } from '@tanstack/react-query';
 import { act, screen } from '@testing-library/react';
 import { useEffect, useState } from 'react';
-import { beforeEach, expect, test, vi } from 'vitest';
+import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import {
   type BodyPublication,
   freshnessRuntimeOf,
   nextNetworkOrder,
   recordNetworkReadReceipt,
 } from '../../lib/freshness/provenance';
+import { browserInputStorage, configureInputAccess } from '../../lib/local-data/input-access';
 import {
   installCrashTrap,
   mockEntityUpdateResult,
@@ -20,7 +21,14 @@ import { type RouterOutputs, trpc } from '../../trpc';
 import { detailGetInput } from '../entity-detail/useEntityDetail';
 import { markBodyPending } from '../undo/body-provenance';
 import { undoEpoch } from '../undo/undo-epoch';
-import { finishDraftSlot, readDraft, saveDraft, setDraftScope } from './draft-storage';
+import {
+  finishDraftSlot,
+  listDraftsIn,
+  readDraft,
+  readManagedDrafts,
+  saveDraft,
+  setDraftScope,
+} from './draft-storage';
 import { SaveIndicator } from './SaveIndicator';
 import { type BodySave, type BodySaveEntity, useBodySave } from './useBodySave';
 
@@ -83,7 +91,7 @@ const fail500: Respond = () => {
 };
 
 /** Пороги записаны ЧИСЛАМИ: значение — договор, а не деталь (см. save.test.tsx про M1). */
-const SAVE_PAUSE = 2000;
+const SAVE_PAUSE = 1000;
 /** Выдержка, после которой запрос считается зависшим и запись перестаёт быть заперта. */
 const GIVE_UP = 30_000;
 
@@ -489,7 +497,7 @@ test('неотправленная правка попадает в хранил
   expect(stored()).toEqual({
     doc: ONE,
     baseRevision: ENTITY.bodyRevision,
-    savedAt: '2030-01-01T00:00:02.000Z',
+    savedAt: '2030-01-01T00:00:01.000Z',
     rejected: false,
     slot: expect.any(String),
   });
@@ -619,7 +627,7 @@ test('черновик читается после перемонтирован�
   await tick();
   expect(s.api().pendingDraft).toEqual({
     doc: ONE,
-    savedAt: '2030-01-01T00:00:02.000Z',
+    savedAt: '2030-01-01T00:00:01.000Z',
     rejected: false,
     // Версия схемы у черновика та же, что у приложения, — предложение обычное, с отправкой.
     // Признак пинится ЗДЕСЬ, а не только в новых тестах: подними он на штатном черновике, и
@@ -967,7 +975,7 @@ test('терминальный отказ метит черновик: он не
   expect(back.updates()).toEqual([]);
   expect(back.api().pendingDraft).toEqual({
     doc: ONE,
-    savedAt: '2030-01-01T00:00:02.000Z',
+    savedAt: '2030-01-01T00:00:01.000Z',
     rejected: true,
     // Приговор сервера и чужая версия схемы — РАЗНЫЕ поводы для предложения: первый оставляет
     // человеку «оставить моё», второй его отбирает. Смешай их — и отвергнутая правка потеряла
@@ -2172,4 +2180,239 @@ test('recovery sends the exact existing slot and keeps it and the independent ca
   } finally {
     quota.mockRestore();
   }
+});
+
+function bindManagedInput(persistent = false) {
+  const controller = new AbortController();
+  const storage = browserInputStorage(persistent ? localStorage : sessionStorage);
+  configureInputAccess({
+    storage,
+    prefix: persistent ? '' : 'shared-tab:',
+    isCurrent: () => !controller.signal.aborted,
+    drafts: {
+      scope: { accountId: OWNER, graphId: OWNER, generation: 'test' },
+      signal: controller.signal,
+      persistent,
+    },
+  });
+  return { controller, storage };
+}
+
+afterEach(() => {
+  configureInputAccess(undefined);
+  sessionStorage.clear();
+});
+
+test('managed editor updates memory on each letter without writing Web Storage until pagehide', async () => {
+  const { storage } = bindManagedInput();
+  const server = gatedServer();
+  const s = mount({ respond: server.respond });
+  await tick();
+  const writes = vi.spyOn(Storage.prototype, 'setItem');
+  s.api().onDocChange(ONE);
+  expect(readDraft('e1')?.doc).toEqual(ONE);
+  s.api().onDocChange(TWO);
+  expect(readDraft('e1')?.doc).toEqual(TWO);
+  expect(writes).not.toHaveBeenCalled();
+  expect(s.updates()).toEqual([]);
+  await act(async () => window.dispatchEvent(new Event('pagehide')));
+  expect(listDraftsIn(storage, OWNER, 'shared-tab:').map(({ draft }) => draft.doc)).toEqual([TWO]);
+  expect(localStorage.length).toBe(0);
+  expect(s.updates()).toHaveLength(1);
+  await server.answer(0, SAVED);
+  expect(listDraftsIn(storage, OWNER, 'shared-tab:')[0]?.draft.acknowledged).toBe(true);
+  await tick(5000);
+  expect(s.updates()).toHaveLength(1);
+});
+
+test('late managed hydration keeps an older candidate but does not send it over a newly typed body', async () => {
+  const { storage } = bindManagedInput(true);
+  storage.setItem(
+    KEY,
+    JSON.stringify({
+      doc: ONE,
+      baseRevision: 3,
+      rejected: false,
+      savedAt: '2030-01-01T00:00:00.000Z',
+      slot: 'old-slot',
+    }),
+  );
+  const s = mount({ respond: fail500 });
+  s.api().onDocChange(TWO);
+  await tick(300);
+  expect(readManagedDrafts('e1')?.map((draft) => draft.doc)).toEqual(
+    expect.arrayContaining([ONE, TWO]),
+  );
+  expect(s.updates()).toEqual([]);
+  await tick(700);
+  expect(s.updates()).toHaveLength(1);
+  expect(s.updates()[0]?.input).toMatchObject({ bodyDoc: TWO });
+});
+
+test('two active editors of the same body keep independent emergency copies', async () => {
+  const { storage } = bindManagedInput();
+  const first = mount({ respond: fail500 });
+  const second = mount({ respond: fail500 });
+  await tick();
+  first.api().onDocChange(ONE);
+  second.api().onDocChange(TWO);
+  await act(async () => window.dispatchEvent(new Event('pagehide')));
+  expect(listDraftsIn(storage, OWNER, 'shared-tab:').map(({ draft }) => draft.doc)).toEqual(
+    expect.arrayContaining([ONE, TWO]),
+  );
+});
+
+test('normal IndexedDB failure falls back to the exact timed checkpoint and records a later ACK', async () => {
+  const { storage } = bindManagedInput(true);
+  const server = gatedServer();
+  const s = mount({ respond: server.respond });
+  await tick();
+  s.api().onDocChange(ONE);
+  await tick(299);
+  expect(listDraftsIn(storage, OWNER)).toEqual([]);
+  s.api().onDocChange(TWO);
+  await tick(1);
+  const checkpoint = listDraftsIn(storage, OWNER)[0]?.draft;
+  expect(checkpoint?.doc).toEqual(TWO);
+  expect(s.updates()).toEqual([]);
+  await tick(999);
+  expect(s.updates()).toHaveLength(1);
+  await server.answer(0, SAVED);
+  expect(listDraftsIn(storage, OWNER)[0]?.draft).toMatchObject({
+    slot: checkpoint?.slot,
+    doc: TWO,
+    acknowledged: true,
+  });
+  await tick(5000);
+  expect(s.updates()).toHaveLength(1);
+});
+
+test.each([
+  'flush',
+  'flushSettled',
+] as const)('returning to the unchanged body and immediately calling %s retires the previous exact fallback', async (flush) => {
+  const { storage } = bindManagedInput(true);
+  const s = mount({ respond: fail500 });
+  await tick();
+  s.api().onDocChange(ONE);
+  await tick(300);
+  expect(listDraftsIn(storage, OWNER)[0]?.draft.doc).toEqual(ONE);
+  s.api().onDocChange(BASE);
+  await act(async () => {
+    await s.api()[flush]();
+  });
+  expect(listDraftsIn(storage, OWNER)).toEqual([]);
+  expect(s.updates()).toEqual([]);
+});
+
+test('shown foreign revision then accepted edit matching the opening body', async () => {
+  const { storage } = bindManagedInput();
+  const s = mount({ respond: fail500 });
+  await tick();
+  await s.set({ id: 'e1', entity: MOVED });
+  s.api().onShown(MOVED.bodyRevision);
+  expect(s.api().expectedRevision()).toBe(MOVED.bodyRevision);
+  // BodyEditor calls onChange after accepting the new content and a single full-body edit.
+  s.api().onDocChange(BASE);
+  await tick(300);
+  const exact = listDraftsIn(storage, OWNER, 'shared-tab:');
+  await tick(700);
+  expect({
+    exact: exact.map((x) => x.draft.doc),
+    updates: s.updates().map((x) => x.input),
+  }).toMatchObject({
+    exact: [BASE],
+    updates: [{ bodyDoc: BASE, expectedBodyRevision: MOVED.bodyRevision }],
+  });
+});
+
+test('an exact retired legacy slot must not become an automatic send after a delayed scan', async () => {
+  const { storage } = bindManagedInput(true);
+  const slot = 'discarded-legacy-slot';
+  storage.setItem(
+    KEY,
+    JSON.stringify({
+      doc: ONE,
+      baseRevision: 3,
+      rejected: false,
+      savedAt: new Date().toISOString(),
+      slot,
+    }),
+  );
+  const s = mount({ respond: fail500 });
+  // Hydration starts on a Promise continuation, then awaits its storage read.
+  await Promise.resolve();
+  storage.setItem(`orbis:body-draft-finished:${OWNER}:e1:${slot}`, String(Date.now()));
+  await tick(5);
+  expect(s.updates().map((x) => x.input)).toEqual([]);
+});
+
+test('a settled editor can acquire a new unsent change while a second editor is being flushed', async () => {
+  const { flushBodyOf, registerBodyFlush } = await import('./body-flush');
+  bindManagedInput();
+  const first = mount({ respond: fail500 });
+  const server = gatedServer();
+  const second = mount({ respond: server.respond });
+  const unregisterFirst = registerBodyFlush(
+    'e1',
+    () => first.api().flushSettled(),
+    undefined,
+    undefined,
+    () => first.api().rewriteCheckpoint(),
+  );
+  const unregisterSecond = registerBodyFlush('e1', () => second.api().flushSettled());
+  try {
+    await tick();
+    second.api().onDocChange(TWO);
+    const settled = flushBodyOf('e1');
+    await tick();
+    expect(second.updates()).toHaveLength(1);
+    first.api().onDocChange(ONE);
+    await server.answer(0, SAVED);
+    const result = await settled;
+    expect({ result, unsent: first.api().hasUnsent() }).toEqual({
+      result: 'blocked',
+      unsent: true,
+    });
+  } finally {
+    unregisterFirst();
+    unregisterSecond();
+  }
+});
+
+test.each([
+  'live',
+  'before-click',
+  'before-save',
+] as const)('Keep mine publishes the accepted document only while its exact offer is live (%s)', async (markerTime) => {
+  const { storage } = bindManagedInput(true);
+  const slot = 'open-offer';
+  storage.setItem(
+    KEY,
+    JSON.stringify({
+      doc: ONE,
+      baseRevision: STALE_REVISION,
+      rejected: false,
+      savedAt: new Date().toISOString(),
+      slot,
+    }),
+  );
+  const s = mount();
+  await tick();
+  expect(s.api().pendingDraft?.doc).toEqual(ONE);
+  const markerKey = `orbis:body-draft-finished:${OWNER}:e1:${slot}`;
+  if (markerTime === 'before-click') storage.setItem(markerKey, String(Date.now()));
+  if (markerTime === 'before-save') {
+    const getItem = Storage.prototype.getItem;
+    let reads = 0;
+    vi.spyOn(Storage.prototype, 'getItem').mockImplementation(function (this: Storage, key) {
+      if (key === markerKey && ++reads === 2) this.setItem(key, String(Date.now()));
+      return getItem.call(this, key);
+    });
+  }
+  const accepted = vi.fn();
+  await act(async () => s.api().applyPendingDraft(accepted));
+  expect(accepted.mock.calls).toEqual(markerTime === 'live' ? [[ONE]] : []);
+  expect(s.api().pendingDraft).toBeNull();
+  expect(s.updates()).toHaveLength(markerTime === 'live' ? 1 : 0);
 });

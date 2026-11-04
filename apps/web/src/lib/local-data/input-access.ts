@@ -1,9 +1,11 @@
 import type { StorageAccess } from '../../auth/storage';
+import type { InputScope } from './input-store';
 
 export type InputStorage = StorageAccess & { keys(): string[] };
 export type InputAccess = {
   storage: InputStorage;
   prefix: string;
+  drafts?: { scope: InputScope; persistent: boolean; signal: AbortSignal };
   isCurrent(): boolean;
   /** The captured input generation can outlive an ordinary runtime lease. */
   canPreserve?(): boolean;

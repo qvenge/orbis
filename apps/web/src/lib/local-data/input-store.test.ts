@@ -5,7 +5,9 @@ import {
   type InputDraftToken,
   type InputSlot,
   retireInput,
+  validInputSlot,
   visibleInput,
+  visibleInputs,
 } from './input-slot';
 import { openInputStore } from './input-store';
 
@@ -86,6 +88,132 @@ describe('exact input slots', () => {
     expect(retired?.snapshot).toBeUndefined();
     expect(checkpointInput(retired, draft, now)).toBeUndefined();
     expect(visibleInput(retired, now)).toBeUndefined();
+  });
+
+  it('retains one acknowledged predecessor across a newer checkpoint and its exact cancellation', () => {
+    const ack = { ...snapshot(1), acknowledged: true as const };
+    const pending = snapshot(2);
+    const slot = checkpoint(checkpoint(undefined, ack), pending);
+    expect(visibleInputs(slot, now)).toEqual([pending, ack]);
+    const cancelled = retireInput(slot, pending.token);
+    expect(visibleInputs(cancelled, now)).toEqual([ack]);
+    expect(checkpointInput(cancelled, pending, now)).toBeUndefined();
+    expect(visibleInputs(checkpoint(cancelled, snapshot(3)), now)).toEqual([snapshot(3), ack]);
+  });
+
+  it('accepts repeat outcomes and retires acknowledged insurance by exact token only', () => {
+    const ack = { ...snapshot(1, { generation: 'preserved' }), acknowledged: true as const };
+    const pending = snapshot(2);
+    const slot = checkpoint(checkpoint(undefined, ack), pending);
+    expect(checkpointInput(slot, ack, now)).toBe(slot);
+    expect(retireInput(slot, { ...ack.token, generation: scope.generation })).toBeUndefined();
+    const retired = retireInput(slot, ack.token);
+    expect(visibleInputs(retired, now)).toEqual([pending]);
+    expect(checkpointInput(retired, ack, now)).toBeUndefined();
+  });
+
+  it('bounds acknowledged insurance and expires each exact copy independently', () => {
+    const ack = { ...snapshot(1), acknowledged: true as const };
+    const pending = { ...snapshot(2), savedAt: '2026-11-04T00:00:00Z' };
+    const slot = checkpoint(checkpoint(undefined, ack), pending);
+    const afterAckExpiry = now + 30.5 * 86_400_000;
+    expect(visibleInputs(slot, afterAckExpiry)).toEqual([pending]);
+    expect(visibleInputs(slot, now + 32 * 86_400_000)).toEqual([]);
+    const newAck = { ...pending, acknowledged: true as const };
+    expect(visibleInputs(checkpoint(slot, newAck), now)).toEqual([newAck]);
+  });
+
+  it('rejects malformed or cross-scope acknowledged insurance', () => {
+    const ack = { ...snapshot(1), acknowledged: true as const };
+    const slot = checkpoint(checkpoint(undefined, ack), snapshot(2));
+    expect(validInputSlot(slot, scope)).toBe(true);
+    for (const invalid of [
+      snapshot(1),
+      { ...ack, token: { ...ack.token, accountId: 'foreign' } },
+      { ...ack, token: { ...ack.token, graphId: 'foreign' } },
+      { ...ack, token: { ...ack.token, writerId: 'foreign' } },
+      { ...ack, token: { ...ack.token, sequence: 2 } },
+    ])
+      expect(validInputSlot({ ...slot, acknowledgedFallback: invalid }, scope)).toBe(false);
+  });
+
+  it('records the first ACK of an older submitted request while keeping newer pending input', () => {
+    const submitted = snapshot(1);
+    const pending = snapshot(2);
+    const first = checkpointInput(undefined, submitted, now, true);
+    const latest = checkpoint(first, pending);
+    const lateAck = { ...submitted, acknowledged: true as const, savedAt: '2026-11-04T00:00:00Z' };
+    const updated = checkpoint(latest, lateAck);
+    const insurance = { ...lateAck, savedAt: submitted.savedAt };
+    expect(visibleInputs(updated, now)).toEqual([pending, insurance]);
+    expect(visibleInputs(retireInput(updated, pending.token), now)).toEqual([insurance]);
+    expect(visibleInputs(retireInput(updated, submitted.token), now)).toEqual([pending]);
+    expect(checkpointInput(latest, lateAck, now + 30.5 * 86_400_000)).toBeUndefined();
+  });
+
+  it('does not admit late submissions or ACKs after exact retirement', () => {
+    const submitted = snapshot(1);
+    const pending = snapshot(2);
+    const first = checkpointInput(undefined, submitted, now, true);
+    const latest = checkpoint(first, pending);
+    const retired = retireInput(latest, submitted.token);
+    expect(visibleInputs(retired, now)).toEqual([pending]);
+    expect(checkpointInput(retired, submitted, now, true)).toBeUndefined();
+    expect(checkpointInput(retired, { ...submitted, acknowledged: true }, now)).toBeUndefined();
+    expect(
+      checkpointInput(
+        latest,
+        { ...submitted, acknowledged: true, token: { ...submitted.token, generation: 'other' } },
+        now,
+      ),
+    ).toBeUndefined();
+    expect(
+      checkpointInput(checkpoint(undefined, pending), { ...submitted, acknowledged: true }, now),
+    ).toBeUndefined();
+  });
+
+  it('records exact prior submission in the replacing checkpoint when its own write aborted', () => {
+    const first = snapshot(1);
+    const pending = snapshot(2);
+    const hint = { token: first.token, savedAt: '2026-11-04T00:00:00Z' };
+    const latest = checkpointInput(checkpoint(undefined, first), pending, now, false, hint);
+    expect(latest?.submitted).toEqual({ token: first.token, savedAt: first.savedAt });
+    const firstAck = { ...first, acknowledged: true as const };
+    expect(visibleInputs(checkpoint(latest, firstAck), now)).toEqual([pending, firstAck]);
+  });
+
+  it('ignores carried submission hints after retirement or an unproven higher sequence', () => {
+    const first = snapshot(1);
+    const pending = snapshot(3);
+    const hint = { token: first.token, savedAt: first.savedAt };
+    for (const before of [
+      retireInput(checkpoint(undefined, first), first.token),
+      checkpoint(undefined, snapshot(2)),
+    ]) {
+      const latest = checkpointInput(before, pending, now, false, hint);
+      expect(visibleInputs(latest, now)).toEqual([pending]);
+      expect(latest?.submitted).toBeUndefined();
+      expect(checkpointInput(latest, { ...first, acknowledged: true }, now)).toBeUndefined();
+    }
+  });
+
+  it('admits a first carried submission only within its writer lease and original TTL', () => {
+    const first = snapshot(1);
+    const pending = snapshot(2);
+    const hint = { token: first.token, savedAt: first.savedAt };
+    expect(checkpointInput(undefined, pending, now, false, hint)?.submitted).toEqual(hint);
+    for (const invalid of [
+      { ...hint, token: { ...hint.token, generation: 'previous' } },
+      { ...hint, token: { ...hint.token, accountId: 'foreign' } },
+      { ...hint, token: { ...hint.token, graphId: 'foreign' } },
+      { ...hint, token: { ...hint.token, writerId: 'foreign' } },
+      { ...hint, token: pending.token },
+      { ...hint, savedAt: '2026-10-01T00:00:00Z' },
+    ]) {
+      const latest = checkpointInput(undefined, pending, now, false, invalid);
+      expect(visibleInputs(latest, now)).toEqual([pending]);
+      expect(latest?.submitted).toBeUndefined();
+    }
   });
 
   it('expires individual snapshots without using an unreadable legacy date to judge the text', () => {

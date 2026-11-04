@@ -387,6 +387,10 @@ export function EntityBody({
     const result = await save.flushSettled();
     return markdownDirty.current ? ('blocked' as const) : result;
   }, [save.flushSettled]);
+  const rewriteCheckpoint = useCallback(
+    () => (markdownDirty.current ? undefined : save.rewriteCheckpoint()),
+    [save.rewriteCheckpoint],
+  );
   const beginRewrite = useCallback(() => {
     const epoch = undoEpoch();
     rewriteLocked.current = true;
@@ -403,8 +407,15 @@ export function EntityBody({
   // Локальная копия ради сужения типа: внутри колбэка кнопки TS `save.pendingDraft` уже не
   // сужает — поле объекта могло бы смениться между рендером и нажатием.
   useEffect(
-    () => registerBodyFlush(entity.id, settledBody, save.revisionForRewrite, beginRewrite),
-    [entity.id, settledBody, save.revisionForRewrite, beginRewrite],
+    () =>
+      registerBodyFlush(
+        entity.id,
+        settledBody,
+        save.revisionForRewrite,
+        beginRewrite,
+        rewriteCheckpoint,
+      ),
+    [entity.id, settledBody, save.revisionForRewrite, beginRewrite, rewriteCheckpoint],
   );
   const draft = save.pendingDraft;
 
@@ -488,26 +499,12 @@ export function EntityBody({
         <DraftBanner
           draft={draft}
           onKeep={() => {
-            // Два действия на одну кнопку: показать предложенный документ и отправить его.
-            // Порядок между ними безразличен (`draft` — значение ЭТОГО рендера, и
-            // `applyPendingDraft` его не меняет), а вот пропусти любое — и экран разойдётся с
-            // базой: без первого человек увидит прежний текст над уже отправленной правкой,
-            // без второго правка осталась бы только на диске.
-            // Запоминаем ЗДЕСЬ, а не ждём `onAccept`: баннер живёт над вкладками и нажимается
-            // в том числе из режима разметки, где редактора нет вовсе и извещать некому
-            // (ре-ревью раунда 4, Д1). Повтор безвреден: живой редактор подтвердит то же
-            // самое своим извещением.
-            //
-            // ГРАНИЦА, о которой надо знать: нажатая ИЗ РЕЖИМА РАЗМЕТКИ, эта кнопка не обновляет
-            // поле — тумблер берёт текст один раз, при открытии, и в поле остаётся текст ДО
-            // черновика. «Применить» следом вернёт его в тело, отменив только что применённый
-            // черновик. Свойство ПРЕ-СУЩЕСТВУЮЩЕЕ (проверено со снятой строкой выше — исход тот
-            // же), но два соседних действия обещают противоположное, и лечится это не здесь, а
-            // подпиской тумблера на приходящий документ (сегодня он от неё отказывается
-            // намеренно: живое обновление стирало бы набранное в поле).
-            shownDocRef.current = draft.doc;
-            setLocalDoc(draft.doc);
-            save.applyPendingDraft();
+            // The hook checks the exact offer before seating it, including a marker
+            // written by another tab while this banner was open.
+            save.applyPendingDraft((accepted) => {
+              shownDocRef.current = accepted;
+              setLocalDoc(accepted);
+            });
           }}
           onDiscard={save.discardPendingDraft}
         />
@@ -567,7 +564,7 @@ export function EntityBody({
               shownDocRef.current = accepted;
               // Редактор показывает документ КЭША — основа следующей правки теперь его ревизия (рулинг R-17). Местная
               // копия (черновик, тумблер) ревизию кэша не несёт: её основу ставит сам жест.
-              if (localDoc === null) save.onShown(shownBodyRevision(entity));
+              if (localDoc === null) save.onShown(shownBodyRevision(entity), accepted);
             }}
           />
         </BodyKindProvider>

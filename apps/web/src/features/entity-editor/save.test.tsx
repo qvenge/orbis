@@ -153,7 +153,7 @@ async function tick(ms = 0): Promise<void> {
  * есть при сохранении на каждый штрих, ровно том, против чего пауза и заведена (проверено
  * мутацией M1). Значение — договор, а не деталь.
  */
-const SAVE_PAUSE = 2000;
+const SAVE_PAUSE = 1000;
 const SLOW_THRESHOLD = 1000;
 
 /**
@@ -226,7 +226,7 @@ test('пауза отсчитывается от ПОСЛЕДНЕГО нажат
   await tick(SAVE_PAUSE - 500);
   s.api().onDocChange(THREE);
   await tick(SAVE_PAUSE - 500);
-  // Прошло 4500 мс — больше двух пауз, но ни одного молчания в две секунды.
+  // Прошло 1500 мс без секундной паузы.
   expect(s.updates()).toHaveLength(0);
 
   await tick(500);
@@ -870,17 +870,17 @@ test('таймер прежней записи не уносит в неё те�
   // таймеру нечего уносить, и дефект не проявляется (ровно поэтому мутант выживал два круга).
   const s = mountWithProps({ id: 'e1', entity: ENTITY });
   s.api().onDocChange(ONE);
-  await tick(SAVE_PAUSE - 1000); // таймер первой записи сработает через секунду
+  await tick(SAVE_PAUSE - 500); // таймер первой записи сработает через секунду
 
   await s.set({ id: 'e2', entity: SECOND });
   s.api().onDocChange(TWO); // правка ВТОРОЙ записи; её пауза — своя
 
   // Момент, в который сработал бы таймер первой записи.
-  await tick(1000);
+  await tick(500);
   expect(s.updates()).toEqual([]);
 
   // Пауза второй записи истекает своим чередом — и уезжает ровно её правка.
-  await tick(SAVE_PAUSE - 1000);
+  await tick(SAVE_PAUSE - 500);
   expect(s.updates()).toHaveLength(1);
   expect(s.updates()[0]?.input).toEqual({
     id: 'e2',
@@ -2249,4 +2249,53 @@ test('R61: eager фасад формы не экспортирует runtime vie
   expect(runtimeImports('../entity-detail/AspectSectionView.tsx')).toContain(
     '../../lib/registry/PropertyControl',
   );
+});
+
+test('continuous edits send the latest text at five seconds and wait for the active ACK', async () => {
+  const server = gatedServer();
+  const s = setup({ respond: server.respond });
+  s.api().onDocChange(ONE);
+  for (let index = 0; index < 6; index += 1) {
+    await tick(800);
+    s.api().onDocChange(index % 2 ? THREE : TWO);
+  }
+  await tick(199);
+  expect(s.updates()).toHaveLength(0);
+  await tick(1);
+  expect(s.updates()).toHaveLength(1);
+  expect(s.updates()[0]?.input).toMatchObject({ bodyDoc: THREE });
+  s.api().onDocChange(TWO);
+  await tick(5000);
+  expect(s.updates()).toHaveLength(1);
+  await server.answer(0, SAVED);
+  expect(s.updates()).toHaveLength(2);
+  expect(s.updates()[1]?.input).toMatchObject({ bodyDoc: TWO, expectedBodyRevision: 4 });
+  await server.answer(1, { ...SAVED, bodyRevision: 5 });
+});
+
+test('returning to the old text while a changed body is in flight sends the return after its ACK', async () => {
+  const server = gatedServer();
+  const s = setup({ respond: server.respond });
+  s.api().onDocChange(ONE);
+  await tick(SAVE_PAUSE);
+  s.api().onDocChange(BASE);
+  await tick(SAVE_PAUSE);
+  expect(s.updates()).toHaveLength(1);
+  await server.answer(0, SAVED);
+  expect(s.updates()).toHaveLength(2);
+  expect(s.updates()[1]?.input).toMatchObject({ bodyDoc: BASE, expectedBodyRevision: 4 });
+  await server.answer(1, { ...SAVED, bodyRevision: 5 });
+});
+
+test('a late ACK after the thirty-second timeout cannot adopt the body basis of a dead attempt', async () => {
+  const server = gatedServer();
+  const s = setup({ respond: server.respond });
+  s.api().onDocChange(ONE);
+  await tick(SAVE_PAUSE);
+  await tick(30_000);
+  await server.answer(0, SAVED);
+  s.api().onDocChange(TWO);
+  await tick(SAVE_PAUSE);
+  expect(s.updates()[1]?.input).toMatchObject({ bodyDoc: TWO, expectedBodyRevision: 3 });
+  await server.answer(1, SAVED);
 });

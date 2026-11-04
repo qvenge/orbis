@@ -24,6 +24,7 @@ import {
 import { stepsGeneration } from '../../features/entity-editor/arrows-stack';
 import {
   clearDraftsIn,
+  hydrateDrafts,
   listDraftsIn,
   setDraftScope,
 } from '../../features/entity-editor/draft-storage';
@@ -536,12 +537,18 @@ export function createBrowserLocalData() {
         ? {
             storage: backend,
             prefix: shared?.inputPrefix ?? '',
+            drafts: {
+              scope: { accountId: owner, graphId: scope.graphId, generation: inputAt },
+              persistent: !shared,
+              signal: abort.signal,
+            },
             isCurrent: () => !abort.signal.aborted && device.canPreserveInput(owner, inputAt),
             canPreserve: () => device.canPreserveInput(owner, inputAt),
           }
         : null,
     );
     setDraftScope(owner);
+    void hydrateDrafts();
     setRetryScope(owner);
     configureNavigation({ ...scope, generation: at, shared: !!shared, isCurrent });
     if (!shared) {
