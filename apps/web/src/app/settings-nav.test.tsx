@@ -1,10 +1,11 @@
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
-import { afterEach, beforeEach, expect, test } from 'vitest';
+import { afterEach, beforeAll, beforeEach, expect, test } from 'vitest';
 import { App } from '../App';
 import { useNav } from '../state/navigation';
 import { queryReply, renderWithProviders, wireEntity } from '../test/harness';
 import { recordAddress, topAddress } from '../test/nav';
 import { registryReply } from '../test/registry';
+import { loadDetailScreen } from './detail-screen-loader';
 import { resetFrame, stubLaunchMode, unstubLaunchMode } from './frame/frame-fixtures';
 
 // Настройки — экран хоста (срез 1б §6.4, §7.3): открываются пунктом «Настройки» раздела «Хост» меню
@@ -24,6 +25,11 @@ const handler = (path: string, input: unknown) => {
   if (path === 'entity.query') return queryReply([]);
   return {};
 };
+
+// Эти проверки начинают с уже доступной записи и проверяют навигацию.
+beforeAll(async () => {
+  await loadDetailScreen();
+});
 
 beforeEach(() => {
   stubLaunchMode('app');
