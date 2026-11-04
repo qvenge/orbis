@@ -4,6 +4,7 @@ import { act, fireEvent, screen, waitFor } from '@testing-library/react';
 import type { Editor } from '@tiptap/react';
 import { useState } from 'react';
 import { beforeEach, expect, test, vi } from 'vitest';
+import { PrivacyActionsContext } from '../../lib/local-data/privacy-actions';
 import { Markdown } from '../../lib/markdown/Markdown';
 import { createIntentsOf } from '../../lib/optimistic/use-create-intent';
 import { resetNavForTests, useNav } from '../../state/navigation';
@@ -247,4 +248,78 @@ test.each([
       expect(await screen.findByRole('link', { name })).toHaveAttribute('href', href);
   }
   expect(change).not.toHaveBeenCalled();
+});
+
+test('existing editor marks and Markdown switch shared policy without losing editing state', async () => {
+  const editor = { current: null as Editor | null };
+  const changed = vi.fn();
+  const doc = parseBody(
+    `[Editor record](/entity/${id}#label) [External](https://outside.test/notes)`,
+  );
+  const privacy = {
+    shared: true,
+    scope: { accountId: 'owner', graphId: 'owner', epoch: 0 },
+    canSeed: false,
+    logout() {},
+    toggleShared() {},
+    graphSeeded() {},
+  };
+  let setShared: (shared: boolean) => void = () => {};
+  function Fixture() {
+    const [shared, change] = useState(false);
+    setShared = change;
+    return (
+      <PrivacyActionsContext.Provider value={{ ...privacy, shared }}>
+        <BodyEditor
+          doc={doc}
+          onChange={changed}
+          onReady={(value) => {
+            editor.current = value;
+          }}
+        />
+        <Markdown source={`[Markdown record](//${location.host}/r/${id})`} />
+      </PrivacyActionsContext.Provider>
+    );
+  }
+  renderWithProviders(<Fixture />);
+  const link = await screen.findByRole('link', { name: 'Editor record' });
+  expect(link).toHaveAttribute('href', `/entity/${id}#label`);
+  const markdown = screen.getByRole('link', { name: 'Markdown record' });
+  const instance = editor.current;
+  if (!instance) throw new Error('Missing editor');
+  act(() => {
+    instance.commands.setTextSelection(2);
+    instance.commands.insertContent('x');
+  });
+  const editedLink = instance.view.dom.querySelector('a');
+  if (!editedLink) throw new Error('Missing edited link');
+  const before = instance.getJSON();
+  const selection = instance.state.selection.toJSON();
+  const calls = changed.mock.calls.length;
+  expect(instance.getText()).toContain('Exditor record');
+  act(() => setShared(true));
+  expect(editor.current).toBe(instance);
+  expect(instance.view.dom.querySelector('a')).toBe(editedLink);
+  expect(instance.getJSON()).toEqual(before);
+  expect(instance.state.selection.toJSON()).toEqual(selection);
+  expect(changed).toHaveBeenCalledTimes(calls);
+  expect(editedLink).not.toHaveAttribute('href');
+  expect(editedLink).not.toHaveAttribute('target');
+  expect(markdown).not.toHaveAttribute('href');
+  expect(screen.getByRole('link', { name: 'External' })).toHaveAttribute(
+    'href',
+    'https://outside.test/notes',
+  );
+  instance.view.dom.focus();
+  fireEvent.keyDown(instance.view.dom, { key: 'Enter' });
+  expect(topAddress()).toMatchObject({ kind: 'home' });
+  const focusedLink = instance.view.dom.querySelector('a');
+  if (!focusedLink) throw new Error('Missing shared link');
+  focusedLink.focus();
+  fireEvent.keyDown(focusedLink, { key: 'Enter' });
+  expect(topAddress()).toEqual(recordAddress(id));
+  act(() => setShared(false));
+  expect(focusedLink).toHaveAttribute('href', `/entity/${id}#label`);
+  expect(focusedLink).toHaveAttribute('target', '_blank');
+  expect(markdown).toHaveAttribute('href', `//${location.host}/r/${id}`);
 });

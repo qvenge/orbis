@@ -8,6 +8,7 @@ import { warmDetailScreen } from '../../app/detail-screen-loader';
 import { FrameAppContext } from '../../app/frame/FrameApp';
 import { HOST_HOME, useNav } from '../../state/navigation';
 import { renderWithProviders, wireEntity } from '../../test/harness';
+import { PrivacyActionsContext } from '../local-data/privacy-actions';
 import type { CreateAttempt } from '../optimistic/create-intents';
 import { createIntentsOf } from '../optimistic/use-create-intent';
 import { RecordLink } from './RecordLink';
@@ -280,4 +281,54 @@ test.each([
         },
   );
   expect(useNav.getState().pendingCreate).toBeNull();
+});
+
+test('shared record links keep in-app keyboard and pointer activation without a native address', async () => {
+  const user = userEvent.setup();
+  const privacy = {
+    shared: true,
+    scope: { accountId: 'owner', graphId: 'owner', epoch: 0 },
+    canSeed: false,
+    logout() {},
+    toggleShared() {},
+    graphSeeded() {},
+  };
+  let setShared: (shared: boolean) => void = () => {};
+  function Fixture() {
+    const [shared, change] = useState(false);
+    setShared = change;
+    return (
+      <PrivacyActionsContext.Provider value={{ ...privacy, shared }}>
+        <RecordLink id={id} href={`/entity/${id}#source`} target="_blank" download>
+          Shared record
+        </RecordLink>
+      </PrivacyActionsContext.Provider>
+    );
+  }
+  const { queryClient } = renderWithProviders(<Fixture />, read, { freshness: true });
+  const link = screen.getByRole('link', { name: 'Shared record' });
+  expect(link).toHaveAttribute('href', `/entity/${id}#source`);
+  expect(link).toHaveAttribute('target', '_blank');
+  expect(link).toHaveAttribute('download');
+  act(() => setShared(true));
+  expect(link).not.toHaveAttribute('href');
+  expect(link).not.toHaveAttribute('target');
+  expect(link).not.toHaveAttribute('download');
+  fireEvent.pointerDown(link, { pointerType: 'touch', pointerId: 1, button: 0 });
+  expect(read).toHaveBeenCalledTimes(1);
+  fireEvent.pointerCancel(link, { pointerType: 'touch', pointerId: 1 });
+  expect(queryClient.isFetching()).toBe(0);
+  fireEvent.click(link, { metaKey: true });
+  fireEvent(link, new MouseEvent('auxclick', { bubbles: true, button: 1 }));
+  expect(currentEntry(useNav.getState().model).address).toEqual(HOST_HOME);
+  await user.tab();
+  expect(link).toHaveFocus();
+  await user.keyboard('{Enter}');
+  expect(currentEntry(useNav.getState().model).address).toMatchObject({ kind: 'record', id });
+  act(() => useNav.setState({ model: initialModel(HOST_HOME) }));
+  fireEvent.click(link);
+  expect(currentEntry(useNav.getState().model).address).toMatchObject({ kind: 'record', id });
+  act(() => setShared(false));
+  expect(link).toHaveAttribute('href', `/entity/${id}#source`);
+  expect(link).toHaveAttribute('target', '_blank');
 });

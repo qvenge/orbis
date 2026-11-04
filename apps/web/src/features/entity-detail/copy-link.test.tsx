@@ -20,8 +20,9 @@ import {
   stubLaunchMode,
   unstubLaunchMode,
 } from '../../app/frame/frame-fixtures';
+import { PrivacyActionsContext } from '../../lib/local-data/privacy-actions';
 import { noteRegistryVersion, resetRegistryVersionForTests } from '../../lib/registry/useRegistry';
-import { useNav } from '../../state/navigation';
+import { configureNavigation, useNav } from '../../state/navigation';
 import { installCrashTrap, renderWithProviders } from '../../test/harness';
 import { BUILTIN_REGISTRY } from '../../test/registry';
 
@@ -113,4 +114,38 @@ test('«Открыть как запись» и открытая вкладка 
   const url = await copyLink();
   expect(url).toBe(`${window.location.origin}/a/${MY_APP}/r/${MY_SECTION}`);
   expect(url).not.toMatch(/[?#]/);
+});
+
+test('shared mode explicitly copies the canonical record URL while history stays opaque', async () => {
+  resetFrame(`/r/${BREAD}`);
+  const privacy = {
+    shared: true,
+    scope: { accountId: 'owner', graphId: 'owner', epoch: 0 },
+    canSeed: false,
+    logout() {},
+    toggleShared() {},
+    graphSeeded() {},
+  };
+  configureNavigation({
+    ...privacy.scope,
+    generation: 'shared-test',
+    shared: true,
+    isCurrent: () => true,
+  });
+  try {
+    renderWithProviders(
+      <PrivacyActionsContext.Provider value={privacy}>
+        <App />
+      </PrivacyActionsContext.Provider>,
+      frameHandler(frameWorld()),
+    );
+    await heading('Купить хлеб');
+    expect(location.pathname).toBe('/');
+    expect(JSON.stringify(history.state)).not.toContain(BREAD);
+    expect(await copyLink()).toBe(`${location.origin}/r/${BREAD}`);
+    expect(location.pathname).toBe('/');
+    expect(JSON.stringify(history.state)).not.toContain(BREAD);
+  } finally {
+    configureNavigation(undefined);
+  }
 });

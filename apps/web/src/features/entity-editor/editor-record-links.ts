@@ -10,13 +10,13 @@ import {
 function anchorAt(root: HTMLElement, target: EventTarget | null) {
   const anchor =
     target instanceof Element
-      ? target.closest<HTMLAnchorElement>('a[href], a[data-pending-record]')
+      ? target.closest<HTMLAnchorElement>('a[href], a[data-record-action]')
       : null;
   return anchor && root.contains(anchor) ? anchor : undefined;
 }
 
 function recordIdAt(anchor: HTMLAnchorElement) {
-  if (anchor.dataset.pendingRecord) return anchor.dataset.pendingRecord;
+  if (anchor.dataset.recordAction) return anchor.dataset.recordAction;
   const href = anchor.getAttribute('href');
   if (href) return recordIdOfLink(href, anchor.ownerDocument);
 }
@@ -26,56 +26,67 @@ type PendingLookup = Pick<
   'availability' | 'subscribePending'
 >;
 
-/** Keep the document's Link mark and its clipboard form intact. Only the in-editor
- * DOM loses the native href while that UUID is unconfirmed. */
-export function recordLinkMarkView({
-  availability,
-  subscribePending,
-}: PendingLookup): MarkViewConstructor {
-  return (mark, view, inline) => {
+const linkAttributes = ['href', 'target', 'rel', 'download', 'role', 'tabindex', 'aria-disabled'];
+
+/** Keep native URL policy in the view, independently of the document and selection. */
+export function recordLinkMarkView({ availability, subscribePending }: PendingLookup) {
+  const mounted = new Set<() => void>();
+  let nativeLinks = true;
+  const create: MarkViewConstructor = (mark, view, inline) => {
     const spec = mark.type.spec.toDOM?.(mark, inline);
     if (!spec) throw new Error('Expected a DOM spec for the Link mark');
     const { dom, contentDOM } = DOMSerializer.renderSpec(view.dom.ownerDocument, spec);
     if (!(dom instanceof HTMLElement)) throw new Error('Expected an HTML Link mark');
     const anchor = dom instanceof HTMLAnchorElement ? dom : undefined;
-    const href = anchor?.getAttribute('href');
-    const id = anchor && href && recordIdAt(anchor);
-    if (!anchor || !href || !id) return { dom, contentDOM };
+    const id = anchor && recordIdAt(anchor);
+    if (!anchor || !id) return { dom, contentDOM };
 
-    const tabIndex = anchor.getAttribute('tabindex');
-    let status: ReturnType<PendingLookup['availability']>;
+    const original = linkAttributes.map((name) => [name, anchor.getAttribute(name)] as const);
+    let status: 'native' | 'shared' | 'pending' | 'rejected' = 'native';
     const sync = () => {
-      const next = availability(id);
+      const next = availability(id) ?? (nativeLinks ? 'native' : 'shared');
       if (next === status) return;
       status = next;
-      if (status) {
-        anchor.removeAttribute('href');
-        anchor.setAttribute('role', 'button');
-        anchor.setAttribute('tabindex', status === 'pending' ? '0' : '-1');
-        if (status === 'rejected') anchor.setAttribute('aria-disabled', 'true');
-        else anchor.removeAttribute('aria-disabled');
-        anchor.dataset.pendingRecord = id;
-      } else {
-        anchor.setAttribute('href', href);
-        anchor.removeAttribute('role');
-        anchor.removeAttribute('aria-disabled');
-        if (tabIndex === null) anchor.removeAttribute('tabindex');
-        else anchor.setAttribute('tabindex', tabIndex);
-        delete anchor.dataset.pendingRecord;
+      if (next === 'native') {
+        for (const [name, value] of original) {
+          if (value === null) anchor.removeAttribute(name);
+          else anchor.setAttribute(name, value);
+        }
+        delete anchor.dataset.recordAction;
+        return;
       }
+      for (const name of ['href', 'target', 'rel', 'download']) anchor.removeAttribute(name);
+      anchor.setAttribute('role', next === 'shared' ? 'link' : 'button');
+      anchor.setAttribute('tabindex', next === 'rejected' ? '-1' : '0');
+      if (next === 'rejected') anchor.setAttribute('aria-disabled', 'true');
+      else anchor.removeAttribute('aria-disabled');
+      anchor.dataset.recordAction = id;
     };
     sync();
+    mounted.add(sync);
+    const unsubscribe = subscribePending(sync);
     return {
       dom,
       contentDOM,
-      destroy: subscribePending(sync),
+      destroy() {
+        mounted.delete(sync);
+        unsubscribe();
+      },
       ignoreMutation: (mutation) =>
         mutation.type === 'attributes' &&
         mutation.target === dom &&
-        ['href', 'role', 'tabindex', 'data-pending-record', 'aria-disabled'].includes(
-          mutation.attributeName ?? '',
-        ),
+        (mutation.attributeName === 'data-record-action' ||
+          linkAttributes.includes(mutation.attributeName ?? '')),
     };
+  };
+  return {
+    create,
+    setNativeLinks(next: boolean) {
+      if (nativeLinks === next) return;
+      nativeLinks = next;
+      // Reconcile mounted marks without rebuilding the editor or losing its selection.
+      for (const sync of mounted) sync();
+    },
   };
 }
 
@@ -196,7 +207,7 @@ export function bindEditorRecordLinks(
         return;
       const link = find(event);
       if (!link || link.anchor !== document.activeElement) return;
-      if (event.key === ' ' && !link.anchor.dataset.pendingRecord) return;
+      if (event.key === ' ' && link.anchor.getAttribute('role') !== 'button') return;
       event.preventDefault();
       open(link.id);
     },

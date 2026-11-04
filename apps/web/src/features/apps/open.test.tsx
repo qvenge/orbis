@@ -15,8 +15,9 @@ import {
   stubLaunchMode,
   unstubLaunchMode,
 } from '../../app/frame/frame-fixtures';
+import { PrivacyActionsContext } from '../../lib/local-data/privacy-actions';
 import { noteRegistryVersion, resetRegistryVersionForTests } from '../../lib/registry/useRegistry';
-import { useNav } from '../../state/navigation';
+import { configureNavigation, useNav } from '../../state/navigation';
 import { installCrashTrap, renderWithProviders, wireEntity } from '../../test/harness';
 import { BUILTIN_REGISTRY } from '../../test/registry';
 import { useToastStore } from '../../ui/toast-store';
@@ -559,4 +560,49 @@ test('m-1: «Сменить, где открывать…» при открыт�
   );
   await waitFor(() => expect(screen.queryByRole('menu')).toBeNull());
   expect(screen.getAllByTestId('place-question')).toHaveLength(1);
+});
+
+test('shared record menu item has no native URL and opens the selected app with Enter', async () => {
+  resetFrame(`/r/${TASK}`);
+  const privacy = {
+    shared: true,
+    scope: { accountId: 'owner', graphId: 'owner', epoch: 0 },
+    canSeed: false,
+    logout() {},
+    toggleShared() {},
+    graphSeeded() {},
+  };
+  configureNavigation({
+    ...privacy.scope,
+    generation: 'shared-test',
+    shared: true,
+    isCurrent: () => true,
+  });
+  try {
+    const world = appsWorld({
+      apps: [appRow(MY, 'Мой дом', '🏡', { [APP_OPENS_OVER]: [PROJ] }), PROJ_ROW],
+      templates: [TPL_MY, TPL_PROJ],
+    });
+    renderWithProviders(
+      <PrivacyActionsContext.Provider value={privacy}>
+        <App />
+      </PrivacyActionsContext.Provider>,
+      appsHandler(world),
+    );
+    await heading('Починить кран');
+    await waitFor(() => expect(navModel().activeApp).toBe(MY));
+    fireEvent.click(screen.getByTestId('screen-menu'));
+    const item = await screen.findByRole('menuitem', { name: 'Открыть в «Проекты»' });
+    expect(item).not.toHaveAttribute('href');
+    fireEvent.click(item, { metaKey: true });
+    fireEvent(item, new MouseEvent('auxclick', { bubbles: true, button: 1 }));
+    expect(navModel().activeApp).toBe(MY);
+    item.focus();
+    fireEvent.keyDown(item, { key: 'Enter' });
+    await waitFor(() => expect(navModel().activeApp).toBe(PROJ));
+    expect(shownPath()).toBe('/');
+    expect(JSON.stringify(window.history.state)).not.toContain(TASK);
+  } finally {
+    configureNavigation(undefined);
+  }
 });

@@ -42,11 +42,12 @@ export function RecordLink({
   disabled,
   prose,
   onOpen,
+  onKeyDown,
   children,
   ...attributes
 }: Props) {
   const controller = useRecordLinkController(app);
-  const { prepare } = controller;
+  const { nativeLinks, prepare } = controller;
   const local = useLocalCreateTarget(id);
   const unavailable = pending || Boolean(local);
   const blocked = disabled || local?.status === 'rejected';
@@ -63,7 +64,8 @@ export function RecordLink({
   function activate(event: MouseEvent<HTMLElement>) {
     if (
       !isPlainRecordActivation(event) ||
-      (!unavailable &&
+      (nativeLinks &&
+        !unavailable &&
         ((target && target !== '_self') || (download !== undefined && download !== false)))
     )
       return;
@@ -82,13 +84,13 @@ export function RecordLink({
 
   if (blocked)
     return (
-      <button {...attributes} type="button" disabled>
+      <button {...attributes} type="button" onKeyDown={onKeyDown} disabled>
         {children}
       </button>
     );
   if (unavailable)
     return (
-      <button {...attributes} type="button" onClick={activate}>
+      <button {...attributes} type="button" onKeyDown={onKeyDown} onClick={activate}>
         {children}
       </button>
     );
@@ -97,11 +99,30 @@ export function RecordLink({
     <a
       {...attributes}
       data-record-link-control={prose ? undefined : ''}
-      href={href ?? controller.href(id)}
-      target={target}
-      rel={rel}
-      download={download}
+      href={nativeLinks ? (href ?? controller.href(id)) : undefined}
+      target={nativeLinks ? target : undefined}
+      rel={nativeLinks ? rel : undefined}
+      download={nativeLinks ? download : undefined}
+      role={nativeLinks ? attributes.role : (attributes.role ?? 'link')}
+      tabIndex={nativeLinks ? attributes.tabIndex : (attributes.tabIndex ?? 0)}
       onClick={activate}
+      onKeyDown={(event) => {
+        onKeyDown?.(event);
+        if (
+          nativeLinks ||
+          event.key !== 'Enter' ||
+          event.repeat ||
+          event.nativeEvent.isComposing ||
+          event.defaultPrevented ||
+          event.altKey ||
+          event.ctrlKey ||
+          event.metaKey ||
+          event.shiftKey
+        )
+          return;
+        event.preventDefault();
+        event.currentTarget.click();
+      }}
       onPointerEnter={(event) => {
         if (event.pointerType === 'mouse') gestures.enter(id);
       }}

@@ -311,11 +311,14 @@ function BodyEditorInstance({
         : acquireEditor(entityId, () => createBodyEditor(entityId, doc.doc))),
   );
   const editor = nativeEditor ?? cachedEditor;
-  const { open, prepare, availability, subscribePending } = useRecordLinkController();
+  const { open, prepare, nativeLinks, availability, subscribePending } = useRecordLinkController();
   const linkMarkView = useMemo(
     () => recordLinkMarkView({ availability, subscribePending }),
     [availability, subscribePending],
   );
+  useLayoutEffect(() => {
+    linkMarkView.setNativeLinks(nativeLinks);
+  }, [linkMarkView, nativeLinks]);
   useLayoutEffect(() => {
     if (!editor.isDestroyed)
       return bindEditorRecordLinks(editor.view.dom, { open, prepare }, () => editor.isEditable);
@@ -343,7 +346,7 @@ function BodyEditorInstance({
       editable: !readOnly,
       editorProps: {
         handleClick: suppressLinkPluginMouseUp,
-        markViews: { link: linkMarkView },
+        markViews: { link: linkMarkView.create },
         attributes: {
           // Та же коробка, что у первого кадра: текст не должен прыгать при подмене.
           class: `${BODY_BOX_CLASS} outline-none`,

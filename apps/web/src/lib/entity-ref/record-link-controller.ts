@@ -4,6 +4,7 @@ import { useCallback, useContext } from 'react';
 import { FrameAppContext } from '../../app/frame/FrameApp';
 import { appRefOf, useNav } from '../../state/navigation';
 import { trpc } from '../../trpc';
+import { usePrivacyActions } from '../local-data/privacy-actions';
 import { createIntentsOf, localCreateTarget } from '../optimistic/create-intent-scope';
 import { claimRecordPrefetch, prefetchRecord, type RecordIntent } from './prefetch';
 
@@ -17,6 +18,7 @@ const noop = () => {};
 
 export function useRecordLinkController(app?: AppKey) {
   const frame = useContext(FrameAppContext);
+  const nativeLinks = !usePrivacyActions()?.shared;
   const linkApp = useNav(
     ({ model }) =>
       app ?? (frame?.via.startsWith('host-') ? HOST_APP : (frame?.app ?? model.activeApp)),
@@ -71,7 +73,7 @@ export function useRecordLinkController(app?: AppKey) {
       buildAddress({ kind: 'record', app: appRefOf(app ?? linkApp), id }),
     [linkApp],
   );
-  return { open, prepare, href, availability, subscribePending: registry.subscribe };
+  return { open, prepare, href, nativeLinks, availability, subscribePending: registry.subscribe };
 }
 
 export function isPlainRecordActivation(event: {

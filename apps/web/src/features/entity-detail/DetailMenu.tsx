@@ -250,7 +250,7 @@ function RecordMenu({
   hostItems,
   frameMenu,
 }: RecordMenuProps & ScreenMenuContentProps & { frameMenu: ReturnType<typeof useFrameMenu> }) {
-  const { open: openRecord, prepare, href, availability } = useRecordLinkController();
+  const { open: openRecord, prepare, href, nativeLinks, availability } = useRecordLinkController();
   // Re-render a visible menu item when its target receives the create ACK.
   useLocalCreateTarget(view.kind === 'configuring' ? view.templateId : entity.id);
   const gestures = useMemo(() => recordLinkGestures(prepare), [prepare]);
@@ -275,7 +275,7 @@ function RecordMenu({
     const address = href(id, app);
     return {
       link: {
-        href: address,
+        href: nativeLinks ? address : undefined,
         onPointerEnter: (event) => {
           if (event.pointerType !== 'mouse') return;
           hoveredHref.current = address;
