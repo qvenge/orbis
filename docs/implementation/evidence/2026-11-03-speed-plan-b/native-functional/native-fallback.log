@@ -1,0 +1,23 @@
+bun test v1.2.7 (5c0fa6dc)
+
+.superpowers/sdd/2026-11-03-speed-plan-b/native-fallback.test.ts:
+{"scenario":"normal-ack-durable","token":{"accountId":"00909352-606a-4830-8947-3c9ebf70d31c","graphId":"00909352-606a-4830-8947-3c9ebf70d31c","generation":"0:0","entityId":"01a1a777-85ae-7020-9406-9fd8f43b21a9","writerId":"01a1a777-8a7e-7477-8344-4bb1a32c5afb","nonce":"01a1a777-8a7e-7477-8344-4e3a15b50c54","sequence":1,"basis":{"revision":1}},"revision":2}
+{"scenario":"response-off","lane":"idb","primaryRevision":1,"currentRevision":4,"oldResponseUntouchedInFallback":true,"acknowledgedCopyKept":true,"recoveryFromStorageUnderDivergence":true,"tokenA":{"accountId":"00909352-606a-4830-8947-3c9ebf70d31c","graphId":"00909352-606a-4830-8947-3c9ebf70d31c","generation":"0:0","entityId":"01a1a777-7da6-73e8-8742-f07f00f98e90","writerId":"01a1a777-9a5b-70ec-bb22-a0c4fdb9fb26","nonce":"01a1a777-9a5b-70ec-bb22-a515ba56223c","sequence":1,"basis":{"revision":1}},"tokenB":{"accountId":"00909352-606a-4830-8947-3c9ebf70d31c","graphId":"00909352-606a-4830-8947-3c9ebf70d31c","generation":"0:0","entityId":"01a1a777-7da6-73e8-8742-f07f00f98e90","writerId":"01a1a777-9a5b-70ec-bb22-a0c4fdb9fb26","nonce":"01a1a777-9ee5-7420-8a9f-b02cb56aab7d","sequence":2,"basis":{"revision":1}},"noResponseRestoreBeforeOffGet":true,"legacyAckInHead":false,"noResend":true,"serviceWorker":"blocked to isolate same-SHA flag"}
+[Bun.serve]: request timed out after 10 seconds. Pass `idleTimeout` to configure.
+16 |   const end = Date.now() + 12_000;
+17 |   do {
+18 |     if (await check()) return;
+19 |     await Bun.sleep(25);
+20 |   } while (Date.now() < end);
+21 |   throw Error(label);
+             ^
+error: off reload makes a real credentialed entity.get
+      at <anonymous> (/private/tmp/orbis-b13-final-ci.07CROy/native-off/.superpowers/sdd/2026-11-03-speed-plan-b/native-fallback.test.ts:21:9)
+(fail) same-SHA normal → response-off → normal keeps B12 native and emergency input [35376.53ms]
+(skip) two real compatible build SHAs switch response buster and preserve exact input
+
+ 0 pass
+ 1 skip
+ 1 fail
+ 39 expect() calls
+Ran 2 tests across 1 files. [36.56s]

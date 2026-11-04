@@ -1,0 +1,25 @@
+bun test v1.2.7 (5c0fa6dc)
+
+.superpowers/sdd/2026-11-03-speed-plan-b/native-text-401.probe.test.ts:
+(skip) exact input through close
+(skip) exact input through network
+{"lane":"401","stage":"record:opened"}
+{"lane":"401","stage":"settings:ready"}
+{"lane":"401","stage":"input:pending","token":{"accountId":"75f706fb-ff53-425c-94a5-7e1ca861f65c","graphId":"75f706fb-ff53-425c-94a5-7e1ca861f65c","generation":"0:0","entityId":"01a1a77d-ab35-748b-baba-8a7ee0b71618","writerId":"01a1a77d-b412-7634-9ba1-b8ad894965b2","nonce":"01a1a77d-b413-7340-8359-d75f9b92dbfe","sequence":1,"basis":{"revision":1}}}
+{"lane":"401","stage":"policy:submitting-settings"}
+{"lane":"401","stage":"401:request-forwarded-without-authorization"}
+{"lane":"401","stage":"401:hono-response","status":401}
+{"lane":"401","stage":"policy:browser-response"}
+{"lane":"401","stage":"policy:other-tab-transition"}
+{"lane":"401","stage":"policy:token-preserved","storage":"emergency"}
+{"lane":"401","stage":"auth:local-only","grant":"password","method":"POST"}
+{"lane":"401","stage":"auth:sign-in-settled"}
+{"scenario":"text-401","before":"idb","after":"idb","token":{"accountId":"75f706fb-ff53-425c-94a5-7e1ca861f65c","graphId":"75f706fb-ff53-425c-94a5-7e1ca861f65c","generation":"0:0","entityId":"01a1a77d-ab35-748b-baba-8a7ee0b71618","writerId":"01a1a77d-b412-7634-9ba1-b8ad894965b2","nonce":"01a1a77d-b413-7340-8359-d75f9b92dbfe","sequence":1,"basis":{"revision":1}},"writes":0,"recoveryOffer":true,"workers":[],"oldEntry":"/assets/index-DxSgzNZF.js","newEntry":"/assets/index-DxSgzNZF.js","fault":"actual Hono unauthorized"}
+(pass) exact input through 401 [6570.84ms]
+(skip) exact input through 412-sw-update
+
+ 1 pass
+ 3 skip
+ 0 fail
+ 10 expect() calls
+Ran 4 tests across 1 files. [7.46s]

@@ -1,0 +1,6 @@
+{"label":"input","shell":["assets/index-Cyb3apjK.js"],"browser":"156.0.8078.80"}
+{"label":"normal native control","href":"/r/10000000-0000-4000-8000-000000009901","pathname":"/r/10000000-0000-4000-8000-000000009901"}
+{"label":"shared native activation","kind":"middle","path":"/","opened":0}
+{"label":"shared native activation","kind":"modified","path":"/","opened":0}
+{"label":"plain shared control","pathname":"/","state":{"orbisNav":3,"id":2,"lineage":"258ba64a-f434-43b0-b53b-5314738ed057"}}
+{"label":"closed Chrome History SQLite","rows":{"normal":["/r/10000000-0000-4000-8000-000000009901"],"middle":[],"modified":[],"plain":[]},"authHits":["POST /auth/v1/token","POST /auth/v1/token"]}

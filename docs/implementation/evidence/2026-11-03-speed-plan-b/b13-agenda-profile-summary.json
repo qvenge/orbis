@@ -1,0 +1,168 @@
+{
+  "samples": {
+    "before": {
+      "spans": [
+        {
+          "phase1_identity": 4.628236999997171,
+          "phase1_context": 4.73547900000267,
+          "phase1_prepare": 2.6787029999977676,
+          "phase1_end": 0.9827809999987949,
+          "materialize": 15.568308000001707,
+          "phase2_identity": 3.3308669999969425,
+          "phase2_execute_all": 80.28308000000106,
+          "phase2_end": 1.1016880000024685
+        },
+        {
+          "phase1_identity": 3.403149999998277,
+          "phase1_context": 3.637894999999844,
+          "phase1_prepare": 2.386491000004753,
+          "phase1_end": 2.1875719999952707,
+          "materialize": 13.01722300000256,
+          "phase2_identity": 3.975811000003887,
+          "phase2_execute_all": 95.95073799999955,
+          "phase2_end": 1.329717000000528
+        },
+        {
+          "phase1_identity": 4.666269999994256,
+          "phase1_context": 6.549930000001041,
+          "phase1_prepare": 2.7724440000019968,
+          "phase1_end": 1.5984870000029332,
+          "materialize": 46.03851599999325,
+          "phase2_identity": 7.112604000001738,
+          "phase2_execute_all": 79.58898300000146,
+          "phase2_end": 1.1723320000019157
+        },
+        {
+          "phase1_identity": 2.7957470000037574,
+          "phase1_context": 5.325710999997682,
+          "phase1_prepare": 2.3586060000016005,
+          "phase1_end": 0.896364000000176,
+          "materialize": 14.911354999996547,
+          "phase2_identity": 3.6137930000040797,
+          "phase2_execute_all": 71.12091700000019,
+          "phase2_end": 0.8696419999978389
+        },
+        {
+          "phase1_identity": 2.9851269999999204,
+          "phase1_context": 3.615407999997842,
+          "phase1_prepare": 2.146500000002561,
+          "phase1_end": 0.7706790000011097,
+          "materialize": 15.1383679999999,
+          "phase2_identity": 4.221831000002567,
+          "phase2_execute_all": 76.461844999998,
+          "phase2_end": 2.277483999998367
+        }
+      ],
+      "totals": [
+        113.72962899999402,
+        126.23435100000643,
+        149.91171900000336,
+        102.25076599999738,
+        107.96816799999942
+      ],
+      "median": {
+        "phase1_identity": 3.403149999998277,
+        "phase1_context": 4.73547900000267,
+        "phase1_prepare": 2.386491000004753,
+        "phase1_end": 0.9827809999987949,
+        "materialize": 15.1383679999999,
+        "phase2_identity": 3.975811000003887,
+        "phase2_execute_all": 79.58898300000146,
+        "phase2_end": 1.1723320000019157,
+        "phase1_total": 11.615107999998145,
+        "phase2_total": 84.71563500000047,
+        "total": 113.72962899999402,
+        "caller_overhead": 0.35863099999551196
+      }
+    },
+    "candidate": {
+      "spans": [
+        {
+          "phase1_identity": 3.5240599999960978,
+          "phase1_context": 5.371147000005294,
+          "phase1_prepare": 3.0895949999976438,
+          "phase1_end": 2.5434150000000955,
+          "materialize": 13.62321399999928,
+          "phase2_identity": 4.542295999999624,
+          "phase2_execute_all": 86.13726699999825,
+          "phase2_end": 2.37536099999852
+        },
+        {
+          "phase1_identity": 3.8336679999993066,
+          "phase1_context": 4.7779369999989285,
+          "phase1_prepare": 3.616777999995975,
+          "phase1_end": 1.3690530000021681,
+          "materialize": 17.864260000002105,
+          "phase2_identity": 5.127057999998215,
+          "phase2_execute_all": 85.83442400000058,
+          "phase2_end": 0.8551319999969564
+        },
+        {
+          "phase1_identity": 2.807229999998526,
+          "phase1_context": 3.8133319999978994,
+          "phase1_prepare": 2.4987509999991744,
+          "phase1_end": 0.9243439999991097,
+          "materialize": 15.175945000002685,
+          "phase2_identity": 3.0562859999990906,
+          "phase2_execute_all": 84.03695999999763,
+          "phase2_end": 1.008564000003389
+        },
+        {
+          "phase1_identity": 3.7864489999992657,
+          "phase1_context": 7.145127000003413,
+          "phase1_prepare": 2.367194999998901,
+          "phase1_end": 0.9426129999992554,
+          "materialize": 20.460519000000204,
+          "phase2_identity": 3.3400089999995544,
+          "phase2_execute_all": 79.62341100000049,
+          "phase2_end": 0.9604499999986729
+        },
+        {
+          "phase1_identity": 2.948473999997077,
+          "phase1_context": 4.37142500000482,
+          "phase1_prepare": 2.9247509999986505,
+          "phase1_end": 0.9542960000035237,
+          "materialize": 15.214522999995097,
+          "phase2_identity": 4.326719000004232,
+          "phase2_execute_all": 81.67366399999446,
+          "phase2_end": 1.100774000005913
+        }
+      ],
+      "totals": [
+        121.69617399999697,
+        123.65767600000254,
+        113.6677869999985,
+        118.9588769999973,
+        113.88514700000087
+      ],
+      "median": {
+        "phase1_identity": 3.5240599999960978,
+        "phase1_context": 4.7779369999989285,
+        "phase1_prepare": 2.9247509999986505,
+        "phase1_end": 0.9542960000035237,
+        "materialize": 15.214522999995097,
+        "phase2_identity": 4.326719000004232,
+        "phase2_execute_all": 84.03695999999763,
+        "phase2_end": 1.008564000003389,
+        "phase1_total": 13.597435999996378,
+        "phase2_total": 88.10181000000011,
+        "total": 118.9588769999973,
+        "caller_overhead": 0.37052099999709753
+      }
+    }
+  },
+  "deltaMedian": {
+    "phase1_identity": 0.1209099999978207,
+    "phase1_context": 0.04245799999625888,
+    "phase1_prepare": 0.5382599999938975,
+    "phase1_end": -0.02848499999527121,
+    "materialize": 0.0761549999951967,
+    "phase2_identity": 0.35090800000034506,
+    "phase2_execute_all": 4.447976999996172,
+    "phase2_end": -0.16376799999852665,
+    "phase1_total": 1.9823279999982333,
+    "phase2_total": 3.386174999999639,
+    "total": 5.229248000003281,
+    "caller_overhead": 0.011890000001585577
+  }
+}

@@ -1,0 +1,12 @@
+
+ RUN  v4.1.9 /private/tmp/orbis-b13-final-ci.07CROy/web-serial/apps/web
+
+Not implemented: Window's scrollBy() method
+Not implemented: Window's scrollBy() method
+Not implemented: navigation to another Document
+
+ Test Files  218 passed | 2 skipped (220)
+      Tests  3061 passed | 2 skipped (3063)
+   Start at  00:55:54
+   Duration  845.99s (transform 8.52s, setup 24.49s, import 130.17s, tests 457.57s, environment 183.67s)
+

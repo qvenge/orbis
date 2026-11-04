@@ -1,0 +1,10 @@
+bun test v1.2.7 (5c0fa6dc)
+
+.superpowers/sdd/2026-11-03-speed-plan-b/native-body-read-causality.test.ts:
+{"scenario":"30s-body-sidechat-action-counts","strokes":43,"typing":{"bodyWrites":6,"targetGetRequests":0,"allEntityGets":0,"chatReads":0,"watchOpens":0,"heartbeats":0,"reconciles":0},"strict":{"bodyWrites":1,"targetGetRequests":0,"allEntityGets":0,"chatReads":0,"watchOpens":0,"heartbeats":0,"reconciles":0},"afterAck":{"bodyWrites":0,"targetGetRequests":0,"allEntityGets":0,"chatReads":0,"watchOpens":0,"heartbeats":0,"reconciles":0},"strictReads":[],"txId":"55042","bodyRevision":8,"token":{"accountId":"e4dd7a98-b11d-4ff9-ad03-16442f1d7602","graphId":"e4dd7a98-b11d-4ff9-ad03-16442f1d7602","generation":"0:0","entityId":"01a1a786-701d-7439-9066-c02331768ef5","writerId":"01a1a786-7cb7-764b-b354-421b246b8e49","nonce":"01a1a786-f54e-714d-8f10-46dac8daee30","sequence":44,"basis":{"revision":7}},"durableBeforeReleasingGets":true}
+(pass) real detail and side chat keep action-correlated read counts and exact ACK persistence [43030.02ms]
+
+ 1 pass
+ 0 fail
+ 10 expect() calls
+Ran 1 tests across 1 files. [43.94s]

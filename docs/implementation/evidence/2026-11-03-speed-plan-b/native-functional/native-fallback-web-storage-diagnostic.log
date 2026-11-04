@@ -1,0 +1,50 @@
+bun test v1.2.7 (5c0fa6dc)
+
+.superpowers/sdd/2026-11-03-speed-plan-b/native-fallback-web-storage.probe.test.ts:
+{"event":"off-request","method":"POST","path":"/trpc/perf.report","authenticated":true,"matchingRecord":false}
+{"event":"off-request","method":"POST","path":"/trpc/perf.report","authenticated":true,"matchingRecord":false}
+{"event":"off-request","method":"GET","path":"/trpc/entity.get,registry.effective,user.getSettings","authenticated":true,"matchingRecord":true}
+{"event":"off-request","method":"GET","path":"/trpc/changes.watch","authenticated":true,"matchingRecord":false}
+{"event":"off-request","method":"GET","path":"/trpc/entity.query,entity.query,entity.query","authenticated":true,"matchingRecord":false}
+{"event":"off-request","method":"GET","path":"/trpc/entity.resolveRefs","authenticated":true,"matchingRecord":false}
+{"event":"off-request","method":"POST","path":"/trpc/entity.blocks","authenticated":true,"matchingRecord":false}
+{"event":"off-request","method":"GET","path":"/trpc/routine.proposalsForEntity,entity.query","authenticated":true,"matchingRecord":true}
+{"event":"off-request","method":"POST","path":"/trpc/entity.update","authenticated":true,"matchingRecord":false}
+{"event":"off-request","method":"POST","path":"/trpc/perf.report","authenticated":true,"matchingRecord":false}
+{"event":"off-request","method":"POST","path":"/trpc/perf.report","authenticated":true,"matchingRecord":false}
+{"event":"off-request","method":"GET","path":"/trpc/entity.get,registry.effective,user.getSettings","authenticated":true,"matchingRecord":true}
+{"event":"off-request","method":"GET","path":"/trpc/changes.watch","authenticated":true,"matchingRecord":false}
+{"event":"off-request","method":"GET","path":"/trpc/entity.query,entity.query,entity.query","authenticated":true,"matchingRecord":false}
+{"event":"off-request","method":"GET","path":"/trpc/entity.resolveRefs","authenticated":true,"matchingRecord":false}
+{"event":"off-request","method":"POST","path":"/trpc/entity.blocks","authenticated":true,"matchingRecord":false}
+{"event":"off-request","method":"GET","path":"/trpc/routine.proposalsForEntity,entity.query","authenticated":true,"matchingRecord":true}
+{"event":"off-request","method":"POST","path":"/trpc/perf.report","authenticated":true,"matchingRecord":false}
+{"event":"off-request","method":"POST","path":"/trpc/perf.report","authenticated":true,"matchingRecord":false}
+{"event":"off-request","method":"GET","path":"/trpc/entity.get,registry.effective,user.getSettings","authenticated":true,"matchingRecord":true}
+{"event":"off-request","method":"GET","path":"/trpc/changes.watch","authenticated":true,"matchingRecord":false}
+{"event":"off-request","method":"GET","path":"/trpc/entity.query,entity.query,entity.query","authenticated":true,"matchingRecord":false}
+{"event":"off-request","method":"GET","path":"/trpc/entity.resolveRefs","authenticated":true,"matchingRecord":false}
+{"event":"off-request","method":"POST","path":"/trpc/entity.blocks","authenticated":true,"matchingRecord":false}
+{"event":"off-request","method":"GET","path":"/trpc/routine.proposalsForEntity,entity.query","authenticated":true,"matchingRecord":true}
+57707 |     "use strict";
+57708 |     init_rtti();
+57709 |     init_serializers();
+57710 |     PlaywrightError = class extends Error {
+57711 |       constructor() {
+57712 |         super(...arguments);
+                ^
+error: evaluate: Error: Pending head still exists
+    at eval (eval at evaluate (:311:30), <anonymous>:7:19)
+    at UtilityScript.evaluate (<anonymous>:313:16)
+    at UtilityScript.<anonymous> (<anonymous>:1:44)
+  log: [],
+
+      at eval (eval at evaluate (/private/tmp/orbis-b13-final-ci.07CROy/native-off/node_modules/playwright-core/lib/coreBundle.js:57712:9)
+(fail) same-SHA normal → response-off → normal keeps B12 native and emergency input [12049.39ms]
+(skip) two real compatible build SHAs switch response buster and preserve exact input
+
+ 0 pass
+ 1 skip
+ 1 fail
+ 31 expect() calls
+Ran 2 tests across 1 files. [12.95s]

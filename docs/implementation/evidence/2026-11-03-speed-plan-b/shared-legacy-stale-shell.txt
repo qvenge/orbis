@@ -1,0 +1,33 @@
+{"type":"versions","chrome":"156.0.8078.80","bun":"1.2.7"}
+{"type":"case","epoch":1,"name":"repeat-claim-control","origin":"http://127.0.0.1:63177"}
+{"type":"worker-first","before":null,"after":"http://127.0.0.1:63177/sw.js?rev=first","changes":["http://127.0.0.1:63177/sw.js?rev=first"]}
+{"type":"before-barrier","beforeHide":{"id":"6bb768bd-cb17-47f3-a2e8-bba3591324f3","shell":"legacy","pageshow":[false],"navType":"navigate","controller":"http://127.0.0.1:63177/sw.js?rev=first","legacyWrite":{"id":"6bb768bd-cb17-47f3-a2e8-bba3591324f3","persisted":false}},"hidden":{"persisted":true,"id":"6bb768bd-cb17-47f3-a2e8-bba3591324f3","controller":"http://127.0.0.1:63177/sw.js?rev=first"},"census":{"rev":"first","windows":[{"id":"427b45cc-5a1d-45b5-aa83-57dfc532473f","path":"/driver"},{"id":"0c395be7-21a0-4e00-b403-35f6f24d6f9d","path":"/neutral"}]}}
+{"type":"worker-repeat-claim","rev":"first","windows":[{"id":"427b45cc-5a1d-45b5-aa83-57dfc532473f","path":"/driver"},{"id":"0c395be7-21a0-4e00-b403-35f6f24d6f9d","path":"/neutral"}]}
+{"type":"after-back","after":{"id":"6bb768bd-cb17-47f3-a2e8-bba3591324f3","shell":"legacy","pageshow":[false,true],"navType":"navigate","controller":"http://127.0.0.1:63177/sw.js?rev=first","legacyWrite":{"id":"6bb768bd-cb17-47f3-a2e8-bba3591324f3","persisted":true}},"initial":{"id":"6bb768bd-cb17-47f3-a2e8-bba3591324f3","shell":"legacy","pageshow":[false],"navType":"navigate","controller":null,"legacyWrite":{"id":"6bb768bd-cb17-47f3-a2e8-bba3591324f3","persisted":false}},"hidden":{"persisted":true,"id":"6bb768bd-cb17-47f3-a2e8-bba3591324f3","controller":"http://127.0.0.1:63177/sw.js?rev=first"},"afterBarrier":{"rev":"first","windows":[{"id":"427b45cc-5a1d-45b5-aa83-57dfc532473f","path":"/driver"},{"id":"0c395be7-21a0-4e00-b403-35f6f24d6f9d","path":"/neutral"}]},"misses":[]}
+{"type":"case","epoch":2,"name":"rotate-already-claimed","origin":"http://127.0.0.1:63189"}
+{"type":"worker-first","before":null,"after":"http://127.0.0.1:63189/sw.js?rev=first","changes":["http://127.0.0.1:63189/sw.js?rev=first"]}
+{"type":"before-barrier","beforeHide":{"id":"f0d9c02b-3103-4d35-b9b1-9567903f2fdd","shell":"legacy","pageshow":[false],"navType":"navigate","controller":"http://127.0.0.1:63189/sw.js?rev=first","legacyWrite":{"id":"f0d9c02b-3103-4d35-b9b1-9567903f2fdd","persisted":false}},"hidden":{"persisted":true,"id":"f0d9c02b-3103-4d35-b9b1-9567903f2fdd","controller":"http://127.0.0.1:63189/sw.js?rev=first"},"census":{"rev":"first","windows":[{"id":"ef9c10c7-1b3c-4521-9227-74c6b9ab9fae","path":"/driver"},{"id":"158da675-bb9a-4ea4-9fb2-f9b54c3a34c5","path":"/neutral"}]}}
+{"type":"worker-rotation","before":"http://127.0.0.1:63189/sw.js?rev=first","after":"http://127.0.0.1:63189/sw.js?rev=second","changes":["http://127.0.0.1:63189/sw.js?rev=second"]}
+{"type":"after-back","after":{"id":"10225faa-f1ed-488d-87a4-6e8f4705d736","shell":"legacy","pageshow":[false],"navType":"back_forward","controller":"http://127.0.0.1:63189/sw.js?rev=second","legacyWrite":{"id":"10225faa-f1ed-488d-87a4-6e8f4705d736","persisted":false}},"initial":{"id":"f0d9c02b-3103-4d35-b9b1-9567903f2fdd","shell":"legacy","pageshow":[false],"navType":"navigate","controller":null,"legacyWrite":{"id":"f0d9c02b-3103-4d35-b9b1-9567903f2fdd","persisted":false}},"hidden":{"persisted":true,"id":"f0d9c02b-3103-4d35-b9b1-9567903f2fdd","controller":"http://127.0.0.1:63189/sw.js?rev=first"},"afterBarrier":{"rev":"second","windows":[{"id":"ef9c10c7-1b3c-4521-9227-74c6b9ab9fae","path":"/driver"},{"id":"158da675-bb9a-4ea4-9fb2-f9b54c3a34c5","path":"/neutral"}]},"misses":["ServiceWorkerVersionActivation"]}
+194 |       const after = await doc(old);
+195 |       report('after-back', { after, initial, hidden, afterBarrier, misses });
+196 |       if (rotate) {
+197 |         assert.notEqual(after.id, initial.id);
+198 |         assert.deepEqual(after.pageshow, [false]);
+199 |         assert.equal(after.shell, 'current');
+                     ^
+AssertionError: Expected values to be strictly equal:
++ actual - expected
+
++ 'legacy'
+- 'current'
+
+ generatedMessage: true,
+     actual: "legacy",
+   expected: "current",
+   operator: "strictEqual",
+       code: "ERR_ASSERTION"
+
+      at /Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-03-speed-plan-b/b7-sw-rotation-probe.ts:199:16
+
+Bun v1.2.7 (macOS x64)

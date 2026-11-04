@@ -1,0 +1,67 @@
+bun test v1.2.7 (5c0fa6dc)
+
+apps/server/src/routers/entity.test.ts:
+(pass) entity.create / entity.get (§9.2) > create→get круговой: аспекты сохранены, wire-форма проходит entitySchema [317.72ms]
+(pass) entity.create / entity.get (§9.2) > невалидный source create отклоняется на входе (zod роутера) → BAD_REQUEST [6.11ms]
+(pass) entity.create / entity.get (§9.2) > create с client-UUID, занятым чужой сущностью → CONFLICT (409), id_conflict в cause [317.10ms]
+(pass) entity.create / entity.get (§9.2) > actionId из create пригоден для ai.undo; идемпотентный replay actionId не отдаёт (03 §3.6) [227.17ms]
+(pass) entity.create / entity.get (§9.2) > get несуществующей (или чужой под RLS) сущности → NOT_FOUND [21.74ms]
+(pass) entity.create / entity.get (§9.2) > get include=backlinks: упоминание через body_refs → via mention [219.92ms]
+(pass) entity.create / entity.get (§9.2) > get include=thread: детерминированный entityThreadId, лениво НЕ создаёт [172.39ms]
+(pass) entity.create / entity.get (§9.2) > get include=thread: страница 50 новых первыми тем же читателем, что listMessages; маркер «думает» скрыт; журнал — без тел [362.99ms]
+(pass) замок заголовка владельца через интерфейс (§8.2) > MCP переименовывает без замка; устаревший expectedTitle от UI даёт структурный отказ, совпавший — успех [270.69ms]
+(pass) замок заголовка владельца через интерфейс (§8.2) > пачка переводит expectedTitle каждого элемента: отказ атомарен, совпавший замок проходит [253.41ms]
+(pass) entity.update: замок текста по ревизии тела (спека скорости §8.1–§8.2) > квитанция автосохранения называет xid именно записи, в том числе внутри сеанса [261.71ms]
+(pass) entity.update: замок текста по ревизии тела (спека скорости §8.1–§8.2) > post-commit эскалация не подменяет xid правки [339.89ms]
+(pass) entity.update: замок текста по ревизии тела (спека скорости §8.1–§8.2) > стухшая ревизия → CONFLICT; повтор с ревизией из ответа — успех; tags — LWW без проверки [246.09ms]
+(pass) entity.update: замок текста по ревизии тела (спека скорости §8.1–§8.2) > провод: 409 несёт data.orbis = {code: STALE_VERSION, details: {id, expected, current}} — и ни слова тела (РП-5) [207.85ms]
+(pass) entity.update: замок текста по ревизии тела (спека скорости §8.1–§8.2) > запись журнала update атрибутирована source=ui (прямое действие владельца в UI, не fast_path) [174.77ms]
+(pass) entity.update: замок текста по ревизии тела (спека скорости §8.1–§8.2) > threadId во входе create: fast_path → запись журнала в этом треде; ui с threadId → VALIDATION; чужой тред → NOT_FOUND [249.86ms]
+(pass) entity.query / entity.count (§6.3–6.4) > query блока Inbox (02 §3.3) находит созданную задачу [196.52ms]
+(pass) entity.query / entity.count (§6.3–6.4) > entity.query со входом `ast`: то же дерево, что разобрал бы текст, — та же выдача [550.78ms]
+(pass) entity.query / entity.count (§6.3–6.4) > ключи проекции §5.4 (tile, aggregate, columns, hide_empty) — запрос исполняется как обычный [359.11ms]
+(pass) entity.query / entity.count (§6.3–6.4) > $-ссылка вне страницы — отказ с подсказкой и деревом, и текстом (1в §3.8) [95.38ms]
+(pass) entity.query / entity.count (§6.3–6.4) > group вне страницы — отказ с подсказкой и деревом, и текстом (1в §3.8, задача 6) [83.46ms]
+(pass) entity.query / entity.count (§6.3–6.4) > РОВНО одно из двух: и текст, и дерево — отказ; ни одного — тоже [3.24ms]
+(pass) entity.query / entity.count (§6.3–6.4) > дерево глубже капа — структурный отказ с НАЗВАННЫМ числом (§А5-7) [2.52ms]
+(pass) entity.query / entity.count (§6.3–6.4) > count игнорирует limit (бейджи 02 §3.2), query — нет [215.23ms]
+(pass) entity.query / entity.count (§6.3–6.4) > невалидный запрос → BAD_REQUEST с {message, position} в cause (§6.4) [92.91ms]
+(pass) relation.create / relation.delete / relation.listFor (§4.2) > listFor видит обе стороны; delete → { ok: true }; самосвязь → UNPROCESSABLE_CONTENT [340.70ms]
+(pass) CAS-предусловие не протекает в tRPC (entity.update) > precondition во входе entity.update → BAD_REQUEST, правка не применена [141.65ms]
+
+apps/server/src/db/with-identity.test.ts:
+(pass) withIdentity (RLS-механика, findings B7) > рантайм-барьер: объект формы пары, собранный снаружи, до базы не доходит [2.35ms]
+(pass) withIdentity (RLS-механика, findings B7) > рантайм-барьер: ЖИВУЮ пару не подменить на месте — она заморожена [0.62ms]
+(pass) withIdentity (RLS-механика, findings B7) > невалидный актор отклоняется до SQL — и у НАСТОЯЩЕГО экземпляра пары тоже [0.14ms]
+(pass) withIdentity (RLS-механика, findings B7) > внутри транзакции auth.uid() = актор, снаружи — NULL [26.03ms]
+(pass) withIdentity (RLS-механика, findings B7) > изоляция: A создаёт, A видит, B — нет; вне identity — deny-by-default [38.76ms]
+(pass) withIdentity (RLS-механика, findings B7) > rollback-путь: identity и данные умирают вместе с транзакцией [16.53ms]
+(pass) withIdentity (RLS-механика, findings B7) > interleaved: A и B на одном пуле не путаются [58.77ms]
+(pass) withIdentity (RLS-механика, findings B7) > interleaved: текущий граф A и B на одном пуле не путается (близнец теста identity) [59.51ms]
+(pass) withIdentity (RLS-механика, findings B7) > текущий граф умирает вместе с транзакцией: снаружи GUC пуст на каждом соединении пула [8.98ms]
+(pass) withIdentity (RLS-механика, findings B7) > актор и граф — разные значения claims: sub = актор, graph = граф [5.24ms]
+(pass) withIdentity (RLS-механика, findings B7) > сигнатура: один id вместо пары не компилируется, поля пары — ровно свои типы (Ш-2)
+
+apps/server/src/freshness/watermark.test.ts:
+(pass) HTTP responseMeta сохраняет Server-Timing и отдаёт минимум разных границ в пачке [189.84ms]
+(pass) reconcile допускает только владельца читаемого графа [37.00ms]
+
+apps/server/src/freshness/feed.test.ts:
+(pass) committed feed storage and singleton floor are installed [18.01ms]
+(pass) NOTIFY folds multiple rows per graph, stays quiet on empty updates and rollback, and sends a global wake [86.93ms]
+(pass) the registered cron job atomically expires old rows and never lowers the floor [23.01ms]
+(pass) TRUNCATE raises the floor above its own transaction without adding scoped rows [7.25ms]
+(pass) real Undo of creation feeds both the archived entity and its journal action in one transaction [228.68ms]
+(pass) ops diagnostics observe a writing transaction and the scheduled cleanup in a read-only transaction [28.46ms]
+
+apps/server/src/freshness/reconcile.test.ts:
+(pass) ранний xid держит поздний commit, обе транзакции приходят один раз [113.12ms]
+(pass) другой граф держит xmin, откат и чужой feed не попадают в диапазон [42.77ms]
+(pass) оба provisional floor и поздний reset с меньшим xid покрываются complete refresh [112.91ms]
+(pass) предел считает строки, не разрезая транзакцию, и reset воспроизводим [107.74ms]
+(pass) будущий uint64 cursor сбрасывается, некорректный формат отклоняется до SQL [8.79ms]
+
+ 51 pass
+ 0 fail
+ 245 expect() calls
+Ran 51 tests across 5 files. [7.58s]

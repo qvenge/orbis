@@ -1,0 +1,532 @@
+
+ RUN  v4.1.9 /private/tmp/orbis-b13-reset-fix2.acPWCd/candidate/apps/web
+
+ ↓ src/features/page/menu.b13-independent-r2.test.tsx > «Сделать страницей» > одна пачка с аспектом «страница»; тост «Отменить» → ai.undo; у страницы пункта нет
+stderr | src/features/page/menu.b13-independent-r2.test.tsx > «Изменить вид только этой записи» (С1а-8, Р-19) > случай 2: текст на место {{body}}, одна пачка; после — страница, вид прежний
+An update to HostPresence inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to HostPresence inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to HostPresence inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to DetailScreen inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to DetailScreen inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to DetailScreen inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to SubtaskAdd inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+
+stderr | src/features/page/menu.b13-independent-r2.test.tsx > «Изменить вид только этой записи» (С1а-8, Р-19) > случай 2: текст на место {{body}}, одна пачка; после — страница, вид прежний
+An update to SubtaskAdd inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+
+ ✓ src/features/page/menu.b13-independent-r2.test.tsx > «Изменить вид только этой записи» (С1а-8, Р-19) > случай 2: текст на место {{body}}, одна пачка; после — страница, вид прежний 1031ms
+ ↓ src/features/page/menu.b13-independent-r2.test.tsx > «Изменить вид только этой записи» (С1а-8, Р-19) > случай 1: тела нет — копия шаблона без {{body}}; ориентир тела исчезает, прочее то же
+ ↓ src/features/page/menu.b13-independent-r2.test.tsx > «Изменить вид только этой записи» (С1а-8, Р-19) > шаблон владельца без {{cards}} — карточки аспектов на месте (C1-I1) > случай 2: карточка задачи до и после, карточки «Страница» нет (РП-25)
+ ↓ src/features/page/menu.b13-independent-r2.test.tsx > «Изменить вид только этой записи» (С1а-8, Р-19) > шаблон владельца без {{cards}} — карточки аспектов на месте (C1-I1) > случай 1: пустое тело — карточка задачи до и после
+ ↓ src/features/page/menu.b13-independent-r2.test.tsx > «Изменить вид только этой записи» (С1а-8, Р-19) > случай 3: шаблон тела не показывает — вопрос владельцу > диалог Р-19: текст вопроса, три кнопки, подсказка про версию; до ответа — ни одной записи
+ ↓ src/features/page/menu.b13-independent-r2.test.tsx > «Изменить вид только этой записи» (С1а-8, Р-19) > случай 3: шаблон тела не показывает — вопрос владельцу > «Отмена» — вызовов нет, запись как была
+stderr | src/features/page/menu.b13-independent-r2.test.tsx > «Изменить вид только этой записи» (С1а-8, Р-19) > случай 3: шаблон тела не показывает — вопрос владельцу > «Сохранить версией и убрать» — одна пачка: закрепление текста, затем тело-шаблон
+An update to HostPresence inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to HostPresence inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to HostPresence inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to DetailScreen inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to DetailScreen inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to DetailScreen inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+
+ ✓ src/features/page/menu.b13-independent-r2.test.tsx > «Изменить вид только этой записи» (С1а-8, Р-19) > случай 3: шаблон тела не показывает — вопрос владельцу > «Сохранить версией и убрать» — одна пачка: закрепление текста, затем тело-шаблон 327ms
+ ↓ src/features/page/menu.b13-independent-r2.test.tsx > «Изменить вид только этой записи» (С1а-8, Р-19) > случай 3: шаблон тела не показывает — вопрос владельцу > «Показать внизу страницы» — одна пачка, текст под шаблоном
+ ↓ src/features/page/menu.b13-independent-r2.test.tsx > «Открыть через …» — разово (§8.4) > «Открыть через шаблон хоста» — только при шаблоне владельца; «‹» возвращает его, новый заход — снова свой
+ ↓ src/features/page/menu.b13-independent-r2.test.tsx > «Открыть через …» — разово (§8.4) > разовый вид не переезжает в другое место с той же записью; у каждого места — своё (гейт 19, M-2)
+ ↓ src/features/page/menu.b13-independent-r2.test.tsx > «Открыть через …» — разово (§8.4) > шаблон хоста у записи без своих шаблонов — пункта «через шаблон хоста» нет
+ ↓ src/features/page/menu.b13-independent-r2.test.tsx > «Открыть через …» — разово (§8.4) > «Открыть через „X“» — по пункту на прочие исправные подходящие шаблоны
+ ↓ src/features/page/menu.b13-independent-r2.test.tsx > «Сменить выбор шаблона для таких записей» (§4.3) > только при споре; показывает плашку и при запомненном выборе
+ ↓ src/features/page/menu.b13-independent-r2.test.tsx > «Сменить выбор шаблона для таких записей» (§4.3) > одного подходящего шаблона — пункта нет
+ ↓ src/features/page/menu.b13-independent-r2.test.tsx > «Сменить выбор шаблона для таких записей» (§4.3) > сломанный шаблон на вершине: спор A/C под ним — пункт есть, как и плашка (brokenIds)
+ ↓ src/features/page/menu.b13-independent-r2.test.tsx > меню страницы (§8.4) > пункты страницы; пунктов записи и «Править как markdown» нет
+ ↓ src/features/page/menu.b13-independent-r2.test.tsx > меню страницы (§8.4) > «Открыть как запись» — шаблон хоста: версии, тред, обратные ссылки, тело в редакторе экрана
+ ↓ src/features/page/menu.b13-independent-r2.test.tsx > меню страницы (§8.4) > «Открыть как запись» — разово: после ухода и возврата страница снова своим телом
+ ↓ src/features/page/menu.b13-independent-r2.test.tsx > меню страницы (§8.4) > «Сделать шаблоном для…» — служебных и «Страницы» в выборе нет; пачка props «Шаблон для»
+ ↓ src/features/page/menu.b13-independent-r2.test.tsx > меню страницы (§8.4) > снятие всех аспектов — одна правка: unset «Шаблон для» и «Главнее, чем» (§3.2)
+ ↓ src/features/page/menu.b13-independent-r2.test.tsx > меню страницы (§8.4) > скрытый аспект в «Шаблон для» виден в диалоге и снимается (остаток 1а №31)
+ ↓ src/features/page/menu.b13-independent-r2.test.tsx > меню страницы (§8.4) > «Перестать быть страницей» — снимается только аспект (РП-22); одна пачка, Undo
+ ↓ src/features/page/menu.b13-independent-r2.test.tsx > диалоги меню держат снимок записи, на которой их открыли (I-1, I-2) > переход на соседнюю запись с открытым вопросом случая 3 — диалог закрыт, вызовов нет
+ ↓ src/features/page/menu.b13-independent-r2.test.tsx > диалоги меню держат снимок записи, на которой их открыли (I-1, I-2) > переход с открытым «Сделать шаблоном для…» — диалог закрыт, вызовов нет
+ ↓ src/features/page/menu.b13-independent-r2.test.tsx > диалоги меню держат снимок записи, на которой их открыли (I-1, I-2) > правка тела мимо экрана при открытом вопросе: пачка идёт с версией плана, сервер отказывает, правка цела
+ ↓ src/features/page/menu.b13-independent-r2.test.tsx > текст записи сломал бы шаблон — вопрос, а не молчаливый случай 2 (I-3) > {{/tab}} в заметке под шаблоном хоста → диалог с причиной; «Показать внизу» — копия без {{body}} + текст
+ ↓ src/features/page/menu.b13-independent-r2.test.tsx > подписи и ключи пунктов «Открыть через „X“» (I-5) > два шаблона с одним названием — два пункта без коллизии ключей; пустое название — id
+ ↓ src/features/page/menu.b13-independent-r2.test.tsx > «Изменить вид» не закрепляет вынужденный шаблон хоста (I-6) > список шаблонов не приехал — пункта нет
+ ↓ src/features/page/menu.b13-independent-r2.test.tsx > «Изменить вид» не закрепляет вынужденный шаблон хоста (I-6) > список шаблонов ещё едет — пункта нет
+ ↓ src/features/page/menu.b13-independent-r2.test.tsx > жест меню при неотправленной правке тела (F-I1) > «Изменить вид только этой записи»: пачки нет, тост, текст досылается; повтор несёт набранное
+ ↓ src/features/page/menu.b13-independent-r2.test.tsx > жест меню при неотправленной правке тела (F-I1) > правка, отменённая до исходного текста, — не неотправленная: жест проходит сразу
+ ↓ src/features/page/menu.b13-independent-r2.test.tsx > жест меню при неотправленной правке тела (F-I1) > сохранение в полёте (ответа ещё нет): жест ждёт — пачки нет, тост (фикс-раунд 1, I-1)
+ ↓ src/features/page/menu.b13-independent-r2.test.tsx > жест меню при неотправленной правке тела (F-I1) > правка тела получила 409: жест не досылает её снова и отсылает к плашке (фикс-раунд 1, M-1)
+ ↓ src/features/page/menu.b13-independent-r2.test.tsx > жест меню при неотправленной правке тела (F-I1) > «Сделать страницей»: пачки нет, тост, текст досылается без 409
+ ↓ src/features/page/menu.b13-independent-r2.test.tsx > жест меню при неотправленной правке тела (F-I1) > «Перестать быть страницей» из «Настроить»: пачки нет, тост, текст досылается без 409
+ ↓ src/features/page/menu.b13-independent-r2.test.tsx > жест меню при неотправленной правке тела (F-I1) > кнопка вопроса случая 3 при неотправленной правке: пачки нет, диалог закрыт, текст досылается
+ ↓ src/features/page/menu.b13-independent-r2.test.tsx > меню при настройке чужого шаблона — про шаблон (остаток 1а №87) > «Настроить шаблон» → пункты только «Открыть шаблон» и «Скопировать ссылку» — ссылка на шаблон
+ ↓ src/features/page/menu.b13-independent-r2.test.tsx > Task20 populated histories actual page menu aspect-only make-page preserves
+ ↓ src/features/page/menu.b13-independent-r2.test.tsx > Task20 populated histories actual page menu body batch resets
+stderr | src/features/page/menu.b13-independent-r2.test.tsx > B13 old body cannot enter a view rewrite after rewind: direct gesture
+An update to HostPresence inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to HostPresence inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to HostPresence inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to DetailScreen inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to DetailScreen inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to DetailScreen inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+
+ ✓ src/features/page/menu.b13-independent-r2.test.tsx > B13 old body cannot enter a view rewrite after rewind: direct gesture 449ms
+stderr | src/features/page/menu.b13-independent-r2.test.tsx > B13 old body cannot enter a view rewrite after rewind: open dialog showing below
+An update to HostPresence inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to HostPresence inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to HostPresence inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to DetailScreen inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to DetailScreen inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to DetailScreen inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+
+ ✓ src/features/page/menu.b13-independent-r2.test.tsx > B13 old body cannot enter a view rewrite after rewind: open dialog showing below 500ms
+stderr | src/features/page/menu.b13-independent-r2.test.tsx > B13 old body cannot enter a view rewrite after rewind: open dialog pinning a version
+An update to HostPresence inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to HostPresence inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to HostPresence inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to DetailScreen inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to DetailScreen inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to DetailScreen inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+
+ ✓ src/features/page/menu.b13-independent-r2.test.tsx > B13 old body cannot enter a view rewrite after rewind: open dialog pinning a version 339ms
+stderr | src/features/page/menu.b13-independent-r2.test.tsx > B13 old body cannot enter a view rewrite after rewind: direct gesture
+An update to HostPresence inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to HostPresence inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to HostPresence inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to DetailScreen inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to DetailScreen inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to DetailScreen inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to SubtaskAdd inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+
+stderr | src/features/page/menu.b13-independent-r2.test.tsx > B13 old body cannot enter a view rewrite after rewind: direct gesture
+An update to SubtaskAdd inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+
+ ✓ src/features/page/menu.b13-independent-r2.test.tsx > B13 old body cannot enter a view rewrite after rewind: direct gesture 212ms
+stderr | src/features/page/menu.b13-independent-r2.test.tsx > B13 old body cannot enter a view rewrite after rewind: already-open dialog
+An update to HostPresence inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to HostPresence inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to HostPresence inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to DetailScreen inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to DetailScreen inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to DetailScreen inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+
+ ✓ src/features/page/menu.b13-independent-r2.test.tsx > B13 old body cannot enter a view rewrite after rewind: already-open dialog 144ms
+
+ Test Files  1 passed (1)
+      Tests  7 passed | 38 skipped (45)
+   Start at  21:41:34
+   Duration  7.87s (transform 2.03s, setup 159ms, import 3.09s, tests 3.31s, environment 1.09s)
+

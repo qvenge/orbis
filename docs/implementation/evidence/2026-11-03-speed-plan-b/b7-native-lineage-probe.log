@@ -1,0 +1,10 @@
+before {
+  id: "87e125bf-5883-42d2-8c27-4362f96ade36",
+  shows: [ false ],
+  type: "navigate",
+}
+back {
+  id: "87e125bf-5883-42d2-8c27-4362f96ade36",
+  shows: [ false, true ],
+  type: "navigate",
+}

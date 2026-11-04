@@ -1,0 +1,19 @@
+
+ RUN  v4.1.9 /private/tmp/orbis-b13-final-ci.07CROy/responsive-fixture/apps/web
+
+ ✓ src/features/entity-detail/properties-relations/responsive.test.tsx (8 tests) 11681ms
+   ✓ same-mounted session reset discards prior values panel and ignores its late write  3331ms
+   ✓ same-mounted session reset discards prior host panel and ignores its late write  1405ms
+   ✓ host mutation pending survives responsive frame replacement starting desktop=false  954ms
+   ✓ host mutation pending survives responsive frame replacement starting desktop=true  942ms
+   ✓ known new version stays blocked through cached host remount starting desktop=false  1095ms
+   ✓ known new version stays blocked through cached host remount starting desktop=true  1093ms
+   ✓ responsive frame starting desktop=false retains dirty/pending/unknown panel lifecycle in both directions  1416ms
+   ✓ responsive frame starting desktop=true retains dirty/pending/unknown panel lifecycle in both directions  1442ms
+
+ Test Files  1 passed (1)
+      Tests  8 passed (8)
+   Start at  00:10:28
+   Duration  15.62s (transform 2.42s, setup 218ms, import 2.30s, tests 11.68s, environment 1.17s)
+
+JSON report written to /private/tmp/orbis-b13-final-ci.07CROy/reports/responsive-fixture.json

@@ -1,0 +1,7 @@
+{"name":"B13_BODY_NO_WRITE","data":{"gets":1,"sends":1,"focused":true,"nativeUndo":0,"commonUndo":false}}
+{"name":"B13_BODY_NO_WRITE","data":{"gets":1,"sends":1,"focused":true,"nativeUndo":0,"commonUndo":false}}
+{"name":"B13_BODY_EXPLICIT","data":{"before":1,"gets":2,"sends":1}}
+{"name":"B13_HISTORY_PENDING","data":{"serverTitle":"Чужое имя","reads":4,"shown":"План Б","undo":true,"raw":"Чужое имя"}}
+{"name":"B13_HISTORY_SETTLED","data":{"serverTitle":"Чужое имя","reads":5,"shown":"Чужое имя","undo":false}}
+{"name":"B13_RENAME_REQUESTS","data":[{"path":"entity.update","input":{"id":"019e4466-1000-7e07-b5d4-64be9721da61","title":"План Б","expectedTitle":"План"}},{"path":"entity.update","input":{"id":"019e4466-1000-7e07-b5d4-64be9721da61","title":"План","expectedTitle":"План Б"}}]}
+{"name":"B13_RENAME_KNOWN_REFUSAL","data":{"reads":2,"field":"План","redo":true}}

@@ -1,0 +1,46 @@
+$ bun run --filter @orbis/server test:perf:graph
+@orbis/server test:perf:graph: bun test v1.2.7 (5c0fa6dc)
+@orbis/server test:perf:graph: 
+@orbis/server test:perf:graph: perf/graph.test.ts:
+@orbis/server test:perf:graph: perf: корпус 50000 сущностей / 149999 рёбер, глубина 8 (засеян за 31.6 с)
+@orbis/server test:perf:graph: perf: поддерево замера — 4999 узлов (уровень 1)
+@orbis/server test:perf:graph: perf: малое поддерево — 6 узлов (уровень 5)
+@orbis/server test:perf:graph: (pass) корпус наполнен: обход идёт по данным, а не по пустоте [151.12ms]
+@orbis/server test:perf:graph: perf: descendants_of:whole-graph median=819.1ms runs=3
+@orbis/server test:perf:graph: perf: descendants_of:subtree-all-rows median=124.8ms runs=5
+@orbis/server test:perf:graph: perf: descendants_of:subtree p95=172.2ms median=122.3ms runs=20 samples=[107.9, 153.0, 121.9, 126.4, 100.3, 105.0, 172.2, 122.3, 156.7, 128.9, 116.5, 100.5, 99.9, 106.5, 98.8, 169.8, 126.2, 123.4, 97.4, 174.3]
+@orbis/server test:perf:graph: perf: recompute:subtree5k p95=716.3ms median=594.5ms runs=20 samples=[569.3, 598.6, 780.7, 586.2, 578.8, 568.8, 594.5, 611.2, 595.6, 562.4, 559.5, 562.1, 590.9, 595.6, 695.9, 616.1, 716.3, 555.5, 594.1, 656.4]
+@orbis/server test:perf:graph: perf: recompute:subtree-small p95=15.9ms median=13.1ms runs=20 samples=[14.0, 13.5, 13.1, 12.4, 12.0, 15.9, 13.9, 13.9, 12.1, 13.1, 15.9, 14.0, 12.9, 11.7, 12.8, 14.1, 13.0, 15.3, 13.0, 11.7]
+@orbis/server test:perf:graph: perf: when:value-next_7d p95=190.0ms median=148.2ms runs=20 samples=[134.1, 143.3, 178.7, 184.7, 192.0, 153.8, 143.5, 137.0, 190.0, 177.8, 152.4, 135.7, 137.8, 130.4, 171.9, 163.4, 128.4, 128.7, 148.2, 129.9]
+@orbis/server test:perf:graph: perf: when:slot-deadline p95=17.4ms median=15.9ms runs=20 samples=[16.2, 15.0, 13.9, 14.0, 20.3, 17.3, 15.9, 16.3, 17.4, 15.0, 14.9, 15.8, 15.8, 17.1, 16.0, 15.8, 15.7, 16.5, 16.2, 15.6]
+@orbis/server test:perf:graph: perf: descendants_of:subtree — порог П6 130 мс НЕ достигнут (p95 = 172 мс)
+@orbis/server test:perf:graph: perf: recompute:subtree5k — порог П6 1000 мс ДОСТИГНУТ (p95 = 716 мс)
+@orbis/server test:perf:graph: perf: when:value-next_7d — порог П6 430 мс ДОСТИГНУТ (p95 = 190 мс)
+@orbis/server test:perf:graph: perf: when:slot-deadline — порог П6 350 мс ДОСТИГНУТ (p95 = 17 мс)
+@orbis/server test:perf:graph: perf: recompute:subtree-small — p95 16 мс на 6 узлах (потолок сторожа 150 мс)
+@orbis/server test:perf:graph: 351 |       ` (потолок сторожа ${SMALL_CEILING_MS} мс)`,
+@orbis/server test:perf:graph: 352 |   );
+@orbis/server test:perf:graph: 353 |   if (recomputeSmall > SMALL_CEILING_MS) {
+@orbis/server test:perf:graph: 354 |     over.push(`recompute:subtree-small=${recomputeSmall.toFixed(0)}ms > ${SMALL_CEILING_MS}ms`);
+@orbis/server test:perf:graph: 355 |   }
+@orbis/server test:perf:graph: 356 |   expect(over).toEqual([]);
+@orbis/server test:perf:graph:                      ^
+@orbis/server test:perf:graph: error: expect(received).toEqual(expected)
+@orbis/server test:perf:graph: 
+@orbis/server test:perf:graph: + [
+@orbis/server test:perf:graph: +   "descendants_of:subtree=172ms > 130ms"
+@orbis/server test:perf:graph: + ]
+@orbis/server test:perf:graph: - []
+@orbis/server test:perf:graph: 
+@orbis/server test:perf:graph: - Expected  - 1
+@orbis/server test:perf:graph: + Received  + 3
+@orbis/server test:perf:graph: 
+@orbis/server test:perf:graph:       at <anonymous> (/private/tmp/orbis-b13-final-ci.07CROy/candidate/apps/server/perf/graph.test.ts:356:16)
+@orbis/server test:perf:graph: (fail) П6: descendants_of под RLS и пересчёт предков на поддереве ≥5k [25358.44ms]
+@orbis/server test:perf:graph: 
+@orbis/server test:perf:graph:  1 pass
+@orbis/server test:perf:graph:  1 fail
+@orbis/server test:perf:graph:  8 expect() calls
+@orbis/server test:perf:graph: Ran 2 tests across 1 files. [57.95s]
+@orbis/server test:perf:graph: Exited with code 1
+error: script "test:perf:graph" exited with code 1

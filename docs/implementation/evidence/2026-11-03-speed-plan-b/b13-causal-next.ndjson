@@ -1,0 +1,7 @@
+{"name":"offscreen-known-no-write","data":{"before":2,"reads":2,"undo":false}}
+{"name":"coalesced-after-unknown-B","data":{"observedC":false,"reads":5,"writes":3,"raw":"План Б","visible":"План В","rawAccepted":true,"commonUndo":false}}
+{"name":"coalesced-after-known-C","data":{"observedC":false,"reads":5,"writes":3,"raw":"План Б","visible":"План Б","rawAccepted":true,"commonUndo":false}}
+{"name":"coalesced-after-unknown-B","data":{"observedC":true,"reads":5,"writes":3,"raw":"План Б","visible":"План В","rawAccepted":true,"commonUndo":false}}
+{"name":"coalesced-after-known-C","data":{"observedC":true,"reads":5,"writes":3,"raw":"План Б","visible":"План Б","rawAccepted":true,"commonUndo":false}}
+{"name":"cold-body-pending-C","data":{"raw":"План Б","visible":"План В","rawAccepted":true,"commonUndo":true,"nativeUndo":2,"nativeRedo":0,"titleWrites":2,"bodyWrites":0}}
+{"name":"cold-body-settled-C","data":{"raw":"План Б","visible":"План Б","rawAccepted":true,"commonUndo":false,"nativeUndo":0,"nativeRedo":0,"titleWrites":2,"bodyWrites":0}}

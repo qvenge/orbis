@@ -1,0 +1,17 @@
+
+ RUN  v4.1.9 /private/tmp/orbis-b13-sse-rewind-fix.jwO12D/candidate/apps/web
+
+{"holdFloor":false,"reads":[{"at":0,"from":"100"},{"at":50,"from":"101"},{"at":10150,"from":"20"}],"idle":[],"newCommitAt":10100,"newCommitLatency":50}
+{"holdFloor":true,"reads":[{"at":0,"from":"100"},{"at":100,"from":"101"},{"at":10150,"from":"20"}],"idle":[],"newCommitAt":10100,"newCommitLatency":50}
+ ✓ src/lib/freshness/sse-rewind.probe.test.ts > B13 active SSE reader across an authoritative strict lowering > returns to idle safety cadence after strict lowering (old provisional floor=false) 10ms
+ ✓ src/lib/freshness/sse-rewind.probe.test.ts > B13 active SSE reader across an authoritative strict lowering > returns to idle safety cadence after strict lowering (old provisional floor=true) 2ms
+ ✓ src/lib/freshness/sse-rewind.probe.test.ts > B13 ordinary provisional to complete retains held-xmin retry then becomes idle 2ms
+ ✓ src/lib/freshness/sse-rewind.probe.test.ts > preserves current held-xmin catch-up from notify 2ms
+ ✓ src/lib/freshness/sse-rewind.probe.test.ts > preserves current held-xmin catch-up from recovered 1ms
+ ✓ src/lib/freshness/sse-rewind.probe.test.ts > preserves current held-xmin catch-up from rewind-snapshot 1ms
+
+ Test Files  1 passed (1)
+      Tests  6 passed (6)
+   Start at  22:55:13
+   Duration  2.96s (transform 645ms, setup 224ms, import 1.06s, tests 21ms, environment 1.43s)
+

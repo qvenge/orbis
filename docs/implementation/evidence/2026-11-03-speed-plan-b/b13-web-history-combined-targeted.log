@@ -1,0 +1,63 @@
+
+ RUN  v4.1.9 /private/tmp/orbis-b13-web-history-combined.FMPjv5/apps/web
+
+stderr | src/features/entity-detail/history-lifecycle.test.tsx > first accepted title after an editable disk restore: same
+An update to SubtaskAdd inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+
+stderr | src/features/entity-detail/history-lifecycle.test.tsx > first accepted title after an editable disk restore: pre-ACK first A
+An update to SubtaskAdd inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+
+ ✓ src/features/entity-detail/history-lifecycle.test.tsx (84 tests | 61 skipped) 28109ms
+   ✓ current title CAS failure while offscreen clears e1 retained steps  375ms
+   ✓ early remount before old refusal clears foreign basis План Б bodyTop=false  2196ms
+   ✓ early remount before old refusal clears foreign basis Чужое имя bodyTop=false  1869ms
+   ✓ early remount before old refusal clears foreign basis План Б bodyTop=true  3957ms
+   ✓ early remount before old refusal clears foreign basis Чужое имя bodyTop=true  3958ms
+   ✓ coalesced earlier C does not block fresh B refusal observedC=false  955ms
+   ✓ coalesced earlier C does not block fresh B refusal observedC=true  992ms
+   ✓ actual cold BODY current basis after observed B refusal and unobserved C outcome=foreign order=body  1672ms
+   ✓ actual cold BODY current basis after observed B refusal and unobserved C outcome=pending order=body  1870ms
+   ✓ actual cold BODY current basis after observed B refusal and unobserved C outcome=pending order=title-body  1718ms
+   ✓ actual cold BODY current basis after observed B refusal and unobserved C outcome=pending order=body-title  1751ms
+   ✓ actual cold BODY current basis after observed B refusal and unobserved C outcome=accepted order=body  1700ms
+   ✓ actual cold BODY current basis after observed B refusal and unobserved C outcome=accepted order=title-body  1681ms
+   ✓ actual cold BODY current basis after observed B refusal and unobserved C outcome=accepted order=body-title  1703ms
+ ✓ src/features/entity-editor/arrows.test.tsx (28 tests | 17 skipped) 5413ms
+   ✓ реальный экран: сохранённый title undo использует текущее видимое основание CAS  516ms
+   ✓ реальный экран: отказ CAS стирает общий стек и оставляет баннер R28  466ms
+   ✓ title SUCCESS после checkbox SUCCESS всё ещё принимает title перед старым title отказом  300ms
+   ✓ own undo к уже видимому title не даёт вечное доверие последующему чужому совпадению  1651ms
+   ✓ rapid own optimistic props coalescing не доверяет позднему foreign return к старому v  1179ms
+ ✓ src/features/entity-detail/history-delivery.test.tsx (13 tests | 10 skipped) 3212ms
+   ✓ foreign actual refetched body landing resets populated title and native histories  1599ms
+   ✓ journal actual refetched body landing resets populated title and native histories  1433ms
+ ✓ src/features/entity-editor/title-history.test.ts (25 tests | 17 skipped) 8ms
+ ✓ src/lib/useGraphUndo.test.tsx (13 tests | 9 skipped) 617ms
+ ✓ src/features/entity-detail/foreign-refusal.test.tsx (5 tests) 3909ms
+   ✓ current body-only foreign refusal resets common and native history while retaining own draft  1634ms
+   ✓ contrast: explicit refresh accepts foreign body and resets both histories while keeping own draft  1558ms
+
+ Test Files  6 passed (6)
+      Tests  54 passed | 114 skipped (168)
+   Start at  22:37:53
+   Duration  57.38s (transform 2.80s, setup 815ms, import 8.28s, tests 41.27s, environment 5.62s)
+
+JSON report written to /Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-03-speed-plan-b/b13-web-history-combined-targeted.json

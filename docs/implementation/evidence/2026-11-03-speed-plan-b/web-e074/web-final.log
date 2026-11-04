@@ -1,0 +1,1106 @@
+@orbis/web test: 
+@orbis/web test:  RUN  v4.1.9 /private/tmp/orbis-b13-final-ci.07CROy/web-final/apps/web
+@orbis/web test: 
+@orbis/web test: Not implemented: Window's scrollBy() method
+@orbis/web test: Not implemented: Window's scrollBy() method
+@orbis/web test: Not implemented: navigation to another Document
+@orbis/web test:  ❯ src/features/entity-detail/properties-relations/responsive.test.tsx (8 tests | 1 failed) 15667ms
+@orbis/web test:    × same-mounted session reset discards prior values panel and ignores its late write 1122ms
+@orbis/web test:  ❯ src/features/entity-detail/properties-relations/host-pending.test.tsx (3 tests | 2 failed) 5339ms
+@orbis/web test:    × addressed host lock starts synchronously before import and spans real page batch failure/retry 1293ms
+@orbis/web test:    × public owner close/open cannot replace the addressed panel synchronously during a host intent 2120ms
+@orbis/web test: 
+@orbis/web test: ⎯⎯⎯⎯⎯⎯⎯ Failed Tests 3 ⎯⎯⎯⎯⎯⎯⎯
+@orbis/web test: 
+@orbis/web test:  FAIL  src/features/entity-detail/properties-relations/host-pending.test.tsx > addressed host lock starts synchronously before import and spans real page batch failure/retry
+@orbis/web test: TestingLibraryElementError: Unable to find role="menuitem" and name "Свойства и связи"
+@orbis/web test: 
+@orbis/web test: Ignored nodes: comments, script, style
+@orbis/web test: [36m<body>[39m
+@orbis/web test:   [36m<div>[39m
+@orbis/web test:     [36m<header[39m
+@orbis/web test:       [33mclass[39m=[32m"sticky top-0 z-10 shrink-0 border-b border-line/70 bg-surface/90 backdrop-blur"[39m
+@orbis/web test:     [36m>[39m
+@orbis/web test:       [36m<div[39m
+@orbis/web test:         [33mclass[39m=[32m"relative flex h-14 items-center gap-2 px-2"[39m
+@orbis/web test:         [33mdata-testid[39m=[32m"host-presence"[39m
+@orbis/web test:       [36m>[39m
+@orbis/web test:         [36m<button[39m
+@orbis/web test:           [33maria-label[39m=[32m"Назад"[39m
+@orbis/web test:           [33mclass[39m=[32m"inline-flex size-11 shrink-0 cursor-pointer items-center justify-center rounded-full bg-host text-host-foreground transition hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"[39m
+@orbis/web test:           [33mdata-host[39m=[32m"back"[39m
+@orbis/web test:           [33mdata-testid[39m=[32m"host-back"[39m
+@orbis/web test:           [33mtype[39m=[32m"button"[39m
+@orbis/web test:         [36m>[39m
+@orbis/web test:           [36m<svg[39m
+@orbis/web test:             [33maria-hidden[39m=[32m"true"[39m
+@orbis/web test:             [33mclass[39m=[32m"lucide lucide-chevron-left"[39m
+@orbis/web test:             [33mfill[39m=[32m"none"[39m
+@orbis/web test:             [33mheight[39m=[32m"20"[39m
+@orbis/web test:             [33mstroke[39m=[32m"currentColor"[39m
+@orbis/web test:             [33mstroke-linecap[39m=[32m"round"[39m
+@orbis/web test:             [33mstroke-linejoin[39m=[32m"round"[39m
+@orbis/web test:             [33mstroke-width[39m=[32m"2"[39m
+@orbis/web test:             [33mviewBox[39m=[32m"0 0 24 24"[39m
+@orbis/web test:             [33mwidth[39m=[32m"20"[39m
+@orbis/web test:             [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+@orbis/web test:           [36m>[39m
+@orbis/web test:             [36m<path[39m
+@orbis/web test:               [33md[39m=[32m"m15 18-6-6 6-6"[39m
+@orbis/web test:             [36m/>[39m
+@orbis/web test:           [36m</svg>[39m
+@orbis/web test:         [36m</button>[39m
+@orbis/web test:         [36m<button[39m
+@orbis/web test:           [33maria-expanded[39m=[32m"false"[39m
+@orbis/web test:           [33maria-haspopup[39m=[32m"dialog"[39m
+@orbis/web test:           [33mclass[39m=[32m"flex min-h-11 min-w-0 cursor-pointer items-center gap-1.5 rounded-full px-2 text-sm font-medium transition hover:bg-surface-2 disabled:cursor-default disabled:hover:bg-transparent"[39m
+@orbis/web test:           [33mdata-testid[39m=[32m"nav-switch"[39m
+@orbis/web test:           [33mtype[39m=[32m"button"[39m
+@orbis/web test:         [36m>[39m
+@orbis/web test:           [36m<span[39m
+@orbis/web test:             [33maria-hidden[39m=[32m"true"[39m
+@orbis/web test:           [36m>[39m
+@orbis/web test:             [0m🪐[0m
+@orbis/web test:           [36m</span>[39m
+@orbis/web test:           [36m<span[39m
+@orbis/web test:             [33mclass[39m=[32m"sr-only"[39m
+@orbis/web test:           [36m>[39m
+@orbis/web test:             [0mOrbis[0m
+@orbis/web test:           [36m</span>[39m
+@orbis/web test:           [36m<span[39m
+@orbis/web test:             [33maria-hidden[39m=[32m"true"[39m
+@orbis/web test:             [33mclass[39m=[32m"text-text-muted"[39m
+@orbis/web test:           [36m>[39m
+@orbis/web test:             [0m·[0m
+@orbis/web test:           [36m</span>[39m
+@orbis/web test:           [36m<span[39m
+@orbis/web test:             [33mclass[39m=[32m"min-w-0 truncate"[39m
+@orbis/web test:           [36m>[39m
+@orbis/web test:             [0mДомой[0m
+@orbis/web test:           [36m</span>[39m
+@orbis/web test:           [36m<svg[39m
+@orbis/web test:             [33maria-hidden[39m=[32m"true"[39m
+@orbis/web test:             [33mclass[39m=[32m"lucide lucide-chevron-down shrink-0 text-text-muted"[39m
+@orbis/web test:             [33mfill[39m=[32m"none"[39m
+@orbis/web test:             [33mheight[39m=[32m"14"[39m
+@orbis/web test:             [33mstroke[39m=[32m"currentColor"[39m
+@orbis/web test:             [33mstroke-linecap[39m=[32m"round"[39m
+@orbis/web test:             [33mstroke-linejoin[39m=[32m"round"[39m
+@orbis/web test:             [33mstroke-width[39m=[32m"2"[39m
+@orbis/web test:             [33mviewBox[39m=[32m"0 0 24 24"[39m
+@orbis/web test:             [33mwidth[39m=[32m"14"[39m
+@orbis/web test:             [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+@orbis/web test:           [36m>[39m
+@orbis/web test:             [36m<path[39m
+@orbis/web test:               [33md[39m=[32m"m6 9 6 6 6-6"[39m
+@orbis/web test:             [36m/>[39m
+@orbis/web test:           [36m</svg>[39m
+@orbis/web test:         [36m</button>[39m
+@orbis/web test:         [36m<span[39m
+@orbis/web test:           [33mclass[39m=[32m"flex-1"[39m
+@orbis/web test:         [36m/>[39m
+@orbis/web test:         [36m<button[39m
+@orbis/web test:           [33maria-label[39m=[32m"Домой"[39m
+@orbis/web test:           [33mclass[39m=[32m"inline-flex size-11 shrink-0 cursor-pointer items-center justify-center rounded-full bg-host text-host-foreground transition hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"[39m
+@orbis/web test:           [33mdata-host[39m=[32m"home"[39m
+@orbis/web test:           [33mdata-testid[39m=[32m"host-home"[39m
+@orbis/web test:           [33mtype[39m=[32m"button"[39m
+@orbis/web test:         [36m>[39m
+@orbis/web test:           [36m<svg[39m
+@orbis/web test:             [33maria-hidden[39m=[32m"true"[39m
+@orbis/web test:             [33mclass[39m=[32m"lucide lucide-house"[39m
+@orbis/web test:             [33mfill[39m=[32m"none"[39m
+@orbis/web test:             [33mheight[39m=[32m"18"[39m
+@orbis/web test:             [33mstroke[39m=[32m"currentColor"[39m
+@orbis/web test:             [33mstroke-linecap[39m=[32m"round"[39m
+@orbis/web test:             [33mstroke-linejoin[39m=[32m"round"[39m
+@orbis/web test:             [33mstroke-width[39m=[32m"2"[39m
+@orbis/web test:             [33mviewBox[39m=[32m"0 0 24 24"[39m
+@orbis/web test:             [33mwidth[39m=[32m"18"[39m
+@orbis/web test:             [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+@orbis/web test:           [36m>[39m
+@orbis/web test:             [36m<path[39m
+@orbis/web test:               [33md[39m=[32m"M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8"[39m
+@orbis/web test:             [36m/>[39m
+@orbis/web test:             [36m<path[39m
+@orbis/web test:               [33md[39m=[32m"M3 10a2 2 0 0 1 .709-1.528l7-6a2 2 0 0 1 2.582 0l7 6A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"[39m
+@orbis/web test:             [36m/>[39m
+@orbis/web test:           [36m</svg>[39m
+@orbis/web test:         [36m</button>[39m
+@orbis/web test:         [36m<span[39m
+@orbis/web test:           [33mclass[39m=[32m"relative inline-flex"[39m
+@orbis/web test:         [36m>[39m
+@orbis/web test:           [36m<button[39m
+@orbis/web test:             [33maria-expanded[39m=[32m"true"[39m
+@orbis/web test:             [33maria-haspopup[39m=[32m"menu"[39m
+@orbis/web test:             [33maria-label[39m=[32m"Меню"[39m
+@orbis/web test:             [33mclass[39m=[32m"inline-flex size-11 shrink-0 cursor-pointer items-center justify-center rounded-full bg-host text-host-foreground transition hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"[39m
+@orbis/web test:             [33mdata-host[39m=[32m"menu"[39m
+@orbis/web test:             [33mdata-state[39m=[32m"open"[39m
+@orbis/web test:             [33mdata-testid[39m=[32m"screen-menu"[39m
+@orbis/web test:             [33mid[39m=[32m"_r_0_"[39m
+@orbis/web test:             [33mtitle[39m=[32m"Меню"[39m
+@orbis/web test:             [33mtype[39m=[32m"button"[39m
+@orbis/web test:           [36m>[39m
+@orbis/web test:             [36m<svg[39m
+@orbis/web test:               [33maria-hidden[39m=[32m"true"[39m
+@orbis/web test:               [33mclass[39m=[32m"lucide lucide-ellipsis-vertical"[39m
+@orbis/web test:               [33mfill[39m=[32m"none"[39m
+@orbis/web test:               [33mheight[39m=[32m"18"[39m
+@orbis/web test:               [33mstroke[39m=[32m"currentColor"[39m
+@orbis/web test:               [33mstroke-linecap[39m=[32m"round"[39m
+@orbis/web test:               [33mstroke-linejoin[39m=[32m"round"[39m
+@orbis/web test:               [33mstroke-width[39m=[32m"2"[39m
+@orbis/web test:               [33mviewBox[39m=[32m"0 0 24 24"[39m
+@orbis/web test:               [33mwidth[39m=[32m"18"[39m
+@orbis/web test:               [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+@orbis/web test:             [36m>[39m
+@orbis/web test:               [36m<circle[39m
+@orbis/web test:                 [33mcx[39m=[32m"12"[39m
+@orbis/web test:                 [33mcy[39m=[32m"12"[39m
+@orbis/web test:                 [33mr[39m=[32m"1"[39m
+@orbis/web test:               [36m/>[39m
+@orbis/web test:               [36m<circle[39m
+@orbis/web test:                 [33mcx[39m=[32m"12"[39m
+@orbis/web test:                 [33mcy[39m=[32...
+@orbis/web test: 
+@orbis/web test: Ignored nodes: comments, script, style
+@orbis/web test: [36m<body>[39m
+@orbis/web test:   [36m<div>[39m
+@orbis/web test:     [36m<header[39m
+@orbis/web test:       [33mclass[39m=[32m"sticky top-0 z-10 shrink-0 border-b border-line/70 bg-surface/90 backdrop-blur"[39m
+@orbis/web test:     [36m>[39m
+@orbis/web test:       [36m<div[39m
+@orbis/web test:         [33mclass[39m=[32m"relative flex h-14 items-center gap-2 px-2"[39m
+@orbis/web test:         [33mdata-testid[39m=[32m"host-presence"[39m
+@orbis/web test:       [36m>[39m
+@orbis/web test:         [36m<button[39m
+@orbis/web test:           [33maria-label[39m=[32m"Назад"[39m
+@orbis/web test:           [33mclass[39m=[32m"inline-flex size-11 shrink-0 cursor-pointer items-center justify-center rounded-full bg-host text-host-foreground transition hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"[39m
+@orbis/web test:           [33mdata-host[39m=[32m"back"[39m
+@orbis/web test:           [33mdata-testid[39m=[32m"host-back"[39m
+@orbis/web test:           [33mtype[39m=[32m"button"[39m
+@orbis/web test:         [36m>[39m
+@orbis/web test:           [36m<svg[39m
+@orbis/web test:             [33maria-hidden[39m=[32m"true"[39m
+@orbis/web test:             [33mclass[39m=[32m"lucide lucide-chevron-left"[39m
+@orbis/web test:             [33mfill[39m=[32m"none"[39m
+@orbis/web test:             [33mheight[39m=[32m"20"[39m
+@orbis/web test:             [33mstroke[39m=[32m"currentColor"[39m
+@orbis/web test:             [33mstroke-linecap[39m=[32m"round"[39m
+@orbis/web test:             [33mstroke-linejoin[39m=[32m"round"[39m
+@orbis/web test:             [33mstroke-width[39m=[32m"2"[39m
+@orbis/web test:             [33mviewBox[39m=[32m"0 0 24 24"[39m
+@orbis/web test:             [33mwidth[39m=[32m"20"[39m
+@orbis/web test:             [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+@orbis/web test:           [36m>[39m
+@orbis/web test:             [36m<path[39m
+@orbis/web test:               [33md[39m=[32m"m15 18-6-6 6-6"[39m
+@orbis/web test:             [36m/>[39m
+@orbis/web test:           [36m</svg>[39m
+@orbis/web test:         [36m</button>[39m
+@orbis/web test:         [36m<button[39m
+@orbis/web test:           [33maria-expanded[39m=[32m"false"[39m
+@orbis/web test:           [33maria-haspopup[39m=[32m"dialog"[39m
+@orbis/web test:           [33mclass[39m=[32m"flex min-h-11 min-w-0 cursor-pointer items-center gap-1.5 rounded-full px-2 text-sm font-medium transition hover:bg-surface-2 disabled:cursor-default disabled:hover:bg-transparent"[39m
+@orbis/web test:           [33mdata-testid[39m=[32m"nav-switch"[39m
+@orbis/web test:           [33mtype[39m=[32m"button"[39m
+@orbis/web test:         [36m>[39m
+@orbis/web test:           [36m<span[39m
+@orbis/web test:             [33maria-hidden[39m=[32m"true"[39m
+@orbis/web test:           [36m>[39m
+@orbis/web test:             [0m🪐[0m
+@orbis/web test:           [36m</span>[39m
+@orbis/web test:           [36m<span[39m
+@orbis/web test:             [33mclass[39m=[32m"sr-only"[39m
+@orbis/web test:           [36m>[39m
+@orbis/web test:             [0mOrbis[0m
+@orbis/web test:           [36m</span>[39m
+@orbis/web test:           [36m<span[39m
+@orbis/web test:             [33maria-hidden[39m=[32m"true"[39m
+@orbis/web test:             [33mclass[39m=[32m"text-text-muted"[39m
+@orbis/web test:           [36m>[39m
+@orbis/web test:             [0m·[0m
+@orbis/web test:           [36m</span>[39m
+@orbis/web test:           [36m<span[39m
+@orbis/web test:             [33mclass[39m=[32m"min-w-0 truncate"[39m
+@orbis/web test:           [36m>[39m
+@orbis/web test:             [0mДомой[0m
+@orbis/web test:           [36m</span>[39m
+@orbis/web test:           [36m<svg[39m
+@orbis/web test:             [33maria-hidden[39m=[32m"true"[39m
+@orbis/web test:             [33mclass[39m=[32m"lucide lucide-chevron-down shrink-0 text-text-muted"[39m
+@orbis/web test:             [33mfill[39m=[32m"none"[39m
+@orbis/web test:             [33mheight[39m=[32m"14"[39m
+@orbis/web test:             [33mstroke[39m=[32m"currentColor"[39m
+@orbis/web test:             [33mstroke-linecap[39m=[32m"round"[39m
+@orbis/web test:             [33mstroke-linejoin[39m=[32m"round"[39m
+@orbis/web test:             [33mstroke-width[39m=[32m"2"[39m
+@orbis/web test:             [33mviewBox[39m=[32m"0 0 24 24"[39m
+@orbis/web test:             [33mwidth[39m=[32m"14"[39m
+@orbis/web test:             [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+@orbis/web test:           [36m>[39m
+@orbis/web test:             [36m<path[39m
+@orbis/web test:               [33md[39m=[32m"m6 9 6 6 6-6"[39m
+@orbis/web test:             [36m/>[39m
+@orbis/web test:           [36m</svg>[39m
+@orbis/web test:         [36m</button>[39m
+@orbis/web test:         [36m<span[39m
+@orbis/web test:           [33mclass[39m=[32m"flex-1"[39m
+@orbis/web test:         [36m/>[39m
+@orbis/web test:         [36m<button[39m
+@orbis/web test:           [33maria-label[39m=[32m"Домой"[39m
+@orbis/web test:           [33mclass[39m=[32m"inline-flex size-11 shrink-0 cursor-pointer items-center justify-center rounded-full bg-host text-host-foreground transition hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"[39m
+@orbis/web test:           [33mdata-host[39m=[32m"home"[39m
+@orbis/web test:           [33mdata-testid[39m=[32m"host-home"[39m
+@orbis/web test:           [33mtype[39m=[32m"button"[39m
+@orbis/web test:         [36m>[39m
+@orbis/web test:           [36m<svg[39m
+@orbis/web test:             [33maria-hidden[39m=[32m"true"[39m
+@orbis/web test:             [33mclass[39m=[32m"lucide lucide-house"[39m
+@orbis/web test:             [33mfill[39m=[32m"none"[39m
+@orbis/web test:             [33mheight[39m=[32m"18"[39m
+@orbis/web test:             [33mstroke[39m=[32m"currentColor"[39m
+@orbis/web test:             [33mstroke-linecap[39m=[32m"round"[39m
+@orbis/web test:             [33mstroke-linejoin[39m=[32m"round"[39m
+@orbis/web test:             [33mstroke-width[39m=[32m"2"[39m
+@orbis/web test:             [33mviewBox[39m=[32m"0 0 24 24"[39m
+@orbis/web test:             [33mwidth[39m=[32m"18"[39m
+@orbis/web test:             [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+@orbis/web test:           [36m>[39m
+@orbis/web test:             [36m<path[39m
+@orbis/web test:               [33md[39m=[32m"M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8"[39m
+@orbis/web test:             [36m/>[39m
+@orbis/web test:             [36m<path[39m
+@orbis/web test:               [33md[39m=[32m"M3 10a2 2 0 0 1 .709-1.528l7-6a2 2 0 0 1 2.582 0l7 6A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"[39m
+@orbis/web test:             [36m/>[39m
+@orbis/web test:           [36m</svg>[39m
+@orbis/web test:         [36m</button>[39m
+@orbis/web test:         [36m<span[39m
+@orbis/web test:           [33mclass[39m=[32m"relative inline-flex"[39m
+@orbis/web test:         [36m>[39m
+@orbis/web test:           [36m<button[39m
+@orbis/web test:             [33maria-expanded[39m=[32m"true"[39m
+@orbis/web test:             [33maria-haspopup[39m=[32m"menu"[39m
+@orbis/web test:             [33maria-label[39m=[32m"Меню"[39m
+@orbis/web test:             [33mclass[39m=[32m"inline-flex size-11 shrink-0 cursor-pointer items-center justify-center rounded-full bg-host text-host-foreground transition hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"[39m
+@orbis/web test:             [33mdata-host[39m=[32m"menu"[39m
+@orbis/web test:             [33mdata-state[39m=[32m"open"[39m
+@orbis/web test:             [33mdata-testid[39m=[32m"screen-menu"[39m
+@orbis/web test:             [33mid[39m=[32m"_r_0_"[39m
+@orbis/web test:             [33mtitle[39m=[32m"Меню"[39m
+@orbis/web test:             [33mtype[39m=[32m"button"[39m
+@orbis/web test:           [36m>[39m
+@orbis/web test:             [36m<svg[39m
+@orbis/web test:               [33maria-hidden[39m=[32m"true"[39m
+@orbis/web test:               [33mclass[39m=[32m"lucide lucide-ellipsis-vertical"[39m
+@orbis/web test:               [33mfill[39m=[32m"none"[39m
+@orbis/web test:               [33mheight[39m=[32m"18"[39m
+@orbis/web test:               [33mstroke[39m=[32m"currentColor"[39m
+@orbis/web test:               [33mstroke-linecap[39m=[32m"round"[39m
+@orbis/web test:               [33mstroke-linejoin[39m=[32m"round"[39m
+@orbis/web test:               [33mstroke-width[39m=[32m"2"[39m
+@orbis/web test:               [33mviewBox[39m=[32m"0 0 24 24"[39m
+@orbis/web test:               [33mwidth[39m=[32m"18"[39m
+@orbis/web test:               [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+@orbis/web test:             [36m>[39m
+@orbis/web test:               [36m<circle[39m
+@orbis/web test:                 [33mcx[39m=[32m"12"[39m
+@orbis/web test:                 [33mcy[39m=[32m"12"[39m
+@orbis/web test:                 [33mr[39m=[32m"1"[39m
+@orbis/web test:               [36m/>[39m
+@orbis/web test:               [36m<circle[39m
+@orbis/web test:                 [33mcx[39m=[32m"12"[39m
+@orbis/web test:                 [33mcy[39m=[32...
+@orbis/web test:  ❯ waitForWrapper ../../node_modules/@testing-library/dom/dist/wait-for.js:163:27
+@orbis/web test:  ❯ ../../node_modules/@testing-library/dom/dist/query-helpers.js:86:33
+@orbis/web test:  ❯ src/features/entity-detail/properties-relations/host-pending.test.tsx:41:32
+@orbis/web test:      39|   );
+@orbis/web test:      40|   fireEvent.click(await screen.findByTestId('screen-menu'));
+@orbis/web test:      41|   fireEvent.click(await screen.findByRole('menuitem', { name: 'Свойств…
+@orbis/web test:        |                                ^
+@orbis/web test:      42|   const dialog = await screen.findByRole('dialog', { name: 'Свойства и…
+@orbis/web test:      43|   const button = within(dialog).getByRole('button', { name: 'Сделать с…
+@orbis/web test: 
+@orbis/web test: ⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/3]⎯
+@orbis/web test: 
+@orbis/web test:  FAIL  src/features/entity-detail/properties-relations/host-pending.test.tsx > public owner close/open cannot replace the addressed panel synchronously during a host intent
+@orbis/web test: AssertionError: expected "vi.fn()" to be called 1 times, but got 0 times
+@orbis/web test: 
+@orbis/web test: Ignored nodes: comments, script, style
+@orbis/web test: [36m<html>[39m
+@orbis/web test:   [36m<head />[39m
+@orbis/web test:   [36m<body[39m
+@orbis/web test:     [33mdata-scroll-locked[39m=[32m"1"[39m
+@orbis/web test:     [33mstyle[39m=[32m"pointer-events: none;"[39m
+@orbis/web test:   [36m>[39m
+@orbis/web test:     [36m<span[39m
+@orbis/web test:       [33maria-hidden[39m=[32m"true"[39m
+@orbis/web test:       [33mdata-aria-hidden[39m=[32m"true"[39m
+@orbis/web test:       [33mdata-radix-focus-guard[39m=[32m""[39m
+@orbis/web test:       [33mstyle[39m=[32m"outline: none; opacity: 0; position: fixed; pointer-events: none;"[39m
+@orbis/web test:       [33mtabindex[39m=[32m"0"[39m
+@orbis/web test:     [36m/>[39m
+@orbis/web test:     [36m<div[39m
+@orbis/web test:       [33maria-hidden[39m=[32m"true"[39m
+@orbis/web test:       [33mdata-aria-hidden[39m=[32m"true"[39m
+@orbis/web test:     [36m>[39m
+@orbis/web test:       [36m<button[39m
+@orbis/web test:         [33mtype[39m=[32m"button"[39m
+@orbis/web test:       [36m>[39m
+@orbis/web test:         [0mOpen owned panel[0m
+@orbis/web test:       [36m</button>[39m
+@orbis/web test:     [36m</div>[39m
+@orbis/web test:     [36m<div[39m
+@orbis/web test:       [33maria-hidden[39m=[32m"true"[39m
+@orbis/web test:       [33mclass[39m=[32m"fixed inset-0 z-50 bg-overlay"[39m
+@orbis/web test:       [33mdata-aria-hidden[39m=[32m"true"[39m
+@orbis/web test:       [33mdata-state[39m=[32m"open"[39m
+@orbis/web test:       [33mstyle[39m=[32m"pointer-events: auto;"[39m
+@orbis/web test:     [36m/>[39m
+@orbis/web test:     [36m<div[39m
+@orbis/web test:       [33maria-label[39m=[32m"Свойства и связи"[39m
+@orbis/web test:       [33maria-labelledby[39m=[32m"radix-_r_9_"[39m
+@orbis/web test:       [33mclass[39m=[32m"fixed top-0 right-0 z-50 h-dvh w-full sm:w-[min(36rem,100vw)] border-line bg-surface p-4 shadow-pop flex flex-col overflow-hidden gap-3"[39m
+@orbis/web test:       [33mdata-state[39m=[32m"open"[39m
+@orbis/web test:       [33mid[39m=[32m"radix-_r_8_"[39m
+@orbis/web test:       [33mrole[39m=[32m"dialog"[39m
+@orbis/web test:       [33mstyle[39m=[32m"pointer-events: auto;"[39m
+@orbis/web test:       [33mtabindex[39m=[32m"-1"[39m
+@orbis/web test:     [36m>[39m
+@orbis/web test:       [36m<h2[39m
+@orbis/web test:         [33mclass[39m=[32m"sr-only"[39m
+@orbis/web test:         [33mid[39m=[32m"radix-_r_9_"[39m
+@orbis/web test:       [36m>[39m
+@orbis/web test:         [0mСвойства и связи[0m
+@orbis/web test:       [36m</h2>[39m
+@orbis/web test:       [36m<button[39m
+@orbis/web test:         [33maria-label[39m=[32m"Закрыть"[39m
+@orbis/web test:         [33mclass[39m=[32m"absolute right-3 top-3 cursor-pointer rounded p-1 text-text-muted outline-hidden transition hover:bg-surface-2 hover:text-text focus-visible:ring-2 focus-visible:ring-accent/60"[39m
+@orbis/web test:         [33mtype[39m=[32m"button"[39m
+@orbis/web test:       [36m>[39m
+@orbis/web test:         [36m<svg[39m
+@orbis/web test:           [33maria-hidden[39m=[32m"true"[39m
+@orbis/web test:           [33mclass[39m=[32m"lucide lucide-x"[39m
+@orbis/web test:           [33mfill[39m=[32m"none"[39m
+@orbis/web test:           [33mheight[39m=[32m"16"[39m
+@orbis/web test:           [33mstroke[39m=[32m"currentColor"[39m
+@orbis/web test:           [33mstroke-linecap[39m=[32m"round"[39m
+@orbis/web test:           [33mstroke-linejoin[39m=[32m"round"[39m
+@orbis/web test:           [33mstroke-width[39m=[32m"2"[39m
+@orbis/web test:           [33mviewBox[39m=[32m"0 0 24 24"[39m
+@orbis/web test:           [33mwidth[39m=[32m"16"[39m
+@orbis/web test:           [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+@orbis/web test:         [36m>[39m
+@orbis/web test:           [36m<path[39m
+@orbis/web test:             [33md[39m=[32m"M18 6 6 18"[39m
+@orbis/web test:           [36m/>[39m
+@orbis/web test:           [36m<path[39m
+@orbis/web test:             [33md[39m=[32m"m6 6 12 12"[39m
+@orbis/web test:           [36m/>[39m
+@orbis/web test:         [36m</svg>[39m
+@orbis/web test:       [36m</button>[39m
+@orbis/web test:       [36m<header[39m
+@orbis/web test:         [33mclass[39m=[32m"pr-8"[39m
+@orbis/web test:       [36m>[39m
+@orbis/web test:         [36m<h2[39m
+@orbis/web test:           [33mclass[39m=[32m"text-base font-medium"[39m
+@orbis/web test:         [36m>[39m
+@orbis/web test:           [0mЗаметка[0m
+@orbis/web test:         [36m</h2>[39m
+@orbis/web test:         [36m<p[39m
+@orbis/web test:           [33mclass[39m=[32m"break-all text-2xs text-text-muted"[39m
+@orbis/web test:         [36m>[39m
+@orbis/web test:           [0m00000000-0000-4000-8000-000000000010[0m
+@orbis/web test:         [36m</p>[39m
+@orbis/web test:       [36m</header>[39m
+@orbis/web test:       [36m<div[39m
+@orbis/web test:         [33maria-label[39m=[32m"Раздел панели"[39m
+@orbis/web test:         [33mclass[39m=[32m"flex gap-2"[39m
+@orbis/web test:         [33mrole[39m=[32m"tablist"[39m
+@orbis/web test:       [36m>[39m
+@orbis/web test:         [36m<button[39m
+@orbis/web test:           [33maria-controls[39m=[32m"_r_7_-panel-0"[39m
+@orbis/web test:           [33maria-selected[39m=[32m"true"[39m
+@orbis/web test:           [33mclass[39m=[32m"inline-flex cursor-pointer select-none items-center justify-center gap-2 rounded-control text-sm font-medium outline-hidden transition focus-visible:ring-2 focus-visible:ring-accent/60 focus-visible:ring-offset-2 focus-visible:ring-offset-bg disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-50 bg-accent text-accent-foreground shadow-control hover:bg-accent/90 active:bg-accent/80 px-4 py-2 "[39m
+@orbis/web test:           [33mdisabled[39m=[32m""[39m
+@orbis/web test:           [33mid[39m=[32m"_r_7_-tab-0"[39m
+@orbis/web test:           [33mrole[39m=[32m"tab"[39m
+@orbis/web test:           [33mtabindex[39m=[32m"0"[39m
+@orbis/web test:           [33mtype[39m=[32m"button"[39m
+@orbis/web test:         [36m>[39m
+@orbis/web test:           [0mАспекты[0m
+@orbis/web test:         [36m</button>[39m
+@orbis/web test:         [36m<button[39m
+@orbis/web test:           [33maria-controls[39m=[32m"_r_7_-panel-1"[39m
+@orbis/web test:           [33maria-selected[39m=[32m"false"[39m
+@orbis/web test:           [33mclass[39m=[32m"inline-flex cursor-pointer select-none items-center justify-center gap-2 rounded-control text-sm font-medium outline-hidden transition focus-visible:ring-2 focus-visible:ring-accent/60 focus-visible:ring-offset-2 focus-visible:ring-offset-bg disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-50 bg-accent text-accent-foreground shadow-control hover:bg-accent/90 active:bg-accent/80 px-4 py-2 "[39m
+@orbis/web test:           [33mdisabled[39m=[32m""[39m
+@orbis/web test:           [33mid[39m=[32m"_r_7_-tab-1"[39m
+@orbis/web test:           [33mrole[39m=[32m"tab"[39m
+@orbis/web test:           [33mtabindex[39m=[32m"-1"[39m
+@orbis/web test:           [33mtype[39m=[32m"button"[39m
+@orbis/web test:         [36m>[39m
+@orbis/web test:           [0mСвойства[0m
+@orbis/web test:         [36m</button>[39m
+@orbis/web test:         [36m<button[39m
+@orbis/web test:           [33maria-controls[39m=[32m"_r_7_-panel-2"[39m
+@orbis/web test:           [33maria-selected[39m=[32m"false"[39m
+@orbis/web test:           [33mclass[39m=[32m"inline-flex cursor-pointer select-none items-center justify-center gap-2 rounded-control text-sm font-medium outline-hidden transition focus-visible:ring-2 focus-visible:ring-accent/60 focus-visible:ring-offset-2 focus-visible:ring-offset-bg disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-50 bg-accent text-accent-foreground shadow-control hover:bg-accent/90 active:bg-accent/80 px-4 py-2 "[39m
+@orbis/web test:           [33mdisabled[39m=[32m""[39m
+@orbis/web test:           [33mid[39m=[32m"_r_7_-tab-2"[39m
+@orbis/web test:           [33mrole[39m=[32m"tab"[39m
+@orbis/web test:           [33mtabindex[39m=[32m"-1"[39m
+@orbis/web test:           [33mtype[39m=[32m"button"[39m
+@orbis/web test:         [36m>[39m
+@orbis/web test:           [0mСвязи[0m
+@orbis/web test:         [36m</button>[39m
+@orbis/web test:       [36m</div>[39m
+@orbis/web test:       [36m<fieldset[39m
+@orbis/web test:         [33mclass[39m=[32m"min-h-0 flex-1 overflow-y-auto"[39m
+@orbis/web test:         [33mdata-testid[39m=[32m"panel-scroll"[39m
+@orbis/web test:         [33mdisabled[39m=[32m""[39m
+@orbis/web test:       [36m>[39m
+@orbis/web test:         [36m<div[39m
+@orbis/web test:           [33maria-labelledby[39m=[32m"_r_7_-tab-0"[39m
+@orbis/web test:           [33mid[39m=[32m"_r_7_-panel-0"[39m
+@orbis/web test:           [33mrole[39m=[32m"tabpanel"[39m
+@orbis/web test:         [36m>[39m
+@orbis/web test:           [36m<section[39m
+@orbis/web test:             [33maria-label[39m=[32m"Аспекты"[39m
+@orbis/web test:             [33mclass[39m=[32m"flex flex-col gap-3"[39m
+@orbis/web test:           [36m>[39m
+@orbis/web test:             [36m<label[39m
+@orbis/web test:               [33mclass[39m=[32m"flex flex-col gap-1 text-sm"[39m
+@orbis/web test:             [36m>[39m
+@orbis/web test:            ...
+@orbis/web test:  ❯ src/features/entity-detail/properties-relations/host-pending.test.tsx:114:47
+@orbis/web test:     112|   expect(screen.getByRole('dialog', { name: 'Свойства и связи' })).toB…
+@orbis/web test:     113|   expect(within(dialog).getByText(entity.id)).toBeVisible();
+@orbis/web test:     114|   await waitFor(() => expect(latest.makePage).toHaveBeenCalledTimes(1)…
+@orbis/web test:        |                                               ^
+@orbis/web test:     115|   await act(async () => release());
+@orbis/web test:     116|   act(() => api?.close());
+@orbis/web test:  ❯ runWithExpensiveErrorDiagnosticsDisabled ../../node_modules/@testing-library/dom/dist/config.js:47:12
+@orbis/web test:  ❯ checkCallback ../../node_modules/@testing-library/dom/dist/wait-for.js:124:77
+@orbis/web test:  ❯ Timeout.checkRealTimersCallback ../../node_modules/@testing-library/dom/dist/wait-for.js:118:16
+@orbis/web test: 
+@orbis/web test: ⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/3]⎯
+@orbis/web test: 
+@orbis/web test:  FAIL  src/features/entity-detail/properties-relations/responsive.test.tsx > same-mounted session reset discards prior values panel and ignores its late write
+@orbis/web test: TestingLibraryElementError: Unable to find an element with the text: Заметка. This could be because the text is broken up by multiple elements. In this case, you can provide a function for your text matcher to make your matcher more flexible.
+@orbis/web test: 
+@orbis/web test: Ignored nodes: comments, script, style
+@orbis/web test: [36m<body>[39m
+@orbis/web test:   [36m<div>[39m
+@orbis/web test:     [36m<div[39m
+@orbis/web test:       [33mclass[39m=[32m"flex h-full flex-col bg-surface"[39m
+@orbis/web test:     [36m>[39m
+@orbis/web test:       [36m<main[39m
+@orbis/web test:         [33mclass[39m=[32m"flex-1 overflow-y-auto pb-24"[39m
+@orbis/web test:         [33mdata-place[39m=[32m"/r/00000000-0000-4000-8000-000000000010"[39m
+@orbis/web test:         [33mdata-testid[39m=[32m"screen-content"[39m
+@orbis/web test:       [36m>[39m
+@orbis/web test:         [36m<div[39m
+@orbis/web test:           [33mclass[39m=[32m"contents"[39m
+@orbis/web test:         [36m>[39m
+@orbis/web test:           [36m<header[39m
+@orbis/web test:             [33mclass[39m=[32m"sticky top-0 z-10 shrink-0 border-b border-line/70 bg-surface/90 backdrop-blur"[39m
+@orbis/web test:           [36m>[39m
+@orbis/web test:             [36m<div[39m
+@orbis/web test:               [33mclass[39m=[32m"relative flex h-14 items-center gap-2 px-2"[39m
+@orbis/web test:               [33mdata-testid[39m=[32m"host-presence"[39m
+@orbis/web test:             [36m>[39m
+@orbis/web test:               [36m<button[39m
+@orbis/web test:                 [33maria-label[39m=[32m"Назад"[39m
+@orbis/web test:                 [33mclass[39m=[32m"inline-flex size-11 shrink-0 cursor-pointer items-center justify-center rounded-full bg-host text-host-foreground transition hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"[39m
+@orbis/web test:                 [33mdata-host[39m=[32m"back"[39m
+@orbis/web test:                 [33mdata-testid[39m=[32m"host-back"[39m
+@orbis/web test:                 [33mtype[39m=[32m"button"[39m
+@orbis/web test:               [36m>[39m
+@orbis/web test:                 [36m<svg[39m
+@orbis/web test:                   [33maria-hidden[39m=[32m"true"[39m
+@orbis/web test:                   [33mclass[39m=[32m"lucide lucide-chevron-left"[39m
+@orbis/web test:                   [33mfill[39m=[32m"none"[39m
+@orbis/web test:                   [33mheight[39m=[32m"20"[39m
+@orbis/web test:                   [33mstroke[39m=[32m"currentColor"[39m
+@orbis/web test:                   [33mstroke-linecap[39m=[32m"round"[39m
+@orbis/web test:                   [33mstroke-linejoin[39m=[32m"round"[39m
+@orbis/web test:                   [33mstroke-width[39m=[32m"2"[39m
+@orbis/web test:                   [33mviewBox[39m=[32m"0 0 24 24"[39m
+@orbis/web test:                   [33mwidth[39m=[32m"20"[39m
+@orbis/web test:                   [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+@orbis/web test:                 [36m>[39m
+@orbis/web test:                   [36m<path[39m
+@orbis/web test:                     [33md[39m=[32m"m15 18-6-6 6-6"[39m
+@orbis/web test:                   [36m/>[39m
+@orbis/web test:                 [36m</svg>[39m
+@orbis/web test:               [36m</button>[39m
+@orbis/web test:               [36m<button[39m
+@orbis/web test:                 [33maria-expanded[39m=[32m"false"[39m
+@orbis/web test:                 [33maria-haspopup[39m=[32m"dialog"[39m
+@orbis/web test:                 [33mclass[39m=[32m"flex min-h-11 min-w-0 cursor-pointer items-center gap-1.5 rounded-full px-2 text-sm font-medium transition hover:bg-surface-2 disabled:cursor-default disabled:hover:bg-transparent"[39m
+@orbis/web test:                 [33mdata-testid[39m=[32m"nav-switch"[39m
+@orbis/web test:                 [33mtype[39m=[32m"button"[39m
+@orbis/web test:               [36m>[39m
+@orbis/web test:                 [36m<span[39m
+@orbis/web test:                   [33maria-hidden[39m=[32m"true"[39m
+@orbis/web test:                 [36m>[39m
+@orbis/web test:                   [0m🪐[0m
+@orbis/web test:                 [36m</span>[39m
+@orbis/web test:                 [36m<span[39m
+@orbis/web test:                   [33mclass[39m=[32m"sr-only"[39m
+@orbis/web test:                 [36m>[39m
+@orbis/web test:                   [0mOrbis[0m
+@orbis/web test:                 [36m</span>[39m
+@orbis/web test:                 [36m<span[39m
+@orbis/web test:                   [33maria-hidden[39m=[32m"true"[39m
+@orbis/web test:                   [33mclass[39m=[32m"text-text-muted"[39m
+@orbis/web test:                 [36m>[39m
+@orbis/web test:                   [0m·[0m
+@orbis/web test:                 [36m</span>[39m
+@orbis/web test:                 [36m<span[39m
+@orbis/web test:                   [33mclass[39m=[32m"min-w-0 truncate"[39m
+@orbis/web test:                 [36m>[39m
+@orbis/web test:                   [0mДомой[0m
+@orbis/web test:                 [36m</span>[39m
+@orbis/web test:                 [36m<svg[39m
+@orbis/web test:                   [33maria-hidden[39m=[32m"true"[39m
+@orbis/web test:                   [33mclass[39m=[32m"lucide lucide-chevron-down shrink-0 text-text-muted"[39m
+@orbis/web test:                   [33mfill[39m=[32m"none"[39m
+@orbis/web test:                   [33mheight[39m=[32m"14"[39m
+@orbis/web test:                   [33mstroke[39m=[32m"currentColor"[39m
+@orbis/web test:                   [33mstroke-linecap[39m=[32m"round"[39m
+@orbis/web test:                   [33mstroke-linejoin[39m=[32m"round"[39m
+@orbis/web test:                   [33mstroke-width[39m=[32m"2"[39m
+@orbis/web test:                   [33mviewBox[39m=[32m"0 0 24 24"[39m
+@orbis/web test:                   [33mwidth[39m=[32m"14"[39m
+@orbis/web test:                   [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+@orbis/web test:                 [36m>[39m
+@orbis/web test:                   [36m<path[39m
+@orbis/web test:                     [33md[39m=[32m"m6 9 6 6 6-6"[39m
+@orbis/web test:                   [36m/>[39m
+@orbis/web test:                 [36m</svg>[39m
+@orbis/web test:               [36m</button>[39m
+@orbis/web test:               [36m<span[39m
+@orbis/web test:                 [33mclass[39m=[32m"flex-1"[39m
+@orbis/web test:               [36m/>[39m
+@orbis/web test:               [36m<button[39m
+@orbis/web test:                 [33maria-label[39m=[32m"Домой"[39m
+@orbis/web test:                 [33mclass[39m=[32m"inline-flex size-11 shrink-0 cursor-pointer items-center justify-center rounded-full bg-host text-host-foreground transition hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"[39m
+@orbis/web test:                 [33mdata-host[39m=[32m"home"[39m
+@orbis/web test:                 [33mdata-testid[39m=[32m"host-home"[39m
+@orbis/web test:                 [33mtype[39m=[32m"button"[39m
+@orbis/web test:               [36m>[39m
+@orbis/web test:                 [36m<svg[39m
+@orbis/web test:                   [33maria-hidden[39m=[32m"true"[39m
+@orbis/web test:                   [33mclass[39m=[32m"lucide lucide-house"[39m
+@orbis/web test:                   [33mfill[39m=[32m"none"[39m
+@orbis/web test:                   [33mheight[39m=[32m"18"[39m
+@orbis/web test:                   [33mstroke[39m=[32m"currentColor"[39m
+@orbis/web test:                   [33mstroke-linecap[39m=[32m"round"[39m
+@orbis/web test:                   [33mstroke-linejoin[39m=[32m"round"[39m
+@orbis/web test:                   [33mstroke-width[39m=[32m"2"[39m
+@orbis/web test:                   [33mviewBox[39m=[32m"0 0 24 24"[39m
+@orbis/web test:                   [33mwidth[39m=[32m"18"[39m
+@orbis/web test:                   [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+@orbis/web test:                 [36m>[39m
+@orbis/web test:                   [36m<path[39m
+@orbis/web test:                     [33md[39m=[32m"M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8"[39m
+@orbis/web test:                   [36m/>[39m
+@orbis/web test:                   [36m<path[39m
+@orbis/web test:                     [33md[39m=[32m"M3 10a2 2 0 0 1 .709-1.528l7-6a2 2 0 0 1 2.582 0l7 6A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"[39m
+@orbis/web test:                   [36m/>[39m
+@orbis/web test:                 [36m</svg>[39m
+@orbis/web test:               [36m</button>[39m
+@orbis/web test:               [36m<span[39m
+@orbis/web test:                 [33mclass[39m=[32m"relative inline-flex"[39m
+@orbis/web test:               [36m>[39m
+@orbis/web test:                 [36m<button[39m
+@orbis/web test:                   [33maria-expanded[39m=[32m"false"[39m
+@orbis/web test:                   [33maria-haspopup[39m=[32m"menu"[39m
+@orbis/web test:                   [33maria-label[39m=[32m"Меню"[39m
+@orbis/web test:                   [33mclass[39m=[32m"inline-flex size-11 shrink-0 cursor-pointer items-center justify-center rounded-full bg-host text-host-foreground transition hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"[39m
+@orbis/web test:                   [33mdata-host[39m=[32m"menu"[39m
+@orbis/web test:                   [33mdata-state[39m=[32m"closed"[39m
+@orbis/web test:                   [33mdata-testid[39m=[32m"screen-menu"[39m
+@orbis/web test:                   [33mid[39m=[32m"_r_0_"[39m
+@orbis/web test:                   [33mtitle[39m=[32m"Меню"[39m
+@orbis/web test:                   [33mtype[39m=[32m"button"[39m
+@orbis/web test:                 [36m>[39m
+@orbis/web test:                   [36m<svg[39m
+@orbis/web test:                     [33maria-hidden[39m=[32m"true"[39m
+@orbis/web test:                     [33mclass[39m=[32m"lucide lucide-ellipsis-vertical"[39m
+@orbis/web test:                     [33mfill[39m=[32m"none"[39m
+@orbis/web test:                     [33mheight[39m=[32m"18"[39m
+@orbis/web test:                     [33mstroke[39m=[32m"currentColor"[39m
+@orbis/web test:                     [33mstroke-linecap[39m=[32m"round"[39m
+@orbis/web test:                     [33mstroke-linejoin[39m=[32m"round"[39m
+@orbis/web test:                     [33mstroke-width[39m=[32m"2"[39m
+@orbis/web test:                     [33mviewBox[39m=[32m"0 0 24 24"[39m
+@orbis/web test:                     [33mwidth[39m=[32m"18"[39m
+@orbis/web test:                     [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+@orbis/web test:                   [36m>[39m
+@orbis/web test:                     [36m<circle[39m
+@orbis/web test:                       [33mcx[39m=[32m"12"[39m
+@orbis/web test:                       [33mcy[39m=[32m"12"[39m
+@orbis/web test:                       [33mr[39m=[32m"1"[39m
+@orbis/web test:                     [36m/>[39m
+@orbis/web test:                     [36m<circle[39m
+@orbis/web test:                       [33mcx[39m=[32m"12"[39m
+@orbis/web test:                       [33mcy[39m=[32m"5"[39m
+@orbis/web test:                       [33mr[39m=[32m"1"[39m
+@orbis/web test:                     [36m/>[39m
+@orbis/web test:                     [36m<circle[39m
+@orbis/web test:                       [33mcx[39m=[32m"12"[39m
+@orbis/web test:                       [33mcy[39m=[32m"19"[39m
+@orbis/web test:                       [33mr[39m=[32m"1"[39m
+@orbis/web test:                     [36m/>[39m
+@orbis/web test:                   [36m</svg>[39m
+@orbis/web test:                 [36m</button>[39m
+@orbis/web test:               [36m</span>[39m
+@orbis/web test:             [36m</div>[39m
+@orbis/web test:             [36m<div[39m
+@orbis/web test:               [33mclass[39m=[32m"flex h-9 items-center px-4 pb-1"[39m
+@orbis/web test:             [36m>[39m
+@orbis/web test:               [36m<h1[39m
+@orbis/web test:                 [33mclass[39m=[32m"min-w-0 flex-1 truncate text-sm font-medium"[39m
+@orbis/web test:               [36m>[39m
+@orbis/web test:                 [0m…[0m
+@orbis/web test:               [36m</h1>[39m
+@orbis/web test:             [36m</div>[39m
+@orbis/web test:           [36m</header>[39m
+@orbis/web test:           [36m<div[39m
+@orbis/web test:             [33mclass[39m=[32m"mx-auto flex w-full max-w-3xl flex-col gap-2 p-3"[39m
+@orbis/web test:           [36m>[39m
+@orbis/web test:             [36m<div[39m
+@orbis/web test:               [33maria-label[39m=[32m"Загрузка"[39m
+@orbis/web test:               [33mclass[39m=[32m"animate-pulse rounded-md bg-surface-2 h-9 w-2/3"[39m
+@orbis/web test:               [33mrole[39m=[32m"status"[39m
+@orbis/web test:             [36m/>[39m
+@orbis/web test:             [36m<div[39m
+@orbis/web test:               [33maria-label[39m=[32m"Загрузка"[39m
+@orbis/web test:               [33mclass[39m=[32m"animate-pulse rounded-md bg-surface-2 h-9"[39m
+@orbis/web test:               [33mrole[39m=[32m"status"[39m
+@orbis/web test:             [36m/>[39m
+@orbis/web test:             [36m<div[39m
+@orbis/web test:               [33maria-label[39m=[32m"Загрузка"[39m
+@orbis/web test:               [33mclass[39m=[32m"animate-pulse rounded-md bg-surface-2 h-9 w-1/2"[39m
+@orbis/web test:               [33mrole[39m=[32m"status"[39m
+@orbis/web test:             [36m/>[39m
+@orbis/web test:           [36m</div>[39m
+@orbis/web test:         [36m</div>[39m
+@orbis/web test:       [36m</main>[39m
+@orbis/web test:       [36m<div[39m
+@orbis/web test:         [33mclass[39m=[32m"pointer-events-none fixed right-4 bottom-[max(16px,env(safe-area-inset-bottom))] z-30 flex flex-col items-end gap-2"[39m
+@orbis/web test:         [33mdata-testid[39m=[32m"host-buttons"[39m
+@orbis/web test:       [36m>[39m
+@orbis/web test:         [36m<div[39m
+@orbis/web test:           [33mclass[39m=[32m"pointer-events-auto flex items-center gap-1 rounded-full bg-host p-1 shadow-pop"[39m
+@orbis/web test:         [36m>[39m
+@orbis/web test:           [36m<button[39m
+@orbis/web test:             [33maria-label[39m=[32m"Поиск"[39m
+@orbis/web test:             [33mclass[39m=[32m"relative inline-flex size-11 cursor-pointer items-center justify-center rounded-full transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 text-host-foreground hover:bg-white/10"[39m
+@orbis/web test:             [33mdata-host[39m=[32m"search"[39m
+@orbis/web test:             [33mdata-testid[39m=[32m"host-search"[39m
+@orbis/web test:             [33mtype[39m=[32m"button"[39m
+@orbis/web test:           [36m>[39m
+@orbis/web test:             [36m<svg[39m
+@orbis/web test:               [33maria-hidden[39m=[32m"true"[39m
+@orbis/web test:               [33mclass[39m=[32m"lucide lucide-search"[39m
+@orbis/web test:               [33mfill[39m=[32m"none"[39m
+@orbis/web test:               [33mheight[39m=[32m"18"[39m
+@orbis/web test:               [33mstroke[39m=[32m"currentColor"[39m
+@orbis/web test:               [33mstroke-linecap[39m=[32m"round"[39m
+@orbis/web test:               [33mstroke-linejoin[39m=[32m"round"[39m
+@orbis/web test:               [33mstroke-width[39m=[32m"2"[39m
+@orbis/web test:               [33mviewBox[39m=[32m"0 0 24 24"[39m
+@orbis/web test:               [33mwidth[39m=[32m"18"[39m
+@orbis/web test:               [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+@orbis/web test:             [36m>[39m
+@orbis/web test:               [36m<path[39m
+@orbis/web test:                 [33md[39m=[32m"m21 21-4.34-4.34"[39m
+@orbis/web test:               [36m/>[39m
+@orbis/web test:               [36m<circle[39m
+@orbis/web test:                 [33mcx[39m=[32m"11"[39m
+@orbis/web test:                 [33mcy[39m=[32m"11"[39m
+@orbis/web test:                 [33mr[39m=[32m"8"[39m
+@orbis/web test:               [36m/>[39m
+@orbis/web test:             [36m</svg>[39m
+@orbis/web test:           [36m</button>[39m
+@orbis/web test:           [36m<button[39m
+@orbis/web test:             [33maria-label[39m=[32m"Чат"[39m
+@orbis/web test:             [33mclass[39m=[32m"relative inline-flex size-11 cursor-pointer items-center justify-center rounded-full transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 text-host-foreground hover:bg-white/10"[39m
+@orbis/web test:             [33mdata-host[39m=[32m"chat"[39m
+@orbis/web test:             [33mdata-testid[39m=[32m"host-chat"[39m
+@orbis/web test:             [33mtype[39m=[32m"button"[39m
+@orbis/web test:           [36m>[39m
+@orbis/web test:             [36m<svg[39m
+@orbis/web test:               [33maria-hidden[39m=[32m"true"[39m
+@orbis/web test:               [33mclass[39m=[32m"lucide lucide-message-square"[39m
+@orbis/web test:               [33mfill[39m=[32m"none"[39m
+@orbis/web test:               [33mheight[39m=[32m"18"[39m
+@orbis/web test:               [33mstroke[39m=[32m"currentColor"[39m
+@orbis/web test:               [33mstroke-linecap[39m=[32m"round"[39m
+@orbis/web test:               [33mstroke-linejoin[39m=[32m"round"[39m
+@orbis/web test:               [33mstroke-width[39m=[32m"2"[39m
+@orbis/web test:               [33mviewBox[39m=[32m"0 0 24 24"[39m
+@orbis/web test:               [33mwidth[39m=[32m"18"[39m
+@orbis/web test:               [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+@orbis/web test:             [36m>[39m
+@orbis/web test:               [36m<path[39m
+@orbis/web test:                 [33md[39m=[32m"M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z"[39m
+@orbis/web test:               [36m/>[39m
+@orbis/web test:             [36m</svg>[39m
+@orbis/web test:           [36m</button>[39m
+@orbis/web test:           [36m<button[39m
+@orbis/web test:             [33maria-expanded[39m=[32m"false"[39m
+@orbis/web test:             [33maria-label[39m=[32m"Новая запись"[39m
+@orbis/web test:             [33mclass[39m=[32m"relative inline-flex size-11 cursor-pointer items-center justify-center rounded-full transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 text-host-foreground hover:bg-white/10"[39m
+@orbis/web test:             [33mdata-host[39m=[32m"new"[39m
+@orbis/web test:             [33mdata-testid[39m=[32m"host-new"[39m
+@orbis/web test:             [33mtype[39m=[32m"button"[39m
+@orbis/web test:           [36m>[39m
+@orbis/web test:             [36m<svg[39m
+@orbis/web test:               [33maria-hidden[39m=[32m"true"[39m
+@orbis/web test:               [33mclass[39m=[32m"lucide lucide-plus"[39m
+@orbis/web test:               [33mfill[39m=[32m"none"[39m
+@orbis/web test:               [33mheight[39m=[32m"18"[39m
+@orbis/web test:               [33mstroke[39m=[32m"currentColor"[39m
+@orbis/web test:               [33mstroke-linecap[39m=[32m"round"[39m
+@orbis/web test:               [33mstroke-linejoin[39m=[32m"round"[39m
+@orbis/web test:               [33mstroke-width[39m=[32m"2"[39m
+@orbis/web test:               [33mviewBox[39m=[32m"0 0 24 24"[39m
+@orbis/web test:               [33mwidth[39m=[32m"18"[39m
+@orbis/web test:               [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+@orbis/web test:             [36m>[39m
+@orbis/web test:               [36m<path[39m
+@orbis/web test:                 [33md[39m=[32m"M5 12h14"[39m
+@orbis/web test:               [36m/>[39m
+@orbis/web test:               [36m<path[39m
+@orbis/web test:                 [33md[39m=[32m"M12 5v14"[39m
+@orbis/web test:               [36m/>[39m
+@orbis/web test:             [36m</svg>[39m
+@orbis/web test:           [36m</button>[39m
+@orbis/web test:         [36m</div>[39m
+@orbis/web test:       [36m</div>[39m
+@orbis/web test:     [36m</div>[39m
+@orbis/web test:   [36m</div>[39m
+@orbis/web test: [36m</body>[39m
+@orbis/web test: 
+@orbis/web test: Ignored nodes: comments, script, style
+@orbis/web test: [36m<body>[39m
+@orbis/web test:   [36m<div>[39m
+@orbis/web test:     [36m<div[39m
+@orbis/web test:       [33mclass[39m=[32m"flex h-full flex-col bg-surface"[39m
+@orbis/web test:     [36m>[39m
+@orbis/web test:       [36m<main[39m
+@orbis/web test:         [33mclass[39m=[32m"flex-1 overflow-y-auto pb-24"[39m
+@orbis/web test:         [33mdata-place[39m=[32m"/r/00000000-0000-4000-8000-000000000010"[39m
+@orbis/web test:         [33mdata-testid[39m=[32m"screen-content"[39m
+@orbis/web test:       [36m>[39m
+@orbis/web test:         [36m<div[39m
+@orbis/web test:           [33mclass[39m=[32m"contents"[39m
+@orbis/web test:         [36m>[39m
+@orbis/web test:           [36m<header[39m
+@orbis/web test:             [33mclass[39m=[32m"sticky top-0 z-10 shrink-0 border-b border-line/70 bg-surface/90 backdrop-blur"[39m
+@orbis/web test:           [36m>[39m
+@orbis/web test:             [36m<div[39m
+@orbis/web test:               [33mclass[39m=[32m"relative flex h-14 items-center gap-2 px-2"[39m
+@orbis/web test:               [33mdata-testid[39m=[32m"host-presence"[39m
+@orbis/web test:             [36m>[39m
+@orbis/web test:               [36m<button[39m
+@orbis/web test:                 [33maria-label[39m=[32m"Назад"[39m
+@orbis/web test:                 [33mclass[39m=[32m"inline-flex size-11 shrink-0 cursor-pointer items-center justify-center rounded-full bg-host text-host-foreground transition hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"[39m
+@orbis/web test:                 [33mdata-host[39m=[32m"back"[39m
+@orbis/web test:                 [33mdata-testid[39m=[32m"host-back"[39m
+@orbis/web test:                 [33mtype[39m=[32m"button"[39m
+@orbis/web test:               [36m>[39m
+@orbis/web test:                 [36m<svg[39m
+@orbis/web test:                   [33maria-hidden[39m=[32m"true"[39m
+@orbis/web test:                   [33mclass[39m=[32m"lucide lucide-chevron-left"[39m
+@orbis/web test:                   [33mfill[39m=[32m"none"[39m
+@orbis/web test:                   [33mheight[39m=[32m"20"[39m
+@orbis/web test:                   [33mstroke[39m=[32m"currentColor"[39m
+@orbis/web test:                   [33mstroke-linecap[39m=[32m"round"[39m
+@orbis/web test:                   [33mstroke-linejoin[39m=[32m"round"[39m
+@orbis/web test:                   [33mstroke-width[39m=[32m"2"[39m
+@orbis/web test:                   [33mviewBox[39m=[32m"0 0 24 24"[39m
+@orbis/web test:                   [33mwidth[39m=[32m"20"[39m
+@orbis/web test:                   [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+@orbis/web test:                 [36m>[39m
+@orbis/web test:                   [36m<path[39m
+@orbis/web test:                     [33md[39m=[32m"m15 18-6-6 6-6"[39m
+@orbis/web test:                   [36m/>[39m
+@orbis/web test:                 [36m</svg>[39m
+@orbis/web test:               [36m</button>[39m
+@orbis/web test:               [36m<button[39m
+@orbis/web test:                 [33maria-expanded[39m=[32m"false"[39m
+@orbis/web test:                 [33maria-haspopup[39m=[32m"dialog"[39m
+@orbis/web test:                 [33mclass[39m=[32m"flex min-h-11 min-w-0 cursor-pointer items-center gap-1.5 rounded-full px-2 text-sm font-medium transition hover:bg-surface-2 disabled:cursor-default disabled:hover:bg-transparent"[39m
+@orbis/web test:                 [33mdata-testid[39m=[32m"nav-switch"[39m
+@orbis/web test:                 [33mtype[39m=[32m"button"[39m
+@orbis/web test:               [36m>[39m
+@orbis/web test:                 [36m<span[39m
+@orbis/web test:                   [33maria-hidden[39m=[32m"true"[39m
+@orbis/web test:                 [36m>[39m
+@orbis/web test:                   [0m🪐[0m
+@orbis/web test:                 [36m</span>[39m
+@orbis/web test:                 [36m<span[39m
+@orbis/web test:                   [33mclass[39m=[32m"sr-only"[39m
+@orbis/web test:                 [36m>[39m
+@orbis/web test:                   [0mOrbis[0m
+@orbis/web test:                 [36m</span>[39m
+@orbis/web test:                 [36m<span[39m
+@orbis/web test:                   [33maria-hidden[39m=[32m"true"[39m
+@orbis/web test:                   [33mclass[39m=[32m"text-text-muted"[39m
+@orbis/web test:                 [36m>[39m
+@orbis/web test:                   [0m·[0m
+@orbis/web test:                 [36m</span>[39m
+@orbis/web test:                 [36m<span[39m
+@orbis/web test:                   [33mclass[39m=[32m"min-w-0 truncate"[39m
+@orbis/web test:                 [36m>[39m
+@orbis/web test:                   [0mДомой[0m
+@orbis/web test:                 [36m</span>[39m
+@orbis/web test:                 [36m<svg[39m
+@orbis/web test:                   [33maria-hidden[39m=[32m"true"[39m
+@orbis/web test:                   [33mclass[39m=[32m"lucide lucide-chevron-down shrink-0 text-text-muted"[39m
+@orbis/web test:                   [33mfill[39m=[32m"none"[39m
+@orbis/web test:                   [33mheight[39m=[32m"14"[39m
+@orbis/web test:                   [33mstroke[39m=[32m"currentColor"[39m
+@orbis/web test:                   [33mstroke-linecap[39m=[32m"round"[39m
+@orbis/web test:                   [33mstroke-linejoin[39m=[32m"round"[39m
+@orbis/web test:                   [33mstroke-width[39m=[32m"2"[39m
+@orbis/web test:                   [33mviewBox[39m=[32m"0 0 24 24"[39m
+@orbis/web test:                   [33mwidth[39m=[32m"14"[39m
+@orbis/web test:                   [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+@orbis/web test:                 [36m>[39m
+@orbis/web test:                   [36m<path[39m
+@orbis/web test:                     [33md[39m=[32m"m6 9 6 6 6-6"[39m
+@orbis/web test:                   [36m/>[39m
+@orbis/web test:                 [36m</svg>[39m
+@orbis/web test:               [36m</button>[39m
+@orbis/web test:               [36m<span[39m
+@orbis/web test:                 [33mclass[39m=[32m"flex-1"[39m
+@orbis/web test:               [36m/>[39m
+@orbis/web test:               [36m<button[39m
+@orbis/web test:                 [33maria-label[39m=[32m"Домой"[39m
+@orbis/web test:                 [33mclass[39m=[32m"inline-flex size-11 shrink-0 cursor-pointer items-center justify-center rounded-full bg-host text-host-foreground transition hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"[39m
+@orbis/web test:                 [33mdata-host[39m=[32m"home"[39m
+@orbis/web test:                 [33mdata-testid[39m=[32m"host-home"[39m
+@orbis/web test:                 [33mtype[39m=[32m"button"[39m
+@orbis/web test:               [36m>[39m
+@orbis/web test:                 [36m<svg[39m
+@orbis/web test:                   [33maria-hidden[39m=[32m"true"[39m
+@orbis/web test:                   [33mclass[39m=[32m"lucide lucide-house"[39m
+@orbis/web test:                   [33mfill[39m=[32m"none"[39m
+@orbis/web test:                   [33mheight[39m=[32m"18"[39m
+@orbis/web test:                   [33mstroke[39m=[32m"currentColor"[39m
+@orbis/web test:                   [33mstroke-linecap[39m=[32m"round"[39m
+@orbis/web test:                   [33mstroke-linejoin[39m=[32m"round"[39m
+@orbis/web test:                   [33mstroke-width[39m=[32m"2"[39m
+@orbis/web test:                   [33mviewBox[39m=[32m"0 0 24 24"[39m
+@orbis/web test:                   [33mwidth[39m=[32m"18"[39m
+@orbis/web test:                   [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+@orbis/web test:                 [36m>[39m
+@orbis/web test:                   [36m<path[39m
+@orbis/web test:                     [33md[39m=[32m"M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8"[39m
+@orbis/web test:                   [36m/>[39m
+@orbis/web test:                   [36m<path[39m
+@orbis/web test:                     [33md[39m=[32m"M3 10a2 2 0 0 1 .709-1.528l7-6a2 2 0 0 1 2.582 0l7 6A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"[39m
+@orbis/web test:                   [36m/>[39m
+@orbis/web test:                 [36m</svg>[39m
+@orbis/web test:               [36m</button>[39m
+@orbis/web test:               [36m<span[39m
+@orbis/web test:                 [33mclass[39m=[32m"relative inline-flex"[39m
+@orbis/web test:               [36m>[39m
+@orbis/web test:                 [36m<button[39m
+@orbis/web test:                   [33maria-expanded[39m=[32m"false"[39m
+@orbis/web test:                   [33maria-haspopup[39m=[32m"menu"[39m
+@orbis/web test:                   [33maria-label[39m=[32m"Меню"[39m
+@orbis/web test:                   [33mclass[39m=[32m"inline-flex size-11 shrink-0 cursor-pointer items-center justify-center rounded-full bg-host text-host-foreground transition hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"[39m
+@orbis/web test:                   [33mdata-host[39m=[32m"menu"[39m
+@orbis/web test:                   [33mdata-state[39m=[32m"closed"[39m
+@orbis/web test:                   [33mdata-testid[39m=[32m"screen-menu"[39m
+@orbis/web test:                   [33mid[39m=[32m"_r_0_"[39m
+@orbis/web test:                   [33mtitle[39m=[32m"Меню"[39m
+@orbis/web test:                   [33mtype[39m=[32m"button"[39m
+@orbis/web test:                 [36m>[39m
+@orbis/web test:                   [36m<svg[39m
+@orbis/web test:                     [33maria-hidden[39m=[32m"true"[39m
+@orbis/web test:                     [33mclass[39m=[32m"lucide lucide-ellipsis-vertical"[39m
+@orbis/web test:                     [33mfill[39m=[32m"none"[39m
+@orbis/web test:                     [33mheight[39m=[32m"18"[39m
+@orbis/web test:                     [33mstroke[39m=[32m"currentColor"[39m
+@orbis/web test:                     [33mstroke-linecap[39m=[32m"round"[39m
+@orbis/web test:                     [33mstroke-linejoin[39m=[32m"round"[39m
+@orbis/web test:                     [33mstroke-width[39m=[32m"2"[39m
+@orbis/web test:                     [33mviewBox[39m=[32m"0 0 24 24"[39m
+@orbis/web test:                     [33mwidth[39m=[32m"18"[39m
+@orbis/web test:                     [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+@orbis/web test:                   [36m>[39m
+@orbis/web test:                     [36m<circle[39m
+@orbis/web test:                       [33mcx[39m=[32m"12"[39m
+@orbis/web test:                       [33mcy[39m=[32m"12"[39m
+@orbis/web test:                       [33mr[39m=[32m"1"[39m
+@orbis/web test:                     [36m/>[39m
+@orbis/web test:                     [36m<circle[39m
+@orbis/web test:                       [33mcx[39m=[32m"12"[39m
+@orbis/web test:                       [33mcy[39m=[32m"5"[39m
+@orbis/web test:                       [33mr[39m=[32m"1"[39m
+@orbis/web test:                     [36m/>[39m
+@orbis/web test:                     [36m<circle[39m
+@orbis/web test:                       [33mcx[39m=[32m"12"[39m
+@orbis/web test:                       [33mcy[39m=[32m"19"[39m
+@orbis/web test:                       [33mr[39m=[32m"1"[39m
+@orbis/web test:                     [36m/>[39m
+@orbis/web test:                   [36m</svg>[39m
+@orbis/web test:                 [36m</button>[39m
+@orbis/web test:               [36m</span>[39m
+@orbis/web test:             [36m</div>[39m
+@orbis/web test:             [36m<div[39m
+@orbis/web test:               [33mclass[39m=[32m"flex h-9 items-center px-4 pb-1"[39m
+@orbis/web test:             [36m>[39m
+@orbis/web test:               [36m<h1[39m
+@orbis/web test:                 [33mclass[39m=[32m"min-w-0 flex-1 truncate text-sm font-medium"[39m
+@orbis/web test:               [36m>[39m
+@orbis/web test:                 [0m…[0m
+@orbis/web test:               [36m</h1>[39m
+@orbis/web test:             [36m</div>[39m
+@orbis/web test:           [36m</header>[39m
+@orbis/web test:           [36m<div[39m
+@orbis/web test:             [33mclass[39m=[32m"mx-auto flex w-full max-w-3xl flex-col gap-2 p-3"[39m
+@orbis/web test:           [36m>[39m
+@orbis/web test:             [36m<div[39m
+@orbis/web test:               [33maria-label[39m=[32m"Загрузка"[39m
+@orbis/web test:               [33mclass[39m=[32m"animate-pulse rounded-md bg-surface-2 h-9 w-2/3"[39m
+@orbis/web test:               [33mrole[39m=[32m"status"[39m
+@orbis/web test:             [36m/>[39m
+@orbis/web test:             [36m<div[39m
+@orbis/web test:               [33maria-label[39m=[32m"Загрузка"[39m
+@orbis/web test:               [33mclass[39m=[32m"animate-pulse rounded-md bg-surface-2 h-9"[39m
+@orbis/web test:               [33mrole[39m=[32m"status"[39m
+@orbis/web test:             [36m/>[39m
+@orbis/web test:             [36m<div[39m
+@orbis/web test:               [33maria-label[39m=[32m"Загрузка"[39m
+@orbis/web test:               [33mclass[39m=[32m"animate-pulse rounded-md bg-surface-2 h-9 w-1/2"[39m
+@orbis/web test:               [33mrole[39m=[32m"status"[39m
+@orbis/web test:             [36m/>[39m
+@orbis/web test:           [36m</div>[39m
+@orbis/web test:         [36m</div>[39m
+@orbis/web test:       [36m</main>[39m
+@orbis/web test:       [36m<div[39m
+@orbis/web test:         [33mclass[39m=[32m"pointer-events-none fixed right-4 bottom-[max(16px,env(safe-area-inset-bottom))] z-30 flex flex-col items-end gap-2"[39m
+@orbis/web test:         [33mdata-testid[39m=[32m"host-buttons"[39m
+@orbis/web test:       [36m>[39m
+@orbis/web test:         [36m<div[39m
+@orbis/web test:           [33mclass[39m=[32m"pointer-events-auto flex items-center gap-1 rounded-full bg-host p-1 shadow-pop"[39m
+@orbis/web test:         [36m>[39m
+@orbis/web test:           [36m<button[39m
+@orbis/web test:             [33maria-label[39m=[32m"Поиск"[39m
+@orbis/web test:             [33mclass[39m=[32m"relative inline-flex size-11 cursor-pointer items-center justify-center rounded-full transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 text-host-foreground hover:bg-white/10"[39m
+@orbis/web test:             [33mdata-host[39m=[32m"search"[39m
+@orbis/web test:             [33mdata-testid[39m=[32m"host-search"[39m
+@orbis/web test:             [33mtype[39m=[32m"button"[39m
+@orbis/web test:           [36m>[39m
+@orbis/web test:             [36m<svg[39m
+@orbis/web test:               [33maria-hidden[39m=[32m"true"[39m
+@orbis/web test:               [33mclass[39m=[32m"lucide lucide-search"[39m
+@orbis/web test:               [33mfill[39m=[32m"none"[39m
+@orbis/web test:               [33mheight[39m=[32m"18"[39m
+@orbis/web test:               [33mstroke[39m=[32m"currentColor"[39m
+@orbis/web test:               [33mstroke-linecap[39m=[32m"round"[39m
+@orbis/web test:               [33mstroke-linejoin[39m=[32m"round"[39m
+@orbis/web test:               [33mstroke-width[39m=[32m"2"[39m
+@orbis/web test:               [33mviewBox[39m=[32m"0 0 24 24"[39m
+@orbis/web test:               [33mwidth[39m=[32m"18"[39m
+@orbis/web test:               [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+@orbis/web test:             [36m>[39m
+@orbis/web test:               [36m<path[39m
+@orbis/web test:                 [33md[39m=[32m"m21 21-4.34-4.34"[39m
+@orbis/web test:               [36m/>[39m
+@orbis/web test:               [36m<circle[39m
+@orbis/web test:                 [33mcx[39m=[32m"11"[39m
+@orbis/web test:                 [33mcy[39m=[32m"11"[39m
+@orbis/web test:                 [33mr[39m=[32m"8"[39m
+@orbis/web test:               [36m/>[39m
+@orbis/web test:             [36m</svg>[39m
+@orbis/web test:           [36m</button>[39m
+@orbis/web test:           [36m<button[39m
+@orbis/web test:             [33maria-label[39m=[32m"Чат"[39m
+@orbis/web test:             [33mclass[39m=[32m"relative inline-flex size-11 cursor-pointer items-center justify-center rounded-full transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 text-host-foreground hover:bg-white/10"[39m
+@orbis/web test:             [33mdata-host[39m=[32m"chat"[39m
+@orbis/web test:             [33mdata-testid[39m=[32m"host-chat"[39m
+@orbis/web test:             [33mtype[39m=[32m"button"[39m
+@orbis/web test:           [36m>[39m
+@orbis/web test:             [36m<svg[39m
+@orbis/web test:               [33maria-hidden[39m=[32m"true"[39m
+@orbis/web test:               [33mclass[39m=[32m"lucide lucide-message-square"[39m
+@orbis/web test:               [33mfill[39m=[32m"none"[39m
+@orbis/web test:               [33mheight[39m=[32m"18"[39m
+@orbis/web test:               [33mstroke[39m=[32m"currentColor"[39m
+@orbis/web test:               [33mstroke-linecap[39m=[32m"round"[39m
+@orbis/web test:               [33mstroke-linejoin[39m=[32m"round"[39m
+@orbis/web test:               [33mstroke-width[39m=[32m"2"[39m
+@orbis/web test:               [33mviewBox[39m=[32m"0 0 24 24"[39m
+@orbis/web test:               [33mwidth[39m=[32m"18"[39m
+@orbis/web test:               [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+@orbis/web test:             [36m>[39m
+@orbis/web test:               [36m<path[39m
+@orbis/web test:                 [33md[39m=[32m"M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z"[39m
+@orbis/web test:               [36m/>[39m
+@orbis/web test:             [36m</svg>[39m
+@orbis/web test:           [36m</button>[39m
+@orbis/web test:           [36m<button[39m
+@orbis/web test:             [33maria-expanded[39m=[32m"false"[39m
+@orbis/web test:             [33maria-label[39m=[32m"Новая запись"[39m
+@orbis/web test:             [33mclass[39m=[32m"relative inline-flex size-11 cursor-pointer items-center justify-center rounded-full transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 text-host-foreground hover:bg-white/10"[39m
+@orbis/web test:             [33mdata-host[39m=[32m"new"[39m
+@orbis/web test:             [33mdata-testid[39m=[32m"host-new"[39m
+@orbis/web test:             [33mtype[39m=[32m"button"[39m
+@orbis/web test:           [36m>[39m
+@orbis/web test:             [36m<svg[39m
+@orbis/web test:               [33maria-hidden[39m=[32m"true"[39m
+@orbis/web test:               [33mclass[39m=[32m"lucide lucide-plus"[39m
+@orbis/web test:               [33mfill[39m=[32m"none"[39m
+@orbis/web test:               [33mheight[39m=[32m"18"[39m
+@orbis/web test:               [33mstroke[39m=[32m"currentColor"[39m
+@orbis/web test:               [33mstroke-linecap[39m=[32m"round"[39m
+@orbis/web test:               [33mstroke-linejoin[39m=[32m"round"[39m
+@orbis/web test:               [33mstroke-width[39m=[32m"2"[39m
+@orbis/web test:               [33mviewBox[39m=[32m"0 0 24 24"[39m
+@orbis/web test:               [33mwidth[39m=[32m"18"[39m
+@orbis/web test:               [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+@orbis/web test:             [36m>[39m
+@orbis/web test:               [36m<path[39m
+@orbis/web test:                 [33md[39m=[32m"M5 12h14"[39m
+@orbis/web test:               [36m/>[39m
+@orbis/web test:               [36m<path[39m
+@orbis/web test:                 [33md[39m=[32m"M12 5v14"[39m
+@orbis/web test:               [36m/>[39m
+@orbis/web test:             [36m</svg>[39m
+@orbis/web test:           [36m</button>[39m
+@orbis/web test:         [36m</div>[39m
+@orbis/web test:       [36m</div>[39m
+@orbis/web test:     [36m</div>[39m
+@orbis/web test:   [36m</div>[39m
+@orbis/web test: [36m</body>[39m
+@orbis/web test:  ❯ waitForWrapper ../../node_modules/@testing-library/dom/dist/wait-for.js:163:27
+@orbis/web test:  ❯ ../../node_modules/@testing-library/dom/dist/query-helpers.js:86:33
+@orbis/web test:  ❯ src/features/entity-detail/properties-relations/responsive.test.tsx:57:16
+@orbis/web test:      55|           : (registryReply(path) ?? []),
+@orbis/web test:      56|   );
+@orbis/web test:      57|   await screen.findByText(entity.title);
+@orbis/web test:        |                ^
+@orbis/web test:      58|   fireEvent.click(await screen.findByTestId('screen-menu'));
+@orbis/web test:      59|   fireEvent.click(await screen.findByRole('menuitem', { name: 'Свойств…
+@orbis/web test: 
+@orbis/web test: ⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/3]⎯
+@orbis/web test: 
+@orbis/web test: 
+@orbis/web test:  Test Files  2 failed | 216 passed | 2 skipped (220)
+@orbis/web test:       Tests  3 failed | 3058 passed | 2 skipped (3063)
+@orbis/web test:    Start at  23:57:12
+@orbis/web test:    Duration  328.12s (transform 16.53s, setup 47.03s, import 232.58s, tests 593.43s, environment 346.21s)
+@orbis/web test: 
+@orbis/web test: Exited with code 1

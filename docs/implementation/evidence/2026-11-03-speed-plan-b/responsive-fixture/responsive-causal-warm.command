@@ -1,0 +1,1 @@
+B13_NAV_WARM=1 B13_NAV_TRACE=<ndjson> bun x --no-install vitest run --maxWorkers=1 src/features/entity-detail/properties-relations/b13-responsive.probe.test.tsx -t 'same-mounted session reset discards prior values panel'

@@ -1,0 +1,5 @@
+node_modules/.bin/vitest run src/features/entity-detail/history-lifecycle.b13-r6-independent.test.tsx src/features/entity-editor/title-history.test.ts -t "B13 independent|accepted foreign title|accepted network|pre-ACK|post-ACK"
+../../node_modules/.bin/vitest run src/features/entity-detail/history-lifecycle.b13-r6-independent.test.tsx src/features/entity-editor/title-history.test.ts -t "B13 independent|accepted foreign title|accepted network|pre-ACK|post-ACK"
+../../node_modules/.bin/vitest run src/features/entity-detail/history-lifecycle.b13-r6-first-disk.test.tsx -t "B13 independent first disk"
+../../node_modules/.bin/vitest run src/features/entity-detail/history-lifecycle.b13-r6-first-disk.test.tsx -t "B13 independent first disk" [exact dad1 control]
+../../node_modules/.bin/vitest run src/features/entity-detail/history-lifecycle.b13-r6-first-disk-cas.test.tsx -t "B13 independent first disk"

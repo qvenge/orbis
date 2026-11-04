@@ -1,0 +1,13 @@
+bun test v1.2.7 (5c0fa6dc)
+
+.superpowers/sdd/2026-11-03-speed-plan-b/native-mcp-feed.test.ts:
+{"scenario":"mcp-two-local-clients","eventAt":1793810974870.206,"observed":[1793810975321,1793810975249],"clients":2}
+{"scenario":"held-xmin-before-release","heldForMs":915,"bothUnchanged":true}
+{"scenario":"held-xmin-after-release","eventAt":1793810975399.104,"released":1793810976251,"observed":[1793810977294,1793810977231]}
+{"scenario":"stream-off-local-fallback","eventAt":1793810978684.73,"observed":1793810983461,"postEditRequests":[{"lane":"disabled-watch","at":1793810978598},{"lane":"disabled-watch","at":1793810979014},{"lane":"disabled-watch","at":1793810979821},{"lane":"disabled-watch","at":1793810981434},{"lane":"disabled-reconcile","at":1793810983254,"txIds":["54866"]}]}
+(pass) real MCP tool and two Chrome clients on LISTEN/SSE, including held xmin and disabled stream [14792.11ms]
+
+ 1 pass
+ 0 fail
+ 20 expect() calls
+Ran 1 tests across 1 files. [15.76s]

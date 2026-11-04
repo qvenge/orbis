@@ -1,0 +1,4 @@
+$ bun run --filter '*' typecheck
+@orbis/shared typecheck: Exited with code 0
+@orbis/server typecheck: Exited with code 0
+@orbis/web typecheck: Exited with code 0

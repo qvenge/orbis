@@ -1,0 +1,11 @@
+
+ RUN  v4.1.9 /private/tmp/orbis-b13-r6-independent.slUDfl/dad1-control/apps/web
+
+{"before":{"disk":"disk","raw":"План","undo":true,"disabled":false},"after":{"title":"План","writes":0}}
+{"before":{"disk":"disk","raw":"Чужое имя Д","undo":false,"disabled":true},"after":{"title":"Набранный заголовок","writes":0}}
+
+ Test Files  1 passed (1)
+      Tests  2 passed | 79 skipped (81)
+   Start at  22:16:16
+   Duration  6.58s (transform 3.09s, setup 141ms, import 4.30s, tests 948ms, environment 953ms)
+

@@ -1,0 +1,404 @@
+{
+  "records": [
+    {
+      "package": "web",
+      "path": "src/perf/wiring.test.tsx",
+      "name": "отклик «＋» (QuickCapture) > создание — только «подтверждено», вид create",
+      "status": "passed",
+      "commandExit": 0,
+      "started": "2026-11-04T13:57:51.460862+00:00",
+      "ended": "2026-11-04T13:57:57.996195+00:00",
+      "report": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-03-speed-plan-b/b13-triage-initial-before-b/src-perf-wiring.json"
+    },
+    {
+      "package": "web",
+      "path": "src/lib/useGraphUndo.test.tsx",
+      "name": "Undo CONFLICT refreshes cached remote data even on non-confirmation",
+      "status": "passed",
+      "commandExit": 0,
+      "started": "2026-11-04T13:57:57.996768+00:00",
+      "ended": "2026-11-04T13:58:01.424382+00:00",
+      "report": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-03-speed-plan-b/b13-triage-initial-before-b/src-lib-useGraphUndo.json"
+    },
+    {
+      "package": "web",
+      "path": "src/lib/useGraphUndo.test.tsx",
+      "name": "Undo INTERNAL_SERVER_ERROR refreshes cached remote data even on non-confirmation",
+      "status": "passed",
+      "commandExit": 0,
+      "started": "2026-11-04T13:57:57.996768+00:00",
+      "ended": "2026-11-04T13:58:01.424402+00:00",
+      "report": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-03-speed-plan-b/b13-triage-initial-before-b/src-lib-useGraphUndo.json"
+    },
+    {
+      "package": "web",
+      "path": "src/lib/useGraphUndo.test.tsx",
+      "name": "detailed known refusal refreshes stale entity data without clearing form outcome",
+      "status": "passed",
+      "commandExit": 0,
+      "started": "2026-11-04T13:57:57.996768+00:00",
+      "ended": "2026-11-04T13:58:01.424413+00:00",
+      "report": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-03-speed-plan-b/b13-triage-initial-before-b/src-lib-useGraphUndo.json"
+    },
+    {
+      "package": "web",
+      "path": "src/test/fixtures.test.ts",
+      "name": "мешок `meta` остался только у СВЯЗЕЙ — у сущностей его нет во всём сьюте",
+      "status": "passed",
+      "commandExit": 0,
+      "started": "2026-11-04T13:58:01.425209+00:00",
+      "ended": "2026-11-04T13:58:03.479072+00:00",
+      "report": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-03-speed-plan-b/b13-triage-initial-before-b/src-test-fixtures.json"
+    },
+    {
+      "package": "web",
+      "path": "src/features/apps/nav-editor.test.tsx",
+      "name": "(в) страница в хосте: «Добавить в навигацию» — текущее приложение по умолчанию → пачка; затем рядом «Убрать из навигации» (R-34)",
+      "status": "passed",
+      "commandExit": 0,
+      "started": "2026-11-04T13:58:03.479628+00:00",
+      "ended": "2026-11-04T13:58:10.587789+00:00",
+      "report": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-03-speed-plan-b/b13-triage-initial-before-b/src-features-apps-nav-editor.json"
+    },
+    {
+      "package": "web",
+      "path": "src/features/apps/nav-editor.test.tsx",
+      "name": "(в) «Новое приложение…» («Мой дом» 🏡) — одна пачка entity_create с домашней и разделом; «Дом» ставит сервер",
+      "status": "passed",
+      "commandExit": 0,
+      "started": "2026-11-04T13:58:03.479628+00:00",
+      "ended": "2026-11-04T13:58:10.587812+00:00",
+      "report": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-03-speed-plan-b/b13-triage-initial-before-b/src-features-apps-nav-editor.json"
+    },
+    {
+      "package": "web",
+      "path": "src/features/apps/open.test.tsx",
+      "name": "(в) /a/<выключенное>/r/<id> — хост и плашка «выключено — [включить]»; «включить» зовёт app.setDisabled",
+      "status": "passed",
+      "commandExit": 0,
+      "started": "2026-11-04T13:58:10.588416+00:00",
+      "ended": "2026-11-04T13:58:19.420254+00:00",
+      "report": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-03-speed-plan-b/b13-triage-initial-before-b/src-features-apps-open.json"
+    },
+    {
+      "package": "web",
+      "path": "src/features/apps/open.test.tsx",
+      "name": "I-1: домашняя /a/<выключенное> — «включить» возвращает место в рамку приложения",
+      "status": "passed",
+      "commandExit": 0,
+      "started": "2026-11-04T13:58:10.588416+00:00",
+      "ended": "2026-11-04T13:58:19.420279+00:00",
+      "report": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-03-speed-plan-b/b13-triage-initial-before-b/src-features-apps-open.json"
+    },
+    {
+      "package": "web",
+      "path": "src/features/apps/open.test.tsx",
+      "name": "I-1: домашняя /a/<архивное> — «восстановить» возвращает место в рамку приложения",
+      "status": "passed",
+      "commandExit": 0,
+      "started": "2026-11-04T13:58:10.588416+00:00",
+      "ended": "2026-11-04T13:58:19.420291+00:00",
+      "report": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-03-speed-plan-b/b13-triage-initial-before-b/src-features-apps-open.json"
+    },
+    {
+      "package": "web",
+      "path": "src/features/apps/open.test.tsx",
+      "name": "I-1: плитка выключенного приложения на «Домой» → плашка → «включить» → его домашняя в его рамке",
+      "status": "passed",
+      "commandExit": 0,
+      "started": "2026-11-04T13:58:10.588416+00:00",
+      "ended": "2026-11-04T13:58:19.420302+00:00",
+      "report": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-03-speed-plan-b/b13-triage-initial-before-b/src-features-apps-open.json"
+    },
+    {
+      "package": "web",
+      "path": "src/features/budget/EnvelopeCard.test.tsx",
+      "name": "тап по карточке открывает запись категории в рамке экрана",
+      "status": "passed",
+      "commandExit": 0,
+      "started": "2026-11-04T13:58:19.420919+00:00",
+      "ended": "2026-11-04T13:58:23.668268+00:00",
+      "report": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-03-speed-plan-b/b13-triage-initial-before-b/src-features-budget-EnvelopeCard.json"
+    },
+    {
+      "package": "web",
+      "path": "src/features/budget/plan-owner.test.tsx",
+      "name": "budget refresh continuation ownerChanged=false",
+      "status": "passed",
+      "commandExit": 0,
+      "started": "2026-11-04T13:58:23.668945+00:00",
+      "ended": "2026-11-04T13:58:26.774459+00:00",
+      "report": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-03-speed-plan-b/b13-triage-initial-before-b/src-features-budget-plan-owner.json"
+    },
+    {
+      "package": "web",
+      "path": "src/features/budget/plan-owner.test.tsx",
+      "name": "budget refresh continuation ownerChanged=true",
+      "status": "passed",
+      "commandExit": 0,
+      "started": "2026-11-04T13:58:23.668945+00:00",
+      "ended": "2026-11-04T13:58:26.774481+00:00",
+      "report": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-03-speed-plan-b/b13-triage-initial-before-b/src-features-budget-plan-owner.json"
+    },
+    {
+      "package": "web",
+      "path": "src/features/entity-editor/arrows.test.tsx",
+      "name": "реальный экран: сохранённый title undo использует текущее видимое основание CAS",
+      "status": "passed",
+      "commandExit": 0,
+      "started": "2026-11-04T13:58:26.775259+00:00",
+      "ended": "2026-11-04T13:58:33.972486+00:00",
+      "report": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-03-speed-plan-b/b13-triage-initial-before-b/src-features-entity-editor-arrows.json"
+    },
+    {
+      "package": "web",
+      "path": "src/features/entity-editor/arrows.test.tsx",
+      "name": "pending rename → undo использует видимую основу; старый отказ после нового acceptance не гасит redo",
+      "status": "passed",
+      "commandExit": 0,
+      "started": "2026-11-04T13:58:26.775259+00:00",
+      "ended": "2026-11-04T13:58:33.972511+00:00",
+      "report": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-03-speed-plan-b/b13-triage-initial-before-b/src-features-entity-editor-arrows.json"
+    },
+    {
+      "package": "web",
+      "path": "src/features/entity-editor/arrows.test.tsx",
+      "name": "title SUCCESS после checkbox SUCCESS всё ещё принимает title перед старым title отказом",
+      "status": "passed",
+      "commandExit": 0,
+      "started": "2026-11-04T13:58:26.775259+00:00",
+      "ended": "2026-11-04T13:58:33.972524+00:00",
+      "report": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-03-speed-plan-b/b13-triage-initial-before-b/src-features-entity-editor-arrows.json"
+    },
+    {
+      "package": "web",
+      "path": "src/features/entity-editor/arrows.test.tsx",
+      "name": "старый title FAIL не принимает текущий FAILED title",
+      "status": "passed",
+      "commandExit": 0,
+      "started": "2026-11-04T13:58:26.775259+00:00",
+      "ended": "2026-11-04T13:58:33.972533+00:00",
+      "report": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-03-speed-plan-b/b13-triage-initial-before-b/src-features-entity-editor-arrows.json"
+    },
+    {
+      "package": "web",
+      "path": "src/features/entity-editor/arrows.test.tsx",
+      "name": "старый title SUCCESS не принимает текущий FAILED title",
+      "status": "passed",
+      "commandExit": 0,
+      "started": "2026-11-04T13:58:26.775259+00:00",
+      "ended": "2026-11-04T13:58:33.972542+00:00",
+      "report": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-03-speed-plan-b/b13-triage-initial-before-b/src-features-entity-editor-arrows.json"
+    },
+    {
+      "package": "web",
+      "path": "src/features/entity-editor/arrows.test.tsx",
+      "name": "e1 → e2 → e1: история title живёт в LRU, cold поле берёт current server basis",
+      "status": "passed",
+      "commandExit": 0,
+      "started": "2026-11-04T13:58:26.775259+00:00",
+      "ended": "2026-11-04T13:58:33.972552+00:00",
+      "report": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-03-speed-plan-b/b13-triage-initial-before-b/src-features-entity-editor-arrows.json"
+    },
+    {
+      "package": "web",
+      "path": "src/features/entity-editor/arrows.test.tsx",
+      "name": "title SUCCESS вне e1 затем e1 remount не возвращает право старому FAIL стереть redo",
+      "status": "passed",
+      "commandExit": 0,
+      "started": "2026-11-04T13:58:26.775259+00:00",
+      "ended": "2026-11-04T13:58:33.972560+00:00",
+      "report": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-03-speed-plan-b/b13-triage-initial-before-b/src-features-entity-editor-arrows.json"
+    },
+    {
+      "package": "web",
+      "path": "src/features/entity-editor/arrows.test.tsx",
+      "name": "own undo к уже видимому title не даёт вечное доверие последующему чужому совпадению",
+      "status": "passed",
+      "commandExit": 0,
+      "started": "2026-11-04T13:58:26.775259+00:00",
+      "ended": "2026-11-04T13:58:33.972568+00:00",
+      "report": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-03-speed-plan-b/b13-triage-initial-before-b/src-features-entity-editor-arrows.json"
+    },
+    {
+      "package": "web",
+      "path": "src/features/entity-editor/arrows.test.tsx",
+      "name": "rapid own optimistic props coalescing не доверяет позднему foreign return к старому v",
+      "status": "passed",
+      "commandExit": 0,
+      "started": "2026-11-04T13:58:26.775259+00:00",
+      "ended": "2026-11-04T13:58:33.972579+00:00",
+      "report": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-03-speed-plan-b/b13-triage-initial-before-b/src-features-entity-editor-arrows.json"
+    },
+    {
+      "package": "web",
+      "path": "src/features/entity-detail/foreign-refusal.test.tsx",
+      "name": "current body-only foreign refusal resets common and native history while retaining own draft",
+      "status": "passed",
+      "commandExit": 0,
+      "started": "2026-11-04T13:58:33.973347+00:00",
+      "ended": "2026-11-04T13:58:44.003822+00:00",
+      "report": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-03-speed-plan-b/b13-triage-initial-before-b/src-features-entity-detail-foreign-refusal.json"
+    },
+    {
+      "package": "web",
+      "path": "src/features/entity-detail/foreign-refusal.test.tsx",
+      "name": "contrast: explicit refresh accepts foreign body and resets both histories while keeping own draft",
+      "status": "passed",
+      "commandExit": 0,
+      "started": "2026-11-04T13:58:33.973347+00:00",
+      "ended": "2026-11-04T13:58:44.003844+00:00",
+      "report": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-03-speed-plan-b/b13-triage-initial-before-b/src-features-entity-detail-foreign-refusal.json"
+    },
+    {
+      "package": "web",
+      "path": "src/features/entity-detail/history-delivery.test.tsx",
+      "name": "journal actual refetched body landing resets populated title and native histories",
+      "status": "passed",
+      "commandExit": 0,
+      "started": "2026-11-04T13:58:44.004604+00:00",
+      "ended": "2026-11-04T13:58:51.630747+00:00",
+      "report": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-03-speed-plan-b/b13-triage-initial-before-b/src-features-entity-detail-history-delivery.json"
+    },
+    {
+      "package": "web",
+      "path": "src/features/entity-detail/history-lifecycle.test.tsx",
+      "name": "current title CAS failure while offscreen clears e1 retained steps",
+      "status": "passed",
+      "commandExit": 0,
+      "started": "2026-11-04T13:58:51.631635+00:00",
+      "ended": "2026-11-04T13:59:06.526485+00:00",
+      "report": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-03-speed-plan-b/b13-triage-initial-before-b/src-features-entity-detail-history-lifecycle.json"
+    },
+    {
+      "package": "web",
+      "path": "src/features/entity-detail/history-lifecycle.test.tsx",
+      "name": "early remount before old refusal clears foreign basis Чужое имя bodyTop=false",
+      "status": "passed",
+      "commandExit": 0,
+      "started": "2026-11-04T13:58:51.631635+00:00",
+      "ended": "2026-11-04T13:59:06.526517+00:00",
+      "report": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-03-speed-plan-b/b13-triage-initial-before-b/src-features-entity-detail-history-lifecycle.json"
+    },
+    {
+      "package": "web",
+      "path": "src/features/entity-detail/history-lifecycle.test.tsx",
+      "name": "early remount before old refusal clears foreign basis Чужое имя bodyTop=true",
+      "status": "passed",
+      "commandExit": 0,
+      "started": "2026-11-04T13:58:51.631635+00:00",
+      "ended": "2026-11-04T13:59:06.526532+00:00",
+      "report": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-03-speed-plan-b/b13-triage-initial-before-b/src-features-entity-detail-history-lifecycle.json"
+    },
+    {
+      "package": "web",
+      "path": "src/features/entity-detail/history-lifecycle.test.tsx",
+      "name": "coalesced earlier C does not block fresh B refusal observedC=false",
+      "status": "passed",
+      "commandExit": 0,
+      "started": "2026-11-04T13:58:51.631635+00:00",
+      "ended": "2026-11-04T13:59:06.526546+00:00",
+      "report": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-03-speed-plan-b/b13-triage-initial-before-b/src-features-entity-detail-history-lifecycle.json"
+    },
+    {
+      "package": "web",
+      "path": "src/features/entity-detail/history-lifecycle.test.tsx",
+      "name": "coalesced earlier C does not block fresh B refusal observedC=true",
+      "status": "passed",
+      "commandExit": 0,
+      "started": "2026-11-04T13:58:51.631635+00:00",
+      "ended": "2026-11-04T13:59:06.526561+00:00",
+      "report": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-03-speed-plan-b/b13-triage-initial-before-b/src-features-entity-detail-history-lifecycle.json"
+    },
+    {
+      "package": "web",
+      "path": "src/features/entity-detail/history-lifecycle.test.tsx",
+      "name": "actual cold BODY current basis after observed B refusal and unobserved C outcome=foreign order=body",
+      "status": "passed",
+      "commandExit": 0,
+      "started": "2026-11-04T13:58:51.631635+00:00",
+      "ended": "2026-11-04T13:59:06.526575+00:00",
+      "report": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-03-speed-plan-b/b13-triage-initial-before-b/src-features-entity-detail-history-lifecycle.json"
+    },
+    {
+      "package": "web",
+      "path": "src/features/entity-detail/versions-freshness.test.tsx",
+      "name": "V-1: открытый список показывает серверную страховку после restore и убирает её после Undo без reload",
+      "status": "passed",
+      "commandExit": 0,
+      "started": "2026-11-04T13:59:06.527533+00:00",
+      "ended": "2026-11-04T13:59:10.229849+00:00",
+      "report": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-03-speed-plan-b/b13-triage-initial-before-b/src-features-entity-detail-versions-freshness.json"
+    },
+    {
+      "package": "web",
+      "path": "src/features/entity-detail/versions-freshness.test.tsx",
+      "name": "принудительная Undo обновляет открытый список серверной страховкой текста владельца",
+      "status": "passed",
+      "commandExit": 0,
+      "started": "2026-11-04T13:59:06.527533+00:00",
+      "ended": "2026-11-04T13:59:10.229873+00:00",
+      "report": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-03-speed-plan-b/b13-triage-initial-before-b/src-features-entity-detail-versions-freshness.json"
+    },
+    {
+      "package": "web",
+      "path": "src/features/page/menu.test.tsx",
+      "name": "«Сделать страницей» > одна пачка с аспектом «страница»; тост «Отменить» → ai.undo; у страницы пункта нет",
+      "status": "passed",
+      "commandExit": 0,
+      "started": "2026-11-04T13:59:10.230801+00:00",
+      "ended": "2026-11-04T13:59:19.173011+00:00",
+      "report": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-03-speed-plan-b/b13-triage-initial-before-b/src-features-page-menu.json"
+    },
+    {
+      "package": "web",
+      "path": "src/features/page/menu.test.tsx",
+      "name": "жест меню при неотправленной правке тела (F-I1) > «Изменить вид только этой записи»: пачки нет, тост, текст досылается; повтор несёт набранное",
+      "status": "passed",
+      "commandExit": 0,
+      "started": "2026-11-04T13:59:10.230801+00:00",
+      "ended": "2026-11-04T13:59:19.173039+00:00",
+      "report": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-03-speed-plan-b/b13-triage-initial-before-b/src-features-page-menu.json"
+    },
+    {
+      "package": "web",
+      "path": "src/features/page/menu.test.tsx",
+      "name": "жест меню при неотправленной правке тела (F-I1) > сохранение в полёте (ответа ещё нет): жест ждёт — пачки нет, тост (фикс-раунд 1, I-1)",
+      "status": "passed",
+      "commandExit": 0,
+      "started": "2026-11-04T13:59:10.230801+00:00",
+      "ended": "2026-11-04T13:59:19.173054+00:00",
+      "report": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-03-speed-plan-b/b13-triage-initial-before-b/src-features-page-menu.json"
+    },
+    {
+      "package": "web",
+      "path": "src/features/settings/apps-and-extensions.test.tsx",
+      "name": "(г) новая запись поставки: «Добавить» → supply.add; R-18: Undo → ключ снова предлагается",
+      "status": "passed",
+      "commandExit": 0,
+      "started": "2026-11-04T13:59:19.173971+00:00",
+      "ended": "2026-11-04T13:59:24.703879+00:00",
+      "report": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-03-speed-plan-b/b13-triage-initial-before-b/src-features-settings-apps-and-extensions.json"
+    },
+    {
+      "package": "web",
+      "path": "src/features/settings/apps-and-extensions.test.tsx",
+      "name": "I-1: правка «Состава» — одна entity_update без module_set; «Выключить приложение» видит новый «Состав»",
+      "status": "passed",
+      "commandExit": 0,
+      "started": "2026-11-04T13:59:19.173971+00:00",
+      "ended": "2026-11-04T13:59:24.703901+00:00",
+      "report": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-03-speed-plan-b/b13-triage-initial-before-b/src-features-settings-apps-and-extensions.json"
+    },
+    {
+      "package": "web",
+      "path": "src/features/settings/apps-and-extensions.test.tsx",
+      "name": "M-2: правка графа гасит «Обновления» — признак «Изменено вами» не устаревает; повторный показ без запроса",
+      "status": "passed",
+      "commandExit": 0,
+      "started": "2026-11-04T13:59:19.173971+00:00",
+      "ended": "2026-11-04T13:59:24.703912+00:00",
+      "report": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-03-speed-plan-b/b13-triage-initial-before-b/src-features-settings-apps-and-extensions.json"
+    }
+  ]
+}

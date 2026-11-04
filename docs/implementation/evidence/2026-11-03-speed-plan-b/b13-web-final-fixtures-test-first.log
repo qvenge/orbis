@@ -1,0 +1,2664 @@
+
+ RUN  v4.1.9 /private/tmp/orbis-b13-web-final-fixture-run.myVsGt/apps/web
+
+stderr | src/features/page/menu.test.tsx > «Сделать страницей» > одна пачка с аспектом «страница»; тост «Отменить» → ai.undo; у страницы пункта нет
+An update to HostPresence inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to HostPresence inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to HostPresence inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to DetailScreen inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to DetailScreen inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to DetailScreen inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+
+stderr | src/features/page/menu.test.tsx > жест меню при неотправленной правке тела (F-I1) > «Изменить вид только этой записи»: пачки нет, тост, текст досылается; повтор несёт набранное
+An update to HostPresence inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to HostPresence inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to HostPresence inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to DetailScreen inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to DetailScreen inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to DetailScreen inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to DetailScreen inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to Presence inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to Presence inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to Presence inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to Presence inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to Presence inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to Presence inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to DetailScreen inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to ForwardRef inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to ForwardRef inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to ForwardRef inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+
+stderr | src/features/page/menu.test.tsx > жест меню при неотправленной правке тела (F-I1) > правка, отменённая до исходного текста, — не неотправленная: жест проходит сразу
+An update to HostPresence inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to HostPresence inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to HostPresence inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to DetailScreen inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to DetailScreen inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to DetailScreen inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+
+stderr | src/features/page/menu.test.tsx > жест меню при неотправленной правке тела (F-I1) > правка тела получила 409: жест не досылает её снова и отсылает к плашке (фикс-раунд 1, M-1)
+An update to Toaster inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+
+stderr | src/features/page/menu.test.tsx > жест меню при неотправленной правке тела (F-I1) > правка тела получила 409: жест не досылает её снова и отсылает к плашке (фикс-раунд 1, M-1)
+An update to Toaster inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+
+stderr | src/features/page/menu.test.tsx > жест меню при неотправленной правке тела (F-I1) > правка тела получила 409: жест не досылает её снова и отсылает к плашке (фикс-раунд 1, M-1)
+An update to HostPresence inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to HostPresence inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to HostPresence inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to DetailScreen inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to DetailScreen inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to DetailScreen inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+
+stderr | src/features/page/menu.test.tsx > жест меню при неотправленной правке тела (F-I1) > «Сделать страницей»: пачки нет, тост, текст досылается без 409
+An update to HostPresence inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to HostPresence inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to HostPresence inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to DetailScreen inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to DetailScreen inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to DetailScreen inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to SubtaskAdd inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+
+stderr | src/features/page/menu.test.tsx > жест меню при неотправленной правке тела (F-I1) > «Сделать страницей»: пачки нет, тост, текст досылается без 409
+An update to SubtaskAdd inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+
+stderr | src/features/page/menu.test.tsx > жест меню при неотправленной правке тела (F-I1) > «Перестать быть страницей» из «Настроить»: пачки нет, тост, текст досылается без 409
+An update to HostPresence inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to HostPresence inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to HostPresence inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to DetailScreen inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to DetailScreen inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to DetailScreen inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+
+stderr | src/features/page/menu.test.tsx > жест меню при неотправленной правке тела (F-I1) > кнопка вопроса случая 3 при неотправленной правке: пачки нет, диалог закрыт, текст досылается
+An update to HostPresence inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to HostPresence inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to HostPresence inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to DetailScreen inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to DetailScreen inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to DetailScreen inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to SubtaskAdd inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+
+stderr | src/features/page/menu.test.tsx > жест меню при неотправленной правке тела (F-I1) > кнопка вопроса случая 3 при неотправленной правке: пачки нет, диалог закрыт, текст досылается
+An update to SubtaskAdd inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+
+stderr | src/features/page/menu.test.tsx > Task20 populated histories actual page menu aspect-only make-page preserves
+An update to HostPresence inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to HostPresence inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to HostPresence inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to DetailScreen inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to DetailScreen inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to DetailScreen inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+
+stderr | src/features/page/menu.test.tsx > Task20 populated histories actual page menu body batch resets
+An update to HostPresence inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to HostPresence inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to HostPresence inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to DetailScreen inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to DetailScreen inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to DetailScreen inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to DetailScreen inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to Presence inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to Presence inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to Presence inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to Presence inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to Presence inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to Presence inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to DetailScreen inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to ForwardRef inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to ForwardRef inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to ForwardRef inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+
+stderr | src/features/page/menu.test.tsx > B13 old body cannot enter a view rewrite after rewind: direct gesture
+An update to HostPresence inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to HostPresence inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to HostPresence inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to DetailScreen inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to DetailScreen inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to DetailScreen inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+
+stderr | src/features/page/menu.test.tsx > B13 old body cannot enter a view rewrite after rewind: open dialog showing below
+An update to HostPresence inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to HostPresence inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to HostPresence inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to DetailScreen inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to DetailScreen inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to DetailScreen inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+
+stderr | src/features/page/menu.test.tsx > B13 old body cannot enter a view rewrite after rewind: open dialog pinning a version
+An update to HostPresence inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to HostPresence inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to HostPresence inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to DetailScreen inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to DetailScreen inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to DetailScreen inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+
+ ❯ src/features/page/menu.test.tsx (43 tests | 1 failed | 30 skipped) 8791ms
+     × одна пачка с аспектом «страница»; тост «Отменить» → ai.undo; у страницы пункта нет 1673ms
+     ↓ случай 2: текст на место {{body}}, одна пачка; после — страница, вид прежний
+     ↓ случай 1: тела нет — копия шаблона без {{body}}; ориентир тела исчезает, прочее то же
+       ↓ случай 2: карточка задачи до и после, карточки «Страница» нет (РП-25)
+       ↓ случай 1: пустое тело — карточка задачи до и после
+       ↓ диалог Р-19: текст вопроса, три кнопки, подсказка про версию; до ответа — ни одной записи
+       ↓ «Отмена» — вызовов нет, запись как была
+       ↓ «Сохранить версией и убрать» — одна пачка: закрепление текста, затем тело-шаблон
+       ↓ «Показать внизу страницы» — одна пачка, текст под шаблоном
+     ↓ «Открыть через шаблон хоста» — только при шаблоне владельца; «‹» возвращает его, новый заход — снова свой
+     ↓ разовый вид не переезжает в другое место с той же записью; у каждого места — своё (гейт 19, M-2)
+     ↓ шаблон хоста у записи без своих шаблонов — пункта «через шаблон хоста» нет
+     ↓ «Открыть через „X“» — по пункту на прочие исправные подходящие шаблоны
+     ↓ только при споре; показывает плашку и при запомненном выборе
+     ↓ одного подходящего шаблона — пункта нет
+     ↓ сломанный шаблон на вершине: спор A/C под ним — пункт есть, как и плашка (brokenIds)
+     ↓ пункты страницы; пунктов записи и «Править как markdown» нет
+     ↓ «Открыть как запись» — шаблон хоста: версии, тред, обратные ссылки, тело в редакторе экрана
+     ↓ «Открыть как запись» — разово: после ухода и возврата страница снова своим телом
+     ↓ «Сделать шаблоном для…» — служебных и «Страницы» в выборе нет; пачка props «Шаблон для»
+     ↓ снятие всех аспектов — одна правка: unset «Шаблон для» и «Главнее, чем» (§3.2)
+     ↓ скрытый аспект в «Шаблон для» виден в диалоге и снимается (остаток 1а №31)
+     ↓ «Перестать быть страницей» — снимается только аспект (РП-22); одна пачка, Undo
+     ↓ переход на соседнюю запись с открытым вопросом случая 3 — диалог закрыт, вызовов нет
+     ↓ переход с открытым «Сделать шаблоном для…» — диалог закрыт, вызовов нет
+     ↓ правка тела мимо экрана при открытом вопросе: пачка идёт с версией плана, сервер отказывает, правка цела
+     ↓ {{/tab}} в заметке под шаблоном хоста → диалог с причиной; «Показать внизу» — копия без {{body}} + текст
+     ↓ два шаблона с одним названием — два пункта без коллизии ключей; пустое название — id
+     ↓ список шаблонов не приехал — пункта нет
+     ↓ список шаблонов ещё едет — пункта нет
+     ✓ «Изменить вид только этой записи»: пачки нет, тост, текст досылается; повтор несёт набранное  916ms
+     ✓ правка, отменённая до исходного текста, — не неотправленная: жест проходит сразу 225ms
+     ✓ сохранение в полёте (ответа ещё нет): жест ждёт — пачки нет, тост (фикс-раунд 1, I-1)  1252ms
+     ✓ правка тела получила 409: жест не досылает её снова и отсылает к плашке (фикс-раунд 1, M-1)  1771ms
+     ✓ «Сделать страницей»: пачки нет, тост, текст досылается без 409 225ms
+     ✓ «Перестать быть страницей» из «Настроить»: пачки нет, тост, текст досылается без 409  562ms
+     ✓ кнопка вопроса случая 3 при неотправленной правке: пачки нет, диалог закрыт, текст досылается 293ms
+     ↓ «Настроить шаблон» → пункты только «Открыть шаблон» и «Скопировать ссылку» — ссылка на шаблон
+   ✓ Task20 populated histories actual page menu aspect-only make-page preserves 224ms
+   ✓ Task20 populated histories actual page menu body batch resets 272ms
+   ✓ B13 old body cannot enter a view rewrite after rewind: direct gesture  330ms
+   ✓ B13 old body cannot enter a view rewrite after rewind: open dialog showing below  369ms
+   ✓ B13 old body cannot enter a view rewrite after rewind: open dialog pinning a version  374ms
+ ❯ src/features/apps/nav-editor.test.tsx (19 tests | 2 failed | 16 skipped) 4568ms
+   ↓ редактор навигации сохраняет основу видимого имени при чужом рефетче во время ввода
+   ↓ (б) хост на «/»: «Повестка» выше «Daily Planning» → одна пачка с новым порядком
+   ↓ (б) добавить поиском, убрать, сменить домашнюю, форму, имя и иконку — одна пачка на «Сохранить»
+   ↓ (б) Фокус ревью п. 2: архивный раздел — плашка; «Сохранить» вычищает его, отказа «цель архивна» нет
+   ↓ (б) своё приложение: раздел «Приложение «Мой дом»» правит его запись
+   × (в) страница в хосте: «Добавить в навигацию» — текущее приложение по умолчанию → пачка; затем рядом «Убрать из навигации» (R-34) 2123ms
+   ↓ (в) приложение, где запись уже стоит, в диалоге не выбирается («уже здесь»)
+   ↓ (в) выключенное приложение в диалоге — с пометкой «выключено» (финал 1б, Fable M-2)
+   ↓ (в) Фокус ревью п. 2: добавление в навигацию с архивным разделом — архивный вычищен, пачка проходит
+   × (в) «Новое приложение…» («Мой дом» 🏡) — одна пачка entity_create с домашней и разделом; «Дом» ставит сервер 1561ms
+   ↓ (г) «Сделать шаблоном для…» в рамке «Мой дом» — пачка с «Дом» = «Мой дом»
+   ↓ (г) в хосте — без «Дома»
+   ↓ (д) карточка аспекта «страница» — «Дом» ссылочным контролом с выбором приложений
+   ↓ M-2: у архивной записи «Добавить в навигацию» нет — поставить её нельзя
+   ↓ M-3: поиск редактора не предлагает само приложение ни разделом, ни домашней
+   ✓ M-3: отказ пачки — редактор не закрывается, черновик цел, отказ виден в нём  579ms
+   ↓ M-5: архивная «Домашняя» — плашка в редакторе; нетронутая не пишется, правка проходит
+   ↓ M-4: выбранная домашняя до ответа сервера — её заголовок, не uuid «не найдено»
+   ↓ Fable M-3: оболочка без аспекта «поставка» (выведена, R-17) — не оболочка ни рамке, ни меню
+stderr | src/features/apps/open.test.tsx > shared record menu item has no native URL and opens the selected app with Enter
+An update to ForwardRef inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to ForwardRef inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+
+ ❯ src/features/apps/open.test.tsx (30 tests | 1 failed | 25 skipped) 2849ms
+   ↓ (а) задача из чата — в рамке «Мой дом», адрес заменён (replaceState), «‹» — в чат
+   ↓ (б) два места без выбора — запись в хосте и вопрос; «Мой дом» с галочкой — одна пачка и переход
+   ↓ (б) без галочки — переход разовый, пачки нет; повторное открытие снова спрашивает
+   ↓ (б) повтор того же выбора — пустая карта, пустой пачки нет (carry, Fable M-4)
+   ↓ (в) /a/<выключенное>/r/<id> — хост и плашка «выключено — [включить]»; «включить» зовёт app.setDisabled
+   ↓ (в) архивное — плашка «в архиве — [восстановить]», «восстановить» — пачка с archived:false (Э-20)
+   ↓ (в) /a/<id обычной записи> — хост и плашка «приложение не найдено», не пустота
+   ↓ (в) /a/<id обычной записи>/r/<id> — запись в хосте и та же плашка
+   ↓ (в) /a/<выключенное> — домашняя: хост и плашка «выключено — [включить]»
+   ↓ (в) /a/budget/r/<id> — хост и «Бюджет придёт отдельным срезом»
+   ↓ (в) плашка правила открытия `reserved` — «Бюджет придёт отдельным срезом», без кнопки (1в §7.4)
+   ↓ (в) R-25: /a/<выключенное>/r/<задача> при одном месте P — экран в P и плашка выключенного
+   ↓ (г) заметка в «Мой дом» без вида заметок — шаблон хоста в рамке «Мой дом» и «открыть в [Заметки]»
+   ↓ (д) страница с «Домом» = «Мой дом», открытая из хоста, — в рамке «Мой дом», адрес заменён
+   ↓ (д) дом страницы — не приложение: страница в хосте и своя плашка (не «адрес не приложение»)
+   ↓ (е) «⋯ → Открыть в «Проекты»» — разово в «Проекты»; «Сменить, где открывать…» — вопрос
+   ↓ (е) одно место — «Открыть в» есть из хоста, «Сменить, где открывать…» нет
+   ↓ (ж) строка блока данных на странице «Утро» «Моего дома» — запись в рамке «Мой дом»
+   ↓ (з) чип на запись-приложение «Мой дом» — /a/<мой дом>, домашняя в его рамке
+   ↓ (з) чип на запись-оболочку хоста — «/», «Домой» хоста
+   ↓ (з) чип на своё приложение изнутри него — домашняя одной записью в HOME_SECTION (финал C1 M-1)
+   ↓ запись без мест из хоста — хост, адрес тот же, плашек нет
+   ✓ I-1: домашняя /a/<выключенное> — «включить» возвращает место в рамку приложения  746ms
+   × I-1: домашняя /a/<архивное> — «восстановить» возвращает место в рамку приложения 1064ms
+   ✓ I-1: плитка выключенного приложения на «Домой» → плашка → «включить» → его домашняя в его рамке  310ms
+   ✓ m-3 / R-33: отказ «включить» — тост ошибки, не молча 100ms
+   ↓ I-2: «Дом» страницы выключен и в старом, и в новом адресе — одна плашка, без двойных ключей
+   ↓ I-2: /a/<оболочка хоста>/r/<задача> при споре мест — один вопрос
+   ↓ m-1: «Сменить, где открывать…» при открытом вопросе второго не добавляет
+   ✓ shared record menu item has no native URL and opens the selected app with Enter  325ms
+ ❯ src/features/settings/apps-and-extensions.test.tsx (19 tests | 1 failed | 16 skipped) 3770ms
+   ↓ (а) С1б-10: вкладка «Приложения и расширения», слова «Views» в интерфейсе нет
+   ↓ (а) расширения: четыре строки — иконка, имя, описание, переключатель; Финансы по маске выключены
+   ↓ (а) включить Финансы → user.setModuleEnabled, тост «Отменить» → ai.undo этого действия
+   ↓ (а) приложения: хост без «Выключить»/«Удалить», свои — с ними; «Новое приложение» открывает диалог
+   ↓ (в) «Выключить приложение»: место и «Цели» отмечены; снятая галочка → extensions: []
+   ↓ (в) «Выключить приложение» по умолчанию выключает осиротевшие «Цели» той же пачкой
+   ↓ (в) «Удалить приложение» — app.archive с тем же выбором сирот
+   ↓ (в) R-33: «Включить приложение» — без каскада «Состава»
+   ↓ (г) две строки; «Принять все» — только неправленые (названы до нажатия) → supply.acceptAll
+   ↓ (г) «Принять все» гаснет, когда все обновления — правленые
+   ↓ (г) перенос 11: «Сравнить» — двустороннее сравнение по recordText и etalonText ответа
+   ↓ (г) «Оставить своё» → supply.decline; «Принять — прежняя версия сохранится» → supply.accept
+   ↓ (г) перенос Fable M-2: подпись «прежняя версия» не обещает заголовок и значок
+   ✓ (г) новая запись поставки: «Добавить» → supply.add; R-18: Undo → ключ снова предлагается  1216ms
+   ↓ (г) «Сравнить» у оболочки хоста — построчно по печати места, id показаны заголовками
+   ↓ I-1: «Новое приложение» с «Составом» — одна entity_create с расширениями, маска не трогается
+   × I-1: правка «Состава» — одна entity_update без module_set; «Выключить приложение» видит новый «Состав» 1455ms
+   ✓ M-2: правка графа гасит «Обновления» — признак «Изменено вами» не устаревает; повторный показ без запроса  795ms
+   ↓ N-1: правка в обход клиента (агент, вторая вкладка) проявляется по истечении срока свежести
+ ✓ src/features/budget/EnvelopeCard.test.tsx (12 tests | 11 skipped) 159ms
+ ✓ src/features/budget/plan-owner.test.tsx (5 tests | 3 skipped) 342ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 5 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/features/apps/nav-editor.test.tsx > (в) страница в хосте: «Добавить в навигацию» — текущее приложение по умолчанию → пачка; затем рядом «Убрать из навигации» (R-34)
+AssertionError: expected [] to have a length of 1 but got +0
+
+Ignored nodes: comments, script, style
+[36m<html>[39m
+  [36m<head />[39m
+  [36m<body[39m
+    [33mstyle[39m=[32m""[39m
+  [36m>[39m
+    [36m<div>[39m
+      [36m<div[39m
+        [33mclass[39m=[32m"flex h-full flex-col bg-surface"[39m
+      [36m>[39m
+        [36m<main[39m
+          [33mclass[39m=[32m"flex-1 overflow-y-auto pb-24"[39m
+          [33mdata-place[39m=[32m"/r/00000000-0000-4000-8000-000000002150"[39m
+          [33mdata-testid[39m=[32m"screen-content"[39m
+        [36m>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"contents"[39m
+          [36m>[39m
+            [36m<header[39m
+              [33mclass[39m=[32m"sticky top-0 z-10 shrink-0 border-b border-line/70 bg-surface/90 backdrop-blur"[39m
+            [36m>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"relative flex h-14 items-center gap-2 px-2"[39m
+                [33mdata-testid[39m=[32m"host-presence"[39m
+              [36m>[39m
+                [36m<button[39m
+                  [33maria-label[39m=[32m"Назад"[39m
+                  [33mclass[39m=[32m"inline-flex size-11 shrink-0 cursor-pointer items-center justify-center rounded-full bg-host text-host-foreground transition hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"[39m
+                  [33mdata-host[39m=[32m"back"[39m
+                  [33mdata-testid[39m=[32m"host-back"[39m
+                  [33mtype[39m=[32m"button"[39m
+                [36m>[39m
+                  [36m<svg[39m
+                    [33maria-hidden[39m=[32m"true"[39m
+                    [33mclass[39m=[32m"lucide lucide-chevron-left"[39m
+                    [33mfill[39m=[32m"none"[39m
+                    [33mheight[39m=[32m"20"[39m
+                    [33mstroke[39m=[32m"currentColor"[39m
+                    [33mstroke-linecap[39m=[32m"round"[39m
+                    [33mstroke-linejoin[39m=[32m"round"[39m
+                    [33mstroke-width[39m=[32m"2"[39m
+                    [33mviewBox[39m=[32m"0 0 24 24"[39m
+                    [33mwidth[39m=[32m"20"[39m
+                    [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+                  [36m>[39m
+                    [36m<path[39m
+                      [33md[39m=[32m"m15 18-6-6 6-6"[39m
+                    [36m/>[39m
+                  [36m</svg>[39m
+                [36m</button>[39m
+                [36m<button[39m
+                  [33maria-expanded[39m=[32m"false"[39m
+                  [33maria-haspopup[39m=[32m"dialog"[39m
+                  [33mclass[39m=[32m"flex min-h-11 min-w-0 cursor-pointer items-center gap-1.5 rounded-full px-2 text-sm font-medium transition hover:bg-surface-2 disabled:cursor-default disabled:hover:bg-transparent"[39m
+                  [33mdata-testid[39m=[32m"nav-switch"[39m
+                  [33mtype[39m=[32m"button"[39m
+                [36m>[39m
+                  [36m<span[39m
+                    [33maria-hidden[39m=[32m"true"[39m
+                  [36m>[39m
+                    [0m🪐[0m
+                  [36m</span>[39m
+                  [36m<span[39m
+                    [33mclass[39m=[32m"sr-only"[39m
+                  [36m>[39m
+                    [0mOrbis[0m
+                  [36m</span>[39m
+                  [36m<span[39m
+                    [33maria-hidden[39m=[32m"true"[39m
+                    [33mclass[39m=[32m"text-text-muted"[39m
+                  [36m>[39m
+                    [0m·[0m
+                  [36m</span>[39m
+                  [36m<span[39m
+                    [33mclass[39m=[32m"min-w-0 truncate"[39m
+                  [36m>[39m
+                    [0mДомой[0m
+                  [36m</span>[39m
+                  [36m<svg[39m
+                    [33maria-hidden[39m=[32m"true"[39m
+                    [33mclass[39m=[32m"lucide lucide-chevron-down shrink-0 text-text-muted"[39m
+                    [33mfill[39m=[32m"none"[39m
+                    [33mheight[39m=[32m"14"[39m
+                    [33mstroke[39m=[32m"currentColor"[39m
+                    [33mstroke-linecap[39m=[32m"round"[39m
+                    [33mstroke-linejoin[39m=[32m"round"[39m
+                    [33mstroke-width[39m=[32m"2"[39m
+                    [33mviewBox[39m=[32m"0 0 24 24"[39m
+                    [33mwidth[39m=[32m"14"[39m
+                    [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+                  [36m>[39m
+                    [36m<path[39m
+                      [33md[39m=[32m"m6 9 6 6 6-6"[39m
+                    [36m/>[39m
+                  [36m</svg>[39m
+                [36m</button>[39m
+                [36m<span[39m
+                  [33mclass[39m=[32m"flex-1"[39m
+                [36m/>[39m
+                [36m<button[39m
+                  [33maria-label[39m=[32m"Домой"[39m
+                  [33mclass[39m=[32m"inline-flex size-11 shrink-0 cursor-pointer items-center justify-center rounded-full bg-host text-host-foreground transition hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"[39m
+                  [33mdata-host[39m=[32m"home"[39m
+                  [33mdata-testid[39m=[32m"host-home"[39m
+                  [33mtype[39m=[32m"button"[39m
+                [36m>[39m
+                  [36m<svg[39m
+                    [33maria-hidden[39m=[32m"true"[39m
+                    [33mclass[39m=[32m"lucide lucide-house"[39m
+                    [33mfill[39m=[32m"none"[39m
+                    [33mheight[39m=[32m"18"[39m
+                    [33mstroke[39m=[32m"currentColor"[39m
+                    [33mstroke-linecap[39m=[32m"round"[39m
+                    [33mstroke-linejoin[39m=[32m"round"[39m
+                    [33mstroke-width[39m=[32m"2"[39m
+                    [33mviewBox[39m=[32m"0 0 24 24"[39m
+                    [33mwidth[39m=[32m"18"[39m
+                    [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+                  [36m>[39m
+                    [36m<path[39m
+                      [33md[39m=[32m"M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8"[39m
+                    [36m/>[39m
+                    [36m<path[39m
+                      [33md[39m=[32m"M3 10a2 2 0 0 1 .709-1.528l7-6a2 2 0 0 1 2.582 0l7 6A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"[39m
+                    [36m/>[39m
+                  [36m</svg>[39m
+                [36m</button>[39m
+                [36m<span[39m
+                  [33mclass[39m=[32m"relative inline-flex"[39m
+                [36m>[39m
+                  [36m<button[39m
+                    [33maria-expanded[39m=[32m"false"[39m
+                    [33maria-haspopup[39m=[32m"menu"[39m
+                    [33maria-label[39m=[32m"Меню"[39m
+                    [33mclass[39m=[32m"inline-flex size-11 shrink-0 cursor-pointer items-center justify-center rounded-full bg-host text-host-foreground transition hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"[39m
+                    [33mdata-host[39m=[32m"menu"[39m
+                    [33mdata-state[39m=[32m"closed"[39m
+                    [33mdata-testid[39m=[32m"screen-menu"[39m
+                    [33mid[39m=[32m"_r_2_"[39m
+                    [33mtitle[39m=[32m"Меню"[39m
+                    [33mtype[39m=[32m"button"[39m
+                  [36m>[39m
+                    [36m<svg[39m
+                      [33maria-hidden[39m=[32m"true"[39m
+                      [33mclass[39m=[32m"lucide lucide-ellipsis-vertical"[39m
+                      [33mfill[39m=[32m"none"[39m
+                      [33mheight[39m=[32m"18"[39m
+                      [33mstroke[39m=[32m"currentColor"[39m
+                      [33mstroke-linecap[39m=[32m"round"[39m
+                      [33mstroke-linejoin[39m=[32m"round"[39m
+                      [33mstroke-width[39m=[32m"2"[39m
+                      [33mviewBox[39m=[32m"0 0 24 24"[39m
+                      [33mwidth[39m=[32m"18"[39m
+                      [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+                    [36m>[39m
+                      [36m<circle[39m
+                        [33mcx[39m=[32m"12"[39m
+                        [33mcy[39m=[32m"12"[39m
+                        [33mr[39m=[32m"1"[39m
+                      [36m/>[39m
+                      [36m<circle[39m
+                        [33mcx[39m=[32m"12"[39m
+                        [33mcy[39m=[32m"5"[39m
+                        [33mr[39m=[32m"1"[39m
+                      [36m/>[39m
+                      [36m<circle[39m
+                        [33mcx[39m=[32m"12"[39m
+                        [33mcy[39m=[32m"19"[39m
+                        [33mr[39m=[32m"1"[39m
+                      [36m/>[39m
+                    [36m</svg>[39m
+                  [36m</button>[39m
+                  [36m<span[39m
+                    [33maria-expanded[39m=[32m"false"[39m
+                    [33maria-haspopup[39m=[32m"menu"[39m
+                    [33maria-hidden[39m=[32m"true"[39m
+                    [33mclass[39m=[32m"pointer-events-none absolute inset-0"[39m
+                    [33mdata-state[39m=[32m"closed"[39m
+                    [33mdata-testid[39m=[32m"menu-anchor"[39m
+                    [33mid[39m=[32m"radix-_r_4_"[39m
+                    [33mtabindex[39m=[32m"-1"[39m
+                    [33mtype[39m=[32m"button"[39m
+                  [36m/>[39m
+                [36m</span>[39m
+              [36m</div>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"flex h-9 items-center px-4 pb-1"[39m
+              [36m>[39m
+                [36m<h1[39m
+                  [33mclass[39m=[32m"min-w-0 flex-1 truncate text-sm font-medium"[39m
+                [36m>[39m
+                  [0mОбщая страница[0m
+                [36m</h1>[39m
+              [36m</div>[39m
+            [36m</header>[39m
+            [36m<div[39m
+              [33mclass[39m=[32m"mx-auto w-full max-w-3xl px-4 md:px-6"[39m
+            [36m/>[39m
+            [36m<div[39m
+              [33mclass[39m=[32m"mx-auto w-full max-w-3xl"[39m
+              [33mdata-testid[39m=[32m"record-area"[39m
+            [36m>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"flex flex-col gap-6 px-4 pb-10 pt-5 md:px-6"[39m
+                [33mdata-testid[39m=[32m"page-view"[39m
+              [36m>[39m
+                [36m<div[39m
+                  [33mclass[39m=[32m"flex flex-col gap-6"[39m
+                  [33mdata-testid[39m=[32m"page-render"[39m
+                [36m>[39m
+                  [36m<div[39m
+                    [33mdata-testid[39m=[32m"page-text"[39m
+                  [36m>[39m
+                    [36m<div[39m
+                      [33mclass[39m=[32m"orbis-markdown"[39m
+                    [36m>[39m
+                      [36m<p>[39m
+                        [0mОбщая страница.[0m
+                      [36m</p>[39m
+                    [36m</div>[39m
+                  [36m</div>[39m
+                [36m</div>[39m
+              [36m</div>[39m
+            [36m</div>[39m
+          [36m</div>[39m
+        [36m</main>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"pointer-events-none fixed right-4 bottom-[max(16px,env(safe-area-inset-bottom))] z-30 flex flex-col items-end gap-2"[39m
+          [33mdata-testid[39m=[32m"host-buttons"[39m
+        [36m>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"pointer-events-auto flex items-center gap-1 rounded-full bg-host p-1 shadow-pop"[39m
+          [36m>[39m
+            [36m<button[39m
+              [33maria-label[39m=[32m"Поиск"[39m
+              [33mclass[39m=[32m"relative inline-flex size-11 cursor-pointer items-center justify-center rounded-full transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 text-host-foreground hover:bg-white/10"[39m
+              [33mdata-host[39m=[32m"search"[39m
+              [33mdata-testid[39m=[32m"host-search"[39m
+              [33mtype[39m=[32m"button"[39m
+            [36m>[39m
+              [36m<svg[39m
+                [33maria-hidden[39m=[32m"true"[39m
+                [33mclass[39m=[32m"lucide lucide-search"[39m
+                [33mfill[39m=[32m"none"[39m
+                [33mheight[39m=[32m"18"[39m
+                [33mstroke[39m=[32m"currentColor"[39m
+                [33mstroke-linecap[39m=[32m"round"[39m
+                [33mstroke-linejoin[39m=[32m"round"[39m
+                [33mstroke-width[39m=[32m"2"[39m
+                [33mviewBox[39m=[32m"0 0 24 24"[39m
+                [33mwidth[39m=[32m"18"[39m
+                [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+              [36m>[39m
+                [36m<path[39m
+                  [33md[39m=[32m"m21 21-4.34-4.34"[39m
+                [36m/>[39m
+                [36m<circle[39m
+                  [33mcx[39m=[32m"11"[39m
+                  [33mcy[39m=[32m"11"[39m
+                  [33mr[39m=[32m"8"[39m
+                [36m/>[39m
+              [36m</svg>[39m
+            [36m</button>[39m
+            [36m<button[39m
+              [33maria-label[39m=[32m"Чат"[39m
+              [33mclass[39m=[32m"relative inline-flex size-11 cursor-pointer items-center justify-center rounded-full transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 text-host-foreground hover:bg-white/10"[39m
+              [33mdata-host[39m=[32m"chat"[39m
+              [33mdata-testid[39m=[32m"host-chat"[39m
+              [33mtype[39m=[32m"button"[39m
+            [36m>[39m
+              [36m<svg[39m
+                [33maria-hidden[39m=[32m"true"[39m
+                [33mclass[39m=[32m"lucide lucide-message-square"[39m
+                [33mfill[39m=[32m"none"[39m
+                [33mheight[39m=[32m"18"[39m
+                [33mstroke[39m=[32m"currentColor"[39m
+                [33mstroke-linecap[39m=[32m"round"[39m
+                [33mstroke-linejoin[39m=[32m"round"[39m
+                [33mstroke-width[39m=[32m"2"[39m
+                [33mviewBox[39m=[32m"0 0 24 24"[39m
+                [33mwidth[39m=[32m"18"[39m
+                [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+              [36m>[39m
+                [36m<path[39m
+                  [33md[39m=[32m"M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z"[39m
+                [36m/>[39m
+              [36m</svg>[39m
+            [36m</button>[39m
+            [36m<button[39m
+              [33maria-expanded[39m=[32m"false"[39m
+              [33maria-label[39m=[32m"Новая запись"[39m
+              [33mclass[39m=[32m"relative inline-flex size-11 cursor-pointer items-center justify-center rounded-full transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 text-host-foreground hover:bg-white/10"[39m
+              [33mdata-host[39m=[32m"new"[39m
+              [33mdata-testid[39m=[32m"host-new"[39m
+              [33mtype[39m=[32m"button"[39m
+            [36m>[39m
+              [36m<svg[39m
+                [33maria-hidden[39m=[32m"true"[39m
+                [33mclass[39m=[32m"lucide lucide-plus"[39m
+                [33mfill[39m=[32m"none"[39m
+                [33mheight[39m=[32m"18"[39m
+                [33mstroke[39m=[32m"currentColor"[39m
+                [33mstroke-linecap[39m=[32m"round"[39m
+                [33mstroke-linejoin[39m=[32m"round"[39m
+                [33mstroke-width[39m=[32m"2"[39m
+                [33mviewBox[39m=[32m"0 0 24 24"[39m
+                [33mwidth[39m=[32m"18"[39m
+                [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+              [36m>[39m
+                [36m<path[39m
+                  [33md[39m=[32m"M5 12h14"[39m
+                [36m/>[39m
+                [36m<path[39m
+                  [33md[39m=[32m"M12 5v14"[39m
+                [36m/>[39m
+              [36m</svg>[39m
+            [36m</button>[39m
+          [36m</div>[39m
+        [36m</div>[39m
+      [36m</div>[39m
+    [36m</div>[39m
+  [36m</body>[39m
+[36m</html>[39m
+
+- Expected
++ Received
+
+- 1
++ 0
+
+ ❯ src/features/apps/nav-editor.test.tsx:200:20
+    198|       .getMutationCache()
+    199|       .findAll({ mutationKey: [['entity', 'updateBatch']], exact: true…
+    200|     expect(writes).toHaveLength(1);
+       |                    ^
+    201|     expect(writes[0]?.state.data).toMatchObject({ actionId: 'act-21', …
+    202|   });
+ ❯ runWithExpensiveErrorDiagnosticsDisabled ../../node_modules/@testing-library/dom/dist/config.js:47:12
+ ❯ checkCallback ../../node_modules/@testing-library/dom/dist/wait-for.js:124:77
+ ❯ Timeout.checkRealTimersCallback ../../node_modules/@testing-library/dom/dist/wait-for.js:118:16
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/5]⎯
+
+ FAIL  src/features/apps/nav-editor.test.tsx > (в) «Новое приложение…» («Мой дом» 🏡) — одна пачка entity_create с домашней и разделом; «Дом» ставит сервер
+AssertionError: expected [] to have a length of 1 but got +0
+
+Ignored nodes: comments, script, style
+[36m<html>[39m
+  [36m<head />[39m
+  [36m<body[39m
+    [33mstyle[39m=[32m""[39m
+  [36m>[39m
+    [36m<div>[39m
+      [36m<div[39m
+        [33mclass[39m=[32m"flex h-full flex-col bg-surface"[39m
+      [36m>[39m
+        [36m<main[39m
+          [33mclass[39m=[32m"flex-1 overflow-y-auto pb-24"[39m
+          [33mdata-place[39m=[32m"/r/00000000-0000-4000-8000-000000002150"[39m
+          [33mdata-testid[39m=[32m"screen-content"[39m
+        [36m>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"contents"[39m
+          [36m>[39m
+            [36m<header[39m
+              [33mclass[39m=[32m"sticky top-0 z-10 shrink-0 border-b border-line/70 bg-surface/90 backdrop-blur"[39m
+            [36m>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"relative flex h-14 items-center gap-2 px-2"[39m
+                [33mdata-testid[39m=[32m"host-presence"[39m
+              [36m>[39m
+                [36m<button[39m
+                  [33maria-label[39m=[32m"Назад"[39m
+                  [33mclass[39m=[32m"inline-flex size-11 shrink-0 cursor-pointer items-center justify-center rounded-full bg-host text-host-foreground transition hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"[39m
+                  [33mdata-host[39m=[32m"back"[39m
+                  [33mdata-testid[39m=[32m"host-back"[39m
+                  [33mtype[39m=[32m"button"[39m
+                [36m>[39m
+                  [36m<svg[39m
+                    [33maria-hidden[39m=[32m"true"[39m
+                    [33mclass[39m=[32m"lucide lucide-chevron-left"[39m
+                    [33mfill[39m=[32m"none"[39m
+                    [33mheight[39m=[32m"20"[39m
+                    [33mstroke[39m=[32m"currentColor"[39m
+                    [33mstroke-linecap[39m=[32m"round"[39m
+                    [33mstroke-linejoin[39m=[32m"round"[39m
+                    [33mstroke-width[39m=[32m"2"[39m
+                    [33mviewBox[39m=[32m"0 0 24 24"[39m
+                    [33mwidth[39m=[32m"20"[39m
+                    [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+                  [36m>[39m
+                    [36m<path[39m
+                      [33md[39m=[32m"m15 18-6-6 6-6"[39m
+                    [36m/>[39m
+                  [36m</svg>[39m
+                [36m</button>[39m
+                [36m<button[39m
+                  [33maria-expanded[39m=[32m"false"[39m
+                  [33maria-haspopup[39m=[32m"dialog"[39m
+                  [33mclass[39m=[32m"flex min-h-11 min-w-0 cursor-pointer items-center gap-1.5 rounded-full px-2 text-sm font-medium transition hover:bg-surface-2 disabled:cursor-default disabled:hover:bg-transparent"[39m
+                  [33mdata-testid[39m=[32m"nav-switch"[39m
+                  [33mtype[39m=[32m"button"[39m
+                [36m>[39m
+                  [36m<span[39m
+                    [33maria-hidden[39m=[32m"true"[39m
+                  [36m>[39m
+                    [0m🪐[0m
+                  [36m</span>[39m
+                  [36m<span[39m
+                    [33mclass[39m=[32m"sr-only"[39m
+                  [36m>[39m
+                    [0mOrbis[0m
+                  [36m</span>[39m
+                  [36m<span[39m
+                    [33maria-hidden[39m=[32m"true"[39m
+                    [33mclass[39m=[32m"text-text-muted"[39m
+                  [36m>[39m
+                    [0m·[0m
+                  [36m</span>[39m
+                  [36m<span[39m
+                    [33mclass[39m=[32m"min-w-0 truncate"[39m
+                  [36m>[39m
+                    [0mДомой[0m
+                  [36m</span>[39m
+                  [36m<svg[39m
+                    [33maria-hidden[39m=[32m"true"[39m
+                    [33mclass[39m=[32m"lucide lucide-chevron-down shrink-0 text-text-muted"[39m
+                    [33mfill[39m=[32m"none"[39m
+                    [33mheight[39m=[32m"14"[39m
+                    [33mstroke[39m=[32m"currentColor"[39m
+                    [33mstroke-linecap[39m=[32m"round"[39m
+                    [33mstroke-linejoin[39m=[32m"round"[39m
+                    [33mstroke-width[39m=[32m"2"[39m
+                    [33mviewBox[39m=[32m"0 0 24 24"[39m
+                    [33mwidth[39m=[32m"14"[39m
+                    [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+                  [36m>[39m
+                    [36m<path[39m
+                      [33md[39m=[32m"m6 9 6 6 6-6"[39m
+                    [36m/>[39m
+                  [36m</svg>[39m
+                [36m</button>[39m
+                [36m<span[39m
+                  [33mclass[39m=[32m"flex-1"[39m
+                [36m/>[39m
+                [36m<button[39m
+                  [33maria-label[39m=[32m"Домой"[39m
+                  [33mclass[39m=[32m"inline-flex size-11 shrink-0 cursor-pointer items-center justify-center rounded-full bg-host text-host-foreground transition hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"[39m
+                  [33mdata-host[39m=[32m"home"[39m
+                  [33mdata-testid[39m=[32m"host-home"[39m
+                  [33mtype[39m=[32m"button"[39m
+                [36m>[39m
+                  [36m<svg[39m
+                    [33maria-hidden[39m=[32m"true"[39m
+                    [33mclass[39m=[32m"lucide lucide-house"[39m
+                    [33mfill[39m=[32m"none"[39m
+                    [33mheight[39m=[32m"18"[39m
+                    [33mstroke[39m=[32m"currentColor"[39m
+                    [33mstroke-linecap[39m=[32m"round"[39m
+                    [33mstroke-linejoin[39m=[32m"round"[39m
+                    [33mstroke-width[39m=[32m"2"[39m
+                    [33mviewBox[39m=[32m"0 0 24 24"[39m
+                    [33mwidth[39m=[32m"18"[39m
+                    [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+                  [36m>[39m
+                    [36m<path[39m
+                      [33md[39m=[32m"M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8"[39m
+                    [36m/>[39m
+                    [36m<path[39m
+                      [33md[39m=[32m"M3 10a2 2 0 0 1 .709-1.528l7-6a2 2 0 0 1 2.582 0l7 6A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"[39m
+                    [36m/>[39m
+                  [36m</svg>[39m
+                [36m</button>[39m
+                [36m<span[39m
+                  [33mclass[39m=[32m"relative inline-flex"[39m
+                [36m>[39m
+                  [36m<button[39m
+                    [33maria-expanded[39m=[32m"false"[39m
+                    [33maria-haspopup[39m=[32m"menu"[39m
+                    [33maria-label[39m=[32m"Меню"[39m
+                    [33mclass[39m=[32m"inline-flex size-11 shrink-0 cursor-pointer items-center justify-center rounded-full bg-host text-host-foreground transition hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"[39m
+                    [33mdata-host[39m=[32m"menu"[39m
+                    [33mdata-state[39m=[32m"closed"[39m
+                    [33mdata-testid[39m=[32m"screen-menu"[39m
+                    [33mid[39m=[32m"_r_p_"[39m
+                    [33mtitle[39m=[32m"Меню"[39m
+                    [33mtype[39m=[32m"button"[39m
+                  [36m>[39m
+                    [36m<svg[39m
+                      [33maria-hidden[39m=[32m"true"[39m
+                      [33mclass[39m=[32m"lucide lucide-ellipsis-vertical"[39m
+                      [33mfill[39m=[32m"none"[39m
+                      [33mheight[39m=[32m"18"[39m
+                      [33mstroke[39m=[32m"currentColor"[39m
+                      [33mstroke-linecap[39m=[32m"round"[39m
+                      [33mstroke-linejoin[39m=[32m"round"[39m
+                      [33mstroke-width[39m=[32m"2"[39m
+                      [33mviewBox[39m=[32m"0 0 24 24"[39m
+                      [33mwidth[39m=[32m"18"[39m
+                      [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+                    [36m>[39m
+                      [36m<circle[39m
+                        [33mcx[39m=[32m"12"[39m
+                        [33mcy[39m=[32m"12"[39m
+                        [33mr[39m=[32m"1"[39m
+                      [36m/>[39m
+                      [36m<circle[39m
+                        [33mcx[39m=[32m"12"[39m
+                        [33mcy[39m=[32m"5"[39m
+                        [33mr[39m=[32m"1"[39m
+                      [36m/>[39m
+                      [36m<circle[39m
+                        [33mcx[39m=[32m"12"[39m
+                        [33mcy[39m=[32m"19"[39m
+                        [33mr[39m=[32m"1"[39m
+                      [36m/>[39m
+                    [36m</svg>[39m
+                  [36m</button>[39m
+                  [36m<span[39m
+                    [33maria-expanded[39m=[32m"false"[39m
+                    [33maria-haspopup[39m=[32m"menu"[39m
+                    [33maria-hidden[39m=[32m"true"[39m
+                    [33mclass[39m=[32m"pointer-events-none absolute inset-0"[39m
+                    [33mdata-state[39m=[32m"closed"[39m
+                    [33mdata-testid[39m=[32m"menu-anchor"[39m
+                    [33mid[39m=[32m"radix-_r_r_"[39m
+                    [33mtabindex[39m=[32m"-1"[39m
+                    [33mtype[39m=[32m"button"[39m
+                  [36m/>[39m
+                [36m</span>[39m
+              [36m</div>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"flex h-9 items-center px-4 pb-1"[39m
+              [36m>[39m
+                [36m<h1[39m
+                  [33mclass[39m=[32m"min-w-0 flex-1 truncate text-sm font-medium"[39m
+                [36m>[39m
+                  [0mОбщая страница[0m
+                [36m</h1>[39m
+              [36m</div>[39m
+            [36m</header>[39m
+            [36m<div[39m
+              [33mclass[39m=[32m"mx-auto w-full max-w-3xl px-4 md:px-6"[39m
+            [36m/>[39m
+            [36m<div[39m
+              [33mclass[39m=[32m"mx-auto w-full max-w-3xl"[39m
+              [33mdata-testid[39m=[32m"record-area"[39m
+            [36m>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"flex flex-col gap-6 px-4 pb-10 pt-5 md:px-6"[39m
+                [33mdata-testid[39m=[32m"page-view"[39m
+              [36m>[39m
+                [36m<div[39m
+                  [33mclass[39m=[32m"flex flex-col gap-6"[39m
+                  [33mdata-testid[39m=[32m"page-render"[39m
+                [36m>[39m
+                  [36m<div[39m
+                    [33mdata-testid[39m=[32m"page-text"[39m
+                  [36m>[39m
+                    [36m<div[39m
+                      [33mclass[39m=[32m"orbis-markdown"[39m
+                    [36m>[39m
+                      [36m<p>[39m
+                        [0mОбщая страница.[0m
+                      [36m</p>[39m
+                    [36m</div>[39m
+                  [36m</div>[39m
+                [36m</div>[39m
+              [36m</div>[39m
+            [36m</div>[39m
+          [36m</div>[39m
+        [36m</main>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"pointer-events-none fixed right-4 bottom-[max(16px,env(safe-area-inset-bottom))] z-30 flex flex-col items-end gap-2"[39m
+          [33mdata-testid[39m=[32m"host-buttons"[39m
+        [36m>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"pointer-events-auto flex items-center gap-1 rounded-full bg-host p-1 shadow-pop"[39m
+          [36m>[39m
+            [36m<button[39m
+              [33maria-label[39m=[32m"Поиск"[39m
+              [33mclass[39m=[32m"relative inline-flex size-11 cursor-pointer items-center justify-center rounded-full transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 text-host-foreground hover:bg-white/10"[39m
+              [33mdata-host[39m=[32m"search"[39m
+              [33mdata-testid[39m=[32m"host-search"[39m
+              [33mtype[39m=[32m"button"[39m
+            [36m>[39m
+              [36m<svg[39m
+                [33maria-hidden[39m=[32m"true"[39m
+                [33mclass[39m=[32m"lucide lucide-search"[39m
+                [33mfill[39m=[32m"none"[39m
+                [33mheight[39m=[32m"18"[39m
+                [33mstroke[39m=[32m"currentColor"[39m
+                [33mstroke-linecap[39m=[32m"round"[39m
+                [33mstroke-linejoin[39m=[32m"round"[39m
+                [33mstroke-width[39m=[32m"2"[39m
+                [33mviewBox[39m=[32m"0 0 24 24"[39m
+                [33mwidth[39m=[32m"18"[39m
+                [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+              [36m>[39m
+                [36m<path[39m
+                  [33md[39m=[32m"m21 21-4.34-4.34"[39m
+                [36m/>[39m
+                [36m<circle[39m
+                  [33mcx[39m=[32m"11"[39m
+                  [33mcy[39m=[32m"11"[39m
+                  [33mr[39m=[32m"8"[39m
+                [36m/>[39m
+              [36m</svg>[39m
+            [36m</button>[39m
+            [36m<button[39m
+              [33maria-label[39m=[32m"Чат"[39m
+              [33mclass[39m=[32m"relative inline-flex size-11 cursor-pointer items-center justify-center rounded-full transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 text-host-foreground hover:bg-white/10"[39m
+              [33mdata-host[39m=[32m"chat"[39m
+              [33mdata-testid[39m=[32m"host-chat"[39m
+              [33mtype[39m=[32m"button"[39m
+            [36m>[39m
+              [36m<svg[39m
+                [33maria-hidden[39m=[32m"true"[39m
+                [33mclass[39m=[32m"lucide lucide-message-square"[39m
+                [33mfill[39m=[32m"none"[39m
+                [33mheight[39m=[32m"18"[39m
+                [33mstroke[39m=[32m"currentColor"[39m
+                [33mstroke-linecap[39m=[32m"round"[39m
+                [33mstroke-linejoin[39m=[32m"round"[39m
+                [33mstroke-width[39m=[32m"2"[39m
+                [33mviewBox[39m=[32m"0 0 24 24"[39m
+                [33mwidth[39m=[32m"18"[39m
+                [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+              [36m>[39m
+                [36m<path[39m
+                  [33md[39m=[32m"M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z"[39m
+                [36m/>[39m
+              [36m</svg>[39m
+            [36m</button>[39m
+            [36m<button[39m
+              [33maria-expanded[39m=[32m"false"[39m
+              [33maria-label[39m=[32m"Новая запись"[39m
+              [33mclass[39m=[32m"relative inline-flex size-11 cursor-pointer items-center justify-center rounded-full transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 text-host-foreground hover:bg-white/10"[39m
+              [33mdata-host[39m=[32m"new"[39m
+              [33mdata-testid[39m=[32m"host-new"[39m
+              [33mtype[39m=[32m"button"[39m
+            [36m>[39m
+              [36m<svg[39m
+                [33maria-hidden[39m=[32m"true"[39m
+                [33mclass[39m=[32m"lucide lucide-plus"[39m
+                [33mfill[39m=[32m"none"[39m
+                [33mheight[39m=[32m"18"[39m
+                [33mstroke[39m=[32m"currentColor"[39m
+                [33mstroke-linecap[39m=[32m"round"[39m
+                [33mstroke-linejoin[39m=[32m"round"[39m
+                [33mstroke-width[39m=[32m"2"[39m
+                [33mviewBox[39m=[32m"0 0 24 24"[39m
+                [33mwidth[39m=[32m"18"[39m
+                [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+              [36m>[39m
+                [36m<path[39m
+                  [33md[39m=[32m"M5 12h14"[39m
+                [36m/>[39m
+                [36m<path[39m
+                  [33md[39m=[32m"M12 5v14"[39m
+                [36m/>[39m
+              [36m</svg>[39m
+            [36m</button>[39m
+          [36m</div>[39m
+        [36m</div>[39m
+      [36m</div>[39m
+    [36m</div>[39m
+  [36m</body>[39m
+[36m</html>[39m
+
+- Expected
++ Received
+
+- 1
++ 0
+
+ ❯ src/features/apps/nav-editor.test.tsx:200:20
+    198|       .getMutationCache()
+    199|       .findAll({ mutationKey: [['entity', 'updateBatch']], exact: true…
+    200|     expect(writes).toHaveLength(1);
+       |                    ^
+    201|     expect(writes[0]?.state.data).toMatchObject({ actionId: 'act-21', …
+    202|   });
+ ❯ runWithExpensiveErrorDiagnosticsDisabled ../../node_modules/@testing-library/dom/dist/config.js:47:12
+ ❯ checkCallback ../../node_modules/@testing-library/dom/dist/wait-for.js:124:77
+ ❯ Timeout.checkRealTimersCallback ../../node_modules/@testing-library/dom/dist/wait-for.js:118:16
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/5]⎯
+
+ FAIL  src/features/apps/open.test.tsx > I-1: домашняя /a/<архивное> — «восстановить» возвращает место в рамку приложения
+AssertionError: expected [] to have a length of 1 but got +0
+
+Ignored nodes: comments, script, style
+[36m<html>[39m
+  [36m<head />[39m
+  [36m<body>[39m
+    [36m<div>[39m
+      [36m<div[39m
+        [33mclass[39m=[32m"flex h-full flex-col bg-surface"[39m
+      [36m>[39m
+        [36m<main[39m
+          [33mclass[39m=[32m"flex-1 overflow-y-auto pb-24"[39m
+          [33mdata-place[39m=[32m"/a/00000000-0000-4000-8000-000000002001"[39m
+          [33mdata-testid[39m=[32m"screen-content"[39m
+        [36m>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"contents"[39m
+          [36m>[39m
+            [36m<header[39m
+              [33mclass[39m=[32m"sticky top-0 z-10 shrink-0 border-b border-line/70 bg-surface/90 backdrop-blur"[39m
+            [36m>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"relative flex h-14 items-center gap-2 px-2"[39m
+                [33mdata-testid[39m=[32m"host-presence"[39m
+              [36m>[39m
+                [36m<button[39m
+                  [33maria-label[39m=[32m"Назад"[39m
+                  [33mclass[39m=[32m"inline-flex size-11 shrink-0 cursor-pointer items-center justify-center rounded-full bg-host text-host-foreground transition hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"[39m
+                  [33mdata-host[39m=[32m"back"[39m
+                  [33mdata-testid[39m=[32m"host-back"[39m
+                  [33mtype[39m=[32m"button"[39m
+                [36m>[39m
+                  [36m<svg[39m
+                    [33maria-hidden[39m=[32m"true"[39m
+                    [33mclass[39m=[32m"lucide lucide-chevron-left"[39m
+                    [33mfill[39m=[32m"none"[39m
+                    [33mheight[39m=[32m"20"[39m
+                    [33mstroke[39m=[32m"currentColor"[39m
+                    [33mstroke-linecap[39m=[32m"round"[39m
+                    [33mstroke-linejoin[39m=[32m"round"[39m
+                    [33mstroke-width[39m=[32m"2"[39m
+                    [33mviewBox[39m=[32m"0 0 24 24"[39m
+                    [33mwidth[39m=[32m"20"[39m
+                    [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+                  [36m>[39m
+                    [36m<path[39m
+                      [33md[39m=[32m"m15 18-6-6 6-6"[39m
+                    [36m/>[39m
+                  [36m</svg>[39m
+                [36m</button>[39m
+                [36m<button[39m
+                  [33maria-expanded[39m=[32m"false"[39m
+                  [33maria-haspopup[39m=[32m"dialog"[39m
+                  [33mclass[39m=[32m"flex min-h-11 min-w-0 cursor-pointer items-center gap-1.5 rounded-full px-2 text-sm font-medium transition hover:bg-surface-2 disabled:cursor-default disabled:hover:bg-transparent"[39m
+                  [33mdata-testid[39m=[32m"nav-switch"[39m
+                  [33mtype[39m=[32m"button"[39m
+                [36m>[39m
+                  [36m<span[39m
+                    [33maria-hidden[39m=[32m"true"[39m
+                  [36m>[39m
+                    [0m🏡[0m
+                  [36m</span>[39m
+                  [36m<span[39m
+                    [33mclass[39m=[32m"sr-only"[39m
+                  [36m>[39m
+                    [0mМой дом[0m
+                  [36m</span>[39m
+                  [36m<span[39m
+                    [33maria-hidden[39m=[32m"true"[39m
+                    [33mclass[39m=[32m"text-text-muted"[39m
+                  [36m>[39m
+                    [0m·[0m
+                  [36m</span>[39m
+                  [36m<span[39m
+                    [33mclass[39m=[32m"min-w-0 truncate"[39m
+                  [36m>[39m
+                    [0mДом приложения[0m
+                  [36m</span>[39m
+                  [36m<svg[39m
+                    [33maria-hidden[39m=[32m"true"[39m
+                    [33mclass[39m=[32m"lucide lucide-chevron-down shrink-0 text-text-muted"[39m
+                    [33mfill[39m=[32m"none"[39m
+                    [33mheight[39m=[32m"14"[39m
+                    [33mstroke[39m=[32m"currentColor"[39m
+                    [33mstroke-linecap[39m=[32m"round"[39m
+                    [33mstroke-linejoin[39m=[32m"round"[39m
+                    [33mstroke-width[39m=[32m"2"[39m
+                    [33mviewBox[39m=[32m"0 0 24 24"[39m
+                    [33mwidth[39m=[32m"14"[39m
+                    [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+                  [36m>[39m
+                    [36m<path[39m
+                      [33md[39m=[32m"m6 9 6 6 6-6"[39m
+                    [36m/>[39m
+                  [36m</svg>[39m
+                [36m</button>[39m
+                [36m<span[39m
+                  [33mclass[39m=[32m"flex-1"[39m
+                [36m/>[39m
+                [36m<button[39m
+                  [33maria-label[39m=[32m"Домашняя приложения"[39m
+                  [33mclass[39m=[32m"inline-flex size-11 shrink-0 cursor-pointer items-center justify-center rounded-full bg-host text-host-foreground transition hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"[39m
+                  [33mdata-host[39m=[32m"home"[39m
+                  [33mdata-testid[39m=[32m"host-home"[39m
+                  [33mtype[39m=[32m"button"[39m
+                [36m>[39m
+                  [36m<svg[39m
+                    [33maria-hidden[39m=[32m"true"[39m
+                    [33mclass[39m=[32m"lucide lucide-house"[39m
+                    [33mfill[39m=[32m"none"[39m
+                    [33mheight[39m=[32m"18"[39m
+                    [33mstroke[39m=[32m"currentColor"[39m
+                    [33mstroke-linecap[39m=[32m"round"[39m
+                    [33mstroke-linejoin[39m=[32m"round"[39m
+                    [33mstroke-width[39m=[32m"2"[39m
+                    [33mviewBox[39m=[32m"0 0 24 24"[39m
+                    [33mwidth[39m=[32m"18"[39m
+                    [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+                  [36m>[39m
+                    [36m<path[39m
+                      [33md[39m=[32m"M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8"[39m
+                    [36m/>[39m
+                    [36m<path[39m
+                      [33md[39m=[32m"M3 10a2 2 0 0 1 .709-1.528l7-6a2 2 0 0 1 2.582 0l7 6A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"[39m
+                    [36m/>[39m
+                  [36m</svg>[39m
+                [36m</button>[39m
+                [36m<span[39m
+                  [33mclass[39m=[32m"relative inline-flex"[39m
+                [36m>[39m
+                  [36m<button[39m
+                    [33maria-expanded[39m=[32m"false"[39m
+                    [33maria-haspopup[39m=[32m"menu"[39m
+                    [33maria-label[39m=[32m"Меню"[39m
+                    [33mclass[39m=[32m"inline-flex size-11 shrink-0 cursor-pointer items-center justify-center rounded-full bg-host text-host-foreground transition hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"[39m
+                    [33mdata-host[39m=[32m"menu"[39m
+                    [33mdata-state[39m=[32m"closed"[39m
+                    [33mdata-testid[39m=[32m"screen-menu"[39m
+                    [33mid[39m=[32m"_r_c_"[39m
+                    [33mtitle[39m=[32m"Меню"[39m
+                    [33mtype[39m=[32m"button"[39m
+                  [36m>[39m
+                    [36m<svg[39m
+                      [33maria-hidden[39m=[32m"true"[39m
+                      [33mclass[39m=[32m"lucide lucide-ellipsis-vertical"[39m
+                      [33mfill[39m=[32m"none"[39m
+                      [33mheight[39m=[32m"18"[39m
+                      [33mstroke[39m=[32m"currentColor"[39m
+                      [33mstroke-linecap[39m=[32m"round"[39m
+                      [33mstroke-linejoin[39m=[32m"round"[39m
+                      [33mstroke-width[39m=[32m"2"[39m
+                      [33mviewBox[39m=[32m"0 0 24 24"[39m
+                      [33mwidth[39m=[32m"18"[39m
+                      [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+                    [36m>[39m
+                      [36m<circle[39m
+                        [33mcx[39m=[32m"12"[39m
+                        [33mcy[39m=[32m"12"[39m
+                        [33mr[39m=[32m"1"[39m
+                      [36m/>[39m
+                      [36m<circle[39m
+                        [33mcx[39m=[32m"12"[39m
+                        [33mcy[39m=[32m"5"[39m
+                        [33mr[39m=[32m"1"[39m
+                      [36m/>[39m
+                      [36m<circle[39m
+                        [33mcx[39m=[32m"12"[39m
+                        [33mcy[39m=[32m"19"[39m
+                        [33mr[39m=[32m"1"[39m
+                      [36m/>[39m
+                    [36m</svg>[39m
+                  [36m</button>[39m
+                [36m</span>[39m
+              [36m</div>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"flex h-9 items-center px-4 pb-1"[39m
+              [36m>[39m
+                [36m<h1[39m
+                  [33mclass[39m=[32m"min-w-0 flex-1 truncate text-sm font-medium"[39m
+                [36m>[39m
+                  [0mДом приложения[0m
+                [36m</h1>[39m
+              [36m</div>[39m
+            [36m</header>[39m
+            [36m<div[39m
+              [33mclass[39m=[32m"mx-auto w-full max-w-3xl px-4 md:px-6"[39m
+            [36m/>[39m
+            [36m<div[39m
+              [33mclass[39m=[32m"mx-auto w-full max-w-3xl"[39m
+              [33mdata-testid[39m=[32m"record-area"[39m
+            [36m>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"flex flex-col gap-6 px-4 pb-10 pt-5 md:px-6"[39m
+                [33mdata-testid[39m=[32m"page-view"[39m
+              [36m>[39m
+                [36m<div[39m
+                  [33mclass[39m=[32m"flex flex-col gap-6"[39m
+                  [33mdata-testid[39m=[32m"page-render"[39m
+                [36m>[39m
+                  [36m<div[39m
+                    [33mdata-testid[39m=[32m"page-text"[39m
+                  [36m>[39m
+                    [36m<div[39m
+                      [33mclass[39m=[32m"orbis-markdown"[39m
+                    [36m>[39m
+                      [36m<p>[39m
+                        [0mДом приложения.[0m
+                      [36m</p>[39m
+                    [36m</div>[39m
+                  [36m</div>[39m
+                [36m</div>[39m
+              [36m</div>[39m
+            [36m</div>[39m
+          [36m</div>[39m
+        [36m</main>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"pointer-events-none fixed right-4 bottom-[max(16px,env(safe-area-inset-bottom))] z-30 flex flex-col items-end gap-2"[39m
+          [33mdata-testid[39m=[32m"host-buttons"[39m
+        [36m>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"pointer-events-auto flex items-center gap-1 rounded-full bg-host p-1 shadow-pop"[39m
+          [36m>[39m
+            [36m<button[39m
+              [33maria-label[39m=[32m"Поиск"[39m
+              [33mclass[39m=[32m"relative inline-flex size-11 cursor-pointer items-center justify-center rounded-full transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 text-host-foreground hover:bg-white/10"[39m
+              [33mdata-host[39m=[32m"search"[39m
+              [33mdata-testid[39m=[32m"host-search"[39m
+              [33mtype[39m=[32m"button"[39m
+            [36m>[39m
+              [36m<svg[39m
+                [33maria-hidden[39m=[32m"true"[39m
+                [33mclass[39m=[32m"lucide lucide-search"[39m
+                [33mfill[39m=[32m"none"[39m
+                [33mheight[39m=[32m"18"[39m
+                [33mstroke[39m=[32m"currentColor"[39m
+                [33mstroke-linecap[39m=[32m"round"[39m
+                [33mstroke-linejoin[39m=[32m"round"[39m
+                [33mstroke-width[39m=[32m"2"[39m
+                [33mviewBox[39m=[32m"0 0 24 24"[39m
+                [33mwidth[39m=[32m"18"[39m
+                [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+              [36m>[39m
+                [36m<path[39m
+                  [33md[39m=[32m"m21 21-4.34-4.34"[39m
+                [36m/>[39m
+                [36m<circle[39m
+                  [33mcx[39m=[32m"11"[39m
+                  [33mcy[39m=[32m"11"[39m
+                  [33mr[39m=[32m"8"[39m
+                [36m/>[39m
+              [36m</svg>[39m
+            [36m</button>[39m
+            [36m<button[39m
+              [33maria-label[39m=[32m"Чат"[39m
+              [33mclass[39m=[32m"relative inline-flex size-11 cursor-pointer items-center justify-center rounded-full transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 text-host-foreground hover:bg-white/10"[39m
+              [33mdata-host[39m=[32m"chat"[39m
+              [33mdata-testid[39m=[32m"host-chat"[39m
+              [33mtype[39m=[32m"button"[39m
+            [36m>[39m
+              [36m<svg[39m
+                [33maria-hidden[39m=[32m"true"[39m
+                [33mclass[39m=[32m"lucide lucide-message-square"[39m
+                [33mfill[39m=[32m"none"[39m
+                [33mheight[39m=[32m"18"[39m
+                [33mstroke[39m=[32m"currentColor"[39m
+                [33mstroke-linecap[39m=[32m"round"[39m
+                [33mstroke-linejoin[39m=[32m"round"[39m
+                [33mstroke-width[39m=[32m"2"[39m
+                [33mviewBox[39m=[32m"0 0 24 24"[39m
+                [33mwidth[39m=[32m"18"[39m
+                [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+              [36m>[39m
+                [36m<path[39m
+                  [33md[39m=[32m"M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z"[39m
+                [36m/>[39m
+              [36m</svg>[39m
+            [36m</button>[39m
+            [36m<button[39m
+              [33maria-expanded[39m=[32m"false"[39m
+              [33maria-label[39m=[32m"Новая запись"[39m
+              [33mclass[39m=[32m"relative inline-flex size-11 cursor-pointer items-center justify-center rounded-full transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 text-host-foreground hover:bg-white/10"[39m
+              [33mdata-host[39m=[32m"new"[39m
+              [33mdata-testid[39m=[32m"host-new"[39m
+              [33mtype[39m=[32m"button"[39m
+            [36m>[39m
+              [36m<svg[39m
+                [33maria-hidden[39m=[32m"true"[39m
+                [33mclass[39m=[32m"lucide lucide-plus"[39m
+                [33mfill[39m=[32m"none"[39m
+                [33mheight[39m=[32m"18"[39m
+                [33mstroke[39m=[32m"currentColor"[39m
+                [33mstroke-linecap[39m=[32m"round"[39m
+                [33mstroke-linejoin[39m=[32m"round"[39m
+                [33mstroke-width[39m=[32m"2"[39m
+                [33mviewBox[39m=[32m"0 0 24 24"[39m
+                [33mwidth[39m=[32m"18"[39m
+                [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+              [36m>[39m
+                [36m<path[39m
+                  [33md[39m=[32m"M5 12h14"[39m
+                [36m/>[39m
+                [36m<path[39m
+                  [33md[39m=[32m"M12 5v14"[39m
+                [36m/>[39m
+              [36m</svg>[39m
+            [36m</button>[39m
+          [36m</div>[39m
+        [36m</div>[39m
+      [36m</div>[39m
+    [36m</div>[39m
+  [36m</body>[39m
+[36m</html>[39m
+
+- Expected
++ Received
+
+- 1
++ 0
+
+ ❯ src/features/apps/open.test.tsx:77:20
+     75|   await waitFor(() => {
+     76|     const writes = queryClient.getMutationCache().findAll({ mutationKe…
+     77|     expect(writes).toHaveLength(1);
+       |                    ^
+     78|     expect(writes[0]?.state.data).toMatchObject({ actionId: journalId …
+     79|   });
+ ❯ runWithExpensiveErrorDiagnosticsDisabled ../../node_modules/@testing-library/dom/dist/config.js:47:12
+ ❯ checkCallback ../../node_modules/@testing-library/dom/dist/wait-for.js:124:77
+ ❯ Timeout.checkRealTimersCallback ../../node_modules/@testing-library/dom/dist/wait-for.js:118:16
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/5]⎯
+
+ FAIL  src/features/page/menu.test.tsx > «Сделать страницей» > одна пачка с аспектом «страница»; тост «Отменить» → ai.undo; у страницы пункта нет
+AssertionError: expected undefined to match object { …(2) }
+
+Ignored nodes: comments, script, style
+[36m<html>[39m
+  [36m<head />[39m
+  [36m<body[39m
+    [33mstyle[39m=[32m""[39m
+  [36m>[39m
+    [36m<div>[39m
+      [36m<button[39m
+        [33mdata-testid[39m=[32m"go-other"[39m
+        [33mtype[39m=[32m"button"[39m
+      [36m>[39m
+        [0mсоседняя[0m
+      [36m</button>[39m
+      [36m<button[39m
+        [33mdata-testid[39m=[32m"go-back"[39m
+        [33mtype[39m=[32m"button"[39m
+      [36m>[39m
+        [0mназад[0m
+      [36m</button>[39m
+      [36m<button[39m
+        [33mdata-testid[39m=[32m"go-first"[39m
+        [33mtype[39m=[32m"button"[39m
+      [36m>[39m
+        [0mзаново[0m
+      [36m</button>[39m
+      [36m<header[39m
+        [33mclass[39m=[32m"sticky top-0 z-10 shrink-0 border-b border-line/70 bg-surface/90 backdrop-blur"[39m
+      [36m>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"relative flex h-14 items-center gap-2 px-2"[39m
+          [33mdata-testid[39m=[32m"host-presence"[39m
+        [36m>[39m
+          [36m<button[39m
+            [33maria-label[39m=[32m"Назад"[39m
+            [33mclass[39m=[32m"inline-flex size-11 shrink-0 cursor-pointer items-center justify-center rounded-full bg-host text-host-foreground transition hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"[39m
+            [33mdata-host[39m=[32m"back"[39m
+            [33mdata-testid[39m=[32m"host-back"[39m
+            [33mtype[39m=[32m"button"[39m
+          [36m>[39m
+            [36m<svg[39m
+              [33maria-hidden[39m=[32m"true"[39m
+              [33mclass[39m=[32m"lucide lucide-chevron-left"[39m
+              [33mfill[39m=[32m"none"[39m
+              [33mheight[39m=[32m"20"[39m
+              [33mstroke[39m=[32m"currentColor"[39m
+              [33mstroke-linecap[39m=[32m"round"[39m
+              [33mstroke-linejoin[39m=[32m"round"[39m
+              [33mstroke-width[39m=[32m"2"[39m
+              [33mviewBox[39m=[32m"0 0 24 24"[39m
+              [33mwidth[39m=[32m"20"[39m
+              [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+            [36m>[39m
+              [36m<path[39m
+                [33md[39m=[32m"m15 18-6-6 6-6"[39m
+              [36m/>[39m
+            [36m</svg>[39m
+          [36m</button>[39m
+          [36m<button[39m
+            [33maria-expanded[39m=[32m"false"[39m
+            [33maria-haspopup[39m=[32m"dialog"[39m
+            [33mclass[39m=[32m"flex min-h-11 min-w-0 cursor-pointer items-center gap-1.5 rounded-full px-2 text-sm font-medium transition hover:bg-surface-2 disabled:cursor-default disabled:hover:bg-transparent"[39m
+            [33mdata-testid[39m=[32m"nav-switch"[39m
+            [33mtype[39m=[32m"button"[39m
+          [36m>[39m
+            [36m<span[39m
+              [33maria-hidden[39m=[32m"true"[39m
+            [36m>[39m
+              [0m🪐[0m
+            [36m</span>[39m
+            [36m<span[39m
+              [33mclass[39m=[32m"sr-only"[39m
+            [36m>[39m
+              [0mOrbis[0m
+            [36m</span>[39m
+            [36m<span[39m
+              [33maria-hidden[39m=[32m"true"[39m
+              [33mclass[39m=[32m"text-text-muted"[39m
+            [36m>[39m
+              [0m·[0m
+            [36m</span>[39m
+            [36m<span[39m
+              [33mclass[39m=[32m"min-w-0 truncate"[39m
+            [36m>[39m
+              [0mДомой[0m
+            [36m</span>[39m
+            [36m<svg[39m
+              [33maria-hidden[39m=[32m"true"[39m
+              [33mclass[39m=[32m"lucide lucide-chevron-down shrink-0 text-text-muted"[39m
+              [33mfill[39m=[32m"none"[39m
+              [33mheight[39m=[32m"14"[39m
+              [33mstroke[39m=[32m"currentColor"[39m
+              [33mstroke-linecap[39m=[32m"round"[39m
+              [33mstroke-linejoin[39m=[32m"round"[39m
+              [33mstroke-width[39m=[32m"2"[39m
+              [33mviewBox[39m=[32m"0 0 24 24"[39m
+              [33mwidth[39m=[32m"14"[39m
+              [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+            [36m>[39m
+              [36m<path[39m
+                [33md[39m=[32m"m6 9 6 6 6-6"[39m
+              [36m/>[39m
+            [36m</svg>[39m
+          [36m</button>[39m
+          [36m<span[39m
+            [33mclass[39m=[32m"flex-1"[39m
+          [36m/>[39m
+          [36m<button[39m
+            [33maria-label[39m=[32m"Домой"[39m
+            [33mclass[39m=[32m"inline-flex size-11 shrink-0 cursor-pointer items-center justify-center rounded-full bg-host text-host-foreground transition hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"[39m
+            [33mdata-host[39m=[32m"home"[39m
+            [33mdata-testid[39m=[32m"host-home"[39m
+            [33mtype[39m=[32m"button"[39m
+          [36m>[39m
+            [36m<svg[39m
+              [33maria-hidden[39m=[32m"true"[39m
+              [33mclass[39m=[32m"lucide lucide-house"[39m
+              [33mfill[39m=[32m"none"[39m
+              [33mheight[39m=[32m"18"[39m
+              [33mstroke[39m=[32m"currentColor"[39m
+              [33mstroke-linecap[39m=[32m"round"[39m
+              [33mstroke-linejoin[39m=[32m"round"[39m
+              [33mstroke-width[39m=[32m"2"[39m
+              [33mviewBox[39m=[32m"0 0 24 24"[39m
+              [33mwidth[39m=[32m"18"[39m
+              [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+            [36m>[39m
+              [36m<path[39m
+                [33md[39m=[32m"M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8"[39m
+              [36m/>[39m
+              [36m<path[39m
+                [33md[39m=[32m"M3 10a2 2 0 0 1 .709-1.528l7-6a2 2 0 0 1 2.582 0l7 6A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"[39m
+              [36m/>[39m
+            [36m</svg>[39m
+          [36m</button>[39m
+          [36m<span[39m
+            [33mclass[39m=[32m"relative inline-flex"[39m
+          [36m>[39m
+            [36m<button[39m
+              [33maria-expanded[39m=[32m"false"[39m
+              [33maria-haspopup[39m=[32m"menu"[39m
+              [33maria-label[39m=[32m"Меню"[39m
+              [33mclass[39m=[32m"inline-flex size-11 shrink-0 cursor-pointer items-center justify-center rounded-full bg-host text-host-foreground transition hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"[39m
+              [33mdata-host[39m=[32m"menu"[39m
+              [33mdata-state[39m=[32m"closed"[39m
+              [33mdata-testid[39m=[32m"screen-menu"[39m
+              [33mid[39m=[32m"_r_0_"[39m
+              [33mtitle[39m=[32m"Меню"[39m
+              [33mtype[39m=[32m"button"[39m
+            [36m>[39m
+              [36m<svg[39m
+                [33maria-hidden[39m=[32m"true"[39m
+                [33mclass[39m=[32m"lucide lucide-ellipsis-vertical"[39m
+                [33mfill[39m=[32m"none"[39m
+                [33mheight[39m=[32m"18"[39m
+                [33mstroke[39m=[32m"currentColor"[39m
+                [33mstroke-linecap[39m=[32m"round"[39m
+                [33mstroke-linejoin[39m=[32m"round"[39m
+                [33mstroke-width[39m=[32m"2"[39m
+                [33mviewBox[39m=[32m"0 0 24 24"[39m
+                [33mwidth[39m=[32m"18"[39m
+                [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+              [36m>[39m
+                [36m<circle[39m
+                  [33mcx[39m=[32m"12"[39m
+                  [33mcy[39m=[32m"12"[39m
+                  [33mr[39m=[32m"1"[39m
+                [36m/>[39m
+                [36m<circle[39m
+                  [33mcx[39m=[32m"12"[39m
+                  [33mcy[39m=[32m"5"[39m
+                  [33mr[39m=[32m"1"[39m
+                [36m/>[39m
+                [36m<circle[39m
+                  [33mcx[39m=[32m"12"[39m
+                  [33mcy[39m=[32m"19"[39m
+                  [33mr[39m=[32m"1"[39m
+                [36m/>[39m
+              [36m</svg>[39m
+            [36m</button>[39m
+            [36m<span[39m
+              [33maria-expanded[39m=[32m"false"[39m
+              [33maria-haspopup[39m=[32m"menu"[39m
+              [33maria-hidden[39m=[32m"true"[39m
+              [33mclass[39m=[32m"pointer-events-none absolute inset-0"[39m
+              [33mdata-state[39m=[32m"closed"[39m
+              [33mdata-testid[39m=[32m"menu-anchor"[39m
+              [33mid[39m=[32m"radix-_r_8_"[39m
+              [33mtabindex[39m=[32m"-1"[39m
+              [33mtype[39m=[32m"button"[39m
+            [36m/>[39m
+          [36m</span>[39m
+        [36m</div>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"flex h-9 items-center px-4 pb-1"[39m
+        [36m>[39m
+          [36m<h1[39m
+            [33mclass[39m=[32m"min-w-0 flex-1 truncate text-sm font-medium"[39m
+          [36m>[39m
+            [0mМысли вслух[0m
+          [36m</h1>[39m
+        [36m</div>[39m
+      [36m</header>[39m
+      [36m<div[39m
+        [33mclass[39m=[32m"mx-auto w-full max-w-3xl px-4 md:px-6"[39m
+      [36m/>[39m
+      [36m<div[39m
+        [33mclass[39m=[32m"mx-auto w-full max-w-3xl"[39m
+        [33mdata-testid[39m=[32m"record-area"[39m
+      [36m>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"flex flex-col gap-6 px-4 pb-10 pt-5 md:px-6"[39m
+          [33mdata-testid[39m=[32m"page-view"[39m
+        [36m>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"flex flex-col gap-6"[39m
+            [33mdata-testid[39m=[32m"page-render"[39m
+          [36m>[39m
+            [36m<div[39m
+              [33mdata-testid[39m=[32m"page-text"[39m
+            [36m>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"orbis-markdown"[39m
+              [36m>[39m
+                [36m<p>[39m
+                  [0mМысли вслух: заметки к записи.[0m
+                [36m</p>[39m
+              [36m</div>[39m
+            [36m</div>[39m
+          [36m</div>[39m
+        [36m</div>[39m
+      [36m</div>[39m
+      [36m<ol[39m
+        [33maria-live[39m=[32m"polite"[39m
+        [33mclass[39m=[32m"fixed bottom-4 right-4 z-[60] flex w-80 flex-col gap-2"[39m
+        [33mdata-toast-viewport[39m=[32m""[39m
+        [33mstyle[39m=[32m"pointer-events: auto;"[39m
+      [36m>[39m
+        [36m<li[39m
+          [33mclass[39m=[32m"rounded-control border border-line p-3 text-sm shadow-pop bg-surface-2 text-text"[39m
+          [33mdata-toast-item[39m=[32m""[39m
+          [33mtabindex[39m=[32m"0"[39m
+        [36m>[39m
+          [36m<p>[39m
+            [0mОтменено: Правка[0m
+          [36m</p>[39m
+        [36m</li>[39m
+      [36m</ol>[39m
+    [36m</div>[39m
+  [36m</body>[39m
+[36m</html>[39m
+
+- Expected:
+{
+  "bodyRevisions": [],
+  "undone": {
+    "id": "00000000-0000-4000-8000-000000001599",
+  },
+}
+
++ Received:
+undefined
+
+ ❯ src/features/page/menu.test.tsx:427:39
+    425|         .getMutationCache()
+    426|         .findAll({ mutationKey: [['ai', 'undo']], exact: true });
+    427|       expect(undo.at(-1)?.state.data).toMatchObject({
+       |                                       ^
+    428|         undone: { id: ACTION_ID },
+    429|         bodyRevisions: [],
+ ❯ runWithExpensiveErrorDiagnosticsDisabled ../../node_modules/@testing-library/dom/dist/config.js:47:12
+ ❯ checkCallback ../../node_modules/@testing-library/dom/dist/wait-for.js:124:77
+ ❯ Timeout.checkRealTimersCallback ../../node_modules/@testing-library/dom/dist/wait-for.js:118:16
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/5]⎯
+
+ FAIL  src/features/settings/apps-and-extensions.test.tsx > I-1: правка «Состава» — одна entity_update без module_set; «Выключить приложение» видит новый «Состав»
+AssertionError: expected [] to have a length of 1 but got +0
+
+Ignored nodes: comments, script, style
+[36m<html>[39m
+  [36m<head />[39m
+  [36m<body[39m
+    [33mstyle[39m=[32m""[39m
+  [36m>[39m
+    [36m<div>[39m
+      [36m<header[39m
+        [33mclass[39m=[32m"sticky top-0 z-10 shrink-0 border-b border-line/70 bg-surface/90 backdrop-blur"[39m
+      [36m>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"relative flex h-14 items-center gap-2 px-2"[39m
+          [33mdata-testid[39m=[32m"host-presence"[39m
+        [36m>[39m
+          [36m<button[39m
+            [33maria-expanded[39m=[32m"false"[39m
+            [33maria-haspopup[39m=[32m"dialog"[39m
+            [33mclass[39m=[32m"flex min-h-11 min-w-0 cursor-pointer items-center gap-1.5 rounded-full px-2 text-sm font-medium transition hover:bg-surface-2 disabled:cursor-default disabled:hover:bg-transparent"[39m
+            [33mdata-testid[39m=[32m"nav-switch"[39m
+            [33mtype[39m=[32m"button"[39m
+          [36m>[39m
+            [36m<span[39m
+              [33maria-hidden[39m=[32m"true"[39m
+            [36m>[39m
+              [0m🪐[0m
+            [36m</span>[39m
+            [36m<span[39m
+              [33mclass[39m=[32m"sr-only"[39m
+            [36m>[39m
+              [0mOrbis[0m
+            [36m</span>[39m
+            [36m<span[39m
+              [33maria-hidden[39m=[32m"true"[39m
+              [33mclass[39m=[32m"text-text-muted"[39m
+            [36m>[39m
+              [0m·[0m
+            [36m</span>[39m
+            [36m<span[39m
+              [33mclass[39m=[32m"min-w-0 truncate"[39m
+            [36m>[39m
+              [0mДомой[0m
+            [36m</span>[39m
+            [36m<svg[39m
+              [33maria-hidden[39m=[32m"true"[39m
+              [33mclass[39m=[32m"lucide lucide-chevron-down shrink-0 text-text-muted"[39m
+              [33mfill[39m=[32m"none"[39m
+              [33mheight[39m=[32m"14"[39m
+              [33mstroke[39m=[32m"currentColor"[39m
+              [33mstroke-linecap[39m=[32m"round"[39m
+              [33mstroke-linejoin[39m=[32m"round"[39m
+              [33mstroke-width[39m=[32m"2"[39m
+              [33mviewBox[39m=[32m"0 0 24 24"[39m
+              [33mwidth[39m=[32m"14"[39m
+              [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+            [36m>[39m
+              [36m<path[39m
+                [33md[39m=[32m"m6 9 6 6 6-6"[39m
+              [36m/>[39m
+            [36m</svg>[39m
+          [36m</button>[39m
+          [36m<span[39m
+            [33mclass[39m=[32m"flex-1"[39m
+          [36m/>[39m
+          [36m<button[39m
+            [33maria-label[39m=[32m"Домой"[39m
+            [33mclass[39m=[32m"inline-flex size-11 shrink-0 cursor-pointer items-center justify-center rounded-full bg-host text-host-foreground transition hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"[39m
+            [33mdata-host[39m=[32m"home"[39m
+            [33mdata-testid[39m=[32m"host-home"[39m
+            [33mtype[39m=[32m"button"[39m
+          [36m>[39m
+            [36m<svg[39m
+              [33maria-hidden[39m=[32m"true"[39m
+              [33mclass[39m=[32m"lucide lucide-house"[39m
+              [33mfill[39m=[32m"none"[39m
+              [33mheight[39m=[32m"18"[39m
+              [33mstroke[39m=[32m"currentColor"[39m
+              [33mstroke-linecap[39m=[32m"round"[39m
+              [33mstroke-linejoin[39m=[32m"round"[39m
+              [33mstroke-width[39m=[32m"2"[39m
+              [33mviewBox[39m=[32m"0 0 24 24"[39m
+              [33mwidth[39m=[32m"18"[39m
+              [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+            [36m>[39m
+              [36m<path[39m
+                [33md[39m=[32m"M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8"[39m
+              [36m/>[39m
+              [36m<path[39m
+                [33md[39m=[32m"M3 10a2 2 0 0 1 .709-1.528l7-6a2 2 0 0 1 2.582 0l7 6A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"[39m
+              [36m/>[39m
+            [36m</svg>[39m
+          [36m</button>[39m
+          [36m<span[39m
+            [33mclass[39m=[32m"relative inline-flex"[39m
+          [36m>[39m
+            [36m<button[39m
+              [33maria-expanded[39m=[32m"false"[39m
+              [33maria-haspopup[39m=[32m"menu"[39m
+              [33maria-label[39m=[32m"Меню"[39m
+              [33mclass[39m=[32m"inline-flex size-11 shrink-0 cursor-pointer items-center justify-center rounded-full bg-host text-host-foreground transition hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"[39m
+              [33mdata-host[39m=[32m"menu"[39m
+              [33mdata-state[39m=[32m"closed"[39m
+              [33mdata-testid[39m=[32m"screen-menu"[39m
+              [33mid[39m=[32m"_r_d_"[39m
+              [33mtitle[39m=[32m"Меню"[39m
+              [33mtype[39m=[32m"button"[39m
+            [36m>[39m
+              [36m<svg[39m
+                [33maria-hidden[39m=[32m"true"[39m
+                [33mclass[39m=[32m"lucide lucide-ellipsis-vertical"[39m
+                [33mfill[39m=[32m"none"[39m
+                [33mheight[39m=[32m"18"[39m
+                [33mstroke[39m=[32m"currentColor"[39m
+                [33mstroke-linecap[39m=[32m"round"[39m
+                [33mstroke-linejoin[39m=[32m"round"[39m
+                [33mstroke-width[39m=[32m"2"[39m
+                [33mviewBox[39m=[32m"0 0 24 24"[39m
+                [33mwidth[39m=[32m"18"[39m
+                [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+              [36m>[39m
+                [36m<circle[39m
+                  [33mcx[39m=[32m"12"[39m
+                  [33mcy[39m=[32m"12"[39m
+                  [33mr[39m=[32m"1"[39m
+                [36m/>[39m
+                [36m<circle[39m
+                  [33mcx[39m=[32m"12"[39m
+                  [33mcy[39m=[32m"5"[39m
+                  [33mr[39m=[32m"1"[39m
+                [36m/>[39m
+                [36m<circle[39m
+                  [33mcx[39m=[32m"12"[39m
+                  [33mcy[39m=[32m"19"[39m
+                  [33mr[39m=[32m"1"[39m
+                [36m/>[39m
+              [36m</svg>[39m
+            [36m</button>[39m
+          [36m</span>[39m
+        [36m</div>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"flex h-9 items-center px-4 pb-1"[39m
+        [36m>[39m
+          [36m<h1[39m
+            [33mclass[39m=[32m"min-w-0 flex-1 truncate text-sm font-medium"[39m
+          [36m>[39m
+            [0mНастройки[0m
+          [36m</h1>[39m
+        [36m</div>[39m
+      [36m</header>[39m
+      [36m<div[39m
+        [33mclass[39m=[32m"mx-auto w-full max-w-3xl"[39m
+      [36m>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"flex flex-col"[39m
+          [33mdata-orientation[...
+
+- Expected
++ Received
+
+- 1
++ 0
+
+ ❯ src/features/settings/apps-and-extensions.test.tsx:501:20
+    499|       .getMutationCache()
+    500|       .findAll({ mutationKey: [['entity', 'updateBatch']], exact: true…
+    501|     expect(writes).toHaveLength(1);
+       |                    ^
+    502|     expect(writes[0]?.state.data).toMatchObject({ actionId: ACT });
+    503|   });
+ ❯ runWithExpensiveErrorDiagnosticsDisabled ../../node_modules/@testing-library/dom/dist/config.js:47:12
+ ❯ checkCallback ../../node_modules/@testing-library/dom/dist/wait-for.js:124:77
+ ❯ Timeout.checkRealTimersCallback ../../node_modules/@testing-library/dom/dist/wait-for.js:118:16
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[5/5]⎯
+
+
+ Test Files  4 failed | 2 passed (6)
+      Tests  5 failed | 22 passed | 101 skipped (128)
+   Start at  22:52:11
+   Duration  33.45s (transform 2.52s, setup 815ms, import 5.87s, tests 20.48s, environment 5.08s)
+
+JSON report written to /Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-03-speed-plan-b/b13-web-final-fixtures-test.json

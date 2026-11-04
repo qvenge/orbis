@@ -1,0 +1,987 @@
+{
+  "label": "before-b",
+  "url": "http://127.0.0.1:3009",
+  "startedAt": "2026-11-03T12:44:56.861Z",
+  "repeat": 5,
+  "device": {
+    "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+    "viewport": {
+      "width": 1280,
+      "height": 860
+    }
+  },
+  "clientVersions": [
+    "0.6.0"
+  ],
+  "records": {
+    "task": "01a1a170-c8e2-7510-806e-a8505b316d1f",
+    "note": "01a1a170-c909-7523-9983-a3c97cff5267",
+    "page-with-blocks": "01a1a170-c929-7457-8ae6-9f2b0feb8098",
+    "project": "01a1a170-c961-7388-aff7-e9397c49a590",
+    "no-blocks": "01a1a170-c97c-77d8-a11d-bb5731db3a3d"
+  },
+  "samples": [
+    {
+      "metric": "action_confirmed",
+      "kind": "create",
+      "durMs": 38.4,
+      "repeat": 1
+    },
+    {
+      "metric": "action_visible",
+      "kind": "create",
+      "durMs": 52.3,
+      "repeat": 1
+    },
+    {
+      "metric": "action_confirmed",
+      "kind": "subtask",
+      "durMs": 70.9,
+      "repeat": 1
+    },
+    {
+      "metric": "action_visible",
+      "kind": "subtask",
+      "durMs": 87.4,
+      "repeat": 1
+    },
+    {
+      "metric": "cold_start",
+      "kind": "cold-shell",
+      "durMs": 669.3,
+      "repeat": 1
+    },
+    {
+      "metric": "lcp",
+      "kind": "cold-shell",
+      "durMs": 600,
+      "repeat": 1
+    },
+    {
+      "metric": "cold_start",
+      "kind": "empty",
+      "durMs": 639.7,
+      "repeat": 1
+    },
+    {
+      "metric": "lcp",
+      "kind": "empty",
+      "durMs": 580,
+      "repeat": 1
+    },
+    {
+      "metric": "transition",
+      "kind": "first",
+      "screen": "task",
+      "cached": false,
+      "durMs": 151.4,
+      "repeat": 1
+    },
+    {
+      "metric": "transition",
+      "kind": "first",
+      "screen": "note",
+      "cached": false,
+      "durMs": 123.2,
+      "repeat": 1
+    },
+    {
+      "metric": "transition",
+      "kind": "back",
+      "screen": "task",
+      "cached": true,
+      "durMs": 78.6,
+      "repeat": 1
+    },
+    {
+      "metric": "transition",
+      "kind": "first",
+      "screen": "page-with-blocks",
+      "cached": false,
+      "durMs": 120.4,
+      "repeat": 1
+    },
+    {
+      "metric": "transition",
+      "kind": "back",
+      "screen": "task",
+      "cached": true,
+      "durMs": 78.1,
+      "repeat": 1
+    },
+    {
+      "metric": "transition",
+      "kind": "first",
+      "screen": "project",
+      "cached": false,
+      "durMs": 87.3,
+      "repeat": 1
+    },
+    {
+      "metric": "transition",
+      "kind": "back",
+      "screen": "task",
+      "cached": true,
+      "durMs": 71.9,
+      "repeat": 1
+    },
+    {
+      "metric": "transition",
+      "kind": "first",
+      "screen": "no-blocks",
+      "cached": false,
+      "durMs": 92.6,
+      "repeat": 1
+    },
+    {
+      "metric": "transition",
+      "kind": "back",
+      "screen": "task",
+      "cached": true,
+      "durMs": 89,
+      "repeat": 1
+    },
+    {
+      "metric": "transition",
+      "kind": "repeat",
+      "screen": "note",
+      "cached": true,
+      "durMs": 109.1,
+      "repeat": 1
+    },
+    {
+      "metric": "cold_start",
+      "kind": "warm-unverified",
+      "durMs": 942.5,
+      "repeat": 1,
+      "startup": {
+        "shell": "controlled",
+        "target": "unavailable",
+        "reason": "record-unavailable"
+      }
+    },
+    {
+      "metric": "lcp",
+      "kind": "warm-unverified",
+      "durMs": 860,
+      "repeat": 1
+    },
+    {
+      "metric": "action_visible",
+      "kind": "checkbox",
+      "durMs": 10.3,
+      "repeat": 1
+    },
+    {
+      "metric": "action_confirmed",
+      "kind": "checkbox",
+      "durMs": 57.8,
+      "repeat": 1
+    },
+    {
+      "metric": "action_visible",
+      "kind": "checkbox",
+      "durMs": 9.5,
+      "repeat": 1
+    },
+    {
+      "metric": "action_confirmed",
+      "kind": "checkbox",
+      "durMs": 57.6,
+      "repeat": 1
+    },
+    {
+      "metric": "action_visible",
+      "kind": "status",
+      "durMs": 18,
+      "repeat": 1
+    },
+    {
+      "metric": "action_confirmed",
+      "kind": "status",
+      "durMs": 76.1,
+      "repeat": 1
+    },
+    {
+      "metric": "action_visible",
+      "kind": "status",
+      "durMs": 12.7,
+      "repeat": 1
+    },
+    {
+      "metric": "action_confirmed",
+      "kind": "status",
+      "durMs": 58.6,
+      "repeat": 1
+    },
+    {
+      "metric": "cold_start",
+      "kind": "cold-shell",
+      "durMs": 640.5,
+      "repeat": 2
+    },
+    {
+      "metric": "lcp",
+      "kind": "cold-shell",
+      "durMs": 584,
+      "repeat": 2
+    },
+    {
+      "metric": "cold_start",
+      "kind": "empty",
+      "durMs": 635.6,
+      "repeat": 2
+    },
+    {
+      "metric": "lcp",
+      "kind": "empty",
+      "durMs": 584,
+      "repeat": 2
+    },
+    {
+      "metric": "transition",
+      "kind": "first",
+      "screen": "task",
+      "cached": false,
+      "durMs": 100.6,
+      "repeat": 2
+    },
+    {
+      "metric": "transition",
+      "kind": "first",
+      "screen": "note",
+      "cached": false,
+      "durMs": 81.4,
+      "repeat": 2
+    },
+    {
+      "metric": "transition",
+      "kind": "back",
+      "screen": "task",
+      "cached": true,
+      "durMs": 62.4,
+      "repeat": 2
+    },
+    {
+      "metric": "transition",
+      "kind": "first",
+      "screen": "page-with-blocks",
+      "cached": false,
+      "durMs": 110.9,
+      "repeat": 2
+    },
+    {
+      "metric": "transition",
+      "kind": "back",
+      "screen": "task",
+      "cached": true,
+      "durMs": 77.8,
+      "repeat": 2
+    },
+    {
+      "metric": "transition",
+      "kind": "first",
+      "screen": "project",
+      "cached": false,
+      "durMs": 84.6,
+      "repeat": 2
+    },
+    {
+      "metric": "transition",
+      "kind": "back",
+      "screen": "task",
+      "cached": true,
+      "durMs": 75.5,
+      "repeat": 2
+    },
+    {
+      "metric": "transition",
+      "kind": "first",
+      "screen": "no-blocks",
+      "cached": false,
+      "durMs": 81.3,
+      "repeat": 2
+    },
+    {
+      "metric": "transition",
+      "kind": "back",
+      "screen": "task",
+      "cached": true,
+      "durMs": 78.7,
+      "repeat": 2
+    },
+    {
+      "metric": "transition",
+      "kind": "repeat",
+      "screen": "note",
+      "cached": true,
+      "durMs": 93.4,
+      "repeat": 2
+    },
+    {
+      "metric": "cold_start",
+      "kind": "warm-unverified",
+      "durMs": 885.3,
+      "repeat": 2,
+      "startup": {
+        "shell": "controlled",
+        "target": "unavailable",
+        "reason": "record-unavailable"
+      }
+    },
+    {
+      "metric": "lcp",
+      "kind": "warm-unverified",
+      "durMs": 756,
+      "repeat": 2
+    },
+    {
+      "metric": "action_visible",
+      "kind": "checkbox",
+      "durMs": 11.8,
+      "repeat": 2
+    },
+    {
+      "metric": "action_confirmed",
+      "kind": "checkbox",
+      "durMs": 59.9,
+      "repeat": 2
+    },
+    {
+      "metric": "action_visible",
+      "kind": "checkbox",
+      "durMs": 8.2,
+      "repeat": 2
+    },
+    {
+      "metric": "action_confirmed",
+      "kind": "checkbox",
+      "durMs": 76.2,
+      "repeat": 2
+    },
+    {
+      "metric": "action_visible",
+      "kind": "status",
+      "durMs": 17.3,
+      "repeat": 2
+    },
+    {
+      "metric": "action_confirmed",
+      "kind": "status",
+      "durMs": 66.5,
+      "repeat": 2
+    },
+    {
+      "metric": "action_visible",
+      "kind": "status",
+      "durMs": 11.2,
+      "repeat": 2
+    },
+    {
+      "metric": "action_confirmed",
+      "kind": "status",
+      "durMs": 57,
+      "repeat": 2
+    },
+    {
+      "metric": "cold_start",
+      "kind": "cold-shell",
+      "durMs": 648.8,
+      "repeat": 3
+    },
+    {
+      "metric": "lcp",
+      "kind": "cold-shell",
+      "durMs": 608,
+      "repeat": 3
+    },
+    {
+      "metric": "cold_start",
+      "kind": "empty",
+      "durMs": 621,
+      "repeat": 3
+    },
+    {
+      "metric": "lcp",
+      "kind": "empty",
+      "durMs": 576,
+      "repeat": 3
+    },
+    {
+      "metric": "transition",
+      "kind": "first",
+      "screen": "task",
+      "cached": false,
+      "durMs": 99.7,
+      "repeat": 3
+    },
+    {
+      "metric": "transition",
+      "kind": "first",
+      "screen": "note",
+      "cached": false,
+      "durMs": 83.7,
+      "repeat": 3
+    },
+    {
+      "metric": "transition",
+      "kind": "back",
+      "screen": "task",
+      "cached": true,
+      "durMs": 66.8,
+      "repeat": 3
+    },
+    {
+      "metric": "transition",
+      "kind": "first",
+      "screen": "page-with-blocks",
+      "cached": false,
+      "durMs": 87.2,
+      "repeat": 3
+    },
+    {
+      "metric": "transition",
+      "kind": "back",
+      "screen": "task",
+      "cached": true,
+      "durMs": 78.3,
+      "repeat": 3
+    },
+    {
+      "metric": "transition",
+      "kind": "first",
+      "screen": "project",
+      "cached": false,
+      "durMs": 91.3,
+      "repeat": 3
+    },
+    {
+      "metric": "transition",
+      "kind": "back",
+      "screen": "task",
+      "cached": true,
+      "durMs": 83.3,
+      "repeat": 3
+    },
+    {
+      "metric": "transition",
+      "kind": "first",
+      "screen": "no-blocks",
+      "cached": false,
+      "durMs": 93.3,
+      "repeat": 3
+    },
+    {
+      "metric": "transition",
+      "kind": "back",
+      "screen": "task",
+      "cached": true,
+      "durMs": 66.3,
+      "repeat": 3
+    },
+    {
+      "metric": "transition",
+      "kind": "repeat",
+      "screen": "note",
+      "cached": true,
+      "durMs": 95.9,
+      "repeat": 3
+    },
+    {
+      "metric": "cold_start",
+      "kind": "warm-unverified",
+      "durMs": 829.3,
+      "repeat": 3,
+      "startup": {
+        "shell": "controlled",
+        "target": "unavailable",
+        "reason": "record-unavailable"
+      }
+    },
+    {
+      "metric": "lcp",
+      "kind": "warm-unverified",
+      "durMs": 760,
+      "repeat": 3
+    },
+    {
+      "metric": "action_visible",
+      "kind": "status",
+      "durMs": 23.9,
+      "repeat": 3
+    },
+    {
+      "metric": "action_confirmed",
+      "kind": "status",
+      "durMs": 82.1,
+      "repeat": 3
+    },
+    {
+      "metric": "action_visible",
+      "kind": "status",
+      "durMs": 12.3,
+      "repeat": 3
+    },
+    {
+      "metric": "action_confirmed",
+      "kind": "status",
+      "durMs": 77.1,
+      "repeat": 3
+    },
+    {
+      "metric": "cold_start",
+      "kind": "cold-shell",
+      "durMs": 660,
+      "repeat": 4
+    },
+    {
+      "metric": "lcp",
+      "kind": "cold-shell",
+      "durMs": 604,
+      "repeat": 4
+    },
+    {
+      "metric": "cold_start",
+      "kind": "empty",
+      "durMs": 660.5,
+      "repeat": 4
+    },
+    {
+      "metric": "lcp",
+      "kind": "empty",
+      "durMs": 600,
+      "repeat": 4
+    },
+    {
+      "metric": "transition",
+      "kind": "first",
+      "screen": "task",
+      "cached": false,
+      "durMs": 89.8,
+      "repeat": 4
+    },
+    {
+      "metric": "transition",
+      "kind": "first",
+      "screen": "note",
+      "cached": false,
+      "durMs": 83.5,
+      "repeat": 4
+    },
+    {
+      "metric": "transition",
+      "kind": "back",
+      "screen": "task",
+      "cached": true,
+      "durMs": 83.9,
+      "repeat": 4
+    },
+    {
+      "metric": "transition",
+      "kind": "first",
+      "screen": "page-with-blocks",
+      "cached": false,
+      "durMs": 107.4,
+      "repeat": 4
+    },
+    {
+      "metric": "transition",
+      "kind": "back",
+      "screen": "task",
+      "cached": true,
+      "durMs": 76.9,
+      "repeat": 4
+    },
+    {
+      "metric": "transition",
+      "kind": "first",
+      "screen": "project",
+      "cached": false,
+      "durMs": 94.6,
+      "repeat": 4
+    },
+    {
+      "metric": "transition",
+      "kind": "back",
+      "screen": "task",
+      "cached": true,
+      "durMs": 81.3,
+      "repeat": 4
+    },
+    {
+      "metric": "transition",
+      "kind": "first",
+      "screen": "no-blocks",
+      "cached": false,
+      "durMs": 82.6,
+      "repeat": 4
+    },
+    {
+      "metric": "transition",
+      "kind": "back",
+      "screen": "task",
+      "cached": true,
+      "durMs": 77.7,
+      "repeat": 4
+    },
+    {
+      "metric": "transition",
+      "kind": "repeat",
+      "screen": "note",
+      "cached": true,
+      "durMs": 108,
+      "repeat": 4
+    },
+    {
+      "metric": "cold_start",
+      "kind": "warm-unverified",
+      "durMs": 944.1,
+      "repeat": 4,
+      "startup": {
+        "shell": "controlled",
+        "target": "unavailable",
+        "reason": "record-unavailable"
+      }
+    },
+    {
+      "metric": "lcp",
+      "kind": "warm-unverified",
+      "durMs": 816,
+      "repeat": 4
+    },
+    {
+      "metric": "action_visible",
+      "kind": "checkbox",
+      "durMs": 11.1,
+      "repeat": 4
+    },
+    {
+      "metric": "action_confirmed",
+      "kind": "checkbox",
+      "durMs": 43.7,
+      "repeat": 4
+    },
+    {
+      "metric": "action_visible",
+      "kind": "checkbox",
+      "durMs": 7.7,
+      "repeat": 4
+    },
+    {
+      "metric": "action_confirmed",
+      "kind": "checkbox",
+      "durMs": 75.1,
+      "repeat": 4
+    },
+    {
+      "metric": "action_visible",
+      "kind": "status",
+      "durMs": 18.6,
+      "repeat": 4
+    },
+    {
+      "metric": "action_confirmed",
+      "kind": "status",
+      "durMs": 69.1,
+      "repeat": 4
+    },
+    {
+      "metric": "action_visible",
+      "kind": "status",
+      "durMs": 16.7,
+      "repeat": 4
+    },
+    {
+      "metric": "action_confirmed",
+      "kind": "status",
+      "durMs": 66.2,
+      "repeat": 4
+    },
+    {
+      "metric": "cold_start",
+      "kind": "cold-shell",
+      "durMs": 715.8,
+      "repeat": 5
+    },
+    {
+      "metric": "lcp",
+      "kind": "cold-shell",
+      "durMs": 628,
+      "repeat": 5
+    },
+    {
+      "metric": "cold_start",
+      "kind": "empty",
+      "durMs": 677.2,
+      "repeat": 5
+    },
+    {
+      "metric": "lcp",
+      "kind": "empty",
+      "durMs": 636,
+      "repeat": 5
+    },
+    {
+      "metric": "transition",
+      "kind": "first",
+      "screen": "task",
+      "cached": false,
+      "durMs": 99,
+      "repeat": 5
+    },
+    {
+      "metric": "transition",
+      "kind": "first",
+      "screen": "note",
+      "cached": false,
+      "durMs": 85.2,
+      "repeat": 5
+    },
+    {
+      "metric": "transition",
+      "kind": "back",
+      "screen": "task",
+      "cached": true,
+      "durMs": 562.6,
+      "repeat": 5
+    },
+    {
+      "metric": "transition",
+      "kind": "first",
+      "screen": "page-with-blocks",
+      "cached": false,
+      "durMs": 102.1,
+      "repeat": 5
+    },
+    {
+      "metric": "transition",
+      "kind": "back",
+      "screen": "task",
+      "cached": true,
+      "durMs": 84.1,
+      "repeat": 5
+    },
+    {
+      "metric": "transition",
+      "kind": "first",
+      "screen": "project",
+      "cached": false,
+      "durMs": 78.5,
+      "repeat": 5
+    },
+    {
+      "metric": "transition",
+      "kind": "back",
+      "screen": "task",
+      "cached": true,
+      "durMs": 75.5,
+      "repeat": 5
+    },
+    {
+      "metric": "transition",
+      "kind": "first",
+      "screen": "no-blocks",
+      "cached": false,
+      "durMs": 77,
+      "repeat": 5
+    },
+    {
+      "metric": "transition",
+      "kind": "back",
+      "screen": "task",
+      "cached": true,
+      "durMs": 67.2,
+      "repeat": 5
+    },
+    {
+      "metric": "transition",
+      "kind": "repeat",
+      "screen": "note",
+      "cached": true,
+      "durMs": 102.3,
+      "repeat": 5
+    },
+    {
+      "metric": "cold_start",
+      "kind": "warm-unverified",
+      "durMs": 823.5,
+      "repeat": 5,
+      "startup": {
+        "shell": "controlled",
+        "target": "unavailable",
+        "reason": "record-unavailable"
+      }
+    },
+    {
+      "metric": "lcp",
+      "kind": "warm-unverified",
+      "durMs": 648,
+      "repeat": 5
+    },
+    {
+      "metric": "action_visible",
+      "kind": "checkbox",
+      "durMs": 9.5,
+      "repeat": 5
+    },
+    {
+      "metric": "action_confirmed",
+      "kind": "checkbox",
+      "durMs": 51.6,
+      "repeat": 5
+    },
+    {
+      "metric": "action_visible",
+      "kind": "checkbox",
+      "durMs": 11.6,
+      "repeat": 5
+    },
+    {
+      "metric": "action_confirmed",
+      "kind": "checkbox",
+      "durMs": 58.2,
+      "repeat": 5
+    },
+    {
+      "metric": "action_visible",
+      "kind": "status",
+      "durMs": 21.6,
+      "repeat": 5
+    },
+    {
+      "metric": "action_confirmed",
+      "kind": "status",
+      "durMs": 74.4,
+      "repeat": 5
+    },
+    {
+      "metric": "action_visible",
+      "kind": "status",
+      "durMs": 16,
+      "repeat": 5
+    },
+    {
+      "metric": "action_confirmed",
+      "kind": "status",
+      "durMs": 81.6,
+      "repeat": 5
+    },
+    {
+      "metric": "inp",
+      "kind": "typing",
+      "durMs": 56,
+      "repeat": 1
+    },
+    {
+      "metric": "text_survived",
+      "kind": "reopen",
+      "durMs": 925.4,
+      "repeat": 1
+    }
+  ],
+  "notes": [
+    "галочки на экране лаб-задачи нет",
+    "без сети: оболочка запущена, целевой экран за 10 с не появился"
+  ],
+  "trpcEncoding": {
+    "user.getSettings": null,
+    "user.seedOnboarding": null,
+    "entity.query,entity.query,entity.query": null,
+    "entity.resolveRefs": null,
+    "entity.blocks": null,
+    "entity.get,entity.query": null,
+    "routine.proposalsForEntity,registry.effective": null,
+    "supply.updates": null,
+    "entity.get": null,
+    "entity.create": null,
+    "entity.query,entity.query,entity.query,entity.query,entity.get,supply.updates": null,
+    "entity.query,entity.query,entity.query,entity.query,entity.get": null,
+    "routine.proposalsForEntity,registry.effective,entity.get": null,
+    "routine.proposalsForEntity": null,
+    "agentRun.sweep": null,
+    "entity.update": null,
+    "version.list": null,
+    "entity.query,entity.query,entity.query,user.getSettings": null,
+    "chat.ensureThread": null,
+    "chat.listMessages": null,
+    "entity.query,entity.query,entity.query,entity.query,entity.get,entity.get": null,
+    "perf.report": null
+  },
+  "typing": {
+    "requests": {
+      "entity.update": 8,
+      "entity.query": 32,
+      "entity.get": 16,
+      "entity.blocks": 8,
+      "perf.report": 1
+    },
+    "perSave": [
+      {
+        "entity.update": 1,
+        "entity.query": 4,
+        "entity.get": 2,
+        "entity.blocks": 1
+      },
+      {
+        "entity.update": 1,
+        "entity.query": 4,
+        "entity.get": 2,
+        "entity.blocks": 1
+      },
+      {
+        "entity.update": 1,
+        "entity.query": 4,
+        "entity.get": 2,
+        "entity.blocks": 1
+      },
+      {
+        "entity.update": 1,
+        "entity.query": 4,
+        "entity.get": 2,
+        "entity.blocks": 1
+      },
+      {
+        "entity.update": 1,
+        "entity.query": 4,
+        "entity.get": 2,
+        "entity.blocks": 1
+      },
+      {
+        "entity.update": 1,
+        "entity.query": 4,
+        "entity.get": 2,
+        "entity.blocks": 1
+      },
+      {
+        "perf.report": 1,
+        "entity.update": 1,
+        "entity.query": 4,
+        "entity.get": 2,
+        "entity.blocks": 1
+      },
+      {
+        "entity.update": 1,
+        "entity.query": 4,
+        "entity.get": 2,
+        "entity.blocks": 1
+      }
+    ],
+    "bodySave": {
+      "status": "confirmed",
+      "beforeRequest": {},
+      "sinceRequest": {
+        "entity.get": 1
+      },
+      "waitAfterObservedAckMs": 6000,
+      "bodyRevision": 10
+    },
+    "textSurvived": true,
+    "survivedAtMs": 925,
+    "draftBanner": false
+  },
+  "labRecords": [
+    "01a1a170-fd6e-7524-8d3b-f12b60d42ee0",
+    "01a1a171-012d-72da-8c8a-a53ddc7df8dc"
+  ],
+  "failed": null
+}

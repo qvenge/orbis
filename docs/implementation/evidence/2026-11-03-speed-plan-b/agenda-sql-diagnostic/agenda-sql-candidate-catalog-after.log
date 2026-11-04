@@ -1,0 +1,70 @@
+Pager usage is off.
+Timing is off.
+BEGIN
+                                   version                                    |              now              | tz  | current_user | session_user | current_database 
+------------------------------------------------------------------------------+-------------------------------+-----+--------------+--------------+------------------
+ PostgreSQL 17.6 on x86_64-pc-linux-gnu, compiled by gcc (GCC) 15.2.0, 64-bit | 2026-11-04 16:37:24.513016+00 | UTC | postgres     | postgres     | postgres
+(1 row)
+
+              name               | setting | unit |       source       
+---------------------------------+---------+------+--------------------
+ autovacuum                      | on      |      | default
+ autovacuum_naptime              | 60      | s    | default
+ default_statistics_target       | 100     |      | default
+ effective_cache_size            | 524288  | 8kB  | default
+ effective_io_concurrency        | 1       |      | default
+ enable_hashjoin                 | on      |      | default
+ enable_mergejoin                | on      |      | default
+ enable_nestloop                 | on      |      | default
+ jit                             | on      |      | default
+ jit_above_cost                  | 100000  |      | default
+ log_autovacuum_min_duration     | 600000  | ms   | default
+ max_parallel_workers_per_gather | 2       |      | default
+ plan_cache_mode                 | auto    |      | default
+ random_page_cost                | 4       |      | default
+ seq_page_cost                   | 1       |      | default
+ shared_buffers                  | 16384   | 8kB  | configuration file
+ shared_preload_libraries        | pg_cron |      | command line
+ track_io_timing                 | off     |      | default
+ work_mem                        | 4096    | kB   | default
+(19 rows)
+
+      extname       | extversion 
+--------------------+------------
+ pg_cron            | 1.6.4
+ pg_stat_statements | 1.11
+(2 rows)
+
+   relname   | reltuples | relpages | n_live_tup | n_dead_tup | n_mod_since_analyze | analyze_count | autoanalyze_count |         last_analyze          |       last_autoanalyze        |        last_autovacuum        | seq_scan | idx_scan 
+-------------+-----------+----------+------------+------------+---------------------+---------------+-------------------+-------------------------------+-------------------------------+-------------------------------+----------+----------
+ change_feed |      3282 |       89 |       5007 |          0 |                1725 |             1 |                74 | 2026-11-03 13:04:30.912665+00 | 2026-11-04 16:36:34.789995+00 | 2026-11-04 16:36:34.743631+00 |     2699 |    20267
+ entities    |      3036 |      183 |       3043 |         40 |                  87 |             7 |                80 | 2026-11-04 16:37:11.870369+00 | 2026-11-04 16:36:34.978176+00 | 2026-11-04 16:34:34.869707+00 |    52874 |  7034052
+ relations   |      1863 |       32 |       1875 |          0 |                  12 |             7 |                57 | 2026-11-04 16:37:11.888363+00 | 2026-11-04 16:36:34.801509+00 | 2026-11-04 16:27:35.925305+00 |    12079 |  2582352
+(3 rows)
+
+   relname   |       indexrelname       | relpages | reltuples | idx_scan |                                                                                   pg_get_indexdef                                                                                    
+-------------+--------------------------+----------+-----------+----------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ change_feed | change_feed_graph_tx_id  |       26 |      3282 |     2368 | CREATE INDEX change_feed_graph_tx_id ON public.change_feed USING btree (graph_id, tx_id, id)
+ change_feed | change_feed_parent_proof |       42 |      3279 |    17879 | CREATE INDEX change_feed_parent_proof ON public.change_feed USING btree (tx_id, kind, row_key, id DESC) WHERE (kind = ANY (ARRAY['entity'::text, 'thread'::text, 'relation'::text]))
+ change_feed | change_feed_pkey         |       13 |      3282 |       20 | CREATE UNIQUE INDEX change_feed_pkey ON public.change_feed USING btree (id)
+ entities    | entities_aspects_gin     |        7 |      3036 |       27 | CREATE INDEX entities_aspects_gin ON public.entities USING gin (aspects)
+ entities    | entities_body_fts        |       15 |      3036 |        0 | CREATE INDEX entities_body_fts ON public.entities USING gin (to_tsvector('simple'::regconfig, body))
+ entities    | entities_body_refs_gin   |        7 |      3036 |        0 | CREATE INDEX entities_body_refs_gin ON public.entities USING gin (body_refs)
+ entities    | entities_graph_updated   |       29 |      3036 |    17025 | CREATE INDEX entities_graph_updated ON public.entities USING btree (graph_id, updated_at DESC) WHERE (NOT archived)
+ entities    | entities_pkey            |       14 |      3036 |  7017000 | CREATE UNIQUE INDEX entities_pkey ON public.entities USING btree (id)
+ entities    | entities_props_gin       |       41 |      3036 |        0 | CREATE INDEX entities_props_gin ON public.entities USING gin (props)
+ entities    | entities_query_refs_gin  |        7 |      3036 |        0 | CREATE INDEX entities_query_refs_gin ON public.entities USING gin (query_refs)
+ entities    | entities_tags_gin        |        7 |      3036 |        0 | CREATE INDEX entities_tags_gin ON public.entities USING gin (tags)
+ entities    | entities_title_fts       |       25 |      3036 |        0 | CREATE INDEX entities_title_fts ON public.entities USING gin (to_tsvector('simple'::regconfig, title))
+ relations   | rel_uniq                 |       26 |      1863 |   281103 | CREATE UNIQUE INDEX rel_uniq ON public.relations USING btree (source_id, target_id, role)
+ relations   | relations_pkey           |       10 |      1863 |    12802 | CREATE UNIQUE INDEX relations_pkey ON public.relations USING btree (id)
+ relations   | relations_source_role    |        9 |      1863 |   576708 | CREATE INDEX relations_source_role ON public.relations USING btree (source_id, role)
+ relations   | relations_target_role    |       13 |      1863 |  1711739 | CREATE INDEX relations_target_role ON public.relations USING btree (target_id, role)
+(16 rows)
+
+ blks_read | blks_hit | temp_files | temp_bytes | blk_read_time | blk_write_time | xact_commit | xact_rollback | stats_reset 
+-----------+----------+------------+------------+---------------+----------------+-------------+---------------+-------------
+     25966 | 73435604 |          6 |   20321190 |             0 |              0 |      167807 |          2496 | 
+(1 row)
+
+ROLLBACK

@@ -1,0 +1,19 @@
+
+ RUN  v4.1.9 /private/tmp/orbis-b13-web-eleven.SpzFy3/apps/web
+
+ ✓ src/features/entity-editor/b13-arrows-eleven.probe.test.tsx (28 tests | 20 skipped) 4613ms
+   ✓ реальный экран: сохранённый title undo использует текущее видимое основание CAS  414ms
+   ✓ title SUCCESS после checkbox SUCCESS всё ещё принимает title перед старым title отказом  300ms
+   ✓ own undo к уже видимому title не даёт вечное доверие последующему чужому совпадению  1663ms
+   ✓ rapid own optimistic props coalescing не доверяет позднему foreign return к старому v  1199ms
+ ✓ src/features/entity-detail/b13-journal-eleven.probe.test.tsx (13 tests | 12 skipped) 1680ms
+   ✓ journal actual refetched body landing resets populated title and native histories  1678ms
+ ✓ src/lib/b13-undo-eleven.probe.test.tsx (13 tests | 11 skipped) 555ms
+   ✓ Undo CONFLICT refreshes cached remote data even on non-confirmation  322ms
+
+ Test Files  3 passed (3)
+      Tests  11 passed | 43 skipped (54)
+   Start at  22:29:35
+   Duration  15.17s (transform 2.02s, setup 420ms, import 4.57s, tests 6.85s, environment 2.68s)
+
+JSON report written to /Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-03-speed-plan-b/b13-web-eleven-run.json

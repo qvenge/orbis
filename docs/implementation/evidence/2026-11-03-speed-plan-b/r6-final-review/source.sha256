@@ -1,0 +1,8 @@
+ec66cdadaa7a6ca4d85da50e55e60b7f2ae8ea98980c6a444d535b5b0710fa64  apps/web/src/features/entity-detail/NativeRow.tsx
+920e693d1476ec9be625644919566be3dcc5215a79ae3ad9a6d5a7dea238c63b  apps/web/src/features/entity-detail/record-blocks.tsx
+83d5642bbb8eecc6757ad609b19eee27341cc3e679203bf33adbafd695c20b7d  apps/web/src/features/entity-detail/history-lifecycle.test.tsx
+16984f60f1c2461d8d0143a12c167e487276c7c26a7e7fa4860a288be8faf8e3  apps/web/src/features/entity-detail/useTitleHistoryBasis.ts
+7b706b8977d2d158368c3ae0b10d29f6d7af6f5b1ba6667624398412a2c4b0cf  apps/web/src/features/entity-editor/title-history.ts
+de4bedb548ad3fb9a1cfb7f11d7182626fc7ff0ce918cf070245422f7168388a  apps/web/src/features/entity-editor/title-history.test.ts
+e595350e123fea447849115b1c6794edb102b8c0b0b957dbf300826ca3fb9f3a  apps/web/src/features/entity-detail/history-lifecycle.b13-r6-first-disk-cas.test.tsx
+96618f8a04e0d33395e8038c1d5c47984ffa2cc172de5be1fbe418258b33f113  apps/web/src/features/entity-detail/history-lifecycle.b13-r6-independent.test.tsx

@@ -1,0 +1,77 @@
+bun test v1.2.7 (5c0fa6dc)
+
+apps/server/src/freshness/stream.test.ts:
+(pass) a pre-connect commit behind xmin catches up without another notification [107.70ms]
+(pass) verified expiry interrupts a blocked read and discards its late result [31.31ms]
+(pass) two different floor resets at one watermark and the complete reset all reach the stream [301.82ms]
+181 |     expect((await stream.next()).value).toEqual(futureCursorReset());
+182 | 
+183 |     pending = stream.next();
+184 |     // Long enough for the old retry to fire, far before the idle safety tick.
+185 |     await Bun.sleep(350);
+186 |     expect(froms).toEqual(['100', '101']);
+                        ^
+error: expect(received).toEqual(expected)
+
+  [
+    "100",
++   "101",
++   "20",
++   "20"
+-   "101"
+  ]
+
+- Expected  - 1
++ Received  + 3
+
+      at <anonymous> (/private/tmp/orbis-b13-sse-rewind-fix.jwO12D/candidate/apps/server/src/freshness/stream.test.ts:186:19)
+(fail) strict rewind idles until a new wake (old floor: %s) [410.48ms]
+181 |     expect((await stream.next()).value).toEqual(futureCursorReset());
+182 | 
+183 |     pending = stream.next();
+184 |     // Long enough for the old retry to fire, far before the idle safety tick.
+185 |     await Bun.sleep(350);
+186 |     expect(froms).toEqual(['100', '101']);
+                        ^
+error: expect(received).toEqual(expected)
+
+  [
+    "100",
++   "101",
++   "20"
+-   "101"
+  ]
+
+- Expected  - 1
++ Received  + 2
+
+      at <anonymous> (/private/tmp/orbis-b13-sse-rewind-fix.jwO12D/candidate/apps/server/src/freshness/stream.test.ts:186:19)
+(fail) strict rewind idles until a new wake (old floor: %s) [454.20ms]
+244 |     expect((await pending).value).toEqual(newHistoryCommit());
+245 |     expect(froms).toEqual(['100', '101', '20', '20']);
+246 | 
+247 |     pending = stream.next();
+248 |     await Bun.sleep(500);
+249 |     expect(froms).toEqual(['100', '101', '20', '20']);
+                        ^
+error: expect(received).toEqual(expected)
+
+  [
+    "100",
+    "101",
+    "20",
++   "20",
++   "21"
+-   "20"
+  ]
+
+- Expected  - 1
++ Received  + 2
+
+      at <anonymous> (/private/tmp/orbis-b13-sse-rewind-fix.jwO12D/candidate/apps/server/src/freshness/stream.test.ts:249:19)
+(fail) a wake during rewind reseeds the next snapshot and retries a held commit [853.72ms]
+
+ 3 pass
+ 3 fail
+ 20 expect() calls
+Ran 6 tests across 1 files. [2.54s]

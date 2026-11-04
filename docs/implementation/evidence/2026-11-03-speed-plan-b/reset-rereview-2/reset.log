@@ -1,0 +1,65 @@
+
+ RUN  v4.1.9 /private/tmp/orbis-b13-reset-fix2.acPWCd/candidate/apps/web
+
+ ✓ src/features/entity-detail/freshness-reset.test.tsx > an autosave success crossing reset keeps the draft and never becomes editor basis 268ms
+ ✓ src/features/entity-detail/freshness-reset.test.tsx > an autosave rejection crossing reset keeps the draft and never becomes editor basis 229ms
+ ✓ src/features/entity-detail/freshness-reset.test.tsx > version.restore started before reset cannot project old body over a fresh read 340ms
+ ✓ src/features/entity-detail/freshness-reset.test.tsx > old-generation NOT_FOUND does not remove a current response for the same entity 114ms
+ ✓ src/features/entity-detail/freshness-reset.test.tsx > a canceled foreign refresh stays owed after successful own autosave 681ms
+ ✓ src/features/entity-detail/freshness-reset.test.tsx > a hidden Relations panel tab does not fetch label queries 426ms
+ ✓ src/features/entity-detail/freshness-reset.test.tsx > an overlay keeps configure and template preview mounted without reading until visible 29ms
+ ✓ src/features/entity-detail/freshness-reset.test.tsx > rollback with 'new edit' and matching body false uses only a confirmed basis 119ms
+ ✓ src/features/entity-detail/freshness-reset.test.tsx > rollback with 'pending debounce' and matching body false uses only a confirmed basis 1146ms
+ ✓ src/features/entity-detail/freshness-reset.test.tsx > rollback with 'after fresh GET' and matching body false uses only a confirmed basis 115ms
+ ✓ src/features/entity-detail/freshness-reset.test.tsx > rollback with 'pending debounce' and matching body true uses only a confirmed basis 115ms
+ ✓ src/features/entity-detail/freshness-reset.test.tsx > rollback with 'after own ACK' and matching body true uses only a confirmed basis 119ms
+ ✓ src/features/entity-detail/freshness-reset.test.tsx > rollback with 'managed pending debounce' and matching body false uses only a confirmed basis 118ms
+ ✓ src/features/entity-detail/freshness-reset.test.tsx > rollback with 'managed checkpoint failure' and matching body false uses only a confirmed basis 171ms
+ ✓ src/features/entity-detail/freshness-reset.test.tsx > version restore in a mounted editor waits for a confirmed basis after rollback 192ms
+ ✓ src/features/entity-detail/freshness-reset.test.tsx > version restore in a versions-only template waits for a confirmed basis after rollback 157ms
+ ✓ src/features/entity-detail/versions-owner.test.tsx > old restore intent after actual stable AuthProvider ownerchange must not send 416ms
+ ✓ src/features/entity-detail/versions-owner.test.tsx > current owner restoration still sends and succeeds 52ms
+ ✓ src/features/entity-detail/versions-owner.test.tsx > old flush finally cannot release a new owner restore wait 197ms
+ ✓ src/features/entity-detail/versions-owner.test.tsx > late old restore success cannot close or release current restore 209ms
+ ✓ src/features/entity-detail/versions-owner.test.tsx > late old restore error cannot close or release current restore 192ms
+ ✓ src/lib/freshness/runtime.test.ts > coalesces in 100 ms and trails a burst at the 500 ms key limit 17ms
+ ✓ src/lib/freshness/runtime.test.ts > holds an early body event for ACK and suppresses the exact advanced transaction 3ms
+ ✓ src/lib/freshness/runtime.test.ts > releases an unconfirmed candidate even if a save is still in flight 2ms
+ ✓ src/lib/freshness/runtime.test.ts > applies provisional and complete reset tokens independently at the same cursor 3ms
+ ✓ src/lib/freshness/runtime.test.ts > uses the oldest visible receipt and fires a server deadline with no feed traffic 3ms
+ ✓ src/lib/freshness/runtime.test.ts > invalidates a disabled observer without fetching and refreshes when shown 2ms
+ ✓ src/lib/freshness/runtime.test.ts > starts from confirmed settings and stops fallback when hidden, retaining accepted work 4ms
+ ✓ src/lib/freshness/runtime.test.ts > ignores a delayed future-cursor response and only lowers the current input cursor 1ms
+ ✓ src/lib/freshness/runtime.test.ts > does not suppress a no-op receipt or a different event in the same transaction 3ms
+ ✓ src/lib/freshness/runtime.test.ts > failed parallel saves release only their own candidates 2ms
+ ✓ src/lib/freshness/runtime.test.ts > a reset fences a late body ACK from the preceding response generation 1ms
+ ✓ src/lib/freshness/runtime.test.ts > a receipt after the 30 s give-up can publish an ACK but cannot suppress later delivery 1ms
+ ✓ src/lib/freshness/runtime.test.ts > keeps reset and overflow cache scans bounded while marking every key synchronously 65ms
+ ✓ src/lib/freshness/runtime.test.ts > retries an actual revert cancellation at the key limit and stops after a request failure 3ms
+ ✓ src/lib/freshness/runtime.test.ts > keeps an owed read if its silent replacement is then canceled with revert 2ms
+ ✓ src/lib/freshness/runtime.test.ts > B13 probe: repeated provisional reset can advance W2 without another refresh 1ms
+ ✓ src/lib/freshness/runtime.test.ts > B13 probe: same floor token can validly recur after a database rollback 1ms
+ ✓ src/lib/freshness/runtime.test.ts > B13 probe: identical future reset can validly recur after a second rollback 1ms
+ ✓ src/lib/freshness/runtime.test.ts > B13 control: ordinary duplicate provisional and complete tokens are idempotent 1ms
+ ✓ src/lib/freshness/runtime.test.ts > B13 control: delayed same-token complete reset must not skip ordinary events 1ms
+ ✓ src/lib/freshness/transport.b13-independent-r2.test.ts > rejection discards the wire id, while a refresh sends the new bearer on a fresh request 166ms
+ ✓ src/lib/freshness/transport.b13-independent-r2.test.ts > SSE and reconcile 401 share refresh and keep the session on network failure 54ms
+ ✓ src/lib/freshness/transport.b13-independent-r2.test.ts > each raw result keeps its own response watermark, including absence 55ms
+ ✓ src/lib/freshness/transport.b13-independent-r2.test.ts > a refresh refusal affects its current owner once, even when both channels receive 401 3ms
+ ✓ src/lib/freshness/transport.b13-independent-r2.test.ts > stopping and restarting keeps runtime-owned queued work and cursor until owner changes 157ms
+ ✓ src/lib/freshness/transport.b13-independent-r2.test.ts > a disabled stream stays unavailable while the same session reconciles 4ms
+ ✓ src/lib/freshness/transport.b13-independent-r2.test.ts > an ignored higher complete reset reconnects from the accepted boundary without skipping events 155ms
+ ✓ src/lib/freshness/transport.b13-independent-r2.test.ts > overlapping SSE continues from the wire boundary while reconcile is ahead 52ms
+ ✓ src/lib/freshness/transport.b13-independent-r2.test.ts > B13 late 'delete' reconcile after 'none' 213ms
+ ✓ src/lib/freshness/transport.b13-independent-r2.test.ts > B13 late 'delete' reconcile after 'overflow' 257ms
+ ✓ src/lib/freshness/transport.b13-independent-r2.test.ts > B13 late 'delete' reconcile after 'rewind' 357ms
+ ✓ src/lib/freshness/transport.b13-independent-r2.test.ts > B13 late 'unauthorized' reconcile after 'rewind' 358ms
+ ✓ src/lib/freshness/transport.b13-independent-r2.test.ts > a reconcile-origin rewind aborts the old SSE attempt and reconnects at the lower cursor 158ms
+ ✓ src/lib/freshness/transport.b13-independent-r2.test.ts > B13 late reconcile with authoritative rewind = false 205ms
+ ✓ src/lib/freshness/transport.b13-independent-r2.test.ts > B13 late reconcile with authoritative rewind = true 356ms
+
+ Test Files  4 passed (4)
+      Tests  56 passed (56)
+   Start at  21:41:42
+   Duration  17.14s (transform 1.99s, setup 391ms, import 4.25s, tests 8.09s, environment 3.31s)
+

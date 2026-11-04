@@ -1,0 +1,160 @@
+
+ RUN  v4.1.9 /private/tmp/orbis-b13-history-raw.DRFuxk/candidate/apps/web
+
+ ↓ src/features/entity-detail/history-lifecycle.b13-independent-raw.test.tsx > cold remount with foreign title clears retained title/body history
+ ↓ src/features/entity-detail/history-lifecycle.b13-independent-raw.test.tsx > current title CAS failure while offscreen clears e1 retained steps
+ ↓ src/features/entity-detail/history-lifecycle.b13-independent-raw.test.tsx > actual PM overflow after title preserves newest body as common top
+ ↓ src/features/entity-detail/history-lifecycle.b13-independent-raw.test.tsx > actual Detail cold get after query GC does not reuse steps against foreign title
+ ↓ src/features/entity-detail/history-lifecycle.b13-independent-raw.test.tsx > gate20 current offscreen title CAS refusal clears cached history before return
+ ↓ src/features/entity-detail/history-lifecycle.b13-independent-raw.test.tsx > selection and addToHistory false do not put body above title
+ ↓ src/features/entity-detail/history-lifecycle.b13-independent-raw.test.tsx > own pending cold return retains history in StrictMode
+ ↓ src/features/entity-detail/history-lifecycle.b13-independent-raw.test.tsx > own accepted cold return retains history in StrictMode
+ ↓ src/features/entity-detail/history-lifecycle.b13-independent-raw.test.tsx > readOnly span cannot undo; returning editable checks retained foreign basis
+ ↓ src/features/entity-detail/history-lifecycle.b13-independent-raw.test.tsx > actual title-only LRU eviction forgets retained observer basis
+ ↓ src/features/entity-detail/history-lifecycle.b13-independent-raw.test.tsx > failed unobserved title send does not authorize foreign cold value План Б
+ ↓ src/features/entity-detail/history-lifecycle.b13-independent-raw.test.tsx > failed unobserved title send does not authorize foreign cold value Чужое имя
+ ↓ src/features/entity-detail/history-lifecycle.b13-independent-raw.test.tsx > late failed send preserves same newer unobserved План Б
+ ↓ src/features/entity-detail/history-lifecycle.b13-independent-raw.test.tsx > late failed send preserves same newer unobserved План В
+ ↓ src/features/entity-detail/history-lifecycle.b13-independent-raw.test.tsx > late failed send preserves owner newer unobserved План Б
+ ↓ src/features/entity-detail/history-lifecycle.b13-independent-raw.test.tsx > late failed send preserves owner newer unobserved План В
+ ↓ src/features/entity-detail/history-lifecycle.b13-independent-raw.test.tsx > late failed send preserves generation newer unobserved План Б
+ ↓ src/features/entity-detail/history-lifecycle.b13-independent-raw.test.tsx > late failed send preserves generation newer unobserved План В
+ ↓ src/features/entity-detail/history-lifecycle.b13-independent-raw.test.tsx > failed observed optimistic title send does not authorize foreign cold value План Б
+ ↓ src/features/entity-detail/history-lifecycle.b13-independent-raw.test.tsx > failed observed optimistic title send does not authorize foreign cold value Чужое имя
+ ↓ src/features/entity-detail/history-lifecycle.b13-independent-raw.test.tsx > observed old refusal preserves newer C accepted=false observed=false
+ ↓ src/features/entity-detail/history-lifecycle.b13-independent-raw.test.tsx > observed old refusal preserves newer C accepted=false observed=true
+ ↓ src/features/entity-detail/history-lifecycle.b13-independent-raw.test.tsx > observed old refusal preserves newer C accepted=true observed=false
+ ↓ src/features/entity-detail/history-lifecycle.b13-independent-raw.test.tsx > observed old refusal preserves newer C accepted=true observed=true
+ ↓ src/features/entity-detail/history-lifecycle.b13-independent-raw.test.tsx > observed same-value undo success survives old failure and cold return
+ ↓ src/features/entity-detail/history-lifecycle.b13-independent-raw.test.tsx > successful observed send settles offscreen and retains cold own history
+ ↓ src/features/entity-detail/history-lifecycle.b13-independent-raw.test.tsx > observed old success cannot alter new owner token
+ ↓ src/features/entity-detail/history-lifecycle.b13-independent-raw.test.tsx > observed old failure cannot alter new owner token
+ ↓ src/features/entity-detail/history-lifecycle.b13-independent-raw.test.tsx > observed old success cannot alter new generation token
+ ↓ src/features/entity-detail/history-lifecycle.b13-independent-raw.test.tsx > observed old failure cannot alter new generation token
+ ↓ src/features/entity-detail/history-lifecycle.b13-independent-raw.test.tsx > failed observed foreign basis resets retained native body and common steps
+ ↓ src/features/entity-detail/history-lifecycle.b13-independent-raw.test.tsx > confirmed own basis survives a refused same-value native undo send
+ ↓ src/features/entity-detail/history-lifecycle.b13-independent-raw.test.tsx > mounted checkbox refusal resets title and netzero body План Б bodyTop=false
+ ↓ src/features/entity-detail/history-lifecycle.b13-independent-raw.test.tsx > mounted checkbox refusal resets title and netzero body Чужое имя bodyTop=false
+ ↓ src/features/entity-detail/history-lifecycle.b13-independent-raw.test.tsx > mounted checkbox refusal resets title and netzero body План Б bodyTop=true
+ ↓ src/features/entity-detail/history-lifecycle.b13-independent-raw.test.tsx > mounted checkbox refusal resets title and netzero body Чужое имя bodyTop=true
+ ↓ src/features/entity-detail/history-lifecycle.b13-independent-raw.test.tsx > mounted observed old refusal preserves newer C accepted=false observed=false
+ ↓ src/features/entity-detail/history-lifecycle.b13-independent-raw.test.tsx > mounted observed old refusal preserves newer C accepted=false observed=true
+ ↓ src/features/entity-detail/history-lifecycle.b13-independent-raw.test.tsx > mounted observed old refusal preserves newer C accepted=true observed=false
+ ↓ src/features/entity-detail/history-lifecycle.b13-independent-raw.test.tsx > mounted observed old refusal preserves newer C accepted=true observed=true
+ ↓ src/features/entity-detail/history-lifecycle.b13-independent-raw.test.tsx > mounted latest double refusal clears failed basis before fresh input
+ ↓ src/features/entity-detail/history-lifecycle.b13-independent-raw.test.tsx > early remount before old refusal clears foreign basis План Б bodyTop=false
+ ↓ src/features/entity-detail/history-lifecycle.b13-independent-raw.test.tsx > early remount before old refusal clears foreign basis Чужое имя bodyTop=false
+ ↓ src/features/entity-detail/history-lifecycle.b13-independent-raw.test.tsx > early remount before old refusal clears foreign basis План Б bodyTop=true
+ ↓ src/features/entity-detail/history-lifecycle.b13-independent-raw.test.tsx > early remount before old refusal clears foreign basis Чужое имя bodyTop=true
+ ↓ src/features/entity-detail/history-lifecycle.b13-independent-raw.test.tsx > coalesced earlier C does not block fresh B refusal observedC=false
+ ↓ src/features/entity-detail/history-lifecycle.b13-independent-raw.test.tsx > coalesced earlier C does not block fresh B refusal observedC=true
+ ↓ src/features/entity-detail/history-lifecycle.b13-independent-raw.test.tsx > remounted observer preserves newer C accepted=false observed=false
+ ↓ src/features/entity-detail/history-lifecycle.b13-independent-raw.test.tsx > remounted observer preserves newer C accepted=false observed=true
+ ↓ src/features/entity-detail/history-lifecycle.b13-independent-raw.test.tsx > remounted observer preserves newer C accepted=true observed=false
+ ↓ src/features/entity-detail/history-lifecycle.b13-independent-raw.test.tsx > remounted observer preserves newer C accepted=true observed=true
+ ↓ src/features/entity-detail/history-lifecycle.b13-independent-raw.test.tsx > remounted same-value fresh intent survives older failure accepted=false
+ ↓ src/features/entity-detail/history-lifecycle.b13-independent-raw.test.tsx > remounted same-value fresh intent survives older failure accepted=true
+ ↓ src/features/entity-detail/history-lifecycle.b13-independent-raw.test.tsx > actual host template refresh before observed B refusal removesTitle=false
+ ↓ src/features/entity-detail/history-lifecycle.b13-independent-raw.test.tsx > actual host template refresh before observed B refusal removesTitle=true
+ ↓ src/features/entity-detail/history-lifecycle.b13-independent-raw.test.tsx > classified failed title basis resets cached offscreen body before its return
+ ↓ src/features/entity-detail/history-lifecycle.b13-independent-raw.test.tsx > duplicate older refusals after invalid-basis reset preserve newly created BODY history
+ ↓ src/features/entity-detail/history-lifecycle.b13-independent-raw.test.tsx > actual cold BODY return after never-observed B refusal removesTitle=false returned=План Б
+ ↓ src/features/entity-detail/history-lifecycle.b13-independent-raw.test.tsx > actual cold BODY return after never-observed B refusal removesTitle=true returned=План Б
+ ↓ src/features/entity-detail/history-lifecycle.b13-independent-raw.test.tsx > actual cold BODY return after never-observed B refusal removesTitle=true returned=План
+ ↓ src/features/entity-detail/history-lifecycle.b13-independent-raw.test.tsx > actual cold BODY current basis after observed B refusal and unobserved C outcome=foreign order=body
+ ↓ src/features/entity-detail/history-lifecycle.b13-independent-raw.test.tsx > actual cold BODY current basis after observed B refusal and unobserved C outcome=pending order=body
+ ↓ src/features/entity-detail/history-lifecycle.b13-independent-raw.test.tsx > actual cold BODY current basis after observed B refusal and unobserved C outcome=pending order=title-body
+ ↓ src/features/entity-detail/history-lifecycle.b13-independent-raw.test.tsx > actual cold BODY current basis after observed B refusal and unobserved C outcome=pending order=body-title
+ ↓ src/features/entity-detail/history-lifecycle.b13-independent-raw.test.tsx > actual cold BODY current basis after observed B refusal and unobserved C outcome=accepted order=body
+ ↓ src/features/entity-detail/history-lifecycle.b13-independent-raw.test.tsx > actual cold BODY current basis after observed B refusal and unobserved C outcome=accepted order=title-body
+ ↓ src/features/entity-detail/history-lifecycle.b13-independent-raw.test.tsx > actual cold BODY current basis after observed B refusal and unobserved C outcome=accepted order=body-title
+ ↓ src/features/entity-detail/history-lifecycle.b13-independent-raw.test.tsx > first actual BODY-only visit observes baseline before native acquisition and resets fresh foreign title
+ ↓ src/features/entity-detail/history-lifecycle.b13-independent-raw.test.tsx > actual BODY-only rapid reader eviction forgets baseline before lazy acquisition docnull=false
+ ↓ src/features/entity-detail/history-lifecycle.b13-independent-raw.test.tsx > actual BODY-only rapid reader eviction forgets baseline before lazy acquisition docnull=true
+ ↓ src/features/entity-detail/history-lifecycle.b13-independent-raw.test.tsx > controlled BODY-only readOnly does not consume foreign basis before becoming eligible
+ ↓ src/features/entity-detail/history-lifecycle.b13-independent-raw.test.tsx > controlled BODY-only noArrows does not consume foreign basis before becoming eligible
+ ↓ src/features/entity-detail/history-lifecycle.b13-independent-raw.test.tsx > controlled stale BODY-only epoch cannot seed the new owner's first basis
+ ↓ src/features/entity-detail/history-lifecycle.b13-independent-raw.test.tsx > controlled stale BODY-only generation cannot seed the new owner's first basis
+ ↓ src/features/entity-detail/history-lifecycle.b13-independent-raw.test.tsx > controlled duplicate BODY pins preserve the remaining field then evict after final cleanup without title retouch
+stdout | src/features/entity-detail/history-lifecycle.b13-independent-raw.test.tsx > B13 independent raw title and actual body Undo outcome=foreign order=body
+{"name":"foreign-D-while-C-pending-real-body-undo","data":{"before":{"raw":"Чужое имя Д","visible":"План В","rawAccepted":true,"commonUndo":true,"nativeUndo":2,"disabled":false},"afterClick":{"text":"ownтело","nativeUndo":1,"nativeRedo":1},"titleWrites":2,"bodyWrites":0,"bodyInputs":[],"settledC":0}}
+
+stdout | src/features/entity-detail/history-lifecycle.b13-independent-raw.test.tsx > B13 independent raw title and actual body Undo outcome=foreign order=body
+{"name":"cold-body-settled-C","data":{"raw":"Чужое имя Д","visible":"Чужое имя Д","rawAccepted":true,"commonUndo":false,"nativeUndo":0,"nativeRedo":0,"titleWrites":2,"bodyWrites":0}}
+
+ × src/features/entity-detail/history-lifecycle.b13-independent-raw.test.tsx > B13 independent raw title and actual body Undo outcome=foreign order=body 3805ms
+   → expected { raw: 'Чужое имя Д', …(5) } to match object { commonUndo: false, …(2) }
+(3 matching properties omitted from actual)
+   → expected { type: 'doc', content: [ { …(3) } ] } to deeply equal { type: 'doc', content: [ { …(3) } ] }
+stdout | src/features/entity-detail/history-lifecycle.b13-independent-raw.test.tsx > B13 independent raw title and actual body Undo outcome=pending order=body
+{"name":"own-pending-real-body-undo","data":{"before":{"raw":"План В","visible":"План В","rawAccepted":true,"commonUndo":true},"text":"ownтело","nativeUndo":1,"nativeRedo":1,"bodyWrites":0}}
+
+ ✓ src/features/entity-detail/history-lifecycle.b13-independent-raw.test.tsx > B13 independent raw title and actual body Undo outcome=pending order=body 1819ms
+stdout | src/features/entity-detail/history-lifecycle.b13-independent-raw.test.tsx > B13 independent raw title and actual body Undo outcome=accepted order=body
+{"name":"own-accepted-real-body-undo","data":{"before":{"raw":"План В","visible":"План В","rawAccepted":true,"commonUndo":true},"text":"ownтело","nativeUndo":1,"nativeRedo":1,"bodyWrites":0}}
+
+ ✓ src/features/entity-detail/history-lifecycle.b13-independent-raw.test.tsx > B13 independent raw title and actual body Undo outcome=accepted order=body 1795ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/features/entity-detail/history-lifecycle.b13-independent-raw.test.tsx > B13 independent raw title and actual body Undo outcome=foreign order=body
+AssertionError: expected { raw: 'Чужое имя Д', …(5) } to match object { commonUndo: false, …(2) }
+(3 matching properties omitted from actual)
+
+- Expected
++ Received
+
+  {
+-   "commonUndo": false,
+-   "disabled": true,
+-   "nativeUndo": 0,
++   "commonUndo": true,
++   "disabled": false,
++   "nativeUndo": 2,
+  }
+
+ ❯ src/features/entity-detail/history-lifecycle.b13-independent-raw.test.tsx:2692:31
+    2690|             settledC: settledC.mock.calls.length,
+    2691|           });
+    2692|           expect.soft(before).toMatchObject({ commonUndo: false, nativ…
+       |                               ^
+    2693|           expect.soft(editor.getJSON()).toEqual(unchanged);
+    2694|           expect.soft(bodyWrites).toBe(0);
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/2]⎯
+
+ FAIL  src/features/entity-detail/history-lifecycle.b13-independent-raw.test.tsx > B13 independent raw title and actual body Undo outcome=foreign order=body
+AssertionError: expected { type: 'doc', content: [ { …(3) } ] } to deeply equal { type: 'doc', content: [ { …(3) } ] }
+
+- Expected
++ Received
+
+@@ -1,10 +1,10 @@
+  {
+    "content": [
+      {
+        "attrs": {
+-         "id": "119e8e8e-6e5c-46d4-9f14-a304c60749cc",
++         "id": "e1f2f48b-ef56-4610-8d94-7a115bff8b21",
+        },
+        "content": [
+          {
+            "text": "тело",
+            "type": "text",
+
+ ❯ src/features/entity-detail/history-lifecycle.b13-independent-raw.test.tsx:2693:41
+    2691|           });
+    2692|           expect.soft(before).toMatchObject({ commonUndo: false, nativ…
+    2693|           expect.soft(editor.getJSON()).toEqual(unchanged);
+       |                                         ^
+    2694|           expect.soft(bodyWrites).toBe(0);
+    2695|           expect(settledC).not.toHaveBeenCalled();
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/2]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  1 failed | 2 passed | 75 skipped (78)
+   Start at  21:47:15
+   Duration  15.94s (transform 4.07s, setup 274ms, import 6.24s, tests 7.42s, environment 1.66s)
+

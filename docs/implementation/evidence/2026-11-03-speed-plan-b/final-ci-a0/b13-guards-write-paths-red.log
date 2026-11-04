@@ -1,0 +1,63 @@
+bun test v1.2.7 (5c0fa6dc)
+
+scripts/write-paths.test.ts:
+(pass) сторожа путей записи (спека скорости §10.3) > (а) обход не выродился: боевой код сервера, без тестов, обвязки и миграций; схема прочитана [65.84ms]
+(pass) сторожа путей записи (спека скорости §10.3) > (б) приметы на образцах [13.12ms]
+(pass) сторожа путей записи (спека скорости §10.3) > SQL: qualified и quoted таблицы сохраняют границы всех четырёх видов записи [6.17ms]
+(pass) сторожа путей записи (спека скорости §10.3) > SQL: quoted body stamps запрещены в UPDATE и INSERT [1.16ms]
+(pass) сторожа путей записи (спека скорости §10.3) > SQL: conflict UPDATE запрещает все body stamps даже вне INSERT columns [3.75ms]
+(pass) сторожа путей записи (спека скорости §10.3) > SQL: string/comment lexer сохраняет настоящий writer после литерала [2.17ms]
+(pass) сторожа путей записи (спека скорости §10.3) > SQL: body equality в WHERE и SELECT — чтение, assignment в SET — запись [0.74ms]
+(pass) сторожа путей записи (спека скорости §10.3) > SQL: dollar delimiter внутри ASCII/Unicode identifier не скрывает writer [3.80ms]
+(pass) сторожа путей записи (спека скорости §10.3) > SQL: настоящие ASCII/Unicode dollar literals не создают fake write и сохраняют следующий [2.47ms]
+(pass) сторожа путей записи (спека скорости §10.3) > SQL: ASCII/Unicode alias сохраняет body hit в UPDATE [0.46ms]
+(pass) сторожа путей записи (спека скорости §10.3) > SQL: ASCII/Unicode alias сохраняет body hit в INSERT [0.17ms]
+(pass) сторожа путей записи (спека скорости §10.3) > SQL: WHERE/RETURNING внутри ASCII/Unicode identifier не завершает SET [1.11ms]
+(pass) сторожа путей записи (спека скорости §10.3) > SQL: ONLY parenthesized targets сохраняют graph/body/chat/journal boundaries [2.46ms]
+(pass) сторожа путей записи (спека скорости §10.3) > SQL: inheritance star сохраняет UPDATE body assignment и отрицательный reader [2.66ms]
+(pass) сторожа путей записи (спека скорости §10.3) > SQL: punctuation target boundary отделяет SET без разрыва ordinary identifier [0.75ms]
+(pass) сторожа путей записи (спека скорости §10.3) > SQL: quoted INSERT target и alias отделяют AS как token без пробела [1.48ms]
+(pass) сторожа путей записи (спека скорости §10.3) > SQL: TRUNCATE relation list поддерживает ONLY parens/star/dynamic/escaped names [0.82ms]
+(pass) сторожа путей записи (спека скорости §10.3) > SQL: U& quoted table identifiers декодируют carrier и сохраняют quoted case [9.68ms]
+(pass) сторожа путей записи (спека скорости §10.3) > SQL: U& body identifiers декодируются только на assignment/insert LHS [1.83ms]
+(pass) сторожа путей записи (спека скорости §10.3) > SQL: UESCAPE принимает documented single, E и dollar string constants [1.99ms]
+(pass) сторожа путей записи (спека скорости §10.3) > SQL: ONLY token не снимает prefix обычного имени таблицы [1.08ms]
+(pass) сторожа путей записи (спека скорости §10.3) > SQL: Unicode normalization сохраняет opaque offsets перед следующим writer/assignment [0.57ms]
+(pass) сторожа путей записи (спека скорости §10.3) > SQL: invalid Unicode escape tokens не нормализуются в реальные carriers/stamps [0.36ms]
+(pass) сторожа путей записи (спека скорости §10.3) > (в) известные писатели видны: executor пишет граф, синк — журнал, модуль разговоров — сообщения
+1152 |         if (n > 0 && !(OWNED[rule]?.(rel) ?? false)) actual[rel] = n;
+1153 |       }
+1154 |       const expected = Object.fromEntries(
+1155 |         Object.entries(WRITE_PATH_EXCEPTIONS[rule]).map(([rel, e]) => [rel, e.count]),
+1156 |       );
+1157 |       expect(actual).toEqual(expected);
+                            ^
+error: expect(received).toEqual(expected)
+
+  {
+    "apps/server/src/db/migrate-1v.ts": 2,
+    "apps/server/src/db/migrate-speed-a.ts": 1,
+    "apps/server/src/db/reset-world.ts": 2,
+    "apps/server/src/db/seed-registries.ts": 7,
++   "apps/server/src/routers/b13-writer-mutant.ts": 1,
+    "apps/server/src/seed/setup-graph.ts": 1,
+  }
+
+- Expected  - 0
++ Received  + 1
+
+      at <anonymous> (/private/tmp/orbis-b13-final-ci.07CROy/mutants/scripts/write-paths.test.ts:1157:22)
+(fail) сторожа путей записи (спека скорости §10.3) > (г) graph: вне писателя — только исключения, счёт точный [3.99ms]
+(pass) сторожа путей записи (спека скорости §10.3) > (г) journal: вне писателя — только исключения, счёт точный [0.29ms]
+(pass) сторожа путей записи (спека скорости §10.3) > (г) chat: вне писателя — только исключения, счёт точный [0.12ms]
+(pass) сторожа путей записи (спека скорости §10.3) > (г) body-columns: вне писателя — только исключения, счёт точный [0.06ms]
+(pass) сторожа путей записи (спека скорости §10.3) > (г) dynamic-table: вне писателя — только исключения, счёт точный
+(pass) сторожа путей записи (спека скорости §10.3) > (д) у каждого исключения — причина и кто снимет [0.22ms]
+
+1 tests failed:
+(fail) сторожа путей записи (спека скорости §10.3) > (г) graph: вне писателя — только исключения, счёт точный [3.99ms]
+
+ 29 pass
+ 1 fail
+ 297 expect() calls
+Ran 30 tests across 1 files. [3.21s]

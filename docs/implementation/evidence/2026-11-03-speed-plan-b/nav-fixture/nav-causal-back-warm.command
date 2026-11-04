@@ -1,0 +1,1 @@
+B13_NAV_WARM=1 B13_NAV_TRACE=<ndjson> bun x --no-install vitest run --maxWorkers=1 src/app/b13-back-nav.probe.test.tsx -t 'снимает верх стопки \(site\)'

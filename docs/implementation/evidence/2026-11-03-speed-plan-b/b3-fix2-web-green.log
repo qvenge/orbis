@@ -1,0 +1,10 @@
+$ vitest run src/auth/auth-fetch.test.ts src/auth/supabase.test.ts src/lib/freshness/transport.test.ts src/trpc.errorlink.test.ts
+
+ RUN  v4.1.9 /Users/birzhan/.codex/worktrees/853d/orbis/apps/web
+
+
+ Test Files  4 passed (4)
+      Tests  28 passed (28)
+   Start at  20:42:15
+   Duration  3.20s (transform 1.61s, setup 622ms, import 2.32s, tests 642ms, environment 4.61s)
+

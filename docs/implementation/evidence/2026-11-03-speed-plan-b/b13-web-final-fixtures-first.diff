@@ -1,0 +1,578 @@
+--- a/apps/web/src/features/apps/nav-editor.test.tsx
++++ b/apps/web/src/features/apps/nav-editor.test.tsx
+@@ -43,6 +43,7 @@
+   YEAR,
+ } from '../../app/frame/frame-fixtures';
+ import { noteRegistryVersion, resetRegistryVersionForTests } from '../../lib/registry/useRegistry';
++import { testFreshnessOf } from '../../test/freshness';
+ import {
+   installCrashTrap,
+   type MockHandler,
+@@ -188,14 +189,42 @@
+   return { handler, byId };
+ }
+ 
+-function renderApp(rows: WireEntityFixture[] = baseRows(), opts: { rejectBatch?: boolean } = {}) {
+-  const s = store(rows);
+-  const r = renderWithProviders(<App />, (path, input, type) => {
+-    // Отказ пачки по существу (правило каталога) — как ответил бы исполнитель.
+-    if (opts.rejectBatch === true && path === 'entity.updateBatch')
+-      throw trpcError('BAD_REQUEST', 'правило app_nav_not_self');
+-    return s.handler(path, input, type);
++async function expectBatchReceipt(
++  queryClient: ReturnType<typeof renderWithProviders>['queryClient'],
++  results: unknown[],
++) {
++  await waitFor(() => {
++    const writes = queryClient
++      .getMutationCache()
++      .findAll({ mutationKey: [['entity', 'updateBatch']], exact: true });
++    expect(writes).toHaveLength(1);
++    expect(writes[0]?.state.data).toMatchObject({ actionId: 'act-21', results });
+   });
++}
++
++function renderApp(
++  rows: WireEntityFixture[] = baseRows(),
++  opts: { rejectBatch?: boolean; feed?: boolean } = {},
++) {
++  const s = store(rows);
++  const r = renderWithProviders(
++    <App />,
++    (path, input, type) => {
++      // Отказ пачки по существу (правило каталога) — как ответил бы исполнитель.
++      if (opts.rejectBatch === true && path === 'entity.updateBatch')
++        throw trpcError('BAD_REQUEST', 'правило app_nav_not_self');
++      const response = s.handler(path, input, type);
++      if (opts.feed && path === 'entity.updateBatch' && response && typeof response === 'object') {
++        const operations = (input as { operations: BatchOp[] }).operations;
++        const created = operations.flatMap((op) =>
++          op.tool === 'entity_create' && s.byId.has(op.input.id) ? [s.byId.get(op.input.id)] : [],
++        );
++        return { ...response, results: created };
++      }
++      return response;
++    },
++    { freshness: opts.feed },
++  );
+   const batches = () =>
+     r.calls
+       .filter((c) => c.path === 'entity.updateBatch')
+@@ -393,7 +422,7 @@
+ 
+ test('(в) страница в хосте: «Добавить в навигацию» — текущее приложение по умолчанию → пачка; затем рядом «Убрать из навигации» (R-34)', async () => {
+   resetFrame(`/r/${LOOSE}`);
+-  const { batches } = renderApp([...baseRows(), MY_ROW]);
++  const { batches, queryClient } = renderApp([...baseRows(), MY_ROW], { feed: true });
+   await heading('Общая страница');
+   await openMenu();
+   expect(ownItems()).toContain('Добавить в навигацию');
+@@ -409,6 +438,16 @@
+     { tool: 'entity_update', input: { id: SHELL, props: { [APP_NAV]: [...NAV_IDS, LOOSE] } } },
+   ]);
+ 
++  await expectBatchReceipt(queryClient, []);
++  act(() =>
++    testFreshnessOf(queryClient).changes(
++      [
++        { kind: 'entity', rowKey: SHELL, scope: 'other' },
++        { kind: 'journal', rowKey: 'act-21', entityIds: [SHELL], operation: 'insert' },
++      ],
++      1,
++    ),
++  );
+   // R-34: запись уже стоит — рядом «Убрать из навигации»; «Добавить» остаётся (в другое приложение).
+   await waitFor(async () => {
+     const items = await ownItemsOnce();
+@@ -477,7 +516,7 @@
+ 
+ test('(в) «Новое приложение…» («Мой дом» 🏡) — одна пачка entity_create с домашней и разделом; «Дом» ставит сервер', async () => {
+   resetFrame(`/r/${LOOSE}`);
+-  const { batches, byId } = renderApp();
++  const { batches, byId, queryClient } = renderApp(undefined, { feed: true });
+   await heading('Общая страница');
+   await openMenu();
+   fireEvent.click(screen.getByRole('menuitem', { name: 'Добавить в навигацию' }));
+@@ -513,6 +552,18 @@
+   expect(JSON.stringify(ops)).not.toContain(HOME_PROPERTY);
+   // Ответ сервера: у страницы «Дом» = новое приложение, и она переезжает в его рамку.
+   expect(byId.get(LOOSE)?.props[HOME_PROPERTY]).toBe(created);
++  await expectBatchReceipt(queryClient, [expect.objectContaining({ id: created })]);
++  // Narrow dependency probe. The server witness covers the full transaction including relation rows.
++  act(() =>
++    testFreshnessOf(queryClient).changes(
++      [
++        { kind: 'entity', rowKey: created, operation: 'insert' },
++        { kind: 'entity', rowKey: LOOSE, operation: 'update' },
++        { kind: 'journal', rowKey: 'act-21', entityIds: [created, LOOSE], operation: 'insert' },
++      ],
++      1,
++    ),
++  );
+   await waitFor(() => expect(shownPath()).toBe(`/a/${created}/r/${LOOSE}`), { timeout: 3000 });
+ });
+ 
+--- a/apps/web/src/features/apps/open.test.tsx
++++ b/apps/web/src/features/apps/open.test.tsx
+@@ -66,15 +66,42 @@
+   resetFrame('/');
+ });
+ 
++async function deliverAppChange(
++  queryClient: ReturnType<typeof renderWithProviders>['queryClient'],
++  path: 'setDisabled' | 'updateBatch',
++) {
++  const key = path === 'setDisabled' ? ['app', path] : ['entity', path];
++  const journalId = path === 'setDisabled' ? 'act-2' : 'act-1';
++  await waitFor(() => {
++    const writes = queryClient.getMutationCache().findAll({ mutationKey: [key], exact: true });
++    expect(writes).toHaveLength(1);
++    expect(writes[0]?.state.data).toMatchObject({ actionId: journalId });
++  });
++  act(() =>
++    testFreshnessOf(queryClient).changes(
++      [
++        { kind: 'entity', rowKey: MY, scope: 'other' },
++        { kind: 'journal', rowKey: journalId, entityIds: [MY], operation: 'insert' },
++      ],
++      1,
++    ),
++  );
++}
++
+ function renderApp(
+   world: AppsWorld = appsWorld(),
+   extra?: (path: string, input: unknown) => unknown,
++  freshness = false,
+ ) {
+   const base = appsHandler(world);
+-  return renderWithProviders(<App />, (path, input, type) => {
+-    const got = extra?.(path, input);
+-    return got !== undefined ? got : base(path, input, type);
+-  });
++  return renderWithProviders(
++    <App />,
++    (path, input, type) => {
++      const got = extra?.(path, input);
++      return got !== undefined ? got : base(path, input, type);
++    },
++    { freshness },
++  );
+ }
+ 
+ /** Первое ожидание ждёт ленивый чанк экрана записи (холодный кеш vite — гейт 19, M-1). */
+@@ -501,10 +528,15 @@
+ 
+ test('I-1: домашняя /a/<выключенное> — «включить» возвращает место в рамку приложения', async () => {
+   resetFrame(`/a/${MY}`);
+-  const { calls } = renderApp(appsWorld({ apps: [OFF_MY()] }));
++  const { calls, queryClient } = renderApp(
++    appsWorld({ apps: [{ ...OFF_MY(), graphId: 'owner' }] }),
++    undefined,
++    true,
++  );
+   const plaque = await screen.findByTestId('open-plaque', undefined, { timeout: 5000 });
+   await waitFor(() => expect(frameIcon()).toHaveTextContent('🪐'));
+   fireEvent.click(within(plaque).getByRole('button', { name: 'включить' }));
++  await deliverAppChange(queryClient, 'setDisabled');
+   await heading('Дом приложения');
+   await waitFor(() => expect(frameIcon()).toHaveTextContent('🏡'));
+   expect(navModel().activeApp).toBe(MY);
+@@ -515,9 +547,14 @@
+ test('I-1: домашняя /a/<архивное> — «восстановить» возвращает место в рамку приложения', async () => {
+   resetFrame(`/a/${MY}`);
+   const archived = appRow(MY, 'Мой дом', '🏡', { 'orbis/app_home': MY_HOME }, { archived: true });
+-  renderApp(appsWorld({ apps: [archived] }));
++  const { queryClient } = renderApp(
++    appsWorld({ apps: [{ ...archived, graphId: 'owner' }] }),
++    undefined,
++    true,
++  );
+   const plaque = await screen.findByTestId('open-plaque', undefined, { timeout: 5000 });
+   fireEvent.click(within(plaque).getByRole('button', { name: 'восстановить' }));
++  await deliverAppChange(queryClient, 'updateBatch');
+   await heading('Дом приложения');
+   await waitFor(() => expect(frameIcon()).toHaveTextContent('🏡'));
+   expect(navModel().activeApp).toBe(MY);
+@@ -525,13 +562,18 @@
+ 
+ test('I-1: плитка выключенного приложения на «Домой» → плашка → «включить» → его домашняя в его рамке', async () => {
+   resetFrame('/');
+-  renderApp(appsWorld({ apps: [OFF_MY()] }));
++  const { queryClient } = renderApp(
++    appsWorld({ apps: [{ ...OFF_MY(), graphId: 'owner' }] }),
++    undefined,
++    true,
++  );
+   await heading('Домой');
+   fireEvent.click(await screen.findByTestId(`app-tile-${MY}`));
+   const plaque = await screen.findByTestId('open-plaque');
+   expect(plaque).toHaveTextContent('Мой дом выключено');
+   await waitFor(() => expect(frameIcon()).toHaveTextContent('🪐'));
+   fireEvent.click(within(plaque).getByRole('button', { name: 'включить' }));
++  await deliverAppChange(queryClient, 'setDisabled');
+   await heading('Дом приложения');
+   await waitFor(() => expect(frameIcon()).toHaveTextContent('🏡'));
+   expect(navModel().activeApp).toBe(MY);
+--- a/apps/web/src/features/budget/EnvelopeCard.test.tsx
++++ b/apps/web/src/features/budget/EnvelopeCard.test.tsx
+@@ -238,11 +238,15 @@
+ // --- тап → запись категории (экрана категории в 1б нет, §8.6) ---------------------------
+ 
+ test('тап по карточке открывает запись категории в рамке экрана', () => {
+-  renderWithProviders(<EnvelopeCard status={status({ spent: '0', effectiveLimit: '10000.00' })} />);
+-  fireEvent.click(screen.getByRole('button', { name: /Еда/ }));
++  const id = '019e4466-1000-7e07-b5d4-64be9721de01';
++  const value = status({ spent: '0', effectiveLimit: '10000.00' });
++  renderWithProviders(<EnvelopeCard status={{ ...value, category: { ...value.category, id } }} />);
++  const link = screen.getByRole('link', { name: /Еда/ });
++  expect(link).toHaveAttribute('href', `/r/${id}`);
++  fireEvent.click(link);
+   expect(currentEntry(useNav.getState().model).address).toEqual({
+     kind: 'record',
+     app: { kind: 'host' },
+-    id: 'cat-1',
++    id,
+   });
+ });
+--- a/apps/web/src/features/budget/plan-owner.test.tsx
++++ b/apps/web/src/features/budget/plan-owner.test.tsx
+@@ -1,5 +1,6 @@
+ import { act, fireEvent, screen, waitFor } from '@testing-library/react';
+ import { expect, test } from 'vitest';
++import { testFreshnessOf } from '../../test/freshness';
+ import { renderWithProviders, trpcError } from '../../test/harness';
+ import { trpc } from '../../trpc';
+ import { resetUndoSession } from '../undo/undo-epoch';
+@@ -53,7 +54,13 @@
+ test.each([false, true])('budget refresh continuation ownerChanged=%s', async (ownerChanged) => {
+   let close = 0;
+   let reads = 0;
+-  let release: ((v: unknown) => void) | undefined;
++  let writes = 0;
++  const actionId = '019a0000-0000-7000-8000-000000000042';
++  let releaseRead: ((v: number) => void) | undefined;
++  let releaseAck!: () => void;
++  const ack = new Promise<void>((resolve) => {
++    releaseAck = resolve;
++  });
+   function Probe() {
+     trpc.budget.alertCount.useQuery({});
+     return (
+@@ -65,28 +72,56 @@
+       />
+     );
+   }
+-  renderWithProviders(<Probe />, (path) => {
+-    if (path === 'user.getSettings') return { timezone: 'UTC' };
+-    if (path === 'budget.alertCount') {
+-      reads++;
+-      return reads === 1
+-        ? 0
+-        : new Promise((r) => {
+-            release = r;
+-          });
+-    }
+-    if (path === 'budget.confirmPurchase')
+-      return { actionId: '019a0000-0000-7000-8000-000000000042', consequences: false };
+-    return {};
+-  });
+-  await waitFor(() => expect(reads).toBe(1));
+-  fireEvent.click(screen.getByText('Перевести в факт'));
+-  await waitFor(() => expect(release).toBeDefined());
+-  expect(close).toBe(0);
+-  if (ownerChanged) act(() => resetUndoSession());
+-  await act(async () => {
+-    release?.(0);
+-  });
+-  await waitFor(() => expect(close).toBe(ownerChanged ? 0 : 1));
+-  expect(screen.queryByTestId('plan-to-fact-error')).toBeNull();
++  const { queryClient } = renderWithProviders(
++    <Probe />,
++    async (path) => {
++      if (path === 'user.getSettings') return { timezone: 'UTC' };
++      if (path === 'budget.alertCount') {
++        reads++;
++        return reads === 1
++          ? 0
++          : new Promise((resolve) => {
++              releaseRead = resolve;
++            });
++      }
++      if (path === 'budget.confirmPurchase') {
++        writes++;
++        await ack;
++        return { actionId, consequences: false };
++      }
++      return {};
++    },
++    { freshness: true },
++  );
++  try {
++    await waitFor(() => expect(reads).toBe(1));
++    fireEvent.click(screen.getByText('Перевести в факт'));
++    await waitFor(() => expect(writes).toBe(1));
++    // Коммит уже доступен ленте, но ACK и новое чтение отдельно удерживаются.
++    act(() =>
++      testFreshnessOf(queryClient).changes(
++        [
++          { kind: 'entity', rowKey: prompt.entityId, scope: 'other' },
++          { kind: 'journal', rowKey: actionId, entityIds: [prompt.entityId], operation: 'insert' },
++        ],
++        1,
++      ),
++    );
++    await waitFor(() => expect(releaseRead).toBeDefined());
++    expect(close).toBe(0);
++    if (ownerChanged) act(() => resetUndoSession());
++    await act(async () => {
++      releaseAck();
++      await ack;
++    });
++    await waitFor(() => expect(screen.getByText('Перевести в факт')).toBeEnabled());
++    expect(close).toBe(ownerChanged ? 0 : 1);
++    await act(async () => releaseRead?.(1));
++    expect(close).toBe(ownerChanged ? 0 : 1);
++    expect(writes).toBe(1);
++    expect(screen.queryByTestId('plan-to-fact-error')).toBeNull();
++  } finally {
++    releaseAck();
++    releaseRead?.(1);
++  }
+ });
+--- a/apps/web/src/features/page/menu.test.tsx
++++ b/apps/web/src/features/page/menu.test.tsx
+@@ -16,12 +16,15 @@
+ import type { Editor } from '@tiptap/react';
+ import { useState } from 'react';
+ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
++import { browserInputStorage, configureInputAccess } from '../../lib/local-data/input-access';
++import { bindQueryResponses } from '../../lib/local-data/query-responses';
+ import { noteRegistryVersion, resetRegistryVersionForTests } from '../../lib/registry/useRegistry';
+ import { resetNavForTests, useNav } from '../../state/navigation';
+ import { testFreshnessOf } from '../../test/freshness';
+ import {
+   installCrashTrap,
+   type MockHandler,
++  mockEntityUpdateResult,
+   queryReply,
+   renderWithProviders,
+   staleBodyError,
+@@ -45,7 +48,12 @@
+ } from '../entity-detail/structure-fixtures';
+ import { type DetailStructure, snapshotDetailStructure } from '../entity-detail/structure-snapshot';
+ import { canRedoStep, canUndoStep } from '../entity-editor/arrows-stack';
+-import { readDraft } from '../entity-editor/draft-storage';
++import {
++  listDraftsIn,
++  readDraft,
++  setDraftScope,
++  submittedDraftOf,
++} from '../entity-editor/draft-storage';
+ import { CHANGE_VIEW_QUESTION, HIDE_AS_VERSION_HINT } from './ChangeViewDialog';
+ import { changeViewPlan, TEXT_BEFORE_VIEW_CHANGE } from './change-view';
+ import { PAGE_TEMPLATES_QUERY } from './usePageTemplates';
+@@ -387,7 +395,7 @@
+ describe('«Сделать страницей»', () => {
+   test('одна пачка с аспектом «страница»; тост «Отменить» → ai.undo; у страницы пункта нет', async () => {
+     const f = fixture('note-plain');
+-    const { batches, calls } = open(f);
++    const { batches, calls, queryClient } = open(f);
+     await screen.findByTestId('page-tabs');
+     await choose('Сделать страницей');
+ 
+@@ -412,7 +420,22 @@
+         { actionId: ACTION_ID },
+       ]),
+     );
+-    // Undo перечитал граф (`invalidateGraph`): запись снова показана через шаблон.
++    await waitFor(() => {
++      const undo = queryClient
++        .getMutationCache()
++        .findAll({ mutationKey: [['ai', 'undo']], exact: true });
++      expect(undo.at(-1)?.state.data).toMatchObject({
++        undone: { id: ACTION_ID },
++        bodyRevisions: [],
++      });
++    });
++    act(() =>
++      testFreshnessOf(queryClient).changes(
++        [{ kind: 'entity', rowKey: f.entity.id, scope: 'other' }],
++        1,
++      ),
++    );
++    // Undo изменил метаданные вида, а отдельное событие вернуло шаблон.
+     await waitFor(() => expect(screen.queryByTestId('page-view')).toBeNull());
+     expect(await screen.findByTestId('record-view')).toBeInTheDocument();
+   });
+@@ -1070,7 +1093,7 @@
+       }
+       row.updatedAt = '2026-09-25T13:00:00.000Z';
+       log.push('update:OK');
+-      return copy(row);
++      return mockEntityUpdateResult({ ...copy(row), txId: '1' });
+     };
+   }
+ 
+@@ -1113,11 +1136,28 @@
+     return field.editor;
+   }
+ 
+-  /** Досыл осел: правка на «сервере», черновика на диске нет, ни одного 409. */
++  function bodyWrites(r: ReturnType<typeof openWithBody>) {
++    return r.queryClient
++      .getMutationCache()
++      .findAll({ mutationKey: [['entity', 'update']], exact: true });
++  }
++
++  async function bodyAckOnServer(r: ReturnType<typeof openWithBody>, id: string, tail: string) {
++    await waitFor(
++      () => {
++        expect(r.world.rows.get(id)?.body).toContain(tail);
++        const writes = bodyWrites(r);
++        expect(writes).toHaveLength(1);
++        expect(writes[0]?.state.data).toMatchObject({ id, txId: '1', bodyRevision: 2 });
++      },
++      { timeout: 5000 },
++    );
++    expect(r.log).not.toContain('update:STALE');
++  }
++
+   async function bodySettledOnServer(r: ReturnType<typeof openWithBody>, id: string, tail: string) {
+-    await waitFor(() => expect(r.world.rows.get(id)?.body).toContain(tail), { timeout: 5000 });
++    await bodyAckOnServer(r, id, tail);
+     await waitFor(() => expect(readDraft(id)).toBeNull());
+-    expect(r.log).not.toContain('update:STALE');
+   }
+ 
+   test('«Изменить вид только этой записи»: пачки нет, тост, текст досылается; повтор несёт набранное', async () => {
+@@ -1138,6 +1178,12 @@
+       await choose('Изменить вид только этой записи');
+       expect(r.batches()).toHaveLength(1);
+     });
++    act(() =>
++      testFreshnessOf(r.queryClient).changes(
++        [{ kind: 'entity', rowKey: f.entity.id, scope: 'other' }],
++        2,
++      ),
++    );
+     await screen.findByTestId('page-view');
+     expect(JSON.stringify(r.batches()[0])).toContain('ХВОСТ');
+     expect(r.log).not.toContain('update:STALE');
+@@ -1159,23 +1205,71 @@
+   });
+ 
+   test('сохранение в полёте (ответа ещё нет): жест ждёт — пачки нет, тост (фикс-раунд 1, I-1)', async () => {
+-    // Оптимистичный патч кладёт отправленный документ в кэш, и по смыслу отложенное уже «равно»
+-    // телу записи: держит жест только ветка «в полёте». Пачка поверх — и ответ тела получил бы 409.
+     let release: () => void = () => {};
+     const hold = new Promise<void>((resolve) => {
+       release = resolve;
++    });
++    const owner = 'owner';
++    const controller = new AbortController();
++    const storage = browserInputStorage(localStorage);
++    setDraftScope(owner);
++    configureInputAccess({
++      storage,
++      prefix: '',
++      isCurrent: () => !controller.signal.aborted,
++      drafts: {
++        scope: { accountId: owner, graphId: owner, generation: 'menu-flight' },
++        signal: controller.signal,
++        persistent: true,
++      },
+     });
+     const f = fixture('note-plain');
++    const id = f.entity.id;
+     const r = openWithBody(f, hold);
+-    await screen.findByTestId('page-tabs');
+-    await editUnsent('ХВОСТ ');
+-    await waitFor(() => expect(r.log).toContain('update:SENT'), { timeout: 5000 });
+-    await choose('Сделать страницей');
+-    expect(await screen.findByText(BODY_SAVING)).toBeInTheDocument();
+-    expect(r.batches()).toEqual([]);
+-    release();
+-    await bodySettledOnServer(r, f.entity.id, 'ХВОСТ');
+-    expect(r.batches()).toEqual([]);
++    const runtime = testFreshnessOf(r.queryClient).runtime;
++    const responses = bindQueryResponses(r.queryClient, runtime, { enabled: false });
++    try {
++      await screen.findByTestId('page-tabs');
++      await editUnsent('ХВОСТ ');
++      await waitFor(() => expect(r.log).toContain('update:SENT'), { timeout: 5000 });
++      const sent = bodyWrites(r)[0]?.state.variables;
++      if (!sent || typeof sent !== 'object' || !('bodyDoc' in sent))
++        throw new Error('Нет отправленного тела');
++      const token = submittedDraftOf(sent);
++      expect(token).toBeTypeOf('string');
++      expect(readDraft(id)).toMatchObject({ slot: token, baseRevision: 1, doc: sent.bodyDoc });
++      expect(readDraft(id)?.acknowledged).toBeUndefined();
++
++      await choose('Сделать страницей');
++      expect(await screen.findByText(BODY_SAVING)).toBeInTheDocument();
++      expect(r.batches()).toEqual([]);
++      expect(readDraft(id)).toMatchObject({ slot: token, baseRevision: 1, doc: sent.bodyDoc });
++      expect(readDraft(id)?.acknowledged).toBeUndefined();
++      expect(bodyWrites(r)).toHaveLength(1);
++
++      release();
++      await bodyAckOnServer(r, id, 'ХВОСТ');
++      // Без записи ответа подтверждённый input остаётся страховкой под точным токеном.
++      await waitFor(() => {
++        expect(readDraft(id)).toMatchObject({ slot: token, acknowledged: true, doc: sent.bodyDoc });
++        const copies = listDraftsIn(storage, owner);
++        expect(copies).toHaveLength(1);
++        expect(copies[0]?.draft).toMatchObject({
++          slot: token,
++          acknowledged: true,
++          doc: sent.bodyDoc,
++        });
++      });
++      expect(r.calls.filter(({ path }) => path === 'entity.update')).toHaveLength(1);
++      expect(r.batches()).toEqual([]);
++    } finally {
++      release();
++      responses.close();
++      r.unmount();
++      controller.abort();
++      configureInputAccess(undefined);
++      setDraftScope('');
++    }
+   });
+ 
+   test('правка тела получила 409: жест не досылает её снова и отсылает к плашке (фикс-раунд 1, M-1)', async () => {
+--- a/apps/web/src/features/settings/apps-and-extensions.test.tsx
++++ b/apps/web/src/features/settings/apps-and-extensions.test.tsx
+@@ -475,7 +475,7 @@
+ });
+ 
+ test('I-1: правка «Состава» — одна entity_update без module_set; «Выключить приложение» видит новый «Состав»', async () => {
+-  const { callsOf } = render();
++  const { callsOf, queryClient } = render(undefined, {});
+   await openTab();
+   // «Учёба» держала «Проекты»; владелец убирает их из её «Состава».
+   const study = await screen.findByTestId(`app-${STUDY}`);
+@@ -494,6 +494,22 @@
+     ]),
+   );
+   expect(callsOf('user.setModuleEnabled')).toEqual([]);
++  await waitFor(() => {
++    const writes = queryClient
++      .getMutationCache()
++      .findAll({ mutationKey: [['entity', 'updateBatch']], exact: true });
++    expect(writes).toHaveLength(1);
++    expect(writes[0]?.state.data).toMatchObject({ actionId: ACT });
++  });
++  act(() =>
++    testFreshnessOf(queryClient).changes(
++      [
++        { kind: 'entity', rowKey: STUDY, scope: 'other' },
++        { kind: 'journal', rowKey: ACT, entityIds: [STUDY], operation: 'insert' },
++      ],
++      1,
++    ),
++  );
+   await waitFor(() =>
+     expect(screen.getByTestId(`app-${STUDY}`)).toHaveTextContent('Расширений в составе нет'),
+   );

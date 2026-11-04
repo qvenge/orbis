@@ -1,0 +1,100 @@
+{
+  "base": "d0af7420e467675e2cdff7dc23c5b40a6c2b17cd",
+  "owned": [
+    "apps/web/src/features/entity-detail/DetailMenu.tsx",
+    "apps/web/src/features/entity-detail/VersionsCard.tsx",
+    "apps/web/src/features/entity-detail/freshness-reset.test.tsx",
+    "apps/web/src/features/entity-editor/useBodySave.ts",
+    "apps/web/src/features/page/menu.test.tsx",
+    "apps/web/src/features/undo/body-provenance.ts",
+    "apps/web/src/lib/freshness/dependencies.ts",
+    "apps/web/src/lib/freshness/provenance.ts",
+    "apps/web/src/lib/freshness/runtime.test.ts",
+    "apps/web/src/lib/freshness/runtime.ts",
+    "apps/web/src/lib/freshness/transport.test.ts",
+    "apps/web/src/lib/freshness/transport.ts"
+  ],
+  "diskDependencies": [
+    "apps/web/src/lib/local-data/query-responses.ts",
+    "apps/web/src/lib/local-data/response-cache.ts"
+  ],
+  "round2Paths": [
+    "apps/web/src/features/entity-detail/DetailMenu.tsx",
+    "apps/web/src/features/page/menu.test.tsx",
+    "apps/web/src/lib/freshness/runtime.ts",
+    "apps/web/src/lib/freshness/transport.test.ts",
+    "apps/web/src/lib/freshness/transport.ts"
+  ],
+  "files": {
+    "apps/web/src/features/entity-detail/DetailMenu.tsx": {
+      "base": "91ab351af3b2899d067158387bb8191b9aa039d9af047a469a44294420066822",
+      "round1": "91ab351af3b2899d067158387bb8191b9aa039d9af047a469a44294420066822",
+      "round2": "38933f10ae431b35a504149fa63255c2e361823e26a08e1f0a581c185f33026a"
+    },
+    "apps/web/src/features/entity-detail/VersionsCard.tsx": {
+      "base": "aef8d19057c9f1b1f1b7f62da99972dd5f7ba5e27753951d8004c16e82651f13",
+      "round1": "319e543bff14a252a289da231aae50da6d43920362fb54fdd8d9ca6a58b0635b",
+      "round2": "319e543bff14a252a289da231aae50da6d43920362fb54fdd8d9ca6a58b0635b"
+    },
+    "apps/web/src/features/entity-detail/freshness-reset.test.tsx": {
+      "base": "0f8df32a777bf081bd2fd23cee076fa3edb1d1e9660b7b6c3599b94404d788e8",
+      "round1": "4be1a131ea327ebf333c2d5c1f3c6bfc74af5aa51ff735ddd5a7aab4db597009",
+      "round2": "4be1a131ea327ebf333c2d5c1f3c6bfc74af5aa51ff735ddd5a7aab4db597009"
+    },
+    "apps/web/src/features/entity-editor/useBodySave.ts": {
+      "base": "6ac61fb90527a4896b6895e4c77ccf250b7e2db729319f0d7e66e9ead636de3b",
+      "round1": "714826e553e4ad6f00eaf1b2073ef41f6fec6049668bcf56bf3817dc829f92be",
+      "round2": "714826e553e4ad6f00eaf1b2073ef41f6fec6049668bcf56bf3817dc829f92be"
+    },
+    "apps/web/src/features/page/menu.test.tsx": {
+      "base": "086f613fb7014248f3c5b3ae44db6c601b14b9356f96b5e77d8db3080765265c",
+      "round1": "086f613fb7014248f3c5b3ae44db6c601b14b9356f96b5e77d8db3080765265c",
+      "round2": "512403cfbc987b093b5bbe9b1f6b465b5127f74472569de9cd0d99236a9f7879"
+    },
+    "apps/web/src/features/undo/body-provenance.ts": {
+      "base": "6d4b28d095441fff1820593391f6103cb9dbfbe04b974d1de53fac0101491e5a",
+      "round1": "dc3ddfa7c80781d24c45304ab856fd9845319a20467c270d8ddf085dc03e0a27",
+      "round2": "dc3ddfa7c80781d24c45304ab856fd9845319a20467c270d8ddf085dc03e0a27"
+    },
+    "apps/web/src/lib/freshness/dependencies.ts": {
+      "base": "c0619665944218823e17881c70c0c04b7a00d08572cbac98b9de8023650e67e5",
+      "round1": "314a725139fa67cc76b01e71a65dd4e86004a1af00ab0a8f1e6b11d80ec35177",
+      "round2": "314a725139fa67cc76b01e71a65dd4e86004a1af00ab0a8f1e6b11d80ec35177"
+    },
+    "apps/web/src/lib/freshness/provenance.ts": {
+      "base": "59a814746782d245041724e1e6415f07c747de363478807e57019a66032d36c6",
+      "round1": "df5da2345d3675f7bb835723b37c3783fc3f85558c8841b7babc5776e2b0df27",
+      "round2": "df5da2345d3675f7bb835723b37c3783fc3f85558c8841b7babc5776e2b0df27"
+    },
+    "apps/web/src/lib/freshness/runtime.test.ts": {
+      "base": "edede46087e5aafa5e115dc3b86e8c1de123c2d6366eead5b0b2dc9550c06523",
+      "round1": "ce2c40330031b29a397e44e78d9b8fbcc658061a6bd20b61a93a55da26bd1d1c",
+      "round2": "ce2c40330031b29a397e44e78d9b8fbcc658061a6bd20b61a93a55da26bd1d1c"
+    },
+    "apps/web/src/lib/freshness/runtime.ts": {
+      "base": "ebf784654b3be284ab71e8d061163f558b266821ecc008642d2495ad6cad6d61",
+      "round1": "37526b06b87b8589ff2b6f76cd577a4238e58b49aa6dd40a6b0d7fc45003ea29",
+      "round2": "9ba78f5be9738697f0991eaa92cba481804a6f42ac3a696785e7942aa508152b"
+    },
+    "apps/web/src/lib/freshness/transport.test.ts": {
+      "base": "c30d8b8e386388168462eae63ae3bf4178d871abe6bea0bac1a9f7331557e5b8",
+      "round1": "b6e3309c59c4460af7d870d06e46e98f4d32e98488441e3cf9835000306a6c3a",
+      "round2": "8363ca890d98fa8edadef060513c882e65e47bba7c8825bb57b03e037798bf9e"
+    },
+    "apps/web/src/lib/freshness/transport.ts": {
+      "base": "06d2e9b0ade6cb2a7afa8c0c0a66273d41dc030b67dff873ac76a7bc31b4a5c1",
+      "round1": "065b05b2df8373181235300c59a65b2d14f6aaea875c3ab6a8e48866a50828b2",
+      "round2": "25e8545f5ed5c6bde53e8c65aa5b2c069961ae129f1483a814ae5c6e8ef820f9"
+    },
+    "apps/web/src/lib/local-data/query-responses.ts": {
+      "base": "847b8b8c23824a25359862d9736cc83703b243a18068995e84eb54e78cf30b4f",
+      "round1": "f77f10e068468d505aff9b9ce130fa8ab8ba2b70b547cbe93b279a992a94112b",
+      "round2": "f77f10e068468d505aff9b9ce130fa8ab8ba2b70b547cbe93b279a992a94112b"
+    },
+    "apps/web/src/lib/local-data/response-cache.ts": {
+      "base": "6cd4ffee0115af87370990f1373a22c894505e117dfc886b5b06fffbefa916d6",
+      "round1": "20c76387a263d031eee1e03037987aeb4b6a185ae42516349dc32043f8778390",
+      "round2": "20c76387a263d031eee1e03037987aeb4b6a185ae42516349dc32043f8778390"
+    }
+  }
+}

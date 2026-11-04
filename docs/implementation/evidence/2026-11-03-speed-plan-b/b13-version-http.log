@@ -1,0 +1,28 @@
+bun test v1.2.7 (5c0fa6dc)
+
+version-proof.test.ts:
+{"oldRead":412,"oldWrite":412,"currentRead":200,"staleWriteChangedFixture":false}
+(pass) authenticated loopback old update rejected, 0.7 read admitted [560.00ms]
+
+apps/server/src/router.test.ts:
+(pass) ping возвращает ok [0.37ms]
+(pass) whoami без авторизации бросает UNAUTHORIZED [0.94ms]
+(pass) клиент старше минимальной версии: PRECONDITION_FAILED + CLIENT_OUTDATED [0.39ms]
+(pass) клиент 0.2.x (до формата тела v3) получает CLIENT_OUTDATED — старая вкладка не пишет v2 [0.38ms]
+(pass) клиент 0.3.x (до страниц 1б) получает CLIENT_OUTDATED (R-12) [0.54ms]
+(pass) клиент 0.4.x (до среза 1в) получает CLIENT_OUTDATED на entity.blocks и entity.get, текущий минимум проходит гейт [1.15ms]
+(pass) клиент 0.5.x (до плана А скорости) получает CLIENT_OUTDATED на entity.update и entity.get, текущий минимум проходит гейт [0.91ms]
+(pass) HTTP: клиенты плана А получают 412 до доступа к чтению и записи, 0.7.0 проходит гейт [10.91ms]
+(pass) устаревший клиент получает отказ версии раньше auth-проверки [0.25ms]
+(pass) updateSettings: невалидная таймзона отклоняется валидацией входа [7.24ms]
+(pass) updateSettings: валидная IANA-зона проходит гейт валидации [17.49ms]
+(pass) ownerOnly под агентом: seedOnboarding/updateSettings/exportData → FORBIDDEN до БД [0.61ms]
+(pass) мутации графа/журнала под агентом: entity/relation/chat/undo → FORBIDDEN до БД [1.06ms]
+(pass) агент проходит protectedProcedure (whoami) без заголовка версии [0.19ms]
+(pass) равная/новая версия, отсутствие и мусорный заголовок проходят [0.40ms]
+(pass) ручки agenda.list нет (спека 1в §6.5): Повестка — запись поставки из блоков, не подписка [0.59ms]
+
+ 17 pass
+ 0 fail
+ 99 expect() calls
+Ran 17 tests across 2 files. [1168.00ms]

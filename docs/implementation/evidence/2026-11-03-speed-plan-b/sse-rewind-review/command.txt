@@ -1,0 +1,2 @@
+working directory: /private/tmp/orbis-b13-sse-rewind.puWLKh/candidate/apps/web
+../../node_modules/.bin/vitest run src/lib/freshness/sse-rewind.probe.test.ts --maxWorkers 1 --reporter verbose

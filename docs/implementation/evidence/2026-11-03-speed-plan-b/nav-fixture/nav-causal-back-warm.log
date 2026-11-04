@@ -1,0 +1,9 @@
+
+ RUN  v4.1.9 /private/tmp/orbis-b13-final-ci.07CROy/nav-causal/apps/web
+
+
+ Test Files  1 passed (1)
+      Tests  1 passed | 1 skipped (2)
+   Start at  23:44:42
+   Duration  7.69s (transform 3.55s, setup 278ms, import 3.81s, tests 1.99s, environment 1.29s)
+

@@ -1,0 +1,22 @@
+
+ RUN  v4.1.9 /private/tmp/orbis-b13-sse-rereview.WBhzOL/candidate/apps/web
+
+{"holdFloor":false,"reads":[{"at":0,"from":"100"},{"at":50,"from":"101"},{"at":10150,"from":"20"}],"idle":[],"newCommitAt":10100,"newCommitLatency":50}
+{"holdFloor":true,"reads":[{"at":0,"from":"100"},{"at":100,"from":"101"},{"at":10150,"from":"20"}],"idle":[],"newCommitAt":10100,"newCommitLatency":50}
+ ✓ src/lib/freshness/sse-rewind-author.probe.test.ts > B13 active SSE reader across an authoritative strict lowering > returns to idle safety cadence after strict lowering (old provisional floor=false) 10ms
+ ✓ src/lib/freshness/sse-rewind-author.probe.test.ts > B13 active SSE reader across an authoritative strict lowering > returns to idle safety cadence after strict lowering (old provisional floor=true) 2ms
+ ✓ src/lib/freshness/sse-rewind-author.probe.test.ts > B13 ordinary provisional to complete retains held-xmin retry then becomes idle 2ms
+ ✓ src/lib/freshness/sse-rewind-author.probe.test.ts > preserves current held-xmin catch-up from notify 3ms
+ ✓ src/lib/freshness/sse-rewind-author.probe.test.ts > preserves current held-xmin catch-up from recovered 2ms
+ ✓ src/lib/freshness/sse-rewind-author.probe.test.ts > preserves current held-xmin catch-up from rewind-snapshot 2ms
+{"holdFloor":false,"reads":[{"at":0,"from":"100"},{"at":50,"from":"101"},{"at":10150,"from":"20"}],"idle":[],"newCommitAt":10100,"newCommitLatency":50}
+{"holdFloor":true,"reads":[{"at":0,"from":"100"},{"at":100,"from":"101"},{"at":10150,"from":"20"}],"idle":[],"newCommitAt":10100,"newCommitLatency":50}
+ ✓ src/lib/freshness/sse-rewind-original.probe.test.ts > B13 active SSE reader across an authoritative strict lowering > returns to idle safety cadence after strict lowering (old provisional floor=false) 10ms
+ ✓ src/lib/freshness/sse-rewind-original.probe.test.ts > B13 active SSE reader across an authoritative strict lowering > returns to idle safety cadence after strict lowering (old provisional floor=true) 3ms
+ ✓ src/lib/freshness/sse-rewind-original.probe.test.ts > B13 ordinary provisional to complete retains held-xmin retry then becomes idle 2ms
+
+ Test Files  2 passed (2)
+      Tests  9 passed (9)
+   Start at  22:57:32
+   Duration  4.02s (transform 605ms, setup 278ms, import 1.48s, tests 39ms, environment 1.81s)
+

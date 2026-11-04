@@ -1,0 +1,970 @@
+{
+  "candidate": {
+    "fixture": [
+      480,
+      500,
+      30
+    ],
+    "role": [
+      {
+        "role": "authenticated",
+        "session_role": "orbis_app",
+        "jit": "on",
+        "plan_cache_mode": "auto",
+        "work_mem": "4MB"
+      }
+    ],
+    "totals": [
+      483.41035200000624,
+      644.0774669999955,
+      536.5668390000064,
+      411.054426000017,
+      292.81714400000055
+    ],
+    "medianTotal": 483.41035200000624,
+    "phaseMedians": {
+      "phase1_identity": 25.571546999999555,
+      "phase1_context": 17.41404600001988,
+      "phase1_prepare": 6.179146999988006,
+      "phase1_end": 5.952865999977803,
+      "materialize": 47.96050699998159,
+      "phase2_identity": 12.356884000007994,
+      "phase2_execute_all": 353.86890299999504,
+      "phase2_end": 2.816019999998389
+    },
+    "blocks": {
+      "0": {
+        "kind": "rows",
+        "sqlSHA": "a597a0b3f62c42546ce1f83ac9caef4c712d9bb057622e71075798eaefef77eb",
+        "params": 13,
+        "estimateRows": 1,
+        "actualRows": 480,
+        "planShape": {
+          "node": "Limit",
+          "relation": null,
+          "index": null,
+          "join": null,
+          "children": [
+            {
+              "node": "Result",
+              "relation": null,
+              "index": null,
+              "join": null,
+              "children": []
+            },
+            {
+              "node": "Result",
+              "relation": null,
+              "index": null,
+              "join": null,
+              "children": []
+            },
+            {
+              "node": "Sort",
+              "relation": null,
+              "index": null,
+              "join": null,
+              "children": [
+                {
+                  "node": "WindowAgg",
+                  "relation": null,
+                  "index": null,
+                  "join": null,
+                  "children": [
+                    {
+                      "node": "Nested Loop",
+                      "relation": null,
+                      "index": null,
+                      "join": "Left",
+                      "children": [
+                        {
+                          "node": "Seq Scan",
+                          "relation": "entities",
+                          "index": null,
+                          "join": null,
+                          "children": []
+                        },
+                        {
+                          "node": "Aggregate",
+                          "relation": null,
+                          "index": null,
+                          "join": null,
+                          "children": [
+                            {
+                              "node": "Values Scan",
+                              "relation": null,
+                              "index": null,
+                              "join": null,
+                              "children": []
+                            }
+                          ]
+                        },
+                        {
+                          "node": "Function Scan",
+                          "relation": null,
+                          "index": null,
+                          "join": null,
+                          "children": []
+                        },
+                        {
+                          "node": "Function Scan",
+                          "relation": null,
+                          "index": null,
+                          "join": null,
+                          "children": []
+                        }
+                      ]
+                    },
+                    {
+                      "node": "Aggregate",
+                      "relation": null,
+                      "index": null,
+                      "join": null,
+                      "children": [
+                        {
+                          "node": "Function Scan",
+                          "relation": null,
+                          "index": null,
+                          "join": null,
+                          "children": []
+                        }
+                      ]
+                    },
+                    {
+                      "node": "Aggregate",
+                      "relation": null,
+                      "index": null,
+                      "join": null,
+                      "children": [
+                        {
+                          "node": "Function Scan",
+                          "relation": null,
+                          "index": null,
+                          "join": null,
+                          "children": []
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        "planningMs": 0.922,
+        "executionMs": 28.328,
+        "sharedHit": 187,
+        "sharedRead": 0,
+        "tempRead": 0,
+        "tempWrite": 0,
+        "spansMedian": {
+          "query": 85.1019920000108,
+          "rawRows": 480,
+          "limit": 500,
+          "wireLayout": 1.6153789999953005,
+          "callback": 86.91057400000864,
+          "savepointTotal": 89.99372600001516,
+          "outsideCallback": 3.083152000006521
+        }
+      },
+      "1": {
+        "kind": "groups",
+        "sqlSHA": "0eb41c80114de7bcf420a9e12912c0e22e7517ce6d427777e40d45387dffa0e3",
+        "params": 19,
+        "estimateRows": 6,
+        "actualRows": 501,
+        "planShape": {
+          "node": "Limit",
+          "relation": null,
+          "index": null,
+          "join": null,
+          "children": [
+            {
+              "node": "Result",
+              "relation": null,
+              "index": null,
+              "join": null,
+              "children": []
+            },
+            {
+              "node": "Result",
+              "relation": null,
+              "index": null,
+              "join": null,
+              "children": []
+            },
+            {
+              "node": "Result",
+              "relation": null,
+              "index": null,
+              "join": null,
+              "children": [
+                {
+                  "node": "Sort",
+                  "relation": null,
+                  "index": null,
+                  "join": null,
+                  "children": [
+                    {
+                      "node": "WindowAgg",
+                      "relation": null,
+                      "index": null,
+                      "join": null,
+                      "children": [
+                        {
+                          "node": "Nested Loop",
+                          "relation": null,
+                          "index": null,
+                          "join": "Left",
+                          "children": [
+                            {
+                              "node": "Seq Scan",
+                              "relation": "entities",
+                              "index": null,
+                              "join": null,
+                              "children": []
+                            },
+                            {
+                              "node": "Aggregate",
+                              "relation": null,
+                              "index": null,
+                              "join": null,
+                              "children": [
+                                {
+                                  "node": "Values Scan",
+                                  "relation": null,
+                                  "index": null,
+                                  "join": null,
+                                  "children": []
+                                }
+                              ]
+                            },
+                            {
+                              "node": "Function Scan",
+                              "relation": null,
+                              "index": null,
+                              "join": null,
+                              "children": []
+                            }
+                          ]
+                        },
+                        {
+                          "node": "Aggregate",
+                          "relation": null,
+                          "index": null,
+                          "join": null,
+                          "children": [
+                            {
+                              "node": "Function Scan",
+                              "relation": null,
+                              "index": null,
+                              "join": null,
+                              "children": []
+                            }
+                          ]
+                        },
+                        {
+                          "node": "Aggregate",
+                          "relation": null,
+                          "index": null,
+                          "join": null,
+                          "children": [
+                            {
+                              "node": "Function Scan",
+                              "relation": null,
+                              "index": null,
+                              "join": null,
+                              "children": []
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "node": "Aggregate",
+                  "relation": null,
+                  "index": null,
+                  "join": null,
+                  "children": [
+                    {
+                      "node": "Function Scan",
+                      "relation": null,
+                      "index": null,
+                      "join": null,
+                      "children": []
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        "planningMs": 0.966,
+        "executionMs": 51.078,
+        "sharedHit": 211,
+        "sharedRead": 0,
+        "tempRead": 0,
+        "tempWrite": 0,
+        "spansMedian": {
+          "query": 144.52174499997636,
+          "rawRows": 501,
+          "limit": 500,
+          "wire": 2.6714330000104383,
+          "layout": 4.939546999987215,
+          "callback": 151.64957699997467,
+          "savepointTotal": 156.7854149999912,
+          "outsideCallback": 5.13583800001652
+        }
+      },
+      "2": {
+        "kind": "rows",
+        "sqlSHA": "ae5acdfade80b52001ad6488fd203f6fdbe3be1ca5cbbb3b163bbe61861ea942",
+        "params": 23,
+        "estimateRows": 31,
+        "actualRows": 31,
+        "planShape": {
+          "node": "Limit",
+          "relation": null,
+          "index": null,
+          "join": null,
+          "children": [
+            {
+              "node": "Result",
+              "relation": null,
+              "index": null,
+              "join": null,
+              "children": []
+            },
+            {
+              "node": "Result",
+              "relation": null,
+              "index": null,
+              "join": null,
+              "children": []
+            },
+            {
+              "node": "Sort",
+              "relation": null,
+              "index": null,
+              "join": null,
+              "children": [
+                {
+                  "node": "WindowAgg",
+                  "relation": null,
+                  "index": null,
+                  "join": null,
+                  "children": [
+                    {
+                      "node": "Nested Loop",
+                      "relation": null,
+                      "index": null,
+                      "join": "Left",
+                      "children": [
+                        {
+                          "node": "Seq Scan",
+                          "relation": "entities",
+                          "index": null,
+                          "join": null,
+                          "children": []
+                        },
+                        {
+                          "node": "Aggregate",
+                          "relation": null,
+                          "index": null,
+                          "join": null,
+                          "children": [
+                            {
+                              "node": "Values Scan",
+                              "relation": null,
+                              "index": null,
+                              "join": null,
+                              "children": []
+                            }
+                          ]
+                        },
+                        {
+                          "node": "Function Scan",
+                          "relation": null,
+                          "index": null,
+                          "join": null,
+                          "children": []
+                        },
+                        {
+                          "node": "Function Scan",
+                          "relation": null,
+                          "index": null,
+                          "join": null,
+                          "children": []
+                        }
+                      ]
+                    },
+                    {
+                      "node": "Aggregate",
+                      "relation": null,
+                      "index": null,
+                      "join": null,
+                      "children": [
+                        {
+                          "node": "Function Scan",
+                          "relation": null,
+                          "index": null,
+                          "join": null,
+                          "children": []
+                        }
+                      ]
+                    },
+                    {
+                      "node": "Aggregate",
+                      "relation": null,
+                      "index": null,
+                      "join": null,
+                      "children": [
+                        {
+                          "node": "Function Scan",
+                          "relation": null,
+                          "index": null,
+                          "join": null,
+                          "children": []
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        "planningMs": 0.909,
+        "executionMs": 41.845,
+        "sharedHit": 199,
+        "sharedRead": 0,
+        "tempRead": 0,
+        "tempWrite": 0,
+        "spansMedian": {
+          "query": 85.25652799999807,
+          "rawRows": 31,
+          "limit": 30,
+          "wireLayout": 0.15770999999949709,
+          "callback": 85.4438300000038,
+          "savepointTotal": 97.60259399999632,
+          "outsideCallback": 5.538189999992028
+        }
+      }
+    },
+    "seedCatalog": [
+      {
+        "relname": "change_feed",
+        "n_live_tup": "4902",
+        "n_dead_tup": "0",
+        "last_analyze": "2026-11-03 13:04:30.912665+00",
+        "last_autoanalyze": "2026-11-04 16:36:34.789995+00",
+        "last_autovacuum": "2026-11-04 16:36:34.743631+00"
+      },
+      {
+        "relname": "entities",
+        "n_live_tup": "3036",
+        "n_dead_tup": "0",
+        "last_analyze": "2026-11-04 16:37:11.870369+00",
+        "last_autoanalyze": "2026-11-04 16:36:34.978176+00",
+        "last_autovacuum": "2026-11-04 16:34:34.869707+00"
+      },
+      {
+        "relname": "relations",
+        "n_live_tup": "1863",
+        "n_dead_tup": "0",
+        "last_analyze": "2026-11-04 16:37:11.888363+00",
+        "last_autoanalyze": "2026-11-04 16:36:34.801509+00",
+        "last_autovacuum": "2026-11-04 16:27:35.925305+00"
+      }
+    ]
+  },
+  "before": {
+    "fixture": [
+      480,
+      500,
+      30
+    ],
+    "role": [
+      {
+        "role": "authenticated",
+        "session_role": "orbis_app",
+        "jit": "on",
+        "plan_cache_mode": "auto",
+        "work_mem": "4MB"
+      }
+    ],
+    "totals": [
+      260.9932589999953,
+      274.4198669999896,
+      216.14240599999903,
+      236.27074900000298,
+      239.46938099998806
+    ],
+    "medianTotal": 239.46938099998806,
+    "phaseMedians": {
+      "phase1_identity": 9.68508500000462,
+      "phase1_context": 8.54140999999072,
+      "phase1_prepare": 4.559956999990391,
+      "phase1_end": 3.598232000003918,
+      "materialize": 29.77146800000628,
+      "phase2_identity": 8.171770999993896,
+      "phase2_execute_all": 169.8277539999981,
+      "phase2_end": 1.9418139999906998
+    },
+    "blocks": {
+      "0": {
+        "kind": "rows",
+        "sqlSHA": "a597a0b3f62c42546ce1f83ac9caef4c712d9bb057622e71075798eaefef77eb",
+        "params": 13,
+        "estimateRows": 1,
+        "actualRows": 480,
+        "planShape": {
+          "node": "Limit",
+          "relation": null,
+          "index": null,
+          "join": null,
+          "children": [
+            {
+              "node": "Result",
+              "relation": null,
+              "index": null,
+              "join": null,
+              "children": []
+            },
+            {
+              "node": "Result",
+              "relation": null,
+              "index": null,
+              "join": null,
+              "children": []
+            },
+            {
+              "node": "Sort",
+              "relation": null,
+              "index": null,
+              "join": null,
+              "children": [
+                {
+                  "node": "WindowAgg",
+                  "relation": null,
+                  "index": null,
+                  "join": null,
+                  "children": [
+                    {
+                      "node": "Nested Loop",
+                      "relation": null,
+                      "index": null,
+                      "join": "Left",
+                      "children": [
+                        {
+                          "node": "Seq Scan",
+                          "relation": "entities",
+                          "index": null,
+                          "join": null,
+                          "children": []
+                        },
+                        {
+                          "node": "Aggregate",
+                          "relation": null,
+                          "index": null,
+                          "join": null,
+                          "children": [
+                            {
+                              "node": "Values Scan",
+                              "relation": null,
+                              "index": null,
+                              "join": null,
+                              "children": []
+                            }
+                          ]
+                        },
+                        {
+                          "node": "Function Scan",
+                          "relation": null,
+                          "index": null,
+                          "join": null,
+                          "children": []
+                        },
+                        {
+                          "node": "Function Scan",
+                          "relation": null,
+                          "index": null,
+                          "join": null,
+                          "children": []
+                        }
+                      ]
+                    },
+                    {
+                      "node": "Aggregate",
+                      "relation": null,
+                      "index": null,
+                      "join": null,
+                      "children": [
+                        {
+                          "node": "Function Scan",
+                          "relation": null,
+                          "index": null,
+                          "join": null,
+                          "children": []
+                        }
+                      ]
+                    },
+                    {
+                      "node": "Aggregate",
+                      "relation": null,
+                      "index": null,
+                      "join": null,
+                      "children": [
+                        {
+                          "node": "Function Scan",
+                          "relation": null,
+                          "index": null,
+                          "join": null,
+                          "children": []
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        "planningMs": 0.724,
+        "executionMs": 25.683,
+        "sharedHit": 185,
+        "sharedRead": 0,
+        "tempRead": 0,
+        "tempWrite": 0,
+        "spansMedian": {
+          "query": 43.422466999996686,
+          "rawRows": 480,
+          "limit": 500,
+          "wireLayout": 1.482799999997951,
+          "callback": 44.73831400000199,
+          "savepointTotal": 46.4052640000009,
+          "outsideCallback": 1.6669499999989057
+        }
+      },
+      "1": {
+        "kind": "groups",
+        "sqlSHA": "0eb41c80114de7bcf420a9e12912c0e22e7517ce6d427777e40d45387dffa0e3",
+        "params": 19,
+        "estimateRows": 6,
+        "actualRows": 501,
+        "planShape": {
+          "node": "Limit",
+          "relation": null,
+          "index": null,
+          "join": null,
+          "children": [
+            {
+              "node": "Result",
+              "relation": null,
+              "index": null,
+              "join": null,
+              "children": []
+            },
+            {
+              "node": "Result",
+              "relation": null,
+              "index": null,
+              "join": null,
+              "children": []
+            },
+            {
+              "node": "Result",
+              "relation": null,
+              "index": null,
+              "join": null,
+              "children": [
+                {
+                  "node": "Sort",
+                  "relation": null,
+                  "index": null,
+                  "join": null,
+                  "children": [
+                    {
+                      "node": "WindowAgg",
+                      "relation": null,
+                      "index": null,
+                      "join": null,
+                      "children": [
+                        {
+                          "node": "Nested Loop",
+                          "relation": null,
+                          "index": null,
+                          "join": "Left",
+                          "children": [
+                            {
+                              "node": "Seq Scan",
+                              "relation": "entities",
+                              "index": null,
+                              "join": null,
+                              "children": []
+                            },
+                            {
+                              "node": "Aggregate",
+                              "relation": null,
+                              "index": null,
+                              "join": null,
+                              "children": [
+                                {
+                                  "node": "Values Scan",
+                                  "relation": null,
+                                  "index": null,
+                                  "join": null,
+                                  "children": []
+                                }
+                              ]
+                            },
+                            {
+                              "node": "Function Scan",
+                              "relation": null,
+                              "index": null,
+                              "join": null,
+                              "children": []
+                            }
+                          ]
+                        },
+                        {
+                          "node": "Aggregate",
+                          "relation": null,
+                          "index": null,
+                          "join": null,
+                          "children": [
+                            {
+                              "node": "Function Scan",
+                              "relation": null,
+                              "index": null,
+                              "join": null,
+                              "children": []
+                            }
+                          ]
+                        },
+                        {
+                          "node": "Aggregate",
+                          "relation": null,
+                          "index": null,
+                          "join": null,
+                          "children": [
+                            {
+                              "node": "Function Scan",
+                              "relation": null,
+                              "index": null,
+                              "join": null,
+                              "children": []
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "node": "Aggregate",
+                  "relation": null,
+                  "index": null,
+                  "join": null,
+                  "children": [
+                    {
+                      "node": "Function Scan",
+                      "relation": null,
+                      "index": null,
+                      "join": null,
+                      "children": []
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        "planningMs": 0.86,
+        "executionMs": 45.82,
+        "sharedHit": 209,
+        "sharedRead": 0,
+        "tempRead": 0,
+        "tempWrite": 0,
+        "spansMedian": {
+          "query": 61.57656699999643,
+          "rawRows": 501,
+          "limit": 500,
+          "wire": 2.1606940000056056,
+          "layout": 4.290774999986752,
+          "callback": 67.74405299998762,
+          "savepointTotal": 75.16175199999998,
+          "outsideCallback": 4.630742000008468
+        }
+      },
+      "2": {
+        "kind": "rows",
+        "sqlSHA": "ae5acdfade80b52001ad6488fd203f6fdbe3be1ca5cbbb3b163bbe61861ea942",
+        "params": 23,
+        "estimateRows": 31,
+        "actualRows": 31,
+        "planShape": {
+          "node": "Limit",
+          "relation": null,
+          "index": null,
+          "join": null,
+          "children": [
+            {
+              "node": "Result",
+              "relation": null,
+              "index": null,
+              "join": null,
+              "children": []
+            },
+            {
+              "node": "Result",
+              "relation": null,
+              "index": null,
+              "join": null,
+              "children": []
+            },
+            {
+              "node": "Sort",
+              "relation": null,
+              "index": null,
+              "join": null,
+              "children": [
+                {
+                  "node": "WindowAgg",
+                  "relation": null,
+                  "index": null,
+                  "join": null,
+                  "children": [
+                    {
+                      "node": "Nested Loop",
+                      "relation": null,
+                      "index": null,
+                      "join": "Left",
+                      "children": [
+                        {
+                          "node": "Seq Scan",
+                          "relation": "entities",
+                          "index": null,
+                          "join": null,
+                          "children": []
+                        },
+                        {
+                          "node": "Aggregate",
+                          "relation": null,
+                          "index": null,
+                          "join": null,
+                          "children": [
+                            {
+                              "node": "Values Scan",
+                              "relation": null,
+                              "index": null,
+                              "join": null,
+                              "children": []
+                            }
+                          ]
+                        },
+                        {
+                          "node": "Function Scan",
+                          "relation": null,
+                          "index": null,
+                          "join": null,
+                          "children": []
+                        },
+                        {
+                          "node": "Function Scan",
+                          "relation": null,
+                          "index": null,
+                          "join": null,
+                          "children": []
+                        }
+                      ]
+                    },
+                    {
+                      "node": "Aggregate",
+                      "relation": null,
+                      "index": null,
+                      "join": null,
+                      "children": [
+                        {
+                          "node": "Function Scan",
+                          "relation": null,
+                          "index": null,
+                          "join": null,
+                          "children": []
+                        }
+                      ]
+                    },
+                    {
+                      "node": "Aggregate",
+                      "relation": null,
+                      "index": null,
+                      "join": null,
+                      "children": [
+                        {
+                          "node": "Function Scan",
+                          "relation": null,
+                          "index": null,
+                          "join": null,
+                          "children": []
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        "planningMs": 0.879,
+        "executionMs": 37.362,
+        "sharedHit": 197,
+        "sharedRead": 0,
+        "tempRead": 0,
+        "tempWrite": 0,
+        "spansMedian": {
+          "query": 45.69270500000857,
+          "rawRows": 31,
+          "limit": 30,
+          "wireLayout": 0.1179790000023786,
+          "callback": 45.85835099998803,
+          "savepointTotal": 50.21294100000523,
+          "outsideCallback": 4.354590000017197
+        }
+      }
+    },
+    "seedCatalog": [
+      {
+        "relname": "entities",
+        "n_live_tup": "3036",
+        "n_dead_tup": "0",
+        "last_analyze": "2026-11-04 16:41:19.7485+00",
+        "last_autoanalyze": "2026-11-04 16:40:55.359424+00",
+        "last_autovacuum": "2026-11-04 16:40:55.166909+00"
+      },
+      {
+        "relname": "relations",
+        "n_live_tup": "1863",
+        "n_dead_tup": "0",
+        "last_analyze": "2026-11-04 16:41:19.765371+00",
+        "last_autoanalyze": "2026-11-04 16:40:55.019363+00",
+        "last_autovacuum": "2026-11-04 14:31:52.327774+00"
+      }
+    ]
+  },
+  "pairs": {
+    "0": {
+      "sameSQL": true,
+      "samePlanShape": true
+    },
+    "1": {
+      "sameSQL": true,
+      "samePlanShape": true
+    },
+    "2": {
+      "sameSQL": true,
+      "samePlanShape": true
+    }
+  }
+}

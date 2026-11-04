@@ -1,0 +1,46 @@
+apps/web/src/features/entity-detail/NativeRow.tsx:4:3 lint/correctness/noUnusedImports  FIXABLE  ━━━━━━━━━━
+
+  ! Several of these imports are unused.
+  
+    2 │ import {
+    3 │   useCallback,
+  > 4 │   useEffect,
+      │   ^^^^^^^^^
+    5 │   useLayoutEffect,
+    6 │   useRef,
+  
+  i Unused imports might be the result of an incomplete refactoring.
+  
+  i Unsafe fix: Remove the unused imports.
+  
+      2   2 │   import {
+      3   3 │     useCallback,
+      4     │ - ··useEffect,
+      5   4 │     useLayoutEffect,
+      6   5 │     useRef,
+  
+
+apps/web/src/features/entity-detail/history-lifecycle.test.tsx:294:7 lint/style/noNonNullAssertion  FIXABLE  ━━━━━━━━━━
+
+  ! Forbidden non-null assertion.
+  
+    292 │   await waitFor(() =>
+    293 │     expect(
+  > 294 │       qc!
+        │       ^^^
+    295 │         .getQueryCache()
+    296 │         .getAll()
+  
+  i Unsafe fix: Replace with optional chain operator ?. This operator includes runtime checks, so it is safer than the compile-only non-null assertion operator
+  
+     292  292 │     await waitFor(() =>
+     293  293 │       expect(
+     294      │ - ······qc!
+     295      │ - ········.getQueryCache()
+          294 │ + ······qc?.getQueryCache()
+     296  295 │           .getAll()
+     297  296 │           .filter((q) => JSON.stringify(q.queryKey).includes('"e1"')),
+  
+
+Checked 6 files in 144ms. No fixes applied.
+Found 2 warnings.

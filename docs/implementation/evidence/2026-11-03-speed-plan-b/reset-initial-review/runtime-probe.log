@@ -1,0 +1,179 @@
+
+ RUN  v4.1.9 /private/tmp/orbis-b13-independent.DvY5aP/candidate/apps/web
+
+ ✓ src/lib/freshness/runtime.test.ts > coalesces in 100 ms and trails a burst at the 500 ms key limit 17ms
+ ✓ src/lib/freshness/runtime.test.ts > holds an early body event for ACK and suppresses the exact advanced transaction 3ms
+ ✓ src/lib/freshness/runtime.test.ts > releases an unconfirmed candidate even if a save is still in flight 2ms
+ ✓ src/lib/freshness/runtime.test.ts > applies provisional and complete reset tokens independently at the same cursor 3ms
+ ✓ src/lib/freshness/runtime.test.ts > uses the oldest visible receipt and fires a server deadline with no feed traffic 3ms
+ ✓ src/lib/freshness/runtime.test.ts > invalidates a disabled observer without fetching and refreshes when shown 2ms
+ ✓ src/lib/freshness/runtime.test.ts > starts from confirmed settings and stops fallback when hidden, retaining accepted work 4ms
+ ✓ src/lib/freshness/runtime.test.ts > ignores a delayed future-cursor response and only lowers the current input cursor 1ms
+ ✓ src/lib/freshness/runtime.test.ts > does not suppress a no-op receipt or a different event in the same transaction 2ms
+ ✓ src/lib/freshness/runtime.test.ts > failed parallel saves release only their own candidates 2ms
+ ✓ src/lib/freshness/runtime.test.ts > a reset fences a late body ACK from the preceding response generation 1ms
+ ✓ src/lib/freshness/runtime.test.ts > a receipt after the 30 s give-up can publish an ACK but cannot suppress later delivery 1ms
+ ✓ src/lib/freshness/runtime.test.ts > keeps reset and overflow cache scans bounded while marking every key synchronously 63ms
+ ✓ src/lib/freshness/runtime.test.ts > retries an actual revert cancellation at the key limit and stops after a request failure 4ms
+ ✓ src/lib/freshness/runtime.test.ts > keeps an owed read if its silent replacement is then canceled with revert 2ms
+ × src/lib/freshness/runtime.test.ts > B13 probe: repeated provisional reset can advance W2 without another refresh 12ms
+   → expected '10' to be '15' // Object.is equality
+   → expected false to be true // Object.is equality
+   → expected '10' to be '21' // Object.is equality
+   → expected "vi.fn()" to be called 2 times, but got 1 times
+ × src/lib/freshness/runtime.test.ts > B13 probe: same floor token can validly recur after a database rollback 3ms
+   → expected '11' to be '21' // Object.is equality
+   → expected "vi.fn()" to be called 3 times, but got 2 times
+   → expected false to be true // Object.is equality
+ × src/lib/freshness/runtime.test.ts > B13 probe: identical future reset can validly recur after a second rollback 2ms
+   → expected '21' to be '11' // Object.is equality
+   → expected "vi.fn()" to be called 2 times, but got 1 times
+ ✓ src/lib/freshness/runtime.test.ts > B13 control: ordinary duplicate provisional and complete tokens are idempotent 1ms
+ ✓ src/lib/freshness/runtime.test.ts > B13 control: delayed same-token complete reset must not skip ordinary events 1ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 3 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/lib/freshness/runtime.test.ts > B13 probe: repeated provisional reset can advance W2 without another refresh
+AssertionError: expected '10' to be '15' // Object.is equality
+
+Expected: "15"
+Received: "10"
+
+ ❯ src/lib/freshness/runtime.test.ts:487:25
+    485|   expect(runtime.acceptChanges(scope, resetProbe('20', '15', 'floor', …
+    486|   expect(reset).toHaveBeenCalledTimes(1);
+    487|   expect.soft(cursor()).toBe('15');
+       |                         ^
+    488|   expect.soft(runtime.acceptChanges(scope, resetProbe('20', '21', 'flo…
+    489|   expect.soft(cursor()).toBe('21');
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/9]⎯
+
+ FAIL  src/lib/freshness/runtime.test.ts > B13 probe: repeated provisional reset can advance W2 without another refresh
+AssertionError: expected false to be true // Object.is equality
+
+- Expected
++ Received
+
+- true
++ false
+
+ ❯ src/lib/freshness/runtime.test.ts:488:102
+    486|   expect(reset).toHaveBeenCalledTimes(1);
+    487|   expect.soft(cursor()).toBe('15');
+    488|   expect.soft(runtime.acceptChanges(scope, resetProbe('20', '21', 'flo…
+       |                                                                                                      ^
+    489|   expect.soft(cursor()).toBe('21');
+    490|   expect.soft(reset).toHaveBeenCalledTimes(2);
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/9]⎯
+
+ FAIL  src/lib/freshness/runtime.test.ts > B13 probe: repeated provisional reset can advance W2 without another refresh
+AssertionError: expected '10' to be '21' // Object.is equality
+
+Expected: "21"
+Received: "10"
+
+ ❯ src/lib/freshness/runtime.test.ts:489:25
+    487|   expect.soft(cursor()).toBe('15');
+    488|   expect.soft(runtime.acceptChanges(scope, resetProbe('20', '21', 'flo…
+    489|   expect.soft(cursor()).toBe('21');
+       |                         ^
+    490|   expect.soft(reset).toHaveBeenCalledTimes(2);
+    491| });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/9]⎯
+
+ FAIL  src/lib/freshness/runtime.test.ts > B13 probe: repeated provisional reset can advance W2 without another refresh
+AssertionError: expected "vi.fn()" to be called 2 times, but got 1 times
+ ❯ src/lib/freshness/runtime.test.ts:490:22
+    488|   expect.soft(runtime.acceptChanges(scope, resetProbe('20', '21', 'flo…
+    489|   expect.soft(cursor()).toBe('21');
+    490|   expect.soft(reset).toHaveBeenCalledTimes(2);
+       |                      ^
+    491| });
+    492|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/9]⎯
+
+ FAIL  src/lib/freshness/runtime.test.ts > B13 probe: same floor token can validly recur after a database rollback
+AssertionError: expected '11' to be '21' // Object.is equality
+
+Expected: "21"
+Received: "11"
+
+ ❯ src/lib/freshness/runtime.test.ts:505:25
+    503|   expect(cursor()).toBe('11');
+    504|   expect(runtime.acceptChanges(scope, floor, '11')).toBe(true);
+    505|   expect.soft(cursor()).toBe('21');
+       |                         ^
+    506|   expect.soft(reset).toHaveBeenCalledTimes(3);
+    507|   expect.soft(runtime.acceptChanges(scope, { ...event(21), floor: '20'…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[5/9]⎯
+
+ FAIL  src/lib/freshness/runtime.test.ts > B13 probe: same floor token can validly recur after a database rollback
+AssertionError: expected "vi.fn()" to be called 3 times, but got 2 times
+ ❯ src/lib/freshness/runtime.test.ts:506:22
+    504|   expect(runtime.acceptChanges(scope, floor, '11')).toBe(true);
+    505|   expect.soft(cursor()).toBe('21');
+    506|   expect.soft(reset).toHaveBeenCalledTimes(3);
+       |                      ^
+    507|   expect.soft(runtime.acceptChanges(scope, { ...event(21), floor: '20'…
+    508| });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[6/9]⎯
+
+ FAIL  src/lib/freshness/runtime.test.ts > B13 probe: same floor token can validly recur after a database rollback
+AssertionError: expected false to be true // Object.is equality
+
+- Expected
++ Received
+
+- true
++ false
+
+ ❯ src/lib/freshness/runtime.test.ts:507:82
+    505|   expect.soft(cursor()).toBe('21');
+    506|   expect.soft(reset).toHaveBeenCalledTimes(3);
+    507|   expect.soft(runtime.acceptChanges(scope, { ...event(21), floor: '20'…
+       |                                                                                  ^
+    508| });
+    509|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[7/9]⎯
+
+ FAIL  src/lib/freshness/runtime.test.ts > B13 probe: identical future reset can validly recur after a second rollback
+AssertionError: expected '21' to be '11' // Object.is equality
+
+Expected: "11"
+Received: "21"
+
+ ❯ src/lib/freshness/runtime.test.ts:522:25
+    520|   expect(cursor()).toBe('21');
+    521|   expect(runtime.acceptChanges(scope, rollback, '21')).toBe(true);
+    522|   expect.soft(cursor()).toBe('11');
+       |                         ^
+    523|   expect.soft(reset).toHaveBeenCalledTimes(2);
+    524| });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[8/9]⎯
+
+ FAIL  src/lib/freshness/runtime.test.ts > B13 probe: identical future reset can validly recur after a second rollback
+AssertionError: expected "vi.fn()" to be called 2 times, but got 1 times
+ ❯ src/lib/freshness/runtime.test.ts:523:22
+    521|   expect(runtime.acceptChanges(scope, rollback, '21')).toBe(true);
+    522|   expect.soft(cursor()).toBe('11');
+    523|   expect.soft(reset).toHaveBeenCalledTimes(2);
+       |                      ^
+    524| });
+    525|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[9/9]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  3 failed | 17 passed (20)
+   Start at  20:48:21
+   Duration  2.88s (transform 794ms, setup 172ms, import 1.12s, tests 130ms, environment 1.19s)
+

@@ -1,0 +1,59 @@
+{
+  "base": "1e5c05ae7fd0d0c41aea4eb9e1def5f43aebeeb3",
+  "exactArchive": "/private/tmp/orbis-b13-r6-fix2.twecTD/final-1e5",
+  "testedBehaviorArchive": "/private/tmp/orbis-b13-r6-fix2.twecTD/candidate",
+  "priorFrozenManifest": "6d75d46afe55413a50ae303a32763409ed3f40ae87e414d68a0d941ff7e14bcd",
+  "owned": {
+    "apps/web/src/features/entity-detail/NativeRow.tsx": {
+      "before": "0154469edd0237acaf90ed8f29e93bc0d1b279fa582cf7f7c3a365a323648515",
+      "firstFrozen": "ec66cdadaa7a6ca4d85da50e55e60b7f2ae8ea98980c6a444d535b5b0710fa64",
+      "after": "ec66cdadaa7a6ca4d85da50e55e60b7f2ae8ea98980c6a444d535b5b0710fa64"
+    },
+    "apps/web/src/features/entity-detail/record-blocks.tsx": {
+      "before": "f83c742ed7a32201c3e7a252c51db8e6836e41847d58f65f9fab0d912bf7b9fa",
+      "firstFrozen": "920e693d1476ec9be625644919566be3dcc5215a79ae3ad9a6d5a7dea238c63b",
+      "after": "920e693d1476ec9be625644919566be3dcc5215a79ae3ad9a6d5a7dea238c63b"
+    },
+    "apps/web/src/features/entity-detail/history-lifecycle.test.tsx": {
+      "before": "2fa831c31734deb52acd9ea9273498bd95d624e1cdd844707bfc3825b190162f",
+      "firstFrozen": "90a3ea8b8b09fdb97bdf01713e0ebae5f75f11da427cfb83ba423ff62d816a18",
+      "after": "83d5642bbb8eecc6757ad609b19eee27341cc3e679203bf33adbafd695c20b7d"
+    },
+    "apps/web/src/features/entity-detail/useTitleHistoryBasis.ts": {
+      "before": null,
+      "firstFrozen": "59bce49bac99db4fea98a83e85e82f79f47f3b7910c5830332ac74b1007d05e1",
+      "after": "16984f60f1c2461d8d0143a12c167e487276c7c26a7e7fa4860a288be8faf8e3"
+    },
+    "apps/web/src/features/entity-editor/title-history.ts": {
+      "before": "8c0ce395b81efc16a043e21f82d19cf5e3d299500e535338dfdd94de92025bcb",
+      "firstFrozen": "f9a3216e2d8b94782bdca92aa36b5510aee2563454bd869ec828a8baa6418615",
+      "after": "7b706b8977d2d158368c3ae0b10d29f6d7af6f5b1ba6667624398412a2c4b0cf"
+    },
+    "apps/web/src/features/entity-editor/title-history.test.ts": {
+      "before": "4d453c4780bd51c993cd64d0c28466180a691249583e02dc3749cf1ee9b5fabd",
+      "firstFrozen": "0f023ed6b926ba8aefb1e4b4c5351f37276a6a3d41d5784eaac4ded531c2b0a8",
+      "after": "de4bedb548ad3fb9a1cfb7f11d7182626fc7ff0ce918cf070245422f7168388a"
+    }
+  },
+  "r5Verified": {
+    "apps/web/src/features/entity-detail/DetailMenu.tsx": "e0e5fd27783ffd11824b1fe99aa853a6b35c0a80c7e73a94fb53ea641640ba85",
+    "apps/web/src/features/entity-detail/copy-link.test.tsx": "2e0d41437ef2dd90aa14906c5418a70f8cc24f50c9041a82e92904d4e7dcfbc6",
+    "apps/web/src/features/entity-editor/BodyEditor.tsx": "c9647212f5de61f796047d7accea8d97026ae7c2169e2d77f1565985028e5bf1",
+    "apps/web/src/features/entity-editor/editor-record-links.test.tsx": "68758c5d58bc91f6968568e03f018461ac7d7202bf428a66eae7db06d29e1383",
+    "apps/web/src/features/entity-editor/editor-record-links.ts": "9726823a6e07d1db920a5b54ffa6903ccf797e13a74c2cb8dad8b352364fdaae",
+    "apps/web/src/lib/entity-ref/RecordLink.test.tsx": "a187b9893fea9159dbcf1a0496854f0976a627bef2e27ec9b0663857ea8921a1",
+    "apps/web/src/lib/entity-ref/RecordLink.tsx": "6b022ea4b09498718ea4cd8a2c503c2f9be9f39929ed1ae5d5a734c4344d3370",
+    "apps/web/src/lib/entity-ref/record-link-controller.ts": "648bb3997c4610a335c9b7dc46b869f538b19197b7b58b9b3139f623ac6701a2"
+  },
+  "fixtureLeafVerified": {
+    "apps/web/src/features/apps/open.test.tsx": "e63351b82f26bf8337bde2ddb215bc93fe2f9df78c76ff648e27c21b7127efff",
+    "apps/web/src/features/entity-detail/versions-freshness.test.tsx": "8e11f16a92d2c39cb6a02cc8c614518c9d752eb5dafb8f983867fe591b59e81e",
+    "apps/web/src/features/settings/apps-and-extensions.test.tsx": "d8e30255759629a8c85697a76ac2f3877e0f6e8fa5eaa9d9b68e3cbb8b1250c5"
+  },
+  "r5FixtureCarriedThroughLeaf": {
+    "path": "apps/web/src/features/apps/open.test.tsx",
+    "dad1": "91b9b310db30789bc646c7f4be49a3cb39a9314c4773790869fe91d059813ad3",
+    "finalBase": "e63351b82f26bf8337bde2ddb215bc93fe2f9df78c76ff648e27c21b7127efff"
+  },
+  "verifiedUnmodifiedBaseFiles": 1513
+}

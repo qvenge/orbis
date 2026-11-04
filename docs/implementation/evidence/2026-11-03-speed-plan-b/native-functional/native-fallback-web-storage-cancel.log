@@ -1,0 +1,63 @@
+bun test v1.2.7 (5c0fa6dc)
+
+.superpowers/sdd/2026-11-03-speed-plan-b/native-fallback-web-storage-cancel.probe.test.ts:
+{"event":"off-request","method":"POST","path":"/trpc/perf.report","authenticated":true,"matchingRecord":false}
+{"event":"off-request","method":"POST","path":"/trpc/perf.report","authenticated":true,"matchingRecord":false}
+{"event":"off-request","method":"GET","path":"/trpc/entity.get,registry.effective,user.getSettings","authenticated":true,"matchingRecord":true}
+{"event":"off-request","method":"GET","path":"/trpc/changes.watch","authenticated":true,"matchingRecord":false}
+{"event":"off-request","method":"GET","path":"/trpc/entity.query,entity.query,entity.query","authenticated":true,"matchingRecord":false}
+{"event":"off-request","method":"GET","path":"/trpc/entity.resolveRefs","authenticated":true,"matchingRecord":false}
+{"event":"off-request","method":"POST","path":"/trpc/entity.blocks","authenticated":true,"matchingRecord":false}
+{"event":"off-request","method":"GET","path":"/trpc/changes.watch","authenticated":true,"matchingRecord":false}
+{"event":"off-request","method":"GET","path":"/trpc/routine.proposalsForEntity,entity.query","authenticated":true,"matchingRecord":true}
+{"event":"off-request","method":"GET","path":"/trpc/changes.watch","authenticated":true,"matchingRecord":false}
+{"event":"off-request","method":"GET","path":"/trpc/changes.watch","authenticated":true,"matchingRecord":false}
+{"event":"off-request","method":"GET","path":"/trpc/changes.watch","authenticated":true,"matchingRecord":false}
+{"event":"off-request","method":"POST","path":"/trpc/entity.update","authenticated":true,"matchingRecord":false}
+{"event":"off-request","method":"GET","path":"/trpc/changes.reconcile","authenticated":true,"matchingRecord":false}
+{"event":"off-request","method":"GET","path":"/trpc/changes.watch","authenticated":true,"matchingRecord":false}
+{"scenario":"editor-cancel-B","before":{"accountId":"a4ab7c3e-826a-4781-8400-8f45e0de2eda","graphId":"a4ab7c3e-826a-4781-8400-8f45e0de2eda","generation":"0:0","entityId":"01a1a77d-6940-7134-a4db-c96f665277eb","writerId":"01a1a77d-77a7-77a8-af82-51015e3e2c7a","nonce":"01a1a77d-7bf0-755e-a192-074d36dc43fd","sequence":2,"basis":{"revision":1}},"heads":[{"suffix":"ack-head","token":{"accountId":"a4ab7c3e-826a-4781-8400-8f45e0de2eda","graphId":"a4ab7c3e-826a-4781-8400-8f45e0de2eda","generation":"0:0","entityId":"01a1a77d-6940-7134-a4db-c96f665277eb","writerId":"01a1a77d-77a7-77a8-af82-51015e3e2c7a","nonce":"01a1a77d-77a7-77a8-af82-577dda3b8c64","sequence":1,"basis":{"revision":1}},"acknowledged":true,"finished":false,"text":"Confirmed local A"},{"suffix":"head","token":{"accountId":"a4ab7c3e-826a-4781-8400-8f45e0de2eda","graphId":"a4ab7c3e-826a-4781-8400-8f45e0de2eda","generation":"0:0","entityId":"01a1a77d-6940-7134-a4db-c96f665277eb","writerId":"01a1a77d-77a7-77a8-af82-51015e3e2c7a","nonce":"01a1a77d-7dbb-751c-a88f-f2011886d35b","sequence":4,"basis":{"revision":2}},"acknowledged":false,"finished":true,"text":"Confirmed local A"}],"sends":1}
+{"event":"off-request","method":"POST","path":"/trpc/perf.report","authenticated":true,"matchingRecord":false}
+{"event":"off-request","method":"POST","path":"/trpc/perf.report","authenticated":true,"matchingRecord":false}
+{"event":"off-request","method":"GET","path":"/trpc/entity.get,registry.effective,user.getSettings","authenticated":true,"matchingRecord":true}
+{"event":"off-request","method":"GET","path":"/trpc/changes.watch","authenticated":true,"matchingRecord":false}
+{"event":"off-request","method":"GET","path":"/trpc/entity.query,entity.query,entity.query","authenticated":true,"matchingRecord":false}
+{"event":"off-request","method":"GET","path":"/trpc/entity.resolveRefs","authenticated":true,"matchingRecord":false}
+{"event":"off-request","method":"POST","path":"/trpc/entity.blocks","authenticated":true,"matchingRecord":false}
+{"event":"off-request","method":"GET","path":"/trpc/changes.watch","authenticated":true,"matchingRecord":false}
+{"event":"off-request","method":"GET","path":"/trpc/routine.proposalsForEntity,entity.query","authenticated":true,"matchingRecord":true}
+{"event":"off-request","method":"GET","path":"/trpc/changes.watch","authenticated":true,"matchingRecord":false}
+{"event":"off-request","method":"GET","path":"/trpc/changes.watch","authenticated":true,"matchingRecord":false}
+{"event":"off-request","method":"GET","path":"/trpc/changes.watch","authenticated":true,"matchingRecord":false}
+{"event":"off-request","method":"POST","path":"/trpc/perf.report","authenticated":true,"matchingRecord":false}
+{"event":"off-request","method":"POST","path":"/trpc/perf.report","authenticated":true,"matchingRecord":false}
+{"event":"off-request","method":"GET","path":"/trpc/entity.get,registry.effective,user.getSettings","authenticated":true,"matchingRecord":true}
+{"event":"off-request","method":"GET","path":"/trpc/changes.watch","authenticated":true,"matchingRecord":false}
+{"event":"off-request","method":"GET","path":"/trpc/entity.query,entity.query,entity.query","authenticated":true,"matchingRecord":false}
+{"event":"off-request","method":"GET","path":"/trpc/entity.resolveRefs","authenticated":true,"matchingRecord":false}
+{"event":"off-request","method":"POST","path":"/trpc/entity.blocks","authenticated":true,"matchingRecord":false}
+{"event":"off-request","method":"GET","path":"/trpc/changes.watch","authenticated":true,"matchingRecord":false}
+{"event":"off-request","method":"GET","path":"/trpc/routine.proposalsForEntity,entity.query","authenticated":true,"matchingRecord":true}
+{"event":"off-request","method":"GET","path":"/trpc/changes.watch","authenticated":true,"matchingRecord":false}
+{"event":"off-request","method":"GET","path":"/trpc/changes.watch","authenticated":true,"matchingRecord":false}
+{"event":"off-request","method":"POST","path":"/trpc/perf.report","authenticated":true,"matchingRecord":false}
+{"event":"off-request","method":"POST","path":"/trpc/perf.report","authenticated":true,"matchingRecord":false}
+{"event":"off-request","method":"GET","path":"/trpc/entity.get,registry.effective,user.getSettings","authenticated":true,"matchingRecord":true}
+{"event":"off-request","method":"GET","path":"/trpc/changes.watch","authenticated":true,"matchingRecord":false}
+{"event":"off-request","method":"GET","path":"/trpc/entity.query,entity.query,entity.query","authenticated":true,"matchingRecord":false}
+{"event":"off-request","method":"GET","path":"/trpc/entity.resolveRefs","authenticated":true,"matchingRecord":false}
+{"event":"off-request","method":"POST","path":"/trpc/entity.blocks","authenticated":true,"matchingRecord":false}
+{"event":"off-request","method":"GET","path":"/trpc/changes.watch","authenticated":true,"matchingRecord":false}
+{"event":"off-request","method":"GET","path":"/trpc/routine.proposalsForEntity,entity.query","authenticated":true,"matchingRecord":true}
+{"event":"off-request","method":"GET","path":"/trpc/changes.watch","authenticated":true,"matchingRecord":false}
+{"event":"off-request","method":"GET","path":"/trpc/changes.watch","authenticated":true,"matchingRecord":false}
+{"event":"off-request","method":"GET","path":"/trpc/changes.watch","authenticated":true,"matchingRecord":false}
+{"scenario":"response-off","lane":"web-storage","primaryRevision":1,"currentRevision":4,"oldResponseUntouchedInFallback":true,"acknowledgedCopyKept":true,"recoveryFromStorageUnderDivergence":true,"tokenA":{"accountId":"a4ab7c3e-826a-4781-8400-8f45e0de2eda","graphId":"a4ab7c3e-826a-4781-8400-8f45e0de2eda","generation":"0:0","entityId":"01a1a77d-6940-7134-a4db-c96f665277eb","writerId":"01a1a77d-77a7-77a8-af82-51015e3e2c7a","nonce":"01a1a77d-77a7-77a8-af82-577dda3b8c64","sequence":1,"basis":{"revision":1}},"tokenB":{"accountId":"a4ab7c3e-826a-4781-8400-8f45e0de2eda","graphId":"a4ab7c3e-826a-4781-8400-8f45e0de2eda","generation":"0:0","entityId":"01a1a77d-6940-7134-a4db-c96f665277eb","writerId":"01a1a77d-77a7-77a8-af82-51015e3e2c7a","nonce":"01a1a77d-7bf0-755e-a192-074d36dc43fd","sequence":2,"basis":{"revision":1}},"noResponseRestoreBeforeOffGet":true,"legacyAckInHead":true,"noResend":true,"serviceWorker":"blocked to isolate same-SHA flag"}
+(pass) same-SHA normal → response-off → normal keeps B12 native and emergency input [16112.26ms]
+(skip) two real compatible build SHAs switch response buster and preserve exact input
+
+ 1 pass
+ 1 skip
+ 0 fail
+ 41 expect() calls
+Ran 2 tests across 1 files. [17.02s]

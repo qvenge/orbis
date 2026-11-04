@@ -1,0 +1,10 @@
+lint exit=0
+typecheck exit=0
+db-prepare exit=0
+test exit=1
+scripts exit=0
+legacy-form exit=0
+perf exit=1
+graph exit=1
+build exit=0
+lazy exit=1

@@ -1,0 +1,31 @@
+{"label":"input","shell":["assets/index-C8QvvH3-.js"],"browser":"156.0.8078.80"}
+{"label":"normal native control","href":"/r/10000000-0000-4000-8000-000000009901","pathname":"/r/10000000-0000-4000-8000-000000009901"}
+{"label":"shared native login","kind":"middle","href":"/r/10000000-0000-4000-8000-000000009902","pathname":"/r/10000000-0000-4000-8000-000000009902","state":null,"hasOpener":false}
+{"label":"shared native login","kind":"modified","href":"/r/10000000-0000-4000-8000-000000009903","pathname":"/r/10000000-0000-4000-8000-000000009903","state":null,"hasOpener":false}
+{"label":"plain shared control","pathname":"/","state":{"orbisNav":3,"id":2,"lineage":"c7413a7d-7a9b-4f0c-b048-99820b48481f"}}
+{"label":"closed Chrome History SQLite","rows":{"normal":["/r/10000000-0000-4000-8000-000000009901"],"middle":["/r/10000000-0000-4000-8000-000000009902"],"modified":["/r/10000000-0000-4000-8000-000000009903"],"plain":[]},"authHits":["POST /auth/v1/token","POST /auth/v1/token"]}
+222 |     const rows = Object.fromEntries(Object.entries(targets).map(([kind, id]) =>
+223 |       [kind, all.filter(({ url }) => url.includes(id)).map(({ url }) => new URL(url).pathname)]));
+224 |     assert.ok(rows.normal.length > 0);
+225 |     assert.equal(rows.plain.length, 0);
+226 |     log('closed Chrome History SQLite', { rows, authHits });
+227 |     assert.deepEqual(live, [], 'Shared app-initiated native opening retained the record identifier at login');
+                 ^
+AssertionError: Shared app-initiated native opening retained the record identifier at login
++ actual - expected
+
++ [
++   'middle',
++   'modified'
++ ]
+- []
+
+ generatedMessage: false,
+     actual: [ "middle", "modified" ],
+   expected: [],
+   operator: "deepStrictEqual",
+       code: "ERR_ASSERTION"
+
+      at /private/tmp/orbis-b13-shared-links.vGH1cO/probe.ts:227:12
+
+Bun v1.2.7 (macOS x64)

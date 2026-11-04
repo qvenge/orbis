@@ -1,0 +1,14 @@
+apps/web/src/features/settings/apps-and-extensions.test.tsx:511:18 lint/style/noNonNullAssertion ━━━━━━━━━━
+
+  ! Forbidden non-null assertion.
+  
+    509 │   let edited = false;
+    510 │   const home = TWO_UPDATES[1] as SupplyUpdate;
+  > 511 │   const homeId = home.recordId!;
+        │                  ^^^^^^^^^^^^^^
+    512 │   const { callsOf, queryClient } = render(() => [{ ...home, edited }], {});
+    513 │   const feed = testFreshnessOf(queryClient);
+  
+
+Checked 3 files in 37ms. No fixes applied.
+Found 1 warning.

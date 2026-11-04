@@ -1,0 +1,16 @@
+{
+  "base": "f4297c3887ffaf71968e799e23da609a7a24b58d",
+  "candidate": "/private/tmp/orbis-b13-sse-rewind-fix.jwO12D/candidate",
+  "files": [
+    {
+      "path": "apps/server/src/freshness/stream.ts",
+      "before": "868680292eff6c57501118efddcc20dc4208bce8e9c6e1b87159073237424dca",
+      "after": "b919077a64e368678d7718c4f3a4f72df1d59035c21468866e8a0c0c112e5e4c"
+    },
+    {
+      "path": "apps/server/src/freshness/stream.test.ts",
+      "before": "cdb49609979a15b92736bc9ac5a39df6590cad3ff39d246469de4b75ce538a76",
+      "after": "f100050ef4c88294ef410e9d070c0687ea914ecd6877095c9c25fef7162fdadd"
+    }
+  ]
+}

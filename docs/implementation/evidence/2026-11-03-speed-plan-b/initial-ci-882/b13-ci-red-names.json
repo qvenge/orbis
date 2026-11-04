@@ -1,0 +1,318 @@
+{
+  "records": [
+    {
+      "package": "web",
+      "path": "src/app/back-nav.test.tsx",
+      "name": "«‹» снимает верх стопки (site) — на уровень, не до корня",
+      "historicalMentions": [
+        "b11-web-timeout-controls.log"
+      ]
+    },
+    {
+      "package": "web",
+      "path": "src/perf/wiring.test.tsx",
+      "name": "отклик «＋» (QuickCapture) > создание — только «подтверждено», вид create",
+      "historicalMentions": []
+    },
+    {
+      "package": "web",
+      "path": "src/lib/useGraphUndo.test.tsx",
+      "name": "Undo CONFLICT refreshes cached remote data even on non-confirmation",
+      "historicalMentions": []
+    },
+    {
+      "package": "web",
+      "path": "src/lib/useGraphUndo.test.tsx",
+      "name": "Undo INTERNAL_SERVER_ERROR refreshes cached remote data even on non-confirmation",
+      "historicalMentions": []
+    },
+    {
+      "package": "web",
+      "path": "src/lib/useGraphUndo.test.tsx",
+      "name": "detailed known refusal refreshes stale entity data without clearing form outcome",
+      "historicalMentions": []
+    },
+    {
+      "package": "web",
+      "path": "src/test/fixtures.test.ts",
+      "name": "мешок `meta` остался только у СВЯЗЕЙ — у сущностей его нет во всём сьюте",
+      "historicalMentions": []
+    },
+    {
+      "package": "web",
+      "path": "src/features/apps/nav-editor.test.tsx",
+      "name": "(в) страница в хосте: «Добавить в навигацию» — текущее приложение по умолчанию → пачка; затем рядом «Убрать из навигации» (R-34)",
+      "historicalMentions": []
+    },
+    {
+      "package": "web",
+      "path": "src/features/apps/nav-editor.test.tsx",
+      "name": "(в) «Новое приложение…» («Мой дом» 🏡) — одна пачка entity_create с домашней и разделом; «Дом» ставит сервер",
+      "historicalMentions": []
+    },
+    {
+      "package": "web",
+      "path": "src/features/apps/open.test.tsx",
+      "name": "(в) /a/<выключенное>/r/<id> — хост и плашка «выключено — [включить]»; «включить» зовёт app.setDisabled",
+      "historicalMentions": [
+        "b10-appoff-baseline.log"
+      ]
+    },
+    {
+      "package": "web",
+      "path": "src/features/apps/open.test.tsx",
+      "name": "I-1: домашняя /a/<выключенное> — «включить» возвращает место в рамку приложения",
+      "historicalMentions": [
+        "b10-appoff-baseline.log"
+      ]
+    },
+    {
+      "package": "web",
+      "path": "src/features/apps/open.test.tsx",
+      "name": "I-1: домашняя /a/<архивное> — «восстановить» возвращает место в рамку приложения",
+      "historicalMentions": [
+        "b10-appoff-baseline.log"
+      ]
+    },
+    {
+      "package": "web",
+      "path": "src/features/apps/open.test.tsx",
+      "name": "I-1: плитка выключенного приложения на «Домой» → плашка → «включить» → его домашняя в его рамке",
+      "historicalMentions": [
+        "b10-appoff-baseline.log"
+      ]
+    },
+    {
+      "package": "web",
+      "path": "src/features/budget/EnvelopeCard.test.tsx",
+      "name": "тап по карточке открывает запись категории в рамке экрана",
+      "historicalMentions": []
+    },
+    {
+      "package": "web",
+      "path": "src/features/budget/plan-owner.test.tsx",
+      "name": "budget refresh continuation ownerChanged=false",
+      "historicalMentions": []
+    },
+    {
+      "package": "web",
+      "path": "src/features/budget/plan-owner.test.tsx",
+      "name": "budget refresh continuation ownerChanged=true",
+      "historicalMentions": []
+    },
+    {
+      "package": "web",
+      "path": "src/features/entity-editor/arrows.test.tsx",
+      "name": "реальный экран: сохранённый title undo использует текущее видимое основание CAS",
+      "historicalMentions": []
+    },
+    {
+      "package": "web",
+      "path": "src/features/entity-editor/arrows.test.tsx",
+      "name": "pending rename → undo использует видимую основу; старый отказ после нового acceptance не гасит redo",
+      "historicalMentions": []
+    },
+    {
+      "package": "web",
+      "path": "src/features/entity-editor/arrows.test.tsx",
+      "name": "title SUCCESS после checkbox SUCCESS всё ещё принимает title перед старым title отказом",
+      "historicalMentions": []
+    },
+    {
+      "package": "web",
+      "path": "src/features/entity-editor/arrows.test.tsx",
+      "name": "старый title FAIL не принимает текущий FAILED title",
+      "historicalMentions": []
+    },
+    {
+      "package": "web",
+      "path": "src/features/entity-editor/arrows.test.tsx",
+      "name": "старый title SUCCESS не принимает текущий FAILED title",
+      "historicalMentions": []
+    },
+    {
+      "package": "web",
+      "path": "src/features/entity-editor/arrows.test.tsx",
+      "name": "e1 → e2 → e1: история title живёт в LRU, cold поле берёт current server basis",
+      "historicalMentions": []
+    },
+    {
+      "package": "web",
+      "path": "src/features/entity-editor/arrows.test.tsx",
+      "name": "title SUCCESS вне e1 затем e1 remount не возвращает право старому FAIL стереть redo",
+      "historicalMentions": []
+    },
+    {
+      "package": "web",
+      "path": "src/features/entity-editor/arrows.test.tsx",
+      "name": "own undo к уже видимому title не даёт вечное доверие последующему чужому совпадению",
+      "historicalMentions": []
+    },
+    {
+      "package": "web",
+      "path": "src/features/entity-editor/arrows.test.tsx",
+      "name": "rapid own optimistic props coalescing не доверяет позднему foreign return к старому v",
+      "historicalMentions": []
+    },
+    {
+      "package": "web",
+      "path": "src/features/entity-detail/foreign-refusal.test.tsx",
+      "name": "current body-only foreign refusal resets common and native history while retaining own draft",
+      "historicalMentions": [
+        "b9-b8-baseline-noncreation.log",
+        "b9-review-broad-serial.log",
+        "b9-ui-isolated-full.log"
+      ]
+    },
+    {
+      "package": "web",
+      "path": "src/features/entity-detail/foreign-refusal.test.tsx",
+      "name": "contrast: explicit refresh accepts foreign body and resets both histories while keeping own draft",
+      "historicalMentions": [
+        "b9-b8-baseline-noncreation.log",
+        "b9-review-broad-serial.log",
+        "b9-ui-isolated-full.log"
+      ]
+    },
+    {
+      "package": "web",
+      "path": "src/features/entity-detail/history-delivery.test.tsx",
+      "name": "journal actual refetched body landing resets populated title and native histories",
+      "historicalMentions": [
+        "b9-b8-baseline-noncreation.log",
+        "b9-review-broad-serial.log",
+        "b9-ui-isolated-full.log"
+      ]
+    },
+    {
+      "package": "web",
+      "path": "src/features/entity-detail/history-lifecycle.test.tsx",
+      "name": "current title CAS failure while offscreen clears e1 retained steps",
+      "historicalMentions": [
+        "b9-b8-baseline-noncreation.log",
+        "b9-review-broad-serial.log",
+        "b9-ui-isolated-full.log"
+      ]
+    },
+    {
+      "package": "web",
+      "path": "src/features/entity-detail/history-lifecycle.test.tsx",
+      "name": "early remount before old refusal clears foreign basis Чужое имя bodyTop=false",
+      "historicalMentions": [
+        "b9-b8-baseline-noncreation.log",
+        "b9-review-broad-serial.log",
+        "b9-ui-isolated-full.log"
+      ]
+    },
+    {
+      "package": "web",
+      "path": "src/features/entity-detail/history-lifecycle.test.tsx",
+      "name": "early remount before old refusal clears foreign basis Чужое имя bodyTop=true",
+      "historicalMentions": [
+        "b9-b8-baseline-noncreation.log",
+        "b9-review-broad-serial.log",
+        "b9-ui-isolated-full.log"
+      ]
+    },
+    {
+      "package": "web",
+      "path": "src/features/entity-detail/history-lifecycle.test.tsx",
+      "name": "coalesced earlier C does not block fresh B refusal observedC=false",
+      "historicalMentions": [
+        "b9-b8-baseline-noncreation.log",
+        "b9-review-broad-serial.log",
+        "b9-ui-isolated-full.log"
+      ]
+    },
+    {
+      "package": "web",
+      "path": "src/features/entity-detail/history-lifecycle.test.tsx",
+      "name": "coalesced earlier C does not block fresh B refusal observedC=true",
+      "historicalMentions": [
+        "b9-b8-baseline-noncreation.log",
+        "b9-review-broad-serial.log",
+        "b9-ui-isolated-full.log"
+      ]
+    },
+    {
+      "package": "web",
+      "path": "src/features/entity-detail/history-lifecycle.test.tsx",
+      "name": "actual cold BODY current basis after observed B refusal and unobserved C outcome=foreign order=body",
+      "historicalMentions": [
+        "b9-b8-baseline-noncreation.log",
+        "b9-review-broad-serial.log",
+        "b9-ui-isolated-full.log"
+      ]
+    },
+    {
+      "package": "web",
+      "path": "src/features/entity-detail/versions-freshness.test.tsx",
+      "name": "V-1: открытый список показывает серверную страховку после restore и убирает её после Undo без reload",
+      "historicalMentions": [
+        "b9-b8-baseline-more.log",
+        "b9-ui-isolated-full.log"
+      ]
+    },
+    {
+      "package": "web",
+      "path": "src/features/entity-detail/versions-freshness.test.tsx",
+      "name": "принудительная Undo обновляет открытый список серверной страховкой текста владельца",
+      "historicalMentions": [
+        "b9-b8-baseline-more.log",
+        "b9-ui-isolated-full.log"
+      ]
+    },
+    {
+      "package": "web",
+      "path": "src/features/page/menu.test.tsx",
+      "name": "«Сделать страницей» > одна пачка с аспектом «страница»; тост «Отменить» → ai.undo; у страницы пункта нет",
+      "historicalMentions": [
+        "b10-menu-baseline.log"
+      ]
+    },
+    {
+      "package": "web",
+      "path": "src/features/page/menu.test.tsx",
+      "name": "жест меню при неотправленной правке тела (F-I1) > «Изменить вид только этой записи»: пачки нет, тост, текст досылается; повтор несёт набранное",
+      "historicalMentions": [
+        "b10-menu-baseline.log"
+      ]
+    },
+    {
+      "package": "web",
+      "path": "src/features/page/menu.test.tsx",
+      "name": "жест меню при неотправленной правке тела (F-I1) > сохранение в полёте (ответа ещё нет): жест ждёт — пачки нет, тост (фикс-раунд 1, I-1)",
+      "historicalMentions": [
+        "b10-menu-baseline.log"
+      ]
+    },
+    {
+      "package": "web",
+      "path": "src/features/settings/apps-and-extensions.test.tsx",
+      "name": "(г) новая запись поставки: «Добавить» → supply.add; R-18: Undo → ключ снова предлагается",
+      "historicalMentions": []
+    },
+    {
+      "package": "web",
+      "path": "src/features/settings/apps-and-extensions.test.tsx",
+      "name": "I-1: правка «Состава» — одна entity_update без module_set; «Выключить приложение» видит новый «Состав»",
+      "historicalMentions": []
+    },
+    {
+      "package": "web",
+      "path": "src/features/settings/apps-and-extensions.test.tsx",
+      "name": "M-2: правка графа гасит «Обновления» — признак «Изменено вами» не устаревает; повторный показ без запроса",
+      "historicalMentions": []
+    },
+    {
+      "package": "server",
+      "path": "src/registry/extension-off.test.ts",
+      "name": "выключенные Финансы: обходы маски (С1б-4, пункты 10–14) > 10. шаблон повтора с orbis/financial не материализуется без warn и отказов; после включения догонка — не раньше today − 92",
+      "historicalMentions": []
+    }
+  ],
+  "fileCount": {
+    "web": 15,
+    "server": 1
+  }
+}

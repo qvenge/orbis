@@ -1,0 +1,35 @@
+bun test v1.2.7 (5c0fa6dc)
+
+scripts/record-links.test.ts:
+(pass) the compiler-backed guard rejects type-valid links that bypass the controller [2.35ms]
+(pass) ordinary UI callbacks, host routes, external anchors and clipboard URLs pass [0.11ms]
+(pass) an exception applies to its named function and sink only
+146 | });
+147 | 
+148 | test('production web routes use RecordLink or a named adapter', () => {
+149 |   expect(production).toContain('apps/web/src/lib/entity-ref/RecordLink.tsx');
+150 |   expect(production).toContain('apps/web/src/app/router.tsx');
+151 |   expect(violations.filter(({ file }) => !Object.hasOwn(sources, file))).toEqual([]);
+                                                                               ^
+error: expect(received).toEqual(expected)
+
++ [
++   {
++     file: "apps/web/src/b13-record-link-mutant.tsx",
++     functionName: "BypassRecordLink",
++     line: 4,
++     target: "openRecord",
++   }
++ ]
+- []
+
+- Expected  - 1
++ Received  + 8
+
+      at <anonymous> (/private/tmp/orbis-b13-final-ci.07CROy/mutants/scripts/record-links.test.ts:151:74)
+(fail) production web routes use RecordLink or a named adapter [1.70ms]
+
+ 3 pass
+ 1 fail
+ 6 expect() calls
+Ran 4 tests across 1 files. [19.29s]

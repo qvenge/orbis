@@ -1,0 +1,10 @@
+создана лаб-запись 01a1a170-fd6e-7524-8d3b-f12b60d42ee0
+создана лаб-запись 01a1a171-012d-72da-8c8a-a53ddc7df8dc
+повтор 1/5
+повтор 2/5
+повтор 3/5
+повтор 4/5
+повтор 5/5
+записано: /Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-03-speed-plan-b/before-b-local.json (замеров 122; заметки: галочки на экране лаб-задачи нет; без сети: оболочка запущена, целевой экран за 10 с не появился)
+сжатие /trpc: {"user.getSettings":null,"user.seedOnboarding":null,"entity.query,entity.query,entity.query":null,"entity.resolveRefs":null,"entity.blocks":null,"entity.get,entity.query":null,"routine.proposalsForEntity,registry.effective":null,"supply.updates":null,"entity.get":null,"entity.create":null,"entity.query,entity.query,entity.query,entity.query,entity.get,supply.updates":null,"entity.query,entity.query,entity.query,entity.query,entity.get":null,"routine.proposalsForEntity,registry.effective,entity.get":null,"routine.proposalsForEntity":null,"agentRun.sweep":null,"entity.update":null,"version.list":null,"entity.query,entity.query,entity.query,user.getSettings":null,"chat.ensureThread":null,"chat.listMessages":null,"entity.query,entity.query,entity.query,entity.query,entity.get,entity.get":null,"perf.report":null}
+лаб-записи прогона: 01a1a170-fd6e-7524-8d3b-f12b60d42ee0, 01a1a171-012d-72da-8c8a-a53ddc7df8dc

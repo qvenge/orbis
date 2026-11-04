@@ -1,0 +1,61 @@
+{
+  "base": "49a4322077296c926176260346e1074cbc19203d",
+  "exactArchive": "/private/tmp/orbis-b13-r5.tG4gJU/candidate",
+  "resetFix2Manifest": "ad3dca530a9fc2c885a666f298bb450b4ccfaa1bfe9cd8c165cd3a7e7afb9b98",
+  "resetPathsVerified": {
+    "apps/web/src/features/entity-detail/DetailMenu.tsx": "38933f10ae431b35a504149fa63255c2e361823e26a08e1f0a581c185f33026a",
+    "apps/web/src/features/entity-detail/VersionsCard.tsx": "319e543bff14a252a289da231aae50da6d43920362fb54fdd8d9ca6a58b0635b",
+    "apps/web/src/features/entity-detail/freshness-reset.test.tsx": "4be1a131ea327ebf333c2d5c1f3c6bfc74af5aa51ff735ddd5a7aab4db597009",
+    "apps/web/src/features/entity-editor/useBodySave.ts": "714826e553e4ad6f00eaf1b2073ef41f6fec6049668bcf56bf3817dc829f92be",
+    "apps/web/src/features/page/menu.test.tsx": "512403cfbc987b093b5bbe9b1f6b465b5127f74472569de9cd0d99236a9f7879",
+    "apps/web/src/features/undo/body-provenance.ts": "dc3ddfa7c80781d24c45304ab856fd9845319a20467c270d8ddf085dc03e0a27",
+    "apps/web/src/lib/freshness/dependencies.ts": "314a725139fa67cc76b01e71a65dd4e86004a1af00ab0a8f1e6b11d80ec35177",
+    "apps/web/src/lib/freshness/provenance.ts": "df5da2345d3675f7bb835723b37c3783fc3f85558c8841b7babc5776e2b0df27",
+    "apps/web/src/lib/freshness/runtime.test.ts": "ce2c40330031b29a397e44e78d9b8fbcc658061a6bd20b61a93a55da26bd1d1c",
+    "apps/web/src/lib/freshness/runtime.ts": "9ba78f5be9738697f0991eaa92cba481804a6f42ac3a696785e7942aa508152b",
+    "apps/web/src/lib/freshness/transport.test.ts": "8363ca890d98fa8edadef060513c882e65e47bba7c8825bb57b03e037798bf9e",
+    "apps/web/src/lib/freshness/transport.ts": "25e8545f5ed5c6bde53e8c65aa5b2c069961ae129f1483a814ae5c6e8ef820f9",
+    "apps/web/src/lib/local-data/query-responses.ts": "f77f10e068468d505aff9b9ce130fa8ab8ba2b70b547cbe93b279a992a94112b",
+    "apps/web/src/lib/local-data/response-cache.ts": "20c76387a263d031eee1e03037987aeb4b6a185ae42516349dc32043f8778390"
+  },
+  "owned": {
+    "apps/web/src/lib/entity-ref/RecordLink.tsx": {
+      "before": "cf89cb14affeba881d125af69f382da523386f5a5e7fd0cc489ed3f6165ff622",
+      "after": "6b022ea4b09498718ea4cd8a2c503c2f9be9f39929ed1ae5d5a734c4344d3370"
+    },
+    "apps/web/src/lib/entity-ref/record-link-controller.ts": {
+      "before": "7452a78ba3af90c641c0ce28e8bb31380fe266e00b55b8c0822d3835b1aa89fa",
+      "after": "648bb3997c4610a335c9b7dc46b869f538b19197b7b58b9b3139f623ac6701a2"
+    },
+    "apps/web/src/features/entity-editor/BodyEditor.tsx": {
+      "before": "cf1f412e167d6f13648b81ee0f2810ea5d774de8c1ba0feb1bdb6f780ec48198",
+      "after": "c9647212f5de61f796047d7accea8d97026ae7c2169e2d77f1565985028e5bf1"
+    },
+    "apps/web/src/features/entity-editor/editor-record-links.ts": {
+      "before": "97f5fb025652bebff93c1b3e367f8b2e9356f7861d2c21bcc08b2f5e5af2520a",
+      "after": "9726823a6e07d1db920a5b54ffa6903ccf797e13a74c2cb8dad8b352364fdaae"
+    },
+    "apps/web/src/features/entity-detail/DetailMenu.tsx": {
+      "before": "38933f10ae431b35a504149fa63255c2e361823e26a08e1f0a581c185f33026a",
+      "after": "e0e5fd27783ffd11824b1fe99aa853a6b35c0a80c7e73a94fb53ea641640ba85"
+    },
+    "apps/web/src/lib/entity-ref/RecordLink.test.tsx": {
+      "before": "46588c51e8ec82586c79ac6d6e3ad86d21d25d197c86b659ad0113ffcfa71a67",
+      "after": "a187b9893fea9159dbcf1a0496854f0976a627bef2e27ec9b0663857ea8921a1"
+    },
+    "apps/web/src/features/entity-editor/editor-record-links.test.tsx": {
+      "before": "bf8110455a02ba7ce515eecd4b85b0abf4cf3c0213e6004d2c614d3bf4ef0f38",
+      "after": "68758c5d58bc91f6968568e03f018461ac7d7202bf428a66eae7db06d29e1383"
+    },
+    "apps/web/src/features/apps/open.test.tsx": {
+      "before": "e48d5bb4d1319f8a499421ab620822fc1f947915c007e6426d4441526a601905",
+      "after": "91b9b310db30789bc646c7f4be49a3cb39a9314c4773790869fe91d059813ad3"
+    },
+    "apps/web/src/features/entity-detail/copy-link.test.tsx": {
+      "before": "3554ba5110910bf932472385e2d77968ed405aeda4a5b831e80ee77c4cabfbe7",
+      "after": "2e0d41437ef2dd90aa14906c5418a70f8cc24f50c9041a82e92904d4e7dcfbc6"
+    }
+  },
+  "buildId": "49a4322077296c926176260346e1074cbc19203d",
+  "indexHtmlSha256": "b8bddea896435677ee206860ec5fe1cb68a3a7998a01434b7bd69a9f6782b68c"
+}

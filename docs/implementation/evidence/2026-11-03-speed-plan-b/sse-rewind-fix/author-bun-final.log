@@ -1,0 +1,14 @@
+bun test v1.2.7 (5c0fa6dc)
+
+apps/server/src/freshness/stream.test.ts:
+(pass) a pre-connect commit behind xmin catches up without another notification [104.02ms]
+(pass) verified expiry interrupts a blocked read and discards its late result [31.00ms]
+(pass) two different floor resets at one watermark and the complete reset all reach the stream [302.32ms]
+(pass) strict rewind idles until a new wake (old floor: %s) [453.67ms]
+(pass) strict rewind idles until a new wake (old floor: %s) [502.22ms]
+(pass) a wake during rewind reseeds the next snapshot and retries a held commit [702.61ms]
+
+ 6 pass
+ 0 fail
+ 24 expect() calls
+Ran 6 tests across 1 files. [2.29s]

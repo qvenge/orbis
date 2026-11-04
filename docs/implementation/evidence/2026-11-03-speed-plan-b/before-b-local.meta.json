@@ -1,0 +1,17 @@
+{
+  "raw": "before-b-local.json",
+  "rawSha256": "7929d34e445e01bd925b361ccb6d00566a2f4eb230d11536763405e1276445ef",
+  "productCommit": "b5abb7fe70068c06b7075ed54a2a0f3c3d729d7b",
+  "labCommit": "29b34a1469c2c4976fdafeebc28c061cfe68837c",
+  "webIndexSha256": "42e9d421c20b64083494dc38ae9e0558e305291a4540ee7e633c6f8c3579a0ef",
+  "clientVersion": "0.6.0",
+  "browser": "Google Chrome 156.0.8078.80",
+  "os": "macOS 26.2 x86_64",
+  "bun": "1.2.7",
+  "dbImage": "supabase/postgres:17.6.1.140",
+  "origin": "http://127.0.0.1:3009",
+  "network": "local loopback without throttling, browser offline probe",
+  "fixture": "synthetic owner, built-in onboarding, five records seeded via tRPC",
+  "repeat": 5,
+  "exitCode": 0
+}

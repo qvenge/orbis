@@ -1,0 +1,47 @@
+вес: DetailScreen-R_5rO27e.js — 22581 Б gzip при пороге 34889 Б (запас 12308 Б)
+check-lazy-chunks: эагерное замыкание DetailScreen-R_5rO27e.js — 363007 Б gzip -9, порог 325750 Б (превышение 37257 Б).
+Растёт первый кадр экрана, даже если сам файл чанка почти не изменился: rollup выносит
+общее в соседние чанки, и они едут вместе с ним. Состав замыкания (по весу):
+  index-C8QvvH3-.js — 135564 Б
+  percent-CIiZt7pr.js — 47823 Б
+  trpc-vfaN9TfY.js — 39259 Б
+  query-zpl7SAsu.js — 28147 Б
+  src-DrZqWEN5.js — 27858 Б
+  DetailScreen-R_5rO27e.js — 22540 Б
+  EntityBody-DDj4kRVw.js — 7633 Б
+  diff-CQExr4L7.js — 7465 Б
+  EditorShell-BCqctkgD.js — 6732 Б
+  use-relation-command-CMkDFv03.js — 4278 Б
+  dependencies-Yt-yvd8x.js — 3925 Б
+  navigation-Bk2tgVT8.js — 3726 Б
+  RecordLink-CmCW46mf.js — 3563 Б
+  dist-BBEu5IbE.js — 3024 Б
+  react-DbyrFoBd.js — 2881 Б
+  marks-cQWAgLM0.js — 2580 Б
+  Checkbox-DntfvXoI.js — 1829 Б
+  create-intent-scope-DrUJfspX.js — 1401 Б
+  react-dom-i-Mcm3wj.js — 1354 Б
+  arrows-stack-CRFQhxn_.js — 1305 Б
+  useUpdateBatch-DlqfPkZz.js — 954 Б
+  createLucideIcon-C0O-yxZG.js — 795 Б
+  storage-POQnC19S.js — 795 Б
+  strip-ids-BVRgKWNC.js — 733 Б
+  render-plan-Cp_go3AH.js — 627 Б
+  jsx-runtime-DUAcabCT.js — 605 Б
+  useTicketRuns-_Rr1d6Vg.js — 539 Б
+  Button-BGJBQZL9.js — 514 Б
+  EntityRef-BKZPiZHb.js — 508 Б
+  record-host-49soktl3.js — 492 Б
+  useSupplyRecords-Bm9NBLsz.js — 491 Б
+  types-CThkjXwz.js — 485 Б
+  body-flush-EgwrIn4X.js — 484 Б
+  Chip-yMwNUsVw.js — 371 Б
+  dist-CwzjpFFk.js — 370 Б
+  extension-mask-RVeZwwxl.js — 299 Б
+  orbis-error-ob5HeVvg.js — 297 Б
+  screen-9ebIsZMJ.js — 295 Б
+  template-for-CPGGQyF8.js — 158 Б
+  x-D8-5ObQH.js — 152 Б
+  detail-input-CRtcw6nD.js — 110 Б
+  supply-CRBR_ylz.js — 46 Б
+Порог не поднимать: найдите статический импорт, притащивший вес, и сделайте его ленивым.

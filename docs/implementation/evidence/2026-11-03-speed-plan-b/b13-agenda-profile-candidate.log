@@ -1,0 +1,26 @@
+$ bun run --filter @orbis/server test:perf
+@orbis/server test:perf: bun test v1.2.7 (5c0fa6dc)
+@orbis/server test:perf: 
+@orbis/server test:perf: perf/perf.test.ts:
+@orbis/server test:perf: perf: seed 52481ms
+@orbis/server test:perf: (pass) фикстура наполнена: гейт меряет данные, а не пустой граф [645.14ms]
+@orbis/server test:perf: perf: entity.query:list50 median=16.2ms runs=7
+@orbis/server test:perf: perf: entity.count:badge median=16.0ms runs=7
+@orbis/server test:perf: perf: budget.overview median=87.4ms runs=5
+@orbis/server test:perf: perf: agenda:horizon median=42.4ms runs=5
+@orbis/server test:perf: perf: entity.backlinks median=39.7ms runs=7
+@orbis/server test:perf: perf: fastpath:create median=99.9ms runs=5
+@orbis/server test:perf: perf: goal.progress median=40.2ms runs=7
+@orbis/server test:perf: perf: entity.blocks:10 median=94.8ms runs=7
+@orbis/server test:perf: perf: agenda:page median=119.0ms runs=5
+@orbis/server test:perf: agenda_profile {"spans":[{"phase1_identity":3.5240599999960978,"phase1_context":5.371147000005294,"phase1_prepare":3.0895949999976438,"phase1_end":2.5434150000000955,"materialize":13.62321399999928,"phase2_identity":4.542295999999624,"phase2_execute_all":86.13726699999825,"phase2_end":2.37536099999852},{"phase1_identity":3.8336679999993066,"phase1_context":4.7779369999989285,"phase1_prepare":3.616777999995975,"phase1_end":1.3690530000021681,"materialize":17.864260000002105,"phase2_identity":5.127057999998215,"phase2_execute_all":85.83442400000058,"phase2_end":0.8551319999969564},{"phase1_identity":2.807229999998526,"phase1_context":3.8133319999978994,"phase1_prepare":2.4987509999991744,"phase1_end":0.9243439999991097,"materialize":15.175945000002685,"phase2_identity":3.0562859999990906,"phase2_execute_all":84.03695999999763,"phase2_end":1.008564000003389},{"phase1_identity":3.7864489999992657,"phase1_context":7.145127000003413,"phase1_prepare":2.367194999998901,"phase1_end":0.9426129999992554,"materialize":20.460519000000204,"phase2_identity":3.3400089999995544,"phase2_execute_all":79.62341100000049,"phase2_end":0.9604499999986729},{"phase1_identity":2.948473999997077,"phase1_context":4.37142500000482,"phase1_prepare":2.9247509999986505,"phase1_end":0.9542960000035237,"materialize":15.214522999995097,"phase2_identity":4.326719000004232,"phase2_execute_all":81.67366399999446,"phase2_end":1.100774000005913}],"totals":[121.69617399999697,123.65767600000254,113.6677869999985,118.9588769999973,113.88514700000087]}
+@orbis/server test:perf: (pass) перф-бюджеты серверных операций [3232.99ms]
+@orbis/server test:perf: perf: spent-cache read(40) p95=4.9ms median=2.9ms runs=40 samples=[4.9, 3.3, 3.1, 3.3, 2.9, 2.7, 3.4, 2.9, 3.1, 3.0, 2.7, 4.5, 3.0, 3.1, 2.9, 2.8, 4.0, 2.4, 2.4, 2.6, 2.4, 2.3, 2.4, 3.2, 2.6, 2.9, 2.8, 2.9, 2.8, 2.7, 2.5, 2.5, 2.6, 2.4, 2.4, 3.8, 4.6, 4.4, 5.0, 6.4]
+@orbis/server test:perf: perf: spent-cache read(40)+tx p95=10.2ms median=6.9ms runs=40 samples=[13.3, 14.5, 8.2, 7.2, 10.2, 6.7, 5.6, 7.0, 5.9, 8.5, 5.9, 6.8, 7.6, 6.0, 5.9, 6.7, 5.5, 6.4, 6.8, 5.8, 5.9, 6.8, 5.9, 7.7, 6.3, 7.2, 8.2, 8.5, 8.4, 7.1, 7.7, 7.1, 7.4, 8.4, 6.3, 6.9, 5.9, 8.1, 5.8, 5.3]
+@orbis/server test:perf: (pass) приёмка §С8-16: p95 чтения прогретого кэша spent (40 конвертов) ≤ 10 мс [666.97ms]
+@orbis/server test:perf: 
+@orbis/server test:perf:  3 pass
+@orbis/server test:perf:  0 fail
+@orbis/server test:perf:  28 expect() calls
+@orbis/server test:perf: Ran 3 tests across 1 files. [57.80s]
+@orbis/server test:perf: Exited with code 0

@@ -1,0 +1,15 @@
+candidate exit=1
+5:@orbis/server test:perf: agenda_after_seed_catalog [{"relname":"change_feed","n_live_tup":"4902","n_dead_tup":"0","last_analyze":"2026-11-03 13:04:30.912665+00","last_autoanalyze":"2026-11-04 16:36:34.789995+00","last_autovacuum":"2026-11-04 16:36:34.743631+00"},{"relname":"entities","n_live_tup":"3036","n_dead_tup":"0","last_analyze":"2026-11-04 16:37:11.870369+00","last_autoanalyze":"2026-11-04 16:36:34.978176+00","last_autovacuum":"2026-11-04 16:34:34.869707+00"},{"relname":"relations","n_live_tup":"1863","n_dead_tup":"0","last_analyze":"2026-11-04 16:37:11.888363+00","last_autoanalyze":"2026-11-04 16:36:34.801509+00","last_autovacuum":"2026-11-04 16:27:35.925305+00"}]
+7:@orbis/server test:perf: agenda_fixture_sizes [480,500,30]
+17:@orbis/server test:perf: perf: agenda:page median=484.1ms runs=5
+31:@orbis/server test:perf: +   "agenda:page=484ms"
+Traceback (most recent call last):
+  File "/private/tmp/orbis-b13-final-ci.07CROy/prepare-agenda-sql.py", line 54, in <module>
+    source = once(source, "async function executePlan(sp: Tx, plan: Plan): Promise<BlockSuccess> {", """async function executePlan(
+      sp: Tx,
+      plan: Plan,
+      profile?: Record<string, number>,
+    ): Promise<BlockSuccess> {""")
+  File "/private/tmp/orbis-b13-final-ci.07CROy/prepare-agenda-sql.py", line 13, in once
+    raise ValueError(old)
+ValueError: async function executePlan(sp: Tx, plan: Plan): Promise<BlockSuccess> {

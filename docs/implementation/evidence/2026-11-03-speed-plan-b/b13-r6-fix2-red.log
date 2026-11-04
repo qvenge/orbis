@@ -1,0 +1,86 @@
+$ vitest run src/features/entity-detail/history-lifecycle.test.tsx src/features/entity-editor/title-history.test.ts --maxWorkers "1" -t "first accepted title after|first network read|promoting a disk title"
+
+ RUN  v4.1.9 /private/tmp/orbis-b13-r6-fix2.twecTD/candidate/apps/web
+
+ ❯ src/features/entity-detail/history-lifecycle.test.tsx (83 tests | 1 failed | 79 skipped) 1444ms
+   × first accepted title after an editable disk restore: foreign 212ms
+ ❯ src/features/entity-editor/title-history.test.ts (25 tests | 4 failed | 21 skipped) 10ms
+   × only the first network read decides whether the unconfirmed title basis is foreign 6ms
+   × a first network read of the disk title preserves a different pending presentation 1ms
+   × a first network read begun before an own ACK promotes the disk basis and keeps attribution 1ms
+   × promoting a disk title retires it as the basis for later network changes 1ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 5 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/features/entity-editor/title-history.test.ts > only the first network read decides whether the unconfirmed title basis is foreign
+TypeError: rememberUnconfirmedTitle is not a function
+ ❯ src/features/entity-editor/title-history.test.ts:310:3
+    308|
+    309| test('only the first network read decides whether the unconfirmed titl…
+    310|   rememberUnconfirmedTitle('e', 'disk A');
+       |   ^
+    311|   expect(observeTitleValue('e', 'disk A')).toBe(false);
+    312|   recordTitleChange('e', 'disk A', 'draft');
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/5]⎯
+
+ FAIL  src/features/entity-editor/title-history.test.ts > a first network read of the disk title preserves a different pending presentation
+TypeError: rememberUnconfirmedTitle is not a function
+ ❯ src/features/entity-editor/title-history.test.ts:319:3
+    317|
+    318| test('a first network read of the disk title preserves a different pen…
+    319|   rememberUnconfirmedTitle('e', 'A');
+       |   ^
+    320|   expect(observeTitleValue('e', 'A')).toBe(false);
+    321|   const sent = markTitleSent('e', 'C');
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/5]⎯
+
+ FAIL  src/features/entity-editor/title-history.test.ts > a first network read begun before an own ACK promotes the disk basis and keeps attribution
+TypeError: rememberUnconfirmedTitle is not a function
+ ❯ src/features/entity-editor/title-history.test.ts:328:3
+    326|
+    327| test('a first network read begun before an own ACK promotes the disk b…
+    328|   rememberUnconfirmedTitle('e', 'A');
+       |   ^
+    329|   expect(observeTitleValue('e', 'A')).toBe(false);
+    330|   const sent = markTitleSent('e', 'C');
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/5]⎯
+
+ FAIL  src/features/entity-editor/title-history.test.ts > promoting a disk title retires it as the basis for later network changes
+TypeError: rememberUnconfirmedTitle is not a function
+ ❯ src/features/entity-editor/title-history.test.ts:339:3
+    337|
+    338| test('promoting a disk title retires it as the basis for later network…
+    339|   rememberUnconfirmedTitle('e', 'A');
+       |   ^
+    340|   expect(observeAcceptedTitle('e', 'A')).toBe(false);
+    341|   expect(observeAcceptedTitle('e', 'D')).toBe(true);
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/5]⎯
+
+ FAIL  src/features/entity-detail/history-lifecycle.test.tsx > first accepted title after an editable disk restore: foreign
+Error: expect(element).toHaveValue(Несохранённый ввод)
+
+Expected the element to have value:
+  Несохранённый ввод
+Received:
+  План
+ ❯ src/features/entity-detail/history-lifecycle.test.tsx:2327:23
+    2325|         expect(arrow).toBeDisabled();
+    2326|         expect(canUndoStep('e1')).toBe(false);
+    2327|         expect(field).toHaveValue(shown);
+       |                       ^
+    2328|         expect(writes).not.toHaveBeenCalled();
+    2329|         expect(storedTitle).toBe('Чужое имя Д');
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[5/5]⎯
+
+
+ Test Files  2 failed (2)
+      Tests  5 failed | 3 passed | 100 skipped (108)
+   Start at  22:20:15
+   Duration  9.98s (transform 3.56s, setup 380ms, import 5.43s, tests 1.45s, environment 2.24s)
+
+error: script "test" exited with code 1

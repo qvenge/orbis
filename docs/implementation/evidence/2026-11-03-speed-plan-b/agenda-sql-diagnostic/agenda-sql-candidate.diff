@@ -1,0 +1,266 @@
+diff --git a/apps/server/perf/perf.test.ts b/apps/server/perf/perf.test.ts
+index d2b854ac..5b8180bc 100644
+--- a/apps/server/perf/perf.test.ts
++++ b/apps/server/perf/perf.test.ts
+@@ -36,6 +36,7 @@ import { readSpentCache, writeSpentCache } from '../src/budget/spent-cache';
+ import { withIdentity } from '../src/db/with-identity';
+ import { readRegistryVersions } from '../src/registry/version';
+ import { appRouter } from '../src/router';
++import { agendaProbe, explainAgendaProbe } from '../src/routers/entity-blocks';
+ import {
+   measureMedian,
+   measureP95,
+@@ -265,6 +266,12 @@ beforeAll(async () => {
+   await truncateAll();
+   const t0 = performance.now();
+   await seedPerfFixture(db, user);
++  const afterSeed = await db.execute(sql`select relname, n_live_tup, n_dead_tup, last_analyze,
++      last_autoanalyze, last_autovacuum
++    from pg_stat_user_tables
++    where relname in ('entities', 'relations', 'change_feed')
++    order by relname`);
++  console.log('agenda_after_seed_catalog', JSON.stringify([...afterSeed]));
+   console.log(`perf: seed ${(performance.now() - t0).toFixed(0)}ms`);
+ });
+ 
+@@ -302,6 +309,7 @@ test('фикстура наполнена: гейт меряет данные, 
+     throw new Error(`блок Повестки ${key}: вид ${r.kind}`);
+   });
+   expect(sizes.every((n) => n > 0)).toBe(true);
++  console.log('agenda_fixture_sizes', JSON.stringify(sizes));
+ 
+   const detail = await caller.entity.get({ id: perfHubId(user), include: [...DETAIL_INCLUDE] });
+   // Потолок секции «Связанное» — 100 (entity-read.ts): обратных ссылок засеяно больше,
+@@ -407,12 +415,24 @@ test('перф-бюджеты серверных операций', async () =>
+     ],
+     [
+       'agenda:page',
+-      await measureMedian('agenda:page', 5, () =>
+-        caller.entity.blocks({ blocks: AGENDA_PAGE_BLOCKS }),
+-      ),
++      await measureMedian('agenda:page', 5, async () => {
++        agendaProbe.active = true;
++        const start = performance.now();
++        try {
++          await caller.entity.blocks({ blocks: AGENDA_PAGE_BLOCKS });
++        } finally {
++          agendaProbe.totals.push(performance.now() - start);
++          agendaProbe.active = false;
++        }
++      }),
+     ],
+   ];
+ 
++  console.log('agenda_profile', JSON.stringify({
++    spans: agendaProbe.spans, totals: agendaProbe.totals, blockSpans: agendaProbe.blockSpans,
++  }));
++  console.log('agenda_explain', JSON.stringify(await explainAgendaProbe(db, personal(user))));
++
+   // Сначала — что измерено ровно то, для чего заведены пороги. Без этой сверки опечатка
+   // в ключе делает порог недостижимым (`ms > undefined` — всегда false), и гейт зеленеет
+   // навсегда, ничего не проверяя: молчаливо мёртвый гейт хуже отсутствующего.
+diff --git a/apps/server/src/routers/entity-blocks.ts b/apps/server/src/routers/entity-blocks.ts
+index 5a1bf2ca..a6e52b6b 100644
+--- a/apps/server/src/routers/entity-blocks.ts
++++ b/apps/server/src/routers/entity-blocks.ts
+@@ -26,7 +26,8 @@ import {
+   type QueryFieldRef,
+   tokenEdges,
+ } from '@orbis/shared/query';
+-import { and, eq, inArray, type SQL } from 'drizzle-orm';
++import { and, eq, inArray, sql, type SQL } from 'drizzle-orm';
++import { PgDialect } from 'drizzle-orm/pg-core';
+ import type { Db } from '../db/client';
+ import { entities } from '../db/schema';
+ import { type Tx, withIdentity } from '../db/with-identity';
+@@ -378,8 +379,15 @@ function compileBlock(
+ async function shownRows(
+   sp: Tx,
+   plan: { sql: SQL; limit: number },
++  profile?: Record<string, number>,
+ ): Promise<{ rows: Record<string, unknown>[]; more: number }> {
++  const queryStarted = profile ? performance.now() : 0;
+   const raw = [...(await sp.execute(plan.sql))] as Record<string, unknown>[];
++  if (profile) {
++    profile.query = performance.now() - queryStarted;
++    profile.rawRows = raw.length;
++    profile.limit = plan.limit;
++  }
+   if (raw.length <= plan.limit) return { rows: raw, more: 0 };
+   return {
+     rows: raw.slice(0, plan.limit),
+@@ -405,25 +413,30 @@ function unionWindow(a: Window | null, b: Window | null): Window | null {
+   return { from: b.from < a.from ? b.from : a.from, to: b.to > a.to ? b.to : a.to };
+ }
+ 
+-async function executePlan(sp: Tx, plan: Plan): Promise<BlockSuccess> {
++async function executePlan(
++  sp: Tx,
++  plan: Plan,
++  profile?: Record<string, number>,
++): Promise<BlockSuccess> {
+   switch (plan.kind) {
+     case 'rows': {
+-      const { rows, more } = await shownRows(sp, plan);
+-      return {
+-        ok: true,
+-        kind: 'rows',
+-        rows: rows.map(toWireEntityFromSql),
+-        more,
+-        closedIds: closedIdsOf(rows),
+-      };
++      const { rows, more } = await shownRows(sp, plan, profile);
++      const start = profile ? performance.now() : 0;
++      const wire = rows.map(toWireEntityFromSql);
++      const closedIds = closedIdsOf(rows);
++      if (profile) profile.wireLayout = performance.now() - start;
++      return { ok: true, kind: 'rows', rows: wire, more, closedIds };
+     }
+     case 'groups': {
+-      const { rows, more } = await shownRows(sp, plan);
++      const { rows, more } = await shownRows(sp, plan, profile);
++      const mapStarted = profile ? performance.now() : 0;
+       const input: DayGroupInputRow[] = rows.map((r) => ({
+         entity: toWireEntityFromSql(r),
+         keyAt: isoOrNull(r.__key_at),
+         dates: (r.__when_dates as DayGroupInputRow['dates'] | null) ?? [],
+       }));
++      const layoutStarted = profile ? performance.now() : 0;
++      if (profile) profile.wire = layoutStarted - mapStarted;
+       const { groups } = layoutDayGroups({
+         rows: input,
+         more,
+@@ -432,7 +445,9 @@ async function executePlan(sp: Tx, plan: Plan): Promise<BlockSuccess> {
+         reg: plan.reg,
+         field: plan.field,
+       });
+-      return { ok: true, kind: 'groups', groups, more, closedIds: closedIdsOf(rows) };
++      const closedIds = closedIdsOf(rows);
++      if (profile) profile.layout = performance.now() - layoutStarted;
++      return { ok: true, kind: 'groups', groups, more, closedIds };
+     }
+     case 'count': {
+       const rows = await sp.execute(plan.sql);
+@@ -471,7 +486,24 @@ async function executeAll(tx: Tx, prepared: Prepared[]): Promise<EntityBlocksRes
+       continue;
+     }
+     try {
+-      const result = await tx.transaction((sp) => executePlan(sp, p.plan));
++      const plan = p.plan;
++      let result: BlockSuccess;
++      if (agendaProbe.active) {
++        const span: Record<string, number> = {};
++        const start = performance.now();
++        result = await tx.transaction(async (sp) => {
++          const entered = performance.now();
++          const value = await executePlan(sp, plan, span);
++          span.callback = performance.now() - entered;
++          return value;
++        });
++        span.savepointTotal = performance.now() - start;
++        span.outsideCallback = span.savepointTotal - span.callback;
++        agendaProbe.blockSpans.push({ key: p.key, kind: plan.kind, span });
++        agendaProbe.plans.set(p.key, plan);
++      } else {
++        result = await tx.transaction((sp) => executePlan(sp, plan));
++      }
+       entries.push([p.key, { ...result, freshness: p.freshness }]);
+     } catch (e) {
+       // Молча гасить нельзя (конвенция fail-soft сервера): без строки в журнале отказ
+@@ -514,6 +546,35 @@ async function executeAll(tx: Tx, prepared: Prepared[]): Promise<EntityBlocksRes
+  * ради сверки групп по дням на фиксированном «сегодня» мира (`day-groups.dataset.test.ts`); роутер его
+  * не передаёт.
+  */
++export const agendaProbe = {
++  active: false,
++  spans: [] as Record<string, number>[],
++  totals: [] as number[],
++  blockSpans: [] as { key: string; kind: Plan['kind']; span: Record<string, number> }[],
++  plans: new Map<string, { kind: Plan['kind']; sql: SQL }>(),
++};
++
++export async function explainAgendaProbe(db: Db, identity: Identity) {
++  const plans = [...agendaProbe.plans.entries()];
++  if (plans.length !== 3) throw Error('Expected the three executed Agenda page plans');
++  const dialect = new PgDialect();
++  return withIdentity(db, identity, async (tx) => {
++    const effective = await tx.execute(sql`select current_user as role, session_user as session_role,
++      current_setting('jit') as jit, current_setting('plan_cache_mode') as plan_cache_mode,
++      current_setting('work_mem') as work_mem`);
++    const evidence = [];
++    for (const [key, plan] of plans) {
++      const statement = dialect.sqlToQuery(plan.sql);
++      const explanation = await tx.execute(
++        sql`explain (analyze, buffers, settings, timing off, format json) ${plan.sql}`,
++      );
++      evidence.push({ key, kind: plan.kind, statement, explanation: [...explanation] });
++    }
++    return { effective: [...effective], evidence };
++  });
++}
++
++
+ export async function runBlocks(
+   db: Db,
+   identity: Identity,
+@@ -529,10 +590,23 @@ export async function runBlocks(
+         today: string;
+         timeZone: string;
+       };
++  const spans: Record<string, number> = {};
++  let last = performance.now();
++  const mark = (name: string) => {
++    if (!agendaProbe.active) return;
++    const now = performance.now();
++    spans[name] = now - last;
++    last = now;
++  };
++  const record = () => {
++    if (agendaProbe.active) agendaProbe.spans.push(spans);
++  };
+   const phase1 = await withIdentity(db, identity, async (tx): Promise<Phase1> => {
++    mark('phase1_identity');
+     const base = await queryContext(tx, identity.graph, null, now);
+     // Триггеры и горизонт — из того же снимка, по которому блоки разобраны и исполнятся.
+     const params = materializeRuleOf(base.reg).rule.params;
++    mark('phase1_context');
+     const badges = await prepareBadges(
+       tx,
+       identity,
+@@ -544,6 +618,7 @@ export async function runBlocks(
+     const prepared = blocks.map((b) =>
+       'badgeOf' in b ? (badges.get(b.key) as Prepared) : prepareBlock(b, base, params),
+     );
++    mark('phase1_prepare');
+     const window = prepared.reduce<Window | null>(
+       (acc, p) => (p.kind === 'planned' ? unionWindow(acc, p.window) : acc),
+       null,
+@@ -556,7 +631,11 @@ export async function runBlocks(
+     }
+     return { kind: 'materialize', window, prepared, ...top };
+   });
+-  if (phase1.kind === 'done') return phase1.result;
++  mark('phase1_end');
++  if (phase1.kind === 'done') {
++    record();
++    return phase1.result;
++  }
+   await materializeInstances({
+     db,
+     identity,
+@@ -564,6 +643,14 @@ export async function runBlocks(
+     to: phase1.window.to,
+     today: phase1.today,
+   });
+-  const results = await withIdentity(db, identity, (tx) => executeAll(tx, phase1.prepared));
++  mark('materialize');
++  const results = await withIdentity(db, identity, async (tx) => {
++    mark('phase2_identity');
++    const rows = await executeAll(tx, phase1.prepared);
++    mark('phase2_execute_all');
++    return rows;
++  });
++  mark('phase2_end');
++  record();
+   return { results, today: phase1.today, timeZone: phase1.timeZone };
+ }

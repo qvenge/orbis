@@ -1,0 +1,159 @@
+
+ RUN  v4.1.9 /private/tmp/orbis-b13-sse-rewind.puWLKh/candidate/apps/web
+
+{"holdFloor":false,"reads":[{"at":0,"from":"100"},{"at":50,"from":"101"},{"at":150,"from":"20"},{"at":350,"from":"20"},{"at":750,"from":"20"},{"at":1550,"from":"20"},{"at":3150,"from":"20"},{"at":5150,"from":"20"},{"at":7150,"from":"20"},{"at":9150,"from":"20"},{"at":11150,"from":"20"}],"idle":[{"at":150,"from":"20"},{"at":350,"from":"20"},{"at":750,"from":"20"},{"at":1550,"from":"20"},{"at":3150,"from":"20"},{"at":5150,"from":"20"},{"at":7150,"from":"20"},{"at":9150,"from":"20"}],"newCommitAt":10100,"newCommitLatency":1050}
+{"holdFloor":true,"reads":[{"at":0,"from":"100"},{"at":100,"from":"101"},{"at":300,"from":"20"},{"at":700,"from":"20"},{"at":1500,"from":"20"},{"at":3100,"from":"20"},{"at":5100,"from":"20"},{"at":7100,"from":"20"},{"at":9100,"from":"20"},{"at":11100,"from":"20"}],"idle":[{"at":300,"from":"20"},{"at":700,"from":"20"},{"at":1500,"from":"20"},{"at":3100,"from":"20"},{"at":5100,"from":"20"},{"at":7100,"from":"20"},{"at":9100,"from":"20"}],"newCommitAt":10100,"newCommitLatency":1000}
+ × src/lib/freshness/sse-rewind.probe.test.ts > B13 active SSE reader across an authoritative strict lowering > returns to idle safety cadence after strict lowering (old provisional floor=false) 18ms
+   → expected [ { at: 150, from: '20' }, …(7) ] to deeply equal []
+   → expected 1050 to be 50 // Object.is equality
+ × src/lib/freshness/sse-rewind.probe.test.ts > B13 active SSE reader across an authoritative strict lowering > returns to idle safety cadence after strict lowering (old provisional floor=true) 3ms
+   → expected [ { at: 300, from: '20' }, …(6) ] to deeply equal []
+   → expected 1000 to be 50 // Object.is equality
+ ✓ src/lib/freshness/sse-rewind.probe.test.ts > B13 ordinary provisional to complete retains held-xmin retry then becomes idle 1ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 2 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/lib/freshness/sse-rewind.probe.test.ts > B13 active SSE reader across an authoritative strict lowering > returns to idle safety cadence after strict lowering (old provisional floor=false)
+AssertionError: expected [ { at: 150, from: '20' }, …(7) ] to deeply equal []
+
+- Expected
++ Received
+
+- []
++ [
++   {
++     "at": 150,
++     "from": "20",
++   },
++   {
++     "at": 350,
++     "from": "20",
++   },
++   {
++     "at": 750,
++     "from": "20",
++   },
++   {
++     "at": 1550,
++     "from": "20",
++   },
++   {
++     "at": 3150,
++     "from": "20",
++   },
++   {
++     "at": 5150,
++     "from": "20",
++   },
++   {
++     "at": 7150,
++     "from": "20",
++   },
++   {
++     "at": 9150,
++     "from": "20",
++   },
++ ]
+
+ ❯ src/lib/freshness/sse-rewind.probe.test.ts:82:27
+     80|         process.stdout.write(JSON.stringify({ holdFloor, reads, idle, …
+     81|         expect(next.value).toMatchObject({ watermark: '21', transactio…
+     82|         expect.soft(idle).toEqual([]);
+       |                           ^
+     83|         expect.soft(newCommitLatency).toBe(50);
+     84|       } finally {
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/4]⎯
+
+ FAIL  src/lib/freshness/sse-rewind.probe.test.ts > B13 active SSE reader across an authoritative strict lowering > returns to idle safety cadence after strict lowering (old provisional floor=false)
+AssertionError: expected 1050 to be 50 // Object.is equality
+
+- Expected
++ Received
+
+- 50
++ 1050
+
+ ❯ src/lib/freshness/sse-rewind.probe.test.ts:83:39
+     81|         expect(next.value).toMatchObject({ watermark: '21', transactio…
+     82|         expect.soft(idle).toEqual([]);
+     83|         expect.soft(newCommitLatency).toBe(50);
+       |                                       ^
+     84|       } finally {
+     85|         stop.abort();
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/4]⎯
+
+ FAIL  src/lib/freshness/sse-rewind.probe.test.ts > B13 active SSE reader across an authoritative strict lowering > returns to idle safety cadence after strict lowering (old provisional floor=true)
+AssertionError: expected [ { at: 300, from: '20' }, …(6) ] to deeply equal []
+
+- Expected
++ Received
+
+- []
++ [
++   {
++     "at": 300,
++     "from": "20",
++   },
++   {
++     "at": 700,
++     "from": "20",
++   },
++   {
++     "at": 1500,
++     "from": "20",
++   },
++   {
++     "at": 3100,
++     "from": "20",
++   },
++   {
++     "at": 5100,
++     "from": "20",
++   },
++   {
++     "at": 7100,
++     "from": "20",
++   },
++   {
++     "at": 9100,
++     "from": "20",
++   },
++ ]
+
+ ❯ src/lib/freshness/sse-rewind.probe.test.ts:82:27
+     80|         process.stdout.write(JSON.stringify({ holdFloor, reads, idle, …
+     81|         expect(next.value).toMatchObject({ watermark: '21', transactio…
+     82|         expect.soft(idle).toEqual([]);
+       |                           ^
+     83|         expect.soft(newCommitLatency).toBe(50);
+     84|       } finally {
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/4]⎯
+
+ FAIL  src/lib/freshness/sse-rewind.probe.test.ts > B13 active SSE reader across an authoritative strict lowering > returns to idle safety cadence after strict lowering (old provisional floor=true)
+AssertionError: expected 1000 to be 50 // Object.is equality
+
+- Expected
++ Received
+
+- 50
++ 1000
+
+ ❯ src/lib/freshness/sse-rewind.probe.test.ts:83:39
+     81|         expect(next.value).toMatchObject({ watermark: '21', transactio…
+     82|         expect.soft(idle).toEqual([]);
+     83|         expect.soft(newCommitLatency).toBe(50);
+       |                                       ^
+     84|       } finally {
+     85|         stop.abort();
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/4]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  2 failed | 1 passed (3)
+   Start at  22:48:49
+   Duration  2.18s (transform 578ms, setup 182ms, import 1.02s, tests 24ms, environment 767ms)
+

@@ -1,0 +1,12 @@
+$ vitest run "src/features/entity-detail/history-lifecycle.b13-r6-first-disk-cas.test.tsx" --maxWorkers "1" -t "B13 independent first disk"
+
+ RUN  v4.1.9 /private/tmp/orbis-b13-r6-fix2.twecTD/independent-probe/apps/web
+
+{"before":{"disk":"disk","raw":"План","undo":true,"disabled":false},"after":{"title":"План","writes":[[{"id":"e1","title":"План","expectedTitle":"План"}]],"storedTitle":"План"}}
+{"before":{"disk":"disk","raw":"Чужое имя Д","undo":false,"disabled":true},"after":{"title":"Набранный заголовок","writes":[],"storedTitle":"Чужое имя Д"}}
+
+ Test Files  1 passed (1)
+      Tests  2 passed | 79 skipped (81)
+   Start at  22:22:04
+   Duration  8.24s (transform 3.00s, setup 249ms, import 4.60s, tests 1.18s, environment 1.91s)
+

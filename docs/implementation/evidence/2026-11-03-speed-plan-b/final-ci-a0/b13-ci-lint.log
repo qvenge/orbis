@@ -1,0 +1,307 @@
+$ biome check .
+apps/web/src/auth/supabase.test.ts:377:20 lint/style/useTemplate  FIXABLE  ━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  i Template literals are preferred over string concatenation.
+  
+    375 │     user: { id: owner },
+    376 │     access_token: accessToken(owner, expiresAt),
+  > 377 │     refresh_token: 'refresh-' + owner,
+        │                    ^^^^^^^^^^^^^^^^^^
+    378 │     expires_at: expiresAt,
+    379 │     expires_in: 3600,
+  
+  i Unsafe fix: Use a template literal.
+  
+    375 375 │       user: { id: owner },
+    376 376 │       access_token: accessToken(owner, expiresAt),
+    377     │ - ····refresh_token:·'refresh-'·+·owner,
+        377 │ + ····refresh_token:·`refresh-${owner}`,
+    378 378 │       expires_at: expiresAt,
+    379 379 │       expires_in: 3600,
+  
+
+scripts/coverage-report.test.ts:49:28 lint/complexity/useLiteralKeys  FIXABLE  ━━━━━━━━━━━━━━━━━━━━━
+
+  i The computed expression can be simplified without the use of a string literal.
+  
+    47 │ test('три корзины: раскладка полная — сумма корзин равна числу мест', () => {
+    48 │   const cov = parseCoverage(md);
+  > 49 │   const sum = cov.byBasket['данные'] + cov.byBasket['машинерия B'] + cov.byBasket['остаток C'];
+       │                            ^^^^^^^^
+    50 │   expect(sum).toBe(cov.places);
+    51 │   // Именованный остаток по ведущему роду — 12 мест; по любому упоминанию (включая вторые
+  
+  i Unsafe fix: Use a literal key instead.
+  
+    47 47 │   test('три корзины: раскладка полная — сумма корзин равна числу мест', () => {
+    48 48 │     const cov = parseCoverage(md);
+    49    │ - ··const·sum·=·cov.byBasket['данные']·+·cov.byBasket['машинерия·B']·+·cov.byBasket['остаток·C'];
+       49 │ + ··const·sum·=·cov.byBasket.данные·+·cov.byBasket['машинерия·B']·+·cov.byBasket['остаток·C'];
+    50 50 │     expect(sum).toBe(cov.places);
+    51 51 │     // Именованный остаток по ведущему роду — 12 мест; по любому упоминанию (включая вторые
+  
+
+scripts/coverage-report.ts:221:61 lint/complexity/useLiteralKeys  FIXABLE  ━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  i The computed expression can be simplified without the use of a string literal.
+  
+    219 │   for (const z of cov.zones) {
+    220 │     L.push(
+  > 221 │       `| ${z.zone} | ${z.rows} | ${z.places} | ${z.byBasket['данные']} | ${z.byBasket['машинерия B']} | ${z.byBasket['остаток C']} |`,
+        │                                                             ^^^^^^^^
+    222 │     );
+    223 │   }
+  
+  i Unsafe fix: Use a literal key instead.
+  
+    219 219 │     for (const z of cov.zones) {
+    220 220 │       L.push(
+    221     │ - ······`|·${z.zone}·|·${z.rows}·|·${z.places}·|·${z.byBasket['данные']}·|·${z.byBasket['машинерия·B']}·|·${z.byBasket['остаток·C']}·|`,
+        221 │ + ······`|·${z.zone}·|·${z.rows}·|·${z.places}·|·${z.byBasket.данные}·|·${z.byBasket['машинерия·B']}·|·${z.byBasket['остаток·C']}·|`,
+    222 222 │       );
+    223 223 │     }
+  
+
+scripts/coverage-report.ts:225:59 lint/complexity/useLiteralKeys  FIXABLE  ━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  i The computed expression can be simplified without the use of a string literal.
+  
+    223 │   }
+    224 │   L.push(
+  > 225 │     `| **Итого** | | **${cov.places}** | **${cov.byBasket['данные']}** | **${cov.byBasket['машинерия B']}** | **${cov.byBasket['остаток C']}** |`,
+        │                                                           ^^^^^^^^
+    226 │   );
+    227 │   L.push(
+  
+  i Unsafe fix: Use a literal key instead.
+  
+    223 223 │     }
+    224 224 │     L.push(
+    225     │ - ····`|·**Итого**·|·|·**${cov.places}**·|·**${cov.byBasket['данные']}**·|·**${cov.byBasket['машинерия·B']}**·|·**${cov.byBasket['остаток·C']}**·|`,
+        225 │ + ····`|·**Итого**·|·|·**${cov.places}**·|·**${cov.byBasket.данные}**·|·**${cov.byBasket['машинерия·B']}**·|·**${cov.byBasket['остаток·C']}**·|`,
+    226 226 │     );
+    227 227 │     L.push(
+  
+
+scripts/lab/selectors.test.ts:32:59 lint/style/useTemplate  FIXABLE  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  i Template literals are preferred over string concatenation.
+  
+    30 │     if (ts.isTemplateExpression(node)) {
+    31 │       const signature =
+  > 32 │         node.head.text + node.templateSpans.map((span) => '${*}' + span.literal.text).join('');
+       │                                                           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+    33 │       recordSelector(signature);
+    34 │     }
+  
+  i Unsafe fix: Use a template literal.
+  
+     30  30 │       if (ts.isTemplateExpression(node)) {
+     31  31 │         const signature =
+     32     │ - ········node.head.text·+·node.templateSpans.map((span)·=>·'${*}'·+·span.literal.text).join('');
+         32 │ + ········node.head.text·+·node.templateSpans.map((span)·=>·`\${*}${span.literal.text}`).join('');
+     33  33 │         recordSelector(signature);
+     34  34 │       }
+  
+
+apps/server/src/routers/entity-update-batch.test.ts:458:34 lint/style/noNonNullAssertion ━━━━━━━━━━━
+
+  ! Forbidden non-null assertion.
+  
+    456 │   expect(after.entity.id).toBe(source.id);
+    457 │   expect(before.entity.body).toBeDefined();
+  > 458 │   expect(after.entity.body).toBe(before.entity.body!);
+        │                                  ^^^^^^^^^^^^^^^^^^^
+    459 │   expect(after.entity.aspects).toContain('orbis/task');
+    460 │   expect(after.entity.props['orbis/due_date']).toBe('2026-10-20');
+  
+
+apps/server/src/routers/entity-update-batch.test.ts:470:35 lint/style/noNonNullAssertion ━━━━━━━━━━━
+
+  ! Forbidden non-null assertion.
+  
+    468 │   expect(undone.entity.aspects).toEqual(before.entity.aspects);
+    469 │   expect(undone.entity.props).toEqual(before.entity.props);
+  > 470 │   expect(undone.entity.body).toBe(before.entity.body!);
+        │                                   ^^^^^^^^^^^^^^^^^^^
+    471 │   const journalBeforeInvalid = await journal();
+    472 │   await expect(
+  
+
+apps/server/src/routers/properties-relations.test.ts:229:36 lint/style/noNonNullAssertion ━━━━━━━━━━
+
+  ! Forbidden non-null assertion.
+  
+    227 │   const removed = await api.entity.get({ id: source.id, include: ['body', 'relations'] });
+    228 │   expect(before.entity.body).toBeDefined();
+  > 229 │   expect(removed.entity.body).toBe(before.entity.body!);
+        │                                    ^^^^^^^^^^^^^^^^^^^
+    230 │   expect(removed.entity.bodyRefs).toEqual([target.id]);
+    231 │   expect(removed.relations).toEqual([]);
+  
+
+scripts/lab/records.test.ts:68:20 lint/style/noNonNullAssertion ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ! Forbidden non-null assertion.
+  
+    66 │     async (_: unknown, method: string, input: { id?: string; query?: string }) => {
+    67 │       if (method === 'entity.get') {
+  > 68 │         reads.push(input.id!);
+       │                    ^^^^^^^^^
+    69 │         return options.missing?.includes(input.id!) ? null : { entity: entity(input.id!) };
+    70 │       }
+  
+
+scripts/lab/records.test.ts:69:42 lint/style/noNonNullAssertion ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ! Forbidden non-null assertion.
+  
+    67 │       if (method === 'entity.get') {
+    68 │         reads.push(input.id!);
+  > 69 │         return options.missing?.includes(input.id!) ? null : { entity: entity(input.id!) };
+       │                                          ^^^^^^^^^
+    70 │       }
+    71 │       return (options.rows?.[input.query!] ?? []).map(entity);
+  
+
+scripts/lab/records.test.ts:69:79 lint/style/noNonNullAssertion ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ! Forbidden non-null assertion.
+  
+    67 │       if (method === 'entity.get') {
+    68 │         reads.push(input.id!);
+  > 69 │         return options.missing?.includes(input.id!) ? null : { entity: entity(input.id!) };
+       │                                                                               ^^^^^^^^^
+    70 │       }
+    71 │       return (options.rows?.[input.query!] ?? []).map(entity);
+  
+
+scripts/lab/records.test.ts:71:30 lint/style/noNonNullAssertion ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ! Forbidden non-null assertion.
+  
+    69 │         return options.missing?.includes(input.id!) ? null : { entity: entity(input.id!) };
+    70 │       }
+  > 71 │       return (options.rows?.[input.query!] ?? []).map(entity);
+       │                              ^^^^^^^^^^^^
+    72 │     },
+    73 │     async (_: unknown, id: string) => {
+  
+
+scripts/lab/scenario.ts:47:57 lint/suspicious/noTemplateCurlyInString ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ! Unexpected template string placeholder.
+  
+    45 │   ['main[data-testid="screen-content"]', ['app/router.tsx', '<main data-testid="screen-content"']],
+    46 │   [
+  > 47 │     'main[data-testid="screen-content"][data-place$="/r/${*}"]',
+       │                                                         ^^^^
+    48 │     ['app/router.tsx', 'data-place={place}'],
+    49 │   ],
+  
+  i Turn the string into a template string.
+  
+
+scripts/lab/scenario.ts:70:31 lint/suspicious/noTemplateCurlyInString ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ! Unexpected template string placeholder.
+  
+    68 │   ],
+    69 │   [
+  > 70 │     '[data-testid="search-hit-${*}"]',
+       │                               ^^^^
+    71 │     ['features/search/SearchPanel.tsx', "'data-testid': `search-hit-${hit.id}`"],
+    72 │   ],
+  
+  i Turn the string into a template string.
+  
+
+scripts/lab/scenario.ts:71:69 lint/suspicious/noTemplateCurlyInString ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ! Unexpected template string placeholder.
+  
+    69 │   [
+    70 │     '[data-testid="search-hit-${*}"]',
+  > 71 │     ['features/search/SearchPanel.tsx', "'data-testid': `search-hit-${hit.id}`"],
+       │                                                                     ^^^^^^^^^
+    72 │   ],
+    73 │   ['[data-testid="host-back"]', ['app/frame/HostPresence.tsx', 'data-testid="host-back"']],
+  
+  i Turn the string into a template string.
+  
+
+scripts/lab/scenario.ts:105:73 lint/suspicious/noTemplateCurlyInString ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ! Unexpected template string placeholder.
+  
+    103 │   [
+    104 │     'select[data-testid="prop-orbis/task_status"]',
+  > 105 │     ['lib/registry/PropertyControl.tsx', '<select', 'data-testid={`prop-${def.id}`}'],
+        │                                                                         ^^^^^^^^^
+    106 │   ],
+    107 │   [
+  
+  i Turn the string into a template string.
+  
+
+scripts/lab/scenario.ts:118:33 lint/suspicious/noTemplateCurlyInString ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ! Unexpected template string placeholder.
+  
+    116 │   ['#side-chat', ['app/frame/SideChat.tsx', 'id="side-chat"']],
+    117 │   [
+  > 118 │     '#side-chat [data-thread-id=${*}][data-thread-ready="true"]',
+        │                                 ^^^^
+    119 │     ['app/frame/SideChat.tsx', 'id="side-chat"', '<GlobalChat context={context}'],
+    120 │     ['features/chat/ChatScreen.tsx', '<ChatPanel context={context}'],
+  
+  i Turn the string into a template string.
+  
+
+scripts/lab/scenario.ts:128:6 lint/suspicious/noTemplateCurlyInString ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ! Unexpected template string placeholder.
+  
+    126 │   ],
+    127 │   [
+  > 128 │     '${*} [data-testid="message-list"]',
+        │      ^^^^
+    129 │     ['features/chat/ChatPanel.tsx', '<ThreadView ', '<MessageList'],
+    130 │     ['features/chat/MessageList.tsx', 'data-testid="message-list"'],
+  
+  i Turn the string into a template string.
+  
+
+scripts/lab/scenario.ts:133:6 lint/suspicious/noTemplateCurlyInString ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ! Unexpected template string placeholder.
+  
+    131 │   ],
+    132 │   [
+  > 133 │     '${*} input[aria-label="Сообщение"]',
+        │      ^^^^
+    134 │     ['features/chat/ChatPanel.tsx', '<Composer'],
+    135 │     ['features/chat/Composer.tsx', '<input', 'aria-label="Сообщение"'],
+  
+  i Turn the string into a template string.
+  
+
+scripts/lab/selectors.test.ts:32:60 lint/suspicious/noTemplateCurlyInString ━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ! Unexpected template string placeholder.
+  
+    30 │     if (ts.isTemplateExpression(node)) {
+    31 │       const signature =
+  > 32 │         node.head.text + node.templateSpans.map((span) => '${*}' + span.literal.text).join('');
+       │                                                            ^^^^
+    33 │       recordSelector(signature);
+    34 │     }
+  
+  i Turn the string into a template string.
+  
+
+The number of diagnostics exceeds the limit allowed. Use --max-diagnostics to increase it.
+Diagnostics not shown: 15.
+Checked 1265 files in 1733ms. No fixes applied.
+Found 29 warnings.
+Found 6 infos.

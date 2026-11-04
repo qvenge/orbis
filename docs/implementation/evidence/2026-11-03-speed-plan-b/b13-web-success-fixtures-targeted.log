@@ -1,0 +1,9 @@
+
+ RUN  v4.1.9 /private/tmp/orbis-b13-web-success-fixtures.A1CeZE/apps/web
+
+
+ Test Files  3 passed (3)
+      Tests  9 passed | 43 skipped (52)
+   Start at  22:18:37
+   Duration  15.86s (transform 2.46s, setup 385ms, import 4.34s, tests 7.35s, environment 3.02s)
+

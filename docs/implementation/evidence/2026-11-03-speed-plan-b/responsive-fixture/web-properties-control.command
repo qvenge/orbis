@@ -1,0 +1,1 @@
+bun x --no-install vitest run --maxWorkers=1 src/features/entity-detail/properties-relations/host-pending.test.tsx src/features/entity-detail/properties-relations/responsive.test.tsx -t 'same-mounted session reset discards prior values panel|addressed host lock starts synchronously|public owner close/open cannot replace|restore holds its optimistic UI'

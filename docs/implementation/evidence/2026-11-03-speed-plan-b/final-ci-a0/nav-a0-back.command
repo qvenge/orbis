@@ -1,0 +1,1 @@
+bun x --no-install vitest run --maxWorkers=1 --reporter=default --reporter=json --outputFile=/private/tmp/orbis-b13-final-ci.07CROy/reports/nav-a0-back.json src/app/back-nav.test.tsx -t 'снимает верх стопки \(site\)'

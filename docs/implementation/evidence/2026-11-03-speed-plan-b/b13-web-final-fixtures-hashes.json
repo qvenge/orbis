@@ -1,0 +1,36 @@
+{
+  "base": "d1f7223ebf9de2bb7b8ef7e4590a18d1c9c898f4",
+  "candidate": "/private/tmp/orbis-b13-web-final-fixtures.RYzmbF",
+  "files": [
+    {
+      "path": "apps/web/src/features/apps/nav-editor.test.tsx",
+      "before": "90a105f987d8bb2c6ef37737d6ef1614fd4d36c6875961991ff56e7eea280c7a",
+      "after": "6aa7052eadaa1e423c1aa959b12641e5c34419172811430abf9cd0d0a2e3e056"
+    },
+    {
+      "path": "apps/web/src/features/apps/open.test.tsx",
+      "before": "e63351b82f26bf8337bde2ddb215bc93fe2f9df78c76ff648e27c21b7127efff",
+      "after": "0529a9ce5139c403d5d3b822fdd24e203a5c6c32f0af45c121f84e9a6f7252e8"
+    },
+    {
+      "path": "apps/web/src/features/budget/EnvelopeCard.test.tsx",
+      "before": "06d44723c95efd7c622deabed6168a77ca49d41943fd76ffa90c1cb54e8818a6",
+      "after": "f69627d6c0f5ee1ac2647a88b08c88f5e57d2a94b6603f30d78fd6be13aafcde"
+    },
+    {
+      "path": "apps/web/src/features/budget/plan-owner.test.tsx",
+      "before": "bceb12a4617f7b00c049b934ac4957ff6d966eb6aeafb180be698e58a91e2769",
+      "after": "31dea0e97b0eeceb57f9ec2b46de315fd1f96276f379c8a1b5e100bcce6080e5"
+    },
+    {
+      "path": "apps/web/src/features/page/menu.test.tsx",
+      "before": "512403cfbc987b093b5bbe9b1f6b465b5127f74472569de9cd0d99236a9f7879",
+      "after": "7c70558889bbecf9b1655815f23b510ffe5d1d3462d8771131dcb9c731870bbf"
+    },
+    {
+      "path": "apps/web/src/features/settings/apps-and-extensions.test.tsx",
+      "before": "d8e30255759629a8c85697a76ac2f3877e0f6e8fa5eaa9d9b68e3cbb8b1250c5",
+      "after": "319bf9bbb5dbed9388410c16bc3f1e2c7942b97f6c4ec94d6c01541794dde3f3"
+    }
+  ]
+}

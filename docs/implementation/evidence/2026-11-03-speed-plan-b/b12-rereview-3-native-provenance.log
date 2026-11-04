@@ -1,0 +1,6 @@
+native exact retirement fences carried submission {"entityId":"retire-before-B","first":true,"retirement":true,"newer":true,"sameBodyWrongToken":false,"late":false,"latest":[["B",false]]}
+native exact retirement fences carried submission {"entityId":"retire-after-B","first":true,"retirement":true,"newer":true,"sameBodyWrongToken":false,"late":false,"latest":[["B",false]]}
+native carried submission provenance {"mode":"valid","savedB":true,"acceptedA":true,"rows":[["B",false,"2026-11-04T12:40:39.357Z"],["A",true,"2026-11-04T12:40:39.357Z"]],"original":"2026-11-04T12:40:39.357Z"}
+native carried submission provenance {"mode":"wrong-basis","savedB":true,"acceptedA":false,"rows":[["B",false,"2026-11-04T12:40:39.359Z"]],"original":"2026-11-04T12:40:39.359Z"}
+native carried submission provenance {"mode":"wrong-generation","savedB":true,"acceptedA":false,"rows":[["B",false,"2026-11-04T12:40:39.360Z"]],"original":"2026-11-04T12:40:39.360Z"}
+native carried submission provenance {"mode":"expired","savedB":true,"acceptedA":false,"rows":[["B",false,"2026-11-04T12:40:39.362Z"]],"original":"2026-10-04T12:40:39.362Z"}

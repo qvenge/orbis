@@ -1,0 +1,14 @@
+{"label":"review candidate hashes","scripts":["assets/index-Cx8nvUj4.js"]}
+{"label":"fixture POST","path":"/trpc/user.seedOnboarding"}
+{"label":"fixture POST","path":"/trpc/perf.report"}
+{"label":"fixture POST","path":"/trpc/perf.report"}
+{"label":"fixture POST","path":"/trpc/user.seedOnboarding"}
+{"label":"fixture body mutation","parsed":{"0":{"id":"10000000-0000-4000-8000-000000000077","bodyDoc":{"v":3,"doc":{"type":"doc","content":[{"type":"paragraph","attrs":{"id":"c9036656-a7e6-43c9-a92e-f3b4cc4728eb"},"content":[{"type":"text","text":"confirmed A without a durable response"}]}]}},"expectedBodyRevision":1,"autosave":true}}}
+{"label":"fixture POST","path":"/trpc/perf.report"}
+{"label":"fixture POST","path":"/trpc/user.seedOnboarding"}
+{"label":"GREEN: real body editor held HTTP A, checkpointed B, ACKed A with strict response abort, cancelled B and reloaded","exactA":{"accountId":"10000000-0000-4000-8000-000000000001","graphId":"10000000-0000-4000-8000-000000000001","generation":"0:0","entityId":"10000000-0000-4000-8000-000000000077","writerId":"01a1a693-c009-73eb-8118-5c52df70c9b7","nonce":"01a1a693-c009-73eb-8118-62143014b818","sequence":1,"basis":{"revision":1}},"strictReads":[1,0],"blockedReads":1}
+{"label":"fixture POST","path":"/trpc/perf.report"}
+{"label":"fixture POST","path":"/trpc/user.seedOnboarding"}
+{"label":"fixture body mutation","parsed":{"0":{"id":"10000000-0000-4000-8000-000000000077","bodyDoc":{"v":3,"doc":{"type":"doc","content":[{"type":"paragraph","attrs":{"id":"c9036656-a7e6-43c9-a92e-f3b4cc4728eb"},"content":[{"type":"text","text":"confirmed A without a durable response"}]}]}},"expectedBodyRevision":3,"autosave":true}}}
+{"label":"GREEN: strict recovery receipt retires retained exact A after successful commit","exactA":{"accountId":"10000000-0000-4000-8000-000000000001","graphId":"10000000-0000-4000-8000-000000000001","generation":"0:0","entityId":"10000000-0000-4000-8000-000000000077","writerId":"01a1a693-c009-73eb-8118-5c52df70c9b7","nonce":"01a1a693-c009-73eb-8118-62143014b818","sequence":1,"basis":{"revision":1}}}
+{"label":"fixture POST","path":"/trpc/perf.report"}

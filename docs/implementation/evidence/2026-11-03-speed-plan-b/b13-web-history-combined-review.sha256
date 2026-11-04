@@ -1,0 +1,5 @@
+cc1fb01098b0a0c0af8e7f021731c774e6c878a9a91a6aca0aa2815f041b080c  apps/web/src/features/entity-detail/foreign-refusal.test.tsx
+830d836e25a480ef569d7c63572fbe305cdadcdd2cfdfca7fde6fbc8bf6e2101  apps/web/src/features/entity-detail/history-delivery.test.tsx
+54d1698be3b0fee6b2673a51fe9c27afe732f75d1392ce14668909232ea26486  apps/web/src/features/entity-detail/history-lifecycle.test.tsx
+a46f300b069541f7e794af5bea412e9fb9141184bbc8239ff97517c08f294b56  apps/web/src/features/entity-editor/arrows.test.tsx
+67c8d385c0bba54e7303592e42403419b7604721d824388d352b03d3e7dd3c0a  apps/web/src/lib/useGraphUndo.test.tsx

@@ -1,0 +1,3 @@
+candidate: /private/tmp/orbis-b13-sse-rereview.WBhzOL/candidate
+bun test apps/server/src/freshness/stream.test.ts
+(cd apps/web && ../../node_modules/.bin/vitest run src/lib/freshness/sse-rewind-original.probe.test.ts src/lib/freshness/sse-rewind-author.probe.test.ts --maxWorkers 1 --reporter verbose)

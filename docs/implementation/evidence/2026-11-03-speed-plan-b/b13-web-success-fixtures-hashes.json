@@ -1,0 +1,17 @@
+{
+  "base": "dad1fdf2e9f6d292e2d127618326b3862149f26b",
+  "files": {
+    "apps/web/src/features/apps/open.test.tsx": {
+      "before": "91b9b310db30789bc646c7f4be49a3cb39a9314c4773790869fe91d059813ad3",
+      "after": "e63351b82f26bf8337bde2ddb215bc93fe2f9df78c76ff648e27c21b7127efff"
+    },
+    "apps/web/src/features/entity-detail/versions-freshness.test.tsx": {
+      "before": "1e11e91202e9a424a4d24b91c526a11870b04e62d0f7d1ec1844385973e1b335",
+      "after": "8e11f16a92d2c39cb6a02cc8c614518c9d752eb5dafb8f983867fe591b59e81e"
+    },
+    "apps/web/src/features/settings/apps-and-extensions.test.tsx": {
+      "before": "c74eeca8cfe4738494905e6c92e87f13f024f8b7adff3d0bf2cc42168eb025d1",
+      "after": "d8e30255759629a8c85697a76ac2f3877e0f6e8fa5eaa9d9b68e3cbb8b1250c5"
+    }
+  }
+}

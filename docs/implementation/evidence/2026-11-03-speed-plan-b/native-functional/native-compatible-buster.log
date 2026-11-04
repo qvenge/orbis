@@ -1,0 +1,12 @@
+bun test v1.2.7 (5c0fa6dc)
+
+.superpowers/sdd/2026-11-03-speed-plan-b/native-fallback.test.ts:
+(skip) same-SHA normal → response-off → normal keeps B12 native and emergency input
+{"scenario":"compatible-real-build-buster","previousSha":"882bd444e87793d4b4c6c9a1e9b64afe14d93b6c","candidateSha":"a0bff516be98680685b790908ef76cc4f949f49c","inputToken":{"accountId":"d12995b4-dcb9-439a-96ec-56b223981f70","graphId":"d12995b4-dcb9-439a-96ec-56b223981f70","generation":"0:0","entityId":"01a1a778-0ba4-736b-8def-8843a3965c6e","writerId":"01a1a778-1453-705e-aeb9-002f9b1d61a4","nonce":"01a1a778-1453-705e-aeb9-05bdada68744","sequence":1,"basis":{"revision":1}},"bodyRevision":2,"previousVersions":["0.7.0"],"candidateVersions":["0.7.0"],"candidateSaves":0,"serviceWorker":"blocked"}
+(pass) two real compatible build SHAs switch response buster and preserve exact input [7382.15ms]
+
+ 1 pass
+ 1 skip
+ 0 fail
+ 15 expect() calls
+Ran 2 tests across 1 files. [8.67s]

@@ -1,0 +1,11 @@
+{"event":"fixture:start","at":3217.885526}
+{"event":"detail:start","at":3263.105177}
+{"event":"detail:resolved","at":4076.191493}
+{"event":"fixture:ready","at":4076.341037}
+{"event":"detail:start","at":4095.60473}
+{"event":"heading:wait","at":4130.487481,"id":"00000000-0000-4000-8000-000000000010"}
+{"event":"detail:resolved","at":4157.774694}
+{"event":"entity.get","at":4428.204843,"id":"00000000-0000-4000-8000-000000000010"}
+{"event":"heading:visible","at":4689.642689,"id":"00000000-0000-4000-8000-000000000010"}
+{"event":"entity.get","at":5474.690691,"id":"00000000-0000-4000-8000-000000000010"}
+{"event":"entity.get","at":6433.94047,"id":"00000000-0000-4000-8000-000000000010"}

@@ -1,0 +1,18 @@
+2026-11-04T16:37:43Z
+23:37  2 users, load averages: 12.41 14.78 11.86
+sysctl: sysctl fmt -1 1024 1: Operation not permitted
+Mach Virtual Memory Statistics: (page size of 4096 bytes)
+Pages free:                               30983.
+Pages active:                           1485108.
+Pages inactive:                         1441671.
+Pages speculative:                        49473.
+Pages throttled:                              0.
+Pages wired down:                        905628.
+Pages purgeable:                          69833.
+"Translation faults":                5771407063.
+Pages copy-on-write:                  251734215.
+Pages zero filled:                   2277086185.
+Pages reactivated:                    242869266.
+Pages purged:                          10309237.
+File-backed pages:                       964294.
+Anonymous pages:                        2011958.

@@ -1,0 +1,6 @@
+6aa7052eadaa1e423c1aa959b12641e5c34419172811430abf9cd0d0a2e3e056  apps/web/src/features/apps/nav-editor.test.tsx
+0529a9ce5139c403d5d3b822fdd24e203a5c6c32f0af45c121f84e9a6f7252e8  apps/web/src/features/apps/open.test.tsx
+f69627d6c0f5ee1ac2647a88b08c88f5e57d2a94b6603f30d78fd6be13aafcde  apps/web/src/features/budget/EnvelopeCard.test.tsx
+31dea0e97b0eeceb57f9ec2b46de315fd1f96276f379c8a1b5e100bcce6080e5  apps/web/src/features/budget/plan-owner.test.tsx
+7c70558889bbecf9b1655815f23b510ffe5d1d3462d8771131dcb9c731870bbf  apps/web/src/features/page/menu.test.tsx
+319bf9bbb5dbed9388410c16bc3f1e2c7942b97f6c4ec94d6c01541794dde3f3  apps/web/src/features/settings/apps-and-extensions.test.tsx

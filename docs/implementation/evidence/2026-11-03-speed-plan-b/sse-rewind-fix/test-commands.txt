@@ -1,0 +1,6 @@
+Isolated candidate: /private/tmp/orbis-b13-sse-rewind-fix.jwO12D/candidate
+Permanent: bun test apps/server/src/freshness/stream.test.ts
+Exact timers: cd apps/web && ../../node_modules/.bin/vitest run src/lib/freshness/sse-rewind.probe.test.ts --maxWorkers 1 --reporter verbose
+Static: ./node_modules/.bin/biome check apps/server/src/freshness/stream.ts apps/server/src/freshness/stream.test.ts
+RED permanent: save candidate stream.ts; replace only it with frozen before/stream.ts, run permanent command, and restore proposal stream.ts.
+No DB required.

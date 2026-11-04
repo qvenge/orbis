@@ -1,0 +1,11 @@
+bun test v1.2.7 (5c0fa6dc)
+
+.superpowers/sdd/2026-11-03-speed-plan-b/b13-undo-loss-witness.test.ts:
+{"lane":"abort","status":500,"from":"36745","watermark":"36745","transactions":[]}
+{"lane":"committed-with-lost-response","status":500,"from":"36745","watermark":"36746","tx":{"txId":"36745","changes":[{"kind":"entity","rowKey":"01a1a72c-a911-76d5-8599-995c9a45cfa3","entityIds":["01a1a72c-a911-76d5-8599-995c9a45cfa3"],"threadId":null,"operation":"update","scope":"other","at":"2026-11-04T15:28:04.554Z","graphWide":false},{"kind":"journal","rowKey":"01a1a72c-a9b6-76cd-9192-f37240c0f545","entityIds":["01a1a72c-a911-76d5-8599-995c9a45cfa3"],"threadId":null,"operation":"insert","scope":"other","at":"2026-11-04T15:28:04.565Z","graphWide":false}]}}
+(pass) the same HTTP 500 may precede any write or hide an actual committed Undo [487.97ms]
+
+ 1 pass
+ 0 fail
+ 12 expect() calls
+Ran 1 tests across 1 files. [1276.00ms]

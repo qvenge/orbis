@@ -1,0 +1,44 @@
+$ bun run --filter @orbis/server test:perf
+@orbis/server test:perf: bun test v1.2.7 (5c0fa6dc)
+@orbis/server test:perf: 
+@orbis/server test:perf: perf/perf.test.ts:
+@orbis/server test:perf: perf: seed 61842ms
+@orbis/server test:perf: (pass) фикстура наполнена: гейт меряет данные, а не пустой граф [1032.60ms]
+@orbis/server test:perf: perf: entity.query:list50 median=24.1ms runs=7
+@orbis/server test:perf: perf: entity.count:badge median=21.8ms runs=7
+@orbis/server test:perf: perf: budget.overview median=122.8ms runs=5
+@orbis/server test:perf: perf: agenda:horizon median=52.8ms runs=5
+@orbis/server test:perf: perf: entity.backlinks median=45.7ms runs=7
+@orbis/server test:perf: perf: fastpath:create median=109.0ms runs=5
+@orbis/server test:perf: perf: goal.progress median=59.7ms runs=7
+@orbis/server test:perf: perf: entity.blocks:10 median=132.2ms runs=7
+@orbis/server test:perf: perf: agenda:page median=177.7ms runs=5
+@orbis/server test:perf: 419 |   expect(results.map(([key]) => key).sort()).toEqual(Object.keys(BUDGETS_MS).sort());
+@orbis/server test:perf: 420 | 
+@orbis/server test:perf: 421 |   // Список нарушителей, а не первый упавший: по красному CI должно быть видно ВСЁ,
+@orbis/server test:perf: 422 |   // что просело, — иначе разбор идёт по одной операции за прогон.
+@orbis/server test:perf: 423 |   const over = results.filter(([key, ms]) => ms > (BUDGETS_MS[key] as number));
+@orbis/server test:perf: 424 |   expect(over.map(([key, ms]) => `${key}=${ms.toFixed(0)}ms`)).toEqual([]);
+@orbis/server test:perf:                                                                      ^
+@orbis/server test:perf: error: expect(received).toEqual(expected)
+@orbis/server test:perf: 
+@orbis/server test:perf: + [
+@orbis/server test:perf: +   "agenda:page=178ms"
+@orbis/server test:perf: + ]
+@orbis/server test:perf: - []
+@orbis/server test:perf: 
+@orbis/server test:perf: - Expected  - 1
+@orbis/server test:perf: + Received  + 3
+@orbis/server test:perf: 
+@orbis/server test:perf:       at <anonymous> (/private/tmp/orbis-b13-ci.F6FMiU/candidate/apps/server/perf/perf.test.ts:424:64)
+@orbis/server test:perf: (fail) перф-бюджеты серверных операций [4431.05ms]
+@orbis/server test:perf: perf: spent-cache read(40) p95=5.3ms median=4.1ms runs=40 samples=[5.3, 5.4, 4.5, 4.0, 3.9, 3.8, 4.1, 3.9, 3.7, 5.2, 3.8, 5.4, 4.8, 4.0, 4.1, 4.7, 4.7, 3.9, 4.0, 4.0, 3.8, 3.9, 3.9, 4.5, 4.7, 4.2, 4.9, 5.2, 4.7, 4.1, 4.8, 3.9, 3.8, 3.8, 4.5, 4.1, 3.9, 3.8, 3.8, 4.4]
+@orbis/server test:perf: perf: spent-cache read(40)+tx p95=12.1ms median=10.4ms runs=40 samples=[10.4, 11.1, 9.7, 10.5, 9.6, 10.4, 10.6, 12.1, 10.2, 11.0, 10.6, 9.3, 11.7, 9.9, 12.2, 10.0, 11.0, 9.3, 10.4, 11.0, 13.0, 9.7, 9.4, 9.0, 9.6, 9.9, 11.6, 11.2, 9.3, 10.1, 10.5, 9.7, 10.7, 11.3, 10.7, 10.2, 9.4, 8.9, 11.1, 11.5]
+@orbis/server test:perf: (pass) приёмка §С8-16: p95 чтения прогретого кэша spent (40 конвертов) ≤ 10 мс [941.23ms]
+@orbis/server test:perf: 
+@orbis/server test:perf:  2 pass
+@orbis/server test:perf:  1 fail
+@orbis/server test:perf:  28 expect() calls
+@orbis/server test:perf: Ran 3 tests across 1 files. [69.31s]
+@orbis/server test:perf: Exited with code 1
+error: script "test:perf" exited with code 1

@@ -1,0 +1,144 @@
+@orbis/web build: vite v8.1.3 building client environment for production...
+@orbis/web build: [2Ktransforming...✓ 2844 modules transformed.
+@orbis/web build: rendering chunks...
+@orbis/web build: computing gzip size...
+@orbis/web build: dist/registerSW.js                                  0.13 kB
+@orbis/web build: dist/manifest.webmanifest                           0.31 kB
+@orbis/web build: dist/index.html                                     4.41 kB │ gzip:   1.68 kB
+@orbis/web build: dist/assets/index-zp2BBMpy.css                     45.54 kB │ gzip:   9.02 kB
+@orbis/web build: dist/assets/supply-CRBR_ylz.js                      0.02 kB │ gzip:   0.04 kB
+@orbis/web build: dist/assets/detail-input-CRtcw6nD.js                0.10 kB │ gzip:   0.11 kB
+@orbis/web build: dist/assets/x-D8-5ObQH.js                           0.15 kB │ gzip:   0.15 kB
+@orbis/web build: dist/assets/template-for-CPGGQyF8.js                0.16 kB │ gzip:   0.15 kB
+@orbis/web build: dist/assets/arrow-up-DPAXT81H.js                    0.16 kB │ gzip:   0.16 kB
+@orbis/web build: dist/assets/code-CJ07thP-.js                        0.16 kB │ gzip:   0.15 kB
+@orbis/web build: dist/assets/privacy-actions-CIa3TgTO.js             0.17 kB │ gzip:   0.15 kB
+@orbis/web build: dist/assets/undo-2-BHY5PEUT.js                      0.20 kB │ gzip:   0.18 kB
+@orbis/web build: dist/assets/ref-clean-DiV7VRjF.js                   0.28 kB │ gzip:   0.18 kB
+@orbis/web build: dist/assets/HostMenu-LI6xTqSs.js                    0.29 kB │ gzip:   0.24 kB
+@orbis/web build: dist/assets/extension-mask-QbAqT_PH.js              0.40 kB │ gzip:   0.29 kB
+@orbis/web build: dist/assets/orbis-error-m88zDAZd.js                 0.45 kB │ gzip:   0.29 kB
+@orbis/web build: dist/assets/screen-9ebIsZMJ.js                      0.47 kB │ gzip:   0.29 kB
+@orbis/web build: dist/assets/Chip-yMwNUsVw.js                        0.51 kB │ gzip:   0.37 kB
+@orbis/web build: dist/assets/dist-CwzjpFFk.js                        0.58 kB │ gzip:   0.37 kB
+@orbis/web build: dist/assets/panel-host-D69aXvyh.js                  0.62 kB │ gzip:   0.37 kB
+@orbis/web build: dist/assets/SearchDialog-BGy157Gy.js                0.67 kB │ gzip:   0.43 kB
+@orbis/web build: dist/assets/nav-edit-BMNrh1YN.js                    0.67 kB │ gzip:   0.41 kB
+@orbis/web build: dist/assets/usePageIdentityActions-BJ6Urm_H.js      0.68 kB │ gzip:   0.40 kB
+@orbis/web build: dist/assets/AllAppsSheet-2p34WWjK.js                0.72 kB │ gzip:   0.50 kB
+@orbis/web build: dist/assets/ExtensionChecks-DL7GGgkE.js             0.76 kB │ gzip:   0.45 kB
+@orbis/web build: dist/assets/useSupplyRecords-BN-rEXiC.js            0.78 kB │ gzip:   0.49 kB
+@orbis/web build: dist/assets/NavSheet-Dq0VZmLF.js                    0.79 kB │ gzip:   0.51 kB
+@orbis/web build: dist/assets/EntityRef-DHnCchzS.js                   0.81 kB │ gzip:   0.51 kB
+@orbis/web build: dist/assets/SearchScreen-yQsRTxTT.js                0.82 kB │ gzip:   0.51 kB
+@orbis/web build: dist/assets/record-host-49soktl3.js                 0.83 kB │ gzip:   0.49 kB
+@orbis/web build: dist/assets/types-CThkjXwz.js                       0.84 kB │ gzip:   0.48 kB
+@orbis/web build: dist/assets/useTicketRuns-e8A3KqM1.js               0.86 kB │ gzip:   0.54 kB
+@orbis/web build: dist/assets/ExtensionOffPlaque-L-YArjpJ.js          0.86 kB │ gzip:   0.57 kB
+@orbis/web build: dist/assets/useDisabledExtensions-BEkCynZT.js       0.88 kB │ gzip:   0.57 kB
+@orbis/web build: dist/assets/NavTiles-DNHC5q5d.js                    0.91 kB │ gzip:   0.57 kB
+@orbis/web build: dist/assets/body-flush-EgwrIn4X.js                  0.92 kB │ gzip:   0.48 kB
+@orbis/web build: dist/assets/Button-BGJBQZL9.js                      0.93 kB │ gzip:   0.51 kB
+@orbis/web build: dist/assets/jsx-runtime-DUAcabCT.js                 1.06 kB │ gzip:   0.60 kB
+@orbis/web build: dist/assets/BodyDiff-B6rj5ZD7.js                    1.08 kB │ gzip:   0.60 kB
+@orbis/web build: dist/assets/SupplyPlaque-DyDGLaTt.js                1.08 kB │ gzip:   0.64 kB
+@orbis/web build: dist/assets/useEntityOptions-hkrNG3q4.js            1.12 kB │ gzip:   0.63 kB
+@orbis/web build: dist/assets/render-plan-Cp_go3AH.js                 1.13 kB │ gzip:   0.62 kB
+@orbis/web build: dist/assets/useAppAction-DnbE0-Vo.js                1.17 kB │ gzip:   0.62 kB
+@orbis/web build: dist/assets/useResolvedRefs-DZVrqLhi.js             1.18 kB │ gzip:   0.69 kB
+@orbis/web build: dist/assets/ArchiveAppDialog-D0-2PbdE.js            1.29 kB │ gzip:   0.80 kB
+@orbis/web build: dist/assets/ParamSwitch-T1JiaT6S.js                 1.35 kB │ gzip:   0.64 kB
+@orbis/web build: dist/assets/ScalarListControl-DUVV6gq9.js           1.37 kB │ gzip:   0.74 kB
+@orbis/web build: dist/assets/createLucideIcon-C0O-yxZG.js            1.41 kB │ gzip:   0.79 kB
+@orbis/web build: dist/assets/strip-ids-BVRgKWNC.js                   1.44 kB │ gzip:   0.73 kB
+@orbis/web build: dist/assets/storage-CEnn0GpO.js                     1.47 kB │ gzip:   0.79 kB
+@orbis/web build: dist/assets/DisableAppDialog-g-jkMt6W.js            1.49 kB │ gzip:   0.87 kB
+@orbis/web build: dist/assets/SubtaskAdd-7hgs6DEd.js                  1.54 kB │ gzip:   0.96 kB
+@orbis/web build: dist/assets/proposal-text-DFKwaG8f.js               1.58 kB │ gzip:   0.86 kB
+@orbis/web build: dist/assets/ChatThread-DTpWDJ0Q.js                  1.58 kB │ gzip:   0.72 kB
+@orbis/web build: dist/assets/CompositionDialog-BiBZwmwb.js           1.59 kB │ gzip:   0.91 kB
+@orbis/web build: dist/assets/AppsBlock-hjmT3CbJ.js                   1.65 kB │ gzip:   0.77 kB
+@orbis/web build: dist/assets/useUpdateBatch-CvayORSf.js              1.76 kB │ gzip:   0.95 kB
+@orbis/web build: dist/assets/undo-action-CRapX_m6.js                 1.90 kB │ gzip:   1.03 kB
+@orbis/web build: dist/assets/NewAppDialog-BbzPig7j.js                1.91 kB │ gzip:   0.99 kB
+@orbis/web build: dist/assets/print-CDscsupB.js                       2.01 kB │ gzip:   0.88 kB
+@orbis/web build: dist/assets/AddToNavDialog-Dpr7dnnx.js              2.04 kB │ gzip:   1.12 kB
+@orbis/web build: dist/assets/MarkdownToggle-zE1j_vd6.js              2.13 kB │ gzip:   1.20 kB
+@orbis/web build: dist/assets/AssignmentCard-DQK9g-0s.js              2.24 kB │ gzip:   1.14 kB
+@orbis/web build: dist/assets/UpdateActions-vGE8nQdF.js               2.27 kB │ gzip:   1.12 kB
+@orbis/web build: dist/assets/undo-toast-CCzFZFrS.js                  2.29 kB │ gzip:   1.26 kB
+@orbis/web build: dist/assets/UndoArrows-DCmqxhPu.js                  2.35 kB │ gzip:   1.17 kB
+@orbis/web build: dist/assets/useSupply-DUlYTCIi.js                   2.58 kB │ gzip:   1.33 kB
+@orbis/web build: dist/assets/ConfigureView-BkQwD3iu.js               2.88 kB │ gzip:   1.39 kB
+@orbis/web build: dist/assets/PinVersionDialog-Cks6yvdr.js            2.90 kB │ gzip:   1.50 kB
+@orbis/web build: dist/assets/assignment-form-8QevBdod.js             2.92 kB │ gzip:   1.36 kB
+@orbis/web build: dist/assets/create-intent-scope-w6B6-9Il.js         3.06 kB │ gzip:   1.40 kB
+@orbis/web build: dist/assets/RefManyControl-BWdBGbE3.js              3.25 kB │ gzip:   1.49 kB
+@orbis/web build: dist/assets/DayGroups-BJ0aTEya.js                   3.34 kB │ gzip:   1.47 kB
+@orbis/web build: dist/assets/RevertShellDialog-BR8S9iXV.js           3.41 kB │ gzip:   1.64 kB
+@orbis/web build: dist/assets/react-dom-i-Mcm3wj.js                   3.57 kB │ gzip:   1.35 kB
+@orbis/web build: dist/assets/SectionList-DN8_FsDU.js                 3.59 kB │ gzip:   1.72 kB
+@orbis/web build: dist/assets/RecordsBlock-DQK_6l--.js                3.62 kB │ gzip:   1.79 kB
+@orbis/web build: dist/assets/SupplyCompare-8JmpGfII.js               3.64 kB │ gzip:   1.68 kB
+@orbis/web build: dist/assets/PlanningCapture-BtrO0y2k.js             3.73 kB │ gzip:   1.83 kB
+@orbis/web build: dist/assets/device-storage-CRlKysVj.js              3.73 kB │ gzip:   1.78 kB
+@orbis/web build: dist/assets/arrows-stack-Bmep0vvy.js                3.98 kB │ gzip:   1.57 kB
+@orbis/web build: dist/assets/OpenPlaqueList-C5t4tuAe.js              3.98 kB │ gzip:   1.88 kB
+@orbis/web build: dist/assets/Checkbox-CSh8gAnT.js                    4.26 kB │ gzip:   1.83 kB
+@orbis/web build: dist/assets/dependencies-DeKX6J60.js                4.73 kB │ gzip:   1.98 kB
+@orbis/web build: dist/assets/SearchPanel-DsHKyIJO.js                 4.74 kB │ gzip:   2.20 kB
+@orbis/web build: dist/assets/Inbox-Cta6Dg2V.js                       4.86 kB │ gzip:   2.16 kB
+@orbis/web build: dist/assets/NavEditor-DpHH0tEL.js                   4.89 kB │ gzip:   2.17 kB
+@orbis/web build: dist/assets/marks-CoSc54dB.js                       5.24 kB │ gzip:   2.58 kB
+@orbis/web build: dist/assets/provenance-BcgO8RaD.js                  5.26 kB │ gzip:   2.07 kB
+@orbis/web build: dist/assets/RefListControl-So2n_zUG.js              5.41 kB │ gzip:   2.27 kB
+@orbis/web build: dist/assets/Dialog-ZffHRgcE.js                      5.83 kB │ gzip:   2.22 kB
+@orbis/web build: dist/assets/VersionsCard-D0AXeHyj.js                5.85 kB │ gzip:   2.67 kB
+@orbis/web build: dist/assets/DesktopFrame-B478z2iK.js                5.89 kB │ gzip:   2.04 kB
+@orbis/web build: dist/assets/AspectSectionView-CetEB5Q7.js           6.06 kB │ gzip:   2.60 kB
+@orbis/web build: dist/assets/ChatPanel-BxrtOs6l.js                   6.93 kB │ gzip:   3.16 kB
+@orbis/web build: dist/assets/react-DbyrFoBd.js                       7.52 kB │ gzip:   2.87 kB
+@orbis/web build: dist/assets/dist-BBEu5IbE.js                        7.72 kB │ gzip:   3.03 kB
+@orbis/web build: dist/assets/ProposalOverlayView-DoURz8JN.js         7.85 kB │ gzip:   3.23 kB
+@orbis/web build: dist/assets/response-cache-C0GE0PUC.js              7.89 kB │ gzip:   3.26 kB
+@orbis/web build: dist/assets/RecordLink-oYH845RU.js                  7.93 kB │ gzip:   3.79 kB
+@orbis/web build: dist/assets/boot-DX7NMxcQ.js                        8.05 kB │ gzip:   3.34 kB
+@orbis/web build: dist/assets/DayPlanner-BO84QL1C.js                  9.20 kB │ gzip:   3.43 kB
+@orbis/web build: dist/assets/AppsAndExtensions-BPQBfbAO.js           9.61 kB │ gzip:   3.37 kB
+@orbis/web build: dist/assets/PropertyControl-BKFd0yf2.js             9.87 kB │ gzip:   3.69 kB
+@orbis/web build: dist/assets/use-relation-command-CBq5JAQd.js       10.19 kB │ gzip:   4.29 kB
+@orbis/web build: dist/assets/navigation-Cg1kNPSh.js                 10.77 kB │ gzip:   3.76 kB
+@orbis/web build: dist/assets/QuestionCard-wWtVw-2A.js               12.99 kB │ gzip:   3.92 kB
+@orbis/web build: dist/assets/RunFeed-BRVDl8YC.js                    16.77 kB │ gzip:   5.61 kB
+@orbis/web build: dist/assets/EditorShell-hgxGAE8S.js                18.73 kB │ gzip:   6.77 kB
+@orbis/web build: dist/assets/diff-CQExr4L7.js                       19.26 kB │ gzip:   7.51 kB
+@orbis/web build: dist/assets/DetailMenu-BSfkAy9q.js                 19.43 kB │ gzip:   7.72 kB
+@orbis/web build: dist/assets/es2015-DDgP8ner.js                     20.63 kB │ gzip:   7.40 kB
+@orbis/web build: dist/assets/floating-ui.dom-iF8JX5qn.js            21.27 kB │ gzip:   8.20 kB
+@orbis/web build: dist/assets/MessageList-BJrbrTZV.js                21.37 kB │ gzip:   7.49 kB
+@orbis/web build: dist/assets/EntityBody-1nW0kbwL.js                 24.75 kB │ gzip:   8.28 kB
+@orbis/web build: dist/assets/DropdownMenu-BCEmsl30.js               32.59 kB │ gzip:  11.16 kB
+@orbis/web build: dist/assets/PropertiesRelationsPanel-DB5yoqqp.js   54.12 kB │ gzip:  15.95 kB
+@orbis/web build: dist/assets/DetailScreen-EFW2PcKX.js               70.78 kB │ gzip:  23.09 kB
+@orbis/web build: dist/assets/src-DrZqWEN5.js                        85.91 kB │ gzip:  28.01 kB
+@orbis/web build: dist/assets/query-zpl7SAsu.js                     103.94 kB │ gzip:  28.38 kB
+@orbis/web build: dist/assets/BodyEditor-BkrE0wRr.js                115.08 kB │ gzip:  34.46 kB
+@orbis/web build: dist/assets/trpc-BqWSkZ2j.js                      135.97 kB │ gzip:  39.87 kB
+@orbis/web build: dist/assets/percent-DWvNgjv2.js                   160.41 kB │ gzip:  48.34 kB
+@orbis/web build: dist/assets/index-BPONuxRt.js                     447.02 kB │ gzip: 137.39 kB
+@orbis/web build: dist/assets/doc-BOWOS0cg.js                       500.15 kB │ gzip: 156.95 kB
+@orbis/web build: 
+@orbis/web build: ✓ built in 1.18s
+@orbis/web build: [plugin builtin:vite-reporter] 
+@orbis/web build: (!) Some chunks are larger than 500 kB after minification. Consider:
+@orbis/web build: - Using dynamic import() to code-split the application
+@orbis/web build: - Use build.rolldownOptions.output.codeSplitting to improve chunking: https://rolldown.rs/reference/OutputOptions.codeSplitting
+@orbis/web build: - Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.
+@orbis/web build: 
+@orbis/web build: PWA v1.3.0
+@orbis/web build: mode      generateSW
+@orbis/web build: precache  125 entries (2110.00 KiB)
+@orbis/web build: files generated
+@orbis/web build:   dist/sw.js
+@orbis/web build:   dist/workbox-dcde9eb3.js
+@orbis/web build: Exited with code 0

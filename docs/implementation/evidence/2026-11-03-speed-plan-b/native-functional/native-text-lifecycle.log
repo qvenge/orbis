@@ -1,0 +1,17 @@
+bun test v1.2.7 (5c0fa6dc)
+
+.superpowers/sdd/2026-11-03-speed-plan-b/native-text-lifecycle.test.ts:
+{"scenario":"text-close","before":"idb","after":"idb","token":{"accountId":"d299e341-00af-4f5e-888b-07fe1e8b0799","graphId":"d299e341-00af-4f5e-888b-07fe1e8b0799","generation":"0:0","entityId":"01a1a77a-d223-72b0-841e-a9cfc596fbc2","writerId":"01a1a77a-d900-72ed-b78f-db984dce175f","nonce":"01a1a77a-d900-72ed-b78f-dd81bce5d4f5","sequence":1,"basis":{"revision":1}},"writes":0,"recoveryOffer":true,"workers":[],"oldEntry":"/assets/index-DxSgzNZF.js","newEntry":"/assets/index-DxSgzNZF.js","fault":null}
+(pass) exact input through close [7560.66ms]
+{"scenario":"text-network","before":"idb","after":"idb","token":{"accountId":"fa48bda4-f20c-4d43-b96c-2549dde04375","graphId":"fa48bda4-f20c-4d43-b96c-2549dde04375","generation":"0:0","entityId":"01a1a77a-ef64-74ba-a5e5-dce1890d881a","writerId":"01a1a77a-f5e6-72a9-85e7-d20056c29ef6","nonce":"01a1a77a-f5e6-72a9-85e7-d6bad4e09878","sequence":1,"basis":{"revision":1}},"writes":0,"recoveryOffer":true,"workers":[],"oldEntry":"/assets/index-DxSgzNZF.js","newEntry":"/assets/index-DxSgzNZF.js","fault":null}
+(pass) exact input through network [6116.43ms]
+Error: NOTSOCK
+error: Test "exact input through 401" timed out after 55000ms (killed 1 dangling process)
+(fail) exact input through 401 [55001.39ms]
+{"scenario":"text-412-sw-update","before":"idb","after":"idb","token":{"accountId":"c29db266-4980-4d3d-a5be-d5f86a07b5e0","graphId":"c29db266-4980-4d3d-a5be-d5f86a07b5e0","generation":"0:0","entityId":"01a1a77b-dd83-700a-9adf-1e7816e89aae","writerId":"01a1a77b-e5f6-7178-823a-c6debd72105b","nonce":"01a1a77b-e5f6-7178-823a-ca26c5373982","sequence":1,"basis":{"revision":1}},"writes":0,"recoveryOffer":true,"workers":[{"build":"882","route":"/sw.js"},{"build":"a0","route":"/sw.js"}],"oldEntry":"/assets/index-C8QvvH3-.js","newEntry":"/assets/index-DxSgzNZF.js","fault":"local typed HTTP 412 envelope"}
+(pass) exact input through 412-sw-update [7697.17ms]
+
+ 3 pass
+ 1 fail
+ 29 expect() calls
+Ran 4 tests across 1 files. [77.29s]

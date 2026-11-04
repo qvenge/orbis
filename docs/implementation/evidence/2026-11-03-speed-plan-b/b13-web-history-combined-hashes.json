@@ -1,0 +1,31 @@
+{
+  "base": "d4bc1c5cba6478f02530c83a50b69c90da8c0eb7",
+  "candidate": "/private/tmp/orbis-b13-web-history-combined.FMPjv5",
+  "files": [
+    {
+      "path": "apps/web/src/features/entity-detail/foreign-refusal.test.tsx",
+      "before": "a0c895fbd910d66a6eaa708688fcae902e350b77e7f66175dfbf01965bdabb37",
+      "after": "cc1fb01098b0a0c0af8e7f021731c774e6c878a9a91a6aca0aa2815f041b080c"
+    },
+    {
+      "path": "apps/web/src/features/entity-detail/history-delivery.test.tsx",
+      "before": "e4aa5241d3755c6c3b3d3ab08e6704ef933d9e7397d79cd0e8d3899dbcca78b3",
+      "after": "830d836e25a480ef569d7c63572fbe305cdadcdd2cfdfca7fde6fbc8bf6e2101"
+    },
+    {
+      "path": "apps/web/src/features/entity-detail/history-lifecycle.test.tsx",
+      "before": "83d5642bbb8eecc6757ad609b19eee27341cc3e679203bf33adbafd695c20b7d",
+      "after": "54d1698be3b0fee6b2673a51fe9c27afe732f75d1392ce14668909232ea26486"
+    },
+    {
+      "path": "apps/web/src/features/entity-editor/arrows.test.tsx",
+      "before": "5315f499164921c1221b494af6cc3645f2d93be68172b7f312ffc18f84f21895",
+      "after": "a46f300b069541f7e794af5bea412e9fb9141184bbc8239ff97517c08f294b56"
+    },
+    {
+      "path": "apps/web/src/lib/useGraphUndo.test.tsx",
+      "before": "90522128f68187aa859e906dd5260fc4b64da5d9b0992f532b3334775708802c",
+      "after": "67c8d385c0bba54e7303592e42403419b7604721d824388d352b03d3e7dd3c0a"
+    }
+  ]
+}

@@ -1,0 +1,30 @@
+bun test v1.2.7 (5c0fa6dc)
+
+scripts/cache-dependencies.test.ts:
+(pass) reports a new tRPC cache family from imperative fetch and a hook factory [25.51ms]
+(pass) finds custom key constants, factories and imperative writes [6.67ms]
+517 |     if (!source) throw new Error(`No TypeScript source for ${file}`);
+518 |     return cacheFamilies(source, checker)
+519 |       .filter(({ kind, name }) => !hasCacheDependency(name, kind))
+520 |       .map(({ kind, name, line }) => `${relative(root, file)}:${line} ${kind} ${name}`);
+521 |   });
+522 |   expect(uncovered).toEqual([]);
+                          ^
+error: expect(received).toEqual(expected)
+
++ [
++   "apps/web/src/b13-cache-family-mutant.ts:5 custom b13-unregistered-family"
++ ]
+- []
+
+- Expected  - 1
++ Received  + 3
+
+      at <anonymous> (/private/tmp/orbis-b13-final-ci.07CROy/mutants/scripts/cache-dependencies.test.ts:522:21)
+(fail) all production query cache keys have a dependency declaration [15007.69ms]
+(pass) typed destructuring and top-level procedure calls cannot hide undeclared families [8702.96ms]
+
+ 3 pass
+ 1 fail
+ 10 expect() calls
+Ran 4 tests across 1 files. [24.62s]

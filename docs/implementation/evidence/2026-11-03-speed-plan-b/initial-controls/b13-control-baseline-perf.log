@@ -1,0 +1,25 @@
+$ bun run --filter @orbis/server test:perf
+@orbis/server test:perf: bun test v1.2.7 (5c0fa6dc)
+@orbis/server test:perf: 
+@orbis/server test:perf: perf/perf.test.ts:
+@orbis/server test:perf: perf: seed 45626ms
+@orbis/server test:perf: (pass) фикстура наполнена: гейт меряет данные, а не пустой граф [772.55ms]
+@orbis/server test:perf: perf: entity.query:list50 median=20.1ms runs=7
+@orbis/server test:perf: perf: entity.count:badge median=16.7ms runs=7
+@orbis/server test:perf: perf: budget.overview median=91.7ms runs=5
+@orbis/server test:perf: perf: agenda:horizon median=40.3ms runs=5
+@orbis/server test:perf: perf: entity.backlinks median=34.1ms runs=7
+@orbis/server test:perf: perf: fastpath:create median=79.6ms runs=5
+@orbis/server test:perf: perf: goal.progress median=47.9ms runs=7
+@orbis/server test:perf: perf: entity.blocks:10 median=108.8ms runs=7
+@orbis/server test:perf: perf: agenda:page median=117.5ms runs=5
+@orbis/server test:perf: (pass) перф-бюджеты серверных операций [3303.88ms]
+@orbis/server test:perf: perf: spent-cache read(40) p95=4.5ms median=3.0ms runs=40 samples=[4.3, 3.2, 3.2, 2.9, 3.0, 2.8, 2.8, 3.6, 2.9, 2.6, 2.7, 2.5, 2.5, 5.5, 3.5, 2.9, 3.2, 3.0, 4.5, 3.8, 3.4, 2.9, 2.9, 2.8, 2.8, 3.2, 2.9, 2.9, 2.9, 3.4, 5.1, 3.2, 2.8, 3.0, 4.0, 4.1, 3.5, 3.1, 2.9, 2.8]
+@orbis/server test:perf: perf: spent-cache read(40)+tx p95=11.9ms median=7.5ms runs=40 samples=[7.6, 7.1, 6.6, 6.1, 8.5, 7.1, 8.1, 9.1, 7.3, 7.8, 6.6, 6.7, 5.6, 6.4, 8.3, 8.8, 9.2, 7.5, 6.6, 8.0, 6.6, 6.7, 7.0, 8.0, 9.5, 9.1, 7.3, 8.2, 7.0, 6.5, 6.2, 6.8, 6.8, 11.9, 13.6, 12.2, 9.9, 5.9, 10.8, 11.1]
+@orbis/server test:perf: (pass) приёмка §С8-16: p95 чтения прогретого кэша spent (40 конвертов) ≤ 10 мс [644.55ms]
+@orbis/server test:perf: 
+@orbis/server test:perf:  3 pass
+@orbis/server test:perf:  0 fail
+@orbis/server test:perf:  28 expect() calls
+@orbis/server test:perf: Ran 3 tests across 1 files. [50.96s]
+@orbis/server test:perf: Exited with code 0

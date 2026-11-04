@@ -1,0 +1,100 @@
+
+ RUN  v4.1.9 /private/tmp/orbis-b13-independent.DvY5aP/candidate/apps/web
+
+ ✓ src/features/entity-detail/freshness-reset.test.tsx > an autosave success crossing reset keeps the draft and never becomes editor basis 270ms
+ ✓ src/features/entity-detail/freshness-reset.test.tsx > an autosave rejection crossing reset keeps the draft and never becomes editor basis 225ms
+ ✓ src/features/entity-detail/freshness-reset.test.tsx > version.restore started before reset cannot project old body over a fresh read 408ms
+ ✓ src/features/entity-detail/freshness-reset.test.tsx > old-generation NOT_FOUND does not remove a current response for the same entity 115ms
+ ✓ src/features/entity-detail/freshness-reset.test.tsx > a canceled foreign refresh stays owed after successful own autosave 675ms
+ ✓ src/features/entity-detail/freshness-reset.test.tsx > a hidden Relations panel tab does not fetch label queries 437ms
+ ✓ src/features/entity-detail/freshness-reset.test.tsx > an overlay keeps configure and template preview mounted without reading until visible 28ms
+ × src/features/entity-detail/freshness-reset.test.tsx > B13 probe: new edit cannot write from a pre-rollback body before current confirmation 126ms
+   → expected [ { path: 'entity.update', …(1) } ] to have a length of +0 but got 1
+   → expected 'human edit based on the old document' to be 'different body with reused revision' // Object.is equality
+   → expected undefined to deeply equal { v: 3, doc: { type: 'doc', …(1) } }
+ × src/features/entity-detail/freshness-reset.test.tsx > B13 probe: pending debounce cannot write from a pre-rollback body before current confirmation 113ms
+   → expected [ { path: 'entity.update', …(1) } ] to have a length of +0 but got 1
+   → expected 'human edit based on the old document' to be 'different body with reused revision' // Object.is equality
+   → expected undefined to deeply equal { v: 3, doc: { type: 'doc', …(1) } }
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 2 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/features/entity-detail/freshness-reset.test.tsx > B13 probe: new edit cannot write from a pre-rollback body before current confirmation
+ FAIL  src/features/entity-detail/freshness-reset.test.tsx > B13 probe: pending debounce cannot write from a pre-rollback body before current confirmation
+AssertionError: expected [ { path: 'entity.update', …(1) } ] to have a length of +0 but got 1
+
+- Expected
++ Received
+
+- 0
++ 1
+
+ ❯ src/features/entity-detail/freshness-reset.test.tsx:457:73
+    455|         editor.flush();
+    456|       });
+    457|       expect.soft(calls.filter(({ path }) => path === 'entity.update')…
+       |                                                                         ^
+    458|       expect.soft(serverBody).toBe('different body with reused revisio…
+    459|       expect.soft(readDraft(id)?.doc).toEqual(local);
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/6]⎯
+
+ FAIL  src/features/entity-detail/freshness-reset.test.tsx > B13 probe: new edit cannot write from a pre-rollback body before current confirmation
+ FAIL  src/features/entity-detail/freshness-reset.test.tsx > B13 probe: pending debounce cannot write from a pre-rollback body before current confirmation
+AssertionError: expected 'human edit based on the old document' to be 'different body with reused revision' // Object.is equality
+
+Expected: "different body with reused revision"
+Received: "human edit based on the old document"
+
+ ❯ src/features/entity-detail/freshness-reset.test.tsx:458:31
+    456|       });
+    457|       expect.soft(calls.filter(({ path }) => path === 'entity.update')…
+    458|       expect.soft(serverBody).toBe('different body with reused revisio…
+       |                               ^
+    459|       expect.soft(readDraft(id)?.doc).toEqual(local);
+    460|     } finally {
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/6]⎯
+
+ FAIL  src/features/entity-detail/freshness-reset.test.tsx > B13 probe: new edit cannot write from a pre-rollback body before current confirmation
+ FAIL  src/features/entity-detail/freshness-reset.test.tsx > B13 probe: pending debounce cannot write from a pre-rollback body before current confirmation
+AssertionError: expected undefined to deeply equal { v: 3, doc: { type: 'doc', …(1) } }
+
+- Expected:
+{
+  "doc": {
+    "content": [
+      {
+        "content": [
+          {
+            "text": "human edit based on the old document",
+            "type": "text",
+          },
+        ],
+        "type": "paragraph",
+      },
+    ],
+    "type": "doc",
+  },
+  "v": 3,
+}
+
++ Received:
+undefined
+
+ ❯ src/features/entity-detail/freshness-reset.test.tsx:459:39
+    457|       expect.soft(calls.filter(({ path }) => path === 'entity.update')…
+    458|       expect.soft(serverBody).toBe('different body with reused revisio…
+    459|       expect.soft(readDraft(id)?.doc).toEqual(local);
+       |                                       ^
+    460|     } finally {
+    461|       await act(async () => refreshed.resolve(detail(3, 'different bod…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/6]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  2 failed | 7 passed (9)
+   Start at  20:48:34
+   Duration  6.41s (transform 1.70s, setup 137ms, import 2.82s, tests 2.40s, environment 826ms)
+

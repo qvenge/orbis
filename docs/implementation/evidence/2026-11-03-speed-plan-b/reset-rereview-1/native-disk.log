@@ -1,0 +1,11 @@
+BROWSER 156.0.8078.80
+9:28:18 PM [vite] (client) dependencies optimized: @tanstack/react-query, uuid, zod-to-json-schema, zod, zustand
+9:28:18 PM [vite] (client) optimized dependencies changed. reloading
+PASS runtimeBridge {"afterFloor":3,"purged":true}
+PASS lazyRewindBridge {"afterFloor":3,"purged":true}
+PASS sameTokenCurrent {"first":1,"second":2}
+PASS sameTokenStaleWithQueuedWriter {"second":2,"written":false}
+PASS freezeAfterDigest {"retained":true}
+PASS freezeInsideRewind {"retained":true}
+PASS strictAckAbortAndEpoch {"retainedAfterStrictAbort":true,"retainedAfterEpoch":true}
+PASS ordinaryCrossTabReplay {"generation":1,"body":"first tab new row"}

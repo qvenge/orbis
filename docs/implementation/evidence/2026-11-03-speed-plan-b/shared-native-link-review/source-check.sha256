@@ -1,0 +1,10 @@
+6b022ea4b09498718ea4cd8a2c503c2f9be9f39929ed1ae5d5a734c4344d3370 apps/web/src/lib/entity-ref/RecordLink.tsx
+648bb3997c4610a335c9b7dc46b869f538b19197b7b58b9b3139f623ac6701a2 apps/web/src/lib/entity-ref/record-link-controller.ts
+c9647212f5de61f796047d7accea8d97026ae7c2169e2d77f1565985028e5bf1 apps/web/src/features/entity-editor/BodyEditor.tsx
+9726823a6e07d1db920a5b54ffa6903ccf797e13a74c2cb8dad8b352364fdaae apps/web/src/features/entity-editor/editor-record-links.ts
+e0e5fd27783ffd11824b1fe99aa853a6b35c0a80c7e73a94fb53ea641640ba85 apps/web/src/features/entity-detail/DetailMenu.tsx
+a187b9893fea9159dbcf1a0496854f0976a627bef2e27ec9b0663857ea8921a1 apps/web/src/lib/entity-ref/RecordLink.test.tsx
+68758c5d58bc91f6968568e03f018461ac7d7202bf428a66eae7db06d29e1383 apps/web/src/features/entity-editor/editor-record-links.test.tsx
+91b9b310db30789bc646c7f4be49a3cb39a9314c4773790869fe91d059813ad3 apps/web/src/features/apps/open.test.tsx
+2e0d41437ef2dd90aa14906c5418a70f8cc24f50c9041a82e92904d4e7dcfbc6 apps/web/src/features/entity-detail/copy-link.test.tsx
+b8bddea896435677ee206860ec5fe1cb68a3a7998a01434b7bd69a9f6782b68c apps/web/dist/index.html

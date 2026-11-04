@@ -1,0 +1,18 @@
+Preparing bundled transport and isolated browser
+Connected while xmin was held
+SSE data shape: {
+  array: false,
+  keys: [ "floor", "watermark", "reset", "transactions" ],
+  kind: undefined,
+  reset: undefined,
+}
+PASS pre-connect committed row waited for xmin; network reconnect resumed with accepted Last-Event-ID
+SSE data shape: {
+  array: false,
+  keys: [ "kind" ],
+  kind: "refresh-token",
+  reset: undefined,
+}
+PASS verified expiry caused one refresh; new bearer and client version arrived in headers only
+PASS quiet stream survived Bun idle timeout, sent real 25-second SSE ping and held no transaction
+PASS graceful server stop and restart delivered the next row with no duplicate delivery

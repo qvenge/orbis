@@ -1,0 +1,87 @@
+apps/web/src/features/entity-detail/history-delivery.test.tsx:321:15 lint/style/noNonNullAssertion  FIXABLE  ━━━━━━━━━━
+
+  ! Forbidden non-null assertion.
+  
+    319 │       saved = { ...saved, bodyDoc: parseBody('чужое тело'), bodyRevision: saved.bodyRevision + 1 };
+    320 │       await act(async () => {
+  > 321 │         await qc!.invalidateQueries({
+        │               ^^^
+    322 │           predicate: (q) =>
+    323 │             JSON.stringify(q.queryKey).includes('entity') &&
+  
+  i Unsafe fix: Replace with optional chain operator ?. This operator includes runtime checks, so it is safer than the compile-only non-null assertion operator
+  
+    319 319 │         saved = { ...saved, bodyDoc: parseBody('чужое тело'), bodyRevision: saved.bodyRevision + 1 };
+    320 320 │         await act(async () => {
+    321     │ - ········await·qc!.invalidateQueries({
+        321 │ + ········await·qc?.invalidateQueries({
+    322 322 │             predicate: (q) =>
+    323 323 │               JSON.stringify(q.queryKey).includes('entity') &&
+  
+
+apps/web/src/features/entity-detail/history-delivery.test.tsx:454:20 lint/style/noNonNullAssertion  FIXABLE  ━━━━━━━━━━
+
+  ! Forbidden non-null assertion.
+  
+    452 │   await screen.findByText('Отменено: Правка');
+    453 │   expect(canUndoStep('e1')).toBe(false);
+  > 454 │   expect(undoDepth(editors[0]!.state)).toBe(0);
+        │                    ^^^^^^^^^^^
+    455 │   expect(canUndoStep('e2')).toBe(true);
+    456 │   expect(undoDepth(editors[1]!.state)).toBe(1);
+  
+  i Unsafe fix: Replace with optional chain operator ?. This operator includes runtime checks, so it is safer than the compile-only non-null assertion operator
+  
+    452 452 │     await screen.findByText('Отменено: Правка');
+    453 453 │     expect(canUndoStep('e1')).toBe(false);
+    454     │ - ··expect(undoDepth(editors[0]!.state)).toBe(0);
+        454 │ + ··expect(undoDepth(editors[0]?.state)).toBe(0);
+    455 455 │     expect(canUndoStep('e2')).toBe(true);
+    456 456 │     expect(undoDepth(editors[1]!.state)).toBe(1);
+  
+
+apps/web/src/features/entity-detail/history-delivery.test.tsx:456:20 lint/style/noNonNullAssertion  FIXABLE  ━━━━━━━━━━
+
+  ! Forbidden non-null assertion.
+  
+    454 │   expect(undoDepth(editors[0]!.state)).toBe(0);
+    455 │   expect(canUndoStep('e2')).toBe(true);
+  > 456 │   expect(undoDepth(editors[1]!.state)).toBe(1);
+        │                    ^^^^^^^^^^^
+    457 │ });
+    458 │ 
+  
+  i Unsafe fix: Replace with optional chain operator ?. This operator includes runtime checks, so it is safer than the compile-only non-null assertion operator
+  
+    454 454 │     expect(undoDepth(editors[0]!.state)).toBe(0);
+    455 455 │     expect(canUndoStep('e2')).toBe(true);
+    456     │ - ··expect(undoDepth(editors[1]!.state)).toBe(1);
+        456 │ + ··expect(undoDepth(editors[1]?.state)).toBe(1);
+    457 457 │   });
+    458 458 │   
+  
+
+apps/web/src/features/entity-detail/history-lifecycle.test.tsx:295:7 lint/style/noNonNullAssertion  FIXABLE  ━━━━━━━━━━
+
+  ! Forbidden non-null assertion.
+  
+    293 │   await waitFor(() =>
+    294 │     expect(
+  > 295 │       qc!
+        │       ^^^
+    296 │         .getQueryCache()
+    297 │         .getAll()
+  
+  i Unsafe fix: Replace with optional chain operator ?. This operator includes runtime checks, so it is safer than the compile-only non-null assertion operator
+  
+     293  293 │     await waitFor(() =>
+     294  294 │       expect(
+     295      │ - ······qc!
+     296      │ - ········.getQueryCache()
+          295 │ + ······qc?.getQueryCache()
+     297  296 │           .getAll()
+     298  297 │           .filter((q) => JSON.stringify(q.queryKey).includes('"e1"')),
+  
+
+Checked 5 files in 118ms. No fixes applied.
+Found 4 warnings.

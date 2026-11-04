@@ -1,0 +1,7 @@
+{"event":"fixture:prepared","at":4444.476398,"address":{"kind":"home","app":{"kind":"host"}},"pathname":"/r/11111111-1111-4111-8111-111111111111"}
+{"event":"fixture:render-ready","at":4445.127183}
+{"event":"address","at":4466.62211,"address":{"kind":"record","app":{"kind":"host"},"id":"11111111-1111-4111-8111-111111111111"}}
+{"event":"loader:start","at":4475.497508}
+{"event":"heading:wait","at":4530.270005,"id":"11111111-1111-4111-8111-111111111111"}
+{"event":"heading:timeout","at":5540.375527,"id":"11111111-1111-4111-8111-111111111111"}
+{"event":"loader:resolved","at":6067.770408}

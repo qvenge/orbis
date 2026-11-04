@@ -1,0 +1,9 @@
+
+ RUN  v4.1.9 /private/tmp/orbis-b13-final-ci.07CROy/responsive-causal/apps/web
+
+
+ Test Files  1 passed (1)
+      Tests  1 passed | 7 skipped (8)
+   Start at  00:08:48
+   Duration  6.92s (transform 2.44s, setup 182ms, import 2.06s, tests 3.65s, environment 814ms)
+

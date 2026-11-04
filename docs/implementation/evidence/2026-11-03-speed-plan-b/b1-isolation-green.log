@@ -1,0 +1,32 @@
+bun test v1.2.7 (5c0fa6dc)
+
+apps/server/src/db/change-feed.test.ts:
+(pass) entity writes report affected backlinks, distinguish body and skip empty statements [199.06ms]
+(pass) entity key and graph changes address both old and new scopes [44.18ms]
+(pass) relation update affects both endpoint sets and cascade resolves the surviving target [41.08ms]
+(pass) deleting both relation endpoints in a single statement raises the global floor [44.97ms]
+(pass) version, thread and message metadata retain old and new anchors [126.71ms]
+(pass) journal resolves living and deleted edge IDs without exposing them as entity IDs [94.61ms]
+(pass) registry changes use NULL-safe graph keys and invalidate global data without scoped rows [60.04ms]
+(pass) settings and registry deltas report the actual changed graph and natural key [56.64ms]
+(pass) an unchanged system row and an unchanged NULL-key definition do not reset [24.06ms]
+(pass) deleting a thread with its messages resets and preserves the old journal thread key [43.40ms]
+(pass) authenticated feed exposes only proved backlinks and treats foreign and absent refs alike [55.17ms]
+(pass) authenticated version, message and thread events omit an anchor moved to another graph [78.39ms]
+(pass) authenticated journal preserves a same-graph deleted thread and hides foreign or moved parents [68.30ms]
+(pass) relation cascade uses the latest actual parent graph (move back: %s) [48.57ms]
+(pass) relation cascade uses the latest actual parent graph (move back: %s) [46.01ms]
+(pass) journal does not reuse entity or edge events from before a cross-graph move [38.81ms]
+
+apps/server/src/freshness/feed.test.ts:
+(pass) committed feed storage and singleton floor are installed [42.27ms]
+(pass) NOTIFY folds multiple rows per graph, stays quiet on empty updates and rollback, and sends a global wake [180.58ms]
+(pass) the registered cron job atomically expires old rows and never lowers the floor [43.57ms]
+(pass) TRUNCATE raises the floor above its own transaction without adding scoped rows [11.37ms]
+(pass) real Undo of creation feeds both the archived entity and its journal action in one transaction [563.04ms]
+(pass) ops diagnostics observe a writing transaction and the scheduled cleanup in a read-only transaction [87.01ms]
+
+ 22 pass
+ 0 fail
+ 62 expect() calls
+Ran 22 tests across 2 files. [3.26s]

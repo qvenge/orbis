@@ -1,0 +1,56 @@
+
+ RUN  v4.1.9 /private/tmp/orbis-b13-r6-independent.slUDfl/candidate/apps/web
+
+{"before":{"disk":"disk","raw":"План","undo":true,"disabled":false},"after":{"title":"План","writes":[[{"id":"e1","title":"План","expectedTitle":"План"}]],"storedTitle":"План"}}
+{"before":{"disk":"disk","raw":"Чужое имя Д","undo":true,"disabled":false},"after":{"title":"План","writes":[[{"id":"e1","title":"План","expectedTitle":"Чужое имя Д"}]],"storedTitle":"План"}}
+ ❯ src/features/entity-detail/history-lifecycle.b13-r6-first-disk-cas.test.tsx (81 tests | 1 failed | 79 skipped) 1058ms
+   × B13 independent first disk editable before first accepted network title=Чужое имя Д 249ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/features/entity-detail/history-lifecycle.b13-r6-first-disk-cas.test.tsx > B13 independent first disk editable before first accepted network title=Чужое имя Д
+AssertionError: expected { disk: 'disk', …(3) } to match object { undo: false, disabled: true }
+(2 matching properties omitted from actual)
+
+- Expected
++ Received
+
+  {
+-   "disabled": true,
+-   "undo": false,
++   "disabled": false,
++   "undo": true,
+  }
+
+ ❯ src/features/entity-detail/history-lifecycle.b13-r6-first-disk-cas.test.tsx:2807:29
+    2805|         expect(after.title).toBe('План');
+    2806|       } else {
+    2807|         expect.soft(before).toMatchObject({ undo: false, disabled: tru…
+       |                             ^
+    2808|         expect.soft(after.title).toBe('Набранный заголовок');
+    2809|       }
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/2]⎯
+
+ FAIL  src/features/entity-detail/history-lifecycle.b13-r6-first-disk-cas.test.tsx > B13 independent first disk editable before first accepted network title=Чужое имя Д
+AssertionError: expected 'План' to be 'Набранный заголовок' // Object.is equality
+
+Expected: "Набранный заголовок"
+Received: "План"
+
+ ❯ src/features/entity-detail/history-lifecycle.b13-r6-first-disk-cas.test.tsx:2808:34
+    2806|       } else {
+    2807|         expect.soft(before).toMatchObject({ undo: false, disabled: tru…
+    2808|         expect.soft(after.title).toBe('Набранный заголовок');
+       |                                  ^
+    2809|       }
+    2810|     } finally {
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/2]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  1 failed | 1 passed | 79 skipped (81)
+   Start at  22:16:40
+   Duration  5.54s (transform 2.23s, setup 183ms, import 3.24s, tests 1.06s, environment 826ms)
+

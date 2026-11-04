@@ -1,0 +1,50 @@
+bun test v1.2.7 (5c0fa6dc)
+
+scripts/write-paths.test.ts:
+(pass) сторожа путей записи (спека скорости §10.3) > (а) обход не выродился: боевой код сервера, без тестов, обвязки и миграций; схема прочитана [52.19ms]
+(pass) сторожа путей записи (спека скорости §10.3) > (б) приметы на образцах [8.50ms]
+(pass) сторожа путей записи (спека скорости §10.3) > SQL: qualified и quoted таблицы сохраняют границы всех четырёх видов записи [4.06ms]
+(pass) сторожа путей записи (спека скорости §10.3) > SQL: quoted body stamps запрещены в UPDATE и INSERT
+(pass) сторожа путей записи (спека скорости §10.3) > SQL: conflict UPDATE запрещает все body stamps даже вне INSERT columns [2.82ms]
+(pass) сторожа путей записи (спека скорости §10.3) > SQL: string/comment lexer сохраняет настоящий writer после литерала [1.24ms]
+(pass) сторожа путей записи (спека скорости §10.3) > SQL: body equality в WHERE и SELECT — чтение, assignment в SET — запись
+(pass) сторожа путей записи (спека скорости §10.3) > SQL: dollar delimiter внутри ASCII/Unicode identifier не скрывает writer [1.53ms]
+(pass) сторожа путей записи (спека скорости §10.3) > SQL: настоящие ASCII/Unicode dollar literals не создают fake write и сохраняют следующий [1.20ms]
+(pass) сторожа путей записи (спека скорости §10.3) > SQL: ASCII/Unicode alias сохраняет body hit в UPDATE [0.70ms]
+(pass) сторожа путей записи (спека скорости §10.3) > SQL: ASCII/Unicode alias сохраняет body hit в INSERT [0.21ms]
+(pass) сторожа путей записи (спека скорости §10.3) > SQL: WHERE/RETURNING внутри ASCII/Unicode identifier не завершает SET [0.11ms]
+(pass) сторожа путей записи (спека скорости §10.3) > SQL: ONLY parenthesized targets сохраняют graph/body/chat/journal boundaries [2.25ms]
+(pass) сторожа путей записи (спека скорости §10.3) > SQL: inheritance star сохраняет UPDATE body assignment и отрицательный reader [1.27ms]
+(pass) сторожа путей записи (спека скорости §10.3) > SQL: punctuation target boundary отделяет SET без разрыва ordinary identifier [1.27ms]
+(pass) сторожа путей записи (спека скорости §10.3) > SQL: quoted INSERT target и alias отделяют AS как token без пробела [1.14ms]
+(pass) сторожа путей записи (спека скорости §10.3) > SQL: TRUNCATE relation list поддерживает ONLY parens/star/dynamic/escaped names [0.82ms]
+(pass) сторожа путей записи (спека скорости §10.3) > SQL: U& quoted table identifiers декодируют carrier и сохраняют quoted case [5.44ms]
+(pass) сторожа путей записи (спека скорости §10.3) > SQL: U& body identifiers декодируются только на assignment/insert LHS [0.54ms]
+(pass) сторожа путей записи (спека скорости §10.3) > SQL: UESCAPE принимает documented single, E и dollar string constants [1.54ms]
+(pass) сторожа путей записи (спека скорости §10.3) > SQL: ONLY token не снимает prefix обычного имени таблицы [0.78ms]
+(pass) сторожа путей записи (спека скорости §10.3) > SQL: Unicode normalization сохраняет opaque offsets перед следующим writer/assignment [0.56ms]
+(pass) сторожа путей записи (спека скорости §10.3) > SQL: invalid Unicode escape tokens не нормализуются в реальные carriers/stamps [0.48ms]
+(pass) сторожа путей записи (спека скорости §10.3) > (в) известные писатели видны: executor пишет граф, синк — журнал, модуль разговоров — сообщения [0.14ms]
+(pass) сторожа путей записи (спека скорости §10.3) > (г) graph: вне писателя — только исключения, счёт точный [0.45ms]
+(pass) сторожа путей записи (спека скорости §10.3) > (г) journal: вне писателя — только исключения, счёт точный [0.10ms]
+(pass) сторожа путей записи (спека скорости §10.3) > (г) chat: вне писателя — только исключения, счёт точный [0.04ms]
+(pass) сторожа путей записи (спека скорости §10.3) > (г) body-columns: вне писателя — только исключения, счёт точный [0.02ms]
+(pass) сторожа путей записи (спека скорости §10.3) > (г) dynamic-table: вне писателя — только исключения, счёт точный
+(pass) сторожа путей записи (спека скорости §10.3) > (д) у каждого исключения — причина и кто снимет [0.13ms]
+
+scripts/cache-dependencies.test.ts:
+(pass) reports a new tRPC cache family from imperative fetch and a hook factory [14.92ms]
+(pass) finds custom key constants, factories and imperative writes [1.49ms]
+(pass) all production query cache keys have a dependency declaration [14555.19ms]
+(pass) typed destructuring and top-level procedure calls cannot hide undeclared families [10694.80ms]
+
+scripts/record-links.test.ts:
+(pass) the compiler-backed guard rejects type-valid links that bypass the controller
+(pass) ordinary UI callbacks, host routes, external anchors and clipboard URLs pass
+(pass) an exception applies to its named function and sink only [0.33ms]
+(pass) production web routes use RecordLink or a named adapter
+
+ 38 pass
+ 0 fail
+ 313 expect() calls
+Ran 38 tests across 3 files. [53.02s]

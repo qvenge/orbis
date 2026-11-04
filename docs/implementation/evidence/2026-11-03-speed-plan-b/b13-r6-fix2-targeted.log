@@ -1,0 +1,119 @@
+$ vitest run src/features/entity-detail/history-lifecycle.test.tsx src/features/entity-editor/title-history.test.ts --maxWorkers "1" --reporter verbose -t "first accepted title after|first network read|promoting a disk title|accepted foreign title blocks|accepted repeat under|intervening accepted transition|rejected displayed send|started after the ACK|actual cold BODY current basis"
+
+ RUN  v4.1.9 /private/tmp/orbis-b13-r6-fix2.twecTD/candidate/apps/web
+
+ ↓ src/features/entity-detail/history-lifecycle.test.tsx > cold remount with foreign title clears retained title/body history
+ ↓ src/features/entity-detail/history-lifecycle.test.tsx > current title CAS failure while offscreen clears e1 retained steps
+ ↓ src/features/entity-detail/history-lifecycle.test.tsx > actual PM overflow after title preserves newest body as common top
+ ↓ src/features/entity-detail/history-lifecycle.test.tsx > actual Detail cold get after query GC does not reuse steps against foreign title
+ ↓ src/features/entity-detail/history-lifecycle.test.tsx > gate20 current offscreen title CAS refusal clears cached history before return
+ ↓ src/features/entity-detail/history-lifecycle.test.tsx > selection and addToHistory false do not put body above title
+ ↓ src/features/entity-detail/history-lifecycle.test.tsx > own pending cold return retains history in StrictMode
+ ↓ src/features/entity-detail/history-lifecycle.test.tsx > own accepted cold return retains history in StrictMode
+ ↓ src/features/entity-detail/history-lifecycle.test.tsx > readOnly span cannot undo; returning editable checks retained foreign basis
+ ↓ src/features/entity-detail/history-lifecycle.test.tsx > actual title-only LRU eviction forgets retained observer basis
+ ↓ src/features/entity-detail/history-lifecycle.test.tsx > failed unobserved title send does not authorize foreign cold value План Б
+ ↓ src/features/entity-detail/history-lifecycle.test.tsx > failed unobserved title send does not authorize foreign cold value Чужое имя
+ ↓ src/features/entity-detail/history-lifecycle.test.tsx > late failed send preserves same newer unobserved План Б
+ ↓ src/features/entity-detail/history-lifecycle.test.tsx > late failed send preserves same newer unobserved План В
+ ↓ src/features/entity-detail/history-lifecycle.test.tsx > late failed send preserves owner newer unobserved План Б
+ ↓ src/features/entity-detail/history-lifecycle.test.tsx > late failed send preserves owner newer unobserved План В
+ ↓ src/features/entity-detail/history-lifecycle.test.tsx > late failed send preserves generation newer unobserved План Б
+ ↓ src/features/entity-detail/history-lifecycle.test.tsx > late failed send preserves generation newer unobserved План В
+ ↓ src/features/entity-detail/history-lifecycle.test.tsx > failed observed optimistic title send does not authorize foreign cold value План Б
+ ↓ src/features/entity-detail/history-lifecycle.test.tsx > failed observed optimistic title send does not authorize foreign cold value Чужое имя
+ ↓ src/features/entity-detail/history-lifecycle.test.tsx > observed old refusal preserves newer C accepted=false observed=false
+ ↓ src/features/entity-detail/history-lifecycle.test.tsx > observed old refusal preserves newer C accepted=false observed=true
+ ↓ src/features/entity-detail/history-lifecycle.test.tsx > observed old refusal preserves newer C accepted=true observed=false
+ ↓ src/features/entity-detail/history-lifecycle.test.tsx > observed old refusal preserves newer C accepted=true observed=true
+ ↓ src/features/entity-detail/history-lifecycle.test.tsx > observed same-value undo success survives old failure and cold return
+ ↓ src/features/entity-detail/history-lifecycle.test.tsx > successful observed send settles offscreen and retains cold own history
+ ↓ src/features/entity-detail/history-lifecycle.test.tsx > observed old success cannot alter new owner token
+ ↓ src/features/entity-detail/history-lifecycle.test.tsx > observed old failure cannot alter new owner token
+ ↓ src/features/entity-detail/history-lifecycle.test.tsx > observed old success cannot alter new generation token
+ ↓ src/features/entity-detail/history-lifecycle.test.tsx > observed old failure cannot alter new generation token
+ ↓ src/features/entity-detail/history-lifecycle.test.tsx > failed observed foreign basis resets retained native body and common steps
+ ↓ src/features/entity-detail/history-lifecycle.test.tsx > confirmed own basis survives a refused same-value native undo send
+ ↓ src/features/entity-detail/history-lifecycle.test.tsx > mounted checkbox refusal resets title and netzero body План Б bodyTop=false
+ ↓ src/features/entity-detail/history-lifecycle.test.tsx > mounted checkbox refusal resets title and netzero body Чужое имя bodyTop=false
+ ↓ src/features/entity-detail/history-lifecycle.test.tsx > mounted checkbox refusal resets title and netzero body План Б bodyTop=true
+ ↓ src/features/entity-detail/history-lifecycle.test.tsx > mounted checkbox refusal resets title and netzero body Чужое имя bodyTop=true
+ ↓ src/features/entity-detail/history-lifecycle.test.tsx > mounted observed old refusal preserves newer C accepted=false observed=false
+ ↓ src/features/entity-detail/history-lifecycle.test.tsx > mounted observed old refusal preserves newer C accepted=false observed=true
+ ↓ src/features/entity-detail/history-lifecycle.test.tsx > mounted observed old refusal preserves newer C accepted=true observed=false
+ ↓ src/features/entity-detail/history-lifecycle.test.tsx > mounted observed old refusal preserves newer C accepted=true observed=true
+ ↓ src/features/entity-detail/history-lifecycle.test.tsx > mounted latest double refusal clears failed basis before fresh input
+ ↓ src/features/entity-detail/history-lifecycle.test.tsx > early remount before old refusal clears foreign basis План Б bodyTop=false
+ ↓ src/features/entity-detail/history-lifecycle.test.tsx > early remount before old refusal clears foreign basis Чужое имя bodyTop=false
+ ↓ src/features/entity-detail/history-lifecycle.test.tsx > early remount before old refusal clears foreign basis План Б bodyTop=true
+ ↓ src/features/entity-detail/history-lifecycle.test.tsx > early remount before old refusal clears foreign basis Чужое имя bodyTop=true
+ ↓ src/features/entity-detail/history-lifecycle.test.tsx > coalesced earlier C does not block fresh B refusal observedC=false
+ ↓ src/features/entity-detail/history-lifecycle.test.tsx > coalesced earlier C does not block fresh B refusal observedC=true
+ ↓ src/features/entity-detail/history-lifecycle.test.tsx > remounted observer preserves newer C accepted=false observed=false
+ ↓ src/features/entity-detail/history-lifecycle.test.tsx > remounted observer preserves newer C accepted=false observed=true
+ ↓ src/features/entity-detail/history-lifecycle.test.tsx > remounted observer preserves newer C accepted=true observed=false
+ ↓ src/features/entity-detail/history-lifecycle.test.tsx > remounted observer preserves newer C accepted=true observed=true
+ ↓ src/features/entity-detail/history-lifecycle.test.tsx > remounted same-value fresh intent survives older failure accepted=false
+ ↓ src/features/entity-detail/history-lifecycle.test.tsx > remounted same-value fresh intent survives older failure accepted=true
+ ↓ src/features/entity-detail/history-lifecycle.test.tsx > actual host template refresh before observed B refusal removesTitle=false
+ ↓ src/features/entity-detail/history-lifecycle.test.tsx > actual host template refresh before observed B refusal removesTitle=true
+ ↓ src/features/entity-detail/history-lifecycle.test.tsx > classified failed title basis resets cached offscreen body before its return
+ ↓ src/features/entity-detail/history-lifecycle.test.tsx > duplicate older refusals after invalid-basis reset preserve newly created BODY history
+ ↓ src/features/entity-detail/history-lifecycle.test.tsx > actual cold BODY return after never-observed B refusal removesTitle=false returned=План Б
+ ↓ src/features/entity-detail/history-lifecycle.test.tsx > actual cold BODY return after never-observed B refusal removesTitle=true returned=План Б
+ ↓ src/features/entity-detail/history-lifecycle.test.tsx > actual cold BODY return after never-observed B refusal removesTitle=true returned=План
+ ✓ src/features/entity-detail/history-lifecycle.test.tsx > actual cold BODY current basis after observed B refusal and unobserved C outcome=foreign order=body 2309ms
+ ✓ src/features/entity-detail/history-lifecycle.test.tsx > actual cold BODY current basis after observed B refusal and unobserved C outcome=pending order=body 1726ms
+ ✓ src/features/entity-detail/history-lifecycle.test.tsx > actual cold BODY current basis after observed B refusal and unobserved C outcome=pending order=title-body 1709ms
+ ✓ src/features/entity-detail/history-lifecycle.test.tsx > actual cold BODY current basis after observed B refusal and unobserved C outcome=pending order=body-title 1723ms
+ ✓ src/features/entity-detail/history-lifecycle.test.tsx > actual cold BODY current basis after observed B refusal and unobserved C outcome=accepted order=body 1713ms
+ ✓ src/features/entity-detail/history-lifecycle.test.tsx > actual cold BODY current basis after observed B refusal and unobserved C outcome=accepted order=title-body 1701ms
+ ✓ src/features/entity-detail/history-lifecycle.test.tsx > actual cold BODY current basis after observed B refusal and unobserved C outcome=accepted order=body-title 2038ms
+ ✓ src/features/entity-detail/history-lifecycle.test.tsx > first accepted title after an editable disk restore: same 763ms
+ ✓ src/features/entity-detail/history-lifecycle.test.tsx > first accepted title after an editable disk restore: foreign 547ms
+ ✓ src/features/entity-detail/history-lifecycle.test.tsx > first accepted title after an editable disk restore: own pending 569ms
+ ✓ src/features/entity-detail/history-lifecycle.test.tsx > first accepted title after an editable disk restore: own ACK 635ms
+ ✓ src/features/entity-detail/history-lifecycle.test.tsx > first accepted title after an editable disk restore: pre-ACK first A 572ms
+ ✓ src/features/entity-detail/history-lifecycle.test.tsx > accepted foreign title blocks real Undo (body-only) 662ms
+ ✓ src/features/entity-detail/history-lifecycle.test.tsx > accepted foreign title blocks real Undo (title and body) 180ms
+ ✓ src/features/entity-detail/history-lifecycle.test.tsx > accepted foreign title blocks real Undo (disk then network) 451ms
+ ✓ src/features/entity-detail/history-lifecycle.test.tsx > accepted foreign title blocks real Undo (old raw title after an own ACK) 207ms
+ ↓ src/features/entity-detail/history-lifecycle.test.tsx > first actual BODY-only visit observes baseline before native acquisition and resets fresh foreign title
+ ↓ src/features/entity-detail/history-lifecycle.test.tsx > actual BODY-only rapid reader eviction forgets baseline before lazy acquisition docnull=false
+ ↓ src/features/entity-detail/history-lifecycle.test.tsx > actual BODY-only rapid reader eviction forgets baseline before lazy acquisition docnull=true
+ ↓ src/features/entity-detail/history-lifecycle.test.tsx > controlled BODY-only readOnly does not consume foreign basis before becoming eligible
+ ↓ src/features/entity-detail/history-lifecycle.test.tsx > controlled BODY-only noArrows does not consume foreign basis before becoming eligible
+ ↓ src/features/entity-detail/history-lifecycle.test.tsx > controlled stale BODY-only epoch cannot seed the new owner's first basis
+ ↓ src/features/entity-detail/history-lifecycle.test.tsx > controlled stale BODY-only generation cannot seed the new owner's first basis
+ ↓ src/features/entity-detail/history-lifecycle.test.tsx > controlled duplicate BODY pins preserve the remaining field then evict after final cleanup without title retouch
+ ↓ src/features/entity-editor/title-history.test.ts > слово, пауза и смена направления образуют шаги; новая буква стирает повтор
+ ↓ src/features/entity-editor/title-history.test.ts > retained observer consumes only provisional prefix; reset preserves basis, eviction forgets
+ ↓ src/features/entity-editor/title-history.test.ts > duplicate refresh preserves newer pending and noop sends do not trust later foreign return
+ ↓ src/features/entity-editor/title-history.test.ts > failed token retires only its own send, preserving newer and duplicate values
+ ↓ src/features/entity-editor/title-history.test.ts > late rejection cannot recreate, alter reset basis, or remove a new entry token
+ ↓ src/features/entity-editor/title-history.test.ts > coalesced observation retires every earlier unobserved own send
+ ↓ src/features/entity-editor/title-history.test.ts > failed observed basis is foreign even for the same value; newer pending stays own
+ ↓ src/features/entity-editor/title-history.test.ts > same-value send owns a fresh observed identity without a noop pending marker
+ ↓ src/features/entity-editor/title-history.test.ts > new same-value refusal invalidates itself, accepted offscreen send stays recognized
+ ↓ src/features/entity-editor/title-history.test.ts > foreign/reset/eviction detach observed identity from late settlements
+ ↓ src/features/entity-editor/title-history.test.ts > old observed refusal cannot invalidate a newer same-value pending send
+ ↓ src/features/entity-editor/title-history.test.ts > late settlement after eviction does not recreate any history entry
+ ↓ src/features/entity-editor/title-history.test.ts > accepted newer unobserved intent blocks failed basis and survives refusal
+ ↓ src/features/entity-editor/title-history.test.ts > last newer pending refusal classifies the retained failed basis
+ ↓ src/features/entity-editor/title-history.test.ts > never observed, accepted, reset and detached sends cannot deliver a failed basis
+ ↓ src/features/entity-editor/title-history.test.ts > same-value refresh retires only the earlier pending prefix accepted=false
+ ↓ src/features/entity-editor/title-history.test.ts > same-value refresh retires only the earlier pending prefix accepted=true
+ ✓ src/features/entity-editor/title-history.test.ts > an accepted repeat under an own presentation does not consume pending or ACK attribution 4ms
+ ✓ src/features/entity-editor/title-history.test.ts > an intervening accepted transition retires the ACK for a different title 1ms
+ ✓ src/features/entity-editor/title-history.test.ts > a rejected displayed send does not own the changed accepted title 1ms
+ ✓ src/features/entity-editor/title-history.test.ts > a network read started after the ACK can prove a foreign return to the old title 0ms
+ ✓ src/features/entity-editor/title-history.test.ts > only the first network read decides whether the unconfirmed title basis is foreign 1ms
+ ✓ src/features/entity-editor/title-history.test.ts > a first network read of the disk title preserves a different pending presentation 0ms
+ ✓ src/features/entity-editor/title-history.test.ts > a first network read begun before an own ACK promotes the disk basis and keeps attribution 0ms
+ ✓ src/features/entity-editor/title-history.test.ts > promoting a disk title retires it as the basis for later network changes 0ms
+
+ Test Files  2 passed (2)
+      Tests  24 passed | 85 skipped (109)
+   Start at  22:21:40
+   Duration  25.84s (transform 3.39s, setup 435ms, import 4.78s, tests 17.52s, environment 2.58s)
+

@@ -1,0 +1,15 @@
+{"event":"fixture:prepared","at":4726.400066,"address":{"kind":"home","app":{"kind":"host"}},"pathname":"/r/11111111-1111-4111-8111-111111111111"}
+{"event":"loader:start","at":4727.050624}
+{"event":"loader:resolved","at":5897.155431}
+{"event":"fixture:render-ready","at":5897.368979}
+{"event":"address","at":5918.69639,"address":{"kind":"record","app":{"kind":"host"},"id":"11111111-1111-4111-8111-111111111111"}}
+{"event":"loader:start","at":5927.94079}
+{"event":"heading:wait","at":5984.346868,"id":"11111111-1111-4111-8111-111111111111"}
+{"event":"loader:resolved","at":6179.327217}
+{"event":"get:entered","at":6277.645375,"id":"11111111-1111-4111-8111-111111111111"}
+{"event":"get:response","at":6277.957983,"id":"11111111-1111-4111-8111-111111111111"}
+{"event":"heading:visible","at":6454.051394,"id":"11111111-1111-4111-8111-111111111111"}
+{"event":"address","at":6854.470827,"address":{"kind":"host-screen","screen":"settings"}}
+{"event":"address","at":6950.317917,"address":{"kind":"record","app":{"kind":"host"},"id":"11111111-1111-4111-8111-111111111111"}}
+{"event":"get:entered","at":7002.720333,"id":"11111111-1111-4111-8111-111111111111"}
+{"event":"get:response","at":7003.07216,"id":"11111111-1111-4111-8111-111111111111"}

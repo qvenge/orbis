@@ -1,0 +1,604 @@
+
+ RUN  v4.1.9 /private/tmp/orbis-b13-reset-review.p__lufhg/candidate/apps/web
+
+ ↓ src/features/page/menu.b13-independent.test.tsx > «Сделать страницей» > одна пачка с аспектом «страница»; тост «Отменить» → ai.undo; у страницы пункта нет
+stderr | src/features/page/menu.b13-independent.test.tsx > «Изменить вид только этой записи» (С1а-8, Р-19) > случай 2: текст на место {{body}}, одна пачка; после — страница, вид прежний
+An update to HostPresence inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to HostPresence inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to HostPresence inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to DetailScreen inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to DetailScreen inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to DetailScreen inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to SubtaskAdd inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+
+ ✓ src/features/page/menu.b13-independent.test.tsx > «Изменить вид только этой записи» (С1а-8, Р-19) > случай 2: текст на место {{body}}, одна пачка; после — страница, вид прежний 969ms
+ ↓ src/features/page/menu.b13-independent.test.tsx > «Изменить вид только этой записи» (С1а-8, Р-19) > случай 1: тела нет — копия шаблона без {{body}}; ориентир тела исчезает, прочее то же
+ ↓ src/features/page/menu.b13-independent.test.tsx > «Изменить вид только этой записи» (С1а-8, Р-19) > шаблон владельца без {{cards}} — карточки аспектов на месте (C1-I1) > случай 2: карточка задачи до и после, карточки «Страница» нет (РП-25)
+ ↓ src/features/page/menu.b13-independent.test.tsx > «Изменить вид только этой записи» (С1а-8, Р-19) > шаблон владельца без {{cards}} — карточки аспектов на месте (C1-I1) > случай 1: пустое тело — карточка задачи до и после
+ ↓ src/features/page/menu.b13-independent.test.tsx > «Изменить вид только этой записи» (С1а-8, Р-19) > случай 3: шаблон тела не показывает — вопрос владельцу > диалог Р-19: текст вопроса, три кнопки, подсказка про версию; до ответа — ни одной записи
+ ↓ src/features/page/menu.b13-independent.test.tsx > «Изменить вид только этой записи» (С1а-8, Р-19) > случай 3: шаблон тела не показывает — вопрос владельцу > «Отмена» — вызовов нет, запись как была
+stderr | src/features/page/menu.b13-independent.test.tsx > «Изменить вид только этой записи» (С1а-8, Р-19) > случай 3: шаблон тела не показывает — вопрос владельцу > «Сохранить версией и убрать» — одна пачка: закрепление текста, затем тело-шаблон
+An update to HostPresence inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to HostPresence inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to HostPresence inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to DetailScreen inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to DetailScreen inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to DetailScreen inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+
+ ✓ src/features/page/menu.b13-independent.test.tsx > «Изменить вид только этой записи» (С1а-8, Р-19) > случай 3: шаблон тела не показывает — вопрос владельцу > «Сохранить версией и убрать» — одна пачка: закрепление текста, затем тело-шаблон 293ms
+ ↓ src/features/page/menu.b13-independent.test.tsx > «Изменить вид только этой записи» (С1а-8, Р-19) > случай 3: шаблон тела не показывает — вопрос владельцу > «Показать внизу страницы» — одна пачка, текст под шаблоном
+ ↓ src/features/page/menu.b13-independent.test.tsx > «Открыть через …» — разово (§8.4) > «Открыть через шаблон хоста» — только при шаблоне владельца; «‹» возвращает его, новый заход — снова свой
+ ↓ src/features/page/menu.b13-independent.test.tsx > «Открыть через …» — разово (§8.4) > разовый вид не переезжает в другое место с той же записью; у каждого места — своё (гейт 19, M-2)
+ ↓ src/features/page/menu.b13-independent.test.tsx > «Открыть через …» — разово (§8.4) > шаблон хоста у записи без своих шаблонов — пункта «через шаблон хоста» нет
+ ↓ src/features/page/menu.b13-independent.test.tsx > «Открыть через …» — разово (§8.4) > «Открыть через „X“» — по пункту на прочие исправные подходящие шаблоны
+ ↓ src/features/page/menu.b13-independent.test.tsx > «Сменить выбор шаблона для таких записей» (§4.3) > только при споре; показывает плашку и при запомненном выборе
+ ↓ src/features/page/menu.b13-independent.test.tsx > «Сменить выбор шаблона для таких записей» (§4.3) > одного подходящего шаблона — пункта нет
+ ↓ src/features/page/menu.b13-independent.test.tsx > «Сменить выбор шаблона для таких записей» (§4.3) > сломанный шаблон на вершине: спор A/C под ним — пункт есть, как и плашка (brokenIds)
+ ↓ src/features/page/menu.b13-independent.test.tsx > меню страницы (§8.4) > пункты страницы; пунктов записи и «Править как markdown» нет
+ ↓ src/features/page/menu.b13-independent.test.tsx > меню страницы (§8.4) > «Открыть как запись» — шаблон хоста: версии, тред, обратные ссылки, тело в редакторе экрана
+ ↓ src/features/page/menu.b13-independent.test.tsx > меню страницы (§8.4) > «Открыть как запись» — разово: после ухода и возврата страница снова своим телом
+ ↓ src/features/page/menu.b13-independent.test.tsx > меню страницы (§8.4) > «Сделать шаблоном для…» — служебных и «Страницы» в выборе нет; пачка props «Шаблон для»
+ ↓ src/features/page/menu.b13-independent.test.tsx > меню страницы (§8.4) > снятие всех аспектов — одна правка: unset «Шаблон для» и «Главнее, чем» (§3.2)
+ ↓ src/features/page/menu.b13-independent.test.tsx > меню страницы (§8.4) > скрытый аспект в «Шаблон для» виден в диалоге и снимается (остаток 1а №31)
+ ↓ src/features/page/menu.b13-independent.test.tsx > меню страницы (§8.4) > «Перестать быть страницей» — снимается только аспект (РП-22); одна пачка, Undo
+ ↓ src/features/page/menu.b13-independent.test.tsx > диалоги меню держат снимок записи, на которой их открыли (I-1, I-2) > переход на соседнюю запись с открытым вопросом случая 3 — диалог закрыт, вызовов нет
+ ↓ src/features/page/menu.b13-independent.test.tsx > диалоги меню держат снимок записи, на которой их открыли (I-1, I-2) > переход с открытым «Сделать шаблоном для…» — диалог закрыт, вызовов нет
+ ↓ src/features/page/menu.b13-independent.test.tsx > диалоги меню держат снимок записи, на которой их открыли (I-1, I-2) > правка тела мимо экрана при открытом вопросе: пачка идёт с версией плана, сервер отказывает, правка цела
+ ↓ src/features/page/menu.b13-independent.test.tsx > текст записи сломал бы шаблон — вопрос, а не молчаливый случай 2 (I-3) > {{/tab}} в заметке под шаблоном хоста → диалог с причиной; «Показать внизу» — копия без {{body}} + текст
+ ↓ src/features/page/menu.b13-independent.test.tsx > подписи и ключи пунктов «Открыть через „X“» (I-5) > два шаблона с одним названием — два пункта без коллизии ключей; пустое название — id
+ ↓ src/features/page/menu.b13-independent.test.tsx > «Изменить вид» не закрепляет вынужденный шаблон хоста (I-6) > список шаблонов не приехал — пункта нет
+ ↓ src/features/page/menu.b13-independent.test.tsx > «Изменить вид» не закрепляет вынужденный шаблон хоста (I-6) > список шаблонов ещё едет — пункта нет
+ ↓ src/features/page/menu.b13-independent.test.tsx > жест меню при неотправленной правке тела (F-I1) > «Изменить вид только этой записи»: пачки нет, тост, текст досылается; повтор несёт набранное
+ ↓ src/features/page/menu.b13-independent.test.tsx > жест меню при неотправленной правке тела (F-I1) > правка, отменённая до исходного текста, — не неотправленная: жест проходит сразу
+ ↓ src/features/page/menu.b13-independent.test.tsx > жест меню при неотправленной правке тела (F-I1) > сохранение в полёте (ответа ещё нет): жест ждёт — пачки нет, тост (фикс-раунд 1, I-1)
+ ↓ src/features/page/menu.b13-independent.test.tsx > жест меню при неотправленной правке тела (F-I1) > правка тела получила 409: жест не досылает её снова и отсылает к плашке (фикс-раунд 1, M-1)
+ ↓ src/features/page/menu.b13-independent.test.tsx > жест меню при неотправленной правке тела (F-I1) > «Сделать страницей»: пачки нет, тост, текст досылается без 409
+ ↓ src/features/page/menu.b13-independent.test.tsx > жест меню при неотправленной правке тела (F-I1) > «Перестать быть страницей» из «Настроить»: пачки нет, тост, текст досылается без 409
+ ↓ src/features/page/menu.b13-independent.test.tsx > жест меню при неотправленной правке тела (F-I1) > кнопка вопроса случая 3 при неотправленной правке: пачки нет, диалог закрыт, текст досылается
+ ↓ src/features/page/menu.b13-independent.test.tsx > меню при настройке чужого шаблона — про шаблон (остаток 1а №87) > «Настроить шаблон» → пункты только «Открыть шаблон» и «Скопировать ссылку» — ссылка на шаблон
+ ↓ src/features/page/menu.b13-independent.test.tsx > Task20 populated histories actual page menu aspect-only make-page preserves
+ ↓ src/features/page/menu.b13-independent.test.tsx > Task20 populated histories actual page menu body batch resets
+stderr | src/features/page/menu.b13-independent.test.tsx > B13 old body cannot enter a view rewrite after rewind: direct gesture
+An update to HostPresence inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to HostPresence inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to HostPresence inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to DetailScreen inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to DetailScreen inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to DetailScreen inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to SubtaskAdd inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+
+ × src/features/page/menu.b13-independent.test.tsx > B13 old body cannot enter a view rewrite after rewind: direct gesture 306ms
+   → expected [ [ { tool: 'entity_update', …(1) } ] ] to deeply equal []
+   → expected '{{title}}\n\n{{tags}}\n\n{{tabs}}\n{{…' to be 'new history has different words at th…' // Object.is equality
+   → expected 2 to be 1 // Object.is equality
+stderr | src/features/page/menu.b13-independent.test.tsx > B13 old body cannot enter a view rewrite after rewind: already-open dialog
+An update to HostPresence inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to HostPresence inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to HostPresence inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to DetailScreen inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to DetailScreen inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to DetailScreen inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+
+ × src/features/page/menu.b13-independent.test.tsx > B13 old body cannot enter a view rewrite after rewind: already-open dialog 257ms
+   → expected [ [ { tool: 'entity_update', …(1) } ] ] to deeply equal []
+   → expected '{{title}}\n{{cards}}\n\nРемонт кухни:…' to be 'new history has different words at th…' // Object.is equality
+   → expected 2 to be 1 // Object.is equality
+ ↓ src/lib/freshness/transport.b13-independent.test.ts > rejection discards the wire id, while a refresh sends the new bearer on a fresh request
+ ↓ src/lib/freshness/transport.b13-independent.test.ts > SSE and reconcile 401 share refresh and keep the session on network failure
+ ↓ src/lib/freshness/transport.b13-independent.test.ts > each raw result keeps its own response watermark, including absence
+ ↓ src/lib/freshness/transport.b13-independent.test.ts > a refresh refusal affects its current owner once, even when both channels receive 401
+ ↓ src/lib/freshness/transport.b13-independent.test.ts > stopping and restarting keeps runtime-owned queued work and cursor until owner changes
+ ↓ src/lib/freshness/transport.b13-independent.test.ts > a disabled stream stays unavailable while the same session reconciles
+ ↓ src/lib/freshness/transport.b13-independent.test.ts > an ignored higher complete reset reconnects from the accepted boundary without skipping events
+ ✓ src/lib/freshness/transport.b13-independent.test.ts > overlapping SSE continues from the wire boundary while reconcile is ahead 64ms
+ ✓ src/lib/freshness/transport.b13-independent.test.ts > B13 late reconcile with authoritative rewind = false 218ms
+ × src/lib/freshness/transport.b13-independent.test.ts > B13 late reconcile with authoritative rewind = true 371ms
+   → expected '35' to be '20' // Object.is equality
+   → expected "vi.fn()" to not be called at all, but actually been called 1 times
+
+Received:
+
+  1st vi.fn() call:
+
+    Array [
+      Object {
+        "accountId": "owner",
+        "epoch": 1,
+        "graphId": "graph",
+      },
+      "same-uuid-in-both-histories",
+    ]
+
+
+Number of calls: 1
+
+   → expected true to be false // Object.is equality
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 3 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/features/page/menu.b13-independent.test.tsx > B13 old body cannot enter a view rewrite after rewind: direct gesture
+AssertionError: expected [ [ { tool: 'entity_update', …(1) } ] ] to deeply equal []
+
+- Expected
++ Received
+
+- []
++ [
++   [
++     {
++       "input": {
++         "aspects": {
++           "attach": [
++             "orbis/page",
++           ],
++         },
++         "body": "{{title}}
++
++ {{tags}}
++
++ {{tabs}}
++ {{tab: Запись}}
++ {{cards: own}}
++
++ Мысли вслух: заметки к записи.
++ {{/tab}}
++ {{tab: Детали}}
++ {{cards}}
++
++ {{versions}}
++
++ {{subtasks}}
++
++ {{blockers}}
++
++ {{backlinks}}
++ {{/tab}}
++ {{tab: Тред}}
++ {{thread}}
++ {{/tab}}
++ {{/tabs}}",
++         "expectedBodyRevision": 1,
++         "id": "00000000-0000-4000-8000-000000000125",
++       },
++       "tool": "entity_update",
++     },
++   ],
++ ]
+
+ ❯ src/features/page/menu.b13-independent.test.tsx:1388:28
+    1386|     }
+    1387|     await act(async () => {});
+    1388|     expect.soft(batches()).toEqual([]);
+       |                            ^
+    1389|     expect.soft(world.rows.get(recordId)?.body).toBe(changedBody);
+    1390|     expect.soft(world.rows.get(recordId)?.bodyRevision).toBe(previousR…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/9]⎯
+
+ FAIL  src/features/page/menu.b13-independent.test.tsx > B13 old body cannot enter a view rewrite after rewind: direct gesture
+AssertionError: expected '{{title}}\n\n{{tags}}\n\n{{tabs}}\n{{…' to be 'new history has different words at th…' // Object.is equality
+
+- Expected
++ Received
+
+- new history has different words at the same body revision
++ {{title}}
++
++ {{tags}}
++
++ {{tabs}}
++ {{tab: Запись}}
++ {{cards: own}}
++
++ Мысли вслух: заметки к записи.
++ {{/tab}}
++ {{tab: Детали}}
++ {{cards}}
++
++ {{versions}}
++
++ {{subtasks}}
++
++ {{blockers}}
++
++ {{backlinks}}
++ {{/tab}}
++ {{tab: Тред}}
++ {{thread}}
++ {{/tab}}
++ {{/tabs}}
+
+ ❯ src/features/page/menu.b13-independent.test.tsx:1389:49
+    1387|     await act(async () => {});
+    1388|     expect.soft(batches()).toEqual([]);
+    1389|     expect.soft(world.rows.get(recordId)?.body).toBe(changedBody);
+       |                                                 ^
+    1390|     expect.soft(world.rows.get(recordId)?.bodyRevision).toBe(previousR…
+    1391|   } finally {
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/9]⎯
+
+ FAIL  src/features/page/menu.b13-independent.test.tsx > B13 old body cannot enter a view rewrite after rewind: direct gesture
+ FAIL  src/features/page/menu.b13-independent.test.tsx > B13 old body cannot enter a view rewrite after rewind: already-open dialog
+AssertionError: expected 2 to be 1 // Object.is equality
+
+- Expected
++ Received
+
+- 1
++ 2
+
+ ❯ src/features/page/menu.b13-independent.test.tsx:1390:57
+    1388|     expect.soft(batches()).toEqual([]);
+    1389|     expect.soft(world.rows.get(recordId)?.body).toBe(changedBody);
+    1390|     expect.soft(world.rows.get(recordId)?.bodyRevision).toBe(previousR…
+       |                                                         ^
+    1391|   } finally {
+    1392|     await act(async () => release());
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/9]⎯
+
+ FAIL  src/features/page/menu.b13-independent.test.tsx > B13 old body cannot enter a view rewrite after rewind: already-open dialog
+AssertionError: expected [ [ { tool: 'entity_update', …(1) } ] ] to deeply equal []
+
+- Expected
++ Received
+
+- []
++ [
++   [
++     {
++       "input": {
++         "aspects": {
++           "attach": [
++             "orbis/page",
++           ],
++         },
++         "body": "{{title}}
++ {{cards}}
++
++ Ремонт кухни: заметки к записи.",
++         "expectedBodyRevision": 1,
++         "id": "00000000-0000-4000-8000-000000000109",
++       },
++       "tool": "entity_update",
++     },
++   ],
++ ]
+
+ ❯ src/features/page/menu.b13-independent.test.tsx:1388:28
+    1386|     }
+    1387|     await act(async () => {});
+    1388|     expect.soft(batches()).toEqual([]);
+       |                            ^
+    1389|     expect.soft(world.rows.get(recordId)?.body).toBe(changedBody);
+    1390|     expect.soft(world.rows.get(recordId)?.bodyRevision).toBe(previousR…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/9]⎯
+
+ FAIL  src/features/page/menu.b13-independent.test.tsx > B13 old body cannot enter a view rewrite after rewind: already-open dialog
+AssertionError: expected '{{title}}\n{{cards}}\n\nРемонт кухни:…' to be 'new history has different words at th…' // Object.is equality
+
+- Expected
++ Received
+
+- new history has different words at the same body revision
++ {{title}}
++ {{cards}}
++
++ Ремонт кухни: заметки к записи.
+
+ ❯ src/features/page/menu.b13-independent.test.tsx:1389:49
+    1387|     await act(async () => {});
+    1388|     expect.soft(batches()).toEqual([]);
+    1389|     expect.soft(world.rows.get(recordId)?.body).toBe(changedBody);
+       |                                                 ^
+    1390|     expect.soft(world.rows.get(recordId)?.bodyRevision).toBe(previousR…
+    1391|   } finally {
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[5/9]⎯
+
+ FAIL  src/lib/freshness/transport.b13-independent.test.ts > B13 late reconcile with authoritative rewind = true
+AssertionError: expected '35' to be '20' // Object.is equality
+
+Expected: "20"
+Received: "35"
+
+ ❯ src/lib/freshness/transport.b13-independent.test.ts:421:35
+    419|     releasePoll(Response.json([{ result: { data: { ...page('35'), tran…
+    420|     await poll;
+    421|     expect.soft(acceptedCursor()).toBe(rewind ? '20' : '35');
+       |                                   ^
+    422|     if (rewind) {
+    423|       push({ ...page('40'), transactions: [change('insert')] });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[6/9]⎯
+
+ FAIL  src/lib/freshness/transport.b13-independent.test.ts > B13 late reconcile with authoritative rewind = true
+AssertionError: expected "vi.fn()" to not be called at all, but actually been called 1 times
+
+Received:
+
+  1st vi.fn() call:
+
+    Array [
+      Object {
+        "accountId": "owner",
+        "epoch": 1,
+        "graphId": "graph",
+      },
+      "same-uuid-in-both-histories",
+    ]
+
+
+Number of calls: 1
+
+ ❯ src/lib/freshness/transport.b13-independent.test.ts:426:37
+    424|       await vi.waitFor(() => expect(acceptedCursor()).toBe('40'));
+    425|       await new Promise((resolve) => setTimeout(resolve, 150));
+    426|       expect.soft(removeEntity).not.toHaveBeenCalled();
+       |                                     ^
+    427|       expect.soft(runtime.wasDeleted(entityId)).toBe(false);
+    428|     } else {
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[7/9]⎯
+
+ FAIL  src/lib/freshness/transport.b13-independent.test.ts > B13 late reconcile with authoritative rewind = true
+AssertionError: expected true to be false // Object.is equality
+
+- Expected
++ Received
+
+- false
++ true
+
+ ❯ src/lib/freshness/transport.b13-independent.test.ts:427:49
+    425|       await new Promise((resolve) => setTimeout(resolve, 150));
+    426|       expect.soft(removeEntity).not.toHaveBeenCalled();
+    427|       expect.soft(runtime.wasDeleted(entityId)).toBe(false);
+       |                                                 ^
+    428|     } else {
+    429|       await vi.waitFor(() => expect(removeEntity).toHaveBeenCalledOnce…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[8/9]⎯
+
+
+ Test Files  2 failed (2)
+      Tests  3 failed | 4 passed | 45 skipped (52)
+   Start at  21:27:31
+   Duration  8.34s (transform 2.03s, setup 203ms, import 3.29s, tests 2.79s, environment 1.59s)
+
