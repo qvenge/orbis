@@ -66,15 +66,52 @@ afterEach(() => {
   resetFrame('/');
 });
 
+async function deliverAppChange(
+  queryClient: ReturnType<typeof renderWithProviders>['queryClient'],
+  path: 'setDisabled' | 'updateBatch',
+) {
+  const journalId = path === 'setDisabled' ? 'act-2' : 'act-1';
+  if (path === 'setDisabled') {
+    await waitFor(() => {
+      const writes = queryClient
+        .getMutationCache()
+        .findAll({ mutationKey: [['app', path]], exact: true });
+      expect(writes).toHaveLength(1);
+      expect(writes[0]?.state.data).toMatchObject({ actionId: journalId });
+    });
+  } else {
+    // updateBatch goes through the direct tRPC client, so its success is visible in the Undo toast.
+    await waitFor(() =>
+      expect(useToastStore.getState().toasts.map((toast) => toast.title)).toContain(
+        '«Мой дом» восстановлено',
+      ),
+    );
+  }
+  act(() =>
+    testFreshnessOf(queryClient).changes(
+      [
+        { kind: 'entity', rowKey: MY, scope: 'other' },
+        { kind: 'journal', rowKey: journalId, entityIds: [MY], operation: 'insert' },
+      ],
+      1,
+    ),
+  );
+}
+
 function renderApp(
   world: AppsWorld = appsWorld(),
   extra?: (path: string, input: unknown) => unknown,
+  freshness = false,
 ) {
   const base = appsHandler(world);
-  return renderWithProviders(<App />, (path, input, type) => {
-    const got = extra?.(path, input);
-    return got !== undefined ? got : base(path, input, type);
-  });
+  return renderWithProviders(
+    <App />,
+    (path, input, type) => {
+      const got = extra?.(path, input);
+      return got !== undefined ? got : base(path, input, type);
+    },
+    { freshness },
+  );
 }
 
 /** Первое ожидание ждёт ленивый чанк экрана записи (холодный кеш vite — гейт 19, M-1). */
@@ -501,10 +538,15 @@ const OFF_MY = () =>
 
 test('I-1: домашняя /a/<выключенное> — «включить» возвращает место в рамку приложения', async () => {
   resetFrame(`/a/${MY}`);
-  const { calls } = renderApp(appsWorld({ apps: [OFF_MY()] }));
+  const { calls, queryClient } = renderApp(
+    appsWorld({ apps: [{ ...OFF_MY(), graphId: 'owner' }] }),
+    undefined,
+    true,
+  );
   const plaque = await screen.findByTestId('open-plaque', undefined, { timeout: 5000 });
   await waitFor(() => expect(frameIcon()).toHaveTextContent('🪐'));
   fireEvent.click(within(plaque).getByRole('button', { name: 'включить' }));
+  await deliverAppChange(queryClient, 'setDisabled');
   await heading('Дом приложения');
   await waitFor(() => expect(frameIcon()).toHaveTextContent('🏡'));
   expect(navModel().activeApp).toBe(MY);
@@ -515,9 +557,14 @@ test('I-1: домашняя /a/<выключенное> — «включить»
 test('I-1: домашняя /a/<архивное> — «восстановить» возвращает место в рамку приложения', async () => {
   resetFrame(`/a/${MY}`);
   const archived = appRow(MY, 'Мой дом', '🏡', { 'orbis/app_home': MY_HOME }, { archived: true });
-  renderApp(appsWorld({ apps: [archived] }));
+  const { queryClient } = renderApp(
+    appsWorld({ apps: [{ ...archived, graphId: 'owner' }] }),
+    undefined,
+    true,
+  );
   const plaque = await screen.findByTestId('open-plaque', undefined, { timeout: 5000 });
   fireEvent.click(within(plaque).getByRole('button', { name: 'восстановить' }));
+  await deliverAppChange(queryClient, 'updateBatch');
   await heading('Дом приложения');
   await waitFor(() => expect(frameIcon()).toHaveTextContent('🏡'));
   expect(navModel().activeApp).toBe(MY);
@@ -525,13 +572,18 @@ test('I-1: домашняя /a/<архивное> — «восстановить
 
 test('I-1: плитка выключенного приложения на «Домой» → плашка → «включить» → его домашняя в его рамке', async () => {
   resetFrame('/');
-  renderApp(appsWorld({ apps: [OFF_MY()] }));
+  const { queryClient } = renderApp(
+    appsWorld({ apps: [{ ...OFF_MY(), graphId: 'owner' }] }),
+    undefined,
+    true,
+  );
   await heading('Домой');
   fireEvent.click(await screen.findByTestId(`app-tile-${MY}`));
   const plaque = await screen.findByTestId('open-plaque');
   expect(plaque).toHaveTextContent('Мой дом выключено');
   await waitFor(() => expect(frameIcon()).toHaveTextContent('🪐'));
   fireEvent.click(within(plaque).getByRole('button', { name: 'включить' }));
+  await deliverAppChange(queryClient, 'setDisabled');
   await heading('Дом приложения');
   await waitFor(() => expect(frameIcon()).toHaveTextContent('🏡'));
   expect(navModel().activeApp).toBe(MY);

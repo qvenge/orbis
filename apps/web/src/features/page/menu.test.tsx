@@ -16,12 +16,15 @@ import { closeHistory, redoDepth, undoDepth } from '@tiptap/pm/history';
 import type { Editor } from '@tiptap/react';
 import { useState } from 'react';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
+import { browserInputStorage, configureInputAccess } from '../../lib/local-data/input-access';
+import { bindQueryResponses } from '../../lib/local-data/query-responses';
 import { noteRegistryVersion, resetRegistryVersionForTests } from '../../lib/registry/useRegistry';
 import { resetNavForTests, useNav } from '../../state/navigation';
 import { testFreshnessOf } from '../../test/freshness';
 import {
   installCrashTrap,
   type MockHandler,
+  mockEntityUpdateResult,
   queryReply,
   renderWithProviders,
   staleBodyError,
@@ -45,7 +48,12 @@ import {
 } from '../entity-detail/structure-fixtures';
 import { type DetailStructure, snapshotDetailStructure } from '../entity-detail/structure-snapshot';
 import { canRedoStep, canUndoStep } from '../entity-editor/arrows-stack';
-import { readDraft } from '../entity-editor/draft-storage';
+import {
+  listDraftsIn,
+  readDraft,
+  setDraftScope,
+  submittedDraftOf,
+} from '../entity-editor/draft-storage';
 import { CHANGE_VIEW_QUESTION, HIDE_AS_VERSION_HINT } from './ChangeViewDialog';
 import { changeViewPlan, TEXT_BEFORE_VIEW_CHANGE } from './change-view';
 import { PAGE_TEMPLATES_QUERY } from './usePageTemplates';
@@ -387,7 +395,7 @@ const becomePageOp = (id: string, bodyRevision: number, body: string): Op => ({
 describe('«Сделать страницей»', () => {
   test('одна пачка с аспектом «страница»; тост «Отменить» → ai.undo; у страницы пункта нет', async () => {
     const f = fixture('note-plain');
-    const { batches, calls } = open(f);
+    const { batches, calls, queryClient } = open(f);
     await screen.findByTestId('page-tabs');
     await choose('Сделать страницей');
 
@@ -412,7 +420,14 @@ describe('«Сделать страницей»', () => {
         { actionId: ACTION_ID },
       ]),
     );
-    // Undo перечитал граф (`invalidateGraph`): запись снова показана через шаблон.
+    expect(await screen.findByText('Отменено: Правка')).toBeInTheDocument();
+    act(() =>
+      testFreshnessOf(queryClient).changes(
+        [{ kind: 'entity', rowKey: f.entity.id, scope: 'other' }],
+        1,
+      ),
+    );
+    // Undo изменил метаданные вида, а отдельное событие вернуло шаблон.
     await waitFor(() => expect(screen.queryByTestId('page-view')).toBeNull());
     expect(await screen.findByTestId('record-view')).toBeInTheDocument();
   });
@@ -1070,7 +1085,7 @@ describe('жест меню при неотправленной правке т�
       }
       row.updatedAt = '2026-09-25T13:00:00.000Z';
       log.push('update:OK');
-      return copy(row);
+      return mockEntityUpdateResult({ ...copy(row), txId: '1' });
     };
   }
 
@@ -1113,11 +1128,28 @@ describe('жест меню при неотправленной правке т�
     return field.editor;
   }
 
-  /** Досыл осел: правка на «сервере», черновика на диске нет, ни одного 409. */
-  async function bodySettledOnServer(r: ReturnType<typeof openWithBody>, id: string, tail: string) {
-    await waitFor(() => expect(r.world.rows.get(id)?.body).toContain(tail), { timeout: 5000 });
-    await waitFor(() => expect(readDraft(id)).toBeNull());
+  function bodyWrites(r: ReturnType<typeof openWithBody>) {
+    return r.queryClient
+      .getMutationCache()
+      .findAll({ mutationKey: [['entity', 'update']], exact: true });
+  }
+
+  async function bodyAckOnServer(r: ReturnType<typeof openWithBody>, id: string, tail: string) {
+    await waitFor(
+      () => {
+        expect(r.world.rows.get(id)?.body).toContain(tail);
+        const writes = bodyWrites(r);
+        expect(writes).toHaveLength(1);
+        expect(writes[0]?.state.data).toMatchObject({ id, txId: '1', bodyRevision: 2 });
+      },
+      { timeout: 5000 },
+    );
     expect(r.log).not.toContain('update:STALE');
+  }
+
+  async function bodySettledOnServer(r: ReturnType<typeof openWithBody>, id: string, tail: string) {
+    await bodyAckOnServer(r, id, tail);
+    await waitFor(() => expect(readDraft(id)).toBeNull());
   }
 
   test('«Изменить вид только этой записи»: пачки нет, тост, текст досылается; повтор несёт набранное', async () => {
@@ -1138,6 +1170,12 @@ describe('жест меню при неотправленной правке т�
       await choose('Изменить вид только этой записи');
       expect(r.batches()).toHaveLength(1);
     });
+    act(() =>
+      testFreshnessOf(r.queryClient).changes(
+        [{ kind: 'entity', rowKey: f.entity.id, scope: 'other' }],
+        2,
+      ),
+    );
     await screen.findByTestId('page-view');
     expect(JSON.stringify(r.batches()[0])).toContain('ХВОСТ');
     expect(r.log).not.toContain('update:STALE');
@@ -1159,23 +1197,71 @@ describe('жест меню при неотправленной правке т�
   });
 
   test('сохранение в полёте (ответа ещё нет): жест ждёт — пачки нет, тост (фикс-раунд 1, I-1)', async () => {
-    // Оптимистичный патч кладёт отправленный документ в кэш, и по смыслу отложенное уже «равно»
-    // телу записи: держит жест только ветка «в полёте». Пачка поверх — и ответ тела получил бы 409.
     let release: () => void = () => {};
     const hold = new Promise<void>((resolve) => {
       release = resolve;
     });
+    const owner = 'owner';
+    const controller = new AbortController();
+    const storage = browserInputStorage(localStorage);
+    setDraftScope(owner);
+    configureInputAccess({
+      storage,
+      prefix: '',
+      isCurrent: () => !controller.signal.aborted,
+      drafts: {
+        scope: { accountId: owner, graphId: owner, generation: 'menu-flight' },
+        signal: controller.signal,
+        persistent: true,
+      },
+    });
     const f = fixture('note-plain');
+    const id = f.entity.id;
     const r = openWithBody(f, hold);
-    await screen.findByTestId('page-tabs');
-    await editUnsent('ХВОСТ ');
-    await waitFor(() => expect(r.log).toContain('update:SENT'), { timeout: 5000 });
-    await choose('Сделать страницей');
-    expect(await screen.findByText(BODY_SAVING)).toBeInTheDocument();
-    expect(r.batches()).toEqual([]);
-    release();
-    await bodySettledOnServer(r, f.entity.id, 'ХВОСТ');
-    expect(r.batches()).toEqual([]);
+    const runtime = testFreshnessOf(r.queryClient).runtime;
+    const responses = bindQueryResponses(r.queryClient, runtime, { enabled: false });
+    try {
+      await screen.findByTestId('page-tabs');
+      await editUnsent('ХВОСТ ');
+      await waitFor(() => expect(r.log).toContain('update:SENT'), { timeout: 5000 });
+      const sent = bodyWrites(r)[0]?.state.variables;
+      if (!sent || typeof sent !== 'object' || !('bodyDoc' in sent))
+        throw new Error('Нет отправленного тела');
+      const token = submittedDraftOf(sent);
+      expect(token).toBeTypeOf('string');
+      expect(readDraft(id)).toMatchObject({ slot: token, baseRevision: 1, doc: sent.bodyDoc });
+      expect(readDraft(id)?.acknowledged).toBeUndefined();
+
+      await choose('Сделать страницей');
+      expect(await screen.findByText(BODY_SAVING)).toBeInTheDocument();
+      expect(r.batches()).toEqual([]);
+      expect(readDraft(id)).toMatchObject({ slot: token, baseRevision: 1, doc: sent.bodyDoc });
+      expect(readDraft(id)?.acknowledged).toBeUndefined();
+      expect(bodyWrites(r)).toHaveLength(1);
+
+      release();
+      await bodyAckOnServer(r, id, 'ХВОСТ');
+      // Без записи ответа подтверждённый input остаётся страховкой под точным токеном.
+      await waitFor(() => {
+        expect(readDraft(id)).toMatchObject({ slot: token, acknowledged: true, doc: sent.bodyDoc });
+        const copies = listDraftsIn(storage, owner);
+        expect(copies).toHaveLength(1);
+        expect(copies[0]?.draft).toMatchObject({
+          slot: token,
+          acknowledged: true,
+          doc: sent.bodyDoc,
+        });
+      });
+      expect(r.calls.filter(({ path }) => path === 'entity.update')).toHaveLength(1);
+      expect(r.batches()).toEqual([]);
+    } finally {
+      release();
+      responses.close();
+      r.unmount();
+      controller.abort();
+      configureInputAccess(undefined);
+      setDraftScope('');
+    }
   });
 
   test('правка тела получила 409: жест не досылает её снова и отсылает к плашке (фикс-раунд 1, M-1)', async () => {

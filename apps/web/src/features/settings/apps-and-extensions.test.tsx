@@ -475,7 +475,7 @@ test('I-1: «Новое приложение» с «Составом» — од�
 });
 
 test('I-1: правка «Состава» — одна entity_update без module_set; «Выключить приложение» видит новый «Состав»', async () => {
-  const { callsOf } = render();
+  const { callsOf, queryClient } = render(undefined, {});
   await openTab();
   // «Учёба» держала «Проекты»; владелец убирает их из её «Состава».
   const study = await screen.findByTestId(`app-${STUDY}`);
@@ -494,6 +494,18 @@ test('I-1: правка «Состава» — одна entity_update без mod
     ]),
   );
   expect(callsOf('user.setModuleEnabled')).toEqual([]);
+  await waitFor(() =>
+    expect(toasts().map((toast) => toast.title)).toContain('Состав «Учёба» сохранён'),
+  );
+  act(() =>
+    testFreshnessOf(queryClient).changes(
+      [
+        { kind: 'entity', rowKey: STUDY, scope: 'other' },
+        { kind: 'journal', rowKey: ACT, entityIds: [STUDY], operation: 'insert' },
+      ],
+      1,
+    ),
+  );
   await waitFor(() =>
     expect(screen.getByTestId(`app-${STUDY}`)).toHaveTextContent('Расширений в составе нет'),
   );

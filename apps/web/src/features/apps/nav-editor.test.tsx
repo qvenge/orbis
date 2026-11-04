@@ -43,6 +43,7 @@ import {
   YEAR,
 } from '../../app/frame/frame-fixtures';
 import { noteRegistryVersion, resetRegistryVersionForTests } from '../../lib/registry/useRegistry';
+import { testFreshnessOf } from '../../test/freshness';
 import {
   installCrashTrap,
   type MockHandler,
@@ -188,19 +189,37 @@ function store(rows: WireEntityFixture[]) {
   return { handler, byId };
 }
 
-function renderApp(rows: WireEntityFixture[] = baseRows(), opts: { rejectBatch?: boolean } = {}) {
+function renderApp(
+  rows: WireEntityFixture[] = baseRows(),
+  opts: { rejectBatch?: boolean; feed?: boolean } = {},
+) {
   const s = store(rows);
-  const r = renderWithProviders(<App />, (path, input, type) => {
-    // Отказ пачки по существу (правило каталога) — как ответил бы исполнитель.
-    if (opts.rejectBatch === true && path === 'entity.updateBatch')
-      throw trpcError('BAD_REQUEST', 'правило app_nav_not_self');
-    return s.handler(path, input, type);
-  });
+  const batchReceipts: unknown[] = [];
+  const r = renderWithProviders(
+    <App />,
+    (path, input, type) => {
+      // Отказ пачки по существу (правило каталога) — как ответил бы исполнитель.
+      if (opts.rejectBatch === true && path === 'entity.updateBatch')
+        throw trpcError('BAD_REQUEST', 'правило app_nav_not_self');
+      const response = s.handler(path, input, type);
+      if (opts.feed && path === 'entity.updateBatch' && response && typeof response === 'object') {
+        const operations = (input as { operations: BatchOp[] }).operations;
+        const created = operations.flatMap((op) =>
+          op.tool === 'entity_create' && s.byId.has(op.input.id) ? [s.byId.get(op.input.id)] : [],
+        );
+        const receipt = { ...response, results: created };
+        batchReceipts.push(receipt);
+        return receipt;
+      }
+      return response;
+    },
+    { freshness: opts.feed },
+  );
   const batches = () =>
     r.calls
       .filter((c) => c.path === 'entity.updateBatch')
       .map((c) => (c.input as { operations: BatchOp[] }).operations);
-  return { ...r, batches, byId: s.byId };
+  return { ...r, batches, batchReceipts, byId: s.byId };
 }
 
 const heading = (name: string) =>
@@ -393,7 +412,9 @@ test('(б) своё приложение: раздел «Приложение «
 
 test('(в) страница в хосте: «Добавить в навигацию» — текущее приложение по умолчанию → пачка; затем рядом «Убрать из навигации» (R-34)', async () => {
   resetFrame(`/r/${LOOSE}`);
-  const { batches } = renderApp([...baseRows(), MY_ROW]);
+  const { batches, batchReceipts, queryClient } = renderApp([...baseRows(), MY_ROW], {
+    feed: true,
+  });
   await heading('Общая страница');
   await openMenu();
   expect(ownItems()).toContain('Добавить в навигацию');
@@ -409,6 +430,17 @@ test('(в) страница в хосте: «Добавить в навигац�
     { tool: 'entity_update', input: { id: SHELL, props: { [APP_NAV]: [...NAV_IDS, LOOSE] } } },
   ]);
 
+  await waitFor(() => expect(toastTitles()).toContain('Добавлено в навигацию «Orbis»'));
+  expect(batchReceipts).toMatchObject([{ actionId: 'act-21', results: [] }]);
+  act(() =>
+    testFreshnessOf(queryClient).changes(
+      [
+        { kind: 'entity', rowKey: SHELL, scope: 'other' },
+        { kind: 'journal', rowKey: 'act-21', entityIds: [SHELL], operation: 'insert' },
+      ],
+      1,
+    ),
+  );
   // R-34: запись уже стоит — рядом «Убрать из навигации»; «Добавить» остаётся (в другое приложение).
   await waitFor(async () => {
     const items = await ownItemsOnce();
@@ -477,7 +509,7 @@ test('(в) Фокус ревью п. 2: добавление в навигаци
 
 test('(в) «Новое приложение…» («Мой дом» 🏡) — одна пачка entity_create с домашней и разделом; «Дом» ставит сервер', async () => {
   resetFrame(`/r/${LOOSE}`);
-  const { batches, byId } = renderApp();
+  const { batches, batchReceipts, byId, queryClient } = renderApp(undefined, { feed: true });
   await heading('Общая страница');
   await openMenu();
   fireEvent.click(screen.getByRole('menuitem', { name: 'Добавить в навигацию' }));
@@ -513,6 +545,19 @@ test('(в) «Новое приложение…» («Мой дом» 🏡) — �
   expect(JSON.stringify(ops)).not.toContain(HOME_PROPERTY);
   // Ответ сервера: у страницы «Дом» = новое приложение, и она переезжает в его рамку.
   expect(byId.get(LOOSE)?.props[HOME_PROPERTY]).toBe(created);
+  await waitFor(() => expect(toastTitles()).toContain('Приложение «Мой дом» создано'));
+  expect(batchReceipts).toMatchObject([{ actionId: 'act-21', results: [{ id: created }] }]);
+  // Narrow dependency probe. The server witness covers the full transaction including relation rows.
+  act(() =>
+    testFreshnessOf(queryClient).changes(
+      [
+        { kind: 'entity', rowKey: created, operation: 'insert' },
+        { kind: 'entity', rowKey: LOOSE, operation: 'update' },
+        { kind: 'journal', rowKey: 'act-21', entityIds: [created, LOOSE], operation: 'insert' },
+      ],
+      1,
+    ),
+  );
   await waitFor(() => expect(shownPath()).toBe(`/a/${created}/r/${LOOSE}`), { timeout: 3000 });
 });
 

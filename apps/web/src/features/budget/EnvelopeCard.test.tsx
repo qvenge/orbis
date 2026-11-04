@@ -238,11 +238,15 @@ test('carryover-бейдж: ↩ +1 200 при профиците, ↩ −800 п�
 // --- тап → запись категории (экрана категории в 1б нет, §8.6) ---------------------------
 
 test('тап по карточке открывает запись категории в рамке экрана', () => {
-  renderWithProviders(<EnvelopeCard status={status({ spent: '0', effectiveLimit: '10000.00' })} />);
-  fireEvent.click(screen.getByRole('button', { name: /Еда/ }));
+  const id = '019e4466-1000-7e07-b5d4-64be9721de01';
+  const value = status({ spent: '0', effectiveLimit: '10000.00' });
+  renderWithProviders(<EnvelopeCard status={{ ...value, category: { ...value.category, id } }} />);
+  const link = screen.getByRole('link', { name: /Еда/ });
+  expect(link).toHaveAttribute('href', `/r/${id}`);
+  fireEvent.click(link);
   expect(currentEntry(useNav.getState().model).address).toEqual({
     kind: 'record',
     app: { kind: 'host' },
-    id: 'cat-1',
+    id,
   });
 });
