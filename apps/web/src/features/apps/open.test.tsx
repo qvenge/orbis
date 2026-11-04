@@ -18,6 +18,7 @@ import {
 import { PrivacyActionsContext } from '../../lib/local-data/privacy-actions';
 import { noteRegistryVersion, resetRegistryVersionForTests } from '../../lib/registry/useRegistry';
 import { configureNavigation, useNav } from '../../state/navigation';
+import { testFreshnessOf } from '../../test/freshness';
 import { installCrashTrap, renderWithProviders, wireEntity } from '../../test/harness';
 import { BUILTIN_REGISTRY } from '../../test/registry';
 import { useToastStore } from '../../ui/toast-store';
@@ -204,8 +205,22 @@ test('(б) повтор того же выбора — пустая карта, 
 
 test('(в) /a/<выключенное>/r/<id> — хост и плашка «выключено — [включить]»; «включить» зовёт app.setDisabled', async () => {
   resetFrame(`/a/${MY}/r/${TASK}`);
-  const world = appsWorld({ apps: [appRow(MY, 'Мой дом', '🏡', { [APP_DISABLED]: true })] });
-  const { calls } = renderApp(world);
+  const row = { ...appRow(MY, 'Мой дом', '🏡', { [APP_DISABLED]: true }), graphId: 'owner' };
+  const world = appsWorld({ apps: [row] });
+  const backend = appsHandler(world);
+  let release!: () => void;
+  const hold = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const { calls, queryClient } = renderWithProviders(
+    <App />,
+    async (path, input, type) => {
+      const result = backend(path, input, type);
+      if (path === 'app.setDisabled') await hold;
+      return result;
+    },
+    { freshness: true },
+  );
   await heading('Починить кран');
   const plaque = await screen.findByTestId('open-plaque');
   expect(plaque).toHaveTextContent('Мой дом выключено');
@@ -218,6 +233,18 @@ test('(в) /a/<выключенное>/r/<id> — хост и плашка «в�
     expect(calls.filter((c) => c.path === 'app.setDisabled')).toEqual([
       { path: 'app.setDisabled', input: { appId: MY, disabled: false, extensions: [] } },
     ]),
+  );
+  expect(frameIcon()).toHaveTextContent('🪐');
+  await act(async () => {
+    release();
+    await hold;
+  });
+  await waitFor(() =>
+    expect(within(plaque).getByRole('button', { name: 'включить' })).toBeEnabled(),
+  );
+  expect(frameIcon()).toHaveTextContent('🪐');
+  act(() =>
+    testFreshnessOf(queryClient).changes([{ kind: 'entity', rowKey: MY, scope: 'other' }], 1),
   );
   // Включилось — перечитанный список даёт приложение: рамка «Мой дом», его вид, плашки нет.
   await waitFor(() => expect(frameIcon()).toHaveTextContent('🏡'));

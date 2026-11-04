@@ -14,8 +14,9 @@ import {
 } from '@orbis/shared';
 import { etalonOf } from '@orbis/shared/supply';
 import { printAppProps, printPageRecord } from '@orbis/shared/supply/print';
-import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, expect, test, vi } from 'vitest';
+import { testFreshnessOf } from '../../test/freshness';
 import {
   installCrashTrap,
   type MockHandler,
@@ -118,10 +119,14 @@ const TWO_UPDATES: SupplyUpdate[] = [
 
 type BatchOp = { tool: string; input: Record<string, unknown> & { id: string } };
 
-function render(updates: () => SupplyUpdate[] = () => []) {
+function render(
+  updates: () => SupplyUpdate[] = () => [],
+  probe?: { afterMutation?: (path: string) => void },
+) {
   // «Сервер в памяти» для записей-приложений: пачка правит их, перечитывание видит записанное.
   const apps = new Map(APPS.map((a) => [a.id, { ...a, props: { ...a.props } }]));
-  const handler: MockHandler = (path, input) => {
+  const handler: MockHandler = (path, input, type) => {
+    if (type === 'mutation') probe?.afterMutation?.(path);
     switch (path) {
       case 'user.getSettings':
         return SETTINGS;
@@ -170,7 +175,7 @@ function render(updates: () => SupplyUpdate[] = () => []) {
         return {};
     }
   };
-  const r = renderWithProviders(<SettingsScreen />, handler);
+  const r = renderWithProviders(<SettingsScreen />, handler, { freshness: probe !== undefined });
   const callsOf = (path: string) => r.calls.filter((c) => c.path === path).map((c) => c.input);
   return { ...r, callsOf };
 }
@@ -400,18 +405,27 @@ test('(г) новая запись поставки: «Добавить» → su
     recordText: null,
   };
   let added = false;
-  const { callsOf } = render(() => (added ? [] : [offered]));
+  const supplyRecordId = id(71);
+  const { callsOf, queryClient } = render(() => (added ? [] : [offered]), {
+    afterMutation(path) {
+      if (path === 'supply.add') added = true;
+      if (path === 'ai.undo') added = false;
+    },
+  });
+  const feed = testFreshnessOf(queryClient);
   await openTab();
   const row = await screen.findByTestId('supply-update-horizon-life');
   expect(row).toHaveTextContent(`В поставке появилось: ${life.emoji} ${life.title}`);
   // Сервер после «Добавить» предлагать ключ перестаёт; после отмены — снова предлагает.
-  added = true;
   fireEvent.click(within(row).getByRole('button', { name: 'Добавить' }));
   await waitFor(() => expect(callsOf('supply.add')).toEqual([{ key: 'horizon-life' }]));
+  expect(screen.getByTestId('supply-update-horizon-life')).toBeInTheDocument();
+  act(() => feed.changes([{ kind: 'entity', rowKey: supplyRecordId, operation: 'insert' }], 1));
   await waitFor(() => expect(screen.queryByTestId('supply-update-horizon-life')).toBeNull());
-  added = false;
   await undoLastToast(`Добавлено из поставки: «${life.title}»`);
   await waitFor(() => expect(callsOf('ai.undo')).toEqual([{ actionId: ACT }]));
+  expect(screen.queryByTestId('supply-update-horizon-life')).toBeNull();
+  act(() => feed.changes([{ kind: 'entity', rowKey: supplyRecordId, operation: 'update' }], 2));
   expect(await screen.findByTestId('supply-update-horizon-life')).toBeInTheDocument();
 });
 
@@ -493,14 +507,15 @@ test('I-1: правка «Состава» — одна entity_update без mod
 
 test('M-2: правка графа гасит «Обновления» — признак «Изменено вами» не устаревает; повторный показ без запроса', async () => {
   let edited = false;
-  const { callsOf } = render(() => [{ ...(TWO_UPDATES[1] as SupplyUpdate), edited }]);
+  const home = TWO_UPDATES[1] as SupplyUpdate;
+  const homeId = home.recordId!;
+  const { callsOf, queryClient } = render(() => [{ ...home, edited }], {});
+  const feed = testFreshnessOf(queryClient);
   await openTab();
   const row = await screen.findByTestId('supply-update-home');
   expect(row).not.toHaveTextContent('Изменено вами');
   const before = callsOf('supply.updates').length;
-  // Владелец правит «Домой» где-то ещё — любая правка графа идёт через `invalidateGraph` (здесь —
-  // «Изменить состав», пачка того же механизма).
-  edited = true;
+  // Транзакция состава меняет приложение и не записывает «Домой».
   fireEvent.click(
     within(await screen.findByTestId(`app-${STUDY}`)).getByRole('button', {
       name: 'Изменить состав',
@@ -509,15 +524,23 @@ test('M-2: правка графа гасит «Обновления» — пр�
   const dialog = await screen.findByRole('dialog', { name: 'Состав «Учёба»' });
   fireEvent.click(within(dialog).getByRole('checkbox', { name: 'Цели' }));
   fireEvent.click(within(dialog).getByRole('button', { name: 'Сохранить' }));
+  await waitFor(() => expect(callsOf('entity.updateBatch')).toHaveLength(1));
+  act(() => feed.changes([{ kind: 'entity', rowKey: STUDY, scope: 'other' }], 1));
+  await waitFor(() => expect(callsOf('supply.updates')).toHaveLength(before + 1));
+  expect(screen.getByTestId('supply-update-home')).not.toHaveTextContent('Изменено вами');
+
+  // Состояние меняет отдельная фактически подтверждённая правка тела «Домой».
+  edited = true;
+  act(() => feed.changes([{ kind: 'entity', rowKey: homeId, scope: 'body' }], 2));
   await waitFor(() =>
     expect(screen.getByTestId('supply-update-home')).toHaveTextContent('Изменено вами'),
   );
-  expect(callsOf('supply.updates').length).toBe(before + 1);
+  expect(callsOf('supply.updates').length).toBe(before + 2);
   // Уход с вкладки и возврат в пределах срока свежести: список из кеша, без нового запроса.
   fireEvent.click(screen.getByRole('tab', { name: 'Общие' }));
   fireEvent.click(screen.getByRole('tab', { name: 'Приложения и расширения' }));
   expect(await screen.findByTestId('supply-update-home')).toHaveTextContent('Изменено вами');
-  expect(callsOf('supply.updates').length).toBe(before + 1);
+  expect(callsOf('supply.updates').length).toBe(before + 2);
 });
 
 test('N-1: правка в обход клиента (агент, вторая вкладка) проявляется по истечении срока свежести', async () => {
