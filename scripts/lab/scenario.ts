@@ -68,7 +68,7 @@ export const LAB_SELECTORS = [
   ],
   [
     '[data-testid="search-hit-${*}"]',
-    ['features/search/SearchPanel.tsx', 'data-testid={`search-hit-${hit.id}`}'],
+    ['features/search/SearchPanel.tsx', "'data-testid': `search-hit-${hit.id}`"],
   ],
   ['[data-testid="host-back"]', ['app/frame/HostPresence.tsx', 'data-testid="host-back"']],
   ['[data-testid="host-new"]', ['app/frame/HostButtons.tsx', 'data-testid="host-new"']],
@@ -113,15 +113,24 @@ export const LAB_SELECTORS = [
     ['features/entity-editor/EditorShell.tsx', 'data-testid="editor-preview"'],
   ],
   ['[data-testid="host-chat"]', ['app/frame/HostButtons.tsx', 'data-testid="host-chat"']],
+  ['#side-chat', ['app/frame/SideChat.tsx', 'id="side-chat"']],
   [
-    '#side-chat [data-testid="message-list"]',
-    ['app/frame/SideChat.tsx', 'id="side-chat"', '<ChatPanel context={context}'],
+    '#side-chat [data-thread-id=${*}][data-thread-ready="true"]',
+    ['app/frame/SideChat.tsx', 'id="side-chat"', '<GlobalChat context={context}'],
+    ['features/chat/ChatScreen.tsx', '<ChatPanel context={context}'],
+    [
+      'features/chat/ChatPanel.tsx',
+      'data-thread-id={threadId}',
+      "data-thread-ready={hasTail ? 'true'",
+    ],
+  ],
+  [
+    '${*} [data-testid="message-list"]',
     ['features/chat/ChatPanel.tsx', '<ThreadView ', '<MessageList'],
     ['features/chat/MessageList.tsx', 'data-testid="message-list"'],
   ],
   [
-    '#side-chat input[aria-label="Сообщение"]',
-    ['app/frame/SideChat.tsx', 'id="side-chat"'],
+    '${*} input[aria-label="Сообщение"]',
     ['features/chat/ChatPanel.tsx', '<Composer'],
     ['features/chat/Composer.tsx', '<input', 'aria-label="Сообщение"'],
   ],

@@ -16,15 +16,21 @@ const scenario = ts.createSourceFile(
 /** Покрытие берётся из AST сценария, без комментариев и самого манифеста: новый селектор требует новой строки. */
 function usedSignatures(): string[] {
   const found = new Set<string>();
+  function recordSelector(signature: string) {
+    if (
+      /^#[-\w]+(?:\s|$)/.test(signature) ||
+      /\[(?:data-testid|aria-label|role|data-thread-id|data-thread-ready)=/.test(signature)
+    )
+      found.add(signature);
+  }
+
   function visit(node: ts.Node) {
     if (ts.isVariableDeclaration(node) && node.name.getText(scenario) === 'LAB_SELECTORS') return;
-    if (ts.isStringLiteralLike(node) && /\[(?:data-testid|aria-label|role)=/.test(node.text))
-      found.add(node.text);
-    if (
-      ts.isTemplateExpression(node) &&
-      /\[(?:data-testid|aria-label|role)=/.test(node.head.text)
-    ) {
-      found.add(node.head.text + node.templateSpans.map((s) => '${*}' + s.literal.text).join(''));
+    if (ts.isStringLiteralLike(node)) recordSelector(node.text);
+    if (ts.isTemplateExpression(node)) {
+      const signature =
+        node.head.text + node.templateSpans.map((span) => '${*}' + span.literal.text).join('');
+      recordSelector(signature);
     }
     if (
       ts.isCallExpression(node) &&

@@ -194,7 +194,7 @@ it('keeps a same-scope attempt recoverable and ignores a mismatched success enve
   expect(
     registry.settle(attempt, {
       kind: 'ack',
-      result: { ...serverEntity(attempt.id), graphId: 'foreign graph' },
+      result: { ...serverEntity(attempt.id), graphId: '019e4466-1000-7e07-b5d4-64be9721da52' },
     }),
   ).toMatchObject({ status: 'unknown' });
   expect(registry.isUnconfirmedCreate(attempt.id)).toBe(true);

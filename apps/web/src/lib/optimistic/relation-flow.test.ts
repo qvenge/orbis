@@ -71,7 +71,7 @@ test('rejection removes only the exact delete layer and does not overwrite a fre
   const pending = store.beginRelation(scope, 'remove', 'delete', key, 2);
   expect(store.projectResponse(one)).toMatchObject({ relations: [unrelated] });
   expect(store.projectResponse(two)).toMatchObject({ relations: [] });
-  const newer = detail('two', [{ ...edge, meta: { newer: true } }], 3);
+  const newer = detail('two', [{ ...edge, sourceId: edge.sourceId, meta: { newer: true } }], 3);
   store.acceptResponse(newer);
   expect(store.projectResponse(newer)).toMatchObject({ relations: [] });
   store.settleOptimistic(pending, { kind: 'failed' });
