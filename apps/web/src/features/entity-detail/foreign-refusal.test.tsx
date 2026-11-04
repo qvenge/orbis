@@ -27,6 +27,7 @@ async function refusedScenario() {
     ...wireEntity({
       id: '019a0000-0000-7000-8000-000000000050',
       title: 'unchanged body-only control',
+      graphId: 'owner',
     }),
     body: 'original body',
     bodyDoc: parseBody('original body'),
@@ -35,7 +36,7 @@ async function refusedScenario() {
   const server = { ...base };
   let gets = 0;
   const sends: Array<{ expectedBodyRevision?: number; bodyDoc?: unknown }> = [];
-  const rendered = renderWithProviders(
+  renderWithProviders(
     <DetailScreen entityId="019a0000-0000-7000-8000-000000000050" />,
     (path, input) => {
       if (path === 'entity.get') {
@@ -55,6 +56,7 @@ async function refusedScenario() {
       }
       return registryReply(path) ?? {};
     },
+    { freshness: true },
   );
   fireEvent.click(await screen.findByTestId('editor-preview'));
   const host = await screen.findByTestId('body-editor');
@@ -74,7 +76,7 @@ async function refusedScenario() {
     {},
     { timeout: 6000 },
   );
-  await waitFor(() => expect(gets).toBeGreaterThan(1));
+  expect(gets).toBe(1);
   expect(sends).toHaveLength(1);
   expect(sends[0]?.expectedBodyRevision).toBe(1);
   expect(server.title).toBe(base.title);
@@ -83,7 +85,7 @@ async function refusedScenario() {
   expect(JSON.stringify(readDraft('019a0000-0000-7000-8000-000000000050')?.doc)).toContain(
     'local input',
   );
-  return { editor, rendered, alert, server };
+  return { editor, alert, gets: () => gets, sends };
 }
 test('current body-only foreign refusal resets common and native history while retaining own draft', async () => {
   const { editor } = await refusedScenario();
@@ -100,13 +102,16 @@ test('current body-only foreign refusal resets common and native history while r
   expect(editor.getText()).toContain('local input');
 });
 test('contrast: explicit refresh accepts foreign body and resets both histories while keeping own draft', async () => {
-  const { editor, alert } = await refusedScenario();
+  const { editor, alert, gets, sends } = await refusedScenario();
+  const before = gets();
   fireEvent.click(
     within(alert.closest('[role="alert"]') as HTMLElement).getByRole('button', {
       name: 'Обновить',
     }),
   );
   await waitFor(() => expect(editor.getText()).toBe('foreign body'));
+  expect(gets()).toBe(before + 1);
+  expect(sends).toHaveLength(1);
   expect(canUndoStep('019a0000-0000-7000-8000-000000000050')).toBe(false);
   expect(canRedoStep('019a0000-0000-7000-8000-000000000050')).toBe(false);
   expect(undoDepth(editor.state)).toBe(0);

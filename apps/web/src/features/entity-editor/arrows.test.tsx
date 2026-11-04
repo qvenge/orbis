@@ -3,6 +3,7 @@ import { act, fireEvent, screen, waitFor } from '@testing-library/react';
 import { Editor } from '@tiptap/core';
 import { type ReactNode, useState } from 'react';
 import { expect, test, vi } from 'vitest';
+import { testFreshnessOf } from '../../test/freshness';
 import {
   installCrashTrap,
   mockEntityUpdateResult,
@@ -192,31 +193,38 @@ async function openDetailEditor() {
   return pm();
 }
 test('реальный экран: сохранённый title undo использует текущее видимое основание CAS', async () => {
-  navAt('e1');
+  const firstId = '019e4466-1000-7e07-b5d4-64be9721db11';
+  const scopedEntity = { ...entity, id: firstId, graphId: 'owner' };
+  navAt(firstId);
   let title = 'План',
     gets = 0;
-  const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, (path, input) => {
-    if (path === 'entity.get') {
-      gets++;
-      return {
-        entity: {
-          ...entity,
-          title,
-          body: 'тело',
-          bodyRevision: 1,
-          bodyChangedAt: entity.updatedAt,
-          bodyAction: null,
-        },
-        relations: [],
-        thread: { threadId: 'th1', messages: [] },
-      };
-    }
-    if (path === 'entity.update') {
-      title = (input as { title: string }).title;
-      return mockEntityUpdateResult({ ...entity, title });
-    }
-    return handler(path);
-  });
+  let tx = 0;
+  const { calls } = renderWithProviders(
+    <DetailScreen entityId={firstId} />,
+    (path, input) => {
+      if (path === 'entity.get') {
+        gets++;
+        return {
+          entity: {
+            ...scopedEntity,
+            title,
+            body: 'тело',
+            bodyRevision: 1,
+            bodyChangedAt: entity.updatedAt,
+            bodyAction: null,
+          },
+          relations: [],
+          thread: { threadId: 'th1', messages: [] },
+        };
+      }
+      if (path === 'entity.update') {
+        title = (input as { title: string }).title;
+        return mockEntityUpdateResult({ ...scopedEntity, title, txId: String(++tx) });
+      }
+      return handler(path);
+    },
+    { freshness: true },
+  );
   const field = await screen.findByTestId('title-edit');
   fireEvent.change(field, { target: { value: 'План Б' } });
   fireEvent.blur(field);
@@ -302,7 +310,9 @@ test('чужой заголовок, совпавший с прежней соб
 });
 
 test('pending rename → undo использует видимую основу; старый отказ после нового acceptance не гасит redo', async () => {
-  navAt('e1');
+  const id = '019e4466-1000-7e07-b5d4-64be9721da61';
+  const scopedEntity = { ...entity, id, graphId: 'owner' };
+  navAt(id);
   let title = 'План';
   let rejectFirst: (error: unknown) => void = () => {};
   const pending = new Promise((_resolve, reject) => {
@@ -310,38 +320,41 @@ test('pending rename → undo использует видимую основу; 
   });
   let writes = 0,
     reads = 0;
-  const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, (path, input) => {
-    if (path === 'entity.get') {
-      reads++;
-      return { entity: { ...entity, title }, relations: [], thread: null };
-    }
-    if (path === 'entity.update') {
-      const vars = input as { title: string; expectedTitle: string };
-      if (++writes === 1) {
-        // В текущем серверном снимке Б уже установил конкурентный писатель;
-        // удержанный запрос ещё не получил решения и позднее получит отказ CAS.
-        title = 'План Б';
-        return pending;
+  const { calls } = renderWithProviders(
+    <DetailScreen entityId={id} />,
+    (path, input) => {
+      if (path === 'entity.get') {
+        reads++;
+        return { entity: { ...scopedEntity, title }, relations: [], thread: null };
       }
-      expect(vars.expectedTitle).toBe(title);
-      title = vars.title;
-      return mockEntityUpdateResult({ ...entity, title });
-    }
-    return handler(path);
-  });
+      if (path === 'entity.update') {
+        const vars = input as { title: string; expectedTitle: string };
+        if (++writes === 1) {
+          // Независимая запись уже сменила имя, а собственный CAS ещё не завершён.
+          title = 'План Б';
+          return pending;
+        }
+        expect(vars.expectedTitle).toBe(title);
+        title = vars.title;
+        return mockEntityUpdateResult({ ...scopedEntity, title, txId: '2' });
+      }
+      return handler(path);
+    },
+    { freshness: true },
+  );
   const field = await screen.findByTestId('title-edit');
   fireEvent.change(field, { target: { value: 'План Б' } });
   fireEvent.blur(field);
   await waitFor(() => expect(writes).toBe(1));
   key(field);
   await waitFor(() => expect(writes).toBe(2));
-  expect(calls.filter((c) => c.path === 'entity.update').at(-1)?.input).toMatchObject({
-    title: 'План',
-    expectedTitle: 'План Б',
-  });
+  expect(calls.filter((c) => c.path === 'entity.update')).toEqual([
+    { path: 'entity.update', input: { id, title: 'План Б', expectedTitle: 'План' } },
+    { path: 'entity.update', input: { id, title: 'План', expectedTitle: 'План Б' } },
+  ]);
   await waitFor(() => expect(reads).toBeGreaterThan(1));
   expect(field).toHaveValue('План');
-  expect(canRedoStep('e1')).toBe(true);
+  expect(canRedoStep(id)).toBe(true);
   await act(async () => {
     rejectFirst(
       trpcError('CONFLICT', 'Поздний отказ', {
@@ -351,8 +364,9 @@ test('pending rename → undo использует видимую основу; 
     );
     await pending.catch(() => {});
   });
-  await waitFor(() => expect(reads).toBeGreaterThan(2));
-  expect(canRedoStep('e1')).toBe(true);
+  // Известный отказ первой записи не меняет подтверждённое основание второй.
+  expect(calls.filter((c) => c.path === 'entity.update')).toHaveLength(2);
+  expect(canRedoStep(id)).toBe(true);
   expect(screen.queryByText(/Заголовок изменён в другом месте/)).toBeNull();
   expect(field).toHaveValue('План');
 });
@@ -393,11 +407,18 @@ test('CAS отказ отмены несохранённого title очища�
 });
 
 test('title SUCCESS после checkbox SUCCESS всё ещё принимает title перед старым title отказом', async () => {
-  navAt('e1');
-  const task = { ...entity, aspects: ['orbis/task'], props: { 'orbis/task_status': 'inbox' } };
+  const firstId = '019e4466-1000-7e07-b5d4-64be9721db12';
+  const scopedEntity = { ...entity, id: firstId, graphId: 'owner' };
+  navAt(firstId);
+  const task = {
+    ...scopedEntity,
+    aspects: ['orbis/task'],
+    props: { 'orbis/task_status': 'inbox' },
+  };
   let title = 'План',
     writes = 0,
     reads = 0;
+  let taskStatus = 'inbox';
   let rejectOld: (e: unknown) => void = () => {};
   let acceptNew: (v: unknown) => void = () => {};
   const old = new Promise((_resolve, reject) => {
@@ -406,26 +427,41 @@ test('title SUCCESS после checkbox SUCCESS всё ещё принимает
   const next = new Promise((resolve) => {
     acceptNew = resolve;
   });
-  renderWithProviders(<DetailScreen entityId="e1" />, (path, input) => {
-    if (path === 'entity.get') {
-      reads++;
-      return { entity: { ...task, title }, relations: [], thread: null };
-    }
-    if (path === 'entity.update') {
-      writes++;
-      const vars = input as { title?: string };
-      if (writes === 1) {
-        title = 'План Б';
-        return old;
+  renderWithProviders(
+    <DetailScreen entityId={firstId} />,
+    (path, input) => {
+      if (path === 'entity.get') {
+        reads++;
+        return {
+          entity: { ...task, title, props: { 'orbis/task_status': taskStatus } },
+          relations: [],
+          thread: null,
+        };
       }
-      if (vars.title !== undefined) {
-        title = vars.title;
-        return next;
+      if (path === 'entity.update') {
+        writes++;
+        const vars = input as { title?: string; expectedTitle?: string };
+        if (writes === 1) {
+          title = 'План Б';
+          return old;
+        }
+        if (vars.title !== undefined) {
+          expect(vars.expectedTitle).toBe(title);
+          title = vars.title;
+          return next;
+        }
+        taskStatus = 'done';
+        return mockEntityUpdateResult({
+          ...task,
+          title,
+          props: { 'orbis/task_status': taskStatus },
+          txId: '3',
+        });
       }
-      return mockEntityUpdateResult({ ...task, title });
-    }
-    return handler(path);
-  });
+      return handler(path);
+    },
+    { freshness: true },
+  );
   const field = await screen.findByTestId('title-edit');
   fireEvent.change(field, { target: { value: 'План Б' } });
   fireEvent.blur(field);
@@ -436,11 +472,11 @@ test('title SUCCESS после checkbox SUCCESS всё ещё принимает
   await waitFor(() => expect(writes).toBe(3));
   await waitFor(() => expect(reads).toBeGreaterThan(1));
   await act(async () => {
-    acceptNew(mockEntityUpdateResult({ ...task, title: 'План' }));
+    acceptNew(mockEntityUpdateResult({ ...task, title: 'План', txId: '2' }));
     await next;
   });
-  await waitFor(() => expect(reads).toBeGreaterThan(2));
-  expect(canRedoStep('e1')).toBe(true);
+  expect(field).toHaveValue('План');
+  expect(canRedoStep(firstId)).toBe(true);
   await act(async () => {
     rejectOld(
       trpcError('CONFLICT', 'Старый отказ', {
@@ -450,16 +486,19 @@ test('title SUCCESS после checkbox SUCCESS всё ещё принимает
     );
     await old.catch(() => {});
   });
-  await waitFor(() => expect(reads).toBeGreaterThan(3));
-  expect(canRedoStep('e1')).toBe(true);
+  expect(writes).toBe(3);
+  expect(canRedoStep(firstId)).toBe(true);
   expect(screen.queryByText(/Заголовок изменён в другом месте/)).toBeNull();
 });
 
 for (const firstSucceeds of [false, true])
   test(`старый title ${firstSucceeds ? 'SUCCESS' : 'FAIL'} не принимает текущий FAILED title`, async () => {
-    navAt('e1');
+    const firstId = '019e4466-1000-7e07-b5d4-64be9721db13';
+    const scopedEntity = { ...entity, id: firstId, graphId: 'owner' };
+    navAt(firstId);
     let writes = 0,
       reads = 0;
+    let title = 'План';
     let releaseFirst: () => void = () => {},
       releaseSecond: () => void = () => {};
     const first = new Promise<void>((resolve) => {
@@ -473,19 +512,26 @@ for (const firstSucceeds of [false, true])
         code: 'CONFLICT',
         details: { reason: 'precondition_failed', mismatches: [{ property: 'orbis/title' }] },
       });
-    renderWithProviders(<DetailScreen entityId="e1" />, async (path) => {
-      if (path === 'entity.get') {
-        reads++;
-        return { entity, relations: [], thread: null };
-      }
-      if (path === 'entity.update') {
-        const n = ++writes;
-        await (n === 1 ? first : second);
-        if (n === 1 && firstSucceeds) return mockEntityUpdateResult({ ...entity, title: 'План Б' });
-        throw stale();
-      }
-      return handler(path);
-    });
+    renderWithProviders(
+      <DetailScreen entityId={firstId} />,
+      async (path) => {
+        if (path === 'entity.get') {
+          reads++;
+          return { entity: { ...scopedEntity, title }, relations: [], thread: null };
+        }
+        if (path === 'entity.update') {
+          const n = ++writes;
+          await (n === 1 ? first : second);
+          if (n === 1 && firstSucceeds) {
+            title = 'План Б';
+            return mockEntityUpdateResult({ ...scopedEntity, title, txId: '1' });
+          }
+          throw stale();
+        }
+        return handler(path);
+      },
+      { freshness: true },
+    );
     const field = await screen.findByTestId('title-edit');
     fireEvent.change(field, { target: { value: 'План Б' } });
     fireEvent.blur(field);
@@ -497,60 +543,73 @@ for (const firstSucceeds of [false, true])
       releaseFirst();
       await first;
     });
-    await waitFor(() => expect(reads).toBeGreaterThan(1));
+    if (firstSucceeds) await waitFor(() => expect(reads).toBeGreaterThan(1));
+    else expect(reads).toBe(1);
     fireEvent.change(field, { target: { value: 'План В ещё' } });
-    expect(canUndoStep('e1')).toBe(true);
+    expect(canUndoStep(firstId)).toBe(true);
     await act(async () => {
       releaseSecond();
       await second;
     });
-    await waitFor(() => expect(reads).toBeGreaterThan(2));
+    expect(writes).toBe(2);
     expect(screen.getByText(/Заголовок изменён в другом месте/)).toBeInTheDocument();
-    expect(canUndoStep('e1')).toBe(false);
+    expect(canUndoStep(firstId)).toBe(false);
     expect(field).toHaveValue('План В ещё');
   });
 
 test('e1 → e2 → e1: история title живёт в LRU, cold поле берёт current server basis', async () => {
-  navAt('e1');
+  const firstId = '019e4466-1000-7e07-b5d4-64be9721db14';
+  const secondId = '019e4466-1000-7e07-b5d4-64be9721dc14';
+  const scopedEntity = { ...entity, id: firstId, graphId: 'owner' };
+  navAt(firstId);
   let change!: (id: string) => void;
   let firstTitle = 'План',
     reads = 0;
+  let tx = 0;
   function Host() {
-    const [id, set] = useState('e1');
+    const [id, set] = useState(firstId);
     change = set;
     return <DetailScreen entityId={id} />;
   }
-  const { calls } = renderWithProviders(<Host />, (path, input) => {
-    const vars = input as { id?: string; title?: string; expectedTitle?: string };
-    if (path === 'entity.get') {
-      reads++;
-      return {
-        entity: { ...entity, id: vars.id ?? 'e1', title: vars.id === 'e2' ? 'Сосед' : firstTitle },
-        relations: [],
-        thread: null,
-      };
-    }
-    if (path === 'entity.update') {
-      expect(vars.id).toBe('e1');
-      expect(vars.expectedTitle).toBe(firstTitle);
-      firstTitle = vars.title ?? firstTitle;
-      return mockEntityUpdateResult({ ...entity, title: firstTitle });
-    }
-    return handler(path);
-  });
+  const { calls } = renderWithProviders(
+    <Host />,
+    (path, input) => {
+      const vars = input as { id?: string; title?: string; expectedTitle?: string };
+      if (path === 'entity.get') {
+        reads++;
+        return {
+          entity: {
+            ...scopedEntity,
+            id: vars.id ?? firstId,
+            title: vars.id === secondId ? 'Сосед' : firstTitle,
+          },
+          relations: [],
+          thread: null,
+        };
+      }
+      if (path === 'entity.update') {
+        expect(vars.id).toBe(firstId);
+        expect(vars.expectedTitle).toBe(firstTitle);
+        firstTitle = vars.title ?? firstTitle;
+        return mockEntityUpdateResult({ ...scopedEntity, title: firstTitle, txId: String(++tx) });
+      }
+      return handler(path);
+    },
+    { freshness: true },
+  );
   let field = await screen.findByTestId('title-edit');
   fireEvent.change(field, { target: { value: 'План Б' } });
   fireEvent.blur(field);
   await waitFor(() => expect(reads).toBeGreaterThan(1));
-  act(() => change('e2'));
+  act(() => change(secondId));
   await waitFor(() => expect(screen.getByTestId('title-edit')).toHaveValue('Сосед'));
-  act(() => change('e1'));
+  act(() => change(firstId));
   await waitFor(() => expect(screen.getByTestId('title-edit')).toHaveValue('План Б'));
   field = screen.getByTestId('title-edit');
   key(field);
   await waitFor(() =>
     expect(calls.filter((c) => c.path === 'entity.update').at(-1)?.input).toMatchObject({
-      id: 'e1',
+      id: firstId,
       title: 'План',
       expectedTitle: 'План Б',
     }),
@@ -559,7 +618,10 @@ test('e1 → e2 → e1: история title живёт в LRU, cold поле б
 });
 
 test('title SUCCESS вне e1 затем e1 remount не возвращает право старому FAIL стереть redo', async () => {
-  navAt('e1');
+  const firstId = '019e4466-1000-7e07-b5d4-64be9721db15';
+  const secondId = '019e4466-1000-7e07-b5d4-64be9721dc15';
+  const scopedEntity = { ...entity, id: firstId, graphId: 'owner' };
+  navAt(firstId);
   let change!: (id: string) => void;
   let title = 'План',
     writes = 0,
@@ -573,9 +635,9 @@ test('title SUCCESS вне e1 затем e1 remount не возвращает п
     acceptNew = resolve;
   });
   function Host() {
-    const [id, set] = useState('e1');
+    const [id, set] = useState(firstId);
     change = set;
-    const warm = trpc.entity.get.useQuery(detailGetInput('e2'));
+    const warm = trpc.entity.get.useQuery(detailGetInput(secondId));
     return (
       <>
         <span data-testid="warm-e2">{warm.data?.entity.title}</span>
@@ -583,27 +645,35 @@ test('title SUCCESS вне e1 затем e1 remount не возвращает п
       </>
     );
   }
-  renderWithProviders(<Host />, (path, input) => {
-    const vars = input as { id?: string; title?: string };
-    if (path === 'entity.get') {
-      if (vars.id === 'e1') firstReads++;
-      return {
-        entity: { ...entity, id: vars.id ?? 'e1', title: vars.id === 'e2' ? 'Сосед' : title },
-        relations: [],
-        thread: null,
-      };
-    }
-    if (path === 'entity.update') {
-      if (++writes === 1) {
-        // Б — текущий снимок конкурентного писателя, а не запись отказавшего save.
-        title = 'План Б';
-        return old;
+  renderWithProviders(
+    <Host />,
+    (path, input) => {
+      const vars = input as { id?: string; title?: string };
+      if (path === 'entity.get') {
+        if (vars.id === firstId) firstReads++;
+        return {
+          entity: {
+            ...scopedEntity,
+            id: vars.id ?? firstId,
+            title: vars.id === secondId ? 'Сосед' : title,
+          },
+          relations: [],
+          thread: null,
+        };
       }
-      title = vars.title ?? title;
-      return next;
-    }
-    return handler(path);
-  });
+      if (path === 'entity.update') {
+        if (++writes === 1) {
+          // Б — текущий снимок конкурентного писателя, а не запись отказавшего save.
+          title = 'План Б';
+          return old;
+        }
+        title = vars.title ?? title;
+        return next;
+      }
+      return handler(path);
+    },
+    { freshness: true },
+  );
   const field = await screen.findByTestId('title-edit');
   await waitFor(() => expect(screen.getByTestId('warm-e2')).toHaveTextContent('Сосед'));
   fireEvent.change(field, { target: { value: 'План Б' } });
@@ -611,17 +681,16 @@ test('title SUCCESS вне e1 затем e1 remount не возвращает п
   await waitFor(() => expect(writes).toBe(1));
   key(field);
   await waitFor(() => expect(writes).toBe(2));
-  act(() => change('e2'));
+  act(() => change(secondId));
   await waitFor(() => expect(screen.getByTestId('title-edit')).toHaveValue('Сосед'));
   await act(async () => {
-    acceptNew(mockEntityUpdateResult({ ...entity, title: 'План' }));
+    acceptNew(mockEntityUpdateResult({ ...scopedEntity, title: 'План', txId: '2' }));
     await next;
   });
-  act(() => change('e1'));
+  act(() => change(firstId));
   await waitFor(() => expect(screen.getByTestId('title-edit')).toHaveValue('План'));
   await waitFor(() => expect(firstReads).toBeGreaterThan(1));
-  expect(canRedoStep('e1')).toBe(true);
-  const before = firstReads;
+  expect(canRedoStep(firstId)).toBe(true);
   await act(async () => {
     rejectOld(
       trpcError('CONFLICT', 'Старый отказ', {
@@ -631,28 +700,56 @@ test('title SUCCESS вне e1 затем e1 remount не возвращает п
     );
     await old.catch(() => {});
   });
-  await waitFor(() => expect(firstReads).toBeGreaterThan(before));
-  expect(canRedoStep('e1')).toBe(true);
+  expect(writes).toBe(2);
+  expect(canRedoStep(firstId)).toBe(true);
   expect(screen.queryByText(/Заголовок изменён в другом месте/)).toBeNull();
 });
 
 test('own undo к уже видимому title не даёт вечное доверие последующему чужому совпадению', async () => {
-  navAt('e1');
-  const task = { ...entity, aspects: ['orbis/task'], props: { 'orbis/task_status': 'inbox' } };
+  const firstId = '019e4466-1000-7e07-b5d4-64be9721db16';
+  const scopedEntity = { ...entity, id: firstId, graphId: 'owner' };
+  navAt(firstId);
+  const task = {
+    ...scopedEntity,
+    aspects: ['orbis/task'],
+    props: { 'orbis/task_status': 'inbox' },
+  };
+  let tx = 0;
+  let checkWrites = 0;
+  let taskStatus = 'inbox';
   let title = 'План',
     reads = 0;
-  renderWithProviders(<DetailScreen entityId="e1" />, (path, input) => {
-    if (path === 'entity.get') {
-      reads++;
-      return { entity: { ...task, title }, relations: [], thread: null };
-    }
-    if (path === 'entity.update') {
-      const vars = input as { title?: string };
-      title = vars.title ?? title;
-      return mockEntityUpdateResult({ ...task, title });
-    }
-    return handler(path);
-  });
+  const { queryClient } = renderWithProviders(
+    <DetailScreen entityId={firstId} />,
+    (path, input) => {
+      if (path === 'entity.get') {
+        reads++;
+        return {
+          entity: { ...task, title, props: { 'orbis/task_status': taskStatus } },
+          relations: [],
+          thread: null,
+        };
+      }
+      if (path === 'entity.update') {
+        const vars = input as { title?: string; expectedTitle?: string };
+        if (vars.title !== undefined) {
+          expect(vars.expectedTitle).toBe(title);
+          title = vars.title;
+        } else {
+          checkWrites++;
+          taskStatus = 'done';
+        }
+        return mockEntityUpdateResult({
+          ...task,
+          title,
+          props: { 'orbis/task_status': taskStatus },
+          txId: String(++tx),
+        });
+      }
+      return handler(path);
+    },
+    { freshness: true },
+  );
   const field = await screen.findByTestId('title-edit');
   fireEvent.change(field, { target: { value: 'План Б' } });
   key(field); // Сохраняется прежний показанный План: prop value не меняется.
@@ -660,12 +757,24 @@ test('own undo к уже видимому title не даёт вечное до�
   fireEvent.change(field, { target: { value: 'План В' } });
   fireEvent.blur(field);
   await waitFor(() => expect(reads).toBeGreaterThan(2));
-  expect(canUndoStep('e1')).toBe(true);
-  title = 'План'; // Чужое переименование после подтверждённого План В.
+  expect(canUndoStep(firstId)).toBe(true);
+  const beforeCheckbox = reads;
   fireEvent.click(screen.getByRole('checkbox', { name: /готово/i }));
-  await waitFor(() => expect(reads).toBeGreaterThan(3));
+  await waitFor(() => expect(checkWrites).toBe(1));
+  await waitFor(() => expect(reads).toBeGreaterThan(beforeCheckbox));
+  expect(field).toHaveValue('План В');
+
+  // Чужой commit получает свой xid. Ответ checkbox сохранил прежний title.
+  title = 'План';
+  act(() =>
+    testFreshnessOf(queryClient).changes(
+      [{ kind: 'entity', rowKey: firstId, scope: 'other' }],
+      ++tx,
+    ),
+  );
+  await waitFor(() => expect(field).toHaveValue('План'));
   expect(field).toHaveValue('План');
-  expect(canUndoStep('e1')).toBe(false);
+  expect(canUndoStep(firstId)).toBe(false);
 });
 
 test('native beforeinput historyUndo/historyRedo идёт по общему title/body порядку', async () => {
@@ -696,8 +805,17 @@ test('native beforeinput historyUndo/historyRedo идёт по общему titl
 });
 
 test('rapid own optimistic props coalescing не доверяет позднему foreign return к старому v', async () => {
-  navAt('e1');
-  const task = { ...entity, aspects: ['orbis/task'], props: { 'orbis/task_status': 'inbox' } };
+  const firstId = '019e4466-1000-7e07-b5d4-64be9721db17';
+  const scopedEntity = { ...entity, id: firstId, graphId: 'owner' };
+  navAt(firstId);
+  const task = {
+    ...scopedEntity,
+    aspects: ['orbis/task'],
+    props: { 'orbis/task_status': 'inbox' },
+  };
+  let tx = 0;
+  let checkWrites = 0;
+  let taskStatus = 'inbox';
   let title = 'План',
     reads = 0,
     writes = 0;
@@ -705,19 +823,38 @@ test('rapid own optimistic props coalescing не доверяет позднем
   const old = new Promise((_resolve, reject) => {
     rejectOld = reject;
   });
-  renderWithProviders(<DetailScreen entityId="e1" />, (path, input) => {
-    if (path === 'entity.get') {
-      reads++;
-      return { entity: { ...task, title }, relations: [], thread: null };
-    }
-    if (path === 'entity.update') {
-      const vars = input as { title?: string };
-      if (vars.title !== undefined && ++writes === 1) return old; // Запрос Б не был принят.
-      title = vars.title ?? title;
-      return mockEntityUpdateResult({ ...task, title });
-    }
-    return handler(path);
-  });
+  const { queryClient } = renderWithProviders(
+    <DetailScreen entityId={firstId} />,
+    (path, input) => {
+      if (path === 'entity.get') {
+        reads++;
+        return {
+          entity: { ...task, title, props: { 'orbis/task_status': taskStatus } },
+          relations: [],
+          thread: null,
+        };
+      }
+      if (path === 'entity.update') {
+        const vars = input as { title?: string; expectedTitle?: string };
+        if (vars.title !== undefined && ++writes === 1) return old; // Запрос Б не был принят.
+        if (vars.title !== undefined) {
+          expect(vars.expectedTitle).toBe(title);
+          title = vars.title;
+        } else {
+          checkWrites++;
+          taskStatus = 'done';
+        }
+        return mockEntityUpdateResult({
+          ...task,
+          title,
+          props: { 'orbis/task_status': taskStatus },
+          txId: String(++tx),
+        });
+      }
+      return handler(path);
+    },
+    { freshness: true },
+  );
   const field = await screen.findByTestId('title-edit');
   fireEvent.change(field, { target: { value: 'План Б' } });
   fireEvent.blur(field);
@@ -735,13 +872,24 @@ test('rapid own optimistic props coalescing не доверяет позднем
     );
     await old.catch(() => {});
   });
-  await waitFor(() => expect(reads).toBeGreaterThan(2));
-  expect(canUndoStep('e1')).toBe(true);
-  title = 'План Б';
+  expect(canUndoStep(firstId)).toBe(true);
+  const beforeCheckbox = reads;
   fireEvent.click(screen.getByRole('checkbox', { name: /готово/i }));
-  await waitFor(() => expect(reads).toBeGreaterThan(3));
+  await waitFor(() => expect(checkWrites).toBe(1));
+  await waitFor(() => expect(reads).toBeGreaterThan(beforeCheckbox));
+  expect(field).toHaveValue('План В');
+
+  // Чужой commit получает свой xid. Ответ checkbox сохранил прежний title.
+  title = 'План Б';
+  act(() =>
+    testFreshnessOf(queryClient).changes(
+      [{ kind: 'entity', rowKey: firstId, scope: 'other' }],
+      ++tx,
+    ),
+  );
+  await waitFor(() => expect(field).toHaveValue('План Б'));
   expect(field).toHaveValue('План Б');
-  expect(canUndoStep('e1')).toBe(false);
+  expect(canUndoStep(firstId)).toBe(false);
 });
 
 for (const duplicate of [false, true]) {

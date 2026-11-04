@@ -1,9 +1,10 @@
-import { parseBody } from '@orbis/shared/doc';
+import { parseBody, serializeBody } from '@orbis/shared/doc';
 import { type QueryClient, useQueryClient } from '@tanstack/react-query';
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import type { Editor } from '@tiptap/core';
 import { closeHistory, redoDepth, undoDepth } from '@tiptap/pm/history';
 import { expect, test } from 'vitest';
+import { testFreshnessOf } from '../../test/freshness';
 import { renderWithProviders, trpcError, wireEntity } from '../../test/harness';
 import { navAt } from '../../test/nav';
 import { registryReply } from '../../test/registry';
@@ -209,7 +210,11 @@ test('native body undo/redo autosaves returned doc with current CAS and one text
 }, 15000);
 for (const landing of ['foreign', 'journal', 'journal-same'] as const)
   test(`${landing} actual refetched body landing resets populated title and native histories`, async () => {
-    navAt('e1');
+    resetUndoSession();
+    const recordId = '019e4466-1000-7e07-b5d4-64be9721dd01';
+    const scopedEntity = { ...entity, id: recordId, graphId: 'owner' };
+    const actionId = '019e4466-1000-7e07-b5d4-64be9721dd02';
+    navAt(recordId);
     const oldDoc = {
       ...doc,
       doc: {
@@ -228,7 +233,9 @@ for (const landing of ['foreign', 'journal', 'journal-same'] as const)
     // Its inverse stores prior BODY STRING, so undo rebuilds parseBody at revision 3.
     // executor2850/2889/2943 and undo252 preserve this actual canonical-same premise.
     let saved =
-      landing === 'journal-same' ? { ...entity, bodyDoc: newDoc, bodyRevision: 2 } : entity;
+      landing === 'journal-same'
+        ? { ...scopedEntity, bodyDoc: newDoc, bodyRevision: 2 }
+        : scopedEntity;
     if (landing === 'journal-same') {
       expect(newDoc).not.toEqual(oldDoc);
       expect(sameDoc(newDoc.doc, oldDoc.doc)).toBe(true);
@@ -238,30 +245,50 @@ for (const landing of ['foreign', 'journal', 'journal-same'] as const)
       qc = useQueryClient();
       return (
         <>
-          <DetailScreen entityId="e1" />
+          <DetailScreen entityId={recordId} />
           <Toaster />
         </>
       );
     }
-    const { calls } = renderWithProviders(<Host />, (path, input) => {
-      if (path === 'entity.get') return { entity: saved, relations: [], thread: null };
-      if (path === 'entity.update') {
-        const vars = input as { bodyDoc?: typeof doc; title?: string };
-        if (vars.bodyDoc)
-          saved = { ...saved, bodyDoc: vars.bodyDoc, bodyRevision: saved.bodyRevision + 1 };
-        if (vars.title) saved = { ...saved, title: vars.title };
-        return { ...saved, actionId: 'session1', consequences: false };
-      }
-      if (path === 'ai.undo') {
-        saved = {
-          ...saved,
-          bodyDoc: doc,
-          bodyRevision: saved.bodyRevision + 1,
-        };
-        return { ...result, bodyRevisions: [{ entityId: 'e1', bodyRevision: saved.bodyRevision }] };
-      }
-      return fallback(path);
-    });
+    const { calls, queryClient } = renderWithProviders(
+      <Host />,
+      (path, input) => {
+        if (path === 'entity.get') return { entity: saved, relations: [], thread: null };
+        if (path === 'entity.update') {
+          const vars = input as {
+            bodyDoc?: typeof doc;
+            title?: string;
+            expectedBodyRevision?: number;
+          };
+          if (vars.bodyDoc) {
+            expect(vars.expectedBodyRevision).toBe(saved.bodyRevision);
+            saved = {
+              ...saved,
+              body: serializeBody(vars.bodyDoc),
+              bodyDoc: vars.bodyDoc,
+              bodyRevision: saved.bodyRevision + 1,
+            };
+          }
+          if (vars.title) saved = { ...saved, title: vars.title };
+          return { ...saved, txId: '1', actionId: 'session1', consequences: false };
+        }
+        if (path === 'ai.undo') {
+          saved = {
+            ...saved,
+            body: scopedEntity.body,
+            bodyDoc: doc,
+            bodyRevision: saved.bodyRevision + 1,
+          };
+          return {
+            ...result,
+            undone: { ...result.undone, id: actionId },
+            bodyRevisions: [{ entityId: recordId, bodyRevision: saved.bodyRevision }],
+          };
+        }
+        return fallback(path);
+      },
+      { freshness: landing === 'journal' },
+    );
     fireEvent.click(await screen.findByTestId('editor-preview'));
     await screen.findByTestId('body-editor', {}, { timeout: 5000 });
     const ed = (
@@ -286,7 +313,7 @@ for (const landing of ['foreign', 'journal', 'journal-same'] as const)
       });
     act(() => screen.getByTestId('title-edit').focus());
     fireEvent.change(screen.getByTestId('title-edit'), { target: { value: 'План Б' } });
-    expect(canUndoStep('e1')).toBe(true);
+    expect(canUndoStep(recordId)).toBe(true);
     expect(undoDepth(ed.state)).toBe(landing === 'journal-same' ? 2 : 1);
     if (landing === 'foreign') {
       saved = { ...saved, bodyDoc: parseBody('чужое тело'), bodyRevision: saved.bodyRevision + 1 };
@@ -298,8 +325,24 @@ for (const landing of ['foreign', 'journal', 'journal-same'] as const)
         });
       });
     } else {
-      act(() => offerUndo({ title: 'Правка', actionId: 'a1', entityIds: ['e1'] }));
+      act(() => offerUndo({ title: 'Правка', actionId, entityIds: [recordId] }));
       fireEvent.click(await screen.findByRole('button', { name: 'Отменить' }));
+      if (landing === 'journal') {
+        await waitFor(() => expect(calls.filter((c) => c.path === 'ai.undo')).toHaveLength(1));
+        await screen.findByText(/^Отменено:/);
+        act(() =>
+          testFreshnessOf(queryClient).changes(
+            [
+              {
+                kind: 'entity',
+                rowKey: recordId,
+                scope: 'body',
+              },
+            ],
+            2,
+          ),
+        );
+      }
     }
     await waitFor(() => expect(ed.getText()).toBe(landing === 'foreign' ? 'чужое тело' : 'тело'));
     if (landing === 'journal-same') {

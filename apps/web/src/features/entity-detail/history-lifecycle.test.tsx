@@ -207,7 +207,8 @@ test('current title CAS failure while offscreen clears e1 retained steps', async
     );
     await pending.catch(() => {});
   });
-  await waitFor(() => expect(reads).toBeGreaterThan(before));
+  // Структурный отказ уже достаточен для сброса сохранённой истории e1.
+  expect(reads).toBe(before);
   expect(canUndoStep('e1')).toBe(false);
 });
 
@@ -1140,9 +1141,17 @@ test('mounted latest double refusal clears failed basis before fresh input', asy
 for (const bodyTop of [false, true])
   for (const foreign of ['План Б', 'Чужое имя'])
     test(`early remount before old refusal clears foreign basis ${foreign} bodyTop=${bodyTop}`, async () => {
-      const task = { ...entity, aspects: ['orbis/task'], props: { 'orbis/task_status': 'inbox' } };
+      const firstId = '019e4466-1000-7e07-b5d4-64be9721da62';
+      const secondId = '019e4466-1000-7e07-b5d4-64be9721da63';
+      const task = {
+        ...entity,
+        id: firstId,
+        graphId: 'owner',
+        aspects: ['orbis/task'],
+        props: { 'orbis/task_status': 'inbox' },
+      };
       const observed = vi.spyOn(titleHistory, 'observeTitleValue');
-      navAt('e1');
+      navAt(firstId);
       let change: (id: string) => void = () => {};
       let qc: QueryClient | null = null;
       let serverTitle = 'План',
@@ -1155,10 +1164,10 @@ for (const bodyTop of [false, true])
         reject = fail;
       });
       function Host() {
-        const [id, set] = useState('e1');
+        const [id, set] = useState(firstId);
         change = set;
         qc = useQueryClient();
-        const warm = trpc.entity.get.useQuery(detailGetInput('e2'));
+        const warm = trpc.entity.get.useQuery(detailGetInput(secondId));
         return (
           <>
             <span data-testid="warm">{warm.data?.entity.title}</span>
@@ -1180,8 +1189,8 @@ for (const bodyTop of [false, true])
             return {
               entity: {
                 ...task,
-                id: vars.id ?? 'e1',
-                title: vars.id === 'e2' ? 'Сосед' : serverTitle,
+                id: vars.id ?? firstId,
+                title: vars.id === secondId ? 'Сосед' : serverTitle,
               },
               relations: [],
               thread: null,
@@ -1198,7 +1207,7 @@ for (const bodyTop of [false, true])
             }
             writes++;
             if (writes === 1) return held;
-            expect(vars).toMatchObject({ id: 'e1', title: 'План', expectedTitle: foreign });
+            expect(vars).toMatchObject({ id: firstId, title: 'План', expectedTitle: foreign });
             serverTitle = vars.title;
             return mockEntityUpdateResult({ ...task, title: serverTitle });
           }
@@ -1218,11 +1227,11 @@ for (const bodyTop of [false, true])
             .getAll()
             .some((q) => {
               const data = q.state.data as { entity?: { id: string; title: string } } | undefined;
-              return data?.entity?.id === 'e1' && data.entity.title === 'План Б';
+              return data?.entity?.id === firstId && data.entity.title === 'План Б';
             }),
         ).toBe(true),
       );
-      await waitFor(() => expect(observed).toHaveBeenCalledWith('e1', 'План Б'));
+      await waitFor(() => expect(observed).toHaveBeenCalledWith(firstId, 'План Б'));
       await screen.findByTestId('body-editor', undefined, { timeout: 10000 });
       const editor = (
         screen.getByTestId('body-editor').querySelector('.ProseMirror') as HTMLElement & {
@@ -1236,19 +1245,24 @@ for (const bodyTop of [false, true])
         expect(undoDepth(editor.state)).toBe(1);
         expect(editor.getJSON()).toEqual(unchangedBody);
       }
-      act(() => change('e2'));
+      act(() => change(secondId));
       await waitFor(() => expect(screen.getByTestId('title-edit')).toHaveValue('Сосед'));
       await waitFor(() =>
         expect(
           qc
             ?.getQueryCache()
             .getAll()
-            .filter((q) => JSON.stringify(q.queryKey).includes('"e1"')),
+            .filter((q) => JSON.stringify(q.queryKey).includes(JSON.stringify(firstId))),
         ).toHaveLength(0),
       );
       serverTitle = foreign; // Независимая запись, пока собственный title-запрос ещё не завершён.
-      act(() => change('e1'));
-      await waitFor(() => expect(screen.getByTestId('title-edit')).toHaveValue(foreign));
+      act(() => change(firstId));
+      // Холодный GET принял чужую основу. Удержанный запрос ещё проецирует своё имя.
+      await waitFor(() => expect(acceptedDetailTitle(qc, firstId)).toBe(foreign));
+      expect(screen.getByTestId('title-edit')).toHaveValue('План Б');
+      // Проекция отправки остаётся. Сброс истории определяется принятой основой.
+      const ownBasis = foreign === 'План Б';
+      expect(canUndoStep(firstId)).toBe(ownBasis);
       const newField = screen.getByTestId('title-edit');
       expect(newField).not.toBe(oldField);
       expect(oldField).not.toBeInTheDocument();
@@ -1260,10 +1274,7 @@ for (const bodyTop of [false, true])
           }
         ).editor,
       ).toBe(editor);
-      if (foreign === 'План Б') {
-        expect(canUndoStep('e1')).toBe(true);
-        if (bodyTop) expect(undoDepth(editor.state)).toBe(1);
-      }
+      if (bodyTop) expect(undoDepth(editor.state)).toBe(ownBasis ? 1 : 0);
       fireEvent.click(await screen.findByRole('checkbox', { name: /готово/i }));
       await waitFor(() => expect(checkboxes).toBe(1));
       const before = reads;
@@ -1279,12 +1290,13 @@ for (const bodyTop of [false, true])
             .getAll()
             .some((q) => {
               const data = q.state.data as { entity?: { id: string; title: string } } | undefined;
-              return data?.entity?.id === 'e1' && data.entity.title === foreign;
+              return data?.entity?.id === firstId && data.entity.title === foreign;
             }),
         ).toBe(true),
       );
+      expect(newField).toHaveValue(foreign);
       if (bodyTop) {
-        expect(canUndoStep('e1')).toBe(false);
+        expect(canUndoStep(firstId)).toBe(false);
         expect(undoDepth(editor.state)).toBe(0);
         expect(redoDepth(editor.state)).toBe(0);
         expect(screen.getByRole('button', { name: 'Шаг назад' })).toBeDisabled();
@@ -1293,21 +1305,29 @@ for (const bodyTop of [false, true])
         expect(editor.getJSON()).toEqual(unchangedBody);
         await new Promise((done) => setTimeout(done, 2100));
         expect(bodyWrites).toBe(0);
-      } else if (canUndoStep('e1')) {
+      } else if (canUndoStep(firstId)) {
         fireEvent.keyDown(newField, { key: 'z', code: 'KeyZ', ctrlKey: true });
         await waitFor(() => expect(writes).toBe(2));
         expect(serverTitle).toBe('План');
       }
       expect(writes).toBe(1);
-      expect(canUndoStep('e1')).toBe(false);
+      expect(canUndoStep(firstId)).toBe(false);
     });
 
 for (const observedC of [false, true])
   test(`coalesced earlier C does not block fresh B refusal observedC=${observedC}`, async () => {
-    const task = { ...entity, aspects: ['orbis/task'], props: { 'orbis/task_status': 'inbox' } };
+    const firstId = '019e4466-1000-7e07-b5d4-64be9721da64';
+    const secondId = '019e4466-1000-7e07-b5d4-64be9721da65';
+    const task = {
+      ...entity,
+      id: firstId,
+      graphId: 'owner',
+      aspects: ['orbis/task'],
+      props: { 'orbis/task_status': 'inbox' },
+    };
     const observed = vi.spyOn(titleHistory, 'observeTitleValue');
     observed.mockClear();
-    navAt('e1');
+    navAt(firstId);
     let change: (id: string) => void = () => {};
     let qc: QueryClient | null = null;
     let serverTitle = 'План',
@@ -1316,15 +1336,18 @@ for (const observedC of [false, true])
       checkboxes = 0;
     let reject: (error: unknown) => void = () => {};
     const firstHeld = new Promise(() => {});
-    const cHeld = new Promise(() => {});
+    let rejectC: (error: unknown) => void = () => {};
+    const cHeld = new Promise((_done, fail) => {
+      rejectC = fail;
+    });
     const latestHeld = new Promise((_done, fail) => {
       reject = fail;
     });
     function Host() {
-      const [id, set] = useState('e1');
+      const [id, set] = useState(firstId);
       change = set;
       qc = useQueryClient();
-      const warm = trpc.entity.get.useQuery(detailGetInput('e2'));
+      const warm = trpc.entity.get.useQuery(detailGetInput(secondId));
       return (
         <>
           <span data-testid="warm">{warm.data?.entity.title}</span>
@@ -1338,7 +1361,8 @@ for (const observedC of [false, true])
           ?.getQueryCache()
           .getAll()
           .find(
-            (q) => (q.state.data as { entity?: { id: string } } | undefined)?.entity?.id === 'e1',
+            (q) =>
+              (q.state.data as { entity?: { id: string } } | undefined)?.entity?.id === firstId,
           )?.state.data as { entity: { title: string } } | undefined
       )?.entity.title;
     renderWithProviders(
@@ -1350,8 +1374,8 @@ for (const observedC of [false, true])
           return {
             entity: {
               ...task,
-              id: vars.id ?? 'e1',
-              title: vars.id === 'e2' ? 'Сосед' : serverTitle,
+              id: vars.id ?? firstId,
+              title: vars.id === secondId ? 'Сосед' : serverTitle,
             },
             relations: [],
             thread: null,
@@ -1372,7 +1396,7 @@ for (const observedC of [false, true])
             expect(vars.title).toBe('План Б');
             return latestHeld;
           }
-          expect(vars).toMatchObject({ id: 'e1', title: 'План', expectedTitle: 'План Б' });
+          expect(vars).toMatchObject({ id: firstId, title: 'План', expectedTitle: 'План Б' });
           serverTitle = vars.title;
           return mockEntityUpdateResult({ ...task, title: serverTitle });
         }
@@ -1386,19 +1410,19 @@ for (const observedC of [false, true])
     fireEvent.blur(old);
     await waitFor(() => expect(writes).toBe(1));
     await waitFor(() => expect(cachedTitle()).toBe('План Б'));
-    await waitFor(() => expect(observed).toHaveBeenCalledWith('e1', 'План Б'));
-    act(() => change('e2'));
+    await waitFor(() => expect(observed).toHaveBeenCalledWith(firstId, 'План Б'));
+    act(() => change(secondId));
     await waitFor(() => expect(screen.getByTestId('title-edit')).toHaveValue('Сосед'));
     await waitFor(() =>
       expect(
         qc
           ?.getQueryCache()
           .getAll()
-          .filter((q) => JSON.stringify(q.queryKey).includes('"e1"')),
+          .filter((q) => JSON.stringify(q.queryKey).includes(JSON.stringify(firstId))),
       ).toHaveLength(0),
     );
     serverTitle = 'План Б'; // Независимый писатель; первый собственный запрос не завершён.
-    act(() => change('e1'));
+    act(() => change(firstId));
     await waitFor(() => expect(screen.getByTestId('title-edit')).toHaveValue('План Б'));
     const current = screen.getByTestId('title-edit');
     expect(current).not.toBe(old);
@@ -1413,15 +1437,15 @@ for (const observedC of [false, true])
     });
     if (observedC) {
       await waitFor(() => expect(cachedTitle()).toBe('План В'));
-      await waitFor(() => expect(observed).toHaveBeenCalledWith('e1', 'План В'));
+      await waitFor(() => expect(observed).toHaveBeenCalledWith(firstId, 'План В'));
       fireEvent.keyDown(current, { key: 'z', code: 'KeyZ', ctrlKey: true });
     }
     await waitFor(() => expect(writes).toBe(3));
     await waitFor(() => expect(cachedTitle()).toBe('План Б'));
     expect(
-      observed.mock.calls.filter((call) => call[0] === 'e1' && call[1] === 'План В'),
+      observed.mock.calls.filter((call) => call[0] === firstId && call[1] === 'План В'),
     ).toHaveLength(observedC ? 1 : 0);
-    expect(canUndoStep('e1')).toBe(true);
+    expect(canUndoStep(firstId)).toBe(true);
     fireEvent.click(await screen.findByRole('checkbox', { name: /готово/i }));
     await waitFor(() => expect(checkboxes).toBe(1));
     const before = reads;
@@ -1430,14 +1454,24 @@ for (const observedC of [false, true])
       await latestHeld.catch(() => {});
     });
     await waitFor(() => expect(reads).toBeGreaterThan(before));
+    await waitFor(() => expect(acceptedDetailTitle(qc, firstId)).toBe('План Б'));
+    expect(cachedTitle()).toBe('План В');
+    expect(canUndoStep(firstId)).toBe(false);
+
+    // Неизвестный исход B не завершает более ранний C. Отказ C приходит отдельно.
+    const afterB = reads;
+    await act(async () => {
+      rejectC(
+        trpcError('CONFLICT', 'Чужое имя', {
+          code: 'CONFLICT',
+          details: { reason: 'precondition_failed', mismatches: [{ property: 'orbis/title' }] },
+        }),
+      );
+      await cHeld.catch(() => {});
+    });
     await waitFor(() => expect(cachedTitle()).toBe('План Б'));
-    if (canUndoStep('e1')) {
-      await act(async () => {
-        fireEvent.keyDown(current, { key: 'z', code: 'KeyZ', ctrlKey: true });
-      });
-      await waitFor(() => expect(writes).toBe(4));
-      expect(serverTitle).toBe('План');
-    }
+    expect(reads).toBe(afterB);
+    expect(canUndoStep(firstId)).toBe(false);
     expect(writes).toBe(3);
   });
 

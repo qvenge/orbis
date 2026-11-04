@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { afterEach, beforeEach, expect, test } from 'vitest';
 import { useDetailedUpdateBatch, useUpdateBatch } from '../features/page/useUpdateBatch';
 import { resetUndoSession } from '../features/undo/undo-epoch';
+import { testFreshnessOf } from '../test/freshness';
 import { renderWithProviders, trpcError, wireEntity } from '../test/harness';
 import { trpc } from '../trpc';
 import { useToastStore } from '../ui/toast-store';
@@ -190,22 +191,27 @@ test.each([
   'CONFLICT',
   'INTERNAL_SERVER_ERROR',
 ])('Undo %s refreshes cached remote data even on non-confirmation', async (code) => {
+  const id = '00000000-0000-4000-8000-000000000010';
   let title = 'До';
-  renderWithProviders(
+  let reads = 0;
+  const { calls, queryClient } = renderWithProviders(
     <>
       <UndoProbe />
       <RefreshedRead />
     </>,
     (path) => {
       if (path === 'ai.undo') {
-        title = 'После отказа';
+        // На 500 тело ответа потеряно после коммита; лента ещё не пришла.
+        if (code === 'INTERNAL_SERVER_ERROR') title = 'После отказа';
         throw trpcError(code, 'Отмена недоступна');
       }
-      if (path === 'entity.get')
-        return { entity: wireEntity({ id: '00000000-0000-4000-8000-000000000010', title }) };
+      if (path === 'entity.get') {
+        reads++;
+        return { entity: wireEntity({ id, title, graphId: 'owner' }) };
+      }
       return {};
     },
-    { queries: { staleTime: Infinity } },
+    { freshness: true, queries: { staleTime: Infinity } },
   );
   await waitFor(() => expect(screen.getByTestId('current-read')).toHaveTextContent('До'));
   fireEvent.click(screen.getByText('Тост'));
@@ -213,10 +219,31 @@ test.each([
     expect(useToastStore.getState().toasts.at(-1)?.action?.label).toBe('Отменить'),
   );
   act(() => useToastStore.getState().toasts.at(-1)?.action?.onSelect());
+  await waitFor(() =>
+    expect(useToastStore.getState().toasts.some((toast) => toast.tone === 'danger')).toBe(true),
+  );
+  expect(calls.filter((call) => call.path === 'ai.undo')).toHaveLength(1);
+  expect(reads).toBe(1);
+  expect(screen.getByTestId('current-read')).toHaveTextContent('До');
+
+  // Событие чужого/фактически записанного изменения отделено от 409 и от 500.
+  // Для committed+lost-500 эту форму подтверждает отдельный local HTTP witness.
+  if (code === 'CONFLICT') title = 'После отказа';
+  act(() =>
+    testFreshnessOf(queryClient).changes([{ kind: 'entity', rowKey: id, scope: 'other' }], 1),
+  );
   await waitFor(() => expect(screen.getByTestId('current-read')).toHaveTextContent('После отказа'));
+  expect(reads).toBe(2);
+  expect(calls.filter((call) => call.path === 'ai.undo')).toHaveLength(1);
 });
 test('detailed known refusal refreshes stale entity data without clearing form outcome', async () => {
   let title = 'До';
+  let gets = 0;
+  let writes = 0;
+  let reject!: (error: unknown) => void;
+  const pending = new Promise((_resolve, rejectWrite) => {
+    reject = rejectWrite;
+  });
   renderWithProviders(
     <>
       <BatchProbe detailed />
@@ -224,20 +251,37 @@ test('detailed known refusal refreshes stale entity data without clearing form o
     </>,
     (path) => {
       if (path === 'entity.updateBatch') {
-        title = 'После отказа';
-        throw trpcError('CONFLICT', 'Состояние изменилось');
+        writes++;
+        return pending;
       }
-      if (path === 'entity.get')
-        return { entity: wireEntity({ id: '00000000-0000-4000-8000-000000000010', title }) };
+      if (path === 'entity.get') {
+        gets++;
+        return {
+          entity: wireEntity({
+            id: '00000000-0000-4000-8000-000000000010',
+            title,
+            graphId: 'owner',
+          }),
+        };
+      }
       return {};
     },
-    { queries: { staleTime: Infinity } },
+    { freshness: true, queries: { staleTime: Infinity } },
   );
   await waitFor(() => expect(screen.getByTestId('current-read')).toHaveTextContent('До'));
+  const before = gets;
   fireEvent.click(screen.getByText('Записать'));
+  await waitFor(() => expect(writes).toBe(1));
+  title = 'После отказа'; // Независимая правка уже есть на сервере.
+  await act(async () => {
+    reject(trpcError('CONFLICT', 'Состояние изменилось'));
+    await pending.catch(() => {});
+  });
   await waitFor(() => expect(screen.getByTestId('current-read')).toHaveTextContent('После отказа'));
   expect(
     screen.getByText('{"kind":"rejected","message":"Состояние изменилось"}'),
   ).toBeInTheDocument();
   expect(useToastStore.getState().toasts).toEqual([]);
+  expect(gets).toBe(before + 1);
+  expect(writes).toBe(1);
 });
