@@ -21,7 +21,7 @@ const handler = (path: string, input: unknown) => {
     return { entity: wireEntity({ id, title: `Запись ${id}` }), relations: [], thread: null };
   }
   if (path === 'entity.query') return queryReply([]);
-  if (path === 'chat.ensureThread') return { threadId: 't1' };
+  if (path === 'chat.openThread') return { threadId: 't1', messages: [] };
   if (path === 'chat.listMessages') return [];
   return {};
 };

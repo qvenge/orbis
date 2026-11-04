@@ -626,8 +626,8 @@ export function structureHandler(
         return [];
       case 'routine.runUnits':
         return [];
-      case 'chat.ensureThread':
-        return { threadId: `thread-${main.id}` };
+      case 'chat.openThread':
+        return { threadId: `thread-${main.id}`, messages: [] };
       case 'chat.listMessages':
         return [];
       default:

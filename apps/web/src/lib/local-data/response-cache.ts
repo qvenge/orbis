@@ -80,6 +80,15 @@ export function projectServerResponse(key: QueryKey, raw: unknown): unknown {
   const policy = cacheDependencyOf(key, raw)?.persistence;
   if (!policy || policy === 'none') return undefined;
   const path = family(key);
+  if (path === 'chatOpen') {
+    const threadId = object(raw)?.threadId;
+    if (
+      typeof threadId === 'string' &&
+      /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(threadId)
+    )
+      return { threadId };
+    return undefined;
+  }
   if (path === 'chatThread') {
     const data = object(raw);
     if (

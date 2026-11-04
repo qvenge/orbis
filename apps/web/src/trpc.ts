@@ -137,7 +137,9 @@ const networkReadReceiptLink: TRPCLink<AppRouter> =
         observer.error(TRPCClientError.from(new Error('Сессия изменилась')));
         return;
       }
-      const read = op.type === 'query' || (op.type === 'mutation' && op.path === 'entity.blocks');
+      const read =
+        op.type === 'query' ||
+        (op.type === 'mutation' && (op.path === 'entity.blocks' || op.path === 'chat.openThread'));
       const startedSequence = nextNetworkOrder();
       const startedAt = Date.now();
       return next(op).subscribe({

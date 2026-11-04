@@ -1,14 +1,14 @@
+import { hashKey } from '@tanstack/react-query';
 import { act, fireEvent, screen, waitFor } from '@testing-library/react';
+import { getQueryKey } from '@trpc/react-query';
 import { useState } from 'react';
-import { beforeEach, expect, test } from 'vitest';
+import { expect, test } from 'vitest';
+import { bindQueryResponses } from '../../lib/local-data/query-responses';
+import { testFreshnessOf } from '../../test/freshness';
 import { renderWithProviders } from '../../test/harness';
-import { resetEnsuredThreads, useEnsuredThread } from './useEnsuredThread';
-
-beforeEach(() => {
-  // Заведённые треды помнит МОДУЛЬ, а модуль живёт дольше теста: без сброса второй тест видел
-  // бы кеш первого и не звал бы ensureThread вовсе.
-  resetEnsuredThreads();
-});
+import { trpc } from '../../trpc';
+import { resetUndoSession } from '../undo/undo-epoch';
+import { useEnsuredThread } from './useEnsuredThread';
 
 /**
  * Пробник МЕНЯЕТ `entityId` у живого хука — то есть делает ровно то, чего сегодняшние
@@ -32,11 +32,12 @@ function EnsureProbe() {
 
 const threadOf = (input: unknown) => ({
   threadId: `th-${(input as { entityId: string }).entityId}`,
+  messages: [],
 });
 
 test('смена записи без key: хук заводит тред НОВОЙ записи, а не отдаёт чужой', async () => {
   const { calls } = renderWithProviders(<EnsureProbe />, (path, input) => {
-    if (path === 'chat.ensureThread') return threadOf(input);
+    if (path === 'chat.openThread') return threadOf(input);
     throw new Error(`unexpected ${path}`);
   });
   await waitFor(() => expect(screen.getByTestId('probe')).toHaveTextContent('th-e1'));
@@ -44,7 +45,7 @@ test('смена записи без key: хук заводит тред НОВ�
   fireEvent.click(screen.getByRole('button', { name: 'на e2' }));
 
   await waitFor(() => expect(screen.getByTestId('probe')).toHaveTextContent('th-e2'));
-  expect(calls.filter((c) => c.path === 'chat.ensureThread').map((c) => c.input)).toEqual([
+  expect(calls.filter((c) => c.path === 'chat.openThread').map((c) => c.input)).toEqual([
     { entityId: 'e1' },
     { entityId: 'e2' },
   ]);
@@ -53,11 +54,11 @@ test('смена записи без key: хук заводит тред НОВ�
 test('поздний ответ ПРЕЖНЕЙ записи состояние новой не затирает', async () => {
   // Отложенные ответы — массивом, а не переменной: `let x: F | null = null`, присвоенная внутри
   // замыкания, сужается компилятором до `null` и на вызове даёт `never` (проверено tsc).
-  const releaseE1: ((v: { threadId: string }) => void)[] = [];
+  const releaseE1: ((v: { threadId: string; messages: [] }) => void)[] = [];
   renderWithProviders(<EnsureProbe />, (path, input) => {
-    if (path !== 'chat.ensureThread') throw new Error(`unexpected ${path}`);
+    if (path !== 'chat.openThread') throw new Error(`unexpected ${path}`);
     if ((input as { entityId: string }).entityId === 'e1')
-      return new Promise<{ threadId: string }>((resolve) => {
+      return new Promise<{ threadId: string; messages: [] }>((resolve) => {
         releaseE1.push(resolve);
       });
     return threadOf(input);
@@ -70,7 +71,7 @@ test('поздний ответ ПРЕЖНЕЙ записи состояние �
 
   // …и только теперь отвечает e1. Это ответ на вопрос, который больше не задан.
   await act(async () => {
-    releaseE1[0]?.({ threadId: 'th-e1' });
+    releaseE1[0]?.({ threadId: 'th-e1', messages: [] });
   });
   expect(screen.getByTestId('probe')).toHaveTextContent('th-e2');
   // И по e1 никто ничего не переспрашивал: поздний ответ ОТБРОШЕН, а не превращён в новый
@@ -86,7 +87,7 @@ test('смена записи под StrictMode: ровно две мутаци�
   const { calls } = renderWithProviders(
     <EnsureProbe />,
     (path, input) => {
-      if (path === 'chat.ensureThread') return threadOf(input);
+      if (path === 'chat.openThread') return threadOf(input);
       throw new Error(`unexpected ${path}`);
     },
     { strict: true },
@@ -96,8 +97,187 @@ test('смена записи под StrictMode: ровно две мутаци�
   fireEvent.click(screen.getByRole('button', { name: 'на e2' }));
 
   await waitFor(() => expect(screen.getByTestId('probe')).toHaveTextContent('th-e2'));
-  expect(calls.filter((c) => c.path === 'chat.ensureThread').map((c) => c.input)).toEqual([
+  expect(calls.filter((c) => c.path === 'chat.openThread').map((c) => c.input)).toEqual([
     { entityId: 'e1' },
     { entityId: 'e2' },
   ]);
+});
+
+function ToggleThread() {
+  const [show, setShow] = useState(true);
+  return (
+    <>
+      <button type="button" onClick={() => setShow(!show)}>
+        Переключить тред
+      </button>
+      {show && <EnsureProbe />}
+    </>
+  );
+}
+
+test('open publishes the exact same confirmed operation to both newest keys and binding', async () => {
+  const { queryClient } = renderWithProviders(<EnsureProbe />, (_path, input) => threadOf(input), {
+    freshness: true,
+  });
+  await waitFor(() => expect(screen.getByTestId('probe')).toHaveTextContent('th-e1'));
+  const { runtime } = testFreshnessOf(queryClient);
+  const publications = [
+    ['chatOpen', 'e1'],
+    ['chatThread', 'th-e1'],
+    getQueryKey(trpc.chat.listMessages, { threadId: 'th-e1', limit: 50 }, 'query'),
+  ].map((key) => runtime.publicationOf(hashKey(key)));
+  expect(publications).toMatchObject([
+    { source: 'network', raw: { threadId: 'th-e1' } },
+    { source: 'network', raw: { pages: [[]], pageParams: [undefined] } },
+    { source: 'network', raw: [] },
+  ]);
+  expect(
+    publications.map((publication) => publication?.source === 'network' && publication.receipt),
+  ).toEqual(
+    publications.map(() => publications[0]?.source === 'network' && publications[0].receipt),
+  );
+});
+
+test('an entity deletion retires a disabled binding even in a coalesced oversized feed batch', async () => {
+  const { queryClient, calls } = renderWithProviders(
+    <ToggleThread />,
+    (_path, input) => threadOf(input),
+    {
+      freshness: true,
+    },
+  );
+  const feed = testFreshnessOf(queryClient);
+  const responses = bindQueryResponses(queryClient, feed.runtime, { enabled: false });
+  try {
+    await waitFor(() => expect(screen.getByTestId('probe')).toHaveTextContent('th-e1'));
+    const toggle = screen.getByRole('button', { name: 'Переключить тред' });
+    fireEvent.click(toggle);
+    act(() =>
+      feed.changes([{ kind: 'message', rowKey: 'm1', threadId: 'th-e1', entityIds: ['e1'] }]),
+    );
+    fireEvent.click(toggle);
+    expect(screen.getByTestId('probe')).toHaveTextContent('th-e1');
+    expect(calls).toHaveLength(1);
+    fireEvent.click(toggle);
+    act(() =>
+      feed.changes([
+        ...Array.from({ length: 200 }, (_, i) => ({
+          kind: 'entity' as const,
+          rowKey: `neighbor-${i}`,
+        })),
+        { kind: 'entity', rowKey: 'e1', operation: 'delete' },
+      ]),
+    );
+    await waitFor(() => expect(queryClient.getQueryData(['chatOpen', 'e1'])).toBeUndefined());
+    fireEvent.click(toggle);
+    expect(screen.getByTestId('probe')).toHaveTextContent('failed');
+    expect(calls).toHaveLength(1);
+  } finally {
+    responses.close();
+  }
+});
+
+test('a POST held across deletion and revival cannot publish its original tail', async () => {
+  const finish: ((result: { threadId: string; messages: [] }) => void)[] = [];
+  const { queryClient, calls } = renderWithProviders(
+    <ToggleThread />,
+    () => new Promise((resolve) => finish.push(resolve)),
+    { freshness: true },
+  );
+  const feed = testFreshnessOf(queryClient);
+  const responses = bindQueryResponses(queryClient, feed.runtime, { enabled: false });
+  try {
+    await waitFor(() => expect(finish).toHaveLength(1));
+    const toggle = screen.getByRole('button', { name: 'Переключить тред' });
+    fireEvent.click(toggle);
+    act(() =>
+      feed.changes([
+        { kind: 'entity', rowKey: 'e1', operation: 'delete' },
+        { kind: 'entity', rowKey: 'e1', operation: 'insert' },
+      ]),
+    );
+    await waitFor(() => expect(queryClient.getQueryState(['chatOpen', 'e1'])).toBeUndefined());
+    fireEvent.click(toggle);
+    await waitFor(() => expect(finish).toHaveLength(2));
+    await act(async () => finish[0]?.({ threadId: 'old-thread', messages: [] }));
+    expect(queryClient.getQueryData(['chatThread', 'old-thread'])).toBeUndefined();
+    expect(screen.getByTestId('probe')).toHaveTextContent('pending');
+    await act(async () => finish[1]?.({ threadId: 'new-thread', messages: [] }));
+    await waitFor(() => expect(screen.getByTestId('probe')).toHaveTextContent('new-thread'));
+    expect(calls).toHaveLength(2);
+  } finally {
+    responses.close();
+  }
+});
+
+test('a late response after the owner epoch changes cannot fill either query cache', async () => {
+  const finish: ((result: { threadId: string; messages: [] }) => void)[] = [];
+  const { queryClient } = renderWithProviders(
+    <ToggleThread />,
+    () => new Promise((resolve) => finish.push(resolve)),
+  );
+  await waitFor(() => expect(finish).toHaveLength(1));
+  const toggle = screen.getByRole('button', { name: 'Переключить тред' });
+  fireEvent.click(toggle);
+  act(() => {
+    resetUndoSession();
+    queryClient.clear();
+  });
+  fireEvent.click(toggle);
+  await waitFor(() => expect(finish).toHaveLength(2));
+  await act(async () => finish[0]?.({ threadId: 'old-owner', messages: [] }));
+  expect(queryClient.getQueryData(['chatThread', 'old-owner'])).toBeUndefined();
+  expect(
+    queryClient.getQueryData(
+      getQueryKey(trpc.chat.listMessages, { threadId: 'old-owner', limit: 50 }, 'query'),
+    ),
+  ).toBeUndefined();
+  await act(async () => finish[1]?.({ threadId: 'new-owner', messages: [] }));
+  await waitFor(() => expect(screen.getByTestId('probe')).toHaveTextContent('new-owner'));
+});
+
+test('active pending binding reopens on reset and discards old response', async () => {
+  const finish: ((result: { threadId: string; messages: [] }) => void)[] = [];
+  const { queryClient } = renderWithProviders(
+    <EnsureProbe />,
+    () => new Promise((resolve) => finish.push(resolve)),
+    { freshness: true },
+  );
+  const feed = testFreshnessOf(queryClient);
+  const responses = bindQueryResponses(queryClient, feed.runtime, { enabled: false });
+  try {
+    await waitFor(() => expect(finish).toHaveLength(1));
+    act(() => feed.reset());
+    await act(async () => finish[0]?.({ threadId: 'old-thread', messages: [] }));
+    expect(queryClient.getQueryData(['chatThread', 'old-thread'])).toBeUndefined();
+    await waitFor(() => expect(finish).toHaveLength(2));
+    await act(async () => finish[1]?.({ threadId: 'new-thread', messages: [] }));
+    await waitFor(() => expect(screen.getByTestId('probe')).toHaveTextContent('new-thread'));
+  } finally {
+    responses.close();
+  }
+});
+
+test('successful POST binding is saved when feed passed the read snapshot', async () => {
+  const finish: ((result: { threadId: string; messages: [] }) => void)[] = [];
+  const writes: unknown[] = [];
+  const { queryClient, calls } = renderWithProviders(
+    <EnsureProbe />,
+    () => new Promise((resolve) => finish.push(resolve)),
+    { freshness: true },
+  );
+  const feed = testFreshnessOf(queryClient);
+  feed.runtime.setSinks({
+    writeNetwork: (read) => writes.push({ key: read.key, watermark: read.receipt.watermark }),
+  });
+  await waitFor(() => expect(finish).toHaveLength(1));
+  act(() =>
+    feed.changes([
+      { kind: 'message', rowKey: 'unrelated', threadId: 'other-thread', entityIds: [] },
+    ]),
+  );
+  await act(async () => finish[0]?.({ threadId: 'current-thread', messages: [] }));
+  await waitFor(() => expect(screen.getByTestId('probe')).toHaveTextContent('current-thread'));
+  expect(calls).toHaveLength(1);
+  expect(writes).toEqual([{ key: ['chatOpen', 'e1'], watermark: '0' }]);
 });

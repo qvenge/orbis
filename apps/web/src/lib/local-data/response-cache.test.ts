@@ -51,6 +51,16 @@ describe('response persistence policy', () => {
     });
   });
 
+  it('persists a server-issued thread binding without a third copy of messages or a failed result', () => {
+    const place = ['chatOpen', null];
+    const threadId = '9f806db1-f414-532c-a3b1-a215364c04a2';
+    expect(projectServerResponse(place, { threadId, messages, retry: 'secret' })).toEqual({
+      threadId,
+    });
+    expect(projectServerResponse(place, { threadId: '', messages })).toBeUndefined();
+    expect(projectServerResponse(place, { error: 'no thread' })).toBeUndefined();
+  });
+
   it('denies history, transient data and unknown families', () => {
     expect(
       projectServerResponse([newest[0], { input: { threadId: 't', before: 'cursor' } }], messages),

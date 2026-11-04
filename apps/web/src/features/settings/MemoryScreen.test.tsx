@@ -190,7 +190,7 @@ test('роутер: адрес /settings/memory рисует экран памя
   window.history.replaceState(null, '', '/settings/memory');
   renderWithProviders(<App />, (path) => {
     if (path === 'user.getSettings') return settings;
-    if (path === 'chat.ensureThread') return { threadId: 't1' };
+    if (path === 'chat.openThread') return { threadId: 't1', messages: [] };
     if (path === 'chat.listMessages') return [];
     if (path === 'entity.query') return queryReply([rule]);
     return {};
@@ -203,7 +203,7 @@ test('роутер: правило, открытое с /settings/memory, лож
   window.history.replaceState(null, '', '/settings/memory');
   renderWithProviders(<App />, (path) => {
     if (path === 'user.getSettings') return settings;
-    if (path === 'chat.ensureThread') return { threadId: 't1' };
+    if (path === 'chat.openThread') return { threadId: 't1', messages: [] };
     if (path === 'chat.listMessages') return [];
     if (path === 'entity.query') return queryReply([rule]);
     return {};

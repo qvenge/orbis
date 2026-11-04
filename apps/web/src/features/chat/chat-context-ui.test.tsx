@@ -11,6 +11,7 @@
 import { ROLE_SUBITEM } from '@orbis/shared';
 import { HOST_APP } from '@orbis/shared/nav';
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { getQueryKey } from '@trpc/react-query';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { App } from '../../App';
 import {
@@ -29,6 +30,7 @@ import { noteRegistryVersion, resetRegistryVersionForTests } from '../../lib/reg
 import { useNav } from '../../state/navigation';
 import { installCrashTrap, queryReply, renderWithProviders, wireEntity } from '../../test/harness';
 import { BUILTIN_REGISTRY } from '../../test/registry';
+import { trpc } from '../../trpc';
 import type { CaptureContext } from '../browser/QuickCapture';
 import { withRecordContext } from './record-context';
 
@@ -326,8 +328,15 @@ test('(в) «＋» на странице, пока её запись не про
   });
   stubViewport(false);
   resetFrame(`/r/${AGENDA}`);
-  const { calls } = renderApp({ id: AGENDA, until });
+  const { calls, queryClient } = renderApp({ id: AGENDA, until });
   await screen.findByTestId('host-buttons');
+  // A partial response for the same id must not stand in for the canonical detail read.
+  const shortKey = getQueryKey(trpc.entity.get, { id: AGENDA }, 'query');
+  act(() =>
+    queryClient.setQueryData(shortKey, {
+      entity: wireEntity({ id: AGENDA, title: 'Из другого ключа', aspects: ['orbis/task'] }),
+    }),
+  );
   const early = await capture(calls, 'рано');
   expect(early.input.aspects).toBeUndefined();
   expect(early).not.toHaveProperty('link');
@@ -347,7 +356,7 @@ test('(в) «＋» на странице, пока её запись не про
   expect(related(calls)).toEqual([]);
 });
 
-test('(в) «＋» на записи-задаче, чья запись приехала после открытия «＋», — подзадача (подписка на кеш)', async () => {
+test('(в) «＋» на записи-задаче, чья запись приехала после открытия «＋», — подзадача (наблюдатель ключа detail)', async () => {
   let release!: () => void;
   const until = new Promise<void>((r) => {
     release = r;
@@ -358,8 +367,18 @@ test('(в) «＋» на записи-задаче, чья запись прие�
   await screen.findByTestId('host-buttons');
   fireEvent.click(hostButton(/Новая запись/));
   await screen.findByTestId('quick-capture-form');
+  const reads = () =>
+    calls.filter(
+      (call) => call.path === 'entity.get' && (call.input as { id?: string }).id === TASK,
+    );
+  await waitFor(() => expect(reads()).toHaveLength(1));
+  expect(reads()[0]?.input).toMatchObject({
+    id: TASK,
+    include: expect.arrayContaining(['bodyDoc']),
+  });
   release();
   await heading('Починить кран');
+  expect(reads()).toHaveLength(1);
   // «＋» открыт ДО ответа — `capture` жмёт «＋» ещё раз и закрыл бы его: пишем в открытую форму.
   const form = screen.getByTestId('quick-capture-form');
   fireEvent.change(within(form).getByRole('textbox', { name: 'Быстрая запись' }), {

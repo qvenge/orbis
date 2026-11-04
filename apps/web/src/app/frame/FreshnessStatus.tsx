@@ -31,7 +31,7 @@ function Status({ screen }: { screen: NonNullable<ReturnType<typeof useFreshness
 
   let label: string;
   if (!screen.online) {
-    if (!screen.hasCopy || screen.receivedAt === null) label = 'нет сети · нет сохранённой копии';
+    if (screen.receivedAt === null) label = 'нет сети · нет сохранённой копии';
     else {
       const time = new Intl.DateTimeFormat('ru', {
         hour: '2-digit',
@@ -39,7 +39,8 @@ function Status({ screen }: { screen: NonNullable<ReturnType<typeof useFreshness
         timeZone:
           settings?.timezone && isValidTimeZone(settings.timezone) ? settings.timezone : undefined,
       }).format(screen.receivedAt);
-      label = `нет сети · экран на ${time}`;
+      const missing = screen.hasCopy ? '' : ' · часть данных недоступна';
+      label = `нет сети · экран на ${time}${missing}`;
     }
   } else if (screen.updating) label = 'обновляется';
   else if (screen.old) label = 'данные старше 4 часов';

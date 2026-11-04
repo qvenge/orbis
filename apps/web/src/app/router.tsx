@@ -6,6 +6,7 @@ import { OpenPlaques } from '../features/apps/OpenPlaques';
 import { NavTilesSlot } from '../features/apps/slots';
 import { useApps } from '../features/apps/useApps';
 import { ChatScreen } from '../features/chat/ChatScreen';
+import { detailGetInput } from '../features/entity-detail/detail-input';
 import { useSupplyRecords } from '../features/page/useSupplyRecords';
 import { MemoryScreen } from '../features/settings/MemoryScreen';
 import { SettingsScreen } from '../features/settings/SettingsScreen';
@@ -166,17 +167,7 @@ function PlaceScreen({ address }: { address: Address }) {
   }
 }
 
-/**
- * Домашняя приложения (⌂, `/`, `/a/<приложение>`) — запись «Домашняя» его оболочки экраном записи.
- * «Домой» в архиве — плашка «Домашняя в архиве — [восстановить]» (спека §6.6), а не пустота.
- *
- * Адрес `/a/<ref>` сперва проходит шаг 0 правила открытия (`homePlaceOf`, Фокус ревью п. 3):
- * выключенное, архивное или «не-приложение» — хост и плашка, адрес держит плашку, а рамка — хост
- * (место переезжает в стопку хоста: рамку рисует `model.activeApp`, R-22); оболочка хоста —
- * синоним `/`. Живое приложение по ключу поставки — его запись. Форма «домашняя как центр» —
- * плитки разделов над содержимым домашней (§6.2 п. 2).
- */
-function HomeScreen({ app }: { app: string }) {
+function useHomeShell(app: string) {
   const apps = useApps();
   const place = useMemo(
     () =>
@@ -191,6 +182,35 @@ function HomeScreen({ app }: { app: string }) {
   );
   const target = place?.kind === 'app' ? place.id : app;
   const shell = useAppShell(target);
+  return { apps, place, target, shell };
+}
+
+export function StartupRecordRead({ id }: { id: string }) {
+  trpc.entity.get.useQuery(detailGetInput(id), {
+    notifyOnChangeProps: [],
+  });
+  return null;
+}
+
+export function StartupHomeRead({ app }: { app: string }) {
+  const { apps, place, shell } = useHomeShell(app);
+  if ((app !== HOST_APP && apps.status === 'loading') || place?.kind === 'fallback') return null;
+  return shell.home === null ? null : <StartupRecordRead id={shell.home} />;
+}
+
+/**
+ * Домашняя приложения (⌂, `/`, `/a/<приложение>`) — запись «Домашняя» его оболочки экраном записи.
+ * «Домой» в архиве — плашка «Домашняя в архиве — [восстановить]» (спека §6.6), а не пустота.
+ *
+ * Адрес `/a/<ref>` сперва проходит шаг 0 правила открытия (`homePlaceOf`, Фокус ревью п. 3):
+ * выключенное, архивное или «не-приложение» — хост и плашка, адрес держит плашку, а рамка — хост
+ * (место переезжает в стопку хоста: рамку рисует `model.activeApp`, R-22); оболочка хоста —
+ * синоним `/`. Живое приложение по ключу поставки — его запись. Форма «домашняя как центр» —
+ * плитки разделов над содержимым домашней (§6.2 п. 2).
+ */
+
+function HomeScreen({ app }: { app: string }) {
+  const { apps, place, target, shell } = useHomeShell(app);
   // Рамка — по ответу шага 0, в обе стороны: плашка — место в стопке хоста; приложение ожило
   // («включить», «восстановить», правка агентом) — место обратно в рамку приложения (гейт 20, I-1).
   const frame = place === null ? null : place.kind === 'app' ? place.id : HOST_APP;

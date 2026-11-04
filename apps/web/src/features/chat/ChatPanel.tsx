@@ -2,9 +2,10 @@ import { Clock } from 'lucide-react';
 import { useState } from 'react';
 import { useFlushBuffer, useOnline, useRetryBuffer } from '../../state/retry';
 import { Composer, type ComposerContext } from './Composer';
-import { MessageList, ThreadSkeleton } from './MessageList';
+import { MessageList } from './MessageList';
+import { ThreadSkeleton } from './ThreadSkeleton';
 import { useChatThread } from './useChatThread';
-import { type EnsuredThread, EnsureFailedNotice, useEnsuredThread } from './useEnsuredThread';
+import { type EnsuredThread, EnsureFailedNotice } from './useEnsuredThread';
 import { useFastPath } from './useFastPath';
 
 /**
@@ -16,24 +17,15 @@ import { useFastPath } from './useFastPath';
  * ввода, РП-27) сообщение уходит агенту со ссылкой на запись первой строкой, мимо быстрого пути
  * (`submitWithContext`); без контекста — как было (`submit`: быстрый путь, иначе агент).
  *
- * Тред заводится через `useEnsuredThread` — тем же способом, что и тред записи на detail. Способ
- * не косметический: пока ответ ensure читался из `mutation.data`, экран под `<StrictMode>`
- * оставался на скелетоне НАВСЕГДА (отписка снимает наблюдателя с мутации и обратно он не
- * встаёт — подробности в самом хуке). В прод-сборке двойного прогона эффектов нет, поэтому
- * болезнь была только девелоперской, — но разработка велась вслепую на пустом экране.
+ * Тред открывает общий хук в родителе, пока загружается этот чанк.
  */
-export function ChatPanel({ context }: { context: ComposerContext | null }) {
-  const { state, retry } = useEnsuredThread();
-  return <ChatBody state={state} onRetry={retry} context={context} />;
-}
-
-function ChatBody({
+export function ChatPanel({
   state,
-  onRetry,
+  retry: onRetry,
   context,
 }: {
   state: EnsuredThread;
-  onRetry: () => void;
+  retry: () => void;
   context: ComposerContext | null;
 }) {
   if (state.status === 'pending') return <ThreadSkeleton />;
@@ -49,15 +41,25 @@ function ChatBody({
 }
 
 function ThreadView({ threadId, context }: { threadId: string; context: ComposerContext | null }) {
-  const { messages, isLoading } = useChatThread(threadId);
+  const { messages, hasTail, error, retry: retryTail } = useChatThread(threadId);
   const { submit, submitWithContext, reparse, retry, isSending } = useFastPath(threadId);
   const online = useOnline();
   const pending = useRetryBuffer((s) => s.size);
 
   return (
-    <div className="flex h-full flex-col">
+    <div
+      className="flex h-full flex-col"
+      data-thread-id={threadId}
+      data-thread-ready={hasTail ? 'true' : undefined}
+    >
       {pending > 0 && <PendingFlush pending={pending} online={online} />}
-      {isLoading ? (
+      {error ? (
+        <EnsureFailedNotice
+          what="Не удалось прочитать чат."
+          message={error.message}
+          onRetry={retryTail}
+        />
+      ) : !hasTail ? (
         <ThreadSkeleton />
       ) : (
         <MessageList

@@ -240,8 +240,8 @@ export function frameHandler(world: FrameWorld = frameWorld()): MockHandler {
       }
       case 'chat.threadEntity':
         return { entityId: world.threads[(input as { threadId: string }).threadId] ?? null };
-      case 'chat.ensureThread':
-        return { threadId: GLOBAL_THREAD };
+      case 'chat.openThread':
+        return { threadId: GLOBAL_THREAD, messages: world.chat };
       case 'chat.listMessages':
         return world.chat;
       case 'user.getSettings':

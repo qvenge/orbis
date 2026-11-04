@@ -1,11 +1,32 @@
-import { type ReactNode, useEffect, useRef } from 'react';
+import { hashKey, onlineManager, type QueryClient, useQueryClient } from '@tanstack/react-query';
+import { getQueryKey } from '@trpc/react-query';
+import { type ReactNode, useEffect, useRef, useSyncExternalStore } from 'react';
+import { freshnessRuntimeOf } from '../../lib/freshness/provenance';
 import { usePrivacyActions } from '../../lib/local-data/privacy-actions';
-import { trpc } from '../../trpc';
+import { type RouterOutputs, trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
 import { Spinner } from '../../ui/Spinner';
 
+const settingsKey = getQueryKey(trpc.user.getSettings, undefined, 'query');
+
+function absenceOfHostShell(client: QueryClient): 'missing-settings' | 'unseeded' | undefined {
+  const state = client.getQueryState<RouterOutputs['user']['getSettings']>(settingsKey);
+  if (state?.fetchStatus !== 'idle') return;
+  const runtime = freshnessRuntimeOf(client);
+  if (state.status === 'error') {
+    const error = state.error as { data?: { code?: string } } | null;
+    if (error?.data?.code === 'NOT_FOUND' && (!runtime || runtime.isCurrentReadError(error)))
+      return 'missing-settings';
+    return;
+  }
+  if (state.data?.graphEstablished !== false) return;
+  const read = runtime?.publicationOf(hashKey(settingsKey));
+  if (!runtime || (read?.source === 'network' && runtime.isAcceptedRead(read))) return 'unseeded';
+}
+
 export function OnboardingGate({ children }: { children: ReactNode }) {
   const privacy = usePrivacyActions();
+  const client = useQueryClient();
   const started = useRef(false);
   const settings = trpc.user.getSettings.useQuery();
   const seed = trpc.user.seedOnboarding.useMutation({
@@ -22,22 +43,26 @@ export function OnboardingGate({ children }: { children: ReactNode }) {
     },
   });
 
-  const needsSeed = settings.isError && settings.error.data?.code === 'NOT_FOUND';
-  // Граф старой формы (срез 1б, Э-18): сервер его не заводит и отвечает CONFLICT — у
-  // seedOnboarding другого CONFLICT нет (R-19). Код tRPC, а не имя отказа: cause по HTTP не
-  // сериализуется, а PRECONDITION_FAILED на проводе занят «клиент устарел».
+  const absence = settings.fetchStatus === 'idle' ? absenceOfHostShell(client) : undefined;
+  const needsSeed = absence === 'missing-settings';
   const needsMigration = seed.isError && seed.error.data?.code === 'CONFLICT';
-
-  // seedOnboarding вызывается один раз при старте сессии и БЕЗ условия по настройкам: признак
-  // «граф заведён» — запись оболочки хоста, а не строка настроек (после reset-world строка есть,
-  // а графа нет — вход заводит его заново, срез 1б §8.6). На заведённом графе вход ничего не
-  // пишет. Для пользователя С настройками вызов идёт параллельно рендеру и его не блокирует.
-  const canSeed = privacy?.canSeed ?? true;
+  const online = useSyncExternalStore(onlineManager.subscribe, () => onlineManager.isOnline());
+  const canSeed = online && (privacy?.canSeed ?? true);
   useEffect(() => {
-    if (!canSeed || !seed.isIdle || started.current) return;
-    started.current = true;
-    seed.mutate();
-  }, [canSeed, seed.isIdle, seed.mutate]);
+    if (!absence || !canSeed || !seed.isIdle || started.current) return;
+    let afterPaint: number | undefined;
+    const firstFrame = requestAnimationFrame(() => {
+      afterPaint = requestAnimationFrame(() => {
+        if (started.current || !onlineManager.isOnline() || !absenceOfHostShell(client)) return;
+        started.current = true;
+        seed.mutate();
+      });
+    });
+    return () => {
+      cancelAnimationFrame(firstFrame);
+      if (afterPaint !== undefined) cancelAnimationFrame(afterPaint);
+    };
+  }, [absence, canSeed, client, seed.isIdle, seed.mutate]);
 
   // Экран перевода — НЕЗАВИСИМО от needsSeed: у графа старой формы строка настроек есть, и
   // фоновый отказ, который ниже приложение «не блокирует», здесь обязан его остановить —
@@ -94,7 +119,7 @@ export function OnboardingGate({ children }: { children: ReactNode }) {
   // Splash — только пока грузятся настройки либо их нет (NOT_FOUND: ждём seed + refetch).
   // Фоновый seed у пользователя С настройками рендер НЕ задерживает (seed.isPending
   // сюда сознательно не входит).
-  if (settings.isLoading || needsSeed) {
+  if (settings.data === undefined || needsSeed) {
     return (
       <div
         role="status"

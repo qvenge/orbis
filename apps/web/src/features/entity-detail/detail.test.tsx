@@ -40,7 +40,6 @@ import { registryReply } from '../../test/registry';
 import { type RouterOutputs, trpc } from '../../trpc';
 import { Toaster } from '../../ui/Toast';
 import { useChatThread } from '../chat/useChatThread';
-import { resetEnsuredThreads } from '../chat/useEnsuredThread';
 import { readDraft, setDraftScope } from '../entity-editor/draft-storage';
 import { isUndoEpoch, undoEpoch } from '../undo/undo-epoch';
 import { AspectSections } from './AspectSection';
@@ -243,10 +242,6 @@ beforeEach(() => {
   // Скоуп черновиков — аккаунт сессии (`AuthProvider`), а не поле записи: стенд поднимает экран
   // без провайдера, поэтому аккаунт объявляется здесь тем же вызовом, что и в бою.
   setDraftScope(DRAFT_ACCOUNT);
-  // Заведённые треды помнит МОДУЛЬ (useEnsuredThread), а модуль живёт дольше теста: без сброса
-  // первый же тест, открывший «Тред» записи e1, оставлял бы следующему нулевое число вызовов
-  // ensureThread — и проверка «завели ровно один раз» краснела бы от соседа, а не от кода.
-  resetEnsuredThreads();
   // Модуль меню ⋮ тоже помнит МОДУЛЬ (DetailMenuSlot): без сброса все тесты файла после первого,
   // открывшего меню, шли бы с уже загруженным чанком, и «жест до загрузки» не проверялся бы.
   resetDetailMenuModuleForTests();
@@ -2799,18 +2794,21 @@ test('вкладка «Тред» живой не держится: её зап�
   const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
     if (path === 'entity.get')
       return { entity, relations: [], thread: { threadId: 'th1', messages: [] } };
-    if (path === 'chat.ensureThread') return { threadId: 'th1' };
+    if (path === 'chat.openThread') return { threadId: 'th1', messages: [] };
     if (path === 'chat.listMessages') return [];
     return registryReply(path) ?? {};
   });
   await screen.findByRole('tab', { name: 'Тред' });
-  const threadCalls = () => calls.filter((c) => c.path === 'chat.listMessages');
+  const threadCalls = () => calls.filter((c) => c.path.startsWith('chat.'));
   expect(threadCalls()).toEqual([]);
 
   // Положительный контроль В ТОМ ЖЕ ТЕСТЕ: открытая вкладка свой запрос ШЛЁТ — иначе молчание
   // выше означало бы лишь, что тред не спрашивает ничего и никогда.
   fireEvent.click(screen.getByRole('tab', { name: 'Тред' }));
-  await waitFor(() => expect(threadCalls().length).toBeGreaterThan(0));
+  await screen.findByTestId('message-list');
+  expect(threadCalls().filter((call) => call.path === 'chat.openThread')).toEqual([
+    { path: 'chat.openThread', input: { entityId: 'e1' } },
+  ]);
 });
 
 // --- тред сущности заводится ДО первого сообщения (дефект живого смоука) --------------------
@@ -2826,7 +2824,7 @@ const threadHandler: MockHandler = (path) => {
     // `th-formula` — то, что detail знает БЕЗ создания строки. Ровно этот id и уходил в
     // ai.sendMessage до починки; в ассертах ниже он служит отрицательным контролем.
     return { entity, relations: [], thread: { threadId: 'th-formula', messages: [] } };
-  if (path === 'chat.ensureThread') return { threadId: 'th-ensured' };
+  if (path === 'chat.openThread') return { threadId: 'th-ensured', messages: [] };
   if (path === 'chat.listMessages') return [];
   return registryReply(path) ?? {};
 };
@@ -2836,7 +2834,7 @@ test('открытие «Треда» заводит тред сущности �
     strict: true,
   });
   await screen.findByRole('tab', { name: 'Тред' });
-  const ensureCalls = () => calls.filter((c) => c.path === 'chat.ensureThread');
+  const ensureCalls = () => calls.filter((c) => c.path === 'chat.openThread');
   // Вкладку не открывали — тред не заводим: записи, куда не заходили, лишней мутации не платят.
   expect(ensureCalls()).toEqual([]);
 
@@ -2844,7 +2842,7 @@ test('открытие «Треда» заводит тред сущности �
   await screen.findByLabelText('Сообщение');
   // Один вызов, а не два: StrictMode прогоняет эффекты монтирования дважды, и без гварда на
   // ref каждое открытие вкладки стоило бы двух мутаций.
-  expect(ensureCalls()).toEqual([{ path: 'chat.ensureThread', input: { entityId: 'e1' } }]);
+  expect(ensureCalls()).toEqual([{ path: 'chat.openThread', input: { entityId: 'e1' } }]);
 });
 
 test('сообщение из «Треда» уходит в ЗАВЕДЁННЫЙ тред, а не в посчитанный формулой', async () => {
@@ -2863,7 +2861,7 @@ test('сообщение из «Треда» уходит в ЗАВЕДЁННЫ�
 
 test('тред завести не вышло — вкладка говорит об этом, а не показывает вечный скелетон', async () => {
   renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
-    if (path === 'chat.ensureThread') throw trpcError('INTERNAL_SERVER_ERROR', 'база недоступна');
+    if (path === 'chat.openThread') throw trpcError('INTERNAL_SERVER_ERROR', 'база недоступна');
     return threadHandler(path, undefined);
   });
   await screen.findByRole('tab', { name: 'Тред' });
@@ -2881,22 +2879,27 @@ test('тред завести не вышло — вкладка говорит 
 // закешированных сообщений. Мутация идемпотентна, но платить ею за каждое переключение вкладок
 // незачем: заведённый тред записи помнит модуль (useEnsuredThread).
 test('повторное открытие «Треда» той же записи тред НЕ заводит и скелетоном не мигает', async () => {
-  const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
-    if (path === 'chat.listMessages')
-      return [
-        {
-          id: 'm1',
-          threadId: 'th-ensured',
-          role: 'user',
-          content: 'первое',
-          metadata: {},
-          createdAt: '2026-07-05T10:00:00.000Z',
-        },
-      ];
-    return threadHandler(path, undefined);
-  });
+  const messages = [
+    {
+      id: 'm1',
+      threadId: 'th-ensured',
+      role: 'user',
+      content: 'первое',
+      metadata: {},
+      createdAt: '2026-07-05T10:00:00.000Z',
+    },
+  ];
+  const { calls } = renderWithProviders(
+    <DetailScreen entityId="e1" />,
+    (path) => {
+      if (path === 'chat.openThread') return { threadId: 'th-ensured', messages };
+      if (path === 'chat.listMessages') return messages;
+      return threadHandler(path, undefined);
+    },
+    { queries: { staleTime: 30_000 } },
+  );
   await screen.findByRole('tab', { name: 'Тред' });
-  const ensureCalls = () => calls.filter((c) => c.path === 'chat.ensureThread');
+  const ensureCalls = () => calls.filter((c) => c.path === 'chat.openThread');
 
   fireEvent.click(screen.getByRole('tab', { name: 'Тред' }));
   await screen.findByText('первое');
@@ -2923,10 +2926,10 @@ test('повторное открытие «Треда» той же запис�
 test('тред завести не вышло — «Повторить» пробует заново и поднимает ленту', async () => {
   let attempt = 0;
   const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
-    if (path === 'chat.ensureThread') {
+    if (path === 'chat.openThread') {
       attempt += 1;
       if (attempt === 1) throw trpcError('INTERNAL_SERVER_ERROR', 'база недоступна');
-      return { threadId: 'th-ensured' };
+      return { threadId: 'th-ensured', messages: [] };
     }
     return threadHandler(path, undefined);
   });
@@ -2940,7 +2943,7 @@ test('тред завести не вышло — «Повторить» про�
 
   await screen.findByLabelText('Сообщение');
   expect(screen.queryByRole('alert')).toBeNull();
-  expect(calls.filter((c) => c.path === 'chat.ensureThread')).toHaveLength(2);
+  expect(calls.filter((c) => c.path === 'chat.openThread')).toHaveLength(2);
 });
 
 test('меню ⋮: «Править как markdown» показывает тело исходным текстом', async () => {

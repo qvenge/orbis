@@ -1,7 +1,9 @@
+import { hashKey } from '@tanstack/react-query';
 import { act, fireEvent, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { resetNavForTests } from '../../state/navigation';
 import { registerRetrySend, useRetryBuffer } from '../../state/retry';
+import { testFreshnessOf } from '../../test/freshness';
 import { queryReply, renderWithProviders, trpcError } from '../../test/harness';
 import { ChatScreen } from './ChatScreen';
 
@@ -26,7 +28,7 @@ afterEach(() => {
 
 test('глобальный чат: pending ai.sendMessage → typing-индикатор виден', async () => {
   renderWithProviders(<ChatScreen />, (path) => {
-    if (path === 'chat.ensureThread') return { threadId: 't1' };
+    if (path === 'chat.openThread') return { threadId: 't1', messages: [] };
     if (path === 'chat.listMessages') return [];
     if (path === 'user.getSettings') return settings;
     if (path === 'entity.query') return queryReply([]); // без категорий fast-path не сработает → LLM-путь
@@ -55,7 +57,7 @@ test('глобальный чат: pending ai.sendMessage → typing-индик�
 // приходит, а `ensure.data` навсегда остаётся `undefined`: экран стоял на ThreadSkeleton вечно.
 
 const strictMocks = (path: string) => {
-  if (path === 'chat.ensureThread') return { threadId: 't1' };
+  if (path === 'chat.openThread') return { threadId: 't1', messages: [] };
   if (path === 'chat.listMessages') return [];
   if (path === 'user.getSettings') return settings;
   if (path === 'entity.query') return queryReply([]);
@@ -63,7 +65,10 @@ const strictMocks = (path: string) => {
 };
 
 test('под StrictMode чат поднимается: тред заведён ровно один раз, поле ввода на экране', async () => {
-  const { calls } = renderWithProviders(<ChatScreen />, strictMocks, { strict: true });
+  const { calls } = renderWithProviders(<ChatScreen />, strictMocks, {
+    strict: true,
+    queries: { staleTime: 30_000 },
+  });
 
   // Скелетон уходит — то есть ответ ensure до экрана ДОЕХАЛ, а не потерялся вместе с
   // наблюдателем мутации.
@@ -71,14 +76,14 @@ test('под StrictMode чат поднимается: тред заведён �
   expect(screen.getByLabelText('Сообщение')).toBeInTheDocument();
 
   // Ровно одна мутация, а не две: двойной прогон эффектов не должен стоить второго треда.
-  expect(calls.filter((c) => c.path === 'chat.ensureThread')).toEqual([
-    { path: 'chat.ensureThread', input: {} },
+  expect(calls.filter((c) => c.path.startsWith('chat.'))).toEqual([
+    { path: 'chat.openThread', input: {} },
   ]);
 });
 
 test('тред завести не вышло — чат говорит об этом, а не показывает вечный скелетон', async () => {
   renderWithProviders(<ChatScreen />, (path) => {
-    if (path === 'chat.ensureThread') throw trpcError('INTERNAL_SERVER_ERROR', 'база недоступна');
+    if (path === 'chat.openThread') throw trpcError('INTERNAL_SERVER_ERROR', 'база недоступна');
     return strictMocks(path);
   });
 
@@ -95,7 +100,7 @@ test('тред завести не вышло — чат говорит об э�
 // о непосланных записях и без единого способа их послать, кроме перезагрузки страницы.
 
 const chatMocks = (path: string) => {
-  if (path === 'chat.ensureThread') return { threadId: 't1' };
+  if (path === 'chat.openThread') return { threadId: 't1', messages: [] };
   if (path === 'chat.listMessages') return [];
   if (path === 'user.getSettings') return settings;
   if (path === 'entity.query') return queryReply([]);
@@ -297,4 +302,120 @@ test('пустая очередь — индикатора нет', async () => 
 
   await waitFor(() => expect(screen.getByTestId('message-list')).toBeInTheDocument());
   expect(screen.queryByTestId('pending-indicator')).not.toBeInTheDocument();
+});
+
+const createdThread = {
+  kind: 'thread' as const,
+  rowKey: 't1',
+  threadId: 't1',
+  entityIds: [],
+  operation: 'insert' as const,
+};
+
+function holdChatOpen() {
+  let finish: ((result: { threadId: string; messages: []; openTxId?: string }) => void) | undefined;
+  const { queryClient, calls } = renderWithProviders(
+    <ChatScreen />,
+    (path) =>
+      path === 'chat.openThread'
+        ? new Promise((resolve) => {
+            finish = resolve;
+          })
+        : chatMocks(path),
+    { freshness: true, queries: { staleTime: 30_000 } },
+  );
+  return {
+    calls,
+    feed: testFreshnessOf(queryClient),
+    started: () => waitFor(() => expect(finish).toBeDefined()),
+    respond: (openTxId?: string) =>
+      act(async () => finish?.({ threadId: 't1', messages: [], openTxId })),
+  };
+}
+
+test.each([
+  'before',
+  'after',
+] as const)('the creating thread INSERT arriving %s the open response needs no list GET', async (when) => {
+  const { calls, feed, started, respond } = holdChatOpen();
+  const insert = () => act(() => feed.changes([{ ...createdThread }], 1));
+  await started();
+  if (when === 'before') insert();
+  await respond('1');
+  await screen.findByTestId('message-list');
+  if (when === 'after') insert();
+  await act(async () => new Promise((resolve) => setTimeout(resolve, 150)));
+
+  expect(calls.filter((call) => call.path.startsWith('chat.'))).toEqual([
+    { path: 'chat.openThread', input: {} },
+  ]);
+  expect(feed.runtime.publicationOf(hashKey(['chatThread', 't1']))).toMatchObject({
+    receipt: { watermark: '0' },
+  });
+
+  act(() => feed.changes([{ kind: 'message', rowKey: 'later', threadId: 't1' }]));
+  await waitFor(() =>
+    expect(calls.filter((call) => call.path === 'chat.listMessages')).toHaveLength(1),
+  );
+  await waitFor(() =>
+    expect(feed.runtime.publicationOf(hashKey(['chatThread', 't1']))).toMatchObject({
+      receipt: { watermark: '3' },
+    }),
+  );
+  act(() => feed.changes([{ kind: 'journal', rowKey: 'undo', threadId: 't1' }]));
+  await waitFor(() =>
+    expect(calls.filter((call) => call.path === 'chat.listMessages')).toHaveLength(2),
+  );
+});
+
+test.each([
+  'another xid',
+  'missing xid',
+  'invalid xid',
+  'mixed events',
+  'oversized batch',
+] as const)('an open behind the feed still catches up when exact INSERT proof is absent: %s', async (scenario) => {
+  const { calls, feed, started, respond } = holdChatOpen();
+  await started();
+  const otherEvents =
+    scenario === 'oversized batch'
+      ? Array.from({ length: 200 }, (_, i) => ({
+          kind: 'message' as const,
+          rowKey: String(i),
+          threadId: 'other',
+        }))
+      : scenario === 'mixed events'
+        ? [{ kind: 'journal' as const, rowKey: 'undo', threadId: 't1' }]
+        : [];
+  act(() => feed.changes([{ ...createdThread }, ...otherEvents], 1));
+  const openTxIds = {
+    'missing xid': undefined,
+    'invalid xid': '01',
+    'another xid': '2',
+    'mixed events': '1',
+    'oversized batch': '1',
+  };
+  await respond(openTxIds[scenario]);
+  await screen.findByTestId('message-list');
+  await waitFor(() => expect(calls.some((call) => call.path === 'chat.listMessages')).toBe(true));
+});
+
+test.each([
+  'another INSERT',
+  'delete and reinsert',
+] as const)('a later %s of the same ID cannot borrow the open transaction proof', async (later) => {
+  const { calls, feed, started, respond } = holdChatOpen();
+  await started();
+  await respond('1');
+  await screen.findByTestId('message-list');
+  act(() => feed.changes([{ ...createdThread }], 1));
+  await act(async () => new Promise((resolve) => setTimeout(resolve, 150)));
+  expect(calls.some((call) => call.path === 'chat.listMessages')).toBe(false);
+  act(() => {
+    if (later === 'delete and reinsert') {
+      feed.changes([{ ...createdThread, operation: 'delete' }]);
+    }
+    feed.changes([{ ...createdThread }]);
+  });
+  await waitFor(() => expect(calls.some((call) => call.path === 'chat.listMessages')).toBe(true));
 });

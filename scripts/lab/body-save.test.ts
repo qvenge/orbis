@@ -63,6 +63,7 @@ function probeFixture(saveReply: unknown, postAckRead = true) {
     finish(previous);
     send(save);
     send(read);
+    send(trpc('chat.openThread', { input: {}, post: true }));
     finish(save);
   };
   return { page, edit, listeners };
@@ -75,7 +76,7 @@ test('наблюдение привязано к ACK нужного автосо
     bodyRevision: 4,
     txId: '90300',
     beforeRequest: { 'entity.get': 1, 'chat.listMessages': 1 },
-    sinceRequest: { 'entity.get': 2, 'chat.listMessages': 2 },
+    sinceRequest: { 'entity.get': 2, 'chat.listMessages': 2, 'chat.openThread': 1 },
   });
   expect(listeners.size).toBe(0);
 });
@@ -84,7 +85,7 @@ test('HTTP-ответ с ошибкой в слоте нужной мутаци�
   const { page, edit } = probeFixture({ error: { message: 'Conflict' } });
   expect(await observeBodySave(page, id, marker, edit)).toMatchObject({
     status: 'unconfirmed',
-    sinceRequest: { 'entity.get': 1, 'chat.listMessages': 1 },
+    sinceRequest: { 'entity.get': 1, 'chat.listMessages': 1, 'chat.openThread': 1 },
   });
 });
 
@@ -92,7 +93,7 @@ test('чтение до разбора ACK входит в итог даже п�
   const { page, edit } = probeFixture(reply, false);
   expect(await observeBodySave(page, id, marker, edit)).toMatchObject({
     status: 'confirmed',
-    sinceRequest: { 'entity.get': 1, 'chat.listMessages': 1 },
+    sinceRequest: { 'entity.get': 1, 'chat.listMessages': 1, 'chat.openThread': 1 },
   });
 });
 
@@ -146,4 +147,58 @@ test('пустой ThreadView после ошибки чтения не допу
 
 test('тред готов после успешного чтения именно активного треда и отрисовки', async () => {
   await expect(openReadySideChat(chatFixture())).resolves.toBeUndefined();
+});
+
+function readyChatFixture({
+  fromCache = false,
+  threadId = 'active',
+  tailVisible = true,
+  composerVisible = true,
+  result = { result: { data: { threadId: 'active', messages: [] } } },
+} = {}) {
+  const requests = new Set<(request: Request) => void>();
+  const responses: Array<(error: Error) => void> = [];
+  const page = {
+    on: (_: string, handler: (request: Request) => void) => requests.add(handler),
+    off: (_: string, handler: (request: Request) => void) => requests.delete(handler),
+    waitForResponse: () => new Promise((_resolve, reject) => responses.push(reject)),
+    locator: (selector: string) => ({
+      waitFor: async () => {
+        if (!selector.includes(`[data-thread-id="${threadId}"]`) || !tailVisible)
+          throw new Error('fixture: no rendered tail for expected thread');
+        if (selector.includes('aria-label="Сообщение"') && !composerVisible)
+          throw new Error('fixture: no composer');
+      },
+      click: async () => {
+        if (!fromCache) {
+          const request = trpc('chat.openThread', { post: true, input: {}, response: result });
+          for (const observe of requests) observe(request);
+        }
+        for (const reject of responses) reject(new Error('fixture: no legacy responses'));
+      },
+    }),
+  } as unknown as Page;
+  return { page, requests };
+}
+
+test('one successful open POST proves the exact global tail, including an empty page', async () => {
+  const { page, requests } = readyChatFixture();
+  await expect(openReadySideChat(page, 'active')).resolves.toBeUndefined();
+  expect(requests.size).toBe(0);
+});
+
+test('a matching rendered cached tail needs no open or list request', async () => {
+  const { page } = readyChatFixture({ fromCache: true });
+  await expect(openReadySideChat(page, 'active')).resolves.toBeUndefined();
+});
+
+test('a different thread, absent tail or absent composer is not ready', async () => {
+  for (const fixture of [
+    readyChatFixture({ fromCache: true, threadId: 'entity-thread' }),
+    readyChatFixture({ tailVisible: false }),
+    readyChatFixture({ composerVisible: false }),
+    readyChatFixture({ result: { result: { data: { threadId: 'other', messages: [] } } } }),
+  ]) {
+    await expect(openReadySideChat(fixture.page, 'active')).rejects.toThrow('боковой чат');
+  }
 });

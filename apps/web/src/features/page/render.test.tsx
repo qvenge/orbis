@@ -351,7 +351,7 @@ test('вкладки и сеть: версии на скрытой вкладк�
   expect(await screen.findAllByTestId('versions-card')).toHaveLength(2);
   const touched = (p: string) => calls.some((c) => c.path === p);
   expect(touched('version.list')).toBe(false);
-  expect(touched('chat.ensureThread') || touched('chat.listMessages')).toBe(false);
+  expect(touched('chat.openThread') || touched('chat.listMessages')).toBe(false);
 
   fireEvent.click(screen.getByRole('tab', { name: 'Вложенные' }));
   await waitFor(() => expect(touched('version.list')).toBe(true));

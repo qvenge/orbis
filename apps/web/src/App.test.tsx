@@ -1,7 +1,13 @@
-import { act, screen, within } from '@testing-library/react';
+import { act, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, test } from 'vitest';
 import { App } from './App';
-import { resetFrame, stubLaunchMode, unstubLaunchMode } from './app/frame/frame-fixtures';
+import {
+  frameHandler,
+  HOME,
+  resetFrame,
+  stubLaunchMode,
+  unstubLaunchMode,
+} from './app/frame/frame-fixtures';
 import { useRetryBuffer } from './state/retry';
 import { queryReply, renderWithProviders } from './test/harness';
 
@@ -41,4 +47,39 @@ test('бейдж чата показывает размер retry-буфера �
   });
   expect(screen.queryByTestId('chat-badge')).toBeNull();
   expect(within(buttons).getByRole('button', { name: 'Чат' })).toBeInTheDocument();
+});
+
+test('product bootstrap starts deep-link data and registry while settings are pending', async () => {
+  const id = '00000000-0000-4000-8000-000000000001';
+  resetFrame(`/r/${id}`);
+  const { calls } = renderWithProviders(<App gated />, (path) => {
+    if (path === 'user.getSettings' || path === 'entity.get' || path === 'registry.effective')
+      return new Promise(() => {});
+    return {};
+  });
+  await waitFor(() => {
+    expect(calls.map((call) => call.path)).toEqual(
+      expect.arrayContaining(['user.getSettings', 'entity.get', 'registry.effective']),
+    );
+  });
+  expect(calls.filter((call) => call.path === 'entity.get')).toEqual([
+    { path: 'entity.get', input: expect.objectContaining({ id }) },
+  ]);
+  expect(screen.getByTestId('onboarding-splash')).toBeVisible();
+  expect(screen.queryByTestId('host-buttons')).not.toBeInTheDocument();
+});
+
+test('the actual host shell can resolve and start the home detail while settings are pending', async () => {
+  const frame = frameHandler();
+  const { calls } = renderWithProviders(<App gated />, (path, input, type) => {
+    if (path === 'user.getSettings') return new Promise(() => {});
+    return frame(path, input, type);
+  });
+  await waitFor(() =>
+    expect(calls).toContainEqual({
+      path: 'entity.get',
+      input: expect.objectContaining({ id: HOME, include: expect.arrayContaining(['bodyDoc']) }),
+    }),
+  );
+  expect(screen.getByTestId('onboarding-splash')).toBeVisible();
 });

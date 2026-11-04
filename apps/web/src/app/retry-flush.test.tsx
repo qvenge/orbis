@@ -9,7 +9,7 @@ import { trpc } from '../trpc';
 
 // §2.6/§5.3: retry-буфер должен сливаться сам — на старте (онлайн) и при offline→online.
 const appMocks = (path: string) => {
-  if (path === 'chat.ensureThread') return { threadId: 't1' };
+  if (path === 'chat.openThread') return { threadId: 't1', messages: [] };
   if (path === 'chat.listMessages') return [];
   // `entity.query` шлёт пробник ниже и рамка (записи поставки хоста).
   if (path === 'entity.query') return queryReply([]);

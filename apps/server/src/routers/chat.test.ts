@@ -4,12 +4,22 @@
 // тредах объединением на чтении (§7.8, спека скорости §11.3).
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import type { GraphId, JournalCardMeta } from '@orbis/shared';
-import { entityThreadId, globalThreadId, newId, processingMessageId } from '@orbis/shared';
+import {
+  entityThreadId,
+  globalThreadId,
+  newId,
+  processingMessageId,
+  READ_WATERMARK_HEADER,
+} from '@orbis/shared';
 import { TRPCError } from '@trpc/server';
+import { SignJWT } from 'jose';
 import { appDb, freshGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
 import { actionsOf } from '../../test/journal-helpers';
+import type { AiDeps } from '../ai/send-message';
+import { createApp } from '../app';
 import { chatMessages } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
+import { issuePatGrant } from '../oauth/grants';
 import { appRouter } from '../router';
 import { createCallerFactory } from '../trpc';
 
@@ -61,6 +71,155 @@ describe('chat.ensureThread (§4.5)', () => {
     });
     const err = await trpcError(caller.chat.ensureThread({ entityId: crypto.randomUUID() }));
     expect(err.code).toBe('NOT_FOUND');
+  });
+});
+
+describe('chat.openThread', () => {
+  test('одновременное открытие нового глобального треда даёт один пригодный для записи id', async () => {
+    const user = await freshGraph();
+    const caller = callerFor(user);
+    const threadId = globalThreadId(user);
+    expect(
+      await Promise.all([caller.chat.openThread({}), caller.chat.openThread({})]),
+    ).toMatchObject([
+      { threadId, messages: [] },
+      { threadId, messages: [] },
+    ]);
+    const message = await caller.chat.appendUserMessage({
+      id: newId(),
+      threadId,
+      content: 'Привет',
+    });
+    expect(message.threadId).toBe(threadId);
+    expect(await caller.chat.ensureThread({})).toEqual({ threadId });
+  });
+
+  test('для существующего треда отдаёт только 50 новых строк общей ленты', async () => {
+    const user = await freshGraph();
+    const caller = callerFor(user);
+    const { threadId } = await caller.chat.ensureThread({});
+    const rows = Array.from({ length: 52 }, (_, i) => ({
+      id: newId(),
+      threadId,
+      role: 'user',
+      content: `Сообщение ${i}`,
+      createdAt: new Date(Date.UTC(2025, 0, 1, 0, 0, i)),
+    }));
+    await withIdentity(db, personal(user), (tx) => tx.insert(chatMessages).values(rows));
+    const entity = await caller.entity.create({
+      input: { title: 'Действие в глобальном треде', tags: [] },
+      source: 'fast_path',
+    });
+
+    const latest = await caller.chat.listMessages({ threadId });
+    const opened = await caller.chat.openThread({});
+    expect(opened).toMatchObject({ threadId, messages: latest });
+    expect(await caller.chat.listMessages({ threadId })).toEqual(latest);
+    expect(opened.messages).toHaveLength(50);
+    expect(opened.messages[0]).toMatchObject({
+      role: 'system',
+      metadata: { journal: { actionId: entity.actionId } },
+    });
+    expect(opened.messages.slice(1).map((m) => m.id)).toEqual(
+      rows
+        .slice(3)
+        .reverse()
+        .map((m) => m.id),
+    );
+    expect(JSON.stringify(opened.messages[0])).not.toMatch(/"(operations|inverse|results)"/);
+  });
+
+  test('чужая и отсутствующая запись одинаково недоступны', async () => {
+    const user = await freshGraph();
+    const stranger = callerFor(await freshGraph());
+    const entity = await callerFor(user).entity.create({
+      input: { title: 'Чужая запись', tags: [] },
+      source: 'fast_path',
+    });
+    const absentId = newId();
+    const legacy = await trpcError(stranger.chat.ensureThread({ entityId: absentId }));
+    expect(legacy.code).toBe('NOT_FOUND');
+    for (const entityId of [entity.id, absentId]) {
+      expect(await trpcError(stranger.chat.openThread({ entityId }))).toMatchObject({
+        code: legacy.code,
+        message: legacy.message,
+      });
+    }
+  });
+
+  test('HTTP POST открывает тред записи, возвращает watermark и точный feed xid, запрещён PAT', async () => {
+    const user = await freshGraph();
+    const caller = callerFor(user);
+    const entity = await caller.entity.create({
+      input: { title: 'Носитель треда', tags: [] },
+      source: 'fast_path',
+    });
+    const threadId = entityThreadId(user, entity.id);
+    const app = createApp({ db, ai: {} as AiDeps });
+    const path = '/trpc/chat.openThread?batch=1';
+    const post = (token: string) =>
+      app.request(path, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ 0: { entityId: entity.id } }),
+      });
+    const pat = await issuePatGrant(db, { identity: personal(user), label: 'openThread test' });
+    expect((await post(pat)).status).toBe(403);
+    expect(await caller.chat.threadEntity({ threadId })).toEqual({ entityId: null });
+
+    const jwtEnv = ['SUPABASE_URL', 'SUPABASE_JWKS_URL', 'SUPABASE_JWT_SECRET'] as const;
+    const previous = jwtEnv.map((name) => [name, process.env[name]] as const);
+    delete process.env.SUPABASE_URL;
+    delete process.env.SUPABASE_JWKS_URL;
+    const secret = 'local-test-secret-with-at-least-32-characters';
+    process.env.SUPABASE_JWT_SECRET = secret;
+    try {
+      const token = await new SignJWT({ role: 'authenticated' })
+        .setProtectedHeader({ alg: 'HS256' })
+        .setSubject(user)
+        .setAudience('authenticated')
+        .setExpirationTime('5m')
+        .sign(new TextEncoder().encode(secret));
+      const response = await post(token);
+      expect(response.status).toBe(200);
+      const watermark = response.headers.get(READ_WATERMARK_HEADER);
+      expect(watermark).toMatch(/^\d+$/);
+      if (!watermark) throw new Error('Отсутствует watermark');
+      const payload = (await response.json()) as {
+        result: { data: { threadId: string; messages: unknown[]; openTxId?: string } };
+      }[];
+      expect(payload).toMatchObject([{ result: { data: { threadId, messages: [] } } }]);
+      const openTxId = payload[0]?.result.data.openTxId;
+      expect(openTxId).toMatch(/^\d+$/);
+      const feed = await caller.changes.reconcile({ from: watermark });
+      expect(feed.transactions).toContainEqual({
+        txId: openTxId,
+        changes: [
+          expect.objectContaining({
+            kind: 'thread',
+            operation: 'insert',
+            rowKey: threadId,
+            threadId,
+            graphWide: false,
+          }),
+        ],
+      });
+    } finally {
+      for (const [name, value] of previous) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+    }
+    expect(await caller.chat.threadEntity({ threadId })).toEqual({ entityId: entity.id });
+    const message = await caller.chat.appendUserMessage({
+      id: newId(),
+      threadId,
+      content: 'Привет',
+    });
+    expect(await caller.chat.openThread({ entityId: entity.id })).toMatchObject({
+      threadId,
+      messages: [message],
+    });
   });
 });
 

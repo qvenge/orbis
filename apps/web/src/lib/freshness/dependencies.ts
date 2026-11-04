@@ -156,6 +156,7 @@ const custom: Readonly<
   Record<string, (key: readonly unknown[], data: unknown) => CacheDependency>
 > = {
   registry,
+  chatOpen: (key) => rule('response', { entityIds: ids(key[1]) }),
   chatThread: (key) => rule('thread-tail', { threadIds: ids(key[1]) }),
   'query-block': (key, data) =>
     rule(

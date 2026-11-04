@@ -5,9 +5,7 @@ import { createRoot } from 'react-dom/client';
 import { App } from './App';
 import { AuthProvider, configureProductToken, getCurrentToken, useAuth } from './auth/AuthProvider';
 import { clearLocalMessages } from './features/chat/local-messages';
-import { resetEnsuredThreads } from './features/chat/useEnsuredThread';
 import { ConsentScreen } from './features/oauth/ConsentScreen';
-import { OnboardingGate } from './features/onboarding/OnboardingGate';
 import { UndoBinder } from './features/undo/undo-binding';
 import { bindFreshnessRuntime } from './lib/freshness/provenance';
 import { createFreshnessRuntime } from './lib/freshness/runtime';
@@ -86,7 +84,6 @@ function FreshnessSession({ children }: { children: ReactNode }) {
       void queryClient.cancelQueries();
       queryClient.clear();
       clearLocalMessages(queryClient);
-      resetEnsuredThreads();
       resetRegistryObservation();
     }
     const unregister = privacy.registerRuntimeFreeze(close);
@@ -120,9 +117,7 @@ createRoot(rootElement).render(
               <ConsentScreen />
             ) : (
               <FreshnessSession>
-                <OnboardingGate>
-                  <App />
-                </OnboardingGate>
+                <App gated />
               </FreshnessSession>
             )}
             {/* Тосты доступны и до прохождения онбординга, поэтому вне гейта. */}

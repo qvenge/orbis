@@ -43,7 +43,10 @@ export const restoreResponse: QueryPersister = async (queryFn, context, query) =
   const { restoring } = session;
   const runtime = freshnessRuntimeOf(context.client);
   const currentOperation = runtime?.captureOperation();
-  const signal = context.signal;
+  const chatPlace = query.queryKey[0] === 'chatOpen';
+  // Reading TanStack's signal makes observer removal cancel the whole fetch,
+  // including a POST that starts after a disk miss. A chat open must finish once sent.
+  const signal = chatPlace ? undefined : context.signal;
   const attempt = {};
   restoring.set(query, attempt);
   const forgetAttempt = () => {
@@ -55,11 +58,12 @@ export const restoreResponse: QueryPersister = async (queryFn, context, query) =
     const ticket = cache?.capture();
     const disk = await cache?.read({ key: query.queryKey, queryHash: query.queryHash }, ticket);
     if (
-      signal.aborted ||
+      signal?.aborted ||
       restoring.get(query) !== attempt ||
       caches.get(context.client) !== session ||
       !currentOperation?.() ||
-      context.client.getQueryCache().get(query.queryHash) !== query
+      context.client.getQueryCache().get(query.queryHash) !== query ||
+      (chatPlace && query.state.fetchStatus === 'idle')
     )
       throw new CancelledError({ revert: true });
     if (
@@ -68,6 +72,8 @@ export const restoreResponse: QueryPersister = async (queryFn, context, query) =
     )
       throw new CancelledError({ revert: true });
     if (disk && cache?.isCurrent(ticket)) {
+      const diskSignal = signal ?? context.signal;
+      if (diskSignal.aborted) throw new CancelledError({ revert: true });
       const { data: raw, ...age } = disk;
       const body = runtime?.projectRestoredBody(query.queryKey, raw);
       const data = body?.data ?? raw;
@@ -75,7 +81,7 @@ export const restoreResponse: QueryPersister = async (queryFn, context, query) =
       const [prefix] = query.queryKey;
       if (Array.isArray(prefix) && prefix.join('.') === 'entity.get')
         markBodyPending((data as { entity?: { bodyDoc?: unknown } })?.entity?.bodyDoc);
-      stageDiskRead(query, data, { ...age, source: 'disk', scope: cache.scope }, signal);
+      stageDiskRead(query, data, { ...age, source: 'disk', scope: cache.scope }, diskSignal);
       staged = true;
       // Keep the cancellation barrier through TanStack's success microtasks.
       setTimeout(forgetAttempt, 0);
@@ -83,6 +89,10 @@ export const restoreResponse: QueryPersister = async (queryFn, context, query) =
     }
   } finally {
     if (!staged) forgetAttempt();
+  }
+  if (chatPlace && !query.isActive()) {
+    void query.cancel({ revert: true });
+    throw new CancelledError({ revert: true });
   }
   return queryFn(context);
 };
@@ -140,6 +150,17 @@ export function bindQueryResponses(
   const cancelRestores = () => {
     for (const query of restoring.keys()) void query.cancel({ revert: true });
   };
+  function retireChatPlaces(entityId?: string) {
+    const queryCache = client.getQueryCache();
+    for (const query of queryCache.findAll({
+      queryKey: ['chatOpen'],
+      predicate: (candidate) => entityId === undefined || candidate.queryKey[1] === entityId,
+    })) {
+      // Reset wakes any live observer; removal retires its published evidence.
+      query.reset();
+      queryCache.remove(query);
+    }
+  }
   async function acceptBody(cache: Cache, receipt: BodyPublication) {
     if (closed || receipt.startedSequence <= cutoff) return;
     const ticket = cache.capture();
@@ -179,20 +200,22 @@ export function bindQueryResponses(
       }
     },
     resetResponses: (owner, sequence, token) => {
-      if (!sameFreshnessScope(scope, owner)) return;
+      if (closed || !sameFreshnessScope(scope, owner)) return;
       cutoff = Math.max(cutoff, sequence);
       cancelRestores();
       if (session.cache) void session.cache.invalidateGeneration(sequence, token);
       else void ready.then((cache) => !closed && cache?.invalidateGeneration(sequence, token));
+      retireChatPlaces();
     },
     removeEntity: (owner, id) => {
-      if (!sameFreshnessScope(scope, owner)) return;
+      if (closed || !sameFreshnessScope(scope, owner)) return;
       if (session.cache) void session.cache.removeEntity(id);
       else {
         void ready.then((cache) => {
           if (!closed) void cache?.removeEntity(id);
         });
       }
+      retireChatPlaces(id);
     },
   });
   return {

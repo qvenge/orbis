@@ -1,10 +1,10 @@
 import { PAGE_ASPECT } from '@orbis/shared';
 import { currentEntry } from '@orbis/shared/nav';
-import { useQueryClient } from '@tanstack/react-query';
-import { getQueryKey } from '@trpc/react-query';
+import { skipToken } from '@tanstack/react-query';
 import { MessageSquare, Plus, Search } from 'lucide-react';
-import { useCallback, useContext, useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { useContext, useEffect, useRef, useState } from 'react';
 import { QuickCapture } from '../../features/browser/QuickCapture';
+import { detailGetInput } from '../../features/entity-detail/detail-input';
 import { openSearch } from '../../features/search/open-search';
 import { placeKeyOf, useNav } from '../../state/navigation';
 import { useRetryBuffer } from '../../state/retry';
@@ -48,30 +48,18 @@ function openChatScreen(): void {
 /** Что известно о записи места: страница, не страница или ещё ничего (ответа `entity.get` нет). */
 type RecordKind = 'page' | 'record' | 'unknown';
 
-/**
- * Страница ли запись — по аспектам из кеша `entity.get` (экран записи его читает; своего запроса
- * «＋» не делает) с ПОДПИСКОЙ на кеш: ответ, приехавший после открытия «＋», меняет контекст (гейт 25,
- * m-1). Ключ `entity.get` экрана записи несёт ещё и `include` — берём любой ответ по этому id
- * (частичное совпадение ключа): форма ключа — дело экрана записи.
- */
+function recordKindOf(data: RouterOutputs['entity']['get']): RecordKind {
+  if (!data.entity) return 'unknown';
+  return data.entity.aspects.includes(PAGE_ASPECT) ? 'page' : 'record';
+}
+
+/** Наблюдаем тот же ключ, что и экран записи, без своего чтения. */
 function useRecordKind(id: string | null): RecordKind {
-  const queryClient = useQueryClient();
-  const subscribe = useCallback(
-    (onChange: () => void) => queryClient.getQueryCache().subscribe(onChange),
-    [queryClient],
-  );
-  const read = useCallback((): RecordKind => {
-    if (id === null) return 'unknown';
-    const entity = queryClient
-      .getQueriesData<RouterOutputs['entity']['get']>({
-        queryKey: getQueryKey(trpc.entity.get, { id }, 'query'),
-      })
-      .map(([, data]) => data?.entity)
-      .find((e) => e !== undefined);
-    if (entity === undefined) return 'unknown';
-    return entity.aspects.includes(PAGE_ASPECT) ? 'page' : 'record';
-  }, [queryClient, id]);
-  return useSyncExternalStore(subscribe, read, read);
+  const { data } = trpc.entity.get.useQuery(id === null ? skipToken : detailGetInput(id), {
+    enabled: false,
+    select: recordKindOf,
+  });
+  return data ?? 'unknown';
 }
 
 /**

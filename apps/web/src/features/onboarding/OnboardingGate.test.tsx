@@ -1,10 +1,13 @@
-import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor } from '@testing-library/react';
+import { getQueryKey } from '@trpc/react-query';
 import { expect, test } from 'vitest';
 import { renderWithProviders, trpcError } from '../../test/harness';
+import { trpc } from '../../trpc';
 import { OnboardingGate } from './OnboardingGate';
 
 const settings = {
   graphId: 'u1',
+  graphEstablished: true,
   plan: 'dev',
   timezone: 'Europe/Moscow',
   defaultCurrency: 'RUB',
@@ -38,52 +41,46 @@ test('первый вход: getSettings NOT_FOUND → seedOnboarding → рен
   expect(calls.some((c) => c.path === 'user.seedOnboarding')).toBe(true);
 });
 
-// seedOnboarding вызывается безусловно раз за сессию: признак «граф заведён» — оболочка хоста, а не
-// строка настроек (срез 1б §8.6); на заведённом графе сервер отвечает {seeded:false} и ничего не пишет.
-test('повторный вход: seedOnboarding вызван, рендер не ждёт его; после ответа — refetch настроек', async () => {
-  let seedDone = false;
-  const { calls } = renderWithProviders(
-    <OnboardingGate>
-      <div data-testid="app">app</div>
-    </OnboardingGate>,
+test('готовый граф открывает приложение без seed и повторного settings', async () => {
+  const { calls } = renderWithProviders(<OnboardingGate>app</OnboardingGate>, (path) => {
+    if (path === 'user.getSettings') return settings;
+    throw new Error(`unexpected ${path}`);
+  });
+  await screen.findByText('app');
+  expect(calls.map((call) => call.path)).toEqual(['user.getSettings']);
+});
+
+test('кеш настроек открывает приложение, seed ждёт свежего ответа без host-shell', async () => {
+  let deliver: (reply: typeof settings) => void = () => {};
+  const fresh = new Promise<typeof settings>((resolve) => {
+    deliver = resolve;
+  });
+  let ready = false;
+  const { calls, queryClient } = renderWithProviders(
+    <OnboardingGate>app</OnboardingGate>,
     (path) => {
-      if (path === 'user.getSettings')
-        return seedDone ? { ...settings, installedViews: ['orbis-budget'] } : settings;
+      if (path === 'user.getSettings') return ready ? settings : fresh;
       if (path === 'user.seedOnboarding') {
-        // Медленный ответ: рендер приложения не должен его ждать
-        return new Promise((resolve) =>
-          setTimeout(() => {
-            seedDone = true;
-            resolve({ seeded: false });
-          }, 50),
-        );
+        expect(screen.getByText('app')).toBeVisible();
+        ready = true;
+        return { seeded: false };
       }
       throw new Error(`unexpected ${path}`);
     },
+    { freshness: true },
   );
-  // Приложение рендерится, пока мутация ещё висит
-  await waitFor(() => expect(screen.getByTestId('app')).toBeInTheDocument());
-  expect(calls.some((c) => c.path === 'user.seedOnboarding')).toBe(true);
-  // После ответа настройки перечитаны
+  const key = getQueryKey(trpc.user.getSettings, undefined, 'query');
+  act(() => queryClient.setQueryData(key, { ...settings, graphEstablished: false }));
+  await screen.findByText('app');
+  expect(calls.map((call) => call.path)).toEqual(['user.getSettings']);
+  deliver({ ...settings, graphEstablished: false });
   await waitFor(() =>
-    expect(calls.filter((c) => c.path === 'user.getSettings').length).toBeGreaterThan(1),
+    expect(calls.map((call) => call.path)).toEqual([
+      'user.getSettings',
+      'user.seedOnboarding',
+      'user.getSettings',
+    ]),
   );
-});
-
-test('повторный вход С настройками: seedOnboarding всё равно вызван (безусловность), рендер не заблокирован', async () => {
-  const { calls } = renderWithProviders(
-    <OnboardingGate>
-      <div data-testid="app">app</div>
-    </OnboardingGate>,
-    (path) => {
-      if (path === 'user.getSettings') return { ...settings, installedViews: ['orbis-budget'] };
-      if (path === 'user.seedOnboarding') return new Promise(() => {}); // никогда не отвечает
-      throw new Error(`unexpected ${path}`);
-    },
-  );
-  await waitFor(() => expect(screen.getByTestId('app')).toBeInTheDocument());
-  expect(calls.some((c) => c.path === 'user.seedOnboarding')).toBe(true);
-  expect(screen.queryByTestId('onboarding-splash')).not.toBeInTheDocument();
 });
 
 test('фоновый seedOnboarding упал у пользователя С настройками: приложение рендерится, alert не показывается', async () => {
@@ -92,7 +89,7 @@ test('фоновый seedOnboarding упал у пользователя С на
       <div data-testid="app">app</div>
     </OnboardingGate>,
     (path) => {
-      if (path === 'user.getSettings') return settings;
+      if (path === 'user.getSettings') return { ...settings, graphEstablished: false };
       if (path === 'user.seedOnboarding') throw trpcError('INTERNAL_SERVER_ERROR');
       throw new Error(`unexpected ${path}`);
     },
@@ -137,7 +134,7 @@ test('граф старой формы: seedOnboarding → CONFLICT при су�
       <div data-testid="app">app</div>
     </OnboardingGate>,
     (path) => {
-      if (path === 'user.getSettings') return settings;
+      if (path === 'user.getSettings') return { ...settings, graphEstablished: false };
       if (path === 'user.seedOnboarding') throw trpcError('CONFLICT');
       throw new Error(`unexpected ${path}`);
     },
@@ -206,7 +203,7 @@ test('scoped seed waits for a bearer and transitions only from its confirmed req
       <Host />
     </StrictMode>,
     (path) => {
-      if (path === 'user.getSettings') return settings;
+      if (path === 'user.getSettings') return { ...settings, graphEstablished: false };
       if (path === 'user.seedOnboarding') return { seeded: true };
       throw new Error(`unexpected ${path}`);
     },

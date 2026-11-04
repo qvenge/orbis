@@ -1,16 +1,11 @@
 import { HOST_APP } from '@orbis/shared/nav';
 import { X } from 'lucide-react';
-import { lazy, Suspense } from 'react';
-import { ThreadSkeleton } from '../../features/chat/MessageList';
+import { GlobalChat } from '../../features/chat/ChatScreen';
 import { ReloadButton } from '../ChunkErrorBoundary';
 import { type FrameApp, FrameAppContext } from './FrameApp';
 import { PartBoundary } from './PartBoundary';
 import { useSideChat } from './side-chat-store';
 import { useChatContext } from './useChatContext';
-
-const ChatPanel = lazy(() =>
-  import('../../features/chat/ChatPanel').then((m) => ({ default: m.ChatPanel })),
-);
 
 /**
  * Ссылки бокового чата — как из содержимого хоста (решение плана 13). Боковой чат — не элемент
@@ -57,9 +52,7 @@ export function SideChat() {
           }
         >
           <FrameAppContext.Provider value={SIDE_FRAME}>
-            <Suspense fallback={<ThreadSkeleton />}>
-              <ChatPanel context={context} />
-            </Suspense>
+            <GlobalChat context={context} />
           </FrameAppContext.Provider>
         </PartBoundary>
       </div>

@@ -2,7 +2,7 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { CLIENT_VERSION_HEADER } from '@orbis/shared';
+import { CLIENT_VERSION_HEADER, globalThreadId } from '@orbis/shared';
 import type { BrowserContext, Page, Request, Response } from 'playwright-core';
 // Текст запросов поиска хоста — тот же модуль, что строит их окну поиска: проверка «поиск найдёт запись»
 // обязана спрашивать ровно то, что спросит окно (группы, потолки, квотирование строки), а не свою копию.
@@ -322,11 +322,11 @@ async function trpcCall<T>(
         : undefined;
       if (!token) throw new Error('в профиле нет сессии — сначала bun scripts/lab/login.ts');
       const headers = { authorization: `Bearer ${token}`, 'content-type': 'application/json' };
+      const query =
+        input === undefined ? '' : `?input=${encodeURIComponent(JSON.stringify(input))}`;
       const res =
         kind === 'query'
-          ? await fetch(`/trpc/${path}?input=${encodeURIComponent(JSON.stringify(input))}`, {
-              headers,
-            })
+          ? await fetch(`/trpc/${path}${query}`, { headers })
           : await fetch(`/trpc/${path}`, {
               method: 'POST',
               headers,
@@ -533,6 +533,7 @@ export async function observeBodySave(
       if (
         (procedure === 'entity.get' && input?.id === id) ||
         procedure === 'chat.listMessages' ||
+        procedure === 'chat.openThread' ||
         procedure === 'chat.threadEntity'
       ) {
         const reads =
@@ -855,19 +856,32 @@ async function focusEditor(page: Page): Promise<void> {
   await page.click(editor);
 }
 
-async function waitForSideChatView(page: Page): Promise<void> {
+async function waitForSideChatView(page: Page, threadId?: string): Promise<void> {
+  const scope =
+    threadId === undefined
+      ? '#side-chat'
+      : `#side-chat [data-thread-id=${JSON.stringify(threadId)}][data-thread-ready="true"]`;
   const options = { state: 'visible', timeout: 10_000 } as const;
   try {
     await Promise.all([
-      page.locator('#side-chat [data-testid="message-list"]').waitFor(options),
-      page.locator('#side-chat input[aria-label="Сообщение"]').waitFor(options),
+      page.locator(`${scope} [data-testid="message-list"]`).waitFor(options),
+      page.locator(`${scope} input[aria-label="Сообщение"]`).waitFor(options),
     ]);
   } catch (cause) {
     throw new Error('боковой чат не отрисовал тред и поле ввода', { cause });
   }
 }
 
-export async function openReadySideChat(page: Page): Promise<void> {
+export async function openReadySideChat(page: Page, globalId?: string): Promise<void> {
+  let open: { request: Request; batchIndex: number | undefined } | undefined;
+  const observeOpen = (request: Request) => {
+    if (request.method() !== 'POST') return;
+    const operation = operationsOf(request).find(
+      ({ procedure, input }) => procedure === 'chat.openThread' && input?.entityId === undefined,
+    );
+    if (operation) open = { request, batchIndex: operation.batchIndex };
+  };
+  if (globalId !== undefined) page.on('request', observeOpen);
   const chat = page.locator('[data-testid="host-chat"]');
   let threadId: string | undefined;
   const options = { timeout: 10_000 };
@@ -895,9 +909,26 @@ export async function openReadySideChat(page: Page): Promise<void> {
       return read !== undefined && Array.isArray(await wireDataAt(res, read.batchIndex));
     }, options)
     .catch(() => null);
-  await chat.click(options);
-  if (!(await loaded)) throw new Error('боковой чат не подтвердил загрузку активного треда');
-  await waitForSideChatView(page);
+  try {
+    await chat.click(options);
+    const legacy = async () => {
+      if (!(await loaded) || open || (globalId !== undefined && threadId !== globalId))
+        throw new Error('Нет подтверждённого ответа для активного треда');
+      await waitForSideChatView(page);
+    };
+    const current = async (expectedId: string) => {
+      await waitForSideChatView(page, expectedId);
+      if (!open) return; // The same visible, confirmed newest page was already in the scoped cache.
+      const wire = await wireDataAt(await open.request.response(), open.batchIndex);
+      if (wire?.threadId !== expectedId || !Array.isArray(wire.messages))
+        throw new Error('Ответ openThread не подтвердил активный тред');
+    };
+    await Promise.any(globalId === undefined ? [legacy()] : [legacy(), current(globalId)]);
+  } catch (cause) {
+    throw new Error('боковой чат не подтвердил загрузку активного треда', { cause });
+  } finally {
+    if (globalId !== undefined) page.off('request', observeOpen);
+  }
 }
 
 /**
@@ -918,7 +949,10 @@ async function typing(
   page.on('dialog', (d) => void d.accept());
   await page.goto(`${LAB_URL}/r/${noteId}`);
   await waitReady(page, noteId, notes, 'лаб-запись');
-  await openReadySideChat(page);
+  // Independent witness for the expected global thread. The production UI uses
+  // only the binding issued by openThread; the lab checks it against the fixture graph.
+  const settings = await trpcCall<{ graphId: string }>(page, 'user.getSettings', undefined);
+  await openReadySideChat(page, globalThreadId(settings.graphId));
   await focusEditor(page);
   const requests: Record<string, number> = {};
   const perSave: Array<Record<string, number>> = [];

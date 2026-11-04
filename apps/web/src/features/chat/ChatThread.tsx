@@ -1,11 +1,26 @@
 import { Button } from '../../ui/Button';
 import { Composer } from './Composer';
-import { MessageList, ThreadSkeleton } from './MessageList';
+import { MessageList } from './MessageList';
+import { ThreadSkeleton } from './ThreadSkeleton';
 import { useChatThread, useSendMessage } from './useChatThread';
+import { type EnsuredThread, EnsureFailedNotice } from './useEnsuredThread';
+
+export function OpenedChatThread({ state, retry }: { state: EnsuredThread; retry: () => void }) {
+  if (state.status === 'pending') return <ThreadSkeleton />;
+  if (state.status === 'failed')
+    return (
+      <EnsureFailedNotice
+        what="Не удалось открыть тред записи."
+        message={state.message}
+        onRetry={retry}
+      />
+    );
+  return <ChatThread threadId={state.threadId} />;
+}
 
 // Общий чат-компонент (§2.2): используется глобальным тредом и тредом сущности (разный threadId).
 export function ChatThread({ threadId }: { threadId: string }) {
-  const { messages, fetchOlder, hasMore, isLoading } = useChatThread(threadId);
+  const { messages, fetchOlder, hasMore, hasTail, error, retry } = useChatThread(threadId);
   const { sendMessage, isSending, retryMessage } = useSendMessage(threadId);
   return (
     <div className="flex h-full flex-col">
@@ -14,7 +29,13 @@ export function ChatThread({ threadId }: { threadId: string }) {
           Загрузить ещё
         </Button>
       )}
-      {isLoading ? (
+      {error ? (
+        <EnsureFailedNotice
+          what="Не удалось прочитать тред."
+          message={error.message}
+          onRetry={retry}
+        />
+      ) : !hasTail ? (
         <ThreadSkeleton />
       ) : (
         // §7.9: тред detail тоже отдаёт «Повторить» (onRetry) при сбое ai.sendMessage.
@@ -40,7 +61,7 @@ export function ChatThread({ threadId }: { threadId: string }) {
  * (`chat.ensureThread` — мутация): у треда, который не открывали, строки нет, и лента честно пуста.
  */
 export function ChatFeed({ threadId }: { threadId: string }) {
-  const { messages, fetchOlder, hasMore, isLoading } = useChatThread(threadId);
+  const { messages, fetchOlder, hasMore, hasTail, error, retry } = useChatThread(threadId);
   return (
     <div className="flex h-full flex-col">
       {hasMore && (
@@ -48,7 +69,13 @@ export function ChatFeed({ threadId }: { threadId: string }) {
           Загрузить ещё
         </Button>
       )}
-      {isLoading ? (
+      {error ? (
+        <EnsureFailedNotice
+          what="Не удалось прочитать тред."
+          message={error.message}
+          onRetry={retry}
+        />
+      ) : !hasTail ? (
         <ThreadSkeleton />
       ) : (
         <MessageList

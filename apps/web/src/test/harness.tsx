@@ -144,6 +144,7 @@ export function mockLink(handler: MockHandler, watermark = () => '0'): TRPCLink<
       observable((observer) => {
         const epoch = undoEpoch();
         const startedSequence = nextNetworkOrder();
+        const openWatermark = op.path === 'chat.openThread' ? watermark() : undefined;
         let answer: unknown;
         try {
           answer = handler(op.path, op.input, op.type);
@@ -152,11 +153,15 @@ export function mockLink(handler: MockHandler, watermark = () => '0'): TRPCLink<
         }
         Promise.resolve(answer)
           .then((data) => {
-            if (op.type === 'query' || op.path === 'entity.blocks') {
+            if (
+              op.type === 'query' ||
+              op.path === 'entity.blocks' ||
+              op.path === 'chat.openThread'
+            ) {
               const receipt = {
                 epoch,
                 startedSequence,
-                watermark: watermark(),
+                watermark: openWatermark ?? watermark(),
                 receivedAt: Date.now(),
               };
               recordNetworkReadReceipt(data, receipt);
@@ -168,7 +173,7 @@ export function mockLink(handler: MockHandler, watermark = () => '0'): TRPCLink<
           })
           .catch((err) => {
             const error = err instanceof TRPCClientError ? err : TRPCClientError.from(err);
-            if (op.type === 'query' || op.path === 'entity.blocks')
+            if (op.type === 'query' || op.path === 'entity.blocks' || op.path === 'chat.openThread')
               recordReadErrorReceipt(error, { epoch, startedSequence });
             observer.error(error);
           });

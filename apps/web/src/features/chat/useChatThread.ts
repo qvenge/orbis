@@ -1,8 +1,13 @@
 import { newId } from '@orbis/shared';
-import { useInfiniteQuery, useQueryClient } from '@tanstack/react-query';
+import { hashKey, type QueryClient, useInfiniteQuery, useQueryClient } from '@tanstack/react-query';
 import { TRPCClientError } from '@trpc/client';
+import { getQueryKey } from '@trpc/react-query';
 import { useEffect, useSyncExternalStore } from 'react';
-import { freshnessRuntimeOf } from '../../lib/freshness/provenance';
+import {
+  freshnessRuntimeOf,
+  inheritNetworkReadReceipt,
+  networkReadReceiptOf,
+} from '../../lib/freshness/provenance';
 import { useFreshnessVisible } from '../../lib/freshness/screen';
 import { networkOnlyResponse } from '../../lib/local-data/query-responses';
 import { type RouterOutputs, trpc } from '../../trpc';
@@ -14,6 +19,58 @@ const PAGE = 50;
 
 export function chatThreadKey(threadId: string) {
   return ['chatThread', threadId] as const;
+}
+
+/** Publish a confirmed open page through the ordinary QueryCache read callbacks for both keys. */
+export async function publishOpenedTail(
+  client: QueryClient,
+  opened: RouterOutputs['chat']['openThread'],
+  current: () => boolean,
+) {
+  const { threadId, messages } = opened;
+  const runtime = freshnessRuntimeOf(client);
+  const receipt = networkReadReceiptOf(opened);
+  if (receipt) runtime?.noteOpenedThread(receipt, threadId, opened.openTxId);
+  inheritNetworkReadReceipt(opened, messages);
+  const canFill = (queryKey: readonly unknown[]) => {
+    if (!current()) return false;
+    const query = client.getQueryCache().get(hashKey(queryKey));
+    if (!query) return true;
+    const prior = runtime?.publicationOf(query.queryHash);
+    return (
+      prior?.source !== 'network' ||
+      (receipt?.startedSequence ?? 0) >= prior.receipt.startedSequence
+    );
+  };
+  const listKey = getQueryKey(trpc.chat.listMessages, { threadId, limit: PAGE }, 'query');
+  const threadKey = chatThreadKey(threadId);
+  const options = {
+    queryFn: () => {
+      if (!current()) throw new Error('Сессия изменилась');
+      return messages;
+    },
+    staleTime: 0,
+    retry: false,
+    networkMode: 'always',
+    meta: networkOnlyResponse,
+  } as const;
+  await Promise.all([
+    canFill(listKey) && client.fetchQuery({ ...options, queryKey: listKey }),
+    canFill(threadKey) &&
+      client.fetchInfiniteQuery({
+        ...options,
+        queryKey: threadKey,
+        initialPageParam: undefined as string | undefined,
+        pages: 1,
+        getNextPageParam: nextThreadCursor,
+      }),
+  ]);
+}
+
+function nextThreadCursor(lastPage: ChatMessage[]) {
+  if (lastPage.length < PAGE) return undefined;
+  const oldest = lastPage[lastPage.length - 1];
+  return oldest ? `${oldest.createdAt}|${oldest.id}` : undefined;
 }
 
 /** A no-op command can confirm that the visible thread missed an earlier write. */
@@ -45,11 +102,7 @@ export function useChatThread(threadId: string) {
         { staleTime: 0, meta: networkOnlyResponse },
       ),
     // The compound cursor also orders messages created in the same millisecond.
-    getNextPageParam: (lastPage) => {
-      if (lastPage.length < PAGE) return undefined;
-      const oldest = lastPage[lastPage.length - 1];
-      return oldest ? `${oldest.createdAt}|${oldest.id}` : undefined;
-    },
+    getNextPageParam: nextThreadCursor,
   });
   useEffect(() => {
     const pages = q.data?.pages;
@@ -60,6 +113,9 @@ export function useChatThread(threadId: string) {
     fetchOlder: () => q.fetchNextPage(),
     hasMore: q.hasNextPage,
     isLoading: q.isLoading,
+    hasTail: q.data?.pages[0] !== undefined,
+    error: q.data === undefined && q.isError ? q.error : undefined,
+    retry: () => void q.refetch({ cancelRefetch: false }),
   };
 }
 

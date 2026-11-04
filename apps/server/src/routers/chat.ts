@@ -2,13 +2,13 @@
 // Роутер chat (§9.1): треды §4.5 (детерминированные id, ensure-семантика) и сообщения
 // §4.6 (append-only). Только трансляция: примитивы — chat/threads.ts, chat/messages.ts и
 // выдача треда journal/thread-page.ts.
-import { chatThreadEntityInput } from '@orbis/shared';
-import { and, eq } from 'drizzle-orm';
+import { chatThreadEntityInput, type GraphId } from '@orbis/shared';
+import { and, eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { appendMessageIdempotent } from '../chat/messages';
 import { ensureEntityThread, ensureGlobalThread } from '../chat/threads';
 import { chatThreads } from '../db/schema';
-import { withIdentity } from '../db/with-identity';
+import { type Tx, withIdentity } from '../db/with-identity';
 import { ExecError, execErrorToTRPC } from '../errors';
 import { threadPage } from '../journal/thread-page';
 import { ownerOnlyProcedure, protectedProcedure, router } from '../trpc';
@@ -17,6 +17,17 @@ import { ownerOnlyProcedure, protectedProcedure, router } from '../trpc';
 function mapExecError(e: unknown): never {
   if (e instanceof ExecError) throw execErrorToTRPC(e);
   throw e;
+}
+
+const threadPlaceProcedure = ownerOnlyProcedure.input(
+  z.object({ entityId: z.string().uuid().optional() }).strict(),
+);
+const DEFAULT_THREAD_PAGE_SIZE = 50;
+
+function ensureThreadForPlace(tx: Tx, graph: GraphId, entityId: string | undefined) {
+  return entityId === undefined
+    ? ensureGlobalThread(tx, graph)
+    : ensureEntityThread(tx, graph, entityId);
 }
 
 // Курсор пагинации listMessages: строгий ISO-UTC (форма Date.toISOString(), опц. дробные
@@ -49,20 +60,34 @@ export const chatRouter = router({
     }),
 
   // Без entityId — глобальный тред владельца; ensure идемпотентен (§4.5)
-  ensureThread: ownerOnlyProcedure
-    .input(z.object({ entityId: z.string().uuid().optional() }).strict())
-    .mutation(async ({ ctx, input }) => {
-      try {
-        const threadId = await withIdentity(ctx.db, ctx.identity, (tx) =>
-          input.entityId !== undefined
-            ? ensureEntityThread(tx, ctx.identity.graph, input.entityId)
-            : ensureGlobalThread(tx, ctx.identity.graph),
+  ensureThread: threadPlaceProcedure.mutation(async ({ ctx, input }) => {
+    try {
+      const threadId = await withIdentity(ctx.db, ctx.identity, (tx) =>
+        ensureThreadForPlace(tx, ctx.identity.graph, input.entityId),
+      );
+      return { threadId };
+    } catch (e) {
+      mapExecError(e);
+    }
+  }),
+
+  // Первое открытие чата: заведение и первая страница в одной транзакции.
+  openThread: threadPlaceProcedure.mutation(async ({ ctx, input }) => {
+    try {
+      const graph = ctx.identity.graph;
+      return await withIdentity(ctx.db, ctx.identity, async (tx) => {
+        const threadId = await ensureThreadForPlace(tx, graph, input.entityId);
+        const messages = await threadPage(tx, graph, threadId, { limit: DEFAULT_THREAD_PAGE_SIZE });
+        // Identify only this transaction's feed INSERT without changing the read watermark.
+        const [row] = await tx.execute<{ xid: string | null }>(
+          sql`SELECT pg_current_xact_id_if_assigned()::text AS xid`,
         );
-        return { threadId };
-      } catch (e) {
-        mapExecError(e);
-      }
-    }),
+        return { threadId, messages, ...(row?.xid != null && { openTxId: row.xid }) };
+      });
+    } catch (e) {
+      mapExecError(e);
+    }
+  }),
 
   // created_at DESC (свежие первыми), default limit 50. Курсор before — составной
   // `"<iso>|<id>"` (createdAt+id самого старого загруженного, §2.1 UUIDv7): устойчив к
@@ -88,7 +113,7 @@ export const chatRouter = router({
       withIdentity(ctx.db, ctx.identity, (tx) =>
         threadPage(tx, ctx.identity.graph, input.threadId, {
           ...(input.before !== undefined && { before: input.before }),
-          limit: input.limit ?? 50,
+          limit: input.limit ?? DEFAULT_THREAD_PAGE_SIZE,
         }),
       ),
     ),

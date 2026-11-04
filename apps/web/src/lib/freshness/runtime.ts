@@ -28,6 +28,7 @@ import {
   type BodyResult,
   diskReadOf,
   type FreshnessSinks,
+  type NetworkReadReceipt,
   networkObservationOf,
   nextNetworkOrder,
   observeNetworkRead,
@@ -59,6 +60,7 @@ type BodySave = {
 };
 type BodyToken = Readonly<BodySave & { startedSequence: number }>;
 type Entry = { txId: string; change: Change; due: number };
+type ThreadInsert = { txId: string; threadId: string };
 type Screen = {
   online: boolean;
   updating: boolean;
@@ -95,6 +97,15 @@ function validChange(change: Change): boolean {
   );
 }
 const cmp = (a: string, b: string) => a.length - b.length || (a < b ? -1 : a === b ? 0 : 1);
+
+function structuralThreadInsert(change: Change): string | null {
+  return change.kind === 'thread' &&
+    change.operation === 'insert' &&
+    !change.graphWide &&
+    change.threadId === change.rowKey
+    ? change.threadId
+    : null;
+}
 
 function placeholderTime(query: Query, scope: FreshnessScope): number | null {
   const times = query.observers.flatMap((observer) => {
@@ -137,6 +148,7 @@ export function createFreshnessRuntime({
   const publications = new Map<string, ReadPublication>();
   const publicationListeners = new Map<string, Set<() => void>>();
   const acceptedReads = new WeakSet<ReadPublication>();
+  const openedThreads = new WeakMap<NetworkReadReceipt, ThreadInsert>();
   const optimistic = createOptimisticStore(scope);
   const createIntents = createCreateIntentRegistry(scope, () => (current() ? scope : undefined));
   const displayRepairAttempts = new Map<string, Promise<unknown> | null>();
@@ -159,6 +171,7 @@ export function createFreshnessRuntime({
   let wake: Timer | undefined;
   let fallback: Timer | undefined;
   let cursor: string | undefined;
+  let threadInsertSuffix: { from: string; insert?: ThreadInsert } | undefined;
   let minimum: string | undefined;
   let floor: string | undefined;
   let completedFloor: string | undefined;
@@ -361,6 +374,7 @@ export function createFreshnessRuntime({
 
   function resetAll(token: string) {
     resetSequence = nextNetworkOrder();
+    threadInsertSuffix = undefined;
     bodies.clear();
     deleted.clear();
     // Retire old read evidence and preserve unsettled relation commands.
@@ -373,25 +387,28 @@ export function createFreshnessRuntime({
   }
 
   function apply(batch: Entry[]) {
-    if (batch.length > 200) {
-      for (const query of cache.getAll()) mark(query, true);
-      schedule();
-      return;
-    }
     for (const { change } of batch) {
       if (change.kind !== 'entity') continue;
       if (change.operation === 'delete') {
         deleted.add(change.rowKey);
         bodies.delete(change.rowKey);
+        sinks.removeEntity?.(scope, change.rowKey);
       }
       if (change.operation === 'insert') deleted.delete(change.rowKey);
+    }
+    if (batch.length > 200) {
+      for (const query of cache.getAll()) mark(query, true);
+      schedule();
+      return;
     }
     for (const query of cache.getAll()) {
       const d = policy(query)?.dependencies;
       if (!d) continue;
+      const opened = openedTail(publications.get(query.queryHash));
       let fetch = false;
       let stale = false;
       for (const { txId, change } of batch) {
+        if (opened?.txId === txId && opened.threadId === structuralThreadInsert(change)) continue;
         const id = own.get(txId);
         const body = change.kind === 'entity' && change.scope === 'body';
         const direct = change.entityIds.some((id) => d.entityIds.includes(id));
@@ -551,10 +568,23 @@ export function createFreshnessRuntime({
       return false;
     if (cmp(page.watermark, from) < 0) return true;
     const due = clock.now() + EARLY_BODY_MS;
+    // Keep a bounded proof for an open response arriving behind its own feed
+    // INSERT. Any other event or a second INSERT makes this interval uncertain.
+    let suffix: typeof threadInsertSuffix = threadInsertSuffix ?? { from };
     for (const tx of page.transactions) {
       if (cmp(tx.txId, from) < 0) continue;
-      for (const change of tx.changes) queued.push({ txId: tx.txId, change, due });
+      for (const change of tx.changes) {
+        queued.push({ txId: tx.txId, change, due });
+        if (suffix) {
+          const threadId = structuralThreadInsert(change);
+          suffix =
+            threadId !== null && !suffix.insert
+              ? { from: suffix.from, insert: { txId: tx.txId, threadId } }
+              : undefined;
+        }
+      }
     }
+    threadInsertSuffix = suffix;
     cursor = page.watermark;
     if (queued.length && coalesce === undefined) coalesce = clock.setTimeout(flush, COALESCE_MS);
     return true;
@@ -611,6 +641,16 @@ export function createFreshnessRuntime({
     for (const listener of publicationListeners.get(hash) ?? []) listener();
   }
 
+  function openedTail(read: ReadPublication | undefined): ThreadInsert | undefined {
+    if (
+      read?.source !== 'network' ||
+      !isCurrentOperation(read.receipt.startedSequence) ||
+      (family(read.key) !== 'chatThread' && family(read.key) !== 'chat.listMessages')
+    )
+      return undefined;
+    return openedThreads.get(read.receipt);
+  }
+
   function acceptRead(read: ReadPublication): boolean {
     if (!current() || !sameFreshnessScope(scope, read.scope) || read.source === 'optimistic')
       return false;
@@ -641,7 +681,21 @@ export function createFreshnessRuntime({
     const { watermark } = receipt;
     if (watermark !== null && (minimum === undefined || cmp(watermark, minimum) < 0))
       minimum = watermark;
-    const stale = cursor !== undefined && (watermark === null || cmp(watermark, cursor) < 0);
+    // A successful ensure establishes the place's server ID independently of
+    // the snapshot used for its message tail. Entity deletion retires the place.
+    const confirmedPlace = family(read.key) === 'chatOpen' && watermark !== null;
+    const opened = openedTail(read);
+    const ownInsertCovered =
+      opened !== undefined &&
+      watermark !== null &&
+      threadInsertSuffix?.insert?.txId === opened.txId &&
+      threadInsertSuffix.insert.threadId === opened.threadId &&
+      cmp(watermark, threadInsertSuffix.from) >= 0;
+    const stale =
+      !confirmedPlace &&
+      !ownInsertCovered &&
+      cursor !== undefined &&
+      (watermark === null || cmp(watermark, cursor) < 0);
     publications.set(read.queryHash, read);
     optimistic.acceptResponse(read, !stale);
     finishOptimisticRead(read.queryHash);
@@ -913,6 +967,17 @@ export function createFreshnessRuntime({
     captureOperation,
     isCurrentOperation,
     isCurrentScope: current,
+    noteOpenedThread(receipt: NetworkReadReceipt, threadId: string, txId: unknown) {
+      const xid = changeXidInput.safeParse(txId);
+      if (
+        xid.success &&
+        receipt.epoch === scope.epoch &&
+        receipt.watermark !== null &&
+        cmp(xid.data, receipt.watermark) >= 0 &&
+        isCurrentOperation(receipt.startedSequence)
+      )
+        openedThreads.set(receipt, { threadId, txId: xid.data });
+    },
     createIntents,
     beginBodySave,
     settleBodySave,
