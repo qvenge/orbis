@@ -1459,10 +1459,10 @@ test('свёрнутый дифф: счётчики и ≤3 блоков; skippe
   expect(card).not.toHaveTextContent(BODY_MARKDOWN);
   // Приёмка 2: и строка записи, и «открыть запись» ведут на саму запись — существующей
   // навигацией по entity id (полный дифф живёт там, а не в ленте).
-  fireEvent.click(await within(card).findByRole('button', { name: 'Купить билеты' }));
+  fireEvent.click(await within(card).findByRole('link', { name: 'Купить билеты' }));
   expect(topAddress()).toEqual(recordAddress('e1'));
   resetNavForTests();
-  fireEvent.click(await within(card).findByRole('button', { name: /открыть запись/i }));
+  fireEvent.click(await within(card).findByRole('link', { name: /открыть запись/i }));
   expect(topAddress()).toEqual(recordAddress('e1'));
   withUnits.unmount();
 

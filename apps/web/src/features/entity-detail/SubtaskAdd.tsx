@@ -1,13 +1,17 @@
 import { ROLE_SUBITEM } from '@orbis/shared';
+import { getQueryKey } from '@trpc/react-query';
 import { Plus } from 'lucide-react';
 import { CreateIntentRows } from '../../lib/optimistic/CreateIntentRows';
 import {
   type CreatePlacement,
   useCreateCapture,
+  useCreatePlacement,
   useCreateSurface,
 } from '../../lib/optimistic/use-create-intent';
+import { trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
 import { Spinner } from '../../ui/Spinner';
+import { detailGetInput } from './detail-input';
 
 /** Создание приезжает отдельно; список и его EntityRef уже показываются первым кадром. */
 export function SubtaskAdd({
@@ -15,10 +19,16 @@ export function SubtaskAdd({
   placement,
 }: {
   parentId: string;
-  placement?: CreatePlacement;
+  placement: Omit<CreatePlacement, 'key'>;
 }) {
   const formScope = useCreateSurface('subtask-add');
-  const capture = useCreateCapture(`subtasks:${parentId.toLowerCase()}`, placement, formScope);
+  const origin = `subtasks:${parentId.toLowerCase()}`;
+  const canonical = {
+    ...placement,
+    key: getQueryKey(trpc.entity.get, detailGetInput(parentId), 'query'),
+  };
+  useCreatePlacement(origin, canonical);
+  const capture = useCreateCapture(origin, canonical, formScope);
   const draft = capture.text;
   const isPending = capture.rows.some((view) => view.status === 'pending');
 

@@ -2,10 +2,11 @@
 // задачи 3, I-4): ссылка, раздел, плитка, «‹», системный «назад»; `useOpenRecord` метку сам не ставит.
 import type { PerfSample } from '@orbis/shared';
 import { HOST_APP } from '@orbis/shared/nav';
-import { renderHook } from '@testing-library/react';
+import { fireEvent, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { useOpenRecord } from '../app/useOpenRecord';
 import { resetNavForTests, setNavState, useNav } from '../state/navigation';
+import { renderWithProviders } from '../test/harness';
 import { markScreenReady, resetMarksForTests } from './marks';
 
 const recorded = vi.hoisted(() => [] as PerfSample[]);
@@ -107,8 +108,16 @@ describe('метка перехода в сторе навигации', () => {
   });
 
   test('useOpenRecord ставит метку ровно один раз — через стор, без своей', () => {
-    const { result } = renderHook(() => useOpenRecord());
-    result.current('x');
+    function Adapter() {
+      const open = useOpenRecord();
+      return (
+        <button type="button" onClick={() => open('x')}>
+          Open
+        </button>
+      );
+    }
+    renderWithProviders(<Adapter />);
+    fireEvent.click(screen.getByRole('button', { name: 'Open' }));
     expect(starts.n).toBe(1);
     markScreenReady('x', { cached: false });
     expect(transitions()).toHaveLength(1);

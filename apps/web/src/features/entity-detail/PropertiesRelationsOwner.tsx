@@ -27,6 +27,7 @@ const unavailable: LatestPanelHost = {
   available: new Set(),
   restricted: true,
   setMode() {},
+  openRecord() {},
   setHostView() {},
   restore() {},
   makePage() {},

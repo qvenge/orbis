@@ -7,7 +7,6 @@
 // отвечают на него ЗДЕСЬ, на экране прогона, — второго места, где владелец мог бы его
 // увидеть, у рутины не существует.
 import { useId, useState } from 'react';
-import { useOpenRecord } from '../../app/useOpenRecord';
 import { formatDate } from '../../lib/format';
 import { Markdown } from '../../lib/markdown/Markdown';
 import { trpc } from '../../trpc';
@@ -35,7 +34,6 @@ export type RoutineRunQuestion = {
 };
 
 export function RoutineQuestionBlock({ run }: { run: RoutineRunQuestion }) {
-  const openEntity = useOpenRecord();
   const answerId = useId();
   // Зона владельца — тем же швом, что у ленты прогона и истории: без неё время печаталось бы
   // в зоне машины, а вопрос, заданный ночью, читается только вместе с «когда».
@@ -69,10 +67,8 @@ export function RoutineQuestionBlock({ run }: { run: RoutineRunQuestion }) {
           {formatDate(run.asked_at, tz)}
         </time>
       </h3>
-      {/* Разметкой, а не сырым текстом: вопрос пишет модель, и пишет она markdown'ом —
-          списками, кодом и ссылками на записи. `onEntityLink` не украшение: без него ссылка
-          `[[entity:…]]` из вопроса ПЕРЕЗАГРУЖАЕТ SPA (контракт Markdown.tsx). */}
-      <Markdown source={run.question} className="text-sm" onEntityLink={openEntity} />
+      {/* Вопрос модели может содержать разметку и ссылки на записи. */}
+      <Markdown source={run.question} className="text-sm" />
 
       {run.reply !== undefined && (
         <div className="flex flex-col gap-1 border-line/60 border-t pt-3">
@@ -82,7 +78,7 @@ export function RoutineQuestionBlock({ run }: { run: RoutineRunQuestion }) {
               {formatDate(run.reply.at, tz)}
             </time>
           </h4>
-          <Markdown source={run.reply.text} className="text-sm" onEntityLink={openEntity} />
+          <Markdown source={run.reply.text} className="text-sm" />
         </div>
       )}
 

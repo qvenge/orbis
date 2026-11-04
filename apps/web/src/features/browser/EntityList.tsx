@@ -1,9 +1,6 @@
 import { Inbox } from 'lucide-react';
-import {
-  useCreateAwareOpen,
-  useCreatePlacement,
-  useCreateSurface,
-} from '../../lib/optimistic/use-create-intent';
+import { RecordLink } from '../../lib/entity-ref/RecordLink';
+import { useCreatePlacement, useCreateSurface } from '../../lib/optimistic/use-create-intent';
 import { Button } from '../../ui/Button';
 import { EmptyState } from '../../ui/EmptyState';
 import { Skeleton } from '../../ui/Skeleton';
@@ -11,11 +8,6 @@ import { EntityRow } from './EntityRow';
 import { QuickCapture } from './QuickCapture';
 import { useEntities } from './useEntities';
 
-/**
- * Список «Записей». Куда открыть запись, решает место показа (`onOpen`), а не список: блок на
- * странице открывает её в рамке экрана, в текущем разделе (`useOpenRecord`). Жёсткий переход из
- * самого списка увёл бы запись со страницы любого раздела в чужую стопку.
- */
 export function EntityList({
   filters = '',
   showPagesAndApps,
@@ -27,7 +19,7 @@ export function EntityList({
   showPagesAndApps: boolean;
   capture?: boolean;
   captureSlot?: string;
-  onOpen: (id: string) => void;
+  onOpen?: (id: string) => void;
 }) {
   const { entities, queryKey, hasMore, loadMore, isLoading } = useEntities(
     filters,
@@ -36,12 +28,11 @@ export function EntityList({
   const origin = useCreateSurface('records-capture', captureSlot);
   const placement = { key: queryKey, ids: entities.map((entity) => entity.id) };
   const { hiddenCanonical } = useCreatePlacement(origin, capture ? placement : undefined);
-  const open = useCreateAwareOpen(onOpen);
   return (
     <>
       <EntityListRows
         entities={capture ? entities.filter((entity) => !hiddenCanonical.has(entity.id)) : entities}
-        onOpen={open}
+        onOpen={onOpen}
         hasMore={hasMore}
         loadMore={loadMore}
         isLoading={isLoading}
@@ -65,7 +56,7 @@ function EntityListRows({
   loadMore,
   isLoading,
 }: Pick<ReturnType<typeof useEntities>, 'entities' | 'hasMore' | 'loadMore' | 'isLoading'> & {
-  onOpen: (id: string) => void;
+  onOpen?: (id: string) => void;
 }) {
   if (isLoading)
     return (
@@ -90,14 +81,14 @@ function EntityListRows({
       <ul className="flex flex-col gap-px px-1">
         {entities.map((e) => (
           <li key={e.id}>
-            <button
-              type="button"
+            <RecordLink
+              id={e.id}
               data-testid="entity-row"
-              onClick={() => onOpen(e.id)}
+              onOpen={onOpen ? (id, proceed) => proceed(() => onOpen(id)) : undefined}
               className="flex w-full cursor-pointer items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm transition hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
             >
               <EntityRow entity={e} />
-            </button>
+            </RecordLink>
           </li>
         ))}
       </ul>

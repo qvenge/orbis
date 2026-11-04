@@ -7,6 +7,7 @@
 // внешний, и грант отвечает на вопрос «кто это делал»; у рутины исполнитель внутренний и всегда
 // один, поэтому колонки у неё нет вовсе (Р-8) — пустой столбец на каждой строке сообщал бы, что
 // исполнителя не знают, а его знают.
+import { RecordLink } from '../../lib/entity-ref/RecordLink';
 import { formatDate, plural } from '../../lib/format';
 import { trpc } from '../../trpc';
 import { Badge } from '../../ui/Badge';
@@ -36,14 +37,12 @@ function stepsLabel(n: number): string {
 export function RunsList({
   runs,
   showGrant = true,
-  onOpen,
 }: {
   /** Часть контракта секции; сама выборка уже скоуплена родителем (useTicketRuns). */
   parentId: string;
   runs: TicketRun[];
   /** Показывать ли исполнителя. `false` у рутины: исполнитель внутренний и всегда один. */
   showGrant?: boolean;
-  onOpen: (id: string) => void;
 }) {
   // Оба чтения — ПО УЖЕ ЖИВЫМ ключам кэша: часовой пояс тянет сам экран (DetailScreen), список
   // доступов — карточка назначения агентского тикета. Своей сети секция не добавляет; `enabled`
@@ -87,10 +86,9 @@ export function RunsList({
           const grant = grants.data?.find((g) => g.id === a['orbis/grant']);
           return (
             <li key={run.id}>
-              <button
-                type="button"
+              <RecordLink
+                id={run.id}
                 data-testid={`run-${run.id}`}
-                onClick={() => onOpen(run.id)}
                 className="flex w-full cursor-pointer flex-wrap items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition hover:bg-surface-2/60"
               >
                 <span className="text-text-secondary">{formatDate(startedAt, tz)}</span>
@@ -114,7 +112,7 @@ export function RunsList({
                 {showGrant && grant !== undefined && (
                   <span className="break-words text-text-secondary">· {grant.label}</span>
                 )}
-              </button>
+              </RecordLink>
             </li>
           );
         })}

@@ -73,13 +73,17 @@ export function connectHistoryPort(p: NavHistoryPort | null): void {
   port = p;
 }
 
+type PendingRecordOpen = { app: AppKey; from: 'host-screen' | 'content' };
+const noPendingCreate = { pendingCreate: null, pendingCreateOpen: null };
+
 export interface NavState {
   model: NavModel;
   mode: LaunchMode;
   overlay: NavOverlay | null;
   /** A create screen in memory. It never enters the navigation model or history. */
   pendingCreate: string | null;
-  openPendingCreate(id: string): void;
+  pendingCreateOpen: PendingRecordOpen | null;
+  openPendingCreate(id: string, destination?: PendingRecordOpen): void;
   closePendingCreate(id: string): void;
   confirmPendingCreate(id: string): void;
   /**
@@ -225,7 +229,7 @@ function run(action: NavAction): void {
     overlay: null,
     ...((action.type !== 'view' && action.type !== 'replace') ||
     targetKeyOf(s.model) !== targetKeyOf(r.model)
-      ? { pendingCreate: null }
+      ? noPendingCreate
       : {}),
   });
   persist(r.model);
@@ -242,29 +246,31 @@ export const useNav = create<NavState>()((set, get) => ({
   model: initialModel(HOST_HOME),
   mode: 'site',
   overlay: null,
-  pendingCreate: null,
-  openPendingCreate: (id) => {
-    if (navigationActive() && mayLeave()) set({ pendingCreate: id });
+  ...noPendingCreate,
+  openPendingCreate: (id, destination) => {
+    if (navigationActive() && mayLeave())
+      set({ pendingCreate: id, pendingCreateOpen: destination ?? null });
   },
   closePendingCreate: (id) => {
-    if (get().pendingCreate === id) set({ pendingCreate: null });
+    if (get().pendingCreate === id) set(noPendingCreate);
   },
   confirmPendingCreate: (id) => {
-    const { model, pendingCreate } = get();
+    const { model, pendingCreate, pendingCreateOpen } = get();
     if (!navigationActive() || pendingCreate !== id) return;
     if (!mayLeave()) {
-      set({ pendingCreate: null });
+      set(noPendingCreate);
       return;
     }
     const address = currentEntry(model).address;
     const fromHostScreen =
       address.kind === 'host-screen' && (address.screen === 'chat' || address.screen === 'search');
-    const app = address.kind === 'host-screen' ? HOST_APP : model.activeApp;
+    const app =
+      pendingCreateOpen?.app ?? (address.kind === 'host-screen' ? HOST_APP : model.activeApp);
     run({
       type: 'open',
       address: { kind: 'record', app: appRefOf(app), id },
       app,
-      from: fromHostScreen ? 'host-screen' : 'content',
+      from: pendingCreateOpen?.from ?? (fromHostScreen ? 'host-screen' : 'content'),
     });
   },
   behind: false,
@@ -300,7 +306,7 @@ export const useNav = create<NavState>()((set, get) => ({
   back: () => {
     if (!navigationActive()) return;
     if (get().pendingCreate !== null) {
-      set({ pendingCreate: null });
+      set(noPendingCreate);
       return;
     }
     if (!mayLeave()) return;
@@ -364,7 +370,7 @@ export function setNavState(next: {
   useNav.setState({
     model: next.model,
     overlay: next.overlay,
-    pendingCreate: null,
+    ...noPendingCreate,
     ...(next.mode !== undefined && { mode: next.mode }),
   });
   persist(next.model);
@@ -375,7 +381,7 @@ export function resetNavigation(): void {
     model: initialModel(HOST_HOME),
     mode: 'site',
     overlay: null,
-    pendingCreate: null,
+    ...noPendingCreate,
     behind: false,
   });
 }

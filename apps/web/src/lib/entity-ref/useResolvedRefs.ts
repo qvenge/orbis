@@ -4,13 +4,16 @@ import { type RouterOutputs, trpc } from '../../trpc';
 import { diskAwareStaleTime } from '../freshness/provenance';
 import { useFreshnessVisible } from '../freshness/screen';
 
+import { useReadableRecordIds } from '../optimistic/create-intent-scope';
+
 export type RefTitle = RouterOutputs['entity']['resolveRefs'][number];
 type Result = { data?: RefTitle[]; isPending: boolean; isError: boolean; isFetching: boolean };
 
 /** Resolve all selected IDs in bounded batches, retaining cached names through read failures. */
 export function useResolvedRefs(ids: readonly string[]) {
   const utils = trpc.useUtils();
-  const key = [...new Set(ids)].sort().join(',');
+  const readable = useReadableRecordIds(ids);
+  const key = [...new Set(readable)].sort().join(',');
   const batches = useMemo(() => {
     const unique = key === '' ? [] : key.split(',');
     const result: string[][] = [];

@@ -1,6 +1,6 @@
 import { ENTITY_RESOLVE_REFS_MAX } from '@orbis/shared';
 import { parseBody, serializeBody } from '@orbis/shared/doc';
-import { screen, waitFor } from '@testing-library/react';
+import { fireEvent, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { Editor } from '@tiptap/react';
 import { beforeEach, expect, test, vi } from 'vitest';
@@ -282,4 +282,32 @@ test('смена цели чипа считается правкой и доез
   h.editor?.commands.setContent(parseBody(`См. [[entity:${B}|имя]].`).doc);
   await waitFor(() => expect(onChange).toHaveBeenCalled());
   expect(serializeBody(onChange.mock.calls.at(-1)?.[0])).toContain(B);
+});
+
+test('касание чипа заранее читает полный ключ записи и pointercancel прерывает запрос', async () => {
+  const { calls, queryClient } = renderWithProviders(
+    <BodyEditor doc={parseBody(`[[entity:${A}]]`)} onChange={vi.fn()} />,
+    (path, input) => (path === 'entity.get' ? new Promise(() => {}) : refs([row(A)])(path, input)),
+    { freshness: true },
+  );
+  const chip = await screen.findByTestId('entity-chip');
+  fireEvent.pointerDown(chip, { pointerType: 'touch', pointerId: 7, button: 0 });
+  expect(calls.filter((call) => call.path === 'entity.get')).toEqual([
+    {
+      path: 'entity.get',
+      input: { id: A, include: ['body', 'bodyDoc', 'relations', 'backlinks', 'thread'] },
+    },
+  ]);
+  const query = queryClient
+    .getQueryCache()
+    .getAll()
+    .find(
+      (item) =>
+        item.state.fetchStatus === 'fetching' &&
+        Array.isArray(item.queryKey[0]) &&
+        item.queryKey[0].join('.') === 'entity.get',
+    );
+  expect(query).toBeDefined();
+  fireEvent.pointerCancel(chip, { pointerType: 'touch', pointerId: 7 });
+  expect(query?.state.fetchStatus).toBe('idle');
 });

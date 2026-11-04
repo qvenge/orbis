@@ -212,6 +212,7 @@ function latest(entityId = id): LatestPanelHost {
     available: new Set(['openBody', 'restore', 'makePage', 'stopPage', 'configureApp']),
     restricted: false,
     setMode: vi.fn(),
+    openRecord: (id) => useNav.getState().openRecord(id),
     setHostView: vi.fn(),
     restore: vi.fn(),
     makePage: vi.fn(),

@@ -50,11 +50,14 @@ const task = (id: string, props: Record<string, unknown> = {}) =>
     props: { 'orbis/task_status': 'inbox', ...props },
   });
 
-test('compact: строка — кнопка, открывающая запись', async () => {
+test('compact: строка — ссылка, открывающая запись', async () => {
   const text = 'aspect=orbis/task, display=compact';
   renderWithProviders(<DataBlock text={text} />, handler({ [text]: [task('Отчёт')] }));
   const item = await screen.findByTestId('qb-item');
-  fireEvent.click(within(item).getByRole('button', { name: 'Отчёт' }));
+  const link = within(item).getByRole('link', { name: 'Отчёт' });
+  expect(link).toHaveAttribute('href', '/r/Отчёт');
+  expect(link).toHaveAttribute('data-record-link-control');
+  fireEvent.click(link);
   expect(topAddress()).toEqual(recordAddress('Отчёт'));
 });
 
@@ -62,7 +65,7 @@ test('compact — форма по умолчанию (display не задан)',
   const text = 'aspect=orbis/task';
   renderWithProviders(<DataBlock text={text} />, handler({ [text]: [task('Отчёт')] }));
   const item = await screen.findByTestId('qb-item');
-  expect(within(item).getByRole('button', { name: 'Отчёт' })).toBeInTheDocument();
+  expect(within(item).getByRole('link', { name: 'Отчёт' })).toBeInTheDocument();
   expect(screen.queryByRole('table')).toBeNull();
 });
 
@@ -77,7 +80,7 @@ test('list: строки EntityRow — глиф статуса есть, чек�
   await waitFor(() => expect(item).toHaveTextContent('18 июл.'));
   expect(item.querySelector('svg')).not.toBeNull();
   expect(screen.queryByRole('checkbox')).toBeNull();
-  fireEvent.click(within(item).getByRole('button'));
+  fireEvent.click(within(item).getByRole('link'));
   expect(topAddress()).toEqual(recordAddress('Отчёт'));
 });
 
@@ -143,7 +146,7 @@ test('table с columns=orbis/title|orbis/due_date: колонка заголов
     const cell = within(table).getAllByRole('cell')[titleAt];
     if (cell === undefined) throw new Error('нет ячейки заголовка');
     // Колонка заголовка из `columns` — тот же вход в запись, что и постоянная «Название».
-    fireEvent.click(within(cell).getByRole('button', { name: 'Отчёт' }));
+    fireEvent.click(within(cell).getByRole('link', { name: 'Отчёт' }));
     expect(topAddress()).toEqual(recordAddress('Отчёт'));
     unmount();
   }
@@ -274,8 +277,8 @@ for (const columns of ['orbis/due_date', 'orbis/title|orbis/due_date'] as const)
       ),
     );
     await screen.findByText('18 июл.');
-    expect(screen.getByRole('button', { name: 'Закрыта' })).toHaveClass('line-through');
-    expect(screen.getByRole('button', { name: 'Открыта' })).not.toHaveClass('line-through');
+    expect(screen.getByRole('link', { name: 'Закрыта' })).toHaveClass('line-through');
+    expect(screen.getByRole('link', { name: 'Открыта' })).not.toHaveClass('line-through');
   });
 }
 

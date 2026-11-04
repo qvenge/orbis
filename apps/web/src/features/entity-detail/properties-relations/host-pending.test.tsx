@@ -73,6 +73,7 @@ it('public owner close/open cannot replace the addressed panel synchronously dur
     available,
     restricted: false,
     setMode() {},
+    openRecord() {},
     setHostView() {},
     restore() {},
     makePage: vi.fn(() => mutation),

@@ -9,6 +9,7 @@ import {
 import {
   createTRPCClient,
   httpBatchLink,
+  httpLink,
   httpSubscriptionLink,
   splitLink,
   TRPCClientError,
@@ -266,34 +267,40 @@ export const TRPC_URL = `${API_BASE}/trpc`;
 export const MCP_URL = `${API_BASE || window.location.origin}/mcp`;
 
 export function orbisLinks(getToken: () => string | null): TRPCLink<AppRouter>[] {
-  const scopedBatch: TRPCLink<AppRouter> = (runtime) => {
+  const scopedHttp: TRPCLink<AppRouter> = (runtime) => {
     let activeEpoch: number | undefined;
     let batch: ReturnType<TRPCLink<AppRouter>> | undefined;
     return (operation) => {
       const epoch = undoEpoch();
       const lease = readProductLease?.();
-      if (batch === undefined || activeEpoch !== epoch) {
-        activeEpoch = epoch;
-        // У каждого владельца собственная очередь: старый запрос не объединяется с новым и не получает его токен.
-        batch = httpBatchLink<AppRouter>({
-          url: TRPC_URL,
-          fetch: (url, init) => {
-            if (!leaseCurrent(lease) || !isUndoEpoch(epoch)) throw new Error('Сессия изменилась');
-            const token = productToken(getToken);
-            const headers = new Headers(init?.headers);
-            if (token) headers.set('authorization', `Bearer ${token}`);
-            return fetchWithNetworkStatus(url, {
-              ...init,
-              headers,
-              signal: scopedSignal(lease, init?.signal),
-            });
-          },
-          headers: () => {
-            if (!isUndoEpoch(epoch) || !leaseCurrent(lease)) throw new Error('Сессия изменилась');
-            return trpcHeaders(() => productToken(getToken));
-          },
-        })(runtime);
-      }
+      const speculative =
+        operation.op.type === 'query' &&
+        operation.op.path === 'entity.get' &&
+        operation.op.context.recordPrefetch === true;
+      if (!speculative && batch && activeEpoch === epoch) return batch(operation);
+      const options = {
+        url: TRPC_URL,
+        fetch: (url, init) => {
+          if (!leaseCurrent(lease) || !isUndoEpoch(epoch)) throw new Error('Сессия изменилась');
+          const token = productToken(getToken);
+          const headers = new Headers(init?.headers);
+          if (token) headers.set('authorization', `Bearer ${token}`);
+          return fetchWithNetworkStatus(url, {
+            ...init,
+            headers,
+            signal: scopedSignal(lease, init?.signal),
+          });
+        },
+        headers: () => {
+          if (!isUndoEpoch(epoch) || !leaseCurrent(lease)) throw new Error('Сессия изменилась');
+          return trpcHeaders(() => productToken(getToken));
+        },
+      } satisfies Parameters<typeof httpBatchLink<AppRouter>>[0];
+      // A speculative GET owns its HTTP signal independently of ordinary reads.
+      if (speculative) return httpLink<AppRouter>(options)(runtime)(operation);
+      // Each owner gets a fresh queue, fenced from the next owner's credentials.
+      activeEpoch = epoch;
+      batch = httpBatchLink<AppRouter>(options)(runtime);
       return batch(operation);
     };
   };
@@ -332,7 +339,7 @@ export function orbisLinks(getToken: () => string | null): TRPCLink<AppRouter>[]
     splitLink({
       condition: (op) => op.type === 'subscription',
       true: subscriptions,
-      false: scopedBatch,
+      false: scopedHttp,
     }),
   ];
 }

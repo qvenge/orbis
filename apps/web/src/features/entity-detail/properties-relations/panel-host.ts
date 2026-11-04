@@ -8,6 +8,7 @@ export type LatestPanelHost = {
   available: ReadonlySet<PanelHostAction>;
   restricted: boolean;
   setMode: () => void;
+  openRecord: (id: string) => void;
   setHostView: () => void;
   /** Mutation producers return their promise, awaited by dispatch before unlocking. */
   restore: () => unknown;
@@ -24,14 +25,14 @@ export async function dispatchPanelHost(
   const host = readLatest();
   if (!host.entity) return;
   if (action === 'openBody') {
-    if (!mayLeave()) return;
     if (target.entityId === host.entity.id) {
+      if (!mayLeave()) return;
       host.setMode();
       host.setHostView();
       host.onClose();
       return;
     }
-    useNav.getState().openRecord(target.entityId);
+    host.openRecord(target.entityId);
     const here = currentEntry(useNav.getState().model).address;
     if (here.kind !== 'record' || here.id !== target.entityId) return;
     useNav.getState().setView({ via: 'host' });

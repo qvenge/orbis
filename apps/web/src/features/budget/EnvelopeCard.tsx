@@ -4,7 +4,7 @@
 // decimal-строки сервера; пороги сравниваются ТОЧНО (BigInt), без IEEE-754.
 // Тап открывает запись категории: экрана категории нет (докблок компонента ниже).
 import type { EnvelopeStatus } from '@orbis/shared';
-import { useOpenRecord } from '../../app/useOpenRecord';
+import { RecordLink } from '../../lib/entity-ref/RecordLink';
 import { CURRENCY_SYMBOL, formatAmount } from '../../lib/format';
 import { decimalPercent, scaledPair } from '../../lib/percent';
 
@@ -128,18 +128,16 @@ export function envelopeView(status: EnvelopeStatus): EnvelopeViewModel {
  */
 export function EnvelopeCard({ status }: { status: EnvelopeStatus }) {
   const { category, phase } = status;
-  const openRecord = useOpenRecord();
   const { level, percent, mark, barColor, paceText, sym, carryoverText } = envelopeView(status);
 
-  // Одна интерактивная кнопка с токенами Card (не <Card><button>): вся карточка —
+  // Одна ссылка с токенами Card: вся карточка —
   // цель тапа, и нет конфликта паддингов p-4/p-0 из-за порядка утилит в CSS.
   return (
-    <button
-      type="button"
+    <RecordLink
+      id={category.id}
       data-testid="envelope-card"
       data-level={level}
       data-phase={phase}
-      onClick={() => openRecord(category.id)}
       className={`flex cursor-pointer flex-col gap-1 rounded-card border border-line bg-surface p-3 text-left shadow-card outline-hidden transition hover:bg-surface-2/60 focus-visible:ring-2 focus-visible:ring-accent/60 ${
         phase === 'closed' ? 'opacity-60' : ''
       }`}
@@ -175,6 +173,6 @@ export function EnvelopeCard({ status }: { status: EnvelopeStatus }) {
           {carryoverText}
         </span>
       )}
-    </button>
+    </RecordLink>
   );
 }

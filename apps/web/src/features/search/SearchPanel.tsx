@@ -1,8 +1,16 @@
 import type { BlockResult } from '@orbis/shared';
 import type { UseQueryResult } from '@tanstack/react-query';
 import { Search } from 'lucide-react';
-import { type KeyboardEvent, type ReactNode, useEffect, useRef, useState } from 'react';
-import { useOpenRecord } from '../../app/useOpenRecord';
+import {
+  type KeyboardEvent,
+  type RefObject,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from 'react';
+import { RecordLink } from '../../lib/entity-ref/RecordLink';
+import { useRecordLinkController } from '../../lib/entity-ref/record-link-controller';
 import { useNav } from '../../state/navigation';
 import { Input } from '../../ui/Input';
 import { Spinner } from '../../ui/Spinner';
@@ -50,15 +58,13 @@ export function SearchPanel({
   /** Выбор результата — хозяину панели (окно ⌘K закрывается). */
   onPicked?: () => void;
 }) {
-  const texts = useSearchTexts(value);
-  const openRecord = useOpenRecord();
+  const settledTexts = useSearchTexts(value);
+  const texts = value.trim() === '' ? null : settledTexts;
+  const { open } = useRecordLinkController();
   // Список приложений — здесь, при открытии, а не в группе: группа монтируется после паузы в наборе,
   // и новый наблюдатель протухшего ключа перезапросил бы список на каждое слово.
   const apps = useApps();
   const hits = useRef<readonly Hit[]>([]);
-  // Пустое поле — результатов на экране нет, и Enter не должен открыть прежний, уже невидимый список
-  // (его держит ref: `SearchResults` при пустой строке не монтируется и не перезапишет его; гейт 24, M-1).
-  if (texts === null) hits.current = [];
   const [active, setActive] = useState(0);
   const textKey = texts === null ? '' : texts.records;
   // biome-ignore lint/correctness/useExhaustiveDependencies: выбор сбрасывается на НОВОМ запросе — ключ и есть причина
@@ -67,17 +73,17 @@ export function SearchPanel({
   const pick = (hit: Hit) => {
     onPicked?.();
     if (hit.group === 'apps') useNav.getState().switchApp(hit.id);
-    else openRecord(hit.id);
+    else open(hit.id);
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
     const n = hits.current.length;
     if (e.key === 'ArrowDown' && n > 0) {
       e.preventDefault();
-      setActive((i) => (i + 1) % n);
+      setActive((i) => (Math.min(i, n - 1) + 1) % n);
     } else if (e.key === 'ArrowUp' && n > 0) {
       e.preventDefault();
-      setActive((i) => (i - 1 + n) % n);
+      setActive((i) => (Math.min(i, n - 1) - 1 + n) % n);
     } else if (e.key === 'Enter') {
       const hit = hits.current[Math.min(active, n - 1)];
       if (hit === undefined) return;
@@ -117,10 +123,8 @@ export function SearchPanel({
             texts={texts}
             disabledApp={(id) => apps.byId.get(id)?.disabled === true}
             active={active}
-            onHits={(h) => {
-              hits.current = h;
-            }}
-            onPick={pick}
+            hitsRef={hits}
+            onPicked={onPicked}
           />
         )}
       </div>
@@ -133,19 +137,31 @@ function SearchResults({
   texts,
   disabledApp,
   active,
-  onHits,
-  onPick,
+  hitsRef,
+  onPicked,
 }: {
   texts: Parameters<typeof useSearchGroups>[0];
   disabledApp: (id: string) => boolean;
   active: number;
-  onHits: (hits: readonly Hit[]) => void;
-  onPick: (hit: Hit) => void;
+  hitsRef: RefObject<readonly Hit[]>;
+  onPicked?: () => void;
 }) {
   const data = useSearchGroups(texts);
   const groups = SEARCH_GROUPS.map((g) => ({ g, ...rowsOf(g, data, disabledApp) }));
   const flat = groups.flatMap((x) => x.hits);
-  onHits(flat);
+  const selected = Math.min(active, flat.length - 1);
+  const hit = flat[selected];
+  const selectedRecord = hit?.group === 'apps' ? undefined : hit?.id;
+  const { prepare } = useRecordLinkController();
+  useLayoutEffect(() => {
+    hitsRef.current = flat;
+    return () => {
+      hitsRef.current = [];
+    };
+  }, [flat, hitsRef]);
+  useEffect(() => {
+    if (selectedRecord) return prepare(selectedRecord, 'selection');
+  }, [prepare, selectedRecord]);
 
   const loading = SEARCH_GROUPS.some((g) => data[g].isPending);
   const failed = SEARCH_GROUPS.some((g) => data[g].isError);
@@ -175,7 +191,9 @@ function SearchResults({
             )}
             {hits.map((hit) => {
               const mine = index++;
-              return <HitButton key={hit.id} hit={hit} active={mine === active} onPick={onPick} />;
+              return (
+                <HitRow key={hit.id} hit={hit} active={mine === selected} onPicked={onPicked} />
+              );
             })}
             {more > 0 && <p className="px-2 py-1 text-xs text-text-muted">и ещё {more}</p>}
           </fieldset>
@@ -185,32 +203,48 @@ function SearchResults({
   );
 }
 
-function HitButton({
-  hit,
-  active,
-  onPick,
-}: {
-  hit: Hit;
-  active: boolean;
-  onPick: (hit: Hit) => void;
-}): ReactNode {
-  return (
-    <button
-      type="button"
-      data-testid={`search-hit-${hit.id}`}
-      data-active={active ? '' : undefined}
-      data-disabled={hit.disabled ? '' : undefined}
-      onClick={() => onPick(hit)}
-      className={`flex min-h-11 w-full cursor-pointer items-center gap-2 rounded-control px-2 text-left text-sm transition hover:bg-surface-2 ${
-        active ? 'bg-surface-2' : ''
-      } ${hit.disabled ? 'opacity-50' : ''}`}
-    >
+function HitRow({ hit, active, onPicked }: { hit: Hit; active: boolean; onPicked?: () => void }) {
+  const attributes = {
+    'data-testid': `search-hit-${hit.id}`,
+    'data-active': active ? '' : undefined,
+    'data-disabled': hit.disabled ? '' : undefined,
+    className: `flex min-h-11 w-full cursor-pointer items-center gap-2 rounded-control px-2 text-left text-sm transition hover:bg-surface-2 ${
+      active ? 'bg-surface-2' : ''
+    } ${hit.disabled ? 'opacity-50' : ''}`,
+  };
+  const label = (
+    <>
       <span aria-hidden className="w-5 shrink-0 text-center">
         {hit.emoji ?? '▫️'}
       </span>
       <span className="min-w-0 flex-1 truncate">{hit.title}</span>
       {hit.disabled && <span className="text-2xs text-text-muted">выключено</span>}
-    </button>
+    </>
+  );
+  if (hit.group === 'apps')
+    return (
+      <button
+        type="button"
+        {...attributes}
+        onClick={() => {
+          onPicked?.();
+          useNav.getState().switchApp(hit.id);
+        }}
+      >
+        {label}
+      </button>
+    );
+  return (
+    <RecordLink
+      id={hit.id}
+      {...attributes}
+      onOpen={(_id, proceed) => {
+        onPicked?.();
+        proceed();
+      }}
+    >
+      {label}
+    </RecordLink>
   );
 }
 

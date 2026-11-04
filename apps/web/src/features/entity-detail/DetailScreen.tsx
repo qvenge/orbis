@@ -14,7 +14,7 @@ import {
 import { ScreenMenuProvider } from '../../app/frame/ScreenMenu';
 import { NotFoundScreen } from '../../app/NotFoundScreen';
 import { ScreenHeader } from '../../app/ScreenHeader';
-import { useOpenRecord } from '../../app/useOpenRecord';
+import { useRecordLinkController } from '../../lib/entity-ref/record-link-controller';
 import { freshnessRuntimeOf } from '../../lib/freshness/provenance';
 import { FreshnessVisibility } from '../../lib/freshness/screen';
 import { ScreenReadyMark, useCachedAtOpen } from '../../perf/marks';
@@ -75,7 +75,6 @@ export function DetailScreen({
   // возвратов ниже: хуки безусловны. Сама готовность — листом `ScreenReadyMark` в разметке записи (гейт задачи 3, M-3).
   const cachedAtOpen = useCachedAtOpen(entityId, get.data !== undefined);
   const freshness = freshnessRuntimeOf(useQueryClient());
-  const openRecord = useOpenRecord();
   /**
    * Состояние экрана в верхе стопки навигации (срез 1б §7.1): вкладка шаблона и «открыть через X»
    * живут в истории, а не в адресе, — «‹» на эту запись возвращает их, в том числе после экрана
@@ -297,12 +296,15 @@ export function DetailScreen({
     }),
     [entityId, available, loaded],
   );
+  const { open: openLinkedRecord } = useRecordLinkController();
   const panelOwner = usePropertiesRelationsOwner(registration);
   latestHostRef.current = {
     entity: loaded?.id === entityId ? loaded : undefined,
     available,
     restricted,
     setMode: () => setMode(null),
+    openRecord: (id) =>
+      openLinkedRecord(id, { app: useNav.getState().model.activeApp, from: 'content' }),
     setHostView: () => setOpenVia(HOST_VIEW),
     restore: () => loaded && update.mutateAsync({ id: loaded.id, archived: false }),
     makePage: () => {
@@ -492,7 +494,7 @@ export function DetailScreen({
                 templates.rows.find((r) => r.id === configuringId) ??
                 [...supply.byKey.values()].find((r) => r.id === configuringId)
               )?.title || configuringId,
-            onOpenTemplate: () => openRecord(configuringId),
+            templateId: configuringId,
           }
         : isPage
           ? {

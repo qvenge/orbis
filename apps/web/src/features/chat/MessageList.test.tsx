@@ -328,7 +328,7 @@ test('клик по [[entity:…]] в чате открывает запись �
   const app = '00000000-0000-4000-8000-00000000c0de';
   useNav.getState().openAddress({ kind: 'home', app: { kind: 'app', ref: app } });
   useNav.getState().openHostScreen('chat');
-  render(
+  renderWithProviders(
     <FrameAppContext.Provider value={{ app: 'host', via: 'host-screen' }}>
       <MessageList messages={[msg('a', `готово: [[entity:${E1}]]`)]} isTyping={false} />
     </FrameAppContext.Provider>,

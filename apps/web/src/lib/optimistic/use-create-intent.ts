@@ -1,4 +1,4 @@
-import { hashKey, type QueryClient, type QueryKey, useQueryClient } from '@tanstack/react-query';
+import { hashKey, type QueryKey, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useId, useRef, useState, useSyncExternalStore } from 'react';
 import { journalRefOf } from '../../features/undo/journal-ref';
 import { isUndoEpoch, undoEpoch } from '../../features/undo/undo-epoch';
@@ -9,39 +9,10 @@ import { trpc } from '../../trpc';
 import { useToast } from '../../ui/toast-store';
 import { captureCommandScope, freshnessRuntimeOf } from '../freshness/provenance';
 import { GRAPH_OFFLINE, graphFailure, graphOnline } from '../graph-command';
-import {
-  type CreateAttempt,
-  type CreateIntent,
-  type CreateOutcome,
-  type CreateRequest,
-  createCreateIntentRegistry,
-} from './create-intents';
+import { createIntentsOf, useCreateIntents } from './create-intent-scope';
+import type { CreateAttempt, CreateIntent, CreateOutcome, CreateRequest } from './create-intents';
 
-const local = new WeakMap<
-  QueryClient,
-  { epoch: number; registry: ReturnType<typeof createCreateIntentRegistry> }
->();
-
-export function createIntentsOf(client: QueryClient) {
-  const runtime = freshnessRuntimeOf(client);
-  if (runtime) return runtime.createIntents;
-  // Isolated mounts without a freshness runtime have no graph identity or feed.
-  const epoch = undoEpoch();
-  const previous = local.get(client);
-  if (previous?.epoch === epoch) return previous.registry;
-  const scope = { accountId: '', graphId: '', epoch };
-  const registry = createCreateIntentRegistry(scope, () =>
-    isUndoEpoch(epoch) && !freshnessRuntimeOf(client) ? scope : undefined,
-  );
-  local.set(client, { epoch, registry });
-  return registry;
-}
-
-export function useCreateIntents() {
-  const registry = createIntentsOf(useQueryClient());
-  const intents = useSyncExternalStore(registry.subscribe, registry.getSnapshot);
-  return { registry, intents };
-}
+export { createIntentsOf, useCreateIntents } from './create-intent-scope';
 
 function undoTitle(attempt: CreateAttempt) {
   if (attempt.command.input.props?.['orbis/task_status'] === 'planned') return 'Задача добавлена';
@@ -62,14 +33,6 @@ export function useCreateIntent(id: string | null) {
 export function useCreateSurface(name: string, slot = '') {
   const place = useNav((state) => placeKeyOf(state.model));
   return JSON.stringify([name, place, slot]);
-}
-
-export function useCreateAwareOpen(openRecord: (id: string) => void) {
-  const registry = createIntentsOf(useQueryClient());
-  return (id: string) => {
-    if (registry.isUnconfirmedCreate(id)) useNav.getState().openPendingCreate(id);
-    else openRecord(id);
-  };
 }
 
 export type CreatePlacement = {

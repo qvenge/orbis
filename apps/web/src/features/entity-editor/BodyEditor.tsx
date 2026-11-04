@@ -4,6 +4,7 @@ import { closeHistory, isHistoryTransaction, undoDepth } from '@tiptap/pm/histor
 import { EditorState } from '@tiptap/pm/state';
 import { Editor, EditorContent, useEditor } from '@tiptap/react';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { useRecordLinkController } from '../../lib/entity-ref/record-link-controller';
 import { subscribeUndoEpoch, undoEpoch } from '../undo/undo-epoch';
 import {
   bindStepOwner,
@@ -15,6 +16,11 @@ import {
 import { BubbleToolbar } from './BubbleToolbar';
 import { BODY_BOX_CLASS } from './body-box';
 import { acquireEditor, releaseEditor } from './editor-cache';
+import {
+  bindEditorRecordLinks,
+  recordLinkMarkView,
+  suppressLinkPluginMouseUp,
+} from './editor-record-links';
 import { EDITOR_EXTENSIONS } from './extensions';
 import { RefTitlesProvider } from './nodes/RefTitlesContext';
 import { pastedRecordId } from './paste-address';
@@ -305,6 +311,15 @@ function BodyEditorInstance({
         : acquireEditor(entityId, () => createBodyEditor(entityId, doc.doc))),
   );
   const editor = nativeEditor ?? cachedEditor;
+  const { open, prepare, availability, subscribePending } = useRecordLinkController();
+  const linkMarkView = useMemo(
+    () => recordLinkMarkView({ availability, subscribePending }),
+    [availability, subscribePending],
+  );
+  useLayoutEffect(() => {
+    if (!editor.isDestroyed)
+      return bindEditorRecordLinks(editor.view.dom, { open, prepare }, () => editor.isEditable);
+  }, [editor, open, prepare]);
   const generation = stepsGeneration();
   useEffect(() => {
     if (entityId === undefined) return;
@@ -327,6 +342,8 @@ function BodyEditorInstance({
     editor.setOptions({
       editable: !readOnly,
       editorProps: {
+        handleClick: suppressLinkPluginMouseUp,
+        markViews: { link: linkMarkView },
         attributes: {
           // Та же коробка, что у первого кадра: текст не должен прыгать при подмене.
           class: `${BODY_BOX_CLASS} outline-none`,
@@ -358,7 +375,7 @@ function BodyEditorInstance({
         b.suggest = null;
       }
     };
-  }, [editor, onChange, readOnly, suggest.handlers, generation]);
+  }, [editor, onChange, readOnly, suggest.handlers, generation, linkMarkView]);
 
   /**
    * Готовность редактора и КАРЕТКА — один эффект, потому что оба про один и тот же экземпляр.

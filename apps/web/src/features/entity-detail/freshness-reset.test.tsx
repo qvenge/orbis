@@ -330,7 +330,7 @@ it('a hidden Relations panel tab does not fetch label queries', async () => {
   const labelReads = () => calls.filter(({ path }) => path === 'entity.resolveRefs');
   expect(labelReads()).toHaveLength(0);
   fireEvent.click(within(dialog).getByRole('tab', { name: 'Связи' }));
-  await within(dialog).findByRole('button', { name: 'Открыть: Other end' });
+  await within(dialog).findByRole('link', { name: 'Открыть: Other end' });
   expect(labelReads()).toHaveLength(1);
 
   fireEvent.click(within(dialog).getByRole('tab', { name: 'Аспекты' }));
@@ -343,7 +343,7 @@ it('a hidden Relations panel tab does not fetch label queries', async () => {
   await waitFor(() => expect(labels?.state.isInvalidated).toBe(true));
   expect(labelReads()).toHaveLength(1);
   fireEvent.click(within(dialog).getByRole('tab', { name: 'Связи' }));
-  await within(dialog).findByRole('button', { name: 'Открыть: Renamed while hidden' });
+  await within(dialog).findByRole('link', { name: 'Открыть: Renamed while hidden' });
   expect(labelReads()).toHaveLength(2);
 });
 

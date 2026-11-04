@@ -1,5 +1,5 @@
 import type { BlockDayGroup, BlockGroupRow } from '@orbis/shared';
-import { useOpenRecord } from '../../../app/useOpenRecord';
+import { RecordLink } from '../../../lib/entity-ref/RecordLink';
 import type { BlockData } from '../../../lib/query-blocks/batch';
 import { useRowProjection } from '../../../lib/registry/row';
 import { EntityRow } from '../../browser/EntityRow';
@@ -42,14 +42,12 @@ function TimeCell({ row, ctx }: { row: BlockGroupRow; ctx: RowCtx }) {
  * тоже в поясе ответа (`dateLabel`): `EntityRow` сам печатает момент в поясе браузера.
  */
 function ListRow({ row, ctx }: { row: BlockGroupRow; ctx: RowCtx }) {
-  const openEntity = useOpenRecord();
   const date = useRowProjection(row.entity).date;
   const dateLabel = date === null ? null : rowDateLabel(date.value, ctx.day, ctx.timeZone);
   return (
     <li data-testid="qb-item">
-      <button
-        type="button"
-        onClick={() => openEntity(row.entity.id)}
+      <RecordLink
+        id={row.entity.id}
         className={`${ROW_BUTTON} rounded-lg px-1.5 py-1.5 transition hover:bg-surface-2`}
       >
         <TimeCell row={row} ctx={ctx} />
@@ -59,27 +57,22 @@ function ListRow({ row, ctx }: { row: BlockGroupRow; ctx: RowCtx }) {
           {...(dateLabel !== null && { dateLabel })}
           closed={ctx.closed.has(row.entity.id)}
         />
-      </button>
+      </RecordLink>
     </li>
   );
 }
 
 /** `compact` — только заголовок, как у `CompactForm`, с колонкой времени и зачёркиванием от сервера. */
 function CompactRow({ row, ctx }: { row: BlockGroupRow; ctx: RowCtx }) {
-  const openEntity = useOpenRecord();
   const closed = ctx.closed.has(row.entity.id);
   return (
     <li data-testid="qb-item">
-      <button
-        type="button"
-        onClick={() => openEntity(row.entity.id)}
-        className={`${ROW_BUTTON} py-1 hover:text-accent`}
-      >
+      <RecordLink id={row.entity.id} className={`${ROW_BUTTON} py-1 hover:text-accent`}>
         <TimeCell row={row} ctx={ctx} />
         <span className={`flex-1 truncate ${closed ? 'text-text-muted line-through' : ''}`}>
           {row.entity.title}
         </span>
-      </button>
+      </RecordLink>
     </li>
   );
 }

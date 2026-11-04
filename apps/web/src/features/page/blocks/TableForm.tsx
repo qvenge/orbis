@@ -1,8 +1,8 @@
 import { rowMoneyCurrencyOf, rowProjectionOf } from '@orbis/shared';
 import type { QueryColumn } from '@orbis/shared/query';
 import type { ReactNode } from 'react';
-import { useOpenRecord } from '../../../app/useOpenRecord';
 import { EntityRef } from '../../../lib/entity-ref/EntityRef';
+import { RecordLink } from '../../../lib/entity-ref/RecordLink';
 import { formatDate, formatMoney, formatMoneyWithCurrency } from '../../../lib/format';
 import { displayText, EMPTY_TEXT } from '../../../lib/registry/format';
 import { classLabel } from '../../../lib/registry/labels';
@@ -15,20 +15,18 @@ import type { BlockRow } from './types';
 const CELL = 'px-2 py-1 text-left align-top';
 
 /**
- * Название — кнопкой, как строка `compact`: таблица на странице — тоже вход в свои записи.
+ * Название — ссылкой, как строка `compact`: таблица на странице — тоже вход в свои записи.
  * Закрытая (`closedIds` сервера, п. 42) — зачёркнута.
  */
 function TitleCell({ row, closed }: { row: BlockRow; closed: ReadonlySet<string> }) {
-  const openEntity = useOpenRecord();
   return (
     <td className={CELL}>
-      <button
-        type="button"
-        onClick={() => openEntity(row.id)}
+      <RecordLink
+        id={row.id}
         className={`cursor-pointer text-left hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 ${closed.has(row.id) ? 'text-text-muted line-through' : ''}`}
       >
         {row.title}
-      </button>
+      </RecordLink>
     </td>
   );
 }
@@ -128,7 +126,6 @@ function ColumnCell({
   registry: RegistryView;
   tz: string | undefined;
 }) {
-  const openEntity = useOpenRecord();
   const def = registry.property(field);
   const value = def?.storage === 'core' ? CORE_FIELD[field]?.(row) : row.props[field];
   const kind = def?.type.kind;
@@ -144,7 +141,7 @@ function ColumnCell({
         : ids.map((id, i) => (
             <span key={id}>
               {i > 0 && ', '}
-              <EntityRef id={id} onOpen={openEntity} />
+              <EntityRef id={id} link />
             </span>
           ));
   } else {

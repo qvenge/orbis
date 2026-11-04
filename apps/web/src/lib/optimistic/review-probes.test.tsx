@@ -184,7 +184,7 @@ it('review: keeps historical assistant text visible when the live title no longe
     { freshness: true },
   );
   const message = within(screen.getByTestId('message-list'));
-  await message.findByRole('button', { name: row.title });
+  await message.findByRole('link', { name: row.title });
   expect(message.getByText('Историческое имя')).toBeInTheDocument();
 });
 

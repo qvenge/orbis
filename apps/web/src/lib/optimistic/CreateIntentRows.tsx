@@ -1,6 +1,5 @@
-import { useOpenRecord } from '../../app/useOpenRecord';
-import { useNav } from '../../state/navigation';
-import { Button } from '../../ui/Button';
+import { Button, buttonClassName } from '../../ui/Button';
+import { RecordLink } from '../entity-ref/RecordLink';
 import type { CreateIntent } from './create-intents';
 
 export function CreateIntentRows({
@@ -14,23 +13,15 @@ export function CreateIntentRows({
   rejected?: CreateIntent;
   retry: (id: string) => void;
 }) {
-  const openRecord = useOpenRecord();
   return (
     <>
       {rows.length > 0 && (
         <ul className="space-y-1">
           {rows.map((row) => (
             <li key={row.id} className="flex items-center gap-2 px-2 py-1 text-sm">
-              <Button
-                type="button"
-                variant="ghost"
-                onClick={() => {
-                  if (row.status === 'ack') openRecord(row.id);
-                  else useNav.getState().openPendingCreate(row.id);
-                }}
-              >
+              <RecordLink id={row.id} className={buttonClassName('ghost')}>
                 {row.status === 'ack' ? row.result.title : row.title}
-              </Button>
+              </RecordLink>
               {row.status === 'pending' && <span role="status">Создаётся…</span>}
               {row.status === 'unknown' && <span>Сохранение не подтверждено</span>}
             </li>

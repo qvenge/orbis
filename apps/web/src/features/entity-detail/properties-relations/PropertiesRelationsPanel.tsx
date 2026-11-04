@@ -3,7 +3,6 @@ import { FreshnessVisibility, useFreshnessVisible } from '../../../lib/freshness
 import { lookupOf } from '../../../lib/registry/labels';
 import { useNoteRegistryVersion, useRegistry } from '../../../lib/registry/useRegistry';
 import { mayLeave, registerLeaveGuard } from '../../../state/leave-guard';
-import { useNav } from '../../../state/navigation';
 import { trpc } from '../../../trpc';
 import { Button } from '../../../ui/Button';
 import { Dialog } from '../../../ui/Dialog';
@@ -548,7 +547,7 @@ export function PropertiesRelationsPanel({
                   <RelationsTab
                     {...form(name)}
                     relations={get.data.relations ?? []}
-                    onNavigate={(id) => request(() => useNav.getState().openRecord(id))}
+                    onNavigate={(_id, proceed) => request(proceed)}
                     onShowProperties={() => setTab('Свойства')}
                     onOpenBody={() => hostAction('openBody')}
                   />

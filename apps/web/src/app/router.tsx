@@ -18,6 +18,7 @@ import { Button } from '../ui/Button';
 import { EmptyState } from '../ui/EmptyState';
 import { useToast } from '../ui/toast-store';
 import { ChunkErrorBoundary } from './ChunkErrorBoundary';
+import { loadDetailScreen } from './detail-screen-loader';
 import { type FrameApp, FrameAppContext } from './frame/FrameApp';
 import { useAppShell } from './frame/useAppShell';
 import { settleOverlay } from './history';
@@ -33,10 +34,7 @@ import { ScreenHeader } from './ScreenHeader';
 // Меню «⋯» записи (`DetailMenu`), редактор тела и блок «Записи» ленивы ещё раз, своими чанками
 // внутри экрана (`DetailMenuSlot.tsx`, `EditorShell.tsx`, `RecordsBlockSlot.tsx`).
 // Экранов Бюджета, импорта и Повестки нет: 1б увёл их из интерфейса (§8.6, РП-31), 1в удалил код (§8.1).
-const lazyDetailScreen = () =>
-  lazy(() =>
-    import('../features/entity-detail/DetailScreen').then((m) => ({ default: m.DetailScreen })),
-  );
+const lazyDetailScreen = () => lazy(loadDetailScreen);
 let DetailScreen = lazyDetailScreen();
 
 // Экран поиска хоста — ленивым чанком (R-35): входной чанк входит в эагерное замыкание экрана записи

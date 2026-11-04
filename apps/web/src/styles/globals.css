@@ -119,9 +119,9 @@ body {
  * Чип ссылки (`a[data-entity-chip]` в редакторе тела) исключён намеренно: он красит себя сам —
  * серым, пока заголовок не доехал или сущность не найдена, и зачёркнуто-серым у закрытой
  * задачи. Селектор ниже специфичнее одиночного класса Tailwind, поэтому без исключения он
- * перекрасил бы акцентом ВСЕ состояния чипа, и в jsdom этого не видно ни одному тесту.
+ * перекрасил бы акцентом состояния чипа. Ссылки-строки виджетов также сохраняют свои цвета.
  */
-.orbis-markdown a:not([data-entity-chip]) {
+.orbis-markdown a:not([data-entity-chip], [data-record-link-control]) {
   color: var(--color-accent);
 }
 
@@ -132,7 +132,7 @@ body {
  * курсором — требование «закрытая задача зачёркнута» отваливалось при наведении, и jsdom
  * этого снова не видел (найдено ревью раунда 1). У чипа свой ховер — заливкой, в EntityChip.
  */
-.orbis-markdown a:hover:not([data-entity-chip]) {
+.orbis-markdown a:hover:not([data-entity-chip], [data-record-link-control]) {
   text-decoration: underline;
 }
 

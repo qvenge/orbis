@@ -1,9 +1,10 @@
 import { ROLE_DEPENDENCY } from '@orbis/shared';
 import { Ban, Plus, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
-import { useOpenRecord } from '../../app/useOpenRecord';
+import { RecordLink } from '../../lib/entity-ref/RecordLink';
 import { useFreshnessVisible } from '../../lib/freshness/screen';
 import type { RelationKey } from '../../lib/optimistic/adapters';
+import { useReadableRecordIds } from '../../lib/optimistic/create-intent-scope';
 import {
   type RelationOperation,
   useRelationCommand,
@@ -59,7 +60,6 @@ export function Blockers({ entityId, relations }: { entityId: string; relations:
   // Предпросмотр шаблона (хост `readOnly`): блокировки видны и открываются, но не ставятся и не
   // снимаются.
   const readOnly = useHostReadOnly();
-  const openRecord = useOpenRecord();
   const [adding, setAdding] = useState(false);
   const [draft, setDraft] = useState('');
   const [direction, setDirection] = useState<Direction>('out');
@@ -88,7 +88,11 @@ export function Blockers({ entityId, relations }: { entityId: string; relations:
   // строку: сущность целиком секции не нужна, ей нужны титул и статус, а per-id шторм
   // тем заметнее, чем длиннее список.
   const shown = useFreshnessVisible();
-  const sides = trpc.entity.resolveRefs.useQuery({ ids }, { enabled: shown && ids.length > 0 });
+  const readable = useReadableRecordIds(ids);
+  const sides = trpc.entity.resolveRefs.useQuery(
+    { ids: readable },
+    { enabled: shown && readable.length > 0 },
+  );
   const byId = new Map((sides.data ?? []).map((e) => [e.id, e]));
   const title = (id: string) => byId.get(id)?.title ?? `${id.slice(0, 8)}…`;
   // Пока сущность не доехала — блокер считается живым: спрятать реальную блокировку хуже,
@@ -167,7 +171,6 @@ export function Blockers({ entityId, relations }: { entityId: string; relations:
     }
   }
 
-  const open = openRecord;
   const list = (label: string, items: Relation[]) => (
     <div className="flex flex-col">
       <p className={SECTION_LABEL}>{label}</p>
@@ -175,15 +178,14 @@ export function Blockers({ entityId, relations }: { entityId: string; relations:
         {items.map((r) => (
           <li key={r.id} data-testid="block-row" className={ROW}>
             <Ban size={14} aria-hidden className="shrink-0 text-text-muted/70" />
-            <button
-              type="button"
-              onClick={() => open(other(r))}
+            <RecordLink
+              id={other(r)}
               className="min-w-0 flex-1 cursor-pointer truncate text-left hover:underline"
             >
               {byId.get(other(r))?.title ??
                 search.data?.find((row) => row.id === other(r))?.title ??
                 title(other(r))}
-            </button>
+            </RecordLink>
             {/* Подтверждение-минимум: соседние разрушающие действия web («Снять аспект»,
                 «Архивировать») модалок не заводят, а Undo по actionId здесь недоступен —
                 поэтому спрашиваем вторым кликом прямо в строке. */}

@@ -16,6 +16,7 @@ import {
   closureOf,
   featurePrecacheEntries,
   parseBudgetArgs,
+  routerLazyModules,
   runtimeModuleImports,
 } from './check-lazy-chunks.ts';
 
@@ -188,4 +189,111 @@ const load = () => import('./VersionsCard');`),
 export * from './VersionsCard';
 import './VersionsCard';`),
   ).toEqual(['./VersionsCard', './VersionsCard', './VersionsCard']);
+});
+
+test('router discovery follows the binding passed to React.lazy and still finds direct imports', () => {
+  const router = `
+    import { lazy as screen } from 'react';
+    import { detailLoader as load } from './loader';
+    const Detail = screen(load);
+    const Search = screen(() => import("./features/SearchScreen"));
+    function unrelated(screen) { return screen(() => import('./Ignored')); }
+  `;
+  expect(
+    routerLazyModules(router, (specifier) => {
+      expect(specifier).toBe('./loader');
+      return `
+      export function detailLoader() {
+        return import('../features/DetailScreen').then(({ DetailScreen }) => ({ default: DetailScreen }));
+      }
+      export const unrelated = () => import('../features/Ignored');
+    `;
+    }),
+  ).toEqual(['DetailScreen', 'SearchScreen']);
+});
+
+test('an eager loader cannot borrow an unrelated dynamic import to pass discovery', () => {
+  const router = `
+    import { lazy } from 'react';
+    import { detailLoader } from './loader';
+    const Detail = lazy(detailLoader);
+  `;
+  const staticMutant = `
+    import { DetailScreen } from '../features/DetailScreen';
+    export const detailLoader = () => {
+      const unused = () => import('../features/DetailScreen');
+      return true ? Promise.resolve({ default: DetailScreen }) : import('../features/DetailScreen');
+    };
+    export const unusedDynamicImport = () => import('../features/DetailScreen');
+  `;
+  expect(() => routerLazyModules(router, () => staticMutant)).toThrow('detailLoader');
+});
+
+const lazyBinding = `
+  import { lazy } from 'react';
+  import { loader } from './loader';
+  const Detail = lazy(loader);
+`;
+
+test.each([
+  'const alias = true; const alreadyLoaded = alias; return alreadyLoaded ? Promise.resolve({ default: Static }) : import("./DetailScreen");',
+  'return (0, import("./DetailScreen"), Promise.resolve({ default: Static }));',
+  'return Promise.resolve({ default: Static }).then(() => { void import("./DetailScreen"); return { default: Static }; });',
+  'if (flag) return Promise.resolve({ default: Static }); return import("./DetailScreen");',
+])('only a reachable returned import can establish lazy loading: %s', (body) => {
+  expect(() =>
+    routerLazyModules(
+      lazyBinding,
+      () => `
+    import { Static, flag } from './eager';
+    export function loader() { ${body} }
+  `,
+    ),
+  ).toThrow('loader');
+});
+
+test('constant reachability uses the lexical binding and follows the selected returned promise', () => {
+  const source = `
+    import { Static } from './eager';
+    const flag = true;
+    export function loader() {
+      const flag = false;
+      if (flag) return Promise.resolve({ default: Static });
+      const load = import("./DetailScreen");
+      return (0, load.then(({ DetailScreen }) => ({ default: DetailScreen })));
+    }
+  `;
+  expect(routerLazyModules(lazyBinding, () => source)).toEqual(['DetailScreen']);
+});
+
+test('the same promise alias counts only if the chosen loader starts it', () => {
+  const declaration = 'const load = import("./DetailScreen");';
+  const loader = (local: string) => `
+    export function loader() {
+      ${local}
+      return enabled ? load.then(({ DetailScreen }) => ({ default: DetailScreen })) : neverLoaded;
+    }
+  `;
+  const outer = 'const enabled = true;';
+  expect(routerLazyModules(lazyBinding, () => outer + loader(declaration))).toEqual([
+    'DetailScreen',
+  ]);
+  expect(() => routerLazyModules(lazyBinding, () => outer + declaration + loader(''))).toThrow(
+    'loader',
+  );
+});
+
+test('an inline lazy callback cannot return a promise started by the router module', () => {
+  const router = (loader: string, outer = '') => `
+    import { lazy } from 'react';
+    ${outer}
+    const Detail = lazy(${loader});
+  `;
+  const declaration = 'const load = import("./DetailScreen");';
+  expect(routerLazyModules(router(`() => { ${declaration} return load; }`), () => '')).toEqual([
+    'DetailScreen',
+  ]);
+  expect(() => routerLazyModules(router('() => load', declaration), () => '')).toThrow(
+    'dynamic import',
+  );
 });

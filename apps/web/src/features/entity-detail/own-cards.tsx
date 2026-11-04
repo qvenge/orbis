@@ -1,6 +1,5 @@
 import { ownCardOrder } from '@orbis/shared';
 import { EXTENSION_CARDS, type OwnCard } from '../../app/extension-registry';
-import { useOpenRecord } from '../../app/useOpenRecord';
 import { AspectSection, AspectSections } from './AspectSection';
 import { AssignmentCardSlot } from './AssignmentCardSlot';
 import { ROUTINE_ASPECT, RoutineStatusBlock } from './RoutineStatusBlock';
@@ -41,7 +40,6 @@ const CARD_CLASS = 'flex flex-col gap-6';
  */
 function AssignmentOwnCard() {
   const { entity } = useRecordHost();
-  const openRecord = useOpenRecord();
   const isTicket = entity.aspects.includes(TASK) && entity.aspects.includes(ASSIGNMENT);
   const isRoutine = entity.aspects.includes(ROUTINE_ASPECT);
   const { runs, lastRun } = useTicketRuns(entity.id, isTicket);
@@ -53,14 +51,13 @@ function AssignmentOwnCard() {
       {isTicket && (
         <TicketWaitingBlock key={`waiting-${entity.id}`} entity={entity} lastRun={lastRun} />
       )}
-      {isTicket && !isRoutine && <RunsList parentId={entity.id} runs={runs} onOpen={openRecord} />}
+      {isTicket && !isRoutine && <RunsList parentId={entity.id} runs={runs} />}
     </div>
   );
 }
 
 function RoutineCard() {
   const { entity } = useRecordHost();
-  const openRecord = useOpenRecord();
   const { runs, lastRun } = useTicketRuns(entity.id, true);
   return (
     <div className={CARD_CLASS}>
@@ -69,7 +66,7 @@ function RoutineCard() {
           рутину оно не должно. */}
       <RoutineStatusBlock key={`routine-${entity.id}`} entity={entity} lastRun={lastRun} />
       {/* У рутины исполнитель внутренний и всегда один — колонка гранта ей не положена (Р-8). */}
-      <RunsList parentId={entity.id} runs={runs} showGrant={false} onOpen={openRecord} />
+      <RunsList parentId={entity.id} runs={runs} showGrant={false} />
     </div>
   );
 }

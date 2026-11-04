@@ -1,6 +1,6 @@
 import type { AppKey } from '@orbis/shared/nav';
 import { useAppShell } from '../../app/frame/useAppShell';
-import { useNav } from '../../state/navigation';
+import { RecordLink } from '../../lib/entity-ref/RecordLink';
 
 /**
  * Разделы формы «домашняя как центр» (срез 1б §6.2 п. 2): постоянной навигации нет, разделы —
@@ -18,17 +18,17 @@ export function NavTiles({ app }: { app: AppKey }) {
       className="mx-auto grid w-full max-w-3xl grid-cols-2 gap-2 px-4 pt-3 sm:grid-cols-3 md:px-6"
     >
       {shell.sections.map((s) => (
-        <button
+        <RecordLink
           key={s.id}
-          type="button"
+          id={s.id}
+          app={app}
           disabled={s.archived}
-          onClick={() => useNav.getState().openRecord(s.id, { app })}
           className="flex min-h-14 cursor-pointer items-center gap-2 rounded-card border border-line bg-surface px-3 py-2 text-left text-sm transition hover:bg-surface-2 disabled:cursor-default disabled:text-text-muted"
         >
           {s.emoji && <span aria-hidden>{s.emoji}</span>}
           <span className="min-w-0 flex-1 truncate">{s.title}</span>
           {s.archived && <span className="text-2xs">в архиве</span>}
-        </button>
+        </RecordLink>
       ))}
     </nav>
   );

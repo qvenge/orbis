@@ -1,11 +1,7 @@
 import { getQueryKey } from '@trpc/react-query';
 import { useRef, useState } from 'react';
 import { useFreshnessVisible } from '../../lib/freshness/screen';
-import {
-  useCreateAwareOpen,
-  useCreatePlacement,
-  useCreateSurface,
-} from '../../lib/optimistic/use-create-intent';
+import { useCreatePlacement, useCreateSurface } from '../../lib/optimistic/use-create-intent';
 import { trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
 import { Dialog } from '../../ui/Dialog';
@@ -21,7 +17,7 @@ export function DayPlanner({
   onOpen,
   captureSlot,
 }: {
-  onOpen: (id: string) => void;
+  onOpen?: (id: string) => void;
   captureSlot?: string;
 }) {
   const { day, selection, select, ready, failed, retry } = usePlanningDay();
@@ -55,7 +51,6 @@ export function DayPlanner({
   const shownRows = rows.filter((row) => !hiddenCanonical.has(row.id));
   const open = shownRows.filter((r) => !isClosed(r));
   const closed = shownRows.filter(isClosed);
-  const openRecord = useCreateAwareOpen(onOpen);
   const more = (q.data?.rows.length ?? 0) > limit;
   async function reorder(id: string, offset: number) {
     const selected = rows.find((r) => r.id === id);
@@ -98,7 +93,7 @@ export function DayPlanner({
         <PlannedTaskRow
           key={r.id}
           record={r}
-          onOpen={openRecord}
+          onOpen={onOpen}
           run={run}
           busy={busy}
           onReorder={(id, offset) => void reorder(id, offset)}

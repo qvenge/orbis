@@ -9,7 +9,8 @@
 // работы: у поля `at` один смысл («во сколько»), а у паузы — совсем другой («работает ли»), и
 // текстовый инпут рядом с кнопкой означал бы, что выключить рутину можно опечаткой.
 import type { ReactNode } from 'react';
-import { useOpenRecord } from '../../app/useOpenRecord';
+import { RecordLink } from '../../lib/entity-ref/RecordLink';
+import { useRecordLinkController } from '../../lib/entity-ref/record-link-controller';
 import { formatDate, plural } from '../../lib/format';
 import { useFreshnessVisible } from '../../lib/freshness/screen';
 import { type RouterOutputs, trpc } from '../../trpc';
@@ -84,7 +85,7 @@ export function RoutineStatusBlock({
   entity: Entity;
   lastRun: TicketRun | undefined;
 }) {
-  const openEntity = useOpenRecord();
+  const { open } = useRecordLinkController();
   const tz = trpc.user.getSettings.useQuery().data?.timezone;
   // Предпросмотр шаблона (хост `readOnly`): состояние рутины видно, «Прогнать сейчас» и паузы нет —
   // ручной прогон и пауза двигали бы рутину, взятую для примера.
@@ -109,7 +110,7 @@ export function RoutineStatusBlock({
       // Ответ приходит ДО модели (V1.3): за исходом владелец пойдёт на экран самого прогона,
       // туда и ведём. Инвалидация — до перехода: прогон уже создан, и история рутины без неё
       // осталась бы вчерашней.
-      openEntity(runId);
+      open(runId);
     },
   });
   const { mutation: update } = useEntityUpdate(entity.id);
@@ -177,15 +178,14 @@ export function RoutineStatusBlock({
           {/* Ссылкой на сам прогон: «сбой» без возможности посмотреть, на чём именно, — это
               сообщение, на которое нечем ответить. Открытие — тем же push поверх стека
               активной вкладки, что у истории прогонов и подзадач. */}
-          <button
-            type="button"
+          <RecordLink
+            id={lastRun.id}
             data-testid="routine-last-run"
-            onClick={() => openEntity(lastRun.id)}
             className="cursor-pointer text-accent hover:underline"
           >
             {RUN_OUTCOME_LABELS[outcome] ?? outcome}
             {startedAt !== undefined && ` · ${formatDate(startedAt, tz)}`}
-          </button>
+          </RecordLink>
         </Row>
       )}
       {/* Отказ ЛЮБОЙ из двух кнопок: «прогон уже идёт» (CONFLICT) и «лимит на сегодня исчерпан»

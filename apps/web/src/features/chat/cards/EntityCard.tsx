@@ -1,7 +1,7 @@
 import { useQueryClient } from '@tanstack/react-query';
 import { getQueryKey } from '@trpc/react-query';
 import { useCallback, useState, useSyncExternalStore } from 'react';
-import { useOpenRecord } from '../../../app/useOpenRecord';
+import { RecordLink } from '../../../lib/entity-ref/RecordLink';
 import { formatAmount } from '../../../lib/format';
 import { freshnessRuntimeOf, networkReadContext } from '../../../lib/freshness/provenance';
 import { useFreshnessVisible } from '../../../lib/freshness/screen';
@@ -49,7 +49,6 @@ export function EntityCard({
   const card = runtime?.projectCard(historicalCard) ?? historicalCard;
   const [undoneHere, setUndone] = useState(false);
   const undone = undoneOnServer || undoneHere;
-  const openRecord = useOpenRecord();
   // Подписи полей — из реестра (§А9-2): ключи `keyFields` это id СВОЙСТВ, и словарь имён
   // старой схемы, живший здесь раньше, не знал ни одного из них.
   const registry = useRegistry();
@@ -120,14 +119,13 @@ export function EntityCard({
       data-undone={String(undone)}
       className={`flex flex-col gap-2 ${undone ? 'opacity-50' : ''}`}
     >
-      <button
-        type="button"
+      <RecordLink
+        id={card.entityId}
         className="cursor-pointer text-left text-sm font-medium transition hover:text-accent disabled:cursor-default disabled:hover:text-text"
         disabled={undone}
-        onClick={() => openRecord(card.entityId)}
       >
         {card.title}
-      </button>
+      </RecordLink>
       {/* Свойства — тихая сетка «подпись: значение», числа таблично. */}
       <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 text-xs">
         {Object.entries(card.keyFields).map(([k, v]) => {

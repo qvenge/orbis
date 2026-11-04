@@ -12,7 +12,6 @@ import {
 import { currentEntry } from '@orbis/shared/nav';
 import type { ParseRegistry } from '@orbis/shared/query';
 import { createContext, type ReactNode, useContext, useMemo } from 'react';
-import { useOpenRecord } from '../../app/useOpenRecord';
 import { Markdown } from '../../lib/markdown/Markdown';
 import { BodyKindProvider } from '../../lib/query-blocks/body-kind';
 import { useFieldCatalog } from '../../lib/query-blocks/useFieldCatalog';
@@ -301,7 +300,6 @@ function PageNodeView({
   path: readonly number[];
   place: string;
 }) {
-  const openEntity = useOpenRecord();
   const plan = useRenderPlan();
   const issue = plan.issues.get(pathKey(path));
   if (issue !== undefined) {
@@ -321,7 +319,7 @@ function PageNodeView({
       if (text === '') return null;
       return (
         <div data-testid="page-text">
-          <Markdown source={text} onEntityLink={openEntity} />
+          <Markdown source={text} />
         </div>
       );
     }
@@ -337,10 +335,9 @@ function PageNodeView({
       // «Записи» — своей точкой лени (спека 1б §12, Н-9): рендерер эагерен в экране записи, а блок
       // нужен одной странице. Запись открывается в текущем разделе — поверх этой страницы.
       // «Приложения» — тоже своей точкой лени: плитки нужны «Домой» и редкой странице.
-      if (node.name === 'records')
-        return <RecordsBlockSlot onOpen={openEntity} captureSlot={pathKey(path)} />;
+      if (node.name === 'records') return <RecordsBlockSlot captureSlot={pathKey(path)} />;
       if (node.name === 'apps') return <AppsBlockSlot />;
-      return <PlanningBlockSlot kind={node.name} onOpen={openEntity} captureSlot={pathKey(path)} />;
+      return <PlanningBlockSlot kind={node.name} captureSlot={pathKey(path)} />;
     case 'param':
       // Параметр страницы (1в §5.1) — переключатель на месте блока. Узел без объявления сюда не
       // доходит: ошибка блока — `PARAM_INVALID`, плашкой выше, как «второй» и неуместный.

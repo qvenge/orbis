@@ -1,4 +1,4 @@
-import { useOpenRecord } from '../../app/useOpenRecord';
+import { RecordLink } from '../../lib/entity-ref/RecordLink';
 import type { RouterOutputs } from '../../trpc';
 
 type Backlink = NonNullable<RouterOutputs['entity']['get']['backlinks']>[number];
@@ -16,7 +16,6 @@ type Backlink = NonNullable<RouterOutputs['entity']['get']['backlinks']>[number]
  * иначе «Связанное (100)» читалось бы как точное число связей (урок C6).
  */
 export function Backlinks({ items, truncated }: { items: Backlink[]; truncated: boolean }) {
-  const openRecord = useOpenRecord();
   if (items.length === 0) return null;
 
   return (
@@ -33,13 +32,12 @@ export function Backlinks({ items, truncated }: { items: Backlink[]; truncated: 
             className="flex items-center gap-2.5 rounded-md px-2 py-1.5 text-sm transition hover:bg-surface-2/60"
           >
             {/* Открытие — в стопку текущего раздела поверх записи (как у подзадач). */}
-            <button
-              type="button"
-              onClick={() => openRecord(entity.id)}
+            <RecordLink
+              id={entity.id}
               className="min-w-0 flex-1 cursor-pointer truncate text-left hover:underline"
             >
               {entity.title}
-            </button>
+            </RecordLink>
             <span className="shrink-0 text-2xs text-text-muted">{viaLabel}</span>
           </li>
         ))}

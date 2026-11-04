@@ -21,6 +21,10 @@ const sizes: Record<Size, string> = {
   icon: 'h-8 w-8 p-0',
 };
 
+export function buttonClassName(variant: Variant, size: Size = 'md') {
+  return `${base} ${variants[variant]} ${sizes[size]}`;
+}
+
 /**
  * Тип пропсов — `ComponentProps<'button'>`, а не голые HTML-атрибуты: в React 19 `ref` — обычный
  * проп функционального компонента и доходит до `<button>` вместе с прочими. Им пользуются Radix
@@ -34,10 +38,6 @@ export function Button({
   ...props
 }: ComponentProps<'button'> & { variant?: Variant; size?: Size }) {
   return (
-    <button
-      type={type}
-      className={`${base} ${variants[variant]} ${sizes[size]} ${className}`}
-      {...props}
-    />
+    <button type={type} className={`${buttonClassName(variant, size)} ${className}`} {...props} />
   );
 }

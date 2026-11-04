@@ -35,9 +35,11 @@ import {
   SlidersHorizontal,
   Undo2,
 } from 'lucide-react';
-import { lazy, Suspense, useState } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import type { ScreenMenuContentProps } from '../../app/frame/ScreenMenu';
-import { useNav } from '../../state/navigation';
+import { recordLinkGestures } from '../../lib/entity-ref/prefetch';
+import { useRecordLinkController } from '../../lib/entity-ref/record-link-controller';
+import { useLocalCreateTarget } from '../../lib/optimistic/create-intent-scope';
 import { DropdownMenu, type DropdownMenuItem } from '../../ui/DropdownMenu';
 import { useToast } from '../../ui/toast-store';
 import {
@@ -104,7 +106,7 @@ export type DetailMenuView =
   | {
       kind: 'configuring';
       templateTitle: string;
-      onOpenTemplate: () => void;
+      templateId: string;
     };
 
 /**
@@ -241,6 +243,54 @@ function RecordMenu({
   hostItems,
   frameMenu,
 }: RecordMenuProps & ScreenMenuContentProps & { frameMenu: ReturnType<typeof useFrameMenu> }) {
+  const { open: openRecord, prepare, href, availability } = useRecordLinkController();
+  // Re-render a visible menu item when its target receives the create ACK.
+  useLocalCreateTarget(view.kind === 'configuring' ? view.templateId : entity.id);
+  const gestures = useMemo(() => recordLinkGestures(prepare), [prepare]);
+  const hoveredHref = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    if (!open) return;
+    return () => {
+      hoveredHref.current = undefined;
+      gestures.dispose();
+    };
+  }, [gestures, open]);
+  function recordItem(
+    id: string,
+    app?: string,
+  ): Pick<DropdownMenuItem, 'link' | 'onSelect' | 'disabled'> {
+    const onSelect = () => {
+      openRecord(id, { app });
+      gestures.releaseTouch();
+    };
+    const status = availability(id);
+    if (status) return { onSelect, disabled: status === 'rejected' };
+    const address = href(id, app);
+    return {
+      link: {
+        href: address,
+        onPointerEnter: (event) => {
+          if (event.pointerType !== 'mouse') return;
+          hoveredHref.current = address;
+          gestures.enter(id);
+        },
+        onPointerLeave: (event) => {
+          if (event.pointerType !== 'mouse' || hoveredHref.current !== address) return;
+          hoveredHref.current = undefined;
+          gestures.leave();
+        },
+        onFocus: () => {
+          if (hoveredHref.current !== address) gestures.focus(id);
+        },
+        onBlur: gestures.blur,
+        onPointerDown: (event) => gestures.down(id, event),
+        onPointerMove: gestures.move,
+        onPointerCancel: gestures.cancel,
+        onPointerUp: gestures.up,
+      },
+      onSelect,
+    };
+  }
   const revertText = useRevertTextItem(entity.id, bodyAction);
   const runBatch = useUpdateBatch();
   const pageActions = usePageIdentityActions(entity, bodyGate);
@@ -295,7 +345,7 @@ function RecordMenu({
           {
             label: `Открыть шаблон „${view.templateTitle}“`,
             icon: <LayoutTemplate size={16} aria-hidden />,
-            onSelect: view.onOpenTemplate,
+            ...recordItem(view.templateId),
           },
           copyLinkItem,
         ]
@@ -435,7 +485,7 @@ function RecordMenu({
           key: `open-in:${id}`,
           label: `Открыть в «${p.apps.byId.get(id)?.title || id}»`,
           icon: <AppWindow size={16} aria-hidden />,
-          onSelect: () => useNav.getState().openRecord(entity.id, { app: id }),
+          ...recordItem(entity.id, id),
         })),
       ...(contenders === null
         ? []

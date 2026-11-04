@@ -14,7 +14,7 @@
 // ссылка. Признак, который никогда не срабатывает, — это не подстраховка, а мёртвая ветка.
 import { Brain } from 'lucide-react';
 import { ScreenHeader } from '../../app/ScreenHeader';
-import { useOpenRecord } from '../../app/useOpenRecord';
+import { RecordLink } from '../../lib/entity-ref/RecordLink';
 import { Button } from '../../ui/Button';
 import { Card } from '../../ui/Card';
 import { EmptyState } from '../../ui/EmptyState';
@@ -33,7 +33,6 @@ const ROW_CLASS =
 
 export function MemoryScreen() {
   // Запись правила открывается из хоста: экран памяти — экран хоста (срез 1б §7.2).
-  const openEntity = useOpenRecord();
   // Отрицаний «Записей» (§9.6) здесь нет: фильтр уже сужает до правил памяти, и текст запроса
   // остаётся прежним — `showPagesAndApps` лишь не дописывает `!aspect=…` к своему аспекту.
   const { entities, hasMore, loadMore, isLoading, isError } = useEntities(MEMORY_FILTER, true);
@@ -76,14 +75,9 @@ export function MemoryScreen() {
             <ul className="flex flex-col gap-px">
               {entities.map((e) => (
                 <li key={e.id}>
-                  <button
-                    type="button"
-                    data-testid="memory-row"
-                    onClick={() => openEntity(e.id)}
-                    className={ROW_CLASS}
-                  >
+                  <RecordLink id={e.id} data-testid="memory-row" className={ROW_CLASS}>
                     <EntityRow entity={e} />
-                  </button>
+                  </RecordLink>
                 </li>
               ))}
             </ul>

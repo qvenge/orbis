@@ -298,11 +298,11 @@ describe('complete directional relation browser', () => {
     );
     await screen.findAllByText('Свойство из метаданных: Поле теста');
     fireEvent.click(
-      within(screen.getByTestId('relation-in')).getByRole('button', {
+      within(screen.getByTestId('relation-in')).getByRole('link', {
         name: 'Открыть запись-источник',
       }),
     );
-    expect(navigate).toHaveBeenCalledWith(A);
+    expect(navigate).toHaveBeenCalledWith(A, expect.any(Function));
     expect(show).not.toHaveBeenCalled();
     fireEvent.click(
       within(screen.getByTestId('relation-out')).getByRole('button', { name: 'Изменить свойство' }),

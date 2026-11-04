@@ -1,7 +1,9 @@
 import { trpc } from '../../trpc';
 import { Skeleton } from '../../ui/Skeleton';
 import { useFreshnessVisible } from '../freshness/screen';
+import { useLocalCreateTarget } from '../optimistic/create-intent-scope';
 import { useNoteRegistryVersion } from '../registry/useRegistry';
+import { RecordLink } from './RecordLink';
 
 /**
  * Человеко-читаемая ссылка на сущность по id (вместо сырого UUID в UI).
@@ -9,8 +11,18 @@ import { useNoteRegistryVersion } from '../registry/useRegistry';
  * сервер не трогаем. Пока грузится — skeleton под короткий текст;
  * ошибка/нет данных — укороченный моноширинный id; успех — title.
  */
-export function EntityRef({ id, onOpen }: { id: string; onOpen?: (id: string) => void }) {
-  const q = trpc.entity.get.useQuery({ id }, { enabled: useFreshnessVisible() });
+export function EntityRef({
+  id,
+  link,
+  onOpen,
+}: {
+  id: string;
+  link?: boolean;
+  onOpen?: (id: string) => void;
+}) {
+  const pending = useLocalCreateTarget(id);
+  const shown = useFreshnessVisible();
+  const q = trpc.entity.get.useQuery({ id }, { enabled: shown && !pending });
   /**
    * Версия реестра из этого же ответа (§А10-1) — повод перечитать снимок подписей.
    *
@@ -22,22 +34,22 @@ export function EntityRef({ id, onOpen }: { id: string; onOpen?: (id: string) =>
    */
   useNoteRegistryVersion(q.data, q.dataUpdatedAt);
   if (q.isLoading) return <Skeleton className="inline-block h-4 w-24 align-middle" />;
-  const title = q.data?.entity.title;
+  const title = pending?.title ?? q.data?.entity.title;
   if (!title)
     return (
       <span className="font-mono text-xs text-text-muted" title={id}>
         {id.slice(0, 8)}…
       </span>
     );
-  if (onOpen)
+  if (link || onOpen)
     return (
-      <button
-        type="button"
-        onClick={() => onOpen(id)}
+      <RecordLink
+        id={id}
+        onOpen={onOpen ? (target, proceed) => proceed(() => onOpen(target)) : undefined}
         className="cursor-pointer text-left hover:underline"
       >
         {title}
-      </button>
+      </RecordLink>
     );
   return <span>{title}</span>;
 }

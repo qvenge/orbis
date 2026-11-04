@@ -1,5 +1,5 @@
 import { DropdownMenu as RDM } from 'radix-ui';
-import type { ReactNode } from 'react';
+import { type ComponentProps, type MouseEvent, type ReactNode, useRef } from 'react';
 import type { LazyMenuControl } from './LazyMenuSlot';
 
 /**
@@ -17,6 +17,18 @@ export type DropdownMenuItem = {
   icon?: ReactNode;
   disabled?: boolean;
   onSelect: () => void;
+  link?: Pick<
+    ComponentProps<'a'>,
+    | 'href'
+    | 'onFocus'
+    | 'onBlur'
+    | 'onPointerEnter'
+    | 'onPointerLeave'
+    | 'onPointerDown'
+    | 'onPointerMove'
+    | 'onPointerCancel'
+    | 'onPointerUp'
+  >;
 };
 
 /**
@@ -111,18 +123,57 @@ export function DropdownMenu({
   );
 }
 
+const ITEM_CLASS =
+  'flex cursor-pointer select-none items-center gap-2 rounded-control px-2 py-1.5 text-sm text-text outline-hidden transition data-[highlighted]:bg-surface-2 data-[highlighted]:text-text';
+
 function menuItem(item: DropdownMenuItem) {
+  if (item.link) return <LinkMenuItem key={item.key ?? item.label} item={item} />;
   return (
     <RDM.Item
       key={item.key ?? item.label}
       onSelect={item.onSelect}
       disabled={item.disabled}
-      // data-highlighted Radix ставит и на наведение мышью, и на переход
-      // стрелками — подсветка одна на оба способа.
-      className="flex cursor-pointer select-none items-center gap-2 rounded-control px-2 py-1.5 text-sm text-text outline-hidden transition data-[highlighted]:bg-surface-2 data-[highlighted]:text-text"
+      className={ITEM_CLASS}
     >
       {item.icon}
       {item.label}
+    </RDM.Item>
+  );
+}
+
+function LinkMenuItem({ item }: { item: DropdownMenuItem }) {
+  const click = useRef<MouseEvent | null>(null);
+  return (
+    <RDM.Item
+      asChild
+      disabled={item.disabled}
+      className={ITEM_CLASS}
+      onClick={(event) => {
+        click.current = event;
+      }}
+      onSelect={(event) => {
+        // Radix dispatches its select event synchronously inside the anchor click.
+        const activation = click.current;
+        click.current = null;
+        if (
+          activation &&
+          (activation.button !== 0 ||
+            activation.metaKey ||
+            activation.ctrlKey ||
+            activation.altKey ||
+            activation.shiftKey)
+        ) {
+          event.preventDefault();
+          return;
+        }
+        activation?.preventDefault();
+        item.onSelect();
+      }}
+    >
+      <a {...(item.disabled ? undefined : item.link)}>
+        {item.icon}
+        {item.label}
+      </a>
     </RDM.Item>
   );
 }

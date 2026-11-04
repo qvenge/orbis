@@ -1,7 +1,6 @@
 // Тикет остановился и ждёт человека (С3, С8, С6; приёмка 7–8). Один блок на три исхода
 // прогона, потому что жест у них ОДИН: прочитать текст и ответить, вернув работу в круг.
 import { useId, useState } from 'react';
-import { useOpenRecord } from '../../app/useOpenRecord';
 import { Markdown } from '../../lib/markdown/Markdown';
 import { type RouterOutputs, trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
@@ -29,7 +28,6 @@ export function TicketWaitingBlock({
   entity: Entity;
   lastRun: TicketRun | undefined;
 }) {
-  const openEntity = useOpenRecord();
   // Предпросмотр шаблона (хост `readOnly`): вопрос виден, ответа и «Закрыть тикет» нет.
   const readOnly = useHostReadOnly();
   const answerId = useId();
@@ -81,14 +79,8 @@ export function TicketWaitingBlock({
       className="flex flex-col gap-3 rounded-control border border-line bg-surface-2/40 p-4"
     >
       <h3 className="font-medium text-sm">{HEADINGS[outcome]}</h3>
-      {/* Разметкой, а не сырым текстом: агент пишет отчёты и вопросы markdown'ом — списками,
-          кодом и ссылками. Компонент тот же, что у ленты чата и просмотра тела, и своего веса
-          в чанк detail не добавляет (EditorShell уже тянет его статически). `onEntityLink` —
-          как в EditorShell: без него ссылка `[[entity:…]]` из отчёта агента уходит обычной и
-          ПЕРЕЗАГРУЖАЕТ SPA (контракт Markdown.tsx), а не открывает запись поверх стека. */}
-      {waitingFor !== '' && (
-        <Markdown source={waitingFor} className="text-sm" onEntityLink={openEntity} />
-      )}
+      {/* Отчёт агента может содержать разметку и ссылки на записи. */}
+      {waitingFor !== '' && <Markdown source={waitingFor} className="text-sm" />}
       {!readOnly && (
         <>
           <div className="flex flex-col gap-1">

@@ -3,6 +3,8 @@ import { useMemo } from 'react';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import rehypeSanitize from 'rehype-sanitize';
 import remarkGfm from 'remark-gfm';
+import { RecordLink } from '../entity-ref/RecordLink';
+import { recordIdOfLink } from '../entity-ref/record-link-controller';
 
 /**
  * Ссылка на сущность в тексте. Класс символов и регистронезависимость — КОПИЯ серверного
@@ -46,34 +48,24 @@ function linkifyEntityRefs(source: string): string {
 function buildComponents(onEntityLink?: (id: string) => void): Components {
   return {
     a({ node: _node, href, children, ...rest }) {
-      const place = href ? parseAddress(href) : null;
-      // Внутренняя ссылка на запись (и старая `/entity/<id>`): открыть по месту экрана
-      // (`useOpenRecord` вызывающего, срез 1б §7.2). Приложение из адреса отбрасывается — в данных
-      // ссылка на запись по id, рамку выбирает правило открытия при нажатии (§7.4). Без
-      // preventDefault браузер перезагрузил бы документ.
-      if (place?.kind === 'record' && onEntityLink) {
-        const { id } = place;
+      const id = href && recordIdOfLink(href, document);
+      // Исходный href нужен браузеру для новой вкладки. Рамку обычного клика
+      // выбирает контроллер ссылки или переданное правило открытия.
+      if (id) {
         return (
-          <a
+          <RecordLink
             {...rest}
+            id={id}
             href={href}
-            onClick={(e) => {
-              // Штатные жесты браузера не перехватываем: Ctrl/Cmd-клик (новая вкладка),
-              // Shift (новое окно), Alt (скачать) и не-основная кнопка обязаны работать —
-              // href настоящий, и ссылка, которая ведёт себя не как ссылка, хуже её отсутствия.
-              if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
-              e.preventDefault();
-              onEntityLink(id);
-            }}
+            prose
+            onOpen={onEntityLink ? (id, proceed) => proceed(() => onEntityLink(id)) : undefined}
           >
             {children}
-          </a>
+          </RecordLink>
         );
       }
-      // Путь приложения без обработчика — обычная ссылка того же документа: перезагрузка
-      // отработает как вход по внешней ссылке. Всё прочее ведёт наружу — только новой
-      // вкладкой и без доступа к opener.
-      // «//host» путём приложения НЕ является: это протокол-относительная ссылка НАРУЖУ.
+      // Остальные пути приложения загружаются браузером как прямой вход.
+      // Протокол-относительный адрес записи уже распознан выше; остальные //host ссылки открываются отдельно.
       // Санитайзер её пропускает (двоеточия до первого «/» нет — значение считается
       // относительным), и без этой оговорки она увела бы SPA целиком, в той же вкладке,
       // с полным Referer. Разметку сюда приносит ответ модели — вектор не теоретический.
@@ -121,7 +113,7 @@ export function Markdown({
   className,
 }: {
   source: string;
-  /** Клик по `[[entity:<id>]]`. Не передан — ссылка остаётся обычной (перезагрузит документ). */
+  /** Правило открытия записи для вызывающих с особой рамкой. По умолчанию берётся контекст. */
   onEntityLink?: (id: string) => void;
   className?: string;
 }) {

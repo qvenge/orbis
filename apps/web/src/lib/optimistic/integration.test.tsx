@@ -216,17 +216,17 @@ it('renders live record fields in chat without changing historical card payload 
     { freshness: true },
   );
   const chat = within(await screen.findByLabelText('chat'));
-  await chat.findByRole('button', { name: 'Сервер' });
-  expect(chat.getByRole('button', { name: 'История действия' })).toBeInTheDocument();
+  await chat.findByRole('link', { name: 'Сервер' });
+  expect(chat.getByRole('link', { name: 'История действия' })).toBeInTheDocument();
   fireEvent.click(screen.getByRole('button', { name: 'A' }));
-  await chat.findByRole('button', { name: 'A' });
-  expect(chat.getByRole('button', { name: 'История действия' })).toBeInTheDocument();
+  await chat.findByRole('link', { name: 'A' });
+  expect(chat.getByRole('link', { name: 'История действия' })).toBeInTheDocument();
   const key = hashKey(getQueryKey(trpc.chat.listMessages, { threadId: 'thread' }, 'query'));
   expect(testFreshnessOf(view.queryClient).runtime.publicationOf(key)?.raw).toBe(messages);
   expect(first.metadata.cards[0]).toEqual(card);
   expect(first.content).toBe('Исходный текст');
   await act(async () => pending.reject(trpcError('BAD_REQUEST', 'Отклонено')));
-  await chat.findByRole('button', { name: 'Сервер' });
+  await chat.findByRole('link', { name: 'Сервер' });
 });
 
 it('takes Undo from a new server read while keeping an unrelated edit in flight', async () => {
@@ -591,13 +591,13 @@ it('adds and removes the historical assistant echo as the same live card changes
     { freshness: true },
   );
   const thread = within(screen.getByTestId('message-list'));
-  await thread.findByRole('button', { name: row.title });
+  await thread.findByRole('link', { name: row.title });
   expect(thread.getAllByText(row.title)).toHaveLength(1);
   fireEvent.click(screen.getByRole('button', { name: 'A' }));
-  await thread.findByRole('button', { name: 'A' });
+  await thread.findByRole('link', { name: 'A' });
   expect(thread.getByText(row.title)).toBeInTheDocument();
   await act(async () => pending.reject(trpcError('BAD_REQUEST', 'Отказ')));
-  await thread.findByRole('button', { name: row.title });
+  await thread.findByRole('link', { name: row.title });
   expect(thread.getAllByText(row.title)).toHaveLength(1);
 });
 

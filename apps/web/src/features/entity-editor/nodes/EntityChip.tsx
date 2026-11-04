@@ -2,7 +2,7 @@ import { EntityRef } from '@orbis/shared/doc';
 import { buildAddress } from '@orbis/shared/nav';
 import type { Attributes, NodeViewProps } from '@tiptap/core';
 import { NodeViewWrapper, ReactNodeViewRenderer } from '@tiptap/react';
-import { useOpenRecord } from '../../../app/useOpenRecord';
+import { RecordLink } from '../../../lib/entity-ref/RecordLink';
 import { useRefTitle } from './RefTitlesContext';
 
 function Chip({ node }: NodeViewProps) {
@@ -14,7 +14,6 @@ function Chip({ node }: NodeViewProps) {
   const entityId = typeof node.attrs.entityId === 'string' ? node.attrs.entityId : '';
   const label = typeof node.attrs.label === 'string' ? node.attrs.label : null;
   const found = useRefTitle(entityId);
-  const openRecord = useOpenRecord();
 
   // Пока резолв едет — показываем ВМОРОЖЕННУЮ подпись из текста: пустое место мигало бы при
   // каждом открытии записи. Подписи нет — обрубок id, потому что невидимый чип неотличим от
@@ -29,7 +28,8 @@ function Chip({ node }: NodeViewProps) {
 
   return (
     <NodeViewWrapper as="span">
-      <a
+      <RecordLink
+        id={entityId}
         data-testid="entity-chip"
         // Не украшение и не дубль testid: по этому признаку `.orbis-markdown a` в globals.css
         // уступает чипу цвет. Без него общее правило разметки (селектор специфичнее одиночного
@@ -47,18 +47,10 @@ function Chip({ node }: NodeViewProps) {
         // бы его ровно под курсором (найдено ревью). Само правило разметки от чипа отвязано
         // в globals.css.
         className={`rounded px-1 transition hover:bg-surface-2 ${tone}`}
-        onClick={(e) => {
-          // Штатные жесты браузера не перехватываем — то же правило, что в Markdown.tsx:62:
-          // Ctrl/Cmd (новая вкладка), Shift (новое окно), Alt (скачать) и не-основная кнопка
-          // обязаны работать. Ссылка, которая ведёт себя не как ссылка, хуже её отсутствия.
-          if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
-          e.preventDefault();
-          openRecord(entityId);
-        }}
       >
         {found?.emoji ? `${found.emoji} ` : ''}
         {text}
-      </a>
+      </RecordLink>
     </NodeViewWrapper>
   );
 }

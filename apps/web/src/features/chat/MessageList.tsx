@@ -1,6 +1,5 @@
 import { MessageSquare } from 'lucide-react';
 import { useEffect, useRef } from 'react';
-import { useOpenRecord } from '../../app/useOpenRecord';
 import { Markdown } from '../../lib/markdown/Markdown';
 import { EmptyState } from '../../ui/EmptyState';
 import { Skeleton } from '../../ui/Skeleton';
@@ -27,20 +26,12 @@ export function ThreadSkeleton() {
   );
 }
 
-function AssistantBody({
-  message,
-  handlers,
-  openEntity,
-}: {
-  message: ChatMessage;
-  handlers: CardHandlers;
-  openEntity: ReturnType<typeof useOpenRecord>;
-}) {
+function AssistantBody({ message, handlers }: { message: ChatMessage; handlers: CardHandlers }) {
   const project = useCardProjection(message);
   return (
     <>
       {message.content && !contentDuplicatesCard(message, handlers, project) && (
-        <Markdown source={message.content} onEntityLink={openEntity} className="leading-relaxed" />
+        <Markdown source={message.content} className="leading-relaxed" />
       )}
       {renderCards(message, handlers, project)}
     </>
@@ -66,7 +57,6 @@ export function MessageList({
   // чипов нет вовсе: кнопка, которая ничего не делает, хуже её отсутствия.
   onPick?: (text: string) => void;
 } & CardHandlers) {
-  const openEntity = useOpenRecord();
   // messages в DESC; для показа сверху-вниз (старые вверху) — reverse на рендере.
   const ordered = [...messages].reverse();
 
@@ -125,13 +115,7 @@ export function MessageList({
             className="flex w-full max-w-[92%] flex-col gap-2 self-start text-sm text-text"
           >
             <SystemMessage label={authorLabel(m)}>
-              {m.content && (
-                <Markdown
-                  source={m.content}
-                  onEntityLink={openEntity}
-                  className="leading-relaxed"
-                />
-              )}
+              {m.content && <Markdown source={m.content} className="leading-relaxed" />}
               {renderCardBodies(m, { onRetry, onReparse, readOnly })}
             </SystemMessage>
           </article>
@@ -141,7 +125,7 @@ export function MessageList({
             data-role={m.role}
             className="max-w-[75%] self-end rounded-2xl rounded-br-md bg-surface-2 px-4 py-2.5 text-sm text-text"
           >
-            {m.content && <Markdown source={m.content} onEntityLink={openEntity} />}
+            {m.content && <Markdown source={m.content} />}
             {renderCards(m, { onRetry, onReparse, readOnly })}
           </article>
         ) : (
@@ -150,11 +134,7 @@ export function MessageList({
             data-role={m.role}
             className="flex w-full max-w-[92%] flex-col gap-2 self-start text-sm text-text"
           >
-            <AssistantBody
-              message={m}
-              handlers={{ onRetry, onReparse, readOnly }}
-              openEntity={openEntity}
-            />
+            <AssistantBody message={m} handlers={{ onRetry, onReparse, readOnly }} />
           </article>
         ),
       )}

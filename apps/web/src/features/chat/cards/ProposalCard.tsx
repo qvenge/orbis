@@ -21,8 +21,8 @@ import { getQueryKey } from '@trpc/react-query';
 //    экрана. Часы вкладки об этом не знают ничего, и «устарело» по возрасту сообщения
 //    гасило бы кнопки живого предложения — и наоборот.
 import { useState } from 'react';
-import { useOpenRecord } from '../../../app/useOpenRecord';
 import { EntityRef } from '../../../lib/entity-ref/EntityRef';
+import { RecordLink } from '../../../lib/entity-ref/RecordLink';
 import { formatDate } from '../../../lib/format';
 import { networkReadContext } from '../../../lib/freshness/provenance';
 import { useFreshnessVisible } from '../../../lib/freshness/screen';
@@ -99,7 +99,6 @@ function diffCounts(units: readonly DiffUnit[]): {
  * неизменённых строки вытеснили бы единственную изменённую. На записи — наоборот (Задача 10).
  */
 function CollapsedBodyDiff({ units, entityId }: { units: readonly DiffUnit[]; entityId?: string }) {
-  const openEntity = useOpenRecord();
   const changed = units.filter((unit) => unit.kind !== 'same');
   const counts = diffCounts(changed);
   const rest = changed.length - COLLAPSED_DIFF_UNITS;
@@ -115,13 +114,12 @@ function CollapsedBodyDiff({ units, entityId }: { units: readonly DiffUnit[]; en
       </span>
       <BodyDiffUnits units={changed.slice(0, COLLAPSED_DIFF_UNITS)} />
       {rest > 0 && entityId !== undefined && (
-        <button
-          type="button"
-          onClick={() => openEntity(entityId)}
+        <RecordLink
+          id={entityId}
           className="cursor-pointer self-start text-text-muted text-xs hover:underline"
         >
           …и ещё {rest} — открыть запись
-        </button>
+        </RecordLink>
       )}
     </span>
   );
@@ -174,7 +172,6 @@ export function ProposalCard({
   /** Тред, в ленте которого карточка стоит; `undefined` — экран прогона (ленты нет). */
   threadId?: string;
 }) {
-  const openEntity = useOpenRecord();
   // Подписи строк предложения и разбора расхождений — из реестра (§А9-2).
   const registry = useRegistry();
   const tz = trpc.user.getSettings.useQuery().data?.timezone;
@@ -297,7 +294,7 @@ export function ProposalCard({
                 >
                   {op.entity !== undefined && (
                     <span className="font-medium">
-                      <EntityRef id={op.entity.id} onOpen={openEntity} />
+                      <EntityRef id={op.entity.id} link />
                     </span>
                   )}
                   <span className="text-text-secondary">{rowLabel(registry, op)}</span>

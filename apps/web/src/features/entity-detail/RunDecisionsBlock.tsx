@@ -10,7 +10,7 @@
 // пачки у них общий с этим блоком (`routine.runUnits` по `{runId}`): владелец ходит между
 // двумя местами, и одно событие обязано выглядеть в них одинаково.
 import { useId, useState } from 'react';
-import { useOpenRecord } from '../../app/useOpenRecord';
+import { useRecordLinkController } from '../../lib/entity-ref/record-link-controller';
 import { useFreshnessVisible } from '../../lib/freshness/screen';
 import { useRegistry } from '../../lib/registry/useRegistry';
 import { type RouterOutputs, trpc } from '../../trpc';
@@ -157,7 +157,7 @@ function RunBatch({
   flagged: boolean;
   terminalUnanswered: boolean;
 }) {
-  const openEntity = useOpenRecord();
+  const { open } = useRecordLinkController();
   // Предпросмотр шаблона (хост `readOnly`): пачка видна строками-итогами (`UnitStub`), без карточек
   // с «Принять»/«Отклонить» и без «Принять все» и «Продолжить сейчас».
   const readOnly = useHostReadOnly();
@@ -224,7 +224,7 @@ function RunBatch({
       setConfirm(false);
       // Поведение то же, что у «Прогнать сейчас» на экране рутины (Решение 9): ответ приходит
       // ДО модели, и за исходом владелец идёт на экран нового прогона.
-      openEntity(started);
+      open(started);
     },
     // Отказ («прогон уже идёт», исчерпан лимит) показываем строкой, а модалку закрываем:
     // диалог поверх сообщения об ошибке читался бы как «нажми ещё раз».

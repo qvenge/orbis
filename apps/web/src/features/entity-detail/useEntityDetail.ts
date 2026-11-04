@@ -42,32 +42,15 @@ import {
   submittedDraftOf,
 } from '../entity-editor/draft-storage';
 import { sameDoc } from '../entity-editor/strip-ids';
+import { detailGetInput } from './detail-input';
+
+export { detailGetInput } from './detail-input';
 
 type Entity = RouterOutputs['entity']['get']['entity'];
 type UpdateInput = RouterInputs['entity']['update'];
 
 // Принятие переживает размонтирование редактора, но не переезжает в кэш другого клиента.
 const TITLE_GENERATIONS = new WeakMap<QueryClient, Record<string, number>>();
-
-// §9.2: detail тянет body+relations+backlinks+thread (backlinks — секция «Связанное»
-// §3.5.8, Task D5). Один и тот же input — ключ кэша для useQuery и точечных
-// optimistic-патчей (cancel/getData/setData/invalidate).
-//
-// bodyDoc — источник документа для редактора (Р6: явный opt-in, без него ключа в ответе нет
-// вовсе). Без него редактор пришлось бы собирать из markdown на клиенте, и блочные id (Р5) до
-// него бы не доезжали вовсе. Цена — вес ответа detail примерно вдвое; она и есть причина, по
-// которой документ не едет в списках.
-const DETAIL_INCLUDE: NonNullable<RouterInputs['entity']['get']['include']> = [
-  'body',
-  'bodyDoc',
-  'relations',
-  'backlinks',
-  'thread',
-];
-
-export function detailGetInput(id: string): RouterInputs['entity']['get'] {
-  return { id, include: DETAIL_INCLUDE };
-}
 
 type BodyFields = Pick<Entity, 'body' | 'bodyDoc'>;
 

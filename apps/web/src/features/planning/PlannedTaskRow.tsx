@@ -1,5 +1,6 @@
 import { MoreHorizontal } from 'lucide-react';
 import { useId, useState } from 'react';
+import { RecordLink } from '../../lib/entity-ref/RecordLink';
 import { Button } from '../../ui/Button';
 import { Checkbox } from '../../ui/Checkbox';
 import { Dialog } from '../../ui/Dialog';
@@ -16,7 +17,7 @@ export function PlannedTaskRow({
   last,
 }: {
   record: PlanningRecord;
-  onOpen: (id: string) => void;
+  onOpen?: (id: string) => void;
   run: RunUpdateBatch;
   busy: boolean;
   onReorder: (id: string, offset: number) => void;
@@ -52,13 +53,13 @@ export function PlannedTaskRow({
           }
         />
       </label>
-      <button
-        type="button"
-        onClick={() => onOpen(record.id)}
+      <RecordLink
+        id={record.id}
+        onOpen={onOpen ? (id, proceed) => proceed(() => onOpen(id)) : undefined}
         className={`min-w-0 flex-1 cursor-pointer py-3 text-left text-sm break-words focus-visible:outline-accent ${done || cancelled ? 'text-text-muted line-through' : 'text-text'}`}
       >
         {record.title}
-      </button>
+      </RecordLink>
       {record.props[TASK_STATUS] === 'waiting' && (
         <span className="text-xs text-text-muted">Ожидание</span>
       )}

@@ -198,7 +198,10 @@ test.each([
       resolveCreate?.(wireEntity({ id, title: 'Подтверждённая', graphId: 'owner' })),
     );
     if (back) {
-      await screen.findByRole('button', { name: 'Подтверждённая' });
+      expect(await screen.findByRole('link', { name: 'Подтверждённая' })).toHaveAttribute(
+        'href',
+        `/r/${id}`,
+      );
       expect(push).not.toHaveBeenCalled();
       expect(
         calls.some((c) => c.path === 'entity.get' && (c.input as { id: string }).id === id),

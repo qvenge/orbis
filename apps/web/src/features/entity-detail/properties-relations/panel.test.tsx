@@ -185,6 +185,7 @@ it('explicit metadata retry refreshes its own cached entity version as well as t
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { resetRegistryVersionForTests } from '../../../lib/registry/useRegistry';
 import { mayLeave } from '../../../state/leave-guard';
+import { useNav } from '../../../state/navigation';
 import {
   type MockHandler,
   queryReply,
@@ -192,7 +193,7 @@ import {
   trpcError,
   wireEntity,
 } from '../../../test/harness';
-import { navAt } from '../../../test/nav';
+import { navAt, recordAddress, topAddress } from '../../../test/nav';
 import { useToastStore } from '../../../ui/toast-store';
 import type { PanelHostActions } from '../PropertiesRelationsSlot';
 import { PropertiesRelationsPanel } from './PropertiesRelationsPanel';
@@ -713,4 +714,103 @@ it('preview exposes only reading and body navigation, no mutation from any form'
       ),
     ),
   ).toBe(false);
+});
+
+it('a relation link keeps its native modified gesture and resumes dirty navigation once after discard', async () => {
+  const { calls } = renderWithProviders(panel(), (path, input, type) => {
+    if (path === 'entity.get')
+      return { entity, relations: [manualEdge], registryVersion: registry.version };
+    if (path === 'entity.resolveRefs') {
+      return [{ id: neighbor, title: 'Соседняя запись', archived: false, emoji: null }];
+    }
+    return handler(path, input, type);
+  });
+  await properties();
+  fireEvent.change(screen.getByLabelText('Поле теста'), {
+    target: { value: 'Сохранить черновик' },
+  });
+  fireEvent.click(screen.getByRole('tab', { name: 'Связи' }));
+  const link = await screen.findByRole('link', { name: 'Открыть: Соседняя запись' });
+  expect(link).toHaveAttribute('href', `/r/${neighbor}`);
+
+  let native = false;
+  document.addEventListener(
+    'click',
+    (event) => {
+      native = !event.defaultPrevented;
+      event.preventDefault();
+    },
+    { once: true },
+  );
+  fireEvent.click(link, { ctrlKey: true });
+  expect(native).toBe(true);
+  expect(topAddress()).toEqual(recordAddress(id));
+  expect(screen.queryByRole('button', { name: 'Отбросить изменения' })).toBeNull();
+
+  const open = vi.spyOn(useNav.getState(), 'openRecord');
+  try {
+    fireEvent.click(link);
+    await screen.findByRole('button', { name: 'Отбросить изменения' });
+    expect(open).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Продолжить редактирование' }));
+    expect(topAddress()).toEqual(recordAddress(id));
+
+    fireEvent.click(link);
+    fireEvent.click(await screen.findByRole('button', { name: 'Отбросить изменения' }));
+    expect(open).toHaveBeenCalledTimes(1);
+    expect(topAddress()).toEqual(recordAddress(neighbor));
+    expect(calls.some(({ path }) => path === 'entity.updateBatch')).toBe(false);
+  } finally {
+    open.mockRestore();
+  }
+});
+
+it('host-action lock disables native relation opening and prefetch', async () => {
+  let toggle: (p: boolean) => void = () => {};
+  function Host() {
+    const [pending, setPending] = useState(false);
+    toggle = setPending;
+    return (
+      <PropertiesRelationsPanel
+        target={{ entityId: id, readOnly: true }}
+        host={{ ...host, pending }}
+        onClose={() => {}}
+      />
+    );
+  }
+  const { calls } = renderWithProviders(
+    <Host />,
+    (path, input, type) => {
+      if (path === 'entity.get' && (input as { id: string }).id === id)
+        return {
+          entity,
+          relations: [{ ...manualEdge, role: 'ref' }],
+          registryVersion: registry.version,
+        };
+      if (path === 'entity.resolveRefs')
+        return [{ id: neighbor, title: 'Соседняя запись', archived: false, emoji: null }];
+      if (path === 'entity.get') return new Promise(() => {});
+      return handler(path, input, type);
+    },
+    { freshness: true },
+  );
+  await screen.findByRole('tab', { name: 'Связи' });
+  fireEvent.click(screen.getByRole('tab', { name: 'Связи' }));
+  const names = ['Открыть: Соседняя запись', 'Открыть запись-источник'];
+  for (const name of names)
+    expect(await screen.findByRole('link', { name })).toHaveAttribute('href', `/r/${neighbor}`);
+  act(() => toggle(true));
+  for (const name of names) {
+    const next = screen.getByRole('button', { name });
+    expect(next.closest('fieldset')).toBeDisabled();
+    expect(next).toBeDisabled();
+    expect(next).not.toHaveAttribute('href');
+    await act(async () => {
+      fireEvent.focus(next);
+    });
+  }
+  const reads = calls.filter(
+    ({ path, input }) => path === 'entity.get' && (input as { id: string }).id === neighbor,
+  );
+  expect(reads).toHaveLength(0);
 });

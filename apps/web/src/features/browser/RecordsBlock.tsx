@@ -19,7 +19,7 @@ export function RecordsBlock({
   onOpen,
   captureSlot,
 }: {
-  onOpen: (id: string) => void;
+  onOpen?: (id: string) => void;
   captureSlot?: string;
 }) {
   const [filters, setFilters] = useState('');

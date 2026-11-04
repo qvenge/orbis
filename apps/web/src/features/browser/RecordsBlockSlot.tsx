@@ -28,7 +28,7 @@ export function RecordsBlockSlot({
   onOpen,
   captureSlot,
 }: {
-  onOpen: (id: string) => void;
+  onOpen?: (id: string) => void;
   captureSlot?: string;
 }) {
   return (

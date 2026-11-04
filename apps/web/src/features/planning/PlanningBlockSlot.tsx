@@ -10,7 +10,7 @@ export function PlanningBlockSlot({
   captureSlot,
 }: {
   kind: 'day-planner' | 'inbox';
-  onOpen: (id: string) => void;
+  onOpen?: (id: string) => void;
   captureSlot?: string;
 }) {
   const readOnly = useHostReadOnly();

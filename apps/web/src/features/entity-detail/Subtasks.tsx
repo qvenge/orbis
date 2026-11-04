@@ -1,17 +1,11 @@
 import { ROLE_SUBITEM, ROLE_TICKET } from '@orbis/shared';
-import { getQueryKey } from '@trpc/react-query';
 import { Circle } from 'lucide-react';
 import { lazy, Suspense } from 'react';
-import { useOpenRecord } from '../../app/useOpenRecord';
 import { EntityRef } from '../../lib/entity-ref/EntityRef';
-import {
-  useCreateAwareOpen,
-  useCreateIntents,
-  useCreatePlacement,
-} from '../../lib/optimistic/use-create-intent';
-import { type RouterOutputs, trpc } from '../../trpc';
+import { RecordLink } from '../../lib/entity-ref/RecordLink';
+import { useCreateIntents } from '../../lib/optimistic/create-intent-scope';
+import type { RouterOutputs } from '../../trpc';
 import { useHostReadOnly } from './record-host';
-import { detailGetInput } from './useEntityDetail';
 
 const SubtaskAdd = lazy(() => import('./SubtaskAdd').then((m) => ({ default: m.SubtaskAdd })));
 
@@ -52,11 +46,9 @@ export function Subtasks({ parentId, relations }: { parentId: string; relations:
     .filter((r) => SUBTASK_ROLES.includes(r.role) && r.sourceId === parentId)
     .map((r) => r.targetId);
   const readOnly = useHostReadOnly();
-  const openRecord = useCreateAwareOpen(useOpenRecord());
   const { registry, intents } = useCreateIntents();
   const origin = `subtasks:${parentId.toLowerCase()}`;
   const placement = {
-    key: getQueryKey(trpc.entity.get, detailGetInput(parentId), 'query'),
     ids: serverIds,
     rawContains: (raw: unknown, id: string) =>
       (raw as { relations?: Relation[] } | undefined)?.relations?.some(
@@ -64,8 +56,9 @@ export function Subtasks({ parentId, relations }: { parentId: string; relations:
           edge.sourceId === parentId && edge.targetId === id && SUBTASK_ROLES.includes(edge.role),
       ) === true,
   };
-  const { hiddenCanonical } = useCreatePlacement(origin, readOnly ? undefined : placement);
-  const visibleIds = serverIds.filter((id) => !hiddenCanonical.has(id));
+  const visibleIds = serverIds.filter(
+    (id) => !registry.isUnconfirmedCreate(id) || registry.lookup(id)?.origin !== origin,
+  );
   const localCount = readOnly
     ? 0
     : intents.filter(
@@ -91,11 +84,9 @@ export function Subtasks({ parentId, relations }: { parentId: string; relations:
               <Circle size={14} aria-hidden className="shrink-0 text-text-muted/70" />
               {/* Открытие подзадачи — в стопку текущего раздела поверх записи. */}
               {registry.isUnconfirmedCreate(id) ? (
-                <button type="button" onClick={() => openRecord(id)}>
-                  {registry.lookup(id)?.title}
-                </button>
+                <RecordLink id={id}>{registry.lookup(id)?.title}</RecordLink>
               ) : (
-                <EntityRef id={id} onOpen={openRecord} />
+                <EntityRef id={id} link />
               )}
             </li>
           ))}

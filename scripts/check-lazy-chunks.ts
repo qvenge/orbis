@@ -33,7 +33,8 @@
  * Запуск: `bun scripts/check-lazy-chunks.ts [--max-gzip Ч=Б] [--max-closure-gzip Ч=Б]` — после
  * сборки web. В CI стоит следом за ней, с порогами экрана записи.
  */
-import { readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { basename, dirname, resolve } from 'node:path';
 import { gzipSync } from 'node:zlib';
 import ts from 'typescript';
 
@@ -73,7 +74,192 @@ export function runtimeModuleImports(source: string): string[] {
     return [];
   });
 }
+function exportedLoader(file: ts.SourceFile, name: string): ts.Node | undefined {
+  for (const statement of file.statements) {
+    if (
+      !ts.canHaveModifiers(statement) ||
+      !ts.getModifiers(statement)?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword)
+    )
+      continue;
+    if (ts.isFunctionDeclaration(statement) && statement.name?.text === name && statement.body)
+      return statement.body;
+    if (ts.isVariableStatement(statement)) {
+      const declaration = statement.declarationList.declarations.find(
+        ({ name: binding }) => ts.isIdentifier(binding) && binding.text === name,
+      );
+      if (declaration?.initializer) return declaration.initializer;
+    }
+  }
+}
+
+function sourceBindings(file: ts.SourceFile): ts.TypeChecker {
+  const options: ts.CompilerOptions = { noLib: true, noResolve: true, types: [] };
+  const host = ts.createCompilerHost(options, true);
+  host.getSourceFile = (name) => (name === file.fileName ? file : undefined);
+  return ts.createProgram([file.fileName], options, host).getTypeChecker();
+}
+
+function dynamicModules(node: ts.Node, checker: ts.TypeChecker): string[] {
+  const invokedDeclarations = new Set<ts.VariableDeclaration>();
+  function immutableValue(
+    expression: ts.Expression,
+    allowedDeclarations?: ReadonlySet<ts.VariableDeclaration>,
+  ): ts.Expression {
+    if (ts.isParenthesizedExpression(expression))
+      return immutableValue(expression.expression, allowedDeclarations);
+    if (ts.isIdentifier(expression)) {
+      const declaration = checker.getSymbolAtLocation(expression)?.valueDeclaration;
+      if (
+        declaration &&
+        ts.isVariableDeclaration(declaration) &&
+        ts.isVariableDeclarationList(declaration.parent) &&
+        (declaration.parent.flags & ts.NodeFlags.Const) !== 0 &&
+        (allowedDeclarations === undefined || allowedDeclarations.has(declaration)) &&
+        declaration.initializer &&
+        declaration.initializer.end <= expression.getStart()
+      )
+        return immutableValue(declaration.initializer, allowedDeclarations);
+    }
+    return expression;
+  }
+
+  function constantBoolean(expression: ts.Expression): boolean | undefined {
+    const value = immutableValue(expression);
+    if (value.kind === ts.SyntaxKind.TrueKeyword) return true;
+    if (value.kind === ts.SyntaxKind.FalseKeyword) return false;
+    if (ts.isPrefixUnaryExpression(value) && value.operator === ts.SyntaxKind.ExclamationToken) {
+      const operand = constantBoolean(value.operand);
+      return operand === undefined ? undefined : !operand;
+    }
+  }
+
+  // Walk the returned value only. A callback, argument, or discarded sequence
+  // operand can import a module without making it the loader's promise.
+  // Only declarations reached during this invocation can have started it.
+  function importedPromise(expression: ts.Expression): string | undefined {
+    const value = immutableValue(expression, invokedDeclarations);
+    if (ts.isConditionalExpression(value)) {
+      const condition = constantBoolean(value.condition);
+      if (condition !== undefined)
+        return importedPromise(condition ? value.whenTrue : value.whenFalse);
+    }
+    if (ts.isBinaryExpression(value) && value.operatorToken.kind === ts.SyntaxKind.CommaToken)
+      return importedPromise(value.right);
+    if (!ts.isCallExpression(value)) return;
+    if (value.expression.kind === ts.SyntaxKind.ImportKeyword) {
+      const target = value.arguments[0];
+      if (target && ts.isStringLiteralLike(target))
+        return basename(target.text).replace(/\.(?:tsx?|jsx?)$/, '');
+    }
+    if (ts.isPropertyAccessExpression(value.expression) && value.expression.name.text === 'then')
+      return importedPromise(value.expression.expression);
+  }
+
+  const modules: string[] = [];
+  function addReturn(expression: ts.Expression | undefined): boolean {
+    const module = expression && importedPromise(expression);
+    if (!module) return false;
+    modules.push(module);
+    return true;
+  }
+
+  // True ends the reachable path, false falls through, undefined is unsupported.
+  function visitStatement(statement: ts.Statement): boolean | undefined {
+    if (ts.isReturnStatement(statement)) return addReturn(statement.expression) ? true : undefined;
+    if (ts.isThrowStatement(statement)) return true;
+    if (ts.isVariableStatement(statement)) {
+      for (const declaration of statement.declarationList.declarations)
+        invokedDeclarations.add(declaration);
+      return false;
+    }
+    if (ts.isEmptyStatement(statement)) return false;
+    if (ts.isBlock(statement)) {
+      for (const child of statement.statements) {
+        const result = visitStatement(child);
+        if (result !== false) return result;
+      }
+      return false;
+    }
+    if (ts.isIfStatement(statement)) {
+      const condition = constantBoolean(statement.expression);
+      if (condition === true) return visitStatement(statement.thenStatement);
+      if (condition === false)
+        return statement.elseStatement ? visitStatement(statement.elseStatement) : false;
+    }
+  }
+
+  if (ts.isBlock(node)) return visitStatement(node) === true ? modules : [];
+  if (!ts.isArrowFunction(node) && !ts.isFunctionExpression(node)) return [];
+  const body = node.body;
+  return (ts.isBlock(body) ? visitStatement(body) === true : addReturn(body)) ? modules : [];
+}
+
+/** Resolve only the function bound to React.lazy, including a named export in a shared loader. */
+export function routerLazyModules(source: string, readLoader: (specifier: string) => string) {
+  const file = ts.createSourceFile('router.tsx', source, ts.ScriptTarget.Latest, true);
+  const checker = sourceBindings(file);
+  const bindings = new Map<ts.Symbol, { specifier: string; name: string }>();
+  function bind(local: ts.Identifier, specifier: string, name: string) {
+    const symbol = checker.getSymbolAtLocation(local);
+    if (symbol) bindings.set(symbol, { specifier, name });
+  }
+  for (const statement of file.statements) {
+    if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier))
+      continue;
+    const clause = statement.importClause;
+    if (!clause || clause.isTypeOnly) continue;
+    const specifier = statement.moduleSpecifier.text;
+    if (clause.name) bind(clause.name, specifier, '*');
+    if (clause.namedBindings && ts.isNamespaceImport(clause.namedBindings))
+      bind(clause.namedBindings.name, specifier, '*');
+    if (clause.namedBindings && ts.isNamedImports(clause.namedBindings))
+      for (const element of clause.namedBindings.elements)
+        if (!element.isTypeOnly)
+          bind(element.name, specifier, (element.propertyName ?? element.name).text);
+  }
+  function binding(node: ts.Expression) {
+    const local = ts.isPropertyAccessExpression(node) ? node.expression : node;
+    const symbol = checker.getSymbolAtLocation(local);
+    const imported = symbol && bindings.get(symbol);
+    return imported?.name === '*' && ts.isPropertyAccessExpression(node)
+      ? { specifier: imported.specifier, name: node.name.text }
+      : imported;
+  }
+  const screens = new Set<string>();
+  function visit(node: ts.Node) {
+    if (ts.isCallExpression(node)) {
+      const callee = binding(node.expression);
+      if (callee?.specifier === 'react' && callee.name === 'lazy') {
+        const loader = node.arguments[0];
+        const imported = loader && binding(loader);
+        const loaderFile = imported
+          ? ts.createSourceFile(
+              'loader.tsx',
+              readLoader(imported.specifier),
+              ts.ScriptTarget.Latest,
+              true,
+            )
+          : file;
+        const target = imported ? exportedLoader(loaderFile, imported.name) : loader;
+        const modules = target
+          ? dynamicModules(target, imported ? sourceBindings(loaderFile) : checker)
+          : [];
+        if (modules.length === 0)
+          throw new Error(
+            `React.lazy: dynamic import missing in ${loader?.getText(file) ?? 'loader'}`,
+          );
+        for (const module of modules) screens.add(module);
+      }
+    }
+    ts.forEachChild(node, visit);
+  }
+  visit(file);
+  return [...screens];
+}
+
 const SOURCE_LAZY_EDGES = [
+  { source: 'apps/web/src/app/router.tsx', modules: ['DetailScreen', 'SearchScreen'] },
+  { source: 'apps/web/src/app/detail-screen-loader.ts', modules: ['DetailScreen'] },
   { source: 'apps/web/src/features/chat/ChatScreen.tsx', modules: ['ChatPanel', 'useFastPath'] },
   { source: 'apps/web/src/app/frame/SideChat.tsx', modules: ['ChatPanel', 'useFastPath'] },
   {
@@ -699,10 +885,19 @@ function main(argv: readonly string[]): void {
       process.exit(1);
     }
   }
-  const routerSrc = readFileSync(ROUTER, 'utf8');
-  const inRouter = [...routerSrc.matchAll(/lazy\([\s\S]{0,200}?import\('([^']+)'\)/g)].map(
-    (m) => m[1].split('/').pop() as string,
-  );
+  let inRouter: string[];
+  try {
+    inRouter = routerLazyModules(readFileSync(ROUTER, 'utf8'), (specifier) => {
+      const path = resolve(dirname(ROUTER), specifier);
+      const file = [path, `${path}.ts`, `${path}.tsx`].find((candidate) => existsSync(candidate));
+      if (!specifier.startsWith('.') || !file)
+        throw new Error(`Cannot resolve loader ${specifier}`);
+      return readFileSync(file, 'utf8');
+    });
+  } catch (error) {
+    console.error(`check-lazy-chunks: ${(error as Error).message}`);
+    process.exit(1);
+  }
   const onlyInRouter = inRouter.filter((n) => !LAZY_SCREENS.includes(n));
   const onlyInList = LAZY_SCREENS.filter((n) => !inRouter.includes(n));
   if (onlyInRouter.length > 0 || onlyInList.length > 0) {

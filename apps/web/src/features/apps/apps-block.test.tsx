@@ -150,7 +150,9 @@ test('«домашняя как центр» — листа разделов н�
   // Плитки — над содержимым домашней, под заголовком экрана.
   const content = screen.getByTestId('page-view');
   expect(tiles.compareDocumentPosition(content) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-  fireEvent.click(within(tiles).getByRole('button', { name: /Ремонт/ }));
+  const tile = within(tiles).getByRole('link', { name: /Ремонт/ });
+  expect(tile).toHaveAttribute('href', `/a/${MY}/r/${MY_SECTION}`);
+  fireEvent.click(tile);
   await heading('Ремонт');
   expect(shownPath()).toBe(`/a/${MY}/r/${MY_SECTION}`);
   await waitFor(() => expect(frameIcon()).toHaveTextContent('🏡'));
@@ -170,6 +172,8 @@ test('«список из заголовка» — раздел чужого д�
   // Раздел навигации и домашняя хоста без «Дома» — не бездомные (§4.3): ярлык хоста.
   const agenda = await screen.findByTestId(`nav-section-${AGENDA}`);
   await waitFor(() => expect(agenda).toHaveTextContent('↗ Orbis'));
+  expect(own).toHaveAttribute('href', `/a/${MY}/r/${MY_SECTION}`);
+  expect(agenda).toHaveAttribute('href', `/r/${AGENDA}`);
   expect(screen.getByTestId(`nav-section-${HOST_HOME_PAGE}`)).toHaveTextContent('↗ Orbis');
   // Страница с «Домом» = другое приложение — ярлык его дома.
   await waitFor(() =>

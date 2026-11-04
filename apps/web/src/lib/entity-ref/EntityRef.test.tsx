@@ -1,6 +1,8 @@
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { expect, test, vi } from 'vitest';
+import { resetNavForTests } from '../../state/navigation';
 import { renderWithProviders, trpcError, wireEntity } from '../../test/harness';
+import { recordAddress, topAddress } from '../../test/nav';
 import { EntityRef } from './EntityRef';
 
 const entity = wireEntity({
@@ -28,15 +30,22 @@ test('ошибка запроса → укороченный моноширин�
   expect(screen.queryByText(entity.id)).not.toBeInTheDocument();
 });
 
-test('onOpen задан → title кликабелен и зовёт onOpen(id)', async () => {
+test('onOpen задан → title становится нативной ссылкой и зовёт onOpen(id)', async () => {
   const onOpen = vi.fn();
   renderWithProviders(<EntityRef id={entity.id} onOpen={onOpen} />, (path) => {
     if (path === 'entity.get') return { entity, relations: [] };
     throw new Error(`unexpected ${path}`);
   });
-  await waitFor(() =>
-    expect(screen.getByRole('button', { name: 'Обед с командой' })).toBeInTheDocument(),
-  );
-  fireEvent.click(screen.getByRole('button', { name: 'Обед с командой' }));
+  const link = await screen.findByRole('link', { name: 'Обед с командой' });
+  expect(link).toHaveAttribute('href', `/r/${entity.id}`);
+  fireEvent.click(link);
   expect(onOpen).toHaveBeenCalledWith(entity.id);
+});
+
+test('link открывает запись в текущей рамке без отдельного callback', async () => {
+  resetNavForTests();
+  renderWithProviders(<EntityRef id={entity.id} link />, () => ({ entity, relations: [] }));
+  const anchor = await screen.findByRole('link', { name: entity.title });
+  fireEvent.click(anchor);
+  expect(topAddress()).toEqual(recordAddress(entity.id));
 });

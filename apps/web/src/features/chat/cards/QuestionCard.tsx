@@ -15,7 +15,6 @@
 // Своя карточка, а не `confirmation_card`: её кнопки «Принять»/«Отклонить» вели бы владельца
 // прямо в структурный отказ гейта рода (server `policy/pending.ts`, assertNotQuestion).
 import { useId, useState } from 'react';
-import { useOpenRecord } from '../../../app/useOpenRecord';
 import { Markdown } from '../../../lib/markdown/Markdown';
 import { type RouterOutputs, trpc } from '../../../trpc';
 import { Button } from '../../../ui/Button';
@@ -35,7 +34,6 @@ export function QuestionCard({
   /** Тред, в ленте которого стоит карточка; `undefined` — экран прогона (рулинг П-5). */
   threadId?: string;
 }) {
-  const openEntity = useOpenRecord();
   const { unit, loaded, isError, errorMessage, isFetching, settled } = useRunUnit({
     runId: card.runId,
     pendingId: card.pendingId,
@@ -120,10 +118,8 @@ export function QuestionCard({
 
       {(!resolved || expanded) && (
         <div className="flex flex-col gap-3" data-testid="question-body">
-          {/* Разметкой, а не сырым текстом: вопрос пишет модель, и пишет она markdown'ом.
-              `onEntityLink` не украшение — без него ссылка `[[entity:…]]` из вопроса
-              ПЕРЕЗАГРУЖАЕТ SPA (контракт Markdown.tsx). */}
-          <Markdown source={card.question} className="text-sm" onEntityLink={openEntity} />
+          {/* Вопрос модели может содержать разметку и ссылки на записи. */}
+          <Markdown source={card.question} className="text-sm" />
 
           {!loaded ? (
             // Отказ чтения — СЛОВАМИ сервера, а не вечным многоточием: карточка приезжает из

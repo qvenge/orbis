@@ -1,5 +1,6 @@
 import { effectiveLabel, mirrorPropertyId, OWNER_LOCALE } from '@orbis/shared';
 import { useState } from 'react';
+import { RecordLink } from '../../../lib/entity-ref/RecordLink';
 import {
   contractTarget,
   implementsContract,
@@ -8,7 +9,7 @@ import {
 import { useResolvedRefs } from '../../../lib/entity-ref/useResolvedRefs';
 import { FIELD_CLASS } from '../../../lib/registry/controls';
 import { lookupOf } from '../../../lib/registry/labels';
-import { Button } from '../../../ui/Button';
+import { Button, buttonClassName } from '../../../ui/Button';
 import { type PanelDraft, startDraft } from './draft';
 import {
   checkedPatch,
@@ -25,7 +26,7 @@ import type { Relation, RelationKey } from './types';
 
 export type RelationsTabProps = Omit<PanelFormProps, 'onSpecial'> & {
   relations: readonly Relation[];
-  onNavigate: (id: string) => void;
+  onNavigate: (id: string, proceed: () => void) => void;
   onShowProperties: (propertyId?: string) => void;
   onOpenBody: () => void;
   /** Shell routes opening another editor through its dirty/unknown action guard. */
@@ -281,9 +282,14 @@ export function RelationsTab(props: RelationsTabProps) {
                       <span className="text-sm text-text-muted">Запись недоступна</span>
                     )}
                   {neighbor && (
-                    <Button onClick={() => props.onNavigate(otherId)}>
+                    <RecordLink
+                      id={otherId}
+                      disabled={props.actionPending}
+                      onOpen={props.onNavigate}
+                      className={buttonClassName('primary')}
+                    >
                       Открыть: {neighbor.title}
-                    </Button>
+                    </RecordLink>
                   )}
                   {!def && <p>Определение роли неизвестно</p>}
                   {def?.constraints.created_by === 'system' && <p>Управляется системой</p>}
@@ -297,9 +303,14 @@ export function RelationsTab(props: RelationsTabProps) {
                           Изменить свойство
                         </Button>
                       ) : (
-                        <Button onClick={() => props.onNavigate(r.sourceId)}>
+                        <RecordLink
+                          id={r.sourceId}
+                          disabled={props.actionPending}
+                          onOpen={props.onNavigate}
+                          className={buttonClassName('primary')}
+                        >
                           Открыть запись-источник
-                        </Button>
+                        </RecordLink>
                       )}
                     </>
                   )}

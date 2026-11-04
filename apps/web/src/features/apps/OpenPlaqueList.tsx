@@ -1,5 +1,7 @@
 import { HOME_PROPERTY, type OpenPlaque } from '@orbis/shared';
 import type { ReactNode } from 'react';
+import { RecordLink } from '../../lib/entity-ref/RecordLink';
+import { useRecordLinkController } from '../../lib/entity-ref/record-link-controller';
 import { appRefOf, useNav } from '../../state/navigation';
 import { trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
@@ -30,12 +32,18 @@ import { PlaceQuestion } from './PlaceQuestion';
  * шага 0.
  */
 export function OpenPlaqueList({ plaques, apps, record }: OpenPlaquesProps) {
+  const { open } = useRecordLinkController();
   const recordId = record?.id ?? null;
   const pageHome = record?.props[HOME_PROPERTY] ?? null;
   const titleOf = (id: string) => apps.byId.get(id)?.title || 'Приложение';
   const goTo = (appId: string) => {
     if (recordId === null) return;
-    useNav.getState().replacePlace({ kind: 'record', app: appRefOf(appId), id: recordId }, appId);
+    open(recordId, {
+      navigate: () =>
+        useNav
+          .getState()
+          .replacePlace({ kind: 'record', app: appRefOf(appId), id: recordId }, appId),
+    });
   };
   return (
     <div className="flex flex-col gap-2 px-4 pt-3 md:px-6">
@@ -59,17 +67,15 @@ export function OpenPlaqueList({ plaques, apps, record }: OpenPlaquesProps) {
                 В «{titleOf(p.appId)}» нет вида для таких записей
                 {p.alternatives.length > 0 && ' — открыть в'}
                 {p.alternatives.map((id) => (
-                  <Button
+                  <RecordLink
                     key={id}
-                    variant="outline"
-                    size="sm"
-                    className="ml-2"
-                    onClick={() =>
-                      recordId !== null && useNav.getState().openRecord(recordId, { app: id })
-                    }
+                    id={recordId ?? ''}
+                    app={id}
+                    disabled={recordId === null}
+                    className="ml-2 inline-flex cursor-pointer items-center rounded-control border border-line bg-surface px-3 py-1 text-sm font-medium text-text transition hover:bg-surface-2 focus-visible:ring-2 focus-visible:ring-accent/60"
                   >
                     {titleOf(id)}
-                  </Button>
+                  </RecordLink>
                 ))}
               </Plaque>
             );

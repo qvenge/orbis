@@ -1,5 +1,8 @@
-import { createEvent, fireEvent, render, screen } from '@testing-library/react';
+import { createEvent, fireEvent, screen } from '@testing-library/react';
 import { expect, test, vi } from 'vitest';
+import { resetNavForTests } from '../../state/navigation';
+import { renderWithProviders as render } from '../../test/harness';
+import { recordAddress, topAddress } from '../../test/nav';
 import { Markdown } from './Markdown';
 
 const E1 = '019e4466-1111-7000-8000-0123456789ab';
@@ -48,6 +51,7 @@ test('[[entity:id]] становится ссылкой на запись (ад�
   render(<Markdown source={`см. [[entity:${E1}]]`} onEntityLink={onEntityLink} />);
   const link = screen.getByRole('link');
   expect(link).toHaveAttribute('href', `/r/${E1}`);
+  expect(link).not.toHaveAttribute('data-record-link-control');
   const click = createEvent.click(link);
   fireEvent(link, click);
   expect(onEntityLink).toHaveBeenCalledWith(E1);
@@ -156,4 +160,17 @@ test('Ctrl/Cmd-клик по entity-ссылке остаётся браузер
 test('{{query:…}} в ленте остаётся текстом (виджеты — объём detail-экрана)', () => {
   render(<Markdown source={'{{query: aspect=orbis/task}}'} />);
   expect(screen.getByText(/\{\{query: aspect=orbis\/task\}\}/)).toBeInTheDocument();
+});
+
+test.each([
+  '/entity/',
+  `${window.location.origin}/r/`,
+])('обычная Markdown-ссылка на запись (%s) открывается через правило рамки без callback', (prefix) => {
+  resetNavForTests();
+  const href = prefix + E1;
+  render(<Markdown source={`[запись](${href})`} />);
+  const link = screen.getByRole('link', { name: 'запись' });
+  expect(link).toHaveAttribute('href', href);
+  expect(fireEvent.click(link)).toBe(false);
+  expect(topAddress()).toEqual(recordAddress(E1));
 });

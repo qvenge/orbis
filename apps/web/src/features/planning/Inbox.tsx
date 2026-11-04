@@ -1,13 +1,10 @@
 import { hashKey, useQueryClient } from '@tanstack/react-query';
 import { getQueryKey } from '@trpc/react-query';
 import { useCallback, useRef, useState, useSyncExternalStore } from 'react';
+import { RecordLink } from '../../lib/entity-ref/RecordLink';
 import { freshnessRuntimeOf } from '../../lib/freshness/provenance';
 import { useFreshnessVisible } from '../../lib/freshness/screen';
-import {
-  useCreateAwareOpen,
-  useCreatePlacement,
-  useCreateSurface,
-} from '../../lib/optimistic/use-create-intent';
+import { useCreatePlacement, useCreateSurface } from '../../lib/optimistic/use-create-intent';
 import { useRegistry } from '../../lib/registry/useRegistry';
 import { trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
@@ -27,7 +24,7 @@ export function Inbox({
   onOpen,
   captureSlot,
 }: {
-  onOpen: (id: string) => void;
+  onOpen?: (id: string) => void;
   captureSlot?: string;
 }) {
   const [tab, setTab] = useState<'pending' | 'later'>('pending');
@@ -63,7 +60,6 @@ export function Inbox({
   const placement = { key, ids: [...members] };
   const origin = useCreateSurface('inbox', captureSlot);
   const { hiddenCanonical } = useCreatePlacement(origin, placement);
-  const openRecord = useCreateAwareOpen(onOpen);
   const rows = (q.data?.rows ?? []).filter((r) => members.has(r.id) && !hiddenCanonical.has(r.id));
   async function triage(
     r: PlanningRecord,
@@ -171,13 +167,13 @@ export function Inbox({
                 aria-label={r.title}
                 className="rounded-xl border border-line bg-surface p-4"
               >
-                <button
-                  type="button"
-                  onClick={() => openRecord(r.id)}
+                <RecordLink
+                  id={r.id}
+                  onOpen={onOpen ? (id, proceed) => proceed(() => onOpen(id)) : undefined}
                   className="w-full cursor-pointer text-left font-medium text-text break-words focus-visible:outline-accent"
                 >
                   {r.title}
-                </button>
+                </RecordLink>
                 {r.body && r.body !== r.title && (
                   <p className="mt-2 line-clamp-4 whitespace-pre-wrap text-sm text-text-muted break-words">
                     {r.body.startsWith(`${r.title}\n`) ? r.body.slice(r.title.length + 1) : r.body}

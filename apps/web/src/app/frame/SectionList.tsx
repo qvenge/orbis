@@ -1,9 +1,10 @@
 import { HOME_PROPERTY } from '@orbis/shared';
-import { type AppKey, HOST_APP } from '@orbis/shared/nav';
+import { type AppKey, buildAddress, currentEntry, HOST_APP, navReduce } from '@orbis/shared/nav';
 import { useMemo } from 'react';
 import { HOMED_PAGES_QUERY, useApps } from '../../features/apps/useApps';
+import { RecordLink } from '../../lib/entity-ref/RecordLink';
 import { useBadgeData } from '../../lib/query-blocks/useBadgeData';
-import { useNav } from '../../state/navigation';
+import { sectionRoot, useNav } from '../../state/navigation';
 import { trpc } from '../../trpc';
 import { NavBadge } from '../../ui/NavBadge';
 import { type ShellSection, useAppShell } from './useAppShell';
@@ -34,6 +35,8 @@ export function SectionList({
   activeSection: string;
   onPicked?: () => void;
 }) {
+  const model = useNav((s) => s.model);
+  const mode = useNav((s) => s.mode);
   const shell = useAppShell(app, { withStoppedAt: true });
   const apps = useApps();
   const host = useAppShell(HOST_APP);
@@ -62,16 +65,18 @@ export function SectionList({
   }, [homed.data, apps.hostShell, app, host.sections, host.home, host.homeArchived]);
   const titleOf = (key: AppKey) =>
     key === HOST_APP ? (apps.hostShell?.title ?? 'Orbis') : (apps.byId.get(key)?.title ?? '…');
-  const openSection = (id: string) => {
-    onPicked?.();
+  const targetOf = (id: string) => {
     const home = foreign.get(id);
-    if (home !== undefined) useNav.getState().openRecord(id, { app: home });
-    // «Домашняя как центр» (§7.3, С1б-3): разделов нет — одна стопка. Строка сайдбара десктопа —
-    // тот же переход в стопке домашней, что плитка (`NavTiles`): иначе два жеста в одно место на
-    // одном экране дали бы две истории, и «‹» с «раздела» вела бы в хост, а не на домашнюю.
-    else if (shell.navForm === 'home-hub') useNav.getState().openRecord(id, { app });
-    else useNav.getState().openSection(app, id);
+    // У ярлыка чужого дома и у формы home-hub переход идёт в обычную стопку.
+    const linkApp = home ?? (shell.navForm === 'home-hub' ? app : undefined);
+    if (linkApp !== undefined) return { id, app: linkApp };
+    // Для раздела ссылка и предзагрузка ведут туда же, куда реальное действие:
+    // на корень активного раздела или на последнее место другого раздела.
+    const action = { type: 'section' as const, app, section: id, root: sectionRoot(app, id) };
+    const address = currentEntry(navReduce(model, action, mode).model).address;
+    return address.kind === 'record' ? { id: address.id, href: buildAddress(address) } : undefined;
   };
+  const selectSection = (id: string) => useNav.getState().openSection(app, id);
   return (
     <>
       {shell.fromEtalon && (
@@ -93,7 +98,9 @@ export function SectionList({
                 section={s}
                 active={s.id === activeSection}
                 home={foreign.has(s.id) ? titleOf(foreign.get(s.id) as AppKey) : null}
-                onOpen={() => openSection(s.id)}
+                target={targetOf(s.id)}
+                onPicked={onPicked}
+                selectSection={() => selectSection(s.id)}
               />
             )}
           </li>
@@ -107,25 +114,28 @@ function SectionRow({
   section,
   active,
   home,
-  onOpen,
+  target,
+  onPicked,
+  selectSection,
 }: {
   section: ShellSection;
   active: boolean;
   /** Заголовок чужого дома раздела — ярлык «↗ Дом»; `null` — раздел этого приложения. */
   home: string | null;
-  onOpen: () => void;
+  target?: { id: string; app?: AppKey; href?: string };
+  onPicked?: () => void;
+  selectSection: () => void;
 }) {
   const { badge } = useBadgeData(section.id);
-  return (
-    <button
-      type="button"
-      data-testid={`nav-section-${section.id}`}
-      aria-current={active ? 'page' : undefined}
-      onClick={onOpen}
-      className={`flex min-h-11 w-full cursor-pointer items-center gap-2 rounded-control px-3 py-2 text-left text-sm transition hover:bg-surface-2 ${
-        active ? 'bg-surface-2 font-medium' : ''
-      }`}
-    >
+  const attributes = {
+    'data-testid': `nav-section-${section.id}`,
+    'aria-current': active ? ('page' as const) : undefined,
+    className: `flex min-h-11 w-full cursor-pointer items-center gap-2 rounded-control px-3 py-2 text-left text-sm transition hover:bg-surface-2 ${
+      active ? 'bg-surface-2 font-medium' : ''
+    }`,
+  };
+  const label = (
+    <>
       {section.emoji && <span aria-hidden>{section.emoji}</span>}
       <span className="min-w-0 flex-1 truncate">
         {section.title}
@@ -135,6 +145,31 @@ function SectionRow({
       </span>
       {home !== null && <span className="text-xs text-text-muted">↗ {home}</span>}
       <NavBadge count={badge} label="в разделе" data-testid={`nav-badge-${section.id}`} />
+    </>
+  );
+  if (target)
+    return (
+      <RecordLink
+        {...attributes}
+        {...target}
+        onOpen={(_id, proceed) => {
+          onPicked?.();
+          proceed(target.app === undefined ? selectSection : undefined);
+        }}
+      >
+        {label}
+      </RecordLink>
+    );
+  return (
+    <button
+      type="button"
+      {...attributes}
+      onClick={() => {
+        onPicked?.();
+        selectSection();
+      }}
+    >
+      {label}
     </button>
   );
 }

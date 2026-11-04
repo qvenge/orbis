@@ -323,7 +323,9 @@ test('(г) заметка в «Мой дом» без вида заметок �
   await waitFor(() => expect(frameIcon()).toHaveTextContent('🏡'));
   expect(shownPath()).toBe(`/a/${MY}/r/${IDEA}`);
   expect(screen.queryByText('Вид «Заметки вид».')).toBeNull();
-  fireEvent.click(within(plaque).getByRole('button', { name: 'Заметки' }));
+  const link = within(plaque).getByRole('link', { name: 'Заметки' });
+  expect(link).toHaveAttribute('href', `/a/${NOTES}/r/${IDEA}`);
+  fireEvent.click(link);
   await waitFor(() => expect(shownPath()).toBe(`/a/${NOTES}/r/${IDEA}`));
   await waitFor(() => expect(frameIcon()).toHaveTextContent('📝'));
   expect(await screen.findByText('Вид «Заметки вид».')).toBeInTheDocument();

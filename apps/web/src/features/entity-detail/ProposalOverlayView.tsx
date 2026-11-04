@@ -39,7 +39,6 @@
 // файлов в `save.test.tsx`.
 import { type BodyDiffResult, diffBodyDocs } from '@orbis/shared/doc/diff';
 import { useEffect, useRef, useState } from 'react';
-import { useOpenRecord } from '../../app/useOpenRecord';
 import { EntityRef } from '../../lib/entity-ref/EntityRef';
 import { BodyKindProvider } from '../../lib/query-blocks/body-kind';
 import { ThisEntityProvider } from '../../lib/query-blocks/this-entity';
@@ -623,7 +622,6 @@ function ProposalRowView({
   edited?: unknown;
   onEdit: (raw: string) => void;
 }) {
-  const openEntity = useOpenRecord();
   // Тело правится тут же, если есть ЧТО открыть (документ предложенного тела) и С ЧЕМ
   // сравнивать (тело этой записи). Обе половины — не формальность: см. NO_BODY_EDIT_HERE.
   const bodyRow = op.field === 'body';
@@ -679,7 +677,7 @@ function ProposalRowView({
       <span className="flex flex-wrap items-baseline gap-x-2">
         {op.entity !== undefined && (
           <span className="font-medium">
-            <EntityRef id={op.entity.id} onOpen={openEntity} />
+            <EntityRef id={op.entity.id} link />
           </span>
         )}
         <span className="text-text-secondary">{rowLabel(registry, op)}</span>

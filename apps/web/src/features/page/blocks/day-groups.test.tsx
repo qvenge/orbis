@@ -208,9 +208,9 @@ test('колонка времени — слева от строки, в поя�
   expect(times('T7')).toHaveTextContent('срок');
   expect(times('T9')).toHaveTextContent('10:00');
   expect(times('Идея')).toHaveTextContent('');
-  // Слева: время — первый элемент кнопки строки, до заголовка.
-  const button = within(rowOf('Встреча')).getByRole('button');
-  expect(button.firstElementChild).toBe(times('Встреча'));
+  // Слева: время — первый элемент ссылки строки, до заголовка.
+  const link = within(rowOf('Встреча')).getByRole('link');
+  expect(link.firstElementChild).toBe(times('Встреча'));
 });
 
 test('дата строки не повторяет день группы — в поясе ответа, не браузера', async () => {
@@ -284,7 +284,9 @@ test('compact: время слева и зачёркивание — у заго
   expect(within(rowOf('Отчёт')).getByTestId('qb-time')).toHaveTextContent('сделано 23:40');
   expect(screen.getByText('Отчёт')).toHaveClass('line-through');
   expect(screen.getByText('T7')).not.toHaveClass('line-through');
-  fireEvent.click(within(rowOf('T9')).getByRole('button'));
+  const link = within(rowOf('T9')).getByRole('link');
+  expect(link).toHaveAttribute('href', `/r/${ID.t9}`);
+  fireEvent.click(link);
   expect(topAddress()).toEqual(recordAddress(ID.t9));
 });
 

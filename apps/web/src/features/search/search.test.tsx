@@ -18,6 +18,8 @@ import {
 } from '@orbis/shared';
 import { currentEntry } from '@orbis/shared/nav';
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { getQueryKey } from '@trpc/react-query';
+import { useState } from 'react';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { App } from '../../App';
 import {
@@ -47,6 +49,9 @@ import {
   wireEntity,
 } from '../../test/harness';
 import { BUILTIN_REGISTRY } from '../../test/registry';
+import { trpc } from '../../trpc';
+import { detailGetInput } from '../entity-detail/detail-input';
+import { SearchPanel } from './SearchPanel';
 import { useSearchDialog } from './search-dialog-store';
 import { SEARCH_GROUPS, type SearchGroup, searchBlockTexts } from './search-query';
 
@@ -529,4 +534,75 @@ test('M-6: Colemak/Dvorak — физическая K с латинской бу�
   // Буква «k» на любой физической клавише (Dvorak: K на месте QWERTY «V») — поиск.
   fireEvent.keyDown(window, { key: 'k', code: 'KeyV', ctrlKey: true });
   expect(useSearchDialog.getState().open).toBe(true);
+});
+
+test('выделенный результат предзагружается после ответа поиска; стрелки отменяют прежний запрос', async () => {
+  const base = searchHandler();
+  const onPicked = vi.fn();
+  function SearchUnderTest() {
+    const [value, change] = useState('переезд');
+    return <SearchPanel value={value} onChange={change} onPicked={onPicked} fieldAt="top" />;
+  }
+  const { calls, queryClient } = renderWithProviders(
+    <SearchUnderTest />,
+    (path, input, kind) =>
+      path === 'entity.get' ? new Promise(() => {}) : base(path, input, kind),
+    { freshness: true },
+  );
+  const first = await screen.findByRole('link', { name: 'Переезд — коробки' });
+  expect(first).toHaveAttribute('data-active');
+  expect(first).toHaveAttribute('href', `/r/${MOVE_TASK}`);
+  let native = false;
+  document.addEventListener(
+    'click',
+    (event) => {
+      native = !event.defaultPrevented;
+      event.preventDefault();
+    },
+    { once: true },
+  );
+  fireEvent.click(first, { ctrlKey: true });
+  expect(native).toBe(true);
+  expect(onPicked).not.toHaveBeenCalled();
+  const stateOf = (id: string) =>
+    queryClient.getQueryState(getQueryKey(trpc.entity.get, detailGetInput(id), 'query'));
+  const detailReads = () =>
+    calls.filter((call) => call.path === 'entity.get').map((call) => call.input);
+  await waitFor(() => expect(detailReads()).toEqual([detailGetInput(MOVE_TASK)]));
+  const input = screen.getByRole('searchbox');
+  fireEvent.keyDown(input, { key: 'ArrowDown' });
+  expect(screen.getByRole('link', { name: 'Переезд — план' })).toHaveAttribute('data-active');
+  expect(stateOf(MOVE_TASK)?.fetchStatus).toBe('idle');
+  expect(detailReads()).toEqual([detailGetInput(MOVE_TASK), detailGetInput(MOVE_PAGE)]);
+  fireEvent.keyDown(input, { key: 'ArrowDown' });
+  expect(screen.getByRole('button', { name: 'Мой дом' })).toHaveAttribute('data-active');
+  expect(stateOf(MOVE_PAGE)?.fetchStatus).toBe('idle');
+  expect(detailReads()).toHaveLength(2);
+
+  // The active app disappears without a new search. The page is now the last
+  // row, so the displayed selection and keyboard Enter must clamp to that row.
+  const appsText = searchBlockTexts('переезд')?.apps;
+  const appsQuery = queryClient
+    .getQueryCache()
+    .getAll()
+    .find((query) => query.queryKey[1] === appsText);
+  if (!appsQuery) throw new Error('Missing search app group');
+  const data = queryClient.getQueryData<BlockResult>(appsQuery.queryKey);
+  if (!data?.ok || data.kind !== 'rows') throw new Error('Missing search app rows');
+  act(() => {
+    queryClient.setQueryData(appsQuery.queryKey, { ...data, rows: [] });
+  });
+  await waitFor(() =>
+    expect(screen.getByRole('link', { name: 'Переезд — план' })).toHaveAttribute('data-active'),
+  );
+  expect(detailReads()).toEqual([
+    detailGetInput(MOVE_TASK),
+    detailGetInput(MOVE_PAGE),
+    detailGetInput(MOVE_PAGE),
+  ]);
+  fireEvent.change(input, { target: { value: '' } });
+  expect(screen.queryByRole('link', { name: 'Переезд — план' })).toBeNull();
+  expect(stateOf(MOVE_PAGE)?.fetchStatus).toBe('idle');
+  fireEvent.keyDown(input, { key: 'Enter' });
+  expect(onPicked).not.toHaveBeenCalled();
 });
