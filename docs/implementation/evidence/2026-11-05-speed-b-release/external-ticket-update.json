@@ -1,0 +1,20 @@
+{
+  "source": "Root final UI readback handoff after explicit user approval of exact data and destination",
+  "destination": "https://orbis-64q4.onrender.com/r/716a937c-b7f8-4223-b085-b5b6b696cd40",
+  "explicit_user_approval": true,
+  "operation": "existing ticket body update",
+  "verification": {
+    "method": "in-app browser blur then reload and readback",
+    "new_paragraphs": 7,
+    "all_new_paragraphs_persisted": true,
+    "original_text_preserved": true,
+    "exact_ticket_title_verified": true,
+    "deliverable_tab_marked": true,
+    "screenshot_shown": true,
+    "observer": "root"
+  },
+  "server_body_revision": null,
+  "revision_note": "not exposed by the UI; no revision inferred",
+  "earlier_automatic_review_denial": "historical; later exact user approval preceded this action",
+  "packaging_agent_external_action": false
+}

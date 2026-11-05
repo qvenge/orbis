@@ -1,0 +1,93 @@
+{
+  "actualRunnerExit": 1,
+  "actualWrapperExit": 1,
+  "watchdogTimedOut": false,
+  "remaining": [],
+  "oldChromeExit": {
+    "phase": "chrome-exit",
+    "identity": "22121/Thu Nov  5 16:45:30 2026",
+    "descendants": [
+      "22121/Thu Nov  5 16:45:30 2026",
+      "22144/Thu Nov  5 16:45:31 2026",
+      "22150/Thu Nov  5 16:45:32 2026",
+      "22151/Thu Nov  5 16:45:32 2026",
+      "22153/Thu Nov  5 16:45:32 2026",
+      "22154/Thu Nov  5 16:45:32 2026",
+      "22158/Thu Nov  5 16:45:33 2026",
+      "22160/Thu Nov  5 16:45:33 2026",
+      "22161/Thu Nov  5 16:45:33 2026",
+      "22169/Thu Nov  5 16:45:34 2026",
+      "22171/Thu Nov  5 16:45:35 2026",
+      "22206/Thu Nov  5 16:45:42 2026",
+      "22221/Thu Nov  5 16:45:46 2026",
+      "22225/Thu Nov  5 16:45:48 2026"
+    ],
+    "contextClosed": true,
+    "transport": "pipe"
+  },
+  "failedRestartCleanup": {
+    "phase": "failed-startup-cleanup",
+    "identity": "22283/Thu Nov  5 16:46:00 2026",
+    "descendants": [
+      "22283/Thu Nov  5 16:46:00 2026",
+      "22292/Thu Nov  5 16:46:01 2026",
+      "22293/Thu Nov  5 16:46:01 2026",
+      "22295/Thu Nov  5 16:46:01 2026",
+      "22296/Thu Nov  5 16:46:01 2026",
+      "22299/Thu Nov  5 16:46:01 2026",
+      "22302/Thu Nov  5 16:46:01 2026",
+      "22303/Thu Nov  5 16:46:01 2026"
+    ]
+  },
+  "inputCheckpoints": [
+    "1-before-d2-precondition.input.json",
+    "2-before-d2-submit.input.json",
+    "3-after-d2-queue-observed.input.json",
+    "4-before-old-exit.input.json"
+  ],
+  "owner": "0d34368a-d2f7-49ca-8a11-eaebc869a670",
+  "ids": {
+    "a": "864ffa1d-77ee-4324-b192-e2184a1e305b",
+    "b": "7812df48-6ee2-4385-a556-0012fe8418a6",
+    "held": "9717c6e4-5342-4f00-a59b-adac54d233e7"
+  },
+  "origin": "http://127.0.0.1:64408",
+  "queueOriginalUUID": "01a1ab19-a935-73cd-8632-1d1562433c63",
+  "canonicalPayloadSha256": "6e854ff8712809fb8f22cf0e8c9894577bb81d74cdaa4a7bf9cc349b76a11c16",
+  "allGatedOldCreatesMatchCanonicalPayload": true,
+  "aiRoutesInD2": 0,
+  "currentBrowserRequests": 0,
+  "preOpenCas": {
+    "phase": "pre-open-cas",
+    "afterCas": [
+      {
+        "body": "Server CAS 0",
+        "rev": 2
+      },
+      {
+        "body": "Server CAS 1",
+        "rev": 2
+      }
+    ]
+  },
+  "bfCache": {
+    "phase": "bfcache-observation",
+    "status": "roundtrip-confirmed",
+    "token": "28c9c4a2-8145-42d2-88dd-47513befde6f",
+    "pagehide": {
+      "token": "28c9c4a2-8145-42d2-88dd-47513befde6f",
+      "sequence": 2,
+      "type": "pagehide",
+      "persisted": true
+    },
+    "pageshow": {
+      "token": "28c9c4a2-8145-42d2-88dd-47513befde6f",
+      "sequence": 3,
+      "type": "pageshow",
+      "persisted": true
+    }
+  },
+  "migrationReached": true,
+  "currentStartupSucceeded": false,
+  "closedProfileFiles": 469
+}

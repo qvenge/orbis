@@ -1,0 +1,3 @@
+PTY exit_code=1
+zsh:12: read-only variable: status
+The shell wrapper did not persist n.exit. Bun stderr records an uncaught assertion and the trace ends at scenario-result=failed-or-inconclusive.

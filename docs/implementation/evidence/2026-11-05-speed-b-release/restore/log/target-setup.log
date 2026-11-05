@@ -1,0 +1,2 @@
+setup-db: auth.uid() канонизирована (читает request.jwt.claims)
+setup-db: orbis_app готова (NOBYPASSRLS, NOINHERIT, member of authenticated)

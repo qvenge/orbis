@@ -1,0 +1,4 @@
+{
+  "files": [],
+  "stage": "Queue wait failed before before-old-exit checkpoint; point-in-time input snapshots absent. Final profile is not before-state evidence."
+}

@@ -1,0 +1,12 @@
+{
+  "errors": [
+    {
+      "read": "url",
+      "error": "timed out"
+    },
+    {
+      "read": "browser",
+      "error": "Exact record URL could not be verified"
+    }
+  ]
+}

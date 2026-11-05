@@ -1,0 +1,6 @@
+lint exit=0
+db-prepare exit=0
+workspace-test exit=1
+scripts-independent exit=0
+legacy-form exit=0
+build exit=0

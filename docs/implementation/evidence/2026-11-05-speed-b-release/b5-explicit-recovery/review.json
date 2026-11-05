@@ -1,0 +1,13 @@
+{
+  "base": "356a610f5ae92efe429bdb6891c5bde6f9c09e9f",
+  "files": {
+    "apps/web/src/features/entity-editor/useBodySave.ts": {
+      "before": "714826e553e4ad6f00eaf1b2073ef41f6fec6049668bcf56bf3817dc829f92be",
+      "after": "51a5b3d04938226f9e59176846de8e645930cd79f128d492cac45bd009dd41c8"
+    },
+    "apps/web/src/features/entity-detail/recovery-basis.test.tsx": {
+      "before": null,
+      "after": "39bc1c4dbb2c1feebdb5f4e118039dadfb88aa29273f5c8f9103b6558af89560"
+    }
+  }
+}

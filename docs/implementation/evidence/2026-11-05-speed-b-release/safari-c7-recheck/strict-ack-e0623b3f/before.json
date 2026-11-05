@@ -1,0 +1,113 @@
+{
+  "origin": "http://127.0.0.1:61071",
+  "inputs": {
+    "available": true,
+    "rows": []
+  },
+  "visibleBody": "Safari local initial body\n\n",
+  "responses": {
+    "available": true,
+    "rows": [
+      {
+        "buster": "[\"c7ccb9dd1f4cc1f68d43255ecf313768ebc2b315\",3]",
+        "entityKeys": [
+          "[\"71880ded-c43a-4c02-881e-c4c475d7d4c4\",\"01a1aae8-9903-73dd-9b43-fe28cf0e5625\"]"
+        ],
+        "graphId": "71880ded-c43a-4c02-881e-c4c475d7d4c4",
+        "data": {
+          "entity": {
+            "id": "01a1aae8-9903-73dd-9b43-fe28cf0e5625",
+            "body": "Safari local initial body",
+            "updatedAt": "2026-11-05T08:52:12.675Z",
+            "bodyDoc": {
+              "v": 3,
+              "doc": {
+                "type": "doc",
+                "content": [
+                  {
+                    "type": "paragraph",
+                    "content": [
+                      {
+                        "type": "text",
+                        "text": "Safari local initial body"
+                      }
+                    ]
+                  }
+                ]
+              }
+            },
+            "bodyChangedAt": "2026-11-05T08:52:12.682Z",
+            "tags": [],
+            "bodyRevision": 1,
+            "archived": false,
+            "title": "Safari synthetic record c23a34a5",
+            "bodyRefs": [],
+            "graphId": "71880ded-c43a-4c02-881e-c4c475d7d4c4",
+            "aspects": [
+              "orbis/note"
+            ],
+            "emoji": null,
+            "queryRefs": [],
+            "createdAt": "2026-11-05T08:52:12.675Z",
+            "props": {}
+          },
+          "thread": {
+            "threadId": "c81155be-6980-5f7d-b3eb-4e33dab237e2",
+            "messages": []
+          },
+          "registryVersion": "234.0",
+          "freshness": {
+            "threadIds": [
+              "c81155be-6980-5f7d-b3eb-4e33dab237e2"
+            ],
+            "registry": true,
+            "entityIds": [
+              "01a1aae8-9903-73dd-9b43-fe28cf0e5625"
+            ],
+            "graph": true,
+            "settings": false,
+            "bodyOrStamp": false,
+            "expiresAt": null
+          },
+          "relations": [],
+          "bodyAction": {
+            "startedAt": "2026-11-05T08:52:12.649Z",
+            "actionId": "01a1aae8-98e8-740a-9561-ddfe6b38eef2",
+            "mine": true,
+            "endedAt": "2026-11-05T08:52:12.682Z",
+            "textSession": false,
+            "actorKind": "owner"
+          },
+          "backlinks": []
+        },
+        "generation": 0,
+        "queryHash": "[[\"entity\",\"get\"],{\"input\":{\"id\":\"01a1aae8-9903-73dd-9b43-fe28cf0e5625\",\"include\":[\"body\",\"bodyDoc\",\"relations\",\"backlinks\",\"thread\"]},\"type\":\"query\"}]",
+        "key": [
+          [
+            "entity",
+            "get"
+          ],
+          {
+            "input": {
+              "id": "01a1aae8-9903-73dd-9b43-fe28cf0e5625",
+              "include": [
+                "body",
+                "bodyDoc",
+                "relations",
+                "backlinks",
+                "thread"
+              ]
+            },
+            "type": "query"
+          }
+        ],
+        "receivedAt": 1793868795223,
+        "fragmentTimes": null,
+        "expiresAt": 1794473595223
+      }
+    ]
+  },
+  "emergency": [],
+  "emergencyError": null,
+  "recovery": []
+}

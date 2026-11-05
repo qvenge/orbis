@@ -1,0 +1,3 @@
+Both designated names and ports free before allocation.
+fb58e46e1a8f9ae9732ef6f6d94576342d855ebdbb66fe89b3604113421909d4 sha256:6501843661b1f8ff97e85c02de33edc0ee2e2693888ad596ee86222f02dc8ecc source /orbis-speed-b-restore-source
+ac87003ee607a16065ca91192394987cf2bbd04d41826e68cde40d85d053928f sha256:6501843661b1f8ff97e85c02de33edc0ee2e2693888ad596ee86222f02dc8ecc target /orbis-speed-b-restore-target

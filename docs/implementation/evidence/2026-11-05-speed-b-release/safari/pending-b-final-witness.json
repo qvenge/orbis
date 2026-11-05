@@ -1,0 +1,36 @@
+{
+  "doc": {
+    "v": 3,
+    "doc": {
+      "type": "doc",
+      "content": [
+        {
+          "type": "paragraph",
+          "attrs": {
+            "id": "bbc769c6-2933-4726-b60e-281a3e1e5e5d"
+          },
+          "content": [
+            {
+              "type": "text",
+              "text": "Safari recovery B 7aedb19e4bf3"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "rejected": false,
+  "savedAt": "2026-11-05T07:14:08.638Z",
+  "token": {
+    "accountId": "61e6593e-9d1f-4f82-a241-5c81e2656c78",
+    "graphId": "61e6593e-9d1f-4f82-a241-5c81e2656c78",
+    "generation": "0:0",
+    "sequence": 30,
+    "writerId": "01a1aa8e-ce9f-7449-bd67-99e635838f90",
+    "entityId": "01a1aa5c-0958-71d0-bcfa-316c65a44ba4",
+    "basis": {
+      "revision": 2
+    },
+    "nonce": "01a1aa8e-d07e-7002-838d-ed8edd4397bd"
+  }
+}

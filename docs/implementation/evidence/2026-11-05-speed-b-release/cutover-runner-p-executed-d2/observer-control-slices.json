@@ -1,0 +1,7 @@
+{
+  "method": "Exact slices from rehearsal.ts, utilities + process/pipe/lifecycle registration + close",
+  "utilitiesSha256": "4fdf669de45670e7801ea36730198cec731ec173356472fb3ae1c6866e7a71e0",
+  "transportSha256": "a80badaf5d0ab14c884a2abb73bc18080469bab6a59d32c4b0fe23bb29250939",
+  "closeSha256": "8aaa54c0ac411d3f2f8c9622a86b6e041e72227c9c9204916f84ad3ba6032fde",
+  "browserDependencyRoot": "/private/tmp/orbis-cutover-current.5ejcvs08"
+}

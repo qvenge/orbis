@@ -1,0 +1,18 @@
+{
+  "exit": 0,
+  "token": "314adfcc-946d-4855-b631-e733a17b713d",
+  "hide": {
+    "token": "314adfcc-946d-4855-b631-e733a17b713d",
+    "sequence": 2,
+    "type": "pagehide",
+    "persisted": true
+  },
+  "show": {
+    "token": "314adfcc-946d-4855-b631-e733a17b713d",
+    "sequence": 3,
+    "type": "pageshow",
+    "persisted": true
+  },
+  "appCoverage": false,
+  "databaseUsed": false
+}

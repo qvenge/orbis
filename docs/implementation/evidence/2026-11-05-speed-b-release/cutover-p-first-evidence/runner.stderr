@@ -1,0 +1,11 @@
+1197 |   const message = redact(String(error));
+1198 |   const stack = redact(error instanceof Error ? error.stack ?? message : message);
+1199 |   const details = { name: error instanceof Error ? error.name : typeof error, message, stack };
+1200 |   await Bun.write(join(outDir, 'original-failure.json'), JSON.stringify(details, null, 2));
+1201 |   log('scenario-result', { scenario, status: 'failed-or-inconclusive', message, stack });
+1202 |   const preserved = new Error(message);
+                               ^
+error: TimeoutError: waitForFunction: Timeout 18000ms exceeded.
+      at /Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-runner-p-proposal/rehearsal.ts:1202:25
+
+Bun v1.2.7 (macOS x64)

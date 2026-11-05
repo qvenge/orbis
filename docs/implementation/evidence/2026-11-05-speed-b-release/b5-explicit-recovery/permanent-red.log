@@ -1,0 +1,69 @@
+$ vitest run src/features/entity-detail/recovery-basis.test.tsx --maxWorkers "1" --reporter verbose
+
+ RUN  v4.1.9 /private/tmp/orbis-safari-hook-repro.bZQFWv/candidate/apps/web
+
+ ✓ src/features/entity-detail/recovery-basis.test.tsx > public recovery with held network 225ms
+ × src/features/entity-detail/recovery-basis.test.tsx > public recovery with ordinary old shown basis 1054ms
+   → expected [] to have a length of 1 but got +0
+
+Ignored nodes: comments, script, style
+[36m<html>[39m
+  [36m<head />[39m
+  [36m<body>[39m
+    [36m<div>[39m
+      [36m<button[39m
+        [33mtype[39m=[32m"button"[39m
+      [36m>[39m
+        [0mОставить моё[0m
+      [36m</button>[39m
+    [36m</div>[39m
+  [36m</body>[39m
+[36m</html>[39m
+ ✓ src/features/entity-detail/recovery-basis.test.tsx > public recovery with ordinary latest shown C 81ms
+ ✓ src/features/entity-detail/recovery-basis.test.tsx > public recovery with confirmed after rewind 586ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/features/entity-detail/recovery-basis.test.tsx > public recovery with ordinary old shown basis
+AssertionError: expected [] to have a length of 1 but got +0
+
+Ignored nodes: comments, script, style
+[36m<html>[39m
+  [36m<head />[39m
+  [36m<body>[39m
+    [36m<div>[39m
+      [36m<button[39m
+        [33mtype[39m=[32m"button"[39m
+      [36m>[39m
+        [0mОставить моё[0m
+      [36m</button>[39m
+    [36m</div>[39m
+  [36m</body>[39m
+[36m</html>[39m
+
+- Expected
++ Received
+
+- 1
++ 0
+
+ ❯ src/features/entity-detail/recovery-basis.test.tsx:187:44
+    185|       expect(readDraft(id)?.doc).toEqual(B);
+    186|     } else {
+    187|       await waitFor(() => expect(writes()).toHaveLength(1));
+       |                                            ^
+    188|       expect(writes()[0]?.input).toMatchObject({
+    189|         id,
+ ❯ runWithExpensiveErrorDiagnosticsDisabled ../../node_modules/@testing-library/dom/dist/config.js:47:12
+ ❯ checkCallback ../../node_modules/@testing-library/dom/dist/wait-for.js:124:77
+ ❯ Timeout.checkRealTimersCallback ../../node_modules/@testing-library/dom/dist/wait-for.js:118:16
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  1 failed | 3 passed (4)
+   Start at  15:29:36
+   Duration  5.31s (transform 1.13s, setup 216ms, import 1.78s, tests 1.95s, environment 1.03s)
+
+error: script "test" exited with code 1

@@ -1,0 +1,11 @@
+SOURCE
+orbis_change_feed_owner|f|f|f|t|f|f|f
+public|pg_database_owner|{pg_database_owner=UC/pg_database_owner,=U/pg_database_owner,postgres=U/pg_database_owner,anon=U/pg_database_owner,authenticated=U/pg_database_owner,service_role=U/pg_database_owner,orbis_change_feed_owner=U/pg_database_owner}
+orbis_capture_change_feed()|orbis_change_feed_owner|t|{"search_path=pg_catalog, public"}|{orbis_change_feed_owner=X/orbis_change_feed_owner,postgres=X/orbis_change_feed_owner}|6defe288cfd07517076e177e267a8708
+pg_cron|1.6.4
+2|orbis_change_feed_cleanup|27 3 * * *|postgres|supabase_admin|t|44eef3fd87b85bcb91673ffd42313d08
+1|orbis_perf_samples_cleanup|17 3 * * *|postgres|supabase_admin|t|e3e6e9ebd7f86a044de232703e6d5264
+TARGET
+public|supabase_admin|
+orbis_capture_change_feed()|supabase_admin|t|{"search_path=pg_catalog, public"}||6defe288cfd07517076e177e267a8708
+cron catalog absent

@@ -1,0 +1,10 @@
+if (location.origin !== arguments[0]) throw Error('Unrelated origin');
+const field = document.querySelector('[data-testid="body-editor"] [contenteditable="true"]');
+if (!field || field.getClientRects().length === 0) return { ready: false };
+field.focus();
+const range = document.createRange();
+range.selectNodeContents(field);
+const selection = getSelection();
+selection.removeAllRanges();
+selection.addRange(range);
+return { ready: true, before: field.innerText };

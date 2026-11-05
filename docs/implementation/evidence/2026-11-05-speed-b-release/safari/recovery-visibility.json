@@ -1,0 +1,30 @@
+{
+  "value": {
+    "visibility": "visible",
+    "now": 1793863321978,
+    "focused": false,
+    "timeOrigin": 1793862851736,
+    "buttons": [
+      {
+        "disabled": false,
+        "text": "Оставить моё",
+        "rect": {
+          "y": 235,
+          "x": 333,
+          "width": 118.859375,
+          "height": 32
+        }
+      },
+      {
+        "disabled": false,
+        "text": "Отбросить",
+        "rect": {
+          "y": 235,
+          "x": 459.859375,
+          "width": 100.09375,
+          "height": 32
+        }
+      }
+    ]
+  }
+}

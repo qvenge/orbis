@@ -1,0 +1,638 @@
+{
+  "status": 200,
+  "value": {
+    "owner": "71880ded-c43a-4c02-881e-c4c475d7d4c4",
+    "recordId": "01a1aae8-9903-73dd-9b43-fe28cf0e5625",
+    "body": "Safari confirmed server C 52475d31be56",
+    "bodyRevision": 3,
+    "unavailable": false,
+    "ackPhase": {
+      "id": "29548020-0f1f-4f74-90ec-b4d996be1847",
+      "armed": false,
+      "preexistingAtArm": 0,
+      "preexistingRecordGetsRemaining": 0,
+      "drained": true,
+      "readsReleased": true,
+      "readsHeld": 0,
+      "sent": {
+        "id": "01a1aae8-9903-73dd-9b43-fe28cf0e5625",
+        "bodyDoc": {
+          "v": 3,
+          "doc": {
+            "type": "doc",
+            "content": [
+              {
+                "type": "paragraph",
+                "attrs": {
+                  "id": "e507ca77-62c6-46e9-8cb2-fe0976fe2443"
+                },
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "Safari strict ACK fafd011574a4"
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        "expectedBodyRevision": 1,
+        "bodyDocSha256": "1d4f35f937afca373c3081800149b04cc94c5d9b200385fbd9c7e713783e470c",
+        "requestSha256": "37012334a4828e5ebf141e9ce861cbef7a7eaacdd2c473f6010247904ef63426"
+      },
+      "receipt": {
+        "id": "01a1aae8-9903-73dd-9b43-fe28cf0e5625",
+        "txId": "72875",
+        "bodyRevision": 2,
+        "status": 200,
+        "bodyDoc": {
+          "v": 3,
+          "doc": {
+            "type": "doc",
+            "content": [
+              {
+                "type": "paragraph",
+                "attrs": {
+                  "id": "e507ca77-62c6-46e9-8cb2-fe0976fe2443"
+                },
+                "content": [
+                  {
+                    "text": "Safari strict ACK fafd011574a4",
+                    "type": "text"
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        "bodyDocSha256": "1d4f35f937afca373c3081800149b04cc94c5d9b200385fbd9c7e713783e470c",
+        "sha256": "95730f4bcbbd40319b9bc6823197ac9bed6f26f2224da225cbe810e116c76e15"
+      },
+      "saveReleased": true,
+      "observedInput": {
+        "token": {
+          "accountId": "71880ded-c43a-4c02-881e-c4c475d7d4c4",
+          "graphId": "71880ded-c43a-4c02-881e-c4c475d7d4c4",
+          "generation": "0:0",
+          "sequence": 30,
+          "writerId": "01a1aaea-378e-771f-9dd1-1470710032f9",
+          "entityId": "01a1aae8-9903-73dd-9b43-fe28cf0e5625",
+          "basis": {
+            "revision": 1
+          },
+          "nonce": "01a1aaea-3ab9-7017-899f-9f8b56b5a277"
+        },
+        "doc": {
+          "v": 3,
+          "doc": {
+            "type": "doc",
+            "content": [
+              {
+                "type": "paragraph",
+                "attrs": {
+                  "id": "e507ca77-62c6-46e9-8cb2-fe0976fe2443"
+                },
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "Safari strict ACK fafd011574a4"
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        "snapshotSha256": "a8d7358f82dceddcd665ef79a3d467d8f442797c5da4e3b5bd0eb00dc78a23c2"
+      },
+      "durableSnapshotSha256": "518a2d5fc11cce3739b3108f2f32d6f23dcd5b928ceb7eddd535e301c42ddad6"
+    },
+    "events": [
+      {
+        "at": "2026-11-05T08:53:15.045Z",
+        "kind": "request",
+        "paths": [
+          "entity.get",
+          "registry.effective",
+          "user.getSettings"
+        ],
+        "method": "GET",
+        "credentialed": true
+      },
+      {
+        "at": "2026-11-05T08:53:15.216Z",
+        "kind": "ungated-record-get-completed",
+        "remaining": 0
+      },
+      {
+        "at": "2026-11-05T08:53:15.483Z",
+        "kind": "request",
+        "paths": [
+          "entity.query",
+          "entity.query",
+          "entity.query"
+        ],
+        "method": "GET",
+        "credentialed": true
+      },
+      {
+        "at": "2026-11-05T08:53:15.667Z",
+        "kind": "request",
+        "paths": [
+          "routine.proposalsForEntity"
+        ],
+        "method": "GET",
+        "credentialed": true
+      },
+      {
+        "at": "2026-11-05T08:53:15.688Z",
+        "kind": "request",
+        "paths": [
+          "entity.resolveRefs",
+          "entity.query"
+        ],
+        "method": "GET",
+        "credentialed": true
+      },
+      {
+        "at": "2026-11-05T08:53:15.690Z",
+        "kind": "request",
+        "paths": [
+          "entity.blocks"
+        ],
+        "method": "POST",
+        "credentialed": true
+      },
+      {
+        "at": "2026-11-05T08:53:45.503Z",
+        "kind": "request",
+        "paths": [
+          "perf.report"
+        ],
+        "method": "POST",
+        "credentialed": true
+      },
+      {
+        "at": "2026-11-05T08:53:58.304Z",
+        "kind": "request",
+        "paths": [
+          "entity.get"
+        ],
+        "method": "GET",
+        "credentialed": true
+      },
+      {
+        "at": "2026-11-05T08:53:58.333Z",
+        "kind": "ungated-record-get-completed",
+        "remaining": 0
+      },
+      {
+        "at": "2026-11-05T08:53:58.504Z",
+        "kind": "ack-phase-armed",
+        "phase": "29548020-0f1f-4f74-90ec-b4d996be1847",
+        "preexistingRecordGets": 0
+      },
+      {
+        "at": "2026-11-05T08:54:00.805Z",
+        "kind": "request",
+        "paths": [
+          "entity.update"
+        ],
+        "method": "POST",
+        "credentialed": true
+      },
+      {
+        "at": "2026-11-05T08:54:00.818Z",
+        "kind": "body-request-captured",
+        "phase": "29548020-0f1f-4f74-90ec-b4d996be1847",
+        "sent": {
+          "id": "01a1aae8-9903-73dd-9b43-fe28cf0e5625",
+          "bodyDoc": {
+            "v": 3,
+            "doc": {
+              "type": "doc",
+              "content": [
+                {
+                  "type": "paragraph",
+                  "attrs": {
+                    "id": "e507ca77-62c6-46e9-8cb2-fe0976fe2443"
+                  },
+                  "content": [
+                    {
+                      "type": "text",
+                      "text": "Safari strict ACK fafd011574a4"
+                    }
+                  ]
+                }
+              ]
+            }
+          },
+          "expectedBodyRevision": 1,
+          "bodyDocSha256": "1d4f35f937afca373c3081800149b04cc94c5d9b200385fbd9c7e713783e470c",
+          "requestSha256": "37012334a4828e5ebf141e9ce861cbef7a7eaacdd2c473f6010247904ef63426"
+        }
+      },
+      {
+        "at": "2026-11-05T08:54:00.943Z",
+        "kind": "body-ack",
+        "receipt": {
+          "id": "01a1aae8-9903-73dd-9b43-fe28cf0e5625",
+          "txId": "72875",
+          "bodyRevision": 2,
+          "status": 200,
+          "bodyDoc": {
+            "v": 3,
+            "doc": {
+              "type": "doc",
+              "content": [
+                {
+                  "type": "paragraph",
+                  "attrs": {
+                    "id": "e507ca77-62c6-46e9-8cb2-fe0976fe2443"
+                  },
+                  "content": [
+                    {
+                      "text": "Safari strict ACK fafd011574a4",
+                      "type": "text"
+                    }
+                  ]
+                }
+              ]
+            }
+          },
+          "bodyDocSha256": "1d4f35f937afca373c3081800149b04cc94c5d9b200385fbd9c7e713783e470c",
+          "sha256": "95730f4bcbbd40319b9bc6823197ac9bed6f26f2224da225cbe810e116c76e15"
+        }
+      },
+      {
+        "at": "2026-11-05T08:54:00.943Z",
+        "kind": "body-ack-held",
+        "phase": "29548020-0f1f-4f74-90ec-b4d996be1847",
+        "receipt": {
+          "id": "01a1aae8-9903-73dd-9b43-fe28cf0e5625",
+          "txId": "72875",
+          "bodyRevision": 2,
+          "status": 200,
+          "bodyDoc": {
+            "v": 3,
+            "doc": {
+              "type": "doc",
+              "content": [
+                {
+                  "type": "paragraph",
+                  "attrs": {
+                    "id": "e507ca77-62c6-46e9-8cb2-fe0976fe2443"
+                  },
+                  "content": [
+                    {
+                      "text": "Safari strict ACK fafd011574a4",
+                      "type": "text"
+                    }
+                  ]
+                }
+              ]
+            }
+          },
+          "bodyDocSha256": "1d4f35f937afca373c3081800149b04cc94c5d9b200385fbd9c7e713783e470c",
+          "sha256": "95730f4bcbbd40319b9bc6823197ac9bed6f26f2224da225cbe810e116c76e15"
+        }
+      },
+      {
+        "at": "2026-11-05T08:54:01.113Z",
+        "kind": "input-bound",
+        "phase": "29548020-0f1f-4f74-90ec-b4d996be1847",
+        "token": {
+          "accountId": "71880ded-c43a-4c02-881e-c4c475d7d4c4",
+          "graphId": "71880ded-c43a-4c02-881e-c4c475d7d4c4",
+          "generation": "0:0",
+          "sequence": 30,
+          "writerId": "01a1aaea-378e-771f-9dd1-1470710032f9",
+          "entityId": "01a1aae8-9903-73dd-9b43-fe28cf0e5625",
+          "basis": {
+            "revision": 1
+          },
+          "nonce": "01a1aaea-3ab9-7017-899f-9f8b56b5a277"
+        },
+        "snapshotSha256": "a8d7358f82dceddcd665ef79a3d467d8f442797c5da4e3b5bd0eb00dc78a23c2"
+      },
+      {
+        "at": "2026-11-05T08:54:01.115Z",
+        "kind": "body-ack-released",
+        "phase": "29548020-0f1f-4f74-90ec-b4d996be1847",
+        "readsStillHeld": true
+      },
+      {
+        "at": "2026-11-05T08:54:01.504Z",
+        "kind": "durable-before-get-release",
+        "phase": "29548020-0f1f-4f74-90ec-b4d996be1847",
+        "token": {
+          "accountId": "71880ded-c43a-4c02-881e-c4c475d7d4c4",
+          "graphId": "71880ded-c43a-4c02-881e-c4c475d7d4c4",
+          "generation": "0:0",
+          "sequence": 30,
+          "writerId": "01a1aaea-378e-771f-9dd1-1470710032f9",
+          "entityId": "01a1aae8-9903-73dd-9b43-fe28cf0e5625",
+          "basis": {
+            "revision": 1
+          },
+          "nonce": "01a1aaea-3ab9-7017-899f-9f8b56b5a277"
+        },
+        "receiptSha256": "95730f4bcbbd40319b9bc6823197ac9bed6f26f2224da225cbe810e116c76e15",
+        "snapshotSha256": "518a2d5fc11cce3739b3108f2f32d6f23dcd5b928ceb7eddd535e301c42ddad6"
+      },
+      {
+        "at": "2026-11-05T08:54:01.507Z",
+        "kind": "record-get-gate-released",
+        "phase": "29548020-0f1f-4f74-90ec-b4d996be1847",
+        "heldRequests": 0
+      },
+      {
+        "at": "2026-11-05T08:54:41.609Z",
+        "kind": "request",
+        "paths": [
+          "perf.report"
+        ],
+        "method": "POST",
+        "credentialed": true
+      },
+      {
+        "at": "2026-11-05T08:54:41.700Z",
+        "kind": "request",
+        "paths": [
+          "entity.get"
+        ],
+        "method": "GET",
+        "credentialed": true
+      },
+      {
+        "at": "2026-11-05T08:54:41.734Z",
+        "kind": "ungated-record-get-completed",
+        "remaining": 0
+      },
+      {
+        "at": "2026-11-05T08:54:41.777Z",
+        "kind": "request",
+        "paths": [
+          "perf.report"
+        ],
+        "method": "POST",
+        "credentialed": true
+      },
+      {
+        "at": "2026-11-05T08:54:41.783Z",
+        "kind": "request",
+        "paths": [
+          "perf.report"
+        ],
+        "method": "POST",
+        "credentialed": true
+      },
+      {
+        "at": "2026-11-05T08:54:42.545Z",
+        "kind": "request",
+        "paths": [
+          "entity.query",
+          "entity.resolveRefs",
+          "routine.proposalsForEntity",
+          "registry.effective",
+          "user.getSettings",
+          "entity.get",
+          "entity.query"
+        ],
+        "method": "GET",
+        "credentialed": true
+      },
+      {
+        "at": "2026-11-05T08:54:42.653Z",
+        "kind": "ungated-record-get-completed",
+        "remaining": 0
+      },
+      {
+        "at": "2026-11-05T08:54:47.051Z",
+        "kind": "request",
+        "paths": [
+          "perf.report"
+        ],
+        "method": "POST",
+        "credentialed": true
+      },
+      {
+        "at": "2026-11-05T08:54:47.055Z",
+        "kind": "request",
+        "paths": [
+          "perf.report"
+        ],
+        "method": "POST",
+        "credentialed": true
+      },
+      {
+        "at": "2026-11-05T08:54:47.850Z",
+        "kind": "request",
+        "paths": [
+          "entity.query",
+          "entity.resolveRefs",
+          "routine.proposalsForEntity",
+          "registry.effective",
+          "user.getSettings",
+          "entity.get",
+          "entity.query"
+        ],
+        "method": "GET",
+        "credentialed": true
+      },
+      {
+        "at": "2026-11-05T08:54:50.310Z",
+        "kind": "fixture-foreign-write",
+        "id": "01a1aae8-9903-73dd-9b43-fe28cf0e5625",
+        "txId": "72879",
+        "bodyRevision": 3
+      },
+      {
+        "at": "2026-11-05T08:54:50.357Z",
+        "kind": "request",
+        "paths": [
+          "perf.report"
+        ],
+        "method": "POST",
+        "credentialed": true
+      },
+      {
+        "at": "2026-11-05T08:54:51.078Z",
+        "kind": "request",
+        "paths": [
+          "entity.query",
+          "entity.resolveRefs",
+          "routine.proposalsForEntity",
+          "registry.effective",
+          "user.getSettings",
+          "entity.get",
+          "entity.query"
+        ],
+        "method": "GET",
+        "credentialed": true
+      },
+      {
+        "at": "2026-11-05T08:54:51.193Z",
+        "kind": "ungated-record-get-completed",
+        "remaining": 0
+      },
+      {
+        "at": "2026-11-05T08:54:53.206Z",
+        "kind": "request",
+        "paths": [
+          "entity.get"
+        ],
+        "method": "GET",
+        "credentialed": true
+      },
+      {
+        "at": "2026-11-05T08:54:53.237Z",
+        "kind": "ungated-record-get-completed",
+        "remaining": 0
+      },
+      {
+        "at": "2026-11-05T09:04:18.965Z",
+        "kind": "request",
+        "paths": [
+          "perf.report"
+        ],
+        "method": "POST",
+        "credentialed": true
+      },
+      {
+        "at": "2026-11-05T09:04:19.018Z",
+        "kind": "request",
+        "paths": [
+          "changes.watch"
+        ],
+        "method": "GET",
+        "credentialed": true
+      },
+      {
+        "at": "2026-11-05T09:04:19.092Z",
+        "kind": "request",
+        "paths": [
+          "changes.reconcile"
+        ],
+        "method": "GET",
+        "credentialed": true
+      },
+      {
+        "at": "2026-11-05T09:04:19.140Z",
+        "kind": "request",
+        "paths": [
+          "registry.effective",
+          "entity.get",
+          "user.getSettings",
+          "entity.query",
+          "entity.query",
+          "entity.query",
+          "entity.query",
+          "routine.proposalsForEntity",
+          "entity.resolveRefs"
+        ],
+        "method": "GET",
+        "credentialed": true
+      },
+      {
+        "at": "2026-11-05T09:04:19.151Z",
+        "kind": "request",
+        "paths": [
+          "entity.blocks"
+        ],
+        "method": "POST",
+        "credentialed": true
+      },
+      {
+        "at": "2026-11-05T09:04:19.523Z",
+        "kind": "request",
+        "paths": [
+          "changes.watch"
+        ],
+        "method": "GET",
+        "credentialed": true
+      },
+      {
+        "at": "2026-11-05T09:04:19.542Z",
+        "kind": "request",
+        "paths": [
+          "changes.reconcile"
+        ],
+        "method": "GET",
+        "credentialed": true
+      },
+      {
+        "at": "2026-11-05T09:04:19.684Z",
+        "kind": "ungated-record-get-completed",
+        "remaining": 0
+      },
+      {
+        "at": "2026-11-05T09:04:48.850Z",
+        "kind": "request",
+        "paths": [
+          "perf.report"
+        ],
+        "method": "POST",
+        "credentialed": true
+      },
+      {
+        "at": "2026-11-05T09:07:33.717Z",
+        "kind": "request",
+        "paths": [
+          "changes.watch"
+        ],
+        "method": "GET",
+        "credentialed": true
+      },
+      {
+        "at": "2026-11-05T09:07:33.755Z",
+        "kind": "request",
+        "paths": [
+          "changes.reconcile"
+        ],
+        "method": "GET",
+        "credentialed": true
+      },
+      {
+        "at": "2026-11-05T09:07:33.790Z",
+        "kind": "request",
+        "paths": [
+          "registry.effective",
+          "entity.get",
+          "user.getSettings",
+          "entity.query",
+          "entity.query",
+          "entity.query",
+          "entity.query",
+          "routine.proposalsForEntity",
+          "entity.resolveRefs"
+        ],
+        "method": "GET",
+        "credentialed": true
+      },
+      {
+        "at": "2026-11-05T09:07:33.792Z",
+        "kind": "request",
+        "paths": [
+          "entity.blocks"
+        ],
+        "method": "POST",
+        "credentialed": true
+      },
+      {
+        "at": "2026-11-05T09:07:34.093Z",
+        "kind": "ungated-record-get-completed",
+        "remaining": 0
+      },
+      {
+        "at": "2026-11-05T09:08:03.705Z",
+        "kind": "request",
+        "paths": [
+          "perf.report"
+        ],
+        "method": "POST",
+        "credentialed": true
+      }
+    ]
+  },
+  "at": 1793869847.226851
+}

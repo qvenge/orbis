@@ -1,0 +1,1 @@
+8b86f515c8e25d5a11ccf862e3ea17accd7c380ad04b2f5c7ffce03362243a70  .superpowers/sdd/2026-11-05-speed-b-release/logical-restore-container-executed-packet.sha256

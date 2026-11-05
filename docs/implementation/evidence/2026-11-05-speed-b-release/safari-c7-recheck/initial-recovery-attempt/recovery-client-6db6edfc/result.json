@@ -1,0 +1,7 @@
+{
+  "ok": false,
+  "stage": "explicit-supported-recovery",
+  "error": "timed out",
+  "evidence": "/private/tmp/orbis-safari-functional.I89ymf/recovery-client-6db6edfc",
+  "instruction": "Inspect actual server/browser state. Client does not revert controls on failure."
+}

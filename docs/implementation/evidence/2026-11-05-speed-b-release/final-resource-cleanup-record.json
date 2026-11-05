@@ -1,0 +1,45 @@
+{
+  "source": "Root final resource handoff after exact Docker identity verification",
+  "containers": [
+    {
+      "name": "primary",
+      "published_port": 54339,
+      "container_id_prefix": "59b414b7",
+      "running": false,
+      "docker_stop_exit": 0
+    },
+    {
+      "name": "cutover-N",
+      "published_port": 54344,
+      "container_id": "e2fd1fa7e35c9554ec799e40bdb03c70ce2ef5be2394d4b52b9c44b1c1a986d1",
+      "running": false,
+      "docker_stop_exit": 0
+    },
+    {
+      "name": "cutover-P",
+      "published_port": 54345,
+      "container_id": "df2b9c20578cfbc3ba64cd2b494b0de214ef4758ddb1c89081a23488bd7af770",
+      "running": false,
+      "docker_stop_exit": 0
+    }
+  ],
+  "prior_restore_containers": {
+    "ports": [
+      54342,
+      54343
+    ],
+    "running": false,
+    "stop_previously_verified": true
+  },
+  "post_stop_inspect_running_false": true,
+  "removed": false,
+  "volumes_or_data_deleted": false,
+  "additional_runtime_planned": false,
+  "external_ticket": {
+    "ui_body_prepared": true,
+    "autosave_confirmed": false,
+    "automatic_review": "blur/reload denied",
+    "explicit_approval": "pending",
+    "save_state": "unknown"
+  }
+}

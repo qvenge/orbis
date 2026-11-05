@@ -1,0 +1,25 @@
+{
+  "origin": "http://127.0.0.1:61071",
+  "source": "own-origin entity.get body and bodyDoc",
+  "status": 200,
+  "bodyDoc": {
+    "v": 3,
+    "doc": {
+      "type": "doc",
+      "content": [
+        {
+          "type": "paragraph",
+          "content": [
+            {
+              "type": "text",
+              "text": "Safari local initial body"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "bodyRevision": 1,
+  "recordId": "01a1aae8-9903-73dd-9b43-fe28cf0e5625",
+  "body": "Safari local initial body"
+}

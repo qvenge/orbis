@@ -1,0 +1,11 @@
+{
+  "source": "356a610f5ae92efe429bdb6891c5bde6f9c09e9f",
+  "artifactManifest": "15144519575777a82e0e75728de0a1bd4f3c02eb0c1ca41fdce746635b03b4ea",
+  "origin": "http://127.0.0.1:51083",
+  "owner": "61e6593e-9d1f-4f82-a241-5c81e2656c78",
+  "recordId": "01a1aa5c-0958-71d0-bcfa-316c65a44ba4",
+  "initialBody": "Safari local initial body",
+  "initialRevision": 1,
+  "expiresAt": 1793863120,
+  "auth": "scoped synthetic storage seed; connect-src self blocks occupied auth origin"
+}

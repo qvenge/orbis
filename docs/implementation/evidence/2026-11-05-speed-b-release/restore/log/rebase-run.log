@@ -1,0 +1,7 @@
+target identity verified
+target Unix socket verified
+SET
+LOCK TABLE
+TRUNCATE TABLE
+psql:rebase-target.sql:45: NOTICE:  target restore reset xid 1003, floor 1004
+DO

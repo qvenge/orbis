@@ -1,0 +1,33 @@
+{
+  "status": 200,
+  "value": {
+    "value": {
+      "origin": "http://127.0.0.1:51083",
+      "source": "own-origin entity.get body and bodyDoc",
+      "status": 200,
+      "bodyDoc": {
+        "v": 3,
+        "doc": {
+          "type": "doc",
+          "content": [
+            {
+              "type": "paragraph",
+              "attrs": {
+                "id": "bbc769c6-2933-4726-b60e-281a3e1e5e5d"
+              },
+              "content": [
+                {
+                  "type": "text",
+                  "text": "Safari strict ACK 236e4bf3bbc8"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "bodyRevision": 2,
+      "recordId": "01a1aa5c-0958-71d0-bcfa-316c65a44ba4",
+      "body": "Safari strict ACK 236e4bf3bbc8"
+    }
+  }
+}

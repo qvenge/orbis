@@ -1,0 +1,19 @@
+# Safari Mac c7 — повторная проверка и закрытие стенда
+
+**ACK PASS, explicit recovery INCONCLUSIVE.** Новый exact c7 normal build и принятый regression fix использованы в отдельном synthetic Mac Safari 26.2 automation-сеансе. Два окна восстановления сохранены отдельно. Успешная нативная recovery-ветка не подтверждена.
+
+Источник `c7ccb9dd1f4cc1f68d43255ecf313768ebc2b315`, 2132 tracked blobs, 130 файлов dist, artifact manifest `7d996259945a80820e0dcc77d986a2087b21aabbe74f32cc5c863468892d81ab`. Exact normal build exit 0 и исходники стенда рассмотрены прежним reviewer `923c3840…`. Локальный Hono обслуживал только loopback61071 и отдельный синтетический граф. Пакет не доказывает внешний Supabase, installed PWA, normal-profile restart или iPhone.
+
+Строгий клиент `strict-ack-e0623b3f` прошёл на новых байтах. После arm новые целевые GET удерживались. Реальный ACK, полный durable bodyDoc/revision и exact input token сопоставлены до разрешения GET. Receipt SHA `95730f4bcbbd40319b9bc6823197ac9bed6f26f2224da225cbe810e116c76e15`, durable snapshot SHA `518a2d5fc11cce3739b3108f2f32d6f23dcd5b928ceb7eddd535e301c42ddad6`, heldTargetReads 0.
+
+Первое восстановление `recovery-client-6db6edfc` дошло до сохранённого A, B при локальном backend503, reload B и настоящего foreign C3. Автоматической перезаписи C не наблюдали. Перед жестом passive observer показывал hidden/focused=false. Команда click не получила ответа за исходное окно; отдельные чтения также упёрлись в timeout. Этот исход и HTTP-журнал скопированы в неизменённый frozen `initial-recovery-attempt` до дальнейших действий.
+
+Между 08:55:13 и 08:58:03 UTC root получил сообщение CUA, что Mac заблокирован. Время начала блокировки неизвестно, её причинность для первого timeout не доказана. После разблокировки отдельные readonly-снимки показали events=[], C3 и сохранённый exact B. Они не заменяют исходные снимки замороженного окна.
+
+Отдельный `post-unlock-explicit.py` выполнил свежий supported element click и получил HTTP200 от WebDriver. Его 18-секундное окно завершилось timeout: в passive observer нет pointer/mouse/click events, нового entity.update или ACK нет, C3 и B остались. Поэтому результат не подтверждает доставку жеста в приложение и не устанавливает WebKit- или product-причину. Исправление публичного хука отдельно доказано регрессией и принято в c7. Исходный Safari click и успешный нативный recovery всё ещё требуют своего свидетельства.
+
+Последующая попытка native CUA click не дала валидного обхода Safari automation glass pane, затем driver не отвечал. Root DELETE session завершился timeout. Root остановил только собственный driver exec session4017 через Ctrl-C, получив exit0 и отсутствие listener55371. Собственный сервер PID14445 завершён узким SIGTERM exit0, PID и listener61071 отсутствовали. Более ранние generic approval deadline и sandbox permission failure не отправили сигнал. Состояние exec session91180 недоступно, фактический launcher exit code не заявляется. Отдельный JSON `root-cleanup-record.json` фиксирует эти переданные root факты. Существующие private `launch.exit/ended` не перенесены как доказательство этого кода возврата.
+
+Пользователь подтвердил выключение Remote Automation на Mac и iPhone и закрытие тестового окна. Приложение на iPhone не проверялось. Никаких новых UI, driver, сервера или DB-действий при упаковке не было.
+
+В public-копиях удалены реальные bootstrap/state/control URL, их приватные control-токены и возможные credentials. Exact synthetic input tokens сохранены. Descriptor fixture.json, local_env.py, bootstrap request/response, профили и файлы телефона исключены. Для каждой копии глобальный `copy-source-map.json` содержит SHA исходного и опубликованного файла и признак маскирования. Оригинальные private bytes не переписывались. Полные source/build manifests и прежний locked timeout сохранены. Итоговый статус выпуска и client-history/cutover остаётся открытым.

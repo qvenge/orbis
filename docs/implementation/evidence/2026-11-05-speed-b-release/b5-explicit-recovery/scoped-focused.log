@@ -1,0 +1,10 @@
+$ vitest run src/features/entity-detail/recovery-basis.test.tsx src/features/entity-editor/save.test.tsx -t "public recovery|Refresh сохраняет последние слова|rewrite читает показанную" --maxWorkers "1"
+
+ RUN  v4.1.9 /private/tmp/orbis-safari-hook-repro.bZQFWv/candidate/apps/web
+
+
+ Test Files  2 passed (2)
+      Tests  6 passed | 75 skipped (81)
+   Start at  15:34:40
+   Duration  6.58s (transform 1.34s, setup 331ms, import 2.58s, tests 1.39s, environment 1.80s)
+

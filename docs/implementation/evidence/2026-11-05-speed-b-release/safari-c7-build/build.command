@@ -1,0 +1,1 @@
+env -u VITE_API_URL -u VITE_RESPONSE_PERSISTENCE -u VITE_SUPABASE_ANON_KEY VITE_SUPABASE_URL=http://localhost:54321 VITE_BUILD_ID=c7ccb9dd1f4cc1f68d43255ecf313768ebc2b315 bun run --filter @orbis/web build

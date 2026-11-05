@@ -1,0 +1,14 @@
+@orbis/server db:migrate: No config path provided, using default 'drizzle.config.ts'
+@orbis/server db:migrate: Reading config file '/private/tmp/orbis-b-restore.oE4t8P/src/apps/server/drizzle.config.ts'
+@orbis/server db:migrate: Using 'postgres' driver for database querying
+@orbis/server db:migrate: [⣷] applying migrations...[2K[1G[⣯] applying migrations...[2K[1G[⣟] applying migrations...[2K[1G[⡿] applying migrations...[2K[1G[⢿] applying migrations...[2K[1G[⣻] applying migrations...{
+@orbis/server db:migrate:   severity_local: 'NOTICE',
+@orbis/server db:migrate:   severity: 'NOTICE',
+@orbis/server db:migrate:   code: '42710',
+@orbis/server db:migrate:   message: 'extension "pg_cron" already exists, skipping',
+@orbis/server db:migrate:   file: 'extension.c',
+@orbis/server db:migrate:   line: '1791',
+@orbis/server db:migrate:   routine: 'CreateExtension'
+@orbis/server db:migrate: }
+@orbis/server: [2K[1G[⣽] applying migrations...[2K[1G[✓] migrations applied successfully!
+@orbis/server db:migrate: Exited with code 0

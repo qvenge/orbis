@@ -1,0 +1,85 @@
+[
+  {
+    "sequence": 1,
+    "phase": "old",
+    "actor": "driver",
+    "version": "0.6.0",
+    "names": [
+      "user.seedOnboarding"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "user.seedOnboarding",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 2,
+    "phase": "old",
+    "actor": "driver",
+    "version": "0.6.0",
+    "names": [
+      "entity.create"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "entity.create",
+        "ok": true,
+        "id": "49417ad1-c69e-404c-a52f-7fa2190a6fd6"
+      }
+    ]
+  },
+  {
+    "sequence": 3,
+    "phase": "old",
+    "actor": "driver",
+    "version": "0.6.0",
+    "names": [
+      "entity.create"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "entity.create",
+        "ok": true,
+        "id": "41faa2b3-8dad-4c23-b998-7706c5ef69d0"
+      }
+    ]
+  },
+  {
+    "sequence": 4,
+    "phase": "old",
+    "actor": "driver",
+    "version": "0.6.0",
+    "names": [
+      "entity.create"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "entity.create",
+        "ok": true,
+        "id": "784ac1b8-f70b-4307-92eb-1776d96d3c92"
+      }
+    ]
+  }
+]

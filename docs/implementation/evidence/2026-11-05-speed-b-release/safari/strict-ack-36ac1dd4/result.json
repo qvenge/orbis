@@ -1,0 +1,7 @@
+{
+  "ok": false,
+  "stage": "initial",
+  "error": "'bodyDoc'",
+  "evidence": "/private/tmp/orbis-safari-functional.DBIeYK/strict-ack-36ac1dd4",
+  "instruction": "Inspect server state. Client does not release gates on failure."
+}

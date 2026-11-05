@@ -1,0 +1,7 @@
+{
+  "reason": "bounded cleanup of stalled CDP after held latch",
+  "signal": "SIGTERM",
+  "identity": "96152/Thu Nov  5 13:54:27 2026",
+  "profile": "/private/tmp/orbis-cutover-n.5Xm4yX/run/chrome.992782",
+  "time": 1793861916.314412
+}

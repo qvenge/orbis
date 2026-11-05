@@ -1,0 +1,2 @@
+cd /private/tmp/orbis-safari-recheck-build.onROez/candidate
+WEB_DIST_DIR=/private/tmp/orbis-safari-recheck-build.onROez/candidate/apps/web/dist SAFARI_DIST_MANIFEST=/private/tmp/orbis-safari-recheck-build.onROez/reports/build-artifact.sha256 SAFARI_FIXTURE_OUT=/private/tmp/orbis-safari-functional.I89ymf nohup python3 /private/tmp/orbis-safari-functional.I89ymf/local_env.py /Users/birzhan/.codex/worktrees/853d/orbis/.env bun ./.superpowers/sdd/2026-11-05-speed-b-release/safari-recheck-stand/safari-server.ts

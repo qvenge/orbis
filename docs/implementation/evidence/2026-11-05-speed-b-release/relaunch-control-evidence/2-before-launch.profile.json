@@ -1,0 +1,19 @@
+{
+  "label": "before-launch",
+  "profile": "/private/tmp/orbis-cutover-relaunch.t_5eise0/profile-parent/chrome.n81o3k",
+  "markers": [
+    {
+      "name": "SingletonLock",
+      "type": "absent"
+    },
+    {
+      "name": "SingletonCookie",
+      "type": "absent"
+    },
+    {
+      "name": "SingletonSocket",
+      "type": "absent"
+    }
+  ],
+  "exitType": "Normal"
+}

@@ -1,0 +1,7 @@
+{
+  "ok": false,
+  "stage": "explicit-supported-recovery",
+  "error": "Bounded ACK window ended; inspect the retained server gates",
+  "evidence": "/private/tmp/orbis-safari-functional.DBIeYK/recovery-client-e0640c1f",
+  "instruction": "Inspect actual server/browser state. Client does not revert controls on failure."
+}

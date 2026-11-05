@@ -1,0 +1,9 @@
+{
+  "source": "root CUA getAXStateAndScreenshot",
+  "message": "The Mac is locked and automatic unlock could not unlock it. Ask the user to unlock the Mac manually before continuing.",
+  "observedAfterUtc": "2026-11-05T08:55:13Z",
+  "observedBeforeUtc": "2026-11-05T08:58:03Z",
+  "exactObservationTime": null,
+  "lockStartTime": null,
+  "classification": "No exact timestamp was returned. Bracket only, no causal attribution."
+}

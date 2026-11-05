@@ -1,0 +1,5 @@
+preflight image=sha256:6501843661b1f8ff97e85c02de33edc0ee2e2693888ad596ee86222f02dc8ecc names=free tcp54344/54345=free
+allocated name=orbis-speed-b-cutover-n e2fd1fa7e35c9554ec799e40bdb03c70ce2ef5be2394d4b52b9c44b1c1a986d1 sha256:6501843661b1f8ff97e85c02de33edc0ee2e2693888ad596ee86222f02dc8ecc n port=54344
+psql: error: connection to server at "127.0.0.1", port 54344 failed: server closed the connection unexpectedly
+	This probably means the server terminated abnormally
+	before or while processing the request.

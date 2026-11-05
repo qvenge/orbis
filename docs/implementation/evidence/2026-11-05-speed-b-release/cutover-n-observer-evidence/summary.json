@@ -1,0 +1,28 @@
+{
+  "exit": 143,
+  "result": "externally-stopped-stalled-harness",
+  "oldAppBfcachePair": {
+    "phase": "bfcache-observation",
+    "status": "roundtrip-confirmed",
+    "token": "4704d845-c7c7-4b46-a0a0-6bc04a58b691",
+    "pagehide": {
+      "token": "4704d845-c7c7-4b46-a0a0-6bc04a58b691",
+      "sequence": 2,
+      "type": "pagehide",
+      "persisted": true
+    },
+    "pageshow": {
+      "token": "4704d845-c7c7-4b46-a0a0-6bc04a58b691",
+      "sequence": 3,
+      "type": "pageshow",
+      "persisted": true
+    }
+  },
+  "heldResponseLatched": true,
+  "heldResponseReleased": false,
+  "bypassResetAcknowledged": false,
+  "migrationReached": false,
+  "purgeReached": false,
+  "profileProcessIdentitiesGone": 10,
+  "Pstarted": false
+}

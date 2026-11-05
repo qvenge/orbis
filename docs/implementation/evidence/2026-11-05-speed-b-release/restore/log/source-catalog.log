@@ -1,0 +1,307 @@
+postgres|supabase_admin|supabase_admin|t|7704502930497941539
+anon|f|f|t|f|f|f|f
+authenticated|f|f|t|f|f|f|f
+orbis_app|t|f|f|f|f|f|f
+orbis_change_feed_owner|f|f|f|t|f|f|f
+service_role|f|f|t|t|f|f|f
+supabase_admin|t|t|t|t|t|t|t
+supabase_admin|authenticated|authenticator|f|f|t
+supabase_admin|authenticated|orbis_app|f|f|t
+supabase_admin|authenticated|postgres|t|t|t
+supabase_admin|orbis_change_feed_owner|supabase_admin|f|f|f
+cron|supabase_admin|{supabase_admin=UC/supabase_admin,postgres=U*/supabase_admin}
+drizzle|supabase_admin|
+public|pg_database_owner|{pg_database_owner=UC/pg_database_owner,=U/pg_database_owner,postgres=U/pg_database_owner,anon=U/pg_database_owner,authenticated=U/pg_database_owner,service_role=U/pg_database_owner,orbis_change_feed_owner=U/pg_database_owner}
+drizzle|__drizzle_migrations|r|supabase_admin|f|f|
+drizzle|__drizzle_migrations_id_seq|S|supabase_admin|f|f|
+public|action_definitions|r|supabase_admin|t|t|{supabase_admin=arwdDxtm/supabase_admin,postgres=arwdDxtm/supabase_admin,anon=arwdDxtm/supabase_admin,authenticated=arwdDxtm/supabase_admin,service_role=arwdDxtm/supabase_admin}
+public|action_journal|r|supabase_admin|t|t|{supabase_admin=arwdDxtm/supabase_admin,postgres=arwdDxtm/supabase_admin,service_role=arwdDxtm/supabase_admin,authenticated=ar/supabase_admin}
+public|action_journal_entities|r|supabase_admin|t|t|{supabase_admin=arwdDxtm/supabase_admin,postgres=arwdDxtm/supabase_admin,service_role=arwdDxtm/supabase_admin,authenticated=ar/supabase_admin}
+public|agent_grants|r|supabase_admin|t|t|{supabase_admin=arwdDxtm/supabase_admin,postgres=arwdDxtm/supabase_admin,anon=arwdDxtm/supabase_admin,authenticated=arwdDxtm/supabase_admin,service_role=arwdDxtm/supabase_admin,orbis_app=arwd/supabase_admin}
+public|ai_usage|r|supabase_admin|t|t|{supabase_admin=arwdDxtm/supabase_admin,postgres=arwdDxtm/supabase_admin,anon=arwdDxtm/supabase_admin,authenticated=arwdDxtm/supabase_admin,service_role=arwdDxtm/supabase_admin}
+public|aspect_definitions|r|supabase_admin|t|t|{supabase_admin=arwdDxtm/supabase_admin,postgres=arwdDxtm/supabase_admin,anon=arwdDxtm/supabase_admin,authenticated=arwdDxtm/supabase_admin,service_role=arwdDxtm/supabase_admin}
+public|change_feed|r|supabase_admin|t|t|{supabase_admin=arwdDxtm/supabase_admin,postgres=arwdDxtm/supabase_admin,authenticated=r/supabase_admin,orbis_change_feed_owner=a/supabase_admin}
+public|change_feed_floor|r|supabase_admin|t|t|{supabase_admin=arwdDxtm/supabase_admin,postgres=arwdDxtm/supabase_admin,authenticated=r/supabase_admin}
+public|change_feed_id_seq|S|supabase_admin|f|f|{supabase_admin=rwU/supabase_admin,postgres=rwU/supabase_admin}
+public|chat_messages|r|supabase_admin|t|t|{supabase_admin=arwdDxtm/supabase_admin,postgres=arwdDxtm/supabase_admin,anon=arwdDxtm/supabase_admin,authenticated=arwdDxtm/supabase_admin,service_role=arwdDxtm/supabase_admin}
+public|chat_threads|r|supabase_admin|t|t|{supabase_admin=arwdDxtm/supabase_admin,postgres=arwdDxtm/supabase_admin,anon=arwdDxtm/supabase_admin,authenticated=arwdDxtm/supabase_admin,service_role=arwdDxtm/supabase_admin}
+public|contract_definitions|r|supabase_admin|t|t|{supabase_admin=arwdDxtm/supabase_admin,postgres=arwdDxtm/supabase_admin,anon=arwdDxtm/supabase_admin,authenticated=arwdDxtm/supabase_admin,service_role=arwdDxtm/supabase_admin}
+public|entities|r|supabase_admin|t|t|{supabase_admin=arwdDxtm/supabase_admin,postgres=arwdDxtm/supabase_admin,anon=arwdDxtm/supabase_admin,authenticated=arwdDxtm/supabase_admin,service_role=arwdDxtm/supabase_admin}
+public|entity_origins|r|supabase_admin|t|t|{supabase_admin=arwdDxtm/supabase_admin,postgres=arwdDxtm/supabase_admin,anon=arwdDxtm/supabase_admin,authenticated=arwdDxtm/supabase_admin,service_role=arwdDxtm/supabase_admin}
+public|entity_versions|r|supabase_admin|t|t|{supabase_admin=arwdDxtm/supabase_admin,postgres=arwdDxtm/supabase_admin,anon=arwdDxtm/supabase_admin,authenticated=arwdDxtm/supabase_admin,service_role=arwdDxtm/supabase_admin,orbis_app=arwd/supabase_admin}
+public|envelope_spent_cache|r|supabase_admin|t|t|{supabase_admin=arwdDxtm/supabase_admin,postgres=arwdDxtm/supabase_admin,anon=arwdDxtm/supabase_admin,authenticated=arwdDxtm/supabase_admin,service_role=arwdDxtm/supabase_admin,orbis_app=arwd/supabase_admin}
+public|graph_members|r|supabase_admin|t|t|{supabase_admin=arwdDxtm/supabase_admin,postgres=arwdDxtm/supabase_admin,service_role=arwdDxtm/supabase_admin,authenticated=ar/supabase_admin,orbis_app=r/supabase_admin}
+public|graphs|r|supabase_admin|t|t|{supabase_admin=arwdDxtm/supabase_admin,postgres=arwdDxtm/supabase_admin,service_role=arwdDxtm/supabase_admin,authenticated=ar/supabase_admin}
+public|oauth_clients|r|supabase_admin|t|t|{supabase_admin=arwdDxtm/supabase_admin,postgres=arwdDxtm/supabase_admin,anon=arwdDxtm/supabase_admin,authenticated=arwdDxtm/supabase_admin,service_role=arwdDxtm/supabase_admin,orbis_app=arwd/supabase_admin}
+public|perf_samples|r|supabase_admin|t|t|{supabase_admin=arwdDxtm/supabase_admin,postgres=arwdDxtm/supabase_admin,service_role=arwdDxtm/supabase_admin,authenticated=ar/supabase_admin}
+public|perf_samples_id_seq|S|supabase_admin|f|f|{supabase_admin=rwU/supabase_admin,postgres=rwU/supabase_admin,anon=rwU/supabase_admin,authenticated=rwU/supabase_admin,service_role=rwU/supabase_admin}
+public|property_definitions|r|supabase_admin|t|t|{supabase_admin=arwdDxtm/supabase_admin,postgres=arwdDxtm/supabase_admin,anon=arwdDxtm/supabase_admin,authenticated=arwdDxtm/supabase_admin,service_role=arwdDxtm/supabase_admin}
+public|registry_deltas|r|supabase_admin|t|t|{supabase_admin=arwdDxtm/supabase_admin,postgres=arwdDxtm/supabase_admin,anon=arwdDxtm/supabase_admin,authenticated=arwdDxtm/supabase_admin,service_role=arwdDxtm/supabase_admin}
+public|registry_system|r|supabase_admin|t|t|{supabase_admin=arwdDxtm/supabase_admin,postgres=arwdDxtm/supabase_admin,anon=arwdDxtm/supabase_admin,authenticated=arwdDxtm/supabase_admin,service_role=arwdDxtm/supabase_admin}
+public|relation_role_definitions|r|supabase_admin|t|t|{supabase_admin=arwdDxtm/supabase_admin,postgres=arwdDxtm/supabase_admin,anon=arwdDxtm/supabase_admin,authenticated=arwdDxtm/supabase_admin,service_role=arwdDxtm/supabase_admin}
+public|relations|r|supabase_admin|t|t|{supabase_admin=arwdDxtm/supabase_admin,postgres=arwdDxtm/supabase_admin,anon=arwdDxtm/supabase_admin,authenticated=arwdDxtm/supabase_admin,service_role=arwdDxtm/supabase_admin}
+public|subscription_definitions|r|supabase_admin|t|t|{supabase_admin=arwdDxtm/supabase_admin,postgres=arwdDxtm/supabase_admin,anon=arwdDxtm/supabase_admin,authenticated=arwdDxtm/supabase_admin,service_role=arwdDxtm/supabase_admin}
+public|user_settings|r|supabase_admin|t|t|{supabase_admin=arwdDxtm/supabase_admin,postgres=arwdDxtm/supabase_admin,anon=arwdDxtm/supabase_admin,authenticated=arwdDxtm/supabase_admin,service_role=arwdDxtm/supabase_admin,orbis_app=r/supabase_admin}
+public|change_feed|entity_ids|{orbis_change_feed_owner=r/supabase_admin}
+public|change_feed|graph_id|{orbis_change_feed_owner=r/supabase_admin}
+public|change_feed|graph_wide|{orbis_change_feed_owner=r/supabase_admin}
+public|change_feed|id|{orbis_change_feed_owner=r/supabase_admin}
+public|change_feed|kind|{orbis_change_feed_owner=r/supabase_admin}
+public|change_feed|operation|{orbis_change_feed_owner=r/supabase_admin}
+public|change_feed|row_key|{orbis_change_feed_owner=r/supabase_admin}
+public|change_feed|tx_id|{orbis_change_feed_owner=r/supabase_admin}
+public|change_feed_floor|floor|{orbis_change_feed_owner=rw/supabase_admin}
+public|change_feed_floor|id|{orbis_change_feed_owner=r/supabase_admin}
+public|chat_threads|entity_id|{orbis_change_feed_owner=r/supabase_admin}
+public|chat_threads|graph_id|{orbis_change_feed_owner=r/supabase_admin}
+public|chat_threads|id|{orbis_change_feed_owner=r/supabase_admin}
+public|entities|graph_id|{orbis_change_feed_owner=r/supabase_admin}
+public|entities|id|{orbis_change_feed_owner=r/supabase_admin}
+public|relations|id|{orbis_change_feed_owner=r/supabase_admin}
+public|relations|source_id|{orbis_change_feed_owner=r/supabase_admin}
+public|relations|target_id|{orbis_change_feed_owner=r/supabase_admin}
+postgres|public|S|{postgres=rwU/postgres,anon=rwU/postgres,authenticated=rwU/postgres,service_role=rwU/postgres}
+postgres|public|f|{postgres=X/postgres,anon=X/postgres,authenticated=X/postgres,service_role=X/postgres}
+postgres|public|r|{postgres=arwdDxtm/postgres,anon=arwdDxtm/postgres,authenticated=arwdDxtm/postgres,service_role=arwdDxtm/postgres}
+postgres|storage|S|{postgres=rwU/postgres,anon=rwU/postgres,authenticated=rwU/postgres,service_role=rwU/postgres}
+postgres|storage|f|{postgres=X/postgres,anon=X/postgres,authenticated=X/postgres,service_role=X/postgres}
+postgres|storage|r|{postgres=arwdDxtm/postgres,anon=arwdDxtm/postgres,authenticated=arwdDxtm/postgres,service_role=arwdDxtm/postgres}
+supabase_admin|cron|S|{postgres=r*w*U*/supabase_admin}
+supabase_admin|cron|f|{postgres=X*/supabase_admin}
+supabase_admin|cron|r|{postgres=a*r*w*d*D*x*t*m*/supabase_admin}
+supabase_admin|extensions|S|{postgres=r*w*U*/supabase_admin}
+supabase_admin|extensions|f|{postgres=X*/supabase_admin}
+supabase_admin|extensions|r|{postgres=a*r*w*d*D*x*t*m*/supabase_admin}
+supabase_admin|graphql|S|{postgres=rwU/supabase_admin,anon=rwU/supabase_admin,authenticated=rwU/supabase_admin,service_role=rwU/supabase_admin}
+supabase_admin|graphql|f|{postgres=X/supabase_admin,anon=X/supabase_admin,authenticated=X/supabase_admin,service_role=X/supabase_admin}
+supabase_admin|graphql|r|{postgres=arwdDxtm/supabase_admin,anon=arwdDxtm/supabase_admin,authenticated=arwdDxtm/supabase_admin,service_role=arwdDxtm/supabase_admin}
+supabase_admin|graphql_public|S|{postgres=rwU/supabase_admin,anon=rwU/supabase_admin,authenticated=rwU/supabase_admin,service_role=rwU/supabase_admin}
+supabase_admin|graphql_public|f|{postgres=X/supabase_admin,anon=X/supabase_admin,authenticated=X/supabase_admin,service_role=X/supabase_admin}
+supabase_admin|graphql_public|r|{postgres=arwdDxtm/supabase_admin,anon=arwdDxtm/supabase_admin,authenticated=arwdDxtm/supabase_admin,service_role=arwdDxtm/supabase_admin}
+supabase_admin|public|S|{postgres=rwU/supabase_admin,anon=rwU/supabase_admin,authenticated=rwU/supabase_admin,service_role=rwU/supabase_admin}
+supabase_admin|public|f|{postgres=X/supabase_admin,anon=X/supabase_admin,authenticated=X/supabase_admin,service_role=X/supabase_admin}
+supabase_admin|public|r|{postgres=arwdDxtm/supabase_admin,anon=arwdDxtm/supabase_admin,authenticated=arwdDxtm/supabase_admin,service_role=arwdDxtm/supabase_admin}
+supabase_admin|realtime|S|{postgres=rwU/supabase_admin,dashboard_user=rwU/supabase_admin}
+supabase_admin|realtime|f|{postgres=X/supabase_admin,dashboard_user=X/supabase_admin}
+supabase_admin|realtime|r|{postgres=arwdDxtm/supabase_admin,dashboard_user=arwdDxtm/supabase_admin}
+supabase_auth_admin|auth|S|{postgres=rwU/supabase_auth_admin,dashboard_user=rwU/supabase_auth_admin}
+supabase_auth_admin|auth|f|{postgres=X/supabase_auth_admin,dashboard_user=X/supabase_auth_admin}
+supabase_auth_admin|auth|r|{postgres=arwdDxtm/supabase_auth_admin,dashboard_user=arwdDxtm/supabase_auth_admin}
+actor_owns_current_graph()|supabase_admin|f|{"search_path=\"\""}|{=X/supabase_admin,supabase_admin=X/supabase_admin,postgres=X/supabase_admin,anon=X/supabase_admin,authenticated=X/supabase_admin,service_role=X/supabase_admin}|1a8b59438cd2c27d150d294ce4024c1d
+actor_reads_current_graph()|supabase_admin|f|{"search_path=\"\""}|{=X/supabase_admin,supabase_admin=X/supabase_admin,postgres=X/supabase_admin,anon=X/supabase_admin,authenticated=X/supabase_admin,service_role=X/supabase_admin}|ae146169e8417c83fc4078f28faabae6
+actor_writes_current_graph()|supabase_admin|f|{"search_path=\"\""}|{=X/supabase_admin,supabase_admin=X/supabase_admin,postgres=X/supabase_admin,anon=X/supabase_admin,authenticated=X/supabase_admin,service_role=X/supabase_admin}|1268305346d21dcbe4b11490f50b8662
+current_graph_id()|supabase_admin|f|{"search_path=\"\""}|{=X/supabase_admin,supabase_admin=X/supabase_admin,postgres=X/supabase_admin,anon=X/supabase_admin,authenticated=X/supabase_admin,service_role=X/supabase_admin}|9c2bfc904cc88e987eacd35f4a66d986
+entities_body_stamp()|supabase_admin|f|{"search_path=\"\""}|{=X/supabase_admin,supabase_admin=X/supabase_admin,postgres=X/supabase_admin,anon=X/supabase_admin,authenticated=X/supabase_admin,service_role=X/supabase_admin}|c1c861479e48329cfa8848c143956308
+graph_members_keep_owner()|supabase_admin|f|{"search_path=\"\""}|{=X/supabase_admin,supabase_admin=X/supabase_admin,postgres=X/supabase_admin,anon=X/supabase_admin,authenticated=X/supabase_admin,service_role=X/supabase_admin}|7854666cc2be84f9cd7a813a662faba9
+graphs_require_owner()|supabase_admin|f|{"search_path=\"\""}|{=X/supabase_admin,supabase_admin=X/supabase_admin,postgres=X/supabase_admin,anon=X/supabase_admin,authenticated=X/supabase_admin,service_role=X/supabase_admin}|938b1aebe716fd815f6a3c15e6f83a95
+orbis_capture_change_feed()|orbis_change_feed_owner|t|{"search_path=pg_catalog, public"}|{orbis_change_feed_owner=X/orbis_change_feed_owner,postgres=X/orbis_change_feed_owner}|6defe288cfd07517076e177e267a8708
+orbis_feed_entity_graph(uuid,xid8)|supabase_admin|f|{"search_path=pg_catalog, public"}|{supabase_admin=X/supabase_admin,postgres=X/supabase_admin,orbis_change_feed_owner=X/supabase_admin}|cf9d33bb2b07b5660f7726c60e3a4981
+orbis_feed_last_event(text,text,xid8)|supabase_admin|f|{"search_path=pg_catalog, public"}|{supabase_admin=X/supabase_admin,postgres=X/supabase_admin,orbis_change_feed_owner=X/supabase_admin}|5d5053d933d453b8f0b3f5661de59146
+public|action_definitions|orbis_feed_delete|O|CREATE TRIGGER orbis_feed_delete AFTER DELETE ON public.action_definitions REFERENCING OLD TABLE AS feed_old FOR EACH STATEMENT EXECUTE FUNCTION orbis_capture_change_feed()
+public|action_definitions|orbis_feed_insert|O|CREATE TRIGGER orbis_feed_insert AFTER INSERT ON public.action_definitions REFERENCING NEW TABLE AS feed_new FOR EACH STATEMENT EXECUTE FUNCTION orbis_capture_change_feed()
+public|action_definitions|orbis_feed_truncate|O|CREATE TRIGGER orbis_feed_truncate AFTER TRUNCATE ON public.action_definitions FOR EACH STATEMENT EXECUTE FUNCTION orbis_capture_change_feed()
+public|action_definitions|orbis_feed_update|O|CREATE TRIGGER orbis_feed_update AFTER UPDATE ON public.action_definitions REFERENCING OLD TABLE AS feed_old NEW TABLE AS feed_new FOR EACH STATEMENT EXECUTE FUNCTION orbis_capture_change_feed()
+public|action_journal|orbis_feed_delete|O|CREATE TRIGGER orbis_feed_delete AFTER DELETE ON public.action_journal REFERENCING OLD TABLE AS feed_old FOR EACH STATEMENT EXECUTE FUNCTION orbis_capture_change_feed()
+public|action_journal|orbis_feed_insert|O|CREATE TRIGGER orbis_feed_insert AFTER INSERT ON public.action_journal REFERENCING NEW TABLE AS feed_new FOR EACH STATEMENT EXECUTE FUNCTION orbis_capture_change_feed()
+public|action_journal|orbis_feed_truncate|O|CREATE TRIGGER orbis_feed_truncate AFTER TRUNCATE ON public.action_journal FOR EACH STATEMENT EXECUTE FUNCTION orbis_capture_change_feed()
+public|action_journal|orbis_feed_update|O|CREATE TRIGGER orbis_feed_update AFTER UPDATE ON public.action_journal REFERENCING OLD TABLE AS feed_old NEW TABLE AS feed_new FOR EACH STATEMENT EXECUTE FUNCTION orbis_capture_change_feed()
+public|aspect_definitions|orbis_feed_delete|O|CREATE TRIGGER orbis_feed_delete AFTER DELETE ON public.aspect_definitions REFERENCING OLD TABLE AS feed_old FOR EACH STATEMENT EXECUTE FUNCTION orbis_capture_change_feed()
+public|aspect_definitions|orbis_feed_insert|O|CREATE TRIGGER orbis_feed_insert AFTER INSERT ON public.aspect_definitions REFERENCING NEW TABLE AS feed_new FOR EACH STATEMENT EXECUTE FUNCTION orbis_capture_change_feed()
+public|aspect_definitions|orbis_feed_truncate|O|CREATE TRIGGER orbis_feed_truncate AFTER TRUNCATE ON public.aspect_definitions FOR EACH STATEMENT EXECUTE FUNCTION orbis_capture_change_feed()
+public|aspect_definitions|orbis_feed_update|O|CREATE TRIGGER orbis_feed_update AFTER UPDATE ON public.aspect_definitions REFERENCING OLD TABLE AS feed_old NEW TABLE AS feed_new FOR EACH STATEMENT EXECUTE FUNCTION orbis_capture_change_feed()
+public|chat_messages|orbis_feed_delete|O|CREATE TRIGGER orbis_feed_delete AFTER DELETE ON public.chat_messages REFERENCING OLD TABLE AS feed_old FOR EACH STATEMENT EXECUTE FUNCTION orbis_capture_change_feed()
+public|chat_messages|orbis_feed_insert|O|CREATE TRIGGER orbis_feed_insert AFTER INSERT ON public.chat_messages REFERENCING NEW TABLE AS feed_new FOR EACH STATEMENT EXECUTE FUNCTION orbis_capture_change_feed()
+public|chat_messages|orbis_feed_truncate|O|CREATE TRIGGER orbis_feed_truncate AFTER TRUNCATE ON public.chat_messages FOR EACH STATEMENT EXECUTE FUNCTION orbis_capture_change_feed()
+public|chat_messages|orbis_feed_update|O|CREATE TRIGGER orbis_feed_update AFTER UPDATE ON public.chat_messages REFERENCING OLD TABLE AS feed_old NEW TABLE AS feed_new FOR EACH STATEMENT EXECUTE FUNCTION orbis_capture_change_feed()
+public|chat_threads|orbis_feed_delete|O|CREATE TRIGGER orbis_feed_delete AFTER DELETE ON public.chat_threads REFERENCING OLD TABLE AS feed_old FOR EACH STATEMENT EXECUTE FUNCTION orbis_capture_change_feed()
+public|chat_threads|orbis_feed_insert|O|CREATE TRIGGER orbis_feed_insert AFTER INSERT ON public.chat_threads REFERENCING NEW TABLE AS feed_new FOR EACH STATEMENT EXECUTE FUNCTION orbis_capture_change_feed()
+public|chat_threads|orbis_feed_truncate|O|CREATE TRIGGER orbis_feed_truncate AFTER TRUNCATE ON public.chat_threads FOR EACH STATEMENT EXECUTE FUNCTION orbis_capture_change_feed()
+public|chat_threads|orbis_feed_update|O|CREATE TRIGGER orbis_feed_update AFTER UPDATE ON public.chat_threads REFERENCING OLD TABLE AS feed_old NEW TABLE AS feed_new FOR EACH STATEMENT EXECUTE FUNCTION orbis_capture_change_feed()
+public|contract_definitions|orbis_feed_delete|O|CREATE TRIGGER orbis_feed_delete AFTER DELETE ON public.contract_definitions REFERENCING OLD TABLE AS feed_old FOR EACH STATEMENT EXECUTE FUNCTION orbis_capture_change_feed()
+public|contract_definitions|orbis_feed_insert|O|CREATE TRIGGER orbis_feed_insert AFTER INSERT ON public.contract_definitions REFERENCING NEW TABLE AS feed_new FOR EACH STATEMENT EXECUTE FUNCTION orbis_capture_change_feed()
+public|contract_definitions|orbis_feed_truncate|O|CREATE TRIGGER orbis_feed_truncate AFTER TRUNCATE ON public.contract_definitions FOR EACH STATEMENT EXECUTE FUNCTION orbis_capture_change_feed()
+public|contract_definitions|orbis_feed_update|O|CREATE TRIGGER orbis_feed_update AFTER UPDATE ON public.contract_definitions REFERENCING OLD TABLE AS feed_old NEW TABLE AS feed_new FOR EACH STATEMENT EXECUTE FUNCTION orbis_capture_change_feed()
+public|entities|entities_body_stamp|O|CREATE TRIGGER entities_body_stamp BEFORE INSERT OR UPDATE OF body, body_doc ON public.entities FOR EACH ROW EXECUTE FUNCTION entities_body_stamp()
+public|entities|orbis_feed_delete|O|CREATE TRIGGER orbis_feed_delete AFTER DELETE ON public.entities REFERENCING OLD TABLE AS feed_old FOR EACH STATEMENT EXECUTE FUNCTION orbis_capture_change_feed()
+public|entities|orbis_feed_insert|O|CREATE TRIGGER orbis_feed_insert AFTER INSERT ON public.entities REFERENCING NEW TABLE AS feed_new FOR EACH STATEMENT EXECUTE FUNCTION orbis_capture_change_feed()
+public|entities|orbis_feed_truncate|O|CREATE TRIGGER orbis_feed_truncate AFTER TRUNCATE ON public.entities FOR EACH STATEMENT EXECUTE FUNCTION orbis_capture_change_feed()
+public|entities|orbis_feed_update|O|CREATE TRIGGER orbis_feed_update AFTER UPDATE ON public.entities REFERENCING OLD TABLE AS feed_old NEW TABLE AS feed_new FOR EACH STATEMENT EXECUTE FUNCTION orbis_capture_change_feed()
+public|entity_versions|orbis_feed_delete|O|CREATE TRIGGER orbis_feed_delete AFTER DELETE ON public.entity_versions REFERENCING OLD TABLE AS feed_old FOR EACH STATEMENT EXECUTE FUNCTION orbis_capture_change_feed()
+public|entity_versions|orbis_feed_insert|O|CREATE TRIGGER orbis_feed_insert AFTER INSERT ON public.entity_versions REFERENCING NEW TABLE AS feed_new FOR EACH STATEMENT EXECUTE FUNCTION orbis_capture_change_feed()
+public|entity_versions|orbis_feed_truncate|O|CREATE TRIGGER orbis_feed_truncate AFTER TRUNCATE ON public.entity_versions FOR EACH STATEMENT EXECUTE FUNCTION orbis_capture_change_feed()
+public|entity_versions|orbis_feed_update|O|CREATE TRIGGER orbis_feed_update AFTER UPDATE ON public.entity_versions REFERENCING OLD TABLE AS feed_old NEW TABLE AS feed_new FOR EACH STATEMENT EXECUTE FUNCTION orbis_capture_change_feed()
+public|graph_members|graph_members_keep_owner|O|CREATE CONSTRAINT TRIGGER graph_members_keep_owner AFTER DELETE OR UPDATE ON public.graph_members DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION graph_members_keep_owner()
+public|graphs|graphs_require_owner|O|CREATE CONSTRAINT TRIGGER graphs_require_owner AFTER INSERT ON public.graphs DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION graphs_require_owner()
+public|property_definitions|orbis_feed_delete|O|CREATE TRIGGER orbis_feed_delete AFTER DELETE ON public.property_definitions REFERENCING OLD TABLE AS feed_old FOR EACH STATEMENT EXECUTE FUNCTION orbis_capture_change_feed()
+public|property_definitions|orbis_feed_insert|O|CREATE TRIGGER orbis_feed_insert AFTER INSERT ON public.property_definitions REFERENCING NEW TABLE AS feed_new FOR EACH STATEMENT EXECUTE FUNCTION orbis_capture_change_feed()
+public|property_definitions|orbis_feed_truncate|O|CREATE TRIGGER orbis_feed_truncate AFTER TRUNCATE ON public.property_definitions FOR EACH STATEMENT EXECUTE FUNCTION orbis_capture_change_feed()
+public|property_definitions|orbis_feed_update|O|CREATE TRIGGER orbis_feed_update AFTER UPDATE ON public.property_definitions REFERENCING OLD TABLE AS feed_old NEW TABLE AS feed_new FOR EACH STATEMENT EXECUTE FUNCTION orbis_capture_change_feed()
+public|registry_deltas|orbis_feed_delete|O|CREATE TRIGGER orbis_feed_delete AFTER DELETE ON public.registry_deltas REFERENCING OLD TABLE AS feed_old FOR EACH STATEMENT EXECUTE FUNCTION orbis_capture_change_feed()
+public|registry_deltas|orbis_feed_insert|O|CREATE TRIGGER orbis_feed_insert AFTER INSERT ON public.registry_deltas REFERENCING NEW TABLE AS feed_new FOR EACH STATEMENT EXECUTE FUNCTION orbis_capture_change_feed()
+public|registry_deltas|orbis_feed_truncate|O|CREATE TRIGGER orbis_feed_truncate AFTER TRUNCATE ON public.registry_deltas FOR EACH STATEMENT EXECUTE FUNCTION orbis_capture_change_feed()
+public|registry_deltas|orbis_feed_update|O|CREATE TRIGGER orbis_feed_update AFTER UPDATE ON public.registry_deltas REFERENCING OLD TABLE AS feed_old NEW TABLE AS feed_new FOR EACH STATEMENT EXECUTE FUNCTION orbis_capture_change_feed()
+public|registry_system|orbis_feed_delete|O|CREATE TRIGGER orbis_feed_delete AFTER DELETE ON public.registry_system REFERENCING OLD TABLE AS feed_old FOR EACH STATEMENT EXECUTE FUNCTION orbis_capture_change_feed()
+public|registry_system|orbis_feed_insert|O|CREATE TRIGGER orbis_feed_insert AFTER INSERT ON public.registry_system REFERENCING NEW TABLE AS feed_new FOR EACH STATEMENT EXECUTE FUNCTION orbis_capture_change_feed()
+public|registry_system|orbis_feed_truncate|O|CREATE TRIGGER orbis_feed_truncate AFTER TRUNCATE ON public.registry_system FOR EACH STATEMENT EXECUTE FUNCTION orbis_capture_change_feed()
+public|registry_system|orbis_feed_update|O|CREATE TRIGGER orbis_feed_update AFTER UPDATE ON public.registry_system REFERENCING OLD TABLE AS feed_old NEW TABLE AS feed_new FOR EACH STATEMENT EXECUTE FUNCTION orbis_capture_change_feed()
+public|relation_role_definitions|orbis_feed_delete|O|CREATE TRIGGER orbis_feed_delete AFTER DELETE ON public.relation_role_definitions REFERENCING OLD TABLE AS feed_old FOR EACH STATEMENT EXECUTE FUNCTION orbis_capture_change_feed()
+public|relation_role_definitions|orbis_feed_insert|O|CREATE TRIGGER orbis_feed_insert AFTER INSERT ON public.relation_role_definitions REFERENCING NEW TABLE AS feed_new FOR EACH STATEMENT EXECUTE FUNCTION orbis_capture_change_feed()
+public|relation_role_definitions|orbis_feed_truncate|O|CREATE TRIGGER orbis_feed_truncate AFTER TRUNCATE ON public.relation_role_definitions FOR EACH STATEMENT EXECUTE FUNCTION orbis_capture_change_feed()
+public|relation_role_definitions|orbis_feed_update|O|CREATE TRIGGER orbis_feed_update AFTER UPDATE ON public.relation_role_definitions REFERENCING OLD TABLE AS feed_old NEW TABLE AS feed_new FOR EACH STATEMENT EXECUTE FUNCTION orbis_capture_change_feed()
+public|relations|orbis_feed_delete|O|CREATE TRIGGER orbis_feed_delete AFTER DELETE ON public.relations REFERENCING OLD TABLE AS feed_old FOR EACH STATEMENT EXECUTE FUNCTION orbis_capture_change_feed()
+public|relations|orbis_feed_insert|O|CREATE TRIGGER orbis_feed_insert AFTER INSERT ON public.relations REFERENCING NEW TABLE AS feed_new FOR EACH STATEMENT EXECUTE FUNCTION orbis_capture_change_feed()
+public|relations|orbis_feed_truncate|O|CREATE TRIGGER orbis_feed_truncate AFTER TRUNCATE ON public.relations FOR EACH STATEMENT EXECUTE FUNCTION orbis_capture_change_feed()
+public|relations|orbis_feed_update|O|CREATE TRIGGER orbis_feed_update AFTER UPDATE ON public.relations REFERENCING OLD TABLE AS feed_old NEW TABLE AS feed_new FOR EACH STATEMENT EXECUTE FUNCTION orbis_capture_change_feed()
+public|subscription_definitions|orbis_feed_delete|O|CREATE TRIGGER orbis_feed_delete AFTER DELETE ON public.subscription_definitions REFERENCING OLD TABLE AS feed_old FOR EACH STATEMENT EXECUTE FUNCTION orbis_capture_change_feed()
+public|subscription_definitions|orbis_feed_insert|O|CREATE TRIGGER orbis_feed_insert AFTER INSERT ON public.subscription_definitions REFERENCING NEW TABLE AS feed_new FOR EACH STATEMENT EXECUTE FUNCTION orbis_capture_change_feed()
+public|subscription_definitions|orbis_feed_truncate|O|CREATE TRIGGER orbis_feed_truncate AFTER TRUNCATE ON public.subscription_definitions FOR EACH STATEMENT EXECUTE FUNCTION orbis_capture_change_feed()
+public|subscription_definitions|orbis_feed_update|O|CREATE TRIGGER orbis_feed_update AFTER UPDATE ON public.subscription_definitions REFERENCING OLD TABLE AS feed_old NEW TABLE AS feed_new FOR EACH STATEMENT EXECUTE FUNCTION orbis_capture_change_feed()
+public|user_settings|orbis_feed_delete|O|CREATE TRIGGER orbis_feed_delete AFTER DELETE ON public.user_settings REFERENCING OLD TABLE AS feed_old FOR EACH STATEMENT EXECUTE FUNCTION orbis_capture_change_feed()
+public|user_settings|orbis_feed_insert|O|CREATE TRIGGER orbis_feed_insert AFTER INSERT ON public.user_settings REFERENCING NEW TABLE AS feed_new FOR EACH STATEMENT EXECUTE FUNCTION orbis_capture_change_feed()
+public|user_settings|orbis_feed_truncate|O|CREATE TRIGGER orbis_feed_truncate AFTER TRUNCATE ON public.user_settings FOR EACH STATEMENT EXECUTE FUNCTION orbis_capture_change_feed()
+public|user_settings|orbis_feed_update|O|CREATE TRIGGER orbis_feed_update AFTER UPDATE ON public.user_settings REFERENCING OLD TABLE AS feed_old NEW TABLE AS feed_new FOR EACH STATEMENT EXECUTE FUNCTION orbis_capture_change_feed()
+public|action_definitions|delete_own|PERMISSIVE|{authenticated}|DELETE|((graph_id = ( SELECT current_graph_id() AS current_graph_id)) AND ( SELECT actor_writes_current_graph() AS actor_writes_current_graph))|
+public|action_definitions|read_builtin_or_own|PERMISSIVE|{authenticated}|SELECT|((graph_id IS NULL) OR ((graph_id = ( SELECT current_graph_id() AS current_graph_id)) AND ( SELECT actor_reads_current_graph() AS actor_reads_current_graph)))|
+public|action_definitions|update_own|PERMISSIVE|{authenticated}|UPDATE|((graph_id = ( SELECT current_graph_id() AS current_graph_id)) AND ( SELECT actor_writes_current_graph() AS actor_writes_current_graph))|((graph_id = ( SELECT current_graph_id() AS current_graph_id)) AND ( SELECT actor_writes_current_graph() AS actor_writes_current_graph))
+public|action_definitions|write_own|PERMISSIVE|{authenticated}|INSERT||((graph_id = ( SELECT current_graph_id() AS current_graph_id)) AND ( SELECT actor_writes_current_graph() AS actor_writes_current_graph))
+public|action_journal|current_graph_insert|PERMISSIVE|{authenticated}|INSERT||((graph_id = ( SELECT current_graph_id() AS current_graph_id)) AND ( SELECT actor_writes_current_graph() AS actor_writes_current_graph))
+public|action_journal|current_graph_select|PERMISSIVE|{authenticated}|SELECT|((graph_id = ( SELECT current_graph_id() AS current_graph_id)) AND ( SELECT actor_reads_current_graph() AS actor_reads_current_graph))|
+public|action_journal_entities|current_graph_insert|PERMISSIVE|{authenticated}|INSERT||((graph_id = ( SELECT current_graph_id() AS current_graph_id)) AND ( SELECT actor_writes_current_graph() AS actor_writes_current_graph))
+public|action_journal_entities|current_graph_select|PERMISSIVE|{authenticated}|SELECT|((graph_id = ( SELECT current_graph_id() AS current_graph_id)) AND ( SELECT actor_reads_current_graph() AS actor_reads_current_graph))|
+public|agent_grants|current_graph_delete|PERMISSIVE|{authenticated}|DELETE|((graph_id = ( SELECT current_graph_id() AS current_graph_id)) AND ( SELECT actor_owns_current_graph() AS actor_owns_current_graph))|
+public|agent_grants|current_graph_insert|PERMISSIVE|{authenticated}|INSERT||((graph_id = ( SELECT current_graph_id() AS current_graph_id)) AND ( SELECT actor_owns_current_graph() AS actor_owns_current_graph))
+public|agent_grants|current_graph_select|PERMISSIVE|{authenticated}|SELECT|((graph_id = ( SELECT current_graph_id() AS current_graph_id)) AND ( SELECT actor_reads_current_graph() AS actor_reads_current_graph))|
+public|agent_grants|current_graph_update|PERMISSIVE|{authenticated}|UPDATE|((graph_id = ( SELECT current_graph_id() AS current_graph_id)) AND ( SELECT actor_owns_current_graph() AS actor_owns_current_graph))|((graph_id = ( SELECT current_graph_id() AS current_graph_id)) AND ( SELECT actor_owns_current_graph() AS actor_owns_current_graph))
+public|agent_grants|server_manages_grants|PERMISSIVE|{orbis_app}|ALL|true|true
+public|ai_usage|current_graph_delete|PERMISSIVE|{authenticated}|DELETE|((graph_id = ( SELECT current_graph_id() AS current_graph_id)) AND ( SELECT actor_writes_current_graph() AS actor_writes_current_graph))|
+public|ai_usage|current_graph_insert|PERMISSIVE|{authenticated}|INSERT||((graph_id = ( SELECT current_graph_id() AS current_graph_id)) AND ( SELECT actor_writes_current_graph() AS actor_writes_current_graph))
+public|ai_usage|current_graph_select|PERMISSIVE|{authenticated}|SELECT|((graph_id = ( SELECT current_graph_id() AS current_graph_id)) AND ( SELECT actor_reads_current_graph() AS actor_reads_current_graph))|
+public|ai_usage|current_graph_update|PERMISSIVE|{authenticated}|UPDATE|((graph_id = ( SELECT current_graph_id() AS current_graph_id)) AND ( SELECT actor_writes_current_graph() AS actor_writes_current_graph))|((graph_id = ( SELECT current_graph_id() AS current_graph_id)) AND ( SELECT actor_writes_current_graph() AS actor_writes_current_graph))
+public|aspect_definitions|delete_own|PERMISSIVE|{authenticated}|DELETE|((graph_id = ( SELECT current_graph_id() AS current_graph_id)) AND ( SELECT actor_writes_current_graph() AS actor_writes_current_graph))|
+public|aspect_definitions|read_builtin_or_own|PERMISSIVE|{authenticated}|SELECT|((graph_id IS NULL) OR ((graph_id = ( SELECT current_graph_id() AS current_graph_id)) AND ( SELECT actor_reads_current_graph() AS actor_reads_current_graph)))|
+public|aspect_definitions|update_own|PERMISSIVE|{authenticated}|UPDATE|((graph_id = ( SELECT current_graph_id() AS current_graph_id)) AND ( SELECT actor_writes_current_graph() AS actor_writes_current_graph))|((graph_id = ( SELECT current_graph_id() AS current_graph_id)) AND ( SELECT actor_writes_current_graph() AS actor_writes_current_graph))
+public|aspect_definitions|write_own|PERMISSIVE|{authenticated}|INSERT||((graph_id = ( SELECT current_graph_id() AS current_graph_id)) AND ( SELECT actor_writes_current_graph() AS actor_writes_current_graph))
+public|change_feed|current_graph_select|PERMISSIVE|{authenticated}|SELECT|((graph_id = ( SELECT current_graph_id() AS current_graph_id)) AND ( SELECT actor_reads_current_graph() AS actor_reads_current_graph))|
+public|change_feed_floor|current_graph_select|PERMISSIVE|{authenticated}|SELECT|( SELECT actor_reads_current_graph() AS actor_reads_current_graph)|
+public|chat_messages|current_graph_delete|PERMISSIVE|{authenticated}|DELETE|(( SELECT actor_writes_current_graph() AS actor_writes_current_graph) AND (EXISTS ( SELECT 1
+   FROM chat_threads t
+  WHERE ((t.id = chat_messages.thread_id) AND (t.graph_id = ( SELECT current_graph_id() AS current_graph_id))))))|
+public|chat_messages|current_graph_insert|PERMISSIVE|{authenticated}|INSERT||(( SELECT actor_writes_current_graph() AS actor_writes_current_graph) AND (EXISTS ( SELECT 1
+   FROM chat_threads t
+  WHERE ((t.id = chat_messages.thread_id) AND (t.graph_id = ( SELECT current_graph_id() AS current_graph_id))))))
+public|chat_messages|current_graph_select|PERMISSIVE|{authenticated}|SELECT|(( SELECT actor_reads_current_graph() AS actor_reads_current_graph) AND (EXISTS ( SELECT 1
+   FROM chat_threads t
+  WHERE ((t.id = chat_messages.thread_id) AND (t.graph_id = ( SELECT current_graph_id() AS current_graph_id))))))|
+public|chat_messages|current_graph_update|PERMISSIVE|{authenticated}|UPDATE|(( SELECT actor_writes_current_graph() AS actor_writes_current_graph) AND (EXISTS ( SELECT 1
+   FROM chat_threads t
+  WHERE ((t.id = chat_messages.thread_id) AND (t.graph_id = ( SELECT current_graph_id() AS current_graph_id))))))|(( SELECT actor_writes_current_graph() AS actor_writes_current_graph) AND (EXISTS ( SELECT 1
+   FROM chat_threads t
+  WHERE ((t.id = chat_messages.thread_id) AND (t.graph_id = ( SELECT current_graph_id() AS current_graph_id))))))
+public|chat_threads|current_graph_delete|PERMISSIVE|{authenticated}|DELETE|((graph_id = ( SELECT current_graph_id() AS current_graph_id)) AND ( SELECT actor_writes_current_graph() AS actor_writes_current_graph))|
+public|chat_threads|current_graph_insert|PERMISSIVE|{authenticated}|INSERT||((graph_id = ( SELECT current_graph_id() AS current_graph_id)) AND ( SELECT actor_writes_current_graph() AS actor_writes_current_graph) AND ((entity_id IS NULL) OR (EXISTS ( SELECT 1
+   FROM entities e
+  WHERE ((e.id = chat_threads.entity_id) AND (e.graph_id = chat_threads.graph_id))))))
+public|chat_threads|current_graph_select|PERMISSIVE|{authenticated}|SELECT|((graph_id = ( SELECT current_graph_id() AS current_graph_id)) AND ( SELECT actor_reads_current_graph() AS actor_reads_current_graph))|
+public|chat_threads|current_graph_update|PERMISSIVE|{authenticated}|UPDATE|((graph_id = ( SELECT current_graph_id() AS current_graph_id)) AND ( SELECT actor_writes_current_graph() AS actor_writes_current_graph))|((graph_id = ( SELECT current_graph_id() AS current_graph_id)) AND ( SELECT actor_writes_current_graph() AS actor_writes_current_graph) AND ((entity_id IS NULL) OR (EXISTS ( SELECT 1
+   FROM entities e
+  WHERE ((e.id = chat_threads.entity_id) AND (e.graph_id = chat_threads.graph_id))))))
+public|contract_definitions|delete_own|PERMISSIVE|{authenticated}|DELETE|((graph_id = ( SELECT current_graph_id() AS current_graph_id)) AND ( SELECT actor_writes_current_graph() AS actor_writes_current_graph))|
+public|contract_definitions|read_builtin_or_own|PERMISSIVE|{authenticated}|SELECT|((graph_id IS NULL) OR ((graph_id = ( SELECT current_graph_id() AS current_graph_id)) AND ( SELECT actor_reads_current_graph() AS actor_reads_current_graph)))|
+public|contract_definitions|update_own|PERMISSIVE|{authenticated}|UPDATE|((graph_id = ( SELECT current_graph_id() AS current_graph_id)) AND ( SELECT actor_writes_current_graph() AS actor_writes_current_graph))|((graph_id = ( SELECT current_graph_id() AS current_graph_id)) AND ( SELECT actor_writes_current_graph() AS actor_writes_current_graph))
+public|contract_definitions|write_own|PERMISSIVE|{authenticated}|INSERT||((graph_id = ( SELECT current_graph_id() AS current_graph_id)) AND ( SELECT actor_writes_current_graph() AS actor_writes_current_graph))
+public|entities|current_graph_delete|PERMISSIVE|{authenticated}|DELETE|((graph_id = ( SELECT current_graph_id() AS current_graph_id)) AND ( SELECT actor_writes_current_graph() AS actor_writes_current_graph))|
+public|entities|current_graph_insert|PERMISSIVE|{authenticated}|INSERT||((graph_id = ( SELECT current_graph_id() AS current_graph_id)) AND ( SELECT actor_writes_current_graph() AS actor_writes_current_graph))
+public|entities|current_graph_select|PERMISSIVE|{authenticated}|SELECT|((graph_id = ( SELECT current_graph_id() AS current_graph_id)) AND ( SELECT actor_reads_current_graph() AS actor_reads_current_graph))|
+public|entities|current_graph_update|PERMISSIVE|{authenticated}|UPDATE|((graph_id = ( SELECT current_graph_id() AS current_graph_id)) AND ( SELECT actor_writes_current_graph() AS actor_writes_current_graph))|((graph_id = ( SELECT current_graph_id() AS current_graph_id)) AND ( SELECT actor_writes_current_graph() AS actor_writes_current_graph))
+public|entity_origins|current_graph_delete|PERMISSIVE|{authenticated}|DELETE|((graph_id = ( SELECT current_graph_id() AS current_graph_id)) AND ( SELECT actor_writes_current_graph() AS actor_writes_current_graph))|
+public|entity_origins|current_graph_insert|PERMISSIVE|{authenticated}|INSERT||((graph_id = ( SELECT current_graph_id() AS current_graph_id)) AND ( SELECT actor_writes_current_graph() AS actor_writes_current_graph) AND (EXISTS ( SELECT 1
+   FROM entities e
+  WHERE ((e.id = entity_origins.entity_id) AND (e.graph_id = entity_origins.graph_id)))))
+public|entity_origins|current_graph_select|PERMISSIVE|{authenticated}|SELECT|((graph_id = ( SELECT current_graph_id() AS current_graph_id)) AND ( SELECT actor_reads_current_graph() AS actor_reads_current_graph))|
+public|entity_origins|current_graph_update|PERMISSIVE|{authenticated}|UPDATE|((graph_id = ( SELECT current_graph_id() AS current_graph_id)) AND ( SELECT actor_writes_current_graph() AS actor_writes_current_graph))|((graph_id = ( SELECT current_graph_id() AS current_graph_id)) AND ( SELECT actor_writes_current_graph() AS actor_writes_current_graph) AND (EXISTS ( SELECT 1
+   FROM entities e
+  WHERE ((e.id = entity_origins.entity_id) AND (e.graph_id = entity_origins.graph_id)))))
+public|entity_versions|current_graph_delete|PERMISSIVE|{authenticated}|DELETE|((graph_id = ( SELECT current_graph_id() AS current_graph_id)) AND ( SELECT actor_writes_current_graph() AS actor_writes_current_graph))|
+public|entity_versions|current_graph_insert|PERMISSIVE|{authenticated}|INSERT||((graph_id = ( SELECT current_graph_id() AS current_graph_id)) AND ( SELECT actor_writes_current_graph() AS actor_writes_current_graph) AND (EXISTS ( SELECT 1
+   FROM entities e
+  WHERE ((e.id = entity_versions.entity_id) AND (e.graph_id = entity_versions.graph_id)))))
+public|entity_versions|current_graph_select|PERMISSIVE|{authenticated}|SELECT|((graph_id = ( SELECT current_graph_id() AS current_graph_id)) AND ( SELECT actor_reads_current_graph() AS actor_reads_current_graph))|
+public|entity_versions|current_graph_update|PERMISSIVE|{authenticated}|UPDATE|((graph_id = ( SELECT current_graph_id() AS current_graph_id)) AND ( SELECT actor_writes_current_graph() AS actor_writes_current_graph))|((graph_id = ( SELECT current_graph_id() AS current_graph_id)) AND ( SELECT actor_writes_current_graph() AS actor_writes_current_graph) AND (EXISTS ( SELECT 1
+   FROM entities e
+  WHERE ((e.id = entity_versions.entity_id) AND (e.graph_id = entity_versions.graph_id)))))
+public|envelope_spent_cache|current_graph_delete|PERMISSIVE|{authenticated}|DELETE|((graph_id = ( SELECT current_graph_id() AS current_graph_id)) AND ( SELECT actor_writes_current_graph() AS actor_writes_current_graph))|
+public|envelope_spent_cache|current_graph_insert|PERMISSIVE|{authenticated}|INSERT||((graph_id = ( SELECT current_graph_id() AS current_graph_id)) AND ( SELECT actor_writes_current_graph() AS actor_writes_current_graph) AND (EXISTS ( SELECT 1
+   FROM entities e
+  WHERE ((e.id = envelope_spent_cache.envelope_id) AND (e.graph_id = envelope_spent_cache.graph_id)))))
+public|envelope_spent_cache|current_graph_select|PERMISSIVE|{authenticated}|SELECT|((graph_id = ( SELECT current_graph_id() AS current_graph_id)) AND ( SELECT actor_reads_current_graph() AS actor_reads_current_graph))|
+public|envelope_spent_cache|current_graph_update|PERMISSIVE|{authenticated}|UPDATE|((graph_id = ( SELECT current_graph_id() AS current_graph_id)) AND ( SELECT actor_writes_current_graph() AS actor_writes_current_graph))|((graph_id = ( SELECT current_graph_id() AS current_graph_id)) AND ( SELECT actor_writes_current_graph() AS actor_writes_current_graph) AND (EXISTS ( SELECT 1
+   FROM entities e
+  WHERE ((e.id = envelope_spent_cache.envelope_id) AND (e.graph_id = envelope_spent_cache.graph_id)))))
+public|graph_members|account_owns_personal_graph|PERMISSIVE|{authenticated}|INSERT||((graph_id = ( SELECT uid() AS uid)) AND (account_id = ( SELECT uid() AS uid)) AND (grant_kind = 'owner'::text) AND (issued_by = ( SELECT uid() AS uid)) AND (revoked_at IS NULL))
+public|graph_members|account_reads_own_membership|PERMISSIVE|{authenticated}|SELECT|(account_id = ( SELECT uid() AS uid))|
+public|graph_members|scheduler_reads_members|PERMISSIVE|{orbis_app}|SELECT|true|
+public|graphs|member_reads_graph|PERMISSIVE|{authenticated}|SELECT|(EXISTS ( SELECT 1
+   FROM graph_members m
+  WHERE ((m.graph_id = graphs.id) AND (m.account_id = ( SELECT uid() AS uid)) AND (m.revoked_at IS NULL))))|
+public|graphs|person_creates_own_graph|PERMISSIVE|{authenticated}|INSERT||((owner_kind = 'person'::text) AND (id = ( SELECT uid() AS uid)) AND (owner_ref = ( SELECT uid() AS uid)))
+public|oauth_clients|server_manages_clients|PERMISSIVE|{orbis_app}|ALL|true|true
+public|perf_samples|own_account_insert|PERMISSIVE|{authenticated}|INSERT||(account_id = ( SELECT uid() AS uid))
+public|perf_samples|own_account_select|PERMISSIVE|{authenticated}|SELECT|(account_id = ( SELECT uid() AS uid))|
+public|property_definitions|delete_own|PERMISSIVE|{authenticated}|DELETE|((graph_id = ( SELECT current_graph_id() AS current_graph_id)) AND ( SELECT actor_writes_current_graph() AS actor_writes_current_graph))|
+public|property_definitions|read_builtin_or_own|PERMISSIVE|{authenticated}|SELECT|((graph_id IS NULL) OR ((graph_id = ( SELECT current_graph_id() AS current_graph_id)) AND ( SELECT actor_reads_current_graph() AS actor_reads_current_graph)))|
+public|property_definitions|update_own|PERMISSIVE|{authenticated}|UPDATE|((graph_id = ( SELECT current_graph_id() AS current_graph_id)) AND ( SELECT actor_writes_current_graph() AS actor_writes_current_graph))|((graph_id = ( SELECT current_graph_id() AS current_graph_id)) AND ( SELECT actor_writes_current_graph() AS actor_writes_current_graph))
+public|property_definitions|write_own|PERMISSIVE|{authenticated}|INSERT||((graph_id = ( SELECT current_graph_id() AS current_graph_id)) AND ( SELECT actor_writes_current_graph() AS actor_writes_current_graph))
+public|registry_deltas|current_graph_delete|PERMISSIVE|{authenticated}|DELETE|((graph_id = ( SELECT current_graph_id() AS current_graph_id)) AND ( SELECT actor_writes_current_graph() AS actor_writes_current_graph))|
+public|registry_deltas|current_graph_insert|PERMISSIVE|{authenticated}|INSERT||((graph_id = ( SELECT current_graph_id() AS current_graph_id)) AND ( SELECT actor_writes_current_graph() AS actor_writes_current_graph))
+public|registry_deltas|current_graph_select|PERMISSIVE|{authenticated}|SELECT|((graph_id = ( SELECT current_graph_id() AS current_graph_id)) AND ( SELECT actor_reads_current_graph() AS actor_reads_current_graph))|
+public|registry_deltas|current_graph_update|PERMISSIVE|{authenticated}|UPDATE|((graph_id = ( SELECT current_graph_id() AS current_graph_id)) AND ( SELECT actor_writes_current_graph() AS actor_writes_current_graph))|((graph_id = ( SELECT current_graph_id() AS current_graph_id)) AND ( SELECT actor_writes_current_graph() AS actor_writes_current_graph))
+public|registry_system|read_all|PERMISSIVE|{public}|SELECT|true|
+public|relation_role_definitions|delete_own|PERMISSIVE|{authenticated}|DELETE|((graph_id = ( SELECT current_graph_id() AS current_graph_id)) AND ( SELECT actor_writes_current_graph() AS actor_writes_current_graph))|
+public|relation_role_definitions|read_builtin_or_own|PERMISSIVE|{authenticated}|SELECT|((graph_id IS NULL) OR ((graph_id = ( SELECT current_graph_id() AS current_graph_id)) AND ( SELECT actor_reads_current_graph() AS actor_reads_current_graph)))|
+public|relation_role_definitions|update_own|PERMISSIVE|{authenticated}|UPDATE|((graph_id = ( SELECT current_graph_id() AS current_graph_id)) AND ( SELECT actor_writes_current_graph() AS actor_writes_current_graph))|((graph_id = ( SELECT current_graph_id() AS current_graph_id)) AND ( SELECT actor_writes_current_graph() AS actor_writes_current_graph))
+public|relation_role_definitions|write_own|PERMISSIVE|{authenticated}|INSERT||((graph_id = ( SELECT current_graph_id() AS current_graph_id)) AND ( SELECT actor_writes_current_graph() AS actor_writes_current_graph))
+public|relations|current_graph_delete|PERMISSIVE|{authenticated}|DELETE|(( SELECT actor_writes_current_graph() AS actor_writes_current_graph) AND (EXISTS ( SELECT 1
+   FROM entities e
+  WHERE ((e.id = relations.source_id) AND (e.graph_id = ( SELECT current_graph_id() AS current_graph_id))))) AND (EXISTS ( SELECT 1
+   FROM entities e
+  WHERE ((e.id = relations.target_id) AND (e.graph_id = ( SELECT current_graph_id() AS current_graph_id))))))|
+public|relations|current_graph_insert|PERMISSIVE|{authenticated}|INSERT||(( SELECT actor_writes_current_graph() AS actor_writes_current_graph) AND (EXISTS ( SELECT 1
+   FROM entities e
+  WHERE ((e.id = relations.source_id) AND (e.graph_id = ( SELECT current_graph_id() AS current_graph_id))))) AND (EXISTS ( SELECT 1
+   FROM entities e
+  WHERE ((e.id = relations.target_id) AND (e.graph_id = ( SELECT current_graph_id() AS current_graph_id))))))
+public|relations|current_graph_select|PERMISSIVE|{authenticated}|SELECT|(( SELECT actor_reads_current_graph() AS actor_reads_current_graph) AND (EXISTS ( SELECT 1
+   FROM entities e
+  WHERE ((e.id = relations.source_id) AND (e.graph_id = ( SELECT current_graph_id() AS current_graph_id))))) AND (EXISTS ( SELECT 1
+   FROM entities e
+  WHERE ((e.id = relations.target_id) AND (e.graph_id = ( SELECT current_graph_id() AS current_graph_id))))))|
+public|relations|current_graph_update|PERMISSIVE|{authenticated}|UPDATE|(( SELECT actor_writes_current_graph() AS actor_writes_current_graph) AND (EXISTS ( SELECT 1
+   FROM entities e
+  WHERE ((e.id = relations.source_id) AND (e.graph_id = ( SELECT current_graph_id() AS current_graph_id))))) AND (EXISTS ( SELECT 1
+   FROM entities e
+  WHERE ((e.id = relations.target_id) AND (e.graph_id = ( SELECT current_graph_id() AS current_graph_id))))))|(( SELECT actor_writes_current_graph() AS actor_writes_current_graph) AND (EXISTS ( SELECT 1
+   FROM entities e
+  WHERE ((e.id = relations.source_id) AND (e.graph_id = ( SELECT current_graph_id() AS current_graph_id))))) AND (EXISTS ( SELECT 1
+   FROM entities e
+  WHERE ((e.id = relations.target_id) AND (e.graph_id = ( SELECT current_graph_id() AS current_graph_id))))))
+public|subscription_definitions|delete_own|PERMISSIVE|{authenticated}|DELETE|((graph_id = ( SELECT current_graph_id() AS current_graph_id)) AND ( SELECT actor_writes_current_graph() AS actor_writes_current_graph))|
+public|subscription_definitions|read_builtin_or_own|PERMISSIVE|{authenticated}|SELECT|((graph_id IS NULL) OR ((graph_id = ( SELECT current_graph_id() AS current_graph_id)) AND ( SELECT actor_reads_current_graph() AS actor_reads_current_graph)))|
+public|subscription_definitions|update_own|PERMISSIVE|{authenticated}|UPDATE|((graph_id = ( SELECT current_graph_id() AS current_graph_id)) AND ( SELECT actor_writes_current_graph() AS actor_writes_current_graph))|((graph_id = ( SELECT current_graph_id() AS current_graph_id)) AND ( SELECT actor_writes_current_graph() AS actor_writes_current_graph))
+public|subscription_definitions|write_own|PERMISSIVE|{authenticated}|INSERT||((graph_id = ( SELECT current_graph_id() AS current_graph_id)) AND ( SELECT actor_writes_current_graph() AS actor_writes_current_graph))
+public|user_settings|current_graph_delete|PERMISSIVE|{authenticated}|DELETE|((graph_id = ( SELECT current_graph_id() AS current_graph_id)) AND ( SELECT actor_writes_current_graph() AS actor_writes_current_graph))|
+public|user_settings|current_graph_insert|PERMISSIVE|{authenticated}|INSERT||((graph_id = ( SELECT current_graph_id() AS current_graph_id)) AND ( SELECT actor_writes_current_graph() AS actor_writes_current_graph))
+public|user_settings|current_graph_select|PERMISSIVE|{authenticated}|SELECT|((graph_id = ( SELECT current_graph_id() AS current_graph_id)) AND ( SELECT actor_reads_current_graph() AS actor_reads_current_graph))|
+public|user_settings|current_graph_update|PERMISSIVE|{authenticated}|UPDATE|((graph_id = ( SELECT current_graph_id() AS current_graph_id)) AND ( SELECT actor_writes_current_graph() AS actor_writes_current_graph))|((graph_id = ( SELECT current_graph_id() AS current_graph_id)) AND ( SELECT actor_writes_current_graph() AS actor_writes_current_graph))
+public|user_settings|scheduler_reads_owner_list|PERMISSIVE|{orbis_app}|SELECT|true|
+pg_cron|1.6.4
+pg_stat_statements|1.11
+pgcrypto|1.3
+plpgsql|1.0
+supabase_vault|0.3.1
+uuid-ossp|1.1
+pg_cron|postgres|UTC
+2|orbis_change_feed_cleanup|27 3 * * *|postgres|supabase_admin|t|44eef3fd87b85bcb91673ffd42313d08
+1|orbis_perf_samples_cleanup|17 3 * * *|postgres|supabase_admin|t|e3e6e9ebd7f86a044de232703e6d5264
+5250
+84|1131|5252
+5253

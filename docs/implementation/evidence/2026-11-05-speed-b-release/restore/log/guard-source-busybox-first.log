@@ -1,0 +1,10 @@
+sha256sum: unrecognized option: check
+BusyBox v1.37.0 (2025-12-16 14:19:28 UTC) multi-call binary.
+
+Usage: sha256sum [-c[sw]] [FILE]...
+
+Print or check SHA256 checksums
+
+	-c	Check sums against list in FILEs
+	-s	Don't output anything, status code shows success
+	-w	Warn about improperly formatted checksum lines

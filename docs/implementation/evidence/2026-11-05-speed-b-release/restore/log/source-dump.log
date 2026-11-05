@@ -1,0 +1,3 @@
+source identity and Unix socket verified
+OK: дамп содержит таблицу 'entities' (3660 строк)
+dump: /tmp/orbis-b-restore-cli.LmnPNm/orbis-backup-source.sql

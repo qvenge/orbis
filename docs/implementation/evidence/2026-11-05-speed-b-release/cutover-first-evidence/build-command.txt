@@ -1,0 +1,1 @@
+b5 exact git archive, env -i PATH=<local> VITE_SUPABASE_URL=http://localhost:54321 VITE_SUPABASE_ANON_KEY=anon bun run --cwd apps/web build

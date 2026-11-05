@@ -1,0 +1,228 @@
+--- old/safari-server.ts
++++ recheck/safari-server.ts
+@@ -10,13 +10,17 @@
+ import { identityOfPerson, parseAccountId } from '../../../../apps/server/src/identity';
+ import { appRouter } from '../../../../apps/server/src/router';
+ 
+-const expectedSource = '356a610f5ae92efe429bdb6891c5bde6f9c09e9f';
+-const expectedManifest = '15144519575777a82e0e75728de0a1bd4f3c02eb0c1ca41fdce746635b03b4ea';
++const pins = JSON.parse(readFileSync(new URL('./reviewed-pins.json', import.meta.url), 'utf8'));
++const expectedSource = pins.sourceSha;
++const expectedManifest = pins.artifactManifestSha256;
+ const digest = (bytes: Uint8Array | string) => createHash('sha256').update(bytes).digest('hex');
+ function must(condition: unknown, label: string): asserts condition {
+   if (!condition) throw new Error(label);
+ }
+ 
++must(typeof expectedSource === 'string' && /^[0-9a-f]{40}$/.test(expectedSource), 'Reviewed source pin required');
++must(typeof expectedManifest === 'string' && /^[0-9a-f]{64}$/.test(expectedManifest), 'Reviewed artifact pin required');
++must(Number.isInteger(pins.artifactFileCount) && pins.artifactFileCount > 0, 'Reviewed artifact count required');
+ const cwd = realpathSync(process.cwd());
+ must(cwd.startsWith('/private/tmp/'), 'Run in the accepted isolated local clone');
+ const source = Bun.spawnSync(['git', 'rev-parse', 'HEAD'], { cwd });
+@@ -45,7 +49,7 @@
+ const manifest = readFileSync(manifestPath);
+ must(digest(manifest) === expectedManifest, 'Unexpected accepted 356 build manifest');
+ const entries = manifest.toString().trim().split('\n');
+-must(entries.length === 130, 'Unexpected accepted artifact file count');
++must(entries.length === pins.artifactFileCount, 'Unexpected accepted artifact file count');
+ for (const entry of entries) {
+   const match = /^([0-9a-f]{64})  (.+)$/.exec(entry);
+   must(match && !match[2].startsWith('/') && !match[2].split('/').includes('..'), 'Invalid manifest entry');
+--- old/strict-ack-client.py
++++ recheck/strict-ack-client.py
+@@ -11,8 +11,6 @@
+ from uuid import UUID, uuid4
+ 
+ DRIVER = "http://127.0.0.1:55371"
+-SOURCE = "356a610f5ae92efe429bdb6891c5bde6f9c09e9f"
+-MANIFEST = "15144519575777a82e0e75728de0a1bd4f3c02eb0c1ca41fdce746635b03b4ea"
+ SCRIPTS = {
+     "prepare-editor.js": "8b65b02a103ce7538cea4a1ca8d9b74996bfee809d5534445ba74de0d121a39c",
+     "storage-snapshot.js": "1e06c5ed18b98e43bf5d13e534c385e5a636eecae84810d552f5e493ec0c71cd",
+@@ -24,6 +22,11 @@
+ def main():
+     if len(sys.argv) != 3 or not re.fullmatch(r"[A-Za-z0-9-]{1,128}", sys.argv[1]):
+         raise ValueError("Supply only the root-owned session ID and fixture.json path")
++    pins = json.loads((Path(__file__).resolve().parent / "reviewed-pins.json").read_text())
++    SOURCE, MANIFEST = pins["sourceSha"], pins["artifactManifestSha256"]
++    if (not re.fullmatch(r"[0-9a-f]{40}", SOURCE) or not re.fullmatch(r"[0-9a-f]{64}", MANIFEST) or
++            not isinstance(pins.get("artifactFileCount"), int) or pins["artifactFileCount"] < 1):
++        raise ValueError("Reviewed source, artifact and file-count pins are required")
+     session_id = sys.argv[1]
+     descriptor_path = Path(sys.argv[2]).resolve(strict=True)
+     if not str(descriptor_path).startswith("/private/tmp/orbis-safari-functional.") or descriptor_path.name != "fixture.json":
+--- old/recovery-client.py
++++ recheck/recovery-client.py
+@@ -11,9 +11,8 @@
+ from uuid import UUID, uuid4
+ 
+ DRIVER = "http://127.0.0.1:55371"
+-SOURCE = "356a610f5ae92efe429bdb6891c5bde6f9c09e9f"
+-MANIFEST = "15144519575777a82e0e75728de0a1bd4f3c02eb0c1ca41fdce746635b03b4ea"
+ SCRIPTS = {
++    "recovery-observation.js": "e97ea7c0bb36f04b86ea8ef65845218e1691467becc709a688ff255a89dccfd6",
+     "prepare-editor.js": "8b65b02a103ce7538cea4a1ca8d9b74996bfee809d5534445ba74de0d121a39c",
+     "storage-snapshot.js": "1e06c5ed18b98e43bf5d13e534c385e5a636eecae84810d552f5e493ec0c71cd",
+     "read-server-body.js": "862d330e9148a44256955716baf656ac95664dc773677dd9ec4b5e34bf653613",
+@@ -24,6 +23,11 @@
+ def main():
+     if len(sys.argv) != 3 or not re.fullmatch(r"[A-Za-z0-9-]{1,128}", sys.argv[1]):
+         raise ValueError("Supply only the root-owned session ID and fixture.json path")
++    pins = json.loads((Path(__file__).resolve().parent / "reviewed-pins.json").read_text())
++    SOURCE, MANIFEST = pins["sourceSha"], pins["artifactManifestSha256"]
++    if (not re.fullmatch(r"[0-9a-f]{40}", SOURCE) or not re.fullmatch(r"[0-9a-f]{64}", MANIFEST) or
++            not isinstance(pins.get("artifactFileCount"), int) or pins["artifactFileCount"] < 1):
++        raise ValueError("Reviewed source, artifact and file-count pins are required")
+     session_id = sys.argv[1]
+     descriptor_path = Path(sys.argv[2]).resolve(strict=True)
+     if not str(descriptor_path).startswith("/private/tmp/orbis-safari-functional.") or descriptor_path.name != "fixture.json":
+@@ -132,6 +136,38 @@
+                 raise TimeoutError(label)
+             time.sleep(0.1)
+ 
++    def capture_outcome_observations():
++        # One read per endpoint, with a separate short observation timeout.
++        # This cannot resume or prolong the failed action/polling deadline.
++        errors = []
++        def read_once(name, path, payload=None, method="POST", fixture=False):
++            target = descriptor["stateURL"] if fixture else DRIVER + "/session/" + session_id + "/" + path
++            request_body = None if payload is None else json.dumps(payload).encode()
++            request = Request(target, data=request_body, method=method,
++                              headers={"Content-Type": "application/json"} if request_body else {})
++            try:
++                with opener.open(request, timeout=2) as response:
++                    value = json.loads(response.read())
++                save("outcome-" + name + ".json", value)
++                if isinstance(value.get("value"), dict) and value["value"].get("error"):
++                    errors.append({"read": name, "error": value["value"]["error"]})
++                return value
++            except Exception as error:
++                errors.append({"read": name, "error": str(error)})
++                return None
++        current = read_once("url", "url", method="GET")
++        if current and current.get("value") == descriptor["recordURL"]:
++            read_once("input-events", "execute/sync", {
++                "script": scripts["recovery-observation.js"], "args": [origin, record, "read-stop"],
++            })
++            read_once("storage", "execute/async", {
++                "script": scripts["storage-snapshot.js"], "args": [origin, owner, record],
++            })
++        else:
++            errors.append({"read": "browser", "error": "Exact record URL could not be verified"})
++        read_once("server", "", method="GET", fixture=True)
++        save("outcome-observation-status.json", {"errors": errors})
++
+     def begin(label):
+         nonlocal stage, deadline
+         if descriptor["expiresAt"] - time.time() < 120:
+@@ -296,6 +332,13 @@
+         save("recovery-before-choice.json", offered)
+ 
+         begin("explicit-supported-recovery")
++        own_page()
++        observation = driver("execute/sync", {
++            "script": scripts["recovery-observation.js"], "args": [origin, record, "install"],
++        })
++        if not observation.get("installed") or observation.get("origin") != origin:
++            raise ValueError("Passive recovery observer was not installed")
++        save("before-recovery-click.json", observation)
+         button = driver("element", {"using": "xpath",
+             "value": "//*[@data-testid='draft-banner']//button[normalize-space(.)='Оставить моё']"})
+         recovery_boundary = len(before_choice["events"])
+@@ -325,11 +368,13 @@
+             "recoveryRevision": receipt["bodyRevision"], "receiptSha256": receipt["sha256"],
+             "noAutomaticPostBeforeChoice": True, "evidence": str(out),
+         }
++        capture_outcome_observations()
+         save("result.json", outcome)
+         print(json.dumps(outcome))
+     except Exception as error:
+         outcome = {"ok": False, "stage": stage, "error": str(error), "evidence": str(out),
+                    "instruction": "Inspect actual server/browser state. Client does not revert controls on failure."}
++        capture_outcome_observations()
+         save("result.json", outcome)
+         print(json.dumps(outcome))
+         return 1
+--- old/recovery-observation.js
++++ recheck/recovery-observation.js
+@@ -0,0 +1,71 @@
++const expectedOrigin = arguments[0];
++const record = arguments[1];
++const mode = arguments[2];
++if (location.origin !== expectedOrigin || location.pathname !== '/r/' + record)
++  throw Error('Unrelated origin or record');
++const key = '__orbisSafariRecoveryObservation';
++function describe(element) {
++  if (!(element instanceof Element)) return null;
++  return {
++    tag: element.tagName,
++    id: element.id,
++    testId: element.getAttribute('data-testid'),
++    role: element.getAttribute('role'),
++    text: (element.textContent ?? '').trim().slice(0, 160),
++  };
++}
++function current() {
++  return {
++    origin: location.origin,
++    visibility: document.visibilityState,
++    focused: document.hasFocus(),
++    active: describe(document.activeElement),
++    buttons: [...document.querySelectorAll('[data-testid="draft-banner"] button')].map((button) => {
++      const rect = button.getBoundingClientRect();
++      return { ...describe(button), disabled: button.disabled,
++        rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height } };
++    }),
++  };
++}
++if (mode === 'install') {
++  if (Object.hasOwn(window, key)) throw Error('Observer already installed');
++  const events = [];
++  const types = ['pointerdown', 'pointerup', 'mousedown', 'mouseup', 'click'];
++  const listen = (event) => {
++    events.push({
++      type: event.type,
++      isTrusted: event.isTrusted,
++      target: describe(event.target),
++      path: event.composedPath().filter((node) => node instanceof Element).slice(0, 4).map(describe),
++      visibility: document.visibilityState,
++      focused: document.hasFocus(),
++      active: describe(document.activeElement),
++      timeStamp: event.timeStamp,
++      now: performance.now(),
++      button: event.button,
++      buttons: event.buttons,
++      detail: event.detail,
++      pointerType: event.pointerType ?? null,
++      defaultPreventedAtCapture: event.defaultPrevented,
++    });
++  };
++  for (const type of types) document.addEventListener(type, listen, { capture: true, passive: true });
++  Object.defineProperty(window, key, {
++    configurable: true,
++    value: {
++      read: () => ({ ...current(), events: events.slice() }),
++      stop: () => {
++        for (const type of types) document.removeEventListener(type, listen, true);
++        delete window[key];
++      },
++    },
++  });
++  return { installed: true, ...current() };
++}
++if (mode === 'read-stop') {
++  const observation = window[key];
++  const result = observation ? observation.read() : { ...current(), installed: false, events: [] };
++  observation?.stop();
++  return result;
++}
++throw Error('Unsupported observation operation');
+--- old/reviewed-pins.json
++++ recheck/reviewed-pins.json
+@@ -0,0 +1,5 @@
++{
++  "sourceSha": "c7ccb9dd1f4cc1f68d43255ecf313768ebc2b315",
++  "artifactManifestSha256": "7d996259945a80820e0dcc77d986a2087b21aabbe74f32cc5c863468892d81ab",
++  "artifactFileCount": 130
++}

@@ -1,0 +1,10 @@
+{
+  "status": "source-only prepared; no runtime grant",
+  "packet": "558f00e5c05ac885d860f9670a4a1cb4b4486742b8fb2917677234df1ac4f2a7",
+  "control": "aa7a51b8a4634b93a2a1124e0469a44abcec4e35c2621f24a4e08a7f565fdcc5",
+  "watchdog": "b2b469aec3fc97304728d15ced49e04cbea366130c59f1268e6262a5f6841e3a",
+  "controlVsReviewedObserver": "0e14ef168b51751241c33cb52f46ca6b3621b0d0dbeb1d044be160b5b2691c1f",
+  "watchdogVsReviewedBenign": "400b3b22d3134bbfe01cd4a6854f3926fb01130ebdcc6754adafb983ef7768c4",
+  "scope": "one benign90s+20s control; fresh profile; exactly two sequential18s public-pipe launches, first allPIDgone before second; about:blank only, no App/Auth/DB; bothstderr DEBUG=pw:browser; exact profile/PID+start guarded cleanup",
+  "p2Report": "ca761e9a50159cba62bb47b4dd0cf72cd71ef44aae34749056ce40317db6ca32"
+}

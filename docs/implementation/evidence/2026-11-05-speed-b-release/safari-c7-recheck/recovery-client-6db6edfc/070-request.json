@@ -1,0 +1,7 @@
+{
+  "url": "[REDACTED_CONTROLURL]",
+  "method": "POST",
+  "body": {
+    "foreignBody": "Safari confirmed server C 52475d31be56"
+  }
+}

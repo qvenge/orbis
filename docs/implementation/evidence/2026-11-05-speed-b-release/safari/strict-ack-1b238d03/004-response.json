@@ -1,0 +1,30 @@
+{
+  "status": 200,
+  "value": {
+    "value": {
+      "origin": "http://127.0.0.1:51083",
+      "source": "own-origin entity.get body and bodyDoc",
+      "status": 200,
+      "bodyDoc": {
+        "v": 3,
+        "doc": {
+          "type": "doc",
+          "content": [
+            {
+              "type": "paragraph",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "Safari local initial body"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "bodyRevision": 1,
+      "recordId": "01a1aa5c-0958-71d0-bcfa-316c65a44ba4",
+      "body": "Safari local initial body"
+    }
+  }
+}

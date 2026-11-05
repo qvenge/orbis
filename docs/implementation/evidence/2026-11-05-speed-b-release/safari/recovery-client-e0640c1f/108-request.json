@@ -1,0 +1,8 @@
+{
+  "url": "http://127.0.0.1:55371/session/D0B84A60-2818-41BC-893D-885C8FA4B937/element",
+  "method": "POST",
+  "body": {
+    "using": "xpath",
+    "value": "//*[@data-testid='draft-banner']//button[normalize-space(.)='Оставить моё']"
+  }
+}

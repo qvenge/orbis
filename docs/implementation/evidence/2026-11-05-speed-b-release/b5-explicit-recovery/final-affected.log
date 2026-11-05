@@ -1,0 +1,10 @@
+$ vitest run src/features/entity-detail/recovery-basis.test.tsx src/features/entity-detail/freshness-reset.test.tsx src/lib/freshness/runtime.test.ts src/lib/freshness/wiring.test.tsx src/features/entity-editor/save.test.tsx src/features/entity-editor/draft.test.tsx --maxWorkers "1"
+
+ RUN  v4.1.9 /private/tmp/orbis-safari-hook-repro.bZQFWv/candidate/apps/web
+
+
+ Test Files  6 passed (6)
+      Tests  216 passed (216)
+   Start at  15:35:51
+   Duration  23.68s (transform 2.33s, setup 880ms, import 6.43s, tests 8.67s, environment 5.97s)
+

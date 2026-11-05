@@ -1,0 +1,11 @@
+# Проверка второго этапа и узкой дельты cutover роли
+
+**Фактические предпосылки локального rollback-control и rebase подтверждены.** Отчёт `3314d31c169ade93b56f86703fe5487b0ea6b8dfbeec30a5cb9ea8180ba49866`, второй манифест `365f2cc8c37fbe2227dab986005b59908e69fd5b99dc324780d704151e41b862`. Все 24 файла и предыдущие 73 файла совпали. [Отчёт этапа](logical-restore-phase-two-report.md).
+
+- Одобренные catalog `ada90f29…` и ACL `9e63ef54…` применены с exit 0 на выделенной цели. Дельта runner `83c1c90b…` добавляет только отдельный режим TARGET и hard-pinned один catalog digest. Guard, Unix socket и транзакция сохраняются. Сырой catalog diff показывает ровно system ID, xmin и отсутствие inert admin membership. Нормализованные 304 строки совпали. Бизнес-манифест 27 объектов/251 строка до и после ремонта одинаков `42e9c9a6…`.
+- На настоящем runtime закоммичен TX1001 с metadata ids 86/87. Точный old floor 5250 и W2 1002 подтверждают, что committed witness ниже старого порога и уже видим снимку. Fresh from1001 даёт floor/provisional. Old from5253 сначала даёт future/complete, затем from1002 снова floor/provisional. В обоих путях witness отсутствует в выдаче. Post-witness business `17409c13…` остаётся точным preimage.
+- Для следующего окна оставить проверки живого состояния в той же target-сессии. После намеренного отказа между TRUNCATE и UPDATE сначала сравнить неизменные feed/floor и бизнес-манифест. Только затем открыть согласованный rebase. Это не свидетельство уже выполненного rebase, scheduler или клиентского cutover.
+
+**Изменение cutover роли по исходникам одобрено.** Манифест `2bb0c129e8eb060b0f08d6e018663f743ac7b27bacc8df1bdd4143ad96dc1e4a`, точная дельта `802845eca3d9032e09dce72247cbc2654814b5d9a76048c51f1fc2b16ea23fa7`. Роль TCP admin изменена на `supabase_admin` в handoff и команде. Привилегии `postgres` не повышаются. Ограниченный runtime проверяет отсутствие membership в elevated ролях по существующим OID, поэтому отсутствие capture role до 0027 допустимо. Выделенные контейнеры всё ещё требуют фактического TCP preflight. [Дельта роли](cutover-runner.admin-role.diff).
+
+В ревью не запускались Docker, SQL, Chrome или тесты. Постоянные документы и правила выпуска не менялись.

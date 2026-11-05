@@ -1,0 +1,89 @@
+{
+  "actualRunnerExit": 1,
+  "actualWrapperExit": 1,
+  "watchdogTimedOut": false,
+  "remaining": [],
+  "chromeExit": {
+    "phase": "chrome-exit",
+    "identity": "17976/Thu Nov  5 16:18:12 2026",
+    "descendants": [
+      "17976/Thu Nov  5 16:18:12 2026",
+      "17995/Thu Nov  5 16:18:14 2026",
+      "17997/Thu Nov  5 16:18:14 2026",
+      "18001/Thu Nov  5 16:18:14 2026",
+      "18002/Thu Nov  5 16:18:14 2026",
+      "18008/Thu Nov  5 16:18:16 2026",
+      "18021/Thu Nov  5 16:18:17 2026",
+      "18022/Thu Nov  5 16:18:17 2026",
+      "18034/Thu Nov  5 16:18:21 2026",
+      "18043/Thu Nov  5 16:18:22 2026",
+      "18078/Thu Nov  5 16:18:35 2026",
+      "18086/Thu Nov  5 16:18:39 2026"
+    ],
+    "contextClosed": true,
+    "transport": "pipe"
+  },
+  "failure": {
+    "name": "TimeoutError",
+    "message": "TimeoutError: waitForFunction: Timeout 18000ms exceeded.",
+    "stack": "waitForFunction: Timeout 18000ms exceeded.\n    at <anonymous> (/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-runner-p-proposal/rehearsal.ts:1007:14)\n    at processTicksAndRejections (native:7:39)"
+  },
+  "lastBrowserAi": [
+    {
+      "sequence": 46,
+      "phase": "old",
+      "actor": "browser",
+      "version": "0.6.0",
+      "names": [
+        "ai.sendMessage"
+      ],
+      "bodies": [],
+      "creates": [],
+      "createPayloads": [],
+      "forwarded": true,
+      "status": 200,
+      "outcomes": [
+        {
+          "name": "ai.sendMessage",
+          "ok": true
+        }
+      ]
+    }
+  ],
+  "browserEntityCreates": [],
+  "gatedBodyPosts": [
+    {
+      "sequence": 28,
+      "phase": "old",
+      "actor": "browser",
+      "version": "0.6.0",
+      "names": [
+        "entity.update"
+      ],
+      "bodies": [
+        "e46c8b66-01a0-41f4-b1d2-104f41ef5fd2"
+      ],
+      "creates": [],
+      "createPayloads": [],
+      "forwarded": false
+    },
+    {
+      "sequence": 37,
+      "phase": "old",
+      "actor": "browser",
+      "version": "0.6.0",
+      "names": [
+        "entity.update"
+      ],
+      "bodies": [
+        "fc6ccf04-8459-42dd-83ed-d42acb4f1d28"
+      ],
+      "creates": [],
+      "createPayloads": [],
+      "forwarded": false
+    }
+  ],
+  "migrationReached": false,
+  "pointInTimeInputCheckpoints": 0,
+  "closedProfileFiles": 441
+}

@@ -1,0 +1,15 @@
+{"event":"fixture:begin","at":4322.203624}
+{"event":"fixture:render-ready","at":4323.128252}
+{"event":"entity.query:reply","at":4377.560066,"input":{"query":"aspect=orbis/supply","fields":"full"}}
+{"event":"entity.get:reply","at":4378.338576,"id":"019a0000-0000-7000-8000-000000000060"}
+{"event":"entity.query:reply","at":4378.791939,"input":{"query":"aspect=orbis/page, has=orbis/template_for","fields":"full"}}
+{"event":"entity.query:reply","at":4379.194494,"input":{"query":"aspect=orbis/app, archived=any"}}
+{"event":"category:wait","at":4386.198008}
+{"event":"registry.effective:reply","at":4545.147731}
+{"event":"entity.query:reply","at":4559.642488,"input":{"query":"aspect=orbis/page, has=orbis/template_for","fields":"full"}}
+{"event":"entity.query:reply","at":4560.164936,"input":{"query":"aspect=orbis/supply","fields":"full"}}
+{"event":"entity.query:reply","at":4606.811786,"input":{"ast":{"filter":{"aspect":"orbis/category"},"sortBy":[{"field":"orbis/title","dir":"asc"}],"limit":200}}}
+{"event":"aspect-view:import-start","at":4626.260326}
+{"event":"aspect-view:import-resolved","at":4708.56672}
+{"event":"entity.query:reply","at":4912.70487,"input":{"ast":{"filter":{"aspect":"orbis/category"},"sortBy":[{"field":"orbis/title","dir":"asc"}],"limit":200}}}
+{"event":"category:visible","at":4913.520577}

@@ -1,0 +1,6 @@
+Allowed local escalation. Workdir shared worktree. umask 077 and shell tracing off.
+Verified runner source.sha256; read N handoff SHA and asserted f547cabba24f8ed6b64ed9b70d00faa76b60226fe73862ce6c2b3d04c9e5aa1b.
+Sourced only /private/tmp/orbis-cutover-first.yhmmfo/n.private.env. Values omitted.
+ORBIS_CUTOVER_DISPOSABLE=1 bun run .superpowers/sdd/2026-11-05-speed-b-release/cutover-runner/rehearsal.ts N /private/tmp/orbis-cutover-first.yhmmfo/manifests /private/tmp/orbis-cutover-first.yhmmfo/n-run /private/tmp/orbis-cutover-first.yhmmfo/n.handoff.json f547cabba24f8ed6b64ed9b70d00faa76b60226fe73862ce6c2b3d04c9e5aa1b
+stdout -> n.trace.jsonl, stderr -> n.runner.stderr
+One actual attempt only. The wrapper tried to capture exit in zsh read-only variable status.

@@ -1,0 +1,2 @@
+psql:assert-target.sql:13: ERROR:  wrong restore target: expected locked local database, role and system id
+CONTEXT:  PL/pgSQL function inline_code_block line 2 at RAISE

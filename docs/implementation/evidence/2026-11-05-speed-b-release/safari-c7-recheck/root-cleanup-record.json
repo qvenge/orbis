@@ -1,0 +1,34 @@
+{
+  "source": "Root filesystem-only packaging handoff after owned cleanup",
+  "runtime": "c7ccb9dd1f4cc1f68d43255ecf313768ebc2b315",
+  "driver": {
+    "port": 55371,
+    "delete_session": "timed out",
+    "owned_exec_session": 4017,
+    "termination": "root Ctrl-C",
+    "exec_exit": 0,
+    "listener_absent": true
+  },
+  "fixture_server": {
+    "pid": 14445,
+    "port": 61071,
+    "first_generic_attempt": "approval deadline, signal not sent",
+    "default_attempt": "permission failure, signal not sent",
+    "final_narrow_sigterm_exit": 0,
+    "pid_absent": true,
+    "listener_absent": true,
+    "owned_exec_session": 91180,
+    "launcher_exit": null,
+    "launcher_exit_reason": "exec session result unavailable; no launcher exit claimed"
+  },
+  "native_cua_click": {
+    "validated_fallback": false,
+    "limitation": "Safari automation glass pane; driver became unresponsive"
+  },
+  "user_confirmation": {
+    "mac_remote_automation_off": true,
+    "iphone_remote_automation_off": true,
+    "test_window_closed": true
+  },
+  "packaging_only": true
+}

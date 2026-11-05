@@ -1,0 +1,7 @@
+target identity verified
+target Unix socket verified
+SET
+LOCK TABLE
+TRUNCATE TABLE
+psql:rebase-target.sql:35: ERROR:  intentional rollback control after feed truncate and before floor update
+CONTEXT:  PL/pgSQL function inline_code_block line 2 at RAISE

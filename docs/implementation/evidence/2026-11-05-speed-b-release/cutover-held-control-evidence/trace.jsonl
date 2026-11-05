@@ -1,0 +1,51 @@
+{"at":"2026-11-05T08:05:28.077Z","phase":"before-await","label":"launch-reviewed-pipe"}
+{"at":"2026-11-05T08:05:29.070Z","phase":"event-loop-tick","holding":false}
+{"at":"2026-11-05T08:05:30.071Z","phase":"event-loop-tick","holding":false}
+{"at":"2026-11-05T08:05:30.487Z","phase":"chrome-launch","transport":"pipe","version":"Chrome/156.0.8078.80","identity":"1564/Thu Nov  5 15:05:28 2026","descendants":["1564/Thu Nov  5 15:05:28 2026","1573/Thu Nov  5 15:05:28 2026","1578/Thu Nov  5 15:05:29 2026","1579/Thu Nov  5 15:05:29 2026","1582/Thu Nov  5 15:05:29 2026","1583/Thu Nov  5 15:05:29 2026","1586/Thu Nov  5 15:05:29 2026","1588/Thu Nov  5 15:05:29 2026","1589/Thu Nov  5 15:05:29 2026"],"arguments":["/Applications/Google","Chrome.app/Contents/MacOS/Google","Chrome","--disable-field-trial-config","--disable-background-networking","--disable-background-timer-throttling","--disable-backgrounding-occluded-windows","--disable-breakpad","--disable-client-side-phishing-detection","--disable-component-extensions-with-background-pages","--disable-component-update","--no-default-browser-check","--disable-default-apps","--disable-dev-shm-usage","--disable-edgeupdater","--disable-extensions","--disable-features=AvoidUnnecessaryBeforeUnloadCheckSync,DestroyProfileOnBrowserClose,DialMediaRouteProvider,GlobalMediaControls,HttpsUpgrades,LensOverlay,MediaRouter,PaintHolding,ThirdPartyStoragePartitioning,BlockOriginHeaderModificationOnRedirect,Translate,AutoDeElevate,OptimizationHints,msForceBrowserSignIn,msEdgeUpdateLaunchServicesPreferredVersion","--enable-features=CDPScreenshotNewSurface","--allow-pre-commit-input","--disable-hang-monitor","--disable-ipc-flooding-protection","--disable-popup-blocking","--disable-prompt-on-repost","--disable-renderer-backgrounding","--disable-updater-scheduler","--force-color-profile=srgb","--metrics-recording-only","--no-first-run","--password-store=basic","--use-mock-keychain","--no-service-autorun","--export-tagged-pdf","--disable-search-engine-choice-screen","--unsafely-disable-devtools-self-xss-warnings","--edge-skip-compat-layer-relaunch","--disable-infobars","--disable-search-engine-choice-screen","--disable-sync","--enable-unsafe-swiftshader","--headless","--hide-scrollbars","--mute-audio","--blink-settings=primaryHoverType=2,availableHoverTypes=2,primaryPointerType=4,availablePointerTypes=4","--disable-background-mode","--window-size=410,820","--proxy-server=http://127.0.0.1:56595","--proxy-bypass-list=<-loopback>;127.0.0.1:56593;127.0.0.1:56594","--host-resolver-rules=MAP","*","~NOTFOUND,","EXCLUDE","127.0.0.1","--user-data-dir=/private/tmp/orbis-cutover-held-control.gcbjechz/profile-parent/chrome.Go9E2F","--remote-debugging-pipe","about:blank"],"bfCacheDefaultRemoved":"--disable-back-forward-cache"}
+{"at":"2026-11-05T08:05:30.487Z","phase":"after-await","label":"launch-reviewed-pipe"}
+{"at":"2026-11-05T08:05:30.487Z","phase":"before-await","label":"new-neutral-page"}
+{"at":"2026-11-05T08:05:30.544Z","phase":"after-await","label":"new-neutral-page"}
+{"at":"2026-11-05T08:05:30.544Z","phase":"before-await","label":"neutral-document"}
+{"at":"2026-11-05T08:05:30.598Z","phase":"after-await","label":"neutral-document"}
+{"at":"2026-11-05T08:05:30.614Z","phase":"before-await","label":"new-target-session"}
+{"at":"2026-11-05T08:05:30.625Z","phase":"after-await","label":"new-target-session"}
+{"at":"2026-11-05T08:05:30.634Z","phase":"before-await","label":"new-browser-session"}
+{"at":"2026-11-05T08:05:30.639Z","phase":"after-await","label":"new-browser-session"}
+{"at":"2026-11-05T08:05:30.653Z","phase":"before-await","label":"enable-target-network"}
+{"at":"2026-11-05T08:05:30.656Z","phase":"after-await","label":"enable-target-network"}
+{"at":"2026-11-05T08:05:30.673Z","phase":"before-await","label":"set-bypass-true"}
+{"at":"2026-11-05T08:05:30.676Z","phase":"after-await","label":"set-bypass-true"}
+{"at":"2026-11-05T08:05:30.676Z","phase":"before-start-held-navigation"}
+{"at":"2026-11-05T08:05:30.676Z","phase":"after-start-held-navigation"}
+{"at":"2026-11-05T08:05:30.676Z","phase":"before-await","label":"arrived-promise"}
+{"at":"2026-11-05T08:05:30.682Z","phase":"http-response-latched","path":"/held"}
+{"at":"2026-11-05T08:05:30.682Z","phase":"after-await","label":"arrived-promise"}
+{"at":"2026-11-05T08:05:30.682Z","phase":"before-await","label":"set-bypass-false-pending-target"}
+{"at":"2026-11-05T08:05:31.071Z","phase":"event-loop-tick","holding":true}
+{"at":"2026-11-05T08:05:32.072Z","phase":"event-loop-tick","holding":true}
+{"at":"2026-11-05T08:05:33.073Z","phase":"event-loop-tick","holding":true}
+{"at":"2026-11-05T08:05:34.074Z","phase":"event-loop-tick","holding":true}
+{"at":"2026-11-05T08:05:35.074Z","phase":"event-loop-tick","holding":true}
+{"at":"2026-11-05T08:05:36.075Z","phase":"event-loop-tick","holding":true}
+{"at":"2026-11-05T08:05:36.684Z","phase":"failed-await","label":"set-bypass-false-pending-target","message":"Error: set-bypass-false-pending-target timeout"}
+{"at":"2026-11-05T08:05:36.685Z","phase":"held-control-result","status":"FAIL-boundary-recorded-before-cleanup","message":"Error: set-bypass-false-pending-target timeout","heldResponseReleased":false,"serviceWorkerInstalled":false}
+{"at":"2026-11-05T08:05:36.685Z","phase":"before-await","label":"canary-browser-get-version"}
+{"at":"2026-11-05T08:05:36.686Z","phase":"before-await","label":"canary-process-census"}
+{"at":"2026-11-05T08:05:36.687Z","phase":"after-await","label":"canary-browser-get-version"}
+{"at":"2026-11-05T08:05:36.687Z","phase":"browser-canary-version","product":"Chrome/156.0.8078.80"}
+{"at":"2026-11-05T08:05:36.784Z","phase":"after-await","label":"canary-process-census"}
+{"at":"2026-11-05T08:05:36.784Z","phase":"process-canary","root":{"pid":1564,"ppid":1559,"start":"Thu Nov  5 15:05:28 2026","cmd":"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome --disable-field-trial-config --disable-background-networking --disable-background-timer-throttling --disable-backgrounding-occluded-windows --disable-breakpad --disable-client-side-phishing-detection --disable-component-extensions-with-background-pages --disable-component-update --no-default-browser-check --disable-default-apps --disable-dev-shm-usage --disable-edgeupdater --disable-extensions --disable-features=AvoidUnnecessaryBeforeUnloadCheckSync,DestroyProfileOnBrowserClose,DialMediaRouteProvider,GlobalMediaControls,HttpsUpgrades,LensOverlay,MediaRouter,PaintHolding,ThirdPartyStoragePartitioning,BlockOriginHeaderModificationOnRedirect,Translate,AutoDeElevate,OptimizationHints,msForceBrowserSignIn,msEdgeUpdateLaunchServicesPreferredVersion --enable-features=CDPScreenshotNewSurface --allow-pre-commit-input --disable-hang-monitor --disable-ipc-flooding-protection --disable-popup-blocking --disable-prompt-on-repost --disable-renderer-backgrounding --disable-updater-scheduler --force-color-profile=srgb --metrics-recording-only --no-first-run --password-store=basic --use-mock-keychain --no-service-autorun --export-tagged-pdf --disable-search-engine-choice-screen --unsafely-disable-devtools-self-xss-warnings --edge-skip-compat-layer-relaunch --disable-infobars --disable-search-engine-choice-screen --disable-sync --enable-unsafe-swiftshader --headless --hide-scrollbars --mute-audio --blink-settings=primaryHoverType=2,availableHoverTypes=2,primaryPointerType=4,availablePointerTypes=4 --disable-background-mode --window-size=410,820 --proxy-server=http://127.0.0.1:56595 --proxy-bypass-list=<-loopback>;127.0.0.1:56593;127.0.0.1:56594 --host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1 --user-data-dir=/private/tmp/orbis-cutover-held-control.gcbjechz/profile-parent/chrome.Go9E2F --remote-debugging-pipe about:blank"},"descendants":["1564/Thu Nov  5 15:05:28 2026","1573/Thu Nov  5 15:05:28 2026","1578/Thu Nov  5 15:05:29 2026","1579/Thu Nov  5 15:05:29 2026","1582/Thu Nov  5 15:05:29 2026","1583/Thu Nov  5 15:05:29 2026","1586/Thu Nov  5 15:05:29 2026","1588/Thu Nov  5 15:05:29 2026","1589/Thu Nov  5 15:05:29 2026","1595/Thu Nov  5 15:05:30 2026"]}
+{"at":"2026-11-05T08:05:36.784Z","phase":"before-await","label":"held-navigation-cleanup-settles"}
+{"at":"2026-11-05T08:05:36.784Z","phase":"held-response-discarded-after-failure"}
+{"at":"2026-11-05T08:05:36.794Z","phase":"held-navigation-settled-error","message":"Error: goto: net::ERR_HTTP_RESPONSE_CODE_FAILURE at http://127.0.0.1:56593/held\nCall log:\n\u001b[2m  - navigating to \"http://127.0.0.1:56593/held\", waiting until \"load\"\u001b[22m\n"}
+{"at":"2026-11-05T08:05:36.794Z","phase":"after-await","label":"held-navigation-cleanup-settles"}
+{"at":"2026-11-05T08:05:36.794Z","phase":"before-await","label":"close-reviewed-chrome"}
+{"at":"2026-11-05T08:05:37.075Z","phase":"event-loop-tick","holding":true}
+{"at":"2026-11-05T08:05:37.480Z","phase":"chrome-exit","identity":"1564/Thu Nov  5 15:05:28 2026","descendants":["1564/Thu Nov  5 15:05:28 2026","1573/Thu Nov  5 15:05:28 2026","1578/Thu Nov  5 15:05:29 2026","1579/Thu Nov  5 15:05:29 2026","1582/Thu Nov  5 15:05:29 2026","1583/Thu Nov  5 15:05:29 2026","1586/Thu Nov  5 15:05:29 2026","1588/Thu Nov  5 15:05:29 2026","1589/Thu Nov  5 15:05:29 2026","1595/Thu Nov  5 15:05:30 2026","1627/Thu Nov  5 15:05:36 2026"],"contextClosed":true,"transport":"pipe"}
+{"at":"2026-11-05T08:05:37.480Z","phase":"after-await","label":"close-reviewed-chrome"}
+{"at":"2026-11-05T08:05:37.481Z","phase":"before-await","label":"stop-held-server"}
+{"at":"2026-11-05T08:05:37.481Z","phase":"after-await","label":"stop-held-server"}
+{"at":"2026-11-05T08:05:37.481Z","phase":"before-await","label":"stop-neutral-server"}
+{"at":"2026-11-05T08:05:37.482Z","phase":"after-await","label":"stop-neutral-server"}
+{"at":"2026-11-05T08:05:37.482Z","phase":"before-await","label":"stop-deny-egress-server"}
+{"at":"2026-11-05T08:05:37.482Z","phase":"after-await","label":"stop-deny-egress-server"}

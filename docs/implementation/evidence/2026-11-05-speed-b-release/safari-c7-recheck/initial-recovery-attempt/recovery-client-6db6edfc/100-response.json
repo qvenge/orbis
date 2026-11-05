@@ -1,0 +1,48 @@
+{
+  "status": 200,
+  "value": {
+    "value": {
+      "visibility": "hidden",
+      "active": {
+        "testId": null,
+        "id": "",
+        "role": null,
+        "tag": "DIV",
+        "text": "Safari confirmed server C 52475d31be56"
+      },
+      "buttons": [
+        {
+          "testId": null,
+          "id": "",
+          "role": null,
+          "tag": "BUTTON",
+          "text": "Оставить моё",
+          "rect": {
+            "y": 235,
+            "x": 333,
+            "width": 118.859375,
+            "height": 32
+          },
+          "disabled": false
+        },
+        {
+          "testId": null,
+          "id": "",
+          "role": null,
+          "tag": "BUTTON",
+          "text": "Отбросить",
+          "rect": {
+            "y": 235,
+            "x": 459.859375,
+            "width": 100.09375,
+            "height": 32
+          },
+          "disabled": false
+        }
+      ],
+      "installed": true,
+      "origin": "http://127.0.0.1:61071",
+      "focused": false
+    }
+  }
+}

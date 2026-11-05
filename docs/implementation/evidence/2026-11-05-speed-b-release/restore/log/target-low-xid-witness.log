@@ -1,0 +1,12 @@
+bun test v1.2.7 (5c0fa6dc)
+
+apps/server/test/restore-rehearsal-target-xid.test.ts:
+RESTORE_RLS {"graphA":["6a772ba8-0c54-477b-8d3b-8a8aede2aef1"],"graphB":["469c6a1e-320a-4d24-bdda-e8c070b816cd"],"noClaims":{"n":0,"f":0}}
+RESTORE_TARGET_WRITE {"tx":"1001","actionId":"01a1a987-b598-76ef-b485-49244c0a6c03","record":"01a1a979-a1eb-77bd-91fc-1d9a3e6f86ee","bodyRevision":3,"events":[{"id":"86","tx":"1001","graph":"6a772ba8-0c54-477b-8d3b-8a8aede2aef1","kind":"entity","row_key":"01a1a979-a1eb-77bd-91fc-1d9a3e6f86ee","operation":"update","scope":"other"},{"id":"87","tx":"1001","graph":"6a772ba8-0c54-477b-8d3b-8a8aede2aef1","kind":"journal","row_key":"01a1a987-b598-76ef-b485-49244c0a6c03","operation":"insert","scope":"other"}]}
+RESTORE_TARGET_RECONCILE {"freshFrom":"1001","oldSourceFrom":"5253","fresh":{"floor":"5250","watermark":"1002","reset":{"reason":"floor","phase":"provisional","token":"floor:5250:provisional"},"transactions":[]},"stale":{"floor":"5250","watermark":"1002","reset":{"reason":"future-cursor","phase":"complete","token":"future-cursor:5253:5250:1002"},"transactions":[]},"continued":{"floor":"5250","watermark":"1002","reset":{"reason":"floor","phase":"provisional","token":"floor:5250:provisional"},"transactions":[]}}
+(pass) one committed target writer is hidden by the imported source floor [351.17ms]
+
+ 1 pass
+ 0 fail
+ 27 expect() calls
+Ran 1 tests across 1 files. [1028.00ms]

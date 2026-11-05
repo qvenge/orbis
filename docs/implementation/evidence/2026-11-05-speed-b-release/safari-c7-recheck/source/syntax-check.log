@@ -1,0 +1,2 @@
+JS/TS syntax only. No launcher, session or request executed.
+Python AST and all pinned JS bytes checked. Exact c7/artifact pins populated. Old reviewed server/clients unchanged.

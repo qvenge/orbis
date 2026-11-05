@@ -1,0 +1,22 @@
+{
+  "packet": "7102183490d232e0e51529263d4021f66a81fcb1e50e4215a875b0da1aca90a6",
+  "handoff": "1ce082aef5edf227153cf6cdf0136ee47c4a481fbaddf0cf611a7e32bd6915b4",
+  "container": {
+    "id": "df2b9c20578cfbc3ba64cd2b494b0de214ef4758ddb1c89081a23488bd7af770",
+    "image": "sha256:6501843661b1f8ff97e85c02de33edc0ee2e2693888ad596ee86222f02dc8ecc"
+  },
+  "systemId": "7704513601507176482",
+  "actualAdmin": [
+    "postgres",
+    "supabase_admin",
+    "supabase_admin",
+    "5432"
+  ],
+  "migration": "1790767973713",
+  "adminPostgresSuperFlags": "t|f",
+  "actualRuntime": "postgres|orbis_app|orbis_app|5432|f|f|f|f|f|f|t|f",
+  "artifactManifests": {
+    "old": "7b5182a818bceb6839659923e5937af0c085ffcb6aeb93747deae7ae92a003eb",
+    "current": "2ec1888a7d71ebd2e93bca482da11620a087a6f479403cc86968d4e71b048abe"
+  }
+}

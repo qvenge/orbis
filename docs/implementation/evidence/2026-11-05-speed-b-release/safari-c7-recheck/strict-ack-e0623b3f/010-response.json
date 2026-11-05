@@ -1,0 +1,110 @@
+{
+  "status": 200,
+  "value": {
+    "owner": "71880ded-c43a-4c02-881e-c4c475d7d4c4",
+    "recordId": "01a1aae8-9903-73dd-9b43-fe28cf0e5625",
+    "body": "Safari local initial body",
+    "bodyRevision": 1,
+    "unavailable": false,
+    "ackPhase": {
+      "id": "29548020-0f1f-4f74-90ec-b4d996be1847",
+      "armed": true,
+      "preexistingAtArm": 0,
+      "preexistingRecordGetsRemaining": 0,
+      "drained": true,
+      "readsReleased": false,
+      "readsHeld": 0,
+      "sent": null,
+      "receipt": null,
+      "saveReleased": false,
+      "observedInput": null,
+      "durableSnapshotSha256": null
+    },
+    "events": [
+      {
+        "at": "2026-11-05T08:53:15.045Z",
+        "kind": "request",
+        "paths": [
+          "entity.get",
+          "registry.effective",
+          "user.getSettings"
+        ],
+        "method": "GET",
+        "credentialed": true
+      },
+      {
+        "at": "2026-11-05T08:53:15.216Z",
+        "kind": "ungated-record-get-completed",
+        "remaining": 0
+      },
+      {
+        "at": "2026-11-05T08:53:15.483Z",
+        "kind": "request",
+        "paths": [
+          "entity.query",
+          "entity.query",
+          "entity.query"
+        ],
+        "method": "GET",
+        "credentialed": true
+      },
+      {
+        "at": "2026-11-05T08:53:15.667Z",
+        "kind": "request",
+        "paths": [
+          "routine.proposalsForEntity"
+        ],
+        "method": "GET",
+        "credentialed": true
+      },
+      {
+        "at": "2026-11-05T08:53:15.688Z",
+        "kind": "request",
+        "paths": [
+          "entity.resolveRefs",
+          "entity.query"
+        ],
+        "method": "GET",
+        "credentialed": true
+      },
+      {
+        "at": "2026-11-05T08:53:15.690Z",
+        "kind": "request",
+        "paths": [
+          "entity.blocks"
+        ],
+        "method": "POST",
+        "credentialed": true
+      },
+      {
+        "at": "2026-11-05T08:53:45.503Z",
+        "kind": "request",
+        "paths": [
+          "perf.report"
+        ],
+        "method": "POST",
+        "credentialed": true
+      },
+      {
+        "at": "2026-11-05T08:53:58.304Z",
+        "kind": "request",
+        "paths": [
+          "entity.get"
+        ],
+        "method": "GET",
+        "credentialed": true
+      },
+      {
+        "at": "2026-11-05T08:53:58.333Z",
+        "kind": "ungated-record-get-completed",
+        "remaining": 0
+      },
+      {
+        "at": "2026-11-05T08:53:58.504Z",
+        "kind": "ack-phase-armed",
+        "phase": "29548020-0f1f-4f74-90ec-b4d996be1847",
+        "preexistingRecordGets": 0
+      }
+    ]
+  }
+}

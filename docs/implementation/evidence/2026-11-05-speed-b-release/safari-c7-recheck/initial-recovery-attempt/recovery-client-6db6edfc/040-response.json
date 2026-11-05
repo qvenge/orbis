@@ -1,0 +1,211 @@
+{
+  "status": 200,
+  "value": {
+    "value": {
+      "origin": "http://127.0.0.1:61071",
+      "inputs": {
+        "available": true,
+        "rows": [
+          {
+            "latest": {
+              "accountId": "71880ded-c43a-4c02-881e-c4c475d7d4c4",
+              "graphId": "71880ded-c43a-4c02-881e-c4c475d7d4c4",
+              "generation": "0:0",
+              "sequence": 30,
+              "writerId": "01a1aaea-378e-771f-9dd1-1470710032f9",
+              "entityId": "01a1aae8-9903-73dd-9b43-fe28cf0e5625",
+              "basis": {
+                "revision": 1
+              },
+              "nonce": "01a1aaea-3ab9-7017-899f-9f8b56b5a277"
+            },
+            "entity": [
+              "71880ded-c43a-4c02-881e-c4c475d7d4c4",
+              "01a1aae8-9903-73dd-9b43-fe28cf0e5625"
+            ],
+            "graphId": "71880ded-c43a-4c02-881e-c4c475d7d4c4",
+            "snapshot": null,
+            "submitted": null,
+            "acknowledgedFallback": null,
+            "key": [
+              "71880ded-c43a-4c02-881e-c4c475d7d4c4",
+              "01a1aae8-9903-73dd-9b43-fe28cf0e5625",
+              "01a1aaea-378e-771f-9dd1-1470710032f9"
+            ]
+          },
+          {
+            "latest": {
+              "accountId": "71880ded-c43a-4c02-881e-c4c475d7d4c4",
+              "graphId": "71880ded-c43a-4c02-881e-c4c475d7d4c4",
+              "generation": "0:0",
+              "sequence": 20,
+              "writerId": "01a1aaea-ef2c-7538-a212-cdec0deda124",
+              "entityId": "01a1aae8-9903-73dd-9b43-fe28cf0e5625",
+              "basis": {
+                "revision": 2
+              },
+              "nonce": "01a1aaea-f1b2-7599-ab21-be19f2a58c9a"
+            },
+            "entity": [
+              "71880ded-c43a-4c02-881e-c4c475d7d4c4",
+              "01a1aae8-9903-73dd-9b43-fe28cf0e5625"
+            ],
+            "graphId": "71880ded-c43a-4c02-881e-c4c475d7d4c4",
+            "snapshot": {
+              "doc": {
+                "v": 3,
+                "doc": {
+                  "type": "doc",
+                  "content": [
+                    {
+                      "type": "paragraph",
+                      "attrs": {
+                        "id": "e507ca77-62c6-46e9-8cb2-fe0976fe2443"
+                      },
+                      "content": [
+                        {
+                          "type": "text",
+                          "text": "Safari recovery B 20"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              },
+              "rejected": false,
+              "savedAt": "2026-11-05T08:54:46.451Z",
+              "token": {
+                "accountId": "71880ded-c43a-4c02-881e-c4c475d7d4c4",
+                "graphId": "71880ded-c43a-4c02-881e-c4c475d7d4c4",
+                "generation": "0:0",
+                "sequence": 20,
+                "writerId": "01a1aaea-ef2c-7538-a212-cdec0deda124",
+                "entityId": "01a1aae8-9903-73dd-9b43-fe28cf0e5625",
+                "basis": {
+                  "revision": 2
+                },
+                "nonce": "01a1aaea-f1b2-7599-ab21-be19f2a58c9a"
+              }
+            },
+            "submitted": null,
+            "acknowledgedFallback": null,
+            "key": [
+              "71880ded-c43a-4c02-881e-c4c475d7d4c4",
+              "01a1aae8-9903-73dd-9b43-fe28cf0e5625",
+              "01a1aaea-ef2c-7538-a212-cdec0deda124"
+            ]
+          }
+        ]
+      },
+      "visibleBody": "Safari recovery B 20acbff7876b\n\n",
+      "responses": {
+        "available": true,
+        "rows": [
+          {
+            "buster": "[\"c7ccb9dd1f4cc1f68d43255ecf313768ebc2b315\",3]",
+            "entityKeys": [
+              "[\"71880ded-c43a-4c02-881e-c4c475d7d4c4\",\"01a1aae8-9903-73dd-9b43-fe28cf0e5625\"]"
+            ],
+            "graphId": "71880ded-c43a-4c02-881e-c4c475d7d4c4",
+            "data": {
+              "entity": {
+                "id": "01a1aae8-9903-73dd-9b43-fe28cf0e5625",
+                "body": "Safari strict ACK fafd011574a4",
+                "updatedAt": "2026-11-05T08:54:00.884Z",
+                "bodyDoc": {
+                  "v": 3,
+                  "doc": {
+                    "type": "doc",
+                    "content": [
+                      {
+                        "type": "paragraph",
+                        "attrs": {
+                          "id": "e507ca77-62c6-46e9-8cb2-fe0976fe2443"
+                        },
+                        "content": [
+                          {
+                            "type": "text",
+                            "text": "Safari strict ACK fafd011574a4"
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                },
+                "bodyChangedAt": "2026-11-05T08:54:00.895Z",
+                "tags": [],
+                "bodyRevision": 2,
+                "archived": false,
+                "title": "Safari synthetic record c23a34a5",
+                "bodyRefs": [],
+                "graphId": "71880ded-c43a-4c02-881e-c4c475d7d4c4",
+                "aspects": [
+                  "orbis/note"
+                ],
+                "emoji": null,
+                "queryRefs": [],
+                "createdAt": "2026-11-05T08:52:12.675Z",
+                "props": {}
+              },
+              "thread": {
+                "threadId": "c81155be-6980-5f7d-b3eb-4e33dab237e2",
+                "messages": []
+              },
+              "registryVersion": "234.0",
+              "freshness": {
+                "threadIds": [
+                  "c81155be-6980-5f7d-b3eb-4e33dab237e2"
+                ],
+                "registry": true,
+                "entityIds": [
+                  "01a1aae8-9903-73dd-9b43-fe28cf0e5625"
+                ],
+                "graph": true,
+                "settings": false,
+                "bodyOrStamp": false,
+                "expiresAt": null
+              },
+              "relations": [],
+              "bodyAction": {
+                "startedAt": "2026-11-05T08:54:00.822Z",
+                "actionId": "01a1aaea-3f78-76f1-9735-0b3930397f8b",
+                "mine": true,
+                "endedAt": "2026-11-05T08:54:00.895Z",
+                "textSession": true,
+                "actorKind": "owner"
+              },
+              "backlinks": []
+            },
+            "generation": 0,
+            "queryHash": "[[\"entity\",\"get\"],{\"input\":{\"id\":\"01a1aae8-9903-73dd-9b43-fe28cf0e5625\",\"include\":[\"body\",\"bodyDoc\",\"relations\",\"backlinks\",\"thread\"]},\"type\":\"query\"}]",
+            "key": [
+              [
+                "entity",
+                "get"
+              ],
+              {
+                "input": {
+                  "id": "01a1aae8-9903-73dd-9b43-fe28cf0e5625",
+                  "include": [
+                    "body",
+                    "bodyDoc",
+                    "relations",
+                    "backlinks",
+                    "thread"
+                  ]
+                },
+                "type": "query"
+              }
+            ],
+            "receivedAt": 1793868882658,
+            "fragmentTimes": null,
+            "expiresAt": 1794473682658
+          }
+        ]
+      },
+      "emergency": [],
+      "emergencyError": null,
+      "recovery": []
+    }
+  }
+}

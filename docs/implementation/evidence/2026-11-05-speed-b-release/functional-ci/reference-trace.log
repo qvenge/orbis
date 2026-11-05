@@ -1,0 +1,9 @@
+
+ RUN  v4.1.9 /private/tmp/orbis-speed-b-release-ci.1IskrJ/reference-trace/apps/web
+
+
+ Test Files  1 passed (1)
+      Tests  1 passed (1)
+   Start at  08:59:36
+   Duration  5.09s (transform 1.79s, setup 212ms, import 2.79s, tests 711ms, environment 1.16s)
+

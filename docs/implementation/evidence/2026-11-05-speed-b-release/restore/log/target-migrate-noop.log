@@ -1,0 +1,23 @@
+@orbis/server db:migrate: No config path provided, using default 'drizzle.config.ts'
+@orbis/server db:migrate: Reading config file '/private/tmp/orbis-b-restore.oE4t8P/src/apps/server/drizzle.config.ts'
+@orbis/server db:migrate: Using 'postgres' driver for database querying
+@orbis/server db:migrate: [⣷] applying migrations...{
+@orbis/server db:migrate:   severity_local: 'NOTICE',
+@orbis/server db:migrate:   severity: 'NOTICE',
+@orbis/server db:migrate:   code: '42P06',
+@orbis/server db:migrate:   message: 'schema "drizzle" already exists, skipping',
+@orbis/server db:migrate:   file: 'schemacmds.c',
+@orbis/server db:migrate:   line: '132',
+@orbis/server db:migrate:   routine: 'CreateSchemaCommand'
+@orbis/server db:migrate: }
+@orbis/server db:migrate: {
+@orbis/server db:migrate:   severity_local: 'NOTICE',
+@orbis/server db:migrate:   severity: 'NOTICE',
+@orbis/server db:migrate:   code: '42P07',
+@orbis/server db:migrate:   message: 'relation "__drizzle_migrations" already exists, skipping',
+@orbis/server db:migrate:   file: 'parse_utilcmd.c',
+@orbis/server db:migrate:   line: '207',
+@orbis/server db:migrate:   routine: 'transformCreateStmt'
+@orbis/server db:migrate: }
+@orbis/server: [2K[1G[✓] migrations applied successfully!
+@orbis/server db:migrate: Exited with code 0

@@ -1,0 +1,12 @@
+{
+  "url": "http://127.0.0.1:55371/session/D0B84A60-2818-41BC-893D-885C8FA4B937/execute/async",
+  "method": "POST",
+  "body": {
+    "script": "const expectedOrigin = arguments[0];\nconst owner = arguments[1];\nconst record = arguments[2];\nconst done = arguments[arguments.length - 1];\nif (location.origin !== expectedOrigin) return done({ error: 'Unrelated origin' });\n(async () => {\n  const session = JSON.parse(localStorage.getItem('sb-localhost-auth-token') ?? 'null');\n  const token = session?.access_token;\n  if (session?.user?.id !== owner || typeof token !== 'string')\n    throw Error('Exact synthetic credential unavailable');\n  const encoded = token.split('.')[1]?.replace(/-/g, '+').replace(/_/g, '/');\n  const claims = encoded ? JSON.parse(atob(encoded)) : null;\n  if (claims?.sub !== owner || claims.exp - Date.now() / 1000 < 120)\n    throw Error('Exact synthetic credential window ended');\n  const url = new URL('/trpc/entity.get', expectedOrigin);\n  url.searchParams.set('input', JSON.stringify({ id: record, include: ['body', 'bodyDoc'] }));\n  const response = await fetch(url, {\n    cache: 'no-store',\n    headers: { Authorization: 'Bearer ' + token, 'x-orbis-client-version': '0.7.0' },\n  });\n  if (response.status !== 200) return done({ error: 'Own entity.get failed', status: response.status });\n  const raw = await response.json();\n  const data = raw?.result?.data?.json ?? raw?.result?.data;\n  const entity = data?.entity;\n  if (entity?.id !== record || !Number.isInteger(entity.bodyRevision) ||\n      !entity.bodyDoc || typeof entity.bodyDoc !== 'object')\n    throw Error('Own entity.get did not return the full expected document');\n  done({ origin: location.origin, source: 'own-origin entity.get body and bodyDoc', status: response.status,\n    recordId: entity.id, body: entity.body, bodyDoc: entity.bodyDoc, bodyRevision: entity.bodyRevision });\n})().catch(() => done({ error: 'Own full-document read could not complete' }));\n",
+    "args": [
+      "http://127.0.0.1:51083",
+      "61e6593e-9d1f-4f82-a241-5c81e2656c78",
+      "01a1aa5c-0958-71d0-bcfa-316c65a44ba4"
+    ]
+  }
+}

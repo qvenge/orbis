@@ -1,0 +1,17 @@
+
+DevTools listening on ws://127.0.0.1:64766/devtools/browser/f4350ac3-aab9-4f08-9d6f-6a0fee79e900
+Trying to load the allocator multiple times. This is *not* supported.
+[84937:7497257:1105/103337.530998:ERROR:content/browser/devtools/devtools_http_handler.cc:464] GetMimeType doesn't know mime type for: browser/f4350ac3-aab9-4f08-9d6f-6a0fee79e900 text/plain will be returned
+[84943:7497228:1105/103337.545802:ERROR:ui/display/mac/cv_display_link_mac.mm:188] CVDisplayLinkCreateWithCGDisplay failed. CVReturn: -6670
+[84943:7497296:1105/103337.554415:ERROR:ui/display/mac/cv_display_link_mac.mm:188] CVDisplayLinkCreateWithCGDisplay failed. CVReturn: -6670
+[84943:7497228:1105/103337.558824:ERROR:ui/display/mac/cv_display_link_mac.mm:188] CVDisplayLinkCreateWithCGDisplay failed. CVReturn: -6670
+[84937:7497112:1105/103337.572060:ERROR:content/browser/devtools/devtools_http_handler.cc:464] GetMimeType doesn't know mime type for: browser/f4350ac3-aab9-4f08-9d6f-6a0fee79e900 text/plain will be returned
+[84943:7497296:1105/103337.608405:ERROR:ui/display/mac/cv_display_link_mac.mm:188] CVDisplayLinkCreateWithCGDisplay failed. CVReturn: -6670
+[84943:7497228:1105/103337.608986:ERROR:ui/display/mac/cv_display_link_mac.mm:188] CVDisplayLinkCreateWithCGDisplay failed. CVReturn: -6670
+[84943:7497296:1105/103337.609217:ERROR:ui/display/mac/cv_display_link_mac.mm:188] CVDisplayLinkCreateWithCGDisplay failed. CVReturn: -6670
+[84943:7497228:1105/103337.609713:ERROR:ui/display/mac/cv_display_link_mac.mm:188] CVDisplayLinkCreateWithCGDisplay failed. CVReturn: -6670
+[84943:7497296:1105/103337.628210:ERROR:ui/display/mac/cv_display_link_mac.mm:188] CVDisplayLinkCreateWithCGDisplay failed. CVReturn: -6670
+[84943:7497228:1105/103337.628692:ERROR:ui/display/mac/cv_display_link_mac.mm:188] CVDisplayLinkCreateWithCGDisplay failed. CVReturn: -6670
+[84943:7497296:1105/103337.628829:ERROR:ui/display/mac/cv_display_link_mac.mm:188] CVDisplayLinkCreateWithCGDisplay failed. CVReturn: -6670
+[84943:7497228:1105/103337.629242:ERROR:ui/display/mac/cv_display_link_mac.mm:188] CVDisplayLinkCreateWithCGDisplay failed. CVReturn: -6670
+[84943:7497296:1105/103337.629374:ERROR:ui/display/mac/cv_display_link_mac.mm:188] CVDisplayLinkCreateWithCGDisplay failed. CVReturn: -6670

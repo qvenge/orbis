@@ -1,0 +1,2 @@
+cd /private/tmp/orbis-speed-b-release-ci.1IskrJ/candidate
+WEB_DIST_DIR=/private/tmp/orbis-speed-b-release-ci.1IskrJ/candidate/apps/web/dist SAFARI_DIST_MANIFEST=/private/tmp/orbis-speed-b-release-ci.1IskrJ/reports/build-artifact.sha256 SAFARI_FIXTURE_OUT=/private/tmp/orbis-safari-functional.DBIeYK python3 /private/tmp/orbis-safari-functional.DBIeYK/local_env.py /Users/birzhan/.codex/worktrees/853d/orbis/.env bun ./.superpowers/sdd/2026-11-05-speed-b-release/safari-functional-stand/safari-server.ts

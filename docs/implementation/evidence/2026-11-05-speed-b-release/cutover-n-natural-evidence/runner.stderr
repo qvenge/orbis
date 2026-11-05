@@ -1,0 +1,11 @@
+1127 |   if (scenario === 'N') await negative(oldServer);
+1128 |   else await positive(oldServer);
+1129 | } catch (error) {
+1130 |   const message = redact(String(error));
+1131 |   log('scenario-result', { scenario, status: 'failed-or-inconclusive', message });
+1132 |   throw new Error(message);
+               ^
+error: AssertionError [ERR_ASSERTION]: null == true
+      at /Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-runner/rehearsal.ts:1132:9
+
+Bun v1.2.7 (macOS x64)

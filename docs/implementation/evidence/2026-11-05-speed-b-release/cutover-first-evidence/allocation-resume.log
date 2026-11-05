@@ -1,0 +1,9 @@
+resume same owned N after TCP readiness stop; p name and port still free
+allocated name=orbis-speed-b-cutover-n e2fd1fa7e35c9554ec799e40bdb03c70ce2ef5be2394d4b52b9c44b1c1a986d1 sha256:6501843661b1f8ff97e85c02de33edc0ee2e2693888ad596ee86222f02dc8ecc n port=54344
+verified-admin-tcp orbis-speed-b-cutover-n port=54344 system_id=7704513346943397928 postgres_superuser=false
+verified-runtime-tcp orbis-speed-b-cutover-n exact migration=0026 body_revision
+allocated name=orbis-speed-b-cutover-p df2b9c20578cfbc3ba64cd2b494b0de214ef4758ddb1c89081a23488bd7af770 sha256:6501843661b1f8ff97e85c02de33edc0ee2e2693888ad596ee86222f02dc8ecc p port=54345
+verified-admin-tcp orbis-speed-b-cutover-p port=54345 system_id=7704513601507176482 postgres_superuser=false
+verified-runtime-tcp orbis-speed-b-cutover-p exact migration=0026 body_revision
+n handoff SHA-256 f547cabba24f8ed6b64ed9b70d00faa76b60226fe73862ce6c2b3d04c9e5aa1b
+p handoff SHA-256 06fd87a5934e934f73c0c8de27615fc7db5b5177a93639b17c8e3f282f1523a2

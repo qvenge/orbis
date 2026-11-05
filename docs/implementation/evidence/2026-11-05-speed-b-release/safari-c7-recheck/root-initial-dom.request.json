@@ -1,0 +1,1 @@
+{"script": "if(location.origin!==arguments[0])throw Error(\"wrong origin\"); return {url:location.href,text:document.body.innerText,preview:!!document.querySelector(\"[data-testid=editor-preview]\"),editor:!!document.querySelector(\"[data-testid=body-editor] [contenteditable=true]\")};", "args": ["http://127.0.0.1:61071"]}

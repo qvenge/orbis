@@ -1,0 +1,7 @@
+setup-db: auth.uid() канонизирована (читает request.jwt.claims)
+setup-db: orbis_app готова (NOBYPASSRLS, NOINHERIT, member of authenticated)
+$ drizzle-kit migrate
+No config path provided, using default 'drizzle.config.ts'
+Reading config file '/private/tmp/orbis-cutover-old.0lo0nn3d/apps/server/drizzle.config.ts'
+Using 'postgres' driver for database querying
+[⣷] applying migrations...[2K[1G[⣯] applying migrations...[2K[1G[⣟] applying migrations...[2K[1G[⡿] applying migrations...[2K[1G[⢿] applying migrations...[2K[1G[⣻] applying migrations...[2K[1G[✓] migrations applied successfully!seed-registries: свойств 93, ролей 11, аспектов 16, контрактов 7, подписок 1, действий 2; версия system-реестров 1; дельт слито 0

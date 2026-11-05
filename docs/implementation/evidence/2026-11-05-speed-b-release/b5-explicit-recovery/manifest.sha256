@@ -1,0 +1,6 @@
+5a39f406e6470ff5d0596958d290fa9647b170a55ae50fd22c24fc7589a5c817  candidate/apps/web/src/features/entity-detail/safari-recovery.probe.test.tsx
+714826e553e4ad6f00eaf1b2073ef41f6fec6049668bcf56bf3817dc829f92be  candidate/apps/web/src/features/entity-editor/useBodySave.ts
+0b8e7c888e532e9f5447073bbf868bf7f4d4801bd9cff50e2d4a4abe2adcaf38  candidate/apps/web/src/features/entity-editor/draft-storage.ts
+90094e24987d0d5017b12cb0a1d464f30b0b6830b04c93011f8af564c57960e1  candidate/apps/web/src/features/entity-editor/draft-mirror.ts
+b210991201da339984fd3fec654bf945ae28783d7e3cd5956a360f47dab7ce28  candidate/apps/web/src/test/harness.tsx
+76e415c634d03c39b29c64f7ec49c1abc7e723bbc57959e17786a3b0ef2b2684  candidate/bun.lock

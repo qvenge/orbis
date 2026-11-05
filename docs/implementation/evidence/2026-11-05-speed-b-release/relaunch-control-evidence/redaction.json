@@ -1,0 +1,71 @@
+{
+  "policy": "SingletonLock personal hostname prefixes redacted in all public copies. Original raw remains private directory700; no hostname value included here.",
+  "privateRaw": "/private/tmp/orbis-cutover-relaunch.t_5eise0",
+  "files": [
+    {
+      "file": "1-after-all-pid-exit.profile.json",
+      "rawSha256": "c45be672f41632331390e6bd8b9c7a993acc650cbd43488b866b54829fd59935",
+      "publicSha256": "c45be672f41632331390e6bd8b9c7a993acc650cbd43488b866b54829fd59935"
+    },
+    {
+      "file": "1-after-launch.processes.json",
+      "rawSha256": "3d455d3d098462f9927d327c93d2211d93bd2804277986603b83768ed28ba4c9",
+      "publicSha256": "3d455d3d098462f9927d327c93d2211d93bd2804277986603b83768ed28ba4c9"
+    },
+    {
+      "file": "1-after-launch.profile.json",
+      "rawSha256": "1d44b9c39fcbcd343b1bd49e3ee5b4e030e03b5b65d621900c6120d8f40ab184",
+      "publicSha256": "3b7c3cacf1aa6d2dd2ab925278e2012cf54b7560e7d343d116223ee31267c93c"
+    },
+    {
+      "file": "1-before-launch.profile.json",
+      "rawSha256": "fec31b8bf34e74c1c27a9ee9b09293f46f19a7e98ce0a466647b0611a262ed02",
+      "publicSha256": "fec31b8bf34e74c1c27a9ee9b09293f46f19a7e98ce0a466647b0611a262ed02"
+    },
+    {
+      "file": "2-before-launch.profile.json",
+      "rawSha256": "53f261ce683f6308c8292876ae9347bd75e3d2b4389034c0ffb9deaaa84c470a",
+      "publicSha256": "53f261ce683f6308c8292876ae9347bd75e3d2b4389034c0ffb9deaaa84c470a"
+    },
+    {
+      "file": "2-failure.profile.json",
+      "rawSha256": "917b8a7b34753dc458354e19af966905ee80ee7521f498117f0ef99f1b7a05a2",
+      "publicSha256": "917b8a7b34753dc458354e19af966905ee80ee7521f498117f0ef99f1b7a05a2"
+    },
+    {
+      "file": "exit",
+      "rawSha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865",
+      "publicSha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "file": "launch-result.json",
+      "rawSha256": "854527875c153e71a5d605f5624cda99eb5b909adf8a24bfce03b9834d2d155c",
+      "publicSha256": "854527875c153e71a5d605f5624cda99eb5b909adf8a24bfce03b9834d2d155c"
+    },
+    {
+      "file": "original-failure.json",
+      "rawSha256": "776073881bd085aab1dc14366beaa08b8c15596631b61c8ae1d30fd23596bd45",
+      "publicSha256": "776073881bd085aab1dc14366beaa08b8c15596631b61c8ae1d30fd23596bd45"
+    },
+    {
+      "file": "runner-identity.json",
+      "rawSha256": "3f3ba6d6cfa30c4d2a440f322193455f5a093de6afbaa152a7e6b9bfa7d53351",
+      "publicSha256": "3f3ba6d6cfa30c4d2a440f322193455f5a093de6afbaa152a7e6b9bfa7d53351"
+    },
+    {
+      "file": "stderr.log",
+      "rawSha256": "2fb11781a9768fa0ac68e8d53bdc3bdbd643ca2060e0b04c7b5601af5d702fc7",
+      "publicSha256": "2fb11781a9768fa0ac68e8d53bdc3bdbd643ca2060e0b04c7b5601af5d702fc7"
+    },
+    {
+      "file": "trace.jsonl",
+      "rawSha256": "d481139255b66cc478e2051c219acb7ccbebce9e97b4fe3ce799560b64c0786e",
+      "publicSha256": "18c43e07a344d9179d5afd44a806708338ce934efaa631ea563960fc8fe6f8fb"
+    },
+    {
+      "file": "watchdog-summary.json",
+      "rawSha256": "acac883d489eb0313055a694541beb67e8804e01fc042b49798cc364a4a5fa4e",
+      "publicSha256": "acac883d489eb0313055a694541beb67e8804e01fc042b49798cc364a4a5fa4e"
+    }
+  ]
+}

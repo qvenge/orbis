@@ -1,0 +1,19 @@
+1054 |   if (scenario === 'N') await negative(oldServer);
+1055 |   else await positive(oldServer);
+1056 | } catch (error) {
+1057 |   const message = redact(String(error));
+1058 |   log('scenario-result', { scenario, status: 'failed-or-inconclusive', message });
+1059 |   throw new Error(message);
+               ^
+error: Error: connectOverCDP: WebSocket error: ws://127.0.0.1:64766/devtools/browser/f4350ac3-aab9-4f08-9d6f-6a0fee79e900 200 OK
+Call log:
+[2m  - <ws preparing> retrieving websocket url from http://127.0.0.1:64766[22m
+[2m  - <ws connecting> ws://127.0.0.1:64766/devtools/browser/f4350ac3-aab9-4f08-9d6f-6a0fee79e900[22m
+[2m  - <ws unexpected response> ws://127.0.0.1:64766/devtools/browser/f4350ac3-aab9-4f08-9d6f-6a0fee79e900 200 OK[22m
+[2m  - <ws error> ws://127.0.0.1:64766/devtools/browser/f4350ac3-aab9-4f08-9d6f-6a0fee79e900 error WebSocket was closed before the connection was established[22m
+[2m  - <ws connect error> ws://127.0.0.1:64766/devtools/browser/f4350ac3-aab9-4f08-9d6f-6a0fee79e900 WebSocket was closed before the connection was established[22m
+[2m  - <ws disconnected> ws://127.0.0.1:64766/devtools/browser/f4350ac3-aab9-4f08-9d6f-6a0fee79e900 code=1006 reason=[22m
+
+      at /Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-runner/rehearsal.ts:1059:9
+
+Bun v1.2.7 (macOS x64)

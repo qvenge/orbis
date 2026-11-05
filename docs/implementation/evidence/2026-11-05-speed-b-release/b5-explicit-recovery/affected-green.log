@@ -1,0 +1,43 @@
+$ vitest run src/features/entity-detail/recovery-basis.test.tsx src/features/entity-detail/freshness-reset.test.tsx src/lib/freshness/runtime.test.ts src/lib/freshness/wiring.test.tsx src/features/entity-editor/save.test.tsx src/features/entity-editor/draft.test.tsx --maxWorkers "1"
+
+ RUN  v4.1.9 /private/tmp/orbis-safari-hook-repro.bZQFWv/candidate/apps/web
+
+ ❯ src/features/entity-editor/save.test.tsx (77 tests | 1 failed) 954ms
+   × Refresh сохраняет последние слова до таймера; Keep mine не принимает невидимую чужую ревизию 21ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/features/entity-editor/save.test.tsx > Refresh сохраняет последние слова до таймера; Keep mine не принимает невидимую чужую ревизию
+AssertionError: expected { id: 'e1', …(3) } to match object { expectedBodyRevision: 4, …(1) }
+(2 matching properties omitted from actual)
+
+- Expected
++ Received
+
+@@ -14,7 +14,7 @@
+        ],
+        "type": "doc",
+      },
+      "v": 3,
+    },
+-   "expectedBodyRevision": 4,
++   "expectedBodyRevision": 9,
+  }
+
+ ❯ src/features/entity-editor/save.test.tsx:2027:22
+    2025|   act(() => api?.applyPendingDraft());
+    2026|   await tick();
+    2027|   expect(updates[1]).toMatchObject({ expectedBodyRevision: 4, bodyDoc:…
+       |                      ^
+    2028| });
+    2029|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed | 5 passed (6)
+      Tests  1 failed | 215 passed (216)
+   Start at  15:29:42
+   Duration  22.58s (transform 2.58s, setup 848ms, import 6.65s, tests 8.19s, environment 5.42s)
+
+error: script "test" exited with code 1

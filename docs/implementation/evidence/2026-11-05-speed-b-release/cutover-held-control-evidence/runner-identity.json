@@ -1,0 +1,6 @@
+{
+  "pid": 1559,
+  "ppid": 1558,
+  "start": "Thu Nov  5 15:05:27 2026",
+  "cmd": "bun run /Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/held-transport-control/control.ts /private/tmp/orbis-cutover-held-control.gcbjechz"
+}

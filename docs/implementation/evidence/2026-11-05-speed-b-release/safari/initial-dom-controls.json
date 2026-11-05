@@ -1,0 +1,196 @@
+{
+  "value": [
+    {
+      "editable": null,
+      "testid": "desktop-frame",
+      "tag": "DIV",
+      "text": "🪐Orbis🗂️Записи☀️Daily Planning🗓️Повестка📋All Tasks🎯Год⏰РутиныДомойSafari synthetic record d9592"
+    },
+    {
+      "editable": null,
+      "testid": "host-rail",
+      "tag": "NAV",
+      "text": ""
+    },
+    {
+      "editable": null,
+      "testid": "app-sidebar",
+      "tag": "NAV",
+      "text": "🪐Orbis🗂️Записи☀️Daily Planning🗓️Повестка📋All Tasks🎯Год⏰Рутины"
+    },
+    {
+      "editable": null,
+      "testid": "nav-section-9097dc25-63ba-5174-937c-02940aaed7a2",
+      "tag": "A",
+      "text": "🗂️Записи"
+    },
+    {
+      "editable": null,
+      "testid": "nav-section-cde10848-31b6-5de6-afb1-f151c1ebc390",
+      "tag": "A",
+      "text": "☀️Daily Planning"
+    },
+    {
+      "editable": null,
+      "testid": "nav-section-68a991cd-33cf-51a8-978d-22ab49738e7d",
+      "tag": "A",
+      "text": "🗓️Повестка"
+    },
+    {
+      "editable": null,
+      "testid": "nav-section-c3f97c86-cfa0-5c66-9163-c85e100bc990",
+      "tag": "A",
+      "text": "📋All Tasks"
+    },
+    {
+      "editable": null,
+      "testid": "nav-section-2a4074d1-5906-5014-945c-19394ca1b9c3",
+      "tag": "A",
+      "text": "🎯Год"
+    },
+    {
+      "editable": null,
+      "testid": "nav-section-9379dd90-1dc0-55c7-b5e7-cf4ca654edc1",
+      "tag": "A",
+      "text": "⏰Рутины"
+    },
+    {
+      "editable": null,
+      "testid": "screen-content",
+      "tag": "MAIN",
+      "text": "ДомойSafari synthetic record d959282dЗаписьДеталиТредSafari local initial bodyЗаметкаСнять аспектВид"
+    },
+    {
+      "editable": null,
+      "testid": "host-presence",
+      "tag": "DIV",
+      "text": "Домой"
+    },
+    {
+      "editable": null,
+      "testid": "host-back",
+      "tag": "BUTTON",
+      "text": ""
+    },
+    {
+      "editable": null,
+      "testid": "screen-menu",
+      "tag": "BUTTON",
+      "text": ""
+    },
+    {
+      "editable": null,
+      "testid": "body-notices",
+      "tag": "DIV",
+      "text": ""
+    },
+    {
+      "editable": null,
+      "testid": "record-area",
+      "tag": "DIV",
+      "text": "ЗаписьДеталиТредSafari local initial bodyЗаметкаСнять аспектВид текста—MarkdownОбычный текстЧек-лист"
+    },
+    {
+      "editable": null,
+      "testid": "record-view",
+      "tag": "DIV",
+      "text": "ЗаписьДеталиТредSafari local initial bodyЗаметкаСнять аспектВид текста—MarkdownОбычный текстЧек-лист"
+    },
+    {
+      "editable": null,
+      "testid": "page-render",
+      "tag": "DIV",
+      "text": "ЗаписьДеталиТредSafari local initial bodyЗаметкаСнять аспектВид текста—MarkdownОбычный текстЧек-лист"
+    },
+    {
+      "editable": null,
+      "testid": "native-row",
+      "tag": "DIV",
+      "text": ""
+    },
+    {
+      "editable": null,
+      "testid": "title-edit",
+      "tag": "INPUT",
+      "text": ""
+    },
+    {
+      "editable": null,
+      "testid": "undo-arrows",
+      "tag": "DIV",
+      "text": ""
+    },
+    {
+      "editable": null,
+      "testid": "tags-block",
+      "tag": "DIV",
+      "text": ""
+    },
+    {
+      "editable": null,
+      "testid": "page-tabs",
+      "tag": "DIV",
+      "text": "ЗаписьДеталиТредSafari local initial bodyЗаметкаСнять аспектВид текста—MarkdownОбычный текстЧек-лист"
+    },
+    {
+      "editable": null,
+      "testid": "body-editor",
+      "tag": "DIV",
+      "text": "Safari local initial body"
+    },
+    {
+      "editable": "true",
+      "testid": null,
+      "tag": "DIV",
+      "text": "Safari local initial body"
+    },
+    {
+      "editable": null,
+      "testid": "aspect-orbis/note",
+      "tag": "SECTION",
+      "text": "ЗаметкаСнять аспектВид текста—MarkdownОбычный текстЧек-листЗакреплена"
+    },
+    {
+      "editable": null,
+      "testid": "prop-orbis/content_type",
+      "tag": "SELECT",
+      "text": "—MarkdownОбычный текстЧек-лист"
+    },
+    {
+      "editable": null,
+      "testid": "prop-orbis/pinned",
+      "tag": "INPUT",
+      "text": ""
+    },
+    {
+      "editable": null,
+      "testid": "versions-card",
+      "tag": "SECTION",
+      "text": "Версии…"
+    },
+    {
+      "editable": null,
+      "testid": "host-buttons",
+      "tag": "DIV",
+      "text": ""
+    },
+    {
+      "editable": null,
+      "testid": "host-search",
+      "tag": "BUTTON",
+      "text": ""
+    },
+    {
+      "editable": null,
+      "testid": "host-chat",
+      "tag": "BUTTON",
+      "text": ""
+    },
+    {
+      "editable": null,
+      "testid": "host-new",
+      "tag": "BUTTON",
+      "text": ""
+    }
+  ]
+}

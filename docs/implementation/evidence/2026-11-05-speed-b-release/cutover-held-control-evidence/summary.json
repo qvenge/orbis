@@ -1,0 +1,42 @@
+{
+  "actualExit": 1,
+  "app": false,
+  "auth": false,
+  "db": false,
+  "serviceWorker": false,
+  "watchdogTimedOut": false,
+  "remaining": [],
+  "chromeExit": {
+    "at": "2026-11-05T08:05:37.480Z",
+    "phase": "chrome-exit",
+    "identity": "1564/Thu Nov  5 15:05:28 2026",
+    "descendants": [
+      "1564/Thu Nov  5 15:05:28 2026",
+      "1573/Thu Nov  5 15:05:28 2026",
+      "1578/Thu Nov  5 15:05:29 2026",
+      "1579/Thu Nov  5 15:05:29 2026",
+      "1582/Thu Nov  5 15:05:29 2026",
+      "1583/Thu Nov  5 15:05:29 2026",
+      "1586/Thu Nov  5 15:05:29 2026",
+      "1588/Thu Nov  5 15:05:29 2026",
+      "1589/Thu Nov  5 15:05:29 2026",
+      "1595/Thu Nov  5 15:05:30 2026",
+      "1627/Thu Nov  5 15:05:36 2026"
+    ],
+    "contextClosed": true,
+    "transport": "pipe"
+  },
+  "failedAwait": [
+    {
+      "at": "2026-11-05T08:05:36.684Z",
+      "phase": "failed-await",
+      "label": "set-bypass-false-pending-target",
+      "message": "Error: set-bypass-false-pending-target timeout"
+    }
+  ],
+  "browserCanary": {
+    "at": "2026-11-05T08:05:36.687Z",
+    "phase": "browser-canary-version",
+    "product": "Chrome/156.0.8078.80"
+  }
+}

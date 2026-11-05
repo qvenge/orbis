@@ -1,0 +1,23 @@
+{
+  "ok": true,
+  "source": "c7ccb9dd1f4cc1f68d43255ecf313768ebc2b315",
+  "session": "E346253A-B974-48FF-81D2-561B19511EAE",
+  "recordId": "01a1aae8-9903-73dd-9b43-fe28cf0e5625",
+  "phase": "29548020-0f1f-4f74-90ec-b4d996be1847",
+  "token": {
+    "accountId": "71880ded-c43a-4c02-881e-c4c475d7d4c4",
+    "graphId": "71880ded-c43a-4c02-881e-c4c475d7d4c4",
+    "generation": "0:0",
+    "sequence": 30,
+    "writerId": "01a1aaea-378e-771f-9dd1-1470710032f9",
+    "entityId": "01a1aae8-9903-73dd-9b43-fe28cf0e5625",
+    "basis": {
+      "revision": 1
+    },
+    "nonce": "01a1aaea-3ab9-7017-899f-9f8b56b5a277"
+  },
+  "receiptSha256": "95730f4bcbbd40319b9bc6823197ac9bed6f26f2224da225cbe810e116c76e15",
+  "durableSnapshotSha256": "518a2d5fc11cce3739b3108f2f32d6f23dcd5b928ceb7eddd535e301c42ddad6",
+  "heldTargetReads": 0,
+  "evidence": "/private/tmp/orbis-safari-functional.I89ymf/strict-ack-e0623b3f"
+}

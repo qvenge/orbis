@@ -1,0 +1,2 @@
+PTY exit_code=143; run-lane.sh recorded 143 after owned runner SIGTERM.
+No runtime exception/scenario-result or finally journal was produced after the stall.

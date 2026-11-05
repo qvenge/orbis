@@ -1,0 +1,396 @@
+;
+; Archive created at 2026-11-05 02:11:48 UTC
+;     dbname: postgres
+;     TOC Entries: 387
+;     Compression: gzip
+;     Dump Version: 1.16-0
+;     Format: CUSTOM
+;     Integer: 4 bytes
+;     Offset: 8 bytes
+;     Dumped from database version: 17.6
+;     Dumped by pg_dump version: 17.6
+;
+;
+; Selected TOC Entries:
+;
+11; 2615 2200 SCHEMA - public pg_database_owner
+4074; 0 0 COMMENT - SCHEMA public pg_database_owner
+4075; 0 0 ACL - SCHEMA public pg_database_owner
+20; 2615 16721 SCHEMA - drizzle supabase_admin
+368; 1255 17182 FUNCTION public actor_owns_current_graph() supabase_admin
+4076; 0 0 ACL public FUNCTION actor_owns_current_graph() supabase_admin
+366; 1255 17180 FUNCTION public actor_reads_current_graph() supabase_admin
+4077; 0 0 ACL public FUNCTION actor_reads_current_graph() supabase_admin
+367; 1255 17181 FUNCTION public actor_writes_current_graph() supabase_admin
+4078; 0 0 ACL public FUNCTION actor_writes_current_graph() supabase_admin
+365; 1255 17179 FUNCTION public current_graph_id() supabase_admin
+4079; 0 0 ACL public FUNCTION current_graph_id() supabase_admin
+369; 1255 17335 FUNCTION public entities_body_stamp() supabase_admin
+4080; 0 0 ACL public FUNCTION entities_body_stamp() supabase_admin
+364; 1255 17171 FUNCTION public graph_members_keep_owner() supabase_admin
+4081; 0 0 ACL public FUNCTION graph_members_keep_owner() supabase_admin
+363; 1255 17168 FUNCTION public graphs_require_owner() supabase_admin
+4082; 0 0 ACL public FUNCTION graphs_require_owner() supabase_admin
+305; 1255 17360 FUNCTION public orbis_capture_change_feed() orbis_change_feed_owner
+4083; 0 0 ACL public FUNCTION orbis_capture_change_feed() orbis_change_feed_owner
+361; 1255 17359 FUNCTION public orbis_feed_entity_graph(uuid, xid8) supabase_admin
+4084; 0 0 ACL public FUNCTION orbis_feed_entity_graph(entity_id uuid, xid xid8) supabase_admin
+360; 1255 17358 FUNCTION public orbis_feed_last_event(text, text, xid8) supabase_admin
+4085; 0 0 ACL public FUNCTION orbis_feed_last_event(event_kind text, event_key text, xid xid8) supabase_admin
+247; 1259 16723 TABLE drizzle __drizzle_migrations supabase_admin
+246; 1259 16722 SEQUENCE drizzle __drizzle_migrations_id_seq supabase_admin
+4086; 0 0 SEQUENCE OWNED BY drizzle __drizzle_migrations_id_seq supabase_admin
+259; 1259 16937 TABLE public action_definitions supabase_admin
+4087; 0 0 ACL public TABLE action_definitions supabase_admin
+271; 1259 17290 TABLE public action_journal supabase_admin
+4088; 0 0 ACL public TABLE action_journal supabase_admin
+272; 1259 17318 TABLE public action_journal_entities supabase_admin
+4089; 0 0 ACL public TABLE action_journal_entities supabase_admin
+256; 1259 16890 TABLE public agent_grants supabase_admin
+4090; 0 0 ACL public TABLE agent_grants supabase_admin
+248; 1259 16731 TABLE public ai_usage supabase_admin
+4091; 0 0 ACL public TABLE ai_usage supabase_admin
+249; 1259 16741 TABLE public aspect_definitions supabase_admin
+4092; 0 0 ACL public TABLE aspect_definitions supabase_admin
+274; 1259 17338 TABLE public change_feed supabase_admin
+4093; 0 0 ACL public TABLE change_feed supabase_admin
+4094; 0 0 ACL public COLUMN change_feed.id supabase_admin
+4095; 0 0 ACL public COLUMN change_feed.tx_id supabase_admin
+4096; 0 0 ACL public COLUMN change_feed.graph_id supabase_admin
+4097; 0 0 ACL public COLUMN change_feed.kind supabase_admin
+4098; 0 0 ACL public COLUMN change_feed.row_key supabase_admin
+4099; 0 0 ACL public COLUMN change_feed.entity_ids supabase_admin
+4100; 0 0 ACL public COLUMN change_feed.operation supabase_admin
+4101; 0 0 ACL public COLUMN change_feed.graph_wide supabase_admin
+275; 1259 17347 TABLE public change_feed_floor supabase_admin
+4102; 0 0 ACL public TABLE change_feed_floor supabase_admin
+4103; 0 0 ACL public COLUMN change_feed_floor.id supabase_admin
+4104; 0 0 ACL public COLUMN change_feed_floor.floor supabase_admin
+273; 1259 17337 SEQUENCE public change_feed_id_seq supabase_admin
+4105; 0 0 ACL public SEQUENCE change_feed_id_seq supabase_admin
+250; 1259 16750 TABLE public chat_messages supabase_admin
+4106; 0 0 ACL public TABLE chat_messages supabase_admin
+251; 1259 16759 TABLE public chat_threads supabase_admin
+4107; 0 0 ACL public TABLE chat_threads supabase_admin
+4108; 0 0 ACL public COLUMN chat_threads.id supabase_admin
+4109; 0 0 ACL public COLUMN chat_threads.graph_id supabase_admin
+4110; 0 0 ACL public COLUMN chat_threads.entity_id supabase_admin
+260; 1259 16943 TABLE public contract_definitions supabase_admin
+4111; 0 0 ACL public TABLE contract_definitions supabase_admin
+252; 1259 16769 TABLE public entities supabase_admin
+4112; 0 0 ACL public TABLE entities supabase_admin
+4113; 0 0 ACL public COLUMN entities.id supabase_admin
+4114; 0 0 ACL public COLUMN entities.graph_id supabase_admin
+253; 1259 16784 TABLE public entity_origins supabase_admin
+4115; 0 0 ACL public TABLE entity_origins supabase_admin
+258; 1259 16920 TABLE public entity_versions supabase_admin
+4116; 0 0 ACL public TABLE entity_versions supabase_admin
+266; 1259 17051 TABLE public envelope_spent_cache supabase_admin
+4117; 0 0 ACL public TABLE envelope_spent_cache supabase_admin
+268; 1259 17077 TABLE public graph_members supabase_admin
+4118; 0 0 ACL public TABLE graph_members supabase_admin
+267; 1259 17067 TABLE public graphs supabase_admin
+4119; 0 0 ACL public TABLE graphs supabase_admin
+257; 1259 16900 TABLE public oauth_clients supabase_admin
+4120; 0 0 ACL public TABLE oauth_clients supabase_admin
+270; 1259 17278 TABLE public perf_samples supabase_admin
+4121; 0 0 ACL public TABLE perf_samples supabase_admin
+269; 1259 17277 SEQUENCE public perf_samples_id_seq supabase_admin
+4122; 0 0 ACL public SEQUENCE perf_samples_id_seq supabase_admin
+261; 1259 16950 TABLE public property_definitions supabase_admin
+4123; 0 0 ACL public TABLE property_definitions supabase_admin
+262; 1259 16961 TABLE public registry_deltas supabase_admin
+4124; 0 0 ACL public TABLE registry_deltas supabase_admin
+263; 1259 16972 TABLE public registry_system supabase_admin
+4125; 0 0 ACL public TABLE registry_system supabase_admin
+264; 1259 16979 TABLE public relation_role_definitions supabase_admin
+4126; 0 0 ACL public TABLE relation_role_definitions supabase_admin
+254; 1259 16794 TABLE public relations supabase_admin
+4127; 0 0 ACL public TABLE relations supabase_admin
+4128; 0 0 ACL public COLUMN relations.id supabase_admin
+4129; 0 0 ACL public COLUMN relations.source_id supabase_admin
+4130; 0 0 ACL public COLUMN relations.target_id supabase_admin
+265; 1259 16988 TABLE public subscription_definitions supabase_admin
+4131; 0 0 ACL public TABLE subscription_definitions supabase_admin
+255; 1259 16807 TABLE public user_settings supabase_admin
+4132; 0 0 ACL public TABLE user_settings supabase_admin
+3529; 2604 16726 DEFAULT drizzle __drizzle_migrations id supabase_admin
+3621; 2606 16730 CONSTRAINT drizzle __drizzle_migrations __drizzle_migrations_pkey supabase_admin
+3708; 2606 17322 CONSTRAINT public action_journal_entities action_journal_entities_pkey supabase_admin
+3702; 2606 17302 CONSTRAINT public action_journal action_journal_pkey supabase_admin
+3661; 2606 16899 CONSTRAINT public agent_grants agent_grants_pkey supabase_admin
+3623; 2606 16740 CONSTRAINT public ai_usage ai_usage_graph_id_date_model_pk supabase_admin
+3715; 2606 17352 CONSTRAINT public change_feed_floor change_feed_floor_pkey supabase_admin
+3713; 2606 17346 CONSTRAINT public change_feed change_feed_pkey supabase_admin
+3628; 2606 16758 CONSTRAINT public chat_messages chat_messages_pkey supabase_admin
+3634; 2606 16768 CONSTRAINT public chat_threads chat_threads_pkey supabase_admin
+3640; 2606 16783 CONSTRAINT public entities entities_pkey supabase_admin
+3646; 2606 16791 CONSTRAINT public entity_origins entity_origins_pkey supabase_admin
+3648; 2606 16793 CONSTRAINT public entity_origins entity_origins_uniq supabase_admin
+3667; 2606 16927 CONSTRAINT public entity_versions entity_versions_pkey supabase_admin
+3689; 2606 17058 CONSTRAINT public envelope_spent_cache envelope_spent_cache_envelope_id_as_of_pk supabase_admin
+3696; 2606 17085 CONSTRAINT public graph_members graph_members_pkey supabase_admin
+3692; 2606 17076 CONSTRAINT public graphs graphs_pkey supabase_admin
+3664; 2606 16907 CONSTRAINT public oauth_clients oauth_clients_pkey supabase_admin
+3699; 2606 17286 CONSTRAINT public perf_samples perf_samples_pkey supabase_admin
+3679; 2606 16969 CONSTRAINT public registry_deltas registry_deltas_pkey supabase_admin
+3681; 2606 16971 CONSTRAINT public registry_deltas registry_deltas_uniq supabase_admin
+3683; 2606 16978 CONSTRAINT public registry_system registry_system_pkey supabase_admin
+3650; 2606 17050 CONSTRAINT public relations rel_uniq supabase_admin
+3652; 2606 16804 CONSTRAINT public relations relations_pkey supabase_admin
+3656; 2606 16822 CONSTRAINT public user_settings user_settings_pkey supabase_admin
+3668; 1259 17275 INDEX public action_definitions_builtin_key supabase_admin
+3669; 1259 17006 INDEX public action_definitions_builtin_uniq supabase_admin
+3670; 1259 17276 INDEX public action_definitions_custom_key supabase_admin
+3671; 1259 17007 INDEX public action_definitions_custom_uniq supabase_admin
+3709; 1259 17328 INDEX public action_journal_entities_probe supabase_admin
+3700; 1259 17314 INDEX public action_journal_graph_time supabase_admin
+3703; 1259 17316 INDEX public action_journal_run supabase_admin
+3704; 1259 17315 INDEX public action_journal_thread_time supabase_admin
+3705; 1259 17317 INDEX public action_journal_type_time supabase_admin
+3706; 1259 17313 INDEX public action_journal_undoes_uniq supabase_admin
+3657; 1259 16913 INDEX public agent_grants_access_hash supabase_admin
+3658; 1259 16915 INDEX public agent_grants_code_hash supabase_admin
+3659; 1259 16916 INDEX public agent_grants_graph supabase_admin
+3662; 1259 16914 INDEX public agent_grants_refresh_hash supabase_admin
+3624; 1259 16848 INDEX public aspect_definitions_builtin_uniq supabase_admin
+3625; 1259 16849 INDEX public aspect_definitions_custom_uniq supabase_admin
+3710; 1259 17353 INDEX public change_feed_graph_tx_id supabase_admin
+3711; 1259 17354 INDEX public change_feed_parent_proof supabase_admin
+3626; 1259 16876 INDEX public chat_messages_metadata_gin supabase_admin
+3629; 1259 16880 INDEX public chat_messages_thread_created supabase_admin
+3630; 1259 16851 INDEX public chat_threads_entity_uniq supabase_admin
+3631; 1259 16850 INDEX public chat_threads_global_uniq supabase_admin
+3632; 1259 16874 INDEX public chat_threads_graph supabase_admin
+3672; 1259 17008 INDEX public contract_definitions_builtin_uniq supabase_admin
+3673; 1259 17009 INDEX public contract_definitions_custom_uniq supabase_admin
+3635; 1259 17044 INDEX public entities_aspects_gin supabase_admin
+3636; 1259 16870 INDEX public entities_body_fts supabase_admin
+3637; 1259 16868 INDEX public entities_body_refs_gin supabase_admin
+3638; 1259 16871 INDEX public entities_graph_updated supabase_admin
+3641; 1259 17043 INDEX public entities_props_gin supabase_admin
+3642; 1259 17045 INDEX public entities_query_refs_gin supabase_admin
+3643; 1259 16865 INDEX public entities_tags_gin supabase_admin
+3644; 1259 16869 INDEX public entities_title_fts supabase_admin
+3665; 1259 16933 INDEX public entity_versions_entity_created supabase_admin
+3690; 1259 17064 INDEX public envelope_spent_cache_graph supabase_admin
+3693; 1259 17092 INDEX public graph_members_account supabase_admin
+3694; 1259 17091 INDEX public graph_members_active_uniq supabase_admin
+3697; 1259 17287 INDEX public perf_samples_account_created supabase_admin
+3674; 1259 17012 INDEX public property_definitions_builtin_key supabase_admin
+3675; 1259 17010 INDEX public property_definitions_builtin_uniq supabase_admin
+3676; 1259 17013 INDEX public property_definitions_custom_key supabase_admin
+3677; 1259 17011 INDEX public property_definitions_custom_uniq supabase_admin
+3684; 1259 17014 INDEX public relation_role_definitions_builtin_uniq supabase_admin
+3685; 1259 17015 INDEX public relation_role_definitions_custom_uniq supabase_admin
+3653; 1259 17047 INDEX public relations_source_role supabase_admin
+3654; 1259 17048 INDEX public relations_target_role supabase_admin
+3686; 1259 17016 INDEX public subscription_definitions_builtin_uniq supabase_admin
+3687; 1259 17017 INDEX public subscription_definitions_custom_uniq supabase_admin
+3755; 2620 17336 TRIGGER public entities entities_body_stamp supabase_admin
+3801; 2620 17172 TRIGGER public graph_members graph_members_keep_owner supabase_admin
+3800; 2620 17169 TRIGGER public graphs graphs_require_owner supabase_admin
+3772; 2620 17412 TRIGGER public action_definitions orbis_feed_delete supabase_admin
+3802; 2620 17384 TRIGGER public action_journal orbis_feed_delete supabase_admin
+3743; 2620 17392 TRIGGER public aspect_definitions orbis_feed_delete supabase_admin
+3747; 2620 17376 TRIGGER public chat_messages orbis_feed_delete supabase_admin
+3751; 2620 17380 TRIGGER public chat_threads orbis_feed_delete supabase_admin
+3776; 2620 17404 TRIGGER public contract_definitions orbis_feed_delete supabase_admin
+3756; 2620 17364 TRIGGER public entities orbis_feed_delete supabase_admin
+3768; 2620 17372 TRIGGER public entity_versions orbis_feed_delete supabase_admin
+3780; 2620 17396 TRIGGER public property_definitions orbis_feed_delete supabase_admin
+3784; 2620 17416 TRIGGER public registry_deltas orbis_feed_delete supabase_admin
+3788; 2620 17420 TRIGGER public registry_system orbis_feed_delete supabase_admin
+3792; 2620 17400 TRIGGER public relation_role_definitions orbis_feed_delete supabase_admin
+3760; 2620 17368 TRIGGER public relations orbis_feed_delete supabase_admin
+3796; 2620 17408 TRIGGER public subscription_definitions orbis_feed_delete supabase_admin
+3764; 2620 17388 TRIGGER public user_settings orbis_feed_delete supabase_admin
+3773; 2620 17410 TRIGGER public action_definitions orbis_feed_insert supabase_admin
+3803; 2620 17382 TRIGGER public action_journal orbis_feed_insert supabase_admin
+3744; 2620 17390 TRIGGER public aspect_definitions orbis_feed_insert supabase_admin
+3748; 2620 17374 TRIGGER public chat_messages orbis_feed_insert supabase_admin
+3752; 2620 17378 TRIGGER public chat_threads orbis_feed_insert supabase_admin
+3777; 2620 17402 TRIGGER public contract_definitions orbis_feed_insert supabase_admin
+3757; 2620 17362 TRIGGER public entities orbis_feed_insert supabase_admin
+3769; 2620 17370 TRIGGER public entity_versions orbis_feed_insert supabase_admin
+3781; 2620 17394 TRIGGER public property_definitions orbis_feed_insert supabase_admin
+3785; 2620 17414 TRIGGER public registry_deltas orbis_feed_insert supabase_admin
+3789; 2620 17418 TRIGGER public registry_system orbis_feed_insert supabase_admin
+3793; 2620 17398 TRIGGER public relation_role_definitions orbis_feed_insert supabase_admin
+3761; 2620 17366 TRIGGER public relations orbis_feed_insert supabase_admin
+3797; 2620 17406 TRIGGER public subscription_definitions orbis_feed_insert supabase_admin
+3765; 2620 17386 TRIGGER public user_settings orbis_feed_insert supabase_admin
+3774; 2620 17413 TRIGGER public action_definitions orbis_feed_truncate supabase_admin
+3804; 2620 17385 TRIGGER public action_journal orbis_feed_truncate supabase_admin
+3745; 2620 17393 TRIGGER public aspect_definitions orbis_feed_truncate supabase_admin
+3749; 2620 17377 TRIGGER public chat_messages orbis_feed_truncate supabase_admin
+3753; 2620 17381 TRIGGER public chat_threads orbis_feed_truncate supabase_admin
+3778; 2620 17405 TRIGGER public contract_definitions orbis_feed_truncate supabase_admin
+3758; 2620 17365 TRIGGER public entities orbis_feed_truncate supabase_admin
+3770; 2620 17373 TRIGGER public entity_versions orbis_feed_truncate supabase_admin
+3782; 2620 17397 TRIGGER public property_definitions orbis_feed_truncate supabase_admin
+3786; 2620 17417 TRIGGER public registry_deltas orbis_feed_truncate supabase_admin
+3790; 2620 17421 TRIGGER public registry_system orbis_feed_truncate supabase_admin
+3794; 2620 17401 TRIGGER public relation_role_definitions orbis_feed_truncate supabase_admin
+3762; 2620 17369 TRIGGER public relations orbis_feed_truncate supabase_admin
+3798; 2620 17409 TRIGGER public subscription_definitions orbis_feed_truncate supabase_admin
+3766; 2620 17389 TRIGGER public user_settings orbis_feed_truncate supabase_admin
+3775; 2620 17411 TRIGGER public action_definitions orbis_feed_update supabase_admin
+3805; 2620 17383 TRIGGER public action_journal orbis_feed_update supabase_admin
+3746; 2620 17391 TRIGGER public aspect_definitions orbis_feed_update supabase_admin
+3750; 2620 17375 TRIGGER public chat_messages orbis_feed_update supabase_admin
+3754; 2620 17379 TRIGGER public chat_threads orbis_feed_update supabase_admin
+3779; 2620 17403 TRIGGER public contract_definitions orbis_feed_update supabase_admin
+3759; 2620 17363 TRIGGER public entities orbis_feed_update supabase_admin
+3771; 2620 17371 TRIGGER public entity_versions orbis_feed_update supabase_admin
+3783; 2620 17395 TRIGGER public property_definitions orbis_feed_update supabase_admin
+3787; 2620 17415 TRIGGER public registry_deltas orbis_feed_update supabase_admin
+3791; 2620 17419 TRIGGER public registry_system orbis_feed_update supabase_admin
+3795; 2620 17399 TRIGGER public relation_role_definitions orbis_feed_update supabase_admin
+3763; 2620 17367 TRIGGER public relations orbis_feed_update supabase_admin
+3799; 2620 17407 TRIGGER public subscription_definitions orbis_feed_update supabase_admin
+3767; 2620 17387 TRIGGER public user_settings orbis_feed_update supabase_admin
+3731; 2606 17163 FK CONSTRAINT public action_definitions action_definitions_graph_id_graphs_id_fk supabase_admin
+3742; 2606 17323 FK CONSTRAINT public action_journal_entities action_journal_entities_action_fk supabase_admin
+3740; 2606 17303 FK CONSTRAINT public action_journal action_journal_graph_id_graphs_id_fk supabase_admin
+3741; 2606 17308 FK CONSTRAINT public action_journal action_journal_thread_id_chat_threads_id_fk supabase_admin
+3727; 2606 16908 FK CONSTRAINT public agent_grants agent_grants_client_id_oauth_clients_client_id_fk supabase_admin
+3728; 2606 17123 FK CONSTRAINT public agent_grants agent_grants_graph_id_graphs_id_fk supabase_admin
+3716; 2606 17113 FK CONSTRAINT public ai_usage ai_usage_graph_id_graphs_id_fk supabase_admin
+3717; 2606 17143 FK CONSTRAINT public aspect_definitions aspect_definitions_graph_id_graphs_id_fk supabase_admin
+3718; 2606 16823 FK CONSTRAINT public chat_messages chat_messages_thread_id_chat_threads_id_fk supabase_admin
+3719; 2606 16828 FK CONSTRAINT public chat_threads chat_threads_entity_id_entities_id_fk supabase_admin
+3720; 2606 17098 FK CONSTRAINT public chat_threads chat_threads_graph_id_graphs_id_fk supabase_admin
+3732; 2606 17153 FK CONSTRAINT public contract_definitions contract_definitions_graph_id_graphs_id_fk supabase_admin
+3721; 2606 17093 FK CONSTRAINT public entities entities_graph_id_graphs_id_fk supabase_admin
+3722; 2606 16833 FK CONSTRAINT public entity_origins entity_origins_entity_id_entities_id_fk supabase_admin
+3723; 2606 17108 FK CONSTRAINT public entity_origins entity_origins_graph_id_graphs_id_fk supabase_admin
+3729; 2606 16928 FK CONSTRAINT public entity_versions entity_versions_entity_id_entities_id_fk supabase_admin
+3730; 2606 17103 FK CONSTRAINT public entity_versions entity_versions_graph_id_graphs_id_fk supabase_admin
+3737; 2606 17059 FK CONSTRAINT public envelope_spent_cache envelope_spent_cache_envelope_id_entities_id_fk supabase_admin
+3738; 2606 17128 FK CONSTRAINT public envelope_spent_cache envelope_spent_cache_graph_id_graphs_id_fk supabase_admin
+3739; 2606 17086 FK CONSTRAINT public graph_members graph_members_graph_id_graphs_id_fk supabase_admin
+3733; 2606 17138 FK CONSTRAINT public property_definitions property_definitions_graph_id_graphs_id_fk supabase_admin
+3734; 2606 17133 FK CONSTRAINT public registry_deltas registry_deltas_graph_id_graphs_id_fk supabase_admin
+3735; 2606 17148 FK CONSTRAINT public relation_role_definitions relation_role_definitions_graph_id_graphs_id_fk supabase_admin
+3724; 2606 16838 FK CONSTRAINT public relations relations_source_id_entities_id_fk supabase_admin
+3725; 2606 16843 FK CONSTRAINT public relations relations_target_id_entities_id_fk supabase_admin
+3736; 2606 17158 FK CONSTRAINT public subscription_definitions subscription_definitions_graph_id_graphs_id_fk supabase_admin
+3726; 2606 17118 FK CONSTRAINT public user_settings user_settings_graph_id_graphs_id_fk supabase_admin
+3986; 3256 17177 POLICY public graph_members account_owns_personal_graph supabase_admin
+3985; 3256 17176 POLICY public graph_members account_reads_own_membership supabase_admin
+3965; 0 16937 ROW SECURITY public action_definitions supabase_admin
+3976; 0 17290 ROW SECURITY public action_journal supabase_admin
+3977; 0 17318 ROW SECURITY public action_journal_entities supabase_admin
+3962; 0 16890 ROW SECURITY public agent_grants supabase_admin
+3954; 0 16731 ROW SECURITY public ai_usage supabase_admin
+3955; 0 16741 ROW SECURITY public aspect_definitions supabase_admin
+3978; 0 17338 ROW SECURITY public change_feed supabase_admin
+3979; 0 17347 ROW SECURITY public change_feed_floor supabase_admin
+3956; 0 16750 ROW SECURITY public chat_messages supabase_admin
+3957; 0 16759 ROW SECURITY public chat_threads supabase_admin
+3966; 0 16943 ROW SECURITY public contract_definitions supabase_admin
+4033; 3256 17237 POLICY public agent_grants current_graph_delete supabase_admin
+4000; 3256 17197 POLICY public ai_usage current_graph_delete supabase_admin
+4029; 3256 17232 POLICY public chat_messages current_graph_delete supabase_admin
+4008; 3256 17207 POLICY public chat_threads current_graph_delete supabase_admin
+3992; 3256 17187 POLICY public entities current_graph_delete supabase_admin
+4016; 3256 17217 POLICY public entity_origins current_graph_delete supabase_admin
+4020; 3256 17222 POLICY public entity_versions current_graph_delete supabase_admin
+4012; 3256 17212 POLICY public envelope_spent_cache current_graph_delete supabase_admin
+4004; 3256 17202 POLICY public registry_deltas current_graph_delete supabase_admin
+4025; 3256 17227 POLICY public relations current_graph_delete supabase_admin
+3996; 3256 17192 POLICY public user_settings current_graph_delete supabase_admin
+4060; 3256 17330 POLICY public action_journal current_graph_insert supabase_admin
+4062; 3256 17332 POLICY public action_journal_entities current_graph_insert supabase_admin
+4031; 3256 17234 POLICY public agent_grants current_graph_insert supabase_admin
+3998; 3256 17194 POLICY public ai_usage current_graph_insert supabase_admin
+4027; 3256 17229 POLICY public chat_messages current_graph_insert supabase_admin
+4006; 3256 17204 POLICY public chat_threads current_graph_insert supabase_admin
+3989; 3256 17184 POLICY public entities current_graph_insert supabase_admin
+4014; 3256 17214 POLICY public entity_origins current_graph_insert supabase_admin
+4018; 3256 17219 POLICY public entity_versions current_graph_insert supabase_admin
+4010; 3256 17209 POLICY public envelope_spent_cache current_graph_insert supabase_admin
+4002; 3256 17199 POLICY public registry_deltas current_graph_insert supabase_admin
+4022; 3256 17224 POLICY public relations current_graph_insert supabase_admin
+3994; 3256 17189 POLICY public user_settings current_graph_insert supabase_admin
+4059; 3256 17329 POLICY public action_journal current_graph_select supabase_admin
+4061; 3256 17331 POLICY public action_journal_entities current_graph_select supabase_admin
+4030; 3256 17233 POLICY public agent_grants current_graph_select supabase_admin
+3997; 3256 17193 POLICY public ai_usage current_graph_select supabase_admin
+4063; 3256 17355 POLICY public change_feed current_graph_select supabase_admin
+4064; 3256 17356 POLICY public change_feed_floor current_graph_select supabase_admin
+4026; 3256 17228 POLICY public chat_messages current_graph_select supabase_admin
+4005; 3256 17203 POLICY public chat_threads current_graph_select supabase_admin
+3988; 3256 17183 POLICY public entities current_graph_select supabase_admin
+4013; 3256 17213 POLICY public entity_origins current_graph_select supabase_admin
+4017; 3256 17218 POLICY public entity_versions current_graph_select supabase_admin
+4009; 3256 17208 POLICY public envelope_spent_cache current_graph_select supabase_admin
+4001; 3256 17198 POLICY public registry_deltas current_graph_select supabase_admin
+4021; 3256 17223 POLICY public relations current_graph_select supabase_admin
+3993; 3256 17188 POLICY public user_settings current_graph_select supabase_admin
+4032; 3256 17235 POLICY public agent_grants current_graph_update supabase_admin
+3999; 3256 17195 POLICY public ai_usage current_graph_update supabase_admin
+4028; 3256 17230 POLICY public chat_messages current_graph_update supabase_admin
+4007; 3256 17205 POLICY public chat_threads current_graph_update supabase_admin
+3991; 3256 17185 POLICY public entities current_graph_update supabase_admin
+4015; 3256 17215 POLICY public entity_origins current_graph_update supabase_admin
+4019; 3256 17220 POLICY public entity_versions current_graph_update supabase_admin
+4011; 3256 17210 POLICY public envelope_spent_cache current_graph_update supabase_admin
+4003; 3256 17200 POLICY public registry_deltas current_graph_update supabase_admin
+4024; 3256 17225 POLICY public relations current_graph_update supabase_admin
+3995; 3256 17190 POLICY public user_settings current_graph_update supabase_admin
+4056; 3256 17267 POLICY public action_definitions delete_own supabase_admin
+4037; 3256 17242 POLICY public aspect_definitions delete_own supabase_admin
+4048; 3256 17257 POLICY public contract_definitions delete_own supabase_admin
+4041; 3256 17247 POLICY public property_definitions delete_own supabase_admin
+4044; 3256 17252 POLICY public relation_role_definitions delete_own supabase_admin
+4052; 3256 17262 POLICY public subscription_definitions delete_own supabase_admin
+3958; 0 16769 ROW SECURITY public entities supabase_admin
+3959; 0 16784 ROW SECURITY public entity_origins supabase_admin
+3964; 0 16920 ROW SECURITY public entity_versions supabase_admin
+3972; 0 17051 ROW SECURITY public envelope_spent_cache supabase_admin
+3974; 0 17077 ROW SECURITY public graph_members supabase_admin
+3973; 0 17067 ROW SECURITY public graphs supabase_admin
+3980; 3256 17174 POLICY public graphs member_reads_graph supabase_admin
+3963; 0 16900 ROW SECURITY public oauth_clients supabase_admin
+4058; 3256 17289 POLICY public perf_samples own_account_insert supabase_admin
+4057; 3256 17288 POLICY public perf_samples own_account_select supabase_admin
+3975; 0 17278 ROW SECURITY public perf_samples supabase_admin
+3981; 3256 17175 POLICY public graphs person_creates_own_graph supabase_admin
+3967; 0 16950 ROW SECURITY public property_definitions supabase_admin
+3990; 3256 17039 POLICY public registry_system read_all supabase_admin
+4053; 3256 17263 POLICY public action_definitions read_builtin_or_own supabase_admin
+4034; 3256 17238 POLICY public aspect_definitions read_builtin_or_own supabase_admin
+4045; 3256 17253 POLICY public contract_definitions read_builtin_or_own supabase_admin
+4038; 3256 17243 POLICY public property_definitions read_builtin_or_own supabase_admin
+4042; 3256 17248 POLICY public relation_role_definitions read_builtin_or_own supabase_admin
+4049; 3256 17258 POLICY public subscription_definitions read_builtin_or_own supabase_admin
+3968; 0 16961 ROW SECURITY public registry_deltas supabase_admin
+3969; 0 16972 ROW SECURITY public registry_system supabase_admin
+3970; 0 16979 ROW SECURITY public relation_role_definitions supabase_admin
+3960; 0 16794 ROW SECURITY public relations supabase_admin
+3987; 3256 17178 POLICY public graph_members scheduler_reads_members supabase_admin
+3984; 3256 16936 POLICY public user_settings scheduler_reads_owner_list supabase_admin
+3983; 3256 16919 POLICY public oauth_clients server_manages_clients supabase_admin
+3982; 3256 16918 POLICY public agent_grants server_manages_grants supabase_admin
+3971; 0 16988 ROW SECURITY public subscription_definitions supabase_admin
+4055; 3256 17265 POLICY public action_definitions update_own supabase_admin
+4036; 3256 17240 POLICY public aspect_definitions update_own supabase_admin
+4047; 3256 17255 POLICY public contract_definitions update_own supabase_admin
+4040; 3256 17245 POLICY public property_definitions update_own supabase_admin
+4043; 3256 17250 POLICY public relation_role_definitions update_own supabase_admin
+4051; 3256 17260 POLICY public subscription_definitions update_own supabase_admin
+3961; 0 16807 ROW SECURITY public user_settings supabase_admin
+4054; 3256 17264 POLICY public action_definitions write_own supabase_admin
+4035; 3256 17239 POLICY public aspect_definitions write_own supabase_admin
+4046; 3256 17254 POLICY public contract_definitions write_own supabase_admin
+4039; 3256 17244 POLICY public property_definitions write_own supabase_admin
+4023; 3256 17249 POLICY public relation_role_definitions write_own supabase_admin
+4050; 3256 17259 POLICY public subscription_definitions write_own supabase_admin
+2286; 826 16453 DEFAULT ACL public DEFAULT PRIVILEGES FOR SEQUENCES postgres
+2287; 826 16454 DEFAULT ACL public DEFAULT PRIVILEGES FOR SEQUENCES supabase_admin
+2285; 826 16452 DEFAULT ACL public DEFAULT PRIVILEGES FOR FUNCTIONS postgres
+2289; 826 16456 DEFAULT ACL public DEFAULT PRIVILEGES FOR FUNCTIONS supabase_admin
+2284; 826 16451 DEFAULT ACL public DEFAULT PRIVILEGES FOR TABLES postgres
+2288; 826 16455 DEFAULT ACL public DEFAULT PRIVILEGES FOR TABLES supabase_admin

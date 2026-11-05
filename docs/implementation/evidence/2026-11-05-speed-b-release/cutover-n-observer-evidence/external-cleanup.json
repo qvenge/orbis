@@ -1,0 +1,20 @@
+{
+  "chromeIdentitiesGone": 10,
+  "actions": [
+    {
+      "pid": 96147,
+      "start": "Thu Nov  5 13:54:23 2026",
+      "signal": "SIGTERM",
+      "time": 1793862045.119939
+    },
+    {
+      "pid": 96138,
+      "start": "Thu Nov  5 13:54:19 2026",
+      "signal": "SIGTERM",
+      "time": 1793862045.9536588
+    }
+  ],
+  "allOwnedProcessesGone": true,
+  "heldResponseReleased": false,
+  "cutoverVerdict": "inconclusive"
+}

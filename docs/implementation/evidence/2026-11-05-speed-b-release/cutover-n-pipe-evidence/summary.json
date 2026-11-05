@@ -1,0 +1,14 @@
+{
+  "stage": "BFCache pagehide observation",
+  "exit": 1,
+  "pipe": true,
+  "chrome": "Chrome/156.0.8078.80",
+  "rootIdentity": "92444/Thu Nov  5 12:58:54 2026",
+  "initialIdentities": 9,
+  "exitedIdentities": 11,
+  "contextClosed": true,
+  "productNavigated": true,
+  "heldStarted": false,
+  "migrationStarted": false,
+  "sharedWipeStarted": false
+}

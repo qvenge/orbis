@@ -1,0 +1,63 @@
+4075; 0 0 ACL - SCHEMA public pg_database_owner
+4076; 0 0 ACL public FUNCTION actor_owns_current_graph() supabase_admin
+4077; 0 0 ACL public FUNCTION actor_reads_current_graph() supabase_admin
+4078; 0 0 ACL public FUNCTION actor_writes_current_graph() supabase_admin
+4079; 0 0 ACL public FUNCTION current_graph_id() supabase_admin
+4080; 0 0 ACL public FUNCTION entities_body_stamp() supabase_admin
+4081; 0 0 ACL public FUNCTION graph_members_keep_owner() supabase_admin
+4082; 0 0 ACL public FUNCTION graphs_require_owner() supabase_admin
+4083; 0 0 ACL public FUNCTION orbis_capture_change_feed() orbis_change_feed_owner
+4084; 0 0 ACL public FUNCTION orbis_feed_entity_graph(entity_id uuid, xid xid8) supabase_admin
+4085; 0 0 ACL public FUNCTION orbis_feed_last_event(event_kind text, event_key text, xid xid8) supabase_admin
+4087; 0 0 ACL public TABLE action_definitions supabase_admin
+4088; 0 0 ACL public TABLE action_journal supabase_admin
+4089; 0 0 ACL public TABLE action_journal_entities supabase_admin
+4090; 0 0 ACL public TABLE agent_grants supabase_admin
+4091; 0 0 ACL public TABLE ai_usage supabase_admin
+4092; 0 0 ACL public TABLE aspect_definitions supabase_admin
+4093; 0 0 ACL public TABLE change_feed supabase_admin
+4094; 0 0 ACL public COLUMN change_feed.id supabase_admin
+4095; 0 0 ACL public COLUMN change_feed.tx_id supabase_admin
+4096; 0 0 ACL public COLUMN change_feed.graph_id supabase_admin
+4097; 0 0 ACL public COLUMN change_feed.kind supabase_admin
+4098; 0 0 ACL public COLUMN change_feed.row_key supabase_admin
+4099; 0 0 ACL public COLUMN change_feed.entity_ids supabase_admin
+4100; 0 0 ACL public COLUMN change_feed.operation supabase_admin
+4101; 0 0 ACL public COLUMN change_feed.graph_wide supabase_admin
+4102; 0 0 ACL public TABLE change_feed_floor supabase_admin
+4103; 0 0 ACL public COLUMN change_feed_floor.id supabase_admin
+4104; 0 0 ACL public COLUMN change_feed_floor.floor supabase_admin
+4105; 0 0 ACL public SEQUENCE change_feed_id_seq supabase_admin
+4106; 0 0 ACL public TABLE chat_messages supabase_admin
+4107; 0 0 ACL public TABLE chat_threads supabase_admin
+4108; 0 0 ACL public COLUMN chat_threads.id supabase_admin
+4109; 0 0 ACL public COLUMN chat_threads.graph_id supabase_admin
+4110; 0 0 ACL public COLUMN chat_threads.entity_id supabase_admin
+4111; 0 0 ACL public TABLE contract_definitions supabase_admin
+4112; 0 0 ACL public TABLE entities supabase_admin
+4113; 0 0 ACL public COLUMN entities.id supabase_admin
+4114; 0 0 ACL public COLUMN entities.graph_id supabase_admin
+4115; 0 0 ACL public TABLE entity_origins supabase_admin
+4116; 0 0 ACL public TABLE entity_versions supabase_admin
+4117; 0 0 ACL public TABLE envelope_spent_cache supabase_admin
+4118; 0 0 ACL public TABLE graph_members supabase_admin
+4119; 0 0 ACL public TABLE graphs supabase_admin
+4120; 0 0 ACL public TABLE oauth_clients supabase_admin
+4121; 0 0 ACL public TABLE perf_samples supabase_admin
+4122; 0 0 ACL public SEQUENCE perf_samples_id_seq supabase_admin
+4123; 0 0 ACL public TABLE property_definitions supabase_admin
+4124; 0 0 ACL public TABLE registry_deltas supabase_admin
+4125; 0 0 ACL public TABLE registry_system supabase_admin
+4126; 0 0 ACL public TABLE relation_role_definitions supabase_admin
+4127; 0 0 ACL public TABLE relations supabase_admin
+4128; 0 0 ACL public COLUMN relations.id supabase_admin
+4129; 0 0 ACL public COLUMN relations.source_id supabase_admin
+4130; 0 0 ACL public COLUMN relations.target_id supabase_admin
+4131; 0 0 ACL public TABLE subscription_definitions supabase_admin
+4132; 0 0 ACL public TABLE user_settings supabase_admin
+2286; 826 16453 DEFAULT ACL public DEFAULT PRIVILEGES FOR SEQUENCES postgres
+2287; 826 16454 DEFAULT ACL public DEFAULT PRIVILEGES FOR SEQUENCES supabase_admin
+2285; 826 16452 DEFAULT ACL public DEFAULT PRIVILEGES FOR FUNCTIONS postgres
+2289; 826 16456 DEFAULT ACL public DEFAULT PRIVILEGES FOR FUNCTIONS supabase_admin
+2284; 826 16451 DEFAULT ACL public DEFAULT PRIVILEGES FOR TABLES postgres
+2288; 826 16455 DEFAULT ACL public DEFAULT PRIVILEGES FOR TABLES supabase_admin

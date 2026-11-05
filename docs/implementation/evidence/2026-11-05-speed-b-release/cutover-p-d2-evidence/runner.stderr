@@ -1,0 +1,30 @@
+1237 |   const message = redact(String(error));
+1238 |   const stack = redact(error instanceof Error ? error.stack ?? message : message);
+1239 |   const details = { name: error instanceof Error ? error.name : typeof error, message, stack };
+1240 |   await Bun.write(join(outDir, 'original-failure.json'), JSON.stringify(details, null, 2));
+1241 |   log('scenario-result', { scenario, status: 'failed-or-inconclusive', message, stack });
+1242 |   const preserved = new Error(message);
+                               ^
+error: TimeoutError: Timeout 18000ms exceeded.
+Call log:
+[2m  - <launching> /Applications/Google Chrome.app/Contents/MacOS/Google Chrome --disable-field-trial-config --disable-background-networking --disable-background-timer-throttling --disable-backgrounding-occluded-windows --disable-breakpad --disable-client-side-phishing-detection --disable-component-extensions-with-background-pages --disable-component-update --no-default-browser-check --disable-default-apps --disable-dev-shm-usage --disable-edgeupdater --disable-extensions --disable-features=AvoidUnnecessaryBeforeUnloadCheckSync,DestroyProfileOnBrowserClose,DialMediaRouteProvider,GlobalMediaControls,HttpsUpgrades,LensOverlay,MediaRouter,PaintHolding,ThirdPartyStoragePartitioning,BlockOriginHeaderModificationOnRedirect,Translate,AutoDeElevate,OptimizationHints,msForceBrowserSignIn,msEdgeUpdateLaunchServicesPreferredVersion --enable-features=CDPScreenshotNewSurface --allow-pre-commit-input --disable-hang-monitor --disable-ipc-flooding-protection --disable-popup-blocking --disable-prompt-on-repost --disable-renderer-backgrounding --disable-updater-scheduler --force-color-profile=srgb --metrics-recording-only --no-first-run --password-store=basic --use-mock-keychain --no-service-autorun --export-tagged-pdf --disable-search-engine-choice-screen --unsafely-disable-devtools-self-xss-warnings --edge-skip-compat-layer-relaunch --disable-infobars --disable-search-engine-choice-screen --disable-sync --enable-unsafe-swiftshader --headless --hide-scrollbars --mute-audio --blink-settings=primaryHoverType=2,availableHoverTypes=2,primaryPointerType=4,availablePointerTypes=4 --disable-background-mode --window-size=410,820 --proxy-server=http://127.0.0.1:64409 --proxy-bypass-list=<-loopback>;127.0.0.1:64408;127.0.0.1:64410 --host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1 --user-data-dir=/private/tmp/orbis-cutover-p.pwk1qtlm/run/chrome.kBALKv --remote-debugging-pipe about:blank[22m
+[2m  - <launched> pid=22283[22m
+[2m  - [pid=22283][err] [22283:7958351:1105/164601.320255:ERROR:content/browser/devtools/devtools_pipe_handler.cc:188] Connection terminated while reading from pipe[22m
+[2m  - [pid=22283][err] Trying to load the allocator multiple times. This is *not* supported.[22m
+[2m  - [pid=22283][err] [22292:7958322:1105/164602.412588:ERROR:ui/display/mac/cv_display_link_mac.mm:188] CVDisplayLinkCreateWithCGDisplay failed. CVReturn: -6670[22m
+[2m  - [pid=22283][err] [22292:7958397:1105/164602.413803:ERROR:ui/display/mac/cv_display_link_mac.mm:188] CVDisplayLinkCreateWithCGDisplay failed. CVReturn: -6670[22m
+[2m  - [pid=22283][err] [22292:7958322:1105/164602.420153:ERROR:ui/display/mac/cv_display_link_mac.mm:188] CVDisplayLinkCreateWithCGDisplay failed. CVReturn: -6670[22m
+[2m  - [pid=22283][err] [22292:7958397:1105/164602.420388:ERROR:ui/display/mac/cv_display_link_mac.mm:188] CVDisplayLinkCreateWithCGDisplay failed. CVReturn: -6670[22m
+[2m  - [pid=22283][err] [22292:7958322:1105/164602.440905:ERROR:ui/display/mac/cv_display_link_mac.mm:188] CVDisplayLinkCreateWithCGDisplay failed. CVReturn: -6670[22m
+[2m  - [pid=22283][err] [22292:7958397:1105/164602.441333:ERROR:ui/display/mac/cv_display_link_mac.mm:188] CVDisplayLinkCreateWithCGDisplay failed. CVReturn: -6670[22m
+[2m  - [pid=22283][err] [22292:7958322:1105/164602.442324:ERROR:ui/display/mac/cv_display_link_mac.mm:188] CVDisplayLinkCreateWithCGDisplay failed. CVReturn: -6670[22m
+[2m  - [pid=22283][err] [22292:7958397:1105/164602.442505:ERROR:ui/display/mac/cv_display_link_mac.mm:188] CVDisplayLinkCreateWithCGDisplay failed. CVReturn: -6670[22m
+[2m  - [pid=22283][err] [22292:7958322:1105/164602.443310:ERROR:ui/display/mac/cv_display_link_mac.mm:188] CVDisplayLinkCreateWithCGDisplay failed. CVReturn: -6670[22m
+[2m  - [pid=22283][err] [22292:7958397:1105/164602.443495:ERROR:ui/display/mac/cv_display_link_mac.mm:188] CVDisplayLinkCreateWithCGDisplay failed. CVReturn: -6670[22m
+[2m  - [pid=22283] <process did exit: exitCode=0, signal=null>[22m
+[2m  - [pid=22283] starting temporary directories cleanup[22m
+[2m  - [pid=22283] finished temporary directories cleanup[22m
+
+      at processTicksAndRejections (/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-runner-p-proposal/rehearsal.ts:1242:25)
+
+Bun v1.2.7 (macOS x64)

@@ -1,0 +1,13 @@
+The files belonging to this database system will be owned by user "postgres".
+2026-11-05 02:46:43.213 UTC [59] LOG:  listening on Unix socket "/run/postgresql/.s.PGSQL.5432"
+2026-11-05 02:46:43.218 UTC [62] LOG:  database system was shut down at 2026-11-05 02:46:42 UTC
+2026-11-05 02:46:43.222 UTC [59] LOG:  database system is ready to accept connections
+waiting for server to shut down....2026-11-05 02:46:44.293 UTC [59] LOG:  received fast shutdown request
+2026-11-05 02:46:44.298 UTC [60] LOG:  checkpoint starting: shutdown immediate
+2026-11-05 02:46:44.397 UTC [59] LOG:  database system is shut down
+PostgreSQL init process complete; ready for start up.
+2026-11-05 02:46:44.522 UTC [1] LOG:  listening on IPv4 address "0.0.0.0", port 5432
+2026-11-05 02:46:44.522 UTC [1] LOG:  listening on IPv6 address "::", port 5432
+2026-11-05 02:46:44.524 UTC [1] LOG:  listening on Unix socket "/run/postgresql/.s.PGSQL.5432"
+2026-11-05 02:46:44.528 UTC [213] LOG:  database system was shut down at 2026-11-05 02:46:44 UTC
+2026-11-05 02:46:44.533 UTC [1] LOG:  database system is ready to accept connections

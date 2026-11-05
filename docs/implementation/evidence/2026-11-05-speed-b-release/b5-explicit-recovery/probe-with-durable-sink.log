@@ -1,0 +1,81 @@
+$ vitest run src/features/entity-detail/safari-recovery.probe.test.tsx --maxWorkers "1" --reporter verbose
+
+ RUN  v4.1.9 /private/tmp/orbis-safari-hook-repro.bZQFWv/candidate/apps/web
+
+stdout | src/features/entity-detail/safari-recovery.probe.test.tsx > public recovery with held network
+RECOVERY_PROBE {"variant":"held network","clicks":1,"history":0,"writes":[],"pending":false,"token":"01a1aacf-1e0f-7726-8496-8309626a9898","initialToken":"01a1aacf-1e0f-7726-8496-8309626a9898"}
+
+ ✓ src/features/entity-detail/safari-recovery.probe.test.tsx > public recovery with held network 212ms
+stdout | src/features/entity-detail/safari-recovery.probe.test.tsx > public recovery with ordinary old shown basis
+RECOVERY_PROBE {"variant":"ordinary old shown basis","clicks":1,"history":0,"writes":[],"pending":true,"token":"01a1aacf-1ee1-765e-8476-789258d16fc5","initialToken":"01a1aacf-1ee1-765e-8476-789258d16fc5"}
+
+stdout | src/features/entity-detail/safari-recovery.probe.test.tsx > public recovery with ordinary latest shown C
+RECOVERY_PROBE {"variant":"ordinary latest shown C","clicks":1,"history":0,"writes":[{"id":"00000000-0000-4000-8000-000000000001","bodyDoc":{"v":3,"doc":{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"persisted user B"}]}]}},"expectedBodyRevision":3,"autosave":true}],"pending":false,"token":"01a1aacf-22ef-7098-8456-a5a6184641e4","initialToken":"01a1aacf-22ef-7098-8456-a5a6184641e4"}
+
+ × src/features/entity-detail/safari-recovery.probe.test.tsx > public recovery with ordinary old shown basis 1038ms
+   → expected [] to have a length of 1 but got +0
+
+Ignored nodes: comments, script, style
+[36m<html>[39m
+  [36m<head />[39m
+  [36m<body>[39m
+    [36m<div>[39m
+      [36m<button[39m
+        [33mtype[39m=[32m"button"[39m
+      [36m>[39m
+        [0mОставить моё[0m
+      [36m</button>[39m
+    [36m</div>[39m
+  [36m</body>[39m
+[36m</html>[39m
+ ✓ src/features/entity-detail/safari-recovery.probe.test.tsx > public recovery with ordinary latest shown C 77ms
+stdout | src/features/entity-detail/safari-recovery.probe.test.tsx > public recovery with confirmed after rewind
+RECOVERY_PROBE {"variant":"confirmed after rewind","clicks":1,"history":19,"writes":[{"id":"00000000-0000-4000-8000-000000000001","bodyDoc":{"v":3,"doc":{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"persisted user B"}]}]}},"expectedBodyRevision":3,"autosave":true}],"pending":false,"token":"01a1aacf-233c-75aa-bb46-6463676d9301","initialToken":"01a1aacf-233c-75aa-bb46-6463676d9301"}
+
+ ✓ src/features/entity-detail/safari-recovery.probe.test.tsx > public recovery with confirmed after rewind 579ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/features/entity-detail/safari-recovery.probe.test.tsx > public recovery with ordinary old shown basis
+AssertionError: expected [] to have a length of 1 but got +0
+
+Ignored nodes: comments, script, style
+[36m<html>[39m
+  [36m<head />[39m
+  [36m<body>[39m
+    [36m<div>[39m
+      [36m<button[39m
+        [33mtype[39m=[32m"button"[39m
+      [36m>[39m
+        [0mОставить моё[0m
+      [36m</button>[39m
+    [36m</div>[39m
+  [36m</body>[39m
+[36m</html>[39m
+
+- Expected
++ Received
+
+- 1
++ 0
+
+ ❯ src/features/entity-detail/safari-recovery.probe.test.tsx:178:44
+    176|       expect(readDraft(id)?.doc).toEqual(B);
+    177|     } else {
+    178|       await waitFor(() => expect(writes()).toHaveLength(1));
+       |                                            ^
+    179|       expect(writes()[0]?.input).toMatchObject({
+    180|         id,
+ ❯ runWithExpensiveErrorDiagnosticsDisabled ../../node_modules/@testing-library/dom/dist/config.js:47:12
+ ❯ checkCallback ../../node_modules/@testing-library/dom/dist/wait-for.js:124:77
+ ❯ Timeout.checkRealTimersCallback ../../node_modules/@testing-library/dom/dist/wait-for.js:118:16
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  1 failed | 3 passed (4)
+   Start at  15:24:19
+   Duration  4.90s (transform 1.09s, setup 222ms, import 1.65s, tests 1.91s, environment 889ms)
+
+error: script "test" exited with code 1

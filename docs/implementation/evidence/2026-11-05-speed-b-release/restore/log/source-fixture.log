@@ -1,0 +1,10 @@
+bun test v1.2.7 (5c0fa6dc)
+
+apps/server/test/restore-rehearsal.fixture.test.ts:
+RESTORE_WITNESS {"a":"6a772ba8-0c54-477b-8d3b-8a8aede2aef1","b":"469c6a1e-320a-4d24-bdda-e8c070b816cd","record":"01a1a979-a1eb-77bd-91fc-1d9a3e6f86ee","sibling":"01a1a979-a207-726b-ac4a-4fb3a35c0b5d","foreign":"01a1a979-a221-730f-929d-08113981f0e7","relation":"01a1a979-a24b-71ae-8d26-290310ab8624","thread":"825c95bf-506f-5976-b59d-87c502e227fc","message":"01a1a979-a279-7689-ba4f-9f36ea8220e3","bodyRevision":3,"bodyActionId":"01a1a979-a28b-749a-beca-01a177eae26c","version":"01a1a979-a2bf-72e3-95ae-70f910bfc1bb","versionActionId":"01a1a979-a2b4-73cf-9961-81eebeec3f77","expiredXid":"5249","recentXid":"5252","sourceFloor":"5250","sourceCursor":"5253"}
+(pass) synthetic source business and old XID witness for logical restore [5755.78ms]
+
+ 1 pass
+ 0 fail
+ 10 expect() calls
+Ran 1 tests across 1 files. [6.26s]

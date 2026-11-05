@@ -1,0 +1,15 @@
+packet=b07dd775d905938aab48b5dd96b15130086bfc3f55b1a8aa95d788cb88e6e22d
+handoff=f547cabba24f8ed6b64ed9b70d00faa76b60226fe73862ce6c2b3d04c9e5aa1b
+old_manifest=7b5182a818bceb6839659923e5937af0c085ffcb6aeb93747deae7ae92a003eb
+current_manifest=a6866df615fdfb8f3842e9e931b8c6447402f50242809acb2284885a10d579e8
+artifacts.py: OK
+launcher.ts: OK
+rehearsal.ts: OK
+identity.ts: OK
+run-lane.sh: OK
+lifecycle-observer.ts: OK
+observer-control.ts: OK
+observer-control-slices.json: OK
+commands.md: OK
+/orbis-speed-b-cutover-n e2fd1fa7e35c9554ec799e40bdb03c70ce2ef5be2394d4b52b9c44b1c1a986d1 sha256:6501843661b1f8ff97e85c02de33edc0ee2e2693888ad596ee86222f02dc8ecc true n port=127.0.0.1:54344
+actual-admin-db-user-login-internalport-systemid-migration-firstfixture=postgres|supabase_admin|supabase_admin|5432|7704513346943397928|1790767973713|1

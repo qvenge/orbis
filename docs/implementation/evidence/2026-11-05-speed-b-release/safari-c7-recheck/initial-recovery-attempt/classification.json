@@ -1,0 +1,10 @@
+{
+  "classification": "environment-inconclusive; no product finding",
+  "reportedByRoot": "CUA after the driver timeout reported Mac locked",
+  "lockObservationAt": null,
+  "exactLockBeganAt": null,
+  "freezeAt": "2026-11-05T08:58:25.059208+00:00",
+  "reason": "Recovery click HTTP timed out; the subsequent URL observation also timed out. No second click.",
+  "runtime": "c7ccb9dd1f4cc1f68d43255ecf313768ebc2b315",
+  "serverDisposition": "kept running until root instructs cleanup"
+}

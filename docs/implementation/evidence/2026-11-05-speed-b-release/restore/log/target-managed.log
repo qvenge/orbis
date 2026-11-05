@@ -1,0 +1,16 @@
+auth|supabase_admin
+extensions|postgres
+public|pg_database_owner
+pg_stat_statements|extensions|1.11
+pgcrypto|extensions|1.3
+plpgsql|pg_catalog|1.0
+supabase_vault|vault|0.3.1
+uuid-ossp|extensions|1.1
+a|default acl||for role postgres in schema public on functions|schema||public
+a|default acl||for role postgres in schema public on sequences|schema||public
+a|default acl||for role postgres in schema public on tables|schema||public
+a|default acl||for role supabase_admin in schema public on functions|schema||public
+a|default acl||for role supabase_admin in schema public on sequences|schema||public
+a|default acl||for role supabase_admin in schema public on tables|schema||public
+uid|supabase_auth_admin|48560866aeb6a7377a70df9949a2eeea
+982

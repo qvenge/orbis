@@ -1,0 +1,5 @@
+{
+  "singletonMarkers": [],
+  "exitType": "Normal",
+  "scope": "final state only; no snapshot at old-exit/restart boundary"
+}

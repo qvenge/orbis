@@ -1,0 +1,32 @@
+{
+  "source": "356a610f5ae92efe429bdb6891c5bde6f9c09e9f",
+  "roles": [
+    {
+      "effective_role": "authenticated",
+      "session_role": "orbis_app"
+    }
+  ],
+  "row": {
+    "id": "01a1aa5c-0958-71d0-bcfa-316c65a44ba4",
+    "graphId": "61e6593e-9d1f-4f82-a241-5c81e2656c78",
+    "body": "Safari confirmed server C 16ed03c86af0",
+    "bodyDoc": {
+      "v": 3,
+      "doc": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "text": "Safari confirmed server C 16ed03c86af0",
+                "type": "text"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "bodyRevision": 3
+  }
+}

@@ -1,0 +1,101 @@
+$ vitest run src/features/entity-detail/safari-recovery.probe.test.tsx --maxWorkers "1" --reporter verbose
+
+ RUN  v4.1.9 /private/tmp/orbis-safari-hook-repro.bZQFWv/candidate/apps/web
+
+stdout | src/features/entity-detail/safari-recovery.probe.test.tsx > public recovery with held network
+RECOVERY_PROBE {"variant":"held network","clicks":0,"history":0,"writes":[{"id":"00000000-0000-4000-8000-000000000001","bodyDoc":{"v":3,"doc":{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"persisted user B"}]}]}},"expectedBodyRevision":2,"autosave":true}],"pending":false,"token":"01a1aacd-c2de-7084-89e7-282323fe8650","initialToken":"01a1aacd-c2de-7084-89e7-282323fe8650"}
+
+ × src/features/entity-detail/safari-recovery.probe.test.tsx > public recovery with held network 1046ms
+   → Unable to find role="button" and name "Оставить моё"
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div />[39m
+[36m</body>[39m
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div />[39m
+[36m</body>[39m
+stdout | src/features/entity-detail/safari-recovery.probe.test.tsx > public recovery with ordinary old shown basis
+RECOVERY_PROBE {"variant":"ordinary old shown basis","clicks":0,"history":0,"writes":[{"id":"00000000-0000-4000-8000-000000000001","bodyDoc":{"v":3,"doc":{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"persisted user B"}]}]}},"expectedBodyRevision":2,"autosave":true}],"pending":false,"token":"01a1aacd-c6f1-74ab-a702-7735dda7c817","initialToken":"01a1aacd-c6f1-74ab-a702-7735dda7c817"}
+
+stdout | src/features/entity-detail/safari-recovery.probe.test.tsx > public recovery with ordinary latest shown C
+RECOVERY_PROBE {"variant":"ordinary latest shown C","clicks":0,"history":0,"writes":[{"id":"00000000-0000-4000-8000-000000000001","bodyDoc":{"v":3,"doc":{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"persisted user B"}]}]}},"expectedBodyRevision":2,"autosave":true}],"pending":false,"token":"01a1aacd-cae1-771b-afc3-2388d14e843b","initialToken":"01a1aacd-cae1-771b-afc3-2388d14e843b"}
+
+ × src/features/entity-detail/safari-recovery.probe.test.tsx > public recovery with ordinary old shown basis 1007ms
+   → Unable to find role="button" and name "Оставить моё"
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div />[39m
+[36m</body>[39m
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div />[39m
+[36m</body>[39m
+ × src/features/entity-detail/safari-recovery.probe.test.tsx > public recovery with ordinary latest shown C 1009ms
+   → Unable to find role="button" and name "Оставить моё"
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div />[39m
+[36m</body>[39m
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div />[39m
+[36m</body>[39m
+stdout | src/features/entity-detail/safari-recovery.probe.test.tsx > public recovery with confirmed after rewind
+RECOVERY_PROBE {"variant":"confirmed after rewind","clicks":0,"history":0,"writes":[{"id":"00000000-0000-4000-8000-000000000001","bodyDoc":{"v":3,"doc":{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"persisted user B"}]}]}},"expectedBodyRevision":2,"autosave":true}],"pending":false,"token":"01a1aacd-ced2-7580-a569-66f0f18180dd","initialToken":"01a1aacd-ced2-7580-a569-66f0f18180dd"}
+
+ × src/features/entity-detail/safari-recovery.probe.test.tsx > public recovery with confirmed after rewind 1007ms
+   → Unable to find role="button" and name "Оставить моё"
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div />[39m
+[36m</body>[39m
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div />[39m
+[36m</body>[39m
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 4 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/features/entity-detail/safari-recovery.probe.test.tsx > public recovery with held network
+ FAIL  src/features/entity-detail/safari-recovery.probe.test.tsx > public recovery with ordinary old shown basis
+ FAIL  src/features/entity-detail/safari-recovery.probe.test.tsx > public recovery with ordinary latest shown C
+ FAIL  src/features/entity-detail/safari-recovery.probe.test.tsx > public recovery with confirmed after rewind
+TestingLibraryElementError: Unable to find role="button" and name "Оставить моё"
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div />[39m
+[36m</body>[39m
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div />[39m
+[36m</body>[39m
+ ❯ waitForWrapper ../../node_modules/@testing-library/dom/dist/wait-for.js:163:27
+ ❯ ../../node_modules/@testing-library/dom/dist/query-helpers.js:86:33
+ ❯ src/features/entity-detail/safari-recovery.probe.test.tsx:130:18
+    128|   const writes = () => view.calls.filter(({ path }) => path === 'entit…
+    129|   try {
+    130|     await screen.findByRole('button', { name: 'Оставить моё' });
+       |                  ^
+    131|     await waitFor(() => expect(reads).toBe(2));
+    132|     expect(api.pendingDraft?.doc).toEqual(B);
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/4]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  4 failed (4)
+   Start at  15:22:50
+   Duration  7.53s (transform 1.22s, setup 216ms, import 1.92s, tests 4.07s, environment 1.05s)
+
+error: script "test" exited with code 1

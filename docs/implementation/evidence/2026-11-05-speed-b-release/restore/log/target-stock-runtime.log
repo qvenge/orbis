@@ -1,0 +1,2 @@
+{"stockCatalog":{"id":"7704502933634711586","floor":"5250","xmin":"994","direct_insert":false,"helper_execute":true,"capture_execute":true}}
+{"outcome":"stock-read-rejected","diagnostics":[{"name":"TRPCError","code":"INTERNAL_SERVER_ERROR"},{"name":"Error"},{"name":"PostgresError","code":"42501","denied":"permission denied for schema public"}]}

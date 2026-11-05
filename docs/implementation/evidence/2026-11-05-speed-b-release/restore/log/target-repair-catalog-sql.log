@@ -1,0 +1,16 @@
+target identity verified
+target Unix socket verified
+CREATE ROLE
+ALTER SCHEMA
+ALTER FUNCTION
+CREATE EXTENSION
+ schedule 
+----------
+        1
+(1 row)
+
+ schedule 
+----------
+        2
+(1 row)
+

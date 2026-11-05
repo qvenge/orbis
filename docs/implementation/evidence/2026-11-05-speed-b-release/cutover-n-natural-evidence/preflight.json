@@ -1,0 +1,20 @@
+{
+  "packet": "962c8654a1181f4559f3e7257453cfbd3d921f2cf5323531d0f5205a8f65793a",
+  "handoff": "f547cabba24f8ed6b64ed9b70d00faa76b60226fe73862ce6c2b3d04c9e5aa1b",
+  "container": {
+    "id": "e2fd1fa7e35c9554ec799e40bdb03c70ce2ef5be2394d4b52b9c44b1c1a986d1",
+    "image": "sha256:6501843661b1f8ff97e85c02de33edc0ee2e2693888ad596ee86222f02dc8ecc"
+  },
+  "systemId": "7704513346943397928",
+  "actualAdmin": [
+    "postgres",
+    "supabase_admin",
+    "supabase_admin",
+    "5432"
+  ],
+  "migration": "1790767973713",
+  "artifactManifests": {
+    "old": "7b5182a818bceb6839659923e5937af0c085ffcb6aeb93747deae7ae92a003eb",
+    "current": "a6866df615fdfb8f3842e9e931b8c6447402f50242809acb2284885a10d579e8"
+  }
+}

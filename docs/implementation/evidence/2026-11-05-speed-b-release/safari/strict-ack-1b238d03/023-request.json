@@ -1,0 +1,42 @@
+{
+  "url": "http://127.0.0.1:51083/__safari/[FIXTURE_NONCE]/control",
+  "method": "POST",
+  "body": {
+    "bindInput": {
+      "doc": {
+        "v": 3,
+        "doc": {
+          "type": "doc",
+          "content": [
+            {
+              "type": "paragraph",
+              "attrs": {
+                "id": "bbc769c6-2933-4726-b60e-281a3e1e5e5d"
+              },
+              "content": [
+                {
+                  "type": "text",
+                  "text": "Safari strict ACK 236e4bf3bbc8"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "rejected": false,
+      "savedAt": "2026-11-05T06:37:17.004Z",
+      "token": {
+        "accountId": "61e6593e-9d1f-4f82-a241-5c81e2656c78",
+        "graphId": "61e6593e-9d1f-4f82-a241-5c81e2656c78",
+        "generation": "0:0",
+        "sequence": 30,
+        "writerId": "01a1aa6d-0aaf-7419-9baa-0b8f5e392a4e",
+        "entityId": "01a1aa5c-0958-71d0-bcfa-316c65a44ba4",
+        "basis": {
+          "revision": 1
+        },
+        "nonce": "01a1aa6d-114c-7686-8c48-ddb13447df4f"
+      }
+    }
+  }
+}

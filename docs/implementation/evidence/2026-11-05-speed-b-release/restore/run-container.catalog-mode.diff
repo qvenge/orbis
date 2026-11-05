@@ -1,0 +1,58 @@
+--- /private/tmp/orbis-b-restore.oE4t8P/run-container.pre-catalog-mode.sh	2026-11-05 09:24:39
++++ .superpowers/sdd/2026-11-05-speed-b-release/logical-restore-container-runner/run-container.sh	2026-11-05 09:24:39
+@@ -4,11 +4,11 @@
+ set -euo pipefail
+ umask 077
+ die() { printf '%s\n' "$*" >&2; exit 1; }
+-[[ $# = 1 ]] || die 'usage: run-container.sh source-identity|identity|source-dump|render-acl|stock-import|acl-replay|rollback-control|rebase'
++[[ $# = 1 ]] || die 'usage: run-container.sh source-identity|identity|source-dump|render-acl|stock-import|catalog-repair|acl-replay|rollback-control|rebase'
+ mode=$1
+ case "$mode" in
+   source-identity|source-dump|render-acl) side=source ;;
+-  identity|stock-import|acl-replay|rollback-control|rebase) side=target ;;
++  identity|stock-import|catalog-repair|acl-replay|rollback-control|rebase) side=target ;;
+   *) die 'unknown phase' ;;
+ esac
+ [[ "${RESTORE_APPROVED_PHASE:-}" = "$mode" ]] || die 'missing exact coordinator phase handoff'
+@@ -49,7 +49,7 @@
+ [[ "$password" != *$'\n'* && "$password" != *$'\r'* ]] || die 'expected a single-line local password'
+ 
+ case "$mode" in
+-  source-dump|render-acl|stock-import|acl-replay)
++  source-dump|render-acl|stock-import|catalog-repair|acl-replay)
+     : "${RESTORE_TMP:?private scratch directory required}"
+     root="$(cd -P -- "$RESTORE_TMP" && pwd)"
+     [[ "$root" =~ ^/private/tmp/orbis-b-restore\.[[:alnum:]]+$ &&
+@@ -75,7 +75,7 @@
+ [[ "$stage" =~ ^/tmp/orbis-b-restore-cli\.[[:alnum:]]+$ ]] || die 'unexpected staged directory'
+ cleanup() {
+   local status=$?
+-  "${box[@]}" rm -f -- "$stage"/{assert-source.sql,assert-target.sql,assert-target-socket.sql,stock-drop.sql,rebase-target.sql,backup.sh,orbis-backup-source.sql,source-schema.dump,source-schema.toc,source-artifacts.sha256,acl.toc,acl.sql,acl-artifact.sha256,acl-reviewed.sql} || :
++  "${box[@]}" rm -f -- "$stage"/{assert-source.sql,assert-target.sql,assert-target-socket.sql,stock-drop.sql,rebase-target.sql,backup.sh,orbis-backup-source.sql,source-schema.dump,source-schema.toc,source-artifacts.sha256,acl.toc,acl.sql,acl-artifact.sha256,acl-reviewed.sql,catalog-repair-proposal.sql} || :
+   "${box[@]}" rmdir -- "$stage" || :
+   return "$status"
+ }
+@@ -111,6 +111,9 @@
+     stage_file "$dir/../logical-restore-runner/stock-drop.sql" stock-drop.sql 3d7e1fc1fddb2c8c332495e7f1a1c7f112acbc9b6060c169a4b63e7e24c210ce
+     stage_file "$root/orbis-backup-source.sql" orbis-backup-source.sql "${RESTORE_DUMP_SHA256:?pin exact stock dump}"
+     ;;
++  catalog-repair)
++    stage_file "$root/catalog-repair-proposal.sql" catalog-repair-proposal.sql ada90f29f127d52d74fd39faa1d1548c78e944f30bdd738c151269b6cc8ecf78
++    ;;
+   acl-replay)
+     stage_file "$root/acl-reviewed.sql" acl-reviewed.sql "${RESTORE_REVIEWED_ACL_SHA256:?pin reviewed ACL script}"
+     ;;
+@@ -171,10 +174,12 @@
+         pg_restore --use-list=acl.toc --file=acl.sql source-schema.dump
+         sha256sum acl.sql > acl-artifact.sha256
+         ;;
+-      identity|stock-import|acl-replay|rollback-control|rebase)
++      identity|stock-import|catalog-repair|acl-replay|rollback-control|rebase)
+         conn+=(--set="restore_target_system_id=$system_id" --file=assert-target.sql --file=assert-target-socket.sql)
+         if [[ "$mode" = stock-import ]]; then
+           conn+=(--file=stock-drop.sql --file=orbis-backup-source.sql)
++        elif [[ "$mode" = catalog-repair ]]; then
++          conn+=(--file=catalog-repair-proposal.sql)
+         elif [[ "$mode" = acl-replay ]]; then
+           conn+=(--file=acl-reviewed.sql)
+         elif [[ "$mode" = rollback-control || "$mode" = rebase ]]; then

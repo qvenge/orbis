@@ -1,0 +1,94 @@
+{
+  "status": 200,
+  "value": {
+    "owner": "61e6593e-9d1f-4f82-a241-5c81e2656c78",
+    "recordId": "01a1aa5c-0958-71d0-bcfa-316c65a44ba4",
+    "body": "Safari local initial body",
+    "bodyRevision": 1,
+    "unavailable": false,
+    "ackPhase": null,
+    "events": [
+      {
+        "at": "2026-11-05T06:21:29.800Z",
+        "kind": "request",
+        "paths": [
+          "entity.get",
+          "registry.effective",
+          "user.getSettings"
+        ],
+        "method": "GET",
+        "credentialed": true
+      },
+      {
+        "at": "2026-11-05T06:21:30.027Z",
+        "kind": "ungated-record-get-completed",
+        "remaining": 0
+      },
+      {
+        "at": "2026-11-05T06:21:30.066Z",
+        "kind": "request",
+        "paths": [
+          "changes.watch"
+        ],
+        "method": "GET",
+        "credentialed": true
+      },
+      {
+        "at": "2026-11-05T06:21:30.703Z",
+        "kind": "request",
+        "paths": [
+          "routine.proposalsForEntity"
+        ],
+        "method": "GET",
+        "credentialed": true
+      },
+      {
+        "at": "2026-11-05T06:21:30.720Z",
+        "kind": "request",
+        "paths": [
+          "entity.query"
+        ],
+        "method": "GET",
+        "credentialed": true
+      },
+      {
+        "at": "2026-11-05T06:21:30.724Z",
+        "kind": "request",
+        "paths": [
+          "entity.query",
+          "entity.query",
+          "entity.query"
+        ],
+        "method": "GET",
+        "credentialed": true
+      },
+      {
+        "at": "2026-11-05T06:21:30.901Z",
+        "kind": "request",
+        "paths": [
+          "entity.resolveRefs"
+        ],
+        "method": "GET",
+        "credentialed": true
+      },
+      {
+        "at": "2026-11-05T06:21:30.903Z",
+        "kind": "request",
+        "paths": [
+          "entity.blocks"
+        ],
+        "method": "POST",
+        "credentialed": true
+      },
+      {
+        "at": "2026-11-05T06:21:59.586Z",
+        "kind": "request",
+        "paths": [
+          "perf.report"
+        ],
+        "method": "POST",
+        "credentialed": true
+      }
+    ]
+  }
+}

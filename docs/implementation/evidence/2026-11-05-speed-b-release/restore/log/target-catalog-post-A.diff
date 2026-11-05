@@ -1,0 +1,8 @@
+--- /private/tmp/orbis-b-restore.oE4t8P/log/target-catalog-post-stock-pre-A.log	2026-11-05 09:13:41
++++ /private/tmp/orbis-b-restore.oE4t8P/log/target-catalog.log	2026-11-05 09:13:42
+@@ -272,4 +272,4 @@
+ cron catalog absent
+ 5250
+ 84|1131|5252
+-983
++995

@@ -1,0 +1,5 @@
+{
+  "name": "TimeoutError",
+  "message": "TimeoutError: waitForFunction: Timeout 18000ms exceeded.",
+  "stack": "waitForFunction: Timeout 18000ms exceeded.\n    at <anonymous> (/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-runner-p-proposal/rehearsal.ts:1007:14)\n    at processTicksAndRejections (native:7:39)"
+}
