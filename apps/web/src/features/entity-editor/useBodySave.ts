@@ -11,15 +11,17 @@ import {
   KNOWN_NODE_TYPES,
   upgradeBodyDoc,
 } from '@orbis/shared/doc/types';
-import { useQueryClient } from '@tanstack/react-query';
+import { hashKey, useQueryClient } from '@tanstack/react-query';
 import type { JSONContent } from '@tiptap/core';
 import { TRPCClientError } from '@trpc/client';
+import { getQueryKey } from '@trpc/react-query';
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { freshnessRuntimeOf } from '../../lib/freshness/provenance';
 import { registerPendingInput } from '../../lib/local-data/lifecycle';
 import { finishStoredDraft } from '../../lib/local-data/query-responses';
 import { isBodyStale } from '../../lib/orbis-error';
-import type { RouterInputs } from '../../trpc';
+import { type RouterInputs, trpc } from '../../trpc';
+import { detailGetInput } from '../entity-detail/detail-input';
 import { useEntityUpdate } from '../entity-detail/useEntityDetail';
 import { isBodyConfirmedAfter, isBodyPending } from '../undo/body-provenance';
 import { isUndoEpoch, subscribeUndoEpoch, undoEpoch } from '../undo/undo-epoch';
@@ -1119,7 +1121,27 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
     (explicit = false) => {
       const history = bodyHistory();
       const base = entityRef.current;
-      const current = explicit && history ? confirmedBody(base.bodyDoc, history) : null;
+      let current: BodyBasis['doc'] | null = null;
+      if (explicit) {
+        const confirmed = confirmedBody(base.bodyDoc, history);
+        if (history) current = confirmed;
+        else if (confirmed) {
+          const runtime = freshnessRuntimeOf(queryClient);
+          const key = getQueryKey(trpc.entity.get, detailGetInput(entityId), 'query');
+          const read = runtime?.publicationOf(hashKey(key));
+          if (read && runtime?.isAcceptedRead(read)) {
+            const authoritative = (
+              runtime.projectBody(key, read.raw) as { entity?: BodySaveEntity }
+            ).entity;
+            if (
+              authoritative?.bodyDoc &&
+              authoritative.bodyRevision === base.bodyRevision &&
+              matchesBody(authoritative.bodyDoc, confirmed)
+            )
+              current = confirmed;
+          }
+        }
+      }
       const basis = current ? { doc: current, revision: base.bodyRevision } : displayedBasis();
       const captured = current ? history : shownHistoryRef.current;
       pendingBasisRef.current = { history: captured, basis };
@@ -1138,7 +1160,7 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
           ? (basis?.revision ?? 0)
           : (unconfirmed?.revision ?? currentExpected(shownRevisionRef.current));
     },
-    [bodyHistory, currentExpected, displayedBasis, queryClient],
+    [bodyHistory, currentExpected, displayedBasis, entityId, queryClient],
   );
 
   const resumeBasis = useCallback(() => {
