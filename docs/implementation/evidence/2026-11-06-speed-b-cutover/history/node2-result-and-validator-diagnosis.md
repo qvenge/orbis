@@ -1,0 +1,11 @@
+# Node2 result and validator diagnosis — 06.11.2026
+
+ONE full P with source8344af68 (SAMEcc66bb93), fresh9ef30445/54347/system7704931412319080482, completed nonzero with clean owned-process cleanup (92 identities, remaining=[], no watchdog, monitor or forced cleanup).
+
+The original service-worker admission gap is passed: old0.6 inputs/D2/BFCache and whole exit, migration0027 and CAS; restart alone again yielded old cached entry. Bounded current HTTP admission, exact registration/update/active protocol1, whole browser exit, then NEW ordinary fromSW current c7 document passed entryEvidence, including current HTML/cache/SW, actual controller readiness=true and successful actual0.7 response. No application runtime/dist changes.
+
+Stopped before the first explicit recovery click: validators.bun.ts asserted that controlRaw must be present. Actual checkpoint6 has null controlRaw, two complete native snapshots with generation0:0, original documents/baseRevision1 and exact tokens. Production createDeviceControl.read() expressly returns initial state for a missing key; inputGeneration(owner) returns0:0. Therefore the test's requirement was incorrect. It is not evidence of lost input or a product defect. Full A recovery/ACK, D2 replay, B discard and privacy outcome remain unexecuted.
+
+Root reproduced both actual snapshots as RED with the immutable helper. New helper imports the manifest-pinned production device-control module against readonly observed storage, keeps structural checks and all token/lineage/generation/doc/basis/TTL/finished assertions. Both actual snapshots plus32 controls PASS (34 total); foreign account/graph/entity, wrong generation/basis, invalid lineage, expired/acknowledged/finished input, changed document, missing prior token, corrupt control, and nondefault generation all reject. Exact retained tokens, valid explicit initial metadata and original legacy data accept. No synthetic storage write or private app callback is used.
+
+Raw /private/tmp/orbis-cutover-node-p.shy83qv9 is immutable. Private browser profile and Auth are not resumed. Node2 DB is now0027 and stopped; Docker stop exit0, no other containers running. Product c7 unchanged. New source df8b198e / diffb2f6c700 is PENDING review and fresh Node3 allocation; any next P must be a separately reviewed fresh0026 run, never a continuation of the dead signer.

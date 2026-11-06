@@ -1,0 +1,87 @@
+{
+  "sourcePacket": "01e2906ca20a4445f3d0d2b3b17cb128482422ad6bdabe7cdef302bd5766195b",
+  "firstFailure": {
+    "label": "current-bypass:navigator.ready",
+    "message": "Error: current-bypass:navigator.ready timeout",
+    "stack": "Error: current-bypass:navigator.ready timeout\n    at Timeout.<anonymous> (file:///Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/sw-admission-control/control.ts:82:39)\n    at listOnTimeout (node:internal/timers:608:17)\n    at process.processTimers (node:internal/timers:543:7)"
+  },
+  "positiveCurrentNoBypassCompleted": true,
+  "positiveWorkerProtocol": [
+    {
+      "at": "2026-11-05T14:32:20.972Z",
+      "monotonicMs": 4790.421942,
+      "attempt": 1,
+      "phase": "actual-worker-protocol",
+      "label": "positive-current-no-bypass",
+      "proof": {
+        "protocol": 1,
+        "ready": false
+      },
+      "businessPageReadyClaimed": false
+    }
+  ],
+  "oldActiveReady": [
+    {
+      "at": "2026-11-05T14:32:23.657Z",
+      "monotonicMs": 7475.641425,
+      "attempt": 2,
+      "phase": "registration-state",
+      "label": "old-active-ready",
+      "value": {
+        "documentState": "complete",
+        "loadSeen": true,
+        "events": [
+          {
+            "kind": "window.load",
+            "time": 25,
+            "state": "complete",
+            "controller": null
+          },
+          {
+            "kind": "controllerchange",
+            "time": 689.4000000357628,
+            "state": "complete",
+            "controller": "activating"
+          }
+        ],
+        "scope": "http://127.0.0.1:59895/",
+        "active": {
+          "state": "activated",
+          "url": "http://127.0.0.1:59895/sw.js"
+        },
+        "waiting": null,
+        "installing": null,
+        "controller": {
+          "state": "activated",
+          "url": "http://127.0.0.1:59895/sw.js"
+        }
+      }
+    }
+  ],
+  "suspectReadyBefore": [
+    {
+      "at": "2026-11-05T14:32:25.741Z",
+      "monotonicMs": 9558.957139,
+      "attempt": 3,
+      "phase": "page-event",
+      "text": "SW_ADMISSION {\"kind\":\"ready-before\",\"state\":\"complete\",\"loaded\":true,\"controller\":null}"
+    }
+  ],
+  "suspectLoadResolved": true,
+  "suspectUpdateStarted": false,
+  "resetsStarted": [],
+  "ordinaryProofReached": false,
+  "supervisor": {
+    "exit": 1,
+    "runnerExit": 1,
+    "watchdogTimedOut": false,
+    "monitorError": null,
+    "cleanupErrors": [],
+    "forcedRunnerCleanup": false,
+    "forcedBrowserCleanup": false,
+    "remaining": []
+  },
+  "profileCount": 2,
+  "noAppAuthDbHono": true,
+  "causeLimit": "upgrade history differs; no sole-bypass/originalP/business/privacy verdict"
+}

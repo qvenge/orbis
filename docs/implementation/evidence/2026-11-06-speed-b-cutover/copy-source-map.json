@@ -1,0 +1,1836 @@
+[
+  {
+    "destination": "source/node1/bun/identity.ts",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/final-p-node-bound/bun/identity.ts",
+    "sourceSha256": "4b2eb36db1e6237fc1ebd26d966aee469bf64a71214da3da76c51e133450e340",
+    "copiedSha256": "4b2eb36db1e6237fc1ebd26d966aee469bf64a71214da3da76c51e133450e340",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "source/node1/bun/launcher.ts",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/final-p-node-bound/bun/launcher.ts",
+    "sourceSha256": "2eecfe01074fe243e2f66bada9e10079de323c53106430104fc4f8af8414ab93",
+    "copiedSha256": "2eecfe01074fe243e2f66bada9e10079de323c53106430104fc4f8af8414ab93",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "source/node1/identity.ts",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/final-p-node-bound/identity.ts",
+    "sourceSha256": "ecd2f10d03c0e07c108e756176807f82729f16a734a3f049c3ba0f8bdd594cfe",
+    "copiedSha256": "ecd2f10d03c0e07c108e756176807f82729f16a734a3f049c3ba0f8bdd594cfe",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "source/node1/lifecycle-observer.ts",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/final-p-node-bound/lifecycle-observer.ts",
+    "sourceSha256": "7ff9fabb71955dda2a32235cc353ece1ecebbdc5290af698c35177a475cbabaf",
+    "copiedSha256": "7ff9fabb71955dda2a32235cc353ece1ecebbdc5290af698c35177a475cbabaf",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "source/node1/node-http.ts",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/final-p-node-bound/node-http.ts",
+    "sourceSha256": "641fcc3e3f4586fdf0d1e0c98037d8aede43fdaf26faa2a7d61ad19ba514fbfb",
+    "copiedSha256": "641fcc3e3f4586fdf0d1e0c98037d8aede43fdaf26faa2a7d61ad19ba514fbfb",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "source/node1/node-platform.ts",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/final-p-node-bound/node-platform.ts",
+    "sourceSha256": "05a309faadbf5c8b5bf487ff02f1e972c250aca0d4eef0de2968ec82b7dcdc73",
+    "copiedSha256": "05a309faadbf5c8b5bf487ff02f1e972c250aca0d4eef0de2968ec82b7dcdc73",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "source/node1/package.json",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/final-p-node-bound/package.json",
+    "sourceSha256": "abd00ef79acd4a6bcb0c30115dbe6b3951b7925df9579ec0749dfaa8ff07e617",
+    "copiedSha256": "abd00ef79acd4a6bcb0c30115dbe6b3951b7925df9579ec0749dfaa8ff07e617",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "source/node1/pins.json",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/final-p-node-bound/pins.json",
+    "sourceSha256": "499af280efd8a70289565879833f3eb1e45c62e007f26dee6949af4b1515d5bb",
+    "copiedSha256": "499af280efd8a70289565879833f3eb1e45c62e007f26dee6949af4b1515d5bb",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "source/node1/preflight.py",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/final-p-node-bound/preflight.py",
+    "sourceSha256": "a95e04f6db4104ab3601c779b2f4e327b74318fec352fedaa67a4f7eeb3c7448",
+    "copiedSha256": "a95e04f6db4104ab3601c779b2f4e327b74318fec352fedaa67a4f7eeb3c7448",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "source/node1/rehearsal.ts",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/final-p-node-bound/rehearsal.ts",
+    "sourceSha256": "1ad0f9001d828f01c21656e7704f0ec65eaeb7d93a361399602ebe1bee8a2834",
+    "copiedSha256": "1ad0f9001d828f01c21656e7704f0ec65eaeb7d93a361399602ebe1bee8a2834",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "source/node1/run-node-p.py",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/final-p-node-bound/run-node-p.py",
+    "sourceSha256": "1018cb00f04e8c8ac38f4d7d1bb8c747341be3c1b9ee96862a63cb23afafd1af",
+    "copiedSha256": "1018cb00f04e8c8ac38f4d7d1bb8c747341be3c1b9ee96862a63cb23afafd1af",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "source/node1/supervisor.py",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/final-p-node-bound/supervisor.py",
+    "sourceSha256": "6a02351a40558f251ca85adbe504a8c3bb426a814352ceef92299a86e85f1123",
+    "copiedSha256": "6a02351a40558f251ca85adbe504a8c3bb426a814352ceef92299a86e85f1123",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "source/node1/validators.bun.ts",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/final-p-node-bound/validators.bun.ts",
+    "sourceSha256": "9f11fee0d9dea98e177704000f7ffd6bcbbc20e28abca5d38cab6e26863c6704",
+    "copiedSha256": "9f11fee0d9dea98e177704000f7ffd6bcbbc20e28abca5d38cab6e26863c6704",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "source/node1/SOURCE_SHA256SUMS",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/final-p-node-bound/SOURCE_SHA256SUMS",
+    "sourceSha256": "2a93c4509ba08e6ae1e82b1dcb6e7a9180019469db3e5750dd8588c6fc77081d",
+    "copiedSha256": "2a93c4509ba08e6ae1e82b1dcb6e7a9180019469db3e5750dd8588c6fc77081d",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "source/node2/bun/identity.ts",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/final-p-node2-bound/bun/identity.ts",
+    "sourceSha256": "4322702c66f2d269547f177335bdd121578bc800dd81b1aec0514688b3171176",
+    "copiedSha256": "4322702c66f2d269547f177335bdd121578bc800dd81b1aec0514688b3171176",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "source/node2/bun/launcher.ts",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/final-p-node2-bound/bun/launcher.ts",
+    "sourceSha256": "2eecfe01074fe243e2f66bada9e10079de323c53106430104fc4f8af8414ab93",
+    "copiedSha256": "2eecfe01074fe243e2f66bada9e10079de323c53106430104fc4f8af8414ab93",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "source/node2/identity.ts",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/final-p-node2-bound/identity.ts",
+    "sourceSha256": "01449401ab3196a2f5c7154772c630e0ba1dc6efa2b2b97527ca81fffb4f955e",
+    "copiedSha256": "01449401ab3196a2f5c7154772c630e0ba1dc6efa2b2b97527ca81fffb4f955e",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "source/node2/lifecycle-observer.ts",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/final-p-node2-bound/lifecycle-observer.ts",
+    "sourceSha256": "7ff9fabb71955dda2a32235cc353ece1ecebbdc5290af698c35177a475cbabaf",
+    "copiedSha256": "7ff9fabb71955dda2a32235cc353ece1ecebbdc5290af698c35177a475cbabaf",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "source/node2/node-http.ts",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/final-p-node2-bound/node-http.ts",
+    "sourceSha256": "641fcc3e3f4586fdf0d1e0c98037d8aede43fdaf26faa2a7d61ad19ba514fbfb",
+    "copiedSha256": "641fcc3e3f4586fdf0d1e0c98037d8aede43fdaf26faa2a7d61ad19ba514fbfb",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "source/node2/node-platform.ts",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/final-p-node2-bound/node-platform.ts",
+    "sourceSha256": "05a309faadbf5c8b5bf487ff02f1e972c250aca0d4eef0de2968ec82b7dcdc73",
+    "copiedSha256": "05a309faadbf5c8b5bf487ff02f1e972c250aca0d4eef0de2968ec82b7dcdc73",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "source/node2/package.json",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/final-p-node2-bound/package.json",
+    "sourceSha256": "abd00ef79acd4a6bcb0c30115dbe6b3951b7925df9579ec0749dfaa8ff07e617",
+    "copiedSha256": "abd00ef79acd4a6bcb0c30115dbe6b3951b7925df9579ec0749dfaa8ff07e617",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "source/node2/pins.json",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/final-p-node2-bound/pins.json",
+    "sourceSha256": "903419315caa7cae6a245e38e5f730e611e9539d02e75bc4002f89a676ca0779",
+    "copiedSha256": "903419315caa7cae6a245e38e5f730e611e9539d02e75bc4002f89a676ca0779",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "source/node2/preflight.py",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/final-p-node2-bound/preflight.py",
+    "sourceSha256": "2cf21a27384b2dff2b3b6b0fdaf98390bfb021b05b588b9b000db48e8f682502",
+    "copiedSha256": "2cf21a27384b2dff2b3b6b0fdaf98390bfb021b05b588b9b000db48e8f682502",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "source/node2/rehearsal.ts",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/final-p-node2-bound/rehearsal.ts",
+    "sourceSha256": "2f26ef33c99eab979fbd7710de13d32c205edcea1e31af1b724dff2ef1a9e875",
+    "copiedSha256": "2f26ef33c99eab979fbd7710de13d32c205edcea1e31af1b724dff2ef1a9e875",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "source/node2/run-node-p.py",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/final-p-node2-bound/run-node-p.py",
+    "sourceSha256": "1018cb00f04e8c8ac38f4d7d1bb8c747341be3c1b9ee96862a63cb23afafd1af",
+    "copiedSha256": "1018cb00f04e8c8ac38f4d7d1bb8c747341be3c1b9ee96862a63cb23afafd1af",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "source/node2/supervisor.py",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/final-p-node2-bound/supervisor.py",
+    "sourceSha256": "6a02351a40558f251ca85adbe504a8c3bb426a814352ceef92299a86e85f1123",
+    "copiedSha256": "6a02351a40558f251ca85adbe504a8c3bb426a814352ceef92299a86e85f1123",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "source/node2/validators.bun.ts",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/final-p-node2-bound/validators.bun.ts",
+    "sourceSha256": "9f11fee0d9dea98e177704000f7ffd6bcbbc20e28abca5d38cab6e26863c6704",
+    "copiedSha256": "9f11fee0d9dea98e177704000f7ffd6bcbbc20e28abca5d38cab6e26863c6704",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "source/node2/SOURCE_SHA256SUMS",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/final-p-node2-bound/SOURCE_SHA256SUMS",
+    "sourceSha256": "8344af680504ee04b6cb8511b6a5b79322f61c0852b72057c48b089135691eb3",
+    "copiedSha256": "8344af680504ee04b6cb8511b6a5b79322f61c0852b72057c48b089135691eb3",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "source/node3/bun/identity.ts",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/final-p-node3-bound/bun/identity.ts",
+    "sourceSha256": "a81e6c06116ba10d7f071ec56e3c3e8cefeaf484c95e1020ace4b44b22ac6960",
+    "copiedSha256": "a81e6c06116ba10d7f071ec56e3c3e8cefeaf484c95e1020ace4b44b22ac6960",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "source/node3/bun/launcher.ts",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/final-p-node3-bound/bun/launcher.ts",
+    "sourceSha256": "2eecfe01074fe243e2f66bada9e10079de323c53106430104fc4f8af8414ab93",
+    "copiedSha256": "2eecfe01074fe243e2f66bada9e10079de323c53106430104fc4f8af8414ab93",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "source/node3/identity.ts",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/final-p-node3-bound/identity.ts",
+    "sourceSha256": "ad86db049e703df32e379e9c55cb42e870149f870bee1533e05b612637bc80ab",
+    "copiedSha256": "ad86db049e703df32e379e9c55cb42e870149f870bee1533e05b612637bc80ab",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "source/node3/lifecycle-observer.ts",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/final-p-node3-bound/lifecycle-observer.ts",
+    "sourceSha256": "7ff9fabb71955dda2a32235cc353ece1ecebbdc5290af698c35177a475cbabaf",
+    "copiedSha256": "7ff9fabb71955dda2a32235cc353ece1ecebbdc5290af698c35177a475cbabaf",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "source/node3/node-http.ts",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/final-p-node3-bound/node-http.ts",
+    "sourceSha256": "641fcc3e3f4586fdf0d1e0c98037d8aede43fdaf26faa2a7d61ad19ba514fbfb",
+    "copiedSha256": "641fcc3e3f4586fdf0d1e0c98037d8aede43fdaf26faa2a7d61ad19ba514fbfb",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "source/node3/node-platform.ts",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/final-p-node3-bound/node-platform.ts",
+    "sourceSha256": "05a309faadbf5c8b5bf487ff02f1e972c250aca0d4eef0de2968ec82b7dcdc73",
+    "copiedSha256": "05a309faadbf5c8b5bf487ff02f1e972c250aca0d4eef0de2968ec82b7dcdc73",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "source/node3/package.json",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/final-p-node3-bound/package.json",
+    "sourceSha256": "abd00ef79acd4a6bcb0c30115dbe6b3951b7925df9579ec0749dfaa8ff07e617",
+    "copiedSha256": "abd00ef79acd4a6bcb0c30115dbe6b3951b7925df9579ec0749dfaa8ff07e617",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "source/node3/pins.json",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/final-p-node3-bound/pins.json",
+    "sourceSha256": "2f0fdd3c13c093845f0abb9ea517d4b85571dcf2a0d6681d96b88f5fc3b89d80",
+    "copiedSha256": "2f0fdd3c13c093845f0abb9ea517d4b85571dcf2a0d6681d96b88f5fc3b89d80",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "source/node3/preflight.py",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/final-p-node3-bound/preflight.py",
+    "sourceSha256": "66e1a906345b1226780a3446181271931ce1665e2a5a19c4fbaa8c24841847b4",
+    "copiedSha256": "66e1a906345b1226780a3446181271931ce1665e2a5a19c4fbaa8c24841847b4",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "source/node3/rehearsal.ts",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/final-p-node3-bound/rehearsal.ts",
+    "sourceSha256": "b5a2153dc1882ad205ea169960a17052909a9f8f60d5635db1ab1d16a1311eab",
+    "copiedSha256": "b5a2153dc1882ad205ea169960a17052909a9f8f60d5635db1ab1d16a1311eab",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "source/node3/run-node-p.py",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/final-p-node3-bound/run-node-p.py",
+    "sourceSha256": "1018cb00f04e8c8ac38f4d7d1bb8c747341be3c1b9ee96862a63cb23afafd1af",
+    "copiedSha256": "1018cb00f04e8c8ac38f4d7d1bb8c747341be3c1b9ee96862a63cb23afafd1af",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "source/node3/supervisor.py",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/final-p-node3-bound/supervisor.py",
+    "sourceSha256": "6a02351a40558f251ca85adbe504a8c3bb426a814352ceef92299a86e85f1123",
+    "copiedSha256": "6a02351a40558f251ca85adbe504a8c3bb426a814352ceef92299a86e85f1123",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "source/node3/validators.bun.ts",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/final-p-node3-bound/validators.bun.ts",
+    "sourceSha256": "ca4c55b9805c1b598e30e56b13aa913b154a4e1a93ffca48894e132e2ca66181",
+    "copiedSha256": "ca4c55b9805c1b598e30e56b13aa913b154a4e1a93ffca48894e132e2ca66181",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "source/node3/SOURCE_SHA256SUMS",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/final-p-node3-bound/SOURCE_SHA256SUMS",
+    "sourceSha256": "39ad3c37ed8eb875e01b9f696b26cc7db82549b413d59d6b665c2f6cb07c6c7e",
+    "copiedSha256": "39ad3c37ed8eb875e01b9f696b26cc7db82549b413d59d6b665c2f6cb07c6c7e",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "source/node4/bun/identity.ts",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/final-p-node4-bound/bun/identity.ts",
+    "sourceSha256": "900e185ca24acdfde7c15e76ce353f89d7f89a098a3821056450e3d7b22be893",
+    "copiedSha256": "900e185ca24acdfde7c15e76ce353f89d7f89a098a3821056450e3d7b22be893",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "source/node4/bun/launcher.ts",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/final-p-node4-bound/bun/launcher.ts",
+    "sourceSha256": "2eecfe01074fe243e2f66bada9e10079de323c53106430104fc4f8af8414ab93",
+    "copiedSha256": "2eecfe01074fe243e2f66bada9e10079de323c53106430104fc4f8af8414ab93",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "source/node4/identity.ts",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/final-p-node4-bound/identity.ts",
+    "sourceSha256": "02237553ea412ca9aebaba235b7b2661532d72d0cb1e24748c66ab71146b3982",
+    "copiedSha256": "02237553ea412ca9aebaba235b7b2661532d72d0cb1e24748c66ab71146b3982",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "source/node4/lifecycle-observer.ts",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/final-p-node4-bound/lifecycle-observer.ts",
+    "sourceSha256": "7ff9fabb71955dda2a32235cc353ece1ecebbdc5290af698c35177a475cbabaf",
+    "copiedSha256": "7ff9fabb71955dda2a32235cc353ece1ecebbdc5290af698c35177a475cbabaf",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "source/node4/node-http.ts",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/final-p-node4-bound/node-http.ts",
+    "sourceSha256": "641fcc3e3f4586fdf0d1e0c98037d8aede43fdaf26faa2a7d61ad19ba514fbfb",
+    "copiedSha256": "641fcc3e3f4586fdf0d1e0c98037d8aede43fdaf26faa2a7d61ad19ba514fbfb",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "source/node4/node-platform.ts",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/final-p-node4-bound/node-platform.ts",
+    "sourceSha256": "05a309faadbf5c8b5bf487ff02f1e972c250aca0d4eef0de2968ec82b7dcdc73",
+    "copiedSha256": "05a309faadbf5c8b5bf487ff02f1e972c250aca0d4eef0de2968ec82b7dcdc73",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "source/node4/package.json",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/final-p-node4-bound/package.json",
+    "sourceSha256": "abd00ef79acd4a6bcb0c30115dbe6b3951b7925df9579ec0749dfaa8ff07e617",
+    "copiedSha256": "abd00ef79acd4a6bcb0c30115dbe6b3951b7925df9579ec0749dfaa8ff07e617",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "source/node4/pins.json",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/final-p-node4-bound/pins.json",
+    "sourceSha256": "91ad7e96b09665f94c5b9c5959f95b24cafd9ef209a0dba1c2aa4f7e332ef0ff",
+    "copiedSha256": "91ad7e96b09665f94c5b9c5959f95b24cafd9ef209a0dba1c2aa4f7e332ef0ff",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "source/node4/preflight.py",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/final-p-node4-bound/preflight.py",
+    "sourceSha256": "44af4d70c0be5bba2bff6f2932093305dd42741be3464ed31129a7c428658e56",
+    "copiedSha256": "44af4d70c0be5bba2bff6f2932093305dd42741be3464ed31129a7c428658e56",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "source/node4/rehearsal.ts",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/final-p-node4-bound/rehearsal.ts",
+    "sourceSha256": "c59b25b479f3b657a87d75081947e6558409d3678f231eb7b44dcf4bd26a8a30",
+    "copiedSha256": "c59b25b479f3b657a87d75081947e6558409d3678f231eb7b44dcf4bd26a8a30",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "source/node4/run-node-p.py",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/final-p-node4-bound/run-node-p.py",
+    "sourceSha256": "1018cb00f04e8c8ac38f4d7d1bb8c747341be3c1b9ee96862a63cb23afafd1af",
+    "copiedSha256": "1018cb00f04e8c8ac38f4d7d1bb8c747341be3c1b9ee96862a63cb23afafd1af",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "source/node4/supervisor.py",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/final-p-node4-bound/supervisor.py",
+    "sourceSha256": "6a02351a40558f251ca85adbe504a8c3bb426a814352ceef92299a86e85f1123",
+    "copiedSha256": "6a02351a40558f251ca85adbe504a8c3bb426a814352ceef92299a86e85f1123",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "source/node4/validators.bun.ts",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/final-p-node4-bound/validators.bun.ts",
+    "sourceSha256": "ca4c55b9805c1b598e30e56b13aa913b154a4e1a93ffca48894e132e2ca66181",
+    "copiedSha256": "ca4c55b9805c1b598e30e56b13aa913b154a4e1a93ffca48894e132e2ca66181",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "source/node4/SOURCE_SHA256SUMS",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/final-p-node4-bound/SOURCE_SHA256SUMS",
+    "sourceSha256": "8321c4b94508b05cede7bc88592e4042ac86d02113c633ce6f99383cf70b3f41",
+    "copiedSha256": "8321c4b94508b05cede7bc88592e4042ac86d02113c633ce6f99383cf70b3f41",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "runs/node1/stderr.log",
+    "source": "/private/tmp/orbis-cutover-node-p.mrp_aylk/stderr.log",
+    "sourceSha256": "16305aec770796b94cc1cf5ed4bdfa7217314f2fa8ca30baf270ad03fec9a9eb",
+    "copiedSha256": "16305aec770796b94cc1cf5ed4bdfa7217314f2fa8ca30baf270ad03fec9a9eb",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "runs/node1/run-config.json",
+    "source": "/private/tmp/orbis-cutover-node-p.mrp_aylk/run-config.json",
+    "sourceSha256": "ca74ab76ef6726e1190ee75cb6fea4a069bc9d6151837ca884f9494de18b9d5c",
+    "copiedSha256": "ca74ab76ef6726e1190ee75cb6fea4a069bc9d6151837ca884f9494de18b9d5c",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "runs/node1/exit",
+    "source": "/private/tmp/orbis-cutover-node-p.mrp_aylk/exit",
+    "sourceSha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865",
+    "copiedSha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "runs/node1/trace.jsonl",
+    "source": "/private/tmp/orbis-cutover-node-p.mrp_aylk/trace.jsonl",
+    "sourceSha256": "ab97275a0a0e03867d712b2eb2d165c007733e08084c5df7f6cb0adb3fdde271",
+    "copiedSha256": "ab97275a0a0e03867d712b2eb2d165c007733e08084c5df7f6cb0adb3fdde271",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "runs/node1/watchdog-summary.json",
+    "source": "/private/tmp/orbis-cutover-node-p.mrp_aylk/watchdog-summary.json",
+    "sourceSha256": "589ae8d49b23798cfb8fdb26d7f891b01712a974d1dd973e5729d4507fa9aa86",
+    "copiedSha256": "589ae8d49b23798cfb8fdb26d7f891b01712a974d1dd973e5729d4507fa9aa86",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "runs/node1/preflight.json",
+    "source": "/private/tmp/orbis-cutover-node-p.mrp_aylk/preflight.json",
+    "sourceSha256": "cbee099bf12d7286699733f20502a787f12586a48cedea0d01b266bb2859059e",
+    "copiedSha256": "cbee099bf12d7286699733f20502a787f12586a48cedea0d01b266bb2859059e",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "runs/node1/run/request-journal.json",
+    "source": "/private/tmp/orbis-cutover-node-p.mrp_aylk/run/request-journal.json",
+    "sourceSha256": "65e8f4ece0badf089345bcfefa320281d13fb72345826d2cb6fbd71e4cfbe638",
+    "copiedSha256": "65e8f4ece0badf089345bcfefa320281d13fb72345826d2cb6fbd71e4cfbe638",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "runs/node1/run/original-failure.json",
+    "source": "/private/tmp/orbis-cutover-node-p.mrp_aylk/run/original-failure.json",
+    "sourceSha256": "5ba087f71e022da47d3cbedd890b55fe9ca85a9fb9f7b2f70759eb8e108fa21a",
+    "copiedSha256": "5ba087f71e022da47d3cbedd890b55fe9ca85a9fb9f7b2f70759eb8e108fa21a",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "runs/node1/run/owned-children.jsonl",
+    "source": "/private/tmp/orbis-cutover-node-p.mrp_aylk/run/owned-children.jsonl",
+    "sourceSha256": "daa5c5e0594cca6e691a3a4341c853358f8196d2ee398987dab01e05a18d4358",
+    "copiedSha256": "daa5c5e0594cca6e691a3a4341c853358f8196d2ee398987dab01e05a18d4358",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "runs/node1/run/d2-browser-route.json",
+    "source": "/private/tmp/orbis-cutover-node-p.mrp_aylk/run/d2-browser-route.json",
+    "sourceSha256": "416a2a78efc5c85d227047416564be44b76d6a55ed02febb60069badc82cc41c",
+    "copiedSha256": "416a2a78efc5c85d227047416564be44b76d6a55ed02febb60069badc82cc41c",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "runs/node1/run/migrate.log",
+    "source": "/private/tmp/orbis-cutover-node-p.mrp_aylk/run/migrate.log",
+    "sourceSha256": "8ae2cd8c610836e3bd52c7b825eda9370e40a1cc918597db47f0a729eac4c5e9",
+    "copiedSha256": "8ae2cd8c610836e3bd52c7b825eda9370e40a1cc918597db47f0a729eac4c5e9",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "runs/node1/run/migrate.stderr.log",
+    "source": "/private/tmp/orbis-cutover-node-p.mrp_aylk/run/migrate.stderr.log",
+    "sourceSha256": "4f3a343569a717efe065f9c0725a68379396af2558b49960a08a570234c50c92",
+    "copiedSha256": "4f3a343569a717efe065f9c0725a68379396af2558b49960a08a570234c50c92",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "runs/node1/run/1-before-d2-precondition.input.json",
+    "source": "/private/tmp/orbis-cutover-node-p.mrp_aylk/run/1-before-d2-precondition.input.json",
+    "sourceSha256": "2b687dfd79eb4f89fbfc9688ac07406926223adb820a04a20aa6509d2b938139",
+    "copiedSha256": "2b687dfd79eb4f89fbfc9688ac07406926223adb820a04a20aa6509d2b938139",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "runs/node1/run/2-before-d2-submit.input.json",
+    "source": "/private/tmp/orbis-cutover-node-p.mrp_aylk/run/2-before-d2-submit.input.json",
+    "sourceSha256": "61fb021ad6ced1db9b90cc9c2f7d3865eed841175922ac7ed60936e38508fbe2",
+    "copiedSha256": "61fb021ad6ced1db9b90cc9c2f7d3865eed841175922ac7ed60936e38508fbe2",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "runs/node1/run/3-after-d2-queue-observed.input.json",
+    "source": "/private/tmp/orbis-cutover-node-p.mrp_aylk/run/3-after-d2-queue-observed.input.json",
+    "sourceSha256": "7241d2fc5ea0df340e2bc8ad5233f0303e8ed5dfbd5c7199fe8b0388123f9f63",
+    "copiedSha256": "7241d2fc5ea0df340e2bc8ad5233f0303e8ed5dfbd5c7199fe8b0388123f9f63",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "runs/node1/run/4-before-old-exit.input.json",
+    "source": "/private/tmp/orbis-cutover-node-p.mrp_aylk/run/4-before-old-exit.input.json",
+    "sourceSha256": "4064fc8f9036516082c83fe895c6ed864b2c5103962ae5e345a54409f3fdf6bc",
+    "copiedSha256": "4064fc8f9036516082c83fe895c6ed864b2c5103962ae5e345a54409f3fdf6bc",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "runs/node2/stderr.log",
+    "source": "/private/tmp/orbis-cutover-node-p.shy83qv9/stderr.log",
+    "sourceSha256": "2f4b07fca5dcdd9fac260becef413540b74e8094a3e9157db663e7ed9740b46b",
+    "copiedSha256": "2f4b07fca5dcdd9fac260becef413540b74e8094a3e9157db663e7ed9740b46b",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "runs/node2/run-config.json",
+    "source": "/private/tmp/orbis-cutover-node-p.shy83qv9/run-config.json",
+    "sourceSha256": "2966964cbd0604ba3c8d9f89a8abbddc6fc9b973404860302cc19d44030cdcf3",
+    "copiedSha256": "2966964cbd0604ba3c8d9f89a8abbddc6fc9b973404860302cc19d44030cdcf3",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "runs/node2/exit",
+    "source": "/private/tmp/orbis-cutover-node-p.shy83qv9/exit",
+    "sourceSha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865",
+    "copiedSha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "runs/node2/trace.jsonl",
+    "source": "/private/tmp/orbis-cutover-node-p.shy83qv9/trace.jsonl",
+    "sourceSha256": "d3211fb467a39878caf351feb8ab64014120bb96df8aac367777a799fdea35fa",
+    "copiedSha256": "d3211fb467a39878caf351feb8ab64014120bb96df8aac367777a799fdea35fa",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "runs/node2/watchdog-summary.json",
+    "source": "/private/tmp/orbis-cutover-node-p.shy83qv9/watchdog-summary.json",
+    "sourceSha256": "1f99cf3e2ab117f033133f106125abf076692d9720eedda6b863305179dae964",
+    "copiedSha256": "1f99cf3e2ab117f033133f106125abf076692d9720eedda6b863305179dae964",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "runs/node2/preflight.json",
+    "source": "/private/tmp/orbis-cutover-node-p.shy83qv9/preflight.json",
+    "sourceSha256": "1056d7add82579cb3326010a8999bb6a5600ceb8477ca248892c9bdf8c530ba4",
+    "copiedSha256": "1056d7add82579cb3326010a8999bb6a5600ceb8477ca248892c9bdf8c530ba4",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "runs/node2/run/request-journal.json",
+    "source": "/private/tmp/orbis-cutover-node-p.shy83qv9/run/request-journal.json",
+    "sourceSha256": "5dc1dbdf9cb6ffe2c2a73b3a603ab33876ca0923decc90af4653b38c2bd97aa6",
+    "copiedSha256": "5dc1dbdf9cb6ffe2c2a73b3a603ab33876ca0923decc90af4653b38c2bd97aa6",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "runs/node2/run/original-failure.json",
+    "source": "/private/tmp/orbis-cutover-node-p.shy83qv9/run/original-failure.json",
+    "sourceSha256": "bb32a87a0d2a114bc3c7d102a27411f62db2cedc4909b31945fa9ab38500b7ae",
+    "copiedSha256": "bb32a87a0d2a114bc3c7d102a27411f62db2cedc4909b31945fa9ab38500b7ae",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "runs/node2/run/owned-children.jsonl",
+    "source": "/private/tmp/orbis-cutover-node-p.shy83qv9/run/owned-children.jsonl",
+    "sourceSha256": "c1463d92f6820139c991b6b3281949c5395cba29b35c48294905e7e65f7c6722",
+    "copiedSha256": "c1463d92f6820139c991b6b3281949c5395cba29b35c48294905e7e65f7c6722",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "runs/node2/run/d2-browser-route.json",
+    "source": "/private/tmp/orbis-cutover-node-p.shy83qv9/run/d2-browser-route.json",
+    "sourceSha256": "504e17f212e44e658228f91e451528f4c57fb026555bd5eac50c2724d11332a4",
+    "copiedSha256": "504e17f212e44e658228f91e451528f4c57fb026555bd5eac50c2724d11332a4",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "runs/node2/run/migrate.log",
+    "source": "/private/tmp/orbis-cutover-node-p.shy83qv9/run/migrate.log",
+    "sourceSha256": "8ae2cd8c610836e3bd52c7b825eda9370e40a1cc918597db47f0a729eac4c5e9",
+    "copiedSha256": "8ae2cd8c610836e3bd52c7b825eda9370e40a1cc918597db47f0a729eac4c5e9",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "runs/node2/run/migrate.stderr.log",
+    "source": "/private/tmp/orbis-cutover-node-p.shy83qv9/run/migrate.stderr.log",
+    "sourceSha256": "4f3a343569a717efe065f9c0725a68379396af2558b49960a08a570234c50c92",
+    "copiedSha256": "4f3a343569a717efe065f9c0725a68379396af2558b49960a08a570234c50c92",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "runs/node2/run/1-before-d2-precondition.input.json",
+    "source": "/private/tmp/orbis-cutover-node-p.shy83qv9/run/1-before-d2-precondition.input.json",
+    "sourceSha256": "2154de2f4ed68736e5397334cf935d1f4b272091992e08e75baecc6e9d2ab5a2",
+    "copiedSha256": "2154de2f4ed68736e5397334cf935d1f4b272091992e08e75baecc6e9d2ab5a2",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "runs/node2/run/2-before-d2-submit.input.json",
+    "source": "/private/tmp/orbis-cutover-node-p.shy83qv9/run/2-before-d2-submit.input.json",
+    "sourceSha256": "189c668efd239c518d9b43c1a8a8f240e1d4c405a65431823b3447af2d21a479",
+    "copiedSha256": "189c668efd239c518d9b43c1a8a8f240e1d4c405a65431823b3447af2d21a479",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "runs/node2/run/3-after-d2-queue-observed.input.json",
+    "source": "/private/tmp/orbis-cutover-node-p.shy83qv9/run/3-after-d2-queue-observed.input.json",
+    "sourceSha256": "d8fc744027d6ca1c421b350114759f93fc4907bc51348d9288bed8124b41379f",
+    "copiedSha256": "d8fc744027d6ca1c421b350114759f93fc4907bc51348d9288bed8124b41379f",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "runs/node2/run/4-before-old-exit.input.json",
+    "source": "/private/tmp/orbis-cutover-node-p.shy83qv9/run/4-before-old-exit.input.json",
+    "sourceSha256": "b7d72590230a0ac6c3c1d7e64e3e2f7ccdd3e66a3913d7b20a745789ec93f2ee",
+    "copiedSha256": "b7d72590230a0ac6c3c1d7e64e3e2f7ccdd3e66a3913d7b20a745789ec93f2ee",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "runs/node2/run/5-after-current-start-before-recovery.input.json",
+    "source": "/private/tmp/orbis-cutover-node-p.shy83qv9/run/5-after-current-start-before-recovery.input.json",
+    "sourceSha256": "7722b66b10d583a60186f032dbabf019a0d8bc53c661a5fa81efa14e0b79bb7c",
+    "copiedSha256": "7722b66b10d583a60186f032dbabf019a0d8bc53c661a5fa81efa14e0b79bb7c",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "runs/node2/run/6-retained-d263aeea-76bf-4a5d-ad12-f4711df2c6de.input.json",
+    "source": "/private/tmp/orbis-cutover-node-p.shy83qv9/run/6-retained-d263aeea-76bf-4a5d-ad12-f4711df2c6de.input.json",
+    "sourceSha256": "36101177c9f7d52083455a73322cff1ee898868b43cb876b5b46c438b654a988",
+    "copiedSha256": "36101177c9f7d52083455a73322cff1ee898868b43cb876b5b46c438b654a988",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "runs/node3/stderr.log",
+    "source": "/private/tmp/orbis-cutover-node-p.17pk5k_j/stderr.log",
+    "sourceSha256": "aba24867fd771a08a8885855aed07b160c69d9dc124630c3cd09ee46261bf01e",
+    "copiedSha256": "aba24867fd771a08a8885855aed07b160c69d9dc124630c3cd09ee46261bf01e",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "runs/node3/run-config.json",
+    "source": "/private/tmp/orbis-cutover-node-p.17pk5k_j/run-config.json",
+    "sourceSha256": "86704e7e5d65f053953b7332100513c5c517947eebcd439abe7f63cd0fe934b8",
+    "copiedSha256": "86704e7e5d65f053953b7332100513c5c517947eebcd439abe7f63cd0fe934b8",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "runs/node3/exit",
+    "source": "/private/tmp/orbis-cutover-node-p.17pk5k_j/exit",
+    "sourceSha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865",
+    "copiedSha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "runs/node3/trace.jsonl",
+    "source": "/private/tmp/orbis-cutover-node-p.17pk5k_j/trace.jsonl",
+    "sourceSha256": "9f0744827393303ad57f466176dd1f618ddc7d74276fba8b63aa721eacb840b3",
+    "copiedSha256": "9f0744827393303ad57f466176dd1f618ddc7d74276fba8b63aa721eacb840b3",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "runs/node3/watchdog-summary.json",
+    "source": "/private/tmp/orbis-cutover-node-p.17pk5k_j/watchdog-summary.json",
+    "sourceSha256": "c194554e0da5490b878bdd9d51674d995bca7559aeb8892d58d337bf5b5e75ec",
+    "copiedSha256": "c194554e0da5490b878bdd9d51674d995bca7559aeb8892d58d337bf5b5e75ec",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "runs/node3/preflight.json",
+    "source": "/private/tmp/orbis-cutover-node-p.17pk5k_j/preflight.json",
+    "sourceSha256": "41c829db5ccfe3338c11eb55930f7f8c1224c22df578f6719f64e9b4520a6997",
+    "copiedSha256": "41c829db5ccfe3338c11eb55930f7f8c1224c22df578f6719f64e9b4520a6997",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "runs/node3/run/request-journal.json",
+    "source": "/private/tmp/orbis-cutover-node-p.17pk5k_j/run/request-journal.json",
+    "sourceSha256": "15a4141b34e622d6451e49bc2a6263f7a16a188839e06e0863845c627e551622",
+    "copiedSha256": "15a4141b34e622d6451e49bc2a6263f7a16a188839e06e0863845c627e551622",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "runs/node3/run/original-failure.json",
+    "source": "/private/tmp/orbis-cutover-node-p.17pk5k_j/run/original-failure.json",
+    "sourceSha256": "f87240ea067f98c3f3ba9940e9d4024f3ad174ecb533cc0c35e512f054560881",
+    "copiedSha256": "f87240ea067f98c3f3ba9940e9d4024f3ad174ecb533cc0c35e512f054560881",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "runs/node3/run/owned-children.jsonl",
+    "source": "/private/tmp/orbis-cutover-node-p.17pk5k_j/run/owned-children.jsonl",
+    "sourceSha256": "a923d25d687e17c58f6a2983988e2c0294c7bad7581e436f42975e0ff722c1d6",
+    "copiedSha256": "a923d25d687e17c58f6a2983988e2c0294c7bad7581e436f42975e0ff722c1d6",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "runs/node3/run/d2-browser-route.json",
+    "source": "/private/tmp/orbis-cutover-node-p.17pk5k_j/run/d2-browser-route.json",
+    "sourceSha256": "a2e78b56a93a223377eca01bb51527583df5e096de50f1415d3d6867e6c57e2d",
+    "copiedSha256": "a2e78b56a93a223377eca01bb51527583df5e096de50f1415d3d6867e6c57e2d",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "runs/node3/run/migrate.log",
+    "source": "/private/tmp/orbis-cutover-node-p.17pk5k_j/run/migrate.log",
+    "sourceSha256": "8ae2cd8c610836e3bd52c7b825eda9370e40a1cc918597db47f0a729eac4c5e9",
+    "copiedSha256": "8ae2cd8c610836e3bd52c7b825eda9370e40a1cc918597db47f0a729eac4c5e9",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "runs/node3/run/migrate.stderr.log",
+    "source": "/private/tmp/orbis-cutover-node-p.17pk5k_j/run/migrate.stderr.log",
+    "sourceSha256": "4f3a343569a717efe065f9c0725a68379396af2558b49960a08a570234c50c92",
+    "copiedSha256": "4f3a343569a717efe065f9c0725a68379396af2558b49960a08a570234c50c92",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "runs/node3/run/1-before-d2-precondition.input.json",
+    "source": "/private/tmp/orbis-cutover-node-p.17pk5k_j/run/1-before-d2-precondition.input.json",
+    "sourceSha256": "084805617ad349aee1641f5a57c4628f86b48495ffef167c88fcf135065aab33",
+    "copiedSha256": "084805617ad349aee1641f5a57c4628f86b48495ffef167c88fcf135065aab33",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "runs/node3/run/2-before-d2-submit.input.json",
+    "source": "/private/tmp/orbis-cutover-node-p.17pk5k_j/run/2-before-d2-submit.input.json",
+    "sourceSha256": "1810e13600432467623d99be013c60c9916354b003a22418cfe4b3e06cabf4c4",
+    "copiedSha256": "1810e13600432467623d99be013c60c9916354b003a22418cfe4b3e06cabf4c4",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "runs/node3/run/3-after-d2-queue-observed.input.json",
+    "source": "/private/tmp/orbis-cutover-node-p.17pk5k_j/run/3-after-d2-queue-observed.input.json",
+    "sourceSha256": "23dabbb7693358e6a1273aea88966f22f3bd427a354e7458705d4094a923e28c",
+    "copiedSha256": "23dabbb7693358e6a1273aea88966f22f3bd427a354e7458705d4094a923e28c",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "runs/node3/run/4-before-old-exit.input.json",
+    "source": "/private/tmp/orbis-cutover-node-p.17pk5k_j/run/4-before-old-exit.input.json",
+    "sourceSha256": "a79672307a9220c4590102c18c2621f44014c1e5b5597bf5ef7a4b20ee47bf12",
+    "copiedSha256": "a79672307a9220c4590102c18c2621f44014c1e5b5597bf5ef7a4b20ee47bf12",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "runs/node3/run/5-after-current-start-before-recovery.input.json",
+    "source": "/private/tmp/orbis-cutover-node-p.17pk5k_j/run/5-after-current-start-before-recovery.input.json",
+    "sourceSha256": "97d4aabe439035b36e76e27b389371866a1890b11728bc48e80460b46fd9a454",
+    "copiedSha256": "97d4aabe439035b36e76e27b389371866a1890b11728bc48e80460b46fd9a454",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "runs/node3/run/6-retained-312c964d-45d0-47ec-99a0-1059829be854.input.json",
+    "source": "/private/tmp/orbis-cutover-node-p.17pk5k_j/run/6-retained-312c964d-45d0-47ec-99a0-1059829be854.input.json",
+    "sourceSha256": "a0f5feafe209521b1c9e1a00896bd45f8851c5e24e4749f194a23fad3bf4ed49",
+    "copiedSha256": "a0f5feafe209521b1c9e1a00896bd45f8851c5e24e4749f194a23fad3bf4ed49",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "runs/node3/run/7-retained-613f9403-99d2-407b-8b91-0436a6183924.input.json",
+    "source": "/private/tmp/orbis-cutover-node-p.17pk5k_j/run/7-retained-613f9403-99d2-407b-8b91-0436a6183924.input.json",
+    "sourceSha256": "11b587959e50f478fb479069fa7491f871586db149a7fe8a945eb15309d27e10",
+    "copiedSha256": "11b587959e50f478fb479069fa7491f871586db149a7fe8a945eb15309d27e10",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "runs/node4/stderr.log",
+    "source": "/private/tmp/orbis-cutover-node-p.xwm18hjr/stderr.log",
+    "sourceSha256": "a02e06100e0ce0246333a35d576804a15e8b1d4c62a2bcf0a7f10dcb3f71265c",
+    "copiedSha256": "a02e06100e0ce0246333a35d576804a15e8b1d4c62a2bcf0a7f10dcb3f71265c",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "runs/node4/run-config.json",
+    "source": "/private/tmp/orbis-cutover-node-p.xwm18hjr/run-config.json",
+    "sourceSha256": "4e969669ad2c1da0c16ea8ea1596983e5376fa4f124ce90aa9980b6c45e23894",
+    "copiedSha256": "4e969669ad2c1da0c16ea8ea1596983e5376fa4f124ce90aa9980b6c45e23894",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "runs/node4/exit",
+    "source": "/private/tmp/orbis-cutover-node-p.xwm18hjr/exit",
+    "sourceSha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "copiedSha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "runs/node4/trace.jsonl",
+    "source": "/private/tmp/orbis-cutover-node-p.xwm18hjr/trace.jsonl",
+    "sourceSha256": "38dcd6b5474633a082730ec6ddd3f3576e5f0126342a3ec8669760d0206607bf",
+    "copiedSha256": "38dcd6b5474633a082730ec6ddd3f3576e5f0126342a3ec8669760d0206607bf",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "runs/node4/watchdog-summary.json",
+    "source": "/private/tmp/orbis-cutover-node-p.xwm18hjr/watchdog-summary.json",
+    "sourceSha256": "24e3c520d37aae73337fc69e34d8c507a027c1133e083f9d34ca51eed873de45",
+    "copiedSha256": "24e3c520d37aae73337fc69e34d8c507a027c1133e083f9d34ca51eed873de45",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "runs/node4/preflight.json",
+    "source": "/private/tmp/orbis-cutover-node-p.xwm18hjr/preflight.json",
+    "sourceSha256": "8d15db9d98eee4e414ed722fb6d36d58c617376e33f2e80f11e14b11421d8e39",
+    "copiedSha256": "8d15db9d98eee4e414ed722fb6d36d58c617376e33f2e80f11e14b11421d8e39",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "runs/node4/run/request-journal.json",
+    "source": "/private/tmp/orbis-cutover-node-p.xwm18hjr/run/request-journal.json",
+    "sourceSha256": "262fbb2bdf00f430b73bafaee2b1358a4a46b7e94ff1c53b825ff9738a85908b",
+    "copiedSha256": "262fbb2bdf00f430b73bafaee2b1358a4a46b7e94ff1c53b825ff9738a85908b",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "runs/node4/run/owned-children.jsonl",
+    "source": "/private/tmp/orbis-cutover-node-p.xwm18hjr/run/owned-children.jsonl",
+    "sourceSha256": "13d65a32643f06f56a499a2594314d18d19fc77df3a118193ec1f496fada240e",
+    "copiedSha256": "13d65a32643f06f56a499a2594314d18d19fc77df3a118193ec1f496fada240e",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "runs/node4/run/d2-browser-route.json",
+    "source": "/private/tmp/orbis-cutover-node-p.xwm18hjr/run/d2-browser-route.json",
+    "sourceSha256": "0564d9a06f7c4fe62dac2222d035e3d2b4c031e329ce60abfae97f715452832b",
+    "copiedSha256": "0564d9a06f7c4fe62dac2222d035e3d2b4c031e329ce60abfae97f715452832b",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "runs/node4/run/migrate.log",
+    "source": "/private/tmp/orbis-cutover-node-p.xwm18hjr/run/migrate.log",
+    "sourceSha256": "8ae2cd8c610836e3bd52c7b825eda9370e40a1cc918597db47f0a729eac4c5e9",
+    "copiedSha256": "8ae2cd8c610836e3bd52c7b825eda9370e40a1cc918597db47f0a729eac4c5e9",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "runs/node4/run/migrate.stderr.log",
+    "source": "/private/tmp/orbis-cutover-node-p.xwm18hjr/run/migrate.stderr.log",
+    "sourceSha256": "4f3a343569a717efe065f9c0725a68379396af2558b49960a08a570234c50c92",
+    "copiedSha256": "4f3a343569a717efe065f9c0725a68379396af2558b49960a08a570234c50c92",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "runs/node4/run/1-before-d2-precondition.input.json",
+    "source": "/private/tmp/orbis-cutover-node-p.xwm18hjr/run/1-before-d2-precondition.input.json",
+    "sourceSha256": "3e779774ad668aa92aee51ef1f8ea2fc8e22c1ec408c1f2a7795582dff86abf0",
+    "copiedSha256": "3e779774ad668aa92aee51ef1f8ea2fc8e22c1ec408c1f2a7795582dff86abf0",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "runs/node4/run/10-retained-719dc284-c2ad-4e02-8a6d-f32d54d96bca.input.json",
+    "source": "/private/tmp/orbis-cutover-node-p.xwm18hjr/run/10-retained-719dc284-c2ad-4e02-8a6d-f32d54d96bca.input.json",
+    "sourceSha256": "6ce1e9fbece9aaa4ff39f79cbe7775bcedf66427fcb683b213d0cc39088704fe",
+    "copiedSha256": "6ce1e9fbece9aaa4ff39f79cbe7775bcedf66427fcb683b213d0cc39088704fe",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "runs/node4/run/2-before-d2-submit.input.json",
+    "source": "/private/tmp/orbis-cutover-node-p.xwm18hjr/run/2-before-d2-submit.input.json",
+    "sourceSha256": "826244d2e100c26874409e9ebe6e92cbea1c366a109ac5e931a65150de208630",
+    "copiedSha256": "826244d2e100c26874409e9ebe6e92cbea1c366a109ac5e931a65150de208630",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "runs/node4/run/3-after-d2-queue-observed.input.json",
+    "source": "/private/tmp/orbis-cutover-node-p.xwm18hjr/run/3-after-d2-queue-observed.input.json",
+    "sourceSha256": "785c8e28ddaf66f1ed85cc8ad73366de83297125b5fcf96bce855af034064056",
+    "copiedSha256": "785c8e28ddaf66f1ed85cc8ad73366de83297125b5fcf96bce855af034064056",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "runs/node4/run/4-before-old-exit.input.json",
+    "source": "/private/tmp/orbis-cutover-node-p.xwm18hjr/run/4-before-old-exit.input.json",
+    "sourceSha256": "9b13457654bf143fbd113b60771d7de2add33915f1473cda1442d68f068bb5b9",
+    "copiedSha256": "9b13457654bf143fbd113b60771d7de2add33915f1473cda1442d68f068bb5b9",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "runs/node4/run/5-after-current-start-before-recovery.input.json",
+    "source": "/private/tmp/orbis-cutover-node-p.xwm18hjr/run/5-after-current-start-before-recovery.input.json",
+    "sourceSha256": "87dfc6cad03b2628732d3221bcc715e2b46f34fa841979a5a12b575052b2f3ba",
+    "copiedSha256": "87dfc6cad03b2628732d3221bcc715e2b46f34fa841979a5a12b575052b2f3ba",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "runs/node4/run/6-retained-b681fbfc-ad00-4046-82db-bee5afa4f5db.input.json",
+    "source": "/private/tmp/orbis-cutover-node-p.xwm18hjr/run/6-retained-b681fbfc-ad00-4046-82db-bee5afa4f5db.input.json",
+    "sourceSha256": "03373503debee2c20a48725476689e05eecae13b1df4c6c870e11f506052c4f3",
+    "copiedSha256": "03373503debee2c20a48725476689e05eecae13b1df4c6c870e11f506052c4f3",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "runs/node4/run/7-retained-719dc284-c2ad-4e02-8a6d-f32d54d96bca.input.json",
+    "source": "/private/tmp/orbis-cutover-node-p.xwm18hjr/run/7-retained-719dc284-c2ad-4e02-8a6d-f32d54d96bca.input.json",
+    "sourceSha256": "afdd40c5947071d5670c04242ed519130cc8ef19699c8aadedcf5970ae7c2e85",
+    "copiedSha256": "afdd40c5947071d5670c04242ed519130cc8ef19699c8aadedcf5970ae7c2e85",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "runs/node4/run/8-before-discard-cancel.input.json",
+    "source": "/private/tmp/orbis-cutover-node-p.xwm18hjr/run/8-before-discard-cancel.input.json",
+    "sourceSha256": "781e3ea26fba8e23957b0822a2bbe20e4b4e5855d5f6ba6b659f89e86e8b2612",
+    "copiedSha256": "781e3ea26fba8e23957b0822a2bbe20e4b4e5855d5f6ba6b659f89e86e8b2612",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "runs/node4/run/9-after-discard-cancel.input.json",
+    "source": "/private/tmp/orbis-cutover-node-p.xwm18hjr/run/9-after-discard-cancel.input.json",
+    "sourceSha256": "d844a42c17ccd8a4162b281173bf212665291cbe96eb6d6f6fb7a9fb71db0f7f",
+    "copiedSha256": "d844a42c17ccd8a4162b281173bf212665291cbe96eb6d6f6fb7a9fb71db0f7f",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "controls/sw-original/source/control.ts",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/sw-admission-control/control.ts",
+    "sourceSha256": "f250a7e6a67abef9523e516ef18f270c498a92d1467ba80ca1c7a674c4b583e3",
+    "copiedSha256": "f250a7e6a67abef9523e516ef18f270c498a92d1467ba80ca1c7a674c4b583e3",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "controls/sw-original/source/node-http.ts",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/sw-admission-control/node-http.ts",
+    "sourceSha256": "641fcc3e3f4586fdf0d1e0c98037d8aede43fdaf26faa2a7d61ad19ba514fbfb",
+    "copiedSha256": "641fcc3e3f4586fdf0d1e0c98037d8aede43fdaf26faa2a7d61ad19ba514fbfb",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "controls/sw-original/source/supervisor.py",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/sw-admission-control/supervisor.py",
+    "sourceSha256": "c2aadf4d58511b9c6427645593a5d163d41299ed33bca7e32503fa8636692947",
+    "copiedSha256": "c2aadf4d58511b9c6427645593a5d163d41299ed33bca7e32503fa8636692947",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "controls/sw-original/source/run-control.py",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/sw-admission-control/run-control.py",
+    "sourceSha256": "48f71fa2374260c9820f334baaaabd955b19b97b700f056f28d04f3bd87e86cd",
+    "copiedSha256": "48f71fa2374260c9820f334baaaabd955b19b97b700f056f28d04f3bd87e86cd",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "controls/sw-original/source/package.json",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/sw-admission-control/package.json",
+    "sourceSha256": "a90fc33418afa2b9cbf4768524b021135b965ecdf993457505bfae3ac44a8428",
+    "copiedSha256": "a90fc33418afa2b9cbf4768524b021135b965ecdf993457505bfae3ac44a8428",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "controls/sw-original/source/SOURCE_SHA256SUMS",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/sw-admission-control/SOURCE_SHA256SUMS",
+    "sourceSha256": "01e2906ca20a4445f3d0d2b3b17cb128482422ad6bdabe7cdef302bd5766195b",
+    "copiedSha256": "01e2906ca20a4445f3d0d2b3b17cb128482422ad6bdabe7cdef302bd5766195b",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "controls/sw-original/README.md",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/sw-admission-control/README.md",
+    "sourceSha256": "ebe23f4c0ed30b084bd7c7ea97c642114e68ff3666de0c10fb2909ad1121747d",
+    "copiedSha256": "ebe23f4c0ed30b084bd7c7ea97c642114e68ff3666de0c10fb2909ad1121747d",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "controls/sw-original/result.md",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/sw-admission-control/result.md",
+    "sourceSha256": "c75eb64cdf48a608f84c29f672977af4ec451aaf89bad23e1f95e660f6dcc662",
+    "copiedSha256": "c75eb64cdf48a608f84c29f672977af4ec451aaf89bad23e1f95e660f6dcc662",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "controls/sw-original/evidence/1-after-all-pid-exit.profile.json",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/sw-admission-control/evidence/1-after-all-pid-exit.profile.json",
+    "sourceSha256": "93e1d8f51f89efedd51cf078f24385f46a11e8a5017fc3ceae54b71b13d74153",
+    "copiedSha256": "93e1d8f51f89efedd51cf078f24385f46a11e8a5017fc3ceae54b71b13d74153",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "controls/sw-original/evidence/1-fresh-blank-profile.profile.json",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/sw-admission-control/evidence/1-fresh-blank-profile.profile.json",
+    "sourceSha256": "64f8ded742918e40631e50509c91ba7b5f96ab4900e2ecde9924fa360170c4f6",
+    "copiedSha256": "64f8ded742918e40631e50509c91ba7b5f96ab4900e2ecde9924fa360170c4f6",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "controls/sw-original/evidence/2-after-all-pid-exit.profile.json",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/sw-admission-control/evidence/2-after-all-pid-exit.profile.json",
+    "sourceSha256": "2c199557111a11d7286be82f05bb7afb6537f0fa4ea096990df568fd879ff288",
+    "copiedSha256": "2c199557111a11d7286be82f05bb7afb6537f0fa4ea096990df568fd879ff288",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "controls/sw-original/evidence/2-fresh-blank-profile.profile.json",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/sw-admission-control/evidence/2-fresh-blank-profile.profile.json",
+    "sourceSha256": "41f11386004b7899d1ec2582feb4ce1d7393cd94bc3298f974a1393296a32ff4",
+    "copiedSha256": "41f11386004b7899d1ec2582feb4ce1d7393cd94bc3298f974a1393296a32ff4",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "controls/sw-original/evidence/3-before-launch.profile.json",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/sw-admission-control/evidence/3-before-launch.profile.json",
+    "sourceSha256": "42bb7fadf00f1429c99eb092f1253fc517530bb56643d22d46b86c1ac087414c",
+    "copiedSha256": "42bb7fadf00f1429c99eb092f1253fc517530bb56643d22d46b86c1ac087414c",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "controls/sw-original/evidence/SHA256SUMS",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/sw-admission-control/evidence/SHA256SUMS",
+    "sourceSha256": "8f34fe8af0bbeb1ad5a2d3e7686f2bde13c8c33a2a464130433bbfa144c8fcff",
+    "copiedSha256": "8f34fe8af0bbeb1ad5a2d3e7686f2bde13c8c33a2a464130433bbfa144c8fcff",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "controls/sw-original/evidence/SOURCE_SHA256SUMS",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/sw-admission-control/evidence/SOURCE_SHA256SUMS",
+    "sourceSha256": "01e2906ca20a4445f3d0d2b3b17cb128482422ad6bdabe7cdef302bd5766195b",
+    "copiedSha256": "01e2906ca20a4445f3d0d2b3b17cb128482422ad6bdabe7cdef302bd5766195b",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "controls/sw-original/evidence/exit",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/sw-admission-control/evidence/exit",
+    "sourceSha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865",
+    "copiedSha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "controls/sw-original/evidence/first-failure.json",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/sw-admission-control/evidence/first-failure.json",
+    "sourceSha256": "e6e7612c1bf6531a331bd9f8a3d9bd3de95fb296c8038355e2afc27f9b056b63",
+    "copiedSha256": "e6e7612c1bf6531a331bd9f8a3d9bd3de95fb296c8038355e2afc27f9b056b63",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "controls/sw-original/evidence/profile-manifests.json",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/sw-admission-control/evidence/profile-manifests.json",
+    "sourceSha256": "4ff0b88b1152624a6091846afd1403b77ee5cafd215f2d566faa06a760fc6c65",
+    "copiedSha256": "4ff0b88b1152624a6091846afd1403b77ee5cafd215f2d566faa06a760fc6c65",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "controls/sw-original/evidence/raw-copy-manifest.json",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/sw-admission-control/evidence/raw-copy-manifest.json",
+    "sourceSha256": "d97cac27d92792fb62baca9973aa4dccb95096c0a29b78caaebfcdc4b7e5fb93",
+    "copiedSha256": "d97cac27d92792fb62baca9973aa4dccb95096c0a29b78caaebfcdc4b7e5fb93",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "controls/sw-original/evidence/run-config.json",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/sw-admission-control/evidence/run-config.json",
+    "sourceSha256": "1108df6c37ee6943eac6dd8a7bf8d55cfcf78a6331bd1037cef8afd30d450f65",
+    "copiedSha256": "1108df6c37ee6943eac6dd8a7bf8d55cfcf78a6331bd1037cef8afd30d450f65",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "controls/sw-original/evidence/stderr.log",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/sw-admission-control/evidence/stderr.log",
+    "sourceSha256": "6b22a2932525be3d5373681e1561935dd64356a98041bcda85feeb0c773e612f",
+    "copiedSha256": "6b22a2932525be3d5373681e1561935dd64356a98041bcda85feeb0c773e612f",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "controls/sw-original/evidence/summary.json",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/sw-admission-control/evidence/summary.json",
+    "sourceSha256": "801807363aaa506652414796e22e0e41903be900a7fdaadcb1178960aa561d9a",
+    "copiedSha256": "801807363aaa506652414796e22e0e41903be900a7fdaadcb1178960aa561d9a",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "controls/sw-original/evidence/trace.jsonl",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/sw-admission-control/evidence/trace.jsonl",
+    "sourceSha256": "03fc4fc7f455e461e0821018688be0395e5f6e01d9e67a8a3681c4e83b5dc7c6",
+    "copiedSha256": "03fc4fc7f455e461e0821018688be0395e5f6e01d9e67a8a3681c4e83b5dc7c6",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "controls/sw-original/evidence/watchdog-summary.json",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/sw-admission-control/evidence/watchdog-summary.json",
+    "sourceSha256": "4ef4aa77b4b8f3db62616f78b6ffce857b66771cb218b68e9d87b19271c737ea",
+    "copiedSha256": "4ef4aa77b4b8f3db62616f78b6ffce857b66771cb218b68e9d87b19271c737ea",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "controls/sw-alternative/source/control.ts",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/sw-admission-control-alternative/control.ts",
+    "sourceSha256": "71b416ecefa582e5a37a69be274ac3d51b69e68fa4ef02131cbb6e51701d07cd",
+    "copiedSha256": "71b416ecefa582e5a37a69be274ac3d51b69e68fa4ef02131cbb6e51701d07cd",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "controls/sw-alternative/source/node-http.ts",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/sw-admission-control-alternative/node-http.ts",
+    "sourceSha256": "641fcc3e3f4586fdf0d1e0c98037d8aede43fdaf26faa2a7d61ad19ba514fbfb",
+    "copiedSha256": "641fcc3e3f4586fdf0d1e0c98037d8aede43fdaf26faa2a7d61ad19ba514fbfb",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "controls/sw-alternative/source/supervisor.py",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/sw-admission-control-alternative/supervisor.py",
+    "sourceSha256": "c2aadf4d58511b9c6427645593a5d163d41299ed33bca7e32503fa8636692947",
+    "copiedSha256": "c2aadf4d58511b9c6427645593a5d163d41299ed33bca7e32503fa8636692947",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "controls/sw-alternative/source/run-control.py",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/sw-admission-control-alternative/run-control.py",
+    "sourceSha256": "48f71fa2374260c9820f334baaaabd955b19b97b700f056f28d04f3bd87e86cd",
+    "copiedSha256": "48f71fa2374260c9820f334baaaabd955b19b97b700f056f28d04f3bd87e86cd",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "controls/sw-alternative/source/package.json",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/sw-admission-control-alternative/package.json",
+    "sourceSha256": "a90fc33418afa2b9cbf4768524b021135b965ecdf993457505bfae3ac44a8428",
+    "copiedSha256": "a90fc33418afa2b9cbf4768524b021135b965ecdf993457505bfae3ac44a8428",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "controls/sw-alternative/source/SOURCE_SHA256SUMS",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/sw-admission-control-alternative/SOURCE_SHA256SUMS",
+    "sourceSha256": "bb62a41fb45412c68b219ead1375947786a795f7d31230e8673eeb3cbf1e8820",
+    "copiedSha256": "bb62a41fb45412c68b219ead1375947786a795f7d31230e8673eeb3cbf1e8820",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "controls/sw-alternative/README.md",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/sw-admission-control-alternative/README.md",
+    "sourceSha256": "50a64d129c9bcc107af07391d6cc252e2e0858efdeb1411e7491f8124c34c1da",
+    "copiedSha256": "50a64d129c9bcc107af07391d6cc252e2e0858efdeb1411e7491f8124c34c1da",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "controls/sw-alternative/result.md",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/sw-admission-control-alternative/result.md",
+    "sourceSha256": "952a74311fdc1be044215c1978fc5043ab81f06a88182c7a6947d688c08693b0",
+    "copiedSha256": "952a74311fdc1be044215c1978fc5043ab81f06a88182c7a6947d688c08693b0",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "controls/sw-alternative/evidence/1-after-all-pid-exit.profile.json",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/sw-admission-control-alternative/evidence/1-after-all-pid-exit.profile.json",
+    "sourceSha256": "652516efb1373b5d863fdd919d2ffc34df1e976c45603d0bd00708f4faa6619f",
+    "copiedSha256": "652516efb1373b5d863fdd919d2ffc34df1e976c45603d0bd00708f4faa6619f",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "controls/sw-alternative/evidence/1-fresh-blank-profile.profile.json",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/sw-admission-control-alternative/evidence/1-fresh-blank-profile.profile.json",
+    "sourceSha256": "e6f6a524fca34a0793d314388ea7205b930ed96de1ce1500c88a67cc73c668db",
+    "copiedSha256": "e6f6a524fca34a0793d314388ea7205b930ed96de1ce1500c88a67cc73c668db",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "controls/sw-alternative/evidence/2-after-all-pid-exit.profile.json",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/sw-admission-control-alternative/evidence/2-after-all-pid-exit.profile.json",
+    "sourceSha256": "951e0c45c47325ecef81e687a6ecaad82ac8b855218bcfb2972c3e24c93851b1",
+    "copiedSha256": "951e0c45c47325ecef81e687a6ecaad82ac8b855218bcfb2972c3e24c93851b1",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "controls/sw-alternative/evidence/2-fresh-blank-profile.profile.json",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/sw-admission-control-alternative/evidence/2-fresh-blank-profile.profile.json",
+    "sourceSha256": "7bdb2d2fc16063d0dc9d92b9e2d097528a1e54285dcc3ec11a6941ff44fcdbba",
+    "copiedSha256": "7bdb2d2fc16063d0dc9d92b9e2d097528a1e54285dcc3ec11a6941ff44fcdbba",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "controls/sw-alternative/evidence/3-after-all-pid-exit.profile.json",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/sw-admission-control-alternative/evidence/3-after-all-pid-exit.profile.json",
+    "sourceSha256": "951e0c45c47325ecef81e687a6ecaad82ac8b855218bcfb2972c3e24c93851b1",
+    "copiedSha256": "951e0c45c47325ecef81e687a6ecaad82ac8b855218bcfb2972c3e24c93851b1",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "controls/sw-alternative/evidence/3-before-launch.profile.json",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/sw-admission-control-alternative/evidence/3-before-launch.profile.json",
+    "sourceSha256": "80d511c4909bb0bbcce7d938d09ec74fbaf8496675a86f227f8aa593d1d15177",
+    "copiedSha256": "80d511c4909bb0bbcce7d938d09ec74fbaf8496675a86f227f8aa593d1d15177",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "controls/sw-alternative/evidence/4-after-all-pid-exit.profile.json",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/sw-admission-control-alternative/evidence/4-after-all-pid-exit.profile.json",
+    "sourceSha256": "951e0c45c47325ecef81e687a6ecaad82ac8b855218bcfb2972c3e24c93851b1",
+    "copiedSha256": "951e0c45c47325ecef81e687a6ecaad82ac8b855218bcfb2972c3e24c93851b1",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "controls/sw-alternative/evidence/4-before-launch.profile.json",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/sw-admission-control-alternative/evidence/4-before-launch.profile.json",
+    "sourceSha256": "80d511c4909bb0bbcce7d938d09ec74fbaf8496675a86f227f8aa593d1d15177",
+    "copiedSha256": "80d511c4909bb0bbcce7d938d09ec74fbaf8496675a86f227f8aa593d1d15177",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "controls/sw-alternative/evidence/SHA256SUMS",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/sw-admission-control-alternative/evidence/SHA256SUMS",
+    "sourceSha256": "d99800210d493acb29046db842b125b8a4ff53aaa591c4f387ca05d5bfd5f745",
+    "copiedSha256": "d99800210d493acb29046db842b125b8a4ff53aaa591c4f387ca05d5bfd5f745",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "controls/sw-alternative/evidence/SOURCE_SHA256SUMS",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/sw-admission-control-alternative/evidence/SOURCE_SHA256SUMS",
+    "sourceSha256": "bb62a41fb45412c68b219ead1375947786a795f7d31230e8673eeb3cbf1e8820",
+    "copiedSha256": "bb62a41fb45412c68b219ead1375947786a795f7d31230e8673eeb3cbf1e8820",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "controls/sw-alternative/evidence/exit",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/sw-admission-control-alternative/evidence/exit",
+    "sourceSha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "copiedSha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "controls/sw-alternative/evidence/profile-manifests.json",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/sw-admission-control-alternative/evidence/profile-manifests.json",
+    "sourceSha256": "4b0243ef43fe3863a36025c18fb055928a7cea7037ea68d7047dcedb4930d5e7",
+    "copiedSha256": "4b0243ef43fe3863a36025c18fb055928a7cea7037ea68d7047dcedb4930d5e7",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "controls/sw-alternative/evidence/raw-copy-manifest.json",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/sw-admission-control-alternative/evidence/raw-copy-manifest.json",
+    "sourceSha256": "65315f47ad5c2b513d1cc9483454c715730017af96744430286acc9f116511b0",
+    "copiedSha256": "65315f47ad5c2b513d1cc9483454c715730017af96744430286acc9f116511b0",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "controls/sw-alternative/evidence/run-config.json",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/sw-admission-control-alternative/evidence/run-config.json",
+    "sourceSha256": "1b4f20c6be88f6d94ff6fd3f0007f04fc161212ded75979eca3cfe2c979f94c1",
+    "copiedSha256": "1b4f20c6be88f6d94ff6fd3f0007f04fc161212ded75979eca3cfe2c979f94c1",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "controls/sw-alternative/evidence/stderr.log",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/sw-admission-control-alternative/evidence/stderr.log",
+    "sourceSha256": "4381661f454a108197f1e17d6af5f8466bf066f29446c0a9b164c18c2cca8f2f",
+    "copiedSha256": "4381661f454a108197f1e17d6af5f8466bf066f29446c0a9b164c18c2cca8f2f",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "controls/sw-alternative/evidence/summary.json",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/sw-admission-control-alternative/evidence/summary.json",
+    "sourceSha256": "8840de04e1ae4dd63133021366eec94055bc2b2732928b05208cc01023d054a6",
+    "copiedSha256": "8840de04e1ae4dd63133021366eec94055bc2b2732928b05208cc01023d054a6",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "controls/sw-alternative/evidence/trace.jsonl",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/sw-admission-control-alternative/evidence/trace.jsonl",
+    "sourceSha256": "171efe4f9abddc5d0bc8bddb04d19dce36eb38de78039403ca401ceb445a40b5",
+    "copiedSha256": "171efe4f9abddc5d0bc8bddb04d19dce36eb38de78039403ca401ceb445a40b5",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "controls/sw-alternative/evidence/watchdog-summary.json",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/sw-admission-control-alternative/evidence/watchdog-summary.json",
+    "sourceSha256": "28ebb275550e64d8bf1093f048bcf830d9fd3c5d03a429f8d21d8df3cd8d1734",
+    "copiedSha256": "28ebb275550e64d8bf1093f048bcf830d9fd3c5d03a429f8d21d8df3cd8d1734",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "checks/validator-default-red/SHA256SUMS",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/validator-default-red/SHA256SUMS",
+    "sourceSha256": "9144370225a5430892d717bf31e5e1281dee5c087f4563f6221675597131076d",
+    "copiedSha256": "9144370225a5430892d717bf31e5e1281dee5c087f4563f6221675597131076d",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "checks/validator-default-red/real-migrated-a-default-metadata.json",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/validator-default-red/real-migrated-a-default-metadata.json",
+    "sourceSha256": "5fd57e0813aa7c0d2d148b6c17377e4c496fcfaf1b9037f2592bce6785acd5ad",
+    "copiedSha256": "5fd57e0813aa7c0d2d148b6c17377e4c496fcfaf1b9037f2592bce6785acd5ad",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "checks/validator-default-red/real-migrated-b-default-metadata.json",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/validator-default-red/real-migrated-b-default-metadata.json",
+    "sourceSha256": "5fd57e0813aa7c0d2d148b6c17377e4c496fcfaf1b9037f2592bce6785acd5ad",
+    "copiedSha256": "5fd57e0813aa7c0d2d148b6c17377e4c496fcfaf1b9037f2592bce6785acd5ad",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "checks/validator-default-red/results.json",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/validator-default-red/results.json",
+    "sourceSha256": "bff48312e13e2422c16b798ed459c29beba5d2c04bc7a86193085db7460c39bc",
+    "copiedSha256": "bff48312e13e2422c16b798ed459c29beba5d2c04bc7a86193085db7460c39bc",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "checks/validator-default-green/SHA256SUMS",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/validator-default-green/SHA256SUMS",
+    "sourceSha256": "f27a14e41051a4bc0def7a44c92b1f5c23c092a89f334dd82be3c93a76dda09c",
+    "copiedSha256": "f27a14e41051a4bc0def7a44c92b1f5c23c092a89f334dd82be3c93a76dda09c",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "checks/validator-default-green/a-acknowledged.json",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/validator-default-green/a-acknowledged.json",
+    "sourceSha256": "78e12597055266a31229c112138b63ab7407750b63c1bcd90ef223e7cae242af",
+    "copiedSha256": "78e12597055266a31229c112138b63ab7407750b63c1bcd90ef223e7cae242af",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "checks/validator-default-green/a-changed-document.json",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/validator-default-green/a-changed-document.json",
+    "sourceSha256": "78e12597055266a31229c112138b63ab7407750b63c1bcd90ef223e7cae242af",
+    "copiedSha256": "78e12597055266a31229c112138b63ab7407750b63c1bcd90ef223e7cae242af",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "checks/validator-default-green/a-corrupt-control.json",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/validator-default-green/a-corrupt-control.json",
+    "sourceSha256": "427c3766ace593789186130e8092ee9311e510f29ae282cb80d09562ae3e5004",
+    "copiedSha256": "427c3766ace593789186130e8092ee9311e510f29ae282cb80d09562ae3e5004",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "checks/validator-default-green/a-expired.json",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/validator-default-green/a-expired.json",
+    "sourceSha256": "78e12597055266a31229c112138b63ab7407750b63c1bcd90ef223e7cae242af",
+    "copiedSha256": "78e12597055266a31229c112138b63ab7407750b63c1bcd90ef223e7cae242af",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "checks/validator-default-green/a-explicit-valid-default.json",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/validator-default-green/a-explicit-valid-default.json",
+    "sourceSha256": "7586a9b60334e1025b42e95438fa834c8289d49325b903b8de60f8e5d9413b96",
+    "copiedSha256": "7586a9b60334e1025b42e95438fa834c8289d49325b903b8de60f8e5d9413b96",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "checks/validator-default-green/a-finished.json",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/validator-default-green/a-finished.json",
+    "sourceSha256": "78e12597055266a31229c112138b63ab7407750b63c1bcd90ef223e7cae242af",
+    "copiedSha256": "78e12597055266a31229c112138b63ab7407750b63c1bcd90ef223e7cae242af",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "checks/validator-default-green/a-foreign-account.json",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/validator-default-green/a-foreign-account.json",
+    "sourceSha256": "78e12597055266a31229c112138b63ab7407750b63c1bcd90ef223e7cae242af",
+    "copiedSha256": "78e12597055266a31229c112138b63ab7407750b63c1bcd90ef223e7cae242af",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "checks/validator-default-green/a-foreign-entity.json",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/validator-default-green/a-foreign-entity.json",
+    "sourceSha256": "78e12597055266a31229c112138b63ab7407750b63c1bcd90ef223e7cae242af",
+    "copiedSha256": "78e12597055266a31229c112138b63ab7407750b63c1bcd90ef223e7cae242af",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "checks/validator-default-green/a-foreign-graph.json",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/validator-default-green/a-foreign-graph.json",
+    "sourceSha256": "78e12597055266a31229c112138b63ab7407750b63c1bcd90ef223e7cae242af",
+    "copiedSha256": "78e12597055266a31229c112138b63ab7407750b63c1bcd90ef223e7cae242af",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "checks/validator-default-green/a-invalid-lineage.json",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/validator-default-green/a-invalid-lineage.json",
+    "sourceSha256": "78e12597055266a31229c112138b63ab7407750b63c1bcd90ef223e7cae242af",
+    "copiedSha256": "78e12597055266a31229c112138b63ab7407750b63c1bcd90ef223e7cae242af",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "checks/validator-default-green/a-nondefault-generation.json",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/validator-default-green/a-nondefault-generation.json",
+    "sourceSha256": "78e12597055266a31229c112138b63ab7407750b63c1bcd90ef223e7cae242af",
+    "copiedSha256": "78e12597055266a31229c112138b63ab7407750b63c1bcd90ef223e7cae242af",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "checks/validator-default-green/a-original-legacy-no-control.json",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/validator-default-green/a-original-legacy-no-control.json",
+    "sourceSha256": "072043bd4710b0669e922f33c9b32442cd10ab4412c7a538b0f371e3b6dccb90",
+    "copiedSha256": "072043bd4710b0669e922f33c9b32442cd10ab4412c7a538b0f371e3b6dccb90",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "checks/validator-default-green/a-previous-token-disappeared.json",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/validator-default-green/a-previous-token-disappeared.json",
+    "sourceSha256": "39e1e4e9de722878e48b8c59ebca4889024d621312064e74e86775bf5e059096",
+    "copiedSha256": "39e1e4e9de722878e48b8c59ebca4889024d621312064e74e86775bf5e059096",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "checks/validator-default-green/a-same-exact-token.json",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/validator-default-green/a-same-exact-token.json",
+    "sourceSha256": "7586a9b60334e1025b42e95438fa834c8289d49325b903b8de60f8e5d9413b96",
+    "copiedSha256": "7586a9b60334e1025b42e95438fa834c8289d49325b903b8de60f8e5d9413b96",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "checks/validator-default-green/a-wrong-basis.json",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/validator-default-green/a-wrong-basis.json",
+    "sourceSha256": "78e12597055266a31229c112138b63ab7407750b63c1bcd90ef223e7cae242af",
+    "copiedSha256": "78e12597055266a31229c112138b63ab7407750b63c1bcd90ef223e7cae242af",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "checks/validator-default-green/a-wrong-generation.json",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/validator-default-green/a-wrong-generation.json",
+    "sourceSha256": "78e12597055266a31229c112138b63ab7407750b63c1bcd90ef223e7cae242af",
+    "copiedSha256": "78e12597055266a31229c112138b63ab7407750b63c1bcd90ef223e7cae242af",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "checks/validator-default-green/b-acknowledged.json",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/validator-default-green/b-acknowledged.json",
+    "sourceSha256": "78e12597055266a31229c112138b63ab7407750b63c1bcd90ef223e7cae242af",
+    "copiedSha256": "78e12597055266a31229c112138b63ab7407750b63c1bcd90ef223e7cae242af",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "checks/validator-default-green/b-changed-document.json",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/validator-default-green/b-changed-document.json",
+    "sourceSha256": "78e12597055266a31229c112138b63ab7407750b63c1bcd90ef223e7cae242af",
+    "copiedSha256": "78e12597055266a31229c112138b63ab7407750b63c1bcd90ef223e7cae242af",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "checks/validator-default-green/b-corrupt-control.json",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/validator-default-green/b-corrupt-control.json",
+    "sourceSha256": "427c3766ace593789186130e8092ee9311e510f29ae282cb80d09562ae3e5004",
+    "copiedSha256": "427c3766ace593789186130e8092ee9311e510f29ae282cb80d09562ae3e5004",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "checks/validator-default-green/b-expired.json",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/validator-default-green/b-expired.json",
+    "sourceSha256": "78e12597055266a31229c112138b63ab7407750b63c1bcd90ef223e7cae242af",
+    "copiedSha256": "78e12597055266a31229c112138b63ab7407750b63c1bcd90ef223e7cae242af",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "checks/validator-default-green/b-explicit-valid-default.json",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/validator-default-green/b-explicit-valid-default.json",
+    "sourceSha256": "77014ab2c3374c9a947778b7fe602cf2ff6cdf31ed3f5115779a89feee5d0d2e",
+    "copiedSha256": "77014ab2c3374c9a947778b7fe602cf2ff6cdf31ed3f5115779a89feee5d0d2e",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "checks/validator-default-green/b-finished.json",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/validator-default-green/b-finished.json",
+    "sourceSha256": "78e12597055266a31229c112138b63ab7407750b63c1bcd90ef223e7cae242af",
+    "copiedSha256": "78e12597055266a31229c112138b63ab7407750b63c1bcd90ef223e7cae242af",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "checks/validator-default-green/b-foreign-account.json",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/validator-default-green/b-foreign-account.json",
+    "sourceSha256": "78e12597055266a31229c112138b63ab7407750b63c1bcd90ef223e7cae242af",
+    "copiedSha256": "78e12597055266a31229c112138b63ab7407750b63c1bcd90ef223e7cae242af",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "checks/validator-default-green/b-foreign-entity.json",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/validator-default-green/b-foreign-entity.json",
+    "sourceSha256": "78e12597055266a31229c112138b63ab7407750b63c1bcd90ef223e7cae242af",
+    "copiedSha256": "78e12597055266a31229c112138b63ab7407750b63c1bcd90ef223e7cae242af",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "checks/validator-default-green/b-foreign-graph.json",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/validator-default-green/b-foreign-graph.json",
+    "sourceSha256": "78e12597055266a31229c112138b63ab7407750b63c1bcd90ef223e7cae242af",
+    "copiedSha256": "78e12597055266a31229c112138b63ab7407750b63c1bcd90ef223e7cae242af",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "checks/validator-default-green/b-invalid-lineage.json",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/validator-default-green/b-invalid-lineage.json",
+    "sourceSha256": "78e12597055266a31229c112138b63ab7407750b63c1bcd90ef223e7cae242af",
+    "copiedSha256": "78e12597055266a31229c112138b63ab7407750b63c1bcd90ef223e7cae242af",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "checks/validator-default-green/b-nondefault-generation.json",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/validator-default-green/b-nondefault-generation.json",
+    "sourceSha256": "78e12597055266a31229c112138b63ab7407750b63c1bcd90ef223e7cae242af",
+    "copiedSha256": "78e12597055266a31229c112138b63ab7407750b63c1bcd90ef223e7cae242af",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "checks/validator-default-green/b-original-legacy-no-control.json",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/validator-default-green/b-original-legacy-no-control.json",
+    "sourceSha256": "072043bd4710b0669e922f33c9b32442cd10ab4412c7a538b0f371e3b6dccb90",
+    "copiedSha256": "072043bd4710b0669e922f33c9b32442cd10ab4412c7a538b0f371e3b6dccb90",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "checks/validator-default-green/b-previous-token-disappeared.json",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/validator-default-green/b-previous-token-disappeared.json",
+    "sourceSha256": "39e1e4e9de722878e48b8c59ebca4889024d621312064e74e86775bf5e059096",
+    "copiedSha256": "39e1e4e9de722878e48b8c59ebca4889024d621312064e74e86775bf5e059096",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "checks/validator-default-green/b-same-exact-token.json",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/validator-default-green/b-same-exact-token.json",
+    "sourceSha256": "77014ab2c3374c9a947778b7fe602cf2ff6cdf31ed3f5115779a89feee5d0d2e",
+    "copiedSha256": "77014ab2c3374c9a947778b7fe602cf2ff6cdf31ed3f5115779a89feee5d0d2e",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "checks/validator-default-green/b-wrong-basis.json",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/validator-default-green/b-wrong-basis.json",
+    "sourceSha256": "78e12597055266a31229c112138b63ab7407750b63c1bcd90ef223e7cae242af",
+    "copiedSha256": "78e12597055266a31229c112138b63ab7407750b63c1bcd90ef223e7cae242af",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "checks/validator-default-green/b-wrong-generation.json",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/validator-default-green/b-wrong-generation.json",
+    "sourceSha256": "78e12597055266a31229c112138b63ab7407750b63c1bcd90ef223e7cae242af",
+    "copiedSha256": "78e12597055266a31229c112138b63ab7407750b63c1bcd90ef223e7cae242af",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "checks/validator-default-green/real-migrated-a-default-metadata.json",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/validator-default-green/real-migrated-a-default-metadata.json",
+    "sourceSha256": "7586a9b60334e1025b42e95438fa834c8289d49325b903b8de60f8e5d9413b96",
+    "copiedSha256": "7586a9b60334e1025b42e95438fa834c8289d49325b903b8de60f8e5d9413b96",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "checks/validator-default-green/real-migrated-b-default-metadata.json",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/validator-default-green/real-migrated-b-default-metadata.json",
+    "sourceSha256": "77014ab2c3374c9a947778b7fe602cf2ff6cdf31ed3f5115779a89feee5d0d2e",
+    "copiedSha256": "77014ab2c3374c9a947778b7fe602cf2ff6cdf31ed3f5115779a89feee5d0d2e",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "checks/validator-default-green/results.json",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/validator-default-green/results.json",
+    "sourceSha256": "078a756396faac528575b409afcb877926919709d949eda569fb749f1127546c",
+    "copiedSha256": "078a756396faac528575b409afcb877926919709d949eda569fb749f1127546c",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "checks/validator-default-green/types.stderr",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/validator-default-green/types.stderr",
+    "sourceSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "copiedSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "checks/validator-default-green/types.stdout",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/validator-default-green/types.stdout",
+    "sourceSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "copiedSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "checks/node2-smoke-evidence/SHA256SUMS",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/node2-smoke-evidence/SHA256SUMS",
+    "sourceSha256": "aa94c6977b9726110f85e9fa73ca89bc3ad7ded784329c0a7b1e39ae12cf1b56",
+    "copiedSha256": "aa94c6977b9726110f85e9fa73ca89bc3ad7ded784329c0a7b1e39ae12cf1b56",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "checks/node2-smoke-evidence/bun-types.stderr",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/node2-smoke-evidence/bun-types.stderr",
+    "sourceSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "copiedSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "checks/node2-smoke-evidence/bun-types.stdout",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/node2-smoke-evidence/bun-types.stdout",
+    "sourceSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "copiedSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "checks/node2-smoke-evidence/dependency-imports.stderr",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/node2-smoke-evidence/dependency-imports.stderr",
+    "sourceSha256": "50121635099ddeea5637a4d279be56e3784f59ef6e2bdab20f675269378f5348",
+    "copiedSha256": "50121635099ddeea5637a4d279be56e3784f59ef6e2bdab20f675269378f5348",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "checks/node2-smoke-evidence/dependency-imports.stdout",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/node2-smoke-evidence/dependency-imports.stdout",
+    "sourceSha256": "726d601ad6a4898fac58687369686b3cad378f906f5b6ae812ca451240658d03",
+    "copiedSha256": "726d601ad6a4898fac58687369686b3cad378f906f5b6ae812ca451240658d03",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "checks/node2-smoke-evidence/node-syntax.stderr",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/node2-smoke-evidence/node-syntax.stderr",
+    "sourceSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "copiedSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "checks/node2-smoke-evidence/node-syntax.stdout",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/node2-smoke-evidence/node-syntax.stdout",
+    "sourceSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "copiedSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "checks/node2-smoke-evidence/node-types.stderr",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/node2-smoke-evidence/node-types.stderr",
+    "sourceSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "copiedSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "checks/node2-smoke-evidence/node-types.stdout",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/node2-smoke-evidence/node-types.stdout",
+    "sourceSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "copiedSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "checks/node2-smoke-evidence/results.json",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/node2-smoke-evidence/results.json",
+    "sourceSha256": "38fd70e72895f54064824c8ef415a5bdd755d8896db71b3a85fd698041510015",
+    "copiedSha256": "38fd70e72895f54064824c8ef415a5bdd755d8896db71b3a85fd698041510015",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "checks/validator-default-generation.py",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/checks/validator-default-generation.py",
+    "sourceSha256": "9a3802f7a097d1a20e10a58fc680305e67d4b6c040b972663ed7708a06115e9d",
+    "copiedSha256": "9a3802f7a097d1a20e10a58fc680305e67d4b6c040b972663ed7708a06115e9d",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "history/node2-admission-vs-2a93.diff",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/node2-admission-vs-2a93.diff",
+    "sourceSha256": "8f01c52d2f1adaa34151af9563ffd78cbd0adc50c05b4dd1d35a2ffd0388d13b",
+    "copiedSha256": "8f01c52d2f1adaa34151af9563ffd78cbd0adc50c05b4dd1d35a2ffd0388d13b",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "history/node2-bind-only.diff",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/node2-bind-only.diff",
+    "sourceSha256": "43b263909cb2854d0a507f52a61f2dcb9964735255539098cf32933779e9199e",
+    "copiedSha256": "43b263909cb2854d0a507f52a61f2dcb9964735255539098cf32933779e9199e",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "history/node3-default-control.diff",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/node3-default-control.diff",
+    "sourceSha256": "b2f6c700f35e6c0bbd5bb1886a4976238665ba3337f21d10ee451100cf713a4f",
+    "copiedSha256": "b2f6c700f35e6c0bbd5bb1886a4976238665ba3337f21d10ee451100cf713a4f",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "history/node3-bind-only.diff",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/node3-bind-only.diff",
+    "sourceSha256": "ff470869f3bd6a66a6396f64ec5eb6299782976ff5d6902196b883e354a698b1",
+    "copiedSha256": "ff470869f3bd6a66a6396f64ec5eb6299782976ff5d6902196b883e354a698b1",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "history/node4-replay-race.diff",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/node4-replay-race.diff",
+    "sourceSha256": "b8622e48a81bc60ba415111961ec042a098a0af0cb4995744b5b8ec55c929907",
+    "copiedSha256": "b8622e48a81bc60ba415111961ec042a098a0af0cb4995744b5b8ec55c929907",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "history/node4-bind-only.diff",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/node4-bind-only.diff",
+    "sourceSha256": "3be5761d6ee3d1456d6f21e7ec89d5289c7cc631b9af3890e084c41fe0bcff39",
+    "copiedSha256": "3be5761d6ee3d1456d6f21e7ec89d5289c7cc631b9af3890e084c41fe0bcff39",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "history/node2-bound-proof.json",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/node2-bound-proof.json",
+    "sourceSha256": "8b9c8936ee0c974a9099ec8124496efeba872869b3b55a057901103bc339df85",
+    "copiedSha256": "8b9c8936ee0c974a9099ec8124496efeba872869b3b55a057901103bc339df85",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "history/node3-bound-proof.json",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/node3-bound-proof.json",
+    "sourceSha256": "4ea87ebcc3c5e24c9b4e8f49ba0b57f7d3c3880441d64dbab005bfff33e04877",
+    "copiedSha256": "4ea87ebcc3c5e24c9b4e8f49ba0b57f7d3c3880441d64dbab005bfff33e04877",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "history/node4-bound-proof.json",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/node4-bound-proof.json",
+    "sourceSha256": "697031f49c365cae991ccc77a333688f98d4966d469be02e024c799d88d19a56",
+    "copiedSha256": "697031f49c365cae991ccc77a333688f98d4966d469be02e024c799d88d19a56",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "history/node4-types.json",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/node4-types.json",
+    "sourceSha256": "732883d74fff105b6916110dd67928d04765fdfa4fce96791f3d3be410b4440f",
+    "copiedSha256": "732883d74fff105b6916110dd67928d04765fdfa4fce96791f3d3be410b4440f",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "history/node2-result-and-validator-diagnosis.md",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/node2-result-and-validator-diagnosis.md",
+    "sourceSha256": "ebddf28018ed255c75159c8de006f755695cc314c355682ead67e173278b2bb0",
+    "copiedSha256": "ebddf28018ed255c75159c8de006f755695cc314c355682ead67e173278b2bb0",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "history/node3-result-and-replay-race.md",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/node3-result-and-replay-race.md",
+    "sourceSha256": "07d26677cedc3dcb4ed0e48e64b3c505507e6399cab53173dfa7f0d186d35f51",
+    "copiedSha256": "07d26677cedc3dcb4ed0e48e64b3c505507e6399cab53173dfa7f0d186d35f51",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "history/node3-replay-race-proof.json",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/node3-replay-race-proof.json",
+    "sourceSha256": "7293546b5639b4c8a80374451910defebe718df024b3594fa5b3c822d265f2ff",
+    "copiedSha256": "7293546b5639b4c8a80374451910defebe718df024b3594fa5b3c822d265f2ff",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "history/actual-node-p-result.md",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/actual-node-p-result.md",
+    "sourceSha256": "3f1576db3738fa7af74932b3cebd9a0943facac8c75a5e47eaec996ba7128fe8",
+    "copiedSha256": "3f1576db3738fa7af74932b3cebd9a0943facac8c75a5e47eaec996ba7128fe8",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "history/helper-checks-report.md",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/helper-checks-report.md",
+    "sourceSha256": "7095b3a170ed8a5cdef1d73a184bbe8b4bbff4e34afc921398153e843c1ddf02",
+    "copiedSha256": "7095b3a170ed8a5cdef1d73a184bbe8b4bbff4e34afc921398153e843c1ddf02",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "history/final-bound-report.md",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/final-bound-report.md",
+    "sourceSha256": "cc7a0c57d1bd08554b76d04ec390e85136aea968a4f2a1cef5d68c8de40693eb",
+    "copiedSha256": "cc7a0c57d1bd08554b76d04ec390e85136aea968a4f2a1cef5d68c8de40693eb",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "reviews/cutover-node-final-integration-review.md",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-final-integration-review.md",
+    "sourceSha256": "69a3fa31280bb56ccdb0d25c1b91936b9cbb348a1fd8fbf82b08ed8ce64dfd53",
+    "copiedSha256": "69a3fa31280bb56ccdb0d25c1b91936b9cbb348a1fd8fbf82b08ed8ce64dfd53",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "reviews/cutover-node2-admission-review.md",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node2-admission-review.md",
+    "sourceSha256": "cc66bb935a96116e8e147e42deab8f7bc254be08154726509cac4cf6cc6b155a",
+    "copiedSha256": "cc66bb935a96116e8e147e42deab8f7bc254be08154726509cac4cf6cc6b155a",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "reviews/cutover-node3-default-control-review.md",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node3-default-control-review.md",
+    "sourceSha256": "b95918c4e45cb8cb29d52b81ace1c6c94d51776256095ee6f16e1fbbb7a1feee",
+    "copiedSha256": "b95918c4e45cb8cb29d52b81ace1c6c94d51776256095ee6f16e1fbbb7a1feee",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "reviews/cutover-node4-replay-review.md",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node4-replay-review.md",
+    "sourceSha256": "158ad530a3611b38bad2b007d77409d7116a8454a67bdef960640f3c2703307d",
+    "copiedSha256": "158ad530a3611b38bad2b007d77409d7116a8454a67bdef960640f3c2703307d",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "resources/cutover-node2-allocation.sh",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node2-allocation.sh",
+    "sourceSha256": "d346736b3617f4fcf6b9caac6e2a9de987d4408dbd1712eff88523f338977be9",
+    "copiedSha256": "d346736b3617f4fcf6b9caac6e2a9de987d4408dbd1712eff88523f338977be9",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "resources/cutover-node2-docker-start.json",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node2-docker-start.json",
+    "sourceSha256": "90175a8807c7cb342fab95818b53324e9a2d78135581ac80b3a031caa598e87d",
+    "copiedSha256": "90175a8807c7cb342fab95818b53324e9a2d78135581ac80b3a031caa598e87d",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "resources/cutover-node2-resource-cleanup.json",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node2-resource-cleanup.json",
+    "sourceSha256": "2e97f9aa47ff52deadd25c0b744f5f554f0efbb1ff67fd574893ada68f346133",
+    "copiedSha256": "2e97f9aa47ff52deadd25c0b744f5f554f0efbb1ff67fd574893ada68f346133",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "resources/cutover-node3-allocation.sh",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node3-allocation.sh",
+    "sourceSha256": "d77d097eb2452ee45b797f4d377cf96f2d50c2c65bc4134378ad913102ad22da",
+    "copiedSha256": "d77d097eb2452ee45b797f4d377cf96f2d50c2c65bc4134378ad913102ad22da",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "resources/cutover-node3-docker-start.json",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node3-docker-start.json",
+    "sourceSha256": "90175a8807c7cb342fab95818b53324e9a2d78135581ac80b3a031caa598e87d",
+    "copiedSha256": "90175a8807c7cb342fab95818b53324e9a2d78135581ac80b3a031caa598e87d",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "resources/cutover-node3-resource-cleanup.json",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node3-resource-cleanup.json",
+    "sourceSha256": "e785691bc9eb754b20582b0a7d6e99e4829460403297af05a7897dbba10d95ca",
+    "copiedSha256": "e785691bc9eb754b20582b0a7d6e99e4829460403297af05a7897dbba10d95ca",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "resources/cutover-node4-allocation.sh",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node4-allocation.sh",
+    "sourceSha256": "f1c68819b784fbb2c990fa9d5edb3358cba5648ab4ae79c345efddcc64cb11a5",
+    "copiedSha256": "f1c68819b784fbb2c990fa9d5edb3358cba5648ab4ae79c345efddcc64cb11a5",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "resources/cutover-node4-docker-start.json",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node4-docker-start.json",
+    "sourceSha256": "90175a8807c7cb342fab95818b53324e9a2d78135581ac80b3a031caa598e87d",
+    "copiedSha256": "90175a8807c7cb342fab95818b53324e9a2d78135581ac80b3a031caa598e87d",
+    "hostnameRedacted": false
+  },
+  {
+    "destination": "resources/cutover-node4-resource-cleanup.json",
+    "source": "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node4-resource-cleanup.json",
+    "sourceSha256": "193209cbab9d7045a89198791ae4fbe29e5040c3363e49b83f1f5af18ac09d95",
+    "copiedSha256": "193209cbab9d7045a89198791ae4fbe29e5040c3363e49b83f1f5af18ac09d95",
+    "hostnameRedacted": false
+  }
+]

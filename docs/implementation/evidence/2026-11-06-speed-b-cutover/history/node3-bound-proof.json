@@ -1,0 +1,24 @@
+{
+  "sourceSha": "39ad3c37ed8eb875e01b9f696b26cc7db82549b413d59d6b665c2f6cb07c6c7e",
+  "diffSha": "ff470869f3bd6a66a6396f64ec5eb6299782976ff5d6902196b883e354a698b1",
+  "handoffSha": "02baa3796890598ffd407b675b7c25af1bf04ad6e8d4aec3f4ca8b323379812d",
+  "handoff": {
+    "lane": "P",
+    "container": {
+      "id": "e08b8302131dadfeb1f6a0c9cec499e5a867a227d2cc78ba28f010ee36c31b46",
+      "image": "sha256:6501843661b1f8ff97e85c02de33edc0ee2e2693888ad596ee86222f02dc8ecc"
+    },
+    "db": {
+      "port": 54348,
+      "name": "postgres",
+      "admin": "supabase_admin",
+      "runtime": "orbis_app",
+      "systemId": "7704933404587495458"
+    },
+    "manifests": {
+      "old": "7b5182a818bceb6839659923e5937af0c085ffcb6aeb93747deae7ae92a003eb",
+      "current": "2ec1888a7d71ebd2e93bca482da11620a087a6f479403cc86968d4e71b048abe"
+    }
+  },
+  "delta": "handoff sentinel and pin status only"
+}

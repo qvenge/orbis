@@ -1,0 +1,42 @@
+[
+  {
+    "sequence": 46,
+    "phase": "old",
+    "actor": "browser",
+    "version": "0.6.0",
+    "names": [
+      "entity.create"
+    ],
+    "bodies": [],
+    "creates": [
+      "01a1abea-0ba0-76c5-837b-47431fd4a60c"
+    ],
+    "createPayloads": [
+      {
+        "id": "01a1abea-0ba0-76c5-837b-47431fd4a60c",
+        "digest": "3376a0698dc3183a6545997ddd95a0375d07df8b8df57b96c00cf6e804999e81"
+      }
+    ],
+    "forwarded": false
+  },
+  {
+    "sequence": 48,
+    "phase": "old",
+    "actor": "browser",
+    "version": "0.6.0",
+    "names": [
+      "entity.create"
+    ],
+    "bodies": [],
+    "creates": [
+      "01a1abea-0ba0-76c5-837b-47431fd4a60c"
+    ],
+    "createPayloads": [
+      {
+        "id": "01a1abea-0ba0-76c5-837b-47431fd4a60c",
+        "digest": "3376a0698dc3183a6545997ddd95a0375d07df8b8df57b96c00cf6e804999e81"
+      }
+    ],
+    "forwarded": false
+  }
+]

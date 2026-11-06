@@ -1,0 +1,13 @@
+# Final bound Node P packet — source/import/Result controls complete
+
+Authoritative sibling `final-p-node-bound/`: **2a93c4509ba08e6ae1e82b1dcb6e7a9180019469db3e5750dd8588c6fc77081d**. True delta from tested3d1:453cc02835d6d4137d5abc7073aa1e45a0b8dba1fe0cbfe97c537bc13726ea06; vs allocation681:09ed0ffeb6771deedfe625d0fdfa6f66b81b65c89f49102c2edaf0225d829663. All original preimages/evidence remain immutable.
+
+Only final adaptations beyond the reviewed allocation bindings:
+
+- Erasable lifecycle field declaration + constructor assignment. Actual Node23.11 preimage import reproduced ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX; corrected dependency import passes. Lexical equality is explicitly false; reversing only constructor spelling reproduces the whole original file. Events/latches/recorder methods are unchanged. Diffefe3d864.
+- Three SQL row-return helpers now return Array.from(await sql`…`). SQL templates/filters and every P-positive assertion remain byte-identical. No row filtering/coercion/count relaxation. Actual frozen postgres.Result ESM and the CJS class used by the runtime both prove raw empty deepEqual fails, normalized empty passes, and normalized nonempty preserves every row, order and object identity. Result-only diff **ca7658b1b21c27292428791337947dd8c0366d00f817104cec7e50232d793a40**.
+- Main handoff constant and pins.json both pin **b167dfa7f3a97d1f2c26797f155474c345ec239fc291f10051497a6639aa3c56**. Pin-only diff0b105514. Source physical bindings retain exact p-node/54346/labelp-node, containerc541273e4cd3ad05566a9917eb86545b8dcff6b8b2db71e365cb902b11ebfabd, system7704674727734878242, image650184…, old7b5182/current2ec1888a. Handoff/manifest bytes verified from root allocation files; no Docker/DB probe by the author.
+
+Final targeted control group: actual Result PASS, Node entry-dependency imports PASS, isolated final Node types PASS, isolated final Bun types PASS; all four exits0. No executable main/package factory/App/DB/browser/port opened. Evidence **7509c2eb9744663e5ceddabbc8d7f3f0abadc3fa82131d39f4f4c207e3fd99b8** in final-smoke-evidence/SHA256SUMS. Earlier import RED/GREEN evidence bbfe712c is retained. The previous25 helper controls remain covering for unchanged HTTP/IPC/ownership code; no wide rerun.
+
+`future-bound-command.json` contains the exact reviewed runtime command. Full P has NOT run and still requires root grant after SAME final source/live-binding review. No signer persistence/resume, product/c7/dist changes, or weakened P710 guards. Historical fdb4/ae012 report is preserved as final-bound-report.before-result-array.md and must not be used as the current freeze.

@@ -1,0 +1,19 @@
+{
+  "label": "after-all-pid-exit",
+  "profile": "/private/tmp/orbis-cutover-sw-admission.ohlsh3nd/profile-parent/chrome.I9UTBM",
+  "markers": [
+    {
+      "name": "SingletonLock",
+      "type": "absent"
+    },
+    {
+      "name": "SingletonCookie",
+      "type": "absent"
+    },
+    {
+      "name": "SingletonSocket",
+      "type": "absent"
+    }
+  ],
+  "exitType": "Normal"
+}

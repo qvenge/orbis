@@ -1,0 +1,26 @@
+{
+  "owner": "077867d7-0eb9-4f24-8b55-dc233db315f7",
+  "ids": {
+    "a": "312c964d-45d0-47ec-99a0-1059829be854",
+    "b": "613f9403-99d2-407b-8b91-0436a6183924",
+    "held": "883de320-fe13-431b-aa32-b3216969224c"
+  },
+  "legacy": [
+    {
+      "key": "orbis:body-draft:077867d7-0eb9-4f24-8b55-dc233db315f7:312c964d-45d0-47ec-99a0-1059829be854",
+      "raw": "{\"doc\":{\"v\":3,\"doc\":{\"type\":\"doc\",\"content\":[{\"type\":\"paragraph\",\"attrs\":{\"id\":\"5320f83a-c124-40ed-8403-360346204e75\"},\"content\":[{\"type\":\"text\",\"text\":\"Original a R5-recover-first-synthetic-body\"}]}]}},\"baseRevision\":1,\"savedAt\":\"2026-11-06T05:57:45.412Z\",\"rejected\":false}"
+    },
+    {
+      "key": "orbis:body-draft:077867d7-0eb9-4f24-8b55-dc233db315f7:613f9403-99d2-407b-8b91-0436a6183924",
+      "raw": "{\"doc\":{\"v\":3,\"doc\":{\"type\":\"doc\",\"content\":[{\"type\":\"paragraph\",\"attrs\":{\"id\":\"7bdfeba6-6923-493b-b063-b3fcd9bafec3\"},\"content\":[{\"type\":\"text\",\"text\":\"Original b R5-discard-second-synthetic-body\"}]}]}},\"baseRevision\":1,\"savedAt\":\"2026-11-06T05:57:48.627Z\",\"rejected\":false}"
+    }
+  ],
+  "finished": [],
+  "slots": [],
+  "controlRaw": null,
+  "queueRaw": null,
+  "databases": [],
+  "at": 1793944669184,
+  "url": "http://127.0.0.1:65375/chat",
+  "time": "2026-11-06T05:57:49.184Z"
+}

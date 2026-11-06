@@ -1,0 +1,235 @@
+{
+  "exit": 0,
+  "runnerExit": 0,
+  "watchdogTimedOut": false,
+  "monitorError": null,
+  "cleanupErrors": [],
+  "forcedRunnerCleanup": false,
+  "forcedBrowserCleanup": false,
+  "runner": {
+    "pid": 62888,
+    "ppid": 62883,
+    "start": "Thu Nov  5 21:51:24 2026",
+    "cmd": "/Users/birzhan/.nvm/versions/node/v23.11.0/bin/node /Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/sw-admission-control-alternative/control.ts /private/tmp/orbis-cutover-sw-admission.xs11xzrh"
+  },
+  "runnerPid": 62888,
+  "observed": [
+    {
+      "pid": 62893,
+      "ppid": 62888,
+      "start": "Thu Nov  5 21:51:25 2026",
+      "cmd": "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome --disable-field-trial-config --disable-background-networking --disable-background-timer-throttling --disable-backgrounding-occluded-windows --disable-breakpad --disable-client-side-phishing-detection --disable-component-extensions-with-background-pages --disable-component-update --no-default-browser-check --disable-default-apps --disable-dev-shm-usage --disable-edgeupdater --disable-extensions --disable-features=AvoidUnnecessaryBeforeUnloadCheckSync,DestroyProfileOnBrowserClose,DialMediaRouteProvider,GlobalMediaControls,HttpsUpgrades,LensOverlay,MediaRouter,PaintHolding,ThirdPartyStoragePartitioning,BlockOriginHeaderModificationOnRedirect,Translate,AutoDeElevate,OptimizationHints,msForceBrowserSignIn,msEdgeUpdateLaunchServicesPreferredVersion --enable-features=CDPScreenshotNewSurface --allow-pre-commit-input --disable-hang-monitor --disable-ipc-flooding-protection --disable-popup-blocking --disable-prompt-on-repost --disable-renderer-backgrounding --disable-updater-scheduler --force-color-profile=srgb --metrics-recording-only --no-first-run --password-store=basic --use-mock-keychain --no-service-autorun --export-tagged-pdf --disable-search-engine-choice-screen --unsafely-disable-devtools-self-xss-warnings --edge-skip-compat-layer-relaunch --disable-infobars --disable-search-engine-choice-screen --disable-sync --enable-unsafe-swiftshader --headless --hide-scrollbars --mute-audio --blink-settings=primaryHoverType=2,availableHoverTypes=2,primaryPointerType=4,availablePointerTypes=4 --disable-background-mode --window-size=410,820 --proxy-server=http://127.0.0.1:60524 --proxy-bypass-list=<-loopback>;127.0.0.1:60522;127.0.0.1:60523 --host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1 --user-data-dir=/private/tmp/orbis-cutover-sw-admission.xs11xzrh/profile-parent/chrome.wDzjNk --remote-debugging-pipe about:blank"
+    },
+    {
+      "pid": 62907,
+      "ppid": 62893,
+      "start": "Thu Nov  5 21:51:25 2026",
+      "cmd": "/Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Versions/156.0.8078.80/Helpers/Google Chrome Helper (GPU).app/Contents/MacOS/Google Chrome Helper (GPU) --type=gpu-process --gpu-recent-crash-count=0 --disable-breakpad --headless --enable-unsafe-swiftshader --noerrdialogs --user-data-dir=/private/tmp/orbis-cutover-sw-admission.xs11xzrh/profile-parent/chrome.wDzjNk --gpu-preferences=WAAAAAAAAAAgAAAEAAAAAAAAAAAAAGAAQAAAAAAAAAADAAAAAAAAADgAAAAAAAAAAAAAAAAAAAACAAAAAAAAAAAAAAAAAAAAKAAAAAAAAAAoAAAAAAAAAAgAAAAAAAAADAAAAAEAAAAAAAAAAAAAAAgAAAAAAAAACAAAAAAAAAA= --shared-files --field-trial-handle=1718379636,r,4424145762650379114,10893551881288836380,262144 --enable-features=CDPScreenshotNewSurface --disable-features=AutoDeElevate,AvoidUnnecessaryBeforeUnloadCheckSync,BlockOriginHeaderModificationOnRedirect,DestroyProfileOnBrowserClose,DialMediaRouteProvider,GlobalMediaControls,HttpsUpgrades,LensOverlay,MediaRouter,OptimizationHints,PaintHolding,ThirdPartyStoragePartitioning,Translate,msEdgeUpdateLaunchServicesPreferredVersion,msForceBrowserSignIn --variations-seed-version --pseudonymization-salt-handle=1935764596,r,2382956614690889672,14581435292505280061,4 --trace-process-track-uuid=3190708988185955192 --seatbelt-client=28"
+    },
+    {
+      "pid": 62908,
+      "ppid": 62893,
+      "start": "Thu Nov  5 21:51:25 2026",
+      "cmd": "/Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Versions/156.0.8078.80/Helpers/Google Chrome Helper.app/Contents/MacOS/Google Chrome Helper --type=utility --utility-sub-type=network.mojom.NetworkService --lang=en-GB --service-sandbox-type=network --host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1 --mute-audio --noerrdialogs --user-data-dir=/private/tmp/orbis-cutover-sw-admission.xs11xzrh/profile-parent/chrome.wDzjNk --shared-files --field-trial-handle=1718379636,r,4424145762650379114,10893551881288836380,262144 --enable-features=CDPScreenshotNewSurface --disable-features=AutoDeElevate,AvoidUnnecessaryBeforeUnloadCheckSync,BlockOriginHeaderModificationOnRedirect,DestroyProfileOnBrowserClose,DialMediaRouteProvider,GlobalMediaControls,HttpsUpgrades,LensOverlay,MediaRouter,OptimizationHints,PaintHolding,ThirdPartyStoragePartitioning,Translate,msEdgeUpdateLaunchServicesPreferredVersion,msForceBrowserSignIn --variations-seed-version --pseudonymization-salt-handle=1935764596,r,2382956614690889672,14581435292505280061,4 --trace-process-track-uuid=3190708989122997041 --seatbelt-client=24"
+    },
+    {
+      "pid": 62909,
+      "ppid": 62893,
+      "start": "Thu Nov  5 21:51:25 2026",
+      "cmd": "/Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Versions/156.0.8078.80/Helpers/Google Chrome Helper.app/Contents/MacOS/Google Chrome Helper --type=utility --utility-sub-type=storage.mojom.StorageService --lang=en-GB --service-sandbox-type=service --host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1 --mute-audio --noerrdialogs --user-data-dir=/private/tmp/orbis-cutover-sw-admission.xs11xzrh/profile-parent/chrome.wDzjNk --shared-files --field-trial-handle=1718379636,r,4424145762650379114,10893551881288836380,262144 --enable-features=CDPScreenshotNewSurface --disable-features=AutoDeElevate,AvoidUnnecessaryBeforeUnloadCheckSync,BlockOriginHeaderModificationOnRedirect,DestroyProfileOnBrowserClose,DialMediaRouteProvider,GlobalMediaControls,HttpsUpgrades,LensOverlay,MediaRouter,OptimizationHints,PaintHolding,ThirdPartyStoragePartitioning,Translate,msEdgeUpdateLaunchServicesPreferredVersion,msForceBrowserSignIn --variations-seed-version --pseudonymization-salt-handle=1935764596,r,2382956614690889672,14581435292505280061,4 --trace-process-track-uuid=3190708990060038890 --seatbelt-client=45"
+    },
+    {
+      "pid": 62910,
+      "ppid": 62893,
+      "start": "Thu Nov  5 21:51:25 2026",
+      "cmd": "/Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Versions/156.0.8078.80/Helpers/Google Chrome Helper (Alerts).app/Contents/MacOS/Google Chrome Helper (Alerts) --type=utility --utility-sub-type=mac_notifications.mojom.MacNotificationProvider --lang=en-GB --service-sandbox-type=none --host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1 --mute-audio --message-loop-type-ui --noerrdialogs --user-data-dir=/private/tmp/orbis-cutover-sw-admission.xs11xzrh/profile-parent/chrome.wDzjNk --shared-files --field-trial-handle=1718379636,r,4424145762650379114,10893551881288836380,262144 --enable-features=CDPScreenshotNewSurface --disable-features=AutoDeElevate,AvoidUnnecessaryBeforeUnloadCheckSync,BlockOriginHeaderModificationOnRedirect,DestroyProfileOnBrowserClose,DialMediaRouteProvider,GlobalMediaControls,HttpsUpgrades,LensOverlay,MediaRouter,OptimizationHints,PaintHolding,ThirdPartyStoragePartitioning,Translate,msEdgeUpdateLaunchServicesPreferredVersion,msForceBrowserSignIn --variations-seed-version --pseudonymization-salt-handle=1935764596,r,2382956614690889672,14581435292505280061,4 --trace-process-track-uuid=3190708990997080739"
+    },
+    {
+      "pid": 62913,
+      "ppid": 62893,
+      "start": "Thu Nov  5 21:51:26 2026",
+      "cmd": "(Google Chrome He)"
+    },
+    {
+      "pid": 62914,
+      "ppid": 62893,
+      "start": "Thu Nov  5 21:51:26 2026",
+      "cmd": "/Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Versions/156.0.8078.80/Helpers/Google Chrome Helper (Renderer).app/Contents/MacOS/Google Chrome Helper (Renderer) --type=renderer --noerrdialogs --user-data-dir=/private/tmp/orbis-cutover-sw-admission.xs11xzrh/profile-parent/chrome.wDzjNk --disable-background-timer-throttling --disable-breakpad --force-color-profile=srgb --remote-debugging-pipe --allow-pre-commit-input --blink-settings=primaryHoverType=2,availableHoverTypes=2,primaryPointerType=4,availablePointerTypes=4 --lang=en-GB --num-raster-threads=4 --enable-zero-copy --enable-gpu-memory-buffer-compositor-resources --enable-main-frame-before-activation --renderer-client-id=8 --launch-time-ticks=460867756949 --shared-files --field-trial-handle=1718379636,r,4424145762650379114,10893551881288836380,262144 --enable-features=CDPScreenshotNewSurface --disable-features=AutoDeElevate,AvoidUnnecessaryBeforeUnloadCheckSync,BlockOriginHeaderModificationOnRedirect,DestroyProfileOnBrowserClose,DialMediaRouteProvider,GlobalMediaControls,HttpsUpgrades,LensOverlay,MediaRouter,OptimizationHints,PaintHolding,ThirdPartyStoragePartitioning,Translate,msEdgeUpdateLaunchServicesPreferredVersion,msForceBrowserSignIn --variations-seed-version --pseudonymization-salt-handle=1935764596,r,2382956614690889672,14581435292505280061,4 --trace-process-track-uuid=3190708993808206286 --seatbelt-client=75"
+    },
+    {
+      "pid": 62915,
+      "ppid": 62893,
+      "start": "Thu Nov  5 21:51:26 2026",
+      "cmd": "(Google Chrome He)"
+    },
+    {
+      "pid": 62923,
+      "ppid": 62893,
+      "start": "Thu Nov  5 21:51:26 2026",
+      "cmd": "(Google Chrome He)"
+    },
+    {
+      "pid": 62941,
+      "ppid": 62888,
+      "start": "Thu Nov  5 21:51:29 2026",
+      "cmd": "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome --disable-field-trial-config --disable-background-networking --disable-background-timer-throttling --disable-backgrounding-occluded-windows --disable-breakpad --disable-client-side-phishing-detection --disable-component-extensions-with-background-pages --disable-component-update --no-default-browser-check --disable-default-apps --disable-dev-shm-usage --disable-edgeupdater --disable-extensions --disable-features=AvoidUnnecessaryBeforeUnloadCheckSync,DestroyProfileOnBrowserClose,DialMediaRouteProvider,GlobalMediaControls,HttpsUpgrades,LensOverlay,MediaRouter,PaintHolding,ThirdPartyStoragePartitioning,BlockOriginHeaderModificationOnRedirect,Translate,AutoDeElevate,OptimizationHints,msForceBrowserSignIn,msEdgeUpdateLaunchServicesPreferredVersion --enable-features=CDPScreenshotNewSurface --allow-pre-commit-input --disable-hang-monitor --disable-ipc-flooding-protection --disable-popup-blocking --disable-prompt-on-repost --disable-renderer-backgrounding --disable-updater-scheduler --force-color-profile=srgb --metrics-recording-only --no-first-run --password-store=basic --use-mock-keychain --no-service-autorun --export-tagged-pdf --disable-search-engine-choice-screen --unsafely-disable-devtools-self-xss-warnings --edge-skip-compat-layer-relaunch --disable-infobars --disable-search-engine-choice-screen --disable-sync --enable-unsafe-swiftshader --headless --hide-scrollbars --mute-audio --blink-settings=primaryHoverType=2,availableHoverTypes=2,primaryPointerType=4,availablePointerTypes=4 --disable-background-mode --window-size=410,820 --proxy-server=http://127.0.0.1:60524 --proxy-bypass-list=<-loopback>;127.0.0.1:60522;127.0.0.1:60523 --host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1 --user-data-dir=/private/tmp/orbis-cutover-sw-admission.xs11xzrh/profile-parent/chrome.7jhozY --remote-debugging-pipe about:blank"
+    },
+    {
+      "pid": 62949,
+      "ppid": 62941,
+      "start": "Thu Nov  5 21:51:30 2026",
+      "cmd": "/Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Versions/156.0.8078.80/Helpers/Google Chrome Helper (GPU).app/Contents/MacOS/Google Chrome Helper (GPU) --type=gpu-process --gpu-recent-crash-count=0 --disable-breakpad --headless --enable-unsafe-swiftshader --noerrdialogs --user-data-dir=/private/tmp/orbis-cutover-sw-admission.xs11xzrh/profile-parent/chrome.7jhozY --gpu-preferences=WAAAAAAAAAAgAAAEAAAAAAAAAAAAAGAAQAAAAAAAAAADAAAAAAAAADgAAAAAAAAAAAAAAAAAAAACAAAAAAAAAAAAAAAAAAAAKAAAAAAAAAAoAAAAAAAAAAgAAAAAAAAADAAAAAEAAAAAAAAAAAAAAAgAAAAAAAAACAAAAAAAAAA= --shared-files --field-trial-handle=1718379636,r,2128702768213115672,17113794603881108876,262144 --enable-features=CDPScreenshotNewSurface --disable-features=AutoDeElevate,AvoidUnnecessaryBeforeUnloadCheckSync,BlockOriginHeaderModificationOnRedirect,DestroyProfileOnBrowserClose,DialMediaRouteProvider,GlobalMediaControls,HttpsUpgrades,LensOverlay,MediaRouter,OptimizationHints,PaintHolding,ThirdPartyStoragePartitioning,Translate,msEdgeUpdateLaunchServicesPreferredVersion,msForceBrowserSignIn --variations-seed-version --pseudonymization-salt-handle=1935764596,r,1121982234782950766,14342061970249666614,4 --trace-process-track-uuid=3190708988185955192 --seatbelt-client=30"
+    },
+    {
+      "pid": 62950,
+      "ppid": 62941,
+      "start": "Thu Nov  5 21:51:30 2026",
+      "cmd": "/Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Versions/156.0.8078.80/Helpers/Google Chrome Helper.app/Contents/MacOS/Google Chrome Helper --type=utility --utility-sub-type=network.mojom.NetworkService --lang=en-GB --service-sandbox-type=network --host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1 --mute-audio --noerrdialogs --user-data-dir=/private/tmp/orbis-cutover-sw-admission.xs11xzrh/profile-parent/chrome.7jhozY --shared-files --field-trial-handle=1718379636,r,2128702768213115672,17113794603881108876,262144 --enable-features=CDPScreenshotNewSurface --disable-features=AutoDeElevate,AvoidUnnecessaryBeforeUnloadCheckSync,BlockOriginHeaderModificationOnRedirect,DestroyProfileOnBrowserClose,DialMediaRouteProvider,GlobalMediaControls,HttpsUpgrades,LensOverlay,MediaRouter,OptimizationHints,PaintHolding,ThirdPartyStoragePartitioning,Translate,msEdgeUpdateLaunchServicesPreferredVersion,msForceBrowserSignIn --variations-seed-version --pseudonymization-salt-handle=1935764596,r,1121982234782950766,14342061970249666614,4 --trace-process-track-uuid=3190708989122997041 --seatbelt-client=30"
+    },
+    {
+      "pid": 62951,
+      "ppid": 62941,
+      "start": "Thu Nov  5 21:51:30 2026",
+      "cmd": "/Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Versions/156.0.8078.80/Helpers/Google Chrome Helper.app/Contents/MacOS/Google Chrome Helper --type=utility --utility-sub-type=storage.mojom.StorageService --lang=en-GB --service-sandbox-type=service --host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1 --mute-audio --noerrdialogs --user-data-dir=/private/tmp/orbis-cutover-sw-admission.xs11xzrh/profile-parent/chrome.7jhozY --shared-files --field-trial-handle=1718379636,r,2128702768213115672,17113794603881108876,262144 --enable-features=CDPScreenshotNewSurface --disable-features=AutoDeElevate,AvoidUnnecessaryBeforeUnloadCheckSync,BlockOriginHeaderModificationOnRedirect,DestroyProfileOnBrowserClose,DialMediaRouteProvider,GlobalMediaControls,HttpsUpgrades,LensOverlay,MediaRouter,OptimizationHints,PaintHolding,ThirdPartyStoragePartitioning,Translate,msEdgeUpdateLaunchServicesPreferredVersion,msForceBrowserSignIn --variations-seed-version --pseudonymization-salt-handle=1935764596,r,1121982234782950766,14342061970249666614,4 --trace-process-track-uuid=3190708990060038890 --seatbelt-client=44"
+    },
+    {
+      "pid": 62952,
+      "ppid": 62941,
+      "start": "Thu Nov  5 21:51:30 2026",
+      "cmd": "(Google Chrome He)"
+    },
+    {
+      "pid": 62956,
+      "ppid": 62941,
+      "start": "Thu Nov  5 21:51:30 2026",
+      "cmd": "<defunct>"
+    },
+    {
+      "pid": 62957,
+      "ppid": 62941,
+      "start": "Thu Nov  5 21:51:30 2026",
+      "cmd": "(Google Chrome He)"
+    },
+    {
+      "pid": 62958,
+      "ppid": 62941,
+      "start": "Thu Nov  5 21:51:30 2026",
+      "cmd": "/Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Versions/156.0.8078.80/Helpers/Google Chrome Helper (Renderer).app/Contents/MacOS/Google Chrome Helper (Renderer) --type=renderer --noerrdialogs --user-data-dir=/private/tmp/orbis-cutover-sw-admission.xs11xzrh/profile-parent/chrome.7jhozY --disable-background-timer-throttling --disable-breakpad --force-color-profile=srgb --remote-debugging-pipe --allow-pre-commit-input --blink-settings=primaryHoverType=2,availableHoverTypes=2,primaryPointerType=4,availablePointerTypes=4 --lang=en-GB --num-raster-threads=4 --enable-zero-copy --enable-gpu-memory-buffer-compositor-resources --enable-main-frame-before-activation --renderer-client-id=7 --launch-time-ticks=460872134337 --shared-files --field-trial-handle=1718379636,r,2128702768213115672,17113794603881108876,262144 --enable-features=CDPScreenshotNewSurface --disable-features=AutoDeElevate,AvoidUnnecessaryBeforeUnloadCheckSync,BlockOriginHeaderModificationOnRedirect,DestroyProfileOnBrowserClose,DialMediaRouteProvider,GlobalMediaControls,HttpsUpgrades,LensOverlay,MediaRouter,OptimizationHints,PaintHolding,ThirdPartyStoragePartitioning,Translate,msEdgeUpdateLaunchServicesPreferredVersion,msForceBrowserSignIn --variations-seed-version --pseudonymization-salt-handle=1935764596,r,1121982234782950766,14342061970249666614,4 --trace-process-track-uuid=3190708992871164437 --seatbelt-client=78"
+    },
+    {
+      "pid": 62964,
+      "ppid": 62941,
+      "start": "Thu Nov  5 21:51:31 2026",
+      "cmd": "/Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Versions/156.0.8078.80/Helpers/Google Chrome Helper (Renderer).app/Contents/MacOS/Google Chrome Helper (Renderer) --type=renderer --noerrdialogs --user-data-dir=/private/tmp/orbis-cutover-sw-admission.xs11xzrh/profile-parent/chrome.7jhozY --disable-background-timer-throttling --disable-breakpad --force-color-profile=srgb --remote-debugging-pipe --allow-pre-commit-input --blink-settings=primaryHoverType=2,availableHoverTypes=2,primaryPointerType=4,availablePointerTypes=4 --lang=en-GB --num-raster-threads=4 --enable-zero-copy --enable-gpu-memory-buffer-compositor-resources --enable-main-frame-before-activation --renderer-client-id=9 --launch-time-ticks=460872662318 --shared-files --field-trial-handle=1718379636,r,2128702768213115672,17113794603881108876,262144 --enable-features=CDPScreenshotNewSurface --disable-features=AutoDeElevate,AvoidUnnecessaryBeforeUnloadCheckSync,BlockOriginHeaderModificationOnRedirect,DestroyProfileOnBrowserClose,DialMediaRouteProvider,GlobalMediaControls,HttpsUpgrades,LensOverlay,MediaRouter,OptimizationHints,PaintHolding,ThirdPartyStoragePartitioning,Translate,msEdgeUpdateLaunchServicesPreferredVersion,msForceBrowserSignIn --variations-seed-version --pseudonymization-salt-handle=1935764596,r,1121982234782950766,14342061970249666614,4 --trace-process-track-uuid=3190708994745248135 --seatbelt-client=101"
+    },
+    {
+      "pid": 62974,
+      "ppid": 62888,
+      "start": "Thu Nov  5 21:51:32 2026",
+      "cmd": "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome --disable-field-trial-config --disable-background-networking --disable-background-timer-throttling --disable-backgrounding-occluded-windows --disable-breakpad --disable-client-side-phishing-detection --disable-component-extensions-with-background-pages --disable-component-update --no-default-browser-check --disable-default-apps --disable-dev-shm-usage --disable-edgeupdater --disable-extensions --disable-features=AvoidUnnecessaryBeforeUnloadCheckSync,DestroyProfileOnBrowserClose,DialMediaRouteProvider,GlobalMediaControls,HttpsUpgrades,LensOverlay,MediaRouter,PaintHolding,ThirdPartyStoragePartitioning,BlockOriginHeaderModificationOnRedirect,Translate,AutoDeElevate,OptimizationHints,msForceBrowserSignIn,msEdgeUpdateLaunchServicesPreferredVersion --enable-features=CDPScreenshotNewSurface --allow-pre-commit-input --disable-hang-monitor --disable-ipc-flooding-protection --disable-popup-blocking --disable-prompt-on-repost --disable-renderer-backgrounding --disable-updater-scheduler --force-color-profile=srgb --metrics-recording-only --no-first-run --password-store=basic --use-mock-keychain --no-service-autorun --export-tagged-pdf --disable-search-engine-choice-screen --unsafely-disable-devtools-self-xss-warnings --edge-skip-compat-layer-relaunch --disable-infobars --disable-search-engine-choice-screen --disable-sync --enable-unsafe-swiftshader --headless --hide-scrollbars --mute-audio --blink-settings=primaryHoverType=2,availableHoverTypes=2,primaryPointerType=4,availablePointerTypes=4 --disable-background-mode --window-size=410,820 --proxy-server=http://127.0.0.1:60524 --proxy-bypass-list=<-loopback>;127.0.0.1:60522;127.0.0.1:60523 --host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1 --user-data-dir=/private/tmp/orbis-cutover-sw-admission.xs11xzrh/profile-parent/chrome.7jhozY --remote-debugging-pipe about:blank"
+    },
+    {
+      "pid": 62982,
+      "ppid": 62974,
+      "start": "Thu Nov  5 21:51:32 2026",
+      "cmd": "/Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Versions/156.0.8078.80/Helpers/Google Chrome Helper (GPU).app/Contents/MacOS/Google Chrome Helper (GPU) --type=gpu-process --gpu-recent-crash-count=0 --disable-breakpad --headless --enable-unsafe-swiftshader --noerrdialogs --user-data-dir=/private/tmp/orbis-cutover-sw-admission.xs11xzrh/profile-parent/chrome.7jhozY --gpu-preferences=WAAAAAAAAAAgAAAEAAAAAAAAAAAAAGAAQAAAAAAAAAADAAAAAAAAADgAAAAAAAAAAAAAAAAAAAACAAAAAAAAAAAAAAAAAAAAKAAAAAAAAAAoAAAAAAAAAAgAAAAAAAAADAAAAAEAAAAAAAAAAAAAAAgAAAAAAAAACAAAAAAAAAA= --shared-files --field-trial-handle=1718379636,r,17458048538498095677,10850551022641025950,262144 --enable-features=CDPScreenshotNewSurface --disable-features=AutoDeElevate,AvoidUnnecessaryBeforeUnloadCheckSync,BlockOriginHeaderModificationOnRedirect,DestroyProfileOnBrowserClose,DialMediaRouteProvider,GlobalMediaControls,HttpsUpgrades,LensOverlay,MediaRouter,OptimizationHints,PaintHolding,ThirdPartyStoragePartitioning,Translate,msEdgeUpdateLaunchServicesPreferredVersion,msForceBrowserSignIn --variations-seed-version --pseudonymization-salt-handle=1935764596,r,3590376661721342520,13977605459402283112,4 --trace-process-track-uuid=3190708988185955192 --seatbelt-client=27"
+    },
+    {
+      "pid": 62983,
+      "ppid": 62974,
+      "start": "Thu Nov  5 21:51:32 2026",
+      "cmd": "(Google Chrome He)"
+    },
+    {
+      "pid": 62985,
+      "ppid": 62974,
+      "start": "Thu Nov  5 21:51:32 2026",
+      "cmd": "/Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Versions/156.0.8078.80/Helpers/Google Chrome Helper.app/Contents/MacOS/Google Chrome Helper --type=utility --utility-sub-type=storage.mojom.StorageService --lang=en-GB --service-sandbox-type=service --host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1 --mute-audio --noerrdialogs --user-data-dir=/private/tmp/orbis-cutover-sw-admission.xs11xzrh/profile-parent/chrome.7jhozY --shared-files --field-trial-handle=1718379636,r,17458048538498095677,10850551022641025950,262144 --enable-features=CDPScreenshotNewSurface --disable-features=AutoDeElevate,AvoidUnnecessaryBeforeUnloadCheckSync,BlockOriginHeaderModificationOnRedirect,DestroyProfileOnBrowserClose,DialMediaRouteProvider,GlobalMediaControls,HttpsUpgrades,LensOverlay,MediaRouter,OptimizationHints,PaintHolding,ThirdPartyStoragePartitioning,Translate,msEdgeUpdateLaunchServicesPreferredVersion,msForceBrowserSignIn --variations-seed-version --pseudonymization-salt-handle=1935764596,r,3590376661721342520,13977605459402283112,4 --trace-process-track-uuid=3190708990060038890 --seatbelt-client=45"
+    },
+    {
+      "pid": 62986,
+      "ppid": 62974,
+      "start": "Thu Nov  5 21:51:32 2026",
+      "cmd": "(Google Chrome He)"
+    },
+    {
+      "pid": 62990,
+      "ppid": 62974,
+      "start": "Thu Nov  5 21:51:33 2026",
+      "cmd": "/Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Versions/156.0.8078.80/Helpers/Google Chrome Helper (Renderer).app/Contents/MacOS/Google Chrome Helper (Renderer) --type=renderer --top-chrome-webui --noerrdialogs --user-data-dir=/private/tmp/orbis-cutover-sw-admission.xs11xzrh/profile-parent/chrome.7jhozY --disable-background-timer-throttling --disable-breakpad --force-color-profile=srgb --remote-debugging-pipe --allow-pre-commit-input --blink-settings=primaryHoverType=2,availableHoverTypes=2,primaryPointerType=4,availablePointerTypes=4 --lang=en-GB --num-raster-threads=4 --enable-zero-copy --enable-gpu-memory-buffer-compositor-resources --enable-main-frame-before-activation --renderer-client-id=6 --launch-time-ticks=460874707013 --shared-files --field-trial-handle=1718379636,r,17458048538498095677,10850551022641025950,262144 --enable-features=CDPScreenshotNewSurface --disable-features=AutoDeElevate,AvoidUnnecessaryBeforeUnloadCheckSync,BlockOriginHeaderModificationOnRedirect,DestroyProfileOnBrowserClose,DialMediaRouteProvider,GlobalMediaControls,HttpsUpgrades,LensOverlay,MediaRouter,OptimizationHints,PaintHolding,ThirdPartyStoragePartitioning,Translate,msEdgeUpdateLaunchServicesPreferredVersion,msForceBrowserSignIn --variations-seed-version --pseudonymization-salt-handle=1935764596,r,3590376661721342520,13977605459402283112,4 --trace-process-track-uuid=3190708991934122588 --seatbelt-client=65"
+    },
+    {
+      "pid": 62991,
+      "ppid": 62974,
+      "start": "Thu Nov  5 21:51:33 2026",
+      "cmd": "<defunct>"
+    },
+    {
+      "pid": 62992,
+      "ppid": 62974,
+      "start": "Thu Nov  5 21:51:33 2026",
+      "cmd": "/Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Versions/156.0.8078.80/Helpers/Google Chrome Helper (Renderer).app/Contents/MacOS/Google Chrome Helper (Renderer) --type=renderer --noerrdialogs --user-data-dir=/private/tmp/orbis-cutover-sw-admission.xs11xzrh/profile-parent/chrome.7jhozY --disable-background-timer-throttling --disable-breakpad --force-color-profile=srgb --remote-debugging-pipe --allow-pre-commit-input --blink-settings=primaryHoverType=2,availableHoverTypes=2,primaryPointerType=4,availablePointerTypes=4 --lang=en-GB --num-raster-threads=4 --enable-zero-copy --enable-gpu-memory-buffer-compositor-resources --enable-main-frame-before-activation --renderer-client-id=7 --launch-time-ticks=460874777031 --shared-files --field-trial-handle=1718379636,r,17458048538498095677,10850551022641025950,262144 --enable-features=CDPScreenshotNewSurface --disable-features=AutoDeElevate,AvoidUnnecessaryBeforeUnloadCheckSync,BlockOriginHeaderModificationOnRedirect,DestroyProfileOnBrowserClose,DialMediaRouteProvider,GlobalMediaControls,HttpsUpgrades,LensOverlay,MediaRouter,OptimizationHints,PaintHolding,ThirdPartyStoragePartitioning,Translate,msEdgeUpdateLaunchServicesPreferredVersion,msForceBrowserSignIn --variations-seed-version --pseudonymization-salt-handle=1935764596,r,3590376661721342520,13977605459402283112,4 --trace-process-track-uuid=3190708992871164437 --seatbelt-client=65"
+    },
+    {
+      "pid": 62998,
+      "ppid": 62974,
+      "start": "Thu Nov  5 21:51:33 2026",
+      "cmd": "/Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Versions/156.0.8078.80/Helpers/Google Chrome Helper (Renderer).app/Contents/MacOS/Google Chrome Helper (Renderer) --type=renderer --noerrdialogs --user-data-dir=/private/tmp/orbis-cutover-sw-admission.xs11xzrh/profile-parent/chrome.7jhozY --disable-background-timer-throttling --disable-breakpad --force-color-profile=srgb --remote-debugging-pipe --allow-pre-commit-input --blink-settings=primaryHoverType=2,availableHoverTypes=2,primaryPointerType=4,availablePointerTypes=4 --lang=en-GB --num-raster-threads=4 --enable-zero-copy --enable-gpu-memory-buffer-compositor-resources --enable-main-frame-before-activation --renderer-client-id=9 --launch-time-ticks=460875324333 --shared-files --field-trial-handle=1718379636,r,17458048538498095677,10850551022641025950,262144 --enable-features=CDPScreenshotNewSurface --disable-features=AutoDeElevate,AvoidUnnecessaryBeforeUnloadCheckSync,BlockOriginHeaderModificationOnRedirect,DestroyProfileOnBrowserClose,DialMediaRouteProvider,GlobalMediaControls,HttpsUpgrades,LensOverlay,MediaRouter,OptimizationHints,PaintHolding,ThirdPartyStoragePartitioning,Translate,msEdgeUpdateLaunchServicesPreferredVersion,msForceBrowserSignIn --variations-seed-version --pseudonymization-salt-handle=1935764596,r,3590376661721342520,13977605459402283112,4 --trace-process-track-uuid=3190708994745248135 --seatbelt-client=84"
+    },
+    {
+      "pid": 63040,
+      "ppid": 62888,
+      "start": "Thu Nov  5 21:51:38 2026",
+      "cmd": "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome --disable-field-trial-config --disable-background-networking --disable-background-timer-throttling --disable-backgrounding-occluded-windows --disable-breakpad --disable-client-side-phishing-detection --disable-component-extensions-with-background-pages --disable-component-update --no-default-browser-check --disable-default-apps --disable-dev-shm-usage --disable-edgeupdater --disable-extensions --disable-features=AvoidUnnecessaryBeforeUnloadCheckSync,DestroyProfileOnBrowserClose,DialMediaRouteProvider,GlobalMediaControls,HttpsUpgrades,LensOverlay,MediaRouter,PaintHolding,ThirdPartyStoragePartitioning,BlockOriginHeaderModificationOnRedirect,Translate,AutoDeElevate,OptimizationHints,msForceBrowserSignIn,msEdgeUpdateLaunchServicesPreferredVersion --enable-features=CDPScreenshotNewSurface --allow-pre-commit-input --disable-hang-monitor --disable-ipc-flooding-protection --disable-popup-blocking --disable-prompt-on-repost --disable-renderer-backgrounding --disable-updater-scheduler --force-color-profile=srgb --metrics-recording-only --no-first-run --password-store=basic --use-mock-keychain --no-service-autorun --export-tagged-pdf --disable-search-engine-choice-screen --unsafely-disable-devtools-self-xss-warnings --edge-skip-compat-layer-relaunch --disable-infobars --disable-search-engine-choice-screen --disable-sync --enable-unsafe-swiftshader --headless --hide-scrollbars --mute-audio --blink-settings=primaryHoverType=2,availableHoverTypes=2,primaryPointerType=4,availablePointerTypes=4 --disable-background-mode --window-size=410,820 --proxy-server=http://127.0.0.1:60524 --proxy-bypass-list=<-loopback>;127.0.0.1:60522;127.0.0.1:60523 --host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1 --user-data-dir=/private/tmp/orbis-cutover-sw-admission.xs11xzrh/profile-parent/chrome.7jhozY --remote-debugging-pipe about:blank"
+    },
+    {
+      "pid": 63048,
+      "ppid": 63040,
+      "start": "Thu Nov  5 21:51:38 2026",
+      "cmd": "/Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Versions/156.0.8078.80/Helpers/Google Chrome Helper (GPU).app/Contents/MacOS/Google Chrome Helper (GPU) --type=gpu-process --gpu-recent-crash-count=0 --disable-breakpad --headless --enable-unsafe-swiftshader --noerrdialogs --user-data-dir=/private/tmp/orbis-cutover-sw-admission.xs11xzrh/profile-parent/chrome.7jhozY --gpu-preferences=WAAAAAAAAAAgAAAEAAAAAAAAAAAAAGAAQAAAAAAAAAADAAAAAAAAADgAAAAAAAAAAAAAAAAAAAACAAAAAAAAAAAAAAAAAAAAKAAAAAAAAAAoAAAAAAAAAAgAAAAAAAAADAAAAAEAAAAAAAAAAAAAAAgAAAAAAAAACAAAAAAAAAA= --shared-files --field-trial-handle=1718379636,r,7658850740114014420,709001829856811135,262144 --enable-features=CDPScreenshotNewSurface --disable-features=AutoDeElevate,AvoidUnnecessaryBeforeUnloadCheckSync,BlockOriginHeaderModificationOnRedirect,DestroyProfileOnBrowserClose,DialMediaRouteProvider,GlobalMediaControls,HttpsUpgrades,LensOverlay,MediaRouter,OptimizationHints,PaintHolding,ThirdPartyStoragePartitioning,Translate,msEdgeUpdateLaunchServicesPreferredVersion,msForceBrowserSignIn --variations-seed-version --pseudonymization-salt-handle=1935764596,r,13857022266868838401,16442918036370424960,4 --trace-process-track-uuid=3190708988185955192 --seatbelt-client=27"
+    },
+    {
+      "pid": 63049,
+      "ppid": 63040,
+      "start": "Thu Nov  5 21:51:38 2026",
+      "cmd": "(Google Chrome He)"
+    },
+    {
+      "pid": 63050,
+      "ppid": 63040,
+      "start": "Thu Nov  5 21:51:39 2026",
+      "cmd": "/Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Versions/156.0.8078.80/Helpers/Google Chrome Helper.app/Contents/MacOS/Google Chrome Helper --type=utility --utility-sub-type=storage.mojom.StorageService --lang=en-GB --service-sandbox-type=service --host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1 --mute-audio --noerrdialogs --user-data-dir=/private/tmp/orbis-cutover-sw-admission.xs11xzrh/profile-parent/chrome.7jhozY --shared-files --field-trial-handle=1718379636,r,7658850740114014420,709001829856811135,262144 --enable-features=CDPScreenshotNewSurface --disable-features=AutoDeElevate,AvoidUnnecessaryBeforeUnloadCheckSync,BlockOriginHeaderModificationOnRedirect,DestroyProfileOnBrowserClose,DialMediaRouteProvider,GlobalMediaControls,HttpsUpgrades,LensOverlay,MediaRouter,OptimizationHints,PaintHolding,ThirdPartyStoragePartitioning,Translate,msEdgeUpdateLaunchServicesPreferredVersion,msForceBrowserSignIn --variations-seed-version --pseudonymization-salt-handle=1935764596,r,13857022266868838401,16442918036370424960,4 --trace-process-track-uuid=3190708990060038890 --seatbelt-client=45"
+    },
+    {
+      "pid": 63051,
+      "ppid": 63040,
+      "start": "Thu Nov  5 21:51:39 2026",
+      "cmd": "/Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Versions/156.0.8078.80/Helpers/Google Chrome Helper (Alerts).app/Contents/MacOS/Google Chrome Helper (Alerts) --type=utility --utility-sub-type=mac_notifications.mojom.MacNotificationProvider --lang=en-GB --service-sandbox-type=none --host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1 --mute-audio --message-loop-type-ui --noerrdialogs --user-data-dir=/private/tmp/orbis-cutover-sw-admission.xs11xzrh/profile-parent/chrome.7jhozY --shared-files --field-trial-handle=1718379636,r,7658850740114014420,709001829856811135,262144 --enable-features=CDPScreenshotNewSurface --disable-features=AutoDeElevate,AvoidUnnecessaryBeforeUnloadCheckSync,BlockOriginHeaderModificationOnRedirect,DestroyProfileOnBrowserClose,DialMediaRouteProvider,GlobalMediaControls,HttpsUpgrades,LensOverlay,MediaRouter,OptimizationHints,PaintHolding,ThirdPartyStoragePartitioning,Translate,msEdgeUpdateLaunchServicesPreferredVersion,msForceBrowserSignIn --variations-seed-version --pseudonymization-salt-handle=1935764596,r,13857022266868838401,16442918036370424960,4 --trace-process-track-uuid=3190708990997080739"
+    },
+    {
+      "pid": 63054,
+      "ppid": 63040,
+      "start": "Thu Nov  5 21:51:39 2026",
+      "cmd": "(Google Chrome He)"
+    },
+    {
+      "pid": 63056,
+      "ppid": 63040,
+      "start": "Thu Nov  5 21:51:39 2026",
+      "cmd": "(Google Chrome He)"
+    },
+    {
+      "pid": 63057,
+      "ppid": 63040,
+      "start": "Thu Nov  5 21:51:39 2026",
+      "cmd": "(Google Chrome He)"
+    },
+    {
+      "pid": 63063,
+      "ppid": 63040,
+      "start": "Thu Nov  5 21:51:39 2026",
+      "cmd": "(Google Chrome He)"
+    }
+  ],
+  "remaining": []
+}

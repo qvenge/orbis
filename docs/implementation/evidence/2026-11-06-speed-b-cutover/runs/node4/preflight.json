@@ -1,0 +1,10 @@
+{
+  "container": {
+    "id": "21de1253be69ff12929ed2161f764b4e221ffa71ae91132542634ec971da05a5",
+    "image": "sha256:6501843661b1f8ff97e85c02de33edc0ee2e2693888ad596ee86222f02dc8ecc"
+  },
+  "systemId": "7704935266829262882",
+  "admin": "postgres|supabase_admin|supabase_admin|5432|7704935266829262882|1790767973713|t|f",
+  "runtime": "postgres|orbis_app|orbis_app|5432|f|f|f|f|f|f|t|f",
+  "migration": "0026"
+}

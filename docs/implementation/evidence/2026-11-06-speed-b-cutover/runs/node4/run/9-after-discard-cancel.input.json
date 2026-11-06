@@ -1,0 +1,110 @@
+{
+  "owner": "36d5698b-7de5-4966-97bd-ac2f2dc65fba",
+  "ids": {
+    "a": "b681fbfc-ad00-4046-82db-bee5afa4f5db",
+    "b": "719dc284-c2ad-4e02-8a6d-f32d54d96bca",
+    "held": "566d21e5-fae6-4818-9899-20dbddf4924f"
+  },
+  "legacy": [],
+  "finished": [
+    {
+      "key": "orbis:body-draft-finished:36d5698b-7de5-4966-97bd-ac2f2dc65fba:b681fbfc-ad00-4046-82db-bee5afa4f5db:44d268e6735e3065b26362ae8fed582a412ed01760b4fb0d77aa14dce6ea7a73",
+      "raw": "1793945121449"
+    }
+  ],
+  "slots": [
+    {
+      "key": [
+        "36d5698b-7de5-4966-97bd-ac2f2dc65fba",
+        "719dc284-c2ad-4e02-8a6d-f32d54d96bca",
+        "7c88275b52fb122acd221a6d1a50db90f3b3c71cf4b898ef2dd8028f6a3e4fe0"
+      ],
+      "latest": {
+        "accountId": "36d5698b-7de5-4966-97bd-ac2f2dc65fba",
+        "graphId": "36d5698b-7de5-4966-97bd-ac2f2dc65fba",
+        "generation": "0:0",
+        "entityId": "719dc284-c2ad-4e02-8a6d-f32d54d96bca",
+        "nonce": "7c88275b52fb122acd221a6d1a50db90f3b3c71cf4b898ef2dd8028f6a3e4fe0",
+        "writerId": "7c88275b52fb122acd221a6d1a50db90f3b3c71cf4b898ef2dd8028f6a3e4fe0",
+        "sequence": 0,
+        "basis": {
+          "revision": 1
+        }
+      },
+      "snapshot": {
+        "doc": {
+          "v": 3,
+          "doc": {
+            "type": "doc",
+            "content": [
+              {
+                "type": "paragraph",
+                "attrs": {
+                  "id": "61ada883-035c-4f02-be40-60a366d051c4"
+                },
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "Original b R5-discard-second-synthetic-body"
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        "rejected": false,
+        "savedAt": "2026-11-06T06:05:05.953Z",
+        "token": {
+          "accountId": "36d5698b-7de5-4966-97bd-ac2f2dc65fba",
+          "graphId": "36d5698b-7de5-4966-97bd-ac2f2dc65fba",
+          "generation": "0:0",
+          "entityId": "719dc284-c2ad-4e02-8a6d-f32d54d96bca",
+          "nonce": "7c88275b52fb122acd221a6d1a50db90f3b3c71cf4b898ef2dd8028f6a3e4fe0",
+          "writerId": "7c88275b52fb122acd221a6d1a50db90f3b3c71cf4b898ef2dd8028f6a3e4fe0",
+          "sequence": 0,
+          "basis": {
+            "revision": 1
+          }
+        }
+      },
+      "graphId": "36d5698b-7de5-4966-97bd-ac2f2dc65fba",
+      "entity": [
+        "36d5698b-7de5-4966-97bd-ac2f2dc65fba",
+        "719dc284-c2ad-4e02-8a6d-f32d54d96bca"
+      ]
+    },
+    {
+      "key": [
+        "36d5698b-7de5-4966-97bd-ac2f2dc65fba",
+        "b681fbfc-ad00-4046-82db-bee5afa4f5db",
+        "44d268e6735e3065b26362ae8fed582a412ed01760b4fb0d77aa14dce6ea7a73"
+      ],
+      "latest": {
+        "accountId": "36d5698b-7de5-4966-97bd-ac2f2dc65fba",
+        "graphId": "36d5698b-7de5-4966-97bd-ac2f2dc65fba",
+        "generation": "0:0",
+        "entityId": "b681fbfc-ad00-4046-82db-bee5afa4f5db",
+        "nonce": "44d268e6735e3065b26362ae8fed582a412ed01760b4fb0d77aa14dce6ea7a73",
+        "writerId": "44d268e6735e3065b26362ae8fed582a412ed01760b4fb0d77aa14dce6ea7a73",
+        "sequence": 0,
+        "basis": {
+          "revision": 1
+        }
+      },
+      "graphId": "36d5698b-7de5-4966-97bd-ac2f2dc65fba",
+      "entity": [
+        "36d5698b-7de5-4966-97bd-ac2f2dc65fba",
+        "b681fbfc-ad00-4046-82db-bee5afa4f5db"
+      ]
+    }
+  ],
+  "controlRaw": null,
+  "queueRaw": "[]",
+  "databases": [
+    "orbis-cache:36d5698b-7de5-4966-97bd-ac2f2dc65fba",
+    "orbis-input:36d5698b-7de5-4966-97bd-ac2f2dc65fba"
+  ],
+  "at": 1793945140365,
+  "url": "http://127.0.0.1:49779/settings",
+  "time": "2026-11-06T06:05:40.365Z"
+}

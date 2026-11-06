@@ -1,0 +1,17 @@
+{
+  "command": [
+    "/Users/birzhan/.nvm/versions/node/v23.11.0/bin/node",
+    "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/final-p-node2-bound/rehearsal.ts",
+    "P",
+    "/private/tmp/orbis-cutover-node2-allocation.ced608eb5f5d/manifests",
+    "/private/tmp/orbis-cutover-node-p.shy83qv9/run",
+    "/private/tmp/orbis-cutover-node2-allocation.ced608eb5f5d/handoff.json",
+    "0cfd6acf2b25e41f1d7ac599d1cd45f616b78a8ca11692f4f96ab01f45cddb7b"
+  ],
+  "node": {
+    "node": "23.11.0"
+  },
+  "bunPath": "/Users/birzhan/.bun/bin/bun",
+  "source": "8344af680504ee04b6cb8511b6a5b79322f61c0852b72057c48b089135691eb3",
+  "noResume": true
+}

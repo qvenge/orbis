@@ -1,0 +1,10 @@
+{
+  "status": "BOUND TO FRESH NODE4; ONE ROOT P RUN",
+  "nodeVersion": "23.11.0",
+  "bunVersion": "1.2.7",
+  "handoffSha": "3215a88b8f933b21e482b04d66a1e22d2691114b7a10bde910ab254e9aa4d65a",
+  "currentManifestSha": "2ec1888a7d71ebd2e93bca482da11620a087a6f479403cc86968d4e71b048abe",
+  "oldManifestSha": "7b5182a818bceb6839659923e5937af0c085ffcb6aeb93747deae7ae92a003eb",
+  "scenarioSeconds": 240,
+  "cleanupSeconds": 20
+}

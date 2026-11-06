@@ -1,0 +1,9 @@
+{
+  "exit": 1,
+  "answer": {
+    "ok": false,
+    "name": "AssertionError",
+    "message": "AssertionError [ERR_ASSERTION]: Current input generation metadata",
+    "stack": "AssertionError [ERR_ASSERTION]: Current input generation metadata\n    at validate (/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/final-p-node2-bound/validators.bun.ts:33:3)\n    at /Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/final-p-node2-bound/validators.bun.ts:80:62\n    at <anonymous> (native:2)\n    at processTicksAndRejections (native:7:39)"
+  }
+}

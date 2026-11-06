@@ -1,0 +1,71 @@
+{
+  "privateRaw": "/private/tmp/orbis-cutover-sw-admission.xs11xzrh",
+  "policy": "Hostname redacted if present; originals private700.",
+  "files": [
+    {
+      "file": "1-after-all-pid-exit.profile.json",
+      "rawSha256": "652516efb1373b5d863fdd919d2ffc34df1e976c45603d0bd00708f4faa6619f",
+      "publicSha256": "652516efb1373b5d863fdd919d2ffc34df1e976c45603d0bd00708f4faa6619f"
+    },
+    {
+      "file": "1-fresh-blank-profile.profile.json",
+      "rawSha256": "e6f6a524fca34a0793d314388ea7205b930ed96de1ce1500c88a67cc73c668db",
+      "publicSha256": "e6f6a524fca34a0793d314388ea7205b930ed96de1ce1500c88a67cc73c668db"
+    },
+    {
+      "file": "2-after-all-pid-exit.profile.json",
+      "rawSha256": "951e0c45c47325ecef81e687a6ecaad82ac8b855218bcfb2972c3e24c93851b1",
+      "publicSha256": "951e0c45c47325ecef81e687a6ecaad82ac8b855218bcfb2972c3e24c93851b1"
+    },
+    {
+      "file": "2-fresh-blank-profile.profile.json",
+      "rawSha256": "7bdb2d2fc16063d0dc9d92b9e2d097528a1e54285dcc3ec11a6941ff44fcdbba",
+      "publicSha256": "7bdb2d2fc16063d0dc9d92b9e2d097528a1e54285dcc3ec11a6941ff44fcdbba"
+    },
+    {
+      "file": "3-after-all-pid-exit.profile.json",
+      "rawSha256": "951e0c45c47325ecef81e687a6ecaad82ac8b855218bcfb2972c3e24c93851b1",
+      "publicSha256": "951e0c45c47325ecef81e687a6ecaad82ac8b855218bcfb2972c3e24c93851b1"
+    },
+    {
+      "file": "3-before-launch.profile.json",
+      "rawSha256": "80d511c4909bb0bbcce7d938d09ec74fbaf8496675a86f227f8aa593d1d15177",
+      "publicSha256": "80d511c4909bb0bbcce7d938d09ec74fbaf8496675a86f227f8aa593d1d15177"
+    },
+    {
+      "file": "4-after-all-pid-exit.profile.json",
+      "rawSha256": "951e0c45c47325ecef81e687a6ecaad82ac8b855218bcfb2972c3e24c93851b1",
+      "publicSha256": "951e0c45c47325ecef81e687a6ecaad82ac8b855218bcfb2972c3e24c93851b1"
+    },
+    {
+      "file": "4-before-launch.profile.json",
+      "rawSha256": "80d511c4909bb0bbcce7d938d09ec74fbaf8496675a86f227f8aa593d1d15177",
+      "publicSha256": "80d511c4909bb0bbcce7d938d09ec74fbaf8496675a86f227f8aa593d1d15177"
+    },
+    {
+      "file": "exit",
+      "rawSha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "publicSha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "file": "run-config.json",
+      "rawSha256": "1b4f20c6be88f6d94ff6fd3f0007f04fc161212ded75979eca3cfe2c979f94c1",
+      "publicSha256": "1b4f20c6be88f6d94ff6fd3f0007f04fc161212ded75979eca3cfe2c979f94c1"
+    },
+    {
+      "file": "stderr.log",
+      "rawSha256": "4381661f454a108197f1e17d6af5f8466bf066f29446c0a9b164c18c2cca8f2f",
+      "publicSha256": "4381661f454a108197f1e17d6af5f8466bf066f29446c0a9b164c18c2cca8f2f"
+    },
+    {
+      "file": "trace.jsonl",
+      "rawSha256": "171efe4f9abddc5d0bc8bddb04d19dce36eb38de78039403ca401ceb445a40b5",
+      "publicSha256": "171efe4f9abddc5d0bc8bddb04d19dce36eb38de78039403ca401ceb445a40b5"
+    },
+    {
+      "file": "watchdog-summary.json",
+      "rawSha256": "28ebb275550e64d8bf1093f048bcf830d9fd3c5d03a429f8d21d8df3cd8d1734",
+      "publicSha256": "28ebb275550e64d8bf1093f048bcf830d9fd3c5d03a429f8d21d8df3cd8d1734"
+    }
+  ]
+}

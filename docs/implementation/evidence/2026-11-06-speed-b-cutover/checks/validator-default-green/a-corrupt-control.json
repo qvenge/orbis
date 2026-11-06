@@ -1,0 +1,9 @@
+{
+  "exit": 1,
+  "answer": {
+    "ok": false,
+    "name": "Error",
+    "message": "Error: \u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043f\u0440\u043e\u0447\u0438\u0442\u0430\u0442\u044c \u043d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438 \u043b\u043e\u043a\u0430\u043b\u044c\u043d\u044b\u0445 \u0434\u0430\u043d\u043d\u044b\u0445",
+    "stack": "Error: \u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043f\u0440\u043e\u0447\u0438\u0442\u0430\u0442\u044c \u043d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438 \u043b\u043e\u043a\u0430\u043b\u044c\u043d\u044b\u0445 \u0434\u0430\u043d\u043d\u044b\u0445\n    at read (/private/tmp/orbis-safari-recheck-build.onROez/candidate/apps/web/src/lib/local-data/device-control.ts:82:17)\n    at validate (/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/final-p-node3-default-control/validators.bun.ts:44:26)\n    at /Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/final-p-node3-default-control/validators.bun.ts:84:62\n    at <anonymous> (native:2)\n    at processTicksAndRejections (native:7:39)"
+  }
+}

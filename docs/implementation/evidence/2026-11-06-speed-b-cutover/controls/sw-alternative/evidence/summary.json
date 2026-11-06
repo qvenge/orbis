@@ -1,0 +1,151 @@
+{
+  "source": "bb62a41fb45412c68b219ead1375947786a795f7d31230e8673eeb3cbf1e8820",
+  "result": {
+    "at": "2026-11-05T14:51:41.301Z",
+    "monotonicMs": 16858.042622,
+    "attempt": 4,
+    "phase": "sw-admission-control-result",
+    "status": "all-control-stages-complete",
+    "positiveNoBypass": true,
+    "originalPOrBusinessPrivacyPass": false,
+    "alternativeDirectRegistration": true
+  },
+  "supervisor": {
+    "exit": 0,
+    "runnerExit": 0,
+    "watchdogTimedOut": false,
+    "monitorError": null,
+    "cleanupErrors": [],
+    "forcedRunnerCleanup": false,
+    "forcedBrowserCleanup": false,
+    "remaining": []
+  },
+  "directRegistrationLabels": [
+    {
+      "at": "2026-11-05T14:51:33.808Z",
+      "monotonicMs": 9365.075348,
+      "attempt": 3,
+      "phase": "await-before",
+      "label": "current-bypass:getRegistration-exact-scope"
+    },
+    {
+      "at": "2026-11-05T14:51:33.831Z",
+      "monotonicMs": 9387.608158,
+      "attempt": 3,
+      "phase": "await-resolve",
+      "label": "current-bypass:getRegistration-exact-scope"
+    },
+    {
+      "at": "2026-11-05T14:51:33.834Z",
+      "monotonicMs": 9390.848167,
+      "attempt": 3,
+      "phase": "await-before",
+      "label": "current-direct-registration:reg.update"
+    },
+    {
+      "at": "2026-11-05T14:51:35.413Z",
+      "monotonicMs": 10969.680296,
+      "attempt": 3,
+      "phase": "await-resolve",
+      "label": "current-direct-registration:reg.update"
+    }
+  ],
+  "activeProtocol": [
+    {
+      "at": "2026-11-05T14:51:37.118Z",
+      "monotonicMs": 12674.737937,
+      "attempt": 3,
+      "phase": "registration-active-protocol-observation",
+      "label": "current-direct-registration",
+      "observed": {
+        "active": "redundant",
+        "url": "http://127.0.0.1:60522/sw.js",
+        "protocolAbsent": true
+      },
+      "businessPageReadyClaimed": false
+    },
+    {
+      "at": "2026-11-05T14:51:37.976Z",
+      "monotonicMs": 13532.414579,
+      "attempt": 3,
+      "phase": "registration-active-protocol-observation",
+      "label": "current-direct-registration",
+      "observed": {
+        "active": "activated",
+        "url": "http://127.0.0.1:60522/sw.js",
+        "reply": {
+          "protocol": 1,
+          "ready": false
+        }
+      },
+      "businessPageReadyClaimed": false
+    },
+    {
+      "at": "2026-11-05T14:51:37.976Z",
+      "monotonicMs": 13532.587457,
+      "attempt": 3,
+      "phase": "registration-active-current-proof",
+      "label": "current-direct-registration",
+      "proof": {
+        "active": "activated",
+        "url": "http://127.0.0.1:60522/sw.js",
+        "reply": {
+          "protocol": 1,
+          "ready": false
+        }
+      },
+      "emptyProbeOnly": true,
+      "businessPageReadyClaimed": false
+    }
+  ],
+  "closeWithOverrides": {
+    "at": "2026-11-05T14:51:37.976Z",
+    "monotonicMs": 13532.662035,
+    "attempt": 3,
+    "phase": "assisted-close-with-target-overrides",
+    "bypass": true,
+    "cacheDisabled": true,
+    "targetResetCommandsIssued": false,
+    "nextProof": "new ordinary browser/context"
+  },
+  "ordinary": {
+    "at": "2026-11-05T14:51:40.762Z",
+    "monotonicMs": 16319.294214,
+    "attempt": 4,
+    "phase": "ordinary-current-probe-proof",
+    "fromServiceWorker": true,
+    "protocol": 1,
+    "actualAppHtmlClaimed": false
+  },
+  "actualWorkerReplies": [
+    {
+      "at": "2026-11-05T14:51:29.139Z",
+      "monotonicMs": 4695.172342,
+      "attempt": 1,
+      "phase": "actual-worker-protocol",
+      "label": "positive-current-no-bypass",
+      "proof": {
+        "protocol": 1,
+        "ready": false
+      },
+      "businessPageReadyClaimed": false
+    },
+    {
+      "at": "2026-11-05T14:51:40.762Z",
+      "monotonicMs": 16319.13213,
+      "attempt": 4,
+      "phase": "actual-worker-protocol",
+      "label": "ordinary",
+      "proof": {
+        "protocol": 1,
+        "ready": false
+      },
+      "businessPageReadyClaimed": false
+    }
+  ],
+  "chromeLaunches": 4,
+  "chromeExits": 4,
+  "ownedIdentityCount": 36,
+  "targetResetCommandsStarted": [],
+  "noPPrivacyOrSoleCauseClaim": true
+}

@@ -1,0 +1,9 @@
+{
+  "exit": 1,
+  "answer": {
+    "ok": false,
+    "name": "AssertionError",
+    "message": "AssertionError [ERR_ASSERTION]: Retained input must match doc/basis and own account/graph/entity/generation",
+    "stack": "AssertionError [ERR_ASSERTION]: Retained input must match doc/basis and own account/graph/entity/generation\n    at validate (/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/final-p-node3-default-control/validators.bun.ts:77:3)\n    at /Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/final-p-node3-default-control/validators.bun.ts:84:62\n    at <anonymous> (native:2)\n    at processTicksAndRejections (native:7:39)"
+  }
+}

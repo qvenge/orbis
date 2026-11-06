@@ -1,0 +1,5 @@
+{
+  "name": "TimeoutError",
+  "message": "TimeoutError: locator.click: Timeout 18000ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByRole('button', { name: /Ждут отправки: 1\\. Отправить сейчас/ })\u001b[22m\n",
+  "stack": "locator.click: Timeout 18000ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByRole('button', { name: /Ждут отправки: 1\\. Отправить сейчас/ })\u001b[22m\n\n    at positive (/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/final-p-node3-bound/rehearsal.ts:1147:18)\n    at async file:///Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/final-p-node3-bound/rehearsal.ts:1256:8"
+}

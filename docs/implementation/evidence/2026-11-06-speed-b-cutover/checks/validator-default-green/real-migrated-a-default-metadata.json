@@ -1,0 +1,20 @@
+{
+  "exit": 0,
+  "answer": {
+    "ok": true,
+    "retainedTokens": [
+      {
+        "accountId": "1f615893-d3e8-4fa4-9b94-7117379999ce",
+        "graphId": "1f615893-d3e8-4fa4-9b94-7117379999ce",
+        "generation": "0:0",
+        "entityId": "d263aeea-76bf-4a5d-ad12-f4711df2c6de",
+        "nonce": "2a694a3556289999af07f482610f88f08b342a9835316507d8a26c3cf8aabd03",
+        "writerId": "2a694a3556289999af07f482610f88f08b342a9835316507d8a26c3cf8aabd03",
+        "sequence": 0,
+        "basis": {
+          "revision": 1
+        }
+      }
+    ]
+  }
+}

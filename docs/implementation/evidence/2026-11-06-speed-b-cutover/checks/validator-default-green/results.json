@@ -1,0 +1,206 @@
+[
+  {
+    "case": "real-migrated-a-default-metadata",
+    "expectedAccepted": true,
+    "accepted": true,
+    "passed": true
+  },
+  {
+    "case": "a-foreign-account",
+    "expectedAccepted": false,
+    "accepted": false,
+    "passed": true
+  },
+  {
+    "case": "a-foreign-graph",
+    "expectedAccepted": false,
+    "accepted": false,
+    "passed": true
+  },
+  {
+    "case": "a-foreign-entity",
+    "expectedAccepted": false,
+    "accepted": false,
+    "passed": true
+  },
+  {
+    "case": "a-wrong-generation",
+    "expectedAccepted": false,
+    "accepted": false,
+    "passed": true
+  },
+  {
+    "case": "a-wrong-basis",
+    "expectedAccepted": false,
+    "accepted": false,
+    "passed": true
+  },
+  {
+    "case": "a-invalid-lineage",
+    "expectedAccepted": false,
+    "accepted": false,
+    "passed": true
+  },
+  {
+    "case": "a-expired",
+    "expectedAccepted": false,
+    "accepted": false,
+    "passed": true
+  },
+  {
+    "case": "a-acknowledged",
+    "expectedAccepted": false,
+    "accepted": false,
+    "passed": true
+  },
+  {
+    "case": "a-finished",
+    "expectedAccepted": false,
+    "accepted": false,
+    "passed": true
+  },
+  {
+    "case": "a-changed-document",
+    "expectedAccepted": false,
+    "accepted": false,
+    "passed": true
+  },
+  {
+    "case": "a-previous-token-disappeared",
+    "expectedAccepted": false,
+    "accepted": false,
+    "passed": true
+  },
+  {
+    "case": "a-corrupt-control",
+    "expectedAccepted": false,
+    "accepted": false,
+    "passed": true
+  },
+  {
+    "case": "a-nondefault-generation",
+    "expectedAccepted": false,
+    "accepted": false,
+    "passed": true
+  },
+  {
+    "case": "a-same-exact-token",
+    "expectedAccepted": true,
+    "accepted": true,
+    "passed": true
+  },
+  {
+    "case": "a-explicit-valid-default",
+    "expectedAccepted": true,
+    "accepted": true,
+    "passed": true
+  },
+  {
+    "case": "a-original-legacy-no-control",
+    "expectedAccepted": true,
+    "accepted": true,
+    "passed": true
+  },
+  {
+    "case": "real-migrated-b-default-metadata",
+    "expectedAccepted": true,
+    "accepted": true,
+    "passed": true
+  },
+  {
+    "case": "b-foreign-account",
+    "expectedAccepted": false,
+    "accepted": false,
+    "passed": true
+  },
+  {
+    "case": "b-foreign-graph",
+    "expectedAccepted": false,
+    "accepted": false,
+    "passed": true
+  },
+  {
+    "case": "b-foreign-entity",
+    "expectedAccepted": false,
+    "accepted": false,
+    "passed": true
+  },
+  {
+    "case": "b-wrong-generation",
+    "expectedAccepted": false,
+    "accepted": false,
+    "passed": true
+  },
+  {
+    "case": "b-wrong-basis",
+    "expectedAccepted": false,
+    "accepted": false,
+    "passed": true
+  },
+  {
+    "case": "b-invalid-lineage",
+    "expectedAccepted": false,
+    "accepted": false,
+    "passed": true
+  },
+  {
+    "case": "b-expired",
+    "expectedAccepted": false,
+    "accepted": false,
+    "passed": true
+  },
+  {
+    "case": "b-acknowledged",
+    "expectedAccepted": false,
+    "accepted": false,
+    "passed": true
+  },
+  {
+    "case": "b-finished",
+    "expectedAccepted": false,
+    "accepted": false,
+    "passed": true
+  },
+  {
+    "case": "b-changed-document",
+    "expectedAccepted": false,
+    "accepted": false,
+    "passed": true
+  },
+  {
+    "case": "b-previous-token-disappeared",
+    "expectedAccepted": false,
+    "accepted": false,
+    "passed": true
+  },
+  {
+    "case": "b-corrupt-control",
+    "expectedAccepted": false,
+    "accepted": false,
+    "passed": true
+  },
+  {
+    "case": "b-nondefault-generation",
+    "expectedAccepted": false,
+    "accepted": false,
+    "passed": true
+  },
+  {
+    "case": "b-same-exact-token",
+    "expectedAccepted": true,
+    "accepted": true,
+    "passed": true
+  },
+  {
+    "case": "b-explicit-valid-default",
+    "expectedAccepted": true,
+    "accepted": true,
+    "passed": true
+  },
+  {
+    "case": "b-original-legacy-no-control",
+    "expectedAccepted": true,
+    "accepted": true,
+    "passed": true
+  }
+]

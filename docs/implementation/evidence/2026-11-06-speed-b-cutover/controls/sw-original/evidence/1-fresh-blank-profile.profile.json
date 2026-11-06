@@ -1,0 +1,19 @@
+{
+  "label": "fresh-blank-profile",
+  "profile": "/private/tmp/orbis-cutover-sw-admission.ohlsh3nd/profile-parent/chrome.BWbBi5",
+  "markers": [
+    {
+      "name": "SingletonLock",
+      "type": "absent"
+    },
+    {
+      "name": "SingletonCookie",
+      "type": "absent"
+    },
+    {
+      "name": "SingletonSocket",
+      "type": "absent"
+    }
+  ],
+  "exitType": null
+}

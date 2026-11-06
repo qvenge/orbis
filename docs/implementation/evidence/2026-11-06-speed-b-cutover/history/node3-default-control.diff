@@ -1,0 +1,167 @@
+--- node2/bun/identity.ts
++++ node3/bun/identity.ts
+@@ -22,7 +22,7 @@
+   assert(/^[a-f0-9]{64}$/.test(value.container.id));
+   assert(/^sha256:[a-f0-9]{64}$/.test(value.container.image));
+   assert.equal(lane, 'P');
+-  assert.equal(value.db.port, 54347);
++  assert.equal(value.db.port, 54348);
+   assert.equal(value.db.name, 'postgres');
+   assert.equal(value.db.admin, 'supabase_admin');
+   assert.equal(value.db.runtime, 'orbis_app');
+@@ -47,7 +47,7 @@
+ }
+ 
+ export async function checkContainer(handoff: Handoff): Promise<void> {
+-  const name = 'orbis-speed-b-cutover-p-node2';
++  const name = 'orbis-speed-b-cutover-p-node3';
+   const docker = Bun.spawn(['docker', 'inspect', '--type=container', name], { stdout: 'pipe', stderr: 'ignore' });
+   const output = await new Response(docker.stdout).text();
+   assert.equal(await docker.exited, 0, 'Cutover container inspection failed');
+@@ -57,7 +57,7 @@
+   assert(c.Id === handoff.container.id && c.Image === handoff.container.image, 'Pinned container/image mismatch');
+   assert.equal(c.Name, '/' + name);
+   assert.equal(c.State?.Running, true);
+-  assert.equal(c.Config?.Labels?.['orbis.cutover.lane'], 'p-node2');
++  assert.equal(c.Config?.Labels?.['orbis.cutover.lane'], 'p-node3');
+   const published = c.NetworkSettings?.Ports;
+   assert.deepEqual(Object.entries(published ?? {}).filter(([, entries]) => entries !== null),
+     [['5432/tcp', [{ HostIp: '127.0.0.1', HostPort: String(handoff.db.port) }]]]);
+--- node2/identity.ts
++++ node3/identity.ts
+@@ -27,7 +27,7 @@
+   assert(/^[a-f0-9]{64}$/.test(value.container.id));
+   assert(/^sha256:[a-f0-9]{64}$/.test(value.container.image));
+   assert.equal(lane, 'P');
+-  assert.equal(value.db.port, 54347);
++  assert.equal(value.db.port, 54348);
+   assert.equal(value.db.name, 'postgres');
+   assert.equal(value.db.admin, 'supabase_admin');
+   assert.equal(value.db.runtime, 'orbis_app');
+@@ -52,7 +52,7 @@
+ }
+ 
+ export async function checkContainer(handoff: Handoff): Promise<void> {
+-  const name = 'orbis-speed-b-cutover-p-node2';
++  const name = 'orbis-speed-b-cutover-p-node3';
+   const { stdout: output } = await exec('docker', ['inspect', '--type=container', name]);
+   const rows = JSON.parse(output);
+   assert.equal(rows.length, 1);
+@@ -60,7 +60,7 @@
+   assert(c.Id === handoff.container.id && c.Image === handoff.container.image, 'Pinned container/image mismatch');
+   assert.equal(c.Name, '/' + name);
+   assert.equal(c.State?.Running, true);
+-  assert.equal(c.Config?.Labels?.['orbis.cutover.lane'], 'p-node2');
++  assert.equal(c.Config?.Labels?.['orbis.cutover.lane'], 'p-node3');
+   const published = c.NetworkSettings?.Ports;
+   assert.deepEqual(Object.entries(published ?? {}).filter(([, entries]) => entries !== null),
+     [['5432/tcp', [{ HostIp: '127.0.0.1', HostPort: String(handoff.db.port) }]]]);
+--- node2/pins.json
++++ node3/pins.json
+@@ -1,8 +1,8 @@
+ {
+-  "status": "BOUND TO FRESH NODE2; ONE ROOT P RUN",
++  "status": "SOURCE ONLY; NODE3 DEFAULT-CONTROL VALIDATOR; ALLOCATION PENDING",
+   "nodeVersion": "23.11.0",
+   "bunVersion": "1.2.7",
+-  "handoffSha": "0cfd6acf2b25e41f1d7ac599d1cd45f616b78a8ca11692f4f96ab01f45cddb7b",
++  "handoffSha": "PENDING_NEW_NODE3_ALLOCATION",
+   "currentManifestSha": "2ec1888a7d71ebd2e93bca482da11620a087a6f479403cc86968d4e71b048abe",
+   "oldManifestSha": "7b5182a818bceb6839659923e5937af0c085ffcb6aeb93747deae7ae92a003eb",
+   "scenarioSeconds": 240,
+--- node2/preflight.py
++++ node3/preflight.py
+@@ -5,21 +5,21 @@
+     import hashlib, pathlib
+     assert hashlib.sha256(pathlib.Path(handoff_path).read_bytes()).hexdigest() == digest
+     h = json.loads(pathlib.Path(handoff_path).read_text())
+-    assert h['lane'] == 'P' and h['db']['port'] == 54347 and h['db']['name'] == 'postgres'
++    assert h['lane'] == 'P' and h['db']['port'] == 54348 and h['db']['name'] == 'postgres'
+     assert h['db']['admin'] == 'supabase_admin' and h['db']['runtime'] == 'orbis_app'
+     assert re.fullmatch('[a-f0-9]{64}', h['container']['id'])
+     assert h['container']['image'] == 'sha256:6501843661b1f8ff97e85c02de33edc0ee2e2693888ad596ee86222f02dc8ecc'
+-    c = json.loads(subprocess.check_output(['docker', 'inspect', '--type=container', 'orbis-speed-b-cutover-p-node2'], text=True, timeout=10))[0]
++    c = json.loads(subprocess.check_output(['docker', 'inspect', '--type=container', 'orbis-speed-b-cutover-p-node3'], text=True, timeout=10))[0]
+     assert c['Id'] == h['container']['id'] and c['Image'] == h['container']['image']
+-    assert c['State']['Running'] and c['Config']['Labels']['orbis.cutover.lane'] == 'p-node2'
+-    assert {k:v for k,v in c['NetworkSettings']['Ports'].items() if v is not None} == {'5432/tcp':[{'HostIp':'127.0.0.1','HostPort':'54347'}]}
++    assert c['State']['Running'] and c['Config']['Labels']['orbis.cutover.lane'] == 'p-node3'
++    assert {k:v for k,v in c['NetworkSettings']['Ports'].items() if v is not None} == {'5432/tcp':[{'HostIp':'127.0.0.1','HostPort':'54348'}]}
+     def query(role, text):
+         raw = private['DATABASE_URL_ADMIN' if role == 'admin' else 'DATABASE_URL']
+         u = urllib.parse.urlsplit(raw)
+-        assert u.scheme in ('postgres','postgresql') and u.hostname == '127.0.0.1' and u.port == 54347
++        assert u.scheme in ('postgres','postgresql') and u.hostname == '127.0.0.1' and u.port == 54348
+         user = h['db']['admin' if role == 'admin' else 'runtime']
+         assert u.username == user and u.path == '/postgres' and u.password and '?' not in raw and '#' not in raw
+-        return subprocess.check_output(['psql','-X','-qAt','-w','-h','127.0.0.1','-p','54347','-U',user,'-d','postgres','-v','ON_ERROR_STOP=1','-F','|','-c',text],
++        return subprocess.check_output(['psql','-X','-qAt','-w','-h','127.0.0.1','-p','54348','-U',user,'-d','postgres','-v','ON_ERROR_STOP=1','-F','|','-c',text],
+             env=dict(os.environ, PGPASSWORD=urllib.parse.unquote(u.password)), text=True, timeout=10).strip()
+     admin = query('admin', "select current_database(),current_user,session_user,inet_server_port(),system_identifier::text,(select max(created_at)::text from drizzle.__drizzle_migrations),(select rolsuper from pg_roles where rolname='supabase_admin'),(select rolsuper from pg_roles where rolname='postgres') from pg_control_system()")
+     assert admin.split('|') == ['postgres','supabase_admin','supabase_admin','5432',h['db']['systemId'],'1790767973713','t','f']
+--- node2/rehearsal.ts
++++ node3/rehearsal.ts
+@@ -14,7 +14,7 @@
+ assert(!process.versions.bun && process.versions.node === '23.11.0', 'Real pinned Node23.11 must own Playwright');
+ const BUN_EXECUTABLE = process.env.ORBIS_CUTOVER_BUN_PATH;
+ assert(BUN_EXECUTABLE?.startsWith('/'), 'Explicit pinned Bun executable is required for app/migrator/validators');
+-const NEW_HANDOFF_SHA = '0cfd6acf2b25e41f1d7ac599d1cd45f616b78a8ca11692f4f96ab01f45cddb7b';
++const NEW_HANDOFF_SHA = 'PENDING_NEW_NODE3_ALLOCATION';
+ assert(/^[a-f0-9]{64}$/.test(NEW_HANDOFF_SHA), 'New allocation is not issued; never resume old P0027');
+ 
+ const OLD = 'b5abb7fe70068c06b7075ed54a2a0f3c3d729d7b';
+--- node2/validators.bun.ts
++++ node3/validators.bun.ts
+@@ -13,8 +13,9 @@
+ for (const path of ['apps/web/src/lib/local-data/input-slot.ts',
+   'apps/web/src/features/entity-editor/draft-storage.ts', 'apps/web/src/features/entity-editor/draft-mirror.ts',
+   'apps/web/src/lib/local-data/input-store.ts', 'apps/web/src/lib/local-data/input-access.ts',
+-  'apps/web/src/lib/local-data/database.ts'])
++  'apps/web/src/lib/local-data/database.ts', 'apps/web/src/lib/local-data/device-control.ts'])
+   assert.equal(digest(await Bun.file(join(tree, path)).arrayBuffer()), manifest.source[path]);
++const { createDeviceControl, DEVICE_CONTROL_KEY } = await import(join(tree, 'apps/web/src/lib/local-data/device-control.ts'));
+ const { validInputSlot, visibleInputs, validInputToken } = await import(join(tree, 'apps/web/src/lib/local-data/input-slot.ts'));
+ const { listDraftsIn, isDraftSlotFinishedIn } = await import(join(tree, 'apps/web/src/features/entity-editor/draft-storage.ts'));
+ const input = JSON.parse(await Bun.stdin.text());
+@@ -29,13 +30,24 @@
+ }
+ const canonicalSha = (value: unknown) => digest(JSON.stringify(canonical(value)));
+ function validate() {
+-  const control = observed.controlRaw ? JSON.parse(observed.controlRaw) : null;
++  assert(observed.controlRaw === null || typeof observed.controlRaw === 'string', 'Observed device control bytes');
++  const rows = new Map([...observed.legacy, ...observed.finished]
++    .filter(row => row.raw !== null).map(row => [row.key, row.raw!]));
++  const readonlyStorage = {
++    getItem: (key: string) => key === DEVICE_CONTROL_KEY ? observed.controlRaw : rows.get(key) ?? null,
++    keys: () => [...rows.keys()],
++    setItem: () => { throw new Error('Readonly proof storage'); },
++    removeItem: () => { throw new Error('Readonly proof storage'); },
++  };
++  // The real codec defines absence as initial generation; malformed bytes still fail.
++  const device = createDeviceControl(readonlyStorage);
++  const control = device.read();
+   assert(control && typeof control.inputGeneration === 'string' && control.accountInput &&
+     typeof control.accountInput === 'object' && !Array.isArray(control.accountInput), 'Current input generation metadata');
+   const account = Object.hasOwn(control.accountInput, owner) ? control.accountInput[owner] : '0';
+   assert.equal(typeof account, 'string');
+   const scope = { accountId: owner, graphId: owner,
+-    generation: `${control.inputGeneration}:${account}` };
++    generation: device.inputGeneration(owner, control) };
+   const tokenValid = (token: any) => validInputToken(token) &&
+     token.accountId === scope.accountId && token.graphId === scope.graphId && token.entityId === id &&
+     token.generation === scope.generation && token.basis.revision === expected.baseRevision;
+@@ -45,14 +57,6 @@
+   };
+   const matchingTokens: unknown[] = [];
+   let legacyMatch = false;
+-  const rows = new Map([...observed.legacy, ...observed.finished]
+-    .filter(row => row.raw !== null).map(row => [row.key, row.raw!]));
+-  const readonlyStorage = {
+-    getItem: (key: string) => rows.get(key) ?? null,
+-    keys: () => [...rows.keys()],
+-    setItem: () => { throw new Error('Readonly proof storage'); },
+-    removeItem: () => { throw new Error('Readonly proof storage'); },
+-  };
+   // Public codec owns legacy parse, TTL, finished filtering and exact-input dedup.
+   for (const { draft: value } of listDraftsIn(readonlyStorage, owner, '', id)) {
+     if (value.acknowledged || !semantic(value.doc, value.baseRevision)) continue;

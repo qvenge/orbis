@@ -1,0 +1,15 @@
+{
+  "command": [
+    "/Users/birzhan/.nvm/versions/node/v23.11.0/bin/node",
+    "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/sw-admission-control-alternative/control.ts",
+    "/private/tmp/orbis-cutover-sw-admission.xs11xzrh"
+  ],
+  "runtime": {
+    "node": "23.11.0"
+  },
+  "sourcePacket": "bb62a41fb45412c68b219ead1375947786a795f7d31230e8673eeb3cbf1e8820",
+  "app": false,
+  "auth": false,
+  "db": false,
+  "profile": "new blank profiles only; never P profile"
+}

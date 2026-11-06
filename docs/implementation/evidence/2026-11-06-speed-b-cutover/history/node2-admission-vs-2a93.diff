@@ -1,0 +1,201 @@
+--- 2a93/bun/identity.ts
++++ node2/bun/identity.ts
+@@ -22,7 +22,7 @@
+   assert(/^[a-f0-9]{64}$/.test(value.container.id));
+   assert(/^sha256:[a-f0-9]{64}$/.test(value.container.image));
+   assert.equal(lane, 'P');
+-  assert.equal(value.db.port, 54346);
++  assert.equal(value.db.port, 54347);
+   assert.equal(value.db.name, 'postgres');
+   assert.equal(value.db.admin, 'supabase_admin');
+   assert.equal(value.db.runtime, 'orbis_app');
+@@ -47,7 +47,7 @@
+ }
+ 
+ export async function checkContainer(handoff: Handoff): Promise<void> {
+-  const name = 'orbis-speed-b-cutover-p-node';
++  const name = 'orbis-speed-b-cutover-p-node2';
+   const docker = Bun.spawn(['docker', 'inspect', '--type=container', name], { stdout: 'pipe', stderr: 'ignore' });
+   const output = await new Response(docker.stdout).text();
+   assert.equal(await docker.exited, 0, 'Cutover container inspection failed');
+@@ -57,7 +57,7 @@
+   assert(c.Id === handoff.container.id && c.Image === handoff.container.image, 'Pinned container/image mismatch');
+   assert.equal(c.Name, '/' + name);
+   assert.equal(c.State?.Running, true);
+-  assert.equal(c.Config?.Labels?.['orbis.cutover.lane'], 'p-node');
++  assert.equal(c.Config?.Labels?.['orbis.cutover.lane'], 'p-node2');
+   const published = c.NetworkSettings?.Ports;
+   assert.deepEqual(Object.entries(published ?? {}).filter(([, entries]) => entries !== null),
+     [['5432/tcp', [{ HostIp: '127.0.0.1', HostPort: String(handoff.db.port) }]]]);
+--- 2a93/identity.ts
++++ node2/identity.ts
+@@ -27,7 +27,7 @@
+   assert(/^[a-f0-9]{64}$/.test(value.container.id));
+   assert(/^sha256:[a-f0-9]{64}$/.test(value.container.image));
+   assert.equal(lane, 'P');
+-  assert.equal(value.db.port, 54346);
++  assert.equal(value.db.port, 54347);
+   assert.equal(value.db.name, 'postgres');
+   assert.equal(value.db.admin, 'supabase_admin');
+   assert.equal(value.db.runtime, 'orbis_app');
+@@ -52,7 +52,7 @@
+ }
+ 
+ export async function checkContainer(handoff: Handoff): Promise<void> {
+-  const name = 'orbis-speed-b-cutover-p-node';
++  const name = 'orbis-speed-b-cutover-p-node2';
+   const { stdout: output } = await exec('docker', ['inspect', '--type=container', name]);
+   const rows = JSON.parse(output);
+   assert.equal(rows.length, 1);
+@@ -60,7 +60,7 @@
+   assert(c.Id === handoff.container.id && c.Image === handoff.container.image, 'Pinned container/image mismatch');
+   assert.equal(c.Name, '/' + name);
+   assert.equal(c.State?.Running, true);
+-  assert.equal(c.Config?.Labels?.['orbis.cutover.lane'], 'p-node');
++  assert.equal(c.Config?.Labels?.['orbis.cutover.lane'], 'p-node2');
+   const published = c.NetworkSettings?.Ports;
+   assert.deepEqual(Object.entries(published ?? {}).filter(([, entries]) => entries !== null),
+     [['5432/tcp', [{ HostIp: '127.0.0.1', HostPort: String(handoff.db.port) }]]]);
+--- 2a93/pins.json
++++ node2/pins.json
+@@ -1,8 +1,8 @@
+ {
+-  "status": "ROOT ALLOCATION BOUND; FULL P NOT YET GRANTED",
++  "status": "SOURCE ONLY; NEW NODE2 ALLOCATION PENDING",
+   "nodeVersion": "23.11.0",
+   "bunVersion": "1.2.7",
+-  "handoffSha": "b167dfa7f3a97d1f2c26797f155474c345ec239fc291f10051497a6639aa3c56",
++  "handoffSha": "PENDING_NEW_NODE2_ALLOCATION",
+   "currentManifestSha": "2ec1888a7d71ebd2e93bca482da11620a087a6f479403cc86968d4e71b048abe",
+   "oldManifestSha": "7b5182a818bceb6839659923e5937af0c085ffcb6aeb93747deae7ae92a003eb",
+   "scenarioSeconds": 240,
+--- 2a93/preflight.py
++++ node2/preflight.py
+@@ -5,21 +5,21 @@
+     import hashlib, pathlib
+     assert hashlib.sha256(pathlib.Path(handoff_path).read_bytes()).hexdigest() == digest
+     h = json.loads(pathlib.Path(handoff_path).read_text())
+-    assert h['lane'] == 'P' and h['db']['port'] == 54346 and h['db']['name'] == 'postgres'
++    assert h['lane'] == 'P' and h['db']['port'] == 54347 and h['db']['name'] == 'postgres'
+     assert h['db']['admin'] == 'supabase_admin' and h['db']['runtime'] == 'orbis_app'
+     assert re.fullmatch('[a-f0-9]{64}', h['container']['id'])
+     assert h['container']['image'] == 'sha256:6501843661b1f8ff97e85c02de33edc0ee2e2693888ad596ee86222f02dc8ecc'
+-    c = json.loads(subprocess.check_output(['docker', 'inspect', '--type=container', 'orbis-speed-b-cutover-p-node'], text=True, timeout=10))[0]
++    c = json.loads(subprocess.check_output(['docker', 'inspect', '--type=container', 'orbis-speed-b-cutover-p-node2'], text=True, timeout=10))[0]
+     assert c['Id'] == h['container']['id'] and c['Image'] == h['container']['image']
+-    assert c['State']['Running'] and c['Config']['Labels']['orbis.cutover.lane'] == 'p-node'
+-    assert {k:v for k,v in c['NetworkSettings']['Ports'].items() if v is not None} == {'5432/tcp':[{'HostIp':'127.0.0.1','HostPort':'54346'}]}
++    assert c['State']['Running'] and c['Config']['Labels']['orbis.cutover.lane'] == 'p-node2'
++    assert {k:v for k,v in c['NetworkSettings']['Ports'].items() if v is not None} == {'5432/tcp':[{'HostIp':'127.0.0.1','HostPort':'54347'}]}
+     def query(role, text):
+         raw = private['DATABASE_URL_ADMIN' if role == 'admin' else 'DATABASE_URL']
+         u = urllib.parse.urlsplit(raw)
+-        assert u.scheme in ('postgres','postgresql') and u.hostname == '127.0.0.1' and u.port == 54346
++        assert u.scheme in ('postgres','postgresql') and u.hostname == '127.0.0.1' and u.port == 54347
+         user = h['db']['admin' if role == 'admin' else 'runtime']
+         assert u.username == user and u.path == '/postgres' and u.password and '?' not in raw and '#' not in raw
+-        return subprocess.check_output(['psql','-X','-qAt','-w','-h','127.0.0.1','-p','54346','-U',user,'-d','postgres','-v','ON_ERROR_STOP=1','-F','|','-c',text],
++        return subprocess.check_output(['psql','-X','-qAt','-w','-h','127.0.0.1','-p','54347','-U',user,'-d','postgres','-v','ON_ERROR_STOP=1','-F','|','-c',text],
+             env=dict(os.environ, PGPASSWORD=urllib.parse.unquote(u.password)), text=True, timeout=10).strip()
+     admin = query('admin', "select current_database(),current_user,session_user,inet_server_port(),system_identifier::text,(select max(created_at)::text from drizzle.__drizzle_migrations),(select rolsuper from pg_roles where rolname='supabase_admin'),(select rolsuper from pg_roles where rolname='postgres') from pg_control_system()")
+     assert admin.split('|') == ['postgres','supabase_admin','supabase_admin','5432',h['db']['systemId'],'1790767973713','t','f']
+--- 2a93/rehearsal.ts
++++ node2/rehearsal.ts
+@@ -14,7 +14,7 @@
+ assert(!process.versions.bun && process.versions.node === '23.11.0', 'Real pinned Node23.11 must own Playwright');
+ const BUN_EXECUTABLE = process.env.ORBIS_CUTOVER_BUN_PATH;
+ assert(BUN_EXECUTABLE?.startsWith('/'), 'Explicit pinned Bun executable is required for app/migrator/validators');
+-const NEW_HANDOFF_SHA = 'b167dfa7f3a97d1f2c26797f155474c345ec239fc291f10051497a6639aa3c56';
++const NEW_HANDOFF_SHA = 'PENDING_NEW_NODE2_ALLOCATION';
+ assert(/^[a-f0-9]{64}$/.test(NEW_HANDOFF_SHA), 'New allocation is not issued; never resume old P0027');
+ 
+ const OLD = 'b5abb7fe70068c06b7075ed54a2a0f3c3d729d7b';
+@@ -682,26 +682,57 @@
+     navigator.serviceWorker.controller?.scriptURL ?? null) });
+ }
+ 
++// Admission prepares a worker only. Qualified readiness belongs to the next
++// ordinary document after the entire assisted browser has exited.
++async function admissionStep<T>(label: string, action: () => Promise<T>, ms = 8_000): Promise<T> {
++  log('admission-step-start', { label });
++  try {
++    const value = await within(action(), label, ms);
++    log('admission-step-complete', { label });
++    return value;
++  } catch (error) {
++    log('admission-step-failed', { label, message: redact(String(error)) });
++    throw error;
++  }
++}
+ async function freshNetworkPage(chrome: Live, path: string) {
+-  const page = await newPage(chrome);
+-  const cdp = await chrome.context.newCDPSession(page);
+-  await cdp.send('Network.enable');
+-  await cdp.send('Network.setBypassServiceWorker', { bypass: true });
+-  await cdp.send('Network.setCacheDisabled', { cacheDisabled: true });
+-  try {
+-    const response = await page.goto(origin + path, { waitUntil: 'domcontentloaded' });
+-    assert(response && !response.fromServiceWorker());
+-    assert.equal(sha(await response.body()), current.assets['index.html'].sha256);
+-    await requireEntry(page, current);
+-    log('fresh-network-admission', { scenario, entry: current.entry, html: current.assets['index.html'].sha256 });
+-    await page.evaluate(async () => {
+-      const reg = await navigator.serviceWorker.ready;
+-      await reg.update();
+-    });
+-  } finally {
+-    await cdp.send('Network.setBypassServiceWorker', { bypass: false });
+-    await cdp.send('Network.setCacheDisabled', { cacheDisabled: false });
+-  }
++  const page = await admissionStep('new-page', () => newPage(chrome));
++  const cdp = await admissionStep('new-cdp-session', () => chrome.context.newCDPSession(page));
++  await admissionStep('network-enable', () => cdp.send('Network.enable'));
++  await admissionStep('bypass-true', () => cdp.send('Network.setBypassServiceWorker', { bypass: true }));
++  await admissionStep('cache-disabled-true', () => cdp.send('Network.setCacheDisabled', { cacheDisabled: true }));
++  const response = await admissionStep('current-document', () =>
++    page.goto(origin + path, { waitUntil: 'domcontentloaded', timeout: 8_000 }));
++  assert(response && !response.fromServiceWorker());
++  assert.equal(sha(await admissionStep('current-html-bytes', () => response.body())), current.assets['index.html'].sha256);
++  await admissionStep('current-entry', () => requireEntry(page, current));
++  log('fresh-network-admission', { scenario, entry: current.entry, html: current.assets['index.html'].sha256 });
++  await admissionStep('window.load', () => page.waitForLoadState('load', { timeout: 8_000 }));
++  const reg = await admissionStep('getRegistration-exact-scope', () => page.evaluateHandle(async (scope: string) => {
++    const found = await navigator.serviceWorker.getRegistration(scope);
++    if (!found || found.scope !== scope) throw new Error('Existing exact-scope registration unavailable');
++    return found;
++  }, origin + '/'));
++  await admissionStep('registration.update', () => reg.evaluate(async r => { await r.update(); }));
++  const proof = await admissionStep('registration.active-protocol1', () => waitFor(async () => {
++    const observed = await reg.evaluate(r => new Promise<{ active: string | null; url?: string; protocol?: number; ready?: boolean }>(resolve => {
++      const active = r.active;
++      if (!active) return resolve({ active: null });
++      const channel = new MessageChannel();
++      const timer = setTimeout(() => { channel.port1.close(); resolve({ active: active.state, url: active.scriptURL }); }, 1700);
++      channel.port1.onmessage = ({ data }) => {
++        clearTimeout(timer); channel.port1.close();
++        resolve({ active: active.state, url: active.scriptURL, protocol: data?.protocol, ready: data?.ready });
++      };
++      active.postMessage({ type: 'orbis-local-data-census' }, [channel.port2]);
++    }));
++    log('registration-active-protocol-observation', { observed, businessPageReadyClaimed: false });
++    return observed.protocol === 1 && observed.url === origin + '/sw.js' ? observed : false;
++  }, 'actual active current worker', 8_000));
++  log('assisted-worker-prepared', { proof, businessPageReadyClaimed: false,
++    targetResetCommandsIssued: false, nextProof: 'whole browser exit then new ordinary document' });
++  // No finally reset: target-scoped overrides die with the whole browser.
++  // A failing step escapes directly to the original-failure recorder/cleanup.
+   return page;
+ }
+ 
+@@ -827,9 +858,8 @@
+   log('restart-only-insufficient', { observedEntry: await entry(page) });
+   await closeChrome();
+   const aid = await launch();
+-  const recovered = await freshNetworkPage(aid, '/settings');
+-  await currentWorker(recovered, true);
+-  await closeChrome();
++  await freshNetworkPage(aid, '/settings');
++  await admissionStep('whole-browser-close-and-pid-exit', closeChrome, 18_000);
+   const next = await launch();
+   const ordinary = await newPage(next);
+   const startup = await entryEvidence(ordinary, true);

@@ -1,0 +1,14 @@
+[
+  {
+    "case": "real-migrated-a-default-metadata",
+    "expectedAccepted": true,
+    "accepted": false,
+    "passed": false
+  },
+  {
+    "case": "real-migrated-b-default-metadata",
+    "expectedAccepted": true,
+    "accepted": false,
+    "passed": false
+  }
+]

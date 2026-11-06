@@ -1,0 +1,5 @@
+{
+  "label": "current-bypass:navigator.ready",
+  "message": "Error: current-bypass:navigator.ready timeout",
+  "stack": "Error: current-bypass:navigator.ready timeout\n    at Timeout.<anonymous> (file:///Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/sw-admission-control/control.ts:82:39)\n    at listOnTimeout (node:internal/timers:608:17)\n    at process.processTimers (node:internal/timers:543:7)"
+}

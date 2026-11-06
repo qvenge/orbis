@@ -1,0 +1,42 @@
+[
+  {
+    "sequence": 48,
+    "phase": "old",
+    "actor": "browser",
+    "version": "0.6.0",
+    "names": [
+      "entity.create"
+    ],
+    "bodies": [],
+    "creates": [
+      "01a1af75-f07f-742d-b9cf-2bbf5b58d676"
+    ],
+    "createPayloads": [
+      {
+        "id": "01a1af75-f07f-742d-b9cf-2bbf5b58d676",
+        "digest": "52f39dc2e15fd0dfd388ea6430539b05b0686df5c0cc52f256787b020d8e9399"
+      }
+    ],
+    "forwarded": false
+  },
+  {
+    "sequence": 50,
+    "phase": "old",
+    "actor": "browser",
+    "version": "0.6.0",
+    "names": [
+      "entity.create"
+    ],
+    "bodies": [],
+    "creates": [
+      "01a1af75-f07f-742d-b9cf-2bbf5b58d676"
+    ],
+    "createPayloads": [
+      {
+        "id": "01a1af75-f07f-742d-b9cf-2bbf5b58d676",
+        "digest": "52f39dc2e15fd0dfd388ea6430539b05b0686df5c0cc52f256787b020d8e9399"
+      }
+    ],
+    "forwarded": false
+  }
+]

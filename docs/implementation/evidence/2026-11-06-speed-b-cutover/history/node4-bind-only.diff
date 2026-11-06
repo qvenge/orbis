@@ -1,0 +1,24 @@
+--- race/pins.json
++++ bound/pins.json
+@@ -1,8 +1,8 @@
+ {
+-  "status": "SOURCE ONLY; NODE4 REPLAY RACE; ALLOCATION PENDING",
++  "status": "BOUND TO FRESH NODE4; ONE ROOT P RUN",
+   "nodeVersion": "23.11.0",
+   "bunVersion": "1.2.7",
+-  "handoffSha": "PENDING_NEW_NODE4_ALLOCATION",
++  "handoffSha": "3215a88b8f933b21e482b04d66a1e22d2691114b7a10bde910ab254e9aa4d65a",
+   "currentManifestSha": "2ec1888a7d71ebd2e93bca482da11620a087a6f479403cc86968d4e71b048abe",
+   "oldManifestSha": "7b5182a818bceb6839659923e5937af0c085ffcb6aeb93747deae7ae92a003eb",
+   "scenarioSeconds": 240,
+--- race/rehearsal.ts
++++ bound/rehearsal.ts
+@@ -14,7 +14,7 @@
+ assert(!process.versions.bun && process.versions.node === '23.11.0', 'Real pinned Node23.11 must own Playwright');
+ const BUN_EXECUTABLE = process.env.ORBIS_CUTOVER_BUN_PATH;
+ assert(BUN_EXECUTABLE?.startsWith('/'), 'Explicit pinned Bun executable is required for app/migrator/validators');
+-const NEW_HANDOFF_SHA = 'PENDING_NEW_NODE4_ALLOCATION';
++const NEW_HANDOFF_SHA = '3215a88b8f933b21e482b04d66a1e22d2691114b7a10bde910ab254e9aa4d65a';
+ assert(/^[a-f0-9]{64}$/.test(NEW_HANDOFF_SHA), 'New allocation is not issued; never resume old P0027');
+ 
+ const OLD = 'b5abb7fe70068c06b7075ed54a2a0f3c3d729d7b';

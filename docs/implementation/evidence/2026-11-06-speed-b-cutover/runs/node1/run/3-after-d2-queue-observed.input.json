@@ -1,0 +1,26 @@
+{
+  "owner": "eeee7193-f1d5-40d4-bf1e-bf74297c6b59",
+  "ids": {
+    "a": "a57c5d49-8179-40c4-b30a-7734c44b12d4",
+    "b": "06620ef9-009b-431e-b1bc-143782824fa8",
+    "held": "301b2bbf-d575-428c-8689-c53d6d1d1d17"
+  },
+  "legacy": [
+    {
+      "key": "orbis:body-draft:eeee7193-f1d5-40d4-bf1e-bf74297c6b59:06620ef9-009b-431e-b1bc-143782824fa8",
+      "raw": "{\"doc\":{\"v\":3,\"doc\":{\"type\":\"doc\",\"content\":[{\"type\":\"paragraph\",\"attrs\":{\"id\":\"3709b084-28fc-4ff1-a3b6-8a36da8b04cf\"},\"content\":[{\"type\":\"text\",\"text\":\"Original b R5-discard-second-synthetic-body\"}]}]}},\"baseRevision\":1,\"savedAt\":\"2026-11-05T13:33:24.100Z\",\"rejected\":false}"
+    },
+    {
+      "key": "orbis:body-draft:eeee7193-f1d5-40d4-bf1e-bf74297c6b59:a57c5d49-8179-40c4-b30a-7734c44b12d4",
+      "raw": "{\"doc\":{\"v\":3,\"doc\":{\"type\":\"doc\",\"content\":[{\"type\":\"paragraph\",\"attrs\":{\"id\":\"e3753418-038f-4601-8016-a7f15bc25d57\"},\"content\":[{\"type\":\"text\",\"text\":\"Original a R5-recover-first-synthetic-body\"}]}]}},\"baseRevision\":1,\"savedAt\":\"2026-11-05T13:33:20.882Z\",\"rejected\":false}"
+    }
+  ],
+  "finished": [],
+  "slots": [],
+  "controlRaw": null,
+  "queueRaw": "[{\"tool\":\"entity.create\",\"payload\":{\"input\":{\"id\":\"01a1abea-0ba0-76c5-837b-47431fd4a60c\",\"title\":\"такси\",\"tags\":[],\"props\":{\"orbis/amount\":\"500.00\",\"orbis/direction\":\"expense\",\"orbis/currency\":\"RUB\",\"orbis/occurred_on\":\"2026-11-05\",\"orbis/finance_category\":\"9575cbe9-2328-568a-99a5-e32647215792\"},\"aspects\":[\"orbis/financial\"]},\"source\":\"fast_path\",\"threadId\":\"f6eaa979-7dc8-5fb2-9f6a-01787d08c376\"},\"clientId\":\"01a1abea-0ba0-76c5-837b-47431fd4a60c\",\"createdAt\":\"2026-11-05T13:33:24.793Z\"}]",
+  "databases": [],
+  "at": 1793885604890,
+  "url": "http://127.0.0.1:58188/chat",
+  "time": "2026-11-05T13:33:24.890Z"
+}

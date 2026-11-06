@@ -1,0 +1,70 @@
+{
+  "queuedId": "01a1af6f-4c7b-709a-ac00-e8a795ea3f21",
+  "browserCreate": [
+    {
+      "sequence": 131,
+      "phase": "current",
+      "actor": "browser",
+      "version": "0.7.0",
+      "names": [
+        "entity.create"
+      ],
+      "bodies": [],
+      "creates": [
+        "01a1af6f-4c7b-709a-ac00-e8a795ea3f21"
+      ],
+      "createPayloads": [
+        {
+          "id": "01a1af6f-4c7b-709a-ac00-e8a795ea3f21",
+          "digest": "f566804d1fd55b895d67c84181b40b21c7ff9c615a134929dda0f8b458a0e46e"
+        }
+      ],
+      "forwarded": true,
+      "status": 200,
+      "outcomes": [
+        {
+          "name": "entity.create",
+          "ok": true,
+          "id": "01a1af6f-4c7b-709a-ac00-e8a795ea3f21"
+        }
+      ]
+    }
+  ],
+  "bodyRequests": [
+    {
+      "sequence": 128,
+      "phase": "current",
+      "actor": "browser",
+      "version": "0.7.0",
+      "names": [
+        "entity.update"
+      ],
+      "bodies": [
+        "312c964d-45d0-47ec-99a0-1059829be854"
+      ],
+      "creates": [],
+      "createPayloads": [],
+      "forwarded": true,
+      "status": 200,
+      "outcomes": [
+        {
+          "name": "entity.update",
+          "ok": true,
+          "id": "312c964d-45d0-47ec-99a0-1059829be854"
+        }
+      ]
+    }
+  ],
+  "summary": {
+    "exit": 1,
+    "runnerExit": 1,
+    "watchdogTimedOut": false,
+    "monitorError": null,
+    "cleanupErrors": [],
+    "forcedRunnerCleanup": false,
+    "forcedBrowserCleanup": false,
+    "runnerPid": 76680,
+    "remaining": []
+  },
+  "source": "raw Node3 only; post-replay DB uniqueness/purge assertions not reached"
+}

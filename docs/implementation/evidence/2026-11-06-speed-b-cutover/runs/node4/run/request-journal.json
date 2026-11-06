@@ -1,0 +1,4083 @@
+[
+  {
+    "sequence": 1,
+    "phase": "old",
+    "actor": "driver",
+    "version": "0.6.0",
+    "names": [
+      "user.seedOnboarding"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "user.seedOnboarding",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 2,
+    "phase": "old",
+    "actor": "driver",
+    "version": "0.6.0",
+    "names": [
+      "entity.create"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "entity.create",
+        "ok": true,
+        "id": "b681fbfc-ad00-4046-82db-bee5afa4f5db"
+      }
+    ]
+  },
+  {
+    "sequence": 3,
+    "phase": "old",
+    "actor": "driver",
+    "version": "0.6.0",
+    "names": [
+      "entity.create"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "entity.create",
+        "ok": true,
+        "id": "719dc284-c2ad-4e02-8a6d-f32d54d96bca"
+      }
+    ]
+  },
+  {
+    "sequence": 4,
+    "phase": "old",
+    "actor": "driver",
+    "version": "0.6.0",
+    "names": [
+      "entity.create"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "entity.create",
+        "ok": true,
+        "id": "566d21e5-fae6-4818-9899-20dbddf4924f"
+      }
+    ]
+  },
+  {
+    "sequence": 5,
+    "phase": "old",
+    "actor": "driver",
+    "version": "0.6.0",
+    "names": [
+      "user.getSettings"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "user.getSettings",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 6,
+    "phase": "old",
+    "actor": "driver",
+    "version": "0.6.0",
+    "names": [
+      "user.setModuleEnabled"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "user.setModuleEnabled",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 7,
+    "phase": "old",
+    "actor": "driver",
+    "version": "0.6.0",
+    "names": [
+      "user.getSettings"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "user.getSettings",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 8,
+    "phase": "old",
+    "actor": "driver",
+    "version": "0.6.0",
+    "names": [
+      "registry.effective"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "registry.effective",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 9,
+    "phase": "old",
+    "actor": "driver",
+    "version": "0.6.0",
+    "names": [
+      "entity.query"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "entity.query",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 10,
+    "phase": "old",
+    "actor": "browser",
+    "version": "0.6.0",
+    "names": [
+      "user.getSettings"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "user.getSettings",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 11,
+    "phase": "old",
+    "actor": "browser",
+    "version": "0.6.0",
+    "names": [
+      "user.seedOnboarding"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "user.seedOnboarding",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 12,
+    "phase": "old",
+    "actor": "browser",
+    "version": "0.6.0",
+    "names": [
+      "entity.query"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "entity.query",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 13,
+    "phase": "old",
+    "actor": "browser",
+    "version": "0.6.0",
+    "names": [
+      "user.getSettings"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "user.getSettings",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 14,
+    "phase": "old",
+    "actor": "browser",
+    "version": "0.6.0",
+    "names": [
+      "entity.resolveRefs"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "entity.resolveRefs",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 15,
+    "phase": "old",
+    "actor": "browser",
+    "version": "0.6.0",
+    "names": [
+      "entity.get",
+      "entity.query",
+      "entity.query"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "entity.get",
+        "ok": true
+      },
+      {
+        "name": "entity.query",
+        "ok": true
+      },
+      {
+        "name": "entity.query",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 16,
+    "phase": "old",
+    "actor": "browser",
+    "version": "0.6.0",
+    "names": [
+      "routine.proposalsForEntity",
+      "registry.effective"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "routine.proposalsForEntity",
+        "ok": true
+      },
+      {
+        "name": "registry.effective",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 17,
+    "phase": "old",
+    "actor": "driver",
+    "version": "0.6.0",
+    "names": [
+      "entity.get"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "entity.get",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 18,
+    "phase": "old",
+    "actor": "driver",
+    "version": "0.6.0",
+    "names": [
+      "entity.get"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "entity.get",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 19,
+    "phase": "old",
+    "actor": "browser",
+    "version": "0.6.0",
+    "names": [
+      "perf.report"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "perf.report",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 20,
+    "phase": "old",
+    "actor": "browser",
+    "version": "0.6.0",
+    "names": [
+      "perf.report"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "perf.report",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 21,
+    "phase": "old",
+    "actor": "browser",
+    "version": "0.6.0",
+    "names": [
+      "user.getSettings"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "user.getSettings",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 22,
+    "phase": "old",
+    "actor": "browser",
+    "version": "0.6.0",
+    "names": [
+      "user.seedOnboarding"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "user.seedOnboarding",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 23,
+    "phase": "old",
+    "actor": "browser",
+    "version": "0.6.0",
+    "names": [
+      "entity.query"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "entity.query",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 24,
+    "phase": "old",
+    "actor": "browser",
+    "version": "0.6.0",
+    "names": [
+      "user.getSettings"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "user.getSettings",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 25,
+    "phase": "old",
+    "actor": "browser",
+    "version": "0.6.0",
+    "names": [
+      "entity.resolveRefs"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "entity.resolveRefs",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 26,
+    "phase": "old",
+    "actor": "browser",
+    "version": "0.6.0",
+    "names": [
+      "entity.get",
+      "entity.query",
+      "entity.query"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "entity.get",
+        "ok": true
+      },
+      {
+        "name": "entity.query",
+        "ok": true
+      },
+      {
+        "name": "entity.query",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 27,
+    "phase": "old",
+    "actor": "browser",
+    "version": "0.6.0",
+    "names": [
+      "routine.proposalsForEntity",
+      "registry.effective"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "routine.proposalsForEntity",
+        "ok": true
+      },
+      {
+        "name": "registry.effective",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 28,
+    "phase": "old",
+    "actor": "browser",
+    "version": "0.6.0",
+    "names": [
+      "entity.update"
+    ],
+    "bodies": [
+      "b681fbfc-ad00-4046-82db-bee5afa4f5db"
+    ],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": false
+  },
+  {
+    "sequence": 29,
+    "phase": "old",
+    "actor": "browser",
+    "version": "0.6.0",
+    "names": [
+      "entity.query",
+      "entity.query",
+      "entity.query",
+      "entity.get"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "entity.query",
+        "ok": true
+      },
+      {
+        "name": "entity.query",
+        "ok": true
+      },
+      {
+        "name": "entity.query",
+        "ok": true
+      },
+      {
+        "name": "entity.get",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 30,
+    "phase": "old",
+    "actor": "browser",
+    "version": "0.6.0",
+    "names": [
+      "user.getSettings"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "user.getSettings",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 31,
+    "phase": "old",
+    "actor": "browser",
+    "version": "0.6.0",
+    "names": [
+      "user.seedOnboarding"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "user.seedOnboarding",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 32,
+    "phase": "old",
+    "actor": "browser",
+    "version": "0.6.0",
+    "names": [
+      "entity.query"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "entity.query",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 33,
+    "phase": "old",
+    "actor": "browser",
+    "version": "0.6.0",
+    "names": [
+      "user.getSettings"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "user.getSettings",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 34,
+    "phase": "old",
+    "actor": "browser",
+    "version": "0.6.0",
+    "names": [
+      "entity.resolveRefs"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "entity.resolveRefs",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 35,
+    "phase": "old",
+    "actor": "browser",
+    "version": "0.6.0",
+    "names": [
+      "entity.get",
+      "entity.query",
+      "entity.query"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "entity.get",
+        "ok": true
+      },
+      {
+        "name": "entity.query",
+        "ok": true
+      },
+      {
+        "name": "entity.query",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 36,
+    "phase": "old",
+    "actor": "browser",
+    "version": "0.6.0",
+    "names": [
+      "routine.proposalsForEntity",
+      "registry.effective"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "routine.proposalsForEntity",
+        "ok": true
+      },
+      {
+        "name": "registry.effective",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 37,
+    "phase": "old",
+    "actor": "browser",
+    "version": "0.6.0",
+    "names": [
+      "entity.update"
+    ],
+    "bodies": [
+      "719dc284-c2ad-4e02-8a6d-f32d54d96bca"
+    ],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": false
+  },
+  {
+    "sequence": 38,
+    "phase": "old",
+    "actor": "browser",
+    "version": "0.6.0",
+    "names": [
+      "entity.query",
+      "entity.query",
+      "entity.query",
+      "entity.get"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "entity.query",
+        "ok": true
+      },
+      {
+        "name": "entity.query",
+        "ok": true
+      },
+      {
+        "name": "entity.query",
+        "ok": true
+      },
+      {
+        "name": "entity.get",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 39,
+    "phase": "old",
+    "actor": "browser",
+    "version": "0.6.0",
+    "names": [
+      "user.getSettings"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "user.getSettings",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 40,
+    "phase": "old",
+    "actor": "browser",
+    "version": "0.6.0",
+    "names": [
+      "user.seedOnboarding"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "user.seedOnboarding",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 41,
+    "phase": "old",
+    "actor": "browser",
+    "version": "0.6.0",
+    "names": [
+      "entity.query",
+      "entity.resolveRefs"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "entity.query",
+        "ok": true
+      },
+      {
+        "name": "entity.resolveRefs",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 42,
+    "phase": "old",
+    "actor": "browser",
+    "version": "0.6.0",
+    "names": [
+      "user.getSettings"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "user.getSettings",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 43,
+    "phase": "old",
+    "actor": "browser",
+    "version": "0.6.0",
+    "names": [
+      "entity.resolveRefs"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "entity.resolveRefs",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 44,
+    "phase": "old",
+    "actor": "browser",
+    "version": "0.6.0",
+    "names": [
+      "chat.ensureThread"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "chat.ensureThread",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 45,
+    "phase": "old",
+    "actor": "browser",
+    "version": "0.6.0",
+    "names": [
+      "chat.listMessages"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "chat.listMessages",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 46,
+    "phase": "old",
+    "actor": "browser",
+    "version": "0.6.0",
+    "names": [
+      "entity.query"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "entity.query",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 47,
+    "phase": "old",
+    "actor": "browser",
+    "version": "0.6.0",
+    "names": [
+      "entity.query"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "entity.query",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 48,
+    "phase": "old",
+    "actor": "browser",
+    "version": "0.6.0",
+    "names": [
+      "entity.create"
+    ],
+    "bodies": [],
+    "creates": [
+      "01a1af75-f07f-742d-b9cf-2bbf5b58d676"
+    ],
+    "createPayloads": [
+      {
+        "id": "01a1af75-f07f-742d-b9cf-2bbf5b58d676",
+        "digest": "52f39dc2e15fd0dfd388ea6430539b05b0686df5c0cc52f256787b020d8e9399"
+      }
+    ],
+    "forwarded": false
+  },
+  {
+    "sequence": 49,
+    "phase": "old",
+    "actor": "browser",
+    "version": "0.6.0",
+    "names": [
+      "registry.effective",
+      "budget.envelopeForCategory"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "registry.effective",
+        "ok": true
+      },
+      {
+        "name": "budget.envelopeForCategory",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 50,
+    "phase": "old",
+    "actor": "browser",
+    "version": "0.6.0",
+    "names": [
+      "entity.create"
+    ],
+    "bodies": [],
+    "creates": [
+      "01a1af75-f07f-742d-b9cf-2bbf5b58d676"
+    ],
+    "createPayloads": [
+      {
+        "id": "01a1af75-f07f-742d-b9cf-2bbf5b58d676",
+        "digest": "52f39dc2e15fd0dfd388ea6430539b05b0686df5c0cc52f256787b020d8e9399"
+      }
+    ],
+    "forwarded": false
+  },
+  {
+    "sequence": 51,
+    "phase": "old",
+    "actor": "driver",
+    "version": "0.6.0",
+    "names": [
+      "entity.get"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 404,
+    "outcomes": [
+      {
+        "name": "entity.get",
+        "ok": false,
+        "errorCode": "NOT_FOUND"
+      }
+    ]
+  },
+  {
+    "sequence": 52,
+    "phase": "old",
+    "actor": "driver",
+    "version": "0.6.0",
+    "names": [
+      "entity.get"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "entity.get",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 53,
+    "phase": "old",
+    "actor": "driver",
+    "version": "0.6.0",
+    "names": [
+      "entity.get"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "entity.get",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 54,
+    "phase": "old",
+    "actor": "browser",
+    "version": "0.6.0",
+    "names": [
+      "entity.query"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "entity.query",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 55,
+    "phase": "old",
+    "actor": "browser",
+    "version": "0.6.0",
+    "names": [
+      "user.getSettings"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "user.getSettings",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 56,
+    "phase": "old",
+    "actor": "browser",
+    "version": "0.6.0",
+    "names": [
+      "user.seedOnboarding"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "user.seedOnboarding",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 57,
+    "phase": "old",
+    "actor": "browser",
+    "version": "0.6.0",
+    "names": [
+      "entity.query"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "entity.query",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 58,
+    "phase": "old",
+    "actor": "browser",
+    "version": "0.6.0",
+    "names": [
+      "entity.create"
+    ],
+    "bodies": [],
+    "creates": [
+      "01a1af75-f07f-742d-b9cf-2bbf5b58d676"
+    ],
+    "createPayloads": [
+      {
+        "id": "01a1af75-f07f-742d-b9cf-2bbf5b58d676",
+        "digest": "52f39dc2e15fd0dfd388ea6430539b05b0686df5c0cc52f256787b020d8e9399"
+      }
+    ],
+    "forwarded": false
+  },
+  {
+    "sequence": 59,
+    "phase": "old",
+    "actor": "browser",
+    "version": "0.6.0",
+    "names": [
+      "user.getSettings"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "user.getSettings",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 60,
+    "phase": "old",
+    "actor": "browser",
+    "version": "0.6.0",
+    "names": [
+      "entity.resolveRefs"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "entity.resolveRefs",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 61,
+    "phase": "old",
+    "actor": "browser",
+    "version": "0.6.0",
+    "names": [
+      "entity.get",
+      "entity.query",
+      "entity.query"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "entity.get",
+        "ok": true
+      },
+      {
+        "name": "entity.query",
+        "ok": true
+      },
+      {
+        "name": "entity.query",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 62,
+    "phase": "old",
+    "actor": "browser",
+    "version": "0.6.0",
+    "names": [
+      "routine.proposalsForEntity",
+      "registry.effective"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "routine.proposalsForEntity",
+        "ok": true
+      },
+      {
+        "name": "registry.effective",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 63,
+    "phase": "old",
+    "actor": "browser",
+    "version": "0.6.0",
+    "names": [
+      "entity.update"
+    ],
+    "bodies": [
+      "719dc284-c2ad-4e02-8a6d-f32d54d96bca"
+    ],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": false
+  },
+  {
+    "sequence": 64,
+    "phase": "old",
+    "actor": "browser",
+    "version": "0.6.0",
+    "names": [
+      "entity.query",
+      "entity.query",
+      "entity.query",
+      "entity.get"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "entity.query",
+        "ok": true
+      },
+      {
+        "name": "entity.query",
+        "ok": true
+      },
+      {
+        "name": "entity.query",
+        "ok": true
+      },
+      {
+        "name": "entity.get",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 65,
+    "phase": "old",
+    "actor": "browser",
+    "version": "0.6.0",
+    "names": [
+      "perf.report"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "perf.report",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 66,
+    "phase": "old",
+    "actor": "browser",
+    "version": "0.6.0",
+    "names": [
+      "perf.report"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "perf.report",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 67,
+    "phase": "old",
+    "actor": "browser",
+    "version": "0.6.0",
+    "names": [
+      "entity.update"
+    ],
+    "bodies": [
+      "719dc284-c2ad-4e02-8a6d-f32d54d96bca"
+    ],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": false
+  },
+  {
+    "sequence": 68,
+    "phase": "old",
+    "actor": "browser",
+    "version": "0.6.0",
+    "names": [
+      "entity.query",
+      "entity.query",
+      "entity.query",
+      "entity.get"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "entity.query",
+        "ok": true
+      },
+      {
+        "name": "entity.query",
+        "ok": true
+      },
+      {
+        "name": "entity.query",
+        "ok": true
+      },
+      {
+        "name": "entity.get",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 69,
+    "phase": "old",
+    "actor": "browser",
+    "version": "0.6.0",
+    "names": [
+      "perf.report"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "perf.report",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 70,
+    "phase": "old",
+    "actor": "browser",
+    "version": "0.6.0",
+    "names": [
+      "entity.update"
+    ],
+    "bodies": [
+      "719dc284-c2ad-4e02-8a6d-f32d54d96bca"
+    ],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": false
+  },
+  {
+    "sequence": 71,
+    "phase": "old",
+    "actor": "driver",
+    "version": "0.6.0",
+    "names": [
+      "entity.get"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "entity.get",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 72,
+    "phase": "old",
+    "actor": "driver",
+    "version": "0.6.0",
+    "names": [
+      "entity.get"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "entity.get",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 73,
+    "phase": "current",
+    "actor": "driver",
+    "version": "0.6.0",
+    "names": [
+      "user.getSettings"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 412,
+    "outcomes": [
+      {
+        "name": "user.getSettings",
+        "ok": false,
+        "errorCode": "PRECONDITION_FAILED"
+      }
+    ]
+  },
+  {
+    "sequence": 74,
+    "phase": "current",
+    "actor": "driver",
+    "version": "0.7.0",
+    "names": [
+      "entity.update"
+    ],
+    "bodies": [
+      "b681fbfc-ad00-4046-82db-bee5afa4f5db"
+    ],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "entity.update",
+        "ok": true,
+        "id": "b681fbfc-ad00-4046-82db-bee5afa4f5db"
+      }
+    ]
+  },
+  {
+    "sequence": 75,
+    "phase": "current",
+    "actor": "driver",
+    "version": "0.7.0",
+    "names": [
+      "entity.get"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "entity.get",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 76,
+    "phase": "current",
+    "actor": "driver",
+    "version": "0.7.0",
+    "names": [
+      "entity.update"
+    ],
+    "bodies": [
+      "719dc284-c2ad-4e02-8a6d-f32d54d96bca"
+    ],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "entity.update",
+        "ok": true,
+        "id": "719dc284-c2ad-4e02-8a6d-f32d54d96bca"
+      }
+    ]
+  },
+  {
+    "sequence": 77,
+    "phase": "current",
+    "actor": "driver",
+    "version": "0.7.0",
+    "names": [
+      "entity.get"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "entity.get",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 78,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.6.0",
+    "names": [
+      "user.getSettings"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 412,
+    "outcomes": [
+      {
+        "name": "user.getSettings",
+        "ok": false,
+        "errorCode": "PRECONDITION_FAILED"
+      }
+    ]
+  },
+  {
+    "sequence": 79,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.6.0",
+    "names": [
+      "user.seedOnboarding"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 412,
+    "outcomes": [
+      {
+        "name": "user.seedOnboarding",
+        "ok": false,
+        "errorCode": "PRECONDITION_FAILED"
+      }
+    ]
+  },
+  {
+    "sequence": 80,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.6.0",
+    "names": [
+      "perf.report"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 412,
+    "outcomes": [
+      {
+        "name": "perf.report",
+        "ok": false,
+        "errorCode": "PRECONDITION_FAILED"
+      }
+    ]
+  },
+  {
+    "sequence": 81,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "entity.create"
+    ],
+    "bodies": [],
+    "creates": [
+      "01a1af75-f07f-742d-b9cf-2bbf5b58d676"
+    ],
+    "createPayloads": [
+      {
+        "id": "01a1af75-f07f-742d-b9cf-2bbf5b58d676",
+        "digest": "52f39dc2e15fd0dfd388ea6430539b05b0686df5c0cc52f256787b020d8e9399"
+      }
+    ],
+    "forwarded": false
+  },
+  {
+    "sequence": 82,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "registry.effective"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "registry.effective",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 83,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "user.getSettings"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "user.getSettings",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 84,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "changes.watch"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 503
+  },
+  {
+    "sequence": 85,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "entity.query"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "entity.query",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 86,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "entity.resolveRefs"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "entity.resolveRefs",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 87,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "changes.watch"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 503
+  },
+  {
+    "sequence": 88,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "changes.watch"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 503
+  },
+  {
+    "sequence": 89,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "changes.watch"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 503
+  },
+  {
+    "sequence": 90,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "changes.watch"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 503
+  },
+  {
+    "sequence": 91,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "changes.watch"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 503
+  },
+  {
+    "sequence": 92,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "perf.report"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "perf.report",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 93,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "perf.report"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "perf.report",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 94,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "entity.create"
+    ],
+    "bodies": [],
+    "creates": [
+      "01a1af75-f07f-742d-b9cf-2bbf5b58d676"
+    ],
+    "createPayloads": [
+      {
+        "id": "01a1af75-f07f-742d-b9cf-2bbf5b58d676",
+        "digest": "52f39dc2e15fd0dfd388ea6430539b05b0686df5c0cc52f256787b020d8e9399"
+      }
+    ],
+    "forwarded": false
+  },
+  {
+    "sequence": 95,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "user.getSettings"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "user.getSettings",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 96,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "registry.effective"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "registry.effective",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 97,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "entity.query"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "entity.query",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 98,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "entity.resolveRefs"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "entity.resolveRefs",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 99,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "changes.watch"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 503
+  },
+  {
+    "sequence": 100,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "user.getSettings"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "user.getSettings",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 101,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "perf.report"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "perf.report",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 102,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "perf.report"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "perf.report",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 103,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "entity.create"
+    ],
+    "bodies": [],
+    "creates": [
+      "01a1af75-f07f-742d-b9cf-2bbf5b58d676"
+    ],
+    "createPayloads": [
+      {
+        "id": "01a1af75-f07f-742d-b9cf-2bbf5b58d676",
+        "digest": "52f39dc2e15fd0dfd388ea6430539b05b0686df5c0cc52f256787b020d8e9399"
+      }
+    ],
+    "forwarded": false
+  },
+  {
+    "sequence": 104,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "entity.get"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "entity.get",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 105,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "registry.effective",
+      "user.getSettings"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "registry.effective",
+        "ok": true
+      },
+      {
+        "name": "user.getSettings",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 106,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "entity.query"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "entity.query",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 107,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "entity.resolveRefs"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "entity.resolveRefs",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 108,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "changes.watch"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 503
+  },
+  {
+    "sequence": 109,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "changes.watch"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 503
+  },
+  {
+    "sequence": 110,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "routine.proposalsForEntity"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "routine.proposalsForEntity",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 111,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "entity.query",
+      "entity.query"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "entity.query",
+        "ok": true
+      },
+      {
+        "name": "entity.query",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 112,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "changes.watch"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 503
+  },
+  {
+    "sequence": 113,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "changes.watch"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 503
+  },
+  {
+    "sequence": 114,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "entity.create"
+    ],
+    "bodies": [],
+    "creates": [
+      "01a1af75-f07f-742d-b9cf-2bbf5b58d676"
+    ],
+    "createPayloads": [
+      {
+        "id": "01a1af75-f07f-742d-b9cf-2bbf5b58d676",
+        "digest": "52f39dc2e15fd0dfd388ea6430539b05b0686df5c0cc52f256787b020d8e9399"
+      }
+    ],
+    "forwarded": false
+  },
+  {
+    "sequence": 115,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "entity.get"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "entity.get",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 116,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "registry.effective",
+      "user.getSettings"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "registry.effective",
+        "ok": true
+      },
+      {
+        "name": "user.getSettings",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 117,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "entity.query"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "entity.query",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 118,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "changes.watch"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 503
+  },
+  {
+    "sequence": 119,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "entity.resolveRefs"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "entity.resolveRefs",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 120,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "changes.watch"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 503
+  },
+  {
+    "sequence": 121,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "changes.watch"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 503
+  },
+  {
+    "sequence": 122,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "routine.proposalsForEntity"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "routine.proposalsForEntity",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 123,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "entity.query",
+      "entity.query"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "entity.query",
+        "ok": true
+      },
+      {
+        "name": "entity.query",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 124,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "changes.watch"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 503
+  },
+  {
+    "sequence": 125,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "changes.watch"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 503
+  },
+  {
+    "sequence": 126,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "entity.update"
+    ],
+    "bodies": [
+      "b681fbfc-ad00-4046-82db-bee5afa4f5db"
+    ],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "entity.update",
+        "ok": true,
+        "id": "b681fbfc-ad00-4046-82db-bee5afa4f5db"
+      }
+    ]
+  },
+  {
+    "sequence": 127,
+    "phase": "current",
+    "actor": "driver",
+    "version": "0.7.0",
+    "names": [
+      "entity.get"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "entity.get",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 128,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "changes.reconcile"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "changes.reconcile",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 129,
+    "phase": "current",
+    "actor": "driver",
+    "version": "0.7.0",
+    "names": [
+      "entity.get"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "entity.get",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 130,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "entity.create"
+    ],
+    "bodies": [],
+    "creates": [
+      "01a1af75-f07f-742d-b9cf-2bbf5b58d676"
+    ],
+    "createPayloads": [
+      {
+        "id": "01a1af75-f07f-742d-b9cf-2bbf5b58d676",
+        "digest": "52f39dc2e15fd0dfd388ea6430539b05b0686df5c0cc52f256787b020d8e9399"
+      }
+    ],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "entity.create",
+        "ok": true,
+        "id": "01a1af75-f07f-742d-b9cf-2bbf5b58d676"
+      }
+    ]
+  },
+  {
+    "sequence": 131,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "changes.watch"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 503
+  },
+  {
+    "sequence": 132,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "registry.effective",
+      "user.getSettings"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "registry.effective",
+        "ok": true
+      },
+      {
+        "name": "user.getSettings",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 133,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "chat.openThread"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "chat.openThread",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 134,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "entity.resolveRefs",
+      "entity.query"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "entity.resolveRefs",
+        "ok": true
+      },
+      {
+        "name": "entity.query",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 135,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "entity.resolveRefs"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "entity.resolveRefs",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 136,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "changes.watch"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 503
+  },
+  {
+    "sequence": 137,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "changes.reconcile"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "changes.reconcile",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 138,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "changes.watch"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 503
+  },
+  {
+    "sequence": 139,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "changes.watch"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 503
+  },
+  {
+    "sequence": 140,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "chat.listMessages"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "chat.listMessages",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 141,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "user.getSettings"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "user.getSettings",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 142,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "changes.watch"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 503
+  },
+  {
+    "sequence": 143,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "user.getSettings"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "user.getSettings",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 144,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "entity.query"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "entity.query",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 145,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "changes.watch"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 503
+  },
+  {
+    "sequence": 146,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "changes.watch"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 503
+  },
+  {
+    "sequence": 147,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "changes.watch"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 503
+  },
+  {
+    "sequence": 148,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "changes.reconcile"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "changes.reconcile",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 149,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "entity.get",
+      "user.getSettings",
+      "entity.query",
+      "entity.query",
+      "entity.query",
+      "routine.proposalsForEntity"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "entity.get",
+        "ok": true
+      },
+      {
+        "name": "user.getSettings",
+        "ok": true
+      },
+      {
+        "name": "entity.query",
+        "ok": true
+      },
+      {
+        "name": "entity.query",
+        "ok": true
+      },
+      {
+        "name": "entity.query",
+        "ok": true
+      },
+      {
+        "name": "routine.proposalsForEntity",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 150,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "changes.watch"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 503
+  },
+  {
+    "sequence": 151,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "changes.watch"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 503
+  },
+  {
+    "sequence": 152,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "changes.reconcile"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "changes.reconcile",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 153,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "entity.get",
+      "user.getSettings",
+      "entity.query",
+      "entity.query",
+      "entity.query",
+      "routine.proposalsForEntity"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "entity.get",
+        "ok": true
+      },
+      {
+        "name": "user.getSettings",
+        "ok": true
+      },
+      {
+        "name": "entity.query",
+        "ok": true
+      },
+      {
+        "name": "entity.query",
+        "ok": true
+      },
+      {
+        "name": "entity.query",
+        "ok": true
+      },
+      {
+        "name": "routine.proposalsForEntity",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 154,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "changes.watch"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 503
+  },
+  {
+    "sequence": 155,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "changes.reconcile"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "changes.reconcile",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 156,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "changes.watch"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 503
+  },
+  {
+    "sequence": 157,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "changes.reconcile"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "changes.reconcile",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 158,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "changes.watch"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 503
+  },
+  {
+    "sequence": 159,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "changes.reconcile"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "changes.reconcile",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 160,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "changes.watch"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 503
+  },
+  {
+    "sequence": 161,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "changes.reconcile"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "changes.reconcile",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 162,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "changes.watch"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 503
+  },
+  {
+    "sequence": 163,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "changes.reconcile"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "changes.reconcile",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 164,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "changes.watch"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 503
+  },
+  {
+    "sequence": 165,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "changes.reconcile"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "changes.reconcile",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 166,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "changes.watch"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 503
+  },
+  {
+    "sequence": 167,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "changes.reconcile"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "changes.reconcile",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 168,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "changes.watch"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 503
+  },
+  {
+    "sequence": 169,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "changes.reconcile"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "changes.reconcile",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 170,
+    "phase": "current",
+    "actor": "driver",
+    "version": "0.7.0",
+    "names": [
+      "entity.get"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "entity.get",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 171,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "perf.report"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "perf.report",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 172,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "perf.report"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "perf.report",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 173,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "perf.report"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "perf.report",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 174,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "perf.report"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "perf.report",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 175,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "perf.report"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "perf.report",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 176,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "perf.report"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "perf.report",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 177,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "user.getSettings"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "user.getSettings",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 178,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "registry.effective"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "registry.effective",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 179,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "entity.query"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "entity.query",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 180,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "entity.resolveRefs"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "entity.resolveRefs",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 181,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "changes.watch"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 503
+  },
+  {
+    "sequence": 182,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "user.getSettings"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "user.getSettings",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 183,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "changes.watch"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 503
+  },
+  {
+    "sequence": 184,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "changes.watch"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 503
+  },
+  {
+    "sequence": 185,
+    "phase": "current",
+    "actor": "driver",
+    "version": "0.7.0",
+    "names": [
+      "entity.get"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "entity.get",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 186,
+    "phase": "current",
+    "actor": "driver",
+    "version": "0.7.0",
+    "names": [
+      "entity.get"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "entity.get",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 187,
+    "phase": "current",
+    "actor": "driver",
+    "version": "0.7.0",
+    "names": [
+      "entity.get"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "entity.get",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 188,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "entity.query",
+      "entity.query",
+      "registry.effective",
+      "user.getSettings"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "entity.query",
+        "ok": true
+      },
+      {
+        "name": "entity.query",
+        "ok": true
+      },
+      {
+        "name": "registry.effective",
+        "ok": true
+      },
+      {
+        "name": "user.getSettings",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 189,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "changes.watch"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 503
+  },
+  {
+    "sequence": 190,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "entity.get",
+      "entity.resolveRefs"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "entity.get",
+        "ok": true
+      },
+      {
+        "name": "entity.resolveRefs",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 191,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "changes.watch"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 503
+  },
+  {
+    "sequence": 192,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "changes.watch"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 503
+  },
+  {
+    "sequence": 193,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "entity.blocks"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "entity.blocks",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 194,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "entity.get"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "entity.get",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 195,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "changes.watch"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 503
+  },
+  {
+    "sequence": 196,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "routine.proposalsForEntity",
+      "entity.query"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "routine.proposalsForEntity",
+        "ok": true
+      },
+      {
+        "name": "entity.query",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 197,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "perf.report"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "perf.report",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 198,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "entity.query",
+      "entity.query",
+      "registry.effective",
+      "user.getSettings"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "entity.query",
+        "ok": true
+      },
+      {
+        "name": "entity.query",
+        "ok": true
+      },
+      {
+        "name": "registry.effective",
+        "ok": true
+      },
+      {
+        "name": "user.getSettings",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 199,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "changes.watch"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 503
+  },
+  {
+    "sequence": 200,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "entity.get",
+      "entity.resolveRefs"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "entity.get",
+        "ok": true
+      },
+      {
+        "name": "entity.resolveRefs",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 201,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "changes.watch"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 503
+  },
+  {
+    "sequence": 202,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "routine.proposalsForEntity",
+      "supply.updates",
+      "entity.query"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "routine.proposalsForEntity",
+        "ok": true
+      },
+      {
+        "name": "supply.updates",
+        "ok": true
+      },
+      {
+        "name": "entity.query",
+        "ok": true
+      }
+    ]
+  },
+  {
+    "sequence": 203,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "changes.watch"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 503
+  },
+  {
+    "sequence": 204,
+    "phase": "current",
+    "actor": "browser",
+    "version": "0.7.0",
+    "names": [
+      "perf.report"
+    ],
+    "bodies": [],
+    "creates": [],
+    "createPayloads": [],
+    "forwarded": true,
+    "status": 200,
+    "outcomes": [
+      {
+        "name": "perf.report",
+        "ok": true
+      }
+    ]
+  }
+]

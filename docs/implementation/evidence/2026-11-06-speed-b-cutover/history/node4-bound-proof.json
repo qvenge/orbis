@@ -1,0 +1,24 @@
+{
+  "sourceSha": "8321c4b94508b05cede7bc88592e4042ac86d02113c633ce6f99383cf70b3f41",
+  "diffSha": "3be5761d6ee3d1456d6f21e7ec89d5289c7cc631b9af3890e084c41fe0bcff39",
+  "handoffSha": "3215a88b8f933b21e482b04d66a1e22d2691114b7a10bde910ab254e9aa4d65a",
+  "handoff": {
+    "lane": "P",
+    "container": {
+      "id": "21de1253be69ff12929ed2161f764b4e221ffa71ae91132542634ec971da05a5",
+      "image": "sha256:6501843661b1f8ff97e85c02de33edc0ee2e2693888ad596ee86222f02dc8ecc"
+    },
+    "db": {
+      "port": 54349,
+      "name": "postgres",
+      "admin": "supabase_admin",
+      "runtime": "orbis_app",
+      "systemId": "7704935266829262882"
+    },
+    "manifests": {
+      "old": "7b5182a818bceb6839659923e5937af0c085ffcb6aeb93747deae7ae92a003eb",
+      "current": "2ec1888a7d71ebd2e93bca482da11620a087a6f479403cc86968d4e71b048abe"
+    }
+  },
+  "pinOnlyVerified": true
+}

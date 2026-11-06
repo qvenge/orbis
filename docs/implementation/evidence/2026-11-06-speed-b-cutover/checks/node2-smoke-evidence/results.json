@@ -1,0 +1,49 @@
+{
+  "results": [
+    {
+      "name": "node-syntax",
+      "command": [
+        "/Users/birzhan/.nvm/versions/node/v23.11.0/bin/node",
+        "--check",
+        "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/final-p-node2-admission/rehearsal.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "name": "dependency-imports",
+      "command": [
+        "/Users/birzhan/.nvm/versions/node/v23.11.0/bin/node",
+        "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/final-smoke-evidence/import-smoke.mjs",
+        "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/final-p-node2-admission"
+      ],
+      "exit": 0
+    },
+    {
+      "name": "node-types",
+      "command": [
+        "/Users/birzhan/.nvm/versions/node/v23.11.0/bin/node",
+        "/Users/birzhan/.codex/worktrees/853d/orbis/node_modules/typescript/bin/tsc",
+        "-p",
+        "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/checks/tsconfig.node2-node.json"
+      ],
+      "exit": 0
+    },
+    {
+      "name": "bun-types",
+      "command": [
+        "/Users/birzhan/.nvm/versions/node/v23.11.0/bin/node",
+        "/Users/birzhan/.codex/worktrees/853d/orbis/node_modules/typescript/bin/tsc",
+        "-p",
+        "/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/checks/tsconfig.node2-bun.json"
+      ],
+      "exit": 0
+    }
+  ],
+  "elapsed": 4.07002756500151,
+  "load": [
+    2.4443359375,
+    2.9189453125,
+    2.50537109375
+  ],
+  "scope": "imports/types only; no executable main/App/DB/Chrome"
+}

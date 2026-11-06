@@ -1,0 +1,141 @@
+{
+  "owner": "1f615893-d3e8-4fa4-9b94-7117379999ce",
+  "ids": {
+    "a": "d263aeea-76bf-4a5d-ad12-f4711df2c6de",
+    "b": "d8b4a96c-8416-4ee6-91d5-e2df470842a5",
+    "held": "9be0c91c-c457-4164-b212-e7972ad40f27"
+  },
+  "legacy": [],
+  "finished": [],
+  "slots": [
+    {
+      "key": [
+        "1f615893-d3e8-4fa4-9b94-7117379999ce",
+        "d263aeea-76bf-4a5d-ad12-f4711df2c6de",
+        "2a694a3556289999af07f482610f88f08b342a9835316507d8a26c3cf8aabd03"
+      ],
+      "latest": {
+        "accountId": "1f615893-d3e8-4fa4-9b94-7117379999ce",
+        "graphId": "1f615893-d3e8-4fa4-9b94-7117379999ce",
+        "generation": "0:0",
+        "entityId": "d263aeea-76bf-4a5d-ad12-f4711df2c6de",
+        "nonce": "2a694a3556289999af07f482610f88f08b342a9835316507d8a26c3cf8aabd03",
+        "writerId": "2a694a3556289999af07f482610f88f08b342a9835316507d8a26c3cf8aabd03",
+        "sequence": 0,
+        "basis": {
+          "revision": 1
+        }
+      },
+      "snapshot": {
+        "doc": {
+          "v": 3,
+          "doc": {
+            "type": "doc",
+            "content": [
+              {
+                "type": "paragraph",
+                "attrs": {
+                  "id": "d8b154d3-f591-421b-829c-691b2786706e"
+                },
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "Original a R5-recover-first-synthetic-body"
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        "rejected": false,
+        "savedAt": "2026-11-06T05:51:06.653Z",
+        "token": {
+          "accountId": "1f615893-d3e8-4fa4-9b94-7117379999ce",
+          "graphId": "1f615893-d3e8-4fa4-9b94-7117379999ce",
+          "generation": "0:0",
+          "entityId": "d263aeea-76bf-4a5d-ad12-f4711df2c6de",
+          "nonce": "2a694a3556289999af07f482610f88f08b342a9835316507d8a26c3cf8aabd03",
+          "writerId": "2a694a3556289999af07f482610f88f08b342a9835316507d8a26c3cf8aabd03",
+          "sequence": 0,
+          "basis": {
+            "revision": 1
+          }
+        }
+      },
+      "graphId": "1f615893-d3e8-4fa4-9b94-7117379999ce",
+      "entity": [
+        "1f615893-d3e8-4fa4-9b94-7117379999ce",
+        "d263aeea-76bf-4a5d-ad12-f4711df2c6de"
+      ]
+    },
+    {
+      "key": [
+        "1f615893-d3e8-4fa4-9b94-7117379999ce",
+        "d8b4a96c-8416-4ee6-91d5-e2df470842a5",
+        "972b5c720dd88f7d571ef6e0afaff9f46d587cf2c66c85ec7eb818c57ec72405"
+      ],
+      "latest": {
+        "accountId": "1f615893-d3e8-4fa4-9b94-7117379999ce",
+        "graphId": "1f615893-d3e8-4fa4-9b94-7117379999ce",
+        "generation": "0:0",
+        "entityId": "d8b4a96c-8416-4ee6-91d5-e2df470842a5",
+        "nonce": "972b5c720dd88f7d571ef6e0afaff9f46d587cf2c66c85ec7eb818c57ec72405",
+        "writerId": "972b5c720dd88f7d571ef6e0afaff9f46d587cf2c66c85ec7eb818c57ec72405",
+        "sequence": 0,
+        "basis": {
+          "revision": 1
+        }
+      },
+      "snapshot": {
+        "doc": {
+          "v": 3,
+          "doc": {
+            "type": "doc",
+            "content": [
+              {
+                "type": "paragraph",
+                "attrs": {
+                  "id": "bd1bfd6a-b04c-4737-8110-8358bdb1d8ef"
+                },
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "Original b R5-discard-second-synthetic-body"
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        "rejected": false,
+        "savedAt": "2026-11-06T05:51:12.364Z",
+        "token": {
+          "accountId": "1f615893-d3e8-4fa4-9b94-7117379999ce",
+          "graphId": "1f615893-d3e8-4fa4-9b94-7117379999ce",
+          "generation": "0:0",
+          "entityId": "d8b4a96c-8416-4ee6-91d5-e2df470842a5",
+          "nonce": "972b5c720dd88f7d571ef6e0afaff9f46d587cf2c66c85ec7eb818c57ec72405",
+          "writerId": "972b5c720dd88f7d571ef6e0afaff9f46d587cf2c66c85ec7eb818c57ec72405",
+          "sequence": 0,
+          "basis": {
+            "revision": 1
+          }
+        }
+      },
+      "graphId": "1f615893-d3e8-4fa4-9b94-7117379999ce",
+      "entity": [
+        "1f615893-d3e8-4fa4-9b94-7117379999ce",
+        "d8b4a96c-8416-4ee6-91d5-e2df470842a5"
+      ]
+    }
+  ],
+  "controlRaw": null,
+  "queueRaw": "[{\"tool\":\"entity.create\",\"payload\":{\"input\":{\"id\":\"01a1af69-37f2-77d8-ae55-07595f4e769a\",\"title\":\"такси\",\"tags\":[],\"props\":{\"orbis/amount\":\"500.00\",\"orbis/direction\":\"expense\",\"orbis/currency\":\"RUB\",\"orbis/occurred_on\":\"2026-11-06\",\"orbis/finance_category\":\"59b72bbc-8b67-5995-9686-6f8471e56edb\"},\"aspects\":[\"orbis/financial\"]},\"source\":\"fast_path\",\"threadId\":\"74fe99f9-0d87-58ce-9fea-876e7a489d92\"},\"clientId\":\"01a1af69-37f2-77d8-ae55-07595f4e769a\",\"createdAt\":\"2026-11-06T05:51:10.859Z\"}]",
+  "databases": [
+    "orbis-cache:1f615893-d3e8-4fa4-9b94-7117379999ce",
+    "orbis-input:1f615893-d3e8-4fa4-9b94-7117379999ce"
+  ],
+  "at": 1793944287508,
+  "url": "http://127.0.0.1:64418/r/d263aeea-76bf-4a5d-ad12-f4711df2c6de",
+  "time": "2026-11-06T05:51:27.508Z"
+}

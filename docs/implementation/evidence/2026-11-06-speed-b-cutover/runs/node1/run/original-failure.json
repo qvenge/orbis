@@ -1,0 +1,5 @@
+{
+  "name": "Error",
+  "message": "Error: cdpSession.send: Target page, context or browser has been closed",
+  "stack": "cdpSession.send: Target page, context or browser has been closed\n    at freshNetworkPage (/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/final-p-node-bound/rehearsal.ts:702:15)\n    at async restartOrdinary (/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/final-p-node-bound/rehearsal.ts:830:21)\n    at async positive (/Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/final-p-node-bound/rehearsal.ts:1089:39)\n    at async file:///Users/birzhan/.codex/worktrees/853d/orbis/.superpowers/sdd/2026-11-05-speed-b-release/cutover-node-preparation/final-p-node-bound/rehearsal.ts:1226:8"
+}

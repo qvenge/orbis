@@ -1,0 +1,8 @@
+{"module":"node-http.ts","imported":true}
+{"module":"node-platform.ts","imported":true}
+{"module":"identity.ts","imported":true}
+{"module":"lifecycle-observer.ts","imported":true}
+{"package":"jose","imported":true,"executedFactory":false}
+{"package":"postgres","imported":true,"executedFactory":false}
+{"package":"playwright-core","imported":true,"executedFactory":false}
+{"status":"imports-only-pass","node":"23.11.0","mainImported":false,"app":false,"db":false,"browser":false}

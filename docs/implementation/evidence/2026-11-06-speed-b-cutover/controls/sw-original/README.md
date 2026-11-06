@@ -1,0 +1,17 @@
+# One static SW admission control — SOURCE ONLY, NOT EXECUTED
+
+Entry (review only): `python3 run-control.py --node /Users/birzhan/.nvm/versions/node/v23.11.0/bin/node`. One90s scenario +20s scoped cleanup, real Node/fixed public pipe/PW1.63/Chrome156. No P, Docker, DB, Hono, Auth, business UI, app/source edits or old private profile. Canonical fixed supervisor is byte-identical; known public browser lifecycle/census/profile guards are reused. Close uses public Browser.close and then the same PID/start/Normal/Singleton proof. All raw directories are new/private; hostname in public copies must be redacted.
+
+Actual frozen old7b5182/current2ec1888a manifest assets are byte-verified. Actual sw.js, workbox, registerSW.js, current orbis-local-data-worker.js and all precache assets are served unchanged with the Hono-equivalent assets-immutable/other-no-cache policy. **Only HTML is replaced**, including `/index.html`: otherwise both actual navigation fallbacks would execute App. One identical empty HTML is used in all cases and loads actual registerSW.js before the real window.load. App JS is cached by the actual worker but never executed. This is a deliberate static-fixture deviation, not actual current App HTML proof.
+
+Sequence within one control:
+
+1. Positive current-SW/same-empty-probe without any bypass in one NEW blank profile: actual load + navigator.ready + reg.update + public current-worker protocol observation; then whole browser close/PID exit.
+2. A second NEW blank profile: actual old worker register/load/ready/controller baseline, then whole close. Switch only static files to current, relaunch same second profile; apply exact P Network.enable/bypass=true/cacheDisabled=true, DOMContentLoaded, independent real-load and ready waits, reg.update, and separately marked bypass/cache resets.
+3. Only if every stage succeeds, close whole browser and launch an ordinary target in the same second profile without overrides. Require response.fromServiceWorker=true and actual current-worker protocol1. This is a probe capability, not P/business/privacy PASS.
+
+Every new await has before/resolve/reject markers and bounds; ready/update page-side markers record real document load and registration/controller states. Registration is not fabricated or triggered by an invented callback: actual registerSW.js listens to actual window.load. Public JSHandle holds the real ready registration. Page errors race/stop the active stage; first error remains preserved; cleanup errors are separate. No private Playwright/product API or challenge fake is used. The empty probe does NOT answer the app's local-data challenge; protocol1 ready may be false and is never advertised as business-page readiness.
+
+Comparison limit: current/no-bypass positive controls the custom-worker/nonparticipating-probe variable, but differs in upgrade history from old→current+bypass. Therefore even a later suspect failure does not automatically prove bypass alone or the original P3 cause. If positive fails, stop/limited immediately. If a ready/update/reset fails, record that exact boundary; do not proceed/retry/fake an ordinary proof. Global90s may stop the sequence before all positive stages; then no completed-control verdict.
+
+Source parent control and HTTP adapter are copied/reused, not a new framework. Root must read source/diff and grant runtime separately. No control, browser, test, compiler, port or registration has been executed during this source preparation.
