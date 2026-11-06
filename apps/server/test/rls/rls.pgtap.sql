@@ -3,7 +3,7 @@
 -- Всё в одной транзакции с ROLLBACK: БД не мутируется.
 BEGIN;
 CREATE EXTENSION IF NOT EXISTS pgtap;
-SELECT plan(197);
+SELECT plan(198);
 
 -- Графы фикстур (0020): с FK на graphs владельца «из воздуха» не бывает. Весь файл — одна транзакция
 -- с ROLLBACK, отложенные триггеры И-1 до проверки не доходят — гранты заведены ради политик.
@@ -1197,6 +1197,12 @@ SELECT ok(EXISTS (SELECT FROM pg_roles WHERE rolname = 'orbis_change_feed_owner'
   AND NOT pg_has_role('authenticated', 'orbis_change_feed_owner', 'MEMBER')
   AND NOT pg_has_role('anon', 'orbis_change_feed_owner', 'MEMBER'),
   'роль владельца триггеров NOLOGIN BYPASSRLS без членства ролей приложения');
+SELECT ok(NOT EXISTS (
+  SELECT FROM pg_auth_members m
+  WHERE m.roleid = 'orbis_change_feed_owner'::regrole
+    AND m.member = session_user::regrole
+    AND (m.set_option OR m.inherit_option)),
+  'мигратор не сохраняет временные SET и INHERIT роли владельца триггеров');
 SELECT ok(NOT EXISTS (
   SELECT FROM unnest(ARRAY['orbis_app','authenticated','anon','service_role']) AS roles(role)
   CROSS JOIN unnest(ARRAY['public.change_feed','public.change_feed_floor']) AS tables(tbl)

@@ -424,7 +424,13 @@ REVOKE ALL ON FUNCTION public.orbis_capture_change_feed() FROM PUBLIC, anon, aut
 --> statement-breakpoint
 -- ALTER OWNER требует SET ROLE и CREATE для нового владельца, если мигратор не superuser.
 -- Оба нужны только для передачи объекта.
-GRANT orbis_change_feed_owner TO CURRENT_USER WITH SET TRUE, INHERIT FALSE;
+-- Supautils в supabase/postgres:17.6.1.140 падает на CURRENT_USER в GRANT/REVOKE роли
+-- (supabase/supautils#205). Передаём то же имя как SQL-идентификатор, не меняя полномочия.
+DO $$
+BEGIN
+  EXECUTE pg_catalog.format(
+    'GRANT orbis_change_feed_owner TO %I WITH SET TRUE, INHERIT FALSE', current_user);
+END $$;
 --> statement-breakpoint
 GRANT CREATE ON SCHEMA public TO orbis_change_feed_owner;
 --> statement-breakpoint
@@ -432,7 +438,11 @@ ALTER FUNCTION public.orbis_capture_change_feed() OWNER TO orbis_change_feed_own
 --> statement-breakpoint
 REVOKE CREATE ON SCHEMA public FROM orbis_change_feed_owner;
 --> statement-breakpoint
-REVOKE SET OPTION FOR orbis_change_feed_owner FROM CURRENT_USER;
+DO $$
+BEGIN
+  EXECUTE pg_catalog.format(
+    'REVOKE SET OPTION FOR orbis_change_feed_owner FROM %I', current_user);
+END $$;
 --> statement-breakpoint
 -- Один statement чистки (под административной ролью pg_cron). DELETE и продвижение floor
 -- фиксируются одной транзакцией. Именованный schedule обновляет существующую задачу.
