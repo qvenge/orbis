@@ -11,7 +11,7 @@ import {
   useMemo,
   useState,
 } from 'react';
-import { Markdown } from '../../lib/markdown/Markdown';
+import { MarkdownSlot, VerifiedFileBody } from '../../lib/markdown/MarkdownSlot';
 import { useBodyKind } from '../../lib/query-blocks/body-kind';
 import { QueryBlock } from '../../lib/query-blocks/QueryBlock';
 import { useFieldCatalog } from '../../lib/query-blocks/useFieldCatalog';
@@ -169,7 +169,7 @@ function firstFrameNode(
 ): ReactNode {
   if (node.kind === 'text') {
     const text = node.text.trim();
-    return text === '' ? null : <Markdown key={key} source={text} />;
+    return text === '' ? null : <MarkdownSlot key={key} source={text} />;
   }
   if (node.kind === 'query') {
     // Обёртка с data-query-widget — не украшение: по ней страж выше отличает клик по живому
@@ -254,7 +254,7 @@ function firstFrameNode(
     case 'broken':
       // `broken` всегда несёт проблему (`bodyIssues`) и сюда не доходит; ветка — ради полноты
       // разбора: пустоты вместо узла не бывает.
-      return <Markdown key={key} source={node.raw.trim()} />;
+      return <MarkdownSlot key={key} source={node.raw.trim()} />;
   }
 }
 
@@ -294,6 +294,8 @@ export function EditorShell({
   onAccept,
   reseat,
   readOnly = false,
+  fileReferences = false,
+  blockFileInsertion = false,
 }: {
   entityId?: string;
   doc: BodyDoc | null;
@@ -308,6 +310,8 @@ export function EditorShell({
   /** Счётчик принудительной посадки документа — проносится редактору как есть (`BodyEditor.reseat`). */
   reseat?: number;
   readOnly?: boolean;
+  fileReferences?: boolean;
+  blockFileInsertion?: boolean;
 }) {
   const [mount, setMount] = useState<Mount | null>(() =>
     entityId !== undefined && hasLiveEditor(entityId) ? BY_IDLE : null,
@@ -355,35 +359,50 @@ export function EditorShell({
   // Ключ узла — его порядок в тексте тела: узлы первого кадра не переставляются, только
   // пересобираются из текста целиком.
   const nodes = useMemo(() => parsePageText(markdown), [markdown]);
-  const frame = firstFrameNodes(nodes, kind, secondBlocksOf(nodes, kind));
+
   // Оба ослабления a11y — одной строкой ниже: у многострочного `//`-комментария биом читает
   // как подавление только ПОСЛЕДНЮЮ строку, и первое правило осталось бы неподавленным.
   // Довод тот же, что у DetailScreen: клавиатурного двойника у этого жеста нет и не нужно —
   // редактор всё равно встаёт сам по простою, а role=button здесь невозможен, потому что
   // внутри разметки живут ссылки, а интерактивное внутри кнопки — уже не кнопка.
-  const preview = (
-    // biome-ignore lint/a11y/useKeyWithClickEvents lint/a11y/noStaticElementInteractions: жест мыши поверх текста, см. выше
-    <div
-      data-testid="editor-preview"
-      onClick={readOnly ? undefined : wantEditor}
-      // Коробка и зазор между сегментами — общие с редактором (BODY_BOX_CLASS, body-box.ts):
-      // иначе подмена первого кадра редактором двигала бы текст под руками.
-      className={`${BODY_BOX_CLASS} flex flex-col gap-4${readOnly ? '' : ' cursor-text'}`}
-    >
-      {/* Приглашение к вводу там, где вводить нельзя, звало бы в никуда. */}
-      {frame.length === 0 && !readOnly && <p className="text-text-muted">{BODY_PLACEHOLDER}</p>}
-      {/* Параметры страницы (1в §5.1): в настройке — умолчания объявлений тела, без состояния
+  const renderPreview = (nodes: readonly PageNode[]) => {
+    const frame = firstFrameNodes(nodes, kind, secondBlocksOf(nodes, kind));
+    return (
+      // biome-ignore lint/a11y/useKeyWithClickEvents lint/a11y/noStaticElementInteractions: жест мыши поверх текста, см. выше
+      <div
+        data-testid="editor-preview"
+        onClick={readOnly ? undefined : wantEditor}
+        // Коробка и зазор между сегментами — общие с редактором (BODY_BOX_CLASS, body-box.ts):
+        // иначе подмена первого кадра редактором двигала бы текст под руками.
+        className={`${BODY_BOX_CLASS} flex flex-col gap-4${readOnly ? '' : ' cursor-text'}`}
+      >
+        {/* Приглашение к вводу там, где вводить нельзя, звало бы в никуда. */}
+        {frame.length === 0 && !readOnly && <p className="text-text-muted">{BODY_PLACEHOLDER}</p>}
+        {/* Параметры страницы (1в §5.1): в настройке — умолчания объявлений тела, без состояния
           экрана; блоки с `$` просят данные с ними, а не отказ. Редактор ставит свой провайдер —
           по живому документу (`QueryWidget`). */}
-      <PageParamsProvider nodes={nodes}>{frame}</PageParamsProvider>
-    </div>
-  );
+        <PageParamsProvider nodes={nodes}>{frame}</PageParamsProvider>
+      </div>
+    );
+  };
+  const plain = renderPreview(nodes);
+  const preview =
+    fileReferences && markdown.includes('orbis-file:') ? (
+      <Suspense fallback={plain}>
+        <VerifiedFileBody entityId={entityId} source={markdown} doc={doc}>
+          {(text) => renderPreview(parsePageText(text))}
+        </VerifiedFileBody>
+      </Suspense>
+    ) : (
+      plain
+    );
   // `doc === null` перекрывает даже поднятое намерение: жест «хочу редактор» законен, а вот
   // подставить вместо документа пустышку — нет (см. заголовок файла).
   if (readOnly || mount === null || doc === null) return preview;
   return (
     <Suspense fallback={preview}>
       <BodyEditor
+        blockFileInsertion={blockFileInsertion}
         entityId={entityId}
         doc={doc}
         onChange={onChange}

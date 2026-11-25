@@ -190,7 +190,11 @@ export function FieldRow({
             def={def}
             value={entity.props[id]}
             onChange={() => {}}
-            readOnly={!editable}
+            readOnly={
+              def.type.kind === 'file'
+                ? !access.canSet || !!form.metadataUnavailable || submissionLocked(form.submission)
+                : !editable
+            }
             selfId={entity.id}
             draft={editing ? { state: input, onChange: change } : undefined}
           />
@@ -256,7 +260,7 @@ export function FieldRow({
           {form.specialReason?.('navigation') && <p>{form.specialReason('navigation')}</p>}
         </>
       )}
-      {editing && (
+      {editing && def?.type.kind !== 'file' && (
         <div className="flex flex-wrap gap-2">
           {access.canUnset && !submissionLocked(form.submission) && (
             <Button size="sm" className="min-h-11" onClick={() => change({ kind: 'unset' })}>

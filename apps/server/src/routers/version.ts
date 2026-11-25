@@ -5,7 +5,7 @@ import type { JournalRef } from '@orbis/shared';
 // через executor (единственный путь мутаций, 00-arch §4), list читает под withIdentity
 // (RLS §4.10). Своих INSERT/DELETE здесь нет.
 import { newId } from '@orbis/shared';
-import { type BodyDoc, upgradeBodyDoc } from '@orbis/shared/doc';
+import { type BodyDoc, bodyDocError, parseBody, upgradeBodyDoc } from '@orbis/shared/doc';
 import { desc, eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { entityVersions } from '../db/schema';
@@ -16,7 +16,7 @@ import { execute } from '../executor/executor';
 import { makeJournalSink } from '../executor/journal';
 import { journalRef } from '../executor/journal-ref';
 import type { ActorKind, WireEntityVersion, WireEntityWithRevision } from '../executor/types';
-import { ownerOnlyProcedure, router } from '../trpc';
+import { ownerOnlyProcedure, router, supportsFileWrites } from '../trpc';
 
 // Боевой синк — один инстанс на модуль (без состояния, пишет тем же tx, §7.8). Без него
 // закрепление не попало бы в журнал, и «отмени последнее» его бы не нашло.
@@ -43,6 +43,7 @@ const labelInput = z.string().trim().min(1).max(VERSION_LABEL_MAX);
  */
 function pinnedDoc(stored: unknown): BodyDoc | undefined {
   if (typeof stored !== 'object' || stored === null) return undefined;
+  if (bodyDocError(stored as BodyDoc) !== undefined) return undefined;
   return upgradeBodyDoc(stored as BodyDoc) ?? undefined;
 }
 
@@ -73,7 +74,8 @@ export const versionRouter = router({
         {
           identity: ctx.identity,
           actorKind: 'owner',
-          source: 'ui', // прямое действие владельца в UI (не chat/mcp/system)
+          source: 'ui',
+          fileCapability: supportsFileWrites(ctx.clientVersion), // прямое действие владельца в UI (не chat/mcp/system)
           operations: [
             {
               tool: 'entity_version_pin',
@@ -160,13 +162,14 @@ export const versionRouter = router({
         });
       }
 
-      const doc = pinnedDoc(version.bodyDoc);
+      const doc = pinnedDoc(version.bodyDoc) ?? parseBody(version.body, version.bodyFormat);
       const r = await execute(
         ctx.db,
         {
           identity: ctx.identity,
           actorKind: 'owner',
           source: 'ui',
+          fileCapability: supportsFileWrites(ctx.clientVersion),
           batchId: newId(),
           batchLabel: `Восстановлена версия «${version.label}»`,
           operations: [
@@ -181,7 +184,7 @@ export const versionRouter = router({
                 expectedBodyRevision: input.expectedBodyRevision,
                 // Одна из двух форм, не обе: схема входа запрещает их вместе, а executor
                 // сам достроит недостающую (body_doc — правда, body — её проекция)
-                ...(doc === undefined ? { body: version.body } : { bodyDoc: doc }),
+                bodyDoc: doc,
               },
             },
           ],

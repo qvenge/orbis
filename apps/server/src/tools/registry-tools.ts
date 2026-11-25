@@ -101,6 +101,7 @@ const propertyTypeJsonSchema = {
     'тип значения: {"kind":"text"} | {"kind":"number","min":0,"integer":true} | ' +
     '{"kind":"decimal","min":"0"} | {"kind":"boolean"} | {"kind":"date"} | {"kind":"timestamp"} | ' +
     '{"kind":"time"} | {"kind":"select","options":[{"key":"low","label":{"ru":"Низкое"},"rank":1}]} | ' +
+    '{"kind":"file","cardinality":"one"} | {"kind":"file","cardinality":"many","maxItems":10} | ' +
     '{"kind":"ref","target":<дерево запроса>} | {"kind":"json","schema":{…}}. ' +
     'Тип потом НЕ меняется — под ним лежат записанные значения.',
   properties: { kind: { type: 'string', enum: [...PROPERTY_KINDS] } },

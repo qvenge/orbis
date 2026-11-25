@@ -5,6 +5,7 @@
   "main": "src/index.ts",
   "exports": {
     ".": "./src/index.ts",
+    "./files": "./src/contracts/files.ts",
     "./query": "./src/query/index.ts",
     "./query/fixtures": "./src/query/ast-fixtures.ts",
     "./expr": "./src/expr/index.ts",

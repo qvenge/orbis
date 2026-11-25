@@ -174,6 +174,7 @@ export function exprTypeOfKind(kind: PropertyKind): ExprType {
     case 'text':
     case 'time':
     case 'select':
+    case 'file':
     case 'ref':
     case 'grant':
     case 'registry_ref':

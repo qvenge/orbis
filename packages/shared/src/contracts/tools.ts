@@ -11,6 +11,7 @@ import { queryAstSchema } from '../query/ast';
 // Кап пачки — константа ДЕЙСТВИЙ (Р-11): лист пакета, обратного ребра к контрактам у неё нет.
 import { BATCH_CAP_DEFAULT } from '../registry/action-type';
 import { entityFieldsSchema } from './fields';
+import { FILE_LIST_LIMIT, fileIdSchema } from './files';
 
 /**
  * ВНУТРЕННЯЯ форма правки значений (§А1-1, РП-3): плоский патч по свойствам плюс
@@ -56,6 +57,7 @@ export const entityCreateInput = z
     title: z.string().min(1),
     emoji: z.string().optional(),
     body: z.string().optional(),
+    bodyFormatVersion: z.literal(4).optional(),
     tags: z.array(z.string()), // обязателен по §9.2 (может быть пустым)
     props: entityPropsPatch.shape.props,
     // У СОЗДАНИЯ аспекты — список, а не `{attach, detach}`: снимать у ещё не существующей
@@ -76,10 +78,14 @@ export const entityUpdateInput = z
     id: z.string().uuid(),
     // Замок ТЕКСТА (§8.1, D3 уточнён): ревизия тела, от которой клиент начал правку; обязательна при body/bodyDoc —
     // проверяет executor под FOR UPDATE. Правка статуса, свойства, тега ревизию не двигает и замок не краснит.
+    expectedFileProps: z
+      .record(z.union([fileIdSchema, z.array(fileIdSchema).max(FILE_LIST_LIMIT), z.null()]))
+      .optional(),
     expectedBodyRevision: z.number().int().positive().optional(),
     title: z.string().min(1).optional(),
     emoji: z.string().nullable().optional(),
     body: z.string().optional(),
+    bodyFormatVersion: z.literal(4).optional(),
     tags: z.array(z.string()).optional(),
     props: entityPropsPatch.shape.props,
     unset: entityPropsPatch.shape.unset,
@@ -309,6 +315,7 @@ export type EntityUpdateExecInput = z.infer<typeof entityUpdateExecInput>;
 
 export const attachAspectInput = z
   .object({
+    expectedFileProps: entityUpdateInput.shape.expectedFileProps,
     entity_id: z.string().uuid(),
     data: z.record(z.unknown()),
   })

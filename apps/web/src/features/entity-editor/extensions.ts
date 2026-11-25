@@ -4,9 +4,11 @@ import UniqueID from '@tiptap/extension-unique-id';
 import { Placeholder } from '@tiptap/extensions';
 import { ArrowsKeys } from './arrows-keys';
 import { BODY_PLACEHOLDER } from './body-box';
+import { FileInsertionMarkers } from './file-insertion';
 import { LayoutGuard } from './layout-guard';
 import { MoveBlock } from './move-block';
 import { EntityRefWithView } from './nodes/EntityChip';
+import { FileRefWithView } from './nodes/FileReference';
 import { ColumnsWithView, ColumnWithView, TabsWithView, TabWithView } from './nodes/LayoutFrame';
 import { QueryBlockWithView } from './nodes/QueryWidget';
 import {
@@ -48,6 +50,7 @@ import { UNIQUE_ID_TYPES } from './strip-ids';
  */
 /** Узлы схемы, которые редактор ставит своими версиями с NodeView — те же имена, та же схема. */
 const WITH_VIEW: ReadonlySet<string> = new Set([
+  'fileRef',
   'entityRef',
   'queryBlock',
   'columns',
@@ -68,6 +71,8 @@ export const EDITOR_EXTENSIONS: AnyExtension[] = [
   // фильтр тут работает; что он не промахнулся, стерегут тесты «… в составе редактора ровно
   // один» (по одному на имя: общий фильтр промахнулся бы мимо любого из двух молча).
   ...DOC_EXTENSIONS.filter((e) => !WITH_VIEW.has(e.name)),
+  FileInsertionMarkers,
+  FileRefWithView,
   EntityRefWithView,
   QueryBlockWithView,
   // Страницы 1а §9.1: контейнеры — подписанными рамками, обвязка — подписанными заглушками.

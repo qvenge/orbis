@@ -313,3 +313,25 @@ test('разобранная разметка сохраняется с перв
   expect(blockTypes(savedDoc(onChange))).toEqual(['paragraph', 'blockquote']);
   expect(onClose).toHaveBeenCalledTimes(1);
 });
+
+test('Markdown-правка сохраняет ID исходных блоков и прежний буквальный файловый маркер', async () => {
+  const id = '018f932a-e591-7011-99d1-0ea197510b3f';
+  const marker = `![План](orbis-file:${id})`;
+  const doc = parseBody(marker, null);
+  doc.doc.content![0]!.attrs = { ...doc.doc.content![0]!.attrs, id: 'old-raw' };
+  doc.doc.content!.push({
+    type: 'paragraph',
+    attrs: { id: 'old-text' },
+    content: [{ type: 'text', text: 'Примечание' }],
+  });
+  const { area, apply, onChange } = mount(doc);
+  fireEvent.change(area, { target: { value: `# Новый раздел\n\n${area.value} автора` } });
+  await userEvent.click(apply);
+  const saved = savedDoc(onChange);
+  expect(saved.doc.content?.map((node) => node.attrs?.id)).toEqual([
+    undefined,
+    'old-raw',
+    'old-text',
+  ]);
+  expect(saved.doc.content?.[1]?.content?.[0]?.text).toBe(marker);
+});

@@ -555,6 +555,10 @@ export function EntityBody({
         <BodyKindProvider kind={bodyKindOf(entity)}>
           <EditorShell
             entityId={entity.id}
+            fileReferences={entity.bodyFormatVersion === 4}
+            blockFileInsertion={Boolean(
+              screenConflict || save.conflict || save.pendingDraft || entity.archived,
+            )}
             readOnly={save.rewritePending}
             doc={doc}
             markdown={entity.body ?? ''}
@@ -583,7 +587,14 @@ export function EntityBody({
 export function ReadOnlyEntityBody({ entity }: { entity: Entity }) {
   return (
     <BodyKindProvider kind={bodyKindOf(entity)}>
-      <EditorShell doc={null} markdown={entity.body ?? ''} onChange={() => {}} readOnly />
+      <EditorShell
+        entityId={entity.id}
+        fileReferences={entity.bodyFormatVersion === 4}
+        doc={asBodyDoc(entity.bodyDoc)}
+        markdown={entity.body ?? ''}
+        onChange={() => {}}
+        readOnly
+      />
     </BodyKindProvider>
   );
 }

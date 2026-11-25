@@ -21,7 +21,7 @@ import {
   type BodyDoc,
   bindQueryBlocks,
   bodyDocError,
-  canonicalizeBody,
+  parseBody,
   readBodyDoc,
   serializeBody,
   upgradeBodyDoc,
@@ -123,6 +123,7 @@ interface BodyTarget {
   expectedBodyRevision?: number;
   /** markdown «станет»; `undefined` — тело в payload'е нечитаемо (см. `editedDoc`). */
   after?: string;
+  sourceFormat?: 4 | null;
   /** Документ «станет» у ПРАВЛЕНОГО предложения — он же уедет в запись, канонизировать нечего. */
   edited?: BodyDoc;
 }
@@ -134,7 +135,8 @@ function bodyTarget(index: number, input: Record<string, unknown>): BodyTarget {
   const base = { index, id, ...(expected !== undefined && { expectedBodyRevision: expected }) };
   // Исходное предложение несёт тело markdown-строкой, правленое — документом (Ш1.11); ключ
   // строки предложения у обеих форм общий (`body`), поэтому и строка показа одна
-  if (typeof input.body === 'string') return { ...base, after: input.body };
+  if (typeof input.body === 'string')
+    return { ...base, after: input.body, sourceFormat: input.bodyFormatVersion === 4 ? 4 : null };
   const edited = editedDoc(input.bodyDoc);
   if (edited === null) return base;
   return { ...base, after: serializeBody(edited), edited };
@@ -211,10 +213,10 @@ function diffRow(
   // ОБЕ стороны привязаны одним реестром (Р-21-1): у стороны «было» это делает `readBodyDoc`,
   // у стороны «стало» — явная привязка канона. Привяжи одну и не привяжи другую, и блок
   // приезжал бы `changed` при неизменном запросе — дифф меряет блоки по дереву и его печати.
-  const before = readBodyDoc(current.bodyDoc, current.body, reg);
+  const before = readBodyDoc(current.bodyDoc, current.body, reg, current.bodyFormat);
   const after =
     target.edited === undefined
-      ? bindQueryBlocks(canonicalizeBody(target.after).doc, reg)
+      ? bindQueryBlocks(parseBody(target.after, target.sourceFormat ?? null), reg)
       : bindQueryBlocks(target.edited, reg);
   // Своих `DiffLimits` сервер НЕ передаёт: четыре после-разборных числа (maxBlocks,
   // maxBlockWords, maxEditRatio, minEditBudget) живут умолчаниями в самом diff.ts, и вторая
@@ -258,6 +260,7 @@ function overSourceLimit(markdown: string): boolean {
 interface CurrentBody {
   body: string;
   bodyDoc: unknown;
+  bodyFormat: number | null;
   bodyRevision: number;
 }
 
@@ -281,12 +284,13 @@ async function currentBodies(tx: Tx, ids: readonly string[]): Promise<Map<string
       id: entities.id,
       body: entities.body,
       bodyDoc: entities.bodyDoc,
+      bodyFormat: entities.bodyFormat,
       bodyRevision: entities.bodyRevision,
     })
     .from(entities)
     .where(inArray(entities.id, unique));
   for (const row of rows) {
-    out.set(row.id, { body: row.body, bodyDoc: row.bodyDoc, bodyRevision: row.bodyRevision });
+    out.set(row.id, row);
   }
   return out;
 }

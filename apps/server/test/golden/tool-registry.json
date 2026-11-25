@@ -701,6 +701,11 @@
         "body": {
           "type": "string"
         },
+        "bodyFormatVersion": {
+          "type": "integer",
+          "const": 4,
+          "description": "Формат Markdown с файловыми ссылками. Укажите 4 при правке текста с вложениями."
+        },
         "tags": {
           "type": "array",
           "items": {
@@ -735,6 +740,25 @@
           "type": "string",
           "format": "uuid"
         },
+        "expectedFileProps": {
+          "type": "object",
+          "additionalProperties": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            ]
+          }
+        },
         "expectedBodyRevision": {
           "type": "integer",
           "minimum": 1,
@@ -749,6 +773,11 @@
         },
         "body": {
           "type": "string"
+        },
+        "bodyFormatVersion": {
+          "type": "integer",
+          "const": 4,
+          "description": "Формат Markdown с файловыми ссылками. Укажите 4 при правке текста с вложениями."
         },
         "tags": {
           "type": "array",
@@ -1084,6 +1113,144 @@
     }
   },
   {
+    "name": "file_field_edit",
+    "description": "Прикрепить, открепить или переставить файл в свойстве записи. Сохраняйте commandId для повтора.",
+    "inputJsonSchema": {
+      "type": "object",
+      "properties": {
+        "entityId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "propertyId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "edit": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "add"
+                },
+                "fileId": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "beforeId": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              },
+              "required": ["kind", "fileId"],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "remove"
+                },
+                "fileId": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              },
+              "required": ["kind", "fileId"],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "reorder"
+                },
+                "expected": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "maxItems": 50
+                },
+                "value": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "maxItems": 50
+                }
+              },
+              "required": ["kind", "expected", "value"],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "set"
+                },
+                "expected": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "fileId": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              },
+              "required": ["kind", "expected", "fileId"],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "clear"
+                },
+                "expected": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": ["kind", "expected"],
+              "additionalProperties": false
+            }
+          ]
+        },
+        "commandId": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      "required": ["entityId", "propertyId", "edit", "commandId"],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  {
     "name": "property_create",
     "description": "Завести НОВОЕ свойство — поле, которым можно описывать записи. Заводи только то, по чему будут фильтровать или считать; всё прочее оставляй текстом в теле записи. Сперва посмотри property_catalog: подходящее свойство скорее всего уже есть, и второе такое же придётся потом сливать. От себя заводи со status=proposed — владелец разберёт; неразобранных предложений не больше 20, дальше отказ «разберите пачку».",
     "inputJsonSchema": {
@@ -1109,7 +1276,7 @@
         },
         "type": {
           "type": "object",
-          "description": "тип значения: {\"kind\":\"text\"} | {\"kind\":\"number\",\"min\":0,\"integer\":true} | {\"kind\":\"decimal\",\"min\":\"0\"} | {\"kind\":\"boolean\"} | {\"kind\":\"date\"} | {\"kind\":\"timestamp\"} | {\"kind\":\"time\"} | {\"kind\":\"select\",\"options\":[{\"key\":\"low\",\"label\":{\"ru\":\"Низкое\"},\"rank\":1}]} | {\"kind\":\"ref\",\"target\":<дерево запроса>} | {\"kind\":\"json\",\"schema\":{…}}. Тип потом НЕ меняется — под ним лежат записанные значения.",
+          "description": "тип значения: {\"kind\":\"text\"} | {\"kind\":\"number\",\"min\":0,\"integer\":true} | {\"kind\":\"decimal\",\"min\":\"0\"} | {\"kind\":\"boolean\"} | {\"kind\":\"date\"} | {\"kind\":\"timestamp\"} | {\"kind\":\"time\"} | {\"kind\":\"select\",\"options\":[{\"key\":\"low\",\"label\":{\"ru\":\"Низкое\"},\"rank\":1}]} | {\"kind\":\"file\",\"cardinality\":\"one\"} | {\"kind\":\"file\",\"cardinality\":\"many\",\"maxItems\":10} | {\"kind\":\"ref\",\"target\":<дерево запроса>} | {\"kind\":\"json\",\"schema\":{…}}. Тип потом НЕ меняется — под ним лежат записанные значения.",
           "properties": {
             "kind": {
               "type": "string",
@@ -1125,7 +1292,8 @@
                 "ref",
                 "json",
                 "grant",
-                "registry_ref"
+                "registry_ref",
+                "file"
               ]
             }
           },

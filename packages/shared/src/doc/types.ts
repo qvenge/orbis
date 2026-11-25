@@ -28,7 +28,8 @@ import type { JSONContent } from '@tiptap/core';
  * версия схемы не поднимается, вкладку старого клиента закрывает подъём контракта клиента до 0.5.0
  * (задача 3 — один подъём на все формы провода и новый узел документа).
  */
-export const DOC_SCHEMA_VERSION = 3;
+// v4 добавляет fileRef. NULL у формата хранимой строки оставляет прежнюю грамматику Markdown.
+export const DOC_SCHEMA_VERSION = 4;
 
 /** Хранимая форма `entities.body_doc`. Голый документ не хранится — только с версией. */
 export type BodyDoc = { v: number; doc: JSONContent };
@@ -59,6 +60,7 @@ export const KNOWN_NODE_TYPES: ReadonlySet<string> = new Set([
   'columns',
   'doc',
   'entityRef',
+  'fileRef',
   'hardBreak',
   'heading',
   'horizontalRule',
@@ -129,11 +131,36 @@ export function collectNodeTypes(doc: JSONContent): Set<string> {
  */
 export function upgradeBodyDoc(stored: BodyDoc): BodyDoc | null {
   if (stored.v === DOC_SCHEMA_VERSION) return stored;
-  // 2 → 3: узлы v2 все остались в схеме с теми же атрибутами — меняется только штамп.
-  if (stored.v === 2) return { v: DOC_SCHEMA_VERSION, doc: stored.doc };
-  // 1 → 2 → 3: дерево конвертируется один раз (1 → 2), дальше — тот же штамп.
-  if (stored.v === 1) return { v: DOC_SCHEMA_VERSION, doc: queryAttrsV1ToV2(stored.doc) };
+  if (stored.v === 1 || stored.v === 2 || stored.v === 3) {
+    if (collectNodeTypes(stored.doc).has('fileRef')) return null;
+    const doc = stored.v === 1 ? queryAttrsV1ToV2(stored.doc) : stored.doc;
+    return { v: DOC_SCHEMA_VERSION, doc: protectLegacyLinks(doc) };
+  }
   return null;
+}
+
+// An ordinary link mark to this URI in a pre-v4 tree is legacy content. Its
+// spelling must remain literal the first time its Markdown is written by v4.
+function protectLegacyLinks(node: JSONContent): JSONContent {
+  if (node.type === 'text') {
+    const link = node.marks?.find(
+      (mark) =>
+        mark.type === 'link' &&
+        typeof mark.attrs?.href === 'string' &&
+        /^orbis-file:[\da-f]{8}-(?:[\da-f]{4}-){3}[\da-f]{12}$/i.test(mark.attrs.href),
+    );
+    if (link) {
+      const marks = node.marks?.filter((mark) => mark !== link);
+      const { marks: _oldMarks, ...rest } = node;
+      return {
+        ...rest,
+        text: `[${node.text}](${link.attrs?.href})`,
+        ...(marks?.length ? { marks } : {}),
+      };
+    }
+  }
+  const content = node.content?.map(protectLegacyLinks);
+  return content?.some((child, i) => child !== node.content?.[i]) ? { ...node, content } : node;
 }
 
 /** Обход с СОХРАНЕНИЕМ ИДЕНТИЧНОСТИ: узел пересобирается, только если он сам или потомок изменился. */

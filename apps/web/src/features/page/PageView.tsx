@@ -53,7 +53,20 @@ export function PageView({ reply }: { reply: EntityGetReply }) {
             <div data-testid="page-view" className="flex flex-col gap-6 px-4 pb-10 pt-5 md:px-6">
               {/* Обновление поставки — предложение на самой странице (срез 1б §9.1 п. 2). */}
               <SupplyPlaqueSlot entity={entity} />
-              <Renderer nodes={nodes} kind={kind} appendUnplacedCards={false} />
+              <Renderer
+                fileBody={
+                  entity.bodyFormatVersion === 4
+                    ? {
+                        entityId: entity.id,
+                        source: entity.body ?? '',
+                        doc: entity.bodyDoc as import('@orbis/shared/doc').BodyDoc,
+                      }
+                    : undefined
+                }
+                nodes={nodes}
+                kind={kind}
+                appendUnplacedCards={false}
+              />
             </div>
           </OwnBodyProvider>
         </ThisEntityProvider>

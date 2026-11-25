@@ -103,7 +103,7 @@ const ENTITY_IDS = sql`ARRAY(
         UNION ALL
         SELECT o.value -> 'payload' ->> k.key, o.ord * 10 + k.ord
           FROM jsonb_array_elements((l.a -> 'operations') || (l.a -> 'inverse')) WITH ORDINALITY AS o(value, ord)
-          CROSS JOIN unnest(ARRAY['id', 'source_id', 'target_id', 'entity_id']) WITH ORDINALITY AS k(key, ord)
+          CROSS JOIN unnest(ARRAY['id', 'source_id', 'target_id', 'entity_id', 'entityId']) WITH ORDINALITY AS k(key, ord)
          WHERE jsonb_typeof(o.value -> 'payload' -> k.key) = 'string'
       ) x
       WHERE x.id ~* ${UUID}

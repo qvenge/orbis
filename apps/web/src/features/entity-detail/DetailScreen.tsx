@@ -466,6 +466,7 @@ export function DetailScreen({
       : null
     : { entityId: entity.id, readOnly: false };
   const menuProps: DetailMenuProps = {
+    attachAvailable: !previewing && configuringId === null,
     ...(configuringId === null &&
       (chosenTarget
         ? { onOpenProperties: () => panelOwner.open(chosenTarget) }

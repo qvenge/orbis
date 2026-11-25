@@ -11,6 +11,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { entityThreadId, globalThreadId, newId } from '@orbis/shared';
 import { eq, inArray, sql } from 'drizzle-orm';
 import { Hono } from 'hono';
+import { ZipFile } from 'yazl';
 import {
   accountOf,
   adminDb,
@@ -36,6 +37,7 @@ import {
 } from '../oauth/grants';
 import { approvePending } from '../policy/pending';
 import { appRouter } from '../router';
+import { transferTools } from '../tools/file-tools';
 import { AGENT_VERB_NAMES, buildToolRegistry, WORKER_SCOPE_TOOLS } from '../tools/registry';
 import { createCallerFactory } from '../trpc';
 import { MCP_MAX_BODY_BYTES, makeMcpHandler } from './transport';
@@ -149,6 +151,142 @@ async function seedEntity(input: Record<string, unknown>): Promise<WireEntity> {
 }
 
 /** Действия журнала в глобальном треде владельца (§7.8), без записей отмены. */
+test.skipIf(process.env.ORBIS_TEST_FILE_STORAGE !== '1')(
+  'MCP по HTTP: большой PDF, XLSX, привязка, Undo и отзыв между порциями',
+  async () => {
+    const saved = process.env.ORBIS_FILE_WRITES;
+    process.env.ORBIS_FILE_WRITES = '1';
+    const full = await connectAgent(mainUrl());
+    const worker = await connectAgent(mainUrl(), WORKER_TOKEN);
+    const hash = (bytes: Buffer) => createHash('sha256').update(bytes).digest('hex');
+    async function call(name: string, input: Record<string, unknown>) {
+      const reply = await callTool(full, name, input);
+      if (reply.isError) throw new Error(JSON.stringify(reply.payload.error));
+      return reply.payload.result as Record<string, unknown>;
+    }
+    async function upload(bytes: Buffer, name: string, mediaType: string) {
+      const uploadId = newId(),
+        chunkBytes = 24576;
+      const start = await call('file_upload_begin', {
+        uploadId,
+        name,
+        byteSize: bytes.length,
+        mediaType,
+        chunkBytes,
+      });
+      expect(start.nextOffset).toBe(0);
+      let offset = 0;
+      while (offset < bytes.length) {
+        const part = bytes.subarray(offset, offset + chunkBytes);
+        const input = { uploadId, offset, data: part.toString('base64') };
+        const status = await call('file_upload_part', input);
+        if (offset === 0)
+          expect((await call('file_upload_part', input)).nextOffset).toBe(status.nextOffset);
+        offset += part.length;
+        expect(status.nextOffset).toBe(offset);
+      }
+      const info = await call('file_upload_finish', { uploadId });
+      expect(info.sha256).toBe(hash(bytes));
+      return String(info.id);
+    }
+    try {
+      const record = await seedEntity({ title: 'Материалы', tags: [] });
+      const pdf = Buffer.concat([
+        Buffer.from('%PDF-1.4\n%'),
+        Buffer.alloc(1050000, 65),
+        Buffer.from('\n%%EOF'),
+      ]);
+      const pdfId = await upload(pdf, 'Смета.pdf', 'application/pdf');
+      const parts: Buffer[] = [];
+      let offset = 0;
+      while (offset < pdf.length) {
+        const r = await call('file_read_chunk', { fileId: pdfId, offset, length: 24576 });
+        const bytes = Buffer.from(String(r.data), 'base64');
+        parts.push(bytes);
+        offset += bytes.length;
+        expect(bytes.length).toBeGreaterThan(0);
+        expect(r.nextOffset).toBe(offset);
+        expect(r.eof).toBe(offset === pdf.length);
+      }
+      expect(hash(Buffer.concat(parts))).toBe(hash(pdf));
+      const zip = new ZipFile();
+      zip.addBuffer(
+        Buffer.from(
+          '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/></Types>',
+        ),
+        '[Content_Types].xml',
+      );
+      zip.addBuffer(
+        Buffer.from(
+          '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheets/></workbook>',
+        ),
+        'xl/workbook.xml',
+      );
+      zip.addBuffer(
+        Buffer.from(
+          '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>',
+        ),
+        '_rels/.rels',
+      );
+      zip.end();
+      const chunks: Buffer[] = [];
+      for await (const chunk of zip.outputStream) chunks.push(Buffer.from(chunk));
+      const workbook = Buffer.concat(chunks);
+      const fileId = await upload(
+        workbook,
+        'Расходы.xlsx',
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      );
+      const workBytes = await call('file_read_chunk', { fileId, offset: 0, length: 24576 });
+      expect(hash(Buffer.from(String(workBytes.data), 'base64'))).toBe(hash(workbook));
+      const edit = {
+        entityId: record.id,
+        propertyId: 'orbis/attachments',
+        commandId: newId(),
+        edit: { kind: 'add', fileId },
+      };
+      const before = await globalAuditActions();
+      await call('file_field_edit', edit);
+      await call('file_field_edit', edit);
+      const actions = (await globalAuditActions()).filter(
+        (entry) => !before.some((previous) => previous.id === entry.id),
+      );
+      expect(actions).toHaveLength(1);
+      const entity = await call('entity_get', { id: record.id });
+      expect(JSON.stringify(entity)).toContain(fileId);
+      expect(JSON.stringify(entity)).not.toContain(String(workBytes.data));
+      expect(
+        (await callTool(worker, 'file_read_chunk', { fileId, offset: 0, length: 1 })).isError,
+      ).toBe(true);
+      expect((await worker.listTools()).tools.some((t) => t.name.startsWith('file_'))).toBe(false);
+      const [attachmentAction] = actions;
+      if (!attachmentAction) throw new Error('Не найдено действие прикрепления.');
+      await ownerCaller.ai.undo({ actionId: attachmentAction.id });
+      expect(JSON.stringify(await call('entity_get', { id: record.id }))).not.toContain(fileId);
+      const token = await issuePatGrant(db, { identity: personal(owner), label: 'download' });
+      const grant = await verifyBearer(db, token);
+      if (!grant) throw new Error('нет тестового гранта');
+      const reader = await connectAgent(mainUrl(), token);
+      try {
+        expect(
+          (await callTool(reader, 'file_read_chunk', { fileId, offset: 0, length: 1 })).isError,
+        ).toBe(false);
+        await revokeGrant(db, { graphId: owner, grantId: grant.grantId });
+        await expect(
+          callTool(reader, 'file_read_chunk', { fileId, offset: 1, length: 1 }),
+        ).rejects.toThrow();
+      } finally {
+        await reader.close();
+      }
+    } finally {
+      await Promise.all([full.close(), worker.close()]);
+      if (saved === undefined) delete process.env.ORBIS_FILE_WRITES;
+      else process.env.ORBIS_FILE_WRITES = saved;
+    }
+  },
+  90000,
+);
+
 async function globalAuditActions(): Promise<JournalEntry[]> {
   return (await threadJournal(owner, globalThreadId(owner))).filter((e) => e.type !== 'undo');
 }
@@ -425,7 +563,7 @@ describe('/mcp: харднинг транспорта (405/413, Task 10b)', () =
 // ---------------------------------------------------------------------------
 
 describe('/mcp tools/list (§9.2)', () => {
-  test('состав = публичный реестр: 11 публичных core + 16 реестровых + 5 глаголов + 12 attach_* + run_action и тул действия = 46, без internalOnly и routineOnly; имена/описания/схемы дословно', async () => {
+  test('состав = публичный реестр: реестр операций графа и передача оригиналов, без internalOnly и routineOnly; имена/описания/схемы дословно', async () => {
     const agent = await connectAgent(mainUrl());
     try {
       const { tools } = await agent.listTools();
@@ -516,14 +654,16 @@ describe('/mcp tools/list (§9.2)', () => {
       // Дословная сверка с реестром (имя, описание, inputSchema) — адаптер ничего не
       // сочиняет и ничего не теряет, кроме отсечения internalOnly
       const defs = await withIdentity(db, personal(owner), (tx) => buildToolRegistry(tx, owner));
-      const publicDefs = defs.filter((d) => d.internalOnly !== true && d.routineOnly !== true);
+      const publicDefs = [...defs, ...transferTools].filter(
+        (d) => d.internalOnly !== true && d.routineOnly !== true,
+      );
       // builtin-набор: 50 − 2 internalOnly − 2 routineOnly = 46 (1в §7.4: −import_csv_start, он был
       // internalOnly — публичное число прежнее; задача 7 Б-2: +run_action и
       // +action_core_postpone_overdue — оба публичны, скоуп им решают шаги, а не флаг; задача 10
       // Б-2: +action_set, +action_remove, +budget_rollover — публичны полному гранту; задача 16 Б-2:
       // +rule_set, +rule_remove — тем же правилом)
       expect(tools).toHaveLength(publicDefs.length);
-      expect(tools).toHaveLength(46);
+      expect(tools).toHaveLength(54);
       for (const def of publicDefs) {
         const tool = tools.find((t) => t.name === def.name);
         expect(tool).toBeDefined();

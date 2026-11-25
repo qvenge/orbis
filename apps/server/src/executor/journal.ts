@@ -91,14 +91,14 @@ async function insertRow(tx: Tx, v: JournalRowValues): Promise<void> {
       INSERT INTO action_journal (graph_id, id, type, entity_id, actor_user_id, actor_kind, source, mechanism,
                                   actor_grant_id, run_id, action_id, module, edited_from, thread_id, title, card_tool,
                                   entity_ids, operations, inverse, results, text_session, body_before, undoes,
-                                  pinned_version_ids, card_in_reply)
+                                  pinned_version_ids, card_in_reply, body_format)
       VALUES (${v.graphId}::uuid, ${v.id}::uuid, ${v.type}, ${uuidOrNull(v.entityId)}, ${v.actorUserId}::uuid,
               ${v.actorKind}, ${v.source}, ${v.mechanism}, ${uuidOrNull(v.actorGrantId)}, ${uuidOrNull(v.runId)},
               ${textOrNull(v.actionId)}, ${textOrNull(v.module)}, ${uuidOrNull(v.editedFrom)},
               ${uuidOrNull(v.threadId)}, ${v.title}, ${v.cardTool}, ${uuidArray(v.entityIds)},
               ${json(v.operations)}, ${json(v.inverse)}, ${v.results === undefined ? sql`NULL` : json(v.results)},
               ${v.textSession}, ${v.bodyBefore === null ? sql`NULL` : json(v.bodyBefore)},
-              ${uuidOrNull(v.undoes)}, ${uuidArray(v.pinnedVersionIds)}, ${v.cardInReply})
+              ${uuidOrNull(v.undoes)}, ${uuidArray(v.pinnedVersionIds)}, ${v.cardInReply}, 4)
       RETURNING graph_id, id, created_at, entity_ids
     )
     INSERT INTO action_journal_entities (graph_id, action_id, entity_id, created_at)

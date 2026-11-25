@@ -35,7 +35,7 @@ type EntityGetReply = RouterOutputs['entity']['get'];
 export const RENDER_CRASH_REASON = 'ошибка отрисовки';
 
 /** Текст шаблона на показ: id (пространство памяти вкладок, граница ошибок) и тело. */
-type TemplateText = Pick<WireEntity, 'id' | 'body'>;
+type TemplateText = Pick<WireEntity, 'id' | 'body' | 'bodyFormatVersion'>;
 
 /**
  * Чем показать запись: шаблон хоста, шаблон владельца, заданный шаблон предпросмотра (§9.3) или —
@@ -147,6 +147,7 @@ const NO_CRASHES: ReadonlyMap<string, string> = new Map();
  * агентом) и есть правка вида всех записей без своего шаблона.
  */
 interface HostSource {
+  fileReferences?: boolean;
   /** Дерево, которым рисуется шаблон хоста. */
   nodes: readonly PageNode[];
   /** Его текст — «Изменить вид только этой записи» копирует показанное, а не эталон. */
@@ -182,6 +183,7 @@ function hostSourceOf(record: WireEntity | undefined, reg: ParseRegistry | null)
   const broken = hostBrokenReason(record.body ?? '', reg);
   if (broken !== null) return { ...ETALON_SOURCE, recordId: record.id, broken };
   return {
+    fileReferences: record.bodyFormatVersion === 4,
     nodes: parsePageText(record.body ?? ''),
     text: record.body ?? '',
     recordId: record.id,
@@ -455,7 +457,15 @@ function ShownTemplate({
         fallback={record ? null : <BaseRecordView />}
         {...(record && { onCatch: onHostCrash })}
       >
-        <TemplateTree scope="template:host" nodes={host.nodes} />
+        <TemplateTree
+          fileBody={
+            host.fileReferences
+              ? { source: host.text, entityId: host.recordId ?? undefined }
+              : undefined
+          }
+          scope="template:host"
+          nodes={host.nodes}
+        />
       </RenderBoundary>
     );
   }
@@ -491,7 +501,15 @@ function ShownTemplate({
 
 function OwnTemplateTree({ row }: { row: TemplateText }) {
   const nodes = useMemo(() => parsePageText(row.body ?? ''), [row.body]);
-  return <TemplateTree scope={`template:${row.id}`} nodes={nodes} />;
+  return (
+    <TemplateTree
+      fileBody={
+        row.bodyFormatVersion === 4 ? { source: row.body ?? '', entityId: row.id } : undefined
+      }
+      scope={`template:${row.id}`}
+      nodes={nodes}
+    />
+  );
 }
 
 /**
@@ -500,10 +518,18 @@ function OwnTemplateTree({ row }: { row: TemplateText }) {
  * (`template:<id>`): одна на все записи этого шаблона — листая записи с «Деталей», человек на
  * «Деталях» и остаётся. У страницы своим телом пространство своё, по странице (`DetailScreen`).
  */
-function TemplateTree({ scope, nodes }: { scope: string; nodes: readonly PageNode[] }) {
+function TemplateTree({
+  scope,
+  nodes,
+  fileBody,
+}: {
+  scope: string;
+  nodes: readonly PageNode[];
+  fileBody?: import('../../lib/markdown/VerifiedFileBody').FileBodySource;
+}) {
   return (
     <TabMemoryScope key={scope} scope={scope}>
-      <Renderer nodes={nodes} kind="template" appendUnplacedCards />
+      <Renderer fileBody={fileBody} nodes={nodes} kind="template" appendUnplacedCards />
     </TabMemoryScope>
   );
 }

@@ -125,8 +125,14 @@ export const userRouter = router({
       });
     }),
 
-  exportData: ownerOnlyProcedure.query(
-    ({ ctx }): Promise<OrbisExport> =>
-      withIdentity(ctx.db, ctx.identity, (tx) => exportData(tx, ctx.identity.graph)),
-  ),
+  exportData: ownerOnlyProcedure.query(async ({ ctx }): Promise<OrbisExport> => {
+    try {
+      return await withIdentity(ctx.db, ctx.identity, (tx) => exportData(tx, ctx.identity.graph), {
+        isolationLevel: 'repeatable read',
+      });
+    } catch (error) {
+      if (error instanceof ExecError) throw execErrorToTRPC(error);
+      throw error;
+    }
+  }),
 });

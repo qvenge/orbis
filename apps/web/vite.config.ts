@@ -62,6 +62,7 @@ export default defineConfig({
     port: 5173,
     proxy: {
       '/trpc': process.env.ORBIS_DEV_API ?? 'http://localhost:3001',
+      '/api': process.env.ORBIS_DEV_API ?? 'http://localhost:3001',
       '/mcp': process.env.ORBIS_DEV_API ?? 'http://localhost:3001',
     },
   },

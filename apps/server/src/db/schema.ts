@@ -50,6 +50,8 @@ export const entities = pgTable('entities', {
    * выбрасывает незнакомые схеме узлы).
    */
   bodyDoc: jsonb('body_doc'),
+  // NULL preserves the Markdown grammar used before attachments.
+  bodyFormat: smallint('body_format'),
   /**
    * Страховка разовой конверсии тел (перенос выполнен 02.09.2026, скрипт снят планом А скорости, РП-23).
    * Рантайм её не читает; снятие — 0012_drop_body_before_doc.sql по слову владельца (остаток).
@@ -300,6 +302,7 @@ export const actionJournal = pgTable(
     entityIds: uuid('entity_ids').array().notNull().default(sql`'{}'`),
     operations: jsonb('operations').notNull(),
     inverse: jsonb('inverse').notNull(),
+    bodyFormat: smallint('body_format'),
     results: jsonb('results'),
     textSession: boolean('text_session').notNull().default(false),
     bodyBefore: jsonb('body_before'),
@@ -411,6 +414,8 @@ export const entityVersions = pgTable(
     body: text('body').notNull(),
     // документ, если у сущности он на момент снимка уже был; NULL — тело ещё не бэкфиллено
     bodyDoc: jsonb('body_doc'),
+    // NULL preserves the Markdown grammar used before attachments.
+    bodyFormat: smallint('body_format'),
     actorUserId: uuid('actor_user_id').notNull(),
     actorKind: text('actor_kind').notNull(), // owner | agent (агент — со среза 4)
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
@@ -851,4 +856,136 @@ export const changeFeedFloor = pgTable(
     floor: xid8('floor').notNull(),
   },
   (t) => [check('change_feed_floor_singleton', sql`${t.id} = 1`)],
+);
+
+// The asset row is the common lock for publishing, holding, and deleting an original.
+export const fileAssets = pgTable(
+  'file_assets',
+  {
+    graphId: uuid('graph_id')
+      .notNull()
+      .references(() => graphs.id),
+    id: uuid('id').primaryKey(),
+    state: text('state').notNull(),
+    name: text('name').notNull(),
+    objectKey: text('object_key').notNull().unique(),
+    mediaType: text('media_type'),
+    byteSize: integer('byte_size'),
+    sha256: text('sha256'),
+    publishedAt: timestamp('published_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    deleteGeneration: integer('delete_generation').notNull().default(0),
+  },
+  (t) => [
+    unique('file_assets_graph_id_key').on(t.graphId, t.id),
+    index('file_assets_cleanup').on(t.graphId, t.state),
+    check('file_assets_state', sql`${t.state} IN ('staging','ready','deleting','deleted')`),
+    check(
+      'file_assets_verified',
+      sql`${t.state} <> 'ready' OR (${t.mediaType} IS NOT NULL AND ${t.byteSize} IS NOT NULL AND ${t.sha256} IS NOT NULL)`,
+    ),
+    check('file_assets_size', sql`${t.byteSize} >= 0`),
+    check('file_assets_hash', sql`${t.sha256} ~ '^[a-f0-9]{64}$'`),
+    check('file_assets_generation', sql`${t.deleteGeneration} >= 0`),
+  ],
+);
+
+export const fileUploads = pgTable(
+  'file_uploads',
+  {
+    graphId: uuid('graph_id').notNull(),
+    id: uuid('id').notNull(),
+    fileId: uuid('file_id').notNull(),
+    ownerActor: uuid('owner_actor').notNull(),
+    // Historical attempt identity survives grant revocation. The service verifies the live grant on every call.
+    ownerGrantId: uuid('owner_grant_id'),
+    declaredSize: integer('declared_size').notNull(),
+    declaredType: text('declared_type'),
+    state: text('state').notNull(),
+    chunkBytes: integer('chunk_bytes').notNull(),
+    nextOffset: integer('next_offset').notNull().default(0),
+    generation: integer('generation').notNull().default(0),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  },
+  (t) => [
+    primaryKey({ name: 'file_uploads_pkey', columns: [t.graphId, t.id] }),
+    unique('file_uploads_asset_key').on(t.graphId, t.fileId),
+    foreignKey({
+      name: 'file_uploads_asset_fk',
+      columns: [t.graphId, t.fileId],
+      foreignColumns: [fileAssets.graphId, fileAssets.id],
+    }),
+    index('file_uploads_expiry').on(t.graphId, t.state, t.expiresAt),
+    check('file_uploads_state', sql`${t.state} IN ('open','finishing','ready','expired','failed')`),
+    check(
+      'file_uploads_progress',
+      sql`${t.nextOffset} BETWEEN 0 AND ${t.declaredSize} AND ${t.chunkBytes} > 0 AND ${t.generation} >= 0`,
+    ),
+  ],
+);
+
+export const fileUploadParts = pgTable(
+  'file_upload_parts',
+  {
+    graphId: uuid('graph_id').notNull(),
+    uploadId: uuid('upload_id').notNull(),
+    offset: integer('offset').notNull(),
+    byteSize: integer('byte_size').notNull(),
+    sha256: text('sha256').notNull(),
+    objectKey: text('object_key').notNull().unique(),
+    confirmed: boolean('confirmed').notNull().default(false),
+  },
+  (t) => [
+    primaryKey({ name: 'file_upload_parts_pkey', columns: [t.graphId, t.uploadId, t.offset] }),
+    foreignKey({
+      name: 'file_upload_parts_upload_fk',
+      columns: [t.graphId, t.uploadId],
+      foreignColumns: [fileUploads.graphId, fileUploads.id],
+    }),
+    check('file_upload_parts_extent', sql`${t.byteSize} > 0 AND ${t.offset} >= 0`),
+    check('file_upload_parts_hash', sql`${t.sha256} ~ '^[a-f0-9]{64}$'`),
+  ],
+);
+
+export const fileHolds = pgTable(
+  'file_holds',
+  {
+    graphId: uuid('graph_id').notNull(),
+    fileId: uuid('file_id').notNull(),
+    sourceKind: text('source_kind').notNull(),
+    sourceKey: text('source_key').notNull(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }),
+  },
+  (t) => [
+    primaryKey({
+      name: 'file_holds_pkey',
+      columns: [t.graphId, t.fileId, t.sourceKind, t.sourceKey],
+    }),
+    foreignKey({
+      name: 'file_holds_asset_fk',
+      columns: [t.graphId, t.fileId],
+      foreignColumns: [fileAssets.graphId, fileAssets.id],
+    }),
+    index('file_holds_source').on(t.graphId, t.sourceKind, t.sourceKey),
+    check(
+      'file_holds_temporary',
+      sql`${t.sourceKind} NOT IN ('read','export') OR ${t.expiresAt} IS NOT NULL`,
+    ),
+  ],
+);
+
+export const fileCommands = pgTable(
+  'file_commands',
+  {
+    graphId: uuid('graph_id')
+      .notNull()
+      .references(() => graphs.id),
+    id: uuid('id').notNull(),
+    actorId: uuid('actor_id').notNull(),
+    grantId: uuid('grant_id'),
+    request: jsonb('request').notNull(),
+    result: jsonb('result').notNull(),
+  },
+  (t) => [primaryKey({ name: 'file_commands_pkey', columns: [t.graphId, t.id] })],
 );

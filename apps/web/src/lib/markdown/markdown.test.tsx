@@ -4,6 +4,7 @@ import { resetNavForTests } from '../../state/navigation';
 import { renderWithProviders as render } from '../../test/harness';
 import { recordAddress, topAddress } from '../../test/nav';
 import { Markdown } from './Markdown';
+import { MarkdownSlot } from './MarkdownSlot';
 
 const E1 = '019e4466-1111-7000-8000-0123456789ab';
 
@@ -173,4 +174,18 @@ test.each([
   expect(link).toHaveAttribute('href', href);
   expect(fireEvent.click(link)).toBe(false);
   expect(topAddress()).toEqual(recordAddress(E1));
+});
+
+test('первый кадр сразу показывает обычный абзац, разметку отдаёт общему рендереру', async () => {
+  render(
+    <>
+      <MarkdownSlot source="План на сегодня." className="text-sm" />
+      <MarkdownSlot source={`1.\n2. [запись](/r/${E1})`} />
+    </>,
+  );
+  const paragraph = screen.getByText('План на сегодня.');
+  expect(paragraph.tagName).toBe('P');
+  expect(paragraph.parentElement).toHaveClass('orbis-markdown', 'text-sm');
+  expect(await screen.findByRole('list')).toBeInTheDocument();
+  expect(screen.getByRole('link', { name: 'запись' })).toHaveAttribute('href', `/r/${E1}`);
 });

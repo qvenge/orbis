@@ -10,6 +10,8 @@
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
 import type { Context } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
+import { getBunServer } from 'hono/bun';
+import { FINISH_HTTP_IDLE_SECONDS } from '../files/uploads';
 import { verifyBearer } from '../oauth/grants';
 import { protectedResourceMetadataUrl } from '../oauth/metadata';
 import { type McpDeps, makeMcpServer } from './server';
@@ -91,10 +93,14 @@ export function makeMcpHandler(deps: McpDeps) {
     // next, сохраняя порядок 405 → 401 → 413 (fail-closed: аутентификация ДО чтения
     // тела): при превышении onError возвращает 413-Response, иначе bodyLimit при
     // стриминге перевешивает буфер тела в c.req.raw — transport читает его ниже.
+    const request = c.req.raw;
     const limitResponse = await mcpBodyLimit(c, async () => {});
     if (limitResponse instanceof Response) return limitResponse;
 
-    const server = makeMcpServer(deps, identity);
+    const httpServer = c.env ? getBunServer<Bun.Server>(c) : undefined;
+    const server = makeMcpServer(deps, identity, () =>
+      httpServer?.timeout?.(request, FINISH_HTTP_IDLE_SECONDS),
+    );
     const transport = new WebStandardStreamableHTTPServerTransport({
       sessionIdGenerator: undefined, // stateless: без сессий и их валидации
       enableJsonResponse: true,

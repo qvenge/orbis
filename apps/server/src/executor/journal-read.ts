@@ -72,7 +72,7 @@ export interface JournalCursor {
   key: string;
 }
 
-const TOUCHED_KEYS = ['id', 'source_id', 'target_id', 'entity_id'] as const;
+const TOUCHED_KEYS = ['id', 'source_id', 'target_id', 'entity_id', 'entityId'] as const;
 
 /**
  * Каноничный uuid. Строже прежнего `[0-9a-f-]{36}` отбора: колонка `entity_ids` и ключи таблицы — тип uuid, и строка
@@ -735,7 +735,10 @@ export async function executedIds(tx: Tx, graph: GraphId, ids: string[]): Promis
   if (keys.length === 0) return out;
   const rows = (await tx.execute(
     sql`SELECT j.id::text AS id FROM action_journal j
-         WHERE ${inGraph(graph)} AND j.id = ANY(${uuidArray(keys)}) AND ${IS_BATCH}`,
+         WHERE ${inGraph(graph)} AND j.id = ANY(${uuidArray(keys)}) AND ${IS_BATCH}
+       UNION ALL SELECT c.request->>'batchId' AS id FROM file_commands c
+       WHERE c.graph_id=${graph} AND c.request->>'kind'='unchanged_file_batch'
+       AND (c.request->>'batchId')::uuid = ANY(${uuidArray(keys)})`,
   )) as unknown as Array<{ id: string }>;
   const found = new Set(rows.map((r) => r.id));
   for (const id of ids) if (found.has(id.toLowerCase())) out.add(id);

@@ -48,7 +48,7 @@ import {
   subscriptionRemoveInput,
   subscriptionSetInput,
 } from '../tools/registry-tools';
-import { ownerOnlyProcedure, protectedProcedure, router } from '../trpc';
+import { ownerOnlyProcedure, protectedProcedure, router, supportsFileWrites } from '../trpc';
 import { registryVersionOf } from '../wire';
 
 // Боевой синк — один инстанс на модуль (без состояния, пишет тем же tx, §7.8)
@@ -67,13 +67,14 @@ const sink = makeJournalSink();
  */
 function registryMutation(tool: string) {
   return async (
-    ctx: { db: Parameters<typeof execute>[0]; identity: Identity },
+    ctx: { db: Parameters<typeof execute>[0]; identity: Identity; clientVersion: string | null },
     input: unknown,
   ): Promise<WireRegistryResult & JournalRef> => {
     const r = await execute(
       ctx.db,
       {
         identity: ctx.identity,
+        fileCapability: supportsFileWrites(ctx.clientVersion),
         actorKind: 'owner',
         source: 'ui',
         operations: [{ tool, input }],

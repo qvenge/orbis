@@ -8,11 +8,14 @@ import { registryDriftIds } from '@orbis/shared';
 import { fetchRequestHandler } from '@trpc/server/adapters/fetch';
 import { type Context, Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
-import { serveStatic } from 'hono/bun';
+import { getBunServer, serveStatic } from 'hono/bun';
 import type { AiDeps } from './ai/send-message';
 import { makeCreateContext } from './context';
 import type { Db } from './db/client';
 import type { RegistryDriftStatus } from './db/registry-drift';
+import { buildGraphPackage, ExportPackageError } from './files/export-package';
+import { fileHttpError, mountFileHttp } from './files/http';
+import { FINISH_HTTP_IDLE_SECONDS } from './files/uploads';
 import { type ChangeListener, changeStreamEnabled } from './freshness/listener';
 import { readWatermarkHeaders, withReadWatermark } from './freshness/watermark';
 import { makeMcpHandler } from './mcp/transport';
@@ -21,6 +24,12 @@ import { makeRegisterHandler } from './oauth/register';
 import { makeTokenHandler } from './oauth/token-endpoint';
 import { serverTiming } from './perf/server-timing';
 import { appRouter } from './router';
+
+declare module 'hono' {
+  interface ContextVariableMap {
+    onFileFinishWait?: () => void;
+  }
+}
 
 /**
  * Корень собранной web-статики (Vite output). Относителен cwd прод-процесса; дефолт —
@@ -198,9 +207,49 @@ export function createApp({
   app.use('/trpc/*', serverTiming());
   // Size-гейт ДО tRPC-хендлера: сверхлимитное тело отсекается прежде JSON-парсинга и
   // любой zod-валидации (порядок регистрации = порядок исполнения middleware).
-  app.use('/trpc/*', trpcBodyLimit);
+  app.use('/trpc/*', (c, next) => {
+    // Chunked bodies may replace c.req.raw inside Hono bodyLimit. Bun's timeout
+    // applies to the original request only, after the owner procedure accepts it.
+    const request = c.req.raw;
+    const server = c.env ? getBunServer<Bun.Server>(c) : undefined;
+    if (server?.timeout) {
+      c.set('onFileFinishWait', () => server.timeout(request, FINISH_HTTP_IDLE_SECONDS));
+    }
+    return trpcBodyLimit(c, next);
+  });
   app.use('/trpc/*', withReadWatermark);
+  mountFileHttp(app, db);
   const createContext = makeCreateContext(db, ai, changeListener);
+  app.post('/api/exports/graph-package', async (c) => {
+    c.header('Cache-Control', 'private, no-store');
+    c.header('X-Content-Type-Options', 'nosniff');
+    try {
+      const req = c.req.raw;
+      const ctx = await createContext({ req });
+      if (!ctx.identity || ctx.actorKind !== 'owner') return c.body(null, ctx.identity ? 403 : 401);
+      const server = c.env ? getBunServer<Bun.Server>(c) : undefined;
+      const archive = await buildGraphPackage({
+        db,
+        identity: ctx.identity,
+        signal: req.signal,
+        ...(server?.requestIP && { sending: () => server.requestIP(req) !== null }),
+      });
+      server?.timeout?.(req, 60);
+      return c.body(archive.stream, 200, {
+        'Content-Type': 'application/zip',
+        'Content-Length': String(archive.length),
+        'Content-Disposition': 'attachment; filename="orbis-export.zip"',
+      });
+    } catch (error) {
+      if (error instanceof ExportPackageError) {
+        return c.json({ code: 'EXPORT_INCOMPLETE', error: error.message }, 503);
+      }
+      const response = fileHttpError(error);
+      response.headers.set('Cache-Control', 'private, no-store');
+      return response;
+    }
+  });
+  app.all('/api/exports/graph-package', (c) => c.body(null, 405, { Allow: 'POST' }));
   // Bun resolves @hono/trpc-server to CJS. The ESM router's tracked() uses a
   // different Symbol there, so the CJS adapter would serialize the tuple
   // instead of emitting its SSE id. Use the public ESM adapter throughout.
@@ -220,7 +269,10 @@ export function createApp({
       endpoint: '/trpc',
       req: c.req.raw,
       router: appRouter,
-      createContext,
+      createContext: async (options) => ({
+        ...(await createContext(options)),
+        onFileFinishWait: c.get('onFileFinishWait'),
+      }),
       responseMeta: ({ eagerGeneration }) => ({ headers: readWatermarkHeaders(eagerGeneration) }),
     });
   });

@@ -6,6 +6,7 @@ import { OrbisCode } from './nodes/code';
 import { OrbisCodeBlock } from './nodes/code-block';
 import { OrbisDocument } from './nodes/document';
 import { EntityRef } from './nodes/entity-ref';
+import { FileRef } from './nodes/file-ref';
 import { Column, Columns, Tab, Tabs } from './nodes/layout';
 import { OrbisListItem } from './nodes/list-item';
 import { ParamBlock } from './nodes/param-block';
@@ -56,6 +57,7 @@ export const DOC_EXTENSIONS: AnyExtension[] = [
   TaskItem,
   TableKit,
   EntityRef,
+  FileRef,
   QueryBlock,
   RawBlock,
   // Формат v3 (спека страниц 1а §5.2–§5.3): контейнеры, их части и блоки обвязки записи.

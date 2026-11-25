@@ -32,15 +32,16 @@ const MINIMAL: Record<PropertyKind, unknown> = {
   ref: { kind: 'ref' },
   json: { kind: 'json' },
   grant: { kind: 'grant' },
+  file: { kind: 'file', cardinality: 'one' },
   registry_ref: { kind: 'registry_ref', target: 'contract' },
 };
 
 const label = { ru: 'Подпись', en: 'Label' };
 const description = { ru: 'Смысл', en: 'Meaning' };
 
-test('словарь закрыт: неизвестный kind отвергается; известных ровно 12', () => {
-  expect(PROPERTY_KINDS.length).toBe(12);
-  expect(new Set(PROPERTY_KINDS).size).toBe(12);
+test('словарь закрыт: неизвестный kind отвергается; известных ровно 13', () => {
+  expect(PROPERTY_KINDS.length).toBe(13);
+  expect(new Set(PROPERTY_KINDS).size).toBe(13);
   // Состав — дословно §А2-2 (10 базовых + `time` и `registry_ref` из добавок В8).
   expect([...PROPERTY_KINDS]).toEqual([
     'text',
@@ -55,6 +56,7 @@ test('словарь закрыт: неизвестный kind отвергае�
     'json',
     'grant',
     'registry_ref',
+    'file',
   ]);
   // У каждого объявленного kind есть ветка союза, и наоборот — чужих веток нет.
   for (const kind of PROPERTY_KINDS) {

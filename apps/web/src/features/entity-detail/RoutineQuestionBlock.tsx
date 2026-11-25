@@ -8,7 +8,7 @@
 // увидеть, у рутины не существует.
 import { useId, useState } from 'react';
 import { formatDate } from '../../lib/format';
-import { Markdown } from '../../lib/markdown/Markdown';
+import { MarkdownSlot } from '../../lib/markdown/MarkdownSlot';
 import { trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
 import { useHostReadOnly } from './record-host';
@@ -68,7 +68,7 @@ export function RoutineQuestionBlock({ run }: { run: RoutineRunQuestion }) {
         </time>
       </h3>
       {/* Вопрос модели может содержать разметку и ссылки на записи. */}
-      <Markdown source={run.question} className="text-sm" />
+      <MarkdownSlot source={run.question} className="text-sm" />
 
       {run.reply !== undefined && (
         <div className="flex flex-col gap-1 border-line/60 border-t pt-3">
@@ -78,7 +78,7 @@ export function RoutineQuestionBlock({ run }: { run: RoutineRunQuestion }) {
               {formatDate(run.reply.at, tz)}
             </time>
           </h4>
-          <Markdown source={run.reply.text} className="text-sm" />
+          <MarkdownSlot source={run.reply.text} className="text-sm" />
         </div>
       )}
 

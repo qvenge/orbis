@@ -13,6 +13,7 @@ import { budgetRouter } from './routers/budget';
 import { changesRouter } from './routers/changes';
 import { chatRouter } from './routers/chat';
 import { entityRouter } from './routers/entity';
+import { filesRouter } from './routers/files';
 // `import` — зарезервированное слово JS: ключ роутера так назвать можно, переменную нет
 import { importRouter } from './routers/import';
 import { oauthRouter } from './routers/oauth';
@@ -33,6 +34,7 @@ export const appRouter = router({
   // не про граф, и переименование сломало бы смоуки, читающие ответ.
   whoami: protectedProcedure.query(({ ctx }) => ({ actorUserId: ctx.identity.actor })),
   entity: entityRouter,
+  files: filesRouter,
   relation: relationRouter,
   chat: chatRouter,
   ai: aiRouter,

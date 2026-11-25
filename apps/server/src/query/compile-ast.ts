@@ -175,7 +175,7 @@ export const ENTITY_SELECT_COLUMNS = `${COLUMNS_BEFORE_BODY}, ${COLUMNS_AFTER_BO
 export const BODY_HEAD_SQL =
   "jsonb_path_query_array(body_doc, 'lax $.doc.content[0 to 7]') AS body_head";
 export function entitySelectColumns(fields: EntityFields): string {
-  if (fields === 'full') return `${COLUMNS_BEFORE_BODY}, body, ${COLUMNS_AFTER_BODY}`;
+  if (fields === 'full') return `${COLUMNS_BEFORE_BODY}, body, body_format, ${COLUMNS_AFTER_BODY}`;
   if (fields === 'start') return `${ENTITY_SELECT_COLUMNS}, ${BODY_HEAD_SQL}`;
   return ENTITY_SELECT_COLUMNS;
 }
@@ -1035,6 +1035,9 @@ function sortItem(
       `сортировать по списочному свойству '${ref.def.id}' нельзя — у списка нет линейного порядка`,
       { property: ref.def.id },
     );
+  }
+  if (ref.def.type.kind === 'file') {
+    return fail('TYPE', 'Сортировка по ID файла не поддерживается', { property: ref.def.id });
   }
   if (ref.def.type.kind === 'select') {
     // Порядок вариантов — `rank` ОБЪЯВЛЕНИЯ из реестра (§А2-2), а не алфавит и не позиция

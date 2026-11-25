@@ -1,4 +1,6 @@
 import { getSchema, type JSONContent } from '@tiptap/core';
+import { Marked, type marked } from 'marked';
+import { fileIdSchema } from '../contracts/files';
 import type { ParseRegistry } from '../query';
 import { bindQueryBlocks } from './bind-query';
 import { blockText } from './diff';
@@ -11,9 +13,18 @@ import { type BodyDoc, DOC_SCHEMA_VERSION, upgradeBodyDoc } from './types';
 
 // Менеджер тяжёлый в конструировании и не хранит состояния между вызовами — создаётся один раз.
 // Проверено спайком: работает на Bun без DOM.
-let manager: OrbisMarkdownManager | null = null;
-function md(): OrbisMarkdownManager {
-  manager ??= new OrbisMarkdownManager({ extensions: DOC_EXTENSIONS });
+const managers = new Map<boolean, OrbisMarkdownManager>();
+function md(legacy = false): OrbisMarkdownManager {
+  let manager = managers.get(legacy);
+  if (!manager) {
+    // TipTap registers tokenizers on the Marked instance. Separate instances prevent a
+    // previously opened v4 document from enabling the file grammar on a legacy read.
+    manager = new OrbisMarkdownManager({
+      extensions: legacy ? DOC_EXTENSIONS.filter((ext) => ext.name !== 'fileRef') : DOC_EXTENSIONS,
+      marked: new Marked() as unknown as typeof marked,
+    });
+    managers.set(legacy, manager);
+  }
   return manager;
 }
 
@@ -36,7 +47,24 @@ function docOf(input: BodyDoc | JSONContent): JSONContent {
  * только узлы по пути к таким маркам, а в БД едет исходный объект.
  */
 export function serializeBody(input: BodyDoc | JSONContent): string {
-  return md().serialize(withCodeFences(docOf(input)));
+  return md().serialize(withCodeFences(protectRawMarkers(docOf(input))));
+}
+
+function protectRawMarkers(node: JSONContent): JSONContent {
+  if (node.type === 'rawBlock') {
+    const markdown = node.attrs?.markdown;
+    if (
+      typeof markdown === 'string' &&
+      markdown.includes('orbis-file:') &&
+      collectFileIds(parseBody(markdown)).length > 0
+    ) {
+      // A legacy image was a raw block. Its original spelling must stay readable
+      // after editing the Markdown projection. Quote this raw content as literal text.
+      return { type: 'paragraph', content: [{ type: 'text', text: markdown }] };
+    }
+  }
+  const content = node.content?.map(protectRawMarkers);
+  return content?.some((child, i) => child !== node.content?.[i]) ? { ...node, content } : node;
 }
 
 /**
@@ -76,6 +104,7 @@ const KNOWN_INLINE = new Set([
   'link',
   'br',
   'escape',
+  'fileRef',
   'entityRef', // свой инлайн-токен, см. queryBlock выше
 ]);
 
@@ -342,8 +371,11 @@ function emptyDoc(): BodyDoc {
  * пример `{{query:…}}` остаётся текстом. Прежний путь (вырезание сегментов регэкспом по сырому
  * тексту до лексера) про заборы не знал и рвал их пополам — найдено ревью.
  */
-function lex(markdown: string): { tokens: Tok[]; hasRefDefs: boolean } {
-  const instance = md().instance;
+function lex(
+  markdown: string,
+  manager: OrbisMarkdownManager,
+): { tokens: Tok[]; hasRefDefs: boolean } {
+  const instance = manager.instance;
   const lexer = new instance.Lexer(instance.defaults);
   const tokens = lexer.lex(markdown) as unknown as Tok[];
   return { tokens, hasRefDefs: Object.keys(lexer.tokens.links ?? {}).length > 0 };
@@ -352,13 +384,46 @@ function lex(markdown: string): { tokens: Tok[]; hasRefDefs: boolean } {
 /**
  * Кусок markdown без маркеров v3 — ПРЕЖНИМ потокенным путём: лексер отдаёт блоки, каждый
  * разбирается отдельно, и незнакомый, негодный схеме или потерявший листья блок уходит в raw
- * ОДИН (вердикт Б1, мера 3). `hasRefDefs` — сигнал наверх: reference-определения делают весь
- * исходник raw (см. `parseBody`).
+ * ОДИН (вердикт Б1, мера 3). При наличии Markdown-определений сохраняем исходную
+ * запись ссылок. Самостоятельные блоки с fileRef остаются структурными в документе v4.
  */
-function parseMarkdownChunk(markdown: string): { content: JSONContent[]; hasRefDefs: boolean } {
-  const { tokens, hasRefDefs } = lex(markdown);
+function parseMarkdownChunk(
+  markdown: string,
+  manager: OrbisMarkdownManager,
+): { content: JSONContent[]; hasRefDefs: boolean } {
+  const { tokens, hasRefDefs } = lex(markdown, manager);
   const content: JSONContent[] = [];
-  if (hasRefDefs) return { content, hasRefDefs };
+  if (hasRefDefs) {
+    // Keep reference definitions and their spelling together. Extract only complete
+    // blocks that the file grammar recognises independently of the definitions.
+    if (!markdown.includes('orbis-file:') || tokens.map((t) => t.raw).join('') !== markdown) {
+      return { content: [rawNode(markdown.replace(/\n+$/, ''))], hasRefDefs };
+    }
+    let literal = '';
+    function flush() {
+      const raw = literal.replace(/^\n+|\n+$/g, '');
+      if (raw) content.push(rawNode(raw));
+      literal = '';
+    }
+    for (const token of tokens) {
+      const parsed =
+        token.raw.includes('orbis-file:') && blockIsKnown(token)
+          ? (manager.parse(token.raw).content ?? [])
+          : [];
+      if (
+        parsed.some((n) => collectFileIds(n).length) &&
+        fitsSchema(parsed) &&
+        blockKeepsItsShape(token, parsed)
+      ) {
+        flush();
+        content.push(...parsed);
+      } else {
+        literal += token.raw;
+      }
+    }
+    flush();
+    return { content, hasRefDefs };
+  }
   for (const token of tokens) {
     if (token.type === 'space') continue;
     const raw = token.raw.replace(/\n+$/, '');
@@ -370,7 +435,7 @@ function parseMarkdownChunk(markdown: string): { content: JSONContent[]; hasRefD
     // а бэкфилл — который ошибку конверсии не глотает намеренно — обрывался на такой строке
     // вместе со всем оставшимся хвостом корпуса. Уводим блок в raw: текст цел до байта,
     // документ пригоден, канон становится неподвижной точкой.
-    const parsed = blockIsKnown(token) ? (md().parse(raw).content ?? []) : null;
+    const parsed = blockIsKnown(token) ? (manager.parse(raw).content ?? []) : null;
     // Третье условие — ОБЩИЙ приём против семейства «разбор молча выбросил узел»
     // (см. blockKeepsItsShape): структурный счёт листьев не зависит от состава текста и
     // потому снимает класс разом, а не по одной форме за раунд.
@@ -386,10 +451,6 @@ function parseMarkdownChunk(markdown: string): { content: JSONContent[]; hasRefD
   return { content, hasRefDefs };
 }
 
-/** Сигнал «в куске есть reference-определения»: разбор бросает, `parseBody` ловит и уводит всё
- *  тело в raw. Свой класс — чтобы в отладке сигнал не путался со сбоем парсера (исход тот же). */
-class RefDefsFound extends Error {}
-
 /**
  * Узлы препрохода → узлы документа (формат v3, спека страниц 1а §5.2–§5.3, §5.8).
  *
@@ -403,14 +464,18 @@ class RefDefsFound extends Error {}
  *   выше: `raw` узлов препрохода несёт перевод своей строки, а разделитель между блоками ставит
  *   печать — иначе каждый круг «разбор → печать» добавлял бы пустую строку.
  */
-function pageNodesToDoc(nodes: PageNode[]): JSONContent[] {
+function pageNodesToDoc(
+  nodes: PageNode[],
+  manager: OrbisMarkdownManager,
+  state: { hasRefDefs: boolean },
+): JSONContent[] {
   const out: JSONContent[] = [];
   for (const node of nodes) {
     switch (node.kind) {
       case 'text': {
         if (node.text.trim() === '') break;
-        const chunk = parseMarkdownChunk(node.text);
-        if (chunk.hasRefDefs) throw new RefDefsFound();
+        const chunk = parseMarkdownChunk(node.text, manager);
+        if (chunk.hasRefDefs) state.hasRefDefs = true;
         out.push(...chunk.content);
         break;
       }
@@ -435,7 +500,10 @@ function pageNodesToDoc(nodes: PageNode[]): JSONContent[] {
       case 'columns':
         out.push({
           type: 'columns',
-          content: node.parts.map((part) => ({ type: 'column', content: partContent(part) })),
+          content: node.parts.map((part) => ({
+            type: 'column',
+            content: partContent(part, manager, state),
+          })),
         });
         break;
       case 'tabs':
@@ -444,7 +512,7 @@ function pageNodesToDoc(nodes: PageNode[]): JSONContent[] {
           content: node.parts.map((part) => ({
             type: 'tab',
             attrs: { label: part.label },
-            content: partContent(part.children),
+            content: partContent(part.children, manager, state),
           })),
         });
         break;
@@ -456,8 +524,12 @@ function pageNodesToDoc(nodes: PageNode[]): JSONContent[] {
   return out;
 }
 
-function partContent(children: PageNode[]): JSONContent[] {
-  const content = pageNodesToDoc(children);
+function partContent(
+  children: PageNode[],
+  manager: OrbisMarkdownManager,
+  state: { hasRefDefs: boolean },
+): JSONContent[] {
+  const content = pageNodesToDoc(children, manager, state);
   return content.length > 0 ? content : [{ type: 'paragraph' }];
 }
 
@@ -470,19 +542,26 @@ function partContent(children: PageNode[]): JSONContent[] {
  * счёл бы концом строки (marked — счёл бы), и `{{title}}\r{{tags}}` разошлось бы в двух
  * разборах, а текст многострочного запроса хранил бы `\r`, которого через marked не было.
  */
-export function parseBody(markdown: string): BodyDoc {
+export function parseBody(
+  markdown: string,
+  sourceFormat: number | null = DOC_SCHEMA_VERSION,
+): BodyDoc {
   if (markdown.trim() === '') return emptyDoc();
   try {
-    const content = pageNodesToDoc(parsePageText(markdown.replace(/\r\n?/g, '\n')));
-    return content.length > 0
-      ? { v: DOC_SCHEMA_VERSION, doc: { type: 'doc', content } }
-      : emptyDoc();
+    const legacy = sourceFormat !== DOC_SCHEMA_VERSION;
+    const state = { hasRefDefs: false };
+    const content = pageNodesToDoc(
+      parsePageText(markdown.replace(/\r\n?/g, '\n')),
+      md(legacy),
+      state,
+    );
+    if (!content.length) return emptyDoc();
+    const doc = { type: 'doc', content };
+    if (state.hasRefDefs && (legacy || collectFileIds(doc).length === 0)) return rawDoc(markdown);
+    return legacy
+      ? (upgradeBodyDoc({ v: 3, doc }) ?? rawDoc(markdown))
+      : { v: DOC_SCHEMA_VERSION, doc };
   } catch {
-    // Два повода, один исход — весь исходник дословно, не теряя ни байта:
-    //  - `RefDefsFound`: reference-определения marked складывает в lexer.tokens.links, и
-    //    восстановить их форму нечем (ловит и сноски GFM из спайка). Весь, а не кусок:
-    //    определение в одной колонке обслуживает ссылку в другой;
-    //  - парсер не справился вовсе.
     return rawDoc(markdown);
   }
 }
@@ -551,6 +630,7 @@ const SKELETON_KINDS: ReadonlySet<string> = new Set([
   'hostBlock',
   'paramBlock',
   'queryBlock',
+  'fileRef',
 ]);
 
 /**
@@ -576,7 +656,11 @@ function skeleton(doc: JSONContent): string {
   const trimmed = (value: unknown) => (typeof value === 'string' ? value.trim() : String(value));
   const walk = (node: JSONContent): void => {
     const type = typeof node.type === 'string' && SKELETON_KINDS.has(node.type) ? node.type : null;
-    if (type === 'tab') out.push(`tab:${trimmed(node.attrs?.label)}`);
+    if (type === 'fileRef')
+      out.push(
+        JSON.stringify([node.attrs?.fileId?.toLowerCase(), node.attrs?.display, node.attrs?.label]),
+      );
+    else if (type === 'tab') out.push(`tab:${trimmed(node.attrs?.label)}`);
     else if (type === 'recordBlock') out.push(`record:${String(node.attrs?.name)}`);
     else if (type === 'aspectCard') out.push(`card:${trimmed(node.attrs?.text)}`);
     // Имя блока хоста — как у блока обвязки: чужое имя печатается `{{foo}}`, разбор оставит текст,
@@ -643,6 +727,19 @@ export function bodyPairFromDoc(input: BodyDoc): { doc: BodyDoc; body: string } 
     : { doc: rawDoc(body), body };
 }
 
+export function collectFileIds(input: BodyDoc | JSONContent): string[] {
+  const ids = new Set<string>();
+  function walk(node: JSONContent) {
+    if (node.type === 'fileRef') {
+      const id = fileIdSchema.safeParse(node.attrs?.fileId);
+      if (id.success) ids.add(id.data);
+    }
+    node.content?.forEach(walk);
+  }
+  walk(docOf(input));
+  return [...ids];
+}
+
 /** Дерево ∪ регэксп по raw-блокам: backlinks не зависят от разбираемости тела (Б2).
  *  Код-блоки и inline-код — по-прежнему НЕ связь (Р7): они не raw, а честные ноды схемы. */
 export function bodyRefsFromDoc(input: BodyDoc | JSONContent): string[] {
@@ -683,6 +780,19 @@ export function bodyRefsFromDoc(input: BodyDoc | JSONContent): string[] {
  */
 export function bodyDocError(input: BodyDoc | JSONContent): string | undefined {
   try {
+    function validateFiles(node: JSONContent): void {
+      if (node.type === 'fileRef') {
+        const attrs = node.attrs;
+        if (
+          !fileIdSchema.safeParse(attrs?.fileId).success ||
+          (attrs?.display !== 'image' && attrs?.display !== 'link') ||
+          typeof attrs?.label !== 'string'
+        )
+          throw new Error('Некорректные атрибуты fileRef');
+      }
+      node.content?.forEach(validateFiles);
+    }
+    validateFiles(docOf(input));
     pmSchema()
       .nodeFromJSON(docOf(input) as never)
       .check();
@@ -779,6 +889,7 @@ export function readBodyDoc(
   stored: unknown,
   fallbackMarkdown: string,
   reg: ParseRegistry,
+  sourceFormat: number | null = null,
 ): BodyDoc {
   if (
     typeof stored === 'object' &&
@@ -790,5 +901,5 @@ export function readBodyDoc(
     const upgraded = upgradeBodyDoc(stored as BodyDoc);
     if (upgraded !== null) return bindQueryBlocks(upgraded, reg);
   }
-  return bindQueryBlocks(parseBody(fallbackMarkdown), reg);
+  return bindQueryBlocks(parseBody(fallbackMarkdown, sourceFormat), reg);
 }

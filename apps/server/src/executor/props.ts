@@ -247,6 +247,26 @@ export function normalizeQueryAstValues(reg: RegistrySnapshot, patch: PropsPatch
   }
 }
 
+export function normalizeFileValue(value: unknown): unknown {
+  if (typeof value === 'string') return value.toLowerCase();
+  if (Array.isArray(value))
+    return value.map((id) => (typeof id === 'string' ? id.toLowerCase() : id));
+  return value;
+}
+
+function normalizeFilePatch(reg: RegistrySnapshot, patch: PropsPatch) {
+  if (!patch.set) return;
+  for (const [id, value] of Object.entries(patch.set)) {
+    const type = reg.properties.get(id)?.type;
+    if (type?.kind !== 'file') continue;
+    if (type.cardinality === 'many' && Array.isArray(value) && !value.length) {
+      delete patch.set[id];
+      patch.unset ??= [];
+      patch.unset.push(id);
+    } else patch.set[id] = normalizeFileValue(value);
+  }
+}
+
 export function touchedProperties(patch: PropsPatch): Set<string> {
   const touched = new Set<string>(Object.keys(patch.set ?? {}));
   for (const propertyId of [...(patch.unset ?? []), ...(patch.replaced ?? [])]) {
@@ -344,6 +364,7 @@ export function replaceAspectProps(
     replaced.push(ref.propertyId);
   }
   const patch: PropsPatch = { set, unset: [], replaced, attach: [aspectId], detach: [] };
+  normalizeFilePatch(reg, patch);
   normalizeQueryAstValues(reg, patch);
   return patch;
 }
@@ -411,6 +432,7 @@ export function propsPatchFromInput(reg: RegistrySnapshot, input: ExecPropsInput
   const patch: PropsPatch = { set, unset, attach, detach };
   // Имена ВНУТРИ значения-дерева приводятся к id той же меркой, что и адрес самого свойства
   // строкой выше (§А5-2) — иначе `progress_source`, названный ключом, лёг бы молча.
+  normalizeFilePatch(reg, patch);
   normalizeQueryAstValues(reg, patch);
   return patch;
 }

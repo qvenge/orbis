@@ -18,6 +18,7 @@ import { ExecError, type ExecErrorCode, execErrorToTRPC } from './errors';
 
 /** Ожидание — дословно таблица §С8/плана Задачи 3 плюс восемь исходных кодов. */
 const EXPECTED: Record<ExecErrorCode, TRPCError['code']> = {
+  CLIENT_OUTDATED: 'PRECONDITION_FAILED',
   VALIDATION: 'BAD_REQUEST',
   NOT_FOUND: 'NOT_FOUND',
   STALE_VERSION: 'CONFLICT',
@@ -25,6 +26,7 @@ const EXPECTED: Record<ExecErrorCode, TRPCError['code']> = {
   FORBIDDEN_LEVEL: 'FORBIDDEN',
   LIMIT: 'TOO_MANY_REQUESTS',
   CONFLICT: 'CONFLICT',
+  EXPORT_FORMAT_REQUIRED: 'CONFLICT',
   LLM_UNAVAILABLE: 'SERVICE_UNAVAILABLE',
   COMPUTED_WRITE: 'FORBIDDEN',
   ROLE_SYSTEM_ONLY: 'FORBIDDEN',
@@ -102,8 +104,8 @@ test('коды реформы свойств заведены все двадц�
   ];
   expect(reform.length).toBe(26);
   for (const code of reform) expect(Object.keys(EXPECTED)).toContain(code);
-  // 34 до среза 1б + GRAPH_NEEDS_MIGRATION (задача 12) + UNDO_TEXT_CHANGED (план А скорости, задача 10).
-  expect(Object.keys(EXPECTED).length).toBe(36);
+  // Предыдущие 36 кодов плюс CLIENT_OUTDATED и EXPORT_FORMAT_REQUIRED.
+  expect(Object.keys(EXPECTED).length).toBe(38);
 });
 
 // Р-И-10: имя `DEREF_IN_CONSTRAINT` приходит из shared, как четыре кода E и PATTERN_NOT_REGULAR, —

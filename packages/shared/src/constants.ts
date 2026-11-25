@@ -20,7 +20,8 @@
 // 0.7.0 — скорость, план Б (спека §12): entity.query возвращает строки с метаданными
 // зависимостей, а entity.blocks передаёт метаданные для каждого успешного блока.
 // Клиент 0.6.x получает 412 с просьбой обновиться. Черновики переживают переход.
-export const MIN_COMPATIBLE_CLIENT_VERSION = '0.7.0';
+// 0.8.0 — файловые свойства и встроенные ссылки документа v4.
+export const MIN_COMPATIBLE_CLIENT_VERSION = '0.8.0';
 export const CLIENT_VERSION_HEADER = 'x-orbis-client-version';
 
 // §7.7/§9.2 (carried-решение плана 1b): максимум вызовов провайдера в одном

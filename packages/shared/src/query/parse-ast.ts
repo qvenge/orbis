@@ -772,6 +772,8 @@ function parseScalar(
       const keys = type.options.map((o) => o.key);
       return keys.includes(text) ? text : bad(`один из вариантов: ${keys.join(', ')}`);
     }
+    case 'file':
+      return UUID_RE.test(text) ? text.toLowerCase() : bad('UUID файла');
     case 'ref':
     case 'grant':
       return UUID_RE.test(text) ? text : bad('UUID');
@@ -998,7 +1000,10 @@ function parseSortBy(t: Token, ctx: Ctx): QuerySortField[] {
     }
     const field = resolveField(name.text, name.offset, ctx);
     // У адреса «нет порядка» — вид json среди видов слота (значение «даты» упорядочено всегда).
-    if (field.list || field.kindText.split('|').includes('json')) {
+    if (
+      field.list ||
+      field.kindText.split('|').some((kind) => kind === 'json' || kind === 'file')
+    ) {
       fail(
         'TYPE',
         `sortBy: по ${field.prop === null ? 'адресу' : 'свойству'} '${field.name}' сортировать нельзя — у значения нет линейного порядка`,

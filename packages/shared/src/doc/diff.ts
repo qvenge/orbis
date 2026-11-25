@@ -178,7 +178,7 @@ const TRANSPARENT_KINDS: ReadonlySet<string> = new Set([
  * забытая здесь, ничего не потеряет, но раскрошит абзац на куски и вставит лишние пробелы между
  * ними: `unitPieces` сочтёт её блоком.
  */
-const INLINE_KINDS: ReadonlySet<string> = new Set(['text', 'hardBreak', 'entityRef']);
+const INLINE_KINDS: ReadonlySet<string> = new Set(['text', 'hardBreak', 'entityRef', 'fileRef']);
 
 /**
  * Атрибуты, входящие в ключ сопоставления.
@@ -262,6 +262,7 @@ function collectText(node: JSONContent | undefined, out: string[], breakText: st
   if (!node) return;
   if (typeof node.text === 'string') out.push(node.text);
   const attrs = node.attrs ?? {};
+  if (node.type === 'fileRef' && typeof attrs.label === 'string') out.push(attrs.label);
   if (node.type === 'rawBlock' && typeof attrs.markdown === 'string') out.push(attrs.markdown);
   // Печатная key-форма дерева (либо исходная строка неразобранного блока) — `text`. Печатать
   // её ЗДЕСЬ из `ast` нечем: печать требует реестра, а этот модуль листовой по закону и ни у

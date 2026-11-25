@@ -167,7 +167,12 @@ export async function readEntity(
   // после создания `out` документ уехал бы в wire сырым.
   const wantsDoc = include.has('bodyDoc');
   if (wantsDoc) {
-    row.bodyDoc = readBodyDoc(row.bodyDoc, row.body, parseRegistryOfSnapshot(await registry()));
+    row.bodyDoc = readBodyDoc(
+      row.bodyDoc,
+      row.body,
+      parseRegistryOfSnapshot(await registry()),
+      row.bodyFormat,
+    );
   }
 
   // Одна запись — с ревизией тела и временем его изменения (§8.1): с них клиент начинает правку текста.

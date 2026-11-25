@@ -43,6 +43,7 @@ import { effectiveRegistry } from '../registry/cache';
 import { disabledExtensionsOf } from '../registry/extensions';
 import type { RegistrySnapshot } from '../registry/load';
 import { MAX_PROPOSAL_OPERATIONS, MAX_RUN_UNITS } from '../routines/constants';
+import { fileFieldTool } from './file-tools';
 import { REGISTRY_TOOLS, subscriptionSetDefFor } from './registry-tools';
 
 export interface OrbisToolDef {
@@ -519,6 +520,12 @@ const entityCreateJsonSchema = {
     title: { type: 'string', minLength: 1 },
     emoji: { type: 'string' },
     body: { type: 'string' },
+    bodyFormatVersion: {
+      type: 'integer',
+      const: 4,
+      description:
+        'Формат Markdown с файловыми ссылками. Укажите 4 при правке текста с вложениями.',
+    },
     tags: {
       type: 'array',
       items: { type: 'string' },
@@ -535,10 +542,18 @@ const entityCreateJsonSchema = {
   additionalProperties: false,
 };
 
+const expectedFilePropsSchema = {
+  type: 'object',
+  additionalProperties: {
+    anyOf: [{ type: 'string' }, { type: 'null' }, { type: 'array', items: { type: 'string' } }],
+  },
+};
+
 const entityUpdateJsonSchema = {
   type: 'object',
   properties: {
     id: uuid,
+    expectedFileProps: expectedFilePropsSchema,
     expectedBodyRevision: {
       type: 'integer',
       minimum: 1,
@@ -549,6 +564,12 @@ const entityUpdateJsonSchema = {
     title: { type: 'string', minLength: 1 },
     emoji: { type: ['string', 'null'] },
     body: { type: 'string' },
+    bodyFormatVersion: {
+      type: 'integer',
+      const: 4,
+      description:
+        'Формат Markdown с файловыми ссылками. Укажите 4 при правке текста с вложениями.',
+    },
     tags: { type: 'array', items: { type: 'string' } },
     props: propsJsonSchema,
     unset: {
@@ -1318,6 +1339,9 @@ function attachToolDef(aspect: AspectDefinition, reg: RegistrySnapshot): OrbisTo
       properties: {
         entity_id: { type: 'string', format: 'uuid' },
         data: aspectToolJsonSchema(aspect, reg, OWNER_LOCALE),
+        ...(aspect.properties.some(
+          ({ propertyId }) => reg.properties.get(propertyId)?.type.kind === 'file',
+        ) && { expectedFileProps: expectedFilePropsSchema }),
       },
       required: ['entity_id', 'data'],
       additionalProperties: false,
@@ -1436,6 +1460,7 @@ export function buildToolDefs(
   return (
     [
       ...CORE_TOOLS,
+      fileFieldTool,
       // Тулы реестра (§А10-2) — отдельным набором, а не строками в CORE_TOOLS: у них общий
       // признак `fullScopeOnly` и общая судьба (гейт уровня §7.10 — Задача 16), и набор,
       // который можно назвать одним именем, дешевле пяти разбросанных дефов.

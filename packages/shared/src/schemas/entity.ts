@@ -6,6 +6,7 @@ export const entitySchema = z.object({
   title: z.string().min(1),
   emoji: z.string().nullable().default(null),
   body: z.string().default(''),
+  bodyFormatVersion: z.literal(4).nullable().optional(),
   // Документ едет ТОЛЬКО по явному include (Р6): wire-форма несёт body всегда, и второй
   // экземпляр тела в каждом ответе удвоил бы вес любого списка сущностей. Поэтому optional
   // (ключа может не быть вовсе) И nullable (запросили, но строка ещё не сконвертирована).

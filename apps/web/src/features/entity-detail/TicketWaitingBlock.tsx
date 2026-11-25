@@ -1,7 +1,7 @@
 // Тикет остановился и ждёт человека (С3, С8, С6; приёмка 7–8). Один блок на три исхода
 // прогона, потому что жест у них ОДИН: прочитать текст и ответить, вернув работу в круг.
 import { useId, useState } from 'react';
-import { Markdown } from '../../lib/markdown/Markdown';
+import { MarkdownSlot } from '../../lib/markdown/MarkdownSlot';
 import { type RouterOutputs, trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
 import { useHostReadOnly } from './record-host';
@@ -80,7 +80,7 @@ export function TicketWaitingBlock({
     >
       <h3 className="font-medium text-sm">{HEADINGS[outcome]}</h3>
       {/* Отчёт агента может содержать разметку и ссылки на записи. */}
-      {waitingFor !== '' && <Markdown source={waitingFor} className="text-sm" />}
+      {waitingFor !== '' && <MarkdownSlot source={waitingFor} className="text-sm" />}
       {!readOnly && (
         <>
           <div className="flex flex-col gap-1">

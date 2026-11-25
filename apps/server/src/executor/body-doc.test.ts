@@ -940,7 +940,7 @@ describe('формат тела v3: гейт версии, контейнеры,
   ].join('\n');
 
   test('(а) старая вкладка шлёт документ v2 — VALIDATION «перезагрузите», тело не тронуто', async () => {
-    expect(DOC_SCHEMA_VERSION).toBe(3);
+    expect(DOC_SCHEMA_VERSION).toBe(4);
     const { entity, owner } = await createOne('исходное тело');
     const r = await execute(
       db,
@@ -969,7 +969,7 @@ describe('формат тела v3: гейт версии, контейнеры,
           'entity_update',
           {
             id: entity.id,
-            bodyDoc: { v: 3, doc: V3_DOC },
+            bodyDoc: { v: DOC_SCHEMA_VERSION, doc: V3_DOC },
             expectedBodyRevision: entity.bodyRevision,
           },
           personal(owner),
@@ -980,7 +980,7 @@ describe('формат тела v3: гейт версии, контейнеры,
     const row = await rowOf(entity.id);
     expect(row.body).toBe(V3_CANON);
     // Документ лёг как прислан — не подменён rawBlock'ом страховки.
-    expect(row.body_doc).toEqual({ v: 3, doc: V3_DOC });
+    expect(row.body_doc).toEqual({ v: DOC_SCHEMA_VERSION, doc: V3_DOC });
   });
 
   test('(б) путь модели: body markdown с контейнерами → body_doc с узлами columns/tabs', async () => {
@@ -1012,7 +1012,7 @@ describe('формат тела v3: гейт версии, контейнеры,
         db,
         req(
           'entity_update',
-          { id: entity.id, bodyDoc: { v: 3, doc }, expectedBodyRevision },
+          { id: entity.id, bodyDoc: { v: DOC_SCHEMA_VERSION, doc }, expectedBodyRevision },
           personal(owner),
         ),
       );
@@ -1071,7 +1071,7 @@ describe('формат тела v3: гейт версии, контейнеры,
     const row = await rowOf(entity.id);
     expect(row.body).toBe(saved.body);
     expect(row.body_doc).toEqual({
-      v: 3,
+      v: DOC_SCHEMA_VERSION,
       doc: { type: 'doc', content: [{ type: 'rawBlock', attrs: { markdown: row.body } }] },
     });
     for (const word of ['до', 'x', 'y', 'б', '{{нет-такого}}']) expect(row.body).toContain(word);
@@ -1084,7 +1084,11 @@ describe('формат тела v3: гейт версии, контейнеры,
         db,
         req(
           'entity_update',
-          { id: entity.id, bodyDoc: { v: 3, doc }, expectedBodyRevision: entity.bodyRevision },
+          {
+            id: entity.id,
+            bodyDoc: { v: DOC_SCHEMA_VERSION, doc },
+            expectedBodyRevision: entity.bodyRevision,
+          },
           personal(owner),
         ),
       );
@@ -1145,7 +1149,7 @@ describe('формат тела v3: гейт версии, контейнеры,
     const read = await withIdentity(db, personal(owner), (tx) =>
       readEntity(tx, owner, { id: entity.id, include: ['body', 'bodyDoc'] }),
     );
-    expect(read.entity.bodyDoc?.v).toBe(3);
+    expect(read.entity.bodyDoc?.v).toBe(DOC_SCHEMA_VERSION);
     const nodes = ((read.entity.bodyDoc?.doc as { content?: unknown[] } | undefined)?.content ??
       []) as Array<{ type?: string; attrs?: Record<string, unknown> }>;
     // Документ НЕ пересобран из body («тело»): иначе здесь был бы один абзац без id.

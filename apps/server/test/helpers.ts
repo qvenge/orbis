@@ -168,7 +168,7 @@ export async function ensureGraphs(ids: Iterable<string> = MINTED): Promise<void
 /** Полная зачистка данных между сьютами (админ-DSN, обходит RLS); личности процесса остаются. */
 export async function truncateAll(): Promise<void> {
   const { db, client } = adminDb();
-  await db.execute(sql`TRUNCATE entities, relations, user_settings, chat_threads,
+  await db.execute(sql`TRUNCATE file_assets, file_commands, entities, relations, user_settings, chat_threads,
     chat_messages, ai_usage, entity_origins, entity_versions, agent_grants, oauth_clients,
     envelope_spent_cache, perf_samples, action_journal, action_journal_entities
     RESTART IDENTITY CASCADE`);

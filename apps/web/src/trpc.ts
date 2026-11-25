@@ -119,6 +119,16 @@ function scopedSignal(lease: ProductTransportLease | undefined, signal?: AbortSi
   return signal ? AbortSignal.any([lease.signal, signal]) : lease.signal;
 }
 
+/** Binary requests use the same account/graph lease as the tRPC transport. */
+export function captureProductRequest(signal?: AbortSignal | null) {
+  const lease = readProductLease?.();
+  const epoch = undoEpoch();
+  return {
+    signal: scopedSignal(lease, signal),
+    isCurrent: () => leaseCurrent(lease) && isUndoEpoch(epoch),
+  };
+}
+
 export function trpcHeaders(getToken: () => string | null): Record<string, string> {
   const token = getToken();
   return {

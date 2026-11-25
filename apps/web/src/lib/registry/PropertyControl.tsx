@@ -41,6 +41,10 @@ import { useRegistry } from './useRegistry';
  * («Навигация» приложения), а этот модуль эагерен в каждом открытии записи (вес первого кадра,
  * сторож `LAZY_DETAIL_MODULES`).
  */
+const FileFieldControl = lazy(() =>
+  import('./FileFieldControl').then((m) => ({ default: m.FileFieldControl })),
+);
+
 const RefListField = lazy(() =>
   import('./RefListControl').then((m) => ({ default: m.RefListField })),
 );
@@ -104,6 +108,21 @@ export function PropertyControl({
         )
     : legacyOnChange;
   const locked = readOnly || mode !== 'editable' || kind === 'readonly';
+
+  if (def.type.kind === 'file')
+    return (
+      <Suspense fallback={null}>
+        <FileFieldControl
+          key={`${selfId}:${def.id}`}
+          entityId={selfId}
+          propertyId={def.id}
+          value={savedValue}
+          many={def.type.cardinality === 'many'}
+          maxItems={def.type.maxItems}
+          readOnly={locked || !selfId}
+        />
+      </Suspense>
+    );
 
   if (locked) {
     return (

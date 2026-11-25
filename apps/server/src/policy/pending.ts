@@ -84,6 +84,14 @@ import {
 } from '../executor/journal-read';
 import type { ActorKind, ExecuteErr, ExecuteOk, ExecuteResult } from '../executor/types';
 import { undoAction } from '../executor/undo';
+import { unchangedBatch } from '../files/bindings';
+import {
+  filesOfOperations,
+  lockFilePropertyDefinitions,
+  mayAddressFileProperty,
+  releaseFileSource,
+  replaceFileHolds,
+} from '../files/holds';
 import type { Identity } from '../identity';
 import { ownerTimeZone } from '../query/context';
 import { actionHash } from '../registry/actions';
@@ -127,6 +135,7 @@ const questionOptions = z
 const pendingRecord = z
   .object({
     id: z.string().uuid(),
+    bodyFormatVersion: z.literal(4).optional(),
     /**
      * Род записи (D42 ОЧ.2): `action` — отложенное действие, `question` — вопрос пачки.
      *
@@ -465,6 +474,8 @@ export async function createPending(
     // explicit-уровень (§7.10) — прочие уровни исполняются/отклоняются в dispatch
     throw new Error(`createPending: уровень «${args.level}» pending не порождает (§7.10)`);
   }
+  if (args.kind !== 'question' && mayAddressFileProperty({ tool: args.tool, input: args.input }))
+    await lockFilePropertyDefinitions(tx, args.actor.graphId);
   const pendingId =
     args.dedupeKey !== undefined ? pendingMessageId(args.actor.graphId, args.dedupeKey) : newId();
   if (args.kind === 'question') assertQuestionBounds(pendingId, args.question, args.options);
@@ -497,7 +508,7 @@ export async function createPending(
   // же PK → ON CONFLICT возвращает ИСХОДНУЮ запись (append-only — сохранённый payload
   // первого запроса, §4.6), вторая карточка не пишется. Карточка детерминирована (тот же
   // pendingId и summary при идентичном ретрае), поэтому реконструируется, а не читается.
-  await appendMessageIdempotent(tx, {
+  const { replayed } = await appendMessageIdempotent(tx, {
     id: pendingId,
     threadId,
     role: 'system',
@@ -505,6 +516,7 @@ export async function createPending(
     metadata: {
       pending: {
         id: pendingId,
+        bodyFormatVersion: 4,
         // Условная запись, как у `run_id`/`edited_from` ниже: у сегодняшних вызывателей
         // (чат, предложение рутины, лестница правки) ключа нет вовсе, и их записи
         // остаются байт-в-байт прежними — на это опираются пины Ш1
@@ -551,6 +563,20 @@ export async function createPending(
       cards: [card],
     },
   });
+  // A confirmation of Undo executes the target journal inverse, whose own hold
+  // lasts until that action is undone through any entry point.
+  if (!replayed && args.kind !== 'question' && args.undoOf === undefined) {
+    const registry = await effectiveRegistry(tx, args.actor.graphId);
+    const refs = filesOfOperations(registry, [{ op: args.tool, payload: args.input }], 4);
+    await replaceFileHolds(
+      tx,
+      { graphId: args.actor.graphId, grantId: args.actor.grantId },
+      'pending',
+      pendingId,
+      [],
+      refs,
+    );
+  }
   return { pendingId, card };
 }
 
@@ -680,7 +706,7 @@ async function findPendingMessage(tx: Tx, pendingId: string): Promise<FoundPendi
  * пачки (`listRunUnits`). Повреждённая единица не прячется из списка НАМЕРЕННО: спрятать
  * её значило бы показать владельцу пачку решённой, пока в ней висит нерешённое.
  */
-function parsePendingRecord(pendingId: string, value: unknown): PendingRecord {
+export function parsePendingRecord(pendingId: string, value: unknown): PendingRecord {
   const parsed = pendingRecord.safeParse(value);
   if (!parsed.success) {
     // fail-closed: повреждённый payload не исполняем (metadata неизменяема §4.6 —
@@ -810,7 +836,9 @@ async function expectedDeltaStaleOf(
  * исполнение) не вправе подменить replay отказом.
  */
 async function isExecuted(tx: Tx, graphId: GraphId, pendingId: string): Promise<boolean> {
-  return (await findBatch(tx, graphId, pendingId)) !== undefined;
+  return (
+    !!(await findBatch(tx, graphId, pendingId)) || !!(await unchangedBatch(tx, graphId, pendingId))
+  );
 }
 
 /**
@@ -934,7 +962,7 @@ function toOperations(pending: PendingRecord): Array<{ tool: string; input: unkn
   return rawOperations(pending).map(liftStoredBodyDoc);
 }
 
-function rawOperations(pending: PendingRecord): Array<{ tool: string; input: unknown }> {
+export function rawOperations(pending: PendingRecord): Array<{ tool: string; input: unknown }> {
   if (pending.tool === undefined) {
     // Недостижимо у валидной записи: `tool` обязателен всюду, кроме вопроса, а вопрос
     // сюда не доходит — его отсекает `assertNotQuestion`. Проверка стоит потому, что
@@ -1169,6 +1197,8 @@ export async function approvePending(
         // Грант исходного вызова доживает до исполнения (С2): подтвердил владелец, но в
         // журнале §7.8 видно, КАКОЙ доступ этот план попросил
         actorGrantId: pending.actor_grant_id,
+        approvedFilePendingId: args.pendingId,
+        fileCapability: pending.bodyFormatVersion === 4,
         // Прогон рутины — та же логика, что с грантом (V1.6): предложение одобрил
         // владелец, но сделала правку рутина, и по run_id её найдёт откат прогона
         runId: pending.run_id,
@@ -1535,7 +1565,7 @@ export async function rejectPendingTx(
   // транзакций (лестница правки Ш1, гашение пачки)
   assertNotQuestion(msg.pending);
   // Адрес исполненной единицы в журнале — сам pendingId (ключ записи пачки), отдельного id записи нет
-  if ((await findBatch(tx, args.identity.graph, args.pendingId)) !== undefined) {
+  if (await isExecuted(tx, args.identity.graph, args.pendingId)) {
     throw new ExecError(
       'VALIDATION',
       `подтверждение ${args.pendingId} уже исполнено — отклонить нельзя`,
@@ -1575,6 +1605,7 @@ export async function rejectPendingTx(
       ...(args.continuation !== undefined && { continuation: args.continuation }),
     },
   });
+  await releaseFileSource(tx, args.identity.graph, 'pending', args.pendingId);
   return {
     pendingId: args.pendingId,
     alreadyRejected: false,

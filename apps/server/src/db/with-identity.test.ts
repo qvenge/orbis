@@ -101,7 +101,7 @@ describe('withIdentity (RLS-механика, findings B7)', () => {
       return r[0];
     });
     expect(inside?.uid).toBe(userA);
-    expect(inside?.who).toBe('authenticated');
+    expect(inside?.who).toBe('orbis_files');
     expect(inside?.xid).toBeNull();
     // свежий checkout после транзакции чист (пул max=3, гоняем несколько раз).
     // Прямой auth.uid() под orbis_app недоступен: NOINHERIT без грантов на схему auth,

@@ -55,7 +55,7 @@ import { parseQueryText, parseRegistryOf } from '../query/parse-text';
 import { queryWithMaterialization } from '../recurring/with-materialization';
 import { effectiveRegistry } from '../registry/cache';
 import { readRegistryVersions } from '../registry/version';
-import { ownerOnlyProcedure, protectedProcedure, router } from '../trpc';
+import { ownerOnlyProcedure, protectedProcedure, router, supportsFileWrites } from '../trpc';
 import { registryVersionOf, toWireEntityFromSql } from '../wire';
 import { runBlocks } from './entity-blocks';
 
@@ -313,7 +313,7 @@ async function currentBodyAction(
  * Повтор по клиентскому id возвращает сохранённый ответ пачки, включая исходный JournalRef.
  */
 async function createAndLink(
-  ctx: { db: Db; identity: Identity },
+  ctx: { db: Db; identity: Identity; clientVersion: string | null },
   input: EntityCreateUiInput,
   source: 'fast_path' | 'quick_capture' | 'ui',
   link: EntityCreateLink,
@@ -332,6 +332,7 @@ async function createAndLink(
     {
       identity: ctx.identity,
       actorKind: 'owner',
+      fileCapability: supportsFileWrites(ctx.clientVersion),
       source,
       ...(threadId !== undefined && { threadId }),
       batchId: createLinkBatchId(ctx.identity.graph, input.id),
@@ -395,6 +396,7 @@ export const entityRouter = router({
           {
             identity: ctx.identity,
             actorKind: 'owner',
+            fileCapability: supportsFileWrites(ctx.clientVersion),
             source: input.source,
             ...(input.threadId !== undefined && { threadId: input.threadId }),
             operations: [{ tool: 'entity_create', input: input.input }],
@@ -435,6 +437,7 @@ export const entityRouter = router({
         {
           identity: ctx.identity,
           actorKind: 'owner',
+          fileCapability: supportsFileWrites(ctx.clientVersion),
           source: 'ui', // прямое действие владельца в UI (не chat/mcp/system)
           ...(autosave === true && { textSession: true }),
           operations: [{ tool: 'entity_update', input: fields }],
@@ -497,6 +500,7 @@ export const entityRouter = router({
         {
           identity: ctx.identity,
           actorKind: 'owner',
+          fileCapability: supportsFileWrites(ctx.clientVersion),
           source: 'ui',
           batchId: newId(),
           operations,

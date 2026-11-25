@@ -38,7 +38,9 @@ import {
 import { TRPCError } from '@trpc/server';
 
 export type ExecErrorCode =
+  | 'CLIENT_OUTDATED'
   | 'VALIDATION'
+  | 'EXPORT_FORMAT_REQUIRED'
   | 'NOT_FOUND'
   | 'STALE_VERSION'
   | 'INVARIANT'
@@ -153,7 +155,9 @@ export interface StructuredError {
  * ошибка — в cause, её безопасные поля — в `data.orbis` (`orbisErrorData` ниже).
  */
 const TRPC_CODE_BY_EXEC: Record<ExecErrorCode, TRPCError['code']> = {
+  CLIENT_OUTDATED: 'PRECONDITION_FAILED',
   VALIDATION: 'BAD_REQUEST',
+  EXPORT_FORMAT_REQUIRED: 'CONFLICT',
   NOT_FOUND: 'NOT_FOUND',
   STALE_VERSION: 'CONFLICT',
   INVARIANT: 'UNPROCESSABLE_CONTENT',
@@ -242,7 +246,12 @@ const ORBIS_ERROR_FIELDS: Partial<
 > = {
   STALE_VERSION: (d) => pick(d, ['id', 'expected', 'current']),
   // Заголовок сверяется существующим CAS; остальные причины CONFLICT не раскрывают деталей.
-  CONFLICT: (d) => (d.reason === 'precondition_failed' ? pick(d, ['reason', 'mismatches']) : {}),
+  CONFLICT: (d) => {
+    if (d.reason === 'precondition_failed') return pick(d, ['reason', 'mismatches']);
+    if (d.reason === 'upload_finishing' && d.state === 'finishing')
+      return pick(d, ['reason', 'state']);
+    return {};
+  },
   // Отказ правила отмены текста (§8.6): что отменялось (id и заголовок действия), перечень записей (id, заголовок записи,
   // актор, время) и место продолжения — клиент рисует по ним кнопку «Всё равно отменить».
   UNDO_TEXT_CHANGED: (d) => pick(d, ['action', 'entries', 'continuation']),

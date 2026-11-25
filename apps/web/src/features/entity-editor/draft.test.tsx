@@ -1934,7 +1934,7 @@ test('перештамповка ПРОГОНЯЕТ документ через 
   expect(block?.attrs?.query).toBeUndefined();
 });
 
-test('черновик v2 из localStorage перештамповывается в v3 и сохраняется (формат тела v3)', async () => {
+test('черновик v2 из localStorage перештамповывается в текущий формат и сохраняется', async () => {
   // Черновик, набранный до выкатки v3, — самый частый сюжет дня выкатки. Узлы v2 все остались в
   // схеме v3, поэтому спрашивать человека не о чем: `toCurrentSchema` через `upgradeBodyDoc`
   // ставит новый штамп и досылает ТОТ ЖЕ документ — с блочными id, без пересборки.
@@ -1955,19 +1955,19 @@ test('черновик v2 из localStorage перештамповывается
 
   expect(s.api().pendingDraft).toBeNull();
   expect(s.updates()).toHaveLength(1);
-  expect((s.input(0) as { bodyDoc: BodyDoc }).bodyDoc).toEqual({ v: 3, doc });
+  expect((s.input(0) as { bodyDoc: BodyDoc }).bodyDoc).toEqual({ v: DOC_SCHEMA_VERSION, doc });
 });
 
-test('черновик v4 (из будущего) вниз не штампуется — предложение выбором, как сегодня', async () => {
-  const v4: BodyDoc = { v: 4, doc: ONE.doc };
-  seed(v4);
+test('черновик новой версии (из будущего) вниз не штампуется — предложение выбором, как сегодня', async () => {
+  const future: BodyDoc = { v: DOC_SCHEMA_VERSION + 1, doc: ONE.doc };
+  seed(future);
 
   const s = mount({ entity: ENTITY });
   await tick(SAVE_PAUSE * 2);
 
   expect(s.updates()).toEqual([]);
-  expect(s.api().pendingDraft).toMatchObject({ doc: v4, foreignSchema: true });
-  expect(stored().doc).toEqual(v4);
+  expect(s.api().pendingDraft).toMatchObject({ doc: future, foreignSchema: true });
+  expect(stored().doc).toEqual(future);
 });
 
 test('старая вкладка (документ v2) получает отказ «перезагрузите» — черновик цел на диске (Фокус ревью п. 5)', async () => {

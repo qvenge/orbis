@@ -1,6 +1,7 @@
 import { type BodyDoc, parseBody, serializeBody } from '@orbis/shared/doc';
 import { useMemo, useRef, useState } from 'react';
 import { Button } from '../../ui/Button';
+import { retainMarkdownBlockIds } from './markdown-block-ids';
 
 /**
  * Предупреждение о неразобранной разметке. Второе «Применить» — не украшение: `parseBody`
@@ -128,7 +129,7 @@ export function MarkdownToggle({
       setAwaitingRawConfirm(true);
       return;
     }
-    onChange(next);
+    onChange(retainMarkdownBlockIds(doc, next));
     close();
   }
 

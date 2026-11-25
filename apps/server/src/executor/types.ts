@@ -60,6 +60,10 @@ export type MutationMechanism =
   | 'app-toggle';
 
 export interface ExecuteRequest {
+  /** Checked transport capability for operations that change existing file data. */
+  fileCapability?: boolean;
+  /** Set only by the approval path after acquiring its pending lock. */
+  approvedFilePendingId?: string;
   /**
    * Пара «актор + текущий граф» (D44): актор — аккаунт, от чьего имени идёт запись
    * (`actor_user_id` журнала, субъект тарифа), граф — в чьих данных она идёт (ключ строк,
@@ -126,6 +130,8 @@ export interface ExecuteRequest {
 
 export interface ExecuteOk {
   ok: true;
+  /** File command receipt without a graph journal entry. */
+  noGraphChange?: true;
   /** id записи журнала действия; у продолжения сеанса правки текста — id записи сеанса (§8.2, §8.5). */
   actionId: string;
   /** Правка дописала эффекты сверх явного входа (§8.2); считает исполнитель в транзакции записи. */
@@ -167,6 +173,7 @@ export interface WireEntity {
   emoji: string | null;
   /** Тело — по выбору полей (§9): лёгкие списки и bare entity.get его не несут; мутации несут всегда. */
   body?: string;
+  bodyFormatVersion?: 4 | null;
   /** Начало текста (fields: start); null — у записи текста нет. */
   bodyStart?: string | null;
   /**

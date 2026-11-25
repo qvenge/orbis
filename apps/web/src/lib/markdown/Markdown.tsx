@@ -1,10 +1,25 @@
 import { buildAddress, parseAddress } from '@orbis/shared/nav';
-import { useMemo } from 'react';
-import ReactMarkdown, { type Components } from 'react-markdown';
-import rehypeSanitize from 'rehype-sanitize';
+import { createContext, lazy, Suspense, useContext, useMemo } from 'react';
+import ReactMarkdown, { type Components, defaultUrlTransform } from 'react-markdown';
+import rehypeSanitize, { defaultSchema } from 'rehype-sanitize';
 import remarkGfm from 'remark-gfm';
 import { RecordLink } from '../entity-ref/RecordLink';
 import { recordIdOfLink } from '../entity-ref/record-link-controller';
+
+const FileContent = lazy(() =>
+  import('../files/FileContent').then((m) => ({ default: m.FileContent })),
+);
+export const FileMarkdownContext = createContext<ReadonlyMap<string, string> | null>(null);
+const fileId = (url?: string) =>
+  url?.match(/^orbis-file:([\da-f]{8}-(?:[\da-f]{4}-){3}[\da-f]{12})$/i)?.[1]?.toLowerCase();
+const fileSchema = {
+  ...defaultSchema,
+  protocols: {
+    ...defaultSchema.protocols,
+    href: [...(defaultSchema.protocols?.href ?? []), 'orbis-file'],
+    src: [...(defaultSchema.protocols?.src ?? []), 'orbis-file'],
+  },
+};
 
 /**
  * Ссылка на сущность в тексте. Класс символов и регистронезависимость — КОПИЯ серверного
@@ -45,9 +60,19 @@ function linkifyEntityRefs(source: string): string {
   });
 }
 
-function buildComponents(onEntityLink?: (id: string) => void): Components {
+function buildComponents(
+  files: ReadonlyMap<string, string> | null,
+  onEntityLink?: (id: string) => void,
+): Components {
   return {
     a({ node: _node, href, children, ...rest }) {
+      const target = files?.get(fileId(href) ?? '');
+      if (target)
+        return (
+          <Suspense fallback={children}>
+            <FileContent id={target} label={typeof children === 'string' ? children : undefined} />
+          </Suspense>
+        );
       const id = href && recordIdOfLink(href, document);
       // Исходный href нужен браузеру для новой вкладки. Рамку обычного клика
       // выбирает контроллер ссылки или переданное правило открытия.
@@ -84,6 +109,16 @@ function buildComponents(onEntityLink?: (id: string) => void): Components {
     },
     // Единственная обёртка, которую не выразить стилем: широкая таблица обязана скроллиться
     // внутри себя, а не растягивать пузырь сообщения.
+    img({ node: _node, src, alt, ...rest }) {
+      const target = typeof src === 'string' && files?.get(fileId(src) ?? '');
+      if (target)
+        return (
+          <Suspense fallback={alt}>
+            <FileContent id={target} image label={alt} />
+          </Suspense>
+        );
+      return <img {...rest} src={src || undefined} alt={alt ?? ''} />;
+    },
     table({ node: _node, children, ...rest }) {
       return (
         <div className="my-2 overflow-x-auto">
@@ -118,12 +153,14 @@ export function Markdown({
   className?: string;
 }) {
   const text = useMemo(() => linkifyEntityRefs(source), [source]);
-  const components = useMemo(() => buildComponents(onEntityLink), [onEntityLink]);
+  const files = useContext(FileMarkdownContext);
+  const components = useMemo(() => buildComponents(files, onEntityLink), [files, onEntityLink]);
   return (
     <div className={className ? `orbis-markdown ${className}` : 'orbis-markdown'}>
       <ReactMarkdown
         remarkPlugins={REMARK_PLUGINS}
-        rehypePlugins={REHYPE_PLUGINS}
+        rehypePlugins={files ? [[rehypeSanitize, fileSchema]] : REHYPE_PLUGINS}
+        urlTransform={(url) => (files?.has(fileId(url) ?? '') ? url : defaultUrlTransform(url))}
         components={components}
       >
         {text}

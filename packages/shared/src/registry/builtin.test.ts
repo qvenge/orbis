@@ -282,20 +282,21 @@ const FREE_DOMAIN_IDS = [
   'orbis/parent_project',
   'orbis/root_project',
   'orbis/inbox_state',
+  'orbis/attachments',
 ] as const;
 
 const byId = new Map(BUILTIN_PROPERTY_META.map((p) => [p.id, p]));
 const defsById = new Map(BUILTIN_ASPECT_DEFS.map((a) => [a.id, a]));
 
-test('89 доменных свойств + 4 core; id/key уникальны; у всех label.ru/en и description.ru/en', () => {
+test('90 доменных свойств + 4 core; id/key уникальны; у всех label.ru/en и description.ru/en', () => {
   const domain = BUILTIN_PROPERTY_META.filter((p) => p.storage === 'props');
   const core = BUILTIN_PROPERTY_META.filter((p) => p.storage === 'core');
   // Счёт §А8: 73 поля − 3 слияния − 1 удаление + 4 новых = 73; core в счёт словаря не входят.
   // Срез 1а §3 добавил два свойства страницы («Шаблон для», «Главнее, чем») — 75.
   // Срез 1б (РП-3) — одиннадцать: шесть «приложения», «Дом» страницы, четыре «поставки» — 86.
-  expect(domain.length).toBe(89);
+  expect(domain.length).toBe(90);
   expect(core.map((p) => p.id)).toEqual([...CORE_PROPERTY_IDS]);
-  expect(BUILTIN_PROPERTY_META.length).toBe(93);
+  expect(BUILTIN_PROPERTY_META.length).toBe(94);
 
   // Состав доменного словаря = все id таблицы §А8 плюс два вычисляемых свойства реформы.
   const fromA8 = new Set<string>();
@@ -1037,6 +1038,7 @@ const A8_TYPES: Record<string, string> = {
   'orbis/planned_date': 'date|core',
   'orbis/plan_order': 'number{integer:true,min:0}|core',
   'orbis/inbox_state': 'select{options:3}|core',
+  'orbis/attachments': 'file{cardinality:many}|core',
   'orbis/completed_at': 'timestamp|core',
   'orbis/effort_min': 'number{integer:true,min:1}|core',
   'orbis/waiting_for': 'text|core',
@@ -1141,7 +1143,7 @@ test('тип и модуль каждого свойства — по колон
     return `${type}|${property.module ?? 'core'}`;
   };
 
-  expect(Object.keys(A8_TYPES).length).toBe(93);
+  expect(Object.keys(A8_TYPES).length).toBe(94);
   for (const property of BUILTIN_PROPERTY_META) {
     expect(`${property.id}: ${signature(property)}`).toBe(
       `${property.id}: ${A8_TYPES[property.id] ?? '<нет в снимке §А8>'}`,

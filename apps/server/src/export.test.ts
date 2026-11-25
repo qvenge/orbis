@@ -13,6 +13,7 @@ import {
 } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import { adminDb, appDb, freshGraph, personal, requireEnv, truncateAll } from '../test/helpers';
+import { withIdentity } from './db/with-identity';
 import { bumpOwnerRegistryVersion } from './registry/version';
 import { appRouter } from './router';
 import { createCallerFactory } from './trpc';
@@ -35,6 +36,35 @@ afterAll(async () => {
 });
 
 describe('user.exportData (§9.4)', () => {
+  test('v3 сохраняет старый файловый литерал в Undo после правки', async () => {
+    const graph = await freshGraph();
+    const id = crypto.randomUUID();
+    const literal = `[старый адрес](orbis-file:${crypto.randomUUID()})`;
+    await withIdentity(db, personal(graph), (tx) =>
+      tx.execute(sql`
+      INSERT INTO entities (id,graph_id,title,body) VALUES (${id},${graph},'Прежний текст',${literal})`),
+    );
+    const owner = callerFor(graph);
+    const before = await owner.entity.get({ id, include: ['body'] });
+    if (before.entity.bodyRevision == null) throw Error('Нет ревизии тела.');
+    const changed = await owner.entity.update({
+      id,
+      expectedBodyRevision: before.entity.bodyRevision,
+      body: 'Новая редакция',
+    });
+    if (!changed.actionId) throw new Error('Нет операции изменения текста.');
+    const legacy = await owner.user.exportData();
+    expect(legacy.version).toBe(3);
+    const inverse = legacy.journal.find((entry) => entry.id === changed.actionId)?.inverse;
+    expect(inverse?.some((op) => op.payload.body === literal)).toBe(true);
+    await owner.ai.undo({ actionId: changed.actionId });
+    const restored = await owner.entity.get({ id, include: ['body', 'bodyDoc'] });
+    expect(restored.entity.body).toContain('orbis-file:');
+    expect(restored.entity.bodyDoc).toBeDefined();
+    expect(JSON.stringify(restored.entity.bodyDoc)).not.toContain('"type":"fileRef"');
+    expect((await owner.user.exportData()).version).toBe(3);
+  });
+
   test('новая пачка экспортирует прежний results[] без внутреннего consequences', async () => {
     const user = await freshGraph();
     const caller = callerFor(user);
@@ -56,7 +86,13 @@ describe('user.exportData (§9.4)', () => {
     const entry = (await caller.user.exportData()).journal.find(
       (item) => item.id === batch.actionId,
     );
-    expect(entry?.results).toEqual(batch.results);
+    // v3 readers see the saved result, with the v4-only body stamp omitted.
+    expect(entry?.results).toEqual(
+      batch.results.map((result) => {
+        const { bodyFormatVersion: _format, ...legacy } = result as Record<string, unknown>;
+        return legacy;
+      }),
+    );
     expect(entry).not.toHaveProperty('consequences');
   });
 

@@ -26,6 +26,7 @@ export async function withIdentity<T>(
   db: Db,
   who: Identity,
   fn: (tx: Tx) => Promise<T>,
+  transactionOptions?: Parameters<Db['transaction']>[1],
 ): Promise<T> {
   // РАНТАЙМ-БАРЬЕР — ПЕРВОЙ СТРОКОЙ, до всякой работы с базой. Тип пары закрыт компилятором, но
   // формы с источником `any` (`JSON.parse`, `Object.create`, `as unknown as Identity`,
@@ -71,9 +72,11 @@ export async function withIdentity<T>(
       `);
       if (!snapshot) throw new Error('withIdentity: отсутствует граница снимка');
       recordReadWatermark(snapshot.watermark);
-      await tx.execute(sql`SET LOCAL ROLE authenticated`);
+      // Inherits authenticated graph RLS. Only the server login may enter the additional
+      // file-table role, including for an atomic graph edit and its retention records.
+      await tx.execute(sql`SET LOCAL ROLE orbis_files`);
       return fn(tx);
-    });
+    }, transactionOptions);
   } finally {
     addDbTime(performance.now() - t0);
   }

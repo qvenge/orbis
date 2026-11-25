@@ -5,6 +5,7 @@ export { bindAttrs as bindQueryBlockAttrs, bindQueryBlocks } from './bind-query'
 export * from './convert';
 export { OrbisMarkdownManager } from './manager';
 export { BODY_REF_RE, EntityRef } from './nodes/entity-ref';
+export { FileRef } from './nodes/file-ref';
 export { Column, Columns, Tab, Tabs } from './nodes/layout';
 export { ParamBlock } from './nodes/param-block';
 export { QUERY_BLOCK_CLOSE, QueryBlock } from './nodes/query-block';

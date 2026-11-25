@@ -293,7 +293,7 @@ function PropertyRow({
           >
             {valueText(value)}
           </span>
-        ) : readOnly ? (
+        ) : readOnly && def.type.kind !== 'file' ? (
           <span
             data-testid={`prop-${propertyId}`}
             className="break-words px-2 py-1 text-sm text-text-secondary"
@@ -308,7 +308,13 @@ function PropertyRow({
           // Контрол ОДИН на все типы, включая `ref`: пикер категории (K6) переехал в общий
           // `RefField` по цели свойства из реестра (§А6-1) вместе с четырьмя своими копиями
           // на экранах Финансов и импорта.
-          <PropertyControl def={def} value={value} onChange={onChange} selfId={selfId} />
+          <PropertyControl
+            def={def}
+            value={value}
+            onChange={onChange}
+            selfId={selfId}
+            readOnly={readOnly}
+          />
         )}
       </dd>
     </>

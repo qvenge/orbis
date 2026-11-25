@@ -381,19 +381,19 @@ describe('карточка аспекта: привязка по реестру 
   });
 });
 
-describe('upgradeBodyDoc: цепочка v1 → v2 → v3', () => {
+describe('upgradeBodyDoc: цепочка v1 → v2 → v3 → v4', () => {
   const content = [
     { type: 'paragraph', attrs: { id: 'блок-1' }, content: [{ type: 'text', text: 'привет' }] },
   ];
 
-  test('v2 → v3 тем же объектом doc: узлы и блочные id не трогаются', () => {
+  test('v2 → v4 тем же объектом doc: узлы и блочные id не трогаются', () => {
     const doc = { type: 'doc', content };
     const got = upgradeBodyDoc({ v: 2, doc });
-    expect(got).toEqual({ v: 3, doc });
+    expect(got).toEqual({ v: 4, doc });
     expect(got?.doc).toBe(doc);
   });
 
-  test('v1 → v3 через queryAttrsV1ToV2', () => {
+  test('v1 → v4 через queryAttrsV1ToV2', () => {
     const got = upgradeBodyDoc({
       v: 1,
       doc: {
@@ -401,7 +401,7 @@ describe('upgradeBodyDoc: цепочка v1 → v2 → v3', () => {
         content: [{ type: 'queryBlock', attrs: { id: 'б', query: ' aspect=orbis/task' } }],
       },
     });
-    expect(got?.v).toBe(3);
+    expect(got?.v).toBe(4);
     expect(got?.doc.content?.[0]?.attrs).toEqual({
       id: 'б',
       ast: null,
@@ -409,15 +409,15 @@ describe('upgradeBodyDoc: цепочка v1 → v2 → v3', () => {
     });
   });
 
-  test('v3 — как есть; v4 и мусор — null', () => {
-    const current = { v: 3, doc: { type: 'doc', content } };
+  test('v4 — как есть; v5 и мусор — null', () => {
+    const current = { v: 4, doc: { type: 'doc', content } };
     expect(upgradeBodyDoc(current)).toBe(current);
-    expect(upgradeBodyDoc({ v: 4, doc: { type: 'doc', content } })).toBeNull();
+    expect(upgradeBodyDoc({ v: 5, doc: { type: 'doc', content } })).toBeNull();
     expect(upgradeBodyDoc({ v: 'два' as never, doc: { type: 'doc', content } })).toBeNull();
     expect(upgradeBodyDoc({ v: 0, doc: { type: 'doc', content } })).toBeNull();
   });
 
-  test('readBodyDoc: хранимый v2 приезжает v3 и привязанным, блочные id целы', () => {
+  test('readBodyDoc: хранимый v2 приезжает v4 и привязанным, блочные id целы', () => {
     const stored = {
       v: 2,
       doc: {

@@ -334,3 +334,22 @@ describe('core-проекция в props — CORE_IN_PROPS (§А1-3, едини�
     ]);
   });
 });
+
+test('для файла выполняются проверка UUID, уникальность ID без учёта регистра и максимум поля', () => {
+  const id = '018f932a-e591-7011-99d1-0ea197510b3f';
+  const def = REG.properties.get('orbis/attachments')!;
+  const reg = withProperty({ ...def, type: { kind: 'file', cardinality: 'many', maxItems: 2 } });
+  const check = (value: unknown) =>
+    validateEntityProps(reg, { aspects: [], props: { [def.id]: value } });
+  expect(check([id])).toEqual([]);
+  for (const value of [
+    id,
+    ['bad'],
+    [`urn:uuid:${id}`],
+    [id, id],
+    [id, id.toUpperCase()],
+    [id, id.replace(/f$/, 'e'), id.replace(/f$/, 'd')],
+  ]) {
+    expect(codes(check(value))).toEqual(['TYPE']);
+  }
+});

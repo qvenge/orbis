@@ -291,6 +291,18 @@ export function validateEntityProps(
       violations.push({ code: 'TYPE', propertyId, message: calendar });
       continue;
     }
+    if (
+      def.type.kind === 'file' &&
+      Array.isArray(value) &&
+      new Set((value as string[]).map((id) => id.toLowerCase())).size !== value.length
+    ) {
+      violations.push({
+        code: 'TYPE',
+        propertyId,
+        message: 'Список содержит повторяющийся ID файла',
+      });
+      continue;
+    }
     const bounds = decimalBounds(schema);
     if (bounds !== undefined) {
       const message = decimalViolation(bounds, value);

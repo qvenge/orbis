@@ -217,3 +217,21 @@ describe('propertyValueJsonSchema: словарь типов §А2-2 → JSON Sc
     expect(reply.properties.at.pattern).toBe(iso);
   });
 });
+
+test('файловые свойства ограничивают уникальные UUID и сохраняют скалярную форму one', () => {
+  const many = typeOf('orbis/attachments');
+  expect(many).toMatchObject({ kind: 'file', cardinality: 'many' });
+  expect(propertyValueJsonSchema(many)).toMatchObject({
+    type: 'array',
+    uniqueItems: true,
+    maxItems: 50,
+    items: { type: 'string', format: 'uuid' },
+  });
+  expect(propertyValueJsonSchema({ kind: 'file', cardinality: 'many', maxItems: 2 })).toMatchObject(
+    { maxItems: 2 },
+  );
+  expect(propertyValueJsonSchema({ kind: 'file', cardinality: 'one' })).toMatchObject({
+    type: 'string',
+    format: 'uuid',
+  });
+});

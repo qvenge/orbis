@@ -434,3 +434,25 @@ test('only the UI accepts a narrow expected Inbox status, including absence', ()
     false,
   );
 });
+
+test('новый Markdown объявляет формат, а замена файлового значения передаёт ожидаемое основание', () => {
+  const id = '018f932a-e591-7011-99d1-0ea197510b3f';
+  const create = { title: 'Запись', tags: [], body: 'текст', bodyFormatVersion: 4 };
+  const update = {
+    id,
+    body: 'текст',
+    bodyFormatVersion: 4,
+    expectedBodyRevision: 1,
+    expectedFileProps: { 'orbis/attachments': [id], 'user/estimate': null },
+  };
+  for (const schema of [entityCreateInput, entityCreateUiInput, entityCreateExecInput]) {
+    expect(schema.safeParse(create).success).toBe(true);
+    expect(schema.safeParse({ ...create, bodyFormatVersion: 5 }).success).toBe(false);
+  }
+  for (const schema of [entityUpdateInput, entityUpdateUiInput, entityUpdateExecInput]) {
+    expect(schema.safeParse(update).success).toBe(true);
+    expect(
+      schema.safeParse({ ...update, expectedFileProps: { 'orbis/attachments': ['x'] } }).success,
+    ).toBe(false);
+  }
+});

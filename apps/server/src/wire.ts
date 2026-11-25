@@ -43,7 +43,9 @@ export function toWireEntity(
     graphId: row.graphId,
     title: row.title,
     emoji: row.emoji,
-    ...(includeBody ? { body: row.body } : {}),
+    ...(includeBody
+      ? { body: row.body, ...(row.bodyFormat === 4 && { bodyFormatVersion: 4 as const }) }
+      : {}),
     ...(includeBodyDoc ? { bodyDoc: (row.bodyDoc ?? null) as WireEntity['bodyDoc'] } : {}),
     bodyRefs: row.bodyRefs,
     tags: row.tags,
@@ -112,6 +114,7 @@ export interface LlmEntity {
   title: string;
   emoji: string | null;
   body?: string;
+  bodyFormatVersion?: 4 | null;
   bodyStart?: string | null;
   bodyRefs: string[];
   tags: string[];
@@ -140,7 +143,12 @@ export function toLlmEntity(
     id: row.id,
     title: row.title,
     emoji: row.emoji,
-    ...(row.body !== undefined ? { body: row.body } : {}),
+    ...(row.body !== undefined
+      ? {
+          body: row.body,
+          ...(row.bodyFormatVersion != null && { bodyFormatVersion: row.bodyFormatVersion }),
+        }
+      : {}),
     ...(row.bodyStart !== undefined ? { bodyStart: row.bodyStart } : {}),
     bodyRefs: row.bodyRefs,
     tags: row.tags,
@@ -179,6 +187,7 @@ export function toWireEntityFromSql(row: Record<string, unknown>): WireEntity {
         title: row.title,
         emoji: row.emoji,
         body: row.body,
+        bodyFormat: row.body_format,
         bodyRefs: row.body_refs,
         tags: row.tags,
         // Только НОВАЯ правда (§А1-1): списочное чтение обязано нести ровно тот же состав,

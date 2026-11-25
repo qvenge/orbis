@@ -1,6 +1,7 @@
 import { settingsSetInput } from '@orbis/shared';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { beforeEach, expect, test, vi } from 'vitest';
+import * as fileTransport from '../../lib/files/transport';
 import { isSupplyRecordsCall, renderWithProviders, trpcError } from '../../test/harness';
 import { BUILTIN_REGISTRY } from '../../test/registry';
 import { useToastStore } from '../../ui/toast-store';
@@ -183,6 +184,38 @@ beforeEach(() => {
   Object.defineProperty(URL, 'revokeObjectURL', { value: vi.fn(), configurable: true });
 });
 
+test('полный пакет скачивает ZIP, а ошибку сборки показывает до скачивания', async () => {
+  const request = vi
+    .spyOn(fileTransport, 'fetchFileResource')
+    .mockRejectedValueOnce(new Error('Оригинал недоступен.'))
+    .mockResolvedValueOnce(
+      new Response('архив', { headers: { 'content-type': 'application/zip' } }),
+    );
+  const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+  try {
+    renderWithProviders(<ExportButton />, () => {
+      throw Error('ZIP использует бинарный маршрут');
+    });
+    const button = screen.getByRole('button', { name: /полный пакет ZIP/i });
+    fireEvent.click(button);
+    expect(await screen.findByRole('alert')).toHaveTextContent('Оригинал недоступен.');
+    expect(click).not.toHaveBeenCalled();
+    fireEvent.click(button);
+    await waitFor(() => expect(click).toHaveBeenCalledTimes(1));
+    expect(request).toHaveBeenLastCalledWith('/api/exports/graph-package', {
+      method: 'POST',
+      signal: expect.any(AbortSignal),
+    });
+    const blob = vi.mocked(URL.createObjectURL).mock.lastCall?.[0] as Blob;
+    expect(blob.type).toBe('application/zip');
+    expect((click.mock.instances[0] as HTMLAnchorElement).download).toMatch(/\.zip$/);
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:x');
+  } finally {
+    click.mockRestore();
+    request.mockRestore();
+  }
+});
+
 test('ExportButton формирует Blob с format:orbis-export', async () => {
   const createObjectURL = URL.createObjectURL as ReturnType<typeof vi.fn>;
   renderWithProviders(<ExportButton />, (path) =>
@@ -202,7 +235,7 @@ test('ExportButton формирует Blob с format:orbis-export', async () => 
         }
       : {},
   );
-  fireEvent.click(screen.getByRole('button', { name: /экспорт/i }));
+  fireEvent.click(screen.getByRole('button', { name: /JSON v3/i }));
   await waitFor(() => expect(createObjectURL).toHaveBeenCalled());
   const blob = createObjectURL.mock.calls[0]?.[0] as Blob;
   const text = await blob.text();
@@ -252,4 +285,26 @@ test('AspectsList: подпись, иконка и СОСТАВ свойств �
   expect(screen.getByText('✅')).toBeInTheDocument();
   // Состав — ПОДПИСЯМИ свойств из реестра и в порядке `rank`, а не id и не порядком массива.
   expect(screen.getByTestId('aspect-props-orbis/task')).toHaveTextContent('Состояние задачи, Срок');
+});
+
+test.each([
+  'one',
+  'many',
+] as const)('владелец создаёт файловое поле %s через реестр', async (cardinality) => {
+  const { calls } = renderWithProviders(<AspectsList />, (path) =>
+    path === 'registry.effective' ? BUILTIN_REGISTRY : {},
+  );
+  fireEvent.click(await screen.findByRole('button', { name: 'Новое файловое поле' }));
+  fireEvent.change(screen.getByLabelText('Название поля'), { target: { value: 'Смета' } });
+  fireEvent.change(screen.getByLabelText('Количество файлов'), { target: { value: cardinality } });
+  if (cardinality === 'many')
+    fireEvent.change(screen.getByLabelText('Максимум файлов'), { target: { value: '3' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Создать поле' }));
+  await waitFor(() =>
+    expect(calls.find((call) => call.path === 'registry.createProperty')?.input).toMatchObject({
+      label: { ru: 'Смета' },
+      status: 'active',
+      type: { kind: 'file', cardinality, ...(cardinality === 'many' ? { maxItems: 3 } : {}) },
+    }),
+  );
 });

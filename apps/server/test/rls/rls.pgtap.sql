@@ -3,7 +3,7 @@
 -- Всё в одной транзакции с ROLLBACK: БД не мутируется.
 BEGIN;
 CREATE EXTENSION IF NOT EXISTS pgtap;
-SELECT plan(198);
+SELECT plan(219);
 
 -- Графы фикстур (0020): с FK на graphs владельца «из воздуха» не бывает. Весь файл — одна транзакция
 -- с ROLLBACK, отложенные триггеры И-1 до проверки не доходят — гранты заведены ради политик.
@@ -1144,13 +1144,13 @@ SELECT is((SELECT count(*)::int FROM pg_policies p WHERE p.schemaname = 'public'
 -- и склейка с литералом даёт «could not determine which collation» ещё до сверки (измерено).
 SELECT is((SELECT string_agg(tablename::text || '.' || policyname::text || ' ' || cmd::text
       || ' ' || roles::text COLLATE "C", ', ' ORDER BY (tablename::text || policyname::text) COLLATE "C")
-    FROM pg_policies WHERE schemaname = 'public' AND roles <> '{authenticated}'),
+    FROM pg_policies WHERE schemaname = 'public' AND roles NOT IN ('{authenticated}','{orbis_files}')),
   'agent_grants.server_manages_grants ALL {orbis_app}, '
   || 'graph_members.scheduler_reads_members SELECT {orbis_app}, '
   || 'oauth_clients.server_manages_clients ALL {orbis_app}, '
   || 'registry_system.read_all SELECT {public}, '
   || 'user_settings.scheduler_reads_owner_list SELECT {orbis_app}',
-  'политики НЕ-`authenticated` ролей — ровно эти пять и никаких больше (поверхность без идентичности)');
+  'политики вне транзакционных ролей — ровно пять (поверхность без идентичности)');
 -- КОЛОНКИ ТЕЛА (0026, спека скорости §8.1, план А задача 7). Функция триггера — SECURITY INVOKER с пустым
 -- search_path (РП-1): она меняет только NEW и других таблиц не читает, привилегий сверх вызывающего ей не нужно, а
 -- правило проекта — «bypass RLS не вводится» (0013:7). Пин — по каталогу, как у четырёх функций политик выше.
@@ -1170,7 +1170,7 @@ SELECT is((SELECT tgtype::int || ' ' || tgfoid::regproc::text || ' ' || tgenable
 SELECT is((SELECT string_agg(a.attname::text, ',' ORDER BY a.attname) FROM pg_trigger t
     JOIN pg_attribute a ON a.attrelid = t.tgrelid AND a.attnum = ANY(t.tgattr)
   WHERE t.tgrelid = 'public.entities'::regclass AND t.tgname = 'entities_body_stamp' AND NOT t.tgisinternal),
-  'body,body_doc', 'UPDATE-половина триггера entities_body_stamp — только по body и body_doc (R-16)');
+  'body,body_doc,body_format', 'триггер вызывается только по содержимому или формату тела');
 -- NULLIF (§8.1): после транзакции с set_config на переиспользованном соединении настройка остаётся ОПРЕДЕЛЁННОЙ с
 -- пустым значением — пустая строка не значение, и запись тела вне executor'а не падает на приведении '' к uuid.
 -- Настройка локальна этой (единственной) транзакции файла — поэтому пин последний.
@@ -1257,6 +1257,83 @@ SELECT throws_ok($$UPDATE public.change_feed_floor SET floor = '1'::xid8$$, '425
 SELECT set_config('request.jwt.claims', '{"sub":"00000000-0000-4000-8000-00000000000a","graph":"00000000-0000-4000-8000-00000000000b"}', true);
 SELECT is((SELECT (SELECT count(*) FROM public.change_feed) + (SELECT count(*) FROM public.change_feed_floor)),
   0::bigint, 'подмена graph в claims без гранта не открывает feed или floor');
+RESET ROLE;
+
+
+-- Attachment tables are reached through the server transaction role. Data API roles
+-- must be denied even for a real member with correctly scoped claims.
+SELECT results_eq(
+  $$SELECT tablename::text COLLATE "C", policyname::text COLLATE "C", cmd::text COLLATE "C" FROM pg_policies
+    WHERE schemaname='public' AND roles='{orbis_files}' ORDER BY 1,2,3$$,
+  $$SELECT t COLLATE "C", ('graph_' || lower(c)) COLLATE "C", c COLLATE "C"
+    FROM unnest(ARRAY['file_assets','file_commands','file_holds','file_upload_parts','file_uploads']) tables(t)
+    CROSS JOIN unnest(ARRAY['SELECT','INSERT','UPDATE','DELETE']) commands(c) ORDER BY 1,2,3$$,
+  'exact policies of the attachment transaction role');
+SELECT has_table('public', 'file_assets', 'attachments have a graph-scoped resource row');
+SELECT ok(NOT EXISTS (
+  SELECT FROM unnest(ARRAY['anon','authenticated','service_role']) roles(r)
+  CROSS JOIN unnest(ARRAY['file_assets','file_uploads','file_upload_parts','file_holds','file_commands']) tables(t)
+  CROSS JOIN unnest(ARRAY['SELECT','INSERT','UPDATE','DELETE','TRUNCATE','TRIGGER','REFERENCES']) privileges(p)
+  WHERE has_table_privilege(r, 'public.' || t, p)), 'Data API has no direct attachment privileges');
+SELECT ok(NOT pg_has_role('authenticator', 'orbis_files', 'SET')
+  AND NOT pg_has_role('authenticated', 'orbis_files', 'SET')
+  AND pg_has_role('orbis_app', 'orbis_files', 'SET'),
+  'only the application login can select the file transaction role');
+
+\set graph_a '00000000-0000-4000-8000-00000000000a'
+\set graph_b '00000000-0000-4000-8000-00000000000b'
+\set file_a '00000000-0000-4000-8000-0000000001a0'
+\set file_b '00000000-0000-4000-8000-0000000001b0'
+\set upload_a '00000000-0000-4000-8000-0000000002a0'
+\set upload_b '00000000-0000-4000-8000-0000000002b0'
+INSERT INTO file_assets (graph_id,id,state,name,object_key) VALUES
+  (:'graph_a',:'file_a','staging','a','original/a'), (:'graph_b',:'file_b','staging','b','original/b');
+INSERT INTO file_uploads (graph_id,id,file_id,owner_actor,declared_size,state,chunk_bytes,expires_at) VALUES
+  (:'graph_a',:'upload_a',:'file_a',:'graph_a',4,'open',4,now()+interval '1 day'),
+  (:'graph_b',:'upload_b',:'file_b',:'graph_b',4,'open',4,now()+interval '1 day');
+INSERT INTO file_upload_parts (graph_id,upload_id,"offset",byte_size,sha256,object_key) VALUES
+  (:'graph_a',:'upload_a',0,4,repeat('a',64),'parts/a'), (:'graph_b',:'upload_b',0,4,repeat('b',64),'parts/b');
+INSERT INTO file_holds (graph_id,file_id,source_kind,source_key) VALUES
+  (:'graph_a',:'file_a','property','same'), (:'graph_b',:'file_b','property','same');
+SELECT throws_ok(format('INSERT INTO file_holds(graph_id,file_id,source_kind,source_key) VALUES (%L,%L,''property'',''x'')',
+  :'graph_a',:'file_b'), '23503', NULL, 'hold cannot reference another graph file');
+SELECT throws_ok(format('UPDATE file_uploads SET file_id=%L WHERE id=%L', :'file_b',:'upload_a'),
+  '23503', NULL, 'upload target belongs to the same graph');
+SELECT throws_ok(format('UPDATE file_upload_parts SET upload_id=%L WHERE upload_id=%L', :'upload_b',:'upload_a'),
+  '23503', NULL, 'part cannot attach to another graph upload');
+SELECT throws_ok(format('UPDATE file_assets SET state=''ready'' WHERE id=%L', :'file_a'),
+  '23514', NULL, 'ready requires verified original metadata');
+UPDATE file_assets SET state='ready', media_type='text/plain', byte_size=4, sha256=repeat('a',64)
+  WHERE id=:'file_a';
+SELECT throws_ok(format('UPDATE file_assets SET object_key=''different'' WHERE id=%L',:'file_a'),
+  '23514',NULL,'an existing file ID cannot be redirected to different bytes');
+SELECT throws_ok(format('UPDATE file_assets SET sha256=repeat(''b'',64) WHERE id=%L',:'file_a'),
+  '23514',NULL,'verified original attributes are immutable');
+INSERT INTO entities (id,graph_id,title) VALUES ('00000000-0000-7000-8000-000000000fa4',:'graph_a','body format');
+UPDATE entities SET body_format=4 WHERE id='00000000-0000-7000-8000-000000000fa4';
+SELECT is((SELECT body_revision FROM entities WHERE id='00000000-0000-7000-8000-000000000fa4'),2,
+  'a change to Markdown interpretation advances the body revision');
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claims', jsonb_build_object('sub',:'graph_a','graph',:'graph_a')::text, true);
+SELECT throws_ok($$SELECT object_key FROM file_upload_parts$$, '42501', NULL,
+  'authenticated graph owner cannot read provider keys directly');
+SET LOCAL ROLE orbis_files;
+SELECT set_config('request.jwt.claims','',true);
+SELECT is((SELECT count(*) FROM file_assets),0::bigint,'empty actor and graph see no files');
+SELECT set_config('request.jwt.claims', jsonb_build_object('sub',:'graph_a','graph',:'graph_b')::text,true);
+SELECT is((SELECT count(*) FROM file_assets),0::bigint,'substituting a graph without membership reveals nothing');
+SELECT set_config('request.jwt.claims', jsonb_build_object('sub','00000000-0000-4000-8000-00000000000e','graph',:'graph_a')::text,true);
+SELECT results_eq($$SELECT name FROM file_assets$$,ARRAY['a'],'operator sees resources of active graph');
+SELECT results_eq($$SELECT object_key FROM file_upload_parts$$,ARRAY['parts/a'],'part reservations are graph scoped');
+SELECT is((SELECT count(*) FROM file_holds WHERE source_key='same' AND file_id=:'file_b'),0::bigint,
+  'a shared source key and foreign file id cannot read another graph hold');
+SELECT set_config('request.jwt.claims', jsonb_build_object('sub','00000000-0000-4000-8000-00000000000f','graph',:'graph_a')::text,true);
+SELECT results_eq($$SELECT name FROM file_assets FOR UPDATE$$,ARRAY['a'],'read lease can lock the resource against GC');
+SELECT lives_ok(format('INSERT INTO file_holds(graph_id,file_id,source_kind,source_key,expires_at) VALUES (%L,%L,''read'',''r'',now()+interval ''1 minute'')',
+  :'graph_a',:'file_a'),'read-only member can hold a resource for a read');
+SELECT throws_ok(format('INSERT INTO file_holds(graph_id,file_id,source_kind,source_key) VALUES (%L,%L,''property'',''unauthorized'')',
+  :'graph_a',:'file_a'),'42501',NULL,'read-only member cannot create a persistent binding');
+SELECT throws_ok($$UPDATE file_assets SET delete_generation=delete_generation+1$$,'42501',NULL,'read-only member cannot mutate the asset');
 RESET ROLE;
 
 SELECT finish();

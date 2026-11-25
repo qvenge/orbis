@@ -46,6 +46,7 @@ export type ControlKind =
   | 'select-many'
   | 'aspects-many'
   | 'ref'
+  | 'file'
   | 'ref-list'
   | 'ref-many'
   | 'readonly';
@@ -72,6 +73,7 @@ export function controlKindOf(def: PropertyDefinition): ControlKind {
     case 'number':
     case 'decimal':
       return type.cardinality === 'many' ? `${type.kind}-list` : type.kind;
+    case 'file':
     case 'boolean':
     case 'date':
     case 'timestamp':

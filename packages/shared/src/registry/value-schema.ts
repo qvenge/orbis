@@ -21,6 +21,7 @@
  * границы decimal. В ajv оно регистрируется как keyword без валидации, иначе `strict: true`
  * отвергает схему целиком.
  */
+import { FILE_LIST_LIMIT } from '../contracts/files';
 import { HHMM_RE } from '../date';
 import { assertPatternRegular } from './property-type';
 import type { PropertyType, TextFormat } from './types';
@@ -121,6 +122,8 @@ function elementSchema(type: PropertyType): Record<string, unknown> {
       // Значение — id сущности. Что она существует и попадает в `target`, проверяет сервер
       // запросом (§А6-1): множество цели — Q-AST, в JSON Schema его не выразить.
       return { type: 'string', format: 'uuid' };
+    case 'file':
+      return { type: 'string', format: 'uuid', minLength: 36, maxLength: 36 };
     case 'grant':
       // Ссылка в `agent_grants` (§А6-4). Существование проверяет инвариант исполнителя, но
       // ФОРМА остаётся uuid: без неё «не-uuid» доехал бы до SQL и упал приведением типа
@@ -197,6 +200,16 @@ export function propertyValueJsonSchema(type: PropertyType): Record<string, unkn
       type.maxItems === undefined
         ? element
         : { type: 'array', items: element, maxItems: type.maxItems };
+  } else if (type.kind === 'file') {
+    schema =
+      type.cardinality === 'many'
+        ? {
+            type: 'array',
+            items: element,
+            uniqueItems: true,
+            maxItems: type.maxItems ?? FILE_LIST_LIMIT,
+          }
+        : element;
   } else if (type.kind === 'ref') {
     schema =
       type.cardinality === 'many'

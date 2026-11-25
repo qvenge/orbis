@@ -13,9 +13,10 @@
  * где его и сравнивают (§А7-3: `"10.0"` = `"10.00"` — сравнение по типу, не по тексту).
  */
 import { z } from 'zod';
+import { FILE_LIST_LIMIT } from '../contracts/files';
 import { queryAstSchema } from '../query/ast';
 
-/** Закрытый словарь §А2-2. Порядок — как в таблице решения; на нём стоит приёмка «ровно 12». */
+/** Закрытый словарь §А2-2. Файлы добавлены в v4. */
 export const PROPERTY_KINDS = [
   'text',
   'number',
@@ -29,6 +30,7 @@ export const PROPERTY_KINDS = [
   'json',
   'grant',
   'registry_ref',
+  'file',
 ] as const;
 export type PropertyKind = (typeof PROPERTY_KINDS)[number];
 
@@ -118,90 +120,105 @@ export const selectOptionSchema = z
   .strict();
 export type SelectOption = z.infer<typeof selectOptionSchema>;
 
-export const propertyTypeSchema = z.discriminatedUnion('kind', [
-  z
-    .object({
-      kind: z.literal('text'),
-      pattern: z.string().optional(),
-      format: z.enum(TEXT_FORMATS).optional(),
-      // minLength — РП-8/Р-17: §А8 молча теряет `min(1)` шести полей, где сегодня пустая
-      // строка запрещена кодом; граница возвращает запрет в реестр, а не в код валидатора.
-      minLength: z.number().int().min(0).optional(),
-      maxLength: z.number().int().min(1).optional(),
-      ...listConfig,
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal('number'),
-      min: z.number().optional(),
-      max: z.number().optional(),
-      integer: z.boolean().optional(),
-      ...listConfig,
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal('decimal'),
-      // Границы — decimal-СТРОКИ (см. шапку файла).
-      min: z.string().optional(),
-      max: z.string().optional(),
-      exclusiveMin: z.string().optional(),
-      ...listConfig,
-    })
-    .strict(),
-  // `default` — семантика ЧТЕНИЯ, не записи (РП-9): на записи он не материализуется, иначе
-  // `has(orbis/planned)` стал бы истинным у каждой транзакции. Применяет его читатель.
-  z.object({ kind: z.literal('boolean'), default: z.boolean().optional() }).strict(),
-  z.object({ kind: z.literal('date') }).strict(),
-  z.object({ kind: z.literal('timestamp') }).strict(),
-  z.object({ kind: z.literal('time') }).strict(),
-  z
-    .object({
-      kind: z.literal('select'),
-      options: z.array(selectOptionSchema).min(1, 'select без вариантов бессмыслен'),
-      ...listConfig,
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal('ref'),
-      // target — Q-AST цели ссылки (§А6-1), одна или список альтернативных множеств.
-      // Форма проверяется схемой канона ЗДЕСЬ, а «статичность» (без date-токенов, `search`,
-      // `this` и проекции) — отдельным гейтом `assertStaticQuery` (`query/static.ts`,
-      // код SCOPE_NOT_STATIC): статичность зависит не от формы узла, а от его содержимого,
-      // и zod-схема, которая её проверяет, дала бы отказ БЕЗ имени причины.
-      target: z.union([queryAstSchema, z.array(queryAstSchema)]).optional(),
-      cardinality: z.enum(['one', 'many']).optional(),
-      max: z.number().int().min(1).optional(),
-    })
-    .strict(),
-  // ПРАВИЛО ветки `json` (наследство гейта Задачи 1, читает его генератор
-  // `propertyValueJsonSchema`): `maxItems` — признак того, что значение свойства МАССИВ, и
-  // тогда `schema` описывает ЭЛЕМЕНТ, а не всё значение. Без `maxItems` `schema` описывает
-  // значение целиком. Второго признака (`cardinality`) у `json` нет намеренно: массив
-  // объектов без верхней границы — тот самый неограниченный список внутри строки, который
-  // запрещает правило 1 §10, и здесь кап обязателен по построению. Единственный случай
-  // v1 — `orbis/run_steps` (`maxItems: 500`), у остальных шести json-свойств значение —
-  // объект.
-  z
-    .object({
-      kind: z.literal('json'),
-      schema: z.record(z.unknown()).optional(),
-      maxItems: z.number().int().min(1).optional(),
-    })
-    .strict(),
-  z.object({ kind: z.literal('grant') }).strict(),
-  // `...listConfig` — сквозной конфиг, а не новый kind (правило словаря выше: «cardinality+maxItems —
-  // не kind, а сквозные конфиги»). Потребителей у списка ссылок на реестр два: «Шаблон для» среза 1а
-  // (набор аспектов, спека §3.2) и манифест приложения среза 1б. Существование КАЖДОГО элемента
-  // списка проверяет сервер (`assertRegistryRefValue`), как и у одиночного значения.
-  z
-    .object({
-      kind: z.literal('registry_ref'),
-      target: z.enum(REGISTRY_REF_TARGETS),
-      ...listConfig,
-    })
-    .strict(),
-]);
+export const propertyTypeSchema = z
+  .discriminatedUnion('kind', [
+    z
+      .object({
+        kind: z.literal('text'),
+        pattern: z.string().optional(),
+        format: z.enum(TEXT_FORMATS).optional(),
+        // minLength — РП-8/Р-17: §А8 молча теряет `min(1)` шести полей, где сегодня пустая
+        // строка запрещена кодом; граница возвращает запрет в реестр, а не в код валидатора.
+        minLength: z.number().int().min(0).optional(),
+        maxLength: z.number().int().min(1).optional(),
+        ...listConfig,
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal('number'),
+        min: z.number().optional(),
+        max: z.number().optional(),
+        integer: z.boolean().optional(),
+        ...listConfig,
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal('decimal'),
+        // Границы — decimal-СТРОКИ (см. шапку файла).
+        min: z.string().optional(),
+        max: z.string().optional(),
+        exclusiveMin: z.string().optional(),
+        ...listConfig,
+      })
+      .strict(),
+    // `default` — семантика ЧТЕНИЯ, не записи (РП-9): на записи он не материализуется, иначе
+    // `has(orbis/planned)` стал бы истинным у каждой транзакции. Применяет его читатель.
+    z.object({ kind: z.literal('boolean'), default: z.boolean().optional() }).strict(),
+    z.object({ kind: z.literal('date') }).strict(),
+    z.object({ kind: z.literal('timestamp') }).strict(),
+    z.object({ kind: z.literal('time') }).strict(),
+    z
+      .object({
+        kind: z.literal('select'),
+        options: z.array(selectOptionSchema).min(1, 'select без вариантов бессмыслен'),
+        ...listConfig,
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal('ref'),
+        // target — Q-AST цели ссылки (§А6-1), одна или список альтернативных множеств.
+        // Форма проверяется схемой канона ЗДЕСЬ, а «статичность» (без date-токенов, `search`,
+        // `this` и проекции) — отдельным гейтом `assertStaticQuery` (`query/static.ts`,
+        // код SCOPE_NOT_STATIC): статичность зависит не от формы узла, а от его содержимого,
+        // и zod-схема, которая её проверяет, дала бы отказ БЕЗ имени причины.
+        target: z.union([queryAstSchema, z.array(queryAstSchema)]).optional(),
+        cardinality: z.enum(['one', 'many']).optional(),
+        max: z.number().int().min(1).optional(),
+      })
+      .strict(),
+    // ПРАВИЛО ветки `json` (наследство гейта Задачи 1, читает его генератор
+    // `propertyValueJsonSchema`): `maxItems` — признак того, что значение свойства МАССИВ, и
+    // тогда `schema` описывает ЭЛЕМЕНТ, а не всё значение. Без `maxItems` `schema` описывает
+    // значение целиком. Второго признака (`cardinality`) у `json` нет намеренно: массив
+    // объектов без верхней границы — тот самый неограниченный список внутри строки, который
+    // запрещает правило 1 §10, и здесь кап обязателен по построению. Единственный случай
+    // v1 — `orbis/run_steps` (`maxItems: 500`), у остальных шести json-свойств значение —
+    // объект.
+    z
+      .object({
+        kind: z.literal('json'),
+        schema: z.record(z.unknown()).optional(),
+        maxItems: z.number().int().min(1).optional(),
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal('file'),
+        cardinality: z.enum(['one', 'many']),
+        maxItems: z.number().int().min(1).max(FILE_LIST_LIMIT).optional(),
+      })
+      .strict(),
+    z.object({ kind: z.literal('grant') }).strict(),
+    // `...listConfig` — сквозной конфиг, а не новый kind (правило словаря выше: «cardinality+maxItems —
+    // не kind, а сквозные конфиги»). Потребителей у списка ссылок на реестр два: «Шаблон для» среза 1а
+    // (набор аспектов, спека §3.2) и манифест приложения среза 1б. Существование КАЖДОГО элемента
+    // списка проверяет сервер (`assertRegistryRefValue`), как и у одиночного значения.
+    z
+      .object({
+        kind: z.literal('registry_ref'),
+        target: z.enum(REGISTRY_REF_TARGETS),
+        ...listConfig,
+      })
+      .strict(),
+  ])
+  .refine(
+    (type) => type.kind !== 'file' || type.cardinality === 'many' || type.maxItems === undefined,
+    {
+      path: ['maxItems'],
+      message: 'Предел количества применяется только к списку файлов',
+    },
+  );
 export type PropertyType = z.infer<typeof propertyTypeSchema>;

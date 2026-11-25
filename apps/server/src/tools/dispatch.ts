@@ -19,6 +19,7 @@ import {
   type BlockSum,
   batchExecuteInput,
   budgetStatusInput,
+  canonicalJson,
   type EntityUpdatePreconditionItem,
   type ExtensionId,
   effectiveLabel,
@@ -45,6 +46,7 @@ import {
   type UndoTextChangedDetails,
 } from '@orbis/shared';
 import { exprNodeSchema, printExpr } from '@orbis/shared/expr';
+import { fileFieldEditInput } from '@orbis/shared/files';
 import {
   normalizeQueryAst,
   OWNER_LOCALE,
@@ -88,6 +90,19 @@ import { nearestPropertyKey, resolvePropertyRef } from '../executor/props';
 import type { ActionRecord, JournalSink, JournalWrite, WireEntity } from '../executor/types';
 import { peekLastUndoable, undoAction } from '../executor/undo';
 import {
+  checkFileMutation,
+  fieldCommands,
+  pendingCommandConflict,
+  readCommandReceipts,
+  saveFileCommand,
+  unchangedBatch,
+} from '../files/bindings';
+import {
+  filesOfOperations,
+  lockFilePropertyDefinitions,
+  mayAddressFileProperty,
+} from '../files/holds';
+import {
   AUTONOMY_PROPERTIES,
   autonomyArmed,
   type ConfirmationLevel,
@@ -107,6 +122,7 @@ import {
   deferDedupeKey,
   listRunUnits,
   operationsNoun,
+  rejectedReason,
 } from '../policy/pending';
 import { sensitivityFactsOf } from '../policy/sensitivity';
 import {
@@ -123,7 +139,6 @@ import { effectiveRegistry, parseRegistryOfSnapshot } from '../registry/cache';
 import { type AspectDelta, aspectDeltaAfterRemove, aspectDeltaAfterSet } from '../registry/deltas';
 import { disabledExtensionsOf } from '../registry/extensions';
 import type { RegistrySnapshot } from '../registry/load';
-
 import {
   readActionRow,
   readAspectDelta,
@@ -146,6 +161,7 @@ import {
   type ToolCallCtx,
   type ToolDispatchResult,
 } from './dispatch-common';
+import { isTransferTool, transfer } from './file-tools';
 import { propertyCatalogInput, runPropertyCatalog } from './property-catalog';
 import {
   AGENT_VERB_NAMES,
@@ -180,6 +196,7 @@ export async function dispatchTool(
   input: unknown,
 ): Promise<ToolDispatchResult> {
   try {
+    if (isTransferTool(name)) return { status: 'ok', result: await transfer(ctx, name, input) };
     // Резолв тула и чтения — один withIdentity-tx (RLS); мутации исполняются после:
     // execute открывает собственный tx, вложить его в текущий нельзя.
     const pre = await withIdentity(ctx.db, ctx.identity, async (tx): Promise<Resolution> => {
@@ -1124,6 +1141,25 @@ function aggregateCard(
 // Мутации через executor (конвейер §9.2, журнал §7.8)
 // ---------------------------------------------------------------------------
 
+async function originalFileConfirmation(
+  tx: Tx,
+  graphId: GraphId,
+  pendingId: string,
+): Promise<ToolDispatchResult> {
+  if (await rejectedReason(tx, pendingId, graphId))
+    throw new ExecError('CONFLICT', 'Предложение отклонено.', {
+      reason: 'file_command_rejected',
+      pendingId,
+    });
+  const [row] = await tx
+    .select({ metadata: chatMessages.metadata })
+    .from(chatMessages)
+    .where(eq(chatMessages.id, pendingId));
+  const card = (row?.metadata as { cards?: Card[] } | undefined)?.cards?.[0];
+  if (!card) throw new ExecError('VALIDATION', 'Отсутствует карточка подтверждения.');
+  return { status: 'pending_confirmation', pendingId, card };
+}
+
 async function runMutation(
   ctx: ToolCallCtx,
   def: OrbisToolDef,
@@ -1291,7 +1327,38 @@ async function runMutation(
     // payload'ом (уже envelope-валидированным; имена операций batch сверены с реестром);
     // до approve ничего не записано ни в граф, ни в журнал §7.8. Исполнение и
     // ревалидацию текущего состояния делает approve (policy/pending.ts)
-    const pending = await withIdentity(ctx.db, ctx.identity, async (tx) => {
+    return await withIdentity(ctx.db, ctx.identity, async (tx): Promise<ToolDispatchResult> => {
+      if (mayAddressFileProperty({ tool, input: payload }))
+        await lockFilePropertyDefinitions(tx, ctx.identity.graph);
+      const commands = fieldCommands(batchPayload?.operations ?? [{ tool, input: payload }]);
+      const caller = {
+        identity: ctx.identity,
+        source: ctx.source,
+        actorGrantId: ctx.grant?.id,
+        fileCapability: ctx.source === 'mcp',
+      };
+      const receipts = await readCommandReceipts(tx, caller, commands);
+      const singleCommand = !batchPayload ? commands[0]?.command : undefined;
+      const dedupeKey =
+        batchPayload?.batch_id ?? (singleCommand && 'file-command:' + singleCommand.commandId);
+      const pendingId = dedupeKey && pendingMessageId(ctx.identity.graph, dedupeKey);
+      if (singleCommand) {
+        const receipt = receipts.get(singleCommand.commandId);
+        if (receipt && 'ok' in receipt)
+          return {
+            status: 'ok',
+            result: receipt.results[0],
+            ...(receipt.noGraphChange ? {} : { actionId: receipt.actionId }),
+          };
+        if (receipt && 'pendingId' in receipt)
+          return originalFileConfirmation(tx, ctx.identity.graph, receipt.pendingId);
+      }
+      for (const receipt of receipts.values())
+        if ('pendingId' in receipt && receipt.pendingId !== pendingId)
+          pendingCommandConflict(receipt.pendingId);
+      if (!commands.length && filesOfOperations(reg, [{ op: tool, payload }], 4).length)
+        await checkFileMutation(tx, caller);
+
       // Карточка обязана называть, ЧТО подтверждается, — а не имя тула: снятие замка (как и
       // его установка) — осознанный акт человека (B1-2). Называется ВСЁ, что подняло
       // уровень: и правка автономии (V1.10 — режим, белый список и то, что СНИМАЕТСЯ), и
@@ -1355,7 +1422,53 @@ async function runMutation(
           : n === undefined
             ? summaryParts.join('; ')
             : `${summaryParts.join('; ')} — в пачке из ${n} ${operationsNoun(n)}`;
-      return createPending(tx, {
+      const pendingInput =
+        batchPayload === undefined
+          ? registryAddressesToId(reg, tool, payload as Record<string, unknown>)
+          : {
+              ...batchPayload,
+              operations: batchPayload.operations.map((op) =>
+                REGISTRY_TOOL_NAMES.has(op.tool) && isRecord(op.input)
+                  ? { ...op, input: registryAddressesToId(reg, op.tool, op.input) }
+                  : op,
+              ),
+            };
+      if (commands.length && pendingId) {
+        const [previous] = await tx
+          .select({ metadata: chatMessages.metadata })
+          .from(chatMessages)
+          .where(eq(chatMessages.id, pendingId));
+        if (previous) {
+          const metadata = previous.metadata as {
+            pending?: { tool: string; input: unknown; actor_grant_id?: string };
+            cards?: Card[];
+          };
+          if (
+            metadata.pending?.tool !== tool ||
+            metadata.pending.actor_grant_id !== ctx.grant?.id ||
+            canonicalJson(metadata.pending.input) !== canonicalJson(pendingInput)
+          )
+            throw new ExecError('CONFLICT', 'ID подтверждения уже использован.');
+          if (await rejectedReason(tx, pendingId, ctx.identity.graph))
+            throw new ExecError('CONFLICT', 'Предложение отклонено.', { pendingId });
+          const executed = await sink.findBatchWrite(tx, ctx.identity.graph, pendingId);
+          if (executed)
+            return {
+              status: 'ok',
+              result: batchPayload ? executed.results : executed.results?.[0],
+              actionId: pendingId,
+            };
+          const completed = await unchangedBatch(tx, ctx.identity.graph, pendingId);
+          if (completed) {
+            const results = (completed.result as { results: unknown[] }).results;
+            return { status: 'ok', result: batchPayload ? results : results[0] };
+          }
+          const card = metadata.cards?.[0];
+          if (!card) throw new ExecError('VALIDATION', 'Отсутствует карточка подтверждения.');
+          return { status: 'pending_confirmation', pendingId, card };
+        }
+      }
+      const pending = await createPending(tx, {
         threadId: ctx.threadId,
         ...(summary !== undefined && { summary }),
         // Грант едет в pending-запись: подтверждать будет владелец кнопкой, но
@@ -1376,25 +1489,18 @@ async function runMutation(
         // освобождается, и «Принять» применилось бы к однофамильцу. Батч разбирается
         // пооперационно — конверт пачки едет в pending целиком, и `approvePending` раскрывает
         // его обратно в операции.
-        input:
-          batchPayload === undefined
-            ? registryAddressesToId(reg, tool, payload as Record<string, unknown>)
-            : {
-                ...batchPayload,
-                operations: batchPayload.operations.map((op) =>
-                  REGISTRY_TOOL_NAMES.has(op.tool) && isRecord(op.input)
-                    ? { ...op, input: registryAddressesToId(reg, op.tool, op.input) }
-                    : op,
-                ),
-              },
+        input: pendingInput,
         level,
         // batch: дедуп pending по исходному batch_id модели — ретрай того же batch
         // не плодит вторую карточку (одиночная мутация без batch_id → без дедупа)
-        ...(batchPayload !== undefined && { dedupeKey: batchPayload.batch_id }),
+        dedupeKey,
         clock: ctx.clock,
       });
+      for (const { command } of commands)
+        if (!receipts.has(command.commandId))
+          await saveFileCommand(tx, caller, command, { pendingId: pending.pendingId });
+      return { status: 'pending_confirmation', ...pending };
     });
-    return { status: 'pending_confirmation', pendingId: pending.pendingId, card: pending.card };
   }
 
   // execute | preview — действие исполняется (§7.10: предпросмотр информационный, не
@@ -1418,6 +1524,7 @@ async function runMutation(
       source: ctx.source,
       threadId: ctx.threadId,
       cardInReply,
+      fileCapability: ctx.source === 'mcp',
       // undefined у чатовых и UI-путей — executor такой ключ в action не пишет
       actorGrantId: ctx.grant?.id,
       // То же и для прогона (V1.5): по run_id действия прогона находит откат (rollback.ts)
@@ -1437,11 +1544,45 @@ async function runMutation(
   // и оттуда он накрывает и кнопку владельца, и «Принять» единицы пачки. Вернуть строку
   // сюда придётся ровно при одном условии: если таблица §7.10 однажды снова начнёт давать
   // мутации реестра уровень `execute` или `preview`.
-  if (!r.ok) return { status: 'error', error: r.error };
+  if (!r.ok) {
+    if (
+      tool === 'file_field_edit' &&
+      isRecord(r.error.details) &&
+      r.error.details.reason === 'pending_file_command'
+    ) {
+      // An individual retry can originate from an operation in a pending batch.
+      // Re-read its receipt: the owner could have approved while execute returned.
+      const commands = fieldCommands([{ tool, input: payload }]);
+      return withIdentity(ctx.db, ctx.identity, async (tx) => {
+        const receipts = await readCommandReceipts(
+          tx,
+          {
+            identity: ctx.identity,
+            source: ctx.source,
+            actorGrantId: ctx.grant?.id,
+            fileCapability: ctx.source === 'mcp',
+          },
+          commands,
+        );
+        const receipt = receipts.get(commands[0]!.command.commandId);
+        if (receipt && 'ok' in receipt)
+          return {
+            status: 'ok',
+            result: receipt.results[0],
+            ...(receipt.noGraphChange ? {} : { actionId: receipt.actionId }),
+          };
+        if (receipt && 'pendingId' in receipt)
+          return originalFileConfirmation(tx, ctx.identity.graph, receipt.pendingId);
+        return { status: 'error', error: r.error };
+      });
+    }
+    return { status: 'error', error: r.error };
+  }
 
   // id action'а для actions-резюме (Task 9): та же семантика, что у undoActionId
   // карточки — идемпотентный replay ничего не журналил, action этого вызова нет
-  const actionId = r.idempotentReplay ? undefined : r.actionId;
+  const actionId =
+    r.noGraphChange || (r.idempotentReplay && tool !== 'file_field_edit') ? undefined : r.actionId;
 
   // Эскалация повторных исправлений категории (§7.8) — ЧАТ-путь: план D3 требует
   // source ∈ ui|chat, а UI-половина уже висит на роутере entity.update. Контракт тот же
@@ -3490,6 +3631,7 @@ function assertBatchToolsKnown(
 const MUTATION_ENVELOPES: Record<string, z.ZodTypeAny> = {
   entity_create: entityCreateInput,
   entity_update: entityUpdateInput,
+  file_field_edit: fileFieldEditInput,
   relation_create: relationCreateInput,
   relation_delete: relationDeleteInput,
   // Тулы реестра (§А10-2): их схемы живут рядом с дефами (`tools/registry-tools.ts`), и

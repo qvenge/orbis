@@ -22,6 +22,7 @@ import { type EntitlementResolver, resolveEntitlement } from '../entitlements';
 import { identityOfGrant } from '../identity';
 import type { GrantIdentity } from '../oauth/grants';
 import { dispatchTool, type ToolDispatchResult } from '../tools/dispatch';
+import { transferTools } from '../tools/file-tools';
 import { buildToolRegistry, WORKER_SCOPE_TOOLS } from '../tools/registry';
 
 /** Ключ entitlements §8, который гейтит каждый tools/call (по аналогии с гейтом Task 9). */
@@ -48,7 +49,11 @@ export interface McpDeps {
  * гранта — вход гейта, id — атрибуция в журнале §7.8). Разбирать identity на транспорте
  * значило бы решать здесь, что из неё «важно», — и терять остальное молча.
  */
-export function makeMcpServer(deps: McpDeps, identity: GrantIdentity): Server {
+export function makeMcpServer(
+  deps: McpDeps,
+  identity: GrantIdentity,
+  onFileFinishWait?: () => void,
+): Server {
   const resolve = deps.entitlements ?? resolveEntitlement;
   // ЧЕТВЁРТЫЙ сайт рождения пары при трёх резолверах (Ф-Г-16): вторая Bearer-поверхность зовёт
   // ТОТ ЖЕ identityOfGrant, что и context.ts. Собирать пару здесь руками нельзя — два способа
@@ -63,7 +68,7 @@ export function makeMcpServer(deps: McpDeps, identity: GrantIdentity): Server {
     sanitized(async (): Promise<ListToolsResult> => {
       const defs = await withIdentity(deps.db, who, (tx) => buildToolRegistry(tx, who.graph));
       return {
-        tools: defs
+        tools: [...defs, ...transferTools]
           .filter(
             (d) =>
               d.internalOnly !== true &&
@@ -102,6 +107,8 @@ export function makeMcpServer(deps: McpDeps, identity: GrantIdentity): Server {
       const gate = gateAgentRequest(resolve, who.actor);
       if (gate !== null) return toCallToolResult(gate);
 
+      if (req.params.name === 'file_upload_finish' && identity.scope === 'full')
+        onFileFinishWait?.();
       const result = await dispatchTool(
         {
           db: deps.db,

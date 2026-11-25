@@ -1,6 +1,7 @@
 import { aspectLabel, fieldLabel } from '../../lib/registry/labels';
 import { useRegistry } from '../../lib/registry/useRegistry';
 import { Card } from '../../ui/Card';
+import { FilePropertyForm } from './FilePropertyForm';
 
 /**
  * Список аспектов, видимых владельцу.
@@ -23,6 +24,12 @@ export function AspectsList() {
   const registry = useRegistry();
   return (
     <div className="flex flex-col gap-2 p-3">
+      <FilePropertyForm />
+      {(registry.data?.properties ?? [])
+        .filter((p) => p.type.kind === 'file' && p.graphId !== null)
+        .map((p) => (
+          <FilePropertyForm key={p.id} definition={p} />
+        ))}
       {(registry.data?.aspects ?? []).map((a) => (
         <Card key={a.id} className="flex flex-col gap-0.5">
           <div className="flex items-center gap-2">

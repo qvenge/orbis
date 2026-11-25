@@ -27,6 +27,7 @@
 // ЗАМОК. Все функции рассчитывают, что транзакция УЖЕ держит замок реестра владельца
 // (`lockOwnerRegistry`, `executor/executor.ts` — первым statement'ом, до бюджетного).
 // Своего замка они не берут: два места, знающие порядок захвата, — это и есть дедлок.
+
 import {
   type ActionDefinition,
   type AspectDefinition,
@@ -91,6 +92,7 @@ import { ExecError } from '../errors';
 // строка перекрывает встроенную» разъехался бы с первым ровно там, где владелец завёл свою.
 import { bodyActionBefore } from '../executor/body-stamp';
 import { resolvePropertyRef } from '../executor/props';
+import { type PropertyRetentionContext, retainedFileProperty } from '../files/holds';
 // Цикла нет: `rules/carriers` берёт из реестра только `rules.ts` и тип снимка.
 import { assertEngineCarriersKept } from '../rules/carriers';
 // Цикла нет: валидатор берёт из `registry/load` только тип строки.
@@ -399,6 +401,7 @@ export async function restorePropertyRow(
   graphId: GraphId,
   id: string,
   row: PropertyRow | null,
+  retention: PropertyRetentionContext = {},
 ): Promise<void> {
   if (row === null) {
     // Строку удаляем — значит нужен её `key`: ссылка на неё в теле записана ключом, и без
@@ -408,7 +411,14 @@ export async function restorePropertyRow(
     // Страховка, а не логика: строку создало отменяемое действие, и значений у неё быть не
     // может. Если они появились ПОСЛЕ (кто-то успел записать), физическое удаление осиротило
     // бы их — отказываем fail-closed, откат целиком не применяется.
-    const used = await propertyUsage(tx, graphId, id, existing.key);
+    const used = await propertyUsage(
+      tx,
+      graphId,
+      existing.id,
+      existing.key,
+      existing.type.kind === 'file',
+      retention,
+    );
     if (used.values > 0 || used.refs > 0) {
       throw new ExecError(
         'INVARIANT',
@@ -741,6 +751,8 @@ async function propertyUsage(
   graphId: GraphId,
   id: string,
   key: string,
+  file: boolean,
+  retention: PropertyRetentionContext,
 ): Promise<{ values: number; refs: number }> {
   const rows = (await tx.execute(sql`
     SELECT count(*)::int AS n FROM entities WHERE props ? ${id}`)) as unknown as { n: number }[];
@@ -754,7 +766,9 @@ async function propertyUsage(
   // двумя именами (`names` ниже), и разойтись этим двум местам нельзя.
   return {
     values: Number(rows[0]?.n ?? 0),
-    refs: holders.filter((h) => h.properties.includes(id) || h.properties.includes(key)).length,
+    refs:
+      holders.filter((h) => h.properties.includes(id) || h.properties.includes(key)).length +
+      Number(file && (await retainedFileProperty(tx, graphId, id, key, retention))),
   };
 }
 
@@ -774,6 +788,7 @@ export async function updateProperty(
   graphId: GraphId,
   id: string,
   patch: UpdatePropertyPatch,
+  retention: PropertyRetentionContext = {},
 ): Promise<void> {
   const row = await readOwnProperty(tx, graphId, id);
   if (row === undefined) {
@@ -815,7 +830,14 @@ export async function updateProperty(
   const { scope } = normalizeDeclaration(await currentRegistry(tx, graphId), row.type, scopeInput);
 
   if (patch.status === 'deprecated' && row.status === 'proposed') {
-    const used = await propertyUsage(tx, graphId, row.id, row.key);
+    const used = await propertyUsage(
+      tx,
+      graphId,
+      row.id,
+      row.key,
+      row.type.kind === 'file',
+      retention,
+    );
     if (used.values === 0 && used.refs === 0) {
       // Дальше адресуем ТОЛЬКО `row.id`: во вход мог прийти key (см. `readOwnProperty`),
       // и `WHERE id = <key>` не задел бы ни одной строки — молча, без единой ошибки.
@@ -1299,6 +1321,7 @@ export interface MergeInverse {
     entityId: string;
     body: string;
     bodyDoc: unknown;
+    bodyFormat?: number | null;
     bodyRefs?: string[];
     queryRefs?: string[];
     /**
@@ -1797,7 +1820,7 @@ export async function mergeProperty(
     // Колонки тела (0026) — ТЕМ ЖЕ чтением под замком, что и тело: «действие тела до» держателя обязано быть значением
     // именно того тела, которое слияние переписывает (§8.6), а не снятым отдельным запросом.
     const rows = (await tx.execute(sql`
-      SELECT body, body_doc, body_refs, query_refs, body_action_id::text AS body_action_id, body_revision
+      SELECT body, body_doc, body_format, body_refs, query_refs, body_action_id::text AS body_action_id, body_revision
         FROM entities
        WHERE id = ${holder.id}::uuid FOR UPDATE
     `)) as unknown as RawRow[];
@@ -1829,7 +1852,7 @@ export async function mergeProperty(
     // заполняющий индекс без документа, обязан сохранить эту страховку.
     const nextDoc = bindQueryBlocks(
       rewriteBodyDoc(
-        readBodyDoc(row.body_doc ?? null, body, parseReg),
+        readBodyDoc(row.body_doc ?? null, body, parseReg, row.body_format as number | null),
         names,
         astTarget,
         textTarget,
@@ -1841,7 +1864,7 @@ export async function mergeProperty(
     const nextBody = serializeBody(nextDoc);
     const written = (await tx.execute(sql`
       UPDATE entities
-         SET body = ${nextBody},
+         SET body = ${nextBody}, body_format = 4,
              body_doc = ${JSON.stringify(nextDoc)}::jsonb,
              body_refs = ${textArray(bodyRefsFromDoc(nextDoc))},
              query_refs = ${textArray(queryRefsFromDoc(nextDoc))},
@@ -1860,6 +1883,7 @@ export async function mergeProperty(
         entityId: holder.id,
         body,
         bodyDoc: row.body_doc ?? null,
+        ...(row.body_format != null && { bodyFormat: Number(row.body_format) }),
         bodyRefs: (row.body_refs ?? []) as string[],
         queryRefs: (row.query_refs ?? []) as string[],
         bodyActionBefore: actionBefore,
@@ -2055,7 +2079,7 @@ export async function undoMerge(
     // ход — пересчёт из ВОССТАНОВЛЕННОГО документа (а при его отсутствии — из markdown,
     // где привязки нет и `query_refs` пусты по построению).
     const restored: BodyDoc | null = (b.bodyDoc ?? null) === null ? null : (b.bodyDoc as BodyDoc);
-    const fallbackDoc = restored ?? parseBody(b.body);
+    const fallbackDoc = restored ?? parseBody(b.body, b.bodyFormat ?? null);
     const bodyRefs = Array.isArray(b.bodyRefs) ? b.bodyRefs : bodyRefsFromDoc(fallbackDoc);
     const queryRefs = Array.isArray(b.queryRefs) ? b.queryRefs : queryRefsFromDoc(fallbackDoc);
     const prior = (await tx.execute(sql`
@@ -2063,7 +2087,7 @@ export async function undoMerge(
        WHERE id = ${b.entityId}::uuid FOR UPDATE`)) as unknown as RawRow[];
     const written = (await tx.execute(sql`
       UPDATE entities
-         SET body = ${b.body},
+         SET body = ${b.body}, body_format=${b.bodyFormat ?? null},
              body_doc = ${restored === null ? null : JSON.stringify(restored)}::jsonb,
              body_refs = ${textArray(bodyRefs)},
              query_refs = ${textArray(queryRefs)},

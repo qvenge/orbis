@@ -22,6 +22,7 @@ import {
   suppressLinkPluginMouseUp,
 } from './editor-record-links';
 import { EDITOR_EXTENSIONS } from './extensions';
+import { useFileInsertion } from './file-insertion';
 import { RefTitlesProvider } from './nodes/RefTitlesContext';
 import { pastedRecordId } from './paste-address';
 import { SuggestMenu, useEditorSuggest } from './slash/EditorSuggest';
@@ -230,6 +231,7 @@ function BodyEditorInstance({
   doc,
   entityId,
   readOnly = false,
+  blockFileInsertion = false,
   onChange,
   onAccept,
   onReady,
@@ -241,6 +243,7 @@ function BodyEditorInstance({
   /** Без id — частный редактор предложения, со своей родной историей. */
   entityId?: string;
   readOnly?: boolean;
+  blockFileInsertion?: boolean;
   onChange: (doc: BodyDoc) => void;
   /**
    * Редактор ПРИНЯЛ пришедший документ и показывает теперь его.
@@ -311,6 +314,7 @@ function BodyEditorInstance({
         : acquireEditor(entityId, () => createBodyEditor(entityId, doc.doc))),
   );
   const editor = nativeEditor ?? cachedEditor;
+  const insertFile = useFileInsertion(editor, entityId, readOnly || blockFileInsertion, reseat);
   const { open, prepare, nativeLinks, availability, subscribePending } = useRecordLinkController();
   const linkMarkView = useMemo(
     () => recordLinkMarkView({ availability, subscribePending }),
@@ -352,7 +356,13 @@ function BodyEditorInstance({
           class: `${BODY_BOX_CLASS} outline-none`,
         },
         transformPastedHTML,
+        handleDrop: (view, event, _movedSlice, moved) => {
+          if (moved || !event.dataTransfer) return false;
+          const pos = view.posAtCoords({ left: event.clientX, top: event.clientY })?.pos;
+          return pos !== undefined && insertFile(view, event.dataTransfer, pos);
+        },
         handlePaste: (view, event) => {
+          if (insertFile(view, event.clipboardData, view.state.selection.from)) return true;
           // §7.4: в данных — ссылка на запись по id, не адрес; адрес вычисляется при нажатии.
           const id = pastedRecordId(
             event.clipboardData?.getData('text/plain') ?? '',
@@ -378,7 +388,7 @@ function BodyEditorInstance({
         b.suggest = null;
       }
     };
-  }, [editor, onChange, readOnly, suggest.handlers, generation, linkMarkView]);
+  }, [editor, onChange, readOnly, suggest.handlers, generation, linkMarkView, insertFile]);
 
   /**
    * Готовность редактора и КАРЕТКА — один эффект, потому что оба про один и тот же экземпляр.

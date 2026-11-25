@@ -130,7 +130,7 @@ test('клиент 0.5.x (до плана А скорости) получает 
   expect((err as TRPCError).code).toBe('UNAUTHORIZED');
 });
 
-test('HTTP: клиенты плана А получают 412 до доступа к чтению и записи, 0.7.0 проходит гейт', async () => {
+test('HTTP: клиенты до файлового формата получают 412 до записи, 0.8.0 проходит гейт', async () => {
   const app = createApp({ db: ctx.db, ai: {} as AiDeps });
   const id = '00000000-0000-7000-8000-0000000000f3';
   const query = encodeURIComponent(JSON.stringify({ id }));
@@ -140,7 +140,7 @@ test('HTTP: клиенты плана А получают 412 до доступ�
     ['/trpc/entity.update', { id, title: 'x' }],
   ] as const;
 
-  for (const version of ['0.6.0', '0.6.9', '0.7.0']) {
+  for (const version of ['0.6.0', '0.7.0', '0.8.0']) {
     const headers = { [CLIENT_VERSION_HEADER]: version, 'Content-Type': 'application/json' };
     for (const [url, input] of paths) {
       const response = await app.request(
@@ -149,14 +149,14 @@ test('HTTP: клиенты плана А получают 412 до доступ�
           ? { headers }
           : { method: 'POST', headers, body: JSON.stringify(input) },
       );
-      if (version === '0.7.0') {
+      if (version === '0.8.0') {
         expect(response.status).toBe(401);
         expect(await response.json()).toMatchObject({ error: { data: { code: 'UNAUTHORIZED' } } });
       } else {
         expect(response.status).toBe(412);
         expect(await response.json()).toMatchObject({
           error: {
-            message: expect.stringContaining('0.7.0'),
+            message: expect.stringContaining('0.8.0'),
             data: { code: 'PRECONDITION_FAILED' },
           },
         });
@@ -164,7 +164,7 @@ test('HTTP: клиенты плана А получают 412 до доступ�
     }
   }
   const admitted = await app.request('/trpc/ping', {
-    headers: { [CLIENT_VERSION_HEADER]: '0.7.0' },
+    headers: { [CLIENT_VERSION_HEADER]: '0.8.0' },
   });
   expect(admitted.status).toBe(200);
   expect(await admitted.json()).toEqual({ result: { data: { ok: true } } });
@@ -277,8 +277,8 @@ test('равная/новая версия, отсутствие и мусорн
   // эквивалентно отсутствию заголовка: пред-проверка формата не блокирует запрос
   const passing = [
     MIN_COMPATIBLE_CLIENT_VERSION,
-    '0.7.1',
-    '0.7.0',
+    '0.8.1',
+    '0.8.0',
     '1.0.0',
     null,
     '',

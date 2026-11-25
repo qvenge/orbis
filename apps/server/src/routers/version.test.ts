@@ -6,7 +6,7 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import type { GraphId } from '@orbis/shared';
 import { newId } from '@orbis/shared';
-import { canonicalizeBody, DOC_SCHEMA_VERSION } from '@orbis/shared/doc';
+import { canonicalizeBody, collectFileIds, DOC_SCHEMA_VERSION, parseBody } from '@orbis/shared/doc';
 import { TRPCError } from '@trpc/server';
 import { sql } from 'drizzle-orm';
 import {
@@ -240,10 +240,11 @@ describe('version.pin / version.list / version.restore (С11)', () => {
     ).toBe(false);
   });
 
-  test('снимок сущности без body_doc (легаси-строка) хранит только body; restore идёт строкой', async () => {
+  test('Markdown-only снимок сохраняет точный старый маркер литералом после pin/restore', async () => {
     const id = newId();
     // Не канон: список сразу за заголовком без пустой строки — так писали тела до конверсии
-    const legacy = '# Раз\n- два';
+    const marker = `![План](orbis-file:${newId()})`;
+    const legacy = `# Раз\n- два\n\n${marker}`;
     const { db: admin, client: adminClient } = adminDb();
     try {
       // Строка «до бэкфилла»: body_doc пуст. Вставка мимо executor'а намеренна — его путь
@@ -269,7 +270,9 @@ describe('version.pin / version.list / version.restore (С11)', () => {
       expectedBodyRevision: rev(e2.entity),
     });
     // Тело восстановлено строкой и приведено к канону тем же конвейером, что запись редактора
-    expect(restored.body).toBe(canonicalizeBody(legacy).body);
+    if (restored.body === undefined) throw new Error('нет тела восстановленной версии');
+    expect(collectFileIds(parseBody(restored.body))).toEqual([]);
+    expect(JSON.stringify(parseBody(restored.body).doc)).toContain(marker);
     expect(restored.body).not.toBe(legacy); // канон посчитал executor, снимок хранил сырую строку
   });
 
@@ -378,7 +381,7 @@ describe('version.pin / version.list / version.restore (С11)', () => {
     expect(restored.body).toBe('снимок v2\n\n{{query:aspect=orbis/task}}');
 
     const back = await a.entity.get({ id, include: ['body', 'bodyDoc'] });
-    expect(back.entity.bodyDoc?.v).toBe(3);
+    expect(back.entity.bodyDoc?.v).toBe(DOC_SCHEMA_VERSION);
     const nodes = ((back.entity.bodyDoc?.doc as { content?: Node[] } | undefined)?.content ??
       []) as Node[];
     expect(nodes.map((n) => n.type)).toEqual(['paragraph', 'queryBlock']);

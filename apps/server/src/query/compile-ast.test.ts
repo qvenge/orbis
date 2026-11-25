@@ -829,7 +829,7 @@ describe('экспорты для движков подписок (§Б5-6)', ()
       'archived',
     ]);
     expect(entitySelectColumns('full')).toBe(
-      'id, graph_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived',
+      'id, graph_id, title, emoji, body, body_format, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived',
     );
     expect(entitySelectColumns('start')).toBe(`${ENTITY_SELECT_COLUMNS}, ${BODY_HEAD_SQL}`);
     expect(BODY_HEAD_SQL).toBe(

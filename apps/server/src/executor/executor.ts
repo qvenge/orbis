@@ -13,6 +13,7 @@ import {
   attachToolName,
   type BodyActionInfo,
   batchExecuteInput,
+  canonicalJson,
   type EntityUpdatePrecondition,
   type EntityUpdatePreconditionItem,
   effectiveLabel,
@@ -39,9 +40,11 @@ import {
   bodyDocError,
   bodyPairFromDoc,
   bodyRefsFromDoc,
+  collectFileIds,
   DOC_SCHEMA_VERSION,
   queryRefsFromDoc,
 } from '@orbis/shared/doc';
+import { type FileFieldEdit, fileFieldEditInput } from '@orbis/shared/files';
 import { OWNER_LOCALE } from '@orbis/shared/query';
 import { and, eq, getTableColumns, sql } from 'drizzle-orm';
 import { z } from 'zod';
@@ -65,6 +68,25 @@ import type { Db } from '../db/client';
 import { entities, entityOrigins, entityVersions, relations, userSettings } from '../db/schema';
 import { type Tx, withIdentity } from '../db/with-identity';
 import { resolveEntitlement } from '../entitlements';
+import {
+  checkFileMutation,
+  editFileValue,
+  fieldCommands,
+  fileConflict,
+  pendingCommandConflict,
+  readCommandReceipts,
+  saveFileCommand,
+  saveUnchangedBatch,
+  unchangedBatch,
+} from '../files/bindings';
+import {
+  FileHoldChanges,
+  fileProperties,
+  filesOfBody,
+  filesOfOperations,
+  lockFilePropertyDefinitions,
+  mayAddressFileProperty,
+} from '../files/holds';
 import type { CompileCtx } from '../query/compile-ast';
 import { ownerQuerySettings, todayInTimeZone, WEEK_START } from '../query/context';
 import { effectiveRegistry, parseRegistryOfSnapshot } from '../registry/cache';
@@ -202,6 +224,7 @@ import {
   comparePropertyValue,
   type EntityState,
   hasPropsInput,
+  normalizeFileValue,
   type PropsPatch,
   propsPatchFromInput,
   replaceAspectProps,
@@ -230,6 +253,7 @@ import type {
   ActionOperation,
   ActionRecord,
   ActorKind,
+  ExecuteOk,
   ExecuteRequest,
   ExecuteResult,
   ExecutorDeps,
@@ -251,6 +275,7 @@ interface ExecCtx {
   tx: Tx;
   /** Снимок реестров владельца на транзакцию (§А10): по нему идут и резолв, и валидация. */
   registry: RegistrySnapshot;
+  fileHolds: FileHoldChanges;
   /** Маска §Б8-3 на транзакцию — рядом со снимком, но НЕ внутри него. */
   disabledModules: readonly string[];
   /** Механизм записи (§А4-4): ось гейтов флагов, отдельная от канала `req.source`. */
@@ -375,6 +400,7 @@ interface OpOutcome {
     | WireOrigin
     | WireEntityVersion
     | WireRegistryResult
+    | { entityId: string; propertyId: string; value: string | string[] | null }
     | WireUserSettings;
   replay?: boolean;
   /**
@@ -416,6 +442,7 @@ interface BudgetHook {
 
 /** Результат стадий 1–4: план записи. apply — стадия 5, единственные записи в БД. */
 interface PreparedOp {
+  noGraphChange?: true;
   /** Уже разрешённые адреса входа: дельта журнала сравнивается с ними, а не с ключами полей ядра. */
   touchedProperties?: ReadonlySet<string>;
   /** Засев тела сверх входа — эффект правил подготовки, даже если его нет среди свойств дельты. */
@@ -688,6 +715,8 @@ export async function execute(
       return await executeBatch(db, req, sink, clock, deps.internalUndo, deps.beforeStages);
     }
 
+    const commands = deps.internalUndo ? [] : fieldCommands([single]);
+    const command = commands[0]?.command;
     const actionId = newId();
     const bodyAction = bodyActionOf(sink, deps.internalUndo, actionId);
     return await withIdentity(db, req.identity, async (tx) => {
@@ -701,10 +730,16 @@ export async function execute(
       // определений не берут ни строковых, ни advisory-блокировок, то есть в цикл ожидания
       // §2.3 войти не могут. А замку он НУЖЕН: предикат контура теперь смотрит на id
       // свойств financial/budget по реестру, а не на имена полей во входе (Р-27).
-      const registry = await effectiveRegistry(tx, req.identity.graph);
       // Замок РЕЕСТРА — ПЕРВЫЙ из двух (см. lockOwnerRegistry): порядок «реестр → бюджет»
       // глобален, и переставить его местами значит завести цикл ожидания.
       await lockRegistry(tx, req.identity.graph, [single]);
+      if (command) {
+        const receipts = await readCommandReceipts(tx, req, commands);
+        const receipt = receipts.get(command.commandId);
+        if (receipt && 'pendingId' in receipt) pendingCommandConflict(receipt.pendingId);
+        if (receipt) return { ...receipt, idempotentReplay: true };
+      }
+      const registry = await effectiveRegistry(tx, req.identity.graph);
       // Замок бюджет-контура — ДО стадий и любых строковых блокировок (см. lockBudgetContour),
       // за ним замки правил уникальности (см. lockUniqueAmongRules): порядок «контур → правила»
       await lockBudgetContour(tx, registry, req.identity.graph, [single]);
@@ -714,6 +749,7 @@ export async function execute(
       // порядок «advisory → строки» глобален — см. lockBudgetContour), до стадий. Отказ — всего действия (К-21).
       if (deps.internalUndo) await assertUndoTextRule(tx, req.identity.graph, deps.internalUndo);
       const ctx: ExecCtx = {
+        fileHolds: new FileHoldChanges(),
         tx,
         registry,
         // Одно точечное чтение по PK на мутацию: ленивость стоила бы асинхронного гейта в
@@ -729,7 +765,19 @@ export async function execute(
         ...(txNow !== undefined && { txNow }),
       };
       const plan = await prepareOp(ctx, single.tool, single.input); // стадии 1–4
-      const out = await plan.apply(ctx); // стадия 5
+      const out = await plan.apply(ctx);
+      if (command && plan.noGraphChange) {
+        const receipt = {
+          ok: true as const,
+          actionId: command.commandId,
+          noGraphChange: true as const,
+          consequences: false,
+          idempotentReplay: false,
+          results: [out.result],
+        };
+        await saveFileCommand(tx, req, command, receipt);
+        return receipt;
+      } // стадия 5
       // Бюджет-хук A4 (§2.3): привязка/ребиндинг ТЕМ ЖЕ tx, операции — в тот же action.
       // Replay по client-UUID ничего не применял — хук не запускается (идемпотентность §5.3)
       let followUps: PreparedOp[] = [];
@@ -796,7 +844,7 @@ export async function execute(
         deps.reportBodyAction === true && out.row !== undefined
           ? await reportedBodyAction(ctx, plan, out.row)
           : undefined;
-      return {
+      const result = {
         ok: true as const,
         // У продолжения сеанса — id записи сеанса (§8.2): её отменяют и её называет ответ
         actionId: ctx.continuedSession ?? actionId,
@@ -810,6 +858,9 @@ export async function execute(
         ...(reported !== undefined && { bodyAction: reported }),
         ...(out.txId !== undefined && { txId: out.txId }),
       };
+      await ctx.fileHolds.flush(tx, fileAccess(ctx));
+      if (command) await saveFileCommand(tx, req, command, result);
+      return result;
     });
   } catch (e) {
     if (e instanceof ExecError) {
@@ -878,9 +929,13 @@ async function executeBatch(
       if (beforeStages) await beforeStages(tx);
       // Снимок реестра — ДО замка контура (см. одиночный путь: плановые SELECT'ы в цикл
       // ожидания не входят, а предикат контура без реестра неполон — Р-27)
-      const registry = await effectiveRegistry(tx, req.identity.graph);
       // Замок РЕЕСТРА — ПЕРВЫЙ из двух, тем же порядком, что и на одиночном пути
       await lockRegistry(tx, req.identity.graph, ops);
+      if (!internalUndo)
+        await tx.execute(
+          sql`SELECT pg_advisory_xact_lock(hashtextextended(${req.identity.graph + ':batch:' + batchId},0))`,
+        );
+      const registry = await effectiveRegistry(tx, req.identity.graph);
       // Замок бюджет-контура — ДО стадий и любых строковых блокировок (см. lockBudgetContour),
       // за ним замки правил уникальности — тем же порядком, что на одиночном пути
       await lockBudgetContour(tx, registry, req.identity.graph, ops);
@@ -889,6 +944,7 @@ async function executeBatch(
       // (закрепления версий идут первыми операциями, и отказ правила не оставляет ни одной из них)
       if (internalUndo) await assertUndoTextRule(tx, req.identity.graph, internalUndo);
       const ctx: ExecCtx = {
+        fileHolds: new FileHoldChanges(),
         tx,
         registry,
         // То же одно чтение по PK, что и на одиночном пути (см. его комментарий).
@@ -902,14 +958,46 @@ async function executeBatch(
         bodyAction,
       };
 
+      const commands = internalUndo ? [] : fieldCommands(ops);
+      const receipts = await readCommandReceipts(tx, req, commands);
+      for (const receipt of receipts.values())
+        if ('pendingId' in receipt && receipt.pendingId !== req.approvedFilePendingId)
+          pendingCommandConflict(receipt.pendingId);
+
       // Повтор batch_id: вернуть сохранённый результат, ничего не применяя (§7.8, §13.4).
       // Внутренний режим undo не идемпотентен по batch_id (id технический) — не проверяем.
       if (!internalUndo) {
         const existing = await sink.findBatchWrite(tx, req.identity.graph, batchId);
-        replayChecked = true;
-        if (existing) return replayFromAudit(batchId, existing);
+        replayChecked = commands.length === 0;
+        if (existing) {
+          for (const { command, index } of commands) {
+            const receipt = receipts.get(command.commandId);
+            if (
+              !receipt ||
+              !('ok' in receipt) ||
+              canonicalJson(receipt.results[0]) !== canonicalJson(existing.results?.[index])
+            )
+              throw new ExecError('CONFLICT', 'ID пачки уже использован.');
+          }
+          await authorizeFileBatchReplay(tx, req, registry, existing);
+          return replayFromAudit(batchId, existing);
+        }
       }
 
+      if (!internalUndo) {
+        const unchanged = await unchangedBatch(tx, req.identity.graph, batchId);
+        if (unchanged) {
+          await checkFileMutation(tx, req);
+          if (
+            unchanged.actorId !== req.identity.actor ||
+            unchanged.grantId !== (req.actorGrantId ?? null) ||
+            canonicalJson((unchanged.request as { operations: unknown }).operations) !==
+              canonicalJson(ops)
+          )
+            throw new ExecError('CONFLICT', 'ID пачки уже использован.');
+          return { ...(unchanged.result as ExecuteOk), idempotentReplay: true };
+        }
+      }
       // Стадия 1 (гейт batch): допустимы только мутирующие тулы, вложенный batch запрещён.
       // Парс envelope каждой операции — внутри её prepare*.
       for (const op of ops) {
@@ -924,8 +1012,25 @@ async function executeBatch(
 
       // Стадии 1–4 ВСЕХ операций над виртуальным состоянием — до первой записи (§7.8)
       const plans: PreparedOp[] = [];
-      for (const op of ops) {
-        plans.push(await prepareOp(ctx, op.tool, op.input, batch));
+      for (const [i, op] of ops.entries()) {
+        const item = commands.find((c) => c.index === i);
+        const receipt = item && receipts.get(item.command.commandId);
+        if (receipt && 'ok' in receipt) {
+          // This command already belongs to another action. Its result is part of
+          // this response, but this group must never undo its original mutation.
+          plans.push({
+            noGraphChange: true,
+            journal: {
+              type: 'entity_updated',
+              entityId: null,
+              tool: op.tool,
+              title: '',
+              operations: [],
+              inverse: [],
+            },
+            apply: async () => ({ result: receipt.results[0] as OpOutcome['result'] }),
+          });
+        } else plans.push(await prepareOp(ctx, op.tool, op.input, batch));
       }
 
       // Стадия 5: применение по порядку одним tx
@@ -944,6 +1049,7 @@ async function executeBatch(
         // выражены, снос владельца дешевле неполной модели.
         await invalidateSpentCacheOfOwner(tx, req.identity.graph);
         await writeUndoRecord(ctx, internalUndo, plans);
+        await ctx.fileHolds.flush(tx, fileAccess(ctx));
         return {
           ok: true as const,
           actionId: batchId,
@@ -951,6 +1057,25 @@ async function executeBatch(
           idempotentReplay: false,
           consequences: false,
         };
+      }
+      if (plans.every((plan) => plan.noGraphChange)) {
+        const result = {
+          ok: true as const,
+          actionId: batchId,
+          noGraphChange: true as const,
+          consequences: false,
+          idempotentReplay: false,
+          results,
+        };
+        await saveUnchangedBatch(tx, req, batchId, ops, result);
+        for (const { command, index } of commands) {
+          const receipt = receipts.get(command.commandId);
+          if (!receipt || 'pendingId' in receipt)
+            await saveFileCommand(tx, req, command, { ...result, results: [results[index]] });
+        }
+        if (req.approvedFilePendingId) ctx.fileHolds.release('pending', req.approvedFilePendingId);
+        await ctx.fileHolds.flush(tx, fileAccess(ctx));
+        return result;
       }
       // Бюджет-хук A4 (§2.3): после применения ВСЕХ операций batch — привязка/ребиндинг
       // тем же tx. Дописанные операции входят в тот же action (Undo откатывает целиком);
@@ -993,6 +1118,7 @@ async function executeBatch(
         inverse: aggregateInverse(allPlans),
         body_before: bodyBefore,
       };
+      if (sink !== NOOP_SINK) await syncInverseHolds(ctx, action);
       await sink.write(tx, {
         graphId: req.identity.graph,
         threadId: req.threadId,
@@ -1011,6 +1137,19 @@ async function executeBatch(
         consequences,
         ...(req.cardInReply !== undefined && { cardInReply: req.cardInReply }),
       });
+      await ctx.fileHolds.flush(tx, fileAccess(ctx));
+      for (const { command, index } of commands) {
+        const receipt = receipts.get(command.commandId);
+        if (!receipt || 'pendingId' in receipt)
+          await saveFileCommand(tx, req, command, {
+            ok: true,
+            actionId: batchId,
+            ...(plans[index]?.noGraphChange && { noGraphChange: true }),
+            results: [results[index]],
+            idempotentReplay: false,
+            consequences,
+          });
+      }
       return {
         ok: true as const,
         actionId: batchId,
@@ -1025,9 +1164,17 @@ async function executeBatch(
     // Ранние гейты (beforeStages, RLS треда) должны пройти ДО любого replay; internalUndo должен
     // исполнить inverse, а не вернуть сохранённое прямое действие.
     if (!internalUndo && replayChecked) {
-      const saved = await withIdentity(db, req.identity, (tx) =>
-        sink.findBatchWrite(tx, req.identity.graph, batchId),
-      ).catch(() => {
+      const saved = await withIdentity(db, req.identity, async (tx) => {
+        const found = await sink.findBatchWrite(tx, req.identity.graph, batchId);
+        if (found)
+          await authorizeFileBatchReplay(
+            tx,
+            req,
+            await effectiveRegistry(tx, req.identity.graph),
+            found,
+          );
+        return found;
+      }).catch(() => {
         // Без доступного журнала replay не доказан: сохраняем исходный реальный отказ.
         throw e;
       });
@@ -1048,6 +1195,26 @@ async function executeBatch(
     }
     throw e;
   }
+}
+
+async function authorizeFileBatchReplay(
+  tx: Tx,
+  req: ExecuteRequest,
+  registry: RegistrySnapshot,
+  saved: JournalWrite,
+) {
+  const ops = [...saved.action.operations, ...saved.action.inverse];
+  if (
+    !ops.some((op) => op.op === 'file_field_edit') &&
+    !filesOfOperations(registry, ops, null).length
+  )
+    return;
+  if (
+    saved.action.actor_user_id !== req.identity.actor ||
+    saved.action.actor_grant_id !== req.actorGrantId
+  )
+    throw new ExecError('CONFLICT', 'ID пачки уже использован.');
+  await checkFileMutation(tx, req);
 }
 
 function replayFromAudit(batchId: string, saved: JournalWrite): ExecuteResult {
@@ -1262,6 +1429,7 @@ async function lockRegistry(
   ops: ReadonlyArray<{ tool: string; input: unknown }>,
 ): Promise<void> {
   if (ops.some(touchesRegistry)) await lockOwnerRegistry(tx, graphId);
+  else if (ops.some(mayAddressFileProperty)) await lockFilePropertyDefinitions(tx, graphId);
 }
 
 /**
@@ -1423,6 +1591,8 @@ async function prepareOp(
   input: unknown,
   batch?: BatchState,
 ): Promise<PreparedOp> {
+  if (tool === 'file_field_edit')
+    return prepareFileEdit(ctx, parseEnvelope(fileFieldEditInput, input, tool), batch);
   if (tool === 'entity_create') return prepareEntityCreate(ctx, input, batch);
   if (tool === 'entity_update') return prepareEntityUpdate(ctx, input, batch);
   if (tool === 'relation_create') return prepareRelationCreate(ctx, input, batch);
@@ -1503,6 +1673,13 @@ function gateEntitlements(ctx: ExecCtx, key: string): void {
 }
 
 /** Стадии 6–7 одиночного вызова: запись action в JournalSink тем же tx. */
+async function syncInverseHolds(ctx: ExecCtx, action: ActionRecord) {
+  const ids = filesOfOperations(ctx.registry, action.inverse, null);
+  ctx.fileHolds.replace('inverse', action.id, [], ids);
+  if (ctx.req.approvedFilePendingId)
+    ctx.fileHolds.release('pending', ctx.req.approvedFilePendingId);
+}
+
 async function writeJournal(ctx: ExecCtx, p: JournalPlan): Promise<void> {
   const action: ActionRecord = {
     id: ctx.actionId,
@@ -1523,6 +1700,7 @@ async function writeJournal(ctx: ExecCtx, p: JournalPlan): Promise<void> {
     body_before: p.bodyBefore ?? {},
     ...(p.textSession === true && { text_session: true }),
   };
+  if (ctx.sink !== NOOP_SINK) await syncInverseHolds(ctx, action);
   await ctx.sink.write(ctx.tx, {
     graphId: ctx.req.identity.graph,
     threadId: ctx.req.threadId,
@@ -1550,6 +1728,7 @@ async function writeUndoRecord(
   plans: readonly PreparedOp[],
 ): Promise<void> {
   await undo.onApplied(ctx.tx);
+  ctx.fileHolds.release('inverse', undo.undoing.id);
   const pins = plans.slice(0, undo.pinned.size);
   await ctx.sink.writeUndo(ctx.tx, {
     graphId: ctx.req.identity.graph,
@@ -2272,6 +2451,173 @@ export function pgErrorInfo(e: unknown): { code?: string; constraint?: string } 
 // ---------------------------------------------------------------------------
 // entity_create
 // ---------------------------------------------------------------------------
+function fileAccess(ctx: ExecCtx) {
+  return {
+    graphId: ctx.req.identity.graph,
+    grantId: ctx.req.actorGrantId,
+    approvedPendingId: ctx.req.approvedFilePendingId,
+  };
+}
+
+async function checkFileWriter(ctx: ExecCtx) {
+  await checkFileMutation(ctx.tx, ctx.req, !!ctx.internalUndo);
+}
+
+function markdownFormat(ctx: ExecCtx, declared: 4 | undefined): number | null {
+  if (declared === 4) return 4;
+  if (ctx.internalUndo || ctx.req.source === 'mcp' || ctx.req.fileCapability !== true) return null;
+  return 4;
+}
+
+async function syncEntityFiles(
+  ctx: ExecCtx,
+  before: EntityRow | null,
+  after: EntityRow,
+  expected?: Record<string, unknown>,
+) {
+  const previous = fileProperties(ctx.registry, before?.props);
+  const next = fileProperties(ctx.registry, after.props);
+  for (const key of new Set([...previous.keys(), ...next.keys()])) {
+    const was = (before?.props as Record<string, unknown> | undefined)?.[key] ?? null;
+    const now = (after.props as Record<string, unknown>)[key] ?? null;
+    if (canonicalJson(was) === canonicalJson(now)) continue;
+    await checkFileWriter(ctx);
+    if (
+      before &&
+      (!ctx.internalUndo || expected !== undefined) &&
+      (!expected ||
+        !(key in expected) ||
+        canonicalJson(normalizeFileValue(expected[key])) !== canonicalJson(normalizeFileValue(was)))
+    )
+      fileConflict(was);
+    ctx.fileHolds.replace(
+      'property',
+      after.id + ':' + key,
+      previous.get(key) ?? [],
+      next.get(key) ?? [],
+      true,
+    );
+  }
+  if (!before || bodyChanges(before, after)) {
+    const old = before ? filesOfBody(before) : [];
+    const ids = filesOfBody(after);
+    if (old.length || ids.length) {
+      await checkFileWriter(ctx);
+      ctx.fileHolds.replace('body', after.id, old, ids, true);
+    }
+  }
+}
+
+function fileInverseExpectations(reg: RegistrySnapshot, before: EntityState, after: EntityState) {
+  const expected: Record<string, unknown> = {};
+  for (const key of new Set([...Object.keys(before.props), ...Object.keys(after.props)])) {
+    if (
+      reg.properties.get(key)?.type.kind === 'file' &&
+      canonicalJson(before.props[key] ?? null) !== canonicalJson(after.props[key] ?? null)
+    )
+      expected[key] = after.props[key] ?? null;
+  }
+  return Object.keys(expected).length ? { expectedFileProps: expected } : {};
+}
+
+async function prepareFileEdit(
+  ctx: ExecCtx,
+  command: FileFieldEdit,
+  batch?: BatchState,
+): Promise<PreparedOp> {
+  await checkFileWriter(ctx);
+  const def = ctx.registry.properties.get(command.propertyId);
+  if (def?.type.kind !== 'file')
+    throw new ExecError('VALIDATION', 'Свойство не является файловым.');
+  const entity = await loadEntityForUpdate(ctx, command.entityId, batch);
+  if (!entity) throw new ExecError('NOT_FOUND', 'Запись не найдена.');
+  const current = normalizeFileValue((entity.props as Record<string, unknown>)[def.id]) ?? null;
+  const edited = editFileValue(def.type.cardinality, current, command.edit);
+  const value = Array.isArray(edited) && !edited.length ? null : edited;
+  const plan = await prepareEntityUpdate(
+    ctx,
+    {
+      id: entity.id,
+      ...(value === null ? { unset: [def.id] } : { props: { [def.id]: value } }),
+      expectedFileProps: { [def.id]: current },
+    },
+    batch,
+  );
+  const previousValue = Array.isArray(current) && current.length === 0 ? null : current;
+  if (canonicalJson(previousValue) === canonicalJson(value)) {
+    batch?.entities.set(entity.id, entity);
+    return {
+      noGraphChange: true,
+      journal: {
+        type: 'entity_updated',
+        entityId: entity.id,
+        tool: 'file_field_edit',
+        title: entity.title,
+        operations: [],
+        inverse: [],
+      },
+      apply: async () => ({ result: { entityId: entity.id, propertyId: def.id, value } }),
+    };
+  }
+  // Whole-list replacement would undo additions made later by other clients.
+  // An addition removes only its own ID. A removal restores the original
+  // position relative to its next neighbour, using the usual conflict rules.
+  const inverse = [...plan.journal.inverse];
+  const edit = command.edit;
+  if (edit.kind === 'add' || edit.kind === 'remove') {
+    const original = Array.isArray(current) ? (current as string[]) : [];
+    const changed =
+      edit.kind === 'add' ? !original.includes(edit.fileId) : original.includes(edit.fileId);
+    const patch = inverse[0]?.payload;
+    if (patch) {
+      const { [def.id]: _field, ...props } =
+        (patch.props as Record<string, unknown> | undefined) ?? {};
+      const unset = (patch.unset as string[] | undefined)?.filter((key) => key !== def.id);
+      const { [def.id]: _expected, ...expected } =
+        (patch.expectedFileProps as Record<string, unknown> | undefined) ?? {};
+      const {
+        props: _oldProps,
+        unset: _oldUnset,
+        expectedFileProps: _oldExpected,
+        ...other
+      } = patch;
+      const rest = {
+        ...other,
+        ...(Object.keys(props).length && { props }),
+        ...(unset?.length && { unset }),
+        ...(Object.keys(expected).length && { expectedFileProps: expected }),
+      };
+      if (Object.keys(rest).some((key) => key !== 'id'))
+        inverse[0] = { op: 'entity_update', payload: rest };
+      else inverse.shift();
+    }
+    if (changed) {
+      const beforeId = original[original.indexOf(edit.fileId) + 1];
+      const back: FileFieldEdit['edit'] =
+        edit.kind === 'add'
+          ? { kind: 'remove', fileId: edit.fileId }
+          : { kind: 'add', fileId: edit.fileId, ...(beforeId && { beforeId }) };
+      inverse.unshift({
+        op: 'file_field_edit',
+        payload: { ...command, commandId: newId(), edit: back },
+      });
+    }
+  }
+  return {
+    ...plan,
+    journal: {
+      ...plan.journal,
+      tool: 'file_field_edit',
+      inverse,
+      operations: [{ op: 'file_field_edit', payload: { ...command } }],
+    },
+    async apply(applyCtx) {
+      await plan.apply(applyCtx);
+      return { result: { entityId: entity.id, propertyId: def.id, value } };
+    },
+  };
+}
+
 async function prepareEntityCreate(
   ctx: ExecCtx,
   rawInput: unknown,
@@ -2286,12 +2632,25 @@ async function prepareEntityCreate(
   // Нормализации (§2.1, §4.1): tags lowercase+dedupe, обе формы тела, серверные таймстампы.
   // body — КАНОН (сериализация собранного документа), а не строка входа: правда о теле одна,
   // и это документ; «как написала модель» эталоном быть не может (вердикт Б1).
+  if (
+    ctx.req.source === 'mcp' &&
+    !(ctx.req.approvedFilePendingId && !ctx.req.fileCapability) &&
+    input.body !== undefined &&
+    input.bodyFormatVersion !== 4 &&
+    filesOfBody({ body: input.body, bodyFormat: 4 }).length
+  ) {
+    throw new ExecError(
+      'CLIENT_OUTDATED',
+      'Для создания файлового тела укажите bodyFormatVersion 4.',
+    );
+  }
   const tags = normalizeTags(input.tags);
   // Ссылки — из дерева ∪ raw-блоков (Б2): `[[entity:…]]` в блоке кода связью не считается (Р7),
   // но тело, не разобранное целиком и уехавшее в rawBlock, backlinks не теряет.
   let { body, bodyDoc, bodyRefs, queryRefs } = bodyFieldsFromMarkdown(
     input.body ?? '',
     ctx.registry,
+    markdownFormat(ctx, input.bodyFormatVersion),
   );
 
   // Слияние (§А7-1): у create «состояние до» — пустое, поэтому весь вход и есть патч.
@@ -2428,6 +2787,7 @@ async function prepareEntityCreate(
     // автор. Для записей, созданных после выкатки, колонка ничего не восстанавливает — она
     // страхует ПЕРЕНОС корпуса, а не путь записи. В отчёте это сказано тем же словами
     // (ре-ревью раунда 8, п.4).
+    bodyFormat: DOC_SCHEMA_VERSION,
     bodyBeforeDoc: body,
     bodyRefs,
     // Кого адресуют query-блоки тела (§А11-1): обратный индекс, по которому слияние свойства
@@ -2515,6 +2875,7 @@ async function prepareEntityCreate(
         }
         return { result: toWireEntityWithRevision(own), replay: true };
       }
+      await syncEntityFiles(applyCtx, null, row);
       return { result: toWireEntityWithRevision(row) };
     },
   };
@@ -2554,6 +2915,20 @@ async function prepareEntityUpdate(
   // Проверка идёт ДО гейта тела и ДО merge: проигравший захват не должен ни писать, ни
   // получать STALE_VERSION вместо честного CONFLICT. Внутренний режим undo (§7.8)
   // предусловий не встречает — inverse их не несёт, поэтому отдельной ветки здесь нет.
+  if (
+    !ctx.internalUndo &&
+    ctx.req.source === 'mcp' &&
+    input.body !== undefined &&
+    input.bodyFormatVersion !== 4 &&
+    (filesOfBody(current).length ||
+      (!(ctx.req.approvedFilePendingId && !ctx.req.fileCapability) &&
+        filesOfBody({ body: input.body, bodyFormat: 4 }).length))
+  ) {
+    throw new ExecError(
+      'CLIENT_OUTDATED',
+      'Для изменения файлового тела укажите bodyFormatVersion 4.',
+    );
+  }
   if (input.precondition) assertPrecondition(ctx.registry, input.precondition, before, current);
 
   // Замок ТЕКСТА (спека скорости §8.1, D3 уточнён): правка тела сверяет РЕВИЗИЮ ТЕЛА строки под FOR UPDATE (в пачке —
@@ -2860,6 +3235,13 @@ async function prepareEntityUpdate(
     // раньше привязки, и сравнивалась бы печать документа, который в БД не поедет.
     const bound = bindQueryBlocks(input.bodyDoc, parseRegistryOfSnapshot(ctx.registry));
     const { doc: storedDoc, body } = bodyPairFromDoc(bound);
+    if (storedDoc !== bound && collectFileIds(bound).length)
+      throw new ExecError(
+        'VALIDATION',
+        'Это сочетание форматирования не сохраняет файловые ссылки. Измените форматирование и повторите.',
+        { reason: 'file_projection_loss' },
+      );
+    patch.bodyFormat = DOC_SCHEMA_VERSION;
     patch.bodyDoc = storedDoc;
     patch.body = body;
     preserveBodyBeforeDoc(patch, current);
@@ -2877,6 +3259,7 @@ async function prepareEntityUpdate(
     // Замок текста (§8.1) не срабатывает и срабатывать не должен: он смотрит на
     // ВХОД, а не на патч, и терять тут нечего — тело пусто.
     const seeded = bodyFieldsFromMarkdown(projectBodyTemplate(input.id), ctx.registry);
+    patch.bodyFormat = DOC_SCHEMA_VERSION;
     patch.body = seeded.body;
     patch.bodyDoc = seeded.bodyDoc;
     preserveBodyBeforeDoc(patch, current);
@@ -2887,7 +3270,12 @@ async function prepareEntityUpdate(
   } else if (input.body !== undefined) {
     // КАНОН, а не input.body: body — производная документа, и сравнивать «как написала
     // модель» бессмысленно (вердикт Б1). FTS не страдает (проверено спайком), сиды каноничны.
-    const { body, bodyDoc, bodyRefs, queryRefs } = bodyFieldsFromMarkdown(input.body, ctx.registry);
+    const { body, bodyDoc, bodyRefs, queryRefs } = bodyFieldsFromMarkdown(
+      input.body,
+      ctx.registry,
+      markdownFormat(ctx, input.bodyFormatVersion),
+    );
+    patch.bodyFormat = DOC_SCHEMA_VERSION;
     patch.body = body;
     patch.bodyDoc = bodyDoc;
     preserveBodyBeforeDoc(patch, current);
@@ -2901,7 +3289,10 @@ async function prepareEntityUpdate(
   // до»), а у записи без смены тела ложно отказывала бы. «Данные отмены пишут тело» ⇔ «ключ «действия тела до»».
   if (patch.body !== undefined && bodyChanges(current, patch)) {
     changed.body = patch.body;
+    if (patch.body.includes('orbis-file:')) changed.bodyFormatVersion = 4;
     prior.body = current.body;
+    if (current.bodyFormat === 4 && current.body.includes('orbis-file:'))
+      prior.bodyFormatVersion = 4;
   }
   if (input.tags !== undefined) {
     patch.tags = normalizeTags(input.tags);
@@ -2930,7 +3321,11 @@ async function prepareEntityUpdate(
   // запись в дельте возвращает обе половины старой карты — считать «затронутые аспекты»
   // ради второго ключа больше не нужно.
   Object.assign(changed, stateDelta(before, state));
-  Object.assign(prior, stateDelta(state, before));
+  Object.assign(
+    prior,
+    stateDelta(state, before),
+    fileInverseExpectations(ctx.registry, before, state),
+  );
   gateEntitlements(ctx, 'entity_update');
 
   // Эффект batch: строка после патча видна следующим операциям — с приращением ревизии тела, которое сделает триггер
@@ -2982,6 +3377,7 @@ async function prepareEntityUpdate(
       if (!updated[0]) throw new ExecError('NOT_FOUND', 'запись не найдена', { id: input.id });
       const { txId, ...row } = updated[0];
       if (writesBody) noteBodyBefore(journal, row, current, bodyBefore);
+      await syncEntityFiles(applyCtx, current, row, input.expectedFileProps);
       return { result: toWireEntityWithRevision(row), row, txId };
     },
   };
@@ -3143,6 +3539,7 @@ async function prepareAttach(
         payload: {
           id: input.entity_id,
           ...stateDelta(state, before),
+          ...fileInverseExpectations(ctx.registry, before, state),
           // Тело — только при реальной смене (R-21, то же правило, что у правки тела)
           ...(seed !== undefined && bodyChanges(current, patch) ? { body: current.body } : {}),
         },
@@ -3171,6 +3568,7 @@ async function prepareAttach(
       const row = updated[0];
       if (!row) throw new ExecError('NOT_FOUND', 'запись не найдена', { id: input.entity_id });
       if (seed !== undefined) noteBodyBefore(journal, row, current, bodyBefore);
+      await syncEntityFiles(applyCtx, current, row, input.expectedFileProps);
       return { result: toWireEntityWithRevision(row) };
     },
   };
@@ -3759,6 +4157,7 @@ async function prepareVersionPin(
             entityId: input.entity_id,
             label: input.label,
             body: current.body,
+            bodyFormat: current.bodyFormat,
             // Документ — КАК ЛЕЖИТ: у тела «до бэкфилла» его нет, и собирать его здесь
             // значило бы записать в снимок разбор, которого в сущности не было. body
             // (NOT NULL) переживает любую смену схемы документа — этого и достаточно.
@@ -3772,6 +4171,7 @@ async function prepareVersionPin(
         if (!row) {
           throw new ExecError('NOT_FOUND', 'версия не записана', { id }); // недостижимо
         }
+        applyCtx.fileHolds.replace('version', id, [], filesOfBody(row));
         return { result: toWireEntityVersion(row) };
       } catch (e) {
         const pg = pgErrorInfo(e);
@@ -3839,6 +4239,7 @@ async function prepareVersionDelete(ctx: ExecCtx, rawInput: unknown): Promise<Pr
       // Результат — wire-форма УДАЛЁННОЙ строки (как у entity_origin_delete): контракт
       // операции требует минимум { id }, а полная форма его содержит и не заводит в
       // закрытом union OpOutcome вырожденного типа ради одного поля.
+      applyCtx.fileHolds.replace('version', gone.id, filesOfBody(gone), []);
       return { result: toWireEntityVersion(gone) };
     },
   };
@@ -3917,6 +4318,7 @@ const propertyMergeUndoInput = z
           entityId: z.string().uuid(),
           body: z.string(),
           bodyDoc: z.unknown(),
+          bodyFormat: z.number().nullable().optional(),
           // Оба индекса ОПЦИОНАЛЬНЫ по той же причине, что `deltas` ниже: журнал
           // append-only, и слияния, записанные до того, как их начали возвращать откатом,
           // этих ключей не несут. `undoMerge` читает их защитно и пересчитывает из
@@ -4068,6 +4470,7 @@ async function preparePropertyCreate(_ctx: ExecCtx, rawInput: unknown): Promise<
   return {
     journal,
     async apply(applyCtx: ExecCtx): Promise<OpOutcome> {
+      if ((input.type as { kind: string }).kind === 'file') await checkFileWriter(applyCtx);
       const created = await createProperty(
         applyCtx.tx,
         applyCtx.req.identity.graph,
@@ -4100,14 +4503,22 @@ async function preparePropertyUpdate(_ctx: ExecCtx, rawInput: unknown): Promise<
       registryGate(applyCtx, 'property_update', { properties: [input.id] });
       const before = await readOwnProperty(applyCtx.tx, applyCtx.req.identity.graph, input.id);
       const id = before?.id ?? input.id;
+      if ((before?.type as { kind?: string } | undefined)?.kind === 'file')
+        await checkFileWriter(applyCtx);
       journal.title = `Правка свойства «${id}»`;
-      await updateProperty(applyCtx.tx, applyCtx.req.identity.graph, input.id, {
-        ...(input.label !== undefined && { label: input.label }),
-        ...(input.description !== undefined && { description: input.description }),
-        ...(input.scope !== undefined && { scope: input.scope as never }),
-        ...(input.rank !== undefined && { rank: input.rank }),
-        ...(input.status !== undefined && { status: input.status }),
-      });
+      await updateProperty(
+        applyCtx.tx,
+        applyCtx.req.identity.graph,
+        input.id,
+        {
+          ...(input.label !== undefined && { label: input.label }),
+          ...(input.description !== undefined && { description: input.description }),
+          ...(input.scope !== undefined && { scope: input.scope as never }),
+          ...(input.rank !== undefined && { rank: input.rank }),
+          ...(input.status !== undefined && { status: input.status }),
+        },
+        { operations: applyCtx.req.operations },
+      );
       journal.operations.push({ op: 'property_update', payload: { ...input, id } });
       journal.inverse.push({
         op: 'property_row_restore',
@@ -4147,6 +4558,7 @@ async function preparePropertyMerge(_ctx: ExecCtx, rawInput: unknown): Promise<P
       // и строки перестали бы отвечать сами; снос — чтобы они не пережили пересчёт мусором.
       await invalidateSpentCacheOfOwner(applyCtx.tx, applyCtx.req.identity.graph);
       const { source, into } = merged.inverse;
+      await syncMergeFiles(applyCtx, merged.inverse, false);
       journal.title = `Свойства слиты: ${source} → ${into}`;
       journal.operations.push({
         op: 'property_merge',
@@ -5056,10 +5468,34 @@ async function preparePropertyRowRestore(_ctx: ExecCtx, rawInput: unknown): Prom
         applyCtx.req.identity.graph,
         input.id,
         (input.row ?? null) as PropertyRow | null,
+        { undoingId: applyCtx.internalUndo?.undoing.id },
       );
       return { result: { property: input.id } };
     },
   };
+}
+
+async function syncMergeFiles(ctx: ExecCtx, merge: MergeInverse, undo: boolean) {
+  if (ctx.registry.properties.get(merge.into)?.type.kind !== 'file') return;
+  await checkFileWriter(ctx);
+  for (const row of merge.values) {
+    const previous = fileProperties(ctx.registry, {
+      [merge.source]: row.source,
+      ...(row.hadInto && { [merge.into]: row.into }),
+    });
+    const next = fileProperties(ctx.registry, { [merge.into]: row.source });
+    for (const key of [merge.source, merge.into]) {
+      const old = previous.get(key) ?? [],
+        newer = next.get(key) ?? [];
+      ctx.fileHolds.replace(
+        'property',
+        row.entityId + ':' + key,
+        undo ? newer : old,
+        undo ? old : newer,
+        true,
+      );
+    }
+  }
 }
 
 async function preparePropertyMergeUndo(_ctx: ExecCtx, rawInput: unknown): Promise<PreparedOp> {
@@ -5072,6 +5508,7 @@ async function preparePropertyMergeUndo(_ctx: ExecCtx, rawInput: unknown): Promi
   return {
     journal,
     async apply(applyCtx: ExecCtx): Promise<OpOutcome> {
+      await syncMergeFiles(applyCtx, input as unknown as MergeInverse, true);
       const undone = await undoMerge(
         applyCtx.tx,
         applyCtx.req.identity.graph,

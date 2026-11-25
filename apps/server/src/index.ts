@@ -2,6 +2,7 @@ import { makeAiDeps } from './ai/send-message';
 import { createApp, isChangeStreamRequest, resolvePort } from './app';
 import { makeDb } from './db/client';
 import { type RegistryDriftStatus, reportRegistryDriftOnStartup } from './db/registry-drift';
+import { fileGcMode, startFileMaintenance } from './files/gc';
 import { changeStreamEnabled, startChangeListener } from './freshness/listener';
 import { assertPublicOriginConfigured } from './oauth/metadata';
 import { type RoutineScheduler, startRoutineScheduler } from './routines/scheduler';
@@ -55,13 +56,24 @@ const app = createApp({
 let shuttingDown = false;
 const server = Bun.serve({
   port: resolvePort(),
-  fetch(request) {
-    if (changeListener && !shuttingDown && isChangeStreamRequest(request)) {
-      server.timeout(request, 60);
+  fetch(request, httpServer) {
+    // The package is verified before response headers. The builder bounds the request lifetime.
+    if (
+      request.method === 'POST' &&
+      new URL(request.url).pathname === '/api/exports/graph-package'
+    ) {
+      httpServer.timeout(request, 0);
+      return app.fetch(request, httpServer);
     }
-    return app.fetch(request);
+    if (changeListener && !shuttingDown && isChangeStreamRequest(request)) {
+      httpServer.timeout(request, 60);
+    }
+    return app.fetch(request, httpServer);
   },
 });
+
+const gcMode = fileGcMode();
+const stopFileMaintenance = gcMode === 'off' ? undefined : startFileMaintenance(db, gcMode);
 
 if (process.env.ORBIS_ROUTINE_SCHEDULER === '1') {
   scheduler = startRoutineScheduler({
@@ -97,12 +109,14 @@ async function shutdown(signal: string): Promise<void> {
   try {
     const listenerStopped = changeListener?.close();
     const schedulerStopped = scheduler?.stop();
+    const filesStopped = stopFileMaintenance?.();
     void manualRuns.shutdown(); // рубильник сразу; ожидание — повторным вызовом ниже
     await listenerStopped?.catch((error) =>
       console.error('[freshness] ошибка остановки LISTEN:', error),
     );
     await server.stop(); // без force: активные запросы доживают
     await schedulerStopped;
+    await filesStopped;
     await manualRuns.shutdown(); // дождаться и прогонов, зарегистрированных в дренаже
     await client.end({ timeout: 5 });
   } catch (e) {

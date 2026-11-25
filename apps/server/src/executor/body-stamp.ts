@@ -15,7 +15,7 @@ type EntityRow = typeof entities.$inferSelect;
 type EntityPatch = Partial<typeof entities.$inferInsert>;
 
 /** Поля тела, по которым триггер решает «тело сменилось». */
-type BodyFields = { body?: string; bodyDoc?: unknown };
+type BodyFields = { body?: string; bodyDoc?: unknown; bodyFormat?: number | null };
 
 /**
  * Сменит ли патч тело — ровно условие триггера: `OLD.body IS DISTINCT FROM NEW.body OR OLD.body_doc IS DISTINCT FROM
@@ -23,6 +23,7 @@ type BodyFields = { body?: string; bodyDoc?: unknown };
  * с ключами в другом порядке» база изменением не считает (`canonicalJson` — та же мера, что у сверки реестров).
  */
 export function bodyChanges(current: BodyFields, patch: BodyFields): boolean {
+  if (patch.bodyFormat !== undefined && patch.bodyFormat !== current.bodyFormat) return true;
   if (patch.body !== undefined && patch.body !== current.body) return true;
   if (patch.bodyDoc === undefined) return false;
   const was = current.bodyDoc ?? null;

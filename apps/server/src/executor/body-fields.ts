@@ -11,6 +11,7 @@ import {
   type BodyDoc,
   bindQueryBlocks,
   bodyRefsFromDoc,
+  DOC_SCHEMA_VERSION,
   parseBody,
   queryRefsFromDoc,
   serializeBody,
@@ -33,9 +34,11 @@ import type { RegistrySnapshot } from '../registry/load';
 export function bodyFieldsFromMarkdown(
   markdown: string,
   reg: RegistrySnapshot,
+  sourceFormat: number | null = DOC_SCHEMA_VERSION,
 ): {
   body: string;
   bodyDoc: BodyDoc;
+  bodyFormat: typeof DOC_SCHEMA_VERSION;
   bodyRefs: string[];
   queryRefs: string[];
 } {
@@ -43,7 +46,7 @@ export function bodyFieldsFromMarkdown(
   // печатью стоит ПРИВЯЗКА (Р-21-1): реестра у `canonicalizeBody` нет и быть не должно, а без
   // привязки в `body_doc` уехали бы блоки без дерева, и единственным, кто их когда-либо
   // разберёт, оказалось бы чтение — которое в БД не пишет.
-  const doc = bindQueryBlocks(parseBody(markdown), parseRegistryOfSnapshot(reg));
+  const doc = bindQueryBlocks(parseBody(markdown, sourceFormat), parseRegistryOfSnapshot(reg));
   // Печать — ПОСЛЕ привязки: `text` блока стал key-формой, и `body` обязан её нести, иначе
   // проекция разошлась бы с документом на первом же смарт-листе.
   const body = serializeBody(doc);
@@ -51,6 +54,7 @@ export function bodyFieldsFromMarkdown(
   return {
     body,
     bodyDoc: doc,
+    bodyFormat: DOC_SCHEMA_VERSION,
     bodyRefs: bodyRefsFromDoc(doc),
     queryRefs: queryRefsFromDoc(doc),
   };

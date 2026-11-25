@@ -31,6 +31,7 @@ import {
   ListPlus,
   MapPin,
   PanelsTopLeft,
+  Paperclip,
   RotateCcw,
   Scale,
   SlidersHorizontal,
@@ -150,6 +151,7 @@ export interface PlacesMenu {
 export type DetailMenuProps = RecordMenuProps | { pending: true };
 
 /** Диалоги навигации — после жеста, отдельным чанком от меню. */
+const AttachFilesDialog = lazy(() => import('./AttachFilesDialog'));
 const AddToNavDialog = lazy(() =>
   import('../apps/AddToNavDialog').then((m) => ({ default: m.AddToNavDialog })),
 );
@@ -181,6 +183,7 @@ export function DetailMenu(props: DetailMenuProps & ScreenMenuContentProps) {
 interface RecordMenuProps {
   onOpenProperties?: () => void;
   propertiesUnavailableReason?: string;
+  attachAvailable?: boolean;
   /** Действующий сеанс текущего тела считает сервер, независимо от памяти стрелок. */
   bodyAction: BodyActionInfo | null;
   onArchive: () => void;
@@ -226,6 +229,7 @@ type MenuDialog =
       plan: Extract<ChangeViewPlan, { case: 3 }>;
     }
   | { kind: 'template-for'; entityId: string; value: unknown; homeFor: string | null }
+  | { kind: 'attach-files'; entityId: string }
   | { kind: 'add-to-nav'; entityId: string }
   | { kind: 'new-app'; entityId: string }
   | null;
@@ -233,6 +237,7 @@ type MenuDialog =
 function RecordMenu({
   onOpenProperties,
   propertiesUnavailableReason,
+  attachAvailable,
   bodyAction,
   onArchive,
   onCopyLink,
@@ -362,6 +367,15 @@ function RecordMenu({
 
   function commonItems(v: Exclude<DetailMenuView, { kind: 'configuring' }>): DropdownMenuItem[] {
     return [
+      ...(!archived && attachAvailable
+        ? [
+            {
+              label: 'Прикрепить файл…',
+              icon: <Paperclip size={16} aria-hidden />,
+              onSelect: () => setDialog({ kind: 'attach-files', entityId: entity.id }),
+            },
+          ]
+        : []),
       ...(onOpenProperties
         ? [{ label: 'Свойства и связи', onSelect: onOpenProperties }]
         : propertiesUnavailableReason
@@ -718,6 +732,15 @@ function RecordMenu({
           { label: 'Хост', items: hostItems },
         ]}
       />
+      {dialog?.kind === 'attach-files' && dialog.entityId === entity.id && (
+        <Suspense fallback={null}>
+          <AttachFilesDialog
+            entityId={entity.id}
+            value={entity.props['orbis/attachments']}
+            close={() => setDialog(null)}
+          />
+        </Suspense>
+      )}
       {dialog?.kind === 'change-view' && dialog.entityId === entity.id && (
         <ChangeViewDialog
           reason={dialog.plan.reason}

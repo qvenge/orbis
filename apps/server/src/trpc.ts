@@ -34,6 +34,7 @@ export type Context = {
   /** Milliseconds since Unix epoch, from the verified owner JWT. */
   expiresAt?: number;
   changeListener?: ChangeListener;
+  onFileFinishWait?: () => void;
   /** Значение заголовка CLIENT_VERSION_HEADER; null — заголовок не прислан (curl/смоуки). */
   clientVersion: string | null;
   /**
@@ -114,6 +115,10 @@ function semverLess(a: string, b: string): boolean {
     if (x !== y) return x < y;
   }
   return false;
+}
+
+export function supportsFileWrites(version: string | null): boolean {
+  return version !== null && /^\d+\.\d+\.\d+$/.test(version) && !semverLess(version, '0.8.0');
 }
 
 // §9.1 (Task 14): клиент старше MIN_COMPATIBLE_CLIENT_VERSION получает отказ

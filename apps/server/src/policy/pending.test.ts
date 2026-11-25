@@ -4,6 +4,7 @@
 // СОХРАНЁННЫЙ payload полным конвейером executor'а (ревалидация текущего состояния)
 // без обращения к LLM; идемпотентность approve — по PK детерминированного
 // записи журнала (batch-механика §7.8, batch_id = pendingId).
+
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import type { GraphId, UndoTextChangedDetails } from '@orbis/shared';
 import {
@@ -13,6 +14,7 @@ import {
   questionStaleMessageId,
   rejectMessageId,
 } from '@orbis/shared';
+import { DOC_SCHEMA_VERSION } from '@orbis/shared/doc/types';
 import { FIXTURE_PARSE_REGISTRY } from '@orbis/shared/query/fixtures';
 import { eq, inArray, sql } from 'drizzle-orm';
 import {
@@ -177,6 +179,7 @@ describe('createPending через dispatch: explicit-уровень §7.10', ()
     // immutable payload — ровно envelope-валидированный input (§7.10)
     expect(md.pending).toEqual({
       id: r.pendingId,
+      bodyFormatVersion: 4,
       tool: 'entity_update',
       input: { id: target.id, archived: true },
       actor_kind: 'ai',
@@ -494,7 +497,7 @@ describe('сохранённый bodyDoc прошлой версии схемы 
     const r = await approvePending(db, { identity: personal(userA), pendingId, clock });
     expect(r.ok).toBe(true);
     const stored = await bodyDocOf(target.id);
-    expect(stored).toEqual({ v: 3, doc });
+    expect(stored).toEqual({ v: DOC_SCHEMA_VERSION, doc });
   });
 
   test('P2 с bodyDoc v1 (атрибут query) → approve ok через цепочку 1 → 2 → 3', async () => {
@@ -546,7 +549,7 @@ describe('сохранённый bodyDoc прошлой версии схемы 
       ),
     );
     const row = rows.get(0);
-    expect(row?.proposedDoc).toEqual({ v: 3, doc });
+    expect(row?.proposedDoc).toEqual({ v: DOC_SCHEMA_VERSION, doc });
     expect(row?.after).toBe('станет');
     expect(row?.bodyDiff).toBeDefined();
   });

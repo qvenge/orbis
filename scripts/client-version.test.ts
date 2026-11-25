@@ -51,7 +51,7 @@ test('план А: клиент 0.5.x отсекается — минимум н
   expect(less(MIN_COMPATIBLE_CLIENT_VERSION, '0.6.0')).toBe(false);
 });
 
-test('план Б: клиент и порог совместимости согласованы на 0.7.0', () => {
-  expect(APP_VERSION).toBe('0.7.0');
-  expect(MIN_COMPATIBLE_CLIENT_VERSION).toBe('0.7.0');
+test('вложения: клиент и порог совместимости согласованы на 0.8.0', () => {
+  expect(APP_VERSION).toBe('0.8.0');
+  expect(MIN_COMPATIBLE_CLIENT_VERSION).toBe('0.8.0');
 });

@@ -2,7 +2,7 @@
 // баррель тянет схему документа (tiptap, marked) в первый кадр (сторожа `check-lazy-chunks.ts` и
 // `save.test.tsx`).
 import { PAGE_ASPECT } from '@orbis/shared';
-import type { PageNode, RecordBlockName } from '@orbis/shared/doc/page-grammar';
+import { type PageNode, parsePageText, type RecordBlockName } from '@orbis/shared/doc/page-grammar';
 import {
   aspectOfCardText,
   type BodyKind,
@@ -11,8 +11,9 @@ import {
 } from '@orbis/shared/doc/placement';
 import { currentEntry } from '@orbis/shared/nav';
 import type { ParseRegistry } from '@orbis/shared/query';
-import { createContext, type ReactNode, useContext, useMemo } from 'react';
-import { Markdown } from '../../lib/markdown/Markdown';
+import { createContext, type ReactNode, Suspense, useContext, useMemo } from 'react';
+import { MarkdownSlot, VerifiedFileBody } from '../../lib/markdown/MarkdownSlot';
+import type { FileBodySource } from '../../lib/markdown/VerifiedFileBody';
 import { BodyKindProvider } from '../../lib/query-blocks/body-kind';
 import { useFieldCatalog } from '../../lib/query-blocks/useFieldCatalog';
 import { useNav } from '../../state/navigation';
@@ -183,6 +184,20 @@ function planRender(
 }
 
 export function Renderer({
+  fileBody,
+  ...props
+}: Parameters<typeof PageRenderer>[0] & { fileBody?: FileBodySource }) {
+  const plain = <PageRenderer {...props} />;
+  if (!fileBody?.source.includes('orbis-file:')) return plain;
+  return (
+    <Suspense fallback={plain}>
+      <VerifiedFileBody {...fileBody}>
+        {(source) => <PageRenderer {...props} nodes={parsePageText(source)} />}
+      </VerifiedFileBody>
+    </Suspense>
+  );
+}
+function PageRenderer({
   nodes,
   kind,
   appendUnplacedCards,
@@ -319,7 +334,7 @@ function PageNodeView({
       if (text === '') return null;
       return (
         <div data-testid="page-text">
-          <Markdown source={text} />
+          <MarkdownSlot source={text} />
         </div>
       );
     }

@@ -130,7 +130,7 @@ export function PropertiesTab(form: PanelFormProps) {
                       if (!propertyAccess(def, context).canSet || access.editor !== 'generic')
                         return;
                       setSelected((ids) => [...ids, def.id]);
-                      if (!draft)
+                      if (!draft && def.type.kind !== 'file')
                         onDraftChange(startDraft(entity, registry, { kind: 'values' }, context));
                     }}
                   >
