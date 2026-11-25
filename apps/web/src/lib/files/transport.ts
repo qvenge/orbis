@@ -10,6 +10,8 @@ import { getCurrentToken } from '../../auth/AuthProvider';
 import { API_BASE, captureProductRequest, trpcHeaders } from '../../trpc';
 import { orbisErrorOf } from '../orbis-error';
 
+export class FileUnavailableError extends Error {}
+
 export async function fetchFileResource(path: string, init: RequestInit): Promise<Response> {
   if (!path.startsWith('/api/')) throw new Error('Неверный адрес файла');
   const scope = captureProductRequest(init.signal);
@@ -32,7 +34,8 @@ export async function fetchFileResource(path: string, init: RequestInit): Promis
   }
   if (!response.ok) {
     const detail = await response.json().catch(() => null);
-    throw new Error(
+    const ErrorType = [401, 403, 404].includes(response.status) ? FileUnavailableError : Error;
+    throw new ErrorType(
       typeof detail?.error === 'string'
         ? detail.error
         : `Не удалось получить файл (${response.status})`,

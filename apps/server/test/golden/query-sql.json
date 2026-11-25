@@ -1234,7 +1234,7 @@
         "archived": "true"
       }
     },
-    "sql": "SELECT id, graph_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT (aspects && ARRAY[$1]::text[]) AND archived ORDER BY e.id ASC LIMIT $2",
+    "sql": "SELECT id, graph_id, title, emoji, body, body_format, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT (aspects && ARRAY[$1]::text[]) AND archived ORDER BY e.id ASC LIMIT $2",
     "params": ["orbis/agent-run", 500],
     "fields": "full"
   },

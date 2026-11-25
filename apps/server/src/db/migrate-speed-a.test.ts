@@ -117,6 +117,19 @@ describe('migrate-speed-a: перенос до плана А', () => {
     await expect(apply(g, true)).rejects.toThrow('непереносимых');
     expect((await counts(g))[0]?.journal).toBe(0);
   });
+  test('отчёт после 0026 находит ожидающее предложение до появления файловых таблиц', async () => {
+    const g = await freshGraph();
+    const f = await seedJournal1v(g);
+    const rollback = new Error('откатить временное переименование файловых таблиц');
+    await expect(
+      pool.begin(async (tx) => {
+        await tx`ALTER TABLE public.file_commands RENAME TO file_commands_after_0026`;
+        await tx`ALTER TABLE public.file_holds RENAME TO file_holds_after_0026`;
+        expect((await reportMigrateSpeedA(tx, g)).staleProposals).toEqual([f.pending]);
+        throw rollback;
+      }),
+    ).rejects.toBe(rollback);
+  });
   test('первый apply сохраняет сообщения; засев не меняет текст/ревизию/время; старое предложение stale', async () => {
     const g = await freshGraph();
     const f = await seedJournal1v(g);

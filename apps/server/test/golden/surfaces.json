@@ -19,6 +19,7 @@
               "title": "Конверт: Еда",
               "emoji": null,
               "body": "",
+              "bodyFormatVersion": 4,
               "bodyRefs": [],
               "tags": [],
               "props": {
@@ -53,6 +54,7 @@
               "title": "Конверт: Транспорт",
               "emoji": null,
               "body": "",
+              "bodyFormatVersion": 4,
               "bodyRefs": [],
               "tags": [],
               "props": {
@@ -90,6 +92,7 @@
               "title": "Покупка запланированная",
               "emoji": null,
               "body": "",
+              "bodyFormatVersion": 4,
               "bodyRefs": [],
               "tags": [],
               "props": {
@@ -341,6 +344,7 @@
               "title": "Конверт: Еда",
               "emoji": null,
               "body": "",
+              "bodyFormatVersion": 4,
               "bodyRefs": [],
               "tags": [],
               "props": {
@@ -375,6 +379,7 @@
               "title": "Конверт: Транспорт",
               "emoji": null,
               "body": "",
+              "bodyFormatVersion": 4,
               "bodyRefs": [],
               "tags": [],
               "props": {
@@ -412,6 +417,7 @@
               "title": "Покупка запланированная",
               "emoji": null,
               "body": "",
+              "bodyFormatVersion": 4,
               "bodyRefs": [],
               "tags": [],
               "props": {
@@ -912,6 +918,7 @@
               "title": "Конверт: Еда",
               "emoji": null,
               "body": "",
+              "bodyFormatVersion": 4,
               "bodyRefs": [],
               "tags": [],
               "props": {
@@ -946,6 +953,7 @@
               "title": "Конверт: Транспорт",
               "emoji": null,
               "body": "",
+              "bodyFormatVersion": 4,
               "bodyRefs": [],
               "tags": [],
               "props": {
@@ -983,6 +991,7 @@
               "title": "Покупка запланированная",
               "emoji": null,
               "body": "",
+              "bodyFormatVersion": 4,
               "bodyRefs": [],
               "tags": [],
               "props": {

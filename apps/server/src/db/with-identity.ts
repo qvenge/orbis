@@ -27,6 +27,7 @@ export async function withIdentity<T>(
   who: Identity,
   fn: (tx: Tx) => Promise<T>,
   transactionOptions?: Parameters<Db['transaction']>[1],
+  role: 'authenticated' | 'orbis_files' = 'orbis_files',
 ): Promise<T> {
   // РАНТАЙМ-БАРЬЕР — ПЕРВОЙ СТРОКОЙ, до всякой работы с базой. Тип пары закрыт компилятором, но
   // формы с источником `any` (`JSON.parse`, `Object.create`, `as unknown as Identity`,
@@ -74,7 +75,11 @@ export async function withIdentity<T>(
       recordReadWatermark(snapshot.watermark);
       // Inherits authenticated graph RLS. Only the server login may enter the additional
       // file-table role, including for an atomic graph edit and its retention records.
-      await tx.execute(sql`SET LOCAL ROLE orbis_files`);
+      await tx.execute(
+        role === 'authenticated'
+          ? sql`SET LOCAL ROLE authenticated`
+          : sql`SET LOCAL ROLE orbis_files`,
+      );
       return fn(tx);
     }, transactionOptions);
   } finally {

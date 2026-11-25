@@ -57,6 +57,18 @@ test('chat history, export, and pending operations have explicit disk policies',
   expect(cacheDependencyOf(trpcKey('routine.proposal'))?.persistence).toBe('none');
 });
 
+test('file reads recheck graph access and keep upload limits and file descriptions off disk', () => {
+  expect(cacheDependencyOf(trpcKey('files.limits'))).toMatchObject({
+    persistence: 'none',
+    dependencies: { graph: true, bodyOrStamp: false },
+  });
+  // A body-only change can publish a previously unreadable file.
+  expect(cacheDependencyOf(trpcKey('files.describe', { ids: ['file'] }), [])).toMatchObject({
+    persistence: 'none',
+    dependencies: { graph: true, bodyOrStamp: true, entityIds: [] },
+  });
+});
+
 test('budget expiry explicitly uses the owner settings deadline, routine uses its server deadline', () => {
   const deadline = '2030-01-02T08:00:00.000Z';
   const money = cacheDependencyOf(trpcKey('budget.envelopeForCategory'), null, deadline);

@@ -101,6 +101,10 @@ const trpc: Readonly<Record<string, Rule>> = {
   'entity.resolveRefs': (input) => rule('response', { entityIds: ids(input.ids), registry: true }),
   'entity.suggest': transient,
   'entity.blocks': graphResponse,
+  // Both endpoints check read access to the current graph. Publishing a file in a
+  // property or in the body can also make a previously missing description visible.
+  'files.limits': () => rule('none', { graph: true }),
+  'files.describe': () => rule('none', { graph: true, bodyOrStamp: true }),
   'relation.listFor': (input, data) =>
     rule('response', {
       entityIds: ids(

@@ -46,6 +46,15 @@ function bodyWriters(journal: SQL): SQL {
 const currentJournal = (graph: GraphId): SQL => sql`
   SELECT id, created_at, type, operations, undoes FROM action_journal WHERE graph_id = ${graph}::uuid`;
 
+// The plan A runbook permits this migration immediately after 0026. File receipts,
+// pending holds and their server role were introduced together in 0028.
+async function hasFileTables(client: SqlClient): Promise<boolean> {
+  const [row] = await client<
+    { available: boolean }[]
+  >`SELECT to_regclass('public.file_commands') IS NOT NULL AS available`;
+  return row?.available === true;
+}
+
 /** Отчёт идёт сырыми SELECT без реестра и без каких-либо изменений. IO дополнительно ставит READ ONLY. */
 export async function reportMigrateSpeedA(
   client: SqlClient,
@@ -75,7 +84,12 @@ export async function reportMigrateSpeedA(
     legacyUndo: legacy.legacyUndo,
     alreadyInTable: Number(already[0]?.n ?? 0),
     seedable: Number(seeds[0]?.n ?? 0),
-    staleProposals: await listStaleBodyProposals(reader, g, executedBeforeTransfer),
+    staleProposals: await listStaleBodyProposals(
+      reader,
+      g,
+      executedBeforeTransfer,
+      await hasFileTables(client),
+    ),
     missingRequired: legacy.untransferable,
   };
 }
@@ -115,7 +129,14 @@ export async function applyMigrateSpeedA(
     return { moved: r.moved, undo: r.undo, deletedMessages, seeded: seeded.length };
   });
   // Ошибка снятия не откатывает состоявшийся перенос: повтор продолжает с уже заполненной таблицы.
-  const closedProposals = await withIdentity(db, who, (tx) => closeStaleBodyProposals(tx, who));
+  const filesAvailable = await hasFileTables(client);
+  const closedProposals = await withIdentity(
+    db,
+    who,
+    (tx) => closeStaleBodyProposals(tx, who, filesAvailable),
+    undefined,
+    filesAvailable ? 'orbis_files' : 'authenticated',
+  );
   return { ...transferred, closedProposals };
 }
 

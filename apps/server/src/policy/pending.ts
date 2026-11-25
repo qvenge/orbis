@@ -835,9 +835,15 @@ async function expectedDeltaStaleOf(
  * результата, и ни снятая после исполнения декларация, ни ставшее ложным предусловие (его сделало ложным само
  * исполнение) не вправе подменить replay отказом.
  */
-async function isExecuted(tx: Tx, graphId: GraphId, pendingId: string): Promise<boolean> {
+async function isExecuted(
+  tx: Tx,
+  graphId: GraphId,
+  pendingId: string,
+  fileTablesAvailable = true,
+): Promise<boolean> {
   return (
-    !!(await findBatch(tx, graphId, pendingId)) || !!(await unchangedBatch(tx, graphId, pendingId))
+    !!(await findBatch(tx, graphId, pendingId)) ||
+    (fileTablesAvailable && !!(await unchangedBatch(tx, graphId, pendingId)))
   );
 }
 
@@ -1553,6 +1559,14 @@ export async function rejectPendingTx(
   tx: Tx,
   args: RejectPendingArgs,
 ): Promise<RejectPendingTxResult> {
+  return rejectPendingWithFileTables(tx, args, true);
+}
+
+async function rejectPendingWithFileTables(
+  tx: Tx,
+  args: RejectPendingArgs,
+  fileTablesAvailable: boolean,
+): Promise<RejectPendingTxResult> {
   const reason = args.reason ?? 'owner';
   await acquirePendingLock(tx, args.pendingId); // до первого чтения — см. док выше
   const msg = await findPendingMessage(tx, args.pendingId);
@@ -1565,7 +1579,7 @@ export async function rejectPendingTx(
   // транзакций (лестница правки Ш1, гашение пачки)
   assertNotQuestion(msg.pending);
   // Адрес исполненной единицы в журнале — сам pendingId (ключ записи пачки), отдельного id записи нет
-  if (await isExecuted(tx, args.identity.graph, args.pendingId)) {
+  if (await isExecuted(tx, args.identity.graph, args.pendingId, fileTablesAvailable)) {
     throw new ExecError(
       'VALIDATION',
       `подтверждение ${args.pendingId} уже исполнено — отклонить нельзя`,
@@ -1605,7 +1619,8 @@ export async function rejectPendingTx(
       ...(args.continuation !== undefined && { continuation: args.continuation }),
     },
   });
-  await releaseFileSource(tx, args.identity.graph, 'pending', args.pendingId);
+  if (fileTablesAvailable)
+    await releaseFileSource(tx, args.identity.graph, 'pending', args.pendingId);
   return {
     pendingId: args.pendingId,
     alreadyRejected: false,
@@ -1666,13 +1681,14 @@ export async function listStaleBodyProposals(
   tx: Tx,
   graph: GraphId,
   executedBeforeTransfer: ReadonlySet<string> = new Set(),
+  fileTablesAvailable = true,
 ): Promise<string[]> {
   const out: string[] = [];
   for (const { id } of await oldBodyProposalRows(tx, graph)) {
     if (
       id !== null &&
       !executedBeforeTransfer.has(id.toLowerCase()) &&
-      !(await isExecuted(tx, graph, id)) &&
+      !(await isExecuted(tx, graph, id, fileTablesAvailable)) &&
       (await rejectedReason(tx, id, graph)) === undefined
     )
       out.push(id);
@@ -1689,14 +1705,22 @@ export async function listStaleBodyProposals(
 // отклонённое: исполненное отклонить нельзя (запись пачки уже в журнале — отказ rejectPendingTx), отклонённое уже снято —
 // повтор возвращает пустой список. Исполненность спрашивается ПОД замком предложения (acquirePendingLock, контракт
 // rejectPendingTx: состояние единицы читается только после захвата).
-export async function closeStaleBodyProposals(tx: Tx, who: Identity): Promise<string[]> {
+export async function closeStaleBodyProposals(
+  tx: Tx,
+  who: Identity,
+  fileTablesAvailable = true,
+): Promise<string[]> {
   const rows = await oldBodyProposalRows(tx, who.graph);
   const closed: string[] = [];
   for (const { id } of rows) {
     if (id === null) continue;
     await acquirePendingLock(tx, id);
-    if (await isExecuted(tx, who.graph, id)) continue;
-    const r = await rejectPendingTx(tx, { identity: who, pendingId: id, reason: 'stale' });
+    if (await isExecuted(tx, who.graph, id, fileTablesAvailable)) continue;
+    const r = await rejectPendingWithFileTables(
+      tx,
+      { identity: who, pendingId: id, reason: 'stale' },
+      fileTablesAvailable,
+    );
     if (!r.alreadyRejected) closed.push(id);
   }
   return closed;

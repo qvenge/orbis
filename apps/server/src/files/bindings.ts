@@ -159,13 +159,14 @@ function batchReceiptId(graph: string, batchId: string) {
 }
 export const unchangedBatchKind = 'unchanged_file_batch';
 export async function unchangedBatch(tx: Tx, graphId: string, batchId: string) {
-  const [row] = await tx
-    .select()
-    .from(fileCommands)
-    .where(
-      and(eq(fileCommands.graphId, graphId), eq(fileCommands.id, batchReceiptId(graphId, batchId))),
-    );
-  if ((row?.request as { kind?: string } | undefined)?.kind !== unchangedBatchKind) return;
+  type BatchReceipt = Pick<
+    typeof fileCommands.$inferSelect,
+    'actorId' | 'grantId' | 'request' | 'result'
+  >;
+  const [row] =
+    await tx.execute<BatchReceipt>(sql`SELECT actor_id AS "actorId", grant_id AS "grantId", request, result
+    FROM file_commands WHERE graph_id = ${graphId}::uuid AND id = ${batchReceiptId(graphId, batchId)}::uuid
+      AND request->>'kind' = ${unchangedBatchKind}`);
   return row;
 }
 export async function saveUnchangedBatch(

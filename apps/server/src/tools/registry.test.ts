@@ -42,6 +42,7 @@ import TOOL_REGISTRY_GOLDEN from '../../test/golden/tool-registry.json';
 import {
   adminDb,
   appDb,
+  freshGraph,
   mintGraph,
   personal,
   requireEnv,
@@ -347,7 +348,7 @@ describe('buildToolRegistry: состав (§9.2 + §7.6)', () => {
     }
   });
 
-  test('fullScopeOnly: true у property_catalog, budget_rollover и шестнадцати тулов реестра (§А9-4) — и ни у кого больше', async () => {
+  test('fullScopeOnly: каталог, перенос бюджета, файловая операция и тулы реестра', async () => {
     // У каталога признак нужен именно потому, что тул ЧИТАЮЩИЙ: правило «чтения открыты
     // все» его бы пропустило, и `worker` получил бы карту поверхности владельца целиком.
     // У тулов реестра он отвечает на другой вопрос — кому этот тул вообще адресован:
@@ -365,6 +366,7 @@ describe('buildToolRegistry: состав (§9.2 + §7.6)', () => {
     expect(defs.filter((d) => d.fullScopeOnly === true).map((d) => d.name)).toEqual([
       'budget_rollover',
       'property_catalog',
+      'file_field_edit',
       'property_create',
       'property_update',
       'property_merge',
@@ -417,13 +419,13 @@ describe('buildToolRegistry: состав (§9.2 + §7.6)', () => {
     }
   });
 
-  test('agentOnly: true только у пяти глаголов исполнителя (§9.3); все они kind=mutate', async () => {
+  test('agentOnly: пять глаголов исполнителя и привязка файла; все они kind=mutate', async () => {
     // Глагол виден ТОЛЬКО вызову с грантом: чат такие дефы отсекает (send-message.ts),
     // dispatch держит вторую линию. Пометка на «обычном» туле закрыла бы его от чата молча.
     const defs = await registryFor(userB);
-    const verbs = new Set<string>(AGENT_VERB_NAMES);
+    const agentMutations = new Set<string>([...AGENT_VERB_NAMES, 'file_field_edit']);
     for (const def of defs) {
-      if (verbs.has(def.name)) {
+      if (agentMutations.has(def.name)) {
         expect({ name: def.name, agentOnly: def.agentOnly, kind: def.kind }).toEqual({
           name: def.name,
           agentOnly: true,
@@ -889,13 +891,27 @@ describe('парность zod-envelope ↔ рукописная JSON Schema (§
     expect(batchExecuteInput.safeParse(batch(BATCH_CAP_DEFAULT + 1)).success).toBe(false);
   });
 
-  test('attach_*: top-level ключи JSON Schema = ключи attachAspectInput (envelope §9.2)', async () => {
-    const defs = await registryFor(userB);
-    const zodKeys = Object.keys(attachAspectInput.shape).sort();
+  test('attach_*: конверт §9.2 предлагает expectedFileProps только у носителя файлового свойства', async () => {
+    const graph = await freshGraph();
+    const fileAspect = 'user/documents';
+    await seedCustomAspect(graph, {
+      key: fileAspect,
+      label: { ru: 'Документы' },
+      properties: [],
+      carries: ['orbis/attachments'],
+    });
+    const defs = await registryFor(graph);
+    const fileTool = defOf(defs, attachToolName(fileAspect));
+    const keys = Object.keys(attachAspectInput.shape).sort();
+    const basicKeys = keys.filter((key) => key !== 'expectedFileProps');
     for (const def of defs.filter((d) => d.name.startsWith('attach_'))) {
       const props = Object.keys(def.inputJsonSchema.properties as Record<string, unknown>).sort();
-      expect({ tool: def.name, keys: props }).toEqual({ tool: def.name, keys: zodKeys });
+      expect({ tool: def.name, keys: props }).toEqual({
+        tool: def.name,
+        keys: def === fileTool ? keys : basicKeys,
+      });
     }
+    expect(fileTool.inputJsonSchema.required).not.toContain('expectedFileProps');
   });
 
   test('собственное определение перекрывает builtin при коллизии id (ORDER BY graph_id NULLS FIRST)', async () => {

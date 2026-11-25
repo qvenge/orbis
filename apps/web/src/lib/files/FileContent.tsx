@@ -1,7 +1,13 @@
 import type { FileInfo } from '@orbis/shared/files';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { captureProductRequest, trpc } from '../../trpc';
-import { downloadFile, fetchFileResource, fileAddress, previewableFile } from './transport';
+import {
+  downloadFile,
+  FileUnavailableError,
+  fetchFileResource,
+  fileAddress,
+  previewableFile,
+} from './transport';
 
 export function FileContent({
   id: storedId,
@@ -14,18 +20,30 @@ export function FileContent({
 }) {
   const id = storedId.toLowerCase();
   const query = trpc.files.describe.useQuery({ ids: [id] });
-  const info = query.data?.find((file) => file.id === id);
+  const code = query.error?.data?.code;
+  const unavailable = code === 'UNAUTHORIZED' || code === 'FORBIDDEN' || code === 'NOT_FOUND';
+  const utils = trpc.useUtils();
+  const forget = useCallback(() => utils.files.describe.setData({ ids: [id] }, []), [utils, id]);
+  const cached = query.data?.find((file) => file.id === id);
+  const info = unavailable ? undefined : cached;
+  // A failed refetch retains the previous answer. Drop it on a confirmed refusal
+  // so a later network failure or remount cannot show the revoked metadata again.
+  useEffect(() => {
+    if (unavailable && cached) forget();
+  }, [unavailable, cached, forget]);
   const [preview, setPreview] = useState<{ id: string; url: string }>();
   const [failure, setFailure] = useState('');
   const [downloading, setDownloading] = useState(false);
   const lifetime = useRef(new AbortController());
-  // biome-ignore lint/correctness/useExhaustiveDependencies: changing the displayed ID cancels its in-flight download.
+  const readable = !!info;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: changing file or losing read access cancels its download.
   useEffect(() => {
     const controller = new AbortController();
     lifetime.current = controller;
     setFailure('');
+    setDownloading(false);
     return () => controller.abort();
-  }, [id]);
+  }, [id, readable]);
   useEffect(() => {
     if (!image || !info || !previewableFile(info.mediaType)) return;
     const stop = new AbortController();
@@ -50,20 +68,23 @@ export function FileContent({
       setPreview({ id: meta.id, url });
     }
     void load(info).catch((e: Error) => {
-      if (!stop.signal.aborted && scope.isCurrent()) setFailure(e.message);
+      if (!stop.signal.aborted && scope.isCurrent()) {
+        if (e instanceof FileUnavailableError) forget();
+        setFailure(e.message);
+      }
     });
     return () => {
       stop.abort();
       release();
     };
-  }, [info, image]);
+  }, [info, image, forget]);
   const name = label || info?.name || 'Файл';
   return (
     <span
       className="inline-flex max-w-full flex-col items-start gap-1 align-middle"
       contentEditable={false}
     >
-      {preview?.id === id && (
+      {info && preview?.id === id && (
         <img src={preview.url} alt={name} className="max-h-96 max-w-full object-contain" />
       )}
       <button
@@ -76,12 +97,17 @@ export function FileContent({
           if (!info) return;
           setDownloading(true);
           setFailure('');
+          const signal = lifetime.current.signal;
+          const scope = captureProductRequest(signal);
           try {
-            await downloadFile(info, lifetime.current.signal);
+            await downloadFile(info, signal);
           } catch (e) {
-            if (!lifetime.current.signal.aborted) setFailure((e as Error).message);
+            if (!signal.aborted && scope.isCurrent()) {
+              if (e instanceof FileUnavailableError) forget();
+              setFailure((e as Error).message);
+            }
           } finally {
-            setDownloading(false);
+            if (!signal.aborted && scope.isCurrent()) setDownloading(false);
           }
         }}
       >
@@ -102,7 +128,9 @@ export function FileContent({
       >
         Скопировать ссылку на файл
       </button>
-      {(failure || query.isError) && <span role="alert">{failure || 'Файл недоступен'}</span>}
+      {(failure || query.isError || (query.data && !info)) && (
+        <span role="alert">{failure || 'Файл недоступен'}</span>
+      )}
     </span>
   );
 }
